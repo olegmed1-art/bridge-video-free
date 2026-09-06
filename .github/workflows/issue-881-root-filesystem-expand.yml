@@ -302,7 +302,7 @@ jobs:
           drill_vcn_id="" drill_ig_id="" drill_route_id="" drill_security_id="" drill_subnet_id=""
           restored_attempted=0 drill_instance_attempted=0 drill_vcn_attempted=0 drill_ig_attempted=0
           drill_route_attempted=0 drill_security_attempted=0 drill_subnet_attempted=0
-          capacity_lease_active=0 source_fence_active=0
+          capacity_lease_active=0 source_fence_active=0 paid_instance_terminal_proven=0
           source_known="$RUNNER_TEMP/issue-881-source-known-hosts"
           source_key="$RUNNER_TEMP/issue-881-source-key"
           receipt_state="$RUNNER_TEMP/issue-881-step4-state.json"
@@ -1330,13 +1330,17 @@ jobs:
           assert c.get('memory-in-gbs')==int(os.environ['EXPECTED_MEMORY'])
           PY
           }
-          open_source_capacity_lease() {
+          arm_source_capacity_lease() {
             [[ "$source_original_ocpus" == 6 && "$source_original_memory" == 12 ]] || return 93
             [[ "$source_lease_ocpus" == 5 && "$source_lease_memory" == 11 ]] || return 93
             capacity_lease_active=1
-            state_set capacity_lease_status OPENING
+            state_set capacity_lease_status ARMED
             lease_restore_epoch=$(( $(date -u +%s) + 2700 ))
             gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="CAPACITY_LEASE_OPEN stamp=${stamp} restore_epoch=${lease_restore_epoch} source_shape=VM.Standard.E5.Flex original=6/12 lease=5/11 run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          }
+          open_source_capacity_lease() {
+            (( capacity_lease_active == 1 )) || return 93
+            state_set capacity_lease_status OPENING
             set_source_capacity "$source_lease_ocpus" "$source_lease_memory" "$primary_deadline" capacity_lease || return $?
             state_set capacity_lease_status OPEN
           }
@@ -1385,6 +1389,7 @@ jobs:
               state_set temporary_instance_id "$drill_instance_id"
               delete_resource_once instance "$drill_instance_id" || true
               if wait_instance_terminated "$drill_instance_id"; then
+                paid_instance_terminal_proven=1
                 state_set paid_termination_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
               else
                 failed=1
@@ -1768,6 +1773,11 @@ jobs:
           # The production source is already E5 paid capacity. Never attempt
           # its larger source configuration outside the bounded paid guard.
           [[ "$shape" == VM.Standard.E5.Flex ]] || exit 92
+          # Publish the authenticated 45-minute restore deadline before the
+          # first action that can mask production. The watchdog can therefore
+          # recover even if this runner disappears while acquiring the fence.
+          mark_phase arm_temporary_capacity_lease
+          if arm_source_capacity_lease; then :; else lease_rc=$?; exit "$lease_rc"; fi
           mark_phase acquire_capacity_workload_fence
           if acquire_source_workload_fence; then :; else fence_rc=$?; exit "$fence_rc"; fi
           mark_phase open_temporary_capacity_lease
@@ -1891,6 +1901,12 @@ jobs:
           state_set retained_backup_status ACCEPTED_ISOLATED_BOOT
           drill_seconds="$(( $(date -u +%s) - drill_started ))"
           if ! cleanup_temp_resources; then
+            # Secondary storage/network cleanup must not keep production
+            # fenced after exact paid compute termination has freed quota.
+            if (( paid_instance_terminal_proven == 1 )); then
+              restore_source_capacity || true
+              release_source_workload_fence || true
+            fi
             # Do not invoke the EXIT trap a second time after a fully bounded
             # explicit cleanup attempt; fail closed with the retained IDs/name
             # stamp available in this run's log for operator reconciliation.

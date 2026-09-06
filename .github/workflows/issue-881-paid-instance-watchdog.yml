@@ -428,8 +428,13 @@ jobs:
 
           # Once compute quota is proven free, restore production before any
           # storage/network cleanup that could fail independently.
-          restore_source_capacity
-          release_source_workload_fence
+          source_restore_rc=0
+          source_release_rc=0
+          restore_source_capacity || source_restore_rc=$?
+          # Even when OCI is unavailable for the entire bounded restore
+          # budget, independently try to unmask and start the reachable host.
+          release_source_workload_fence || source_release_rc=$?
+          (( source_restore_rc == 0 && source_release_rc == 0 )) || exit 105
 
           # The primary runner normally removes the restored boot volume. If
           # that runner disappeared, the independent watchdog owns the same

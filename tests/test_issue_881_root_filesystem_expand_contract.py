@@ -2145,9 +2145,11 @@ def test_receipt_is_literal_safe_and_retains_cleanup_evidence() -> None:
 
 def test_positive_capacity_lease_is_watchdog_armed_restored_and_receipted() -> None:
     dispatch = WORKFLOW.index("mark_phase dispatch_paid_instance_watchdog")
+    armed = WORKFLOW.index("mark_phase arm_temporary_capacity_lease")
+    fence = WORKFLOW.index("mark_phase acquire_capacity_workload_fence")
     lease = WORKFLOW.index("mark_phase open_temporary_capacity_lease")
     preflight = WORKFLOW.index("mark_phase paid_capacity_preflight")
-    assert dispatch < lease < preflight
+    assert dispatch < armed < fence < lease < preflight
     success_cleanup = WORKFLOW.index("if ! cleanup_temp_resources; then", preflight)
     restore = WORKFLOW.index("if ! restore_source_capacity; then", success_cleanup)
     disable_trap = WORKFLOW.index("trap - EXIT", restore)
@@ -2172,6 +2174,10 @@ def test_boundary_capacity_lease_is_exactly_one_ocpu_one_gib_and_45_minutes() ->
     assert "source_lease_ocpus=$((source_original_ocpus - 1))" in WORKFLOW
     assert "source_lease_memory=$((source_original_memory - 1))" in WORKFLOW
     assert "lease_restore_epoch=$(( $(date -u +%s) + 2700 ))" in WORKFLOW
+    arm = WORKFLOW.index("if arm_source_capacity_lease")
+    fence = WORKFLOW.index("if acquire_source_workload_fence", arm)
+    resize = WORKFLOW.index("if open_source_capacity_lease", fence)
+    assert arm < fence < resize
     watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
     assert "lease_restore_epoch <= now + 2700" in watchdog
 
@@ -2214,6 +2220,23 @@ def test_regression_capacity_is_restored_only_after_paid_instance_cleanup() -> N
     restore_comment = watchdog.index("temporary production capacity lease is RESTORED")
     assert terminate < early_restore < volume_cleanup < restore_comment
     assert "'- media canary: ' + code('false')" in WORKFLOW
+
+
+def test_cleanup_failure_restores_after_paid_compute_is_proven_terminal() -> None:
+    cleanup = WORKFLOW[WORKFLOW.index("if ! cleanup_temp_resources; then", WORKFLOW.index("mark_phase paid_capacity_preflight")) :]
+    failure = cleanup[:cleanup.index("if ! restore_source_capacity; then")]
+    assert "paid_instance_terminal_proven=1" in WORKFLOW
+    assert "if (( paid_instance_terminal_proven == 1 )); then" in failure
+    assert failure.index("restore_source_capacity || true") < failure.index("trap - EXIT")
+    assert failure.index("release_source_workload_fence || true") < failure.index("trap - EXIT")
+
+
+def test_watchdog_releases_fence_even_when_capacity_restore_fails() -> None:
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    start = watchdog.index("source_restore_rc=0")
+    block = watchdog[start:watchdog.index("# The primary runner normally removes", start)]
+    assert block.index("restore_source_capacity || source_restore_rc=$?") < block.index("release_source_workload_fence || source_release_rc=$?")
+    assert block.index("release_source_workload_fence || source_release_rc=$?") < block.index("|| exit 105")
 
 
 def test_exit_cleanup_stays_armed_through_fallible_backup_retirement() -> None:
