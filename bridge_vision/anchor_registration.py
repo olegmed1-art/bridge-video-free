@@ -131,6 +131,47 @@ def estimate_anchor_work_units(
     return sum(per_frame), tuple(per_frame)
 
 
+def estimate_anchor_peak_scratch_bytes(
+    reference_size: tuple[int, int],
+    observed_sizes: Sequence[tuple[int, int]],
+    spec: Mapping[str, Any],
+) -> int:
+    """Conservatively bound grayscale, resized-template and score scratch."""
+
+    checked = validate_anchor_spec(spec)
+    reference_width = _dimension(reference_size[0], "reference width")
+    reference_height = _dimension(reference_size[1], "reference height")
+    region = checked["reference_region"]
+    anchor_width = max(8, round(region["width"] * reference_width))
+    anchor_height = max(8, round(region["height"] * reference_height))
+    if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
+        raise AnchorRegistrationError("interface anchor exceeds template budget")
+    peak = 0
+    for index, size in enumerate(observed_sizes):
+        if not isinstance(size, tuple) or len(size) != 2:
+            raise AnchorRegistrationError(f"invalid observed size {index}")
+        observed_width = _dimension(size[0], f"observed width {index}")
+        observed_height = _dimension(size[1], f"observed height {index}")
+        observed_pixels = observed_width * observed_height
+        for scale in checked["scales"]:
+            template_width = max(8, round(anchor_width * scale))
+            template_height = max(8, round(anchor_height * scale))
+            if template_width > observed_width or template_height > observed_height:
+                continue
+            match_positions = (observed_width - template_width + 1) * (
+                observed_height - template_height + 1
+            )
+            template_pixels = template_width * template_height
+            scratch = (
+                2 * observed_pixels
+                + anchor_width * anchor_height
+                + template_pixels
+                + 8 * match_positions
+            )
+            peak = max(peak, scratch)
+    return peak
+
+
 def validate_anchor_job_budget(
     reference_size: tuple[int, int],
     observed_sizes: Sequence[tuple[int, int]],
@@ -147,6 +188,9 @@ def validate_anchor_job_budget(
         "work_units": total,
         "per_frame_work_units": list(per_frame),
         "template_block_pixels": ANCHOR_WORK_BLOCK_PIXELS,
+        "peak_matcher_scratch_bytes": estimate_anchor_peak_scratch_bytes(
+            reference_size, observed_sizes, spec
+        ),
     }
 
 
@@ -229,9 +273,8 @@ def register_from_upper_right_anchor(
         if width > observed_width or height > observed_height:
             continue
         scaled = cv2.resize(template, (width, height), interpolation=cv2.INTER_NEAREST)
-        scores = np.abs(
-            cv2.matchTemplate(observed_appearance, scaled, cv2.TM_CCOEFF_NORMED)
-        )
+        scores = cv2.matchTemplate(observed_appearance, scaled, cv2.TM_CCOEFF_NORMED)
+        np.abs(scores, out=scores)
         x_min = max(0, math.ceil(anchor_x * scale))
         y_min = max(0, math.ceil(anchor_y * scale))
         x_max = min(
@@ -340,6 +383,7 @@ __all__ = [
     "MAX_ANCHOR_FRAME_WORK_UNITS",
     "MAX_ANCHOR_JOB_WORK_UNITS",
     "MAX_ANCHOR_TEMPLATE_PIXELS",
+    "estimate_anchor_peak_scratch_bytes",
     "estimate_anchor_work_units",
     "register_from_upper_right_anchor",
     "validate_anchor_spec",

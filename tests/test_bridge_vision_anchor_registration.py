@@ -5,6 +5,7 @@ import pytest
 import bridge_vision.anchor_registration as anchor_registration
 from bridge_vision.anchor_registration import (
     AnchorRegistrationError,
+    estimate_anchor_peak_scratch_bytes,
     estimate_anchor_work_units,
     register_from_upper_right_anchor,
     validate_anchor_spec,
@@ -163,3 +164,8 @@ def test_anchor_work_is_template_weighted_and_bounded_for_whole_job():
                 },
             },
         )
+
+    scratch = estimate_anchor_peak_scratch_bytes(
+        (1000, 720), [(8192, 2730)], small_spec
+    )
+    assert scratch > 100 * 1024 * 1024

@@ -464,6 +464,7 @@ def test_encoded_dimensions_and_decoded_memory_are_bounded_before_decode():
             bridgit_rank_layout.MAX_DECODED_JOB_BYTES - registered_bytes
         ),
         observation_count=2,
+        matcher_scratch_bytes=0,
     )
     with pytest.raises(BridgitRankLayoutError, match="source and registered frames"):
         bridgit_rank_layout._validate_registration_retention_budget(
@@ -472,6 +473,17 @@ def test_encoded_dimensions_and_decoded_memory_are_bounded_before_decode():
                 bridgit_rank_layout.MAX_DECODED_JOB_BYTES - registered_bytes + 1
             ),
             observation_count=2,
+            matcher_scratch_bytes=0,
+        )
+
+    with pytest.raises(BridgitRankLayoutError, match="source and registered frames"):
+        bridgit_rank_layout._validate_registration_retention_budget(
+            profile,
+            source_decoded_bytes=(
+                bridgit_rank_layout.MAX_DECODED_JOB_BYTES - registered_bytes
+            ),
+            observation_count=2,
+            matcher_scratch_bytes=1,
         )
 
     bridgit_rank_layout._validate_scoring_budget(profile, observation_count=2)
@@ -639,7 +651,7 @@ def test_single_good_frame_is_pending_not_weak_evidence():
     ) == (False, True)
 
 
-def test_cli_rejection_is_retained_as_fail_closed_receipt(tmp_path: Path):
+def test_cli_rejection_is_retained_as_fail_closed_receipt(tmp_path: Path, monkeypatch):
     job_path = tmp_path / "job.json"
     output_path = tmp_path / "receipt.json"
     job_path.write_text('{"job_type":"one","job_type":"two"}', encoding="utf-8")
@@ -657,3 +669,19 @@ def test_cli_rejection_is_retained_as_fail_closed_receipt(tmp_path: Path):
     assert receipt["canonical_promotion_allowed"] is False
     assert receipt["production_write_performed"] is False
     assert receipt["school_canon_write_performed"] is False
+
+    job_path.write_text('{"value":' + "1" * 5000 + "}", encoding="utf-8")
+    assert (
+        bridgit_rank_layout.main(["--job", str(job_path), "--output", str(output_path)])
+        == 2
+    )
+    receipt = json.loads(output_path.read_text(encoding="utf-8"))
+    assert receipt["status"] == "REJECTED"
+    assert receipt["reason"] == "job is not valid UTF-8 JSON"
+
+    def recursion_failure(*_args, **_kwargs):
+        raise RecursionError("parser nesting limit")
+
+    monkeypatch.setattr(bridgit_rank_layout.json, "loads", recursion_failure)
+    with pytest.raises(BridgitRankLayoutError, match="not valid UTF-8 JSON"):
+        bridgit_rank_layout._json_object(b"{}", "job")

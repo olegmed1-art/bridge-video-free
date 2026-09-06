@@ -34,6 +34,7 @@ from typing import Any
 
 from bridge_vision.anchor_registration import (
     AnchorRegistrationError,
+    estimate_anchor_peak_scratch_bytes,
     register_from_upper_right_anchor,
     validate_anchor_job_budget,
     validate_anchor_spec,
@@ -487,7 +488,9 @@ def _json_object(payload: bytes, kind: str) -> dict[str, Any]:
 
     try:
         raw = json.loads(payload.decode("utf-8"), object_pairs_hook=unique_object)
-    except (UnicodeError, json.JSONDecodeError) as exc:
+    except BridgitRankLayoutError:
+        raise
+    except (UnicodeError, ValueError, RecursionError) as exc:
         raise BridgitRankLayoutError(f"{kind} is not valid UTF-8 JSON") from exc
     if not isinstance(raw, dict):
         raise BridgitRankLayoutError(f"{kind} must be an object")
@@ -738,9 +741,13 @@ def _validate_registration_retention_budget(
     *,
     source_decoded_bytes: int,
     observation_count: int,
+    matcher_scratch_bytes: int = 0,
 ) -> None:
     registered_bytes = profile.width * profile.height * 3 * observation_count
-    if source_decoded_bytes + registered_bytes > MAX_DECODED_JOB_BYTES:
+    if (
+        source_decoded_bytes + registered_bytes + matcher_scratch_bytes
+        > MAX_DECODED_JOB_BYTES
+    ):
         raise BridgitRankLayoutError(
             "source and registered frames exceed job memory budget"
         )
@@ -1227,15 +1234,21 @@ def recognize_frames(
         loaded_frames.append(loaded)
         decoded_job_bytes += int(loaded[0].shape[0] * loaded[0].shape[1] * 3)
     if profile.interface_anchor is not None:
-        _validate_registration_retention_budget(
-            profile,
-            source_decoded_bytes=decoded_job_bytes,
-            observation_count=len(loaded_frames),
-        )
         actual_dimensions = [
             (int(image.shape[1]), int(image.shape[0]))
             for image, _, _, _ in loaded_frames
         ]
+        matcher_scratch_bytes = estimate_anchor_peak_scratch_bytes(
+            (profile.width, profile.height),
+            actual_dimensions,
+            profile.interface_anchor,
+        )
+        _validate_registration_retention_budget(
+            profile,
+            source_decoded_bytes=decoded_job_bytes,
+            observation_count=len(loaded_frames),
+            matcher_scratch_bytes=matcher_scratch_bytes,
+        )
         try:
             validate_anchor_job_budget(
                 (profile.width, profile.height),
