@@ -1506,6 +1506,14 @@ def recognize_frames(
                 normalized_y = y / profile.height
                 normalized_width = profile.glyph_width / profile.width
                 normalized_height = profile.glyph_height / profile.height
+                region_x, region_width = _rounded_normalized_axis(
+                    game_window["x"] + normalized_x * game_window["width"],
+                    normalized_width * game_window["width"],
+                )
+                region_y, region_height = _rounded_normalized_axis(
+                    game_window["y"] + normalized_y * game_window["height"],
+                    normalized_height * game_window["height"],
+                )
                 raw_visual_observations.append(
                     {
                         "seat": seat,
@@ -1515,18 +1523,10 @@ def recognize_frames(
                         "frame_sha256": frame_hashes[frame_index],
                         "region": {
                             "coordinate_space": "NORMALIZED_FRAME",
-                            "x": round(
-                                game_window["x"] + normalized_x * game_window["width"],
-                                8,
-                            ),
-                            "y": round(
-                                game_window["y"] + normalized_y * game_window["height"],
-                                8,
-                            ),
-                            "width": round(normalized_width * game_window["width"], 8),
-                            "height": round(
-                                normalized_height * game_window["height"], 8
-                            ),
+                            "x": region_x,
+                            "y": region_y,
+                            "width": region_width,
+                            "height": region_height,
                         },
                         "confidence": round(max(0.0, min(1.0, assigned_score)), 6),
                         "confidence_kind": "TEMPLATE_SIMILARITY_UNCALIBRATED",
@@ -1673,6 +1673,15 @@ def _shadow_result(
     }
 
 
+def _rounded_normalized_axis(start: float, size: float) -> tuple[float, float]:
+    """Round an interval from its edges without moving its end past the frame."""
+    bounded_start = max(0.0, min(1.0, start))
+    bounded_end = max(bounded_start, min(1.0, start + size))
+    rounded_start = round(bounded_start, 8)
+    rounded_end = round(bounded_end, 8)
+    return rounded_start, round(rounded_end - rounded_start, 8)
+
+
 def _recognize_frames_with_opencv_rejection(
     reference_path: Path,
     frame_paths: Sequence[Path],
@@ -1700,7 +1709,7 @@ def _validated_input_root(value: Any) -> Path:
         raise BridgitRankLayoutError("input_root must be an absolute directory")
     try:
         root = raw.resolve(strict=True)
-    except OSError as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         raise BridgitRankLayoutError("input_root is unavailable") from exc
     if not root.is_dir() or root == Path(root.anchor):
         raise BridgitRankLayoutError("input_root must be a bounded directory")
@@ -1722,7 +1731,7 @@ def _validated_ref(
     try:
         path = declared.resolve(strict=True)
         path.relative_to(input_root)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         raise BridgitRankLayoutError(f"{field} escapes input_root") from exc
     if not path.is_file():
         raise BridgitRankLayoutError(f"{field} path must be an existing absolute file")

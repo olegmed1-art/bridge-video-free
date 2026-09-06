@@ -814,6 +814,26 @@ def test_cli_rejection_is_retained_as_fail_closed_receipt(tmp_path: Path, monkey
     assert receipt["production_write_performed"] is False
     assert receipt["school_canon_write_performed"] is False
 
+    job_path.write_text(
+        json.dumps(
+            {
+                "job_type": JOB_TYPE,
+                "input_root": str(tmp_path) + "\u0000",
+                "production_write": False,
+                "allow_hidden_information": False,
+                "teacher_pointer_events": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        bridgit_rank_layout.main(["--job", str(job_path), "--output", str(output_path)])
+        == 2
+    )
+    receipt = json.loads(output_path.read_text(encoding="utf-8"))
+    assert receipt["status"] == "REJECTED"
+    assert receipt["reason"] == "input_root is unavailable"
+
     job_path.write_text('{"value":' + "1" * 5000 + "}", encoding="utf-8")
     assert (
         bridgit_rank_layout.main(["--job", str(job_path), "--output", str(output_path)])
@@ -845,3 +865,32 @@ def test_cli_rejection_is_retained_as_fail_closed_receipt(tmp_path: Path, monkey
     receipt = json.loads(output_path.read_text(encoding="utf-8"))
     assert receipt["status"] == "REJECTED"
     assert receipt["reason"] == "MemoryError"
+
+
+def test_path_resolution_runtime_errors_are_translated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    candidate = tmp_path / "profile.json"
+    candidate.write_text("{}", encoding="utf-8")
+
+    def fail_resolve(_path, *, strict=False):
+        raise RuntimeError("symlink loop")
+
+    monkeypatch.setattr(Path, "resolve", fail_resolve)
+    with pytest.raises(BridgitRankLayoutError, match="profile_ref escapes input_root"):
+        bridgit_rank_layout._validated_ref(
+            {"path": str(candidate), "sha256": "a" * 64},
+            "profile_ref",
+            max_bytes=1024,
+            input_root=tmp_path,
+        )
+
+
+def test_normalized_region_rounding_preserves_frame_boundary():
+    start, size = bridgit_rank_layout._rounded_normalized_axis(
+        0.999999994,
+        0.000000006,
+    )
+    assert start == 0.99999999
+    assert size == 0.00000001
+    assert start + size <= 1.0
