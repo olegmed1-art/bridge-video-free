@@ -199,6 +199,22 @@ def test_pointer_on_changed_or_unrecognized_frame_is_needs_review():
     )
 
 
+def test_pointer_timestamp_must_match_the_selected_spatial_target():
+    first = observation("N", "AH", timestamp_ms=1000, index=0)
+    target = observation("E", "KH", timestamp_ms=2000, index=1)
+    pointer = pointer_for(target, timestamp_ms=1000)
+
+    report = build_deal_evidence_report(
+        [first, target], [pointer], recognizer_version=VERSION
+    )
+
+    assert report["status"] == "NEEDS_REVIEW"
+    evidence = report["pointer_evidence"][0]
+    assert evidence["visual_target"] == {"seat": "E", "card": "KH"}
+    assert evidence["resolution"] == "POINTER_TIMESTAMP_DOES_NOT_MATCH_FRAME"
+    assert evidence["visual_target_timestamps_ms"] == [2000]
+
+
 def test_three_complete_visible_hands_remain_unknown_without_fourth_hand_inference():
     visual = []
     for seat, suit in zip("NES", "HCD"):

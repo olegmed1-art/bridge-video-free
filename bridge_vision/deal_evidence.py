@@ -385,15 +385,6 @@ def build_deal_evidence_report(
             if _contains(item["region"], point)
         ]
         event = dict(event)
-        frame_timestamps = {
-            item["timestamp_ms"] for item in frame_observations.get(frame_sha, ())
-        }
-        if frame_timestamps and timestamp_ms not in frame_timestamps:
-            event["resolution"] = "POINTER_TIMESTAMP_DOES_NOT_MATCH_FRAME"
-            event["visual_frame_timestamps_ms"] = sorted(frame_timestamps)
-            pointer_evidence.append(event)
-            review_reasons.append("teacher_pointer_timestamp_mismatch")
-            continue
         if not targets:
             event["resolution"] = "NO_VISUAL_TARGET_AT_POINTER"
             pointer_evidence.append(event)
@@ -410,6 +401,17 @@ def build_deal_evidence_report(
             continue
         target_seat, target_card = target_keys[0]
         event["visual_target"] = {"seat": target_seat, "card": target_card}
+        target_timestamps = {
+            item["timestamp_ms"]
+            for item in targets
+            if (item["seat"], item["card"]) == (target_seat, target_card)
+        }
+        if timestamp_ms not in target_timestamps:
+            event["resolution"] = "POINTER_TIMESTAMP_DOES_NOT_MATCH_FRAME"
+            event["visual_target_timestamps_ms"] = sorted(target_timestamps)
+            pointer_evidence.append(event)
+            review_reasons.append("teacher_pointer_timestamp_mismatch")
+            continue
         contradicts = (claimed_card is not None and claimed_card != target_card) or (
             claimed_seat is not None and claimed_seat != target_seat
         )
