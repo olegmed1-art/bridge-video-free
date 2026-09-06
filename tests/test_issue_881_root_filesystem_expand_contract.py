@@ -2169,6 +2169,8 @@ def test_regression_capacity_is_restored_only_after_paid_instance_cleanup() -> N
     assert exit_cleanup.index("cleanup_temp_resources") < exit_cleanup.index("restore_source_capacity")
     watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
     terminate = watchdog.index("oci compute instance terminate")
+    early_restore = watchdog.index("restore_source_capacity\n\n          # The primary runner normally removes", terminate)
+    volume_cleanup = watchdog.index("oci bv boot-volume delete", early_restore)
     restore_comment = watchdog.index("temporary production capacity lease is RESTORED")
-    assert terminate < restore_comment
+    assert terminate < early_restore < volume_cleanup < restore_comment
     assert "'- media canary: ' + code('false')" in WORKFLOW
