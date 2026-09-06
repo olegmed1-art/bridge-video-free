@@ -35,8 +35,8 @@ from typing import Any
 from bridge_vision.anchor_registration import (
     AnchorRegistrationError,
     register_from_upper_right_anchor,
-    validate_anchor_spec,
     validate_anchor_job_budget,
+    validate_anchor_spec,
 )
 from bridge_vision.deal_evidence import build_deal_evidence_report
 
@@ -858,6 +858,8 @@ def _read_frame(
     profile: BridgitRankLayoutProfile,
     *,
     registration_reference: Any | None = None,
+    defer_registration: bool = False,
+    decoded_job_bytes_so_far: int = 0,
 ):
     payload = _read_bounded_bytes(path, MAX_FRAME_BYTES, "frame")
     encoded_width, encoded_height = _encoded_image_dimensions(payload)
@@ -869,13 +871,20 @@ def _read_frame(
             "encoded frame dimensions do not match the verified profile"
         )
     _validate_decoded_budget(encoded_width, encoded_height, observation_count=0)
+    decoded_frame_bytes = encoded_width * encoded_height * 3
+    if decoded_job_bytes_so_far + decoded_frame_bytes > MAX_DECODED_JOB_BYTES:
+        raise BridgitRankLayoutError("decoded frames exceed job memory budget")
     cv2, np = _pixel_runtime()
     image = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None or tuple(image.shape[:2]) != (encoded_height, encoded_width):
         raise BridgitRankLayoutError(
             "decoded frame dimensions do not match encoded dimensions"
         )
-    if registration_reference is not None and profile.interface_anchor is not None:
+    if (
+        registration_reference is not None
+        and profile.interface_anchor is not None
+        and not defer_registration
+    ):
         try:
             image, registration = register_from_upper_right_anchor(
                 registration_reference, image, profile.interface_anchor
@@ -884,7 +893,7 @@ def _read_frame(
             raise BridgitRankLayoutError(
                 f"interface registration failed: {exc}"
             ) from exc
-    else:
+    elif not defer_registration:
         registration = {
             "mode": "EXACT_PROFILE_DIMENSIONS",
             "input_size": {"width": encoded_width, "height": encoded_height},
@@ -898,6 +907,8 @@ def _read_frame(
                 "height": 1.0,
             },
         }
+    else:
+        registration = None
     return (
         image,
         hashlib.sha256(payload).hexdigest(),
@@ -1190,10 +1201,52 @@ def recognize_frames(
     )
     if reference_hash != profile.reference_frame_sha256:
         raise BridgitRankLayoutError("reference frame hash mismatch")
-    loaded_frames = [
-        _read_frame(Path(path), profile, registration_reference=reference)
-        for path in frame_paths
-    ]
+    loaded_frames = []
+    decoded_job_bytes = int(reference.shape[0] * reference.shape[1] * 3)
+    for path in frame_paths:
+        loaded = _read_frame(
+            Path(path),
+            profile,
+            registration_reference=reference,
+            defer_registration=profile.interface_anchor is not None,
+            decoded_job_bytes_so_far=decoded_job_bytes,
+        )
+        loaded_frames.append(loaded)
+        decoded_job_bytes += int(loaded[0].shape[0] * loaded[0].shape[1] * 3)
+    if profile.interface_anchor is not None:
+        actual_dimensions = [
+            (int(image.shape[1]), int(image.shape[0]))
+            for image, _, _, _ in loaded_frames
+        ]
+        try:
+            validate_anchor_job_budget(
+                (profile.width, profile.height),
+                actual_dimensions,
+                profile.interface_anchor,
+            )
+        except AnchorRegistrationError as exc:
+            raise BridgitRankLayoutError(
+                f"interface registration budget failed: {exc}"
+            ) from exc
+        registered_frames = []
+        for image, frame_hash, _, _ in loaded_frames:
+            try:
+                registered, registration = register_from_upper_right_anchor(
+                    reference, image, profile.interface_anchor
+                )
+            except AnchorRegistrationError as exc:
+                raise BridgitRankLayoutError(
+                    f"interface registration failed: {exc}"
+                ) from exc
+            registered_frames.append(
+                (
+                    registered,
+                    frame_hash,
+                    hashlib.sha256(registered).hexdigest(),
+                    registration,
+                )
+            )
+        loaded_frames = registered_frames
     frames = [image for image, _, _, _ in loaded_frames]
     frame_hashes = [frame_hash for _, frame_hash, _, _ in loaded_frames]
     pixel_hashes = [pixel_hash for _, _, pixel_hash, _ in loaded_frames]
