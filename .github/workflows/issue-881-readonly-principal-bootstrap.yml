@@ -44,7 +44,7 @@ jobs:
       github.event.comment.user.login == 'olegmed1-art' &&
       github.event.comment.body == '/oracle-ops issue-881-bootstrap-readonly-principal'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
       issues: write
@@ -145,8 +145,15 @@ jobs:
 
           request_json() {
             local output="$1"
+            local limit=30
+            local remaining
             shift
-            timeout --signal=KILL 30s "$@" --output json > "$output"
+            if (( CLEANUP_DEADLINE > 0 )); then
+              remaining=$(( CLEANUP_DEADLINE - SECONDS ))
+              (( remaining > 0 )) || return 124
+              (( remaining >= limit )) || limit=$remaining
+            fi
+            timeout --signal=KILL "${limit}s" "$@" --output json > "$output"
             python -c 'import json,sys; value=json.load(open(sys.argv[1])); assert isinstance(value,dict)' "$output"
           }
           USER_ID=
@@ -158,13 +165,18 @@ jobs:
           MEMBERSHIP_CREATED=0
           POLICY_CREATED=0
           KEY_CREATED=0
+          CLEANUP_DEADLINE=0
           retry_delete() {
-            local attempt
-            for attempt in 1 2 3 4 5 6; do
-              if timeout --signal=KILL 30s "$@" >/dev/null 2>&1; then
+            local attempt remaining per_call
+            for attempt in 1 2; do
+              remaining=$(( CLEANUP_DEADLINE - SECONDS ))
+              (( remaining > 0 )) || return 1
+              per_call=20
+              (( remaining >= per_call )) || per_call=$remaining
+              if timeout --signal=KILL "${per_call}s" "$@" >/dev/null 2>&1; then
                 return 0
               fi
-              sleep 5
+              sleep 3
             done
             return 1
           }
@@ -172,25 +184,60 @@ jobs:
             local rc=$?
             local rollback=NOT_NEEDED
             local failed=0
+            local pass
             trap - EXIT
             set +e
             if (( rc != 0 )); then
               rollback=ROLLED_BACK
-              if (( KEY_CREATED == 1 )); then
-                retry_delete oci iam user api-key delete --user-id "$USER_ID" --fingerprint "$EXPECTED_FINGERPRINT" --force || failed=1
+              CLEANUP_DEADLINE=$(( SECONDS + 240 ))
+              # A timed-out create may have reached OCI before its response was
+              # lost. Recover only this run's exact stamped IDs before rollback.
+              for pass in 1 2 3; do
+                if (( USER_CREATED == 1 )) && [[ -z "$USER_ID" ]]; then
+                  request_json "$RUNNER_TEMP/rollback-users.json" oci iam user list --compartment-id "$TENANCY_ID" --all
+                  USER_ID="$(select_exact "$RUNNER_TEMP/rollback-users.json" "$USER_NAME")"
+                fi
+                if (( GROUP_CREATED == 1 )) && [[ -z "$GROUP_ID" ]]; then
+                  request_json "$RUNNER_TEMP/rollback-groups.json" oci iam group list --compartment-id "$TENANCY_ID" --all
+                  GROUP_ID="$(select_exact "$RUNNER_TEMP/rollback-groups.json" "$GROUP_NAME")"
+                fi
+                if (( POLICY_CREATED == 1 )) && [[ -z "$POLICY_ID" ]]; then
+                  request_json "$RUNNER_TEMP/rollback-policies.json" oci iam policy list --compartment-id "$TENANCY_ID" --all
+                  POLICY_ID="$(select_exact "$RUNNER_TEMP/rollback-policies.json" "$POLICY_NAME")"
+                fi
+                [[ "$USER_CREATED:$GROUP_CREATED:$POLICY_CREATED" != *1* ]] || sleep 5
+              done
+              if (( KEY_CREATED == 1 )) && [[ -n "$USER_ID" && -n "$EXPECTED_FINGERPRINT" ]]; then
+                retry_delete oci iam user api-key delete --user-id "$USER_ID" --fingerprint "$EXPECTED_FINGERPRINT" --force || true
               fi
-              if (( MEMBERSHIP_CREATED == 1 )); then
-                retry_delete oci iam group remove-user --group-id "$GROUP_ID" --user-id "$USER_ID" --force || failed=1
+              if (( MEMBERSHIP_CREATED == 1 )) && [[ -n "$GROUP_ID" && -n "$USER_ID" ]]; then
+                retry_delete oci iam group remove-user --group-id "$GROUP_ID" --user-id "$USER_ID" --force || true
               fi
-              if (( POLICY_CREATED == 1 )); then
-                retry_delete oci iam policy delete --policy-id "$POLICY_ID" --force || failed=1
+              if (( POLICY_CREATED == 1 )) && [[ -n "$POLICY_ID" ]]; then
+                retry_delete oci iam policy delete --policy-id "$POLICY_ID" --force || true
               fi
-              if (( GROUP_CREATED == 1 )); then
-                retry_delete oci iam group delete --group-id "$GROUP_ID" --force || failed=1
+              if (( GROUP_CREATED == 1 )) && [[ -n "$GROUP_ID" ]]; then
+                retry_delete oci iam group delete --group-id "$GROUP_ID" --force || true
               fi
-              if (( USER_CREATED == 1 )); then
-                retry_delete oci iam user delete --user-id "$USER_ID" --force || failed=1
+              if (( USER_CREATED == 1 )) && [[ -n "$USER_ID" ]]; then
+                retry_delete oci iam user delete --user-id "$USER_ID" --force || true
               fi
+              # Three repeated exact-stamp inventories are authoritative even
+              # when a delete returned 404 or its response was lost.
+              for pass in 1 2 3; do
+                request_json "$RUNNER_TEMP/proof-users-$pass.json" oci iam user list --compartment-id "$TENANCY_ID" --all || failed=1
+                request_json "$RUNNER_TEMP/proof-groups-$pass.json" oci iam group list --compartment-id "$TENANCY_ID" --all || failed=1
+                request_json "$RUNNER_TEMP/proof-policies-$pass.json" oci iam policy list --compartment-id "$TENANCY_ID" --all || failed=1
+                python - "$RUNNER_TEMP/proof-users-$pass.json" "$RUNNER_TEMP/proof-groups-$pass.json" "$RUNNER_TEMP/proof-policies-$pass.json" "$NAME_STAMP" <<'PY' || failed=1
+          import json, sys
+          for path in sys.argv[1:4]:
+              rows = json.load(open(path, encoding='utf-8')).get('data')
+              assert isinstance(rows, list)
+              active = [x for x in rows if isinstance(x, dict) and x.get('name') == sys.argv[4] and x.get('lifecycle-state') != 'DELETED']
+              assert not active
+          PY
+                (( pass == 3 )) || sleep 5
+              done
               (( failed == 0 )) || rollback=ROLLBACK_INCOMPLETE
             fi
             printf '%s\n' "$rollback" > "$RUNNER_TEMP/bootstrap-rollback-status"
@@ -230,23 +277,23 @@ jobs:
           # Never inherit additive permissions from a reused user or group.
           [[ -z "$EXISTING_USER_ID" && -z "$EXISTING_GROUP_ID" && -z "$EXISTING_POLICY_ID" ]] || exit 24
 
+          EXPECTED_FINGERPRINT="$(openssl rsa -pubin -in "$RUNNER_TEMP/readonly-public.pem" -outform DER 2>/dev/null | openssl md5 -c | awk '{print $2}')"
+          USER_CREATED=1
           request_json "$RUNNER_TEMP/user-create.json" oci iam user create --compartment-id "$TENANCY_ID" --name "$USER_NAME" --description 'Issue 881 paid preflight read-only audit principal'
           USER_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.user."); print(x)' "$RUNNER_TEMP/user-create.json")"
-          USER_CREATED=1
+          GROUP_CREATED=1
           request_json "$RUNNER_TEMP/group-create.json" oci iam group create --compartment-id "$TENANCY_ID" --name "$GROUP_NAME" --description 'Issue 881 paid preflight read-only audit group'
           GROUP_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.group."); print(x)' "$RUNNER_TEMP/group-create.json")"
-          GROUP_CREATED=1
-          request_json "$RUNNER_TEMP/member-create.json" oci iam group add-user --group-id "$GROUP_ID" --user-id "$USER_ID"
           MEMBERSHIP_CREATED=1
+          request_json "$RUNNER_TEMP/member-create.json" oci iam group add-user --group-id "$GROUP_ID" --user-id "$USER_ID"
+          POLICY_CREATED=1
           request_json "$RUNNER_TEMP/policy-create.json" oci iam policy create --compartment-id "$TENANCY_ID" --name "$POLICY_NAME" --description 'Least-privilege reads for Issue 881 paid preflight' --statements "file://$RUNNER_TEMP/statements.json"
           POLICY_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.policy."); print(x)' "$RUNNER_TEMP/policy-create.json")"
-          POLICY_CREATED=1
 
-          EXPECTED_FINGERPRINT="$(openssl rsa -pubin -in "$RUNNER_TEMP/readonly-public.pem" -outform DER 2>/dev/null | openssl md5 -c | awk '{print $2}')"
+          KEY_CREATED=1
           request_json "$RUNNER_TEMP/key-upload.json" oci iam user api-key upload --user-id "$USER_ID" --key-file "$RUNNER_TEMP/readonly-public.pem"
           ACTUAL_FINGERPRINT="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["fingerprint"])' "$RUNNER_TEMP/key-upload.json")"
           [[ "$ACTUAL_FINGERPRINT" == "$EXPECTED_FINGERPRINT" ]]
-          KEY_CREATED=1
 
           CIPHERTEXT=v1
           for field in user tenancy fingerprint region; do
