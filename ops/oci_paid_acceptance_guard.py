@@ -71,8 +71,8 @@ def select(
         raise Rejected("INVALID_FLEX_OPTIONS")
     min_ocpus = _decimal(ocpu_options.get("min"), "MIN_OCPUS")
     max_ocpus = _decimal(ocpu_options.get("max"), "MAX_OCPUS")
-    min_memory = _decimal(memory_options.get("min-in-gbs"), "MIN_MEMORY")
-    max_memory = _decimal(memory_options.get("max-in-gbs"), "MAX_MEMORY")
+    min_memory = _decimal(memory_options.get("min-in-g-bs"), "MIN_MEMORY")
+    max_memory = _decimal(memory_options.get("max-in-g-bs"), "MAX_MEMORY")
     if not (min_ocpus <= PAID_OCPUS <= max_ocpus <= Decimal("1024")):
         raise Rejected("OCPU_CONFIGURATION_UNAVAILABLE")
     if not (min_memory <= PAID_MEMORY_GB <= max_memory <= Decimal("65536")):

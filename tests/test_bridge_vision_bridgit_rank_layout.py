@@ -1275,6 +1275,27 @@ def test_generated_glyph_regions_must_not_overlap_vertically():
     )
 
 
+def test_side_step_calibration_requires_a_distinct_geometry_margin(monkeypatch):
+    np = pytest.importorskip("numpy")
+    profile = parse_profile(profile_raw())
+    lengths = {seat: {suit: 2 for suit in "HCDS"} for seat in "NESW"}
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_slot_scores",
+        lambda *_args: np.zeros(len(bridgit_rank_layout.RANKS)),
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "ordered_assignments",
+        lambda *_args: [(0.0, tuple("N" * 13))],
+    )
+
+    with pytest.raises(BridgitRankLayoutError, match="calibration is ambiguous"):
+        bridgit_rank_layout._calibrate_side_steps(
+            [object()], {}, lengths, profile.anchors, profile
+        )
+
+
 def test_side_fan_coordinate_preflight_includes_registration_radius():
     profile = parse_profile(profile_raw())
     assert bridgit_rank_layout._glyph_coords_fit_frame([(2, 100), (20, 100)], profile)

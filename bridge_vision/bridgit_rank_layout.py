@@ -1347,7 +1347,10 @@ def _calibrate_side_steps(
             raise BridgitRankLayoutError(
                 f"side fan {suit} has no in-frame calibration trial"
             )
-        options = []
+        options: dict[
+            tuple[tuple[str, tuple[tuple[int, int], ...]], ...],
+            tuple[float, float, float],
+        ] = {}
         for west_step in candidates["W"][suit]:
             for east_step in candidates["E"][suit]:
                 trial = {"W": {suit: west_step}, "E": {suit: east_step}}
@@ -1365,8 +1368,31 @@ def _calibrate_side_steps(
                     [seat for seat, _ in slots],
                     {seat: lengths[seat][suit] for seat in SEATS},
                 )[0][0]
-                options.append((best, west_step, east_step))
-        _, result["W"][suit], result["E"][suit] = max(options)
+                geometry_key = tuple(
+                    (
+                        seat,
+                        tuple(
+                            _coords(
+                                seat,
+                                suit,
+                                lengths[seat][suit],
+                                anchors,
+                                trial,
+                            )
+                        ),
+                    )
+                    for seat in ("W", "E")
+                )
+                candidate = (best, west_step, east_step)
+                if geometry_key not in options or candidate > options[geometry_key]:
+                    options[geometry_key] = candidate
+        ranked = sorted(options.values(), reverse=True)
+        if (
+            len(ranked) > 1
+            and ranked[0][0] - ranked[1][0] < profile.min_assignment_margin
+        ):
+            raise BridgitRankLayoutError(f"side fan {suit} calibration is ambiguous")
+        _, result["W"][suit], result["E"][suit] = ranked[0]
     return result
 
 
