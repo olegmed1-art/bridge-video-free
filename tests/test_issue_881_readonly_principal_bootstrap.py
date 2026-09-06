@@ -136,7 +136,7 @@ def test_regression_ambiguous_creates_are_reconciled_inside_global_deadline() ->
     assert "JOB_DEADLINE_EPOCH - 120" in TEXT
     assert 'remaining=$(( CLEANUP_DEADLINE_EPOCH - now ))' in TEXT
     assert '(( $(date +%s) <= MUTATION_CUTOFF_EPOCH )) || return 25' in TEXT
-    assert TEXT.count("require_mutation_budget") == 6
+    assert TEXT.count("require_mutation_budget") == 7
     for marker, command in (
         ("USER_CREATED=1", 'oci iam user create'),
         ("GROUP_CREATED=1", 'oci iam group create'),
@@ -166,10 +166,14 @@ def test_regression_receipt_failure_remains_inside_rollback_transaction() -> Non
     assert "steps.bootstrap.outcome != 'success'" in TEXT
     assert "status: `BOOTSTRAP_ERROR`" in TEXT
     assert 'remaining=$(( RECEIPT_DEADLINE_EPOCH - $(date +%s) ))' in TEXT
-    assert 'timeout --signal=KILL "${limit}s" gh issue comment 881' in TEXT
+    assert 'timeout --signal=KILL "${limit}s" gh api --method PATCH' in TEXT
     assert "publish_success_receipt" in TEXT
     assert 'RECEIPT_TOKEN="$(openssl rand -hex 32)"' in TEXT
-    assert "comments(last:100)" in TEXT
     assert 'for attempt in 1 2 3; do' in TEXT
     assert "receipt transaction:" in TEXT
-    assert "len(found) == 1" in TEXT
+    assert "PENDING_IAM_BOOTSTRAP" in TEXT
+    assert 'gh api --method POST "/repos/$GITHUB_REPOSITORY/issues/881/comments"' in TEXT
+    assert 'issues/comments/$PENDING_COMMENT_ID' in TEXT
+    pending = TEXT.index("PENDING_IAM_BOOTSTRAP")
+    first_mutation = TEXT.index("oci iam user create", TEXT.index("exit 24"))
+    assert pending < first_mutation
