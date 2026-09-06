@@ -306,6 +306,16 @@ def build_deal_evidence_report(
     frame_observations: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for observation in observations:
         frame_observations[observation["frame_sha256"]].append(observation)
+    expected_visual_pairs = {
+        (record["seat"], card) for card, record in accepted_by_card.items()
+    }
+    complete_supporting_frames = sorted(
+        frame_sha
+        for frame_sha, frame_items in frame_observations.items()
+        if {(item["seat"], item["card"]) for item in frame_items}
+        == expected_visual_pairs
+    )
+    global_temporal_support = len(complete_supporting_frames) >= required_visual_frames
     pointer_evidence: list[dict[str, Any]] = []
     for index, raw in enumerate(teacher_pointer_events):
         if index >= MAX_POINTER_EVENTS:
@@ -429,6 +439,7 @@ def build_deal_evidence_report(
             and len(complete_seats) == 3
             and len(missing_seats) == 1
             and every_observed_card_has_consensus
+            and global_temporal_support
         ):
             missing_seat = missing_seats[0]
             inferred_cards = sorted(
@@ -473,7 +484,11 @@ def build_deal_evidence_report(
     all_records.sort(key=_record_sort_key)
 
     observed_count = len(accepted_by_card)
-    consensus_complete = observed_count == 52 and every_observed_card_has_consensus
+    consensus_complete = (
+        observed_count == 52
+        and every_observed_card_has_consensus
+        and global_temporal_support
+    )
     if conflicts or review_reasons:
         status = "NEEDS_REVIEW"
     elif consensus_complete:
@@ -522,6 +537,8 @@ def build_deal_evidence_report(
             "total_seat_slots": len(all_records),
             "observed_seat_counts": {seat: len(seat_cards[seat]) for seat in SEATS},
             "known_seat_counts": known_by_seat,
+            "complete_supporting_frame_sha256s": complete_supporting_frames,
+            "global_temporal_support": global_temporal_support,
         },
         "diagram": {
             "seat_order": list(SEATS),

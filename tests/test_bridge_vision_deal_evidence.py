@@ -99,6 +99,8 @@ def test_complete_multiframe_deal_has_card_level_temporal_provenance():
         "total_seat_slots": 52,
         "observed_seat_counts": {seat: 13 for seat in "NESW"},
         "known_seat_counts": {seat: 13 for seat in "NESW"},
+        "complete_supporting_frame_sha256s": list(FRAMES),
+        "global_temporal_support": True,
     }
     assert len(report["card_records"]) == 52
     ace_hearts = next(
@@ -120,6 +122,22 @@ def test_one_frame_is_visual_but_not_temporal_consensus():
 
     assert report["status"] == "PENDING_TEMPORAL_CONSENSUS"
     assert {item["source"] for item in report["card_records"]} == {"VISUAL"}
+
+
+def test_per_card_support_cannot_form_a_hybrid_temporal_deal():
+    frames = ("a" * 64, "b" * 64, "c" * 64)
+    visual = []
+    for card_index, item in enumerate(complete_observations(frames=frames)):
+        frame_index = frames.index(item["frame_sha256"])
+        if frame_index != card_index // len(frames) % len(frames):
+            visual.append(item)
+    report = build_deal_evidence_report(visual, recognizer_version=VERSION)
+
+    assert report["integrity"]["observed_cards"] == 52
+    assert {item["source"] for item in report["card_records"]} == {"TEMPORAL_CONSENSUS"}
+    assert report["integrity"]["complete_supporting_frame_sha256s"] == []
+    assert report["integrity"]["global_temporal_support"] is False
+    assert report["status"] == "PENDING_TEMPORAL_CONSENSUS"
 
 
 def test_pointer_corroborates_visual_card_but_never_becomes_observation():
