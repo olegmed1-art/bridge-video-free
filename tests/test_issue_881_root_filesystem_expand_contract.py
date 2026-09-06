@@ -1548,6 +1548,13 @@ case "$FAKE_MODE" in
     echo 'ServiceError: {"code":"InvalidParameter","status":503}' >&2
     exit 22
     ;;
+  throttled)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
+    echo '{"code":"TooManyRequests","status":429}' >&2
+    exit 23
+    ;;
   transient_then_valid)
     count=0
     [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
@@ -1609,6 +1616,9 @@ fi
     mixed_permanent = run("mixed_permanent")
     assert "rc=22" in mixed_permanent and "InvalidParameter" in mixed_permanent
     assert (tmp_path / "fake-count").read_text() == "1"
+    throttled = run("throttled")
+    assert "rc=23" in throttled and "TooManyRequests" in throttled
+    assert (tmp_path / "fake-count").read_text() == "3"
     assert "rc=0" in run("transient_then_valid")
 
 
@@ -1715,6 +1725,42 @@ if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s error=%s\n' 
             text=True, capture_output=True, check=True,
         )
         assert "rc=86 error=INVALID_JSON_SUCCESS_RESPONSE" in result.stdout
+
+
+def test_retry_precheck_expiry_returns_previous_causal_rc() -> None:
+    start = WORKFLOW.index("oci_json_request() {")
+    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fake = Path(temp_dir) / "fake-oci"
+        fake.write_text("#!/usr/bin/env bash\necho 'connection reset' >&2\nexit 18\n")
+        fake.chmod(0o755)
+        script = r'''
+bounded_wait_seconds() {
+  count=0
+  [[ ! -f "$BUDGET_COUNT" ]] || count="$(cat "$BUDGET_COUNT")"
+  count=$((count + 1)); printf '%s' "$count" >"$BUDGET_COUNT"
+  if (( count == 1 )); then printf '%s\n' "$1"
+  elif (( count == 2 )); then printf '%s\n' "$1"
+  else return 42
+  fi
+}
+primary_deadline=999999
+''' + helper + r'''
+if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s stderr=%s\n' "$?" "$OCI_JSON_RAW_ERROR"; fi
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env=os.environ | {
+                "RUNNER_TEMP": temp_dir,
+                "BUDGET_COUNT": str(Path(temp_dir) / "budget-count"),
+                "FAKE_OCI": str(fake),
+                "OCI_JSON_MAX_ATTEMPTS": "3",
+                "OCI_JSON_RETRY_DELAY_SECONDS": "0",
+            },
+            text=True, capture_output=True, check=True,
+        )
+        assert "rc=18 stderr=connection reset" in result.stdout
 
 
 def test_receipt_publishes_prior_inventory_diagnostics() -> None:
