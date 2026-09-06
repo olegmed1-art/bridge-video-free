@@ -1296,16 +1296,21 @@ jobs:
             fi
             exit "$rc"
           }
-          if reconcile_prior_attempt_resources; then
-            state_set prior_cleanup_failure_rc none
-          else
-            reconcile_rc=$?
+          record_reconcile_failure() {
+            local reconcile_rc="$?"
+            trap - ERR
             state_set prior_cleanup_status FAILED
             state_set prior_cleanup_failure_rc "$reconcile_rc"
             state_set failure_rc "$reconcile_rc"
             state_set failure_phase "${phase:-reconcile_prior_attempts}"
             exit "$reconcile_rc"
-          fi
+          }
+          set -E
+          trap 'record_reconcile_failure' ERR
+          reconcile_prior_attempt_resources
+          trap - ERR
+          set +E
+          state_set prior_cleanup_failure_rc none
           if (( cleanup_only == 1 )); then
             mark_phase reconcile_failed_run_backup
             # Preserve every exact-name backup ID, including TERMINATED objects,
