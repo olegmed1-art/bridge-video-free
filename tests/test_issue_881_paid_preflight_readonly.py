@@ -61,6 +61,8 @@ def test_boundary_live_oci_surface_is_exactly_the_required_reads() -> None:
 
 def test_regression_source_instance_is_found_across_active_compartments() -> None:
     assert "--compartment-id-in-subtree true" in TEXT
+    assert "--access-level ACCESSIBLE" in TEXT
+    assert "'INACTIVE'" in TEXT
     assert "x.get('lifecycle-state') == 'ACTIVE'" in TEXT
     assert "ocid1.compartment." in TEXT
     assert 'for compartment in "${compartments[@]}"; do' in TEXT
@@ -68,7 +70,10 @@ def test_regression_source_instance_is_found_across_active_compartments() -> Non
     assert "combined['data'].extend(page['data'])" in TEXT
     assert "assert len(matches) == 1" in TEXT
     assert '[[ "$compartment_id" == "$tenancy_id" ]]' not in TEXT
-    assert 'grep -Fxq -- "$compartment_id"' in TEXT
+    assert 'grep -Fxq -- "$compartment_id"' not in TEXT
+    assert 'for known_compartment in "${compartments[@]}"; do' in TEXT
+    assert '[[ "$known_compartment" == "$compartment_id" ]]' in TEXT
+    assert "(( compartment_known == 1 ))" in TEXT
 
 
 def test_regression_rejected_guard_result_is_published_without_launching() -> None:
