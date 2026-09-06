@@ -2227,7 +2227,11 @@ def test_cleanup_failure_restores_after_paid_compute_is_proven_terminal() -> Non
     terminated = cleanup.index("paid_instance_terminal_proven=1")
     volume_cleanup = cleanup.index('if [[ -n "$restored_id" ]]', terminated)
     assert terminated < cleanup.index("restore_source_capacity || failed=1", terminated) < volume_cleanup
-    assert terminated < cleanup.index("release_source_workload_fence || failed=1", terminated) < volume_cleanup
+    assert "release_source_workload_fence" not in cleanup[terminated:volume_cleanup]
+    failure = WORKFLOW[WORKFLOW.index("if ! cleanup_temp_resources; then", WORKFLOW.index("mark_phase paid_capacity_preflight")) :]
+    failure = failure[:failure.index("if ! restore_source_capacity; then")]
+    assert failure.index("restore_source_capacity || true") < failure.index("trap - EXIT")
+    assert failure.index("release_source_workload_fence || true") < failure.index("trap - EXIT")
 
 
 def test_watchdog_releases_fence_even_when_capacity_restore_fails() -> None:
