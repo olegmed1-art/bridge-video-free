@@ -156,8 +156,7 @@ jobs:
           for compartment in "${compartments[@]}"; do
             index=$(( index + 1 ))
             one="$RUNNER_TEMP/instances-$index.json"
-            request_json "$one" oci compute instance list --compartment-id "$compartment" --display-name bridge-school-dds3-frankfurt --all
-            python - "$instances" "$one" <<'PY'
+            # OCI can return an empty rc=0 payload for the server-filtered\n            # display-name form. Inventory broadly, then enforce exact identity\n            # client-side below.\n            request_json "$one" oci compute instance list --compartment-id "$compartment" --all\n            python - "$instances" "$one" <<'PY'
           import json, sys
           combined = json.load(open(sys.argv[1], encoding='utf-8'))
           page = json.load(open(sys.argv[2], encoding='utf-8'))
