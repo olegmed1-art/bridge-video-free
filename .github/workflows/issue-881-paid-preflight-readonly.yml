@@ -1,0 +1,253 @@
+name: Issue 881 paid preflight read-only
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/issue-881-paid-preflight-readonly.yml'
+      - 'ops/oci_paid_acceptance_guard.py'
+      - 'tests/test_issue_881_paid_preflight_readonly.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-881-paid-preflight-readonly
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Enforce read-only paid preflight contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/issue-881-paid-preflight-readonly.yml
+          python - <<'PY'
+          import runpy
+          namespace = runpy.run_path('tests/test_issue_881_paid_preflight_readonly.py')
+          for name, value in namespace.items():
+              if name.startswith('test_') and callable(value):
+                  value()
+          PY
+
+  audit:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 881 &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      github.event.comment.body == '/oracle-ops issue-881-paid-preflight-readonly'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      ISSUE_NUMBER: '881'
+      OWNER_COMMAND: ${{ github.event.comment.body }}
+      EXACT_COMMAND: /oracle-ops issue-881-paid-preflight-readonly
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Validate exact owner request before credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$OWNER_COMMAND" == "$EXACT_COMMAND" ]] || exit 23
+
+      - name: Install pinned OCI CLI without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
+
+      - name: Configure OCI CLI and collect live paid preflight inputs without mutation
+        id: preflight
+        env:
+          OCI_USER: ${{ secrets.OCI_READONLY_CLI_USER }}
+          OCI_TENANCY: ${{ secrets.OCI_READONLY_CLI_TENANCY }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_READONLY_CLI_FINGERPRINT }}
+          OCI_KEY: ${{ secrets.OCI_READONLY_CLI_KEY_CONTENT }}
+          OCI_REGION: ${{ secrets.OCI_READONLY_CLI_REGION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY OCI_REGION; do
+            [[ -n "${!value:-}" ]] || exit 21
+          done
+          [[ "$OCI_REGION" == eu-frankfurt-1 ]] || exit 22
+          install -d -m 0700 "$HOME/.oci"
+          trap 'rm -f "$HOME/.oci/config" "$HOME/.oci/key.pem"' EXIT
+          printf '%s' "$OCI_KEY" | python -c 'import sys; raw=sys.stdin.read().replace("\\r","").replace("\\n","\n"); open(sys.argv[1],"w").write(raw if raw.endswith("\n") else raw+"\n")' "$HOME/.oci/key.pem"
+          chmod 0600 "$HOME/.oci/key.pem"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          def scalar(env, key):
+              lines = [x.strip() for x in os.environ[env].replace('\r', '').splitlines() if x.strip()]
+              matches = [x.split('=', 1)[1].strip() for x in lines if x.startswith(key + '=')]
+              if len(matches) == 1 and matches[0]:
+                  return matches[0]
+              if not matches and len(lines) == 1 and '=' not in lines[0]:
+                  return lines[0]
+              raise SystemExit(f'ambiguous {env}')
+
+          values = {
+              'user': scalar('OCI_USER', 'user'),
+              'fingerprint': scalar('OCI_FINGERPRINT', 'fingerprint'),
+              'tenancy': scalar('OCI_TENANCY', 'tenancy'),
+              'region': scalar('OCI_REGION', 'region'),
+          }
+          target = Path.home() / '.oci' / 'config'
+          target.write_text(
+              '[DEFAULT]\n'
+              + ''.join(f'{key}={value}\n' for key, value in values.items())
+              + f"key_file={Path.home() / '.oci' / 'key.pem'}\n",
+              encoding='utf-8',
+          )
+          PY
+          chmod 0600 "$HOME/.oci/config"
+          export OCI_CLI_REGION="$OCI_REGION"
+          timeout --signal=KILL 30s oci iam region list --output json >/dev/null
+          evidence="$RUNNER_TEMP/issue-881-paid-preflight-evidence.txt"
+          : > "$evidence"
+          request_json() {
+            local output="$1"
+            shift
+            timeout --signal=KILL 30s "$@" --output json > "$output"
+            python -c 'import json,sys; value=json.load(open(sys.argv[1])); assert isinstance(value,dict)' "$output"
+          }
+
+          roots="$RUNNER_TEMP/roots.json"
+          instances="$RUNNER_TEMP/instances.json"
+          shapes="$RUNNER_TEMP/shapes.json"
+          core_limit="$RUNNER_TEMP/core-limit.json"
+          memory_limit="$RUNNER_TEMP/memory-limit.json"
+          result="$RUNNER_TEMP/preflight-result.json"
+
+          request_json "$roots" oci iam compartment list --include-root --all
+          tenancy_id="$(python - "$roots" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          assert isinstance(data, list) and all(isinstance(x, dict) for x in data)
+          matches = [x.get('id') for x in data if isinstance(x.get('id'), str) and x['id'].startswith('ocid1.tenancy.')]
+          assert len(matches) == 1
+          print(matches[0])
+          PY
+          )"
+          request_json "$instances" oci compute instance list --compartment-id "$tenancy_id" --display-name bridge-school-dds3-frankfurt --all
+          readarray -t source < <(python - "$instances" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          assert isinstance(data, list) and all(isinstance(x, dict) for x in data)
+          allowed = {'PROVISIONING', 'STARTING', 'RUNNING', 'STOPPING', 'STOPPED', 'TERMINATING', 'TERMINATED'}
+          assert all(isinstance(x.get('lifecycle-state'), str) and x['lifecycle-state'] in allowed for x in data)
+          matches = [x for x in data if x.get('display-name') == 'bridge-school-dds3-frankfurt' and x['lifecycle-state'] not in {'TERMINATED', 'TERMINATING'}]
+          assert len(matches) == 1
+          row = matches[0]
+          assert row.get('lifecycle-state') == 'RUNNING'
+          for key in ('id', 'availability-domain', 'compartment-id', 'shape'):
+              assert isinstance(row.get(key), str) and row[key]
+              print(row[key])
+          PY
+          )
+          [[ ${#source[@]} -eq 4 ]]
+          instance_id="${source[0]}"
+          ad="${source[1]}"
+          compartment_id="${source[2]}"
+          source_shape="${source[3]}"
+          [[ "$compartment_id" == "$tenancy_id" ]]
+
+          request_json "$shapes" oci compute shape list --compartment-id "$compartment_id" --availability-domain "$ad" --all
+          request_json "$core_limit" oci limits resource-availability get --service-name compute --limit-name standard-e4-core-count --compartment-id "$compartment_id" --availability-domain "$ad"
+          request_json "$memory_limit" oci limits resource-availability get --service-name compute --limit-name standard-e4-memory-count --compartment-id "$compartment_id" --availability-domain "$ad"
+
+          set +e
+          python ops/oci_paid_acceptance_guard.py \
+            --shapes-json "$shapes" \
+            --availability-json "$core_limit" \
+            --memory-availability-json "$memory_limit" \
+            --source-shape "$source_shape" \
+            --now-utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$result"
+          guard_rc=$?
+          set -e
+          [[ "$guard_rc" == 0 || "$guard_rc" == 2 ]]
+
+          python - "$result" "$core_limit" "$memory_limit" <<'PY' > "$evidence"
+          import importlib.util
+          import json
+          import sys
+
+          result = json.load(open(sys.argv[1], encoding='utf-8'))
+          core = json.load(open(sys.argv[2], encoding='utf-8')).get('data')
+          memory = json.load(open(sys.argv[3], encoding='utf-8')).get('data')
+          assert isinstance(core, dict) and isinstance(memory, dict)
+          status = result.get('status')
+          assert status in {'APPROVED', 'REJECTED'}
+          reason = result.get('reason', 'none')
+          assert isinstance(reason, str) and reason and all(c.isupper() or c.isdigit() or c == '_' for c in reason) if reason != 'none' else True
+
+          spec = importlib.util.spec_from_file_location('paid_guard', 'ops/oci_paid_acceptance_guard.py')
+          module = importlib.util.module_from_spec(spec)
+          assert spec and spec.loader
+          spec.loader.exec_module(module)
+
+          print('status=' + status)
+          print('reason=' + reason)
+          print('shape=' + module.PAID_SHAPE)
+          print('ocpus=' + str(module.PAID_OCPUS))
+          print('memory_gb=' + str(module.PAID_MEMORY_GB))
+          print('available_ocpus=' + str(core.get('available')))
+          print('available_memory_gb=' + str(memory.get('available')))
+          print('billing_class=' + str(result.get('billing_class', 'NOT_APPROVED')))
+          print('hourly_rate_guard_usd=' + str(module.MAX_HOURLY_RATE_USD))
+          print('runtime_limit_seconds=' + str(module.MAX_RUNTIME_SECONDS))
+          print('compute_budget_guard_usd=' + str(module.MAX_COMPUTE_USD))
+          print('estimated_compute_usd=' + str(result.get('estimated_compute_usd', 'NOT_APPROVED')))
+          print('price_basis=' + module.PRICE_BASIS)
+          print('price_basis_valid_until=' + module.PRICE_BASIS_VALID_UNTIL.isoformat().replace('+00:00', 'Z'))
+          PY
+          cat "$evidence"
+          echo "status=$(grep '^status=' "$evidence" | cut -d= -f2-)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish sanitized read-only receipt
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/issue-881-paid-preflight-evidence.txt"
+          {
+            echo '## Issue #881 paid preflight read-only audit'
+            echo
+            if [[ -s "$evidence" ]]; then
+              echo '```text'
+              cat "$evidence"
+              echo '```'
+            else
+              echo "status=AUDIT_ERROR"
+              echo "reason=LIVE_INPUT_COLLECTION_FAILED"
+            fi
+            echo
+            echo "- workflow outcome: \`${JOB_STATUS}\`"
+            echo '- OCI surface: read-only `list/get` only'
+            echo '- OCI principal: dedicated read-only credentials required'
+            echo '- OCI resource creation, update, deletion, launch, termination, attachment and host mutation commands: `absent`'
+            echo '- monetary charge created by this audit: `none`'
+            echo "- run: $RUN_URL"
+          } > "$RUNNER_TEMP/body.md"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
