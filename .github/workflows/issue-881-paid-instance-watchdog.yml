@@ -431,6 +431,21 @@ jobs:
           source_restore_rc=0
           source_release_rc=0
           restore_source_capacity || source_restore_rc=$?
+          # After paid compute is absent, an authenticated live parent may
+          # retain the marker for its root mutation. Bound that distinct fence
+          # phase independently; never extend paid compute or capacity lease.
+          if (( source_restore_rc == 0 )); then
+            fence_comments="$(timeout --signal=KILL 30s gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[] | select(.user.login=="github-actions[bot]") | .body' 2>/dev/null || true)"
+            fence_release_epoch="$(sed -n "s|^CAPACITY_FENCE_HELD stamp=${STAMP} release_epoch=\([0-9][0-9]*\) run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${PARENT_RUN_ID}$|\1|p" <<<"$fence_comments" | tail -n1)"
+            fence_now="$(date -u +%s)"
+            if [[ "$fence_release_epoch" =~ ^[0-9]+$ ]] && (( fence_release_epoch > fence_now && fence_release_epoch <= fence_now + 2700 )); then
+              while (( $(date -u +%s) < fence_release_epoch )); do
+                parent_status="$(timeout --signal=KILL 30s gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PARENT_RUN_ID}" --jq '.status' 2>/dev/null || true)"
+                [[ "$parent_status" == completed ]] && break
+                sleep 5
+              done
+            fi
+          fi
           # Even when OCI is unavailable for the entire bounded restore
           # budget, independently try to unmask and start the reachable host.
           release_source_workload_fence || source_release_rc=$?

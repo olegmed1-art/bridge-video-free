@@ -1394,7 +1394,14 @@ jobs:
                 # Restore production at the exact compute-quota release proof
                 # point, before any unrelated storage/network cleanup waits.
                 # Keep the workload fence held for the later root mutation.
-                restore_source_capacity || failed=1
+                if restore_source_capacity; then
+                  post_termination_fence_epoch=$(( $(date -u +%s) + 2700 ))
+                  if ! gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="CAPACITY_FENCE_HELD stamp=${stamp} release_epoch=${post_termination_fence_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"; then
+                    failed=1
+                  fi
+                else
+                  failed=1
+                fi
               else
                 failed=1
               fi
@@ -1906,9 +1913,12 @@ jobs:
           drill_seconds="$(( $(date -u +%s) - drill_started ))"
           if ! cleanup_temp_resources; then
             # No mutation will follow this failed cleanup, so do not leave the
-            # service fenced while the watchdog/operator reconciles resources.
-            restore_source_capacity || true
-            release_source_workload_fence || true
+            # service fenced once paid compute is proven absent. Before that
+            # proof, the watchdog must retain the fence while freeing quota.
+            if (( paid_instance_terminal_proven == 1 )); then
+              restore_source_capacity || true
+              release_source_workload_fence || true
+            fi
             # Do not invoke the EXIT trap a second time after a fully bounded
             # explicit cleanup attempt; fail closed with the retained IDs/name
             # stamp available in this run's log for operator reconciliation.

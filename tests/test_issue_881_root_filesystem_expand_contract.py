@@ -2226,10 +2226,13 @@ def test_cleanup_failure_restores_after_paid_compute_is_proven_terminal() -> Non
     cleanup = WORKFLOW[WORKFLOW.index("cleanup_temp_resources() {") : WORKFLOW.index("cleanup() {")]
     terminated = cleanup.index("paid_instance_terminal_proven=1")
     volume_cleanup = cleanup.index('if [[ -n "$restored_id" ]]', terminated)
-    assert terminated < cleanup.index("restore_source_capacity || failed=1", terminated) < volume_cleanup
+    restore = cleanup.index("if restore_source_capacity; then", terminated)
+    fence_receipt = cleanup.index("CAPACITY_FENCE_HELD", restore)
+    assert terminated < restore < fence_receipt < volume_cleanup
     assert "release_source_workload_fence" not in cleanup[terminated:volume_cleanup]
     failure = WORKFLOW[WORKFLOW.index("if ! cleanup_temp_resources; then", WORKFLOW.index("mark_phase paid_capacity_preflight")) :]
     failure = failure[:failure.index("if ! restore_source_capacity; then")]
+    assert "if (( paid_instance_terminal_proven == 1 )); then" in failure
     assert failure.index("restore_source_capacity || true") < failure.index("trap - EXIT")
     assert failure.index("release_source_workload_fence || true") < failure.index("trap - EXIT")
 
@@ -2243,6 +2246,17 @@ def test_watchdog_releases_fence_even_when_capacity_restore_fails() -> None:
     volume_cleanup = watchdog.index("oci bv boot-volume delete", start)
     deferred_failure = watchdog.index("if (( source_restore_rc != 0 || source_release_rc != 0 )); then", volume_cleanup)
     assert volume_cleanup < deferred_failure < watchdog.index("exit 105", deferred_failure)
+
+
+def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> None:
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    start = watchdog.index("CAPACITY_FENCE_HELD")
+    release = watchdog.index("release_source_workload_fence || source_release_rc=$?", start)
+    block = watchdog[start:release]
+    assert "fence_release_epoch <= fence_now + 2700" in block
+    assert 'actions/runs/${PARENT_RUN_ID}' in block
+    assert '[[ "$parent_status" == completed ]] && break' in block
+    assert "release_source_workload_fence" not in block
 
 
 def test_exit_cleanup_stays_armed_through_fallible_backup_retirement() -> None:
