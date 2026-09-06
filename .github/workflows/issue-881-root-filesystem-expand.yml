@@ -221,6 +221,7 @@ jobs:
                 return 0
               fi
               OCI_JSON_ERROR=INVALID_JSON_SUCCESS_RESPONSE
+              last_rc=86
               if (( attempt < max_attempts )); then
                 bounded_retry_seconds="$(bounded_wait_seconds "$((retry_delay_seconds + 1))" "$absolute_deadline")" || return 86
                 [[ "$bounded_retry_seconds" == "$((retry_delay_seconds + 1))" ]] || return 86

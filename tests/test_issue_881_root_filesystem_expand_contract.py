@@ -1763,6 +1763,39 @@ if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s stderr=%s\n'
         assert "rc=18 stderr=connection reset" in result.stdout
 
 
+def test_invalid_json_retry_precheck_expiry_returns_86() -> None:
+    start = WORKFLOW.index("oci_json_request() {")
+    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fake = Path(temp_dir) / "fake-oci"
+        fake.write_text("#!/usr/bin/env bash\nprintf 'not-json'\n")
+        fake.chmod(0o755)
+        script = r'''
+bounded_wait_seconds() {
+  count=0
+  [[ ! -f "$BUDGET_COUNT" ]] || count="$(cat "$BUDGET_COUNT")"
+  count=$((count + 1)); printf '%s' "$count" >"$BUDGET_COUNT"
+  if (( count <= 2 )); then printf '%s\n' "$1"; else return 42; fi
+}
+primary_deadline=999999
+''' + helper + r'''
+if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s error=%s\n' "$?" "$OCI_JSON_ERROR"; fi
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env=os.environ | {
+                "RUNNER_TEMP": temp_dir,
+                "BUDGET_COUNT": str(Path(temp_dir) / "budget-count"),
+                "FAKE_OCI": str(fake),
+                "OCI_JSON_MAX_ATTEMPTS": "3",
+                "OCI_JSON_RETRY_DELAY_SECONDS": "0",
+            },
+            text=True, capture_output=True, check=True,
+        )
+        assert "rc=86 error=INVALID_JSON_SUCCESS_RESPONSE" in result.stdout
+
+
 def test_receipt_publishes_prior_inventory_diagnostics() -> None:
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "prior_inventory_key + '_stderr_class'" in receipt
