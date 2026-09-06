@@ -1541,6 +1541,13 @@ case "$FAKE_MODE" in
     echo 'ServiceError: {"code":"UnexpectedGatewayError","status":502}' >&2
     exit 21
     ;;
+  mixed_permanent)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
+    echo 'ServiceError: {"code":"InvalidParameter","status":503}' >&2
+    exit 22
+    ;;
   transient_then_valid)
     count=0
     [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
@@ -1599,6 +1606,9 @@ fi
     prefixed_transient = run("prefixed_transient")
     assert "rc=21" in prefixed_transient and "UnexpectedGatewayError" in prefixed_transient
     assert (tmp_path / "fake-count").read_text() == "3"
+    mixed_permanent = run("mixed_permanent")
+    assert "rc=22" in mixed_permanent and "InvalidParameter" in mixed_permanent
+    assert (tmp_path / "fake-count").read_text() == "1"
     assert "rc=0" in run("transient_then_valid")
 
 
