@@ -1503,7 +1503,7 @@ case "$FAKE_MODE" in
     count=0
     [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
     printf '%s' "$((count + 1))" >"$count_file"
-    echo '{"code":"NotAuthenticated","status":401}' >&2
+    echo '{"code":"NotAuthenticated","status":401,"message":"configured maximum is 500 items"}' >&2
     exit 17
     ;;
   transport)
@@ -1512,6 +1512,13 @@ case "$FAKE_MODE" in
     printf '%s' "$((count + 1))" >"$count_file"
     echo 'connection reset' >&2
     exit 18
+    ;;
+  structured_transient)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
+    echo '{"code":"ServiceUnavailable","status":503}' >&2
+    exit 19
     ;;
   transient_then_valid)
     count=0
@@ -1562,6 +1569,9 @@ fi
     transport = run("transport")
     assert "rc=18" in transport and "connection reset" in transport
     assert (tmp_path / "fake-count").read_text() == "3"
+    structured_transient = run("structured_transient")
+    assert "rc=19" in structured_transient and "ServiceUnavailable" in structured_transient
+    assert (tmp_path / "fake-count").read_text() == "3"
     assert "rc=0" in run("transient_then_valid")
 
 
@@ -1584,6 +1594,50 @@ if prior_named_ids instance boot-acceptance; then echo rc=0; else echo rc=$?; fi
     assert "state:prior_inventory_last_status=REQUEST_FAILED" in result.stderr
     assert "state:prior_inventory_last_failure_rc=17" in result.stderr
     assert "diagnostic:prior_inventory_instance:rc=17" in result.stderr
+
+    invalid = helper + r'''
+state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
+record_oci_diagnostic() { printf 'diagnostic:%s:rc=%s\n' "$1" "$2" >&2; }
+oci_json_request() { OCI_JSON_OUTPUT='{"data":{}}'; OCI_JSON_ERROR=''; OCI_JSON_RAW_ERROR=''; return 0; }
+tenancy_id=tenancy; ad=ad; prior_prefix=prefix; stamp=current; target_prior_stamp=
+if prior_named_ids instance boot-acceptance; then echo rc=0; else echo rc=$?; fi
+'''
+    invalid_result = subprocess.run(["bash", "-c", invalid], text=True, capture_output=True, check=True)
+    assert "rc=97" in invalid_result.stdout
+    assert "state:prior_inventory_last_status=INVALID_RESPONSE" in invalid_result.stderr
+    assert "state:prior_inventory_instance_status=PASS" not in invalid_result.stderr
+
+
+def test_transient_retry_keeps_causal_rc_when_delay_budget_is_short() -> None:
+    start = WORKFLOW.index("oci_json_request() {")
+    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fake = Path(temp_dir) / "fake-oci"
+        fake.write_text("#!/usr/bin/env bash\necho 'connection reset' >&2\nexit 18\n")
+        fake.chmod(0o755)
+        script = r'''
+bounded_wait_seconds() {
+  if [[ "$1" == 5 ]]; then printf '2\n'; else printf '%s\n' "$1"; fi
+}
+primary_deadline=999999
+''' + helper + r'''
+if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s stderr=%s\n' "$?" "$OCI_JSON_RAW_ERROR"; fi
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env=os.environ | {"RUNNER_TEMP": temp_dir, "FAKE_OCI": str(fake), "OCI_JSON_MAX_ATTEMPTS": "3"},
+            text=True, capture_output=True, check=True,
+        )
+        assert "rc=18 stderr=connection reset" in result.stdout
+
+
+def test_receipt_publishes_prior_inventory_diagnostics() -> None:
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "prior_inventory_key + '_stderr_class'" in receipt
+    assert "prior_inventory_key + '_stdout_shape'" in receipt
+    assert "prior_inventory_key + '_stdout_bytes'" in receipt
+    assert "prior_inventory_key + '_stderr_bytes'" in receipt
 
 
 def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:
