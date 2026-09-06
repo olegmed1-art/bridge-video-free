@@ -53,12 +53,6 @@ jobs:
       ISSUE_NUMBER: '881'
       OWNER_COMMAND: ${{ github.event.comment.body }}
       EXACT_COMMAND: /oracle-ops issue-881-paid-preflight-readonly
-      OCI_USER: ${{ secrets.OCI_CLI_USER }}
-      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -71,7 +65,20 @@ jobs:
           set -euo pipefail
           [[ "$OWNER_COMMAND" == "$EXACT_COMMAND" ]] || exit 23
 
-      - name: Configure OCI CLI
+      - name: Install pinned OCI CLI without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
+
+      - name: Configure OCI CLI and collect live paid preflight inputs without mutation
+        id: preflight
+        env:
+          OCI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
         shell: bash
         run: |
           set -euo pipefail
@@ -79,8 +86,8 @@ jobs:
             [[ -n "${!value:-}" ]] || exit 21
           done
           [[ "$OCI_REGION" == eu-frankfurt-1 ]] || exit 22
-          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
           install -d -m 0700 "$HOME/.oci"
+          trap 'rm -f "$HOME/.oci/config" "$HOME/.oci/key.pem"' EXIT
           printf '%s' "$OCI_KEY" | python -c 'import sys; raw=sys.stdin.read().replace("\\r","").replace("\\n","\n"); open(sys.argv[1],"w").write(raw if raw.endswith("\n") else raw+"\n")' "$HOME/.oci/key.pem"
           chmod 0600 "$HOME/.oci/key.pem"
           python - <<'PY'
@@ -113,13 +120,6 @@ jobs:
           chmod 0600 "$HOME/.oci/config"
           export OCI_CLI_REGION="$OCI_REGION"
           timeout --signal=KILL 30s oci iam region list --output json >/dev/null
-
-      - name: Collect live paid preflight inputs without mutation
-        id: preflight
-        shell: bash
-        run: |
-          set -euo pipefail
-          export OCI_CLI_REGION="$OCI_REGION"
           evidence="$RUNNER_TEMP/issue-881-paid-preflight-evidence.txt"
           : > "$evidence"
           request_json() {
@@ -225,6 +225,7 @@ jobs:
         if: always()
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           JOB_STATUS: ${{ job.status }}
         run: |
@@ -249,4 +250,3 @@ jobs:
             echo "- run: $RUN_URL"
           } > "$RUNNER_TEMP/body.md"
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
-
