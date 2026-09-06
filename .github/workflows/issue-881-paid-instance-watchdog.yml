@@ -107,6 +107,7 @@ jobs:
           # fence release and exact-stamped storage cleanup.
           watchdog_hard_deadline=$((SECONDS + 17400))
           watchdog_cleanup_cutoff=$((watchdog_hard_deadline - 600))
+          watchdog_cleanup_cutoff_epoch=$(( $(date -u +%s) + watchdog_cleanup_cutoff - SECONDS ))
           for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY; do [[ -n "${!value:-}" ]]; done
           WATCHDOG_PAYLOAD="${STAMP}|${EXPIRY_EPOCH}|${EXPECTED_AD}|${PARENT_RUN_ID}|${PARENT_RUN_ATTEMPT}|${SOURCE_INSTANCE_HMAC}|${SOURCE_ORIGINAL_OCPUS}|${SOURCE_ORIGINAL_MEMORY}|${SOURCE_LEASE_OCPUS}|${SOURCE_LEASE_MEMORY}" python - <<'PY'
           import hashlib,hmac,os
@@ -183,6 +184,7 @@ jobs:
             local source_id source_restore_deadline source_restored=0 source_get lifecycle ocpus memory command_deadline
             local -a source_state
             source_restore_deadline=$((SECONDS + 900))
+            (( source_restore_deadline < watchdog_cleanup_cutoff )) || source_restore_deadline="$watchdog_cleanup_cutoff"
             oci_retry_json "$source_list" "$source_restore_deadline" oci compute instance list --compartment-id "$tenancy_id" --display-name bridge-school-dds3-frankfurt --all
             EXPECTED_AD="$EXPECTED_AD" TENANCY_ID="$tenancy_id" python - "$source_list" >"$source_id_file" <<'PY'
           import json,os,sys
@@ -465,7 +467,7 @@ jobs:
             # shorten, but never extend, the bounded fail-safe hold.
             if [[ "$parent_status" != completed ]]; then
               fence_wait_deadline=$((fence_now + 2700))
-              (( fence_wait_deadline < watchdog_cleanup_cutoff )) || fence_wait_deadline="$watchdog_cleanup_cutoff"
+              (( fence_wait_deadline < watchdog_cleanup_cutoff_epoch )) || fence_wait_deadline="$watchdog_cleanup_cutoff_epoch"
               if [[ "$fence_release_epoch" =~ ^[0-9]+$ ]] && (( fence_release_epoch <= fence_now )); then
                 fence_wait_deadline="$fence_now"
               elif [[ "$fence_release_epoch" =~ ^[0-9]+$ ]] && (( fence_release_epoch <= fence_wait_deadline )); then

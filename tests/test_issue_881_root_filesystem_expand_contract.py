@@ -2275,7 +2275,7 @@ def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> No
     release = watchdog.index("release_source_workload_fence || source_release_rc=$?", start)
     block = watchdog[start:release]
     assert "fence_wait_deadline=$((fence_now + 2700))" in block
-    assert 'fence_wait_deadline="$watchdog_cleanup_cutoff"' in block
+    assert 'fence_wait_deadline="$watchdog_cleanup_cutoff_epoch"' in block
     assert "fence_release_epoch <= fence_now" in block
     assert "fence_release_epoch <= fence_wait_deadline" in block
     assert 'actions/runs/${PARENT_RUN_ID}' in block
@@ -2288,6 +2288,7 @@ def test_watchdog_retries_paid_reconciliation_with_reserved_cleanup_time() -> No
     watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
     assert "watchdog_hard_deadline=$((SECONDS + 17400))" in watchdog
     assert "watchdog_cleanup_cutoff=$((watchdog_hard_deadline - 600))" in watchdog
+    assert "watchdog_cleanup_cutoff_epoch=$(( $(date -u +%s) + watchdog_cleanup_cutoff - SECONDS ))" in watchdog
     start = watchdog.index("reconcile_paid_instance_once() {")
     loop = watchdog.index("while (( SECONDS < watchdog_cleanup_cutoff )); do", start)
     proof = watchdog.index("instance_terminal_proven == 1 || instance_inventory_clean == 1", loop)
@@ -2296,6 +2297,8 @@ def test_watchdog_retries_paid_reconciliation_with_reserved_cleanup_time() -> No
     assert "exit 97" not in reconcile
     assert "exit 99" not in reconcile
     assert "exit 101" not in reconcile
+    restore = watchdog[watchdog.index("restore_source_capacity() {") : watchdog.index("release_source_workload_fence() {")]
+    assert 'source_restore_deadline="$watchdog_cleanup_cutoff"' in restore
 
 
 def test_exit_cleanup_does_not_reclaim_capacity_before_paid_terminal_proof() -> None:
