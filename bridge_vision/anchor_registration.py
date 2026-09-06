@@ -426,6 +426,10 @@ def register_from_upper_right_anchor(
         if game_width > observed_width or game_height > observed_height:
             continue
         scaled = cv2.resize(template, (width, height), interpolation=cv2.INTER_NEAREST)
+        if float(scaled.std()) < 8.0:
+            raise AnchorRegistrationError(
+                "scaled interface anchor has insufficient visual detail"
+            )
         scores = cv2.matchTemplate(observed_appearance, scaled, cv2.TM_CCOEFF_NORMED)
         np.abs(scores, out=scores)
         x_min, x_max, y_min, y_max = _anchor_origin_bounds(
