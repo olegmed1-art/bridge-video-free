@@ -66,8 +66,15 @@ def test_regression_source_instance_is_found_across_active_compartments() -> Non
     assert "x.get('lifecycle-state') == 'ACTIVE'" in TEXT
     assert "ocid1.compartment." in TEXT
     assert 'for compartment in "${compartments[@]}"; do' in TEXT
-    assert '--compartment-id "$compartment" --display-name bridge-school-dds3-frankfurt' in TEXT
+    assert '--compartment-id "$compartment" --all' in TEXT
+    assert "compute instance list --compartment-id \"$compartment\" --display-name" not in TEXT
+    assert "empty rc=0 payload for the server-filtered" in TEXT
     assert "combined['data'].extend(page['data'])" in TEXT
+    source_block = TEXT.split('readarray -t source < <(', 1)[1].split('[[ ${#source[@]} -eq 4 ]]', 1)[0]
+    assert "named = [x for x in data if x.get('display-name') == 'bridge-school-dds3-frankfurt']" in source_block
+    assert "x['lifecycle-state'] in allowed for x in named" in source_block
+    assert "x['lifecycle-state'] in allowed for x in data" not in source_block
+    assert "matches = [x for x in named" in source_block
     assert "assert len(matches) == 1" in TEXT
     assert '[[ "$compartment_id" == "$tenancy_id" ]]' not in TEXT
     assert 'grep -Fxq -- "$compartment_id"' not in TEXT

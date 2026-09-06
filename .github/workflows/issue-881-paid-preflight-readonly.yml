@@ -156,7 +156,10 @@ jobs:
           for compartment in "${compartments[@]}"; do
             index=$(( index + 1 ))
             one="$RUNNER_TEMP/instances-$index.json"
-            request_json "$one" oci compute instance list --compartment-id "$compartment" --display-name bridge-school-dds3-frankfurt --all
+            # OCI can return an empty rc=0 payload for the server-filtered
+            # display-name form. Inventory broadly, then enforce exact identity
+            # client-side below.
+            request_json "$one" oci compute instance list --compartment-id "$compartment" --all
             python - "$instances" "$one" <<'PY'
           import json, sys
           combined = json.load(open(sys.argv[1], encoding='utf-8'))
@@ -171,8 +174,9 @@ jobs:
           data = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
           assert isinstance(data, list) and all(isinstance(x, dict) for x in data)
           allowed = {'PROVISIONING', 'STARTING', 'RUNNING', 'STOPPING', 'STOPPED', 'TERMINATING', 'TERMINATED'}
-          assert all(isinstance(x.get('lifecycle-state'), str) and x['lifecycle-state'] in allowed for x in data)
-          matches = [x for x in data if x.get('display-name') == 'bridge-school-dds3-frankfurt' and x['lifecycle-state'] not in {'TERMINATED', 'TERMINATING'}]
+          named = [x for x in data if x.get('display-name') == 'bridge-school-dds3-frankfurt']
+          assert all(isinstance(x.get('lifecycle-state'), str) and x['lifecycle-state'] in allowed for x in named)
+          matches = [x for x in named if x['lifecycle-state'] not in {'TERMINATED', 'TERMINATING'}]
           assert len(matches) == 1
           row = matches[0]
           assert row.get('lifecycle-state') == 'RUNNING'
