@@ -59,7 +59,8 @@ jobs:
           now="$(date +%s)"
           job_deadline=$(( now + 1680 ))
           echo "JOB_DEADLINE_EPOCH=$job_deadline" >> "$GITHUB_ENV"
-          echo "MUTATION_CUTOFF_EPOCH=$(( job_deadline - 360 ))" >> "$GITHUB_ENV"
+          echo "MUTATION_CUTOFF_EPOCH=$(( job_deadline - 450 ))" >> "$GITHUB_ENV"
+          echo "RECEIPT_DEADLINE_EPOCH=$(( job_deadline - 360 ))" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -195,6 +196,13 @@ jobs:
           }
           require_mutation_budget() {
             (( $(date +%s) <= MUTATION_CUTOFF_EPOCH )) || return 25
+          }
+          publish_success_receipt() {
+            local remaining limit=30
+            remaining=$(( RECEIPT_DEADLINE_EPOCH - $(date +%s) ))
+            (( remaining > 0 )) || return 26
+            (( remaining >= limit )) || limit=$remaining
+            timeout --signal=KILL "${limit}s" gh issue comment 881 --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
           }
           cleanup() {
             local rc=$?
@@ -369,7 +377,7 @@ jobs:
             echo "- encrypted credential metadata: \`$CIPHERTEXT\`"
             echo "- run: $RUN_URL"
           } > "$RUNNER_TEMP/body.md"
-          gh issue comment 881 --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
+          publish_success_receipt
 
       - name: Publish failed-bootstrap receipt
         if: ${{ always() && steps.bootstrap.outcome != 'success' }}
