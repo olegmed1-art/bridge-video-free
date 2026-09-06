@@ -130,7 +130,8 @@ def test_regression_ambiguous_creates_are_reconciled_inside_global_deadline() ->
     assert "timeout-minutes: 30" in TEXT
     assert "Reserve job-wide cleanup and receipt deadline before setup" in TEXT
     assert "JOB_DEADLINE_EPOCH=$job_deadline" in TEXT
-    assert "MUTATION_CUTOFF_EPOCH=$(( job_deadline - 360 ))" in TEXT
+    assert "MUTATION_CUTOFF_EPOCH=$(( job_deadline - 450 ))" in TEXT
+    assert "RECEIPT_DEADLINE_EPOCH=$(( job_deadline - 360 ))" in TEXT
     assert "CLEANUP_DEADLINE_EPOCH=$(( now + 240 ))" in TEXT
     assert "JOB_DEADLINE_EPOCH - 120" in TEXT
     assert 'remaining=$(( CLEANUP_DEADLINE_EPOCH - now ))' in TEXT
@@ -164,3 +165,6 @@ def test_regression_receipt_failure_remains_inside_rollback_transaction() -> Non
     assert "the OCI rollback trap and credentials are live" in TEXT
     assert "steps.bootstrap.outcome != 'success'" in TEXT
     assert "status: `BOOTSTRAP_ERROR`" in TEXT
+    assert 'remaining=$(( RECEIPT_DEADLINE_EPOCH - $(date +%s) ))' in TEXT
+    assert 'timeout --signal=KILL "${limit}s" gh issue comment 881' in TEXT
+    assert "publish_success_receipt" in TEXT
