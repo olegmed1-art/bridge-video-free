@@ -197,11 +197,7 @@ jobs:
                 # Retry only failures that are safe to classify as transient.
                 # Authentication, authorization, quota, conflict, and invalid
                 # request failures remain immediate fail-closed outcomes.
-                if python -c 'import json,sys; value=json.load(sys.stdin); assert isinstance(value,dict)' <"$stderr_file" 2>/dev/null; then
-                  retry_class="$(python -c 'import json,sys; value=json.load(sys.stdin); status=value.get("status"); code=str(value.get("code") or "").lower(); transient=status==429 or (isinstance(status,int) and status>=500) or code in {"toomanyrequests","internalservererror","serviceunavailable"}; permanent=(isinstance(status,int) and 400<=status<500) or code in {"notauthenticated","notauthorizedornotfound","invalidparameter","limitexceeded","conflict"}; print("TRANSIENT" if transient else "PERMANENT" if permanent else "STRUCTURED_UNKNOWN")' <"$stderr_file")"
-                else
-                  retry_class=UNSTRUCTURED
-                fi
+                retry_class="$(python -c 'import json,sys; raw=sys.stdin.read(); value=None; decoder=json.JSONDecoder(); exec("for index,char in enumerate(raw):\n if ord(char) != 123: continue\n try: candidate,_=decoder.raw_decode(raw[index:])\n except (TypeError,ValueError): continue\n if isinstance(candidate,dict): value=candidate; break"); status=value.get("status") if value else None; code=str(value.get("code") or "").lower() if value else ""; transient=value is not None and (status==429 or (isinstance(status,int) and status>=500) or code in {"toomanyrequests","internalservererror","serviceunavailable"}); permanent=value is not None and ((isinstance(status,int) and 400<=status<500) or code in {"notauthenticated","notauthorizedornotfound","invalidparameter","limitexceeded","conflict"}); print("TRANSIENT" if transient else "PERMANENT" if permanent else "STRUCTURED_UNKNOWN" if value is not None else "UNSTRUCTURED")' <"$stderr_file")"
                 if (( attempt < max_attempts )) && {
                     [[ "$retry_class" == TRANSIENT ]] \
                     || { [[ "$retry_class" == UNSTRUCTURED ]] && { [[ "$rc" == 124 || "$rc" == 137 ]] || grep -Eqi 'TooManyRequests|InternalServerError|ServiceUnavailable|temporar(il)?y unavailable|connection (reset|aborted)|timed out|timeout|HTTP[^0-9]+5[0-9]{2}' "$stderr_file"; }; }

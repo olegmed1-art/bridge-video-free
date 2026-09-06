@@ -1527,6 +1527,20 @@ case "$FAKE_MODE" in
     echo '{"code":"ServiceUnavailable","status":503}' >&2
     exit 19
     ;;
+  prefixed_permanent)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
+    echo 'ServiceError: {"code":"InvalidParameter","status":400,"message":"request timed out"}' >&2
+    exit 20
+    ;;
+  prefixed_transient)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
+    echo 'ServiceError: {"code":"UnexpectedGatewayError","status":502}' >&2
+    exit 21
+    ;;
   transient_then_valid)
     count=0
     [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
@@ -1578,6 +1592,12 @@ fi
     assert (tmp_path / "fake-count").read_text() == "3"
     structured_transient = run("structured_transient")
     assert "rc=19" in structured_transient and "ServiceUnavailable" in structured_transient
+    assert (tmp_path / "fake-count").read_text() == "3"
+    prefixed_permanent = run("prefixed_permanent")
+    assert "rc=20" in prefixed_permanent and "InvalidParameter" in prefixed_permanent
+    assert (tmp_path / "fake-count").read_text() == "1"
+    prefixed_transient = run("prefixed_transient")
+    assert "rc=21" in prefixed_transient and "UnexpectedGatewayError" in prefixed_transient
     assert (tmp_path / "fake-count").read_text() == "3"
     assert "rc=0" in run("transient_then_valid")
 
