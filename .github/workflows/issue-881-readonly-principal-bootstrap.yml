@@ -59,7 +59,7 @@ jobs:
           now="$(date +%s)"
           job_deadline=$(( now + 1680 ))
           echo "JOB_DEADLINE_EPOCH=$job_deadline" >> "$GITHUB_ENV"
-          echo "MUTATION_CUTOFF_EPOCH=$(( job_deadline - 450 ))" >> "$GITHUB_ENV"
+          echo "MUTATION_CUTOFF_EPOCH=$(( job_deadline - 480 ))" >> "$GITHUB_ENV"
           echo "RECEIPT_DEADLINE_EPOCH=$(( job_deadline - 360 ))" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -198,11 +198,42 @@ jobs:
             (( $(date +%s) <= MUTATION_CUTOFF_EPOCH )) || return 25
           }
           publish_success_receipt() {
-            local remaining limit=30
+            local remaining limit=30 rc attempt owner repo per_call
             remaining=$(( RECEIPT_DEADLINE_EPOCH - $(date +%s) ))
             (( remaining > 0 )) || return 26
             (( remaining >= limit )) || limit=$remaining
-            timeout --signal=KILL "${limit}s" gh issue comment 881 --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
+            if timeout --signal=KILL "${limit}s" gh issue comment 881 --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"; then
+              return 0
+            else
+              rc=$?
+            fi
+            owner="${GITHUB_REPOSITORY%%/*}"
+            repo="${GITHUB_REPOSITORY#*/}"
+            # A lost response can hide an accepted comment. Read back the last
+            # 100 comments three times and commit only the receipt carrying this
+            # run's unpredictable transaction token; otherwise rollback.
+            for attempt in 1 2 3; do
+              remaining=$(( RECEIPT_DEADLINE_EPOCH - $(date +%s) ))
+              (( remaining > 0 )) || return "$rc"
+              per_call=10
+              (( remaining >= per_call )) || per_call=$remaining
+              if timeout --signal=KILL "${per_call}s" gh api graphql \
+                -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){comments(last:100){nodes{body}}}}}' \
+                -F owner="$owner" -F repo="$repo" -F number=881 > "$RUNNER_TEMP/receipt-comments.json" &&
+                RECEIPT_TOKEN="$RECEIPT_TOKEN" RUN_URL="$RUN_URL" python - "$RUNNER_TEMP/receipt-comments.json" <<'PY'
+          import json, os, sys
+          nodes = json.load(open(sys.argv[1], encoding='utf-8'))['data']['repository']['issue']['comments']['nodes']
+          assert isinstance(nodes, list)
+          token = f"receipt transaction: `{os.environ['RECEIPT_TOKEN']}`"
+          found = [x for x in nodes if isinstance(x, dict) and token in x.get('body', '') and os.environ['RUN_URL'] in x.get('body', '') and 'status: `READY_FOR_SECRET_INSTALL`' in x.get('body', '')]
+          raise SystemExit(0 if len(found) == 1 else 1)
+          PY
+              then
+                return 0
+              fi
+              (( attempt == 3 )) || sleep 3
+            done
+            return "$rc"
           }
           cleanup() {
             local rc=$?
@@ -357,6 +388,7 @@ jobs:
             CIPHERTEXT="$CIPHERTEXT.$(base64 -w0 "$RUNNER_TEMP/encrypted-$field.bin")"
           done
           [[ -n "$CIPHERTEXT" ]]
+          RECEIPT_TOKEN="$(openssl rand -hex 32)"
           echo "ciphertext=$CIPHERTEXT" >> "$GITHUB_OUTPUT"
           {
             echo '## Issue #881 encrypted read-only credential recovery envelope'
@@ -374,6 +406,7 @@ jobs:
             echo '- compute/storage/network create, update, delete or launch: `absent`'
             echo '- monetary charge: `none`'
             echo '- failed-step IAM rollback: `NOT_NEEDED`'
+            echo "- receipt transaction: \`$RECEIPT_TOKEN\`"
             echo "- encrypted credential metadata: \`$CIPHERTEXT\`"
             echo "- run: $RUN_URL"
           } > "$RUNNER_TEMP/body.md"
