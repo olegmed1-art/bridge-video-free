@@ -14,6 +14,8 @@ def _oci_commands() -> list[str]:
     commands: list[str] = []
     for raw in TEXT.splitlines():
         line = raw.strip()
+        if line.startswith("#"):
+            continue
         if re.match(r"^(request_json .* |retry_delete )?oci ", line):
             commands.append(line.split("oci ", 1)[1])
         elif re.match(r"^timeout .* oci ", line):
@@ -106,7 +108,7 @@ def test_regression_preexisting_identity_objects_are_rejected() -> None:
     assert "Never inherit additive permissions from a reused user or group" in TEXT
     assert "KEY_STATE" not in TEXT
     assert "MEMBER_COUNT" not in TEXT
-    assert "x.get('lifecycle-state') != 'DELETED'" not in TEXT
+    assert "matches = [x for x in rows if x.get('name') == sys.argv[2] and" not in TEXT
     assert 'NAME_STAMP="issue-881-paid-preflight-readonly-${GITHUB_RUN_ID}"' in TEXT
 
 
@@ -122,3 +124,20 @@ def test_regression_partial_iam_creation_is_rolled_back_in_dependency_order() ->
     assert "ROLLBACK_INCOMPLETE" in TEXT
     assert "failed-step IAM rollback" in TEXT
     assert "GITHUB_STEP_SUMMARY" in TEXT
+
+
+def test_regression_ambiguous_creates_are_reconciled_inside_global_deadline() -> None:
+    assert "timeout-minutes: 15" in TEXT
+    assert "CLEANUP_DEADLINE=$(( SECONDS + 240 ))" in TEXT
+    assert 'remaining=$(( CLEANUP_DEADLINE - SECONDS ))' in TEXT
+    for marker, command in (
+        ("USER_CREATED=1", 'oci iam user create'),
+        ("GROUP_CREATED=1", 'oci iam group create'),
+        ("MEMBERSHIP_CREATED=1", 'oci iam group add-user'),
+        ("POLICY_CREATED=1", 'oci iam policy create'),
+        ("KEY_CREATED=1", 'oci iam user api-key upload'),
+    ):
+        assert TEXT.index(marker, TEXT.index("exit 24")) < TEXT.index(command, TEXT.index("exit 24"))
+    assert "Recover only this run's exact stamped IDs before rollback" in TEXT
+    assert "Three repeated exact-stamp inventories are authoritative" in TEXT
+    assert 'for pass in 1 2 3; do' in TEXT
