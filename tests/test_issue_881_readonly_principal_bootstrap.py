@@ -81,6 +81,17 @@ def test_boundary_policy_is_read_only_and_exact() -> None:
         assert f"to {verb} " not in TEXT
 
 
+def test_regression_policy_subject_uses_exact_group_ocid_after_create() -> None:
+    group_create = TEXT.index('oci iam group create')
+    group_id = TEXT.index('GROUP_ID="$(python -c', group_create)
+    statements = TEXT.index('python - "$GROUP_ID"', group_id)
+    policy_create = TEXT.index('oci iam policy create', statements)
+    assert group_create < group_id < statements < policy_create
+    assert TEXT.count("f'Allow group id {group_id} to ") == 3
+    assert "f'Allow group {group} to " not in TEXT
+    assert "assert group_id.startswith('ocid1.group.')" in TEXT
+
+
 def test_regression_identity_domain_primary_email_is_reused_privately() -> None:
     get_admin = TEXT.index('oci iam user get --user-id "$ADMIN_USER_ID"')
     parse_email = TEXT.index('PRIMARY_EMAIL="$(python -', get_admin)
