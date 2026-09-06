@@ -1,5 +1,6 @@
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -235,6 +236,17 @@ def test_job_boundary_rejects_production_hidden_information_and_unknown_type():
                 "production_write": False,
                 "allow_hidden_information": False,
                 "teacher_pointer_events": [{}] * 257,
+            }
+        )
+    with pytest.raises(
+        BridgitRankLayoutError, match="invalid teacher pointer evidence"
+    ):
+        execute_shadow_job(
+            {
+                "job_type": JOB_TYPE,
+                "production_write": False,
+                "allow_hidden_information": False,
+                "teacher_pointer_events": [{}],
             }
         )
 
@@ -507,6 +519,21 @@ def test_encoded_dimensions_and_decoded_memory_are_bounded_before_decode():
         )
 
     bridgit_rank_layout._validate_scoring_budget(profile, observation_count=2)
+    large_profile = replace(
+        profile,
+        width=4096,
+        height=4096,
+        glyph_width=64,
+        glyph_height=64,
+        local_registration_px=4,
+    )
+    bridgit_rank_layout._validate_decoded_budget(
+        large_profile.width, large_profile.height, observation_count=3
+    )
+    with pytest.raises(BridgitRankLayoutError, match="recognition workspace"):
+        bridgit_rank_layout._validate_recognition_memory_budget(
+            large_profile, observation_count=3
+        )
     with pytest.raises(BridgitRankLayoutError, match="scoring-operation budget"):
         bridgit_rank_layout.recognize_frames(
             Path("unread-reference.jpg"),

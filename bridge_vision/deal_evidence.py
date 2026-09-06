@@ -175,6 +175,61 @@ def _record_sort_key(record: Mapping[str, Any]) -> tuple[int, int, int, int]:
     return seat_index, suit_index, rank_index, int(record.get("unknown_slot") or 0)
 
 
+def normalize_teacher_pointer_events(
+    teacher_pointer_events: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Validate pointer fields that do not depend on recognized visual targets."""
+
+    if not isinstance(teacher_pointer_events, Iterable) or isinstance(
+        teacher_pointer_events, (str, bytes)
+    ):
+        raise DealEvidenceError("teacher_pointer_events must be an iterable")
+    result = []
+    for index, raw in enumerate(teacher_pointer_events):
+        if index >= MAX_POINTER_EVENTS:
+            raise DealEvidenceError("too many teacher pointer events")
+        if not isinstance(raw, Mapping):
+            raise DealEvidenceError("teacher pointer event must be an object")
+        if raw.get("source") != "TEACHER_POINTER":
+            raise DealEvidenceError(
+                f"teacher_pointer_events[{index}].source is invalid"
+            )
+        claimed_card = (
+            _normalise_card(raw.get("claimed_card"))
+            if raw.get("claimed_card") is not None
+            else None
+        )
+        claimed_seat = str(raw.get("claimed_seat") or "").upper() or None
+        if claimed_seat is not None and claimed_seat not in SEATS:
+            raise DealEvidenceError(
+                f"invalid teacher_pointer_events[{index}].claimed_seat"
+            )
+        result.append(
+            {
+                "source": "TEACHER_POINTER",
+                "frame_sha256": _sha(
+                    raw.get("frame_sha256"),
+                    f"teacher_pointer_events[{index}].frame_sha256",
+                ),
+                "timestamp_ms": _timestamp(
+                    raw.get("timestamp_ms"),
+                    f"teacher_pointer_events[{index}].timestamp_ms",
+                ),
+                "point": _point(
+                    raw.get("point"), f"teacher_pointer_events[{index}].point"
+                ),
+                "confidence": _confidence(
+                    raw.get("confidence"),
+                    f"teacher_pointer_events[{index}].confidence",
+                ),
+                "claimed_card": claimed_card,
+                "claimed_seat": claimed_seat,
+                "accepted_as_visual_observation": False,
+            }
+        )
+    return result
+
+
 def build_deal_evidence_report(
     visual_observations: Iterable[Mapping[str, Any]],
     teacher_pointer_events: Iterable[Mapping[str, Any]] = (),
@@ -205,6 +260,7 @@ def build_deal_evidence_report(
         teacher_pointer_events, (str, bytes)
     ):
         raise DealEvidenceError("teacher_pointer_events must be an iterable")
+    normalized_pointer_events = normalize_teacher_pointer_events(teacher_pointer_events)
 
     observations: list[dict[str, Any]] = []
     for index, raw in enumerate(visual_observations):
@@ -317,52 +373,18 @@ def build_deal_evidence_report(
     )
     global_temporal_support = len(complete_supporting_frames) >= required_visual_frames
     pointer_evidence: list[dict[str, Any]] = []
-    for index, raw in enumerate(teacher_pointer_events):
-        if index >= MAX_POINTER_EVENTS:
-            raise DealEvidenceError("too many teacher pointer events")
-        if not isinstance(raw, Mapping):
-            raise DealEvidenceError("teacher pointer event must be an object")
-        if raw.get("source") != "TEACHER_POINTER":
-            raise DealEvidenceError(
-                f"teacher_pointer_events[{index}].source is invalid"
-            )
-        frame_sha = _sha(
-            raw.get("frame_sha256"),
-            f"teacher_pointer_events[{index}].frame_sha256",
-        )
-        timestamp_ms = _timestamp(
-            raw.get("timestamp_ms"),
-            f"teacher_pointer_events[{index}].timestamp_ms",
-        )
-        point = _point(raw.get("point"), f"teacher_pointer_events[{index}].point")
-        confidence = _confidence(
-            raw.get("confidence"), f"teacher_pointer_events[{index}].confidence"
-        )
-        claimed_card = (
-            _normalise_card(raw.get("claimed_card"))
-            if raw.get("claimed_card") is not None
-            else None
-        )
-        claimed_seat = str(raw.get("claimed_seat") or "").upper() or None
-        if claimed_seat is not None and claimed_seat not in SEATS:
-            raise DealEvidenceError(
-                f"invalid teacher_pointer_events[{index}].claimed_seat"
-            )
+    for event in normalized_pointer_events:
+        frame_sha = event["frame_sha256"]
+        timestamp_ms = event["timestamp_ms"]
+        point = event["point"]
+        claimed_card = event["claimed_card"]
+        claimed_seat = event["claimed_seat"]
         targets = [
             item
             for item in frame_observations.get(frame_sha, ())
             if _contains(item["region"], point)
         ]
-        event: dict[str, Any] = {
-            "source": "TEACHER_POINTER",
-            "frame_sha256": frame_sha,
-            "timestamp_ms": timestamp_ms,
-            "point": point,
-            "confidence": confidence,
-            "claimed_card": claimed_card,
-            "claimed_seat": claimed_seat,
-            "accepted_as_visual_observation": False,
-        }
+        event = dict(event)
         frame_timestamps = {
             item["timestamp_ms"] for item in frame_observations.get(frame_sha, ())
         }
@@ -554,5 +576,6 @@ __all__ = [
     "PROVENANCE_SOURCES",
     "DealEvidenceError",
     "build_deal_evidence_report",
+    "normalize_teacher_pointer_events",
     "render_deal_diagram_markdown",
 ]

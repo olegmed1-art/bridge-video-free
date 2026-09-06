@@ -39,7 +39,12 @@ from bridge_vision.anchor_registration import (
     validate_anchor_job_budget,
     validate_anchor_spec,
 )
-from bridge_vision.deal_evidence import MAX_POINTER_EVENTS, build_deal_evidence_report
+from bridge_vision.deal_evidence import (
+    MAX_POINTER_EVENTS,
+    DealEvidenceError,
+    build_deal_evidence_report,
+    normalize_teacher_pointer_events,
+)
 
 PROFILE_SCHEMA = "bridge-vision-bridgit-rank-layout/v1"
 JOB_TYPE = "BRIDGIT_RANK_LAYOUT_SHADOW_V1"
@@ -60,6 +65,7 @@ MAX_DECODED_JOB_BYTES = 256 * 1024 * 1024
 MAX_VERTICAL_SEARCH_SPAN = 512
 MAX_TEMPLATE_SCORING_CALLS = 1_000_000
 MAX_TEMPLATE_SCORING_DOT_PRODUCTS = 24_000_000_000
+MAX_RECOGNITION_MISC_WORKSPACE_BYTES = 32 * 1024 * 1024
 MAX_DIAGNOSTIC_DETAIL = 160
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -753,6 +759,29 @@ def _validate_registration_retention_budget(
         )
 
 
+def _estimate_recognition_workspace_bytes(profile: BridgitRankLayoutProfile) -> int:
+    variants_per_rank = len(SUITS) * (2 * profile.local_registration_px + 1) ** 2
+    glyph_pixels = profile.glyph_width * profile.glyph_height
+    template_bank_bytes = len(RANKS) * variants_per_rank * glyph_pixels * 4
+    one_rank_build_bytes = variants_per_rank * glyph_pixels * 5
+    return (
+        template_bank_bytes
+        + one_rank_build_bytes
+        + MAX_RECOGNITION_MISC_WORKSPACE_BYTES
+    )
+
+
+def _validate_recognition_memory_budget(
+    profile: BridgitRankLayoutProfile, *, observation_count: int
+) -> None:
+    retained_frame_bytes = profile.width * profile.height * 3 * (observation_count + 1)
+    if (
+        retained_frame_bytes + _estimate_recognition_workspace_bytes(profile)
+        > MAX_DECODED_JOB_BYTES
+    ):
+        raise BridgitRankLayoutError("recognition workspace exceeds job memory budget")
+
+
 def _validate_input_raster_budget(
     frame_paths: Sequence[Path],
 ) -> list[tuple[int, int]]:
@@ -1199,6 +1228,7 @@ def recognize_frames(
     if not frame_paths or len(frame_paths) > MAX_FRAMES:
         raise BridgitRankLayoutError("frame count outside allowed range")
     _validate_scoring_budget(profile, observation_count=len(frame_paths))
+    _validate_recognition_memory_budget(profile, observation_count=len(frame_paths))
     _validate_decoded_budget(
         profile.width,
         profile.height,
@@ -1278,6 +1308,7 @@ def recognize_frames(
                 )
             )
         loaded_frames = registered_frames
+        del image
     frames = [image for image, _, _, _ in loaded_frames]
     frame_hashes = [frame_hash for _, frame_hash, _, _ in loaded_frames]
     pixel_hashes = [pixel_hash for _, _, pixel_hash, _ in loaded_frames]
@@ -1669,6 +1700,12 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
         raise BridgitRankLayoutError("teacher_pointer_events must be an array")
     if len(pointer_events) > MAX_POINTER_EVENTS:
         raise BridgitRankLayoutError("too many teacher_pointer_events")
+    try:
+        pointer_events = normalize_teacher_pointer_events(pointer_events)
+    except DealEvidenceError as exc:
+        raise BridgitRankLayoutError(
+            f"invalid teacher pointer evidence: {exc}"
+        ) from exc
     input_root = _validated_input_root(job.get("input_root"))
     profile_path = _validated_ref(
         job.get("profile_ref"),
