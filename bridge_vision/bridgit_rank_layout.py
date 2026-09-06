@@ -1326,7 +1326,9 @@ def _calibrate_side_steps(
             if count <= 1:
                 candidates[seat][suit] = [25.0]
                 continue
-            scored = []
+            scored_by_geometry: dict[
+                tuple[tuple[int, int], ...], tuple[float, float]
+            ] = {}
             for quarter in range(72, 101):
                 step = quarter / 4.0
                 trial = {seat: {suit: step}}
@@ -1337,9 +1339,16 @@ def _calibrate_side_steps(
                 for xy in coords:
                     score_cache.setdefault(xy, _slot_scores(frames, bank, xy, profile))
                     score += float(max(score_cache[xy]))
-                scored.append((score, step))
+                geometry_key = tuple(coords)
+                candidate = (score, step)
+                if (
+                    geometry_key not in scored_by_geometry
+                    or candidate > scored_by_geometry[geometry_key]
+                ):
+                    scored_by_geometry[geometry_key] = candidate
             candidates[seat][suit] = [
-                step for _, step in sorted(scored, reverse=True)[:5]
+                step
+                for _, step in sorted(scored_by_geometry.values(), reverse=True)[:5]
             ]
 
     for suit in SUITS:

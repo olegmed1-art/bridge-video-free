@@ -212,6 +212,10 @@ def estimate_anchor_work_units(
                 template_width * template_height / ANCHOR_WORK_BLOCK_PIXELS
             )
             work += match_positions * template_blocks
+        if work == 0:
+            raise AnchorRegistrationError(
+                f"no feasible interface anchor scale for observed frame {index}"
+            )
         per_frame.append(work)
     return sum(per_frame), tuple(per_frame)
 

@@ -242,6 +242,15 @@ def test_scales_that_round_to_the_same_geometry_fail_preflight():
         estimate_anchor_work_units((320, 240), [(640, 480)], offset_only_difference)
 
 
+def test_observation_with_no_feasible_anchor_scale_fails_preflight():
+    with pytest.raises(AnchorRegistrationError, match="no feasible.*scale"):
+        validate_anchor_job_budget(
+            (1000, 720),
+            [(999, 720)],
+            anchor_spec(scales=[1.0]),
+        )
+
+
 def test_reference_anchor_crop_is_rounded_from_edges():
     region = {
         "x": 300.6 / 320,

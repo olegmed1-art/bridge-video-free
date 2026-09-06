@@ -1296,6 +1296,39 @@ def test_side_step_calibration_requires_a_distinct_geometry_margin(monkeypatch):
         )
 
 
+def test_side_step_candidates_are_deduplicated_before_shortlist(monkeypatch):
+    np = pytest.importorskip("numpy")
+    profile = parse_profile(profile_raw())
+    lengths = {seat: {suit: 2 for suit in "HCDS"} for seat in "NESW"}
+    original_coords = bridgit_rank_layout._coords
+
+    def alias_high_steps(seat, suit, count, anchors, side_steps):
+        if seat not in {"W", "E"}:
+            return original_coords(seat, suit, count, anchors, side_steps)
+        step = side_steps[seat][suit]
+        if step >= 24.0:
+            start = 100 if seat == "W" else 800
+            return [(start, 100), (start + 1, 100)]
+        return original_coords(seat, suit, count, anchors, side_steps)
+
+    monkeypatch.setattr(bridgit_rank_layout, "_coords", alias_high_steps)
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_slot_scores",
+        lambda *_args: np.zeros(len(bridgit_rank_layout.RANKS)),
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "ordered_assignments",
+        lambda *_args: [(0.0, tuple("N" * 13))],
+    )
+
+    with pytest.raises(BridgitRankLayoutError, match="calibration is ambiguous"):
+        bridgit_rank_layout._calibrate_side_steps(
+            [object()], {}, lengths, profile.anchors, profile
+        )
+
+
 def test_side_fan_coordinate_preflight_includes_registration_radius():
     profile = parse_profile(profile_raw())
     assert bridgit_rank_layout._glyph_coords_fit_frame([(2, 100), (20, 100)], profile)
