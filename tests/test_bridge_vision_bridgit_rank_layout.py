@@ -279,7 +279,9 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
     profile_path = tmp_path / "profile.json"
     profile_path.write_text(json.dumps(raw), encoding="utf-8")
 
-    def fake_recognize(reference_path, frame_paths, profile):
+    def fake_recognize(
+        reference_path, frame_paths, profile, *, expected_frame_sha256s=None
+    ):
         assert reference_path == reference
         assert frame_paths == [first, second]
         assert profile.profile_id == raw["profile_id"]
@@ -287,6 +289,7 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
             bridgit_rank_layout.sha256_file(first),
             bridgit_rank_layout.sha256_file(second),
         ]
+        assert expected_frame_sha256s == frame_hashes
         return {
             "status": "SHADOW_FULL_LAYOUT_CANDIDATE",
             "result_scope": "SHADOW_ONLY",
@@ -633,6 +636,57 @@ def test_anchor_job_budget_is_rechecked_on_payloads_actually_decoded(monkeypatch
             Path("reference.png"),
             [Path(f"frame-{index}.png") for index in range(3)],
             profile,
+        )
+
+
+def test_decoded_observation_hash_is_checked_before_registration(monkeypatch):
+    raw = profile_raw()
+    raw["geometry"]["interface_anchor"] = {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": {
+            "x": 0.72,
+            "y": 0.02,
+            "width": 0.08,
+            "height": 0.10,
+        },
+        "scales": [1.0],
+        "minimum_score": 0.80,
+        "minimum_margin": 0.03,
+    }
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    profile = parse_profile(raw)
+
+    class Raster:
+        shape = (720, 1000, 3)
+
+    reads = iter(
+        [
+            (Raster(), "a" * 64, "b" * 64, None),
+            (Raster(), "c" * 64, "d" * 64, None),
+        ]
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_validate_input_raster_budget",
+        lambda paths: [(1000, 720)] * len(paths),
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout, "_read_frame", lambda *_args, **_kwargs: next(reads)
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "register_from_upper_right_anchor",
+        lambda *_args, **_kwargs: pytest.fail("must reject before registration"),
+    )
+
+    with pytest.raises(BridgitRankLayoutError, match="changed before recognition"):
+        bridgit_rank_layout.recognize_frames(
+            Path("reference.png"),
+            [Path("frame.png")],
+            profile,
+            expected_frame_sha256s=["e" * 64],
         )
 
 

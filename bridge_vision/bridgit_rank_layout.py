@@ -1223,10 +1223,23 @@ def recognize_frames(
     reference_frame: Path,
     frame_paths: Sequence[Path],
     profile: BridgitRankLayoutProfile,
+    *,
+    expected_frame_sha256s: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Recognize one stable, fully visible deal as a shadow candidate."""
     if not frame_paths or len(frame_paths) > MAX_FRAMES:
         raise BridgitRankLayoutError("frame count outside allowed range")
+    if expected_frame_sha256s is not None:
+        if (
+            not isinstance(expected_frame_sha256s, Sequence)
+            or isinstance(expected_frame_sha256s, (str, bytes))
+            or len(expected_frame_sha256s) != len(frame_paths)
+        ):
+            raise BridgitRankLayoutError("expected frame hashes are incomplete")
+        expected_frame_sha256s = [
+            _required_sha(value, f"expected_frame_sha256s[{index}]")
+            for index, value in enumerate(expected_frame_sha256s)
+        ]
     _validate_scoring_budget(profile, observation_count=len(frame_paths))
     _validate_recognition_memory_budget(profile, observation_count=len(frame_paths))
     _validate_decoded_budget(
@@ -1263,6 +1276,10 @@ def recognize_frames(
         )
         loaded_frames.append(loaded)
         decoded_job_bytes += int(loaded[0].shape[0] * loaded[0].shape[1] * 3)
+    if expected_frame_sha256s is not None:
+        decoded_hashes = [frame_hash for _, frame_hash, _, _ in loaded_frames]
+        if decoded_hashes != list(expected_frame_sha256s):
+            raise BridgitRankLayoutError("observation frame changed before recognition")
     if profile.interface_anchor is not None:
         actual_dimensions = [
             (int(image.shape[1]), int(image.shape[0]))
@@ -1790,7 +1807,12 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
             "reference template frame cannot count as an observation"
         )
 
-    result = recognize_frames(reference_path, frame_paths, profile)
+    result = recognize_frames(
+        reference_path,
+        frame_paths,
+        profile,
+        expected_frame_sha256s=frame_hashes,
+    )
     expected_result_input_hashes = {
         "reference_frame_sha256": profile.reference_frame_sha256,
         "frame_sha256s": frame_hashes,
