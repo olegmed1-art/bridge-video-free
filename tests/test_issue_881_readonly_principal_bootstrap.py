@@ -81,6 +81,17 @@ def test_boundary_policy_is_read_only_and_exact() -> None:
         assert f"to {verb} " not in TEXT
 
 
+def test_regression_identity_domain_primary_email_is_reused_privately() -> None:
+    get_admin = TEXT.index('oci iam user get --user-id "$ADMIN_USER_ID"')
+    parse_email = TEXT.index('PRIMARY_EMAIL="$(python -c', get_admin)
+    create_user = TEXT.index('oci iam user create', parse_email)
+    assert get_admin < parse_email < create_user
+    assert '--email "$PRIMARY_EMAIL"' in TEXT
+    assert '"@" in x' in TEXT
+    assert 'len(x) <= 254' in TEXT
+    assert "echo \"$PRIMARY_EMAIL\"" not in TEXT
+
+
 def test_regression_mutation_credentials_are_scoped_after_owner_gate() -> None:
     bootstrap = TEXT.index("Create dedicated read-only OCI principal")
     exact_gate = TEXT.index("Validate exact owner request before credentials")
