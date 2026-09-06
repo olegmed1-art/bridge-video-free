@@ -743,10 +743,12 @@ def test_oci_json_stdout_isolated_from_warning_stderr() -> None:
     assert 'retry_delay_seconds="${OCI_JSON_RETRY_DELAY_SECONDS:-5}"' in helper
     assert 'for attempt in $(seq 1 "$max_attempts")' in helper
     assert "INVALID_JSON_SUCCESS_RESPONSE" in helper
-    assert 'bounded_retry_seconds="$(bounded_wait_seconds "$retry_delay_seconds" "$absolute_deadline")"' in helper
-    assert 'sleep "$bounded_retry_seconds"' in helper
+    assert helper.count('bounded_retry_seconds="$(bounded_wait_seconds "$((retry_delay_seconds + 1))" "$absolute_deadline")"') == 2
+    assert helper.count('sleep "$retry_delay_seconds"') == 2
     assert "return 86" in helper
-    assert "(( rc == 0 )) || return" in helper
+    assert "if (( rc != 0 )); then" in helper
+    assert "Retry only failures that are safe to classify as transient" in helper
+    assert "return \"$rc\"" in helper
     assert "json.load(sys.stdin)" in helper
 
     cleanup = WORKFLOW[WORKFLOW.index("wait_absent()") : WORKFLOW.index("operation_backup_inventory()")]
@@ -914,7 +916,9 @@ printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
         assert "rc=17" in run("auth").stdout
         assert "rc=86" in run("malformed").stdout
         slow = run("slow", 1)
-        assert "rc=42" in slow.stdout and "elapsed=1" in slow.stdout
+        assert "rc=42" in slow.stdout
+        elapsed = int(slow.stdout.split("elapsed=", 1)[1].split()[0])
+        assert 1 <= elapsed <= 2
 
 
 def test_restored_volume_hydration_wait_is_identity_source_size_and_time_bound() -> None:
@@ -991,7 +995,9 @@ printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
         assert "rc=44" in terminal.stdout
         assert "state:restored_volume_hydration_status=TERMINAL_FAULTY" in terminal.stderr
         waiting = run("waiting", 1)
-        assert "rc=42 elapsed=1" in waiting.stdout
+        assert "rc=42" in waiting.stdout
+        elapsed = int(waiting.stdout.split("elapsed=", 1)[1].split()[0])
+        assert 1 <= elapsed <= 2
         assert "state:restored_volume_hydration_status=TIMEOUT" in waiting.stderr
 
 
@@ -1403,7 +1409,10 @@ printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
 
         slow = run("slow", 1)
         assert "rc=42" in slow.stdout
-        assert "elapsed=1" in slow.stdout
+        # Bash SECONDS is a coarse wall-clock counter and can cross two integer
+        # boundaries during a one-second timeout on a loaded CI runner.
+        elapsed = int(slow.stdout.split("elapsed=", 1)[1].split()[0])
+        assert 1 <= elapsed <= 2
         assert "state:backup_wait_status=TIMEOUT" in slow.stderr
         invalid = run("null")
         assert "rc=43" in invalid.stdout
@@ -1498,12 +1507,61 @@ case "$FAKE_MODE" in
     echo '{malformed'
     ;;
   auth)
-    echo '{"code":"NotAuthenticated","status":401}' >&2
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
+    echo '{"code":"NotAuthenticated","status":401,"message":"configured maximum is 500 items"}' >&2
     exit 17
     ;;
   transport)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
     echo 'connection reset' >&2
     exit 18
+    ;;
+  structured_transient)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
+    echo '{"code":"ServiceUnavailable","status":503}' >&2
+    exit 19
+    ;;
+  prefixed_permanent)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
+    echo 'ServiceError: {"code":"InvalidParameter","status":400,"message":"request timed out"}' >&2
+    exit 20
+    ;;
+  prefixed_transient)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
+    echo 'ServiceError: {"code":"UnexpectedGatewayError","status":502}' >&2
+    exit 21
+    ;;
+  mixed_permanent)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
+    echo 'ServiceError: {"code":"InvalidParameter","status":503}' >&2
+    exit 22
+    ;;
+  throttled)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
+    echo '{"code":"TooManyRequests","status":429}' >&2
+    exit 23
+    ;;
+  transient_then_valid)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    count=$((count + 1))
+    printf '%s' "$count" >"$count_file"
+    if (( count < 2 )); then echo 'connection reset' >&2; exit 18; fi
+    echo '{"data":{"lifecycle-state":"AVAILABLE"}}'
     ;;
 esac
 """
@@ -1540,8 +1598,210 @@ fi
     assert "rc=0" in transient and 'json={"data"' in transient
     assert "rc=86" in run("persistent_empty")
     assert "stderr=INVALID_JSON_SUCCESS_RESPONSE" in run("malformed")
-    assert "rc=17" in run("auth") and "NotAuthenticated" in run("auth")
-    assert "rc=18" in run("transport") and "connection reset" in run("transport")
+    auth = run("auth")
+    assert "rc=17" in auth and "NotAuthenticated" in auth
+    assert (tmp_path / "fake-count").read_text() == "1"
+    transport = run("transport")
+    assert "rc=18" in transport and "connection reset" in transport
+    assert (tmp_path / "fake-count").read_text() == "3"
+    structured_transient = run("structured_transient")
+    assert "rc=19" in structured_transient and "ServiceUnavailable" in structured_transient
+    assert (tmp_path / "fake-count").read_text() == "3"
+    prefixed_permanent = run("prefixed_permanent")
+    assert "rc=20" in prefixed_permanent and "InvalidParameter" in prefixed_permanent
+    assert (tmp_path / "fake-count").read_text() == "1"
+    prefixed_transient = run("prefixed_transient")
+    assert "rc=21" in prefixed_transient and "UnexpectedGatewayError" in prefixed_transient
+    assert (tmp_path / "fake-count").read_text() == "3"
+    mixed_permanent = run("mixed_permanent")
+    assert "rc=22" in mixed_permanent and "InvalidParameter" in mixed_permanent
+    assert (tmp_path / "fake-count").read_text() == "1"
+    throttled = run("throttled")
+    assert "rc=23" in throttled and "TooManyRequests" in throttled
+    assert (tmp_path / "fake-count").read_text() == "3"
+    assert "rc=0" in run("transient_then_valid")
+
+
+def test_prior_inventory_preserves_failure_diagnostic_and_original_rc() -> None:
+    start = WORKFLOW.index("prior_named_ids() {")
+    end = WORKFLOW.index("load_authoritative_failed_receipt()", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    harness = helper + r'''
+state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
+record_oci_diagnostic() { printf 'diagnostic:%s:rc=%s\n' "$1" "$2" >&2; }
+oci_json_request() { OCI_JSON_OUTPUT=""; OCI_JSON_ERROR='NotAuthenticated'; OCI_JSON_RAW_ERROR="$OCI_JSON_ERROR"; return 17; }
+tenancy_id=tenancy; ad=ad; prior_prefix=prefix; stamp=current; target_prior_stamp=
+if prior_named_ids instance boot-acceptance; then echo rc=0; else echo rc=$?; fi
+'''
+    result = subprocess.run(["bash", "-c", harness], text=True, capture_output=True, check=True)
+    assert "rc=17" in result.stdout
+    assert "state:prior_inventory_instance_status=REQUEST_FAILED" in result.stderr
+    assert "state:prior_inventory_instance_failure_rc=17" in result.stderr
+    assert "state:prior_inventory_last_resource=instance" in result.stderr
+    assert "state:prior_inventory_last_status=REQUEST_FAILED" in result.stderr
+    assert "state:prior_inventory_last_failure_rc=17" in result.stderr
+    assert "diagnostic:prior_inventory_instance:rc=17" in result.stderr
+
+    invalid = helper + r'''
+state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
+record_oci_diagnostic() { printf 'diagnostic:%s:rc=%s\n' "$1" "$2" >&2; }
+oci_json_request() { OCI_JSON_OUTPUT='{"data":{}}'; OCI_JSON_ERROR=''; OCI_JSON_RAW_ERROR=''; return 0; }
+tenancy_id=tenancy; ad=ad; prior_prefix=prefix; stamp=current; target_prior_stamp=
+if prior_named_ids instance boot-acceptance; then echo rc=0; else echo rc=$?; fi
+'''
+    invalid_result = subprocess.run(["bash", "-c", invalid], text=True, capture_output=True, check=True)
+    assert "rc=97" in invalid_result.stdout
+    assert "state:prior_inventory_last_status=INVALID_RESPONSE" in invalid_result.stderr
+    assert "state:prior_inventory_instance_status=PASS" not in invalid_result.stderr
+
+
+def test_transient_retry_keeps_causal_rc_when_delay_budget_is_short() -> None:
+    start = WORKFLOW.index("oci_json_request() {")
+    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fake = Path(temp_dir) / "fake-oci"
+        fake.write_text("#!/usr/bin/env bash\necho 'connection reset' >&2\nexit 18\n")
+        fake.chmod(0o755)
+        script = r'''
+bounded_wait_seconds() {
+  if [[ "$1" == 6 ]]; then printf '2\n'; else printf '%s\n' "$1"; fi
+}
+primary_deadline=999999
+''' + helper + r'''
+if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s stderr=%s\n' "$?" "$OCI_JSON_RAW_ERROR"; fi
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env=os.environ | {"RUNNER_TEMP": temp_dir, "FAKE_OCI": str(fake), "OCI_JSON_MAX_ATTEMPTS": "3"},
+            text=True, capture_output=True, check=True,
+        )
+        assert "rc=18 stderr=connection reset" in result.stdout
+
+
+def test_transient_retry_keeps_causal_rc_at_exact_delay_boundary() -> None:
+    start = WORKFLOW.index("oci_json_request() {")
+    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fake = Path(temp_dir) / "fake-oci"
+        fake.write_text("#!/usr/bin/env bash\necho 'connection reset' >&2\nexit 18\n")
+        fake.chmod(0o755)
+        script = r'''
+bounded_wait_seconds() {
+  if [[ "$1" == 6 ]]; then printf '5\n'; else printf '%s\n' "$1"; fi
+}
+primary_deadline=999999
+''' + helper + r'''
+if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s stderr=%s\n' "$?" "$OCI_JSON_RAW_ERROR"; fi
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env=os.environ | {"RUNNER_TEMP": temp_dir, "FAKE_OCI": str(fake), "OCI_JSON_MAX_ATTEMPTS": "3"},
+            text=True, capture_output=True, check=True,
+        )
+        assert "rc=18 stderr=connection reset" in result.stdout
+
+
+def test_invalid_json_retry_returns_causal_class_at_exact_delay_boundary() -> None:
+    start = WORKFLOW.index("oci_json_request() {")
+    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fake = Path(temp_dir) / "fake-oci"
+        fake.write_text("#!/usr/bin/env bash\nprintf 'not-json'\n")
+        fake.chmod(0o755)
+        script = r'''
+bounded_wait_seconds() {
+  if [[ "$1" == 6 ]]; then printf '5\n'; else printf '%s\n' "$1"; fi
+}
+primary_deadline=999999
+''' + helper + r'''
+if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s error=%s\n' "$?" "$OCI_JSON_ERROR"; fi
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env=os.environ | {"RUNNER_TEMP": temp_dir, "FAKE_OCI": str(fake), "OCI_JSON_MAX_ATTEMPTS": "3"},
+            text=True, capture_output=True, check=True,
+        )
+        assert "rc=86 error=INVALID_JSON_SUCCESS_RESPONSE" in result.stdout
+
+
+def test_retry_precheck_expiry_returns_previous_causal_rc() -> None:
+    start = WORKFLOW.index("oci_json_request() {")
+    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fake = Path(temp_dir) / "fake-oci"
+        fake.write_text("#!/usr/bin/env bash\necho 'connection reset' >&2\nexit 18\n")
+        fake.chmod(0o755)
+        script = r'''
+bounded_wait_seconds() {
+  count=0
+  [[ ! -f "$BUDGET_COUNT" ]] || count="$(cat "$BUDGET_COUNT")"
+  count=$((count + 1)); printf '%s' "$count" >"$BUDGET_COUNT"
+  if (( count == 1 )); then printf '%s\n' "$1"
+  elif (( count == 2 )); then printf '%s\n' "$1"
+  else return 42
+  fi
+}
+primary_deadline=999999
+''' + helper + r'''
+if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s stderr=%s\n' "$?" "$OCI_JSON_RAW_ERROR"; fi
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env=os.environ | {
+                "RUNNER_TEMP": temp_dir,
+                "BUDGET_COUNT": str(Path(temp_dir) / "budget-count"),
+                "FAKE_OCI": str(fake),
+                "OCI_JSON_MAX_ATTEMPTS": "3",
+                "OCI_JSON_RETRY_DELAY_SECONDS": "0",
+            },
+            text=True, capture_output=True, check=True,
+        )
+        assert "rc=18 stderr=connection reset" in result.stdout
+
+
+def test_invalid_json_retry_precheck_expiry_returns_86() -> None:
+    start = WORKFLOW.index("oci_json_request() {")
+    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fake = Path(temp_dir) / "fake-oci"
+        fake.write_text("#!/usr/bin/env bash\nprintf 'not-json'\n")
+        fake.chmod(0o755)
+        script = r'''
+bounded_wait_seconds() {
+  count=0
+  [[ ! -f "$BUDGET_COUNT" ]] || count="$(cat "$BUDGET_COUNT")"
+  count=$((count + 1)); printf '%s' "$count" >"$BUDGET_COUNT"
+  if (( count <= 2 )); then printf '%s\n' "$1"; else return 42; fi
+}
+primary_deadline=999999
+''' + helper + r'''
+if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s error=%s\n' "$?" "$OCI_JSON_ERROR"; fi
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env=os.environ | {
+                "RUNNER_TEMP": temp_dir,
+                "BUDGET_COUNT": str(Path(temp_dir) / "budget-count"),
+                "FAKE_OCI": str(fake),
+                "OCI_JSON_MAX_ATTEMPTS": "3",
+                "OCI_JSON_RETRY_DELAY_SECONDS": "0",
+            },
+            text=True, capture_output=True, check=True,
+        )
+        assert "rc=86 error=INVALID_JSON_SUCCESS_RESPONSE" in result.stdout
+
+
+def test_receipt_publishes_prior_inventory_diagnostics() -> None:
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "prior_inventory_key + '_stderr_class'" in receipt
+    assert "prior_inventory_key + '_stdout_shape'" in receipt
+    assert "prior_inventory_key + '_stdout_bytes'" in receipt
+    assert "prior_inventory_key + '_stderr_bytes'" in receipt
 
 
 def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:
