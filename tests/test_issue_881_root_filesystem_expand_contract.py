@@ -186,7 +186,7 @@ def test_watchdog_propagates_all_inventory_validator_failures() -> None:
     assert "< <(STAMP=" not in WATCHDOG
     for name in ("instance-ids", "late-instance-ids", "volume-ids", "late-volume-ids"):
         assert f'$RUNNER_TEMP/{name}' in WATCHDOG
-    assert WATCHDOG.count("then exit 101; fi") == 2
+    assert WATCHDOG.count("then return 101; fi") == 2
     assert WATCHDOG.count("then exit 102; fi") == 2
     assert WATCHDOG.count("sys.stdout.write('\\n'.join(matched)+('\\n' if matched else ''))") == 4
     assert "print('\\n'.join(matched))" not in WATCHDOG
@@ -2197,6 +2197,15 @@ def test_capacity_resize_waits_through_compute_transitions_with_supplied_deadlin
     assert resize.count('bridge-school-dds3-frankfurt "$deadline"') == 4
 
 
+def test_parent_capacity_parser_checks_status_and_cardinality_before_indexing() -> None:
+    resize = WORKFLOW[WORKFLOW.index("set_source_capacity() {") : WORKFLOW.index("arm_source_capacity_lease()")]
+    parser = resize.index('if ! INSTANCE="$current_json"')
+    mapfile = resize.index('mapfile -t current <"$current_state_file"', parser)
+    cardinality = resize.index('(( ${#current[@]} == 3 )) || return 93', mapfile)
+    indexing = resize.index('current_state="${current[0]}"', cardinality)
+    assert parser < mapfile < cardinality < indexing
+
+
 def test_watchdog_service_release_is_retryable_after_marker_removal() -> None:
     watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
     release = watchdog[
@@ -2266,11 +2275,27 @@ def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> No
     release = watchdog.index("release_source_workload_fence || source_release_rc=$?", start)
     block = watchdog[start:release]
     assert "fence_wait_deadline=$((fence_now + 2700))" in block
+    assert 'fence_wait_deadline="$watchdog_cleanup_cutoff"' in block
+    assert "fence_release_epoch <= fence_now" in block
     assert "fence_release_epoch <= fence_wait_deadline" in block
     assert 'actions/runs/${PARENT_RUN_ID}' in block
     assert 'if [[ "$parent_status" != completed ]]; then' in block
     assert '[[ "$parent_status" == completed ]] && break' in block
     assert "release_source_workload_fence" not in block
+
+
+def test_watchdog_retries_paid_reconciliation_with_reserved_cleanup_time() -> None:
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    assert "watchdog_hard_deadline=$((SECONDS + 17400))" in watchdog
+    assert "watchdog_cleanup_cutoff=$((watchdog_hard_deadline - 600))" in watchdog
+    start = watchdog.index("reconcile_paid_instance_once() {")
+    loop = watchdog.index("while (( SECONDS < watchdog_cleanup_cutoff )); do", start)
+    proof = watchdog.index("instance_terminal_proven == 1 || instance_inventory_clean == 1", loop)
+    assert start < loop < proof
+    reconcile = watchdog[start:loop]
+    assert "exit 97" not in reconcile
+    assert "exit 99" not in reconcile
+    assert "exit 101" not in reconcile
 
 
 def test_exit_cleanup_does_not_reclaim_capacity_before_paid_terminal_proof() -> None:

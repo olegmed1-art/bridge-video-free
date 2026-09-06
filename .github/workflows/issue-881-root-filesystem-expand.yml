@@ -1280,7 +1280,8 @@ jobs:
             local target_ocpus="$1" target_memory="$2" deadline="$3" label="$4" current_json current_state current_ocpus current_memory
             OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance get --instance-id "$instance_id" || return $?
             current_json="$OCI_JSON_OUTPUT"
-            readarray -t current < <(INSTANCE="$current_json" EXPECTED_ID="$instance_id" EXPECTED_AD="$ad" EXPECTED_TENANCY="$tenancy_id" python - <<'PY'
+            current_state_file="$RUNNER_TEMP/source-capacity-state"
+            if ! INSTANCE="$current_json" EXPECTED_ID="$instance_id" EXPECTED_AD="$ad" EXPECTED_TENANCY="$tenancy_id" python - >"$current_state_file" <<'PY'
           import json,os
           d=json.loads(os.environ['INSTANCE']).get('data'); assert isinstance(d,dict)
           assert d.get('id')==os.environ['EXPECTED_ID'] and d.get('display-name')=='bridge-school-dds3-frankfurt'
@@ -1291,7 +1292,9 @@ jobs:
           assert isinstance(m,(int,float)) and float(m).is_integer()
           print(d.get('lifecycle-state')); print(int(o)); print(int(m))
           PY
-            ) || return 93
+            then return 93; fi
+            mapfile -t current <"$current_state_file"
+            (( ${#current[@]} == 3 )) || return 93
             current_state="${current[0]}"; current_ocpus="${current[1]}"; current_memory="${current[2]}"
             if [[ "$label" == capacity_lease ]]; then
               [[ "$current_ocpus/$current_memory" == "$source_original_ocpus/$source_original_memory" ]] || return 93

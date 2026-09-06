@@ -103,6 +103,10 @@ jobs:
           [[ "$GITHUB_ACTOR" == 'github-actions[bot]' ]]
           [[ -n "$EXPECTED_AD" && "$EXPECTED_AD" != *$'\n'* ]]
           [[ "$OCI_REGION" == eu-frankfurt-1 ]]
+          # Reserve ten minutes before GitHub's 300-minute hard kill for
+          # fence release and exact-stamped storage cleanup.
+          watchdog_hard_deadline=$((SECONDS + 17400))
+          watchdog_cleanup_cutoff=$((watchdog_hard_deadline - 600))
           for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY; do [[ -n "${!value:-}" ]]; done
           WATCHDOG_PAYLOAD="${STAMP}|${EXPIRY_EPOCH}|${EXPECTED_AD}|${PARENT_RUN_ID}|${PARENT_RUN_ATTEMPT}|${SOURCE_INSTANCE_HMAC}|${SOURCE_ORIGINAL_OCPUS}|${SOURCE_ORIGINAL_MEMORY}|${SOURCE_LEASE_OCPUS}|${SOURCE_LEASE_MEMORY}" python - <<'PY'
           import hashlib,hmac,os
@@ -328,9 +332,11 @@ jobs:
           now="$(date -u +%s)"
           remaining=$((effective_expiry - now))
           (( remaining > 0 )) && sleep "$remaining"
+          reconcile_paid_instance_once() {
           instance_discovery_deadline=$((SECONDS + 120))
+          (( instance_discovery_deadline < watchdog_cleanup_cutoff )) || instance_discovery_deadline="$watchdog_cleanup_cutoff"
           while ! timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --all --output json >"$instances" 2>/dev/null; do
-            (( SECONDS < instance_discovery_deadline )) || exit 97
+            (( SECONDS < instance_discovery_deadline )) || return 97
             sleep 5
           done
           ids_file="$RUNNER_TEMP/instance-ids"
@@ -349,12 +355,13 @@ jobs:
           assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
           sys.stdout.write('\n'.join(matched)+('\n' if matched else ''))
           PY
-          then exit 101; fi
+          then return 101; fi
           mapfile -t ids <"$ids_file"
           instance_terminal_proven=0
           if (( ${#ids[@]} == 1 )); then
             instance_get_error="$RUNNER_TEMP/instance-get.err"
             instance_cleanup_deadline=$((SECONDS + 600))
+            (( instance_cleanup_deadline < watchdog_cleanup_cutoff )) || instance_cleanup_deadline="$watchdog_cleanup_cutoff"
             while (( SECONDS < instance_cleanup_deadline )); do
               timeout --signal=KILL 30s oci compute instance terminate --instance-id "${ids[0]}" --preserve-boot-volume true --force --output json >/dev/null 2>/dev/null || true
               if timeout --signal=KILL 20s oci compute instance get --instance-id "${ids[0]}" --output json >"$instances" 2>"$instance_get_error"; then
@@ -371,13 +378,14 @@ jobs:
               sleep 5
             done
             # A known exact ID can never be downgraded to LIST-based absence.
-            (( instance_terminal_proven == 1 )) || exit 99
+            (( instance_terminal_proven == 1 )) || return 99
           fi
           # A direct GET terminal result for the known exact ID is stronger
           # than an eventually consistent LIST and permits storage cleanup to
           # proceed. If no ID was observed, require a bounded clean inventory.
           if (( ${#ids[@]} == 0 )); then
             instance_confirmation_deadline=$((SECONDS + 120))
+            (( instance_confirmation_deadline < watchdog_cleanup_cutoff )) || instance_confirmation_deadline="$watchdog_cleanup_cutoff"
             instance_inventory_clean=0
             late_instance_clean_count=0
             late_instance_id=""
@@ -398,7 +406,7 @@ jobs:
           assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
           sys.stdout.write('\n'.join(matched)+('\n' if matched else ''))
           PY
-                then exit 101; fi
+                then return 101; fi
                 mapfile -t late_ids <"$late_ids_file"
                 if (( ${#late_ids[@]} == 1 )); then late_instance_id="${late_ids[0]}"; break; fi
                 late_instance_clean_count=$((late_instance_clean_count + 1))
@@ -412,6 +420,7 @@ jobs:
             if [[ -n "$late_instance_id" ]]; then
               late_instance_get_error="$RUNNER_TEMP/late-instance-get.err"
               late_cleanup_deadline=$((SECONDS + 600))
+              (( late_cleanup_deadline < watchdog_cleanup_cutoff )) || late_cleanup_deadline="$watchdog_cleanup_cutoff"
               while (( SECONDS < late_cleanup_deadline )); do
                 timeout --signal=KILL 30s oci compute instance terminate --instance-id "$late_instance_id" --preserve-boot-volume true --force --output json >/dev/null 2>/dev/null || true
                 if timeout --signal=KILL 20s oci compute instance get --instance-id "$late_instance_id" --output json >"$instances" 2>"$late_instance_get_error"; then
@@ -424,11 +433,19 @@ jobs:
                 : >"$late_instance_get_error"
                 sleep 5
               done
-              (( instance_terminal_proven == 1 )) || exit 99
+              (( instance_terminal_proven == 1 )) || return 99
             else
-              (( instance_inventory_clean == 1 )) || exit 99
+              (( instance_inventory_clean == 1 )) || return 99
             fi
           fi
+          }
+          instance_terminal_proven=0
+          instance_inventory_clean=0
+          while (( SECONDS < watchdog_cleanup_cutoff )); do
+            if reconcile_paid_instance_once; then break; fi
+            sleep 5
+          done
+          (( instance_terminal_proven == 1 || instance_inventory_clean == 1 )) || exit 99
 
           # Once compute quota is proven free, restore production before any
           # storage/network cleanup that could fail independently.
@@ -448,7 +465,10 @@ jobs:
             # shorten, but never extend, the bounded fail-safe hold.
             if [[ "$parent_status" != completed ]]; then
               fence_wait_deadline=$((fence_now + 2700))
-              if [[ "$fence_release_epoch" =~ ^[0-9]+$ ]] && (( fence_release_epoch > fence_now && fence_release_epoch <= fence_wait_deadline )); then
+              (( fence_wait_deadline < watchdog_cleanup_cutoff )) || fence_wait_deadline="$watchdog_cleanup_cutoff"
+              if [[ "$fence_release_epoch" =~ ^[0-9]+$ ]] && (( fence_release_epoch <= fence_now )); then
+                fence_wait_deadline="$fence_now"
+              elif [[ "$fence_release_epoch" =~ ^[0-9]+$ ]] && (( fence_release_epoch <= fence_wait_deadline )); then
                 fence_wait_deadline="$fence_release_epoch"
               fi
               while (( $(date -u +%s) < fence_wait_deadline )); do
