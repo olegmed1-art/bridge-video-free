@@ -130,7 +130,7 @@ def test_regression_ambiguous_creates_are_reconciled_inside_global_deadline() ->
     assert "timeout-minutes: 30" in TEXT
     assert "Reserve job-wide cleanup and receipt deadline before setup" in TEXT
     assert "JOB_DEADLINE_EPOCH=$job_deadline" in TEXT
-    assert "MUTATION_CUTOFF_EPOCH=$(( job_deadline - 450 ))" in TEXT
+    assert "MUTATION_CUTOFF_EPOCH=$(( job_deadline - 480 ))" in TEXT
     assert "RECEIPT_DEADLINE_EPOCH=$(( job_deadline - 360 ))" in TEXT
     assert "CLEANUP_DEADLINE_EPOCH=$(( now + 240 ))" in TEXT
     assert "JOB_DEADLINE_EPOCH - 120" in TEXT
@@ -168,3 +168,8 @@ def test_regression_receipt_failure_remains_inside_rollback_transaction() -> Non
     assert 'remaining=$(( RECEIPT_DEADLINE_EPOCH - $(date +%s) ))' in TEXT
     assert 'timeout --signal=KILL "${limit}s" gh issue comment 881' in TEXT
     assert "publish_success_receipt" in TEXT
+    assert 'RECEIPT_TOKEN="$(openssl rand -hex 32)"' in TEXT
+    assert "comments(last:100)" in TEXT
+    assert 'for attempt in 1 2 3; do' in TEXT
+    assert "receipt transaction:" in TEXT
+    assert "len(found) == 1" in TEXT
