@@ -1265,14 +1265,16 @@ def _generated_glyph_coords_are_unique(
     lengths: Mapping[str, Mapping[str, int]],
     anchors: Mapping[str, Mapping[str, tuple[int, int]]],
     side_steps: Mapping[str, Mapping[str, float]],
+    registration_radius: int,
 ) -> bool:
-    coords = [
-        xy
+    registration_origins = [
+        (x + dx, y)
         for suit in SUITS
         for seat in SEATS
-        for xy in _coords(seat, suit, lengths[seat][suit], anchors, side_steps)
+        for x, y in _coords(seat, suit, lengths[seat][suit], anchors, side_steps)
+        for dx in range(-registration_radius, registration_radius + 1)
     ]
-    return len(coords) == len(set(coords))
+    return len(registration_origins) == len(set(registration_origins))
 
 
 def _calibrate_side_steps(
@@ -1554,7 +1556,9 @@ def recognize_frames(
         anchors[seat].update(frame_horizontal_anchors[0][seat])
 
     side_steps = _calibrate_side_steps(frames, bank, lengths, anchors, profile)
-    if not _generated_glyph_coords_are_unique(lengths, anchors, side_steps):
+    if not _generated_glyph_coords_are_unique(
+        lengths, anchors, side_steps, profile.local_registration_px
+    ):
         return _shadow_result(
             "LAYOUT_AMBIGUOUS",
             lengths=lengths,

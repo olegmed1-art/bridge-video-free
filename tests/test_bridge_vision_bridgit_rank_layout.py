@@ -1187,7 +1187,21 @@ def test_generated_glyph_coordinates_must_be_unique_across_suits():
     }
 
     assert not bridgit_rank_layout._generated_glyph_coords_are_unique(
-        lengths, anchors, {}
+        lengths, anchors, {}, 0
+    )
+
+
+def test_generated_glyph_registration_neighborhoods_must_not_overlap():
+    profile = parse_profile(profile_raw())
+    anchors = {seat: dict(values) for seat, values in profile.anchors.items()}
+    anchors["W"]["C"] = (anchors["W"]["H"][0] + 1, anchors["W"]["H"][1])
+    lengths = {
+        seat: {suit: int(seat == "W" and suit in {"H", "C"}) for suit in "HCDS"}
+        for seat in "NESW"
+    }
+
+    assert not bridgit_rank_layout._generated_glyph_coords_are_unique(
+        lengths, anchors, {}, 1
     )
 
 
