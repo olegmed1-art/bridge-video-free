@@ -73,7 +73,14 @@ def test_regression_oci_secrets_exist_only_after_exact_authorization() -> None:
     assert "secrets.OCI_" not in job_preamble
     exact_gate = TEXT.index("Validate exact owner request before credentials")
     install = TEXT.index("Install pinned OCI CLI without credentials")
-    first_secret = TEXT.index("${{ secrets.OCI_CLI_USER }}")
+    first_secret = TEXT.index("${{ secrets.OCI_READONLY_CLI_USER }}")
     assert exact_gate < install < first_secret
-    assert TEXT.count("${{ secrets.OCI_") == 5
+    assert TEXT.count("${{ secrets.OCI_READONLY_CLI_") == 5
+    assert "${{ secrets.OCI_CLI_" not in TEXT
     assert "trap 'rm -f \"$HOME/.oci/config\" \"$HOME/.oci/key.pem\"' EXIT" in TEXT
+
+
+def test_negative_mutation_capable_principal_is_not_accepted() -> None:
+    assert "dedicated read-only credentials required" in TEXT
+    assert "host mutation commands: `absent`" in TEXT
+    assert "impossible_in_this_workflow" not in TEXT
