@@ -916,7 +916,9 @@ printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
         assert "rc=17" in run("auth").stdout
         assert "rc=86" in run("malformed").stdout
         slow = run("slow", 1)
-        assert "rc=42" in slow.stdout and "elapsed=1" in slow.stdout
+        assert "rc=42" in slow.stdout
+        elapsed = int(slow.stdout.split("elapsed=", 1)[1].split()[0])
+        assert 1 <= elapsed <= 2
 
 
 def test_restored_volume_hydration_wait_is_identity_source_size_and_time_bound() -> None:
@@ -993,7 +995,9 @@ printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
         assert "rc=44" in terminal.stdout
         assert "state:restored_volume_hydration_status=TERMINAL_FAULTY" in terminal.stderr
         waiting = run("waiting", 1)
-        assert "rc=42 elapsed=1" in waiting.stdout
+        assert "rc=42" in waiting.stdout
+        elapsed = int(waiting.stdout.split("elapsed=", 1)[1].split()[0])
+        assert 1 <= elapsed <= 2
         assert "state:restored_volume_hydration_status=TIMEOUT" in waiting.stderr
 
 
@@ -1405,7 +1409,10 @@ printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
 
         slow = run("slow", 1)
         assert "rc=42" in slow.stdout
-        assert "elapsed=1" in slow.stdout
+        # Bash SECONDS is a coarse wall-clock counter and can cross two integer
+        # boundaries during a one-second timeout on a loaded CI runner.
+        elapsed = int(slow.stdout.split("elapsed=", 1)[1].split()[0])
+        assert 1 <= elapsed <= 2
         assert "state:backup_wait_status=TIMEOUT" in slow.stderr
         invalid = run("null")
         assert "rc=43" in invalid.stdout
