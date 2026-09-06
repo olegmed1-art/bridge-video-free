@@ -1348,6 +1348,7 @@ def recognize_frames(
             raise BridgitRankLayoutError("observation frame changed before recognition")
         loaded_frames.append(loaded)
         decoded_job_bytes += int(loaded[0].shape[0] * loaded[0].shape[1] * 3)
+    del loaded
     if profile.interface_anchor is not None:
         actual_dimensions = [
             (int(image.shape[1]), int(image.shape[0]))

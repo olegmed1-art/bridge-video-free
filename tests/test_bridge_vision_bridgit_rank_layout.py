@@ -826,6 +826,75 @@ def test_decoded_observation_hash_is_checked_before_registration(monkeypatch):
     assert read_count == 2
 
 
+def test_anchor_source_raster_is_released_before_recognition(monkeypatch):
+    raw = profile_raw()
+    raw["geometry"]["interface_anchor"] = {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": {
+            "x": 0.72,
+            "y": 0.02,
+            "width": 0.08,
+            "height": 0.10,
+        },
+        "scales": [1.0],
+        "minimum_score": 0.80,
+        "minimum_margin": 0.03,
+    }
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    profile = parse_profile(raw)
+    released = []
+
+    class Raster(bytearray):
+        shape = (720, 1000, 3)
+
+    class SourceRaster(Raster):
+        def __del__(self):
+            released.append(True)
+
+    read_count = 0
+
+    def read_frame(*_args, **_kwargs):
+        nonlocal read_count
+        read_count += 1
+        if read_count == 1:
+            return Raster(b"reference"), "a" * 64, "b" * 64, None
+        return SourceRaster(b"source"), "c" * 64, "d" * 64, None
+
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_validate_input_raster_budget",
+        lambda _paths: [(1000, 720), (1000, 720)],
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_read_frame",
+        read_frame,
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "register_from_upper_right_anchor",
+        lambda *_args, **_kwargs: (Raster(b"registered"), {}),
+    )
+
+    def assert_source_released(*_args, **_kwargs):
+        assert released == [True]
+        raise BridgitRankLayoutError("stop after release check")
+
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_validate_temporal_identities",
+        assert_source_released,
+    )
+    with pytest.raises(BridgitRankLayoutError, match="stop after release check"):
+        bridgit_rank_layout.recognize_frames(
+            Path("reference.png"),
+            [Path("frame.png")],
+            profile,
+        )
+
+
 def test_each_frame_must_independently_support_the_fused_deal():
     profile = parse_profile(profile_raw())
     agreed = {suit: tuple("N" * 13) for suit in "HCDS"}
