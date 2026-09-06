@@ -702,14 +702,21 @@ def test_decoded_observation_hash_is_checked_before_registration(monkeypatch):
             (Raster(), "c" * 64, "d" * 64, None),
         ]
     )
+    read_count = 0
+
+    def read_once_before_rejection(*_args, **_kwargs):
+        nonlocal read_count
+        read_count += 1
+        if read_count > 2:
+            pytest.fail("must not decode the next observation after hash mismatch")
+        return next(reads)
+
     monkeypatch.setattr(
         bridgit_rank_layout,
         "_validate_input_raster_budget",
         lambda paths: [(1000, 720)] * len(paths),
     )
-    monkeypatch.setattr(
-        bridgit_rank_layout, "_read_frame", lambda *_args, **_kwargs: next(reads)
-    )
+    monkeypatch.setattr(bridgit_rank_layout, "_read_frame", read_once_before_rejection)
     monkeypatch.setattr(
         bridgit_rank_layout,
         "register_from_upper_right_anchor",
@@ -719,10 +726,11 @@ def test_decoded_observation_hash_is_checked_before_registration(monkeypatch):
     with pytest.raises(BridgitRankLayoutError, match="changed before recognition"):
         bridgit_rank_layout.recognize_frames(
             Path("reference.png"),
-            [Path("frame.png")],
+            [Path("frame.png"), Path("unread-next-frame.png")],
             profile,
-            expected_frame_sha256s=["e" * 64],
+            expected_frame_sha256s=["e" * 64, "f" * 64],
         )
+    assert read_count == 2
 
 
 def test_each_frame_must_independently_support_the_fused_deal():

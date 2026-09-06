@@ -1276,7 +1276,7 @@ def recognize_frames(
         raise BridgitRankLayoutError("reference frame hash mismatch")
     loaded_frames = []
     decoded_job_bytes = int(reference.shape[0] * reference.shape[1] * 3)
-    for path in frame_paths:
+    for index, path in enumerate(frame_paths):
         loaded = _read_frame(
             Path(path),
             profile,
@@ -1284,12 +1284,13 @@ def recognize_frames(
             defer_registration=profile.interface_anchor is not None,
             decoded_job_bytes_so_far=decoded_job_bytes,
         )
+        if (
+            expected_frame_sha256s is not None
+            and loaded[1] != expected_frame_sha256s[index]
+        ):
+            raise BridgitRankLayoutError("observation frame changed before recognition")
         loaded_frames.append(loaded)
         decoded_job_bytes += int(loaded[0].shape[0] * loaded[0].shape[1] * 3)
-    if expected_frame_sha256s is not None:
-        decoded_hashes = [frame_hash for _, frame_hash, _, _ in loaded_frames]
-        if decoded_hashes != list(expected_frame_sha256s):
-            raise BridgitRankLayoutError("observation frame changed before recognition")
     if profile.interface_anchor is not None:
         actual_dimensions = [
             (int(image.shape[1]), int(image.shape[0]))
