@@ -1,5 +1,7 @@
 import json
 import math
+import os
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 
@@ -406,8 +408,8 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
     def fake_recognize(
         reference_path, frame_paths, profile, *, expected_frame_sha256s=None
     ):
-        assert reference_path == reference
-        assert frame_paths == [first, second]
+        assert reference_path.resolve() == reference
+        assert [path.resolve() for path in frame_paths] == [first, second]
         assert profile.profile_id == raw["profile_id"]
         frame_hashes = [
             bridgit_rank_layout.sha256_file(first),
@@ -1225,8 +1227,8 @@ def test_generated_glyph_coordinates_must_be_unique_across_suits():
         for seat in "NESW"
     }
 
-    assert not bridgit_rank_layout._generated_glyph_coords_are_unique(
-        lengths, anchors, {}, 0
+    assert not bridgit_rank_layout._generated_glyph_regions_are_disjoint(
+        lengths, anchors, {}, replace(profile, local_registration_px=0)
     )
 
 
@@ -1239,8 +1241,23 @@ def test_generated_glyph_registration_neighborhoods_must_not_overlap():
         for seat in "NESW"
     }
 
-    assert not bridgit_rank_layout._generated_glyph_coords_are_unique(
-        lengths, anchors, {}, 1
+    assert not bridgit_rank_layout._generated_glyph_regions_are_disjoint(
+        lengths, anchors, {}, replace(profile, local_registration_px=1)
+    )
+
+
+def test_generated_glyph_regions_must_not_overlap_vertically():
+    profile = replace(parse_profile(profile_raw()), local_registration_px=0)
+    anchors = {seat: dict(values) for seat, values in profile.anchors.items()}
+    x, y = anchors["W"]["H"]
+    anchors["W"]["C"] = (x, y + 1)
+    lengths = {
+        seat: {suit: int(seat == "W" and suit in {"H", "C"}) for suit in "HCDS"}
+        for seat in "NESW"
+    }
+
+    assert not bridgit_rank_layout._generated_glyph_regions_are_disjoint(
+        lengths, anchors, {}, profile
     )
 
 
@@ -1353,13 +1370,54 @@ def test_path_resolution_runtime_errors_are_translated(
         raise RuntimeError("symlink loop")
 
     monkeypatch.setattr(Path, "resolve", fail_resolve)
-    with pytest.raises(BridgitRankLayoutError, match="profile_ref escapes input_root"):
-        bridgit_rank_layout._validated_ref(
-            {"path": str(candidate), "sha256": "a" * 64},
-            "profile_ref",
+    with ExitStack() as fd_stack:
+        with pytest.raises(
+            BridgitRankLayoutError, match="profile_ref escapes input_root"
+        ):
+            bridgit_rank_layout._validated_ref(
+                {"path": str(candidate), "sha256": "a" * 64},
+                "profile_ref",
+                max_bytes=1024,
+                input_root=tmp_path,
+                fd_stack=fd_stack,
+            )
+
+
+def test_validated_ref_is_pinned_when_original_path_is_replaced(tmp_path: Path):
+    candidate = tmp_path / "frame.png"
+    replacement = tmp_path / "replacement.png"
+    candidate.write_bytes(b"validated bytes")
+    replacement.write_bytes(b"replacement bytes")
+    declared_sha = bridgit_rank_layout.sha256_file(candidate)
+
+    with ExitStack() as fd_stack:
+        pinned = bridgit_rank_layout._validated_ref(
+            {"path": str(candidate), "sha256": declared_sha},
+            "frame_ref",
             max_bytes=1024,
             input_root=tmp_path,
+            fd_stack=fd_stack,
         )
+        candidate.unlink()
+        candidate.symlink_to(replacement)
+
+        assert bridgit_rank_layout._read_bounded_bytes(pinned, 1024, "frame") == (
+            b"validated bytes"
+        )
+
+
+def test_validated_ref_rejects_fifo_without_blocking(tmp_path: Path):
+    candidate = tmp_path / "frame.fifo"
+    os.mkfifo(candidate)
+    with ExitStack() as fd_stack:
+        with pytest.raises(BridgitRankLayoutError, match="existing absolute file"):
+            bridgit_rank_layout._validated_ref(
+                {"path": str(candidate), "sha256": "a" * 64},
+                "frame_ref",
+                max_bytes=1024,
+                input_root=tmp_path,
+                fd_stack=fd_stack,
+            )
 
 
 def test_normalized_region_rounding_preserves_frame_boundary():

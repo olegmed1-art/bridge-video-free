@@ -204,3 +204,19 @@ def test_anchor_work_is_template_weighted_and_bounded_for_whole_job():
     ) == estimate_anchor_work_units(
         (1000, 720), [(1000, 720)] * 5, impossible_extra_scale
     )
+
+
+def test_scales_that_round_to_the_same_geometry_fail_preflight():
+    with pytest.raises(AnchorRegistrationError, match="duplicate pixel geometry"):
+        estimate_anchor_work_units(
+            (320, 240),
+            [(640, 480)],
+            anchor_spec(scales=[1.0, 1.000001]),
+        )
+
+
+def test_normalized_registration_interval_is_rounded_from_edges():
+    start, size = anchor_registration._rounded_normalized_interval(1, 2560, 2560)
+    assert start == 0.00039063
+    assert size == 0.99960937
+    assert start + size <= 1.0

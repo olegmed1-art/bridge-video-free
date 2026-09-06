@@ -121,6 +121,21 @@ def _appearance(image: Any):
     return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
 
+def _reject_rounded_scale_aliases(scaled_dimensions: Sequence[tuple[int, ...]]) -> None:
+    if len(set(scaled_dimensions)) != len(scaled_dimensions):
+        raise AnchorRegistrationError(
+            "interface anchor scales collapse to duplicate pixel geometry"
+        )
+
+
+def _rounded_normalized_interval(
+    start: int, end: int, total: int
+) -> tuple[float, float]:
+    rounded_start = round(start / total, 8)
+    rounded_end = round(end / total, 8)
+    return rounded_start, round(rounded_end - rounded_start, 8)
+
+
 def estimate_anchor_work_units(
     reference_size: tuple[int, int],
     observed_sizes: Sequence[tuple[int, int]],
@@ -152,6 +167,7 @@ def estimate_anchor_work_units(
         )
         for scale in checked["scales"]
     ]
+    _reject_rounded_scale_aliases(scaled_dimensions)
     per_frame: list[int] = []
     for index, size in enumerate(observed_sizes):
         if not isinstance(size, tuple) or len(size) != 2:
@@ -216,6 +232,7 @@ def estimate_anchor_peak_scratch_bytes(
         )
         for scale in checked["scales"]
     ]
+    _reject_rounded_scale_aliases(scaled_dimensions)
     peak = 0
     for index, size in enumerate(observed_sizes):
         if not isinstance(size, tuple) or len(size) != 2:
@@ -368,16 +385,8 @@ def register_from_upper_right_anchor(
     if float(template.std()) < 8.0:
         raise AnchorRegistrationError("interface anchor has insufficient visual detail")
     observed_appearance = _appearance(observed)
-    candidates: list[dict[str, Any]] = []
-    for scale in checked["scales"]:
-        (
-            width,
-            height,
-            game_width,
-            game_height,
-            anchor_offset_x,
-            anchor_offset_y,
-        ) = _scaled_anchor_geometry(
+    scaled_dimensions = [
+        _scaled_anchor_geometry(
             reference_width=reference_width,
             reference_height=reference_height,
             anchor_x=anchor_x,
@@ -386,6 +395,19 @@ def register_from_upper_right_anchor(
             anchor_height=anchor_height,
             scale=scale,
         )
+        for scale in checked["scales"]
+    ]
+    _reject_rounded_scale_aliases(scaled_dimensions)
+    candidates: list[dict[str, Any]] = []
+    for scale, scaled_geometry in zip(checked["scales"], scaled_dimensions):
+        (
+            width,
+            height,
+            game_width,
+            game_height,
+            anchor_offset_x,
+            anchor_offset_y,
+        ) = scaled_geometry
         if width > observed_width or height > observed_height:
             continue
         if game_width > observed_width or game_height > observed_height:
@@ -464,6 +486,22 @@ def register_from_upper_right_anchor(
     )
     if registered.shape[:2] != (reference_height, reference_width):
         raise AnchorRegistrationError("registered game window has invalid dimensions")
+    anchor_x_normalized, anchor_width_normalized = _rounded_normalized_interval(
+        int(best["anchor_x"]),
+        int(best["anchor_x"]) + int(best["anchor_width"]),
+        observed_width,
+    )
+    anchor_y_normalized, anchor_height_normalized = _rounded_normalized_interval(
+        int(best["anchor_y"]),
+        int(best["anchor_y"]) + int(best["anchor_height"]),
+        observed_height,
+    )
+    window_x_normalized, window_width_normalized = _rounded_normalized_interval(
+        left, right, observed_width
+    )
+    window_y_normalized, window_height_normalized = _rounded_normalized_interval(
+        top, bottom, observed_height
+    )
     return registered, {
         "mode": "UPPER_RIGHT_ANCHOR",
         "anchor_type": checked["type"],
@@ -474,17 +512,17 @@ def register_from_upper_right_anchor(
         "scale": round(float(best["scale"]), 6),
         "anchor_region": {
             "coordinate_space": "NORMALIZED_INPUT_FRAME",
-            "x": round(best["anchor_x"] / observed_width, 8),
-            "y": round(best["anchor_y"] / observed_height, 8),
-            "width": round(best["anchor_width"] / observed_width, 8),
-            "height": round(best["anchor_height"] / observed_height, 8),
+            "x": anchor_x_normalized,
+            "y": anchor_y_normalized,
+            "width": anchor_width_normalized,
+            "height": anchor_height_normalized,
         },
         "game_window": {
             "coordinate_space": "NORMALIZED_INPUT_FRAME",
-            "x": round(left / observed_width, 8),
-            "y": round(top / observed_height, 8),
-            "width": round((right - left) / observed_width, 8),
-            "height": round((bottom - top) / observed_height, 8),
+            "x": window_x_normalized,
+            "y": window_y_normalized,
+            "width": window_width_normalized,
+            "height": window_height_normalized,
         },
         "input_size": {"width": observed_width, "height": observed_height},
         "registered_size": {"width": reference_width, "height": reference_height},

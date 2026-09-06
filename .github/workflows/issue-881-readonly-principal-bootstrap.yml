@@ -338,15 +338,6 @@ jobs:
           PY
           }
 
-          python - "$GROUP_NAME" <<'PY' > "$RUNNER_TEMP/statements.json"
-          import json, sys
-          group = sys.argv[1]
-          print(json.dumps([
-              f'Allow group {group} to inspect compartments in tenancy',
-              f'Allow group {group} to inspect instance-family in tenancy',
-              f'Allow group {group} to read limits in tenancy',
-          ]))
-          PY
           request_json "$RUNNER_TEMP/users.json" oci iam user list --compartment-id "$TENANCY_ID" --all
           request_json "$RUNNER_TEMP/groups.json" oci iam group list --compartment-id "$TENANCY_ID" --all
           request_json "$RUNNER_TEMP/policies.json" oci iam policy list --compartment-id "$TENANCY_ID" --all
@@ -405,6 +396,19 @@ jobs:
           GROUP_CREATED=1
           request_json "$RUNNER_TEMP/group-create.json" oci iam group create --compartment-id "$TENANCY_ID" --name "$GROUP_NAME" --description "Issue 881 paid preflight read-only audit group ownership:$OWNERSHIP_TOKEN"
           GROUP_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.group."); print(x)' "$RUNNER_TEMP/group-create.json")"
+          # Bind the policy to the exact group identity. Name-only subjects are
+          # ambiguous across OCI identity domains and can silently grant no
+          # effective resource visibility to this dedicated principal.
+          python - "$GROUP_ID" <<'PY' > "$RUNNER_TEMP/statements.json"
+          import json, sys
+          group_id = sys.argv[1]
+          assert group_id.startswith('ocid1.group.')
+          print(json.dumps([
+              f'Allow group id {group_id} to inspect compartments in tenancy',
+              f'Allow group id {group_id} to inspect instance-family in tenancy',
+              f'Allow group id {group_id} to read limits in tenancy',
+          ]))
+          PY
           require_mutation_budget
           MEMBERSHIP_CREATED=1
           request_json "$RUNNER_TEMP/member-create.json" oci iam group add-user --group-id "$GROUP_ID" --user-id "$USER_ID"

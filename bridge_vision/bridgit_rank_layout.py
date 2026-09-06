@@ -22,9 +22,11 @@ import json
 import math
 import os
 import re
+import stat
 import tempfile
 import sys
 from collections.abc import Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
@@ -1274,20 +1276,30 @@ def _glyph_coords_fit_frame(
     )
 
 
-def _generated_glyph_coords_are_unique(
+def _generated_glyph_regions_are_disjoint(
     lengths: Mapping[str, Mapping[str, int]],
     anchors: Mapping[str, Mapping[str, tuple[int, int]]],
     side_steps: Mapping[str, Mapping[str, float]],
-    registration_radius: int,
+    profile: BridgitRankLayoutProfile,
 ) -> bool:
-    registration_origins = [
-        (x + dx, y)
+    radius = profile.local_registration_px
+    regions = [
+        (
+            x - radius,
+            y,
+            x + radius + profile.glyph_width,
+            y + profile.glyph_height,
+        )
         for suit in SUITS
         for seat in SEATS
         for x, y in _coords(seat, suit, lengths[seat][suit], anchors, side_steps)
-        for dx in range(-registration_radius, registration_radius + 1)
     ]
-    return len(registration_origins) == len(set(registration_origins))
+    return all(
+        min(first[2], second[2]) <= max(first[0], second[0])
+        or min(first[3], second[3]) <= max(first[1], second[1])
+        for index, first in enumerate(regions)
+        for second in regions[index + 1 :]
+    )
 
 
 def _calibrate_side_steps(
@@ -1569,9 +1581,7 @@ def recognize_frames(
         anchors[seat].update(frame_horizontal_anchors[0][seat])
 
     side_steps = _calibrate_side_steps(frames, bank, lengths, anchors, profile)
-    if not _generated_glyph_coords_are_unique(
-        lengths, anchors, side_steps, profile.local_registration_px
-    ):
+    if not _generated_glyph_regions_are_disjoint(lengths, anchors, side_steps, profile):
         return _shadow_result(
             "LAYOUT_AMBIGUOUS",
             lengths=lengths,
@@ -1894,29 +1904,43 @@ def _validated_ref(
     *,
     max_bytes: int,
     input_root: Path,
+    fd_stack: ExitStack,
 ) -> Path:
     if not isinstance(raw, Mapping):
         raise BridgitRankLayoutError(f"{field} must be an object")
     declared = Path(str(raw.get("path") or ""))
     if not declared.is_absolute():
         raise BridgitRankLayoutError(f"{field} path must be an existing absolute file")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
     try:
-        path = declared.resolve(strict=True)
-        path.relative_to(input_root)
+        descriptor = os.open(declared, flags)
+    except OSError as exc:
+        raise BridgitRankLayoutError(f"{field} escapes input_root") from exc
+    fd_stack.callback(os.close, descriptor)
+    try:
+        metadata = os.fstat(descriptor)
+    except OSError as exc:
+        raise BridgitRankLayoutError(f"{field} is unavailable") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise BridgitRankLayoutError(f"{field} path must be an existing absolute file")
+    pinned_path = Path(f"/proc/self/fd/{descriptor}")
+    try:
+        pinned_path.resolve(strict=True).relative_to(input_root)
     except (OSError, ValueError, RuntimeError) as exc:
         raise BridgitRankLayoutError(f"{field} escapes input_root") from exc
-    if not path.is_file():
-        raise BridgitRankLayoutError(f"{field} path must be an existing absolute file")
-    if path.stat().st_size > max_bytes:
+    if metadata.st_size > max_bytes:
         raise BridgitRankLayoutError(f"{field} exceeds size limit")
-    if _bounded_sha256(path, max_bytes, field) != _required_sha(
+    if _bounded_sha256(pinned_path, max_bytes, field) != _required_sha(
         raw.get("sha256"), f"{field}.sha256"
     ):
         raise BridgitRankLayoutError(f"{field} hash mismatch")
-    return path
+    return pinned_path
 
 
-def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
+def _execute_shadow_job_pinned(
+    job: Mapping[str, Any], fd_stack: ExitStack
+) -> dict[str, Any]:
     if not isinstance(job, Mapping) or job.get("job_type") != JOB_TYPE:
         raise BridgitRankLayoutError("unknown job type")
     if job.get("production_write") is not False:
@@ -1942,12 +1966,14 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
         "profile_ref",
         max_bytes=MAX_PROFILE_BYTES,
         input_root=input_root,
+        fd_stack=fd_stack,
     )
     reference_path = _validated_ref(
         job.get("reference_frame_ref"),
         "reference_frame_ref",
         max_bytes=MAX_FRAME_BYTES,
         input_root=input_root,
+        fd_stack=fd_stack,
     )
     profile_payload = _read_bounded_bytes(profile_path, MAX_PROFILE_BYTES, "profile")
     profile_file_sha = hashlib.sha256(profile_payload).hexdigest()
@@ -1998,6 +2024,7 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
             f"frame_refs[{index}]",
             max_bytes=MAX_FRAME_BYTES,
             input_root=input_root,
+            fd_stack=fd_stack,
         )
         frame_paths.append(path)
         declared_frame_sha = _required_sha(
@@ -2076,6 +2103,11 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
     }
     receipt["receipt_sha256"] = canonical_hash(receipt)
     return receipt
+
+
+def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
+    with ExitStack() as fd_stack:
+        return _execute_shadow_job_pinned(job, fd_stack)
 
 
 def atomic_write_receipt(path: Path, receipt: Mapping[str, Any]) -> None:
