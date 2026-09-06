@@ -449,7 +449,7 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
     for seat in SEATS:
         for suit in SUITS:
             x, y = anchors[seat][suit]
-            if x + glyph_width > width or y + max(glyph_height, 17) > height:
+            if x + glyph_width > width or y + glyph_height > height:
                 raise BridgitRankLayoutError(
                     f"geometry.anchors.{seat}.{suit} crop leaves reference frame"
                 )

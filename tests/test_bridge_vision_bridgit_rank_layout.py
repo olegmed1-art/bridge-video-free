@@ -109,6 +109,15 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
         parse_profile(raw)
 
     raw = profile_raw()
+    raw["geometry"]["anchors"]["S"]["S"]["y"] = (
+        raw["frame_size"]["height"] - raw["gates"]["glyph_height"]
+    )
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    assert parse_profile(raw).anchors["S"]["S"][1] == 704
+
+    raw = profile_raw()
     raw["geometry"]["interface_anchor"] = {
         "type": "UPPER_RIGHT_TEMPLATE",
         "reference_region": {"x": 0.72, "y": 0.02, "width": 0.08, "height": 0.10},
