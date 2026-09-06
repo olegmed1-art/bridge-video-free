@@ -2223,12 +2223,11 @@ def test_regression_capacity_is_restored_only_after_paid_instance_cleanup() -> N
 
 
 def test_cleanup_failure_restores_after_paid_compute_is_proven_terminal() -> None:
-    cleanup = WORKFLOW[WORKFLOW.index("if ! cleanup_temp_resources; then", WORKFLOW.index("mark_phase paid_capacity_preflight")) :]
-    failure = cleanup[:cleanup.index("if ! restore_source_capacity; then")]
-    assert "paid_instance_terminal_proven=1" in WORKFLOW
-    assert "if (( paid_instance_terminal_proven == 1 )); then" in failure
-    assert failure.index("restore_source_capacity || true") < failure.index("trap - EXIT")
-    assert failure.index("release_source_workload_fence || true") < failure.index("trap - EXIT")
+    cleanup = WORKFLOW[WORKFLOW.index("cleanup_temp_resources() {") : WORKFLOW.index("cleanup() {")]
+    terminated = cleanup.index("paid_instance_terminal_proven=1")
+    volume_cleanup = cleanup.index('if [[ -n "$restored_id" ]]', terminated)
+    assert terminated < cleanup.index("restore_source_capacity || failed=1", terminated) < volume_cleanup
+    assert terminated < cleanup.index("release_source_workload_fence || failed=1", terminated) < volume_cleanup
 
 
 def test_watchdog_releases_fence_even_when_capacity_restore_fails() -> None:
@@ -2236,7 +2235,10 @@ def test_watchdog_releases_fence_even_when_capacity_restore_fails() -> None:
     start = watchdog.index("source_restore_rc=0")
     block = watchdog[start:watchdog.index("# The primary runner normally removes", start)]
     assert block.index("restore_source_capacity || source_restore_rc=$?") < block.index("release_source_workload_fence || source_release_rc=$?")
-    assert block.index("release_source_workload_fence || source_release_rc=$?") < block.index("|| exit 105")
+    assert "exit 105" not in block
+    volume_cleanup = watchdog.index("oci bv boot-volume delete", start)
+    deferred_failure = watchdog.index("if (( source_restore_rc != 0 || source_release_rc != 0 )); then", volume_cleanup)
+    assert volume_cleanup < deferred_failure < watchdog.index("exit 105", deferred_failure)
 
 
 def test_exit_cleanup_stays_armed_through_fallible_backup_retirement() -> None:

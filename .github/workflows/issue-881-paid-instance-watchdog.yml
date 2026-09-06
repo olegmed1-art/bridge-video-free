@@ -434,7 +434,6 @@ jobs:
           # Even when OCI is unavailable for the entire bounded restore
           # budget, independently try to unmask and start the reachable host.
           release_source_workload_fence || source_release_rc=$?
-          (( source_restore_rc == 0 && source_release_rc == 0 )) || exit 105
 
           # The primary runner normally removes the restored boot volume. If
           # that runner disappeared, the independent watchdog owns the same
@@ -527,5 +526,9 @@ jobs:
             else
               (( late_volume_clean_count >= 3 )) || exit 100
             fi
+          fi
+          if (( source_restore_rc != 0 || source_release_rc != 0 )); then
+            gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="Paid acceptance watchdog: exact-stamped instance and restored boot volume are PROVEN_ABSENT; production restore requires operator reconciliation; run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. No temporary resource IDs retained."
+            exit 105
           fi
           gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="Paid acceptance watchdog: exact-stamped instance and restored boot volume are PROVEN_ABSENT; temporary production capacity lease is RESTORED; run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. No resource IDs retained."

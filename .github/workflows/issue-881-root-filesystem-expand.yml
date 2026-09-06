@@ -1391,6 +1391,10 @@ jobs:
               if wait_instance_terminated "$drill_instance_id"; then
                 paid_instance_terminal_proven=1
                 state_set paid_termination_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                # Restore production at the exact compute-quota release proof
+                # point, before any unrelated storage/network cleanup waits.
+                restore_source_capacity || failed=1
+                release_source_workload_fence || failed=1
               else
                 failed=1
               fi
@@ -1901,12 +1905,6 @@ jobs:
           state_set retained_backup_status ACCEPTED_ISOLATED_BOOT
           drill_seconds="$(( $(date -u +%s) - drill_started ))"
           if ! cleanup_temp_resources; then
-            # Secondary storage/network cleanup must not keep production
-            # fenced after exact paid compute termination has freed quota.
-            if (( paid_instance_terminal_proven == 1 )); then
-              restore_source_capacity || true
-              release_source_workload_fence || true
-            fi
             # Do not invoke the EXIT trap a second time after a fully bounded
             # explicit cleanup attempt; fail closed with the retained IDs/name
             # stamp available in this run's log for operator reconciliation.
