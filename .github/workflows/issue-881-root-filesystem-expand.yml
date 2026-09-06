@@ -1132,11 +1132,19 @@ jobs:
               return 94
             fi
             if [[ -z "$prior_instances$prior_restored$prior_subnets$prior_security$prior_routes$prior_igs$prior_vcns" ]]; then
-              state_set prior_cleanup_status EXACT_NAME_INVENTORY_EMPTY
-              echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=0 ids=none exact_name_inventory_empty=true'
-              return 0
+              if (( cleanup_only == 0 )); then
+                state_set prior_cleanup_status EXACT_NAME_INVENTORY_EMPTY
+                echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=0 ids=none exact_name_inventory_empty=true'
+                return 0
+              fi
+              # A redacted cleanup receipt intentionally contributes no OCIDs.
+              # One empty inventory snapshot is not an absence proof: continue
+              # through the three repeated exact-stamp inventories and typed
+              # proof recording before granting cleanup success.
+              echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_START resource_count=0 ids=none redacted_inventory=true'
+            else
+              echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_START resource_count=$prior_count ids=$prior_ids"
             fi
-            echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_START resource_count=$prior_count ids=$prior_ids"
             if [[ -n "$prior_instances" ]]; then
               readarray -t ids <<<"$prior_instances"
               reconcile_bound_resource instance boot-acceptance 600 "${ids[@]}"
