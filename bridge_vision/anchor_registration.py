@@ -82,7 +82,7 @@ def validate_anchor_spec(raw: Any) -> dict[str, Any]:
         "scales": scales,
         "minimum_score": _number(raw.get("minimum_score"), "minimum_score", 0.0, 1.0),
         "minimum_margin": _number(
-            raw.get("minimum_margin"), "minimum_margin", 0.0, 1.0
+            raw.get("minimum_margin"), "minimum_margin", 0.000001, 1.0
         ),
         "appearance": "INTENSITY_INVERSION_INVARIANT",
     }

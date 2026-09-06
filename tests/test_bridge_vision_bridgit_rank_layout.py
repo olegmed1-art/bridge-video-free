@@ -129,6 +129,20 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
         parse_profile(raw)
 
     raw = profile_raw()
+    raw["geometry"]["interface_anchor"] = {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": {"x": 0.72, "y": 0.02, "width": 0.08, "height": 0.10},
+        "scales": [1.0],
+        "minimum_score": 0.80,
+        "minimum_margin": 0,
+    }
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="minimum_margin"):
+        parse_profile(raw)
+
+    raw = profile_raw()
     raw["gates"]["min_assignment_margin"] = 0
     raw["profile_sha256"] = canonical_hash(
         {key: value for key, value in raw.items() if key != "profile_sha256"}
@@ -598,6 +612,26 @@ def test_encoded_dimensions_and_decoded_memory_are_bounded_before_decode():
             [Path(f"unread-frame-{index}.jpg") for index in range(16)],
             profile,
         )
+
+
+def test_frame_payload_read_is_bounded_by_remaining_memory(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile = parse_profile(profile_raw())
+    observed_limits = []
+
+    def bounded_read(_path, max_bytes, _kind):
+        observed_limits.append(max_bytes)
+        raise BridgitRankLayoutError("bounded read stopped")
+
+    monkeypatch.setattr(bridgit_rank_layout, "_read_bounded_bytes", bounded_read)
+    with pytest.raises(BridgitRankLayoutError, match="bounded read stopped"):
+        bridgit_rank_layout._read_frame(
+            Path("frame.png"),
+            profile,
+            decoded_job_bytes_so_far=bridgit_rank_layout.MAX_DECODED_JOB_BYTES - 10,
+        )
+    assert observed_limits == [9]
 
 
 def test_anchor_work_is_bounded_across_job_before_decode(monkeypatch):

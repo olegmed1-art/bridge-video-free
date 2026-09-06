@@ -938,7 +938,11 @@ def _read_frame(
     defer_registration: bool = False,
     decoded_job_bytes_so_far: int = 0,
 ):
-    payload = _read_bounded_bytes(path, MAX_FRAME_BYTES, "frame")
+    remaining_payload_headroom = MAX_DECODED_JOB_BYTES - decoded_job_bytes_so_far
+    if remaining_payload_headroom <= 1:
+        raise BridgitRankLayoutError("frame payload exceeds job memory budget")
+    payload_limit = min(MAX_FRAME_BYTES, remaining_payload_headroom - 1)
+    payload = _read_bounded_bytes(path, payload_limit, "frame")
     encoded_width, encoded_height = _encoded_image_dimensions(payload)
     if (registration_reference is None or profile.interface_anchor is None) and (
         encoded_width,
