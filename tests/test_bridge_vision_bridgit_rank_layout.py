@@ -107,6 +107,26 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
     with pytest.raises(BridgitRankLayoutError, match="span exceeds scoring budget"):
         parse_profile(raw)
 
+    raw = profile_raw()
+    raw["geometry"]["interface_anchor"] = {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": {"x": 0.72, "y": 0.02, "width": 0.08, "height": 0.10},
+        "scales": [0.75, 1.0, 1.25],
+        "minimum_score": 0.80,
+        "minimum_margin": 0.03,
+    }
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    assert parse_profile(raw).interface_anchor["type"] == "UPPER_RIGHT_TEMPLATE"
+
+    raw["geometry"]["interface_anchor"]["reference_region"]["x"] = 0.1
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="right half"):
+        parse_profile(raw)
+
 
 def test_profile_hash_and_duplicate_json_keys_fail_closed(tmp_path: Path):
     raw = profile_raw()
@@ -234,6 +254,10 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
         assert reference_path == reference
         assert frame_paths == [first, second]
         assert profile.profile_id == raw["profile_id"]
+        frame_hashes = [
+            bridgit_rank_layout.sha256_file(first),
+            bridgit_rank_layout.sha256_file(second),
+        ]
         return {
             "status": "SHADOW_FULL_LAYOUT_CANDIDATE",
             "result_scope": "SHADOW_ONLY",
@@ -242,11 +266,27 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
             "hidden_hand_reconstruction_performed": False,
             "input_hashes": {
                 "reference_frame_sha256": reference_sha,
-                "frame_sha256s": [
-                    bridgit_rank_layout.sha256_file(first),
-                    bridgit_rank_layout.sha256_file(second),
-                ],
+                "frame_sha256s": frame_hashes,
             },
+            "_visual_observations": [
+                {
+                    "seat": "N",
+                    "suit": "H",
+                    "rank": "A",
+                    "source": "VISUAL",
+                    "frame_sha256": frame_sha,
+                    "region": {
+                        "coordinate_space": "NORMALIZED_FRAME",
+                        "x": 0.1,
+                        "y": 0.1,
+                        "width": 0.02,
+                        "height": 0.03,
+                    },
+                    "confidence": 0.91,
+                    "recognizer_version": bridgit_rank_layout.BACKEND_VERSION,
+                }
+                for frame_sha in frame_hashes
+            ],
         }
 
     monkeypatch.setattr(bridgit_rank_layout, "recognize_frames", fake_recognize)
@@ -273,6 +313,21 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
         ],
         "allow_hidden_information": False,
         "production_write": False,
+        "teacher_pointer_events": [
+            {
+                "source": "TEACHER_POINTER",
+                "frame_sha256": bridgit_rank_layout.sha256_file(second),
+                "timestamp_ms": 2000,
+                "point": {
+                    "coordinate_space": "NORMALIZED_FRAME",
+                    "x": 0.11,
+                    "y": 0.11,
+                },
+                "confidence": 0.95,
+                "claimed_card": "AH",
+                "claimed_seat": "N",
+            }
+        ],
     }
     receipt = execute_shadow_job(job)
     assert receipt == execute_shadow_job(job)
@@ -280,6 +335,13 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
     assert receipt["result"]["canonical_promotion_allowed"] is False
     assert receipt["production_write_performed"] is False
     assert receipt["school_canon_write_performed"] is False
+    report = receipt["result"]["deal_evidence_report"]
+    assert report["status"] == "PARTIAL"
+    observed = next(item for item in report["card_records"] if item["rank"] == "A")
+    assert observed["source"] == "TEMPORAL_CONSENSUS"
+    assert [item["timestamp_ms"] for item in observed["evidence"][:2]] == [1000, 2000]
+    assert observed["evidence"][-1]["source"] == "TEACHER_POINTER"
+    assert observed["evidence"][-1]["accepted_as_visual_observation"] is False
     claimed = receipt.pop("receipt_sha256")
     assert claimed == canonical_hash(receipt)
 

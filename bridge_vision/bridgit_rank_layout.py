@@ -32,6 +32,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from bridge_vision.anchor_registration import (
+    AnchorRegistrationError,
+    register_from_upper_right_anchor,
+    validate_anchor_spec,
+)
+from bridge_vision.deal_evidence import build_deal_evidence_report
+
 PROFILE_SCHEMA = "bridge-vision-bridgit-rank-layout/v1"
 JOB_TYPE = "BRIDGIT_RANK_LAYOUT_SHADOW_V1"
 RECEIPT_TYPE = "BRIDGIT_RANK_LAYOUT_SHADOW_RECEIPT_V1"
@@ -179,6 +186,7 @@ class BridgitRankLayoutProfile:
     anchors: dict[str, dict[str, tuple[int, int]]]
     horizontal_search: dict[str, tuple[int, int, int]]
     vertical_search: dict[str, tuple[int, int, int]]
+    interface_anchor: dict[str, Any] | None
     glyph_width: int
     glyph_height: int
     local_registration_px: int
@@ -352,6 +360,14 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
             )
         vertical_search[seat] = (x_min, x_max, edge_x)
 
+    interface_anchor_raw = geometry.get("interface_anchor")
+    interface_anchor = None
+    if interface_anchor_raw is not None:
+        try:
+            interface_anchor = validate_anchor_spec(interface_anchor_raw)
+        except AnchorRegistrationError as exc:
+            raise BridgitRankLayoutError(f"invalid interface anchor: {exc}") from exc
+
     gates = raw.get("gates")
     if not isinstance(gates, Mapping):
         raise BridgitRankLayoutError("gates must be an object")
@@ -444,6 +460,7 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
         anchors=anchors,
         horizontal_search=horizontal_search,
         vertical_search=vertical_search,
+        interface_anchor=interface_anchor,
         glyph_width=glyph_width,
         glyph_height=glyph_height,
         local_registration_px=registration,
@@ -715,6 +732,19 @@ def _validate_decoded_budget(
         raise BridgitRankLayoutError("decoded frames exceed job memory budget")
 
 
+def _validate_input_raster_budget(frame_paths: Sequence[Path]) -> None:
+    total = 0
+    for index, path in enumerate(frame_paths):
+        payload = _read_bounded_bytes(Path(path), MAX_FRAME_BYTES, f"frame[{index}]")
+        width, height = _encoded_image_dimensions(payload)
+        decoded = width * height * 3
+        if decoded > MAX_DECODED_FRAME_BYTES:
+            raise BridgitRankLayoutError("decoded frame exceeds raster memory budget")
+        total += decoded
+        if total > MAX_DECODED_JOB_BYTES:
+            raise BridgitRankLayoutError("decoded frames exceed job memory budget")
+
+
 def _validate_scoring_budget(
     profile: BridgitRankLayoutProfile, *, observation_count: int
 ) -> None:
@@ -722,7 +752,9 @@ def _validate_scoring_budget(
     if observation_count < 1 or observation_count > MAX_FRAMES:
         raise BridgitRankLayoutError("frame count outside allowed range")
 
-    side_span = sum(x_max - x_min for x_min, x_max, _ in profile.vertical_search.values())
+    side_span = sum(
+        x_max - x_min for x_min, x_max, _ in profile.vertical_search.values()
+    )
     registration_width = 2 * profile.local_registration_px + 1
 
     # Side calibration tries 29 step values over at most 26 side-hand cards,
@@ -730,16 +762,17 @@ def _validate_scoring_budget(
     # final fused and per-frame assignments each score all 52 visible cards.
     calibration_locations = 29 * 26 + 25 * len(SUITS) * len(RANKS)
     assignment_locations = 2 * len(CARDS)
-    scoring_calls = observation_count * len(RANKS) * (
-        len(SUITS) * side_span
-        + (calibration_locations + assignment_locations) * registration_width
+    scoring_calls = (
+        observation_count
+        * len(RANKS)
+        * (
+            len(SUITS) * side_span
+            + (calibration_locations + assignment_locations) * registration_width
+        )
     )
     variants_per_rank = len(SUITS) * registration_width**2
     dot_products = (
-        scoring_calls
-        * variants_per_rank
-        * profile.glyph_width
-        * profile.glyph_height
+        scoring_calls * variants_per_rank * profile.glyph_width * profile.glyph_height
     )
     if (
         scoring_calls > MAX_TEMPLATE_SCORING_CALLS
@@ -814,22 +847,56 @@ def _encoded_image_dimensions(payload: bytes) -> tuple[int, int]:
     raise BridgitRankLayoutError("frame encoding must be JPEG or PNG")
 
 
-def _read_frame(path: Path, profile: BridgitRankLayoutProfile):
+def _read_frame(
+    path: Path,
+    profile: BridgitRankLayoutProfile,
+    *,
+    registration_reference: Any | None = None,
+):
     payload = _read_bounded_bytes(path, MAX_FRAME_BYTES, "frame")
-    if _encoded_image_dimensions(payload) != (profile.width, profile.height):
+    encoded_width, encoded_height = _encoded_image_dimensions(payload)
+    if (registration_reference is None or profile.interface_anchor is None) and (
+        encoded_width,
+        encoded_height,
+    ) != (profile.width, profile.height):
         raise BridgitRankLayoutError(
             "encoded frame dimensions do not match the verified profile"
         )
+    _validate_decoded_budget(encoded_width, encoded_height, observation_count=0)
     cv2, np = _pixel_runtime()
     image = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if image is None or tuple(image.shape[:2]) != (profile.height, profile.width):
+    if image is None or tuple(image.shape[:2]) != (encoded_height, encoded_width):
         raise BridgitRankLayoutError(
-            "frame dimensions do not match the verified profile"
+            "decoded frame dimensions do not match encoded dimensions"
         )
+    if registration_reference is not None and profile.interface_anchor is not None:
+        try:
+            image, registration = register_from_upper_right_anchor(
+                registration_reference, image, profile.interface_anchor
+            )
+        except AnchorRegistrationError as exc:
+            raise BridgitRankLayoutError(
+                f"interface registration failed: {exc}"
+            ) from exc
+    else:
+        registration = {
+            "mode": "EXACT_PROFILE_DIMENSIONS",
+            "input_size": {"width": encoded_width, "height": encoded_height},
+            "registered_size": {"width": profile.width, "height": profile.height},
+            "anchor_region": None,
+            "game_window": {
+                "coordinate_space": "NORMALIZED_INPUT_FRAME",
+                "x": 0.0,
+                "y": 0.0,
+                "width": 1.0,
+                "height": 1.0,
+            },
+        }
     return (
         image,
         hashlib.sha256(payload).hexdigest(),
         hashlib.sha256(image).hexdigest(),
+        registration,
     )
 
 
@@ -1100,15 +1167,24 @@ def recognize_frames(
         profile.height,
         observation_count=len(frame_paths),
     )
-    reference, reference_hash, reference_pixel_hash = _read_frame(
+    _validate_input_raster_budget([reference_frame, *frame_paths])
+    reference, reference_hash, reference_pixel_hash, _ = _read_frame(
         reference_frame, profile
     )
     if reference_hash != profile.reference_frame_sha256:
         raise BridgitRankLayoutError("reference frame hash mismatch")
-    loaded_frames = [_read_frame(Path(path), profile) for path in frame_paths]
-    frames = [image for image, _, _ in loaded_frames]
-    frame_hashes = [frame_hash for _, frame_hash, _ in loaded_frames]
-    pixel_hashes = [pixel_hash for _, _, pixel_hash in loaded_frames]
+    loaded_frames = [
+        _read_frame(Path(path), profile, registration_reference=reference)
+        for path in frame_paths
+    ]
+    frames = [image for image, _, _, _ in loaded_frames]
+    frame_hashes = [frame_hash for _, frame_hash, _, _ in loaded_frames]
+    pixel_hashes = [pixel_hash for _, _, pixel_hash, _ in loaded_frames]
+    frame_registrations = [registration for _, _, _, registration in loaded_frames]
+    frame_registration_receipts = [
+        {"frame_sha256": frame_hash, **registration}
+        for frame_hash, registration in zip(frame_hashes, frame_registrations)
+    ]
     _validate_temporal_identities(
         reference_hash,
         reference_pixel_hash,
@@ -1159,6 +1235,7 @@ def recognize_frames(
                 lengths=frame_lengths,
                 reason=f"per_frame_geometry_not_proven:{geometry_failure}",
                 input_hashes=input_hashes,
+                frame_registrations=frame_registration_receipts,
             )
         frame_geometries.append(frame_lengths)
         frame_horizontal_anchors.append(detected_anchors)
@@ -1170,6 +1247,7 @@ def recognize_frames(
             lengths=lengths,
             reason="per_frame_geometry_disagreement",
             input_hashes=input_hashes,
+            frame_registrations=frame_registration_receipts,
         )
     if any(
         frame_anchors != frame_horizontal_anchors[0]
@@ -1180,6 +1258,7 @@ def recognize_frames(
             lengths=lengths,
             reason="per_frame_anchor_disagreement",
             input_hashes=input_hashes,
+            frame_registrations=frame_registration_receipts,
         )
     for seat in ("N", "S"):
         anchors[seat].update(frame_horizontal_anchors[0][seat])
@@ -1195,6 +1274,7 @@ def recognize_frames(
     frame_assigned_scores: list[list[float]] = [[] for _ in frame_hashes]
     frame_assignment_margins: list[list[float]] = [[] for _ in frame_hashes]
     frame_ink_scores: list[list[float]] = [[] for _ in frame_hashes]
+    raw_visual_observations: list[dict[str, Any]] = []
     for suit in SUITS:
         slots = [
             (seat, xy)
@@ -1258,8 +1338,40 @@ def recognize_frames(
                     sum(lengths[other][suit] for other in SEATS[: SEATS.index(seat)])
                     + single_used[seat]
                 )
-                frame_assigned_scores[frame_index].append(
-                    float(single_matrix[row][RANKS.index(rank)])
+                assigned_score = float(single_matrix[row][RANKS.index(rank)])
+                frame_assigned_scores[frame_index].append(assigned_score)
+                _, (x, y) = slots[row]
+                game_window = frame_registrations[frame_index]["game_window"]
+                normalized_x = x / profile.width
+                normalized_y = y / profile.height
+                normalized_width = profile.glyph_width / profile.width
+                normalized_height = profile.glyph_height / profile.height
+                raw_visual_observations.append(
+                    {
+                        "seat": seat,
+                        "suit": suit,
+                        "rank": rank,
+                        "source": "VISUAL",
+                        "frame_sha256": frame_hashes[frame_index],
+                        "region": {
+                            "coordinate_space": "NORMALIZED_FRAME",
+                            "x": round(
+                                game_window["x"] + normalized_x * game_window["width"],
+                                8,
+                            ),
+                            "y": round(
+                                game_window["y"] + normalized_y * game_window["height"],
+                                8,
+                            ),
+                            "width": round(normalized_width * game_window["width"], 8),
+                            "height": round(
+                                normalized_height * game_window["height"], 8
+                            ),
+                        },
+                        "confidence": round(max(0.0, min(1.0, assigned_score)), 6),
+                        "confidence_kind": "TEMPLATE_SIMILARITY_UNCALIBRATED",
+                        "recognizer_version": BACKEND_VERSION,
+                    }
                 )
                 single_used[seat] += 1
             if len(single_alternatives) > 1:
@@ -1375,6 +1487,12 @@ def recognize_frames(
         evidence=evidence,
         uncertainties=uncertainties,
         frame_assignment_issues=frame_assignment_issues,
+        frame_registrations=frame_registration_receipts,
+        _visual_observations=(
+            raw_visual_observations
+            if status in {"SHADOW_FULL_LAYOUT_CANDIDATE", "PENDING_TEMPORAL_CONSENSUS"}
+            else []
+        ),
     )
 
 
@@ -1485,6 +1603,7 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
         raise BridgitRankLayoutError("frame_refs count outside allowed range")
     frame_paths: list[Path] = []
     timestamps: set[int] = set()
+    timestamp_values: list[int] = []
     frame_hashes: list[str] = []
     for index, ref in enumerate(frame_refs):
         if not isinstance(ref, Mapping):
@@ -1498,6 +1617,7 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
         if timestamp in timestamps:
             raise BridgitRankLayoutError("duplicate frame timestamp")
         timestamps.add(timestamp)
+        timestamp_values.append(timestamp)
         path = _validated_ref(
             ref,
             f"frame_refs[{index}]",
@@ -1532,6 +1652,36 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
     }
     if result.get("input_hashes") != expected_result_input_hashes:
         raise BridgitRankLayoutError("input changed during recognition")
+    raw_visual_observations = result.pop("_visual_observations", [])
+    if not isinstance(raw_visual_observations, list):
+        raise BridgitRankLayoutError("recognizer returned invalid visual observations")
+    timestamp_by_frame = {
+        frame_hash: timestamp
+        for frame_hash, timestamp in zip(frame_hashes, timestamp_values)
+    }
+    enriched_visual_observations = []
+    for observation in raw_visual_observations:
+        if not isinstance(observation, Mapping):
+            raise BridgitRankLayoutError(
+                "recognizer returned invalid visual observation"
+            )
+        frame_sha = str(observation.get("frame_sha256") or "")
+        if frame_sha not in timestamp_by_frame:
+            raise BridgitRankLayoutError("visual observation references unknown frame")
+        enriched_visual_observations.append(
+            {**dict(observation), "timestamp_ms": timestamp_by_frame[frame_sha]}
+        )
+    pointer_events = job.get("teacher_pointer_events", ())
+    try:
+        result["deal_evidence_report"] = build_deal_evidence_report(
+            enriched_visual_observations,
+            pointer_events,
+            recognizer_version=BACKEND_VERSION,
+            required_visual_frames=profile.min_independent_frames,
+            allow_logical_inference=False,
+        )
+    except ValueError as exc:
+        raise BridgitRankLayoutError(f"invalid deal evidence: {exc}") from exc
     receipt: dict[str, Any] = {
         "receipt_type": RECEIPT_TYPE,
         "backend_version": BACKEND_VERSION,

@@ -8,6 +8,8 @@ Governance mode: `ASSURED`
 
 Status: isolated shadow implementation validated locally; blocked from production activation
 
+Amended: 2026-09-06 (anchor registration and per-card provenance contract)
+
 ## Outcome
 
 The profiled Bridgit desktop recognizer was transferred into the repository as an opt-in module without changing the default Universal Video route, any workflow, server service, production database, SCHOOL CANON or WORLD. It uses only already selected local frames; no full-video batch was launched.
@@ -50,6 +52,27 @@ These five deals are a development regression corpus, not a frozen holdout: the 
 - the default `BridgeVisionEngine` remains empty and unchanged.
 
 Repository contract tests include decoded-pixel reference replay, per-frame deal disagreement, pre-decode image-header validation, decoded-memory gates and pre-recognition scoring-work limits. The exact-current-main Universal Video suite, dependency audit, Ruff checks, Python compilation and `git diff --check` must all pass again on the amended exact head before this evidence is considered current.
+
+## 2026-09-06 bounded extension evidence
+
+No production video or video server was used. Four deterministic synthetic registration cases now exercise a verified upper-right anchor: translated/scaled light UI, translated/scaled intensity-inverted dark UI, absent anchor and two equally plausible game windows. The first two register to reference geometry; the latter two fail closed. The profile and receipt use normalized anchor/game-window coordinates. This proves the registration contract and deterministic implementation, not real-world cross-UI accuracy.
+
+Twelve deterministic evidence-report cases cover: 52 unique cards and 13 per seat, one-frame versus temporal provenance, pointer corroboration, pointer/card conflict to `NEEDS_REVIEW`, a pointer frame changed during the gesture, explicit unknown slots, guarded 39-card complement, refusal to guess from incomplete evidence, duplicate card across seats, a hand above 13 cards, required `H,C,D,S` diagram order, normalized region bounds and repeatability under reversed input order. The integrated shadow-job test verifies timestamp binding and that pointer evidence never becomes a visual observation.
+
+Two additional private processed-report exports (27 extracted control frames in total, 960-pixel render width) were inspected locally to confirm the same Bridgit family, the upper-right compass/board anchor and `H,C,D,S` order in horizontal and vertical hands. Their report SHA-256 values are `355173084ee70406cc9692ccd6bc91fadac813b3f56d3a48bc7c54faff0260c8c5d46d98` and `002b05332ff7b0738a7a01dc9e4aafa78d612d2ce24d0a1fa283fa0dbbffbd30`. No raw frame, face, name, Drive identifier or manually transcribed deal was committed. These sources have not passed pixel recognition against independent truth and therefore do not count toward precision/recall or readiness.
+
+| Required scenario | Current evidence | Result |
+|---|---|---|
+| previously successful complete deals | five development deals, 260/260 exact pairs | regression only |
+| previously failed second deal | no frozen, independently labelled input available on this branch | blocked |
+| multiple other videos | two private report exports inspected; recognition truth absent | blocked |
+| resolution/scale/window shift | bounded synthetic anchor registration | contract pass; real holdout blocked |
+| light/dark theme | intensity-inverted synthetic registration | contract pass; real holdout blocked |
+| blur/partial/occlusion/transition | erased glyph and mid-play fail-closed checks; broader corpus absent | partial |
+| missing/wrong anchor | missing and ambiguous synthetic anchors rejected | pass |
+| visual/pointer conflict | deterministic `NEEDS_REVIEW` | pass |
+| logical completion conflict/unknowns | complement isolated from visual/canonical output; incomplete evidence stays unknown | pass |
+| repeated identical run | receipt and evidence report equality | pass |
 
 ## Why production remains blocked
 
