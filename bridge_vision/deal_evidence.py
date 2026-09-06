@@ -283,6 +283,7 @@ def build_deal_evidence_report(
     )
     timestamp_by_frame: dict[str, int] = {}
     frame_by_timestamp: dict[int, str] = {}
+    target_by_frame_region: dict[tuple[Any, ...], tuple[str, str]] = {}
     for item in observations:
         frame = item["frame_sha256"]
         timestamp = item["timestamp_ms"]
@@ -292,6 +293,22 @@ def build_deal_evidence_report(
             raise DealEvidenceError("independent frames require distinct timestamps")
         timestamp_by_frame[frame] = timestamp
         frame_by_timestamp[timestamp] = frame
+        region = item["region"]
+        region_key = (
+            frame,
+            region["coordinate_space"],
+            region["x"],
+            region["y"],
+            region["width"],
+            region["height"],
+        )
+        target = (item["card"], item["seat"])
+        if (
+            region_key in target_by_frame_region
+            and target_by_frame_region[region_key] != target
+        ):
+            raise DealEvidenceError("visual region reused for different targets")
+        target_by_frame_region[region_key] = target
 
     conflicts: list[dict[str, Any]] = []
     review_reasons: list[str] = []

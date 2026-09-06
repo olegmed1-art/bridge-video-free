@@ -143,6 +143,15 @@ def test_distinct_frame_hashes_cannot_reuse_a_consensus_timestamp():
         build_deal_evidence_report(visual, recognizer_version=VERSION)
 
 
+def test_one_visual_region_cannot_be_relabelled_as_different_cards():
+    first = observation("N", "AH", index=0)
+    second = observation("E", "KH", index=1)
+    second["region"] = dict(first["region"])
+
+    with pytest.raises(DealEvidenceError, match="visual region reused"):
+        build_deal_evidence_report([first, second], recognizer_version=VERSION)
+
+
 def test_per_card_support_cannot_form_a_hybrid_temporal_deal():
     frames = ("a" * 64, "b" * 64, "c" * 64)
     visual = []
@@ -276,6 +285,7 @@ def test_same_card_in_two_seats_is_not_silently_resolved():
 def test_more_than_thirteen_cards_in_a_hand_is_needs_review():
     cards = [rank + suit for suit in SUITS for rank in RANKS][:14]
     visual = [observation("N", card, index=index) for index, card in enumerate(cards)]
+    visual[-1]["region"]["y"] += 0.05
     report = build_deal_evidence_report(visual, recognizer_version=VERSION)
 
     assert report["status"] == "NEEDS_REVIEW"
