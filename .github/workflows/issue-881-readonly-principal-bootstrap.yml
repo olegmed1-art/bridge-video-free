@@ -155,6 +155,14 @@ jobs:
           PY
           )"
           [[ "$TENANCY_ID" == ocid1.tenancy.* ]] || exit 22
+          ADMIN_USER_ID="$(python - <<'PY'
+          import os
+          lines = [x.strip() for x in os.environ['OCI_USER_RAW'].replace('\r', '').splitlines() if x.strip()]
+          matches = [x.split('=', 1)[1].strip() for x in lines if x.startswith('user=')]
+          print(matches[0] if len(matches) == 1 else lines[0])
+          PY
+          )"
+          [[ "$ADMIN_USER_ID" == ocid1.user.* ]] || exit 22
 
           request_json() {
             local output="$1"
@@ -342,6 +350,25 @@ jobs:
           request_json "$RUNNER_TEMP/users.json" oci iam user list --compartment-id "$TENANCY_ID" --all
           request_json "$RUNNER_TEMP/groups.json" oci iam group list --compartment-id "$TENANCY_ID" --all
           request_json "$RUNNER_TEMP/policies.json" oci iam policy list --compartment-id "$TENANCY_ID" --all
+          request_json "$RUNNER_TEMP/admin-user.json" oci iam user get --user-id "$ADMIN_USER_ID"
+          PRIMARY_EMAIL="$(python - "$RUNNER_TEMP/admin-user.json" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))['data'].get('email')
+          assert isinstance(value, str) and 3 <= len(value) <= 254
+          assert value.count('@') == 1 and not any(ch.isspace() for ch in value)
+          local, domain = value.split('@')
+          allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&'*+/=?^_`{|}~.-")
+          assert 1 <= len(local) <= 64 and set(local) <= allowed
+          assert not local.startswith('.') and not local.endswith('.') and '..' not in local
+          labels = domain.split('.')
+          assert len(labels) >= 2 and len(domain) <= 253
+          for label in labels:
+              assert 1 <= len(label) <= 63
+              assert label[0].isalnum() and label[-1].isalnum()
+              assert all(ch.isascii() and (ch.isalnum() or ch == '-') for ch in label)
+          print(value)
+          PY
+          )"
           EXISTING_USER_ID="$(select_exact "$RUNNER_TEMP/users.json" "$USER_NAME")"
           EXISTING_GROUP_ID="$(select_exact "$RUNNER_TEMP/groups.json" "$GROUP_NAME")"
           EXISTING_POLICY_ID="$(select_exact "$RUNNER_TEMP/policies.json" "$POLICY_NAME")"
@@ -372,7 +399,7 @@ jobs:
           EXPECTED_FINGERPRINT="$(openssl rsa -pubin -in "$RUNNER_TEMP/readonly-public.pem" -outform DER 2>/dev/null | openssl md5 -c | awk '{print $2}')"
           require_mutation_budget
           USER_CREATED=1
-          request_json "$RUNNER_TEMP/user-create.json" oci iam user create --compartment-id "$TENANCY_ID" --name "$USER_NAME" --description "Issue 881 paid preflight read-only audit principal ownership:$OWNERSHIP_TOKEN"
+          request_json "$RUNNER_TEMP/user-create.json" oci iam user create --compartment-id "$TENANCY_ID" --name "$USER_NAME" --email "$PRIMARY_EMAIL" --description "Issue 881 paid preflight read-only audit principal ownership:$OWNERSHIP_TOKEN"
           USER_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.user."); print(x)' "$RUNNER_TEMP/user-create.json")"
           require_mutation_budget
           GROUP_CREATED=1

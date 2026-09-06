@@ -1151,6 +1151,46 @@ def test_rank_holes_use_only_the_configured_glyph_crop(
     assert thresholds == [profile.binary_threshold]
 
 
+def test_hole_prior_does_not_raise_raw_template_evidence(monkeypatch):
+    np = pytest.importorskip("numpy")
+    profile = replace(parse_profile(profile_raw()), local_registration_px=0)
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_pixel_runtime",
+        lambda: (object(), np),
+    )
+    monkeypatch.setattr(bridgit_rank_layout, "_glyph", lambda *_args: object())
+    monkeypatch.setattr(bridgit_rank_layout, "_similarity", lambda *_args: 0.20)
+    monkeypatch.setattr(bridgit_rank_layout, "_rank_hole_counts", lambda *_args: [2])
+
+    assignment_scores, raw_scores = bridgit_rank_layout._slot_score_components(
+        [object()],
+        {rank: object() for rank in bridgit_rank_layout.RANKS},
+        (10, 10),
+        profile,
+    )
+
+    assert raw_scores.tolist() == pytest.approx([0.20] * 13)
+    assert assignment_scores[bridgit_rank_layout.RANKS.index("8")] == pytest.approx(
+        0.50
+    )
+    assert raw_scores[bridgit_rank_layout.RANKS.index("8")] < profile.min_template_score
+
+
+def test_generated_glyph_coordinates_must_be_unique_across_suits():
+    profile = parse_profile(profile_raw())
+    anchors = {seat: dict(values) for seat, values in profile.anchors.items()}
+    anchors["W"]["C"] = anchors["W"]["H"]
+    lengths = {
+        seat: {suit: int(seat == "W" and suit in {"H", "C"}) for suit in "HCDS"}
+        for seat in "NESW"
+    }
+
+    assert not bridgit_rank_layout._generated_glyph_coords_are_unique(
+        lengths, anchors, {}
+    )
+
+
 def test_side_fan_coordinate_preflight_includes_registration_radius():
     profile = parse_profile(profile_raw())
     assert bridgit_rank_layout._glyph_coords_fit_frame([(2, 100), (20, 100)], profile)

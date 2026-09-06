@@ -1068,12 +1068,12 @@ def _similarity(target: Any, samples: Any) -> float:
     return float((samples @ vector).max())
 
 
-def _slot_scores(
+def _slot_score_components(
     frames: Sequence[Any],
     bank: Mapping[str, Any],
     xy: tuple[int, int],
     profile: BridgitRankLayoutProfile,
-):
+) -> tuple[Any, Any]:
     _, np = _pixel_runtime()
     x, y = xy
     radius = profile.local_registration_px
@@ -1087,14 +1087,24 @@ def _slot_scores(
         ]
         for frame in frames
     ]
-    scores = np.median(np.asarray(per_frame), axis=0)
+    raw_scores = np.median(np.asarray(per_frame), axis=0)
+    assignment_scores = raw_scores.copy()
 
     hole_counts = _rank_hole_counts(frames, xy, profile)
     median_holes = float(np.median(hole_counts))
-    scores[RANKS.index("8")] += 0.30 if median_holes >= 2 else -0.30
+    assignment_scores[RANKS.index("8")] += 0.30 if median_holes >= 2 else -0.30
     if median_holes < 1:
-        scores[RANKS.index("6")] -= 0.35
-    return scores
+        assignment_scores[RANKS.index("6")] -= 0.35
+    return assignment_scores, raw_scores
+
+
+def _slot_scores(
+    frames: Sequence[Any],
+    bank: Mapping[str, Any],
+    xy: tuple[int, int],
+    profile: BridgitRankLayoutProfile,
+):
+    return _slot_score_components(frames, bank, xy, profile)[0]
 
 
 def _rank_hole_counts(
@@ -1249,6 +1259,20 @@ def _glyph_coords_fit_frame(
         and y + profile.glyph_height <= profile.height
         for x, y in coords
     )
+
+
+def _generated_glyph_coords_are_unique(
+    lengths: Mapping[str, Mapping[str, int]],
+    anchors: Mapping[str, Mapping[str, tuple[int, int]]],
+    side_steps: Mapping[str, Mapping[str, float]],
+) -> bool:
+    coords = [
+        xy
+        for suit in SUITS
+        for seat in SEATS
+        for xy in _coords(seat, suit, lengths[seat][suit], anchors, side_steps)
+    ]
+    return len(coords) == len(set(coords))
 
 
 def _calibrate_side_steps(
@@ -1530,6 +1554,14 @@ def recognize_frames(
         anchors[seat].update(frame_horizontal_anchors[0][seat])
 
     side_steps = _calibrate_side_steps(frames, bank, lengths, anchors, profile)
+    if not _generated_glyph_coords_are_unique(lengths, anchors, side_steps):
+        return _shadow_result(
+            "LAYOUT_AMBIGUOUS",
+            lengths=lengths,
+            reason="duplicate_glyph_coordinates",
+            input_hashes=input_hashes,
+            frame_registrations=frame_registration_receipts,
+        )
     hands = {seat: {suit: [] for suit in SUITS} for seat in SEATS}
     uncertainties = []
     evidence_scores: list[float] = []
@@ -1547,7 +1579,11 @@ def recognize_frames(
             for seat in SEATS
             for xy in _coords(seat, suit, lengths[seat][suit], anchors, side_steps)
         ]
-        matrix = [_slot_scores(frames, bank, xy, profile) for _, xy in slots]
+        score_components = [
+            _slot_score_components(frames, bank, xy, profile) for _, xy in slots
+        ]
+        matrix = [assignment_scores for assignment_scores, _ in score_components]
+        raw_matrix = [raw_scores for _, raw_scores in score_components]
         for _, xy in slots:
             fractions = _rank_ink_fractions(frames, xy, profile)
             ink_scores.append(float(statistics.median(fractions)))
@@ -1568,7 +1604,7 @@ def recognize_frames(
                 sum(lengths[other][suit] for other in SEATS[: SEATS.index(seat)])
                 + used[seat]
             )
-            evidence_scores.append(float(matrix[row][RANKS.index(rank)]))
+            evidence_scores.append(float(raw_matrix[row][RANKS.index(rank)]))
             used[seat] += 1
         if len(alternatives) > 1:
             second_score, second_path = alternatives[1]
@@ -1588,8 +1624,14 @@ def recognize_frames(
                 )
 
         for frame_index, frame in enumerate(frames):
+            single_score_components = [
+                _slot_score_components([frame], bank, xy, profile) for _, xy in slots
+            ]
             single_matrix = [
-                _slot_scores([frame], bank, xy, profile) for _, xy in slots
+                assignment_scores for assignment_scores, _ in single_score_components
+            ]
+            single_raw_matrix = [
+                raw_scores for _, raw_scores in single_score_components
             ]
             single_alternatives = ordered_assignments(
                 single_matrix,
@@ -1604,7 +1646,7 @@ def recognize_frames(
                     sum(lengths[other][suit] for other in SEATS[: SEATS.index(seat)])
                     + single_used[seat]
                 )
-                assigned_score = float(single_matrix[row][RANKS.index(rank)])
+                assigned_score = float(single_raw_matrix[row][RANKS.index(rank)])
                 frame_assigned_scores[frame_index].append(assigned_score)
                 _, (x, y) = slots[row]
                 game_window = frame_registrations[frame_index]["game_window"]
