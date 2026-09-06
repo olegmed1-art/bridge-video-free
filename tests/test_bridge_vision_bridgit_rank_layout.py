@@ -193,6 +193,25 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
         parse_profile(raw)
 
     raw = profile_raw()
+    raw["geometry"]["interface_anchor"] = {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": {
+            "x": 0.999,
+            "y": 0.02,
+            "width": 0.001,
+            "height": 0.02,
+        },
+        "scales": [1.0],
+        "minimum_score": 0.80,
+        "minimum_margin": 0.03,
+    }
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="reference interface anchor"):
+        parse_profile(raw)
+
+    raw = profile_raw()
     raw["gates"]["min_assignment_margin"] = 0
     raw["profile_sha256"] = canonical_hash(
         {key: value for key, value in raw.items() if key != "profile_sha256"}

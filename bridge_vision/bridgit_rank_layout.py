@@ -1466,6 +1466,20 @@ def recognize_frames(
             if not detected or visible != 13:
                 geometry_failure = f"{seat}_fan_geometry_not_proven"
                 break
+            horizontal_coords = [
+                xy
+                for suit in SUITS
+                for xy in _coords(
+                    seat,
+                    suit,
+                    frame_lengths[seat][suit],
+                    detected_anchors,
+                    {},
+                )
+            ]
+            if not _glyph_coords_fit_frame(horizontal_coords, profile):
+                geometry_failure = f"{seat}_fan_geometry_out_of_frame"
+                break
         if geometry_failure is None:
             side = _side_lengths([frame], bank, profile)
             frame_lengths["W"], frame_lengths["E"] = side["W"], side["E"]
@@ -1478,7 +1492,7 @@ def recognize_frames(
         if geometry_failure is not None:
             if geometry_failure.endswith("has_fewer_than_13_visible_cards"):
                 status = "PARTIAL_PLAY"
-            elif geometry_failure.endswith("fan_geometry_not_proven"):
+            elif "fan_geometry" in geometry_failure:
                 status = "LAYOUT_UNKNOWN"
             else:
                 status = "LAYOUT_AMBIGUOUS"

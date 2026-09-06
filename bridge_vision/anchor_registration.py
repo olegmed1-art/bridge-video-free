@@ -134,8 +134,10 @@ def estimate_anchor_work_units(
     region = checked["reference_region"]
     anchor_x = round(region["x"] * reference_width)
     anchor_y = round(region["y"] * reference_height)
-    anchor_width = max(8, round(region["width"] * reference_width))
-    anchor_height = max(8, round(region["height"] * reference_height))
+    anchor_width = round(region["width"] * reference_width)
+    anchor_height = round(region["height"] * reference_height)
+    if anchor_width < 8 or anchor_height < 8:
+        raise AnchorRegistrationError("reference interface anchor is too small")
     if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
         raise AnchorRegistrationError("interface anchor exceeds template budget")
     scaled_dimensions = [
@@ -196,8 +198,10 @@ def estimate_anchor_peak_scratch_bytes(
     region = checked["reference_region"]
     anchor_x = round(region["x"] * reference_width)
     anchor_y = round(region["y"] * reference_height)
-    anchor_width = max(8, round(region["width"] * reference_width))
-    anchor_height = max(8, round(region["height"] * reference_height))
+    anchor_width = round(region["width"] * reference_width)
+    anchor_height = round(region["height"] * reference_height)
+    if anchor_width < 8 or anchor_height < 8:
+        raise AnchorRegistrationError("reference interface anchor is too small")
     if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
         raise AnchorRegistrationError("interface anchor exceeds template budget")
     scaled_dimensions = [
@@ -342,8 +346,10 @@ def register_from_upper_right_anchor(
     region = checked["reference_region"]
     anchor_x = round(region["x"] * reference_width)
     anchor_y = round(region["y"] * reference_height)
-    anchor_width = max(8, round(region["width"] * reference_width))
-    anchor_height = max(8, round(region["height"] * reference_height))
+    anchor_width = round(region["width"] * reference_width)
+    anchor_height = round(region["height"] * reference_height)
+    if anchor_width < 8 or anchor_height < 8:
+        raise AnchorRegistrationError("reference interface anchor is too small")
     if (
         anchor_x + anchor_width > reference_width
         or anchor_y + anchor_height > reference_height
