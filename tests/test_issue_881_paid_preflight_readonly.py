@@ -65,3 +65,15 @@ def test_regression_rejected_guard_result_is_published_without_launching() -> No
     assert "python ops/oci_paid_acceptance_guard.py" in TEXT
     assert "OCI resource creation, update, deletion, launch" in TEXT
     assert "oci compute instance launch" not in TEXT
+
+
+def test_regression_oci_secrets_exist_only_after_exact_authorization() -> None:
+    audit = TEXT.split("  audit:\n", 1)[1]
+    job_preamble = audit.split("    steps:\n", 1)[0]
+    assert "secrets.OCI_" not in job_preamble
+    exact_gate = TEXT.index("Validate exact owner request before credentials")
+    install = TEXT.index("Install pinned OCI CLI without credentials")
+    first_secret = TEXT.index("${{ secrets.OCI_CLI_USER }}")
+    assert exact_gate < install < first_secret
+    assert TEXT.count("${{ secrets.OCI_") == 5
+    assert "trap 'rm -f \"$HOME/.oci/config\" \"$HOME/.oci/key.pem\"' EXIT" in TEXT
