@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import pytest
 
+import bridge_vision.anchor_registration as anchor_registration
 from bridge_vision.anchor_registration import (
     AnchorRegistrationError,
+    estimate_anchor_work_units,
     register_from_upper_right_anchor,
     validate_anchor_spec,
+    validate_anchor_job_budget,
 )
 
 cv2 = pytest.importorskip("cv2")
@@ -94,3 +97,52 @@ def test_anchor_profile_is_normalized_bounded_and_upper_right():
     invalid["reference_region"] = {"x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1}
     with pytest.raises(AnchorRegistrationError, match="right half"):
         validate_anchor_spec(invalid)
+
+
+def test_different_scale_or_window_size_is_a_competing_anchor():
+    best = {
+        "scale": 1.0,
+        "window_x": 20,
+        "window_y": 10,
+        "window_width": 200,
+        "window_height": 120,
+    }
+    same = dict(best)
+    different_scale = {
+        **best,
+        "scale": 1.25,
+        "window_width": 250,
+        "window_height": 150,
+    }
+
+    assert anchor_registration._implies_distinct_window(best, same) is False
+    assert anchor_registration._implies_distinct_window(best, different_scale) is True
+
+
+def test_anchor_work_is_template_weighted_and_bounded_for_whole_job():
+    small_spec = anchor_spec()
+    large_spec = anchor_spec()
+    large_spec["reference_region"] = {
+        "x": 0.70,
+        "y": 0.02,
+        "width": 0.20,
+        "height": 0.30,
+    }
+    small_work, _ = estimate_anchor_work_units((1000, 720), [(1920, 1080)], small_spec)
+    large_work, _ = estimate_anchor_work_units((1000, 720), [(1920, 1080)], large_spec)
+    assert large_work > small_work
+
+    with pytest.raises(AnchorRegistrationError, match="job exceeds work budget"):
+        validate_anchor_job_budget(
+            (1000, 720),
+            [(1920, 1080)] * 3,
+            {
+                **small_spec,
+                "reference_region": {
+                    "x": 0.72,
+                    "y": 0.02,
+                    "width": 0.08,
+                    "height": 0.10,
+                },
+            },
+        )

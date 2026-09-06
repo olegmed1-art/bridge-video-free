@@ -36,6 +36,7 @@ from bridge_vision.anchor_registration import (
     AnchorRegistrationError,
     register_from_upper_right_anchor,
     validate_anchor_spec,
+    validate_anchor_job_budget,
 )
 from bridge_vision.deal_evidence import build_deal_evidence_report
 
@@ -732,17 +733,22 @@ def _validate_decoded_budget(
         raise BridgitRankLayoutError("decoded frames exceed job memory budget")
 
 
-def _validate_input_raster_budget(frame_paths: Sequence[Path]) -> None:
+def _validate_input_raster_budget(
+    frame_paths: Sequence[Path],
+) -> list[tuple[int, int]]:
     total = 0
+    dimensions = []
     for index, path in enumerate(frame_paths):
         payload = _read_bounded_bytes(Path(path), MAX_FRAME_BYTES, f"frame[{index}]")
         width, height = _encoded_image_dimensions(payload)
+        dimensions.append((width, height))
         decoded = width * height * 3
         if decoded > MAX_DECODED_FRAME_BYTES:
             raise BridgitRankLayoutError("decoded frame exceeds raster memory budget")
         total += decoded
         if total > MAX_DECODED_JOB_BYTES:
             raise BridgitRankLayoutError("decoded frames exceed job memory budget")
+    return dimensions
 
 
 def _validate_scoring_budget(
@@ -1167,7 +1173,18 @@ def recognize_frames(
         profile.height,
         observation_count=len(frame_paths),
     )
-    _validate_input_raster_budget([reference_frame, *frame_paths])
+    input_dimensions = _validate_input_raster_budget([reference_frame, *frame_paths])
+    if profile.interface_anchor is not None:
+        try:
+            validate_anchor_job_budget(
+                (profile.width, profile.height),
+                input_dimensions[1:],
+                profile.interface_anchor,
+            )
+        except AnchorRegistrationError as exc:
+            raise BridgitRankLayoutError(
+                f"interface registration budget failed: {exc}"
+            ) from exc
     reference, reference_hash, reference_pixel_hash, _ = _read_frame(
         reference_frame, profile
     )

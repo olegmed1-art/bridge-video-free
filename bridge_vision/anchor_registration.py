@@ -8,7 +8,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 MAX_ANCHOR_TEMPLATE_PIXELS = 512 * 512
-MAX_ANCHOR_SEARCH_PIXELS = 250_000_000
+ANCHOR_WORK_BLOCK_PIXELS = 256
+MAX_ANCHOR_FRAME_WORK_UNITS = 250_000_000
+MAX_ANCHOR_JOB_WORK_UNITS = 500_000_000
 
 
 class AnchorRegistrationError(ValueError):
@@ -32,6 +34,12 @@ def _number(value: Any, field: str, minimum: float, maximum: float) -> float:
     if not math.isfinite(result) or not minimum <= result <= maximum:
         raise AnchorRegistrationError(f"invalid {field}")
     return result
+
+
+def _dimension(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 8192:
+        raise AnchorRegistrationError(f"invalid {field}")
+    return value
 
 
 def validate_anchor_spec(raw: Any) -> dict[str, Any]:
@@ -85,6 +93,79 @@ def _appearance(image: Any):
     return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
 
+def estimate_anchor_work_units(
+    reference_size: tuple[int, int],
+    observed_sizes: Sequence[tuple[int, int]],
+    spec: Mapping[str, Any],
+) -> tuple[int, tuple[int, ...]]:
+    """Estimate bounded matching work, weighted by template pixel blocks."""
+
+    checked = validate_anchor_spec(spec)
+    reference_width = _dimension(reference_size[0], "reference width")
+    reference_height = _dimension(reference_size[1], "reference height")
+    region = checked["reference_region"]
+    anchor_width = max(8, round(region["width"] * reference_width))
+    anchor_height = max(8, round(region["height"] * reference_height))
+    if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
+        raise AnchorRegistrationError("interface anchor exceeds template budget")
+    per_frame: list[int] = []
+    for index, size in enumerate(observed_sizes):
+        if not isinstance(size, tuple) or len(size) != 2:
+            raise AnchorRegistrationError(f"invalid observed size {index}")
+        observed_width = _dimension(size[0], f"observed width {index}")
+        observed_height = _dimension(size[1], f"observed height {index}")
+        work = 0
+        for scale in checked["scales"]:
+            template_width = max(8, round(anchor_width * scale))
+            template_height = max(8, round(anchor_height * scale))
+            if template_width > observed_width or template_height > observed_height:
+                continue
+            match_positions = (observed_width - template_width + 1) * (
+                observed_height - template_height + 1
+            )
+            template_blocks = math.ceil(
+                template_width * template_height / ANCHOR_WORK_BLOCK_PIXELS
+            )
+            work += match_positions * template_blocks
+        per_frame.append(work)
+    return sum(per_frame), tuple(per_frame)
+
+
+def validate_anchor_job_budget(
+    reference_size: tuple[int, int],
+    observed_sizes: Sequence[tuple[int, int]],
+    spec: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Reject an over-budget registration job before image decode/matching."""
+
+    total, per_frame = estimate_anchor_work_units(reference_size, observed_sizes, spec)
+    if any(work > MAX_ANCHOR_FRAME_WORK_UNITS for work in per_frame):
+        raise AnchorRegistrationError("interface anchor frame exceeds work budget")
+    if total > MAX_ANCHOR_JOB_WORK_UNITS:
+        raise AnchorRegistrationError("interface anchor job exceeds work budget")
+    return {
+        "work_units": total,
+        "per_frame_work_units": list(per_frame),
+        "template_block_pixels": ANCHOR_WORK_BLOCK_PIXELS,
+    }
+
+
+def _implies_distinct_window(
+    best: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> bool:
+    return (
+        not math.isclose(float(candidate["scale"]), float(best["scale"]), abs_tol=1e-12)
+        or abs(candidate["window_x"] - best["window_x"])
+        > max(4, best["window_width"] * 0.03)
+        or abs(candidate["window_y"] - best["window_y"])
+        > max(4, best["window_height"] * 0.03)
+        or abs(candidate["window_width"] - best["window_width"])
+        > max(4, best["window_width"] * 0.03)
+        or abs(candidate["window_height"] - best["window_height"])
+        > max(4, best["window_height"] * 0.03)
+    )
+
+
 def register_from_upper_right_anchor(
     reference: Any,
     observed: Any,
@@ -108,13 +189,11 @@ def register_from_upper_right_anchor(
         or anchor_y + anchor_height > reference_height
     ):
         raise AnchorRegistrationError("rounded interface anchor leaves reference")
-    if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
-        raise AnchorRegistrationError("interface anchor exceeds template budget")
-    if (
-        observed_width * observed_height * len(checked["scales"])
-        > MAX_ANCHOR_SEARCH_PIXELS
-    ):
-        raise AnchorRegistrationError("interface anchor search exceeds work budget")
+    work_receipt = validate_anchor_job_budget(
+        (reference_width, reference_height),
+        [(observed_width, observed_height)],
+        checked,
+    )
     template = _appearance(
         reference[
             anchor_y : anchor_y + anchor_height, anchor_x : anchor_x + anchor_width
@@ -189,14 +268,7 @@ def register_from_upper_right_anchor(
     if best["score"] < checked["minimum_score"]:
         raise AnchorRegistrationError("upper-right interface anchor score is too low")
     distant = next(
-        (
-            item
-            for item in candidates[1:]
-            if abs(item["window_x"] - best["window_x"])
-            > max(4, best["window_width"] * 0.03)
-            or abs(item["window_y"] - best["window_y"])
-            > max(4, best["window_height"] * 0.03)
-        ),
+        (item for item in candidates[1:] if _implies_distinct_window(best, item)),
         None,
     )
     runner_up_score = float(distant["score"]) if distant is not None else -1.0
@@ -238,6 +310,7 @@ def register_from_upper_right_anchor(
         },
         "input_size": {"width": observed_width, "height": observed_height},
         "registered_size": {"width": reference_width, "height": reference_height},
+        "anchor_work": work_receipt,
         "registered_pixel_sha256": hashlib.sha256(
             np.ascontiguousarray(registered)
         ).hexdigest(),
@@ -245,9 +318,13 @@ def register_from_upper_right_anchor(
 
 
 __all__ = [
+    "ANCHOR_WORK_BLOCK_PIXELS",
     "AnchorRegistrationError",
-    "MAX_ANCHOR_SEARCH_PIXELS",
+    "MAX_ANCHOR_FRAME_WORK_UNITS",
+    "MAX_ANCHOR_JOB_WORK_UNITS",
     "MAX_ANCHOR_TEMPLATE_PIXELS",
+    "estimate_anchor_work_units",
     "register_from_upper_right_anchor",
     "validate_anchor_spec",
+    "validate_anchor_job_budget",
 ]

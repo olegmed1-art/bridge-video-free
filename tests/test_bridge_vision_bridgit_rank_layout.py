@@ -466,6 +466,48 @@ def test_encoded_dimensions_and_decoded_memory_are_bounded_before_decode():
         )
 
 
+def test_anchor_work_is_bounded_across_job_before_decode(monkeypatch):
+    raw = profile_raw()
+    raw["geometry"]["interface_anchor"] = {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": {
+            "x": 0.72,
+            "y": 0.02,
+            "width": 0.08,
+            "height": 0.10,
+        },
+        "scales": [1.0, 1.25, 1.5],
+        "minimum_score": 0.80,
+        "minimum_margin": 0.03,
+    }
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    profile = parse_profile(raw)
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_validate_input_raster_budget",
+        lambda paths: [
+            (1000, 720),
+            (1920, 1080),
+            (1920, 1080),
+            (1920, 1080),
+        ],
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_read_frame",
+        lambda *_args, **_kwargs: pytest.fail("must reject before decode"),
+    )
+
+    with pytest.raises(BridgitRankLayoutError, match="anchor job exceeds work budget"):
+        bridgit_rank_layout.recognize_frames(
+            Path("reference.png"),
+            [Path(f"frame-{index}.png") for index in range(3)],
+            profile,
+        )
+
+
 def test_each_frame_must_independently_support_the_fused_deal():
     profile = parse_profile(profile_raw())
     agreed = {suit: tuple("N" * 13) for suit in "HCDS"}
