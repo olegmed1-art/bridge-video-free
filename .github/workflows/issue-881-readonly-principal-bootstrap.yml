@@ -44,7 +44,7 @@ jobs:
       github.event.comment.user.login == 'olegmed1-art' &&
       github.event.comment.body == '/oracle-ops issue-881-bootstrap-readonly-principal'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
       issues: write
@@ -52,6 +52,15 @@ jobs:
       OWNER_COMMAND: ${{ github.event.comment.body }}
       EXACT_COMMAND: /oracle-ops issue-881-bootstrap-readonly-principal
     steps:
+      - name: Reserve job-wide cleanup and receipt deadline before setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          now="$(date +%s)"
+          job_deadline=$(( now + 1680 ))
+          echo "JOB_DEADLINE_EPOCH=$job_deadline" >> "$GITHUB_ENV"
+          echo "MUTATION_CUTOFF_EPOCH=$(( job_deadline - 360 ))" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
@@ -148,8 +157,8 @@ jobs:
             local limit=30
             local remaining
             shift
-            if (( CLEANUP_DEADLINE > 0 )); then
-              remaining=$(( CLEANUP_DEADLINE - SECONDS ))
+            if (( CLEANUP_DEADLINE_EPOCH > 0 )); then
+              remaining=$(( CLEANUP_DEADLINE_EPOCH - $(date +%s) ))
               (( remaining > 0 )) || return 124
               (( remaining >= limit )) || limit=$remaining
             fi
@@ -165,11 +174,12 @@ jobs:
           MEMBERSHIP_CREATED=0
           POLICY_CREATED=0
           KEY_CREATED=0
-          CLEANUP_DEADLINE=0
+          CLEANUP_DEADLINE_EPOCH=0
           retry_delete() {
-            local attempt remaining per_call
+            local attempt now remaining per_call
             for attempt in 1 2; do
-              remaining=$(( CLEANUP_DEADLINE - SECONDS ))
+              now="$(date +%s)"
+              remaining=$(( CLEANUP_DEADLINE_EPOCH - now ))
               (( remaining > 0 )) || return 1
               per_call=20
               (( remaining >= per_call )) || per_call=$remaining
@@ -189,7 +199,11 @@ jobs:
             set +e
             if (( rc != 0 )); then
               rollback=ROLLED_BACK
-              CLEANUP_DEADLINE=$(( SECONDS + 240 ))
+              now="$(date +%s)"
+              CLEANUP_DEADLINE_EPOCH=$(( now + 240 ))
+              if (( CLEANUP_DEADLINE_EPOCH > JOB_DEADLINE_EPOCH - 120 )); then
+                CLEANUP_DEADLINE_EPOCH=$(( JOB_DEADLINE_EPOCH - 120 ))
+              fi
               # A timed-out create may have reached OCI before its response was
               # lost. Recover only this run's exact stamped IDs before rollback.
               for pass in 1 2 3; do
@@ -276,6 +290,7 @@ jobs:
           EXISTING_POLICY_ID="$(select_exact "$RUNNER_TEMP/policies.json" "$POLICY_NAME")"
           # Never inherit additive permissions from a reused user or group.
           [[ -z "$EXISTING_USER_ID" && -z "$EXISTING_GROUP_ID" && -z "$EXISTING_POLICY_ID" ]] || exit 24
+          (( $(date +%s) <= MUTATION_CUTOFF_EPOCH )) || exit 25
 
           EXPECTED_FINGERPRINT="$(openssl rsa -pubin -in "$RUNNER_TEMP/readonly-public.pem" -outform DER 2>/dev/null | openssl md5 -c | awk '{print $2}')"
           USER_CREATED=1
