@@ -136,12 +136,12 @@ jobs:
           memory_limit="$RUNNER_TEMP/memory-limit.json"
           result="$RUNNER_TEMP/preflight-result.json"
 
-          request_json "$roots" oci iam compartment list --include-root --compartment-id-in-subtree true --all
+          request_json "$roots" oci iam compartment list --include-root --compartment-id-in-subtree true --access-level ACCESSIBLE --all
           readarray -t compartments < <(python - "$roots" <<'PY'
           import json, sys
           data = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
           assert isinstance(data, list) and all(isinstance(x, dict) for x in data)
-          allowed = {'ACTIVE', 'CREATING', 'DELETING', 'DELETED', 'FAILED'}
+          allowed = {'ACTIVE', 'INACTIVE', 'CREATING', 'DELETING', 'DELETED', 'FAILED'}
           assert all(isinstance(x.get('lifecycle-state'), str) and x['lifecycle-state'] in allowed for x in data)
           ids = [x.get('id') for x in data if x.get('lifecycle-state') == 'ACTIVE' and isinstance(x.get('id'), str) and x['id'].startswith(('ocid1.tenancy.', 'ocid1.compartment.'))]
           assert len(ids) == len(set(ids)) and sum(x.startswith('ocid1.tenancy.') for x in ids) == 1
@@ -186,7 +186,13 @@ jobs:
           ad="${source[1]}"
           compartment_id="${source[2]}"
           source_shape="${source[3]}"
-          printf '%s\n' "${compartments[@]}" | grep -Fxq -- "$compartment_id"
+          compartment_known=0
+          for known_compartment in "${compartments[@]}"; do
+            if [[ "$known_compartment" == "$compartment_id" ]]; then
+              compartment_known=1
+            fi
+          done
+          (( compartment_known == 1 ))
 
           request_json "$shapes" oci compute shape list --compartment-id "$compartment_id" --availability-domain "$ad" --all
           request_json "$core_limit" oci limits resource-availability get --service-name compute --limit-name standard-e4-core-count --compartment-id "$compartment_id" --availability-domain "$ad"
