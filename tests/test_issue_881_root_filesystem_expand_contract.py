@@ -2384,7 +2384,7 @@ def test_watchdog_failed_resize_restarts_once_and_preserves_restart_budget() -> 
     import hmac
     block = WATCHDOG[WATCHDOG.index('          restore_source_capacity() {'):WATCHDOG.index('          release_source_workload_fence() {')]
     block = '\n'.join(line[10:] if line.startswith('          ') else line for line in block.splitlines())
-    for scenario in ('failed_update', 'exhausted_update', 'lost_start', 'success'):
+    for scenario in ('failed_update', 'exhausted_update', 'lost_start', 'success', 'late_stop'):
         with tempfile.TemporaryDirectory() as tmp:
             harness = r'''
 set -uo pipefail
@@ -2397,9 +2397,17 @@ mock_memory=11
 stops=0
 starts=0
 updates=0
+pending_stop=0
 sleep() { SECONDS=$((SECONDS + 5)); }
 oci_retry_json() {
   local output="$1"; shift 2
+  if [[ "$SCENARIO" == late_stop && "$pending_stop" == 1 ]]; then
+    pending_stop=2
+  elif [[ "$SCENARIO" == late_stop && "$pending_stop" == 2 ]]; then
+    state=STOPPING; pending_stop=3
+  elif [[ "$SCENARIO" == late_stop && "$pending_stop" == 3 ]]; then
+    SECONDS=$((SECONDS + 600)); state=STOPPED; pending_stop=4
+  fi
   MOCK_STATE="$state" MOCK_OCPUS="$mock_ocpus" MOCK_MEMORY="$mock_memory" python - "$output" "$@" <<'MOCK'
 import json,os,sys
 d={'id':'test-id','display-name':'bridge-school-dds3-frankfurt','compartment-id':'test','availability-domain':'test-ad','shape':'VM.Standard.E5.Flex','lifecycle-state':os.environ['MOCK_STATE'],'shape-config':{'ocpus':int(os.environ['MOCK_OCPUS']),'memory-in-gbs':int(os.environ['MOCK_MEMORY'])}}
@@ -2409,7 +2417,12 @@ MOCK
 oci_retry_quiet() {
   local deadline="$1"; shift
   case "$*" in
-    *SOFTSTOP*) stops=$((stops + 1)); state=STOPPED ;;
+    *SOFTSTOP*)
+      stops=$((stops + 1))
+      if [[ "$SCENARIO" == late_stop ]]; then
+        SECONDS="$deadline"; pending_stop=1; return 1
+      fi
+      state=STOPPED ;;
     *update*)
       updates=$((updates + 1))
       if [[ "$SCENARIO" == success ]]; then mock_ocpus=6; mock_memory=12; return 0; fi
@@ -2418,6 +2431,7 @@ oci_retry_quiet() {
     *START*)
       starts=$((starts + 1))
       if [[ "$SCENARIO" == lost_start && "$starts" == 1 ]]; then return 1; fi
+      if [[ "$SCENARIO" == late_stop ]]; then SECONDS=$((SECONDS + 660)); fi
       state=RUNNING ;;
     *) return 99 ;;
   esac
@@ -2432,4 +2446,4 @@ oci_retry_quiet() {
             assert int(stops) == 1 and int(updates) == 1, result.stdout
             assert int(starts) == (2 if scenario == 'lost_start' else 1), result.stdout
             assert int(rc) == (0 if scenario == 'success' else 105), result.stdout
-            assert int(elapsed) < 1500 - 600, result.stdout
+            assert int(elapsed) < (1500 if scenario == "late_stop" else 900), result.stdout
