@@ -785,20 +785,51 @@ def test_each_frame_must_independently_support_the_fused_deal():
     ]
 
 
-def test_rank_ink_uses_only_the_configured_glyph_crop():
-    _, np = bridgit_rank_layout._pixel_runtime()
+def test_rank_ink_uses_only_the_configured_glyph_crop(
+    monkeypatch: pytest.MonkeyPatch,
+):
     profile = replace(
         parse_profile(profile_raw()),
         glyph_width=8,
         glyph_height=8,
         local_registration_px=0,
     )
-    frame = np.full((profile.height, profile.width, 3), 255, dtype="uint8")
-    frame[11:25, 18:24] = 0
-    assert bridgit_rank_layout._rank_ink_fractions([frame], (10, 10), profile) == [0.0]
+    frame_slices = []
+    gray_slices = []
 
-    frame[11:17, 11:17] = 0
-    assert bridgit_rank_layout._rank_ink_fractions([frame], (10, 10), profile) == [1.0]
+    class FakeFrame:
+        def __getitem__(self, key):
+            frame_slices.append(key)
+            return object()
+
+    class FakeMask:
+        def __getitem__(self, key):
+            gray_slices.append(key)
+            return self
+
+        def __lt__(self, _threshold):
+            return self
+
+        def mean(self):
+            return 0.25
+
+    class FakeCv2:
+        COLOR_BGR2GRAY = 1
+
+        @staticmethod
+        def cvtColor(_crop, _conversion):
+            return FakeMask()
+
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_pixel_runtime",
+        lambda: (FakeCv2(), object()),
+    )
+    assert bridgit_rank_layout._rank_ink_fractions(
+        [FakeFrame()], (10, 10), profile
+    ) == [0.25]
+    assert frame_slices == [(slice(10, 18), slice(10, 18))]
+    assert gray_slices == [(slice(1, 7), slice(1, 7))]
 
 
 def test_single_good_frame_is_pending_not_weak_evidence():
