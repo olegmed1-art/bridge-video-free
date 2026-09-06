@@ -118,6 +118,14 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
     assert parse_profile(raw).anchors["S"]["S"][1] == 704
 
     raw = profile_raw()
+    raw["geometry"]["anchors"]["W"]["H"]["x"] = 1
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="crop leaves reference frame"):
+        parse_profile(raw)
+
+    raw = profile_raw()
     raw["geometry"]["interface_anchor"] = {
         "type": "UPPER_RIGHT_TEMPLATE",
         "reference_region": {"x": 0.72, "y": 0.02, "width": 0.08, "height": 0.10},
@@ -163,6 +171,25 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
         {key: value for key, value in raw.items() if key != "profile_sha256"}
     )
     with pytest.raises(BridgitRankLayoutError, match="minimum_score"):
+        parse_profile(raw)
+
+    raw = profile_raw()
+    raw["geometry"]["interface_anchor"] = {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": {
+            "x": 0.98,
+            "y": 0.02,
+            "width": 0.008,
+            "height": 0.012,
+        },
+        "scales": [0.25],
+        "minimum_score": 0.80,
+        "minimum_margin": 0.03,
+    }
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="scaled interface anchor"):
         parse_profile(raw)
 
     raw = profile_raw()

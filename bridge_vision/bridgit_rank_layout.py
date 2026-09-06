@@ -383,6 +383,7 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
     if interface_anchor_raw is not None:
         try:
             interface_anchor = validate_anchor_spec(interface_anchor_raw)
+            validate_anchor_job_budget((width, height), (), interface_anchor)
         except AnchorRegistrationError as exc:
             raise BridgitRankLayoutError(f"invalid interface anchor: {exc}") from exc
 
@@ -449,7 +450,11 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
     for seat in SEATS:
         for suit in SUITS:
             x, y = anchors[seat][suit]
-            if x + glyph_width > width or y + glyph_height > height:
+            if (
+                x - registration < 0
+                or x + registration + glyph_width > width
+                or y + glyph_height > height
+            ):
                 raise BridgitRankLayoutError(
                     f"geometry.anchors.{seat}.{suit} crop leaves reference frame"
                 )

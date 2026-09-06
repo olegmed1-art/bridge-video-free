@@ -42,6 +42,16 @@ def _dimension(value: Any, field: str) -> int:
     return value
 
 
+def _scaled_anchor_dimensions(
+    anchor_width: int, anchor_height: int, scale: float
+) -> tuple[int, int]:
+    width = round(anchor_width * scale)
+    height = round(anchor_height * scale)
+    if width < 8 or height < 8:
+        raise AnchorRegistrationError("scaled interface anchor is too small")
+    return width, height
+
+
 def validate_anchor_spec(raw: Any) -> dict[str, Any]:
     """Validate a bounded profile fragment using normalized coordinates."""
 
@@ -110,6 +120,10 @@ def estimate_anchor_work_units(
     anchor_height = max(8, round(region["height"] * reference_height))
     if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
         raise AnchorRegistrationError("interface anchor exceeds template budget")
+    scaled_dimensions = [
+        _scaled_anchor_dimensions(anchor_width, anchor_height, scale)
+        for scale in checked["scales"]
+    ]
     per_frame: list[int] = []
     for index, size in enumerate(observed_sizes):
         if not isinstance(size, tuple) or len(size) != 2:
@@ -117,9 +131,7 @@ def estimate_anchor_work_units(
         observed_width = _dimension(size[0], f"observed width {index}")
         observed_height = _dimension(size[1], f"observed height {index}")
         work = 0
-        for scale in checked["scales"]:
-            template_width = max(8, round(anchor_width * scale))
-            template_height = max(8, round(anchor_height * scale))
+        for template_width, template_height in scaled_dimensions:
             if template_width > observed_width or template_height > observed_height:
                 continue
             match_positions = (observed_width - template_width + 1) * (
@@ -148,6 +160,10 @@ def estimate_anchor_peak_scratch_bytes(
     anchor_height = max(8, round(region["height"] * reference_height))
     if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
         raise AnchorRegistrationError("interface anchor exceeds template budget")
+    scaled_dimensions = [
+        _scaled_anchor_dimensions(anchor_width, anchor_height, scale)
+        for scale in checked["scales"]
+    ]
     peak = 0
     for index, size in enumerate(observed_sizes):
         if not isinstance(size, tuple) or len(size) != 2:
@@ -156,9 +172,7 @@ def estimate_anchor_peak_scratch_bytes(
         observed_height = _dimension(size[1], f"observed height {index}")
         observed_pixels = observed_width * observed_height
         peak = max(peak, observed_pixels + anchor_width * anchor_height)
-        for scale in checked["scales"]:
-            template_width = max(8, round(anchor_width * scale))
-            template_height = max(8, round(anchor_height * scale))
+        for template_width, template_height in scaled_dimensions:
             if template_width > observed_width or template_height > observed_height:
                 continue
             match_positions = (observed_width - template_width + 1) * (
@@ -270,8 +284,7 @@ def register_from_upper_right_anchor(
     observed_appearance = _appearance(observed)
     candidates: list[dict[str, Any]] = []
     for scale in checked["scales"]:
-        width = max(8, round(anchor_width * scale))
-        height = max(8, round(anchor_height * scale))
+        width, height = _scaled_anchor_dimensions(anchor_width, anchor_height, scale)
         game_width = round(reference_width * scale)
         game_height = round(reference_height * scale)
         if width > observed_width or height > observed_height:
