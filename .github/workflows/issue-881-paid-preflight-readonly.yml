@@ -209,7 +209,7 @@ jobs:
                         and x.get('id') != source_id
                         and x.get('shape') == 'VM.Standard.E5.Flex'
                         and x.get('lifecycle-state') not in {'TERMINATING', 'TERMINATED'}]
-          allowed = {'PROVISIONING', 'STARTING', 'RUNNING', 'STOPPING', 'STOPPED', 'MOVING'}
+          allowed = {'PROVISIONING', 'STARTING', 'RUNNING', 'STOPPING', 'STOPPED', 'MOVING', 'CREATING_IMAGE'}
           assert all(x.get('lifecycle-state') in allowed for x in candidates)
           print(json.dumps({
               'total': len(candidates),
