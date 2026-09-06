@@ -164,6 +164,7 @@ def estimate_anchor_peak_scratch_bytes(
             template_pixels = template_width * template_height
             scratch = (
                 2 * observed_pixels
+                + 16 * (observed_width + 1) * (observed_height + 1)
                 + anchor_width * anchor_height
                 + template_pixels
                 + 8 * match_positions

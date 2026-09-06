@@ -127,6 +127,14 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
     with pytest.raises(BridgitRankLayoutError, match="right half"):
         parse_profile(raw)
 
+    raw = profile_raw()
+    raw["gates"]["min_assignment_margin"] = 0
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="min_assignment_margin"):
+        parse_profile(raw)
+
 
 def test_profile_hash_and_duplicate_json_keys_fail_closed(tmp_path: Path):
     raw = profile_raw()
@@ -679,9 +687,25 @@ def test_cli_rejection_is_retained_as_fail_closed_receipt(tmp_path: Path, monkey
     assert receipt["status"] == "REJECTED"
     assert receipt["reason"] == "job is not valid UTF-8 JSON"
 
-    def recursion_failure(*_args, **_kwargs):
-        raise RecursionError("parser nesting limit")
+    with monkeypatch.context() as patcher:
 
-    monkeypatch.setattr(bridgit_rank_layout.json, "loads", recursion_failure)
-    with pytest.raises(BridgitRankLayoutError, match="not valid UTF-8 JSON"):
-        bridgit_rank_layout._json_object(b"{}", "job")
+        def recursion_failure(*_args, **_kwargs):
+            raise RecursionError("parser nesting limit")
+
+        patcher.setattr(bridgit_rank_layout.json, "loads", recursion_failure)
+        with pytest.raises(BridgitRankLayoutError, match="not valid UTF-8 JSON"):
+            bridgit_rank_layout._json_object(b"{}", "job")
+
+    job_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "execute_shadow_job",
+        lambda _job: (_ for _ in ()).throw(MemoryError()),
+    )
+    assert (
+        bridgit_rank_layout.main(["--job", str(job_path), "--output", str(output_path)])
+        == 2
+    )
+    receipt = json.loads(output_path.read_text(encoding="utf-8"))
+    assert receipt["status"] == "REJECTED"
+    assert receipt["reason"] == "MemoryError"

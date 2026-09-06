@@ -166,6 +166,6 @@ def test_anchor_work_is_template_weighted_and_bounded_for_whole_job():
         )
 
     scratch = estimate_anchor_peak_scratch_bytes(
-        (1000, 720), [(8192, 2730)], small_spec
+        (1000, 720), [(4000, 3000)], small_spec
     )
-    assert scratch > 100 * 1024 * 1024
+    assert scratch > 256 * 1024 * 1024

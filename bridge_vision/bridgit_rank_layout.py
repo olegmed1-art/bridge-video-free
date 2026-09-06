@@ -412,7 +412,7 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
     min_margin = _number(
         gates.get("min_assignment_margin"),
         "gates.min_assignment_margin",
-        minimum=0,
+        minimum=0.000001,
         maximum=5,
     )
     min_independent_frames = _integer(
@@ -1837,9 +1837,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         BridgitPixelRuntimeUnavailable,
         BridgitRankLayoutError,
         KeyError,
+        MemoryError,
         OSError,
     ) as exc:
-        detail = str(exc).replace("\n", " ").replace("\r", " ")[:MAX_DIAGNOSTIC_DETAIL]
+        detail = str(exc) or exc.__class__.__name__
+        detail = detail.replace("\n", " ").replace("\r", " ")[:MAX_DIAGNOSTIC_DETAIL]
         receipt = {
             "receipt_type": RECEIPT_TYPE,
             "backend_version": BACKEND_VERSION,
