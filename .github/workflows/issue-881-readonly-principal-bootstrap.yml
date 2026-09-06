@@ -84,7 +84,6 @@ jobs:
             [[ -n "${!value:-}" ]] || exit 21
           done
           install -d -m 0700 "$HOME/.oci"
-          trap 'rm -f "$HOME/.oci/config" "$HOME/.oci/key.pem" "$RUNNER_TEMP/readonly-public.pem" "$RUNNER_TEMP"/plain-*.txt "$RUNNER_TEMP"/encrypted-*.bin' EXIT
           printf '%s' "$OCI_KEY_RAW" | python -c 'import sys; raw=sys.stdin.read().replace("\\r","").replace("\\n","\n"); open(sys.argv[1],"w").write(raw if raw.endswith("\n") else raw+"\n")' "$HOME/.oci/key.pem"
           chmod 0600 "$HOME/.oci/key.pem"
           python - <<'PY'
@@ -131,9 +130,10 @@ jobs:
           5wIDAQAB
           -----END PUBLIC KEY-----
           PUBLIC_KEY
-          USER_NAME=issue-881-paid-preflight-readonly-v1
-          GROUP_NAME=issue-881-paid-preflight-readonly-v1
-          POLICY_NAME=issue-881-paid-preflight-readonly-v1
+          NAME_STAMP="issue-881-paid-preflight-readonly-${GITHUB_RUN_ID}"
+          USER_NAME="$NAME_STAMP"
+          GROUP_NAME="$NAME_STAMP"
+          POLICY_NAME="$NAME_STAMP"
           TENANCY_ID="$(python - <<'PY'
           import os
           lines = [x.strip() for x in os.environ['OCI_TENANCY_RAW'].replace('\r', '').splitlines() if x.strip()]
@@ -149,12 +149,61 @@ jobs:
             timeout --signal=KILL 30s "$@" --output json > "$output"
             python -c 'import json,sys; value=json.load(open(sys.argv[1])); assert isinstance(value,dict)' "$output"
           }
+          USER_ID=
+          GROUP_ID=
+          POLICY_ID=
+          EXPECTED_FINGERPRINT=
+          USER_CREATED=0
+          GROUP_CREATED=0
+          MEMBERSHIP_CREATED=0
+          POLICY_CREATED=0
+          KEY_CREATED=0
+          retry_delete() {
+            local attempt
+            for attempt in 1 2 3 4 5 6; do
+              if timeout --signal=KILL 30s "$@" >/dev/null 2>&1; then
+                return 0
+              fi
+              sleep 5
+            done
+            return 1
+          }
+          cleanup() {
+            local rc=$?
+            local rollback=NOT_NEEDED
+            local failed=0
+            trap - EXIT
+            set +e
+            if (( rc != 0 )); then
+              rollback=ROLLED_BACK
+              if (( KEY_CREATED == 1 )); then
+                retry_delete oci iam user api-key delete --user-id "$USER_ID" --fingerprint "$EXPECTED_FINGERPRINT" --force || failed=1
+              fi
+              if (( MEMBERSHIP_CREATED == 1 )); then
+                retry_delete oci iam group remove-user --group-id "$GROUP_ID" --user-id "$USER_ID" --force || failed=1
+              fi
+              if (( POLICY_CREATED == 1 )); then
+                retry_delete oci iam policy delete --policy-id "$POLICY_ID" --force || failed=1
+              fi
+              if (( GROUP_CREATED == 1 )); then
+                retry_delete oci iam group delete --group-id "$GROUP_ID" --force || failed=1
+              fi
+              if (( USER_CREATED == 1 )); then
+                retry_delete oci iam user delete --user-id "$USER_ID" --force || failed=1
+              fi
+              (( failed == 0 )) || rollback=ROLLBACK_INCOMPLETE
+            fi
+            printf '%s\n' "$rollback" > "$RUNNER_TEMP/bootstrap-rollback-status"
+            rm -f "$HOME/.oci/config" "$HOME/.oci/key.pem" "$RUNNER_TEMP/readonly-public.pem" "$RUNNER_TEMP"/plain-*.txt "$RUNNER_TEMP"/encrypted-*.bin
+            exit "$rc"
+          }
+          trap cleanup EXIT
           select_exact() {
             python - "$1" "$2" <<'PY'
           import json, sys
           rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
           assert isinstance(rows, list) and all(isinstance(x, dict) for x in rows)
-          matches = [x for x in rows if x.get('name') == sys.argv[2] and x.get('lifecycle-state') != 'DELETED']
+          matches = [x for x in rows if x.get('name') == sys.argv[2]]
           assert len(matches) <= 1
           if matches:
               value = matches[0].get('id')
@@ -183,16 +232,21 @@ jobs:
 
           request_json "$RUNNER_TEMP/user-create.json" oci iam user create --compartment-id "$TENANCY_ID" --name "$USER_NAME" --description 'Issue 881 paid preflight read-only audit principal'
           USER_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.user."); print(x)' "$RUNNER_TEMP/user-create.json")"
+          USER_CREATED=1
           request_json "$RUNNER_TEMP/group-create.json" oci iam group create --compartment-id "$TENANCY_ID" --name "$GROUP_NAME" --description 'Issue 881 paid preflight read-only audit group'
           GROUP_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.group."); print(x)' "$RUNNER_TEMP/group-create.json")"
+          GROUP_CREATED=1
           request_json "$RUNNER_TEMP/member-create.json" oci iam group add-user --group-id "$GROUP_ID" --user-id "$USER_ID"
+          MEMBERSHIP_CREATED=1
           request_json "$RUNNER_TEMP/policy-create.json" oci iam policy create --compartment-id "$TENANCY_ID" --name "$POLICY_NAME" --description 'Least-privilege reads for Issue 881 paid preflight' --statements "file://$RUNNER_TEMP/statements.json"
           POLICY_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.policy."); print(x)' "$RUNNER_TEMP/policy-create.json")"
+          POLICY_CREATED=1
 
           EXPECTED_FINGERPRINT="$(openssl rsa -pubin -in "$RUNNER_TEMP/readonly-public.pem" -outform DER 2>/dev/null | openssl md5 -c | awk '{print $2}')"
           request_json "$RUNNER_TEMP/key-upload.json" oci iam user api-key upload --user-id "$USER_ID" --key-file "$RUNNER_TEMP/readonly-public.pem"
           ACTUAL_FINGERPRINT="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["fingerprint"])' "$RUNNER_TEMP/key-upload.json")"
           [[ "$ACTUAL_FINGERPRINT" == "$EXPECTED_FINGERPRINT" ]]
+          KEY_CREATED=1
 
           CIPHERTEXT=v1
           for field in user tenancy fingerprint region; do
@@ -209,6 +263,11 @@ jobs:
           done
           [[ -n "$CIPHERTEXT" ]]
           echo "ciphertext=$CIPHERTEXT" >> "$GITHUB_OUTPUT"
+          {
+            echo '## Issue #881 encrypted read-only credential recovery envelope'
+            echo
+            echo "\`$CIPHERTEXT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish encrypted bootstrap receipt
         if: always()
@@ -216,6 +275,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
           CIPHERTEXT: ${{ steps.bootstrap.outputs.ciphertext }}
+          ROLLBACK_FILE: ${{ runner.temp }}/bootstrap-rollback-status
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |
@@ -226,6 +286,7 @@ jobs:
             STATUS=BOOTSTRAP_ERROR
             CIPHERTEXT=none
           fi
+          ROLLBACK_STATUS="$(cat "$ROLLBACK_FILE" 2>/dev/null || echo NOT_RECORDED)"
           {
             echo '## Issue #881 read-only OCI principal bootstrap'
             echo
@@ -233,6 +294,7 @@ jobs:
             echo '- IAM scope: `inspect compartments`, `inspect instance-family`, `read limits` only'
             echo '- compute/storage/network create, update, delete or launch: `absent`'
             echo '- monetary charge: `none`'
+            echo "- failed-step IAM rollback: \`$ROLLBACK_STATUS\`"
             echo "- encrypted credential metadata: \`$CIPHERTEXT\`"
             echo "- run: $RUN_URL"
           } > "$RUNNER_TEMP/body.md"
