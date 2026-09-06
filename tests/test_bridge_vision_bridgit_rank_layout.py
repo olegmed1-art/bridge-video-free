@@ -350,6 +350,9 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
     assert [item["timestamp_ms"] for item in observed["evidence"][:2]] == [1000, 2000]
     assert observed["evidence"][-1]["source"] == "TEACHER_POINTER"
     assert observed["evidence"][-1]["accepted_as_visual_observation"] is False
+    invalid_pointer_job = {**job, "teacher_pointer_events": None}
+    with pytest.raises(BridgitRankLayoutError, match="must be an array"):
+        execute_shadow_job(invalid_pointer_job)
     claimed = receipt.pop("receipt_sha256")
     assert claimed == canonical_hash(receipt)
 

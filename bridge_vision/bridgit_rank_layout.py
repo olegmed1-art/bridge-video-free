@@ -1662,6 +1662,11 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
         raise BridgitRankLayoutError("production write is forbidden")
     if job.get("allow_hidden_information") is not False:
         raise BridgitRankLayoutError("hidden information must be explicitly forbidden")
+    pointer_events = job.get("teacher_pointer_events", ())
+    if not isinstance(pointer_events, Sequence) or isinstance(
+        pointer_events, (str, bytes)
+    ):
+        raise BridgitRankLayoutError("teacher_pointer_events must be an array")
     input_root = _validated_input_root(job.get("input_root"))
     profile_path = _validated_ref(
         job.get("profile_ref"),
@@ -1772,7 +1777,6 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
         enriched_visual_observations.append(
             {**dict(observation), "timestamp_ms": timestamp_by_frame[frame_sha]}
         )
-    pointer_events = job.get("teacher_pointer_events", ())
     try:
         result["deal_evidence_report"] = build_deal_evidence_report(
             enriched_visual_observations,

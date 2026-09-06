@@ -197,9 +197,13 @@ def build_deal_evidence_report(
         raise DealEvidenceError("allow_logical_inference must be boolean")
     if allow_logical_inference:
         raise DealEvidenceError("logical fourth-hand inference is prohibited")
-    if isinstance(visual_observations, (str, bytes)):
+    if not isinstance(visual_observations, Iterable) or isinstance(
+        visual_observations, (str, bytes)
+    ):
         raise DealEvidenceError("visual_observations must be an iterable")
-    if isinstance(teacher_pointer_events, (str, bytes)):
+    if not isinstance(teacher_pointer_events, Iterable) or isinstance(
+        teacher_pointer_events, (str, bytes)
+    ):
         raise DealEvidenceError("teacher_pointer_events must be an iterable")
 
     observations: list[dict[str, Any]] = []
