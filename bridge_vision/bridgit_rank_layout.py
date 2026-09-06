@@ -422,7 +422,7 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
     min_rank_ink = _number(
         gates.get("min_rank_ink_fraction"),
         "gates.min_rank_ink_fraction",
-        minimum=0,
+        minimum=0.000001,
         maximum=1,
     )
     min_margin = _number(

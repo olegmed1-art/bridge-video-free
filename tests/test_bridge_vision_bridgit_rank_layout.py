@@ -137,6 +137,14 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
         parse_profile(raw)
 
     raw = profile_raw()
+    raw["gates"]["min_rank_ink_fraction"] = 0
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="min_rank_ink_fraction"):
+        parse_profile(raw)
+
+    raw = profile_raw()
     raw["ordering"]["suits"] = 1
     raw["profile_sha256"] = canonical_hash(
         {key: value for key, value in raw.items() if key != "profile_sha256"}
