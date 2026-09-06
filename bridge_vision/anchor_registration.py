@@ -29,7 +29,7 @@ def _runtime():
 def _number(value: Any, field: str, minimum: float, maximum: float) -> float:
     try:
         result = float(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise AnchorRegistrationError(f"invalid {field}") from exc
     if not math.isfinite(result) or not minimum <= result <= maximum:
         raise AnchorRegistrationError(f"invalid {field}")

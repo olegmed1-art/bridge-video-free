@@ -48,7 +48,7 @@ def _normalise_card(value: Any) -> str:
 def _confidence(value: Any, field: str) -> float:
     try:
         number = float(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise DealEvidenceError(f"invalid {field}") from exc
     if not math.isfinite(number) or not 0.0 <= number <= 1.0:
         raise DealEvidenceError(f"invalid {field}")

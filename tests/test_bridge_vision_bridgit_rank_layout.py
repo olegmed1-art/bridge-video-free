@@ -136,6 +136,22 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
     with pytest.raises(BridgitRankLayoutError, match="min_assignment_margin"):
         parse_profile(raw)
 
+    raw = profile_raw()
+    raw["ordering"]["suits"] = 1
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="verified suit order"):
+        parse_profile(raw)
+
+    raw = profile_raw()
+    raw["gates"]["min_template_score"] = 10**3999
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="min_template_score"):
+        parse_profile(raw)
+
 
 def test_profile_hash_and_duplicate_json_keys_fail_closed(tmp_path: Path):
     raw = profile_raw()

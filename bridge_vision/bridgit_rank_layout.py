@@ -139,7 +139,7 @@ def _integer(value: Any, field: str, *, minimum: int, maximum: int) -> int:
         raise BridgitRankLayoutError(f"invalid {field}")
     try:
         number = int(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise BridgitRankLayoutError(f"invalid {field}") from exc
     if number < minimum or number > maximum:
         raise BridgitRankLayoutError(f"{field} outside allowed range")
@@ -149,7 +149,7 @@ def _integer(value: Any, field: str, *, minimum: int, maximum: int) -> int:
 def _number(value: Any, field: str, *, minimum: float, maximum: float) -> float:
     try:
         number = float(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise BridgitRankLayoutError(f"invalid {field}") from exc
     if not math.isfinite(number) or number < minimum or number > maximum:
         raise BridgitRankLayoutError(f"{field} outside allowed range")
@@ -267,9 +267,19 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
     ordering = raw.get("ordering")
     if not isinstance(ordering, Mapping):
         raise BridgitRankLayoutError("ordering must be an object")
-    if tuple(ordering.get("suits") or ()) != SUITS:
+    ordering_suits = ordering.get("suits")
+    if (
+        not isinstance(ordering_suits, Sequence)
+        or isinstance(ordering_suits, (str, bytes))
+        or tuple(ordering_suits) != SUITS
+    ):
         raise BridgitRankLayoutError("verified suit order must be H,C,D,S")
-    if tuple(ordering.get("ranks") or ()) != RANKS:
+    ordering_ranks = ordering.get("ranks")
+    if (
+        not isinstance(ordering_ranks, Sequence)
+        or isinstance(ordering_ranks, (str, bytes))
+        or tuple(ordering_ranks) != RANKS
+    ):
         raise BridgitRankLayoutError("verified rank order must be A through 2")
 
     slots_raw = raw.get("template_slots")

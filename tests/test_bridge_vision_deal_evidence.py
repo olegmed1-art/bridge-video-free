@@ -120,6 +120,9 @@ def test_non_iterable_evidence_inputs_fail_closed():
         build_deal_evidence_report(None, recognizer_version=VERSION)
     with pytest.raises(DealEvidenceError, match="teacher_pointer_events"):
         build_deal_evidence_report([], None, recognizer_version=VERSION)
+    overflowing = observation("N", "AH", confidence=10**3999)
+    with pytest.raises(DealEvidenceError, match="confidence"):
+        build_deal_evidence_report([overflowing], recognizer_version=VERSION)
 
 
 def test_one_frame_is_visual_but_not_temporal_consensus():

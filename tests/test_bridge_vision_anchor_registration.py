@@ -99,6 +99,10 @@ def test_anchor_profile_is_normalized_bounded_and_upper_right():
     with pytest.raises(AnchorRegistrationError, match="right half"):
         validate_anchor_spec(invalid)
 
+    overflow = anchor_spec(minimum_score=10**3999)
+    with pytest.raises(AnchorRegistrationError, match="minimum_score"):
+        validate_anchor_spec(overflow)
+
 
 def test_different_scale_or_window_size_is_a_competing_anchor():
     best = {
