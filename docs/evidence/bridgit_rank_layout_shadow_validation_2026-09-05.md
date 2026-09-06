@@ -4,13 +4,15 @@ Date: 2026-09-05
 
 Change ID: `bridgit-rank-layout-shadow-v1`
 
-Governance mode: `ASSURED`
+Governance mode: `ASSURED` (open; required I2 assurance not yet obtained)
 
-Status: isolated shadow implementation validated locally; blocked from production activation
+Status: local development checks passed; ASSURED validation incomplete; blocked from production activation
 
 Amended: 2026-09-06 (anchor registration and per-card provenance contract)
 
 ## Outcome
+
+This is not a completed ASSURED validation record and claims no validation closure. The required logically independent I2 result is absent; the measurements below are development evidence only.
 
 The profiled Bridgit desktop recognizer was transferred into the repository as an opt-in module without changing the default Universal Video route, any workflow, server service, production database, SCHOOL CANON or WORLD. It uses only already selected local frames; no full-video batch was launched.
 

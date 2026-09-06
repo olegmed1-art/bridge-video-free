@@ -78,7 +78,7 @@ def _region(value: Any, field: str) -> dict[str, float | str]:
     result: dict[str, float | str] = {"coordinate_space": "NORMALIZED_FRAME"}
     for name in ("x", "y", "width", "height"):
         result[name] = _confidence(value.get(name), f"{field}.{name}")
-    if float(result["width"]) <= 0.0 or float(result["height"]) <= 0.0:
+    if float(result["width"]) <= 1e-8 or float(result["height"]) <= 1e-8:
         raise DealEvidenceError(f"invalid {field} size")
     if (
         float(result["x"]) + float(result["width"]) > 1.0 + 1e-9

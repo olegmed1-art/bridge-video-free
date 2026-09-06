@@ -129,6 +129,10 @@ def test_non_iterable_evidence_inputs_fail_closed():
             recognizer_version=VERSION,
             required_visual_frames=1,
         )
+    tiny = observation("N", "AH")
+    tiny["region"]["width"] = 1e-8
+    with pytest.raises(DealEvidenceError, match="region size"):
+        build_deal_evidence_report([tiny], recognizer_version=VERSION)
 
 
 def test_one_frame_is_visual_but_not_temporal_consensus():

@@ -749,17 +749,24 @@ def _frame_assignment_issues(
 
 
 def _temporal_support_gates(
-    *, observed_frames: int, required_frames: int, minimum_ink_support: int
+    *,
+    observed_frames: int,
+    required_frames: int,
+    minimum_ink_support: int,
+    distinct_timestamps: int | None,
 ) -> tuple[bool, bool]:
     if (
         observed_frames < 1
         or required_frames < 2
         or minimum_ink_support < 0
         or minimum_ink_support > observed_frames
+        or (distinct_timestamps is not None and distinct_timestamps != observed_frames)
     ):
         raise BridgitRankLayoutError("invalid temporal support evidence")
     every_observed_frame_has_ink = minimum_ink_support == observed_frames
-    enough_frames_for_consensus = observed_frames >= required_frames
+    enough_frames_for_consensus = (
+        distinct_timestamps is not None and distinct_timestamps >= required_frames
+    )
     return every_observed_frame_has_ink, enough_frames_for_consensus
 
 
@@ -1418,6 +1425,7 @@ def recognize_frames(
     profile: BridgitRankLayoutProfile,
     *,
     expected_frame_sha256s: Sequence[str] | None = None,
+    observation_timestamps_ms: Sequence[int] | None = None,
 ) -> dict[str, Any]:
     """Recognize one stable, fully visible deal as a shadow candidate."""
     if not frame_paths or len(frame_paths) > MAX_FRAMES:
@@ -1433,6 +1441,25 @@ def recognize_frames(
             _required_sha(value, f"expected_frame_sha256s[{index}]")
             for index, value in enumerate(expected_frame_sha256s)
         ]
+    validated_timestamps: list[int] | None = None
+    if observation_timestamps_ms is not None:
+        if (
+            not isinstance(observation_timestamps_ms, Sequence)
+            or isinstance(observation_timestamps_ms, (str, bytes))
+            or len(observation_timestamps_ms) != len(frame_paths)
+        ):
+            raise BridgitRankLayoutError("observation timestamps are incomplete")
+        validated_timestamps = [
+            _integer(
+                value,
+                f"observation_timestamps_ms[{index}]",
+                minimum=0,
+                maximum=10**12,
+            )
+            for index, value in enumerate(observation_timestamps_ms)
+        ]
+        if len(set(validated_timestamps)) != len(validated_timestamps):
+            raise BridgitRankLayoutError("duplicate observation timestamp")
     _validate_scoring_budget(profile, observation_count=len(frame_paths))
     _validate_recognition_memory_budget(profile, observation_count=len(frame_paths))
     _validate_decoded_budget(
@@ -1866,6 +1893,10 @@ def recognize_frames(
         "independent_decoded_pixel_sha256s": sorted(pixel_hashes),
         "reference_decoded_pixel_sha256": reference_pixel_hash,
         "independent_frames_required": profile.min_independent_frames,
+        "independent_timestamps_ms": (
+            sorted(validated_timestamps) if validated_timestamps is not None else []
+        ),
+        "timestamp_independence_proven": validated_timestamps is not None,
         "minimum_rank_ink_frame_support": min(ink_support_counts),
         "per_frame_deal_agreement": not frame_assignment_issues,
         "per_frame_assignment_receipts": per_frame_assignment_receipts,
@@ -1878,6 +1909,9 @@ def recognize_frames(
         observed_frames=len(frame_hashes),
         required_frames=profile.min_independent_frames,
         minimum_ink_support=evidence["minimum_rank_ink_frame_support"],
+        distinct_timestamps=(
+            len(validated_timestamps) if validated_timestamps is not None else None
+        ),
     )
     weak = (
         evidence["minimum_assigned_score"] < profile.min_template_score
@@ -1965,6 +1999,7 @@ def _recognize_frames_with_opencv_rejection(
     profile: BridgitRankLayoutProfile,
     *,
     expected_frame_sha256s: Sequence[str],
+    observation_timestamps_ms: Sequence[int],
 ) -> dict[str, Any]:
     try:
         return recognize_frames(
@@ -1972,6 +2007,7 @@ def _recognize_frames_with_opencv_rejection(
             frame_paths,
             profile,
             expected_frame_sha256s=expected_frame_sha256s,
+            observation_timestamps_ms=observation_timestamps_ms,
         )
     except Exception as exc:
         cv2, _ = _pixel_runtime()
@@ -2147,6 +2183,7 @@ def _execute_shadow_job_pinned(
         frame_paths,
         profile,
         expected_frame_sha256s=frame_hashes,
+        observation_timestamps_ms=timestamp_values,
     )
     expected_result_input_hashes = {
         "reference_frame_sha256": profile.reference_frame_sha256,

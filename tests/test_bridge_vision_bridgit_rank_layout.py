@@ -420,7 +420,12 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
     profile_path.write_text(json.dumps(raw), encoding="utf-8")
 
     def fake_recognize(
-        reference_path, frame_paths, profile, *, expected_frame_sha256s=None
+        reference_path,
+        frame_paths,
+        profile,
+        *,
+        expected_frame_sha256s=None,
+        observation_timestamps_ms=None,
     ):
         assert reference_path.resolve() == reference
         assert [path.resolve() for path in frame_paths] == [first, second]
@@ -430,6 +435,7 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
             bridgit_rank_layout.sha256_file(second),
         ]
         assert expected_frame_sha256s == frame_hashes
+        assert observation_timestamps_ms == [1000, 2000]
         return {
             "status": "SHADOW_FULL_LAYOUT_CANDIDATE",
             "result_scope": "SHADOW_ONLY",
@@ -1571,17 +1577,43 @@ def test_single_good_frame_is_pending_not_weak_evidence():
         observed_frames=1,
         required_frames=2,
         minimum_ink_support=1,
+        distinct_timestamps=1,
     ) == (True, False)
     assert bridgit_rank_layout._temporal_support_gates(
         observed_frames=2,
         required_frames=2,
         minimum_ink_support=2,
+        distinct_timestamps=2,
     ) == (True, True)
     assert bridgit_rank_layout._temporal_support_gates(
         observed_frames=2,
         required_frames=2,
         minimum_ink_support=1,
+        distinct_timestamps=2,
     ) == (False, True)
+    assert bridgit_rank_layout._temporal_support_gates(
+        observed_frames=2,
+        required_frames=2,
+        minimum_ink_support=2,
+        distinct_timestamps=None,
+    ) == (True, False)
+
+
+def test_direct_recognition_rejects_duplicate_observation_timestamps(monkeypatch):
+    profile = parse_profile(profile_raw())
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_validate_input_raster_budget",
+        lambda *_args: pytest.fail("timestamps must fail before raster reads"),
+    )
+
+    with pytest.raises(BridgitRankLayoutError, match="duplicate observation timestamp"):
+        bridgit_rank_layout.recognize_frames(
+            Path("reference.png"),
+            [Path("first.png"), Path("second.png")],
+            profile,
+            observation_timestamps_ms=[1000, 1000],
+        )
 
 
 def test_cli_rejection_is_retained_as_fail_closed_receipt(tmp_path: Path, monkeypatch):
