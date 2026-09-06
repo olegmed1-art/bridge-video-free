@@ -405,7 +405,7 @@ jobs:
           assert group_id.startswith('ocid1.group.')
           print(json.dumps([
               f'Allow group id {group_id} to inspect compartments in tenancy',
-              f'Allow group id {group_id} to inspect instance-family in tenancy',
+              f'Allow group id {group_id} to read instances in tenancy',
               f'Allow group id {group_id} to read limits in tenancy',
           ]))
           PY
@@ -450,7 +450,7 @@ jobs:
             echo '## Issue #881 read-only OCI principal bootstrap'
             echo
             echo '- status: `READY_FOR_SECRET_INSTALL`'
-            echo '- IAM scope: `inspect compartments`, `inspect instance-family`, `read limits` only'
+            echo '- IAM scope: `inspect compartments`, `read instances`, `read limits` only'
             echo '- compute/storage/network create, update, delete or launch: `absent`'
             echo '- monetary charge: `none`'
             echo '- failed-step IAM rollback: `NOT_NEEDED`'
@@ -479,7 +479,7 @@ jobs:
             echo '## Issue #881 read-only OCI principal bootstrap'
             echo
             echo '- status: `BOOTSTRAP_ERROR`'
-            echo '- IAM scope: `inspect compartments`, `inspect instance-family`, `read limits` only'
+            echo '- IAM scope: `inspect compartments`, `read instances`, `read limits` only'
             echo '- compute/storage/network create, update, delete or launch: `absent`'
             echo '- monetary charge: `none`'
             echo "- failed-step IAM rollback: \`$ROLLBACK_STATUS\`"

@@ -27,10 +27,15 @@ from bridge_vision.bridgit_rank_layout import (
 
 def profile_raw(reference_sha: str = "a" * 64) -> dict:
     slots = []
-    for index, card in enumerate(
-        rank + suit for rank in "AKQJT98765432" for suit in "HCDS"
-    ):
-        slots.append({"card": card, "x": 20 + index * 3, "y": 30 + index})
+    for rank_index, rank in enumerate("AKQJT98765432"):
+        for suit_index, suit in enumerate("HCDS"):
+            slots.append(
+                {
+                    "card": rank + suit,
+                    "x": 20 + suit_index * 40,
+                    "y": 30 + rank_index * 30,
+                }
+            )
     anchors = {
         seat: {
             suit: {
@@ -211,6 +216,15 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
         {key: value for key, value in raw.items() if key != "profile_sha256"}
     )
     with pytest.raises(BridgitRankLayoutError, match="reference interface anchor"):
+        parse_profile(raw)
+
+    raw = profile_raw()
+    raw["template_slots"][1]["x"] = raw["template_slots"][0]["x"] + 1
+    raw["template_slots"][1]["y"] = raw["template_slots"][0]["y"]
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="glyph regions overlap"):
         parse_profile(raw)
 
     raw = profile_raw()

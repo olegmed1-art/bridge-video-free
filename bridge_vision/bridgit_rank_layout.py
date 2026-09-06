@@ -448,6 +448,14 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
             raise BridgitRankLayoutError(
                 f"template_slots[{index}] glyph crop leaves reference frame"
             )
+    template_regions = [(x, y, x + glyph_width, y + glyph_height) for _, x, y in slots]
+    if any(
+        min(first[2], second[2]) > max(first[0], second[0])
+        and min(first[3], second[3]) > max(first[1], second[1])
+        for index, first in enumerate(template_regions)
+        for second in template_regions[index + 1 :]
+    ):
+        raise BridgitRankLayoutError("template_slots glyph regions overlap")
     for seat in SEATS:
         for suit in SUITS:
             x, y = anchors[seat][suit]
