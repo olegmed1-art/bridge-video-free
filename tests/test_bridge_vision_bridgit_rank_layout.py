@@ -228,6 +228,15 @@ def test_job_boundary_rejects_production_hidden_information_and_unknown_type():
                 "allow_hidden_information": True,
             }
         )
+    with pytest.raises(BridgitRankLayoutError, match="too many teacher_pointer_events"):
+        execute_shadow_job(
+            {
+                "job_type": JOB_TYPE,
+                "production_write": False,
+                "allow_hidden_information": False,
+                "teacher_pointer_events": [{}] * 257,
+            }
+        )
 
 
 def test_receipt_write_is_atomic_and_default_engine_remains_empty(tmp_path: Path):

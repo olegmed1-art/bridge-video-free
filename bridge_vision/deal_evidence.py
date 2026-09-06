@@ -541,7 +541,9 @@ def render_deal_diagram_markdown(report: Mapping[str, Any]) -> str:
             )
         lines.append(f"| {seat} | {' | '.join(cells)} | {int(unknown.get(seat, 0))} |")
     lines.append("")
-    lines.append("Legend: V=visual, T=temporal consensus, L=logical inference.")
+    lines.append(
+        "Legend: V=visual, T=temporal consensus; logical inference is prohibited."
+    )
     return "\n".join(lines)
 
 

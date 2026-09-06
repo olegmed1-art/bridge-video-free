@@ -39,7 +39,7 @@ from bridge_vision.anchor_registration import (
     validate_anchor_job_budget,
     validate_anchor_spec,
 )
-from bridge_vision.deal_evidence import build_deal_evidence_report
+from bridge_vision.deal_evidence import MAX_POINTER_EVENTS, build_deal_evidence_report
 
 PROFILE_SCHEMA = "bridge-vision-bridgit-rank-layout/v1"
 JOB_TYPE = "BRIDGIT_RANK_LAYOUT_SHADOW_V1"
@@ -1667,6 +1667,8 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
         pointer_events, (str, bytes)
     ):
         raise BridgitRankLayoutError("teacher_pointer_events must be an array")
+    if len(pointer_events) > MAX_POINTER_EVENTS:
+        raise BridgitRankLayoutError("too many teacher_pointer_events")
     input_root = _validated_input_root(job.get("input_root"))
     profile_path = _validated_ref(
         job.get("profile_ref"),
