@@ -159,6 +159,14 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
         parse_profile(raw)
 
     raw = profile_raw()
+    raw["gates"]["min_peak_prominence"] = 0
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="min_peak_prominence"):
+        parse_profile(raw)
+
+    raw = profile_raw()
     raw["ordering"]["suits"] = 1
     raw["profile_sha256"] = canonical_hash(
         {key: value for key, value in raw.items() if key != "profile_sha256"}
@@ -652,6 +660,14 @@ def test_anchor_work_is_bounded_across_job_before_decode(monkeypatch):
         {key: value for key, value in raw.items() if key != "profile_sha256"}
     )
     profile = parse_profile(raw)
+    assert (
+        bridgit_rank_layout.estimate_anchor_peak_scratch_bytes(
+            (profile.width, profile.height),
+            [(8, 8)],
+            profile.interface_anchor,
+        )
+        == 80 * 72 + 8 * 8
+    )
     monkeypatch.setattr(
         bridgit_rank_layout,
         "_validate_input_raster_budget",
@@ -888,6 +904,7 @@ def test_rank_holes_use_only_the_configured_glyph_crop(
         local_registration_px=0,
     )
     frame_slices = []
+    thresholds = []
 
     class FakeFrame:
         def __getitem__(self, key):
@@ -902,7 +919,8 @@ def test_rank_holes_use_only_the_configured_glyph_crop(
             return self
 
     class FakeGray:
-        def __lt__(self, _threshold):
+        def __lt__(self, threshold):
+            thresholds.append(threshold)
             return FakeBinary()
 
     class FakeCv2:
@@ -927,6 +945,7 @@ def test_rank_holes_use_only_the_configured_glyph_crop(
         0
     ]
     assert frame_slices == [(slice(10, 18), slice(10, 18))]
+    assert thresholds == [profile.binary_threshold]
 
 
 def test_single_good_frame_is_pending_not_weak_evidence():

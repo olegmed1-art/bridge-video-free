@@ -153,6 +153,7 @@ def estimate_anchor_peak_scratch_bytes(
         observed_width = _dimension(size[0], f"observed width {index}")
         observed_height = _dimension(size[1], f"observed height {index}")
         observed_pixels = observed_width * observed_height
+        peak = max(peak, observed_pixels + anchor_width * anchor_height)
         for scale in checked["scales"]:
             template_width = max(8, round(anchor_width * scale))
             template_height = max(8, round(anchor_height * scale))

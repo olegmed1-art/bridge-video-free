@@ -416,7 +416,7 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
     min_peak_prominence = _number(
         gates.get("min_peak_prominence"),
         "gates.min_peak_prominence",
-        minimum=0,
+        minimum=0.000001,
         maximum=1,
     )
     min_rank_ink = _number(
@@ -1107,7 +1107,7 @@ def _rank_hole_counts(
                 frame[y0 : y0 + glyph_height, x0 : x0 + glyph_width],
                 cv2.COLOR_BGR2GRAY,
             )
-            binary = (gray < 100).astype("uint8") * 255
+            binary = (gray < profile.binary_threshold).astype("uint8") * 255
             _, hierarchy = cv2.findContours(
                 binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
             )
