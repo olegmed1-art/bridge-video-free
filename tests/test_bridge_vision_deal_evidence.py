@@ -134,6 +134,15 @@ def test_one_frame_is_visual_but_not_temporal_consensus():
     assert {item["source"] for item in report["card_records"]} == {"VISUAL"}
 
 
+def test_distinct_frame_hashes_cannot_reuse_a_consensus_timestamp():
+    visual = complete_observations()
+    for item in visual:
+        item["timestamp_ms"] = 1000
+
+    with pytest.raises(DealEvidenceError, match="distinct timestamps"):
+        build_deal_evidence_report(visual, recognizer_version=VERSION)
+
+
 def test_per_card_support_cannot_form_a_hybrid_temporal_deal():
     frames = ("a" * 64, "b" * 64, "c" * 64)
     visual = []
@@ -201,7 +210,7 @@ def test_pointer_on_changed_or_unrecognized_frame_is_needs_review():
 
 def test_pointer_timestamp_must_match_the_selected_spatial_target():
     first = observation("N", "AH", timestamp_ms=1000, index=0)
-    target = observation("E", "KH", timestamp_ms=2000, index=1)
+    target = observation("E", "KH", frame=FRAMES[1], timestamp_ms=2000, index=1)
     pointer = pointer_for(target, timestamp_ms=1000)
 
     report = build_deal_evidence_report(

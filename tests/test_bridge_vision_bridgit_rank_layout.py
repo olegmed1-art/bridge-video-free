@@ -786,6 +786,43 @@ def test_anchor_work_is_bounded_across_job_before_decode(monkeypatch):
         )
 
 
+def test_anchor_retention_is_bounded_from_headers_before_decode(monkeypatch):
+    raw = profile_raw()
+    raw["geometry"]["interface_anchor"] = {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": {
+            "x": 0.90,
+            "y": 0.02,
+            "width": 8 / 1000,
+            "height": 8 / 720,
+        },
+        "scales": [1.0],
+        "minimum_score": 0.80,
+        "minimum_margin": 0.03,
+    }
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    profile = parse_profile(raw)
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_validate_input_raster_budget",
+        lambda _paths: [(1000, 720)] + [(3000, 2000)] * 8,
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_read_frame",
+        lambda *_args, **_kwargs: pytest.fail("must reject before decode"),
+    )
+
+    with pytest.raises(BridgitRankLayoutError, match="registered frames exceed"):
+        bridgit_rank_layout.recognize_frames(
+            Path("reference.png"),
+            [Path(f"frame-{index}.png") for index in range(8)],
+            profile,
+        )
+
+
 def test_anchor_job_budget_is_rechecked_on_payloads_actually_decoded(monkeypatch):
     raw = profile_raw()
     raw["geometry"]["interface_anchor"] = {

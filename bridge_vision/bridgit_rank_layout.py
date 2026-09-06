@@ -1452,6 +1452,20 @@ def recognize_frames(
             raise BridgitRankLayoutError(
                 f"interface registration budget failed: {exc}"
             ) from exc
+        header_decoded_bytes = sum(
+            width * height * 3 for width, height in input_dimensions
+        )
+        header_matcher_scratch_bytes = estimate_anchor_peak_scratch_bytes(
+            (profile.width, profile.height),
+            input_dimensions[1:],
+            profile.interface_anchor,
+        )
+        _validate_registration_retention_budget(
+            profile,
+            source_decoded_bytes=header_decoded_bytes,
+            observation_count=len(frame_paths),
+            matcher_scratch_bytes=header_matcher_scratch_bytes,
+        )
     reference, reference_hash, reference_pixel_hash, _ = _read_frame(
         reference_frame, profile
     )

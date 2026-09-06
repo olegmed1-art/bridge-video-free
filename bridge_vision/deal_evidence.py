@@ -281,6 +281,17 @@ def build_deal_evidence_report(
             float(item["region"]["y"]),
         )
     )
+    timestamp_by_frame: dict[str, int] = {}
+    frame_by_timestamp: dict[int, str] = {}
+    for item in observations:
+        frame = item["frame_sha256"]
+        timestamp = item["timestamp_ms"]
+        if frame in timestamp_by_frame and timestamp_by_frame[frame] != timestamp:
+            raise DealEvidenceError("one frame cannot have multiple timestamps")
+        if timestamp in frame_by_timestamp and frame_by_timestamp[timestamp] != frame:
+            raise DealEvidenceError("independent frames require distinct timestamps")
+        timestamp_by_frame[frame] = timestamp
+        frame_by_timestamp[timestamp] = frame
 
     conflicts: list[dict[str, Any]] = []
     review_reasons: list[str] = []
