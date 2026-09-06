@@ -2126,6 +2126,7 @@ jobs:
               '[[ -f "$capacity_marker" && ! -L "$capacity_marker" && "$(stat -c '\''%u:%g:%a:%h'\'' "$capacity_marker")" == 0:0:600:1 ]]' \
               '[[ "$(<"$capacity_marker")" == "$CAPACITY_FENCE_STAMP" ]]' \
               'systemctl unmask universal-video-container.service' \
+              'systemctl enable universal-video-container.service' \
               'rm -f -- "$capacity_marker"' \
               '[[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]'
             cat ops/oracle_universal_video_root_filesystem_expand.sh
@@ -2161,9 +2162,10 @@ jobs:
           if [[ -e "$marker" ]]; then
             [[ -f "$marker" && ! -L "$marker" && "$(stat -c '%u:%g:%a:%h' "$marker")" == 0:0:600:1 ]]
             [[ "$(<"$marker")" == "$LEASE_STAMP" ]]
-            systemctl unmask universal-video-container.service
             rm -f -- "$marker"
           fi
+          systemctl unmask universal-video-container.service
+          systemctl enable universal-video-container.service
           [[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]
           systemctl start universal-video-container.service
           [[ "$(systemctl is-active universal-video-container.service)" == active ]]

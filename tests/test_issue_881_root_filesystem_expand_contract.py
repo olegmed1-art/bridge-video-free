@@ -2288,6 +2288,10 @@ def test_capacity_fence_disables_installed_unit_across_reboot() -> None:
     assert "systemctl disable --now universal-video-container.service" in acquire
     assert '== disabled' in acquire
     assert "systemctl mask" not in acquire
+    mutation = WORKFLOW[WORKFLOW.index("mutation=\"$RUNNER_TEMP/issue-881-locked-mutation.sh\"") : WORKFLOW.index("Release capacity workload fence and ensure sole service active")]
+    assert mutation.index("systemctl enable universal-video-container.service") < mutation.index('[[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]')
+    release = WORKFLOW[WORKFLOW.index("Release capacity workload fence and ensure sole service active") : WORKFLOW.index("Publish bounded operational receipt")]
+    assert release.index("systemctl enable universal-video-container.service") < release.index('[[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]')
 
 
 def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> None:
