@@ -2253,10 +2253,24 @@ def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> No
     start = watchdog.index("CAPACITY_FENCE_HELD")
     release = watchdog.index("release_source_workload_fence || source_release_rc=$?", start)
     block = watchdog[start:release]
-    assert "fence_release_epoch <= fence_now + 2700" in block
+    assert "fence_wait_deadline=$((fence_now + 2700))" in block
+    assert "fence_release_epoch <= fence_wait_deadline" in block
     assert 'actions/runs/${PARENT_RUN_ID}' in block
+    assert 'if [[ "$parent_status" != completed ]]; then' in block
     assert '[[ "$parent_status" == completed ]] && break' in block
     assert "release_source_workload_fence" not in block
+
+
+def test_exit_cleanup_does_not_reclaim_capacity_before_paid_terminal_proof() -> None:
+    cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
+    gate = cleanup.index("if (( paid_launch_request_started == 0 || paid_instance_terminal_proven == 1 )); then")
+    restore = cleanup.index("restore_source_capacity || cleanup_rc=1", gate)
+    release = cleanup.index("release_source_workload_fence || cleanup_rc=1", restore)
+    conditional_end = cleanup.index("fi", release)
+    assert gate < restore < release < conditional_end
+    launch = WORKFLOW.index("paid_launch_request_started=1")
+    create = WORKFLOW.index("create_json_once paid_instance_create", launch)
+    assert launch < create
 
 
 def test_exit_cleanup_stays_armed_through_fallible_backup_retirement() -> None:

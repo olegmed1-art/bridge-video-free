@@ -302,7 +302,7 @@ jobs:
           drill_vcn_id="" drill_ig_id="" drill_route_id="" drill_security_id="" drill_subnet_id=""
           restored_attempted=0 drill_instance_attempted=0 drill_vcn_attempted=0 drill_ig_attempted=0
           drill_route_attempted=0 drill_security_attempted=0 drill_subnet_attempted=0
-          capacity_lease_active=0 source_fence_active=0 paid_instance_terminal_proven=0
+          capacity_lease_active=0 source_fence_active=0 paid_launch_request_started=0 paid_instance_terminal_proven=0
           source_known="$RUNNER_TEMP/issue-881-source-known-hosts"
           source_key="$RUNNER_TEMP/issue-881-source-key"
           receipt_state="$RUNNER_TEMP/issue-881-step4-state.json"
@@ -1447,8 +1447,10 @@ jobs:
             state_set failure_phase "${phase:-unknown}"
             cleanup_temp_resources
             cleanup_rc=$?
-            restore_source_capacity || cleanup_rc=1
-            release_source_workload_fence || cleanup_rc=1
+            if (( paid_launch_request_started == 0 || paid_instance_terminal_proven == 1 )); then
+              restore_source_capacity || cleanup_rc=1
+              release_source_workload_fence || cleanup_rc=1
+            fi
             # The create response can be lost before OCI's eventually
             # consistent list exposes the exact-name backup.  Repeat bounded
             # rediscovery during EXIT cleanup before deciding there is nothing
@@ -1870,6 +1872,7 @@ jobs:
             gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="PAID_WATCHDOG_LAUNCH stamp=${stamp} expiry_epoch=${paid_expiry_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             state_set paid_launch_utc "$paid_launch_utc"
             mark_phase launch_bounded_paid_acceptance_instance
+            paid_launch_request_started=1
             if create_json_once paid_instance_create "$stamp-boot-acceptance" oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$paid_shape" --shape-config "$paid_shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true; then
               launch="$OCI_CREATE_JSON"
               state_set paid_fallback_status LAUNCHED
