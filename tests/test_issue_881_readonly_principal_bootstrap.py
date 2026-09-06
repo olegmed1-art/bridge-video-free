@@ -127,9 +127,16 @@ def test_regression_partial_iam_creation_is_rolled_back_in_dependency_order() ->
 
 
 def test_regression_ambiguous_creates_are_reconciled_inside_global_deadline() -> None:
-    assert "timeout-minutes: 15" in TEXT
-    assert "CLEANUP_DEADLINE=$(( SECONDS + 240 ))" in TEXT
-    assert 'remaining=$(( CLEANUP_DEADLINE - SECONDS ))' in TEXT
+    assert "timeout-minutes: 30" in TEXT
+    assert "Reserve job-wide cleanup and receipt deadline before setup" in TEXT
+    assert "JOB_DEADLINE_EPOCH=$job_deadline" in TEXT
+    assert "MUTATION_CUTOFF_EPOCH=$(( job_deadline - 360 ))" in TEXT
+    assert "CLEANUP_DEADLINE_EPOCH=$(( now + 240 ))" in TEXT
+    assert "JOB_DEADLINE_EPOCH - 120" in TEXT
+    assert 'remaining=$(( CLEANUP_DEADLINE_EPOCH - now ))' in TEXT
+    cutoff = TEXT.index('(( $(date +%s) <= MUTATION_CUTOFF_EPOCH )) || exit 25')
+    first_mutation = TEXT.index('oci iam user create', TEXT.index("exit 24"))
+    assert cutoff < first_mutation
     for marker, command in (
         ("USER_CREATED=1", 'oci iam user create'),
         ("GROUP_CREATED=1", 'oci iam group create'),
