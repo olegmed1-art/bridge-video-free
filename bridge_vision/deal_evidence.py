@@ -148,21 +148,20 @@ def _contains(region: Mapping[str, Any], point: Mapping[str, Any]) -> bool:
 
 
 def _regions_overlap(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool:
-    tolerance = 1e-9
-    return (
-        min(
-            float(first["x"]) + float(first["width"]),
-            float(second["x"]) + float(second["width"]),
-        )
-        - max(float(first["x"]), float(second["x"]))
-        > tolerance
-        and min(
-            float(first["y"]) + float(first["height"]),
-            float(second["y"]) + float(second["height"]),
-        )
-        - max(float(first["y"]), float(second["y"]))
-        > tolerance
-    )
+    coordinate_quantum = 100_000_000
+
+    def edge(value: float) -> int:
+        return round(value * coordinate_quantum)
+
+    overlap_x = min(
+        edge(float(first["x"]) + float(first["width"])),
+        edge(float(second["x"]) + float(second["width"])),
+    ) - max(edge(float(first["x"])), edge(float(second["x"])))
+    overlap_y = min(
+        edge(float(first["y"]) + float(first["height"])),
+        edge(float(second["y"]) + float(second["height"])),
+    ) - max(edge(float(first["y"])), edge(float(second["y"])))
+    return overlap_x > 1 and overlap_y > 1
 
 
 def _unknown_record(seat: str, slot: int, recognizer_version: str) -> dict[str, Any]:
