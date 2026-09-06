@@ -2273,11 +2273,14 @@ def test_watchdog_propagates_source_identity_and_parser_failures() -> None:
     indexing = restore.index('lifecycle="${source_state[0]}"', cardinality)
     assert parser < mapfile < cardinality < indexing
     softstop = restore.index("--action SOFTSTOP")
-    first_only = restore.index("if (( source_softstop_issued == 0 )); then", indexing)
-    budget = restore.index("source_restore_deadline - SECONDS >= 600", first_only)
-    issued = restore.index("source_softstop_issued=1", budget)
-    assert first_only < budget < issued < softstop
-    assert restore.count("source_restore_deadline - SECONDS >= 600") == 1
+    first_only = restore.index("if (( source_stop_budget_committed == 0 )); then", indexing)
+    budget = restore.index("source_restore_deadline - SECONDS >= 1200", first_only)
+    committed = restore.index("source_stop_budget_committed=1", budget)
+    assert first_only < budget < committed < softstop
+    assert restore.count("source_restore_deadline - SECONDS >= 1200") == 1
+    assert "source_restore_deadline=$((SECONDS + 1500))" in restore
+    conditional_end = restore.index("fi", committed)
+    assert softstop > conditional_end
 
 
 def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> None:
