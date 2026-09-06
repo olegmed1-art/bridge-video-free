@@ -14,7 +14,7 @@ def _oci_commands() -> list[str]:
     commands: list[str] = []
     for raw in TEXT.splitlines():
         line = raw.strip()
-        if re.match(r"^(request_json .* )?oci ", line):
+        if re.match(r"^(request_json .* |retry_delete )?oci ", line):
             commands.append(line.split("oci ", 1)[1])
         elif re.match(r"^timeout .* oci ", line):
             commands.append(line.split("oci ", 1)[1])
@@ -57,13 +57,18 @@ def test_boundary_iam_mutations_are_exactly_the_required_principal_objects() -> 
         for command in commands
         if set(command.split()) & {"create", "add-user", "upload", "update", "delete", "remove-user"}
     ]
-    assert len(mutations) == 5
+    assert len(mutations) == 10
     assert any(command.startswith("iam user create ") for command in mutations)
     assert any(command.startswith("iam group create ") for command in mutations)
     assert any(command.startswith("iam group add-user ") for command in mutations)
     assert any(command.startswith("iam policy create ") for command in mutations)
     assert any(command.startswith("iam user api-key upload ") for command in mutations)
-    assert not any(set(command.split()) & {"update", "delete", "remove-user"} for command in mutations)
+    assert any(command.startswith("iam user api-key delete ") for command in mutations)
+    assert any(command.startswith("iam group remove-user ") for command in mutations)
+    assert any(command.startswith("iam policy delete ") for command in mutations)
+    assert any(command.startswith("iam group delete ") for command in mutations)
+    assert any(command.startswith("iam user delete ") for command in mutations)
+    assert not any(" update " in f" {command} " for command in mutations)
 
 
 def test_boundary_policy_is_read_only_and_exact() -> None:
@@ -101,3 +106,19 @@ def test_regression_preexisting_identity_objects_are_rejected() -> None:
     assert "Never inherit additive permissions from a reused user or group" in TEXT
     assert "KEY_STATE" not in TEXT
     assert "MEMBER_COUNT" not in TEXT
+    assert "x.get('lifecycle-state') != 'DELETED'" not in TEXT
+    assert 'NAME_STAMP="issue-881-paid-preflight-readonly-${GITHUB_RUN_ID}"' in TEXT
+
+
+def test_regression_partial_iam_creation_is_rolled_back_in_dependency_order() -> None:
+    cleanup = TEXT.index("cleanup()")
+    key = TEXT.index("iam user api-key delete", cleanup)
+    membership = TEXT.index("iam group remove-user", cleanup)
+    policy = TEXT.index("iam policy delete", cleanup)
+    group = TEXT.index("iam group delete", cleanup)
+    user = TEXT.index("iam user delete", cleanup)
+    assert cleanup < key < membership < policy < group < user
+    assert "trap cleanup EXIT" in TEXT
+    assert "ROLLBACK_INCOMPLETE" in TEXT
+    assert "failed-step IAM rollback" in TEXT
+    assert "GITHUB_STEP_SUMMARY" in TEXT
