@@ -22,7 +22,6 @@ import json
 import math
 import os
 import re
-import statistics
 import tempfile
 import sys
 from collections.abc import Mapping, Sequence
@@ -1073,29 +1072,67 @@ def _slot_score_components(
     bank: Mapping[str, Any],
     xy: tuple[int, int],
     profile: BridgitRankLayoutProfile,
-) -> tuple[Any, Any]:
+) -> dict[str, Any]:
     _, np = _pixel_runtime()
     x, y = xy
     radius = profile.local_registration_px
-    per_frame = [
-        [
-            max(
-                _similarity(_glyph(frame, x + dx, y, profile), bank[rank])
-                for dx in range(-radius, radius + 1)
+    per_frame_assignment = []
+    per_frame_raw = []
+    per_frame_ink = []
+    per_frame_origins = []
+    for frame in frames:
+        origins = [
+            (
+                x + dx,
+                _glyph(frame, x + dx, y, profile),
+                _rank_hole_count(frame, (x + dx, y), profile),
+                _rank_ink_fraction(frame, (x + dx, y), profile),
             )
-            for rank in RANKS
+            for dx in range(-radius, radius + 1)
         ]
-        for frame in frames
-    ]
-    raw_scores = np.median(np.asarray(per_frame), axis=0)
-    assignment_scores = raw_scores.copy()
-
-    hole_counts = _rank_hole_counts(frames, xy, profile)
-    median_holes = float(np.median(hole_counts))
-    assignment_scores[RANKS.index("8")] += 0.30 if median_holes >= 2 else -0.30
-    if median_holes < 1:
-        assignment_scores[RANKS.index("6")] -= 0.35
-    return assignment_scores, raw_scores
+        frame_assignment = []
+        frame_raw = []
+        frame_ink = []
+        frame_origins = []
+        for rank in RANKS:
+            origin_x, _, hole_count, ink_fraction, raw_score = max(
+                (
+                    (
+                        origin_x,
+                        glyph,
+                        hole_count,
+                        ink_fraction,
+                        _similarity(glyph, bank[rank]),
+                    )
+                    for origin_x, glyph, hole_count, ink_fraction in origins
+                ),
+                key=lambda item: (item[4], -abs(item[0] - x), -item[0]),
+            )
+            assignment_score = raw_score
+            if rank == "8":
+                assignment_score += 0.30 if hole_count >= 2 else -0.30
+            elif rank == "6" and hole_count < 1:
+                assignment_score -= 0.35
+            frame_assignment.append(assignment_score)
+            frame_raw.append(raw_score)
+            frame_ink.append(ink_fraction)
+            frame_origins.append(origin_x)
+        per_frame_assignment.append(frame_assignment)
+        per_frame_raw.append(frame_raw)
+        per_frame_ink.append(frame_ink)
+        per_frame_origins.append(frame_origins)
+    assignment_array = np.asarray(per_frame_assignment)
+    raw_array = np.asarray(per_frame_raw)
+    ink_array = np.asarray(per_frame_ink)
+    return {
+        "assignment": np.median(assignment_array, axis=0),
+        "raw": np.median(raw_array, axis=0),
+        "ink": np.median(ink_array, axis=0),
+        "per_frame_assignment": assignment_array,
+        "per_frame_raw": raw_array,
+        "per_frame_ink": ink_array,
+        "per_frame_origins": per_frame_origins,
+    }
 
 
 def _slot_scores(
@@ -1104,73 +1141,49 @@ def _slot_scores(
     xy: tuple[int, int],
     profile: BridgitRankLayoutProfile,
 ):
-    return _slot_score_components(frames, bank, xy, profile)[0]
+    return _slot_score_components(frames, bank, xy, profile)["assignment"]
 
 
-def _rank_hole_counts(
-    frames: Sequence[Any], xy: tuple[int, int], profile: BridgitRankLayoutProfile
-) -> list[int]:
+def _rank_hole_count(
+    frame: Any, xy: tuple[int, int], profile: BridgitRankLayoutProfile
+) -> int:
     cv2, _ = _pixel_runtime()
     x, y = xy
-    radius = profile.local_registration_px
     glyph_width = profile.glyph_width
     glyph_height = profile.glyph_height
-    hole_counts = []
-    for frame in frames:
-        local = []
-        for dx in range(-radius, radius + 1):
-            x0 = max(0, min(profile.width - glyph_width, x + dx))
-            y0 = max(0, min(profile.height - glyph_height, y))
-            gray = cv2.cvtColor(
-                frame[y0 : y0 + glyph_height, x0 : x0 + glyph_width],
-                cv2.COLOR_BGR2GRAY,
-            )
-            binary = (gray < profile.binary_threshold).astype("uint8") * 255
-            _, hierarchy = cv2.findContours(
-                binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
-            )
-            local.append(
-                sum(1 for item in hierarchy[0] if item[3] >= 0)
-                if hierarchy is not None
-                else 0
-            )
-        hole_counts.append(max(local))
-    return hole_counts
+    gray = cv2.cvtColor(
+        frame[y : y + glyph_height, x : x + glyph_width],
+        cv2.COLOR_BGR2GRAY,
+    )
+    binary = (gray <= profile.binary_threshold).astype("uint8") * 255
+    _, hierarchy = cv2.findContours(binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    return (
+        sum(1 for item in hierarchy[0] if item[3] >= 0) if hierarchy is not None else 0
+    )
 
 
-def _rank_ink_fractions(
-    frames: Sequence[Any], xy: tuple[int, int], profile: BridgitRankLayoutProfile
-) -> list[float]:
+def _rank_ink_fraction(
+    frame: Any, xy: tuple[int, int], profile: BridgitRankLayoutProfile
+) -> float:
     cv2, _ = _pixel_runtime()
     x, y = xy
-    radius = profile.local_registration_px
     glyph_width = profile.glyph_width
     glyph_height = profile.glyph_height
     x_margin = max(1, round(glyph_width / 8))
     y_margin = max(1, round(glyph_height / 16))
-    per_frame = []
-    for frame in frames:
-        candidates = []
-        for dx in range(-radius, radius + 1):
-            x0 = max(0, min(profile.width - glyph_width, x + dx))
-            y0 = max(0, min(profile.height - glyph_height, y))
-            gray = cv2.cvtColor(
-                frame[y0 : y0 + glyph_height, x0 : x0 + glyph_width],
-                cv2.COLOR_BGR2GRAY,
-            )
-            candidates.append(
-                float(
-                    (
-                        gray[
-                            y_margin : glyph_height - y_margin,
-                            x_margin : glyph_width - x_margin,
-                        ]
-                        < profile.binary_threshold
-                    ).mean()
-                )
-            )
-        per_frame.append(max(candidates))
-    return per_frame
+    gray = cv2.cvtColor(
+        frame[y : y + glyph_height, x : x + glyph_width],
+        cv2.COLOR_BGR2GRAY,
+    )
+    return float(
+        (
+            gray[
+                y_margin : glyph_height - y_margin,
+                x_margin : glyph_width - x_margin,
+            ]
+            <= profile.binary_threshold
+        ).mean()
+    )
 
 
 def _horizontal_geometry(frame: Any, seat: str, profile: BridgitRankLayoutProfile):
@@ -1586,14 +1599,9 @@ def recognize_frames(
         score_components = [
             _slot_score_components(frames, bank, xy, profile) for _, xy in slots
         ]
-        matrix = [assignment_scores for assignment_scores, _ in score_components]
-        raw_matrix = [raw_scores for _, raw_scores in score_components]
-        for _, xy in slots:
-            fractions = _rank_ink_fractions(frames, xy, profile)
-            ink_scores.append(float(statistics.median(fractions)))
-            ink_support_counts.append(
-                sum(value >= profile.min_rank_ink_fraction for value in fractions)
-            )
+        matrix = [component["assignment"] for component in score_components]
+        raw_matrix = [component["raw"] for component in score_components]
+        ink_matrix = [component["ink"] for component in score_components]
         alternatives = ordered_assignments(
             matrix,
             [seat for seat, _ in slots],
@@ -1608,7 +1616,15 @@ def recognize_frames(
                 sum(lengths[other][suit] for other in SEATS[: SEATS.index(seat)])
                 + used[seat]
             )
-            evidence_scores.append(float(raw_matrix[row][RANKS.index(rank)]))
+            rank_index = RANKS.index(rank)
+            evidence_scores.append(float(raw_matrix[row][rank_index]))
+            ink_scores.append(float(ink_matrix[row][rank_index]))
+            ink_support_counts.append(
+                sum(
+                    value >= profile.min_rank_ink_fraction
+                    for value in score_components[row]["per_frame_ink"][:, rank_index]
+                )
+            )
             used[seat] += 1
         if len(alternatives) > 1:
             second_score, second_path = alternatives[1]
@@ -1627,15 +1643,18 @@ def recognize_frames(
                     }
                 )
 
-        for frame_index, frame in enumerate(frames):
-            single_score_components = [
-                _slot_score_components([frame], bank, xy, profile) for _, xy in slots
-            ]
+        for frame_index, _frame in enumerate(frames):
             single_matrix = [
-                assignment_scores for assignment_scores, _ in single_score_components
+                component["per_frame_assignment"][frame_index]
+                for component in score_components
             ]
             single_raw_matrix = [
-                raw_scores for _, raw_scores in single_score_components
+                component["per_frame_raw"][frame_index]
+                for component in score_components
+            ]
+            single_ink_matrix = [
+                component["per_frame_ink"][frame_index]
+                for component in score_components
             ]
             single_alternatives = ordered_assignments(
                 single_matrix,
@@ -1650,9 +1669,13 @@ def recognize_frames(
                     sum(lengths[other][suit] for other in SEATS[: SEATS.index(seat)])
                     + single_used[seat]
                 )
-                assigned_score = float(single_raw_matrix[row][RANKS.index(rank)])
+                rank_index = RANKS.index(rank)
+                assigned_score = float(single_raw_matrix[row][rank_index])
                 frame_assigned_scores[frame_index].append(assigned_score)
-                _, (x, y) = slots[row]
+                assigned_ink = float(single_ink_matrix[row][rank_index])
+                frame_ink_scores[frame_index].append(assigned_ink)
+                _, (_, y) = slots[row]
+                x = score_components[row]["per_frame_origins"][frame_index][rank_index]
                 game_window = frame_registrations[frame_index]["game_window"]
                 normalized_x = x / profile.width
                 normalized_y = y / profile.height
@@ -1692,9 +1715,6 @@ def recognize_frames(
                 )
             else:
                 frame_assignment_margins[frame_index].append(1_000_000.0)
-            frame_ink_scores[frame_index].extend(
-                _rank_ink_fractions([frame], xy, profile)[0] for _, xy in slots
-            )
 
     cards = [
         rank + suit for seat in SEATS for suit in SUITS for rank in hands[seat][suit]

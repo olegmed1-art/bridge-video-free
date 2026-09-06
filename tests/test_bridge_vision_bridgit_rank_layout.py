@@ -1072,7 +1072,7 @@ def test_rank_ink_uses_only_the_configured_glyph_crop(
             gray_slices.append(key)
             return self
 
-        def __lt__(self, _threshold):
+        def __le__(self, _threshold):
             return self
 
         def mean(self):
@@ -1090,9 +1090,9 @@ def test_rank_ink_uses_only_the_configured_glyph_crop(
         "_pixel_runtime",
         lambda: (FakeCv2(), object()),
     )
-    assert bridgit_rank_layout._rank_ink_fractions(
-        [FakeFrame()], (10, 10), profile
-    ) == [0.25]
+    assert (
+        bridgit_rank_layout._rank_ink_fraction(FakeFrame(), (10, 10), profile) == 0.25
+    )
     assert frame_slices == [(slice(10, 18), slice(10, 18))]
     assert gray_slices == [(slice(1, 7), slice(1, 7))]
 
@@ -1122,7 +1122,7 @@ def test_rank_holes_use_only_the_configured_glyph_crop(
             return self
 
     class FakeGray:
-        def __lt__(self, threshold):
+        def __le__(self, threshold):
             thresholds.append(threshold)
             return FakeBinary()
 
@@ -1144,9 +1144,7 @@ def test_rank_holes_use_only_the_configured_glyph_crop(
         "_pixel_runtime",
         lambda: (FakeCv2(), object()),
     )
-    assert bridgit_rank_layout._rank_hole_counts([FakeFrame()], (10, 10), profile) == [
-        0
-    ]
+    assert bridgit_rank_layout._rank_hole_count(FakeFrame(), (10, 10), profile) == 0
     assert frame_slices == [(slice(10, 18), slice(10, 18))]
     assert thresholds == [profile.binary_threshold]
 
@@ -1161,20 +1159,61 @@ def test_hole_prior_does_not_raise_raw_template_evidence(monkeypatch):
     )
     monkeypatch.setattr(bridgit_rank_layout, "_glyph", lambda *_args: object())
     monkeypatch.setattr(bridgit_rank_layout, "_similarity", lambda *_args: 0.20)
-    monkeypatch.setattr(bridgit_rank_layout, "_rank_hole_counts", lambda *_args: [2])
+    monkeypatch.setattr(bridgit_rank_layout, "_rank_hole_count", lambda *_args: 2)
+    monkeypatch.setattr(bridgit_rank_layout, "_rank_ink_fraction", lambda *_args: 0.1)
 
-    assignment_scores, raw_scores = bridgit_rank_layout._slot_score_components(
+    components = bridgit_rank_layout._slot_score_components(
         [object()],
         {rank: object() for rank in bridgit_rank_layout.RANKS},
         (10, 10),
         profile,
     )
 
-    assert raw_scores.tolist() == pytest.approx([0.20] * 13)
-    assert assignment_scores[bridgit_rank_layout.RANKS.index("8")] == pytest.approx(
-        0.50
+    assert components["raw"].tolist() == pytest.approx([0.20] * 13)
+    assert components["assignment"][
+        bridgit_rank_layout.RANKS.index("8")
+    ] == pytest.approx(0.50)
+    assert (
+        components["raw"][bridgit_rank_layout.RANKS.index("8")]
+        < profile.min_template_score
     )
-    assert raw_scores[bridgit_rank_layout.RANKS.index("8")] < profile.min_template_score
+
+
+def test_slot_evidence_uses_one_origin_per_frame_and_rank(monkeypatch):
+    np = pytest.importorskip("numpy")
+    profile = replace(parse_profile(profile_raw()), local_registration_px=1)
+    monkeypatch.setattr(bridgit_rank_layout, "_pixel_runtime", lambda: (object(), np))
+    monkeypatch.setattr(
+        bridgit_rank_layout, "_glyph", lambda _frame, x, _y, _profile: x
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_similarity",
+        lambda glyph, _samples: {9: 0.9, 10: 0.8, 11: 0.7}[glyph],
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_rank_hole_count",
+        lambda _frame, xy, _profile: 2 if xy[0] == 11 else 0,
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_rank_ink_fraction",
+        lambda _frame, xy, _profile: 0.9 if xy[0] == 11 else 0.1,
+    )
+
+    components = bridgit_rank_layout._slot_score_components(
+        [object()],
+        {rank: object() for rank in bridgit_rank_layout.RANKS},
+        (10, 10),
+        profile,
+    )
+    rank_index = bridgit_rank_layout.RANKS.index("8")
+
+    assert components["per_frame_origins"][0][rank_index] == 9
+    assert components["raw"][rank_index] == pytest.approx(0.9)
+    assert components["assignment"][rank_index] == pytest.approx(0.6)
+    assert components["ink"][rank_index] == pytest.approx(0.1)
 
 
 def test_generated_glyph_coordinates_must_be_unique_across_suits():
