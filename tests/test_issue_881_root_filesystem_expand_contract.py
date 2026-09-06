@@ -677,7 +677,7 @@ def test_failed_drill_deletes_only_its_new_unaccepted_backup() -> None:
     assert '[[ -n "$backup_id" ]] && backup_created_by_run=1' in block
     assert '[[ -n "$backup_id" ]] || backup_id="$(discover_named_id backup "$backup_name")"' in block
     cleanup = block[
-        block.index("cleanup() {") : block.index("\n          reconcile_prior_attempt_resources\n")
+        block.index("cleanup() {") : block.index("\n          record_reconcile_failure() {\n")
     ]
     assert "backup_created_by_run == 1 && backup_accepted == 0" in cleanup
     assert '[[ -z "$backup_id" && "$backup_attempted" == 1 ]]' in cleanup
@@ -1988,6 +1988,63 @@ def test_cleanup_masks_all_exact_ids_before_public_cleanup_logs() -> None:
     assert reconcile.index('mask_resource_ids') < reconcile.index('reconcile_bound_resource instance boot-acceptance')
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "prior_uncertain_instance_proof" in receipt
+
+
+def test_empty_prior_inventory_masking_is_successful_and_reconciliation_is_diagnostic() -> None:
+    mask_start = WORKFLOW.index("mask_resource_ids()")
+    mask_end = WORKFLOW.index("merge_resource_ids()", mask_start)
+    mask_helper = textwrap.dedent(WORKFLOW[mask_start:mask_end])
+    empty = subprocess.run(
+        ["bash", "-e", "-c", mask_helper + "printf '%s\\n' '' '' '' '' '' '' '' | mask_resource_ids; echo PASS"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert empty.stdout.strip() == "PASS"
+
+    invocation = WORKFLOW[
+        WORKFLOW.index("record_reconcile_failure()") :
+        WORKFLOW.index("if (( cleanup_only == 1 )); then", WORKFLOW.index("record_reconcile_failure()"))
+    ]
+    assert 'state_set prior_cleanup_failure_rc "$reconcile_rc"' in invocation
+    assert 'state_set failure_phase "${phase:-reconcile_prior_attempts}"' in invocation
+    assert 'exit "$reconcile_rc"' in invocation
+    assert "trap 'record_reconcile_failure' ERR" in invocation
+    assert "reconcile_prior_attempt_resources\n" in invocation
+    assert "if reconcile_prior_attempt_resources" not in invocation
+    assert invocation.index("set -E") < invocation.index("trap 'record_reconcile_failure' ERR")
+    assert invocation.index("trap 'record_reconcile_failure' ERR") < invocation.index("reconcile_prior_attempt_resources\n")
+    reconcile_call = invocation.index("reconcile_prior_attempt_resources\n")
+    assert reconcile_call < invocation.index("trap - ERR", reconcile_call)
+
+    diagnostic_harness = r'''
+state_file="$(mktemp)"
+state_set() { printf '%s=%s\n' "$1" "$2" >>"$state_file"; }
+phase=reconcile_prior_attempts
+record_reconcile_failure() {
+  local reconcile_rc="$?"
+  trap - ERR
+  state_set prior_cleanup_status FAILED
+  state_set prior_cleanup_failure_rc "$reconcile_rc"
+  state_set failure_rc "$reconcile_rc"
+  state_set failure_phase "${phase:-reconcile_prior_attempts}"
+  cat "$state_file"
+  exit "$reconcile_rc"
+}
+reconcile_prior_attempt_resources() { echo BEFORE; false; echo UNSAFE_CONTINUATION; }
+set -E
+trap 'record_reconcile_failure' ERR
+reconcile_prior_attempt_resources
+echo UNSAFE_SUCCESS
+'''
+    failed = subprocess.run(["bash", "-e", "-c", diagnostic_harness], text=True, capture_output=True)
+    assert failed.returncode == 1
+    assert "UNSAFE_CONTINUATION" not in failed.stdout
+    assert "UNSAFE_SUCCESS" not in failed.stdout
+    assert "prior_cleanup_failure_rc=1" in failed.stdout
+    assert "failure_phase=reconcile_prior_attempts" in failed.stdout
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "value('prior_cleanup_failure_rc', 'none')" in receipt
 
 
 def test_prior_direct_get_proof_is_bound_to_exact_resource_metadata() -> None:
