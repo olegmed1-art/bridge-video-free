@@ -50,13 +50,52 @@ def test_negative_live_oci_surface_contains_no_mutation_command() -> None:
 
 def test_boundary_live_oci_surface_is_exactly_the_required_reads() -> None:
     commands = _live_oci_commands()
-    assert len(commands) == 6
+    assert len(commands) == 7
     assert any(command.startswith("iam region list ") for command in commands)
     assert any(command.startswith("iam compartment list ") for command in commands)
+    assert any(command.startswith("iam availability-domain list ") for command in commands)
     assert any(command.startswith("compute instance list ") for command in commands)
     assert any(command.startswith("compute shape list ") for command in commands)
     assert sum(command.startswith("limits resource-availability get ") for command in commands) == 2
     assert "compute instance get" not in TEXT
+
+
+def test_positive_all_same_region_ads_are_audited_for_a_fast_path() -> None:
+    assert 'for candidate_ad in "${availability_domains[@]}"; do' in TEXT
+    assert '--availability-domain "$candidate_ad"' in TEXT
+    assert "status = 'APPROVED' if selected['same_as_source'] else 'ALTERNATE_AD_AVAILABLE'" in TEXT
+    assert "selected_ad_scope=" in TEXT
+    assert "approved_ad_candidates=" in TEXT
+    assert "non_source_e5_instances=" in TEXT
+
+
+def test_negative_alternate_ad_identity_is_not_published() -> None:
+    evidence_block = TEXT.split("python - \"$candidates\" \"$existing_e5\" <<'PY' > \"$evidence\"", 1)[1].split("          PY", 1)[0]
+    assert "candidate_ad" not in evidence_block
+    assert "availability-domain" not in evidence_block
+    assert "selected_ad_scope" in evidence_block
+    assert "display-name" not in evidence_block
+
+
+def test_boundary_source_ad_is_evaluated_first_and_exactly_once() -> None:
+    assert "print(source)" in TEXT
+    assert "if x != source" in TEXT
+    assert "len(names) == len(data) == len(set(names)) and source in names" in TEXT
+    assert "sum(x['same_as_source'] for x in rows) == 1" in TEXT
+
+
+def test_regression_regional_backup_path_fails_closed_when_no_ad_qualifies() -> None:
+    assert "NO_AVAILABILITY_DOMAIN_HAS_REQUIRED_HEADROOM" in TEXT
+    assert "selected_ad_scope=' + ('SOURCE' if selected['same_as_source'] else 'ALTERNATE' if approved else 'NONE')" in TEXT
+    assert "Boot-volume backups are regional" in TEXT
+
+
+def test_regression_existing_server_fast_path_is_read_only_and_sanitized() -> None:
+    assert "x.get('id') != source_id" in TEXT
+    assert "x.get('shape') == 'VM.Standard.E5.Flex'" in TEXT
+    assert "It never assumes ownership" in TEXT
+    assert "non_source_e5_running=" in TEXT
+    assert "non_source_e5_stopped=" in TEXT
 
 
 def test_regression_source_instance_is_found_across_active_compartments() -> None:
