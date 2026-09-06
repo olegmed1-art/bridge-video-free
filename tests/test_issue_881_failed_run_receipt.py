@@ -87,6 +87,51 @@ def test_accepts_authoritative_instance_id_when_launch_was_captured():
     assert parsed["resources"]["instance"] == ["ocid1.instance.oc1.region.instance"]
 
 
+def test_accepts_exact_redacted_rejected_preflight_receipt_for_inventory_cleanup():
+    body = receipt(create_status="NOT_RECORDED", create_rc="none")
+    body = body.replace(
+        "- isolated instance create request: `NOT_RECORDED`; rc: `none`",
+        "- isolated paid instance create request: `NOT_RECORDED`; rc: `none`",
+    )
+    body = body.replace(
+        "- workflow outcome: `failure`",
+        "- workflow outcome: `failure`\n"
+        "- failing phase before cleanup: `paid_capacity_preflight`\n"
+        "- current-run temporary cleanup: `INCOMPLETE`",
+    )
+    values = {
+        "boot-volume": "ocid1.bootvolume.oc1.region.volume",
+        "vcn": "ocid1.vcn.oc1.region.vcn",
+        "internet-gateway": "ocid1.internetgateway.oc1.region.ig",
+        "route-table": "ocid1.routetable.oc1.region.route",
+        "security-list": "ocid1.securitylist.oc1.region.security",
+        "subnet": "ocid1.subnet.oc1.region.subnet",
+    }
+    for kind, value in values.items():
+        body = body.replace(
+            f"- {RESOURCE_FIELDS[kind]}: `{value}`",
+            f"- {RESOURCE_FIELDS[kind]}: `present_redacted`",
+        )
+    parsed = parse_receipt(body, RUN_ID, PREFIX)
+    assert parsed["instance_create_rc"] is None
+    assert parsed["resources"] == {kind: [] for kind in RESOURCE_FIELDS}
+    assert set(parsed["redacted_resources"]) == set(RESOURCE_FIELDS) - {"instance"}
+
+
+def test_rejects_redacted_receipt_outside_exact_preflight_cleanup_boundary():
+    body = receipt(create_status="NOT_RECORDED", create_rc="none")
+    body = body.replace(
+        "- workflow outcome: `failure`",
+        "- workflow outcome: `failure`\n"
+        "- failing phase before cleanup: `paid_capacity_preflight`\n"
+        "- current-run temporary cleanup: `INCOMPLETE`",
+    ).replace(
+        "- temporary VCN ID: `ocid1.vcn.oc1.region.vcn`",
+        "- temporary VCN ID: `present_redacted`",
+    )
+    _assert_rejected(body)
+
+
 def complete_cleanup_state(create_status="REQUEST_UNCERTAIN"):
     state = {
         "prior_cleanup_status": "RECONCILED_PROVEN_ABSENT",
@@ -144,6 +189,10 @@ def test_cleanup_typed_verdicts_handle_captured_instance_without_uncertainty():
     verdicts = cleanup_typed_proof_verdicts(complete_cleanup_state("CAPTURED"))
     assert verdicts["instance"] == "RECONCILED_PROVEN_ABSENT"
     assert verdicts["uncertain_instance"] == "NOT_APPLICABLE"
+
+    no_launch = cleanup_typed_proof_verdicts(complete_cleanup_state("NOT_RECORDED"))
+    assert no_launch["instance"] == "RECONCILED_PROVEN_ABSENT"
+    assert no_launch["uncertain_instance"] == "NOT_APPLICABLE"
 
     missing_status = complete_cleanup_state()
     missing_status.pop("prior_instance_create_status")

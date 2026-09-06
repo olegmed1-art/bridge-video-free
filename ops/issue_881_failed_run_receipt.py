@@ -76,7 +76,10 @@ def cleanup_typed_proof_verdicts(state: dict[str, object]) -> dict[str, str]:
     uncertain_complete = (
         create_status == "REQUEST_UNCERTAIN"
         and uncertain_proof == "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
-    ) or (create_status == "CAPTURED" and uncertain_proof == "NOT_APPLICABLE")
+    ) or (
+        create_status in {"CAPTURED", "NOT_RECORDED"}
+        and uncertain_proof == "NOT_APPLICABLE"
+    )
     all_complete = reconciled and typed_complete and uncertain_complete
     typed_verdict = (
         "RECONCILED_PROVEN_ABSENT" if all_complete else "RECONCILIATION_INCOMPLETE"
@@ -86,7 +89,7 @@ def cleanup_typed_proof_verdicts(state: dict[str, object]) -> dict[str, str]:
     }
     if all_complete and create_status == "REQUEST_UNCERTAIN":
         verdicts["uncertain_instance"] = "RECONCILED_PROVEN_ABSENT"
-    elif create_status == "CAPTURED" and uncertain_proof == "NOT_APPLICABLE":
+    elif create_status in {"CAPTURED", "NOT_RECORDED"} and uncertain_proof == "NOT_APPLICABLE":
         verdicts["uncertain_instance"] = "NOT_APPLICABLE"
     else:
         verdicts["uncertain_instance"] = "RECONCILIATION_INCOMPLETE"
@@ -100,16 +103,25 @@ def _field(body: str, label: str) -> str:
     return matches[0]
 
 
-def _field_with_rc(body: str, label: str) -> tuple[str, int]:
+def _field_with_rc_matches(body: str, label: str) -> list[tuple[str, int | None]]:
     matches = re.findall(
-        rf"^- {re.escape(label)}: `([^`]+)`; rc: `([0-9]+)`\s*$",
+        rf"^- {re.escape(label)}: `([^`]+)`; rc: `([0-9]+|none)`\s*$",
         body,
         re.MULTILINE,
     )
+    return [(value, None if rc == "none" else int(rc)) for value, rc in matches]
+
+
+def _one_instance_create_field(body: str) -> tuple[str, int | None]:
+    matches: list[tuple[str, int | None]] = []
+    for label in (
+        "isolated instance create request",
+        "isolated paid instance create request",
+    ):
+        matches.extend(_field_with_rc_matches(body, label))
     if len(matches) != 1:
-        raise ValueError(f"expected exactly one complete {label!r} field with rc")
-    value, rc = matches[0]
-    return value, int(rc)
+        raise ValueError("expected exactly one complete isolated instance create field with rc")
+    return matches[0]
 
 
 def parse_receipt(body: str, run_id: str, operation_prefix: str) -> dict[str, object]:
@@ -126,22 +138,43 @@ def parse_receipt(body: str, run_id: str, operation_prefix: str) -> dict[str, ob
     if len(run_urls) != 1 or run_urls[0][1] != run_id:
         raise ValueError("receipt run URL does not match the requested failed run")
 
-    create_status, create_rc = _field_with_rc(body, "isolated instance create request")
+    create_status, create_rc = _one_instance_create_field(body)
     resources: dict[str, list[str]] = {}
+    redacted_resources: set[str] = set()
     for kind, label in RESOURCE_FIELDS.items():
         raw = _field(body, label)
         if raw == "none":
             resources[kind] = []
+            continue
+        if raw == "present_redacted":
+            resources[kind] = []
+            redacted_resources.add(kind)
             continue
         match = OCID_RE.fullmatch(raw)
         if match is None or match.group(1) != OCID_TYPES[kind]:
             raise ValueError(f"invalid {kind} OCID")
         resources[kind] = [raw]
 
-    if not resources["instance"] and create_status != "REQUEST_UNCERTAIN":
-        raise ValueError("missing instance ID is allowed only for an uncertain launch")
+    failure_phase = _field(body, "failing phase before cleanup") if redacted_resources or create_status == "NOT_RECORDED" else None
+    cleanup_status = _field(body, "current-run temporary cleanup") if redacted_resources else None
+    no_launch_preflight = (
+        create_status == "NOT_RECORDED"
+        and create_rc is None
+        and failure_phase == "paid_capacity_preflight"
+    )
+    if not resources["instance"] and create_status != "REQUEST_UNCERTAIN" and not no_launch_preflight:
+        raise ValueError("missing instance ID is allowed only for an uncertain launch or a rejected paid preflight")
     required = set(RESOURCE_FIELDS) - {"instance"}
-    missing = sorted(kind for kind in required if len(resources[kind]) != 1)
+    if redacted_resources and (
+        redacted_resources != required
+        or cleanup_status != "INCOMPLETE"
+        or not no_launch_preflight
+    ):
+        raise ValueError("redacted resources require the exact rejected-preflight cleanup receipt")
+    missing = sorted(
+        kind for kind in required
+        if len(resources[kind]) != 1 and kind not in redacted_resources
+    )
     if missing:
         raise ValueError("failed receipt is missing authoritative resources: " + ",".join(missing))
 
@@ -151,6 +184,7 @@ def parse_receipt(body: str, run_id: str, operation_prefix: str) -> dict[str, ob
         "instance_create_status": create_status,
         "instance_create_rc": create_rc,
         "resources": resources,
+        "redacted_resources": sorted(redacted_resources),
         "receipt_sha256": hashlib.sha256(body.encode()).hexdigest(),
     }
 

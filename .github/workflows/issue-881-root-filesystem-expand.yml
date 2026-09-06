@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('issue-881-root-expand-pr-{0}', github.run_id) || (github.event.issue.number == 881 && github.event.comment.user.login == 'olegmed1-art' && contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded","/oracle-ops issue-881-reconcile-run-33919714953"]'), github.event.comment.body)) && 'oracle-instance-workload-mutation' || format('issue-881-root-expand-noop-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'pull_request' && format('issue-881-root-expand-pr-{0}', github.run_id) || (github.event.issue.number == 881 && github.event.comment.user.login == 'olegmed1-art' && contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded","/oracle-ops issue-881-reconcile-run-34013072946"]'), github.event.comment.body)) && 'oracle-instance-workload-mutation' || format('issue-881-root-expand-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -50,7 +50,7 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.issue.number == 881 &&
       github.event.comment.user.login == 'olegmed1-art' &&
-      contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded","/oracle-ops issue-881-reconcile-run-33919714953"]'), github.event.comment.body)
+      contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded","/oracle-ops issue-881-reconcile-run-34013072946"]'), github.event.comment.body)
     runs-on: ubuntu-24.04
     permissions:
       actions: write
@@ -82,7 +82,7 @@ jobs:
       OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
       GH_TOKEN: ${{ github.token }}
       RECOVERY_COMMAND: /oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded
-      CLEANUP_ONLY_COMMAND: /oracle-ops issue-881-reconcile-run-33919714953
+      CLEANUP_ONLY_COMMAND: /oracle-ops issue-881-reconcile-run-34013072946
       OWNER_COMMAND: ${{ github.event.comment.body }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -277,8 +277,8 @@ jobs:
           failed_run_receipt_comment_id=""
           if [[ "$OWNER_COMMAND" == "$CLEANUP_ONLY_COMMAND" ]]; then
             cleanup_only=1
-            failed_run_id="33919714953"
-            failed_run_receipt_comment_id="5546560028"
+            failed_run_id="34013072946"
+            failed_run_receipt_comment_id="5557131531"
             target_prior_stamp="${operation_run_prefix}${failed_run_id}-a1"
             failed_run_backup_name="${backup_prefix}-${failed_run_id}-a1"
           fi
@@ -1132,11 +1132,19 @@ jobs:
               return 94
             fi
             if [[ -z "$prior_instances$prior_restored$prior_subnets$prior_security$prior_routes$prior_igs$prior_vcns" ]]; then
-              state_set prior_cleanup_status EXACT_NAME_INVENTORY_EMPTY
-              echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=0 ids=none exact_name_inventory_empty=true'
-              return 0
+              if (( cleanup_only == 0 )); then
+                state_set prior_cleanup_status EXACT_NAME_INVENTORY_EMPTY
+                echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=0 ids=none exact_name_inventory_empty=true'
+                return 0
+              fi
+              # A redacted cleanup receipt intentionally contributes no OCIDs.
+              # One empty inventory snapshot is not an absence proof: continue
+              # through the three repeated exact-stamp inventories and typed
+              # proof recording before granting cleanup success.
+              echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_START resource_count=0 ids=none redacted_inventory=true'
+            else
+              echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_START resource_count=$prior_count ids=$prior_ids"
             fi
-            echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_START resource_count=$prior_count ids=$prior_ids"
             if [[ -n "$prior_instances" ]]; then
               readarray -t ids <<<"$prior_instances"
               reconcile_bound_resource instance boot-acceptance 600 "${ids[@]}"

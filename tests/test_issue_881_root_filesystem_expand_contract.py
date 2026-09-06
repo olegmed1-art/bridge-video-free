@@ -221,7 +221,7 @@ def test_workflow_is_exact_host_one_shot_and_pinned() -> None:
     assert "github.event.issue.number == 881" in WORKFLOW
     assert "github.event.comment.user.login == 'olegmed1-art'" in WORKFLOW
     assert '"/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded"' in WORKFLOW
-    assert '"/oracle-ops issue-881-reconcile-run-33919714953"' in WORKFLOW
+    assert '"/oracle-ops issue-881-reconcile-run-34013072946"' in WORKFLOW
 
 
 def test_owner_command_is_case_sensitive_before_any_oci_or_host_access() -> None:
@@ -233,14 +233,14 @@ def test_owner_command_is_case_sensitive_before_any_oci_or_host_access() -> None
     assert "UV_ROOT_OWNER_COMMAND_REJECTED" in block
     gate = r'''
 RECOVERY_COMMAND=/oracle-ops\ issue-881-expand-root-and-recover-bba508-paid-bounded
-CLEANUP_ONLY_COMMAND=/oracle-ops\ issue-881-reconcile-run-33919714953
+CLEANUP_ONLY_COMMAND=/oracle-ops\ issue-881-reconcile-run-34013072946
 if [[ "$OWNER_COMMAND" != "$RECOVERY_COMMAND" && "$OWNER_COMMAND" != "$CLEANUP_ONLY_COMMAND" ]]; then exit 23; fi
 '''
     for command, expected_rc in (
         ("/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded", 0),
-        ("/oracle-ops issue-881-reconcile-run-33919714953", 0),
-        ("/ORACLE-OPS issue-881-reconcile-run-33919714953", 23),
-        ("/oracle-ops issue-881-reconcile-run-33919714953 ", 23),
+        ("/oracle-ops issue-881-reconcile-run-34013072946", 0),
+        ("/ORACLE-OPS issue-881-reconcile-run-34013072946", 23),
+        ("/oracle-ops issue-881-reconcile-run-34013072946 ", 23),
     ):
         result = subprocess.run(["bash", "-c", gate], env=os.environ | {"OWNER_COMMAND": command})
         assert result.returncode == expected_rc
@@ -1835,11 +1835,11 @@ def test_last_second_gate_revalidates_oci_before_ssh_mutation() -> None:
 
 
 def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> None:
-    cleanup_command = "/oracle-ops issue-881-reconcile-run-33919714953"
+    cleanup_command = "/oracle-ops issue-881-reconcile-run-34013072946"
     assert cleanup_command in WORKFLOW
     assert "/oracle-ops issue-881-reconcile-run-33893910685" not in WORKFLOW
-    assert 'failed_run_id="33919714953"' in WORKFLOW
-    assert 'failed_run_receipt_comment_id="5546560028"' in WORKFLOW
+    assert 'failed_run_id="34013072946"' in WORKFLOW
+    assert 'failed_run_receipt_comment_id="5557131531"' in WORKFLOW
     assert 'target_prior_stamp="${operation_run_prefix}${failed_run_id}-a1"' in WORKFLOW
     assert 'failed_run_backup_name="${backup_prefix}-${failed_run_id}-a1"' in WORKFLOW
     cleanup = WORKFLOW.index("reconcile_prior_attempt_resources")
@@ -1945,6 +1945,25 @@ if prove_repeated_exact_stamp_inventory_no_active; then echo rc=0; else echo rc=
             check=True,
         )
         assert "rc=96" in failed.stdout
+
+
+def test_redacted_cleanup_cannot_short_circuit_after_one_empty_inventory() -> None:
+    reconcile = WORKFLOW[
+        WORKFLOW.index("reconcile_prior_attempt_resources()") :
+        WORKFLOW.index("cleanup_temp_resources()")
+    ]
+    empty_gate = reconcile[
+        reconcile.index('if [[ -z "$prior_instances$prior_restored') :
+        reconcile.index('if [[ -n "$prior_instances" ]]')
+    ]
+    assert "if (( cleanup_only == 0 )); then" in empty_gate
+    assert empty_gate.index("if (( cleanup_only == 0 )); then") < empty_gate.index("return 0")
+    assert "redacted_inventory=true" in empty_gate
+    redacted_start = reconcile.index("redacted_inventory=true")
+    repeated_proof = reconcile.index("prove_repeated_exact_stamp_inventory_no_active", redacted_start)
+    typed_proof = reconcile.index("record_authoritative_type_proof instance", repeated_proof)
+    success = reconcile.index("prior_cleanup_status RECONCILED_PROVEN_ABSENT", typed_proof)
+    assert redacted_start < repeated_proof < typed_proof < success
 
 
 def test_uncertain_instance_manifest_is_read_only_for_cleanup_only_mode() -> None:
