@@ -785,6 +785,22 @@ def test_each_frame_must_independently_support_the_fused_deal():
     ]
 
 
+def test_rank_ink_uses_only_the_configured_glyph_crop():
+    _, np = bridgit_rank_layout._pixel_runtime()
+    profile = replace(
+        parse_profile(profile_raw()),
+        glyph_width=8,
+        glyph_height=8,
+        local_registration_px=0,
+    )
+    frame = np.full((profile.height, profile.width, 3), 255, dtype="uint8")
+    frame[11:25, 18:24] = 0
+    assert bridgit_rank_layout._rank_ink_fractions([frame], (10, 10), profile) == [0.0]
+
+    frame[11:17, 11:17] = 0
+    assert bridgit_rank_layout._rank_ink_fractions([frame], (10, 10), profile) == [1.0]
+
+
 def test_single_good_frame_is_pending_not_weak_evidence():
     assert bridgit_rank_layout._temporal_support_gates(
         observed_frames=1,

@@ -1087,15 +1087,30 @@ def _rank_ink_fractions(
     cv2, _ = _pixel_runtime()
     x, y = xy
     radius = profile.local_registration_px
+    glyph_width = profile.glyph_width
+    glyph_height = profile.glyph_height
+    x_margin = max(1, round(glyph_width / 8))
+    y_margin = max(1, round(glyph_height / 16))
     per_frame = []
     for frame in frames:
         candidates = []
         for dx in range(-radius, radius + 1):
-            x0 = max(0, min(profile.width - 16, x + dx))
-            y0 = max(0, min(profile.height - 16, y))
-            gray = cv2.cvtColor(frame[y0 : y0 + 16, x0 : x0 + 16], cv2.COLOR_BGR2GRAY)
+            x0 = max(0, min(profile.width - glyph_width, x + dx))
+            y0 = max(0, min(profile.height - glyph_height, y))
+            gray = cv2.cvtColor(
+                frame[y0 : y0 + glyph_height, x0 : x0 + glyph_width],
+                cv2.COLOR_BGR2GRAY,
+            )
             candidates.append(
-                float((gray[1:15, 2:14] < profile.binary_threshold).mean())
+                float(
+                    (
+                        gray[
+                            y_margin : glyph_height - y_margin,
+                            x_margin : glyph_width - x_margin,
+                        ]
+                        < profile.binary_threshold
+                    ).mean()
+                )
             )
         per_frame.append(max(candidates))
     return per_frame
