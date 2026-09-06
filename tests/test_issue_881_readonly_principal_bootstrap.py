@@ -108,7 +108,7 @@ def test_regression_preexisting_identity_objects_are_rejected() -> None:
     assert "Never inherit additive permissions from a reused user or group" in TEXT
     assert "KEY_STATE" not in TEXT
     assert "MEMBER_COUNT" not in TEXT
-    assert "matches = [x for x in rows if x.get('name') == sys.argv[2] and" not in TEXT
+    assert "marker in x.get('description', '')" in TEXT
     assert 'NAME_STAMP="issue-881-paid-preflight-readonly-${GITHUB_RUN_ID}"' in TEXT
 
 
@@ -146,6 +146,21 @@ def test_regression_ambiguous_creates_are_reconciled_inside_global_deadline() ->
         assert TEXT.index(marker, TEXT.index("exit 24")) < TEXT.index(command, TEXT.index("exit 24"))
         marker_index = TEXT.index(marker, TEXT.index("exit 24"))
         assert TEXT.rfind("require_mutation_budget", TEXT.index("exit 24"), marker_index) >= 0
-    assert "Recover only this run's exact stamped IDs before rollback" in TEXT
+    assert "an exact public name alone never authorizes deletion" in TEXT
+    assert 'OWNERSHIP_TOKEN="$(openssl rand -hex 32)"' in TEXT
+    assert TEXT.count('ownership:$OWNERSHIP_TOKEN') == 3
+    assert TEXT.count('select_owned_exact "$RUNNER_TEMP/rollback-') == 3
     assert "Three repeated exact-stamp inventories are authoritative" in TEXT
     assert 'for pass in 1 2 3; do' in TEXT
+
+
+def test_regression_receipt_failure_remains_inside_rollback_transaction() -> None:
+    bootstrap = TEXT.index("Create dedicated read-only OCI principal")
+    trap = TEXT.index("trap cleanup EXIT", bootstrap)
+    success_receipt = TEXT.index("status: `READY_FOR_SECRET_INSTALL`", trap)
+    publish = TEXT.index('gh issue comment 881', success_receipt)
+    assert trap < success_receipt < publish
+    assert "any failure here" in TEXT
+    assert "the OCI rollback trap and credentials are live" in TEXT
+    assert "steps.bootstrap.outcome != 'success'" in TEXT
+    assert "status: `BOOTSTRAP_ERROR`" in TEXT
