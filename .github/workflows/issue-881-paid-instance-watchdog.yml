@@ -197,10 +197,12 @@ jobs:
           observed=hmac.new(os.environ['OCI_KEY'].encode(),('source-instance|'+os.environ['SOURCE_ID']).encode(),hashlib.sha256).hexdigest()
           assert hmac.compare_digest(observed,os.environ['SOURCE_INSTANCE_HMAC'])
           PY
+            [[ $? == 0 ]] || return 103
             while (( SECONDS < source_restore_deadline )); do
               source_get="$RUNNER_TEMP/source-get.json"
               oci_retry_json "$source_get" "$source_restore_deadline" oci compute instance get --instance-id "$source_id" || continue
-              readarray -t source_state < <(EXPECTED_ID="$source_id" EXPECTED_AD="$EXPECTED_AD" TENANCY_ID="$tenancy_id" python - "$source_get" <<'PY'
+              source_state_file="$RUNNER_TEMP/source-state"
+              if ! EXPECTED_ID="$source_id" EXPECTED_AD="$EXPECTED_AD" TENANCY_ID="$tenancy_id" python - "$source_get" >"$source_state_file" <<'PY'
           import json,os,sys
           d=json.load(open(sys.argv[1])).get('data'); assert isinstance(d,dict)
           assert d.get('id')==os.environ['EXPECTED_ID'] and d.get('display-name')=='bridge-school-dds3-frankfurt'
@@ -211,7 +213,9 @@ jobs:
           assert isinstance(m,(int,float)) and float(m).is_integer()
           print(d.get('lifecycle-state')); print(int(o)); print(int(m))
           PY
-              )
+              then return 104; fi
+              mapfile -t source_state <"$source_state_file"
+              (( ${#source_state[@]} == 3 )) || return 104
               lifecycle="${source_state[0]}"; ocpus="${source_state[1]}"; memory="${source_state[2]}"
               if [[ "$ocpus/$memory" != "$SOURCE_ORIGINAL_OCPUS/$SOURCE_ORIGINAL_MEMORY" && "$ocpus/$memory" != "$SOURCE_LEASE_OCPUS/$SOURCE_LEASE_MEMORY" ]]; then
                 return 103

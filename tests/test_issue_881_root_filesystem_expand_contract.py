@@ -2248,6 +2248,18 @@ def test_watchdog_releases_fence_even_when_capacity_restore_fails() -> None:
     assert volume_cleanup < deferred_failure < watchdog.index("exit 105", deferred_failure)
 
 
+def test_watchdog_propagates_source_identity_and_parser_failures() -> None:
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    restore = watchdog[watchdog.index("restore_source_capacity() {") : watchdog.index("release_source_workload_fence() {")]
+    hmac_check = restore.index("assert hmac.compare_digest")
+    assert restore.index("[[ $? == 0 ]] || return 103", hmac_check) > hmac_check
+    parser = restore.index('if ! EXPECTED_ID="$source_id"')
+    mapfile = restore.index('mapfile -t source_state <"$source_state_file"', parser)
+    cardinality = restore.index('(( ${#source_state[@]} == 3 )) || return 104', mapfile)
+    indexing = restore.index('lifecycle="${source_state[0]}"', cardinality)
+    assert parser < mapfile < cardinality < indexing
+
+
 def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> None:
     watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
     start = watchdog.index("CAPACITY_FENCE_HELD")
