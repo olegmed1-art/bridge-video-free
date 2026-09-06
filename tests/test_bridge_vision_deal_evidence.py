@@ -152,6 +152,16 @@ def test_one_visual_region_cannot_be_relabelled_as_different_cards():
         build_deal_evidence_report([first, second], recognizer_version=VERSION)
 
 
+def test_overlapping_visual_regions_cannot_support_different_cards():
+    first = observation("N", "AH", index=0)
+    second = observation("E", "KH", index=1)
+    second["region"] = dict(first["region"])
+    second["region"]["x"] += 0.0001
+
+    with pytest.raises(DealEvidenceError, match="overlaps a different target"):
+        build_deal_evidence_report([first, second], recognizer_version=VERSION)
+
+
 def test_per_card_support_cannot_form_a_hybrid_temporal_deal():
     frames = ("a" * 64, "b" * 64, "c" * 64)
     visual = []

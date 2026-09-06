@@ -147,6 +147,16 @@ def _contains(region: Mapping[str, Any], point: Mapping[str, Any]) -> bool:
     ) and float(region["y"]) <= y <= float(region["y"]) + float(region["height"])
 
 
+def _regions_overlap(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool:
+    return min(
+        float(first["x"]) + float(first["width"]),
+        float(second["x"]) + float(second["width"]),
+    ) > max(float(first["x"]), float(second["x"])) and min(
+        float(first["y"]) + float(first["height"]),
+        float(second["y"]) + float(second["height"]),
+    ) > max(float(first["y"]), float(second["y"]))
+
+
 def _unknown_record(seat: str, slot: int, recognizer_version: str) -> dict[str, Any]:
     return {
         "seat": seat,
@@ -283,7 +293,9 @@ def build_deal_evidence_report(
     )
     timestamp_by_frame: dict[str, int] = {}
     frame_by_timestamp: dict[int, str] = {}
-    target_by_frame_region: dict[tuple[Any, ...], tuple[str, str]] = {}
+    regions_by_frame: dict[str, list[tuple[Mapping[str, Any], tuple[str, str]]]] = (
+        defaultdict(list)
+    )
     for item in observations:
         frame = item["frame_sha256"]
         timestamp = item["timestamp_ms"]
@@ -294,21 +306,15 @@ def build_deal_evidence_report(
         timestamp_by_frame[frame] = timestamp
         frame_by_timestamp[timestamp] = frame
         region = item["region"]
-        region_key = (
-            frame,
-            region["coordinate_space"],
-            region["x"],
-            region["y"],
-            region["width"],
-            region["height"],
-        )
         target = (item["card"], item["seat"])
-        if (
-            region_key in target_by_frame_region
-            and target_by_frame_region[region_key] != target
+        if any(
+            prior_target != target and _regions_overlap(prior_region, region)
+            for prior_region, prior_target in regions_by_frame[frame]
         ):
-            raise DealEvidenceError("visual region reused for different targets")
-        target_by_frame_region[region_key] = target
+            raise DealEvidenceError(
+                "visual region reused or overlaps a different target"
+            )
+        regions_by_frame[frame].append((region, target))
 
     conflicts: list[dict[str, Any]] = []
     review_reasons: list[str] = []
