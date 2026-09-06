@@ -2283,11 +2283,11 @@ def test_watchdog_propagates_source_identity_and_parser_failures() -> None:
     assert softstop > conditional_end
 
 
-def test_capacity_fence_uses_runtime_mask_for_installed_unit() -> None:
+def test_capacity_fence_disables_installed_unit_across_reboot() -> None:
     acquire = WORKFLOW[WORKFLOW.index("acquire_source_workload_fence() {") : WORKFLOW.index("release_source_workload_fence() {")]
-    assert "systemctl mask --runtime --now universal-video-container.service" in acquire
-    assert '== masked-runtime' in acquire
-    assert "systemctl mask --now universal-video-container.service" not in acquire
+    assert "systemctl disable --now universal-video-container.service" in acquire
+    assert '== disabled' in acquire
+    assert "systemctl mask" not in acquire
 
 
 def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> None:

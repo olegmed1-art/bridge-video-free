@@ -1244,13 +1244,13 @@ jobs:
           [[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]
           install -o root -g root -m 0600 /dev/null "$marker"
           printf '%s\n' "$LEASE_STAMP" >"$marker"
-          systemctl mask --runtime --now universal-video-container.service
-          [[ "$(systemctl is-enabled universal-video-container.service)" == masked-runtime ]]
+          systemctl disable --now universal-video-container.service
+          [[ "$(systemctl is-enabled universal-video-container.service)" == disabled ]]
           [[ "$(systemctl is-active universal-video-container.service 2>/dev/null || true)" != active ]]
           ! find "$base/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .
           echo UV_ROOT_CAPACITY_WORKLOAD_FENCE_PASS
           REMOTE
-            state_set capacity_workload_fence HELD_SERVICE_MASKED
+            state_set capacity_workload_fence HELD_SERVICE_DISABLED
           }
           release_source_workload_fence() {
             (( source_fence_active == 1 )) || return 0
