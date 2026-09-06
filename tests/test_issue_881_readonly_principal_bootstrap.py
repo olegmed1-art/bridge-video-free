@@ -75,7 +75,7 @@ def test_boundary_policy_is_read_only_and_exact() -> None:
 
 
 def test_regression_mutation_credentials_are_scoped_after_owner_gate() -> None:
-    bootstrap = TEXT.index("Reconcile dedicated read-only OCI principal")
+    bootstrap = TEXT.index("Create dedicated read-only OCI principal")
     exact_gate = TEXT.index("Validate exact owner request before credentials")
     install = TEXT.index("Install pinned OCI CLI without credentials")
     first_secret = TEXT.index("${{ secrets.OCI_CLI_USER }}")
@@ -87,8 +87,17 @@ def test_regression_mutation_credentials_are_scoped_after_owner_gate() -> None:
 
 def test_regression_sensitive_metadata_is_only_published_encrypted() -> None:
     assert "openssl pkeyutl -encrypt" in TEXT
+    assert "CIPHERTEXT=v1" in TEXT
+    assert '(( ${#value} > 0 && ${#value} <= 190 ))' in TEXT
     assert "encrypted credential metadata" in TEXT
     assert "echo \"ciphertext=$CIPHERTEXT\"" in TEXT
     assert "echo \"user=$USER_ID\"" not in TEXT
     assert "echo \"tenancy=$TENANCY_ID\"" not in TEXT
     assert "echo \"fingerprint=$EXPECTED_FINGERPRINT\"" not in TEXT
+
+
+def test_regression_preexisting_identity_objects_are_rejected() -> None:
+    assert '[[ -z "$EXISTING_USER_ID" && -z "$EXISTING_GROUP_ID" && -z "$EXISTING_POLICY_ID" ]] || exit 24' in TEXT
+    assert "Never inherit additive permissions from a reused user or group" in TEXT
+    assert "KEY_STATE" not in TEXT
+    assert "MEMBER_COUNT" not in TEXT
