@@ -137,6 +137,62 @@ jobs:
           chmod 0600 "$HOME/.oci/config"
           export OCI_CLI_REGION="$OCI_REGION"
 
+          restore_source_capacity() {
+            local source_list="$RUNNER_TEMP/source-instances.json" source_id_file="$RUNNER_TEMP/source-instance-id"
+            local source_id source_restore_deadline source_restored=0 source_get lifecycle ocpus memory
+            local -a source_state
+            timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --display-name bridge-school-dds3-frankfurt --all --output json >"$source_list" 2>/dev/null
+            EXPECTED_AD="$EXPECTED_AD" TENANCY_ID="$tenancy_id" python - "$source_list" >"$source_id_file" <<'PY'
+          import json,os,sys
+          data=json.load(open(sys.argv[1])).get('data')
+          assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
+          matched=[x for x in data if x.get('display-name')=='bridge-school-dds3-frankfurt' and x.get('lifecycle-state') not in {'TERMINATED','TERMINATING'}]
+          assert len(matched)==1
+          d=matched[0]
+          assert d.get('compartment-id')==os.environ['TENANCY_ID'] and d.get('availability-domain')==os.environ['EXPECTED_AD']
+          assert d.get('shape')=='VM.Standard.E5.Flex' and isinstance(d.get('id'),str) and d['id']
+          print(d['id'])
+          PY
+            source_id="$(<"$source_id_file")"
+            source_restore_deadline=$((SECONDS + 900))
+            while (( SECONDS < source_restore_deadline )); do
+              source_get="$RUNNER_TEMP/source-get.json"
+              timeout --signal=KILL 30s oci compute instance get --instance-id "$source_id" --output json >"$source_get" 2>/dev/null
+              readarray -t source_state < <(EXPECTED_ID="$source_id" EXPECTED_AD="$EXPECTED_AD" TENANCY_ID="$tenancy_id" python - "$source_get" <<'PY'
+          import json,os,sys
+          d=json.load(open(sys.argv[1])).get('data'); assert isinstance(d,dict)
+          assert d.get('id')==os.environ['EXPECTED_ID'] and d.get('display-name')=='bridge-school-dds3-frankfurt'
+          assert d.get('compartment-id')==os.environ['TENANCY_ID'] and d.get('availability-domain')==os.environ['EXPECTED_AD']
+          assert d.get('shape')=='VM.Standard.E5.Flex'
+          c=d.get('shape-config') or {}; o=c.get('ocpus'); m=c.get('memory-in-gbs')
+          assert isinstance(o,(int,float)) and float(o).is_integer()
+          assert isinstance(m,(int,float)) and float(m).is_integer()
+          print(d.get('lifecycle-state')); print(int(o)); print(int(m))
+          PY
+              )
+              lifecycle="${source_state[0]}"; ocpus="${source_state[1]}"; memory="${source_state[2]}"
+              if [[ "$ocpus/$memory" != "$SOURCE_ORIGINAL_OCPUS/$SOURCE_ORIGINAL_MEMORY" && "$ocpus/$memory" != "$SOURCE_LEASE_OCPUS/$SOURCE_LEASE_MEMORY" ]]; then
+                return 103
+              fi
+              if [[ "$lifecycle" == RUNNING && "$ocpus/$memory" == "$SOURCE_ORIGINAL_OCPUS/$SOURCE_ORIGINAL_MEMORY" ]]; then
+                source_restored=1
+                break
+              fi
+              if [[ "$lifecycle" == RUNNING ]]; then
+                timeout --signal=KILL 30s oci compute instance action --instance-id "$source_id" --action SOFTSTOP --output json >/dev/null 2>/dev/null
+              elif [[ "$lifecycle" == STOPPED ]]; then
+                if [[ "$ocpus/$memory" == "$SOURCE_LEASE_OCPUS/$SOURCE_LEASE_MEMORY" ]]; then
+                  timeout --signal=KILL 30s oci compute instance update --instance-id "$source_id" --shape-config "{\"ocpus\":${SOURCE_ORIGINAL_OCPUS},\"memoryInGBs\":${SOURCE_ORIGINAL_MEMORY}}" --force --output json >/dev/null 2>/dev/null
+                fi
+                timeout --signal=KILL 30s oci compute instance action --instance-id "$source_id" --action START --output json >/dev/null 2>/dev/null
+              elif [[ "$lifecycle" != STARTING && "$lifecycle" != STOPPING ]]; then
+                return 104
+              fi
+              sleep 5
+            done
+            (( source_restored == 1 )) || return 105
+          }
+
           roots="$RUNNER_TEMP/roots.json"
           instances="$RUNNER_TEMP/instances.json"
           timeout --signal=KILL 30s oci iam compartment list --include-root --all --output json >"$roots" 2>/dev/null
@@ -283,6 +339,10 @@ jobs:
               (( instance_inventory_clean == 1 )) || exit 99
             fi
           fi
+
+          # Once compute quota is proven free, restore production before any
+          # storage/network cleanup that could fail independently.
+          restore_source_capacity
 
           # The primary runner normally removes the restored boot volume. If
           # that runner disappeared, the independent watchdog owns the same
