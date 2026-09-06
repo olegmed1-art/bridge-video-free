@@ -2178,6 +2178,7 @@ def test_capacity_resize_waits_through_compute_transitions_with_supplied_deadlin
     ]
     assert 'absolute_deadline="${7:-$primary_deadline}"' in helper
     assert 'bounded_wait_seconds "$max_seconds" "$absolute_deadline"' in helper
+    assert 'OCI_JSON_ABSOLUTE_DEADLINE="$absolute_deadline" OCI_JSON_MAX_ATTEMPTS=1' in helper
     terminal = helper[helper.index('if [[ "$state" == TERMINATING') : helper.index("return 44", helper.index('if [[ "$state" == TERMINATING'))]
     assert "STOPPING" not in terminal
     assert "STOPPED" not in terminal
