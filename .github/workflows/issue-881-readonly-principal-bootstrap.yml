@@ -1,0 +1,272 @@
+name: Issue 881 read-only principal bootstrap
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/issue-881-readonly-principal-bootstrap.yml'
+      - 'tests/test_issue_881_readonly_principal_bootstrap.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-881-readonly-principal-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Enforce bounded IAM bootstrap contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/issue-881-readonly-principal-bootstrap.yml
+          python - <<'PY'
+          import runpy
+          namespace = runpy.run_path('tests/test_issue_881_readonly_principal_bootstrap.py')
+          for name, value in namespace.items():
+              if name.startswith('test_') and callable(value):
+                  value()
+          PY
+
+  bootstrap:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 881 &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      github.event.comment.body == '/oracle-ops issue-881-bootstrap-readonly-principal'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      OWNER_COMMAND: ${{ github.event.comment.body }}
+      EXACT_COMMAND: /oracle-ops issue-881-bootstrap-readonly-principal
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Validate exact owner request before credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$OWNER_COMMAND" == "$EXACT_COMMAND" ]] || exit 23
+
+      - name: Install pinned OCI CLI without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
+
+      - name: Reconcile dedicated read-only OCI principal
+        id: bootstrap
+        env:
+          OCI_USER_RAW: ${{ secrets.OCI_CLI_USER }}
+          OCI_TENANCY_RAW: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_FINGERPRINT_RAW: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_KEY_RAW: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_REGION_RAW: ${{ secrets.OCI_CLI_REGION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in OCI_USER_RAW OCI_TENANCY_RAW OCI_FINGERPRINT_RAW OCI_KEY_RAW OCI_REGION_RAW; do
+            [[ -n "${!value:-}" ]] || exit 21
+          done
+          install -d -m 0700 "$HOME/.oci"
+          trap 'rm -f "$HOME/.oci/config" "$HOME/.oci/key.pem" "$RUNNER_TEMP/readonly-public.pem" "$RUNNER_TEMP/metadata.json" "$RUNNER_TEMP/metadata.bin"' EXIT
+          printf '%s' "$OCI_KEY_RAW" | python -c 'import sys; raw=sys.stdin.read().replace("\\r","").replace("\\n","\n"); open(sys.argv[1],"w").write(raw if raw.endswith("\n") else raw+"\n")' "$HOME/.oci/key.pem"
+          chmod 0600 "$HOME/.oci/key.pem"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          def scalar(env, key):
+              lines = [x.strip() for x in os.environ[env].replace('\r', '').splitlines() if x.strip()]
+              matches = [x.split('=', 1)[1].strip() for x in lines if x.startswith(key + '=')]
+              if len(matches) == 1 and matches[0]:
+                  return matches[0]
+              if not matches and len(lines) == 1 and '=' not in lines[0]:
+                  return lines[0]
+              raise SystemExit(f'ambiguous {env}')
+
+          values = {
+              'user': scalar('OCI_USER_RAW', 'user'),
+              'fingerprint': scalar('OCI_FINGERPRINT_RAW', 'fingerprint'),
+              'tenancy': scalar('OCI_TENANCY_RAW', 'tenancy'),
+              'region': scalar('OCI_REGION_RAW', 'region'),
+          }
+          if values['region'] != 'eu-frankfurt-1':
+              raise SystemExit('unexpected region')
+          target = Path.home() / '.oci' / 'config'
+          target.write_text(
+              '[DEFAULT]\n'
+              + ''.join(f'{key}={value}\n' for key, value in values.items())
+              + f"key_file={Path.home() / '.oci' / 'key.pem'}\n",
+              encoding='utf-8',
+          )
+          PY
+          chmod 0600 "$HOME/.oci/config"
+          export OCI_CLI_REGION=eu-frankfurt-1
+          timeout --signal=KILL 30s oci iam region list --output json >/dev/null
+
+          cat > "$RUNNER_TEMP/readonly-public.pem" <<'PUBLIC_KEY'
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAldxBA0+SxBKYXV/aGzlN
+          6wfURQhw9DNqMEQvqK/r90an6Lui9MFlH9oxPir0LvRXm/Wa/bikd9daygiuUhfD
+          /h6YH7avD9mtap00I4aX4fSJkEmQiXyvdyda0+owk1TwCLNzVoDbM2E1Nzj72Hus
+          KzL05j5hkZp7lyL/ouHPoz7SgZQIU13BwNq8ONavrMu2seyd0t9lL57rCZm/XpKY
+          bSieCQBG9ipkozoN4qhhv+DS9vXH7XPEF6NzNcpF/xu4vGTIHZOFZZbHb82+cjRs
+          UXJ8ARImbcwRNUKWL1SdJ8Q/9Hv0MYU0J0DvD/Bz9AAu0tvzTyHER3WPOaWF7OuH
+          5wIDAQAB
+          -----END PUBLIC KEY-----
+          PUBLIC_KEY
+          USER_NAME=issue-881-paid-preflight-readonly-v1
+          GROUP_NAME=issue-881-paid-preflight-readonly-v1
+          POLICY_NAME=issue-881-paid-preflight-readonly-v1
+          TENANCY_ID="$(python - <<'PY'
+          import os
+          lines = [x.strip() for x in os.environ['OCI_TENANCY_RAW'].replace('\r', '').splitlines() if x.strip()]
+          matches = [x.split('=', 1)[1].strip() for x in lines if x.startswith('tenancy=')]
+          print(matches[0] if len(matches) == 1 else lines[0])
+          PY
+          )"
+          [[ "$TENANCY_ID" == ocid1.tenancy.* ]] || exit 22
+
+          request_json() {
+            local output="$1"
+            shift
+            timeout --signal=KILL 30s "$@" --output json > "$output"
+            python -c 'import json,sys; value=json.load(open(sys.argv[1])); assert isinstance(value,dict)' "$output"
+          }
+          select_exact() {
+            python - "$1" "$2" <<'PY'
+          import json, sys
+          rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          assert isinstance(rows, list) and all(isinstance(x, dict) for x in rows)
+          matches = [x for x in rows if x.get('name') == sys.argv[2] and x.get('lifecycle-state') != 'DELETED']
+          assert len(matches) <= 1
+          if matches:
+              value = matches[0].get('id')
+              assert isinstance(value, str) and value.startswith('ocid1.')
+              print(value)
+          PY
+          }
+
+          request_json "$RUNNER_TEMP/users.json" oci iam user list --compartment-id "$TENANCY_ID" --all
+          USER_ID="$(select_exact "$RUNNER_TEMP/users.json" "$USER_NAME")"
+          if [[ -z "$USER_ID" ]]; then
+            request_json "$RUNNER_TEMP/user-create.json" oci iam user create --compartment-id "$TENANCY_ID" --name "$USER_NAME" --description 'Issue 881 paid preflight read-only audit principal'
+            USER_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.user."); print(x)' "$RUNNER_TEMP/user-create.json")"
+          fi
+
+          request_json "$RUNNER_TEMP/groups.json" oci iam group list --compartment-id "$TENANCY_ID" --all
+          GROUP_ID="$(select_exact "$RUNNER_TEMP/groups.json" "$GROUP_NAME")"
+          if [[ -z "$GROUP_ID" ]]; then
+            request_json "$RUNNER_TEMP/group-create.json" oci iam group create --compartment-id "$TENANCY_ID" --name "$GROUP_NAME" --description 'Issue 881 paid preflight read-only audit group'
+            GROUP_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.group."); print(x)' "$RUNNER_TEMP/group-create.json")"
+          fi
+
+          request_json "$RUNNER_TEMP/members.json" oci iam group list-users --group-id "$GROUP_ID" --all
+          MEMBER_COUNT="$(python - "$RUNNER_TEMP/members.json" "$USER_ID" <<'PY'
+          import json, sys
+          rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          assert isinstance(rows, list)
+          print(sum(x.get('id') == sys.argv[2] for x in rows if isinstance(x, dict)))
+          PY
+          )"
+          [[ "$MEMBER_COUNT" == 0 || "$MEMBER_COUNT" == 1 ]]
+          if [[ "$MEMBER_COUNT" == 0 ]]; then
+            request_json "$RUNNER_TEMP/member-create.json" oci iam group add-user --group-id "$GROUP_ID" --user-id "$USER_ID"
+          fi
+
+          python - "$GROUP_NAME" <<'PY' > "$RUNNER_TEMP/statements.json"
+          import json, sys
+          group = sys.argv[1]
+          print(json.dumps([
+              f'Allow group {group} to inspect compartments in tenancy',
+              f'Allow group {group} to inspect instance-family in tenancy',
+              f'Allow group {group} to read limits in tenancy',
+          ]))
+          PY
+          request_json "$RUNNER_TEMP/policies.json" oci iam policy list --compartment-id "$TENANCY_ID" --all
+          POLICY_ID="$(select_exact "$RUNNER_TEMP/policies.json" "$POLICY_NAME")"
+          if [[ -z "$POLICY_ID" ]]; then
+            request_json "$RUNNER_TEMP/policy-create.json" oci iam policy create --compartment-id "$TENANCY_ID" --name "$POLICY_NAME" --description 'Least-privilege reads for Issue 881 paid preflight' --statements "file://$RUNNER_TEMP/statements.json"
+            POLICY_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.policy."); print(x)' "$RUNNER_TEMP/policy-create.json")"
+          else
+            python - "$RUNNER_TEMP/policies.json" "$POLICY_NAME" "$RUNNER_TEMP/statements.json" <<'PY'
+          import json, sys
+          rows = json.load(open(sys.argv[1], encoding='utf-8'))['data']
+          matches = [x for x in rows if x.get('name') == sys.argv[2] and x.get('lifecycle-state') != 'DELETED']
+          assert len(matches) == 1
+          expected = json.load(open(sys.argv[3], encoding='utf-8'))
+          assert sorted(matches[0].get('statements') or []) == sorted(expected)
+          PY
+          fi
+
+          EXPECTED_FINGERPRINT="$(openssl rsa -pubin -in "$RUNNER_TEMP/readonly-public.pem" -outform DER 2>/dev/null | openssl md5 -c | awk '{print $2}')"
+          request_json "$RUNNER_TEMP/api-keys.json" oci iam user api-key list --user-id "$USER_ID" --all
+          KEY_STATE="$(python - "$RUNNER_TEMP/api-keys.json" "$EXPECTED_FINGERPRINT" <<'PY'
+          import json, sys
+          rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          assert isinstance(rows, list) and all(isinstance(x, dict) for x in rows)
+          matches = [x for x in rows if x.get('fingerprint') == sys.argv[2] and x.get('lifecycle-state') != 'DELETED']
+          others = [x for x in rows if x.get('fingerprint') != sys.argv[2] and x.get('lifecycle-state') != 'DELETED']
+          assert not others and len(matches) <= 1
+          print('present' if matches else 'absent')
+          PY
+          )"
+          if [[ "$KEY_STATE" == absent ]]; then
+            request_json "$RUNNER_TEMP/key-upload.json" oci iam user api-key upload --user-id "$USER_ID" --key-file "$RUNNER_TEMP/readonly-public.pem"
+            ACTUAL_FINGERPRINT="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["fingerprint"])' "$RUNNER_TEMP/key-upload.json")"
+            [[ "$ACTUAL_FINGERPRINT" == "$EXPECTED_FINGERPRINT" ]]
+          fi
+
+          python - "$USER_ID" "$TENANCY_ID" "$EXPECTED_FINGERPRINT" <<'PY' > "$RUNNER_TEMP/metadata.json"
+          import json, sys
+          print(json.dumps({'user': sys.argv[1], 'tenancy': sys.argv[2], 'fingerprint': sys.argv[3], 'region': 'eu-frankfurt-1'}, separators=(',', ':')))
+          PY
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/readonly-public.pem" -in "$RUNNER_TEMP/metadata.json" -out "$RUNNER_TEMP/metadata.bin" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256
+          CIPHERTEXT="$(base64 -w0 "$RUNNER_TEMP/metadata.bin")"
+          [[ -n "$CIPHERTEXT" ]]
+          echo "ciphertext=$CIPHERTEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Publish encrypted bootstrap receipt
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          CIPHERTEXT: ${{ steps.bootstrap.outputs.ciphertext }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$JOB_STATUS" == success && -n "$CIPHERTEXT" ]]; then
+            STATUS=READY_FOR_SECRET_INSTALL
+          else
+            STATUS=BOOTSTRAP_ERROR
+            CIPHERTEXT=none
+          fi
+          {
+            echo '## Issue #881 read-only OCI principal bootstrap'
+            echo
+            echo "- status: \`$STATUS\`"
+            echo '- IAM scope: `inspect compartments`, `inspect instance-family`, `read limits` only'
+            echo '- compute/storage/network create, update, delete or launch: `absent`'
+            echo '- monetary charge: `none`'
+            echo "- encrypted credential metadata: \`$CIPHERTEXT\`"
+            echo "- run: $RUN_URL"
+          } > "$RUNNER_TEMP/body.md"
+          gh issue comment 881 --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
+
