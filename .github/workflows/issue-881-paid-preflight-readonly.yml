@@ -74,11 +74,11 @@ jobs:
       - name: Configure OCI CLI and collect live paid preflight inputs without mutation
         id: preflight
         env:
-          OCI_USER: ${{ secrets.OCI_CLI_USER }}
-          OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-          OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-          OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-          OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+          OCI_USER: ${{ secrets.OCI_READONLY_CLI_USER }}
+          OCI_TENANCY: ${{ secrets.OCI_READONLY_CLI_TENANCY }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_READONLY_CLI_FINGERPRINT }}
+          OCI_KEY: ${{ secrets.OCI_READONLY_CLI_KEY_CONTENT }}
+          OCI_REGION: ${{ secrets.OCI_READONLY_CLI_REGION }}
         shell: bash
         run: |
           set -euo pipefail
@@ -245,7 +245,8 @@ jobs:
             echo
             echo "- workflow outcome: \`${JOB_STATUS}\`"
             echo '- OCI surface: read-only `list/get` only'
-            echo '- OCI resource creation, update, deletion, launch, termination, attachment and host mutation: `impossible_in_this_workflow`'
+            echo '- OCI principal: dedicated read-only credentials required'
+            echo '- OCI resource creation, update, deletion, launch, termination, attachment and host mutation commands: `absent`'
             echo '- monetary charge created by this audit: `none`'
             echo "- run: $RUN_URL"
           } > "$RUNNER_TEMP/body.md"
