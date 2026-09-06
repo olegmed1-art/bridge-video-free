@@ -677,7 +677,7 @@ def test_failed_drill_deletes_only_its_new_unaccepted_backup() -> None:
     assert '[[ -n "$backup_id" ]] && backup_created_by_run=1' in block
     assert '[[ -n "$backup_id" ]] || backup_id="$(discover_named_id backup "$backup_name")"' in block
     cleanup = block[
-        block.index("cleanup() {") : block.index("\n          reconcile_prior_attempt_resources\n")
+        block.index("cleanup() {") : block.index("\n          if reconcile_prior_attempt_resources; then\n")
     ]
     assert "backup_created_by_run == 1 && backup_accepted == 0" in cleanup
     assert '[[ -z "$backup_id" && "$backup_attempted" == 1 ]]' in cleanup
@@ -1988,6 +1988,29 @@ def test_cleanup_masks_all_exact_ids_before_public_cleanup_logs() -> None:
     assert reconcile.index('mask_resource_ids') < reconcile.index('reconcile_bound_resource instance boot-acceptance')
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "prior_uncertain_instance_proof" in receipt
+
+
+def test_empty_prior_inventory_masking_is_successful_and_reconciliation_is_diagnostic() -> None:
+    mask_start = WORKFLOW.index("mask_resource_ids()")
+    mask_end = WORKFLOW.index("merge_resource_ids()", mask_start)
+    mask_helper = textwrap.dedent(WORKFLOW[mask_start:mask_end])
+    empty = subprocess.run(
+        ["bash", "-e", "-c", mask_helper + "printf '%s\\n' '' '' '' '' '' '' '' | mask_resource_ids; echo PASS"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert empty.stdout.strip() == "PASS"
+
+    invocation = WORKFLOW[
+        WORKFLOW.index("if reconcile_prior_attempt_resources; then") :
+        WORKFLOW.index("if (( cleanup_only == 1 )); then", WORKFLOW.index("if reconcile_prior_attempt_resources; then"))
+    ]
+    assert 'state_set prior_cleanup_failure_rc "$reconcile_rc"' in invocation
+    assert 'state_set failure_phase "${phase:-reconcile_prior_attempts}"' in invocation
+    assert 'exit "$reconcile_rc"' in invocation
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "value('prior_cleanup_failure_rc', 'none')" in receipt
 
 
 def test_prior_direct_get_proof_is_bound_to_exact_resource_metadata() -> None:

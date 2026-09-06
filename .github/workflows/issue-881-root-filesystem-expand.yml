@@ -355,6 +355,7 @@ jobs:
           state_set failed_run_id "${failed_run_id:-none}"
           state_set failed_run_receipt_comment_id "${failed_run_receipt_comment_id:-none}"
           state_set prior_cleanup_status NOT_STARTED
+          state_set prior_cleanup_failure_rc none
           state_set current_cleanup_status NOT_STARTED
           state_set backup_selection_status NOT_STARTED
           state_set backup_selection_failure_rc none
@@ -1052,8 +1053,11 @@ jobs:
           mask_resource_ids() {
             local id
             while IFS= read -r id; do
-              [[ -n "$id" ]] && echo "::add-mask::$id"
+              if [[ -n "$id" ]]; then
+                echo "::add-mask::$id"
+              fi
             done
+            return 0
           }
           merge_resource_ids() {
             printf '%s\n' "$1" "$2" | sed '/^$/d' | sort -u
@@ -1292,7 +1296,16 @@ jobs:
             fi
             exit "$rc"
           }
-          reconcile_prior_attempt_resources
+          if reconcile_prior_attempt_resources; then
+            state_set prior_cleanup_failure_rc none
+          else
+            reconcile_rc=$?
+            state_set prior_cleanup_status FAILED
+            state_set prior_cleanup_failure_rc "$reconcile_rc"
+            state_set failure_rc "$reconcile_rc"
+            state_set failure_phase "${phase:-reconcile_prior_attempts}"
+            exit "$reconcile_rc"
+          fi
           if (( cleanup_only == 1 )); then
             mark_phase reconcile_failed_run_backup
             # Preserve every exact-name backup ID, including TERMINATED objects,
@@ -1945,7 +1958,7 @@ jobs:
               '- failure rc: ' + code(value('failure_rc', 'none')),
               '- monotonic primary/cleanup/mutation/receipt deadlines: ' + code('/'.join(deadline_values)),
               '- receipt started inside reserved deadline: ' + code(str(receipt_inside_deadline).lower()),
-              '- prior-run reconciliation: ' + code(value('prior_cleanup_status', 'NOT_RECORDED')),
+              '- prior-run reconciliation: ' + code(value('prior_cleanup_status', 'NOT_RECORDED')) + '; rc: ' + code(value('prior_cleanup_failure_rc', 'none')),
               '- prior-run inventory last request: resource=' + code(prior_inventory_resource) + '; status=' + code(value('prior_inventory_last_status', 'NOT_RECORDED')) + '; rc=' + code(value('prior_inventory_last_failure_rc', 'none')) + '; stderr=' + code(value(prior_inventory_key + '_stderr_class', 'NOT_RECORDED')) + '; stdout=' + code(value(prior_inventory_key + '_stdout_shape', 'NOT_RECORDED')) + '; stdout/stderr bytes=' + code(value(prior_inventory_key + '_stdout_bytes', 'unknown') + '/' + value(prior_inventory_key + '_stderr_bytes', 'unknown')),
               '- authoritative failed receipt: ' + code(value('authoritative_receipt_status', 'NOT_APPLICABLE')) + '; SHA-256: ' + code(redacted_presence('authoritative_receipt_sha256')),
               '- prior-run exact resource count: ' + code(value('prior_resource_count', 'unknown')),
