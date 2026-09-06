@@ -768,10 +768,11 @@ jobs:
           }
           wait_oci_resource_ready() {
             local resource="$1" id="$2" desired="$3" max_seconds="$4" receipt_prefix="$5" expected_name="$6"
+            local absolute_deadline="${7:-$primary_deadline}"
             local deadline remaining request_timeout sleep_seconds state rc
             local -r per_request_max_seconds=30
             local -a command
-            max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$absolute_deadline")" || return 42
             case "$resource" in
               boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
               vcn) command=(oci network vcn get --vcn-id "$id") ;;
@@ -815,8 +816,10 @@ jobs:
                   state_set "${receipt_prefix}_status" READY
                   return 0
                 fi
-                if [[ "$state" == TERMINATING || "$state" == TERMINATED || "$state" == FAULTY \
-                    || "$state" == STOPPING || "$state" == STOPPED ]]; then
+                # Instance STOPPING/STOPPED are normal asynchronous states
+                # both after SOFTSTOP and while a subsequent START becomes
+                # visible. Only lifecycle termination is terminal for compute.
+                if [[ "$state" == TERMINATING || "$state" == TERMINATED || "$state" == FAULTY ]]; then
                   state_set "${receipt_prefix}_status" "TERMINAL_${state}"
                   state_set "${receipt_prefix}_failure_rc" 44
                   return 44
@@ -1294,21 +1297,21 @@ jobs:
               return 0
             fi
             if [[ "$current_state" == STARTING ]]; then
-              wait_oci_resource_ready instance "$instance_id" RUNNING 600 "${label}_starting" bridge-school-dds3-frankfurt || return $?
+              wait_oci_resource_ready instance "$instance_id" RUNNING 600 "${label}_starting" bridge-school-dds3-frankfurt "$deadline" || return $?
               current_state=RUNNING
             elif [[ "$current_state" == STOPPING ]]; then
-              wait_oci_resource_ready instance "$instance_id" STOPPED 600 "${label}_stopping" bridge-school-dds3-frankfurt || return $?
+              wait_oci_resource_ready instance "$instance_id" STOPPED 600 "${label}_stopping" bridge-school-dds3-frankfurt "$deadline" || return $?
               current_state=STOPPED
             fi
             if [[ "$current_state" == RUNNING ]]; then
               OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance action --instance-id "$instance_id" --action SOFTSTOP || return $?
-              wait_oci_resource_ready instance "$instance_id" STOPPED 600 "${label}_stop" bridge-school-dds3-frankfurt || return $?
+              wait_oci_resource_ready instance "$instance_id" STOPPED 600 "${label}_stop" bridge-school-dds3-frankfurt "$deadline" || return $?
               current_state=STOPPED
             fi
             [[ "$current_state" == STOPPED ]] || return 93
             OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance update --instance-id "$instance_id" --shape-config "{\"ocpus\":${target_ocpus},\"memoryInGBs\":${target_memory}}" --force || return $?
             OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance action --instance-id "$instance_id" --action START || return $?
-            wait_oci_resource_ready instance "$instance_id" RUNNING 600 "${label}_start" bridge-school-dds3-frankfurt || return $?
+            wait_oci_resource_ready instance "$instance_id" RUNNING 600 "${label}_start" bridge-school-dds3-frankfurt "$deadline" || return $?
             OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance get --instance-id "$instance_id" || return $?
             INSTANCE="$OCI_JSON_OUTPUT" EXPECTED_ID="$instance_id" EXPECTED_OCPUS="$target_ocpus" EXPECTED_MEMORY="$target_memory" python - <<'PY'
           import json,os

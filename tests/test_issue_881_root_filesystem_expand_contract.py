@@ -2171,6 +2171,20 @@ def test_boundary_capacity_lease_is_exactly_one_ocpu_one_gib_and_45_minutes() ->
     assert "lease_restore_epoch <= now + 2700" in watchdog
 
 
+def test_capacity_resize_waits_through_compute_transitions_with_supplied_deadline() -> None:
+    helper = WORKFLOW[
+        WORKFLOW.index("wait_oci_resource_ready() {") :
+        WORKFLOW.index("wait_restored_boot_volume_hydrated()")
+    ]
+    assert 'absolute_deadline="${7:-$primary_deadline}"' in helper
+    assert 'bounded_wait_seconds "$max_seconds" "$absolute_deadline"' in helper
+    terminal = helper[helper.index('if [[ "$state" == TERMINATING') : helper.index("return 44", helper.index('if [[ "$state" == TERMINATING'))]
+    assert "STOPPING" not in terminal
+    assert "STOPPED" not in terminal
+    resize = WORKFLOW[WORKFLOW.index("set_source_capacity() {") : WORKFLOW.index("open_source_capacity_lease()")]
+    assert resize.count('bridge-school-dds3-frankfurt "$deadline"') == 4
+
+
 def test_watchdog_service_release_is_retryable_after_marker_removal() -> None:
     watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
     release = watchdog[
