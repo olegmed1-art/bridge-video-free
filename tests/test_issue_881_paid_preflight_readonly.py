@@ -59,6 +59,18 @@ def test_boundary_live_oci_surface_is_exactly_the_required_reads() -> None:
     assert "compute instance get" not in TEXT
 
 
+def test_regression_source_instance_is_found_across_active_compartments() -> None:
+    assert "--compartment-id-in-subtree true" in TEXT
+    assert "x.get('lifecycle-state') == 'ACTIVE'" in TEXT
+    assert "ocid1.compartment." in TEXT
+    assert 'for compartment in "${compartments[@]}"; do' in TEXT
+    assert '--compartment-id "$compartment" --display-name bridge-school-dds3-frankfurt' in TEXT
+    assert "combined['data'].extend(page['data'])" in TEXT
+    assert "assert len(matches) == 1" in TEXT
+    assert '[[ "$compartment_id" == "$tenancy_id" ]]' not in TEXT
+    assert 'grep -Fxq -- "$compartment_id"' in TEXT
+
+
 def test_regression_rejected_guard_result_is_published_without_launching() -> None:
     assert "[[ \"$guard_rc\" == 0 || \"$guard_rc\" == 2 ]]" in TEXT
     assert "reason=LIVE_INPUT_COLLECTION_FAILED" in TEXT
