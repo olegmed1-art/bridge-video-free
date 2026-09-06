@@ -380,6 +380,25 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
     claimed = receipt.pop("receipt_sha256")
     assert claimed == canonical_hash(receipt)
 
+    class FakeCv2Error(Exception):
+        pass
+
+    class FakeCv2:
+        error = FakeCv2Error
+
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_pixel_runtime",
+        lambda: (FakeCv2(), object()),
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "recognize_frames",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(FakeCv2Error()),
+    )
+    with pytest.raises(BridgitRankLayoutError, match="OpenCV pixel operation failed"):
+        execute_shadow_job(job)
+
 
 def test_shadow_job_rejects_replayed_bytes_and_template_as_observation(
     tmp_path: Path,

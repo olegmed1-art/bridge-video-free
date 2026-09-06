@@ -1662,6 +1662,27 @@ def _shadow_result(
     }
 
 
+def _recognize_frames_with_opencv_rejection(
+    reference_path: Path,
+    frame_paths: Sequence[Path],
+    profile: BridgitRankLayoutProfile,
+    *,
+    expected_frame_sha256s: Sequence[str],
+) -> dict[str, Any]:
+    try:
+        return recognize_frames(
+            reference_path,
+            frame_paths,
+            profile,
+            expected_frame_sha256s=expected_frame_sha256s,
+        )
+    except Exception as exc:
+        cv2, _ = _pixel_runtime()
+        if isinstance(exc, cv2.error):
+            raise BridgitRankLayoutError("OpenCV pixel operation failed") from exc
+        raise
+
+
 def _validated_input_root(value: Any) -> Path:
     raw = Path(str(value or ""))
     if not raw.is_absolute():
@@ -1807,7 +1828,7 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
             "reference template frame cannot count as an observation"
         )
 
-    result = recognize_frames(
+    result = _recognize_frames_with_opencv_rejection(
         reference_path,
         frame_paths,
         profile,
