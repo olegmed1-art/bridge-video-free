@@ -2224,3 +2224,15 @@ def test_exit_cleanup_stays_armed_through_fallible_backup_retirement() -> None:
     assert acceptance < retirement < disable < gate
     cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
     assert "release_source_workload_fence || cleanup_rc=1" in cleanup
+
+
+def test_always_run_fence_release_rebuilds_pinned_ssh_identity() -> None:
+    start = WORKFLOW.index("Release capacity workload fence and ensure sole service active")
+    release = WORKFLOW[start:WORKFLOW.index("Publish bounded operational receipt", start)]
+    assert "steps.ssh.outputs.key" not in release
+    assert "steps.ssh.outputs.known" not in release
+    assert 'ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$release_known"' in release
+    assert 'printf \'%s\\n\' "$SSH_KEY_ORACLE" >"$release_key"' in release
+    assert 'ssh-keygen -y -f "$release_key"' in release
+    assert 'ssh -i "$release_key"' in release
+    assert 'UserKnownHostsFile="$release_known"' in release

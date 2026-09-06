@@ -2107,7 +2107,16 @@ jobs:
           set -euo pipefail
           capacity_fence_stamp='${{ steps.backup.outputs.capacity_fence_stamp }}'
           [[ "$capacity_fence_stamp" =~ ^issue-881-root-recovery-[0-9a-f]{16}-run-[0-9]+-a[1-9][0-9]*$ ]]
-          timeout --signal=KILL 300s ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+          # This is an always-run outage guard. Recreate the pinned SSH
+          # identity independently because the preceding resolver may have
+          # failed before publishing either output.
+          release_known="$RUNNER_TEMP/issue-881-release-known-hosts"
+          release_key="$RUNNER_TEMP/issue-881-release-key"
+          timeout --signal=KILL 120s ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$release_known"
+          printf '%s\n' "$SSH_KEY_ORACLE" >"$release_key"
+          chmod 0600 "$release_key"
+          ssh-keygen -y -f "$release_key" >/dev/null
+          timeout --signal=KILL 180s ssh -i "$release_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$release_known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' LEASE_STAMP='$capacity_fence_stamp' /bin/bash -s" <<'REMOTE'
           set -Eeuo pipefail
           [[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]]
