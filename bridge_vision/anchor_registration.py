@@ -246,6 +246,26 @@ def _suppress_equivalent_window_peak(
     ] = -1.0
 
 
+def _anchor_origin_bounds(
+    *,
+    observed_width: int,
+    observed_height: int,
+    score_width: int,
+    score_height: int,
+    game_width: int,
+    game_height: int,
+    anchor_offset_x: int,
+    anchor_offset_y: int,
+) -> tuple[int, int, int, int]:
+    """Return legal matcher origins from the rounded registered window."""
+    return (
+        max(0, anchor_offset_x),
+        min(score_width - 1, observed_width - game_width + anchor_offset_x),
+        max(0, anchor_offset_y),
+        min(score_height - 1, observed_height - game_height + anchor_offset_y),
+    )
+
+
 def register_from_upper_right_anchor(
     reference: Any,
     observed: Any,
@@ -287,20 +307,22 @@ def register_from_upper_right_anchor(
         width, height = _scaled_anchor_dimensions(anchor_width, anchor_height, scale)
         game_width = round(reference_width * scale)
         game_height = round(reference_height * scale)
+        anchor_offset_x = round(anchor_x * scale)
+        anchor_offset_y = round(anchor_y * scale)
         if width > observed_width or height > observed_height:
             continue
         scaled = cv2.resize(template, (width, height), interpolation=cv2.INTER_NEAREST)
         scores = cv2.matchTemplate(observed_appearance, scaled, cv2.TM_CCOEFF_NORMED)
         np.abs(scores, out=scores)
-        x_min = max(0, math.ceil(anchor_x * scale))
-        y_min = max(0, math.ceil(anchor_y * scale))
-        x_max = min(
-            scores.shape[1] - 1,
-            math.floor(observed_width - (reference_width - anchor_x) * scale),
-        )
-        y_max = min(
-            scores.shape[0] - 1,
-            math.floor(observed_height - (reference_height - anchor_y) * scale),
+        x_min, x_max, y_min, y_max = _anchor_origin_bounds(
+            observed_width=observed_width,
+            observed_height=observed_height,
+            score_width=scores.shape[1],
+            score_height=scores.shape[0],
+            game_width=game_width,
+            game_height=game_height,
+            anchor_offset_x=anchor_offset_x,
+            anchor_offset_y=anchor_offset_y,
         )
         if x_min > x_max or y_min > y_max:
             continue
@@ -309,8 +331,8 @@ def register_from_upper_right_anchor(
             _, maximum, _, location = cv2.minMaxLoc(valid)
             x = x_min + location[0]
             y = y_min + location[1]
-            left = round(x - anchor_x * scale)
-            top = round(y - anchor_y * scale)
+            left = x - anchor_offset_x
+            top = y - anchor_offset_y
             candidates.append(
                 {
                     "score": float(maximum),

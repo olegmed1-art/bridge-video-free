@@ -141,6 +141,19 @@ def test_equivalent_peak_suppression_exposes_a_third_distinct_window():
     assert cv2.minMaxLoc(scores)[3] == (70, 20)
 
 
+def test_anchor_bounds_use_rounded_window_geometry():
+    assert anchor_registration._anchor_origin_bounds(
+        observed_width=160,
+        observed_height=100,
+        score_width=141,
+        score_height=91,
+        game_width=round(321 * 0.5),
+        game_height=100,
+        anchor_offset_x=round(200 * 0.5),
+        anchor_offset_y=10,
+    ) == (100, 100, 10, 10)
+
+
 def test_anchor_work_is_template_weighted_and_bounded_for_whole_job():
     small_spec = anchor_spec()
     large_spec = anchor_spec()

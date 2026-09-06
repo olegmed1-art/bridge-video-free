@@ -1381,6 +1381,7 @@ def recognize_frames(
                 f"interface registration budget failed: {exc}"
             ) from exc
         registered_frames = []
+        registered_pixel_hashes = {reference_pixel_hash}
         for image, frame_hash, _, _ in loaded_frames:
             try:
                 registered, registration = register_from_upper_right_anchor(
@@ -1390,11 +1391,19 @@ def recognize_frames(
                 raise BridgitRankLayoutError(
                     f"interface registration failed: {exc}"
                 ) from exc
+            registered_pixel_hash = hashlib.sha256(registered).hexdigest()
+            if registered_pixel_hash == reference_pixel_hash:
+                raise BridgitRankLayoutError(
+                    "observation duplicates reference template pixels"
+                )
+            if registered_pixel_hash in registered_pixel_hashes:
+                raise BridgitRankLayoutError("duplicate decoded frame pixels")
+            registered_pixel_hashes.add(registered_pixel_hash)
             registered_frames.append(
                 (
                     registered,
                     frame_hash,
-                    hashlib.sha256(registered).hexdigest(),
+                    registered_pixel_hash,
                     registration,
                 )
             )

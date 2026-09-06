@@ -931,6 +931,62 @@ def test_anchor_source_raster_is_released_before_recognition(monkeypatch):
         )
 
 
+def test_registered_pixel_replay_stops_before_next_anchor_match(monkeypatch):
+    raw = profile_raw()
+    raw["geometry"]["interface_anchor"] = {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": {"x": 0.72, "y": 0.02, "width": 0.08, "height": 0.10},
+        "scales": [1.0],
+        "minimum_score": 0.80,
+        "minimum_margin": 0.03,
+    }
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    profile = parse_profile(raw)
+
+    class Raster(bytearray):
+        shape = (720, 1000, 3)
+
+    read_count = 0
+
+    def read_frame(*_args, **_kwargs):
+        nonlocal read_count
+        read_count += 1
+        if read_count == 1:
+            return Raster(b"reference"), "a" * 64, "b" * 64, None
+        marker = str(read_count)
+        return Raster(marker.encode()), marker * 64, chr(96 + read_count) * 64, None
+
+    registration_count = 0
+
+    def register(*_args, **_kwargs):
+        nonlocal registration_count
+        registration_count += 1
+        if registration_count > 2:
+            pytest.fail("must reject replay before matching the next frame")
+        return Raster(b"same-registered-pixels"), {}
+
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_validate_input_raster_budget",
+        lambda _paths: [(1000, 720)] * 4,
+    )
+    monkeypatch.setattr(bridgit_rank_layout, "_read_frame", read_frame)
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "register_from_upper_right_anchor",
+        register,
+    )
+    with pytest.raises(BridgitRankLayoutError, match="duplicate decoded frame pixels"):
+        bridgit_rank_layout.recognize_frames(
+            Path("reference.png"),
+            [Path(f"frame-{index}.png") for index in range(3)],
+            profile,
+        )
+    assert registration_count == 2
+
+
 def test_each_frame_must_independently_support_the_fused_deal():
     profile = parse_profile(profile_raw())
     agreed = {suit: tuple("N" * 13) for suit in "HCDS"}
