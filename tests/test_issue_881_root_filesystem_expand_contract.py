@@ -2217,6 +2217,11 @@ def test_watchdog_service_release_is_retryable_after_marker_removal() -> None:
     assert release.index("systemctl unmask universal-video-container.service") > conditional_end
     assert release.index("systemctl enable universal-video-container.service") > conditional_end
     assert release.index("systemctl start universal-video-container.service") > conditional_end
+    parent_release = WORKFLOW[WORKFLOW.index("release_source_workload_fence() {") : WORKFLOW.index("set_source_capacity() {")]
+    parent_end = parent_release.index("          fi", parent_release.index('if [[ -e "$marker" ]]'))
+    assert parent_release.index("systemctl unmask universal-video-container.service") > parent_end
+    assert parent_release.index("systemctl enable universal-video-container.service") > parent_end
+    assert parent_release.index("systemctl start universal-video-container.service") > parent_end
 
 
 def test_regression_capacity_is_restored_only_after_paid_instance_cleanup() -> None:
@@ -2267,6 +2272,8 @@ def test_watchdog_propagates_source_identity_and_parser_failures() -> None:
     cardinality = restore.index('(( ${#source_state[@]} == 3 )) || return 104', mapfile)
     indexing = restore.index('lifecycle="${source_state[0]}"', cardinality)
     assert parser < mapfile < cardinality < indexing
+    softstop = restore.index("--action SOFTSTOP")
+    assert restore.index("source_restore_deadline - SECONDS >= 600", indexing) < softstop
 
 
 def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> None:

@@ -231,6 +231,9 @@ jobs:
                 break
               fi
               if [[ "$lifecycle" == RUNNING ]]; then
+                # Never stop production unless the full bounded resize/start
+                # budget remains before the reserved cleanup cutoff.
+                (( source_restore_deadline - SECONDS >= 600 )) || return 105
                 command_deadline=$((SECONDS + 60)); (( command_deadline > source_restore_deadline )) && command_deadline="$source_restore_deadline"
                 oci_retry_quiet "$command_deadline" oci compute instance action --instance-id "$source_id" --action SOFTSTOP || true
               elif [[ "$lifecycle" == STOPPED ]]; then

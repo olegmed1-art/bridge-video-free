@@ -1264,11 +1264,13 @@ jobs:
           if [[ -e "$marker" ]]; then
             [[ -f "$marker" && ! -L "$marker" && "$(stat -c '%u:%g:%a:%h' "$marker")" == 0:0:600:1 ]]
             [[ "$(<"$marker")" == "$LEASE_STAMP" ]]
-            systemctl unmask universal-video-container.service
             rm -f -- "$marker"
-            systemctl enable universal-video-container.service
-            systemctl start universal-video-container.service
           fi
+          # Idempotent recovery must also finish a prior release that removed
+          # the marker before its SSH connection was lost.
+          systemctl unmask universal-video-container.service
+          systemctl enable universal-video-container.service
+          systemctl start universal-video-container.service
           [[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]
           [[ "$(systemctl is-active universal-video-container.service)" == active ]]
           echo UV_ROOT_CAPACITY_WORKLOAD_FENCE_RELEASED
