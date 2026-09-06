@@ -206,9 +206,13 @@ jobs:
                     [[ "$retry_class" == TRANSIENT ]] \
                     || { [[ "$retry_class" == UNSTRUCTURED ]] && { [[ "$rc" == 124 || "$rc" == 137 ]] || grep -Eqi 'TooManyRequests|InternalServerError|ServiceUnavailable|temporar(il)?y unavailable|connection (reset|aborted)|timed out|timeout|HTTP[^0-9]+5[0-9]{2}' "$stderr_file"; }; }
                   }; then
-                  bounded_retry_seconds="$(bounded_wait_seconds "$retry_delay_seconds" "$absolute_deadline")" || return "$rc"
-                  [[ "$bounded_retry_seconds" == "$retry_delay_seconds" ]] || return "$rc"
-                  sleep "$bounded_retry_seconds"
+                  # Reserve one second beyond the delay for the next attempt's
+                  # pre-request budget check.  If that margin is unavailable,
+                  # retain and return this attempt's causal response instead of
+                  # sleeping exactly to the deadline and replacing it with 42.
+                  bounded_retry_seconds="$(bounded_wait_seconds "$((retry_delay_seconds + 1))" "$absolute_deadline")" || return "$rc"
+                  [[ "$bounded_retry_seconds" == "$((retry_delay_seconds + 1))" ]] || return "$rc"
+                  sleep "$retry_delay_seconds"
                   continue
                 fi
                 return "$rc"
@@ -218,8 +222,9 @@ jobs:
               fi
               OCI_JSON_ERROR=INVALID_JSON_SUCCESS_RESPONSE
               if (( attempt < max_attempts )); then
-                bounded_retry_seconds="$(bounded_wait_seconds "$retry_delay_seconds" "$absolute_deadline")" || return 42
-                sleep "$bounded_retry_seconds"
+                bounded_retry_seconds="$(bounded_wait_seconds "$((retry_delay_seconds + 1))" "$absolute_deadline")" || return 86
+                [[ "$bounded_retry_seconds" == "$((retry_delay_seconds + 1))" ]] || return 86
+                sleep "$retry_delay_seconds"
               fi
             done
             return 86

@@ -743,8 +743,8 @@ def test_oci_json_stdout_isolated_from_warning_stderr() -> None:
     assert 'retry_delay_seconds="${OCI_JSON_RETRY_DELAY_SECONDS:-5}"' in helper
     assert 'for attempt in $(seq 1 "$max_attempts")' in helper
     assert "INVALID_JSON_SUCCESS_RESPONSE" in helper
-    assert 'bounded_retry_seconds="$(bounded_wait_seconds "$retry_delay_seconds" "$absolute_deadline")"' in helper
-    assert 'sleep "$bounded_retry_seconds"' in helper
+    assert helper.count('bounded_retry_seconds="$(bounded_wait_seconds "$((retry_delay_seconds + 1))" "$absolute_deadline")"') == 2
+    assert helper.count('sleep "$retry_delay_seconds"') == 2
     assert "return 86" in helper
     assert "if (( rc != 0 )); then" in helper
     assert "Retry only failures that are safe to classify as transient" in helper
@@ -1618,7 +1618,7 @@ def test_transient_retry_keeps_causal_rc_when_delay_budget_is_short() -> None:
         fake.chmod(0o755)
         script = r'''
 bounded_wait_seconds() {
-  if [[ "$1" == 5 ]]; then printf '2\n'; else printf '%s\n' "$1"; fi
+  if [[ "$1" == 6 ]]; then printf '2\n'; else printf '%s\n' "$1"; fi
 }
 primary_deadline=999999
 ''' + helper + r'''
@@ -1630,6 +1630,54 @@ if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s stderr=%s\n'
             text=True, capture_output=True, check=True,
         )
         assert "rc=18 stderr=connection reset" in result.stdout
+
+
+def test_transient_retry_keeps_causal_rc_at_exact_delay_boundary() -> None:
+    start = WORKFLOW.index("oci_json_request() {")
+    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fake = Path(temp_dir) / "fake-oci"
+        fake.write_text("#!/usr/bin/env bash\necho 'connection reset' >&2\nexit 18\n")
+        fake.chmod(0o755)
+        script = r'''
+bounded_wait_seconds() {
+  if [[ "$1" == 6 ]]; then printf '5\n'; else printf '%s\n' "$1"; fi
+}
+primary_deadline=999999
+''' + helper + r'''
+if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s stderr=%s\n' "$?" "$OCI_JSON_RAW_ERROR"; fi
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env=os.environ | {"RUNNER_TEMP": temp_dir, "FAKE_OCI": str(fake), "OCI_JSON_MAX_ATTEMPTS": "3"},
+            text=True, capture_output=True, check=True,
+        )
+        assert "rc=18 stderr=connection reset" in result.stdout
+
+
+def test_invalid_json_retry_returns_causal_class_at_exact_delay_boundary() -> None:
+    start = WORKFLOW.index("oci_json_request() {")
+    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fake = Path(temp_dir) / "fake-oci"
+        fake.write_text("#!/usr/bin/env bash\nprintf 'not-json'\n")
+        fake.chmod(0o755)
+        script = r'''
+bounded_wait_seconds() {
+  if [[ "$1" == 6 ]]; then printf '5\n'; else printf '%s\n' "$1"; fi
+}
+primary_deadline=999999
+''' + helper + r'''
+if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s error=%s\n' "$?" "$OCI_JSON_ERROR"; fi
+'''
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env=os.environ | {"RUNNER_TEMP": temp_dir, "FAKE_OCI": str(fake), "OCI_JSON_MAX_ATTEMPTS": "3"},
+            text=True, capture_output=True, check=True,
+        )
+        assert "rc=86 error=INVALID_JSON_SUCCESS_RESPONSE" in result.stdout
 
 
 def test_receipt_publishes_prior_inventory_diagnostics() -> None:
