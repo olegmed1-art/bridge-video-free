@@ -190,6 +190,9 @@ jobs:
             done
             return 1
           }
+          require_mutation_budget() {
+            (( $(date +%s) <= MUTATION_CUTOFF_EPOCH )) || return 25
+          }
           cleanup() {
             local rc=$?
             local rollback=NOT_NEEDED
@@ -290,21 +293,25 @@ jobs:
           EXISTING_POLICY_ID="$(select_exact "$RUNNER_TEMP/policies.json" "$POLICY_NAME")"
           # Never inherit additive permissions from a reused user or group.
           [[ -z "$EXISTING_USER_ID" && -z "$EXISTING_GROUP_ID" && -z "$EXISTING_POLICY_ID" ]] || exit 24
-          (( $(date +%s) <= MUTATION_CUTOFF_EPOCH )) || exit 25
 
           EXPECTED_FINGERPRINT="$(openssl rsa -pubin -in "$RUNNER_TEMP/readonly-public.pem" -outform DER 2>/dev/null | openssl md5 -c | awk '{print $2}')"
+          require_mutation_budget
           USER_CREATED=1
           request_json "$RUNNER_TEMP/user-create.json" oci iam user create --compartment-id "$TENANCY_ID" --name "$USER_NAME" --description 'Issue 881 paid preflight read-only audit principal'
           USER_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.user."); print(x)' "$RUNNER_TEMP/user-create.json")"
+          require_mutation_budget
           GROUP_CREATED=1
           request_json "$RUNNER_TEMP/group-create.json" oci iam group create --compartment-id "$TENANCY_ID" --name "$GROUP_NAME" --description 'Issue 881 paid preflight read-only audit group'
           GROUP_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.group."); print(x)' "$RUNNER_TEMP/group-create.json")"
+          require_mutation_budget
           MEMBERSHIP_CREATED=1
           request_json "$RUNNER_TEMP/member-create.json" oci iam group add-user --group-id "$GROUP_ID" --user-id "$USER_ID"
+          require_mutation_budget
           POLICY_CREATED=1
           request_json "$RUNNER_TEMP/policy-create.json" oci iam policy create --compartment-id "$TENANCY_ID" --name "$POLICY_NAME" --description 'Least-privilege reads for Issue 881 paid preflight' --statements "file://$RUNNER_TEMP/statements.json"
           POLICY_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.policy."); print(x)' "$RUNNER_TEMP/policy-create.json")"
 
+          require_mutation_budget
           KEY_CREATED=1
           request_json "$RUNNER_TEMP/key-upload.json" oci iam user api-key upload --user-id "$USER_ID" --key-file "$RUNNER_TEMP/readonly-public.pem"
           ACTUAL_FINGERPRINT="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["fingerprint"])' "$RUNNER_TEMP/key-upload.json")"
