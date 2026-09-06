@@ -311,6 +311,76 @@ def validate_anchor_job_budget(
     }
 
 
+def validate_anchor_reference_detail(
+    reference: Any,
+    observed_sizes: Sequence[tuple[int, int]],
+    spec: Mapping[str, Any],
+) -> None:
+    """Reject detail-free feasible templates before observation decoding."""
+
+    cv2, _ = _runtime()
+    checked = validate_anchor_spec(spec)
+    if not hasattr(reference, "shape"):
+        raise AnchorRegistrationError("reference must be a decoded image")
+    reference_height, reference_width = reference.shape[:2]
+    region = checked["reference_region"]
+    anchor_x, anchor_y, anchor_width, anchor_height = _rounded_reference_anchor(
+        region, reference_width, reference_height
+    )
+    if anchor_width < 8 or anchor_height < 8:
+        raise AnchorRegistrationError("reference interface anchor is too small")
+    if (
+        anchor_x + anchor_width > reference_width
+        or anchor_y + anchor_height > reference_height
+    ):
+        raise AnchorRegistrationError("rounded interface anchor leaves reference")
+    template = _appearance(
+        reference[
+            anchor_y : anchor_y + anchor_height, anchor_x : anchor_x + anchor_width
+        ]
+    )
+    if float(template.std()) < 8.0:
+        raise AnchorRegistrationError("interface anchor has insufficient visual detail")
+    scaled_dimensions = [
+        _scaled_anchor_geometry(
+            reference_width=reference_width,
+            reference_height=reference_height,
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            anchor_width=anchor_width,
+            anchor_height=anchor_height,
+            scale=scale,
+        )
+        for scale in checked["scales"]
+    ]
+    _reject_rounded_scale_aliases(scaled_dimensions)
+    normalized_sizes = [
+        (
+            _dimension(size[0], f"observed width {index}"),
+            _dimension(size[1], f"observed height {index}"),
+        )
+        for index, size in enumerate(observed_sizes)
+        if isinstance(size, tuple) and len(size) == 2
+    ]
+    if len(normalized_sizes) != len(observed_sizes):
+        raise AnchorRegistrationError("invalid observed size")
+    for scaled_geometry in scaled_dimensions:
+        width, height, game_width, game_height, _, _ = scaled_geometry
+        if not any(
+            width <= observed_width
+            and height <= observed_height
+            and game_width <= observed_width
+            and game_height <= observed_height
+            for observed_width, observed_height in normalized_sizes
+        ):
+            continue
+        scaled = cv2.resize(template, (width, height), interpolation=cv2.INTER_NEAREST)
+        if float(scaled.std()) < 8.0:
+            raise AnchorRegistrationError(
+                "scaled interface anchor has insufficient visual detail"
+            )
+
+
 def _implies_distinct_window(
     best: Mapping[str, Any], candidate: Mapping[str, Any]
 ) -> bool:
@@ -563,6 +633,7 @@ __all__ = [
     "estimate_anchor_peak_scratch_bytes",
     "estimate_anchor_work_units",
     "register_from_upper_right_anchor",
+    "validate_anchor_reference_detail",
     "validate_anchor_spec",
     "validate_anchor_job_budget",
 ]

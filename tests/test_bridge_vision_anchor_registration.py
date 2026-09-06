@@ -8,6 +8,7 @@ from bridge_vision.anchor_registration import (
     estimate_anchor_peak_scratch_bytes,
     estimate_anchor_work_units,
     register_from_upper_right_anchor,
+    validate_anchor_reference_detail,
     validate_anchor_spec,
     validate_anchor_job_budget,
 )
@@ -102,6 +103,24 @@ def test_scaled_anchor_must_retain_visual_variance(monkeypatch):
     monkeypatch.setattr(cv2, "resize", erase_scaled_anchor)
     with pytest.raises(AnchorRegistrationError, match="scaled interface anchor"):
         register_from_upper_right_anchor(reference, observed, anchor_spec(scales=[0.5]))
+
+
+def test_reference_detail_preflight_checks_every_feasible_scale(monkeypatch):
+    reference = reference_frame()
+    original_resize = cv2.resize
+
+    def erase_scaled_anchor(image, size, *args, **kwargs):
+        if image.ndim == 2 and size == (18, 13):
+            return np.full((13, 18), 128, dtype=np.uint8)
+        return original_resize(image, size, *args, **kwargs)
+
+    monkeypatch.setattr(cv2, "resize", erase_scaled_anchor)
+    with pytest.raises(AnchorRegistrationError, match="scaled interface anchor"):
+        validate_anchor_reference_detail(
+            reference,
+            [(200, 120)],
+            anchor_spec(scales=[0.5]),
+        )
 
 
 def test_anchor_profile_is_normalized_bounded_and_upper_right():

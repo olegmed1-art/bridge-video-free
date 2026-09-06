@@ -38,6 +38,7 @@ from bridge_vision.anchor_registration import (
     estimate_anchor_peak_scratch_bytes,
     register_from_upper_right_anchor,
     validate_anchor_job_budget,
+    validate_anchor_reference_detail,
     validate_anchor_spec,
 )
 from bridge_vision.deal_evidence import (
@@ -75,6 +76,10 @@ _PROFILE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{2,95}$")
 
 class BridgitRankLayoutError(ValueError):
     """Input, profile or recognition evidence failed a closed gate."""
+
+
+class _SideStepCalibrationAmbiguous(BridgitRankLayoutError):
+    """Multiple visually plausible side-fan geometries remain."""
 
 
 class BridgitPixelRuntimeUnavailable(RuntimeError):
@@ -857,10 +862,11 @@ def _validate_scoring_budget(
     )
     registration_width = 2 * profile.local_registration_px + 1
 
-    # Side calibration tries 29 step values over at most 26 side-hand cards,
-    # then 25 west/east step pairs over 13 slots in each of four suits.  The
-    # final fused and per-frame assignments each score all 52 visible cards.
-    calibration_locations = 29 * 26 + 25 * len(SUITS) * len(RANKS)
+    # Side calibration tries 29 step values over at most 26 side-hand cards.
+    # Every one of the at most 29×29 distinct W/E geometry pairs is evaluated,
+    # but its matrices reuse these cached locations.  The final fused and
+    # per-frame assignments each score all 52 visible cards.
+    calibration_locations = 29 * 26
     assignment_locations = 2 * len(CARDS)
     scoring_calls = (
         observation_count
@@ -1347,8 +1353,7 @@ def _calibrate_side_steps(
                 ):
                     scored_by_geometry[geometry_key] = candidate
             candidates[seat][suit] = [
-                step
-                for _, step in sorted(scored_by_geometry.values(), reverse=True)[:5]
+                step for _, step in sorted(scored_by_geometry.values(), reverse=True)
             ]
 
     for suit in SUITS:
@@ -1400,7 +1405,9 @@ def _calibrate_side_steps(
             len(ranked) > 1
             and ranked[0][0] - ranked[1][0] < profile.min_assignment_margin
         ):
-            raise BridgitRankLayoutError(f"side fan {suit} calibration is ambiguous")
+            raise _SideStepCalibrationAmbiguous(
+                f"side fan {suit} calibration is ambiguous"
+            )
         _, result["W"][suit], result["E"][suit] = ranked[0]
     return result
 
@@ -1450,7 +1457,19 @@ def recognize_frames(
     )
     if reference_hash != profile.reference_frame_sha256:
         raise BridgitRankLayoutError("reference frame hash mismatch")
+    if profile.interface_anchor is not None:
+        try:
+            validate_anchor_reference_detail(
+                reference,
+                input_dimensions[1:],
+                profile.interface_anchor,
+            )
+        except AnchorRegistrationError as exc:
+            raise BridgitRankLayoutError(
+                f"interface anchor detail failed: {exc}"
+            ) from exc
     loaded_frames = []
+    exact_pixel_hashes = {reference_pixel_hash}
     decoded_job_bytes = int(reference.shape[0] * reference.shape[1] * 3)
     for index, path in enumerate(frame_paths):
         loaded = _read_frame(
@@ -1465,6 +1484,16 @@ def recognize_frames(
             and loaded[1] != expected_frame_sha256s[index]
         ):
             raise BridgitRankLayoutError("observation frame changed before recognition")
+        if profile.interface_anchor is None:
+            if loaded[2] == reference_pixel_hash:
+                raise BridgitRankLayoutError(
+                    "reference template pixels cannot count as an observation"
+                )
+            if loaded[2] in exact_pixel_hashes:
+                raise BridgitRankLayoutError(
+                    "duplicate decoded frame pixels do not provide independent evidence"
+                )
+            exact_pixel_hashes.add(loaded[2])
         loaded_frames.append(loaded)
         decoded_job_bytes += int(loaded[0].shape[0] * loaded[0].shape[1] * 3)
     del loaded
@@ -1623,7 +1652,16 @@ def recognize_frames(
     for seat in ("N", "S"):
         anchors[seat].update(frame_horizontal_anchors[0][seat])
 
-    side_steps = _calibrate_side_steps(frames, bank, lengths, anchors, profile)
+    try:
+        side_steps = _calibrate_side_steps(frames, bank, lengths, anchors, profile)
+    except _SideStepCalibrationAmbiguous:
+        return _shadow_result(
+            "AMBIGUOUS",
+            lengths=lengths,
+            reason="side_step_calibration_ambiguous",
+            input_hashes=input_hashes,
+            frame_registrations=frame_registration_receipts,
+        )
     if not _generated_glyph_regions_are_disjoint(lengths, anchors, side_steps, profile):
         return _shadow_result(
             "LAYOUT_AMBIGUOUS",

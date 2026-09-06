@@ -825,6 +825,9 @@ def test_anchor_job_budget_is_rechecked_on_payloads_actually_decoded(monkeypatch
         bridgit_rank_layout, "_read_frame", lambda *_args, **_kwargs: next(reads)
     )
     monkeypatch.setattr(
+        bridgit_rank_layout, "validate_anchor_reference_detail", lambda *_args: None
+    )
+    monkeypatch.setattr(
         bridgit_rank_layout,
         "register_from_upper_right_anchor",
         lambda *_args, **_kwargs: pytest.fail("must reject before registration"),
@@ -882,6 +885,9 @@ def test_decoded_observation_hash_is_checked_before_registration(monkeypatch):
     )
     monkeypatch.setattr(bridgit_rank_layout, "_read_frame", read_once_before_rejection)
     monkeypatch.setattr(
+        bridgit_rank_layout, "validate_anchor_reference_detail", lambda *_args: None
+    )
+    monkeypatch.setattr(
         bridgit_rank_layout,
         "register_from_upper_right_anchor",
         lambda *_args, **_kwargs: pytest.fail("must reject before registration"),
@@ -895,6 +901,97 @@ def test_decoded_observation_hash_is_checked_before_registration(monkeypatch):
             expected_frame_sha256s=["e" * 64, "f" * 64],
         )
     assert read_count == 2
+
+
+def test_anchor_detail_is_checked_before_observation_decode(monkeypatch):
+    np = pytest.importorskip("numpy")
+    raw = profile_raw()
+    raw["geometry"]["interface_anchor"] = {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": {
+            "x": 0.72,
+            "y": 0.02,
+            "width": 0.08,
+            "height": 0.10,
+        },
+        "scales": [1.0],
+        "minimum_score": 0.80,
+        "minimum_margin": 0.03,
+    }
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    profile = parse_profile(raw)
+    read_count = 0
+
+    def read_reference_only(*_args, **_kwargs):
+        nonlocal read_count
+        read_count += 1
+        if read_count > 1:
+            pytest.fail("must reject anchor detail before observation decode")
+        return (
+            np.zeros((720, 1000, 3), dtype=np.uint8),
+            profile.reference_frame_sha256,
+            "b" * 64,
+            None,
+        )
+
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_validate_input_raster_budget",
+        lambda paths: [(1000, 720)] * len(paths),
+    )
+    monkeypatch.setattr(bridgit_rank_layout, "_read_frame", read_reference_only)
+
+    with pytest.raises(BridgitRankLayoutError, match="insufficient visual detail"):
+        bridgit_rank_layout.recognize_frames(
+            Path("reference.png"),
+            [Path("frame.png")],
+            profile,
+        )
+    assert read_count == 1
+
+
+@pytest.mark.parametrize("duplicate_reference", [False, True])
+def test_exact_size_pixel_replay_stops_during_load(monkeypatch, duplicate_reference):
+    profile = parse_profile(profile_raw())
+
+    class Raster:
+        shape = (720, 1000, 3)
+
+    reference_pixel_hash = "b" * 64
+    first_pixel_hash = reference_pixel_hash if duplicate_reference else "d" * 64
+    second_pixel_hash = "d" * 64
+    reads = iter(
+        [
+            (Raster(), profile.reference_frame_sha256, reference_pixel_hash, None),
+            (Raster(), "c" * 64, first_pixel_hash, None),
+            (Raster(), "e" * 64, second_pixel_hash, None),
+            (Raster(), "f" * 64, "g" * 64, None),
+        ]
+    )
+    read_count = 0
+
+    def stop_before_later_decode(*_args, **_kwargs):
+        nonlocal read_count
+        read_count += 1
+        return next(reads)
+
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_validate_input_raster_budget",
+        lambda paths: [(1000, 720)] * len(paths),
+    )
+    monkeypatch.setattr(bridgit_rank_layout, "_read_frame", stop_before_later_decode)
+
+    match = "reference template pixels" if duplicate_reference else "duplicate decoded"
+    with pytest.raises(BridgitRankLayoutError, match=match):
+        bridgit_rank_layout.recognize_frames(
+            Path("reference.png"),
+            [Path(f"frame-{index}.png") for index in range(3)],
+            profile,
+        )
+    assert read_count == (2 if duplicate_reference else 3)
 
 
 def test_anchor_source_raster_is_released_before_recognition(monkeypatch):
@@ -942,6 +1039,9 @@ def test_anchor_source_raster_is_released_before_recognition(monkeypatch):
         bridgit_rank_layout,
         "_read_frame",
         read_frame,
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout, "validate_anchor_reference_detail", lambda *_args: None
     )
     monkeypatch.setattr(
         bridgit_rank_layout,
@@ -1008,6 +1108,9 @@ def test_registered_pixel_replay_stops_before_next_anchor_match(monkeypatch):
         lambda _paths: [(1000, 720)] * 4,
     )
     monkeypatch.setattr(bridgit_rank_layout, "_read_frame", read_frame)
+    monkeypatch.setattr(
+        bridgit_rank_layout, "validate_anchor_reference_detail", lambda *_args: None
+    )
     monkeypatch.setattr(
         bridgit_rank_layout,
         "register_from_upper_right_anchor",
@@ -1327,6 +1430,94 @@ def test_side_step_candidates_are_deduplicated_before_shortlist(monkeypatch):
         bridgit_rank_layout._calibrate_side_steps(
             [object()], {}, lengths, profile.anchors, profile
         )
+
+
+def test_side_step_calibration_evaluates_every_distinct_geometry_pair(monkeypatch):
+    np = pytest.importorskip("numpy")
+    profile = parse_profile(profile_raw())
+    lengths = {seat: {suit: 2 for suit in "HCDS"} for seat in "NESW"}
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_slot_scores",
+        lambda *_args: np.zeros(len(bridgit_rank_layout.RANKS)),
+    )
+    assignment_calls = 0
+
+    def separated_assignment_scores(*_args):
+        nonlocal assignment_calls
+        assignment_calls += 1
+        return [(-float(assignment_calls), tuple("N" * 13))]
+
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "ordered_assignments",
+        separated_assignment_scores,
+    )
+
+    bridgit_rank_layout._calibrate_side_steps(
+        [object()], {}, lengths, profile.anchors, profile
+    )
+
+    assert assignment_calls > 5 * 5 * len(bridgit_rank_layout.SUITS)
+
+
+def test_ambiguous_side_step_calibration_returns_structured_status(monkeypatch):
+    profile = parse_profile(profile_raw())
+
+    class Raster:
+        shape = (720, 1000, 3)
+
+    reads = iter(
+        [
+            (Raster(), profile.reference_frame_sha256, "b" * 64, {}),
+            (Raster(), "c" * 64, "d" * 64, {}),
+        ]
+    )
+    lengths = {
+        "N": {"H": 13, "C": 0, "D": 0, "S": 0},
+        "E": {"H": 0, "C": 13, "D": 0, "S": 0},
+        "S": {"H": 0, "C": 0, "D": 13, "S": 0},
+        "W": {"H": 0, "C": 0, "D": 0, "S": 13},
+    }
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_validate_input_raster_budget",
+        lambda paths: [(1000, 720)] * len(paths),
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout, "_read_frame", lambda *_args, **_kwargs: next(reads)
+    )
+    monkeypatch.setattr(bridgit_rank_layout, "_template_bank", lambda *_args: {})
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_horizontal_geometry",
+        lambda _frame, seat, _profile: (
+            lengths[seat],
+            dict(profile.anchors[seat]),
+        ),
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_side_lengths",
+        lambda *_args: {"W": lengths["W"], "E": lengths["E"]},
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout, "_glyph_coords_fit_frame", lambda *_args: True
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_calibrate_side_steps",
+        lambda *_args: (_ for _ in ()).throw(
+            bridgit_rank_layout._SideStepCalibrationAmbiguous("ambiguous")
+        ),
+    )
+
+    result = bridgit_rank_layout.recognize_frames(
+        Path("reference.png"), [Path("frame.png")], profile
+    )
+
+    assert result["status"] == "AMBIGUOUS"
+    assert result["reason"] == "side_step_calibration_ambiguous"
 
 
 def test_side_fan_coordinate_preflight_includes_registration_radius():
