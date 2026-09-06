@@ -103,10 +103,12 @@ jobs:
           [[ "$GITHUB_ACTOR" == 'github-actions[bot]' ]]
           [[ -n "$EXPECTED_AD" && "$EXPECTED_AD" != *$'\n'* ]]
           [[ "$OCI_REGION" == eu-frankfurt-1 ]]
-          # Reserve ten minutes before GitHub's 300-minute hard kill for
-          # fence release and exact-stamped storage cleanup.
+          # Reserve twenty minutes for the full cleanup chain: fence release
+          # 300s, discovery 120s, late discovery 120s, deletion/proof 120s,
+          # plus request overruns and receipt slack. The separate 600s setup
+          # allowance remains outside this reserve before the 300m hard kill.
           watchdog_hard_deadline=$((SECONDS + 17400))
-          watchdog_cleanup_cutoff=$((watchdog_hard_deadline - 600))
+          watchdog_cleanup_cutoff=$((watchdog_hard_deadline - 1200))
           watchdog_cleanup_cutoff_epoch=$(( $(date -u +%s) + watchdog_cleanup_cutoff - SECONDS ))
           for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY; do [[ -n "${!value:-}" ]]; done
           WATCHDOG_PAYLOAD="${STAMP}|${EXPIRY_EPOCH}|${EXPECTED_AD}|${PARENT_RUN_ID}|${PARENT_RUN_ATTEMPT}|${SOURCE_INSTANCE_HMAC}|${SOURCE_ORIGINAL_OCPUS}|${SOURCE_ORIGINAL_MEMORY}|${SOURCE_LEASE_OCPUS}|${SOURCE_LEASE_MEMORY}" python - <<'PY'

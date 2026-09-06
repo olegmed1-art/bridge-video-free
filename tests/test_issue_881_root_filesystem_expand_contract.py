@@ -2314,7 +2314,10 @@ def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> No
 def test_watchdog_retries_paid_reconciliation_with_reserved_cleanup_time() -> None:
     watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
     assert "watchdog_hard_deadline=$((SECONDS + 17400))" in watchdog
-    assert "watchdog_cleanup_cutoff=$((watchdog_hard_deadline - 600))" in watchdog
+    assert "watchdog_cleanup_cutoff=$((watchdog_hard_deadline - 1200))" in watchdog
+    # Fence + both discoveries + deletion proof, with loop/request overruns
+    # and a final receipt window, must fit independently of setup slack.
+    assert 300 + 120 + 120 + 120 + 4 * 60 + 60 < 1200
     assert "watchdog_cleanup_cutoff_epoch=$(( $(date -u +%s) + watchdog_cleanup_cutoff - SECONDS ))" in watchdog
     start = watchdog.index("reconcile_paid_instance_once() {")
     loop = watchdog.index("while (( SECONDS < watchdog_cleanup_cutoff )); do", start)
