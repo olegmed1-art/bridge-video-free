@@ -1293,6 +1293,14 @@ jobs:
           PY
             ) || return 93
             current_state="${current[0]}"; current_ocpus="${current[1]}"; current_memory="${current[2]}"
+            if [[ "$label" == capacity_lease ]]; then
+              [[ "$current_ocpus/$current_memory" == "$source_original_ocpus/$source_original_memory" ]] || return 93
+            elif [[ "$label" == capacity_restore ]]; then
+              [[ "$current_ocpus/$current_memory" == "$source_original_ocpus/$source_original_memory" \
+                  || "$current_ocpus/$current_memory" == "$source_lease_ocpus/$source_lease_memory" ]] || return 93
+            else
+              return 93
+            fi
             if [[ "$current_state" == RUNNING && "$current_ocpus" == "$target_ocpus" && "$current_memory" == "$target_memory" ]]; then
               return 0
             fi
@@ -1897,7 +1905,6 @@ jobs:
           fi
           drill_instance_id=""; restored_id=""; drill_subnet_id=""; drill_security_id=""
           drill_route_id=""; drill_ig_id=""; drill_vcn_id=""
-          trap - EXIT
           state_set current_cleanup_status PROVEN_ABSENT
           # Retire older operation-scoped backups only after the retained FULL
           # backup has passed isolated restored-root boot acceptance. This keeps
@@ -1932,6 +1939,10 @@ jobs:
           echo "source_instance_id=$instance_id" >> "$GITHUB_OUTPUT"
           echo "capacity_fence_stamp=$stamp" >> "$GITHUB_OUTPUT"
           echo "temporary_instance_seconds=$drill_seconds" >> "$GITHUB_OUTPUT"
+          # Keep EXIT cleanup armed through every fallible post-restore backup
+          # operation. On success the workload fence intentionally remains for
+          # the following host mutation step; on failure cleanup releases it.
+          trap - EXIT
           echo 'UV_ROOT_BACKUP_GATE_PASS type=FULL size_gb=97 state=AVAILABLE age_lt_24h=true restored_root_boot_acceptance=true isolated_no_egress_network=true source_public_ip_bound=true temporary_instance_deleted=true temporary_volume_deleted=true temporary_network_deleted=true temporary_paid_capacity_authorized=true'
       - name: Resolve pinned SSH identity
         if: ${{ steps.backup.outputs.cleanup_only != 'true' }}

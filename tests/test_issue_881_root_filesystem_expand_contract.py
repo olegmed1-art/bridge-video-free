@@ -2161,6 +2161,11 @@ def test_negative_capacity_lease_rejects_unexpected_source_or_third_config() -> 
     watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
     assert 'if [[ "$ocpus/$memory" != "$SOURCE_ORIGINAL_OCPUS/$SOURCE_ORIGINAL_MEMORY" && "$ocpus/$memory" != "$SOURCE_LEASE_OCPUS/$SOURCE_LEASE_MEMORY" ]]; then' in watchdog
     assert "return 103" in watchdog
+    resize = WORKFLOW[WORKFLOW.index("set_source_capacity() {") : WORKFLOW.index("open_source_capacity_lease()")]
+    assert '[[ "$label" == capacity_lease ]]' in resize
+    assert 'current_ocpus/$current_memory" == "$source_original_ocpus/$source_original_memory' in resize
+    assert '[[ "$label" == capacity_restore ]]' in resize
+    assert 'current_ocpus/$current_memory" == "$source_lease_ocpus/$source_lease_memory' in resize
 
 
 def test_boundary_capacity_lease_is_exactly_one_ocpu_one_gib_and_45_minutes() -> None:
@@ -2209,3 +2214,13 @@ def test_regression_capacity_is_restored_only_after_paid_instance_cleanup() -> N
     restore_comment = watchdog.index("temporary production capacity lease is RESTORED")
     assert terminate < early_restore < volume_cleanup < restore_comment
     assert "'- media canary: ' + code('false')" in WORKFLOW
+
+
+def test_exit_cleanup_stays_armed_through_fallible_backup_retirement() -> None:
+    acceptance = WORKFLOW.index("backup_accepted=1")
+    retirement = WORKFLOW.index("wait_all_absent backup", acceptance)
+    disable = WORKFLOW.index("trap - EXIT", retirement)
+    gate = WORKFLOW.index("UV_ROOT_BACKUP_GATE_PASS", disable)
+    assert acceptance < retirement < disable < gate
+    cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
+    assert "release_source_workload_fence || cleanup_rc=1" in cleanup
