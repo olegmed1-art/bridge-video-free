@@ -96,6 +96,7 @@ def test_regression_existing_server_fast_path_is_read_only_and_sanitized() -> No
     assert "It never assumes ownership" in TEXT
     assert "non_source_e5_running=" in TEXT
     assert "non_source_e5_stopped=" in TEXT
+    assert "'MOVING'" in TEXT
 
 
 def test_regression_source_instance_is_found_across_active_compartments() -> None:
