@@ -134,9 +134,8 @@ def test_regression_ambiguous_creates_are_reconciled_inside_global_deadline() ->
     assert "CLEANUP_DEADLINE_EPOCH=$(( now + 240 ))" in TEXT
     assert "JOB_DEADLINE_EPOCH - 120" in TEXT
     assert 'remaining=$(( CLEANUP_DEADLINE_EPOCH - now ))' in TEXT
-    cutoff = TEXT.index('(( $(date +%s) <= MUTATION_CUTOFF_EPOCH )) || exit 25')
-    first_mutation = TEXT.index('oci iam user create', TEXT.index("exit 24"))
-    assert cutoff < first_mutation
+    assert '(( $(date +%s) <= MUTATION_CUTOFF_EPOCH )) || return 25' in TEXT
+    assert TEXT.count("require_mutation_budget") == 6
     for marker, command in (
         ("USER_CREATED=1", 'oci iam user create'),
         ("GROUP_CREATED=1", 'oci iam group create'),
@@ -145,6 +144,8 @@ def test_regression_ambiguous_creates_are_reconciled_inside_global_deadline() ->
         ("KEY_CREATED=1", 'oci iam user api-key upload'),
     ):
         assert TEXT.index(marker, TEXT.index("exit 24")) < TEXT.index(command, TEXT.index("exit 24"))
+        marker_index = TEXT.index(marker, TEXT.index("exit 24"))
+        assert TEXT.rfind("require_mutation_budget", TEXT.index("exit 24"), marker_index) >= 0
     assert "Recover only this run's exact stamped IDs before rollback" in TEXT
     assert "Three repeated exact-stamp inventories are authoritative" in TEXT
     assert 'for pass in 1 2 3; do' in TEXT
