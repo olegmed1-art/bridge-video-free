@@ -33,7 +33,9 @@ CREATE TABLE bidding.rule_test_run (
     evidence_id uuid REFERENCES public.evidence(evidence_id) ON DELETE SET NULL,
     method_version text NOT NULL CHECK (btrim(method_version) <> ''),
     executed_at timestamptz NOT NULL DEFAULT now(),
-    created_at timestamptz NOT NULL DEFAULT now(),
+    -- Evidence recency is insertion order, not transaction start time.  now()
+    -- is stable for a transaction and can make a later row look older.
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     CHECK (NOT bidding.contains_forbidden_hidden_key(result_details))
 );
 
@@ -48,6 +50,10 @@ DECLARE
     v_test_school uuid;
     v_evidence_school uuid;
 BEGIN
+    -- Evidence order is server-assigned at insertion.  Even the table owner
+    -- must not be able to backdate a late failure behind an earlier pass.
+    NEW.created_at := clock_timestamp();
+
     SELECT school_id INTO v_test_school FROM bidding.rule_test WHERE rule_test_id=NEW.rule_test_id;
     IF v_test_school IS NULL OR v_test_school <> NEW.school_id THEN
         RAISE EXCEPTION 'BID_RULE_TEST_RUN_SCHOOL_MISMATCH' USING ERRCODE='23514';
@@ -129,7 +135,7 @@ END;
 $$;
 
 CREATE TRIGGER rule_conflict_school_scope_guard
-BEFORE INSERT OR UPDATE OF school_id, left_rule_id, right_rule_id ON bidding.rule_conflict
+BEFORE INSERT OR UPDATE OF school_id, left_rule_id, right_rule_id, evidence_ids ON bidding.rule_conflict
 FOR EACH ROW EXECUTE FUNCTION bidding.validate_rule_conflict_school_scope();
 
 CREATE TABLE bidding.runtime_activation (
@@ -161,3 +167,14 @@ CREATE UNIQUE INDEX bidding_runtime_activation_open_uidx
 
 CREATE INDEX bidding_runtime_activation_lookup_idx
     ON bidding.runtime_activation (school_id, authority_lane, scope_key, status, valid_from, valid_to);
+
+ALTER TABLE bidding.runtime_activation
+ADD CONSTRAINT bidding_runtime_activation_active_no_overlap
+EXCLUDE USING gist (
+    school_id WITH =,
+    rule_id WITH =,
+    authority_lane WITH =,
+    scope_key WITH =,
+    tstzrange(valid_from,valid_to,'[)') WITH &&
+)
+WHERE (status='active');
