@@ -75,7 +75,9 @@ def test_boundary_iam_mutations_are_exactly_the_required_principal_objects() -> 
 
 def test_boundary_policy_is_read_only_and_exact() -> None:
     assert TEXT.count("to inspect compartments in tenancy") == 1
-    assert TEXT.count("to read instance-family in tenancy") == 1\n    assert "to inspect instance-family in tenancy" not in TEXT\n    assert TEXT.count("to read limits in tenancy") == 1
+    assert TEXT.count("to read instance-family in tenancy") == 1
+    assert "to inspect instance-family in tenancy" not in TEXT
+    assert TEXT.count("to read limits in tenancy") == 1
     for verb in ("manage", "use"):
         assert f"to {verb} " not in TEXT
 
