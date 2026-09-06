@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import os
@@ -453,6 +454,9 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
                     "rank": "A",
                     "source": "VISUAL",
                     "frame_sha256": frame_sha,
+                    "decoded_pixel_sha256": hashlib.sha256(
+                        ("decoded:" + frame_sha).encode("ascii")
+                    ).hexdigest(),
                     "region": {
                         "coordinate_space": "NORMALIZED_FRAME",
                         "x": 0.1,

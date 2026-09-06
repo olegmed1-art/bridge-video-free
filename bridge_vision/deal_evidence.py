@@ -78,7 +78,10 @@ def _region(value: Any, field: str) -> dict[str, float | str]:
     result: dict[str, float | str] = {"coordinate_space": "NORMALIZED_FRAME"}
     for name in ("x", "y", "width", "height"):
         result[name] = _confidence(value.get(name), f"{field}.{name}")
-    if float(result["width"]) <= 1e-8 or float(result["height"]) <= 1e-8:
+    if (
+        round(float(result["width"]) * 100_000_000) <= 1
+        or round(float(result["height"]) * 100_000_000) <= 1
+    ):
         raise DealEvidenceError(f"invalid {field} size")
     if (
         float(result["x"]) + float(result["width"]) > 1.0 + 1e-9
@@ -124,6 +127,14 @@ def _normalise_visual_observation(
         "source": "VISUAL",
         "frame_sha256": _sha(
             raw.get("frame_sha256"), f"visual_observations[{index}].frame_sha256"
+        ),
+        "decoded_pixel_sha256": (
+            _sha(
+                raw.get("decoded_pixel_sha256"),
+                f"visual_observations[{index}].decoded_pixel_sha256",
+            )
+            if raw.get("decoded_pixel_sha256") is not None
+            else None
         ),
         "timestamp_ms": _timestamp(
             raw.get("timestamp_ms"), f"visual_observations[{index}].timestamp_ms"
@@ -300,6 +311,7 @@ def build_deal_evidence_report(
     )
     timestamp_by_frame: dict[str, int] = {}
     frame_by_timestamp: dict[int, str] = {}
+    pixels_by_frame: dict[str, set[str | None]] = defaultdict(set)
     regions_by_frame: dict[str, list[tuple[Mapping[str, Any], tuple[str, str]]]] = (
         defaultdict(list)
     )
@@ -312,6 +324,7 @@ def build_deal_evidence_report(
             raise DealEvidenceError("independent frames require distinct timestamps")
         timestamp_by_frame[frame] = timestamp
         frame_by_timestamp[timestamp] = frame
+        pixels_by_frame[frame].add(item["decoded_pixel_sha256"])
         region = item["region"]
         target = (item["card"], item["seat"])
         if any(
@@ -322,6 +335,14 @@ def build_deal_evidence_report(
                 "visual region reused or overlaps a different target"
             )
         regions_by_frame[frame].append((region, target))
+    if any(len(values) != 1 for values in pixels_by_frame.values()):
+        raise DealEvidenceError("one frame cannot have multiple decoded pixel hashes")
+    frame_pixel_hashes = [next(iter(values)) for values in pixels_by_frame.values()]
+    pixel_identity_proven = all(value is not None for value in frame_pixel_hashes)
+    if pixel_identity_proven and len(set(frame_pixel_hashes)) != len(
+        frame_pixel_hashes
+    ):
+        raise DealEvidenceError("independent frames require distinct decoded pixels")
 
     conflicts: list[dict[str, Any]] = []
     review_reasons: list[str] = []
@@ -365,7 +386,7 @@ def build_deal_evidence_report(
         )
         source = (
             "TEMPORAL_CONSENSUS"
-            if len(seen_frames) >= required_visual_frames
+            if pixel_identity_proven and len(seen_frames) >= required_visual_frames
             else "VISUAL"
         )
         accepted_by_card[card] = {
@@ -412,7 +433,10 @@ def build_deal_evidence_report(
         if {(item["seat"], item["card"]) for item in frame_items}
         == expected_visual_pairs
     )
-    global_temporal_support = len(complete_supporting_frames) >= required_visual_frames
+    global_temporal_support = (
+        pixel_identity_proven
+        and len(complete_supporting_frames) >= required_visual_frames
+    )
     pointer_evidence: list[dict[str, Any]] = []
     for event in normalized_pointer_events:
         frame_sha = event["frame_sha256"]

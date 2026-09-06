@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 
 import pytest
 
@@ -32,6 +33,9 @@ def observation(
         "card": card,
         "source": "VISUAL",
         "frame_sha256": frame,
+        "decoded_pixel_sha256": hashlib.sha256(
+            ("decoded:" + frame).encode("ascii")
+        ).hexdigest(),
         "timestamp_ms": timestamp_ms,
         "region": {
             "coordinate_space": "NORMALIZED_FRAME",
@@ -130,7 +134,7 @@ def test_non_iterable_evidence_inputs_fail_closed():
             required_visual_frames=1,
         )
     tiny = observation("N", "AH")
-    tiny["region"]["width"] = 1e-8
+    tiny["region"]["width"] = 1.0001e-8
     with pytest.raises(DealEvidenceError, match="region size"):
         build_deal_evidence_report([tiny], recognizer_version=VERSION)
 
@@ -139,6 +143,17 @@ def test_one_frame_is_visual_but_not_temporal_consensus():
     report = build_deal_evidence_report(
         complete_observations(frames=(FRAMES[0],)), recognizer_version=VERSION
     )
+
+    assert report["status"] == "PENDING_TEMPORAL_CONSENSUS"
+    assert {item["source"] for item in report["card_records"]} == {"VISUAL"}
+
+
+def test_missing_decoded_pixel_identity_cannot_claim_temporal_consensus():
+    visual = complete_observations()
+    for item in visual:
+        item.pop("decoded_pixel_sha256")
+
+    report = build_deal_evidence_report(visual, recognizer_version=VERSION)
 
     assert report["status"] == "PENDING_TEMPORAL_CONSENSUS"
     assert {item["source"] for item in report["card_records"]} == {"VISUAL"}

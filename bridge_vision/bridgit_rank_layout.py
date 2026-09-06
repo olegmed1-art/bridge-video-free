@@ -1828,6 +1828,7 @@ def recognize_frames(
                         "rank": rank,
                         "source": "VISUAL",
                         "frame_sha256": frame_hashes[frame_index],
+                        "decoded_pixel_sha256": pixel_hashes[frame_index],
                         "region": {
                             "coordinate_space": "NORMALIZED_FRAME",
                             "x": region_x,
