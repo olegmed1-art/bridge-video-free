@@ -2226,7 +2226,9 @@ def test_watchdog_service_release_is_retryable_after_marker_removal() -> None:
 
 def test_regression_capacity_is_restored_only_after_paid_instance_cleanup() -> None:
     exit_cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
-    assert exit_cleanup.index("cleanup_temp_resources") < exit_cleanup.index("restore_source_capacity")
+    temporary = exit_cleanup.index("cleanup_temp_resources")
+    terminal_gate = exit_cleanup.index("paid_launch_request_started == 0 || paid_instance_terminal_proven == 1", temporary)
+    assert temporary < terminal_gate < exit_cleanup.index("restore_source_capacity", terminal_gate)
     watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
     terminate = watchdog.index("oci compute instance terminate")
     early_restore = watchdog.index("restore_source_capacity", terminate)
@@ -2336,6 +2338,23 @@ def test_exit_cleanup_does_not_reclaim_capacity_before_paid_terminal_proof() -> 
     launch = WORKFLOW.index("paid_launch_request_started=1")
     create = WORKFLOW.index("create_json_once paid_instance_create", launch)
     assert launch < create
+
+
+def test_prelaunch_failure_restores_source_before_temporary_cleanup() -> None:
+    cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
+    gate = cleanup.index("if (( paid_launch_request_started == 0 )); then")
+    restore = cleanup.index("restore_source_capacity || cleanup_rc=1", gate)
+    release = cleanup.index("release_source_workload_fence || cleanup_rc=1", restore)
+    temporary = cleanup.index("cleanup_temp_resources || cleanup_rc=1")
+    assert gate < restore < release < temporary
+
+
+def test_starting_capacity_retry_rechecks_target_before_another_stop() -> None:
+    start = WORKFLOW.index('if [[ "$current_state" == STARTING ]]; then')
+    block = WORKFLOW[start:WORKFLOW.index('elif [[ "$current_state" == STOPPING ]]; then', start)]
+    assert 'set_source_capacity "$target_ocpus" "$target_memory" "$deadline" "$label"' in block
+    assert 'return $?' in block
+    assert 'current_state=RUNNING' not in block
 
 
 def test_exit_cleanup_stays_armed_through_fallible_backup_retirement() -> None:

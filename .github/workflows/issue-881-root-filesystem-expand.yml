@@ -1311,7 +1311,10 @@ jobs:
             fi
             if [[ "$current_state" == STARTING ]]; then
               wait_oci_resource_ready instance "$instance_id" RUNNING 600 "${label}_starting" bridge-school-dds3-frankfurt "$deadline" || return $?
-              current_state=RUNNING
+              # Re-read identity and capacity after the transition. A previous
+              # accepted restore may already have reached the requested shape.
+              set_source_capacity "$target_ocpus" "$target_memory" "$deadline" "$label"
+              return $?
             elif [[ "$current_state" == STOPPING ]]; then
               wait_oci_resource_ready instance "$instance_id" STOPPED 600 "${label}_stopping" bridge-school-dds3-frankfurt "$deadline" || return $?
               current_state=STOPPED
@@ -1450,8 +1453,13 @@ jobs:
             set +e
             state_set failure_rc "$rc"
             state_set failure_phase "${phase:-unknown}"
-            cleanup_temp_resources
-            cleanup_rc=$?
+            # No paid launch can be in flight here: prioritize production
+            # recovery before storage/network waits consume the shared reserve.
+            if (( paid_launch_request_started == 0 )); then
+              restore_source_capacity || cleanup_rc=1
+              release_source_workload_fence || cleanup_rc=1
+            fi
+            cleanup_temp_resources || cleanup_rc=1
             if (( paid_launch_request_started == 0 || paid_instance_terminal_proven == 1 )); then
               restore_source_capacity || cleanup_rc=1
               release_source_workload_fence || cleanup_rc=1
