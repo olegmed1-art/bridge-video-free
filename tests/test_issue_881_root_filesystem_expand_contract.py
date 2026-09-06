@@ -2274,13 +2274,20 @@ def test_watchdog_propagates_source_identity_and_parser_failures() -> None:
     assert parser < mapfile < cardinality < indexing
     softstop = restore.index("--action SOFTSTOP")
     first_only = restore.index("if (( source_stop_budget_committed == 0 )); then", indexing)
-    budget = restore.index("source_restore_deadline - SECONDS >= 1200", first_only)
+    budget = restore.index("source_restore_deadline - SECONDS >= 1380", first_only)
     committed = restore.index("source_stop_budget_committed=1", budget)
     assert first_only < budget < committed < softstop
-    assert restore.count("source_restore_deadline - SECONDS >= 1200") == 1
+    assert restore.count("source_restore_deadline - SECONDS >= 1380") == 1
     assert "source_restore_deadline=$((SECONDS + 1500))" in restore
     conditional_end = restore.index("fi", committed)
     assert softstop > conditional_end
+
+
+def test_capacity_fence_uses_runtime_mask_for_installed_unit() -> None:
+    acquire = WORKFLOW[WORKFLOW.index("acquire_source_workload_fence() {") : WORKFLOW.index("release_source_workload_fence() {")]
+    assert "systemctl mask --runtime --now universal-video-container.service" in acquire
+    assert '== masked-runtime' in acquire
+    assert "systemctl mask --now universal-video-container.service" not in acquire
 
 
 def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> None:

@@ -234,7 +234,7 @@ jobs:
                 if (( source_stop_budget_committed == 0 )); then
                   # Reserve both independently bounded stop and restart
                   # transitions before the first request.
-                  (( source_restore_deadline - SECONDS >= 1200 )) || return 105
+                  (( source_restore_deadline - SECONDS >= 1380 )) || return 105
                   source_stop_budget_committed=1
                 fi
                 # A fresh RUNNING observation permits an idempotent retry. This
