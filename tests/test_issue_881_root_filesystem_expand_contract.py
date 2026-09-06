@@ -1947,6 +1947,25 @@ if prove_repeated_exact_stamp_inventory_no_active; then echo rc=0; else echo rc=
         assert "rc=96" in failed.stdout
 
 
+def test_redacted_cleanup_cannot_short_circuit_after_one_empty_inventory() -> None:
+    reconcile = WORKFLOW[
+        WORKFLOW.index("reconcile_prior_attempt_resources()") :
+        WORKFLOW.index("cleanup_temp_resources()")
+    ]
+    empty_gate = reconcile[
+        reconcile.index('if [[ -z "$prior_instances$prior_restored') :
+        reconcile.index('if [[ -n "$prior_instances" ]]')
+    ]
+    assert "if (( cleanup_only == 0 )); then" in empty_gate
+    assert empty_gate.index("if (( cleanup_only == 0 )); then") < empty_gate.index("return 0")
+    assert "redacted_inventory=true" in empty_gate
+    redacted_start = reconcile.index("redacted_inventory=true")
+    repeated_proof = reconcile.index("prove_repeated_exact_stamp_inventory_no_active", redacted_start)
+    typed_proof = reconcile.index("record_authoritative_type_proof instance", repeated_proof)
+    success = reconcile.index("prior_cleanup_status RECONCILED_PROVEN_ABSENT", typed_proof)
+    assert redacted_start < repeated_proof < typed_proof < success
+
+
 def test_uncertain_instance_manifest_is_read_only_for_cleanup_only_mode() -> None:
     reconcile = WORKFLOW[
         WORKFLOW.index("reconcile_prior_attempt_resources()") :
