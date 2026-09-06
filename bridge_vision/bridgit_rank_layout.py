@@ -407,11 +407,14 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
     min_template_score = _number(
         gates.get("min_template_score"),
         "gates.min_template_score",
-        minimum=-1,
+        minimum=0.000001,
         maximum=1,
     )
     min_peak_score = _number(
-        gates.get("min_peak_score"), "gates.min_peak_score", minimum=-1, maximum=1
+        gates.get("min_peak_score"),
+        "gates.min_peak_score",
+        minimum=0.000001,
+        maximum=1,
     )
     min_peak_prominence = _number(
         gates.get("min_peak_prominence"),

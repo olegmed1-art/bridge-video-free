@@ -143,6 +143,20 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
         parse_profile(raw)
 
     raw = profile_raw()
+    raw["geometry"]["interface_anchor"] = {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": {"x": 0.72, "y": 0.02, "width": 0.08, "height": 0.10},
+        "scales": [1.0],
+        "minimum_score": 0,
+        "minimum_margin": 0.03,
+    }
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="minimum_score"):
+        parse_profile(raw)
+
+    raw = profile_raw()
     raw["gates"]["min_assignment_margin"] = 0
     raw["profile_sha256"] = canonical_hash(
         {key: value for key, value in raw.items() if key != "profile_sha256"}
@@ -165,6 +179,15 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
     )
     with pytest.raises(BridgitRankLayoutError, match="min_peak_prominence"):
         parse_profile(raw)
+
+    for field in ("min_template_score", "min_peak_score"):
+        raw = profile_raw()
+        raw["gates"][field] = 0
+        raw["profile_sha256"] = canonical_hash(
+            {key: value for key, value in raw.items() if key != "profile_sha256"}
+        )
+        with pytest.raises(BridgitRankLayoutError, match=field):
+            parse_profile(raw)
 
     raw = profile_raw()
     raw["ordering"]["suits"] = 1
