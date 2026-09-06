@@ -131,10 +131,9 @@ jobs:
 
           roots="$RUNNER_TEMP/roots.json"
           instances="$RUNNER_TEMP/instances.json"
-          shapes="$RUNNER_TEMP/shapes.json"
-          core_limit="$RUNNER_TEMP/core-limit.json"
-          memory_limit="$RUNNER_TEMP/memory-limit.json"
-          result="$RUNNER_TEMP/preflight-result.json"
+          ads="$RUNNER_TEMP/availability-domains.json"
+          candidates="$RUNNER_TEMP/preflight-candidates.jsonl"
+          existing_e5="$RUNNER_TEMP/existing-e5-summary.json"
 
           request_json "$roots" oci iam compartment list --include-root --compartment-id-in-subtree true --access-level ACCESSIBLE --all
           readarray -t compartments < <(python - "$roots" <<'PY'
@@ -198,26 +197,69 @@ jobs:
           done
           (( compartment_known == 1 ))
 
-          request_json "$shapes" oci compute shape list --compartment-id "$compartment_id" --availability-domain "$ad" --all
-          request_json "$core_limit" oci limits resource-availability get --service-name compute --limit-name standard-e4-core-count --compartment-id "$compartment_id" --availability-domain "$ad"
-          request_json "$memory_limit" oci limits resource-availability get --service-name compute --limit-name standard-e4-memory-count --compartment-id "$compartment_id" --availability-domain "$ad"
+          # A separate existing E5 VM could be a zero-quota fast path, but this
+          # audit only reports sanitized counts. It never assumes ownership or
+          # changes lifecycle state.
+          python - "$instances" "$instance_id" <<'PY' > "$existing_e5"
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          source_id = sys.argv[2]
+          assert isinstance(data, list)
+          candidates = [x for x in data if isinstance(x, dict)
+                        and x.get('id') != source_id
+                        and x.get('shape') == 'VM.Standard.E5.Flex'
+                        and x.get('lifecycle-state') not in {'TERMINATING', 'TERMINATED'}]
+          allowed = {'PROVISIONING', 'STARTING', 'RUNNING', 'STOPPING', 'STOPPED'}
+          assert all(x.get('lifecycle-state') in allowed for x in candidates)
+          print(json.dumps({
+              'total': len(candidates),
+              'running': sum(x.get('lifecycle-state') == 'RUNNING' for x in candidates),
+              'stopped': sum(x.get('lifecycle-state') == 'STOPPED' for x in candidates),
+          }, sort_keys=True))
+          PY
 
-          set +e
-          python ops/oci_paid_acceptance_guard.py \
-            --shapes-json "$shapes" \
-            --availability-json "$core_limit" \
-            --memory-availability-json "$memory_limit" \
-            --source-shape "$source_shape" \
-            --now-utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$result"
-          guard_rc=$?
-          set -e
-          [[ "$guard_rc" == 0 || "$guard_rc" == 2 ]]
-
-          python - "$result" "$core_limit" "$memory_limit" <<'PY' > "$evidence"
-          import importlib.util
-          import json
-          import sys
-
+          # Boot-volume backups are regional. Audit every AD in Frankfurt so
+          # exhausted source-AD quota cannot hide a safe same-region path.
+          request_json "$ads" oci iam availability-domain list --compartment-id "$tenancy_id" --all
+          readarray -t availability_domains < <(python - "$ads" "$ad" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          source = sys.argv[2]
+          assert isinstance(data, list) and 1 <= len(data) <= 16
+          names = [x.get('name') for x in data if isinstance(x, dict)]
+          assert all(isinstance(x, str) and x and '\n' not in x and '\r' not in x for x in names)
+          assert len(names) == len(data) == len(set(names)) and source in names
+          print(source)
+          for name in sorted(x for x in names if x != source):
+              print(name)
+          PY
+          )
+          [[ ${#availability_domains[@]} -ge 1 ]]
+          : > "$candidates"
+          candidate_index=0
+          for candidate_ad in "${availability_domains[@]}"; do
+            candidate_index=$(( candidate_index + 1 ))
+            shapes="$RUNNER_TEMP/shapes-$candidate_index.json"
+            core_limit="$RUNNER_TEMP/core-limit-$candidate_index.json"
+            memory_limit="$RUNNER_TEMP/memory-limit-$candidate_index.json"
+            result="$RUNNER_TEMP/preflight-result-$candidate_index.json"
+            request_json "$shapes" oci compute shape list --compartment-id "$compartment_id" --availability-domain "$candidate_ad" --all
+            request_json "$core_limit" oci limits resource-availability get --service-name compute --limit-name standard-e4-core-count --compartment-id "$compartment_id" --availability-domain "$candidate_ad"
+            request_json "$memory_limit" oci limits resource-availability get --service-name compute --limit-name standard-e4-memory-count --compartment-id "$compartment_id" --availability-domain "$candidate_ad"
+            set +e
+            python ops/oci_paid_acceptance_guard.py \
+              --shapes-json "$shapes" \
+              --availability-json "$core_limit" \
+              --memory-availability-json "$memory_limit" \
+              --source-shape "$source_shape" \
+              --now-utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$result"
+            guard_rc=$?
+            set -e
+            [[ "$guard_rc" == 0 || "$guard_rc" == 2 ]]
+            same_as_source=false
+            [[ "$candidate_ad" != "$ad" ]] || same_as_source=true
+            python - "$result" "$core_limit" "$memory_limit" "$same_as_source" <<'PY' >> "$candidates"
+          import json, sys
           result = json.load(open(sys.argv[1], encoding='utf-8'))
           core = json.load(open(sys.argv[2], encoding='utf-8')).get('data')
           memory = json.load(open(sys.argv[3], encoding='utf-8')).get('data')
@@ -225,7 +267,37 @@ jobs:
           status = result.get('status')
           assert status in {'APPROVED', 'REJECTED'}
           reason = result.get('reason', 'none')
-          assert isinstance(reason, str) and reason and all(c.isupper() or c.isdigit() or c == '_' for c in reason) if reason != 'none' else True
+          assert isinstance(reason, str) and reason
+          print(json.dumps({
+              'same_as_source': sys.argv[4] == 'true',
+              'status': status,
+              'reason': reason,
+              'available_ocpus': core.get('available'),
+              'available_memory_gb': memory.get('available'),
+              'billing_class': result.get('billing_class', 'NOT_APPROVED'),
+              'estimated_compute_usd': result.get('estimated_compute_usd', 'NOT_APPROVED'),
+          }, sort_keys=True))
+          PY
+          done
+
+          python - "$candidates" "$existing_e5" <<'PY' > "$evidence"
+          import importlib.util
+          import json
+          import sys
+
+          rows = [json.loads(x) for x in open(sys.argv[1], encoding='utf-8') if x.strip()]
+          existing = json.load(open(sys.argv[2], encoding='utf-8'))
+          assert rows and sum(x['same_as_source'] for x in rows) == 1
+          assert set(existing) == {'total', 'running', 'stopped'}
+          source = next(x for x in rows if x['same_as_source'])
+          approved = [x for x in rows if x['status'] == 'APPROVED']
+          selected = source if source in approved else (approved[0] if approved else source)
+          if approved:
+              status = 'APPROVED' if selected['same_as_source'] else 'ALTERNATE_AD_AVAILABLE'
+              reason = 'none'
+          else:
+              status = 'REJECTED'
+              reason = 'NO_AVAILABILITY_DOMAIN_HAS_REQUIRED_HEADROOM'
 
           spec = importlib.util.spec_from_file_location('paid_guard', 'ops/oci_paid_acceptance_guard.py')
           module = importlib.util.module_from_spec(spec)
@@ -237,13 +309,20 @@ jobs:
           print('shape=' + module.PAID_SHAPE)
           print('ocpus=' + str(module.PAID_OCPUS))
           print('memory_gb=' + str(module.PAID_MEMORY_GB))
-          print('available_ocpus=' + str(core.get('available')))
-          print('available_memory_gb=' + str(memory.get('available')))
-          print('billing_class=' + str(result.get('billing_class', 'NOT_APPROVED')))
+          print('availability_domains_checked=' + str(len(rows)))
+          print('approved_ad_candidates=' + str(len(approved)))
+          print('selected_ad_scope=' + ('SOURCE' if selected['same_as_source'] else 'ALTERNATE' if approved else 'NONE'))
+          print('source_ad_reason=' + str(source['reason']))
+          print('non_source_e5_instances=' + str(existing['total']))
+          print('non_source_e5_running=' + str(existing['running']))
+          print('non_source_e5_stopped=' + str(existing['stopped']))
+          print('available_ocpus=' + str(selected.get('available_ocpus')))
+          print('available_memory_gb=' + str(selected.get('available_memory_gb')))
+          print('billing_class=' + str(selected.get('billing_class', 'NOT_APPROVED')))
           print('hourly_rate_guard_usd=' + str(module.MAX_HOURLY_RATE_USD))
           print('runtime_limit_seconds=' + str(module.MAX_RUNTIME_SECONDS))
           print('compute_budget_guard_usd=' + str(module.MAX_COMPUTE_USD))
-          print('estimated_compute_usd=' + str(result.get('estimated_compute_usd', 'NOT_APPROVED')))
+          print('estimated_compute_usd=' + str(selected.get('estimated_compute_usd', 'NOT_APPROVED')))
           print('price_basis=' + module.PRICE_BASIS)
           print('price_basis_valid_until=' + module.PRICE_BASIS_VALID_UNTIL.isoformat().replace('+00:00', 'Z'))
           PY
