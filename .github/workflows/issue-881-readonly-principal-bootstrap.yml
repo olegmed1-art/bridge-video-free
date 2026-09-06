@@ -86,6 +86,8 @@ jobs:
           OCI_FINGERPRINT_RAW: ${{ secrets.OCI_CLI_FINGERPRINT }}
           OCI_KEY_RAW: ${{ secrets.OCI_CLI_KEY_CONTENT }}
           OCI_REGION_RAW: ${{ secrets.OCI_CLI_REGION }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -140,6 +142,7 @@ jobs:
           -----END PUBLIC KEY-----
           PUBLIC_KEY
           NAME_STAMP="issue-881-paid-preflight-readonly-${GITHUB_RUN_ID}"
+          OWNERSHIP_TOKEN="$(openssl rand -hex 32)"
           USER_NAME="$NAME_STAMP"
           GROUP_NAME="$NAME_STAMP"
           POLICY_NAME="$NAME_STAMP"
@@ -208,19 +211,20 @@ jobs:
                 CLEANUP_DEADLINE_EPOCH=$(( JOB_DEADLINE_EPOCH - 120 ))
               fi
               # A timed-out create may have reached OCI before its response was
-              # lost. Recover only this run's exact stamped IDs before rollback.
+              # lost. Recover only objects carrying this run's secret ownership
+              # token; an exact public name alone never authorizes deletion.
               for pass in 1 2 3; do
                 if (( USER_CREATED == 1 )) && [[ -z "$USER_ID" ]]; then
                   request_json "$RUNNER_TEMP/rollback-users.json" oci iam user list --compartment-id "$TENANCY_ID" --all
-                  USER_ID="$(select_exact "$RUNNER_TEMP/rollback-users.json" "$USER_NAME")"
+                  USER_ID="$(select_owned_exact "$RUNNER_TEMP/rollback-users.json" "$USER_NAME" "$OWNERSHIP_TOKEN")"
                 fi
                 if (( GROUP_CREATED == 1 )) && [[ -z "$GROUP_ID" ]]; then
                   request_json "$RUNNER_TEMP/rollback-groups.json" oci iam group list --compartment-id "$TENANCY_ID" --all
-                  GROUP_ID="$(select_exact "$RUNNER_TEMP/rollback-groups.json" "$GROUP_NAME")"
+                  GROUP_ID="$(select_owned_exact "$RUNNER_TEMP/rollback-groups.json" "$GROUP_NAME" "$OWNERSHIP_TOKEN")"
                 fi
                 if (( POLICY_CREATED == 1 )) && [[ -z "$POLICY_ID" ]]; then
                   request_json "$RUNNER_TEMP/rollback-policies.json" oci iam policy list --compartment-id "$TENANCY_ID" --all
-                  POLICY_ID="$(select_exact "$RUNNER_TEMP/rollback-policies.json" "$POLICY_NAME")"
+                  POLICY_ID="$(select_owned_exact "$RUNNER_TEMP/rollback-policies.json" "$POLICY_NAME" "$OWNERSHIP_TOKEN")"
                 fi
                 [[ "$USER_CREATED:$GROUP_CREATED:$POLICY_CREATED" != *1* ]] || sleep 5
               done
@@ -275,6 +279,20 @@ jobs:
               print(value)
           PY
           }
+          select_owned_exact() {
+            python - "$1" "$2" "$3" <<'PY'
+          import json, sys
+          rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          assert isinstance(rows, list) and all(isinstance(x, dict) for x in rows)
+          marker = f'ownership:{sys.argv[3]}'
+          matches = [x for x in rows if x.get('name') == sys.argv[2] and marker in x.get('description', '')]
+          assert len(matches) <= 1
+          if matches:
+              value = matches[0].get('id')
+              assert isinstance(value, str) and value.startswith('ocid1.')
+              print(value)
+          PY
+          }
 
           python - "$GROUP_NAME" <<'PY' > "$RUNNER_TEMP/statements.json"
           import json, sys
@@ -297,18 +315,18 @@ jobs:
           EXPECTED_FINGERPRINT="$(openssl rsa -pubin -in "$RUNNER_TEMP/readonly-public.pem" -outform DER 2>/dev/null | openssl md5 -c | awk '{print $2}')"
           require_mutation_budget
           USER_CREATED=1
-          request_json "$RUNNER_TEMP/user-create.json" oci iam user create --compartment-id "$TENANCY_ID" --name "$USER_NAME" --description 'Issue 881 paid preflight read-only audit principal'
+          request_json "$RUNNER_TEMP/user-create.json" oci iam user create --compartment-id "$TENANCY_ID" --name "$USER_NAME" --description "Issue 881 paid preflight read-only audit principal ownership:$OWNERSHIP_TOKEN"
           USER_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.user."); print(x)' "$RUNNER_TEMP/user-create.json")"
           require_mutation_budget
           GROUP_CREATED=1
-          request_json "$RUNNER_TEMP/group-create.json" oci iam group create --compartment-id "$TENANCY_ID" --name "$GROUP_NAME" --description 'Issue 881 paid preflight read-only audit group'
+          request_json "$RUNNER_TEMP/group-create.json" oci iam group create --compartment-id "$TENANCY_ID" --name "$GROUP_NAME" --description "Issue 881 paid preflight read-only audit group ownership:$OWNERSHIP_TOKEN"
           GROUP_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.group."); print(x)' "$RUNNER_TEMP/group-create.json")"
           require_mutation_budget
           MEMBERSHIP_CREATED=1
           request_json "$RUNNER_TEMP/member-create.json" oci iam group add-user --group-id "$GROUP_ID" --user-id "$USER_ID"
           require_mutation_budget
           POLICY_CREATED=1
-          request_json "$RUNNER_TEMP/policy-create.json" oci iam policy create --compartment-id "$TENANCY_ID" --name "$POLICY_NAME" --description 'Least-privilege reads for Issue 881 paid preflight' --statements "file://$RUNNER_TEMP/statements.json"
+          request_json "$RUNNER_TEMP/policy-create.json" oci iam policy create --compartment-id "$TENANCY_ID" --name "$POLICY_NAME" --description "Least-privilege reads for Issue 881 paid preflight ownership:$OWNERSHIP_TOKEN" --statements "file://$RUNNER_TEMP/statements.json"
           POLICY_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.policy."); print(x)' "$RUNNER_TEMP/policy-create.json")"
 
           require_mutation_budget
@@ -338,33 +356,40 @@ jobs:
             echo "\`$CIPHERTEXT\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish encrypted bootstrap receipt
-        if: always()
+          # Receipt publication is part of the transaction: any failure here
+          # exits nonzero while the OCI rollback trap and credentials are live.
+          {
+            echo '## Issue #881 read-only OCI principal bootstrap'
+            echo
+            echo '- status: `READY_FOR_SECRET_INSTALL`'
+            echo '- IAM scope: `inspect compartments`, `inspect instance-family`, `read limits` only'
+            echo '- compute/storage/network create, update, delete or launch: `absent`'
+            echo '- monetary charge: `none`'
+            echo '- failed-step IAM rollback: `NOT_NEEDED`'
+            echo "- encrypted credential metadata: \`$CIPHERTEXT\`"
+            echo "- run: $RUN_URL"
+          } > "$RUNNER_TEMP/body.md"
+          gh issue comment 881 --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
+
+      - name: Publish failed-bootstrap receipt
+        if: ${{ always() && steps.bootstrap.outcome != 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          JOB_STATUS: ${{ job.status }}
-          CIPHERTEXT: ${{ steps.bootstrap.outputs.ciphertext }}
           ROLLBACK_FILE: ${{ runner.temp }}/bootstrap-rollback-status
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$JOB_STATUS" == success && -n "$CIPHERTEXT" ]]; then
-            STATUS=READY_FOR_SECRET_INSTALL
-          else
-            STATUS=BOOTSTRAP_ERROR
-            CIPHERTEXT=none
-          fi
           ROLLBACK_STATUS="$(cat "$ROLLBACK_FILE" 2>/dev/null || echo NOT_RECORDED)"
           {
             echo '## Issue #881 read-only OCI principal bootstrap'
             echo
-            echo "- status: \`$STATUS\`"
+            echo '- status: `BOOTSTRAP_ERROR`'
             echo '- IAM scope: `inspect compartments`, `inspect instance-family`, `read limits` only'
             echo '- compute/storage/network create, update, delete or launch: `absent`'
             echo '- monetary charge: `none`'
             echo "- failed-step IAM rollback: \`$ROLLBACK_STATUS\`"
-            echo "- encrypted credential metadata: \`$CIPHERTEXT\`"
+            echo '- encrypted credential metadata: `none`'
             echo "- run: $RUN_URL"
           } > "$RUNNER_TEMP/body.md"
           gh issue comment 881 --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
