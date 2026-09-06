@@ -189,7 +189,7 @@ def test_pointer_on_changed_or_unrecognized_frame_is_needs_review():
     )
 
 
-def test_three_complete_visible_hands_can_be_inferred_only_for_offline_review():
+def test_three_complete_visible_hands_remain_unknown_without_fourth_hand_inference():
     visual = []
     for seat, suit in zip("NES", "HCD"):
         for index, rank in enumerate(RANKS):
@@ -206,38 +206,25 @@ def test_three_complete_visible_hands_can_be_inferred_only_for_offline_review():
     report = build_deal_evidence_report(
         visual,
         recognizer_version=VERSION,
-        allow_logical_inference=True,
-    )
-
-    assert report["status"] == "COMPLETE_WITH_LOGICAL_INFERENCE"
-    assert report["canonical_observed_deal"]["hands"]["W"]["unknown_count"] == 13
-    inferred = [
-        item for item in report["card_records"] if item["source"] == "LOGICAL_INFERENCE"
-    ]
-    assert len(inferred) == 13
-    assert {item["rank"] + item["suit"] for item in inferred} == {
-        rank + "S" for rank in RANKS
-    }
-    assert all(item["visually_recognized"] is False for item in inferred)
-    assert all(item["available_to_player"] is False for item in inferred)
-    assert all(item["frame_sha256"] is None for item in inferred)
-    assert report["logical_inference"]["canonical_promotion_allowed"] is False
-    assert report["logical_inference"]["hidden_information_use_allowed"] is False
-
-
-def test_inference_does_not_guess_when_preconditions_are_incomplete():
-    visual = [observation("N", "AH")]
-    report = build_deal_evidence_report(
-        visual,
-        recognizer_version=VERSION,
-        allow_logical_inference=True,
     )
 
     assert report["status"] == "PARTIAL"
-    assert report["logical_inference"]["performed"] is False
-    assert report["logical_inference"]["reason"] == "PRECONDITIONS_NOT_MET"
-    assert report["integrity"]["unknown_slots"] == 51
-    assert sum(item["source"] == "UNKNOWN" for item in report["card_records"]) == 51
+    assert report["canonical_observed_deal"]["hands"]["W"]["unknown_count"] == 13
+    assert report["integrity"]["observed_cards"] == 39
+    assert report["integrity"]["inferred_cards"] == 0
+    assert report["integrity"]["unknown_slots"] == 13
+    assert not any(
+        item["source"] == "LOGICAL_INFERENCE" for item in report["card_records"]
+    )
+
+
+def test_explicit_legacy_inference_switch_fails_closed():
+    with pytest.raises(DealEvidenceError, match="fourth-hand inference is prohibited"):
+        build_deal_evidence_report(
+            [observation("N", "AH")],
+            recognizer_version=VERSION,
+            allow_logical_inference=True,
+        )
 
 
 def test_same_card_in_two_seats_is_not_silently_resolved():

@@ -119,6 +119,23 @@ def test_different_scale_or_window_size_is_a_competing_anchor():
     assert anchor_registration._implies_distinct_window(best, different_scale) is True
 
 
+def test_equivalent_peak_suppression_exposes_a_third_distinct_window():
+    scores = np.zeros((80, 120), dtype=np.float32)
+    scores[20, 20] = 0.99
+    scores[20, 40] = 0.98
+    scores[20, 70] = 0.97
+
+    anchor_registration._suppress_equivalent_window_peak(
+        scores,
+        (20, 20),
+        game_width=1000,
+        game_height=600,
+    )
+
+    assert scores[20, 40] == -1.0
+    assert cv2.minMaxLoc(scores)[3] == (70, 20)
+
+
 def test_anchor_work_is_template_weighted_and_bounded_for_whole_job():
     small_spec = anchor_spec()
     large_spec = anchor_spec()

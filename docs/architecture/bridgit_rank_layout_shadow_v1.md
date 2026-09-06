@@ -36,7 +36,7 @@ The module is intentionally not exported as a default `BridgeVisionEngine` detec
 
 The deck bijection is an integrity/ordering constraint over 52 visible slots. It is not evidence for a missing card. If the layout is not fully visible, recognition stops; the worker never emits a completed hidden hand.
 
-`bridge_vision.deal_evidence` also exposes an explicit offline-review complement for the narrow case of 39 temporally confirmed cards in three complete hands. Its 13 output records are marked `LOGICAL_INFERENCE`, have no frame/timestamp/region, set `visually_recognized=false`, `available_to_player=false`, `accepted_as_visual_observation=false`, and never enter `canonical_observed_deal`. Visual model candidates themselves set `available_to_player=null`, `player_availability=NOT_EVALUATED` and `accepted_as_canonical_observation=false`; screen visibility is never treated as legal availability to a player. The shadow job always calls this layer with logical inference disabled. All other gaps remain `UNKNOWN`.
+`bridge_vision.deal_evidence` preserves `LOGICAL_INFERENCE` as a provenance vocabulary value for compatibility but never emits it. The explicit legacy inference switch fails closed; 39 observations remain 39 observed cards plus 13 `UNKNOWN` slots, as required by `bridge-video-deal-v4`. Visual model candidates set `available_to_player=null`, `player_availability=NOT_EVALUATED` and `accepted_as_canonical_observation=false`; screen visibility is never treated as legal availability to a player.
 
 ## Profile gates
 
@@ -110,7 +110,7 @@ This command only creates the requested receipt. It does not register the backen
 | `LAYOUT_AMBIGUOUS` | A frame's side hand/suit peak counts fail totals, or independently measured frame geometries disagree |
 | `REJECTED` | Job, profile, path, hash, image encoding/registration, decoded-memory or scoring-operation budget, replay, runtime dependency or production/hidden-information gate failed |
 
-The nested deal-evidence report independently uses `COMPLETE_VISUAL`, `PENDING_TEMPORAL_CONSENSUS`, `PARTIAL`, `COMPLETE_WITH_LOGICAL_INFERENCE` (offline helper only), or `NEEDS_REVIEW`. These statuses never authorize canonical promotion.
+The nested deal-evidence report independently uses `COMPLETE_VISUAL`, `PENDING_TEMPORAL_CONSENSUS`, `PARTIAL`, or `NEEDS_REVIEW`. These statuses never authorize canonical promotion.
 
 ## Production gates
 

@@ -166,6 +166,24 @@ def _implies_distinct_window(
     )
 
 
+def _suppress_equivalent_window_peak(
+    scores: Any,
+    location: tuple[int, int],
+    *,
+    game_width: int,
+    game_height: int,
+) -> None:
+    """Suppress every integer origin treated as the same registered window."""
+
+    local_x, local_y = location
+    radius_x = math.floor(max(4, game_width * 0.03))
+    radius_y = math.floor(max(4, game_height * 0.03))
+    scores[
+        max(0, local_y - radius_y) : min(scores.shape[0], local_y + radius_y + 1),
+        max(0, local_x - radius_x) : min(scores.shape[1], local_x + radius_x + 1),
+    ] = -1.0
+
+
 def register_from_upper_right_anchor(
     reference: Any,
     observed: Any,
@@ -247,13 +265,12 @@ def register_from_upper_right_anchor(
                     "window_height": game_height,
                 }
             )
-            local_x = location[0]
-            local_y = location[1]
-            radius = max(4, min(width, height) // 3)
-            valid[
-                max(0, local_y - radius) : min(valid.shape[0], local_y + radius + 1),
-                max(0, local_x - radius) : min(valid.shape[1], local_x + radius + 1),
-            ] = -1.0
+            _suppress_equivalent_window_peak(
+                valid,
+                location,
+                game_width=game_width,
+                game_height=game_height,
+            )
     if not candidates:
         raise AnchorRegistrationError("upper-right interface anchor was not found")
     candidates.sort(

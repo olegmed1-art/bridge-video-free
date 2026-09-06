@@ -1,10 +1,9 @@
 """Deterministic, fail-closed evidence report for video-recognized bridge deals.
 
 The report keeps visual observations, teacher pointer corroboration, temporal
-consensus, logical complement and unknown slots as different provenance
-classes.  Only visual observations enter the canonical observed deal.  A
-logical complement is an offline review aid and is never marked as visible or
-available to a player.
+consensus and unknown slots as different provenance classes.  Only visual
+observations enter the canonical observed deal.  Logical complement is an
+explicitly prohibited legacy source and is never emitted.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from bridge_contracts.video_deal import FULL_DECK, SEATS, canonicalize_video_deal
+from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
 
 DEAL_EVIDENCE_SCHEMA = "bridge-video-deal-evidence/v1"
 PROVENANCE_SOURCES = (
@@ -184,12 +183,7 @@ def build_deal_evidence_report(
     required_visual_frames: int = 2,
     allow_logical_inference: bool = False,
 ) -> dict[str, Any]:
-    """Build a provenance-preserving deal report without promoting hidden cards.
-
-    ``allow_logical_inference`` affects only the review diagram.  Inferred cards
-    are excluded from ``canonical_observed_deal`` and carry
-    ``available_to_player=false`` and ``accepted_as_visual_observation=false``.
-    """
+    """Build a provenance-preserving deal report without deriving hidden cards."""
 
     if not _VERSION.fullmatch(str(recognizer_version or "")):
         raise DealEvidenceError("invalid recognizer_version")
@@ -201,6 +195,8 @@ def build_deal_evidence_report(
         raise DealEvidenceError("invalid required_visual_frames")
     if not isinstance(allow_logical_inference, bool):
         raise DealEvidenceError("allow_logical_inference must be boolean")
+    if allow_logical_inference:
+        raise DealEvidenceError("logical fourth-hand inference is prohibited")
     if isinstance(visual_observations, (str, bytes)):
         raise DealEvidenceError("visual_observations must be an iterable")
     if isinstance(teacher_pointer_events, (str, bytes)):
@@ -423,54 +419,9 @@ def build_deal_evidence_report(
             review_reasons.append("canonical_observed_deal_invalid")
 
     all_records = list(accepted_by_card.values())
-    inferred_cards: list[str] = []
-    inference_reason = "NOT_REQUESTED"
     every_observed_card_has_consensus = bool(all_records) and all(
         record["source"] == "TEMPORAL_CONSENSUS" for record in all_records
     )
-    if allow_logical_inference:
-        inference_reason = "PRECONDITIONS_NOT_MET"
-        complete_seats = [seat for seat in SEATS if len(seat_cards[seat]) == 13]
-        missing_seats = [seat for seat in SEATS if len(seat_cards[seat]) == 0]
-        if (
-            not conflicts
-            and not review_reasons
-            and len(accepted_by_card) == 39
-            and len(complete_seats) == 3
-            and len(missing_seats) == 1
-            and every_observed_card_has_consensus
-            and global_temporal_support
-        ):
-            missing_seat = missing_seats[0]
-            inferred_cards = sorted(
-                FULL_DECK - set(accepted_by_card),
-                key=lambda card: (SUITS.index(card[1]), RANKS.index(card[0])),
-            )
-            for card in inferred_cards:
-                all_records.append(
-                    {
-                        "seat": missing_seat,
-                        "suit": card[1],
-                        "rank": card[0],
-                        "source": "LOGICAL_INFERENCE",
-                        "frame_sha256": None,
-                        "timestamp_ms": None,
-                        "region": None,
-                        "confidence": 1.0,
-                        "confidence_kind": "DECK_COMPLEMENT_LOGICAL_CERTAINTY",
-                        "recognizer_version": recognizer_version,
-                        "visually_recognized": False,
-                        "available_to_player": False,
-                        "accepted_as_visual_observation": False,
-                        "accepted_as_canonical_observation": False,
-                        "inference": {
-                            "method": "UNIQUE_52_CARD_COMPLEMENT",
-                            "observed_cards_required": 39,
-                            "observed_seats_required": complete_seats,
-                        },
-                    }
-                )
-            inference_reason = "UNIQUE_52_CARD_COMPLEMENT"
 
     known_by_seat = {seat: 0 for seat in SEATS}
     for record in all_records:
@@ -495,8 +446,6 @@ def build_deal_evidence_report(
         status = "COMPLETE_VISUAL"
     elif observed_count == 52:
         status = "PENDING_TEMPORAL_CONSENSUS"
-    elif inferred_cards:
-        status = "COMPLETE_WITH_LOGICAL_INFERENCE"
     else:
         status = "PARTIAL"
 
@@ -521,19 +470,19 @@ def build_deal_evidence_report(
         "review_reasons": sorted(set(review_reasons)),
         "canonical_observed_deal": observed_deal,
         "logical_inference": {
-            "requested": allow_logical_inference,
-            "performed": bool(inferred_cards),
-            "reason": inference_reason,
-            "cards": inferred_cards,
-            "analysis_only": True,
+            "requested": False,
+            "performed": False,
+            "reason": "PROHIBITED_BY_VIDEO_3_1_FREE",
+            "cards": [],
+            "analysis_only": False,
             "canonical_promotion_allowed": False,
             "hidden_information_use_allowed": False,
         },
         "integrity": {
             "observed_cards": observed_count,
-            "inferred_cards": len(inferred_cards),
+            "inferred_cards": 0,
             "unknown_slots": len(unknown_records),
-            "unique_known_cards": len(accepted_by_card) + len(inferred_cards),
+            "unique_known_cards": len(accepted_by_card),
             "total_seat_slots": len(all_records),
             "observed_seat_counts": {seat: len(seat_cards[seat]) for seat in SEATS},
             "known_seat_counts": known_by_seat,
