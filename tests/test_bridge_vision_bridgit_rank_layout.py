@@ -457,6 +457,23 @@ def test_encoded_dimensions_and_decoded_memory_are_bounded_before_decode():
         bridgit_rank_layout._validate_decoded_budget(4096, 4096, observation_count=5)
 
     profile = parse_profile(profile_raw())
+    registered_bytes = profile.width * profile.height * 3 * 2
+    bridgit_rank_layout._validate_registration_retention_budget(
+        profile,
+        source_decoded_bytes=(
+            bridgit_rank_layout.MAX_DECODED_JOB_BYTES - registered_bytes
+        ),
+        observation_count=2,
+    )
+    with pytest.raises(BridgitRankLayoutError, match="source and registered frames"):
+        bridgit_rank_layout._validate_registration_retention_budget(
+            profile,
+            source_decoded_bytes=(
+                bridgit_rank_layout.MAX_DECODED_JOB_BYTES - registered_bytes + 1
+            ),
+            observation_count=2,
+        )
+
     bridgit_rank_layout._validate_scoring_budget(profile, observation_count=2)
     with pytest.raises(BridgitRankLayoutError, match="scoring-operation budget"):
         bridgit_rank_layout.recognize_frames(

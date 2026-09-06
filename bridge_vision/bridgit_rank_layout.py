@@ -733,6 +733,19 @@ def _validate_decoded_budget(
         raise BridgitRankLayoutError("decoded frames exceed job memory budget")
 
 
+def _validate_registration_retention_budget(
+    profile: BridgitRankLayoutProfile,
+    *,
+    source_decoded_bytes: int,
+    observation_count: int,
+) -> None:
+    registered_bytes = profile.width * profile.height * 3 * observation_count
+    if source_decoded_bytes + registered_bytes > MAX_DECODED_JOB_BYTES:
+        raise BridgitRankLayoutError(
+            "source and registered frames exceed job memory budget"
+        )
+
+
 def _validate_input_raster_budget(
     frame_paths: Sequence[Path],
 ) -> list[tuple[int, int]]:
@@ -1214,6 +1227,11 @@ def recognize_frames(
         loaded_frames.append(loaded)
         decoded_job_bytes += int(loaded[0].shape[0] * loaded[0].shape[1] * 3)
     if profile.interface_anchor is not None:
+        _validate_registration_retention_budget(
+            profile,
+            source_decoded_bytes=decoded_job_bytes,
+            observation_count=len(loaded_frames),
+        )
         actual_dimensions = [
             (int(image.shape[1]), int(image.shape[0]))
             for image, _, _, _ in loaded_frames
