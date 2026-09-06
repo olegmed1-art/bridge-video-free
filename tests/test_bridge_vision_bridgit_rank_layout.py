@@ -1132,6 +1132,15 @@ def test_rank_holes_use_only_the_configured_glyph_crop(
     assert thresholds == [profile.binary_threshold]
 
 
+def test_side_fan_coordinate_preflight_includes_registration_radius():
+    profile = parse_profile(profile_raw())
+    assert bridgit_rank_layout._glyph_coords_fit_frame([(2, 100), (20, 100)], profile)
+    assert not bridgit_rank_layout._glyph_coords_fit_frame(
+        [(1, 100), (20, 100)], profile
+    )
+    assert not bridgit_rank_layout._glyph_coords_fit_frame([(980, 100)], profile)
+
+
 def test_single_good_frame_is_pending_not_weak_evidence():
     assert bridgit_rank_layout._temporal_support_gates(
         observed_frames=1,

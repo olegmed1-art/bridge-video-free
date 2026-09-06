@@ -153,6 +153,16 @@ def test_anchor_bounds_use_rounded_window_geometry():
         anchor_offset_y=10,
     ) == (100, 100, 10, 10)
 
+    assert anchor_registration._scaled_anchor_geometry(
+        reference_width=322,
+        reference_height=200,
+        anchor_x=203,
+        anchor_y=20,
+        anchor_width=119,
+        anchor_height=40,
+        scale=0.5,
+    ) == (59, 20, 161, 100, 102, 10)
+
 
 def test_anchor_work_is_template_weighted_and_bounded_for_whole_job():
     small_spec = anchor_spec()
@@ -186,3 +196,11 @@ def test_anchor_work_is_template_weighted_and_bounded_for_whole_job():
         (1000, 720), [(4000, 3000)], small_spec
     )
     assert scratch > 256 * 1024 * 1024
+
+    one_scale = anchor_spec(scales=[1.0])
+    impossible_extra_scale = anchor_spec(scales=[1.0, 4.0])
+    assert estimate_anchor_work_units(
+        (1000, 720), [(1000, 720)] * 5, one_scale
+    ) == estimate_anchor_work_units(
+        (1000, 720), [(1000, 720)] * 5, impossible_extra_scale
+    )

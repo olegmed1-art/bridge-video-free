@@ -42,14 +42,30 @@ def _dimension(value: Any, field: str) -> int:
     return value
 
 
-def _scaled_anchor_dimensions(
-    anchor_width: int, anchor_height: int, scale: float
-) -> tuple[int, int]:
-    width = round(anchor_width * scale)
-    height = round(anchor_height * scale)
+def _scaled_anchor_geometry(
+    *,
+    reference_width: int,
+    reference_height: int,
+    anchor_x: int,
+    anchor_y: int,
+    anchor_width: int,
+    anchor_height: int,
+    scale: float,
+) -> tuple[int, int, int, int, int, int]:
+    anchor_offset_x = round(anchor_x * scale)
+    anchor_offset_y = round(anchor_y * scale)
+    width = round((anchor_x + anchor_width) * scale) - anchor_offset_x
+    height = round((anchor_y + anchor_height) * scale) - anchor_offset_y
     if width < 8 or height < 8:
         raise AnchorRegistrationError("scaled interface anchor is too small")
-    return width, height
+    return (
+        width,
+        height,
+        round(reference_width * scale),
+        round(reference_height * scale),
+        anchor_offset_x,
+        anchor_offset_y,
+    )
 
 
 def validate_anchor_spec(raw: Any) -> dict[str, Any]:
@@ -116,12 +132,22 @@ def estimate_anchor_work_units(
     reference_width = _dimension(reference_size[0], "reference width")
     reference_height = _dimension(reference_size[1], "reference height")
     region = checked["reference_region"]
+    anchor_x = round(region["x"] * reference_width)
+    anchor_y = round(region["y"] * reference_height)
     anchor_width = max(8, round(region["width"] * reference_width))
     anchor_height = max(8, round(region["height"] * reference_height))
     if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
         raise AnchorRegistrationError("interface anchor exceeds template budget")
     scaled_dimensions = [
-        _scaled_anchor_dimensions(anchor_width, anchor_height, scale)
+        _scaled_anchor_geometry(
+            reference_width=reference_width,
+            reference_height=reference_height,
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            anchor_width=anchor_width,
+            anchor_height=anchor_height,
+            scale=scale,
+        )
         for scale in checked["scales"]
     ]
     per_frame: list[int] = []
@@ -131,8 +157,20 @@ def estimate_anchor_work_units(
         observed_width = _dimension(size[0], f"observed width {index}")
         observed_height = _dimension(size[1], f"observed height {index}")
         work = 0
-        for template_width, template_height in scaled_dimensions:
-            if template_width > observed_width or template_height > observed_height:
+        for (
+            template_width,
+            template_height,
+            game_width,
+            game_height,
+            _,
+            _,
+        ) in scaled_dimensions:
+            if (
+                template_width > observed_width
+                or template_height > observed_height
+                or game_width > observed_width
+                or game_height > observed_height
+            ):
                 continue
             match_positions = (observed_width - template_width + 1) * (
                 observed_height - template_height + 1
@@ -156,12 +194,22 @@ def estimate_anchor_peak_scratch_bytes(
     reference_width = _dimension(reference_size[0], "reference width")
     reference_height = _dimension(reference_size[1], "reference height")
     region = checked["reference_region"]
+    anchor_x = round(region["x"] * reference_width)
+    anchor_y = round(region["y"] * reference_height)
     anchor_width = max(8, round(region["width"] * reference_width))
     anchor_height = max(8, round(region["height"] * reference_height))
     if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
         raise AnchorRegistrationError("interface anchor exceeds template budget")
     scaled_dimensions = [
-        _scaled_anchor_dimensions(anchor_width, anchor_height, scale)
+        _scaled_anchor_geometry(
+            reference_width=reference_width,
+            reference_height=reference_height,
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            anchor_width=anchor_width,
+            anchor_height=anchor_height,
+            scale=scale,
+        )
         for scale in checked["scales"]
     ]
     peak = 0
@@ -172,8 +220,20 @@ def estimate_anchor_peak_scratch_bytes(
         observed_height = _dimension(size[1], f"observed height {index}")
         observed_pixels = observed_width * observed_height
         peak = max(peak, observed_pixels + anchor_width * anchor_height)
-        for template_width, template_height in scaled_dimensions:
-            if template_width > observed_width or template_height > observed_height:
+        for (
+            template_width,
+            template_height,
+            game_width,
+            game_height,
+            _,
+            _,
+        ) in scaled_dimensions:
+            if (
+                template_width > observed_width
+                or template_height > observed_height
+                or game_width > observed_width
+                or game_height > observed_height
+            ):
                 continue
             match_positions = (observed_width - template_width + 1) * (
                 observed_height - template_height + 1
@@ -304,12 +364,25 @@ def register_from_upper_right_anchor(
     observed_appearance = _appearance(observed)
     candidates: list[dict[str, Any]] = []
     for scale in checked["scales"]:
-        width, height = _scaled_anchor_dimensions(anchor_width, anchor_height, scale)
-        game_width = round(reference_width * scale)
-        game_height = round(reference_height * scale)
-        anchor_offset_x = round(anchor_x * scale)
-        anchor_offset_y = round(anchor_y * scale)
+        (
+            width,
+            height,
+            game_width,
+            game_height,
+            anchor_offset_x,
+            anchor_offset_y,
+        ) = _scaled_anchor_geometry(
+            reference_width=reference_width,
+            reference_height=reference_height,
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            anchor_width=anchor_width,
+            anchor_height=anchor_height,
+            scale=scale,
+        )
         if width > observed_width or height > observed_height:
+            continue
+        if game_width > observed_width or game_height > observed_height:
             continue
         scaled = cv2.resize(template, (width, height), interpolation=cv2.INTER_NEAREST)
         scores = cv2.matchTemplate(observed_appearance, scaled, cv2.TM_CCOEFF_NORMED)

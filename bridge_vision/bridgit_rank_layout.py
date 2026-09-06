@@ -1238,6 +1238,19 @@ def _coords(
     return [(round(x + step * index), y) for index in range(count)]
 
 
+def _glyph_coords_fit_frame(
+    coords: Sequence[tuple[int, int]], profile: BridgitRankLayoutProfile
+) -> bool:
+    radius = profile.local_registration_px
+    return all(
+        x - radius >= 0
+        and x + radius + profile.glyph_width <= profile.width
+        and y >= 0
+        and y + profile.glyph_height <= profile.height
+        for x, y in coords
+    )
+
+
 def _calibrate_side_steps(
     frames: Sequence[Any],
     bank: Mapping[str, Any],
@@ -1259,7 +1272,10 @@ def _calibrate_side_steps(
                 step = quarter / 4.0
                 trial = {seat: {suit: step}}
                 score = 0.0
-                for xy in _coords(seat, suit, count, anchors, trial):
+                coords = _coords(seat, suit, count, anchors, trial)
+                if not _glyph_coords_fit_frame(coords, profile):
+                    continue
+                for xy in coords:
                     score_cache.setdefault(xy, _slot_scores(frames, bank, xy, profile))
                     score += float(max(score_cache[xy]))
                 scored.append((score, step))
@@ -1268,6 +1284,10 @@ def _calibrate_side_steps(
             ]
 
     for suit in SUITS:
+        if not candidates["W"][suit] or not candidates["E"][suit]:
+            raise BridgitRankLayoutError(
+                f"side fan {suit} has no in-frame calibration trial"
+            )
         options = []
         for west_step in candidates["W"][suit]:
             for east_step in candidates["E"][suit]:
