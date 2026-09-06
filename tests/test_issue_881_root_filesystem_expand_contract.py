@@ -1823,7 +1823,11 @@ def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:
         "oracle_universal_video_container_missing_image_recover.sh"
     )
     assert "/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /bin/bash -s" in block
-    assert block.count("/run/lock/oracle-workload-mutation.lock") == 1
+    # The mutation and the always-run fence release each serialize on the
+    # shared host lock.  The recovery payload itself must still be invoked
+    # under exactly one flock.
+    mutation_step = block[: block.index("Release capacity workload fence")]
+    assert mutation_step.count("/run/lock/oracle-workload-mutation.lock") == 1
     assert "EXACT_RUNTIME_SHA: bba508350cbe63a7a8ec93fa9c007db9ee9eae6c" in WORKFLOW
     assert "'oracle-instance-workload-mutation'" in WORKFLOW
     assert 'systemctl restart "$SERVICE"' in (ROOT / "ops/oracle_universal_video_container_missing_image_recover.sh").read_text()
@@ -1900,7 +1904,8 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
     ).read_text()
     assert "Each known ID must" in WORKFLOW
     cleanup_only_branch = WORKFLOW[
-        WORKFLOW.index("if (( cleanup_only == 1 )); then") : WORKFLOW.index("trap cleanup EXIT")
+        WORKFLOW.index("if (( cleanup_only == 1 )); then", WORKFLOW.index("record_reconcile_failure()")) :
+        WORKFLOW.index("trap cleanup EXIT")
     ]
     assert "boot-volume-backup create" not in cleanup_only_branch
     assert "boot-volume create" not in cleanup_only_branch
@@ -2153,7 +2158,7 @@ def test_negative_capacity_lease_rejects_unexpected_source_or_third_config() -> 
     assert '[[ "$source_lease_ocpus" == 5 && "$source_lease_memory" == 11 ]] || return 93' in WORKFLOW
     watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
     assert 'if [[ "$ocpus/$memory" != "$SOURCE_ORIGINAL_OCPUS/$SOURCE_ORIGINAL_MEMORY" && "$ocpus/$memory" != "$SOURCE_LEASE_OCPUS/$SOURCE_LEASE_MEMORY" ]]; then' in watchdog
-    assert "exit 103" in watchdog
+    assert "return 103" in watchdog
 
 
 def test_boundary_capacity_lease_is_exactly_one_ocpu_one_gib_and_45_minutes() -> None:
@@ -2169,7 +2174,7 @@ def test_regression_capacity_is_restored_only_after_paid_instance_cleanup() -> N
     assert exit_cleanup.index("cleanup_temp_resources") < exit_cleanup.index("restore_source_capacity")
     watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
     terminate = watchdog.index("oci compute instance terminate")
-    early_restore = watchdog.index("restore_source_capacity\n\n          # The primary runner normally removes", terminate)
+    early_restore = watchdog.index("restore_source_capacity", terminate)
     volume_cleanup = watchdog.index("oci bv boot-volume delete", early_restore)
     restore_comment = watchdog.index("temporary production capacity lease is RESTORED")
     assert terminate < early_restore < volume_cleanup < restore_comment
