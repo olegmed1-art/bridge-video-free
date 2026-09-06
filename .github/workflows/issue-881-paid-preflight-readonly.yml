@@ -136,17 +136,36 @@ jobs:
           memory_limit="$RUNNER_TEMP/memory-limit.json"
           result="$RUNNER_TEMP/preflight-result.json"
 
-          request_json "$roots" oci iam compartment list --include-root --all
-          tenancy_id="$(python - "$roots" <<'PY'
+          request_json "$roots" oci iam compartment list --include-root --compartment-id-in-subtree true --all
+          readarray -t compartments < <(python - "$roots" <<'PY'
           import json, sys
           data = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
           assert isinstance(data, list) and all(isinstance(x, dict) for x in data)
-          matches = [x.get('id') for x in data if isinstance(x.get('id'), str) and x['id'].startswith('ocid1.tenancy.')]
-          assert len(matches) == 1
-          print(matches[0])
+          allowed = {'ACTIVE', 'CREATING', 'DELETING', 'DELETED', 'FAILED'}
+          assert all(isinstance(x.get('lifecycle-state'), str) and x['lifecycle-state'] in allowed for x in data)
+          ids = [x.get('id') for x in data if x.get('lifecycle-state') == 'ACTIVE' and isinstance(x.get('id'), str) and x['id'].startswith(('ocid1.tenancy.', 'ocid1.compartment.'))]
+          assert len(ids) == len(set(ids)) and sum(x.startswith('ocid1.tenancy.') for x in ids) == 1
+          for value in ids:
+              print(value)
           PY
-          )"
-          request_json "$instances" oci compute instance list --compartment-id "$tenancy_id" --display-name bridge-school-dds3-frankfurt --all
+          )
+          [[ ${#compartments[@]} -ge 1 ]]
+          tenancy_id="$(printf '%s\n' "${compartments[@]}" | python -c 'import sys; rows=[x.strip() for x in sys.stdin if x.strip().startswith("ocid1.tenancy.")]; assert len(rows)==1; print(rows[0])')"
+          printf '{"data":[]}' > "$instances"
+          index=0
+          for compartment in "${compartments[@]}"; do
+            index=$(( index + 1 ))
+            one="$RUNNER_TEMP/instances-$index.json"
+            request_json "$one" oci compute instance list --compartment-id "$compartment" --display-name bridge-school-dds3-frankfurt --all
+            python - "$instances" "$one" <<'PY'
+          import json, sys
+          combined = json.load(open(sys.argv[1], encoding='utf-8'))
+          page = json.load(open(sys.argv[2], encoding='utf-8'))
+          assert isinstance(combined.get('data'), list) and isinstance(page.get('data'), list)
+          combined['data'].extend(page['data'])
+          json.dump(combined, open(sys.argv[1], 'w', encoding='utf-8'))
+          PY
+          done
           readarray -t source < <(python - "$instances" <<'PY'
           import json, sys
           data = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
@@ -167,7 +186,7 @@ jobs:
           ad="${source[1]}"
           compartment_id="${source[2]}"
           source_shape="${source[3]}"
-          [[ "$compartment_id" == "$tenancy_id" ]]
+          printf '%s\n' "${compartments[@]}" | grep -Fxq -- "$compartment_id"
 
           request_json "$shapes" oci compute shape list --compartment-id "$compartment_id" --availability-domain "$ad" --all
           request_json "$core_limit" oci limits resource-availability get --service-name compute --limit-name standard-e4-core-count --compartment-id "$compartment_id" --availability-domain "$ad"
