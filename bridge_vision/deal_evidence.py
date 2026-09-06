@@ -148,13 +148,21 @@ def _contains(region: Mapping[str, Any], point: Mapping[str, Any]) -> bool:
 
 
 def _regions_overlap(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool:
-    return min(
-        float(first["x"]) + float(first["width"]),
-        float(second["x"]) + float(second["width"]),
-    ) > max(float(first["x"]), float(second["x"])) and min(
-        float(first["y"]) + float(first["height"]),
-        float(second["y"]) + float(second["height"]),
-    ) > max(float(first["y"]), float(second["y"]))
+    tolerance = 1e-9
+    return (
+        min(
+            float(first["x"]) + float(first["width"]),
+            float(second["x"]) + float(second["width"]),
+        )
+        - max(float(first["x"]), float(second["x"]))
+        > tolerance
+        and min(
+            float(first["y"]) + float(first["height"]),
+            float(second["y"]) + float(second["height"]),
+        )
+        - max(float(first["y"]), float(second["y"]))
+        > tolerance
+    )
 
 
 def _unknown_record(seat: str, slot: int, recognizer_version: str) -> dict[str, Any]:
@@ -256,7 +264,7 @@ def build_deal_evidence_report(
         required_visual_frames, int
     ):
         raise DealEvidenceError("invalid required_visual_frames")
-    if not 1 <= required_visual_frames <= 16:
+    if not 2 <= required_visual_frames <= 16:
         raise DealEvidenceError("invalid required_visual_frames")
     if not isinstance(allow_logical_inference, bool):
         raise DealEvidenceError("allow_logical_inference must be boolean")

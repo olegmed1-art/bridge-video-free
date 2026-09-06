@@ -123,6 +123,12 @@ def test_non_iterable_evidence_inputs_fail_closed():
     overflowing = observation("N", "AH", confidence=10**3999)
     with pytest.raises(DealEvidenceError, match="confidence"):
         build_deal_evidence_report([overflowing], recognizer_version=VERSION)
+    with pytest.raises(DealEvidenceError, match="required_visual_frames"):
+        build_deal_evidence_report(
+            [observation("N", "AH")],
+            recognizer_version=VERSION,
+            required_visual_frames=1,
+        )
 
 
 def test_one_frame_is_visual_but_not_temporal_consensus():
@@ -160,6 +166,17 @@ def test_overlapping_visual_regions_cannot_support_different_cards():
 
     with pytest.raises(DealEvidenceError, match="overlaps a different target"):
         build_deal_evidence_report([first, second], recognizer_version=VERSION)
+
+
+def test_visual_regions_touching_at_binary_float_edge_do_not_overlap():
+    first = observation("N", "AH", index=0)
+    second = observation("E", "KH", index=1)
+    first["region"].update({"x": 0.1, "y": 0.1, "width": 0.2, "height": 0.2})
+    second["region"].update({"x": 0.3, "y": 0.1, "width": 0.2, "height": 0.2})
+
+    report = build_deal_evidence_report([first, second], recognizer_version=VERSION)
+
+    assert report["status"] == "PARTIAL"
 
 
 def test_per_card_support_cannot_form_a_hybrid_temporal_deal():
