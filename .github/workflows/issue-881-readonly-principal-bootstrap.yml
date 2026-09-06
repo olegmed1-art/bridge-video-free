@@ -69,7 +69,7 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
 
-      - name: Reconcile dedicated read-only OCI principal
+      - name: Create dedicated read-only OCI principal
         id: bootstrap
         env:
           OCI_USER_RAW: ${{ secrets.OCI_CLI_USER }}
@@ -84,7 +84,7 @@ jobs:
             [[ -n "${!value:-}" ]] || exit 21
           done
           install -d -m 0700 "$HOME/.oci"
-          trap 'rm -f "$HOME/.oci/config" "$HOME/.oci/key.pem" "$RUNNER_TEMP/readonly-public.pem" "$RUNNER_TEMP/metadata.json" "$RUNNER_TEMP/metadata.bin"' EXIT
+          trap 'rm -f "$HOME/.oci/config" "$HOME/.oci/key.pem" "$RUNNER_TEMP/readonly-public.pem" "$RUNNER_TEMP"/plain-*.txt "$RUNNER_TEMP"/encrypted-*.bin' EXIT
           printf '%s' "$OCI_KEY_RAW" | python -c 'import sys; raw=sys.stdin.read().replace("\\r","").replace("\\n","\n"); open(sys.argv[1],"w").write(raw if raw.endswith("\n") else raw+"\n")' "$HOME/.oci/key.pem"
           chmod 0600 "$HOME/.oci/key.pem"
           python - <<'PY'
@@ -163,33 +163,6 @@ jobs:
           PY
           }
 
-          request_json "$RUNNER_TEMP/users.json" oci iam user list --compartment-id "$TENANCY_ID" --all
-          USER_ID="$(select_exact "$RUNNER_TEMP/users.json" "$USER_NAME")"
-          if [[ -z "$USER_ID" ]]; then
-            request_json "$RUNNER_TEMP/user-create.json" oci iam user create --compartment-id "$TENANCY_ID" --name "$USER_NAME" --description 'Issue 881 paid preflight read-only audit principal'
-            USER_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.user."); print(x)' "$RUNNER_TEMP/user-create.json")"
-          fi
-
-          request_json "$RUNNER_TEMP/groups.json" oci iam group list --compartment-id "$TENANCY_ID" --all
-          GROUP_ID="$(select_exact "$RUNNER_TEMP/groups.json" "$GROUP_NAME")"
-          if [[ -z "$GROUP_ID" ]]; then
-            request_json "$RUNNER_TEMP/group-create.json" oci iam group create --compartment-id "$TENANCY_ID" --name "$GROUP_NAME" --description 'Issue 881 paid preflight read-only audit group'
-            GROUP_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.group."); print(x)' "$RUNNER_TEMP/group-create.json")"
-          fi
-
-          request_json "$RUNNER_TEMP/members.json" oci iam group list-users --group-id "$GROUP_ID" --all
-          MEMBER_COUNT="$(python - "$RUNNER_TEMP/members.json" "$USER_ID" <<'PY'
-          import json, sys
-          rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
-          assert isinstance(rows, list)
-          print(sum(x.get('id') == sys.argv[2] for x in rows if isinstance(x, dict)))
-          PY
-          )"
-          [[ "$MEMBER_COUNT" == 0 || "$MEMBER_COUNT" == 1 ]]
-          if [[ "$MEMBER_COUNT" == 0 ]]; then
-            request_json "$RUNNER_TEMP/member-create.json" oci iam group add-user --group-id "$GROUP_ID" --user-id "$USER_ID"
-          fi
-
           python - "$GROUP_NAME" <<'PY' > "$RUNNER_TEMP/statements.json"
           import json, sys
           group = sys.argv[1]
@@ -199,46 +172,41 @@ jobs:
               f'Allow group {group} to read limits in tenancy',
           ]))
           PY
+          request_json "$RUNNER_TEMP/users.json" oci iam user list --compartment-id "$TENANCY_ID" --all
+          request_json "$RUNNER_TEMP/groups.json" oci iam group list --compartment-id "$TENANCY_ID" --all
           request_json "$RUNNER_TEMP/policies.json" oci iam policy list --compartment-id "$TENANCY_ID" --all
-          POLICY_ID="$(select_exact "$RUNNER_TEMP/policies.json" "$POLICY_NAME")"
-          if [[ -z "$POLICY_ID" ]]; then
-            request_json "$RUNNER_TEMP/policy-create.json" oci iam policy create --compartment-id "$TENANCY_ID" --name "$POLICY_NAME" --description 'Least-privilege reads for Issue 881 paid preflight' --statements "file://$RUNNER_TEMP/statements.json"
-            POLICY_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.policy."); print(x)' "$RUNNER_TEMP/policy-create.json")"
-          else
-            python - "$RUNNER_TEMP/policies.json" "$POLICY_NAME" "$RUNNER_TEMP/statements.json" <<'PY'
-          import json, sys
-          rows = json.load(open(sys.argv[1], encoding='utf-8'))['data']
-          matches = [x for x in rows if x.get('name') == sys.argv[2] and x.get('lifecycle-state') != 'DELETED']
-          assert len(matches) == 1
-          expected = json.load(open(sys.argv[3], encoding='utf-8'))
-          assert sorted(matches[0].get('statements') or []) == sorted(expected)
-          PY
-          fi
+          EXISTING_USER_ID="$(select_exact "$RUNNER_TEMP/users.json" "$USER_NAME")"
+          EXISTING_GROUP_ID="$(select_exact "$RUNNER_TEMP/groups.json" "$GROUP_NAME")"
+          EXISTING_POLICY_ID="$(select_exact "$RUNNER_TEMP/policies.json" "$POLICY_NAME")"
+          # Never inherit additive permissions from a reused user or group.
+          [[ -z "$EXISTING_USER_ID" && -z "$EXISTING_GROUP_ID" && -z "$EXISTING_POLICY_ID" ]] || exit 24
+
+          request_json "$RUNNER_TEMP/user-create.json" oci iam user create --compartment-id "$TENANCY_ID" --name "$USER_NAME" --description 'Issue 881 paid preflight read-only audit principal'
+          USER_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.user."); print(x)' "$RUNNER_TEMP/user-create.json")"
+          request_json "$RUNNER_TEMP/group-create.json" oci iam group create --compartment-id "$TENANCY_ID" --name "$GROUP_NAME" --description 'Issue 881 paid preflight read-only audit group'
+          GROUP_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.group."); print(x)' "$RUNNER_TEMP/group-create.json")"
+          request_json "$RUNNER_TEMP/member-create.json" oci iam group add-user --group-id "$GROUP_ID" --user-id "$USER_ID"
+          request_json "$RUNNER_TEMP/policy-create.json" oci iam policy create --compartment-id "$TENANCY_ID" --name "$POLICY_NAME" --description 'Least-privilege reads for Issue 881 paid preflight' --statements "file://$RUNNER_TEMP/statements.json"
+          POLICY_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"]["id"]; assert x.startswith("ocid1.policy."); print(x)' "$RUNNER_TEMP/policy-create.json")"
 
           EXPECTED_FINGERPRINT="$(openssl rsa -pubin -in "$RUNNER_TEMP/readonly-public.pem" -outform DER 2>/dev/null | openssl md5 -c | awk '{print $2}')"
-          request_json "$RUNNER_TEMP/api-keys.json" oci iam user api-key list --user-id "$USER_ID" --all
-          KEY_STATE="$(python - "$RUNNER_TEMP/api-keys.json" "$EXPECTED_FINGERPRINT" <<'PY'
-          import json, sys
-          rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
-          assert isinstance(rows, list) and all(isinstance(x, dict) for x in rows)
-          matches = [x for x in rows if x.get('fingerprint') == sys.argv[2] and x.get('lifecycle-state') != 'DELETED']
-          others = [x for x in rows if x.get('fingerprint') != sys.argv[2] and x.get('lifecycle-state') != 'DELETED']
-          assert not others and len(matches) <= 1
-          print('present' if matches else 'absent')
-          PY
-          )"
-          if [[ "$KEY_STATE" == absent ]]; then
-            request_json "$RUNNER_TEMP/key-upload.json" oci iam user api-key upload --user-id "$USER_ID" --key-file "$RUNNER_TEMP/readonly-public.pem"
-            ACTUAL_FINGERPRINT="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["fingerprint"])' "$RUNNER_TEMP/key-upload.json")"
-            [[ "$ACTUAL_FINGERPRINT" == "$EXPECTED_FINGERPRINT" ]]
-          fi
+          request_json "$RUNNER_TEMP/key-upload.json" oci iam user api-key upload --user-id "$USER_ID" --key-file "$RUNNER_TEMP/readonly-public.pem"
+          ACTUAL_FINGERPRINT="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["fingerprint"])' "$RUNNER_TEMP/key-upload.json")"
+          [[ "$ACTUAL_FINGERPRINT" == "$EXPECTED_FINGERPRINT" ]]
 
-          python - "$USER_ID" "$TENANCY_ID" "$EXPECTED_FINGERPRINT" <<'PY' > "$RUNNER_TEMP/metadata.json"
-          import json, sys
-          print(json.dumps({'user': sys.argv[1], 'tenancy': sys.argv[2], 'fingerprint': sys.argv[3], 'region': 'eu-frankfurt-1'}, separators=(',', ':')))
-          PY
-          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/readonly-public.pem" -in "$RUNNER_TEMP/metadata.json" -out "$RUNNER_TEMP/metadata.bin" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256
-          CIPHERTEXT="$(base64 -w0 "$RUNNER_TEMP/metadata.bin")"
+          CIPHERTEXT=v1
+          for field in user tenancy fingerprint region; do
+            case "$field" in
+              user) value="$USER_ID" ;;
+              tenancy) value="$TENANCY_ID" ;;
+              fingerprint) value="$EXPECTED_FINGERPRINT" ;;
+              region) value=eu-frankfurt-1 ;;
+            esac
+            (( ${#value} > 0 && ${#value} <= 190 ))
+            printf '%s' "$value" > "$RUNNER_TEMP/plain-$field.txt"
+            openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/readonly-public.pem" -in "$RUNNER_TEMP/plain-$field.txt" -out "$RUNNER_TEMP/encrypted-$field.bin" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256
+            CIPHERTEXT="$CIPHERTEXT.$(base64 -w0 "$RUNNER_TEMP/encrypted-$field.bin")"
+          done
           [[ -n "$CIPHERTEXT" ]]
           echo "ciphertext=$CIPHERTEXT" >> "$GITHUB_OUTPUT"
 
@@ -269,4 +237,3 @@ jobs:
             echo "- run: $RUN_URL"
           } > "$RUNNER_TEMP/body.md"
           gh issue comment 881 --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
-
