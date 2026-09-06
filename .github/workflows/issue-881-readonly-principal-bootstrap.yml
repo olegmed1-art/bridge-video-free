@@ -351,7 +351,24 @@ jobs:
           request_json "$RUNNER_TEMP/groups.json" oci iam group list --compartment-id "$TENANCY_ID" --all
           request_json "$RUNNER_TEMP/policies.json" oci iam policy list --compartment-id "$TENANCY_ID" --all
           request_json "$RUNNER_TEMP/admin-user.json" oci iam user get --user-id "$ADMIN_USER_ID"
-          PRIMARY_EMAIL="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["data"].get("email"); assert isinstance(x,str) and 3 <= len(x) <= 254 and "@" in x and "\n" not in x and "\r" not in x; print(x)' "$RUNNER_TEMP/admin-user.json")"
+          PRIMARY_EMAIL="$(python - "$RUNNER_TEMP/admin-user.json" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))['data'].get('email')
+          assert isinstance(value, str) and 3 <= len(value) <= 254
+          assert value.count('@') == 1 and not any(ch.isspace() for ch in value)
+          local, domain = value.split('@')
+          allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&'*+/=?^_`{|}~.-")
+          assert 1 <= len(local) <= 64 and set(local) <= allowed
+          assert not local.startswith('.') and not local.endswith('.') and '..' not in local
+          labels = domain.split('.')
+          assert len(labels) >= 2 and len(domain) <= 253
+          for label in labels:
+              assert 1 <= len(label) <= 63
+              assert label[0].isalnum() and label[-1].isalnum()
+              assert all(ch.isascii() and (ch.isalnum() or ch == '-') for ch in label)
+          print(value)
+          PY
+          )"
           EXISTING_USER_ID="$(select_exact "$RUNNER_TEMP/users.json" "$USER_NAME")"
           EXISTING_GROUP_ID="$(select_exact "$RUNNER_TEMP/groups.json" "$GROUP_NAME")"
           EXISTING_POLICY_ID="$(select_exact "$RUNNER_TEMP/policies.json" "$POLICY_NAME")"
