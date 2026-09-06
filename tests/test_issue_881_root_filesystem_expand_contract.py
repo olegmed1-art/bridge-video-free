@@ -149,6 +149,8 @@ def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
     assert "oci bv boot-volume get" in volume_loop
     assert "volume_terminal_proven == 1" in volume_loop
     assert "launch_expiry <= now + 1800" in WATCHDOG
+    assert "launch_expiry <= effective_expiry" not in WATCHDOG
+    assert "launch_expiry < effective_expiry" in WATCHDOG
     assert 'effective_expiry="$now"' in WATCHDOG
     assert "if launch_comments=\"$(timeout --signal=KILL 30s gh api" in WATCHDOG
     assert "while ! timeout --signal=KILL 30s oci bv boot-volume list" in WATCHDOG
@@ -2167,6 +2169,19 @@ def test_boundary_capacity_lease_is_exactly_one_ocpu_one_gib_and_45_minutes() ->
     assert "lease_restore_epoch=$(( $(date -u +%s) + 2700 ))" in WORKFLOW
     watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
     assert "lease_restore_epoch <= now + 2700" in watchdog
+
+
+def test_watchdog_service_release_is_retryable_after_marker_removal() -> None:
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    release = watchdog[
+        watchdog.index("release_source_workload_fence() {") :
+        watchdog.index("roots=", watchdog.index("release_source_workload_fence() {"))
+    ]
+    conditional_end = release.index("          fi", release.index('if [[ -e "$marker" ]]'))
+    assert release.index("rm -f -- \"$marker\"") < conditional_end
+    assert release.index("systemctl unmask universal-video-container.service") > conditional_end
+    assert release.index("systemctl enable universal-video-container.service") > conditional_end
+    assert release.index("systemctl start universal-video-container.service") > conditional_end
 
 
 def test_regression_capacity_is_restored_only_after_paid_instance_cleanup() -> None:

@@ -257,11 +257,14 @@ jobs:
           if [[ -e "$marker" ]]; then
             [[ -f "$marker" && ! -L "$marker" && "$(stat -c '%u:%g:%a:%h' "$marker")" == 0:0:600:1 ]]
             [[ "$(<"$marker")" == "$LEASE_STAMP" ]]
-            systemctl unmask universal-video-container.service
             rm -f -- "$marker"
-            systemctl enable universal-video-container.service
-            systemctl start universal-video-container.service
           fi
+          # These operations are deliberately idempotent and unconditional.
+          # A prior attempt may have removed the marker after unmasking but
+          # lost its connection before enable/start completed.
+          systemctl unmask universal-video-container.service
+          systemctl enable universal-video-container.service
+          systemctl start universal-video-container.service
           [[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]
           [[ "$(systemctl is-active universal-video-container.service)" == active ]]
           REMOTE
@@ -302,11 +305,16 @@ jobs:
               fi
               launch_expiry="$(sed -n "s/^PAID_WATCHDOG_LAUNCH stamp=${STAMP} expiry_epoch=\([0-9][0-9]*\) run=.*/\1/p" <<<"$launch_comments" | tail -n1)"
               if [[ "$launch_expiry" =~ ^[0-9]+$ ]]; then
-                (( launch_expiry <= now + 1800 && launch_expiry <= effective_expiry )) || exit 96
+                (( launch_expiry <= now + 1800 )) || exit 96
                 # A delayed authenticated read may discover the launch receipt
-                # after its deadline. That means clean up now, never exit before
-                # issuing the provider termination requests.
-                (( launch_expiry > now )) && effective_expiry="$launch_expiry" || effective_expiry="$now"
+                # after its deadline. A later valid launch deadline is capped
+                # by the already authenticated capacity-lease deadline; it can
+                # never abort or postpone cleanup.
+                if (( launch_expiry <= now )); then
+                  effective_expiry="$now"
+                elif (( launch_expiry < effective_expiry )); then
+                  effective_expiry="$launch_expiry"
+                fi
                 break
               fi
             fi
