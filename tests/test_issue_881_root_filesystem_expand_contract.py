@@ -2377,3 +2377,59 @@ def test_always_run_fence_release_rebuilds_pinned_ssh_identity() -> None:
     assert 'ssh-keygen -y -f "$release_key"' in release
     assert 'ssh -i "$release_key"' in release
     assert 'UserKnownHostsFile="$release_known"' in release
+
+
+def test_watchdog_failed_resize_restarts_once_and_preserves_restart_budget() -> None:
+    import hashlib
+    import hmac
+    block = WATCHDOG[WATCHDOG.index('          restore_source_capacity() {'):WATCHDOG.index('          release_source_workload_fence() {')]
+    block = '\n'.join(line[10:] if line.startswith('          ') else line for line in block.splitlines())
+    for scenario in ('failed_update', 'exhausted_update', 'lost_start', 'success'):
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = r'''
+set -uo pipefail
+SECONDS=0
+watchdog_cleanup_cutoff=2000
+tenancy_id=test
+state=RUNNING
+mock_ocpus=5
+mock_memory=11
+stops=0
+starts=0
+updates=0
+sleep() { SECONDS=$((SECONDS + 5)); }
+oci_retry_json() {
+  local output="$1"; shift 2
+  MOCK_STATE="$state" MOCK_OCPUS="$mock_ocpus" MOCK_MEMORY="$mock_memory" python - "$output" "$@" <<'MOCK'
+import json,os,sys
+d={'id':'test-id','display-name':'bridge-school-dds3-frankfurt','compartment-id':'test','availability-domain':'test-ad','shape':'VM.Standard.E5.Flex','lifecycle-state':os.environ['MOCK_STATE'],'shape-config':{'ocpus':int(os.environ['MOCK_OCPUS']),'memory-in-gbs':int(os.environ['MOCK_MEMORY'])}}
+json.dump({'data':[d] if 'list' in sys.argv else d},open(sys.argv[1],'w'))
+MOCK
+}
+oci_retry_quiet() {
+  local deadline="$1"; shift
+  case "$*" in
+    *SOFTSTOP*) stops=$((stops + 1)); state=STOPPED ;;
+    *update*)
+      updates=$((updates + 1))
+      if [[ "$SCENARIO" == success ]]; then mock_ocpus=6; mock_memory=12; return 0; fi
+      if [[ "$SCENARIO" == exhausted_update ]]; then SECONDS="$deadline"; fi
+      return 1 ;;
+    *START*)
+      starts=$((starts + 1))
+      if [[ "$SCENARIO" == lost_start && "$starts" == 1 ]]; then return 1; fi
+      state=RUNNING ;;
+    *) return 99 ;;
+  esac
+}
+'''
+            harness += block + '\nrc=0\nrestore_source_capacity || rc=$?\nprintf "%s %s %s %s %s %s\\n" "$rc" "$state" "$stops" "$starts" "$updates" "$SECONDS"\n'
+            env = dict(os.environ, RUNNER_TEMP=tmp, EXPECTED_AD='test-ad', OCI_KEY='test-key', SOURCE_INSTANCE_HMAC=hmac.new(b'test-key', b'source-instance|test-id', hashlib.sha256).hexdigest(), SOURCE_ORIGINAL_OCPUS='6', SOURCE_ORIGINAL_MEMORY='12', SOURCE_LEASE_OCPUS='5', SOURCE_LEASE_MEMORY='11', SCENARIO=scenario)
+            result = subprocess.run(['bash', '-c', harness], env=env, text=True, capture_output=True, timeout=15)
+            assert result.returncode == 0, result.stderr
+            rc, state, stops, starts, updates, elapsed = result.stdout.strip().split()
+            assert state == 'RUNNING', result.stdout
+            assert int(stops) == 1 and int(updates) == 1, result.stdout
+            assert int(starts) == (2 if scenario == 'lost_start' else 1), result.stdout
+            assert int(rc) == (0 if scenario == 'success' else 105), result.stdout
+            assert int(elapsed) < 1500 - 600, result.stdout
