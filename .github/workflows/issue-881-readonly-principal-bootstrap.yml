@@ -198,35 +198,32 @@ jobs:
             (( $(date +%s) <= MUTATION_CUTOFF_EPOCH )) || return 25
           }
           publish_success_receipt() {
-            local remaining limit=30 rc attempt owner repo per_call
+            local remaining limit=30 rc attempt per_call
             remaining=$(( RECEIPT_DEADLINE_EPOCH - $(date +%s) ))
             (( remaining > 0 )) || return 26
             (( remaining >= limit )) || limit=$remaining
-            if timeout --signal=KILL "${limit}s" gh issue comment 881 --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"; then
+            if timeout --signal=KILL "${limit}s" gh api --method PATCH "/repos/$GITHUB_REPOSITORY/issues/comments/$PENDING_COMMENT_ID" --input "$RUNNER_TEMP/body.json"; then
               return 0
             else
               rc=$?
             fi
-            owner="${GITHUB_REPOSITORY%%/*}"
-            repo="${GITHUB_REPOSITORY#*/}"
-            # A lost response can hide an accepted comment. Read back the last
-            # 100 comments three times and commit only the receipt carrying this
-            # run's unpredictable transaction token; otherwise rollback.
+            # A lost response can hide an accepted update. Read back the exact
+            # pre-created comment ID three times and commit only this run's
+            # unpredictable transaction token; otherwise rollback.
             for attempt in 1 2 3; do
               remaining=$(( RECEIPT_DEADLINE_EPOCH - $(date +%s) ))
               (( remaining > 0 )) || return "$rc"
               per_call=10
               (( remaining >= per_call )) || per_call=$remaining
-              if timeout --signal=KILL "${per_call}s" gh api graphql \
-                -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){comments(last:100){nodes{body}}}}}' \
-                -F owner="$owner" -F repo="$repo" -F number=881 > "$RUNNER_TEMP/receipt-comments.json" &&
-                RECEIPT_TOKEN="$RECEIPT_TOKEN" RUN_URL="$RUN_URL" python - "$RUNNER_TEMP/receipt-comments.json" <<'PY'
+              if timeout --signal=KILL "${per_call}s" gh api "/repos/$GITHUB_REPOSITORY/issues/comments/$PENDING_COMMENT_ID" > "$RUNNER_TEMP/receipt-comment.json" &&
+                RECEIPT_TOKEN="$RECEIPT_TOKEN" RUN_URL="$RUN_URL" python - "$RUNNER_TEMP/receipt-comment.json" <<'PY'
           import json, os, sys
-          nodes = json.load(open(sys.argv[1], encoding='utf-8'))['data']['repository']['issue']['comments']['nodes']
-          assert isinstance(nodes, list)
+          row = json.load(open(sys.argv[1], encoding='utf-8'))
+          assert isinstance(row, dict)
+          body = row.get('body', '')
           token = f"receipt transaction: `{os.environ['RECEIPT_TOKEN']}`"
-          found = [x for x in nodes if isinstance(x, dict) and token in x.get('body', '') and os.environ['RUN_URL'] in x.get('body', '') and 'status: `READY_FOR_SECRET_INSTALL`' in x.get('body', '')]
-          raise SystemExit(0 if len(found) == 1 else 1)
+          ok = token in body and os.environ['RUN_URL'] in body and 'status: `READY_FOR_SECRET_INSTALL`' in body
+          raise SystemExit(0 if ok else 1)
           PY
               then
                 return 0
@@ -351,6 +348,27 @@ jobs:
           # Never inherit additive permissions from a reused user or group.
           [[ -z "$EXISTING_USER_ID" && -z "$EXISTING_GROUP_ID" && -z "$EXISTING_POLICY_ID" ]] || exit 24
 
+          # Establish an exact receipt identity before any IAM mutation. A lost
+          # create response can leave only a harmless PENDING comment, never a
+          # false READY receipt for rolled-back credentials.
+          RECEIPT_TOKEN="$(openssl rand -hex 32)"
+          {
+            echo '## Issue #881 read-only OCI principal bootstrap'
+            echo
+            echo '- status: `PENDING_IAM_BOOTSTRAP`'
+            echo "- receipt transaction: \`$RECEIPT_TOKEN\`"
+            echo "- run: $RUN_URL"
+          } > "$RUNNER_TEMP/pending-body.md"
+          python - "$RUNNER_TEMP/pending-body.md" "$RUNNER_TEMP/pending-body.json" <<'PY'
+          import json, sys
+          body = open(sys.argv[1], encoding='utf-8').read()
+          json.dump({'body': body}, open(sys.argv[2], 'w', encoding='utf-8'))
+          PY
+          require_mutation_budget
+          timeout --signal=KILL 30s gh api --method POST "/repos/$GITHUB_REPOSITORY/issues/881/comments" --input "$RUNNER_TEMP/pending-body.json" > "$RUNNER_TEMP/pending-comment.json"
+          PENDING_COMMENT_ID="$(python -c 'import json,sys; x=json.load(open(sys.argv[1]))["id"]; assert isinstance(x,int) and x > 0; print(x)' "$RUNNER_TEMP/pending-comment.json")"
+          echo "pending_comment_id=$PENDING_COMMENT_ID" >> "$GITHUB_OUTPUT"
+
           EXPECTED_FINGERPRINT="$(openssl rsa -pubin -in "$RUNNER_TEMP/readonly-public.pem" -outform DER 2>/dev/null | openssl md5 -c | awk '{print $2}')"
           require_mutation_budget
           USER_CREATED=1
@@ -388,7 +406,6 @@ jobs:
             CIPHERTEXT="$CIPHERTEXT.$(base64 -w0 "$RUNNER_TEMP/encrypted-$field.bin")"
           done
           [[ -n "$CIPHERTEXT" ]]
-          RECEIPT_TOKEN="$(openssl rand -hex 32)"
           echo "ciphertext=$CIPHERTEXT" >> "$GITHUB_OUTPUT"
           {
             echo '## Issue #881 encrypted read-only credential recovery envelope'
@@ -410,6 +427,11 @@ jobs:
             echo "- encrypted credential metadata: \`$CIPHERTEXT\`"
             echo "- run: $RUN_URL"
           } > "$RUNNER_TEMP/body.md"
+          python - "$RUNNER_TEMP/body.md" "$RUNNER_TEMP/body.json" <<'PY'
+          import json, sys
+          body = open(sys.argv[1], encoding='utf-8').read()
+          json.dump({'body': body}, open(sys.argv[2], 'w', encoding='utf-8'))
+          PY
           publish_success_receipt
 
       - name: Publish failed-bootstrap receipt
