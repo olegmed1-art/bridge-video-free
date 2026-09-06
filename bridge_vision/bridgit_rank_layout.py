@@ -752,6 +752,24 @@ def _validate_decoded_budget(
         raise BridgitRankLayoutError("decoded frames exceed job memory budget")
 
 
+def _validate_decode_peak_budget(
+    *,
+    retained_decoded_bytes: int,
+    decoded_frame_bytes: int,
+    encoded_payload_bytes: int,
+) -> None:
+    # Conservatively reserve one decoded-frame-sized workspace for imdecode in
+    # addition to its output and the still-live compressed payload.
+    peak_bytes = (
+        retained_decoded_bytes
+        + encoded_payload_bytes
+        + decoded_frame_bytes
+        + decoded_frame_bytes
+    )
+    if peak_bytes > MAX_DECODED_JOB_BYTES:
+        raise BridgitRankLayoutError("frame decode exceeds job memory budget")
+
+
 def _validate_registration_retention_budget(
     profile: BridgitRankLayoutProfile,
     *,
@@ -931,8 +949,11 @@ def _read_frame(
         )
     _validate_decoded_budget(encoded_width, encoded_height, observation_count=0)
     decoded_frame_bytes = encoded_width * encoded_height * 3
-    if decoded_job_bytes_so_far + decoded_frame_bytes > MAX_DECODED_JOB_BYTES:
-        raise BridgitRankLayoutError("decoded frames exceed job memory budget")
+    _validate_decode_peak_budget(
+        retained_decoded_bytes=decoded_job_bytes_so_far,
+        decoded_frame_bytes=decoded_frame_bytes,
+        encoded_payload_bytes=len(payload),
+    )
     cv2, np = _pixel_runtime()
     image = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None or tuple(image.shape[:2]) != (encoded_height, encoded_width):
@@ -1056,14 +1077,32 @@ def _slot_scores(
     ]
     scores = np.median(np.asarray(per_frame), axis=0)
 
-    hole_counts = []
+    hole_counts = _rank_hole_counts(frames, xy, profile)
+    median_holes = float(np.median(hole_counts))
+    scores[RANKS.index("8")] += 0.30 if median_holes >= 2 else -0.30
+    if median_holes < 1:
+        scores[RANKS.index("6")] -= 0.35
+    return scores
+
+
+def _rank_hole_counts(
+    frames: Sequence[Any], xy: tuple[int, int], profile: BridgitRankLayoutProfile
+) -> list[int]:
     cv2, _ = _pixel_runtime()
+    x, y = xy
+    radius = profile.local_registration_px
+    glyph_width = profile.glyph_width
+    glyph_height = profile.glyph_height
+    hole_counts = []
     for frame in frames:
         local = []
         for dx in range(-radius, radius + 1):
-            x0 = max(0, min(profile.width - 14, x + dx))
-            y0 = max(0, min(profile.height - 17, y))
-            gray = cv2.cvtColor(frame[y0 : y0 + 17, x0 : x0 + 14], cv2.COLOR_BGR2GRAY)
+            x0 = max(0, min(profile.width - glyph_width, x + dx))
+            y0 = max(0, min(profile.height - glyph_height, y))
+            gray = cv2.cvtColor(
+                frame[y0 : y0 + glyph_height, x0 : x0 + glyph_width],
+                cv2.COLOR_BGR2GRAY,
+            )
             binary = (gray < 100).astype("uint8") * 255
             _, hierarchy = cv2.findContours(
                 binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE
@@ -1074,11 +1113,7 @@ def _slot_scores(
                 else 0
             )
         hole_counts.append(max(local))
-    median_holes = float(np.median(hole_counts))
-    scores[RANKS.index("8")] += 0.30 if median_holes >= 2 else -0.30
-    if median_holes < 1:
-        scores[RANKS.index("6")] -= 0.35
-    return scores
+    return hole_counts
 
 
 def _rank_ink_fractions(

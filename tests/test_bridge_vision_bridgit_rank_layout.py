@@ -534,6 +534,18 @@ def test_encoded_dimensions_and_decoded_memory_are_bounded_before_decode():
     with pytest.raises(BridgitRankLayoutError, match="job memory budget"):
         bridgit_rank_layout._validate_decoded_budget(4096, 4096, observation_count=5)
 
+    with pytest.raises(BridgitRankLayoutError, match="frame decode"):
+        bridgit_rank_layout._validate_decode_peak_budget(
+            retained_decoded_bytes=bridgit_rank_layout.MAX_DECODED_JOB_BYTES - 200,
+            decoded_frame_bytes=100,
+            encoded_payload_bytes=1,
+        )
+    bridgit_rank_layout._validate_decode_peak_budget(
+        retained_decoded_bytes=bridgit_rank_layout.MAX_DECODED_JOB_BYTES - 201,
+        decoded_frame_bytes=100,
+        encoded_payload_bytes=1,
+    )
+
     profile = parse_profile(profile_raw())
     registered_bytes = profile.width * profile.height * 3 * 2
     bridgit_rank_layout._validate_registration_retention_budget(
@@ -830,6 +842,57 @@ def test_rank_ink_uses_only_the_configured_glyph_crop(
     ) == [0.25]
     assert frame_slices == [(slice(10, 18), slice(10, 18))]
     assert gray_slices == [(slice(1, 7), slice(1, 7))]
+
+
+def test_rank_holes_use_only_the_configured_glyph_crop(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile = replace(
+        parse_profile(profile_raw()),
+        glyph_width=8,
+        glyph_height=8,
+        local_registration_px=0,
+    )
+    frame_slices = []
+
+    class FakeFrame:
+        def __getitem__(self, key):
+            frame_slices.append(key)
+            return object()
+
+    class FakeBinary:
+        def astype(self, _dtype):
+            return self
+
+        def __mul__(self, _value):
+            return self
+
+    class FakeGray:
+        def __lt__(self, _threshold):
+            return FakeBinary()
+
+    class FakeCv2:
+        COLOR_BGR2GRAY = 1
+        RETR_CCOMP = 2
+        CHAIN_APPROX_SIMPLE = 3
+
+        @staticmethod
+        def cvtColor(_crop, _conversion):
+            return FakeGray()
+
+        @staticmethod
+        def findContours(_binary, _mode, _method):
+            return (), None
+
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_pixel_runtime",
+        lambda: (FakeCv2(), object()),
+    )
+    assert bridgit_rank_layout._rank_hole_counts([FakeFrame()], (10, 10), profile) == [
+        0
+    ]
+    assert frame_slices == [(slice(10, 18), slice(10, 18))]
 
 
 def test_single_good_frame_is_pending_not_weak_evidence():
