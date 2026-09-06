@@ -263,6 +263,21 @@ jobs:
           [[ "$source_public_ip" == "$ORACLE_HOST" ]] || exit 34
           shape="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["shape"])')"
           shape_config="$(printf '%s' "$instance_json" | python -c 'import json,sys; d=json.load(sys.stdin)["data"].get("shape-config") or {}; print(json.dumps({"ocpus":d.get("ocpus"),"memoryInGBs":d.get("memory-in-gbs")},separators=(",",":")))')"
+          readarray -t source_capacity < <(INSTANCE="$instance_json" python - <<'PY'
+          import json, os
+          d=json.loads(os.environ['INSTANCE'])['data']
+          c=d.get('shape-config') or {}
+          ocpus=c.get('ocpus'); memory=c.get('memory-in-gbs')
+          assert d.get('shape')=='VM.Standard.E5.Flex'
+          assert isinstance(ocpus,(int,float)) and float(ocpus).is_integer()
+          assert isinstance(memory,(int,float)) and float(memory).is_integer()
+          print(int(ocpus)); print(int(memory))
+          PY
+          )
+          source_original_ocpus="${source_capacity[0]}"
+          source_original_memory="${source_capacity[1]}"
+          source_lease_ocpus=$((source_original_ocpus - 1))
+          source_lease_memory=$((source_original_memory - 1))
           boot_tag="$(printf '%s' "$boot_id" | sha256sum | cut -c1-16)"
           backup_prefix="issue-881-root-recovery-${boot_tag}"
           operation_run_prefix="${backup_prefix}-run-"
@@ -287,6 +302,7 @@ jobs:
           drill_vcn_id="" drill_ig_id="" drill_route_id="" drill_security_id="" drill_subnet_id=""
           restored_attempted=0 drill_instance_attempted=0 drill_vcn_attempted=0 drill_ig_attempted=0
           drill_route_attempted=0 drill_security_attempted=0 drill_subnet_attempted=0
+          capacity_lease_active=0
           receipt_state="$RUNNER_TEMP/issue-881-step4-state.json"
           state_set() {
             STATE_PATH="$receipt_state" STATE_KEY="$1" STATE_VALUE="$2" python - <<'PY'
@@ -377,6 +393,9 @@ jobs:
           state_set paid_watchdog_status NOT_STARTED
           state_set paid_launch_utc none
           state_set paid_termination_utc none
+          state_set capacity_lease_status NOT_STARTED
+          state_set capacity_original_shape_config "ocpus=${source_original_ocpus},memory_gb=${source_original_memory}"
+          state_set capacity_lease_shape_config "ocpus=${source_lease_ocpus},memory_gb=${source_lease_memory}"
           mark_phase initialized
           discover_named_id() {
             local resource="$1" expected="$2" max_seconds="${3:-90}" budget_deadline="${4:-$primary_deadline}" output id deadline remaining request_timeout sleep_seconds rc discovery_key receipt_key saw_timeout=0
@@ -1196,6 +1215,73 @@ jobs:
             state_set prior_cleanup_status RECONCILED_PROVEN_ABSENT
             echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=$prior_count authoritative_receipt_sha256=${authoritative_receipt_sha256:-not_applicable} verdict=RECONCILED_PROVEN_ABSENT"
           }
+          set_source_capacity() {
+            local target_ocpus="$1" target_memory="$2" deadline="$3" label="$4" current_json current_state current_ocpus current_memory
+            OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance get --instance-id "$instance_id" || return $?
+            current_json="$OCI_JSON_OUTPUT"
+            readarray -t current < <(INSTANCE="$current_json" EXPECTED_ID="$instance_id" EXPECTED_AD="$ad" EXPECTED_TENANCY="$tenancy_id" python - <<'PY'
+          import json,os
+          d=json.loads(os.environ['INSTANCE']).get('data'); assert isinstance(d,dict)
+          assert d.get('id')==os.environ['EXPECTED_ID'] and d.get('display-name')=='bridge-school-dds3-frankfurt'
+          assert d.get('compartment-id')==os.environ['EXPECTED_TENANCY'] and d.get('availability-domain')==os.environ['EXPECTED_AD']
+          assert d.get('shape')=='VM.Standard.E5.Flex'
+          c=d.get('shape-config') or {}; o=c.get('ocpus'); m=c.get('memory-in-gbs')
+          assert isinstance(o,(int,float)) and float(o).is_integer()
+          assert isinstance(m,(int,float)) and float(m).is_integer()
+          print(d.get('lifecycle-state')); print(int(o)); print(int(m))
+          PY
+            ) || return 93
+            current_state="${current[0]}"; current_ocpus="${current[1]}"; current_memory="${current[2]}"
+            if [[ "$current_state" == RUNNING && "$current_ocpus" == "$target_ocpus" && "$current_memory" == "$target_memory" ]]; then
+              return 0
+            fi
+            if [[ "$current_state" == STARTING ]]; then
+              wait_oci_resource_ready instance "$instance_id" RUNNING 600 "${label}_starting" bridge-school-dds3-frankfurt || return $?
+              current_state=RUNNING
+            elif [[ "$current_state" == STOPPING ]]; then
+              wait_oci_resource_ready instance "$instance_id" STOPPED 600 "${label}_stopping" bridge-school-dds3-frankfurt || return $?
+              current_state=STOPPED
+            fi
+            if [[ "$current_state" == RUNNING ]]; then
+              OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance action --instance-id "$instance_id" --action SOFTSTOP || return $?
+              wait_oci_resource_ready instance "$instance_id" STOPPED 600 "${label}_stop" bridge-school-dds3-frankfurt || return $?
+              current_state=STOPPED
+            fi
+            [[ "$current_state" == STOPPED ]] || return 93
+            OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance update --instance-id "$instance_id" --shape-config "{\"ocpus\":${target_ocpus},\"memoryInGBs\":${target_memory}}" --force || return $?
+            OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance action --instance-id "$instance_id" --action START || return $?
+            wait_oci_resource_ready instance "$instance_id" RUNNING 600 "${label}_start" bridge-school-dds3-frankfurt || return $?
+            OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance get --instance-id "$instance_id" || return $?
+            INSTANCE="$OCI_JSON_OUTPUT" EXPECTED_ID="$instance_id" EXPECTED_OCPUS="$target_ocpus" EXPECTED_MEMORY="$target_memory" python - <<'PY'
+          import json,os
+          d=json.loads(os.environ['INSTANCE'])['data']; c=d.get('shape-config') or {}
+          assert d.get('id')==os.environ['EXPECTED_ID'] and d.get('display-name')=='bridge-school-dds3-frankfurt'
+          assert d.get('shape')=='VM.Standard.E5.Flex' and d.get('lifecycle-state')=='RUNNING'
+          assert c.get('ocpus')==int(os.environ['EXPECTED_OCPUS'])
+          assert c.get('memory-in-gbs')==int(os.environ['EXPECTED_MEMORY'])
+          PY
+          }
+          open_source_capacity_lease() {
+            [[ "$source_original_ocpus" == 6 && "$source_original_memory" == 12 ]] || return 93
+            [[ "$source_lease_ocpus" == 5 && "$source_lease_memory" == 11 ]] || return 93
+            capacity_lease_active=1
+            state_set capacity_lease_status OPENING
+            set_source_capacity "$source_lease_ocpus" "$source_lease_memory" "$primary_deadline" capacity_lease || return $?
+            state_set capacity_lease_status OPEN
+            lease_restore_epoch=$(( $(date -u +%s) + 2700 ))
+            gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="CAPACITY_LEASE_OPEN stamp=${stamp} restore_epoch=${lease_restore_epoch} source_shape=VM.Standard.E5.Flex original=6/12 lease=5/11 run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          }
+          restore_source_capacity() {
+            (( capacity_lease_active == 1 )) || return 0
+            state_set capacity_lease_status RESTORING
+            if set_source_capacity "$source_original_ocpus" "$source_original_memory" "$cleanup_deadline" capacity_restore; then
+              capacity_lease_active=0
+              state_set capacity_lease_status RESTORED
+              return 0
+            fi
+            state_set capacity_lease_status RESTORE_FAILED
+            return 1
+          }
           cleanup_temp_resources() {
             local failed=0 state
             state_set current_cleanup_status IN_PROGRESS
@@ -1276,6 +1362,7 @@ jobs:
             state_set failure_phase "${phase:-unknown}"
             cleanup_temp_resources
             cleanup_rc=$?
+            restore_source_capacity || cleanup_rc=1
             # The create response can be lost before OCI's eventually
             # consistent list exposes the exact-name backup.  Repeat bounded
             # rediscovery during EXIT cleanup before deciding there is nothing
@@ -1482,7 +1569,7 @@ jobs:
           # mutation. Runner loss during create, hydration, or network setup
           # must not leave the exact-stamped 97 GB volume allocated.
           watchdog_cleanup_epoch=$(( $(date -u +%s) + 14400 ))
-          watchdog_payload="${stamp}|${watchdog_cleanup_epoch}|${ad}|${GITHUB_RUN_ID}|${GITHUB_RUN_ATTEMPT}"
+          watchdog_payload="${stamp}|${watchdog_cleanup_epoch}|${ad}|${GITHUB_RUN_ID}|${GITHUB_RUN_ATTEMPT}|${source_original_ocpus}|${source_original_memory}|${source_lease_ocpus}|${source_lease_memory}"
           watchdog_authorization_hmac="$(WATCHDOG_PAYLOAD="$watchdog_payload" python -c 'import hashlib,hmac,os; print(hmac.new(os.environ["OCI_KEY"].encode(),os.environ["WATCHDOG_PAYLOAD"].encode(),hashlib.sha256).hexdigest())')"
           [[ "$watchdog_authorization_hmac" =~ ^[0-9a-f]{64}$ ]] || exit 95
           mark_phase dispatch_paid_instance_watchdog
@@ -1493,6 +1580,10 @@ jobs:
             -f "inputs[expected_ad]=$ad" \
             -f "inputs[parent_run_id]=${GITHUB_RUN_ID}" \
             -f "inputs[parent_run_attempt]=${GITHUB_RUN_ATTEMPT}" \
+            -f "inputs[source_original_ocpus]=${source_original_ocpus}" \
+            -f "inputs[source_original_memory]=${source_original_memory}" \
+            -f "inputs[source_lease_ocpus]=${source_lease_ocpus}" \
+            -f "inputs[source_lease_memory]=${source_lease_memory}" \
             -f "inputs[authorization_hmac]=$watchdog_authorization_hmac"
           unset watchdog_authorization_hmac watchdog_payload
           state_set paid_watchdog_status DISPATCHED
@@ -1603,6 +1694,14 @@ jobs:
           # The production source is already E5 paid capacity. Never attempt
           # its larger source configuration outside the bounded paid guard.
           [[ "$shape" == VM.Standard.E5.Flex ]] || exit 92
+          mark_phase open_temporary_capacity_lease
+          if open_source_capacity_lease; then
+            :
+          else
+            lease_rc=$?
+            state_set capacity_lease_status OPEN_FAILED
+            exit "$lease_rc"
+          fi
           drill_instance_attempted=1
           launch=""
           mark_phase paid_capacity_preflight
@@ -1722,6 +1821,11 @@ jobs:
             trap - EXIT
             echo 'UV_ROOT_TEMP_CLEANUP_INCOMPLETE' >&2
             exit 90
+          fi
+          if ! restore_source_capacity; then
+            trap - EXIT
+            echo 'UV_ROOT_CAPACITY_RESTORE_FAILED watchdog_remains_armed=true' >&2
+            exit 91
           fi
           drill_instance_id=""; restored_id=""; drill_subnet_id=""; drill_security_id=""
           drill_route_id=""; drill_ig_id=""; drill_vcn_id=""
@@ -2016,6 +2120,7 @@ jobs:
               '- paid price basis valid until: ' + code(value('paid_price_basis_valid_until', 'none')),
               '- paid hourly/runtime/budget caps: ' + code(value('paid_hourly_rate_max_usd', 'none') + '/' + value('paid_runtime_limit_seconds', 'none') + '/' + value('paid_compute_budget_usd', 'none')),
               '- independent paid watchdog: ' + code(value('paid_watchdog_status', 'NOT_RECORDED')),
+              '- temporary production capacity lease: ' + code(value('capacity_lease_status', 'NOT_RECORDED')) + '; original/lease: ' + code(value('capacity_original_shape_config', 'none') + '/' + value('capacity_lease_shape_config', 'none')),
               '- paid launch/termination UTC: ' + code(value('paid_launch_utc', 'none') + '/' + value('paid_termination_utc', 'none')),
               '- restored volume readiness: ' + code(value('restored_volume_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('restored_volume_wait_last_state', 'none')) + '; rc: ' + code(value('restored_volume_wait_failure_rc', 'none')),
               '- restored volume hydration: ' + code(value('restored_volume_hydration_status', 'NOT_RECORDED')) + '; state: ' + code(value('restored_volume_hydration_last_state', 'none')) + '; rc: ' + code(value('restored_volume_hydration_failure_rc', 'none')),

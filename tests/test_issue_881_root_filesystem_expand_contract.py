@@ -2134,3 +2134,41 @@ def test_receipt_is_literal_safe_and_retains_cleanup_evidence() -> None:
         "failure_rc",
     ):
         assert field in receipt
+
+
+def test_positive_capacity_lease_is_watchdog_armed_restored_and_receipted() -> None:
+    dispatch = WORKFLOW.index("mark_phase dispatch_paid_instance_watchdog")
+    lease = WORKFLOW.index("mark_phase open_temporary_capacity_lease")
+    preflight = WORKFLOW.index("mark_phase paid_capacity_preflight")
+    assert dispatch < lease < preflight
+    success_cleanup = WORKFLOW.index("if ! cleanup_temp_resources; then", preflight)
+    restore = WORKFLOW.index("if ! restore_source_capacity; then", success_cleanup)
+    disable_trap = WORKFLOW.index("trap - EXIT", restore)
+    assert success_cleanup < restore < disable_trap
+    assert "temporary production capacity lease:" in WORKFLOW
+
+
+def test_negative_capacity_lease_rejects_unexpected_source_or_third_config() -> None:
+    assert '[[ "$source_original_ocpus" == 6 && "$source_original_memory" == 12 ]] || return 93' in WORKFLOW
+    assert '[[ "$source_lease_ocpus" == 5 && "$source_lease_memory" == 11 ]] || return 93' in WORKFLOW
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    assert 'if [[ "$ocpus/$memory" != "$SOURCE_ORIGINAL_OCPUS/$SOURCE_ORIGINAL_MEMORY" && "$ocpus/$memory" != "$SOURCE_LEASE_OCPUS/$SOURCE_LEASE_MEMORY" ]]; then' in watchdog
+    assert "exit 103" in watchdog
+
+
+def test_boundary_capacity_lease_is_exactly_one_ocpu_one_gib_and_45_minutes() -> None:
+    assert "source_lease_ocpus=$((source_original_ocpus - 1))" in WORKFLOW
+    assert "source_lease_memory=$((source_original_memory - 1))" in WORKFLOW
+    assert "lease_restore_epoch=$(( $(date -u +%s) + 2700 ))" in WORKFLOW
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    assert "lease_restore_epoch <= now + 2700" in watchdog
+
+
+def test_regression_capacity_is_restored_only_after_paid_instance_cleanup() -> None:
+    exit_cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
+    assert exit_cleanup.index("cleanup_temp_resources") < exit_cleanup.index("restore_source_capacity")
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    terminate = watchdog.index("oci compute instance terminate")
+    restore_comment = watchdog.index("temporary production capacity lease is RESTORED")
+    assert terminate < restore_comment
+    assert "'- media canary: ' + code('false')" in WORKFLOW
