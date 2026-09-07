@@ -86,6 +86,13 @@ QUEUE_VERSION_SQL = """SELECT
      WHERE n.nspname='video_queue' AND c.relkind IN ('r','p'))"""
 
 
+EXPECTED_QUEUE_SECURITY = ('a71e6b1e0161c6491106937515d7cf67', '3de2b08011aec2dbe22ef4d815f530b9')
+# Canonical full ACLs and triggers; normalize only generated internal trigger names.
+QUEUE_SECURITY_SQL = """SELECT
+(SELECT md5(coalesce(string_agg(jsonb_build_array(p.proname,oidvectortypes(p.proargtypes),pg_get_userbyid(a.grantor),CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,a.privilege_type,a.is_grantable)::text,E'\\n' ORDER BY p.proname,oidvectortypes(p.proargtypes),pg_get_userbyid(a.grantor),CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,a.privilege_type,a.is_grantable),'')) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace CROSS JOIN LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE n.nspname='video_queue') AS function_acl,
+(SELECT md5(coalesce(string_agg(jsonb_build_array(c.relname,t.tgisinternal,CASE WHEN t.tgisinternal THEN replace(pg_get_triggerdef(t.oid),quote_ident(t.tgname),'INTERNAL') ELSE pg_get_triggerdef(t.oid) END,t.tgenabled,pg_get_userbyid(c.relowner),pg_get_functiondef(p.oid),pg_get_userbyid(p.proowner))::text,E'\\n' ORDER BY c.relname,CASE WHEN t.tgisinternal THEN replace(pg_get_triggerdef(t.oid),quote_ident(t.tgname),'INTERNAL') ELSE pg_get_triggerdef(t.oid) END),'')) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_proc p ON p.oid=t.tgfoid WHERE n.nspname='video_queue') AS triggers"""
+
+
 def require(condition):
     if not condition:
         raise RuntimeError("queue_target_guard")
@@ -162,6 +169,8 @@ def verify(raw, branch):
                 require(cur.fetchone() == (True, ALLOWED_QUEUE_FUNCTIONS, ['batch_status', 'job_status']))
                 cur.execute(QUEUE_VERSION_SQL)
                 require(cur.fetchone() == EXPECTED_QUEUE_VERSION)
+                cur.execute(QUEUE_SECURITY_SQL)
+                require(cur.fetchone() == EXPECTED_QUEUE_SECURITY)
                 cur.execute("SELECT * FROM video_queue.precanary_idle_snapshot()")
                 require(cur.fetchone() == (0, 0))
 
