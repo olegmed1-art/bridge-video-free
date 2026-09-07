@@ -258,10 +258,16 @@ def adapt_legacy_hands(hands: Any, *, recognizer_version: str = "legacy-video31"
     if not _VERSION.fullmatch(recognizer_version):
         raise CardRecognitionContractError("invalid recognizer_version")
     source = _mapping(hands, "legacy hands")
+    unsupported_seats = set(source) - set(SEATS)
+    if unsupported_seats:
+        raise CardRecognitionContractError("unsupported legacy seat key")
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
     for seat in SEATS:
         hand = {} if seat not in source else _mapping(source[seat], f"legacy hands.{seat}")
+        unsupported_suits = set(hand) - set(SUITS)
+        if unsupported_suits:
+            raise CardRecognitionContractError(f"unsupported legacy suit key for {seat}")
         known = 0
         for suit in SUITS:
             raw_ranks = hand.get(suit)
