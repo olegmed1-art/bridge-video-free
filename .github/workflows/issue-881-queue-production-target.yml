@@ -45,12 +45,12 @@ jobs:
       - name: Verify exact main and pinned SSH identity
         id: ssh
         env:
-        SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
-        SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
-        SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
-        SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
-        SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
-        SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+          SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+          SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+          SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+          SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
         run: |
           set -euo pipefail
           EXACT_SHA="$(git rev-parse HEAD)"
