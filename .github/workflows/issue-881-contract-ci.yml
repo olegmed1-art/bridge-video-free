@@ -40,7 +40,8 @@ jobs:
           python -m compileall -q universal_video ops/validate_video_queue_dsn.py \
             ops/validate_universal_video_promotion_evidence.py \
             ops/issue_881_precanary_one_shot.py \
-            ops/issue_881_precanary_queue_proof.py
+            ops/issue_881_precanary_queue_proof.py \
+            ops/verify_oci_instance_command_executions.py
 
   database-contract:
     runs-on: ubuntu-latest

@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import importlib.util
 import json
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -26,6 +27,10 @@ def _load(name: str, relative: str):
 
 ONE_SHOT = _load("issue_881_precanary_one_shot", "ops/issue_881_precanary_one_shot.py")
 QUEUE = _load("issue_881_precanary_queue_proof", "ops/issue_881_precanary_queue_proof.py")
+OCI_EXECUTIONS = _load(
+    "verify_oci_instance_command_executions",
+    "ops/verify_oci_instance_command_executions.py",
+)
 SHA = "a" * 40
 NONCE = "b" * 64
 RECEIPT_ID = 5_600_000_001
@@ -57,14 +62,17 @@ def _run(
     run_id: int = RUN_ID,
     receipt_id: int = RECEIPT_ID,
     attempt: int = 1,
+    run_number: int = 100,
+    recovery: str = "",
     status: str = "in_progress",
     conclusion: str | None = None,
 ) -> dict[str, object]:
     return {
         "id": run_id,
+        "run_number": run_number,
         "path": ONE_SHOT.WORKFLOW_PATH,
         "event": "workflow_dispatch",
-        "display_title": ONE_SHOT.expected_run_name(SHA, receipt_id),
+        "display_title": ONE_SHOT.expected_run_name(SHA, receipt_id, recovery),
         "run_attempt": attempt,
         "head_sha": SHA,
         "status": status,
@@ -101,6 +109,7 @@ def test_one_shot_receipt_accepts_only_one_owner_first_attempt() -> None:
         "receipt_sha256": result["receipt_sha256"],
         "run_id": RUN_ID,
         "run_attempt": 1,
+        "recovery_depth": 0,
     }
     assert len(result["receipt_sha256"]) == 64
     body = _comment()["body"]
@@ -143,34 +152,115 @@ def test_one_shot_receipt_rejects_duplicate_receipt_or_second_sha_run() -> None:
         _validate(runs=[{"workflow_runs": [_run(), duplicate_receipt]}])
 
     second_receipt = _run(run_id=RUN_ID + 2, receipt_id=RECEIPT_ID + 1)
-    with pytest.raises(ONE_SHOT.OneShotValidationError, match="already exists"):
+    with pytest.raises(ONE_SHOT.OneShotValidationError):
         _validate(runs=[{"workflow_runs": [_run(), second_receipt]}])
 
 
-def test_recovery_allows_only_the_named_failed_first_attempt() -> None:
+def test_recovery_allows_only_a_linear_chain_of_failed_first_attempts() -> None:
     recovery_id = RUN_ID - 1
     recovery = str(recovery_id)
     comment = _comment(recovery=recovery)
     prior = _run(
         run_id=recovery_id,
         receipt_id=RECEIPT_ID - 1,
+        run_number=99,
         status="completed",
         conclusion="failure",
     )
+    current = _run(recovery=recovery)
     result = _validate(
         comment=comment,
-        runs=[{"workflow_runs": [prior, _run()]}],
+        runs=[{"workflow_runs": [prior, current]}],
         recover_container_from_run=recovery,
     )
     assert result["run_id"] == RUN_ID
+    assert result["recovery_depth"] == 1
 
     unsafe = copy.deepcopy(prior)
     unsafe["conclusion"] = "success"
     with pytest.raises(ONE_SHOT.OneShotValidationError, match="completed failure"):
         _validate(
             comment=comment,
-            runs=[{"workflow_runs": [unsafe, _run()]}],
+            runs=[{"workflow_runs": [unsafe, current]}],
             recover_container_from_run=recovery,
+        )
+
+    initial_id = RUN_ID - 2
+    initial = _run(
+        run_id=initial_id,
+        receipt_id=RECEIPT_ID - 2,
+        run_number=98,
+        status="completed",
+        conclusion="failure",
+    )
+    prior_recovery = _run(
+        run_id=recovery_id,
+        receipt_id=RECEIPT_ID - 1,
+        run_number=99,
+        recovery=str(initial_id),
+        status="completed",
+        conclusion="failure",
+    )
+    chained = _validate(
+        comment=comment,
+        runs=[{"workflow_runs": [initial, prior_recovery, current]}],
+        recover_container_from_run=recovery,
+    )
+    assert chained["recovery_depth"] == 2
+
+    broken = copy.deepcopy(prior_recovery)
+    broken["display_title"] = ONE_SHOT.expected_run_name(
+        SHA, RECEIPT_ID - 1, str(RUN_ID - 9)
+    )
+    with pytest.raises(ONE_SHOT.OneShotValidationError, match="immediate predecessor"):
+        _validate(
+            comment=comment,
+            runs=[{"workflow_runs": [initial, broken, current]}],
+            recover_container_from_run=recovery,
+        )
+
+
+def test_recovery_chain_has_a_hard_total_run_limit() -> None:
+    runs = []
+    previous = ""
+    for offset in range(ONE_SHOT.MAX_RUNS_PER_EXACT_SHA + 1):
+        run_id = RUN_ID - ONE_SHOT.MAX_RUNS_PER_EXACT_SHA + offset
+        runs.append(
+            _run(
+                run_id=run_id,
+                receipt_id=RECEIPT_ID - ONE_SHOT.MAX_RUNS_PER_EXACT_SHA + offset,
+                run_number=100 - ONE_SHOT.MAX_RUNS_PER_EXACT_SHA + offset,
+                recovery=previous,
+                status=("in_progress" if offset == ONE_SHOT.MAX_RUNS_PER_EXACT_SHA else "completed"),
+                conclusion=(None if offset == ONE_SHOT.MAX_RUNS_PER_EXACT_SHA else "failure"),
+            )
+        )
+        previous = str(run_id)
+    current = runs[-1]
+    current_receipt = int(str(current["display_title"]).split("receipt-", 1)[1].split("/", 1)[0])
+    created = dt.datetime.fromtimestamp(NOW - 60, dt.timezone.utc).isoformat().replace(
+        "+00:00", "Z"
+    )
+    comment = _comment(recovery=str(runs[-2]["id"]))
+    comment["id"] = current_receipt
+    comment["body"] = ONE_SHOT.render_receipt(
+        exact_sha=SHA,
+        approval_nonce=NONCE,
+        recover_container_from_run=str(runs[-2]["id"]),
+    )
+    comment["created_at"] = created
+    comment["updated_at"] = created
+    with pytest.raises(ONE_SHOT.OneShotValidationError, match="limit"):
+        ONE_SHOT.validate_one_shot(
+            comment,
+            [{"workflow_runs": runs}],
+            exact_sha=SHA,
+            receipt_id=current_receipt,
+            approval_nonce=NONCE,
+            recover_container_from_run=str(runs[-2]["id"]),
+            current_run_id=int(current["id"]),
+            current_run_attempt=1,
+            now=NOW,
         )
 
 
@@ -259,6 +349,100 @@ def test_queue_proofs_require_exact_principals_hosts_and_tls() -> None:
             )
 
 
+def test_owner_release_gate_holds_all_queue_tables_until_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Cursor:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def execute(self, statement: str) -> None:
+            self.statements.append(statement)
+
+    class Connection:
+        def __init__(self) -> None:
+            self.read_only = False
+            self.cursor_value = Cursor()
+            self.rollbacks = 0
+
+        def cursor(self):
+            return self.cursor_value
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+
+    connection = Connection()
+    snapshot = _owner_snapshot()
+    snapshots: list[dict[str, object]] = []
+
+    def read_snapshot(_connection, *, owner: bool):
+        assert owner is True
+        snapshots.append(snapshot)
+        return dict(snapshot)
+
+    ready = tmp_path / "owner-ready"
+    control = tmp_path / "owner-control"
+
+    def release_after_ready(_seconds: float) -> None:
+        assert ready.is_file()
+        control.write_bytes(QUEUE.OWNER_RELEASE_SIGNAL)
+        control.chmod(0o600)
+
+    monkeypatch.setattr(QUEUE, "_database_snapshot_on_connection", read_snapshot)
+    monkeypatch.setattr(QUEUE.time, "sleep", release_after_ready)
+    marker = QUEUE.hold_owner_release_gate(
+        connection,
+        baseline=snapshot,
+        ready_file=ready,
+        control_file=control,
+        timeout_seconds=30,
+    )
+
+    assert connection.read_only is True
+    assert connection.cursor_value.statements[-1] == QUEUE.OWNER_RELEASE_LOCK_SQL
+    assert QUEUE.OWNER_RELEASE_LOCK_SQL == (
+        "LOCK TABLE video_queue.batch, video_queue.job, video_queue.job_event "
+        "IN SHARE MODE NOWAIT"
+    )
+    assert len(snapshots) == 2
+    assert connection.rollbacks == 1
+    assert ready.read_text(encoding="utf-8").strip() == QUEUE._owner_marker(
+        "POSTRESTORE_OWNER", snapshot, unchanged=True
+    )
+    assert not control.exists()
+    assert marker == (
+        "UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE "
+        "tables=batch,job,job_event lock=SHARE owner_release=observed "
+        "final_snapshot=unchanged result=PASS"
+    )
+
+    aborted_connection = Connection()
+    aborted_ready = tmp_path / "owner-ready-abort"
+    aborted_control = tmp_path / "owner-control-abort"
+
+    def abort_after_ready(_seconds: float) -> None:
+        assert aborted_ready.is_file()
+        aborted_control.write_bytes(QUEUE.OWNER_ABORT_SIGNAL)
+        aborted_control.chmod(0o600)
+
+    monkeypatch.setattr(QUEUE.time, "sleep", abort_after_ready)
+    with pytest.raises(QUEUE.QueueProofError, match="aborted"):
+        QUEUE.hold_owner_release_gate(
+            aborted_connection,
+            baseline=snapshot,
+            ready_file=aborted_ready,
+            control_file=aborted_control,
+            timeout_seconds=30,
+        )
+    assert aborted_connection.rollbacks == 1
+
+
 def test_runtime_dsn_is_read_once_from_exact_protected_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -323,6 +507,7 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
 
     assert "approval_receipt_id:" in workflow and "approval_nonce:" in workflow
     assert "run-name: issue881-precanary/" in workflow
+    assert "/recover-${{ inputs.recover_container_from_run || 'none' }}" in workflow
     assert len(workflow) < 21_000
     assert "run: bash ops/issue_881_external_precanary_workflow.sh" in workflow
     assert "${{" not in runner
@@ -335,6 +520,16 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "'ops/oracle_universal_video_run_command.sh'" in runner
     assert "'ops/oracle_known_hosts_from_scan.sh'" in runner
     assert "'.github/workflows/oracle-universal-video-admin.yml'" in runner
+    for protected_creator in (
+        "oracle-assistant-lab-oci-diagnostic.yml",
+        "oracle-diana11-002-delivery.yml",
+        "oracle-diana11-002-job.yml",
+        "oracle-diana11-delivery.yml",
+        "oracle-instance-power.yml",
+        "oracle-universal-video-evidence-export.yml",
+    ):
+        assert f"'.github/workflows/{protected_creator}'" in runner
+    assert "'ops/verify_oci_instance_command_executions.py'" in runner
     admin_workflow = (
         ROOT / ".github/workflows/oracle-universal-video-admin.yml"
     ).read_text(encoding="utf-8")
@@ -415,6 +610,21 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     workload_unlock = attest.index("flock --unlock 9", owner_release)
     assert fenced_start < runtime_proof < owner_release < workload_unlock
     assert "UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE" in attest
+    runtime_ready = runner.index("runtime_proof_ready=1", host_attest)
+    database_gate_start = runner.index("owner-release-gate", runtime_ready)
+    locked_owner = runner.index('postrestore_owner_marker="$(cat', database_gate_start)
+    remote_release = runner.index('"$ORACLE_USER@$ORACLE_HOST:$remote_stage/owner-release"', locked_owner)
+    attester_wait = runner.index('wait "$attester_pid"', remote_release)
+    database_release = runner.index("release_database_gate", attester_wait)
+    assert (
+        runtime_ready
+        < database_gate_start
+        < locked_owner
+        < remote_release
+        < attester_wait
+        < database_release
+    )
+    assert "UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE" in workflow
     readiness_failure = attest.index(
         "if ! validate_started_container_after_fence", workload_unlock
     )
@@ -622,6 +832,79 @@ verify_no_active_instance_agent_commands
     wrong_instance = run("SUCCEEDED", instance_id="ocid1.instance.oc1.other")
     assert wrong_instance.returncode != 0
     assert "belongs to another instance" in wrong_instance.stderr
+
+
+def test_every_live_instance_command_creator_uses_the_common_actions_fence() -> None:
+    workflows = ROOT / ".github/workflows"
+    creator_pattern = re.compile(
+        r"(?m)^\s+(?:if ! )?(?:command_id|cid|cmd)=.*"
+        r"oci instance-agent command create"
+    )
+    creators = {
+        path.relative_to(ROOT).as_posix()
+        for path in workflows.glob("*.yml")
+        if creator_pattern.search(path.read_text(encoding="utf-8"))
+    }
+    assert creators == {
+        ".github/workflows/oracle-assistant-lab-oci-diagnostic.yml",
+        ".github/workflows/oracle-diana11-002-delivery.yml",
+        ".github/workflows/oracle-diana11-002-job.yml",
+        ".github/workflows/oracle-diana11-delivery.yml",
+        ".github/workflows/oracle-instance-power.yml",
+        ".github/workflows/oracle-universal-video-admin.yml",
+        ".github/workflows/oracle-universal-video-evidence-export.yml",
+    }
+    for relative in creators:
+        header = (ROOT / relative).read_text(encoding="utf-8").split("\njobs:", 1)[0]
+        assert header.count("\nconcurrency:\n") == 1, relative
+        assert (
+            re.search(
+                r"(?m)^  group: oracle-instance-workload-mutation$", header
+            )
+            is not None
+        ), relative
+
+
+def test_shared_oci_execution_validator_rejects_active_unknown_and_ambiguous() -> None:
+    instance = "ocid1.instance.oc1.synthetic"
+    timestamp = "2026-09-07T12:00:00+00:00"
+
+    def payload(state: str, *, command: str = "one", target: str = instance):
+        return {
+            "data": [
+                {
+                    "instance-agent-command-id": (
+                        f"ocid1.instanceagentcommand.oc1.synthetic-{command}"
+                    ),
+                    "instance-id": target,
+                    "lifecycle-state": state,
+                    "time-created": timestamp,
+                }
+            ]
+        }
+
+    assert OCI_EXECUTIONS.validate_executions(payload("SUCCEEDED"), instance) == 1
+    for state in ("ACCEPTED", "IN_PROGRESS"):
+        with pytest.raises(
+            OCI_EXECUTIONS.CommandExecutionValidationError, match="not terminal"
+        ):
+            OCI_EXECUTIONS.validate_executions(payload(state), instance)
+    with pytest.raises(
+        OCI_EXECUTIONS.CommandExecutionValidationError, match="unknown"
+    ):
+        OCI_EXECUTIONS.validate_executions(payload("QUEUED"), instance)
+    with pytest.raises(
+        OCI_EXECUTIONS.CommandExecutionValidationError, match="another instance"
+    ):
+        OCI_EXECUTIONS.validate_executions(
+            payload("SUCCEEDED", target="ocid1.instance.oc1.other"), instance
+        )
+    duplicate = payload("FAILED")
+    duplicate["data"].append(dict(duplicate["data"][0]))
+    with pytest.raises(
+        OCI_EXECUTIONS.CommandExecutionValidationError, match="duplicate"
+    ):
+        OCI_EXECUTIONS.validate_executions(duplicate, instance)
 
 
 def test_owner_snapshot_controls_unlock_while_worker_is_fenced(tmp_path: Path) -> None:

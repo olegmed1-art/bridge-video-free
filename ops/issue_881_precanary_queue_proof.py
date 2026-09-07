@@ -8,6 +8,7 @@ import json
 import os
 import stat
 import sys
+import time
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import parse_qsl, urlsplit
@@ -25,6 +26,12 @@ OWNER_HOSTS = {
 }
 RUNTIME_DSN_FILE = Path("/run/secrets/video-queue-dsn")
 BASELINE_SCHEMA = "issue881-precanary-owner-baseline-v1"
+OWNER_RELEASE_LOCK_SQL = (
+    "LOCK TABLE video_queue.batch, video_queue.job, video_queue.job_event "
+    "IN SHARE MODE NOWAIT"
+)
+OWNER_RELEASE_SIGNAL = b"RELEASE\n"
+OWNER_ABORT_SIGNAL = b"ABORT\n"
 
 
 class QueueProofError(RuntimeError):
@@ -98,10 +105,54 @@ def _runtime_dsn() -> str:
     return _validated_dsn(value, principal=RUNTIME_PRINCIPAL, hosts={RUNTIME_HOST})
 
 
+def _database_snapshot_on_connection(connection: Any, *, owner: bool) -> dict[str, Any]:
+    from psycopg.rows import dict_row
+
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SET LOCAL statement_timeout='10s'")
+        cursor.execute("SET LOCAL lock_timeout='2s'")
+        cursor.execute(
+            """SELECT current_setting('neon.project_id', true) AS project,
+                      current_setting('neon.branch_id', true) AS branch,
+                      current_database() AS database,
+                      current_user AS principal,
+                      EXISTS (SELECT 1 FROM pg_namespace
+                              WHERE nspname='video_queue') AS schema_exists,
+                      to_regprocedure('video_queue.precanary_idle_snapshot()')
+                          IS NOT NULL AS function_exists"""
+        )
+        identity = cursor.fetchone()
+        _require(identity is not None, "database identity is missing")
+        cursor.execute(
+            """SELECT claimable_jobs AS claimable, leased_jobs AS leased
+                 FROM video_queue.precanary_idle_snapshot()"""
+        )
+        idle = cursor.fetchone()
+        _require(idle is not None and len(idle) == 2, "idle snapshot is missing")
+        result = dict(identity)
+        result["claimable"] = idle["claimable"]
+        result["leased"] = idle["leased"]
+        if owner:
+            cursor.execute(
+                """SELECT
+                    (SELECT count(*) FROM video_queue.batch) AS batches,
+                    (SELECT count(*) FROM video_queue.job) AS jobs,
+                    (SELECT count(*) FROM video_queue.job_event) AS events,
+                    (SELECT max(event_id) FROM video_queue.job_event) AS max_event_id,
+                    (SELECT last_value FROM video_queue.job_event_event_id_seq)
+                        AS sequence_last_value,
+                    (SELECT is_called FROM video_queue.job_event_event_id_seq)
+                        AS sequence_is_called"""
+            )
+            queue_state = cursor.fetchone()
+            _require(queue_state is not None, "owner queue state is missing")
+            result.update(dict(queue_state))
+        return result
+
+
 def _database_snapshot(dsn: str, *, owner: bool) -> dict[str, Any]:
     try:
         import psycopg
-        from psycopg.rows import dict_row
 
         with psycopg.connect(
             dsn,
@@ -111,46 +162,7 @@ def _database_snapshot(dsn: str, *, owner: bool) -> dict[str, Any]:
             ),
         ) as connection:
             connection.read_only = True
-            with connection.cursor(row_factory=dict_row) as cursor:
-                cursor.execute("SET LOCAL statement_timeout='10s'")
-                cursor.execute("SET LOCAL lock_timeout='2s'")
-                cursor.execute(
-                    """SELECT current_setting('neon.project_id', true) AS project,
-                              current_setting('neon.branch_id', true) AS branch,
-                              current_database() AS database,
-                              current_user AS principal,
-                              EXISTS (SELECT 1 FROM pg_namespace
-                                      WHERE nspname='video_queue') AS schema_exists,
-                              to_regprocedure('video_queue.precanary_idle_snapshot()')
-                                  IS NOT NULL AS function_exists"""
-                )
-                identity = cursor.fetchone()
-                _require(identity is not None, "database identity is missing")
-                cursor.execute(
-                    """SELECT claimable_jobs AS claimable, leased_jobs AS leased
-                         FROM video_queue.precanary_idle_snapshot()"""
-                )
-                idle = cursor.fetchone()
-                _require(idle is not None and len(idle) == 2, "idle snapshot is missing")
-                result = dict(identity)
-                result["claimable"] = idle["claimable"]
-                result["leased"] = idle["leased"]
-                if owner:
-                    cursor.execute(
-                        """SELECT
-                            (SELECT count(*) FROM video_queue.batch) AS batches,
-                            (SELECT count(*) FROM video_queue.job) AS jobs,
-                            (SELECT count(*) FROM video_queue.job_event) AS events,
-                            (SELECT max(event_id) FROM video_queue.job_event) AS max_event_id,
-                            (SELECT last_value FROM video_queue.job_event_event_id_seq)
-                                AS sequence_last_value,
-                            (SELECT is_called FROM video_queue.job_event_event_id_seq)
-                                AS sequence_is_called"""
-                    )
-                    queue_state = cursor.fetchone()
-                    _require(queue_state is not None, "owner queue state is missing")
-                    result.update(dict(queue_state))
-                return result
+            return _database_snapshot_on_connection(connection, owner=owner)
     except QueueProofError:
         raise
     except Exception as exc:
@@ -240,6 +252,129 @@ def _write_baseline(path: Path, snapshot: Mapping[str, Any]) -> None:
         raise
 
 
+def _write_private_file(path: Path, payload: bytes) -> None:
+    _require(path.is_absolute(), "control path is not absolute")
+    _require(0 < len(payload) <= 4096, "control payload size is unsafe")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+    except OSError as exc:
+        raise QueueProofError("cannot create private control file") from exc
+
+
+def _read_control_signal(path: Path) -> bytes | None:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise QueueProofError("unsafe owner gate control") from exc
+    try:
+        with os.fdopen(descriptor, "rb") as source:
+            metadata = os.fstat(source.fileno())
+            _require(
+                stat.S_ISREG(metadata.st_mode)
+                and metadata.st_uid == os.getuid()
+                and stat.S_IMODE(metadata.st_mode) == 0o600
+                and metadata.st_nlink == 1
+                and 0 < metadata.st_size <= 16,
+                "unsafe owner gate control metadata",
+            )
+            signal = source.read(17)
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    _require(signal in {OWNER_RELEASE_SIGNAL, OWNER_ABORT_SIGNAL}, "invalid owner gate control")
+    return signal
+
+
+def hold_owner_release_gate(
+    connection: Any,
+    *,
+    baseline: Mapping[str, Any],
+    ready_file: Path,
+    control_file: Path,
+    timeout_seconds: int,
+) -> str:
+    """Hold queue-table write locks through the resident release boundary."""
+
+    _require(30 <= timeout_seconds <= 900, "owner gate timeout is unsafe")
+    _require(ready_file.is_absolute() and control_file.is_absolute(), "control path is not absolute")
+    _require(ready_file != control_file, "owner gate control paths overlap")
+    _require(not ready_file.exists() and not ready_file.is_symlink(), "owner gate ready file exists")
+    _require(not control_file.exists() and not control_file.is_symlink(), "owner gate control exists")
+    connection.read_only = True
+    with connection.cursor() as cursor:
+        cursor.execute("SET LOCAL statement_timeout='10s'")
+        cursor.execute("SET LOCAL lock_timeout='2s'")
+        cursor.execute(OWNER_RELEASE_LOCK_SQL)
+    first = validate_owner_snapshot(_database_snapshot_on_connection(connection, owner=True))
+    _require(first == baseline, "locked owner snapshot differs from baseline")
+    owner_marker = _owner_marker("POSTRESTORE_OWNER", first, unchanged=True)
+    _write_private_file(ready_file, (owner_marker + "\n").encode("utf-8"))
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        signal = _read_control_signal(control_file)
+        if signal is None:
+            time.sleep(0.2)
+            continue
+        if signal == OWNER_ABORT_SIGNAL:
+            connection.rollback()
+            raise QueueProofError("owner release gate was aborted")
+        final = validate_owner_snapshot(_database_snapshot_on_connection(connection, owner=True))
+        _require(final == baseline, "final locked owner snapshot differs from baseline")
+        connection.rollback()
+        return (
+            "UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE "
+            "tables=batch,job,job_event lock=SHARE owner_release=observed "
+            "final_snapshot=unchanged result=PASS"
+        )
+    connection.rollback()
+    raise QueueProofError("owner release gate timed out")
+
+
+def _owner_release_gate(
+    dsn: str,
+    *,
+    baseline_path: Path,
+    ready_file: Path,
+    control_file: Path,
+    timeout_seconds: int,
+) -> str:
+    try:
+        import psycopg
+
+        baseline = _read_baseline(baseline_path)
+        with psycopg.connect(
+            dsn,
+            connect_timeout=8,
+            application_name="issue881-precanary-owner-release-gate",
+        ) as connection:
+            return hold_owner_release_gate(
+                connection,
+                baseline=baseline,
+                ready_file=ready_file,
+                control_file=control_file,
+                timeout_seconds=timeout_seconds,
+            )
+    except QueueProofError:
+        raise
+    except Exception as exc:
+        raise QueueProofError("production owner release gate failed") from exc
+
+
 def _read_baseline(path: Path) -> dict[str, Any]:
     _require(path.is_file() and not path.is_symlink(), "unsafe owner baseline")
     metadata = path.stat()
@@ -276,6 +411,11 @@ def _parser() -> argparse.ArgumentParser:
     before.add_argument("--output", type=Path, required=True)
     after = subparsers.add_parser("owner-after")
     after.add_argument("--baseline", type=Path, required=True)
+    release = subparsers.add_parser("owner-release-gate")
+    release.add_argument("--baseline", type=Path, required=True)
+    release.add_argument("--ready-file", type=Path, required=True)
+    release.add_argument("--control-file", type=Path, required=True)
+    release.add_argument("--timeout-seconds", type=int, default=600)
     return parser
 
 
@@ -296,6 +436,17 @@ def main() -> int:
             principal=OWNER,
             hosts=OWNER_HOSTS,
         )
+        if args.command == "owner-release-gate":
+            print(
+                _owner_release_gate(
+                    dsn,
+                    baseline_path=args.baseline,
+                    ready_file=args.ready_file,
+                    control_file=args.control_file,
+                    timeout_seconds=args.timeout_seconds,
+                )
+            )
+            return 0
         snapshot = validate_owner_snapshot(_database_snapshot(dsn, owner=True))
         if args.command == "owner-before":
             _write_baseline(args.output, snapshot)

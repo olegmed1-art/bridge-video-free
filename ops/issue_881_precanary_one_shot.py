@@ -21,9 +21,11 @@ WORKFLOW_PATH = ".github/workflows/issue-881-authoritative-external-evidence.yml
 RECEIPT_PREFIX = "ISSUE881_PRECANARY_DIRECTOR_GO_V1\n"
 RUN_NAME_PREFIX = "issue881-precanary"
 MAX_RECEIPT_AGE_SECONDS = 900
+MAX_RUNS_PER_EXACT_SHA = 4
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 NONCE_RE = re.compile(r"[0-9a-f]{64}")
 RUN_ID_RE = re.compile(r"[1-9][0-9]{7,19}")
+RECEIPT_ID_RE = re.compile(r"[1-9][0-9]{8,19}")
 
 
 class OneShotValidationError(ValueError):
@@ -62,8 +64,23 @@ def _timestamp(value: Any) -> float:
     return parsed.timestamp()
 
 
-def expected_run_name(exact_sha: str, receipt_id: int) -> str:
-    return f"{RUN_NAME_PREFIX}/{exact_sha}/receipt-{receipt_id}"
+def expected_run_name(
+    exact_sha: str, receipt_id: int, recover_container_from_run: str = ""
+) -> str:
+    recovery = recover_container_from_run or "none"
+    return f"{RUN_NAME_PREFIX}/{exact_sha}/receipt-{receipt_id}/recover-{recovery}"
+
+
+def _parse_run_name(value: Any, exact_sha: str) -> tuple[int, str]:
+    _require(isinstance(value, str), "pre-canary run title is missing")
+    match = re.fullmatch(
+        rf"{re.escape(RUN_NAME_PREFIX)}/{re.escape(exact_sha)}/"
+        rf"receipt-({RECEIPT_ID_RE.pattern})/recover-(none|{RUN_ID_RE.pattern})",
+        value,
+    )
+    _require(match is not None, "pre-canary run title is not canonical")
+    recovery = "" if match.group(2) == "none" else match.group(2)
+    return int(match.group(1)), recovery
 
 
 def render_receipt(
@@ -162,7 +179,7 @@ def validate_one_shot(
     _require(body == expected_body, "receipt body is not exact or canonical")
 
     runs = _flatten_run_pages(run_pages)
-    run_name = expected_run_name(exact_sha, receipt_id)
+    run_name = expected_run_name(exact_sha, receipt_id, recover_container_from_run)
     workflow_runs = [
         run
         for run in runs
@@ -191,25 +208,75 @@ def validate_one_shot(
         "workflow run triggering actor is not the Director",
     )
 
-    exact_sha_prefix = f"{RUN_NAME_PREFIX}/{exact_sha}/receipt-"
     same_sha_runs = [
-        run for run in workflow_runs if str(run.get("display_title", "")).startswith(exact_sha_prefix)
+        run for run in workflow_runs if run.get("head_sha") == exact_sha
     ]
-    allowed_ids = {current_run_id}
-    if recover_container_from_run:
-        recovery_id = int(recover_container_from_run)
-        allowed_ids.add(recovery_id)
-        prior = [run for run in same_sha_runs if run.get("id") == recovery_id]
-        _require(len(prior) == 1, "recovery source run is missing or ambiguous")
+    _require(
+        1 <= len(same_sha_runs) <= MAX_RUNS_PER_EXACT_SHA,
+        "bounded recovery run limit was exceeded",
+    )
+    ordered: list[tuple[int, int, str, dict[str, Any]]] = []
+    run_ids: set[int] = set()
+    run_numbers: set[int] = set()
+    receipt_ids: set[int] = set()
+    for run in same_sha_runs:
+        run_id = run.get("id")
+        run_number = run.get("run_number")
+        _require(type(run_id) is int and run_id > 0, "invalid pre-canary run identity")
         _require(
-            prior[0].get("status") == "completed" and prior[0].get("conclusion") == "failure",
+            type(run_number) is int and run_number > 0,
+            "invalid pre-canary run sequence",
+        )
+        _require(run_id not in run_ids, "duplicate pre-canary run identity")
+        _require(run_number not in run_numbers, "duplicate pre-canary run sequence")
+        parsed_receipt, recovery = _parse_run_name(run.get("display_title"), exact_sha)
+        _require(parsed_receipt not in receipt_ids, "approval receipt was reused in recovery chain")
+        repository = run.get("repository")
+        actor = run.get("actor")
+        triggering_actor = run.get("triggering_actor")
+        _require(
+            isinstance(repository, dict) and repository.get("full_name") == REPOSITORY,
+            "recovery-chain run belongs to the wrong repository",
+        )
+        _require(
+            isinstance(actor, dict) and actor.get("login") == DIRECTOR_LOGIN,
+            "recovery-chain run was not dispatched by the Director",
+        )
+        _require(
+            isinstance(triggering_actor, dict)
+            and triggering_actor.get("login") == DIRECTOR_LOGIN,
+            "recovery-chain triggering actor is not the Director",
+        )
+        _require(run.get("run_attempt") == 1, "recovery from a rerun is forbidden")
+        run_ids.add(run_id)
+        run_numbers.add(run_number)
+        receipt_ids.add(parsed_receipt)
+        ordered.append((run_number, parsed_receipt, recovery, run))
+
+    ordered.sort(key=lambda item: item[0])
+    _require(ordered[-1][3].get("id") == current_run_id, "current run is not last in recovery chain")
+    _require(
+        ordered[-1][1] == receipt_id and ordered[-1][2] == recover_container_from_run,
+        "current recovery-chain title does not match its approval",
+    )
+    _require(ordered[0][2] == "", "recovery chain has no initial run")
+    for index, (_, _, recovery, run) in enumerate(ordered):
+        if index == 0:
+            continue
+        previous = ordered[index - 1][3]
+        _require(
+            recovery == str(previous.get("id")),
+            "recovery chain does not name its immediate predecessor",
+        )
+    for _, _, _, prior in ordered[:-1]:
+        _require(
+            prior.get("status") == "completed" and prior.get("conclusion") == "failure",
             "recovery source run is not a completed failure",
         )
-        _require(prior[0].get("run_attempt") == 1, "recovery from a rerun is forbidden")
     _require(
-        {run.get("id") for run in same_sha_runs} == allowed_ids
-        and len(same_sha_runs) == len(allowed_ids),
-        "another pre-canary run already exists for this exact SHA",
+        current.get("status") in {"queued", "in_progress"}
+        and current.get("conclusion") is None,
+        "current pre-canary run is not active",
     )
 
     return {
@@ -218,6 +285,7 @@ def validate_one_shot(
         "receipt_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
         "run_id": current_run_id,
         "run_attempt": 1,
+        "recovery_depth": len(ordered) - 1,
     }
 
 

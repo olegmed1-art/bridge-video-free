@@ -20,10 +20,9 @@ permissions:
   contents: read
 
 concurrency:
-  # Only an authorized lifecycle command enters the production fence. Other
-  # issue comments get a unique no-op group and cannot replace a pending
-  # workload or power run before their job-level condition skips them.
-  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.action == 'status') && format('oracle-instance-status-{0}', github.run_id) || (github.event_name == 'issue_comment' && github.actor == github.repository_owner && github.event.comment.body == '/oracle-instance status') && format('oracle-instance-status-{0}', github.run_id) || ((github.event_name == 'workflow_dispatch' && contains(fromJSON('["start","stop"]'), inputs.action)) || (github.event_name == 'issue_comment' && github.actor == github.repository_owner && contains(fromJSON('["/oracle-instance start","/oracle-instance stop"]'), github.event.comment.body))) && 'oracle-instance-workload-mutation' || format('oracle-instance-power-noop-{0}', github.run_id) }}
+  # Status also uses OCI Run Command and can outlive a cancelled Actions run.
+  # Keep every exact-instance command creator behind the common fence.
+  group: oracle-instance-workload-mutation
   cancel-in-progress: false
 
 jobs:

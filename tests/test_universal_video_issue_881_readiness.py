@@ -1298,9 +1298,10 @@ def test_external_precanary_is_pr_only_exact_head_validation():
     assert "oracle-universal-video-container-evidence.yml" in workflow
     assert "UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true" in workflow
     assert (
-        "grep -F 'issue_881_precanary_queue_proof.py owner-after' \"$runner\""
+        "grep -F 'issue_881_precanary_queue_proof.py owner-release-gate' \"$runner\""
         in workflow
     )
+    assert "UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE" in workflow
     retired = (
         ROOT / ".github/workflows/oracle-universal-video-container-evidence.yml"
     ).read_text(encoding="utf-8")
@@ -1390,7 +1391,8 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "verify_no_competing_infrastructure_runs(){" in workflow
     assert "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE" in workflow
     assert "issue_881_precanary_queue_proof.py owner-before" in workflow
-    assert "issue_881_precanary_queue_proof.py owner-after" in workflow
+    assert "issue_881_precanary_queue_proof.py owner-release-gate" in workflow
+    assert "UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE" in workflow
     assert "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME" in workflow
     assert "prior-recovery-evidence.txt" in workflow
     assert "UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256='$recovery_sha'" in workflow

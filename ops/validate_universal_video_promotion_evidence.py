@@ -25,7 +25,10 @@ MAX_ARCHIVE_BYTES = 2_000_000
 MAX_EVIDENCE_BYTES = 1_000_000
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
-RUN_NAME_RE = re.compile(r"issue881-precanary/([0-9a-f]{40})/receipt-([1-9][0-9]{8,19})")
+RUN_NAME_RE = re.compile(
+    r"issue881-precanary/([0-9a-f]{40})/receipt-([1-9][0-9]{8,19})/"
+    r"recover-(none|[1-9][0-9]{7,19})"
+)
 
 
 class EvidenceValidationError(ValueError):
@@ -342,6 +345,15 @@ def verify_evidence_archive(
         "worker_fenced=true owner_snapshot=unchanged result=PASS"
     )
     _require(lines.count(owner_release) == 1, "owner release proof is missing or ambiguous")
+    database_fence = (
+        "UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE "
+        "tables=batch,job,job_event lock=SHARE owner_release=observed "
+        "final_snapshot=unchanged result=PASS"
+    )
+    _require(
+        lines.count(database_fence) == 1,
+        "database enqueue-fence proof is missing or ambiguous",
+    )
 
     window_lines = [
         line for line in lines if line.startswith("UNIVERSAL_VIDEO_PRECANARY_WINDOW ")
@@ -363,7 +375,8 @@ def verify_evidence_archive(
         < lines.index(runtime_after[0])
         < lines.index(owner_after)
         < lines.index(owner_release)
-        < lines.index(restore_lines[0]),
+        < lines.index(restore_lines[0])
+        < lines.index(database_fence),
         "one-shot, queue, and restoration receipts are out of order",
     )
 

@@ -123,6 +123,19 @@ jobs:
           key_file=$RUNNER_TEMP/oci/key.pem
           EOF
           chmod 0600 "$RUNNER_TEMP/oci/config"
+          compartment="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get \
+            --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
+          [[ "$compartment" =~ ^ocid1\.compartment\. ]]
+          executions="$RUNNER_TEMP/promotion-oci-executions-instance-lifecycle.json"
+          oci --config-file "$RUNNER_TEMP/oci/config" \
+            instance-agent command-execution list \
+            --compartment-id "$compartment" --instance-id "$INSTANCE_ID" \
+            --all --output json > "$executions"
+          examined="$(python3 ops/verify_oci_instance_command_executions.py \
+            --executions-json "$executions" --instance-id "$INSTANCE_ID")"
+          [[ "$examined" =~ ^[0-9]+$ ]]
+          printf 'UNIVERSAL_VIDEO_PROMOTION_OCI_INSTANCE_COMMAND_EXCLUSIVE boundary=instance-lifecycle examined_instance_executions=%s active_remote_commands=0 result=PASS\n' \
+            "$examined"
           state="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
           case "$state" in
             RUNNING) ;;
@@ -168,6 +181,22 @@ jobs:
             printf 'UNIVERSAL_VIDEO_PROMOTION_MAIN_FRESH boundary=%s sha=%s result=PASS\n' \
               "$boundary" "$GITHUB_SHA"
           }
+          verify_no_active_instance_agent_commands(){
+            local boundary="$1" config="$RUNNER_TEMP/oci/config" compartment executions examined
+            [[ -f "$config" && ! -L "$config" && "$(stat -c '%a' "$config")" == 600 ]]
+            compartment="$(oci --config-file "$config" compute instance get \
+              --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
+            [[ "$compartment" =~ ^ocid1\.compartment\. ]]
+            executions="$RUNNER_TEMP/promotion-oci-executions-$boundary.json"
+            oci --config-file "$config" instance-agent command-execution list \
+              --compartment-id "$compartment" --instance-id "$INSTANCE_ID" \
+              --all --output json > "$executions"
+            examined="$(python3 ops/verify_oci_instance_command_executions.py \
+              --executions-json "$executions" --instance-id "$INSTANCE_ID")"
+            [[ "$examined" =~ ^[0-9]+$ ]]
+            printf 'UNIVERSAL_VIDEO_PROMOTION_OCI_INSTANCE_COMMAND_EXCLUSIVE boundary=%s examined_instance_executions=%s active_remote_commands=0 result=PASS\n' \
+              "$boundary" "$examined"
+          }
           # Fail closed if main advanced after the fresh one-file request gate;
           # no host preflight or mutation may use evidence for older runtime.
           verify_promotion_current_main host-preflight
@@ -203,6 +232,7 @@ jobs:
             # The source preparation can stop/restart residents and replace
             # the checkout, so current main must be fresh at this boundary.
             verify_promotion_current_main source-prepare
+            verify_no_active_instance_agent_commands source-prepare
             set +e
             "${ssh_base[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_RUN_SMOKE=0 UNIVERSAL_VIDEO_SOURCE_ONLY=1 /bin/bash -s" < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
             prepare_rc=$?
@@ -224,6 +254,7 @@ jobs:
           # Remote preflights can take long enough for main to advance. Make
           # the live-main read the final gate before the promotion mutation.
           verify_promotion_current_main image-promotion
+          verify_no_active_instance_agent_commands image-promotion
           set +e
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n env UNIVERSAL_VIDEO_EXPECTED_COMMIT='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST='$IMAGE_DIGEST' /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" \

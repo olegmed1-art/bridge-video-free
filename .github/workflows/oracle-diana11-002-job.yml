@@ -14,11 +14,10 @@ permissions:
   issues: write
 
 concurrency:
-  # Serialize every workload ingress with the lifecycle STOP boundary. A
-  # queued dispatch must not be able to submit work after the final IDLE
-  # proof but before OCI accepts the STOP action. PR validation has no
-  # workload authority and stays out of the production lifecycle fence.
-  group: ${{ github.event_name == 'pull_request' && format('oracle-diana11-002-pr-{0}', github.event.pull_request.number) || 'oracle-instance-workload-mutation' }}
+  # Even a cancelled Actions run can leave its OCI Run Command executing.
+  # Serialize the complete workflow, including contract validation, with every
+  # other creator that targets this exact instance.
+  group: oracle-instance-workload-mutation
   cancel-in-progress: false
 
 jobs:

@@ -15,7 +15,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-universal-video-evidence-export
+  group: oracle-instance-workload-mutation
   cancel-in-progress: false
 
 jobs:

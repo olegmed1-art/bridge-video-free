@@ -21,8 +21,11 @@ python3 ops/issue_881_precanary_one_shot.py render \
 The repository owner must post the rendered text as a fresh, unedited comment
 on Issue #881. It expires in 15 minutes. Its numeric comment ID is the
 `approval_receipt_id`. The nonce is the `approval_nonce` input. Recovery is a
-separate fail-closed case: name exactly one completed first-attempt failed run
-in both the receipt and `recover_container_from_run`, and obtain a new GO.
+separate fail-closed case: name the immediately preceding completed
+first-attempt failed run in both the receipt and
+`recover_container_from_run`, and obtain a new GO. A machine-validated linear
+chain is capped at four total runs for one exact SHA; every link needs a unique
+receipt and may reference only its immediate predecessor.
 
 ## Authoritative workflow and exact inputs
 
@@ -38,12 +41,14 @@ recover_container_from_run: ""
 ```
 
 GitHub's run title must become
-`issue881-precanary/<exact_sha>/receipt-<approval_receipt_id>`. The workflow
-rejects attempts greater than one, reuse of the receipt, any earlier bounded
-pre-canary run for the same SHA, a changed `main`, a stale or edited receipt,
-and an exact protected gate head without clean independent review and required
-CI. Concurrency is still held under `oracle-instance-workload-mutation`, but
-the receipt/run checks—not serialization alone—enforce one-shot execution.
+`issue881-precanary/<exact_sha>/receipt-<approval_receipt_id>/recover-none` for
+the initial run, or end in `recover-<immediate-failed-run-id>` for an approved
+recovery. The workflow rejects attempts greater than one, reuse of a receipt,
+a forked/skipped recovery link, more than four same-SHA runs, a changed `main`,
+a stale or edited receipt, and an exact protected gate head without clean
+independent review and required CI. Concurrency is held under
+`oracle-instance-workload-mutation`, but the receipt/run checks—not
+serialization alone—enforce one-shot execution.
 
 ## Bounded behavior and evidence
 
@@ -67,23 +72,30 @@ A passing artifact contains exactly one of each material receipt, in order:
 - `UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER ... unchanged=true result=PASS`
 - `UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE ... worker_fenced=true ... result=PASS`
 - `UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS ... container_target=active ...`
+- `UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE ... final_snapshot=unchanged result=PASS`
 
 The post-restore runtime proof executes inside the newly resident container as
 its service UID/GID while that exact worker remains blocked by the exclusive
 claim fence. It must read only `/run/secrets/video-queue-dsn`, identify the
 production worker principal and schema/function, and return zero
-claimable/leased jobs. The independent owner proof must then match the complete
-pre-window baseline byte-for-byte at the field level while that worker is still
-fenced. Only a root-only one-use control carrying the exact proof may release
-the fence; resident readiness is checked afterwards.
+claimable/leased jobs. The independent owner transaction then acquires `SHARE
+NOWAIT` locks on `video_queue.batch`, `video_queue.job`, and
+`video_queue.job_event` and must match the complete pre-window baseline while
+that worker is still fenced. Those locks block every queue writer through the
+root-only one-use host release and full resident restoration. A final snapshot
+must still be unchanged before the database fence is released.
 
 Immediately before host mutation and again before the owner release, the runner
 reconciles both the complete GitHub Actions snapshot and every OCI Instance
-Agent command execution visible for the exact Oracle instance. No display-name
+Agent command execution visible for the exact Oracle instance. Every repository
+workflow that can create such a command shares the same
+`oracle-instance-workload-mutation` concurrency fence. No display-name
 allowlist is used: a command left behind by any cancelled workflow must be in a
-terminal OCI lifecycle. The bounded admin workflow also reconciles its own
-command on every exit, attempts cancellation whenever it is not terminal, and
-fails unless that exact remote command becomes provably terminal.
+terminal OCI lifecycle. Promotion repeats the exact-instance reconciliation
+before instance lifecycle, source preparation, and image promotion mutations.
+The bounded admin workflow also reconciles its own command on every exit,
+attempts cancellation whenever it is not terminal, and fails unless that exact
+remote command becomes provably terminal.
 
 ## STOP and rollback
 

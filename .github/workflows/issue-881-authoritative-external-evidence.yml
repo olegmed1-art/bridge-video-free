@@ -1,5 +1,5 @@
 name: Issue 881 Authoritative External Pre-Canary Evidence
-run-name: issue881-precanary/${{ inputs.exact_sha }}/receipt-${{ inputs.approval_receipt_id }}
+run-name: issue881-precanary/${{ inputs.exact_sha }}/receipt-${{ inputs.approval_receipt_id }}/recover-${{ inputs.recover_container_from_run || 'none' }}
 
 on:
   workflow_dispatch:
@@ -197,6 +197,7 @@ jobs:
           [[ "$postrestore_marker" == "$expected" ]]
           [[ "$(grep -Fxc "$expected" "$evidence")" == 1 ]]
           [[ "$(grep -Fxc 'UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE worker_fenced=true owner_snapshot=unchanged result=PASS' "$evidence")" == 1 ]]
+          [[ "$(grep -Fxc 'UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE tables=batch,job,job_event lock=SHARE owner_release=observed final_snapshot=unchanged result=PASS' "$evidence")" == 1 ]]
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_SHA"
           printf '%s\n' "$postrestore_marker" | tee -a "$GITHUB_STEP_SUMMARY"
 

@@ -81,20 +81,45 @@ def test_promotion_rechecks_live_main_at_each_host_mutation_boundary() -> None:
     source_check = WORKFLOW.index(
         "verify_promotion_current_main source-prepare", source_condition
     )
+    source_oci_check = WORKFLOW.index(
+        "verify_no_active_instance_agent_commands source-prepare", source_check
+    )
     source_mutation = WORKFLOW.index(
-        "UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT'", source_check
+        "UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT'", source_oci_check
     )
     entrypoint_pass = WORKFLOW.index("UV_CONTAINER_PROMOTION_ENTRYPOINT_PASS", source_mutation)
     promotion_check = WORKFLOW.index(
         "verify_promotion_current_main image-promotion", entrypoint_pass
     )
+    promotion_oci_check = WORKFLOW.index(
+        "verify_no_active_instance_agent_commands image-promotion", promotion_check
+    )
     promotion_mutation = WORKFLOW.index(
         " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh",
-        promotion_check,
+        promotion_oci_check,
     )
 
-    assert initial_check < source_condition < source_check < source_mutation
-    assert source_mutation < entrypoint_pass < promotion_check < promotion_mutation
+    assert initial_check < source_condition < source_check < source_oci_check < source_mutation
+    assert (
+        source_mutation
+        < entrypoint_pass
+        < promotion_check
+        < promotion_oci_check
+        < promotion_mutation
+    )
+
+
+def test_promotion_reconciles_exact_instance_commands_before_all_mutations() -> None:
+    ensure = WORKFLOW.index("- name: Ensure Oracle instance is running")
+    lifecycle_reconcile = WORKFLOW.index(
+        "boundary=instance-lifecycle", ensure
+    )
+    instance_start = WORKFLOW.index("compute instance action", lifecycle_reconcile)
+    promote = WORKFLOW.index("- name: Promote attested image with rollback")
+    helper = WORKFLOW.index("verify_no_active_instance_agent_commands(){", promote)
+    assert lifecycle_reconcile < instance_start < promote < helper
+    assert WORKFLOW.count("instance-agent command-execution list") >= 2
+    assert WORKFLOW.count("ops/verify_oci_instance_command_executions.py") >= 2
 
 
 def test_promotion_hands_off_exclusive_fence_after_old_resident_stops() -> None:

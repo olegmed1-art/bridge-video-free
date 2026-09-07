@@ -14,6 +14,12 @@ attester_pid=''
 remote_attester_terminal=1
 owner_release_file=''
 owner_abort_file=''
+database_gate_pid=''
+database_gate_terminal=1
+database_gate_ready_file="$RUNNER_TEMP/issue-881-owner-gate-ready.txt"
+database_gate_control_file="$RUNNER_TEMP/issue-881-owner-gate-control.txt"
+database_gate_output="$RUNNER_TEMP/issue-881-owner-gate-output.txt"
+database_gate_marker_file="$RUNNER_TEMP/issue-881-db-enqueue-fence-marker.txt"
 
 root_pr_number=991
 prior_gate_pr_number=1070
@@ -24,9 +30,15 @@ protected_gate_paths=(
   '.github/workflows/issue-881-current-main-authoritative-ci.yml'
   '.github/workflows/issue-881-precanary-evidence.yml'
   '.github/workflows/oracle-idle-guard-ci.yml'
+  '.github/workflows/oracle-assistant-lab-oci-diagnostic.yml'
+  '.github/workflows/oracle-diana11-002-delivery.yml'
+  '.github/workflows/oracle-diana11-002-job.yml'
+  '.github/workflows/oracle-diana11-delivery.yml'
+  '.github/workflows/oracle-instance-power.yml'
   '.github/workflows/oracle-universal-video-admin.yml'
   '.github/workflows/oracle-universal-video-container-evidence.yml'
   '.github/workflows/oracle-universal-video-container-promote.yml'
+  '.github/workflows/oracle-universal-video-evidence-export.yml'
   '.github/workflows/secret-gate.yml'
   '.github/workflows/universal-video-ci.yml'
   '.github/workflows/universal-video-engine-smoke.yml'
@@ -34,6 +46,7 @@ protected_gate_paths=(
   'ops/issue_881_external_precanary_workflow.sh'
   'ops/issue_881_precanary_one_shot.py'
   'ops/issue_881_precanary_queue_proof.py'
+  'ops/verify_oci_instance_command_executions.py'
   'ops/install_universal_video_operator.sh'
   'ops/oracle_known_hosts_from_scan.sh'
   'ops/oracle_universal_video_run_command.sh'
@@ -271,52 +284,9 @@ verify_no_active_instance_agent_commands(){
     --compartment-id "$compartment" --instance-id "$INSTANCE_ID" \
     --all --output json > "$executions_file" \
     || return 1
-  examined="$(python3 - "$executions_file" "$INSTANCE_ID" <<'PY'
-import datetime as dt
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as source:
-    payload = json.load(source)
-if not isinstance(payload, dict) or "data" not in payload:
-    raise SystemExit("invalid OCI command execution list")
-items = payload["data"]
-if not isinstance(items, list):
-    raise SystemExit("invalid OCI command execution collection")
-expected_instance = sys.argv[2]
-terminal = {"SUCCEEDED", "FAILED", "CANCELED", "TIMED_OUT"}
-known = terminal | {"ACCEPTED", "IN_PROGRESS"}
-seen: set[str] = set()
-for item in items:
-    if not isinstance(item, dict):
-        raise SystemExit("invalid OCI command execution item")
-    command_id = item.get("instance-agent-command-id")
-    instance_id = item.get("instance-id")
-    lifecycle = item.get("lifecycle-state")
-    created = item.get("time-created")
-    if not isinstance(command_id, str) or not command_id.startswith(
-        "ocid1.instanceagentcommand."
-    ):
-        raise SystemExit("invalid OCI Run Command identity")
-    if instance_id != expected_instance:
-        raise SystemExit("OCI Run Command execution belongs to another instance")
-    if not isinstance(lifecycle, str) or lifecycle not in known:
-        raise SystemExit("unknown OCI Run Command lifecycle")
-    if not isinstance(created, str):
-        raise SystemExit("missing OCI Run Command timestamp")
-    timestamp = dt.datetime.fromisoformat(created.replace("Z", "+00:00"))
-    if timestamp.tzinfo is None:
-        raise SystemExit("timezone-free OCI Run Command timestamp")
-    if command_id in seen:
-        raise SystemExit("duplicate OCI Run Command execution identity")
-    seen.add(command_id)
-    if lifecycle not in terminal:
-        raise SystemExit(
-            f"OCI Run Command on target instance is not terminal: {lifecycle}"
-        )
-print(len(seen))
-PY
-)" || return 1
+  examined="$(python3 ops/verify_oci_instance_command_executions.py \
+    --executions-json "$executions_file" --instance-id "$INSTANCE_ID")" \
+    || return 1
   [[ "$examined" =~ ^[0-9]+$ ]] \
     || { echo 'OCI Run Command execution count is invalid' >&2; return 1; }
   printf 'UNIVERSAL_VIDEO_PRECANARY_OCI_INSTANCE_COMMAND_EXCLUSIVE examined_instance_executions=%s active_remote_commands=0 result=PASS\n' \
@@ -432,11 +402,77 @@ abort_remote_attester(){
   [[ "$remote_attester_terminal" == 1 ]]
 }
 
+write_database_gate_signal(){
+  local signal="$1"
+  [[ "$signal" == RELEASE || "$signal" == ABORT ]] || return 1
+  [[ ! -e "$database_gate_control_file" && ! -L "$database_gate_control_file" ]] \
+    || return 1
+  DATABASE_GATE_CONTROL_FILE="$database_gate_control_file" \
+    DATABASE_GATE_SIGNAL="$signal" python3 - <<'PY'
+import os
+
+path = os.environ["DATABASE_GATE_CONTROL_FILE"]
+signal = os.environ["DATABASE_GATE_SIGNAL"]
+if signal not in {"RELEASE", "ABORT"}:
+    raise SystemExit(1)
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+descriptor = os.open(path, flags, 0o600)
+with os.fdopen(descriptor, "wb") as output:
+    output.write((signal + "\n").encode("ascii"))
+    output.flush()
+    os.fsync(output.fileno())
+PY
+}
+
+abort_database_gate(){
+  local attempt
+  if [[ "$database_gate_pid" =~ ^[1-9][0-9]*$ ]]; then
+    if kill -0 "$database_gate_pid" >/dev/null 2>&1; then
+      write_database_gate_signal ABORT >/dev/null 2>&1 || true
+      for attempt in {1..150}; do
+        kill -0 "$database_gate_pid" >/dev/null 2>&1 || break
+        sleep 0.2
+      done
+      if kill -0 "$database_gate_pid" >/dev/null 2>&1; then
+        database_gate_terminal=0
+        kill -TERM "$database_gate_pid" >/dev/null 2>&1 || true
+      fi
+    fi
+    wait "$database_gate_pid" >/dev/null 2>&1 || true
+    database_gate_pid=''
+  fi
+  [[ "$database_gate_terminal" == 1 ]]
+}
+
+release_database_gate(){
+  local rc marker
+  [[ "$database_gate_pid" =~ ^[1-9][0-9]*$ ]] \
+    || { echo 'Production enqueue fence process is unavailable' >&2; return 1; }
+  kill -0 "$database_gate_pid" >/dev/null 2>&1 \
+    || { echo 'Production enqueue fence exited before release' >&2; return 1; }
+  write_database_gate_signal RELEASE || return 1
+  set +e
+  wait "$database_gate_pid"
+  rc=$?
+  set -e
+  database_gate_pid=''
+  (( rc == 0 )) || return "$rc"
+  marker="$(cat "$database_gate_output")" || return 1
+  [[ "$marker" == \
+    'UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE tables=batch,job,job_event lock=SHARE owner_release=observed final_snapshot=unchanged result=PASS' ]] \
+    || { echo 'Production enqueue fence receipt is invalid' >&2; return 1; }
+  (umask 077; printf '%s\n' "$marker" > "$database_gate_marker_file")
+  printf '%s\n' "$marker"
+}
+
 cleanup_remote(){
   trap - EXIT
   if abort_remote_attester; then
     "${s[@]}" "sudo -n rm -rf '$remote_root'; rm -rf '$remote_stage'" >/dev/null 2>&1 || true
   fi
+  abort_database_gate >/dev/null 2>&1 || true
 }
 trap cleanup_remote EXIT
 
@@ -444,6 +480,7 @@ bounded_failure(){
   rc="${1:-$?}"
   trap - ERR
   abort_remote_attester || rc=1
+  abort_database_gate || rc=1
   {
     echo "runtime_sha=$EXACT_SHA"
     echo "step_exit=$rc"
@@ -451,6 +488,8 @@ bounded_failure(){
     cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt" 2>/dev/null || true
     cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt" 2>/dev/null || true
     cat "$RUNNER_TEMP/precanary-oci-instance-command-marker.txt" 2>/dev/null || true
+    grep -E '^UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE ' \
+      "$database_gate_output" 2>/dev/null || true
     grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|FENCED_START|POSTRESTORE_(RUNTIME|OWNER)|OWNER_RELEASE|RESTORE(_PASS|_FAILED)?)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
       "$session_log" 2>/dev/null || true
     echo 'real_media_canary_run=false'
@@ -460,6 +499,7 @@ bounded_failure(){
     echo 'canonical_promotion_allowed=false'
     echo 'publication_state=NOT_PUBLISHED'
     echo "remote_attester_terminal=$remote_attester_terminal"
+    echo "database_gate_terminal=$database_gate_terminal"
   } > "$evidence"
   cat "$evidence" >> "$GITHUB_STEP_SUMMARY"
   exit "$rc"
@@ -561,8 +601,30 @@ if [[ "$runtime_proof_ready" != 1 ]]; then
 fi
 
 verify_final_mutation_boundary
-postrestore_owner_marker="$(python3 ops/issue_881_precanary_queue_proof.py owner-after \
-  --baseline "$RUNNER_TEMP/issue-881-owner-baseline.json")"
+python3 ops/issue_881_precanary_queue_proof.py owner-release-gate \
+  --baseline "$RUNNER_TEMP/issue-881-owner-baseline.json" \
+  --ready-file "$database_gate_ready_file" \
+  --control-file "$database_gate_control_file" \
+  --timeout-seconds 600 > "$database_gate_output" 2>&1 &
+database_gate_pid=$!
+database_gate_ready=0
+database_gate_deadline=$((SECONDS + 30))
+while (( SECONDS < database_gate_deadline )); do
+  if [[ -e "$database_gate_ready_file" || -L "$database_gate_ready_file" ]]; then
+    database_gate_ready=1
+    break
+  fi
+  if ! kill -0 "$database_gate_pid" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.2
+done
+[[ "$database_gate_ready" == 1 ]] || bounded_failure 1
+[[ -f "$database_gate_ready_file" && ! -L "$database_gate_ready_file" \
+  && "$(stat -c '%u:%a:%h' "$database_gate_ready_file")" == "$(id -u):600:1" ]] \
+  || bounded_failure 1
+kill -0 "$database_gate_pid" >/dev/null 2>&1 || bounded_failure 1
+postrestore_owner_marker="$(cat "$database_gate_ready_file")"
 [[ "$postrestore_owner_marker" == \
   'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 max_event_id=NULL sequence_last_value=1 sequence_is_called=false claimable=0 leased=0 unchanged=true result=PASS' ]]
 (umask 077; printf '%s\n' "$postrestore_owner_marker" \
@@ -610,6 +672,7 @@ grep -F '"checksum_type":"md5"' "$session_log"
 grep -F '"checksum_value":"b6ebeec5be5909d00d3902c92c380b07"' "$session_log"
 grep -F '"source_media_downloaded":false' "$session_log"
 grep -E '^UNIVERSAL_VIDEO_PRECANARY_WINDOW .*workload_fence=exclusive .*services_quiescent=true .*restore_on_exit=true$' "$session_log"
+release_database_gate
 
 trap - ERR
 {
@@ -619,6 +682,7 @@ trap - ERR
   cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt"
   cat "$RUNNER_TEMP/precanary-oci-instance-command-marker.txt"
   grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|FENCED_START|POSTRESTORE_(RUNTIME|OWNER)|OWNER_RELEASE|RESTORE_PASS)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)) ' "$session_log"
+  cat "$database_gate_marker_file"
   grep -E '"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"' "$session_log"
   echo "image_digest=$installed_digest"
   echo 'real_media_canary_run=false'

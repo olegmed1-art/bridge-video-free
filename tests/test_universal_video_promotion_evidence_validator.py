@@ -30,7 +30,7 @@ def _run() -> dict[str, object]:
         "name": VALIDATOR.AUTHORITATIVE_WORKFLOW_NAME,
         "path": VALIDATOR.AUTHORITATIVE_WORKFLOW_PATH,
         "event": "workflow_dispatch",
-        "display_title": f"issue881-precanary/{COMMIT}/receipt-{RECEIPT_ID}",
+        "display_title": f"issue881-precanary/{COMMIT}/receipt-{RECEIPT_ID}/recover-none",
         "run_attempt": 1,
         "status": "completed",
         "conclusion": "success",
@@ -110,6 +110,9 @@ def _evidence() -> str:
             "source_service_observed=active source_service=active "
             "container_service_before=active container_service_observed=active "
             "container_target=active container_service=active prior_container_recovery=0",
+            "UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE "
+            "tables=batch,job,job_event lock=SHARE owner_release=observed "
+            "final_snapshot=unchanged result=PASS",
             _gate("IMPORT_CLOSURE"),
             _gate(
                 "SYNTHETIC_RESULT_CONTRACT",
@@ -269,6 +272,15 @@ def test_rejects_tampered_or_ambiguous_archive_evidence(tmp_path: Path) -> None:
                 evidence.replace(
                     "UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE ",
                     "REMOVED_OWNER_RELEASE ",
+                )
+            ),
+            None,
+        ),
+        (
+            _archive_bytes(
+                evidence.replace(
+                    "UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE ",
+                    "REMOVED_DB_ENQUEUE_FENCE ",
                 )
             ),
             None,
