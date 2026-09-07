@@ -906,6 +906,51 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
             assert "format(" in header, relative
 
 
+def test_every_direct_oracle_rollout_uses_a_trusted_shared_fence() -> None:
+    workflows = ROOT / ".github/workflows"
+    rollouts = {
+        path.relative_to(ROOT).as_posix()
+        for path in workflows.glob("oracle-*rollout.yml")
+        if "ORACLE_HOST:" in path.read_text(encoding="utf-8")
+    }
+    assert rollouts == {
+        ".github/workflows/oracle-assistant-lab-control-rollout.yml",
+        ".github/workflows/oracle-assistant-lab-worker-rollout.yml",
+        ".github/workflows/oracle-ben-runtime-rollout.yml",
+    }
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
+    for relative in rollouts:
+        workflow = (ROOT / relative).read_text(encoding="utf-8")
+        header = workflow.split("\njobs:", 1)[0]
+        assert "oracle-instance-workload-mutation" in header, relative
+        assert "cancel-in-progress: false" in header, relative
+        assert "format(" in header, relative
+        assert "github.event_name" in header, relative
+        assert f"'{relative}'" in runner, relative
+        if "  pull_request_target:" in header:
+            for trust_gate in (
+                "github.event.pull_request.head.repo.full_name == github.repository",
+                "github.event.pull_request.user.login == github.repository_owner",
+                "github.event.pull_request.base.ref == 'main'",
+                "github.event.pull_request.changed_files == 1",
+            ):
+                assert workflow.count(trust_gate) >= 2, (relative, trust_gate)
+
+
+def test_database_production_fence_excludes_rejected_dispatches() -> None:
+    workflow = (ROOT / ".github/workflows/database-production.yml").read_text(
+        encoding="utf-8"
+    )
+    header = workflow.split("\njobs:", 1)[0]
+    assert "github.ref == 'refs/heads/database-production'" in header
+    assert "inputs.confirmation == 'MIGRATE'" in header
+    assert "'oracle-instance-workload-mutation'" in header
+    assert "database-production-noop-{0}" in header
+    assert "cancel-in-progress: false" in header
+
+
 def test_every_instance_agent_command_must_be_terminal(tmp_path: Path) -> None:
     runner = (
         ROOT / "ops/issue_881_external_precanary_workflow.sh"
