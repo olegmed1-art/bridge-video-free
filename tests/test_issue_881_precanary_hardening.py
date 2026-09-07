@@ -867,7 +867,8 @@ verify_no_competing_infrastructure_runs
 
 def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() -> None:
     direct_mutation = re.compile(
-        r"systemctl restart|oci compute instance action|"
+        r"systemctl (?:restart|start|stop|enable|disable)|systemd-run|"
+        r"oci compute instance action|"
         r"install -o root.*video-queue|VIDEO_QUEUE_DSN",
         re.DOTALL,
     )
@@ -883,6 +884,8 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
         )
     }
     assert owner_mutators == {
+        ".github/workflows/oracle-ben-dds3-health-monitor.yml",
+        ".github/workflows/oracle-dds3-pilot10k-operator.yml",
         ".github/workflows/oracle-instance-power.yml",
         ".github/workflows/oracle-operational-safety-gate.yml",
         ".github/workflows/oracle-operator-commands.yml",
