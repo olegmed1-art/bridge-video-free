@@ -71,6 +71,42 @@ def test_accepts_hash_bound_partial_result_and_preserves_unknowns() -> None:
     assert consumed["logical_inference_performed"] is False
 
 
+def test_accepts_string_frame_sha256_as_visual_evidence() -> None:
+    envelope = _envelope()
+    record = envelope["result"]["card_records"][0]
+    record.update(
+        suit="H",
+        rank="A",
+        source="VISUAL",
+        frame_sha256="1" * 64,
+        confidence=0.95,
+    )
+    record.pop("unknown_slot")
+    _rehash(envelope)
+
+    consumed = validate_recognition_result(envelope)
+
+    assert consumed["cards"][0]["frame_sha256"] == "1" * 64
+    assert consumed["cards"][0]["source"] == "VISUAL"
+
+
+def test_rejects_numeric_frame_sha_without_creating_visual_evidence() -> None:
+    envelope = _envelope()
+    record = envelope["result"]["card_records"][0]
+    record.update(
+        suit="H",
+        rank="A",
+        source="VISUAL",
+        frame_sha256=int("1" * 64),
+        confidence=0.95,
+    )
+    record.pop("unknown_slot")
+    _rehash(envelope)
+
+    with pytest.raises(CardRecognitionContractError, match="frame_sha256"):
+        validate_recognition_result(envelope)
+
+
 def test_rejects_changed_result_after_hashing() -> None:
     envelope = _envelope()
     envelope["result"]["status"] = "COMPLETE_VISUAL"
