@@ -386,7 +386,7 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "freeze_residents_for_idle_snapshot" in script
     assert "stop_frozen_residents" in script
     assert "flock --exclusive --nonblock 9" in script
-    assert 'restore_service "$SOURCE_SERVICE" "$source_state_before"' in script
+    assert 'restore_service "$SOURCE_SERVICE" "$source_target_state"' in script
     assert "start_container_under_fence" in script
     assert "validate_started_container_after_fence" in script
     assert 'source_candidate_path_owned=0' in script
@@ -476,24 +476,27 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     postrestore_queue_index = script.index(
         "verify_postrestore_runtime_queue", fenced_start_index
     )
-    unlock_index = script.index("flock --unlock 9", postrestore_queue_index)
+    owner_release_index = script.index(
+        "verify_postrestore_owner_release", postrestore_queue_index
+    )
+    unlock_index = script.index("flock --unlock 9", owner_release_index)
     validate_container_index = script.index(
         "validate_started_container_after_fence", unlock_index
     )
     restore_source_index = script.index(
-        'restore_service "$SOURCE_SERVICE" "$source_state_before"',
+        'restore_service "$SOURCE_SERVICE" "$source_target_state"',
         validate_container_index,
     )
     restore_pass_index = script.index("UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS")
     source_recheck_index = script.index(
-        '[[ "$source_after" == "$source_state_before" ]]',
+        '[[ "$source_after" == "$source_target_state" ]]',
         restore_source_index,
     )
     container_recheck_index = script.index(
         '[[ "$container_after" == "$container_target_state" ]]'
     )
     readiness_recheck_index = script.index(
-        'restored_service_ready "$SOURCE_SERVICE" "$source_state_before"',
+        'restored_service_ready "$SOURCE_SERVICE" "$source_target_state"',
         container_recheck_index,
     )
     restore_body = script[
@@ -507,6 +510,7 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert (
         fenced_start_index
         < postrestore_queue_index
+        < owner_release_index
         < unlock_index
         < validate_container_index
         < restore_source_index
@@ -941,6 +945,7 @@ resident_image_id=
 SOURCE_SERVICE=source.service
 CONTAINER_SERVICE=container.service
 source_state_before=active
+source_target_state=active
 container_target_state=active
 restored_source_pid=111
 restored_source_start_ticks=222
@@ -956,6 +961,7 @@ stop_frozen_residents(){{ return 0; }}
 residents_are_quiescent(){{ return 0; }}
 start_container_under_fence(){{ return 0; }}
 verify_postrestore_runtime_queue(){{ return 0; }}
+verify_postrestore_owner_release(){{ return 0; }}
 validate_started_container_after_fence(){{ return 0; }}
 bounded_systemctl(){{ printf 'systemctl:%s\n' "$*" >> "$service_log"; }}
 bounded_docker(){{ return 0; }}
@@ -1100,6 +1106,7 @@ resident_image_id=
 SOURCE_SERVICE=source.service
 CONTAINER_SERVICE=container.service
 source_state_before=active
+source_target_state=active
 container_target_state=inactive
 restored_source_pid=
 restored_source_start_ticks=
@@ -1347,8 +1354,8 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' in workflow
     assert "Reviewed head has no current independent approval at final reconciliation" in workflow
     assert "root_required_workflows=(" in workflow
-    assert "Oracle idle STOP guard CI" in workflow
-    assert "Retired Oracle Universal Video Container Evidence Contract" in workflow
+    assert "Issue 881 Exact Canary Contract CI" in workflow
+    assert "Issue 881 Exact Pre-Canary Evidence" in workflow
     assert "root_reviewed_sha" in workflow
     assert "group_by(.user.login) | map(max_by(.submitted_at))" in workflow
     assert "Main changed while live review and CI gates were evaluated" in workflow

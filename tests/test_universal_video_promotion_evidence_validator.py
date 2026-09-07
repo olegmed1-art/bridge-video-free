@@ -77,8 +77,11 @@ def _evidence() -> str:
             "claimable=0 leased=0 result=PASS",
             "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE "
             "other_active=0 other_queued=0 result=PASS",
+            "UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE "
+            "examined_recent=1 active_remote_commands=0 result=PASS",
             "UNIVERSAL_VIDEO_PRECANARY_WINDOW source_service_before=active "
-            "container_service_before=active workload_fence=exclusive "
+            "source_service_observed=active container_service_before=active "
+            "container_service_observed=active workload_fence=exclusive "
             "services_quiescent=true restore_on_exit=true",
             f"UNIVERSAL_VIDEO_PRECANARY_RUNTIME commit={COMMIT} image_digest={IMAGE_DIGEST}",
             f"UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit={COMMIT} "
@@ -96,8 +99,16 @@ def _evidence() -> str:
             "branch=br-wispy-lab-b1rq54of "
             "database=neondb principal=bridge_school_worker_principal schema=true "
             "function=true claimable=0 leased=0 result=PASS",
+            "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER "
+            "project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb "
+            "principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 "
+            "max_event_id=NULL sequence_last_value=1 sequence_is_called=false "
+            "claimable=0 leased=0 unchanged=true result=PASS",
+            "UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE "
+            "worker_fenced=true owner_snapshot=unchanged result=PASS",
             "UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=active "
-            "source_service=active container_service_before=active "
+            "source_service_observed=active source_service=active "
+            "container_service_before=active container_service_observed=active "
             "container_target=active container_service=active prior_container_recovery=0",
             _gate("IMPORT_CLOSURE"),
             _gate(
@@ -117,11 +128,6 @@ def _evidence() -> str:
             "automatic_batch_release=false",
             "canonical_promotion_allowed=false",
             "publication_state=NOT_PUBLISHED",
-            "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER "
-            "project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb "
-            "principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 "
-            "max_event_id=NULL sequence_last_value=1 sequence_is_called=false "
-            "claimable=0 leased=0 unchanged=true result=PASS",
         ]
     ) + "\n"
 
@@ -225,6 +231,15 @@ def test_rejects_tampered_or_ambiguous_archive_evidence(tmp_path: Path) -> None:
         (
             _archive_bytes(
                 evidence.replace(
+                    "UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE ",
+                    "REMOVED_OCI_ADMIN_EXCLUSIVE ",
+                )
+            ),
+            None,
+        ),
+        (
+            _archive_bytes(
+                evidence.replace(
                     "UNIVERSAL_VIDEO_PRECANARY_FENCED_START ",
                     "REMOVED_FENCED_START ",
                 )
@@ -245,6 +260,15 @@ def test_rejects_tampered_or_ambiguous_archive_evidence(tmp_path: Path) -> None:
                 evidence.replace(
                     "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER ",
                     "REMOVED_POSTRESTORE_OWNER ",
+                )
+            ),
+            None,
+        ),
+        (
+            _archive_bytes(
+                evidence.replace(
+                    "UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE ",
+                    "REMOVED_OWNER_RELEASE ",
                 )
             ),
             None,

@@ -149,6 +149,9 @@ jobs:
             --timeout-in-seconds 3600 \
             --display-name "universal-video-${OPERATION}-${GITHUB_RUN_ID}" \
             --query data.id --raw-output)"
+          [[ "$command_id" =~ ^ocid1\.instanceagentcommand\.[A-Za-z0-9._-]+$ ]]
+          (umask 077; printf '%s\n' "$command_id" > "$RUNNER_TEMP/uv-admin-command-id")
+          printf 'command_id=%s\n' "$command_id" >> "$GITHUB_OUTPUT"
           execution=''
           lifecycle=''
           for _ in $(seq 1 720); do
@@ -174,6 +177,52 @@ jobs:
             grep -F UNIVERSAL_VIDEO_DDS3_NONREGRESSION_PASS "$RUNNER_TEMP/uv-admin-safe.txt" >/dev/null
           fi
           echo UNIVERSAL_VIDEO_OCI_ADMIN_REMOTE_PASS
+
+      - name: Reconcile exact OCI command termination
+        if: ${{ always() }}
+        timeout-minutes: 10
+        shell: bash
+        env:
+          OUTPUT_COMMAND_ID: ${{ steps.remote.outputs.command_id }}
+        run: |
+          set -Eeuo pipefail
+          command_file="$RUNNER_TEMP/uv-admin-command-id"
+          if [[ ! -e "$command_file" && ! -L "$command_file" ]]; then
+            [[ -z "${OUTPUT_COMMAND_ID:-}" ]]
+            echo 'UNIVERSAL_VIDEO_OCI_ADMIN_RECONCILE command_created=false result=PASS'
+            exit 0
+          fi
+          [[ -f "$command_file" && ! -L "$command_file" \
+            && "$(stat -c '%a:%h' "$command_file")" == '600:1' ]]
+          mapfile -t command_lines < "$command_file"
+          [[ "${#command_lines[@]}" -eq 1 ]]
+          command_id="${command_lines[0]}"
+          [[ "$command_id" =~ ^ocid1\.instanceagentcommand\.[A-Za-z0-9._-]+$ ]]
+          [[ -z "${OUTPUT_COMMAND_ID:-}" || "$OUTPUT_COMMAND_ID" == "$command_id" ]]
+
+          lifecycle=''
+          for attempt in $(seq 1 108); do
+            execution="$(oci instance-agent command-execution get \
+              --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+              --output json 2>/dev/null || true)"
+            lifecycle="$(printf '%s' "$execution" | python -c \
+              'import json,sys; x=json.load(sys.stdin); print(x.get("data",{}).get("lifecycle-state","") if isinstance(x,dict) else "")' \
+              2>/dev/null || true)"
+            case "$lifecycle" in
+              SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break ;;
+            esac
+            if [[ "$attempt" == 1 ]]; then
+              oci instance-agent command cancel --command-id "$command_id" --force \
+                >/dev/null 2>&1 || true
+            fi
+            sleep 5
+          done
+          case "$lifecycle" in
+            SUCCEEDED|FAILED|CANCELED|TIMED_OUT) ;;
+            *) echo "OCI Run Command is not provably terminal: ${lifecycle:-UNKNOWN}" >&2; exit 1 ;;
+          esac
+          printf 'UNIVERSAL_VIDEO_OCI_ADMIN_RECONCILE command_created=true lifecycle=%s result=PASS\n' \
+            "$lifecycle"
 
       - name: External DDS3 non-regression
         if: ${{ success() }}

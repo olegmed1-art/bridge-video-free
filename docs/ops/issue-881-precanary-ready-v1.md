@@ -59,31 +59,44 @@ A passing artifact contains exactly one of each material receipt, in order:
 - `UNIVERSAL_VIDEO_PRECANARY_ONE_SHOT ... run_attempt=1 result=PASS`
 - `UNIVERSAL_VIDEO_PRECANARY_OWNER_BEFORE ... result=PASS`
 - `UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE ... result=PASS`
+- `UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE ... active_remote_commands=0 result=PASS`
 - the exclusive quiescent window and immutable image digest
 - no-media/no-Drive synthetic and metadata-only gates
 - `UNIVERSAL_VIDEO_PRECANARY_FENCED_START ... workload_fence=exclusive result=PASS`
 - `UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME ... recreated=true worker_fenced=true ... result=PASS`
-- `UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS ... container_target=active ...`
 - `UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER ... unchanged=true result=PASS`
+- `UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE ... worker_fenced=true ... result=PASS`
+- `UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS ... container_target=active ...`
 
 The post-restore runtime proof executes inside the newly resident container as
 its service UID/GID while that exact worker remains blocked by the exclusive
 claim fence. It must read only `/run/secrets/video-queue-dsn`, identify the
 production worker principal and schema/function, and return zero
-claimable/leased jobs. Only then may the fence be released and resident
-readiness checked. The independent owner proof must match the complete
-pre-window baseline byte-for-byte at the field level.
+claimable/leased jobs. The independent owner proof must then match the complete
+pre-window baseline byte-for-byte at the field level while that worker is still
+fenced. Only a root-only one-use control carrying the exact proof may release
+the fence; resident readiness is checked afterwards.
+
+Immediately before host mutation and again before the owner release, the runner
+reconciles both the complete GitHub Actions snapshot and recent OCI Instance
+Agent admin commands. A command from a cancelled admin workflow must be in a
+terminal OCI lifecycle. The admin workflow also reconciles on every exit,
+attempts cancellation whenever the command is not terminal, and fails unless
+that exact remote command becomes provably terminal.
 
 ## STOP and rollback
 
 The host trap restores the prior source checkout and attempts the recorded
-active or inactive resident states on normal failure, `EXIT`, `INT`, or
-`TERM`. This bounded recreation requires the resident container target to be
-active. The worker stays fenced until the new container identity and runtime
-queue proof pass. A same-container identity, wrong image/process ancestry,
-queue drift, or identity ambiguity keeps claim-capable residents stopped and
-emits `UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED`; failed later readiness also
-fails the receipt and requires reconciliation before recovery.
+active or inactive target state of both resident services on normal failure,
+`EXIT`, `INT`, or `TERM`. Recovery evidence records target and observed states
+separately, so a previous failed run cannot silently replace the source-service
+target with its stopped failure state. This bounded recreation requires the
+resident container target to be active. The worker stays fenced until the new
+container identity, runtime queue proof, and independent owner proof pass. A
+same-container identity, wrong image/process ancestry, queue drift, or identity
+ambiguity keeps claim-capable residents stopped and emits
+`UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED`; failed later readiness also fails
+the receipt and requires reconciliation before recovery.
 
 The pre-canary never deletes `/root/.cache` or other host content to create
 space. If the disk threshold is not met, it stops before the build and requires

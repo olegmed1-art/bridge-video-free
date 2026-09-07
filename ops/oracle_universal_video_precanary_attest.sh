@@ -22,6 +22,10 @@ QUEUE_DSN_FILE="${UNIVERSAL_VIDEO_QUEUE_DSN_FILE:-$BASE_DIR/secrets/video-queue-
 QUEUE_PYTHON="${UNIVERSAL_VIDEO_QUEUE_PYTHON:-$BASE_DIR/.venv/bin/python}"
 QUEUE_PROOF_SCRIPT="${UNIVERSAL_VIDEO_QUEUE_PROOF_SCRIPT:-}"
 QUEUE_PROOF_SHA256="${UNIVERSAL_VIDEO_QUEUE_PROOF_SHA256:-}"
+OWNER_RELEASE_FILE="${UNIVERSAL_VIDEO_OWNER_RELEASE_FILE:-}"
+OWNER_ABORT_FILE="${UNIVERSAL_VIDEO_OWNER_ABORT_FILE:-}"
+OWNER_RELEASE_TOKEN_SHA256="${UNIVERSAL_VIDEO_OWNER_RELEASE_TOKEN_SHA256:-}"
+OWNER_RELEASE_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_OWNER_RELEASE_TIMEOUT_SECONDS:-600}"
 ENV_FILE="${UNIVERSAL_VIDEO_CONTAINER_ENV_FILE:-}"
 PERSISTENT_ENV_FILE="$BASE_DIR/universal-video-container.env"
 if [[ -z "$ENV_FILE" ]]; then
@@ -127,8 +131,19 @@ command -v sha256sum >/dev/null || die 'sha256sum is unavailable'
   || die 'post-restore production queue proof metadata is unsafe'
 [[ "$(sha256sum "$QUEUE_PROOF_SCRIPT" | awk '{print $1}')" == "$QUEUE_PROOF_SHA256" ]] \
   || die 'post-restore production queue proof digest mismatch'
+[[ "$OWNER_RELEASE_FILE" =~ ^/root/uv-issue881-[1-9][0-9]{7,19}-1/owner-release$ ]] \
+  || die 'post-restore owner release path is invalid'
+[[ "$OWNER_ABORT_FILE" =~ ^/root/uv-issue881-[1-9][0-9]{7,19}-1/owner-abort$ ]] \
+  || die 'post-restore owner abort path is invalid'
+[[ "$OWNER_RELEASE_TOKEN_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+  || die 'post-restore owner release token digest is invalid'
+[[ "$OWNER_RELEASE_TIMEOUT_SECONDS" =~ ^[0-9]+$ \
+  && "$OWNER_RELEASE_TIMEOUT_SECONDS" -ge 30 \
+  && "$OWNER_RELEASE_TIMEOUT_SECONDS" -le 900 ]] \
+  || die 'post-restore owner release timeout is invalid'
 
 source_state_before=""
+source_target_state=""
 container_state_before=""
 source_was_active=0
 container_was_active=0
@@ -1071,6 +1086,46 @@ verify_postrestore_runtime_queue(){
     "$container_id" "${container_id_before:-absent}" "$runtime_result"
 }
 
+verify_postrestore_owner_release(){
+  local deadline actual_token_sha owner_marker
+  local -a release_lines=()
+  [[ "$lock_held" == 1 ]] || return 1
+  deadline=$((SECONDS + OWNER_RELEASE_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if [[ -e "$OWNER_ABORT_FILE" || -L "$OWNER_ABORT_FILE" ]]; then
+      [[ -f "$OWNER_ABORT_FILE" && ! -L "$OWNER_ABORT_FILE" ]] || return 1
+      [[ "$(stat -c '%U:%G:%a:%h' "$OWNER_ABORT_FILE")" == 'root:root:600:1' ]] \
+        || return 1
+      [[ "$(cat "$OWNER_ABORT_FILE")" == ABORT ]] || return 1
+      rm -f -- "$OWNER_ABORT_FILE" || return 1
+      [[ ! -e "$OWNER_ABORT_FILE" && ! -L "$OWNER_ABORT_FILE" ]] || return 1
+      return 1
+    fi
+    if [[ -e "$OWNER_RELEASE_FILE" || -L "$OWNER_RELEASE_FILE" ]]; then
+      [[ -f "$OWNER_RELEASE_FILE" && ! -L "$OWNER_RELEASE_FILE" ]] || return 1
+      [[ "$(stat -c '%U:%G:%a:%h' "$OWNER_RELEASE_FILE")" == 'root:root:600:1' ]] \
+        || return 1
+      [[ "$(stat -c '%s' "$OWNER_RELEASE_FILE")" =~ ^[1-9][0-9]{1,3}$ ]] \
+        || return 1
+      mapfile -t release_lines < "$OWNER_RELEASE_FILE" || return 1
+      [[ "${#release_lines[@]}" -eq 2 ]] || return 1
+      actual_token_sha="$(printf '%s' "${release_lines[0]}" | sha256sum | awk '{print $1}')"
+      [[ "$actual_token_sha" == "$OWNER_RELEASE_TOKEN_SHA256" ]] || return 1
+      owner_marker="${release_lines[1]}"
+      [[ "$owner_marker" == \
+        'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 max_event_id=NULL sequence_last_value=1 sequence_is_called=false claimable=0 leased=0 unchanged=true result=PASS' ]] \
+        || return 1
+      rm -f -- "$OWNER_RELEASE_FILE" || return 1
+      [[ ! -e "$OWNER_RELEASE_FILE" && ! -L "$OWNER_RELEASE_FILE" ]] || return 1
+      printf '%s\n' "$owner_marker"
+      printf 'UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE worker_fenced=true owner_snapshot=unchanged result=PASS\n'
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 cleanup(){
   local rc=$? service enabled_state source_after container_after runtime_release_safe=0
   trap - EXIT
@@ -1193,7 +1248,11 @@ cleanup(){
     # and idle queue from that exact container before any worker can claim.
     if start_container_under_fence; then
       if verify_postrestore_runtime_queue; then
-        runtime_release_safe=1
+        if verify_postrestore_owner_release; then
+          runtime_release_safe=1
+        else
+          record_restore_failure postrestore_owner_release
+        fi
       else
         record_restore_failure postrestore_runtime_queue
       fi
@@ -1217,7 +1276,7 @@ cleanup(){
         # accepted by the separately approved recovery gate.
         runtime_release_safe=0
       else
-        restore_service "$SOURCE_SERVICE" "$source_state_before" \
+        restore_service "$SOURCE_SERVICE" "$source_target_state" \
           || record_restore_failure source_service
       fi
     fi
@@ -1246,19 +1305,20 @@ cleanup(){
 
     source_after="$(service_state "$SOURCE_SERVICE")"
     container_after="$(service_state "$CONTAINER_SERVICE")"
-    [[ "$source_after" == "$source_state_before" ]] \
+    [[ "$source_after" == "$source_target_state" ]] \
       || record_restore_failure source_state_mismatch
     [[ "$container_after" == "$container_target_state" ]] \
       || record_restore_failure container_state_mismatch
-    restored_service_ready "$SOURCE_SERVICE" "$source_state_before" \
+    restored_service_ready "$SOURCE_SERVICE" "$source_target_state" \
       "$restored_source_pid" "$restored_source_start_ticks" \
       || record_restore_failure source_readiness_mismatch
     restored_service_ready "$CONTAINER_SERVICE" "$container_target_state" \
       "$restored_container_pid" "$restored_container_start_ticks" \
       || record_restore_failure container_readiness_mismatch
     if [[ "${#restore_failures[@]}" -eq 0 ]]; then
-      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=%s source_service=%s container_service_before=%s container_target=%s container_service=%s prior_container_recovery=%s\n' \
-        "$source_state_before" "$source_after" "$container_state_before" "$container_target_state" \
+      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=%s source_service_observed=%s source_service=%s container_service_before=%s container_service_observed=%s container_target=%s container_service=%s prior_container_recovery=%s\n' \
+        "$source_target_state" "$source_state_before" "$source_after" \
+        "$container_target_state" "$container_state_before" "$container_target_state" \
         "$container_after" "$container_recovery_requested"
     else
       printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
@@ -1287,7 +1347,8 @@ assert_quiescent(){
 }
 
 verify_prior_recovery_evidence(){
-  local actual_sha prior_sha
+  local actual_sha prior_sha prior_window
+  local -a prior_window_lines=()
   actual_sha="$(sha256sum "$RECOVERY_EVIDENCE_FILE" | awk '{print $1}')"
   [[ "$actual_sha" == "$RECOVERY_EVIDENCE_SHA256" ]] \
     || die 'immutable prior-run recovery evidence digest mismatch'
@@ -1297,9 +1358,15 @@ verify_prior_recovery_evidence(){
   [[ "${#prior_sha_lines[@]}" -eq 1 ]] \
     || die 'immutable prior-run recovery runtime identity is missing or ambiguous'
   prior_sha="${prior_sha_lines[0]#runtime_sha=}"
-  grep -Eq '^UNIVERSAL_VIDEO_PRECANARY_WINDOW .*container_service_before=active .*restore_on_exit=true$' \
-    "$RECOVERY_EVIDENCE_FILE" \
-    || die 'prior-run evidence does not record an active container entry state'
+  mapfile -t prior_window_lines < <(
+    grep -E '^UNIVERSAL_VIDEO_PRECANARY_WINDOW ' "$RECOVERY_EVIDENCE_FILE" || true
+  )
+  [[ "${#prior_window_lines[@]}" -eq 1 ]] \
+    || die 'prior-run window evidence is missing or ambiguous'
+  prior_window="${prior_window_lines[0]}"
+  [[ "$prior_window" =~ ^UNIVERSAL_VIDEO_PRECANARY_WINDOW[[:space:]]source_service_before=(active|inactive)[[:space:]]source_service_observed=(active|inactive)[[:space:]]container_service_before=active[[:space:]]container_service_observed=(active|inactive)[[:space:]]workload_fence=exclusive[[:space:]]services_quiescent=true[[:space:]]restore_on_exit=true$ ]] \
+    || die 'prior-run evidence does not record exact resident target states'
+  source_target_state="${BASH_REMATCH[1]}"
   grep -Eq '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED .*container_service=(inactive|failed)$' \
     "$RECOVERY_EVIDENCE_FILE" \
     || die 'prior-run evidence does not record a bounded container restoration failure'
@@ -1410,12 +1477,16 @@ assert_known_state "$SOURCE_SERVICE" "$source_state_before"
 assert_known_state "$CONTAINER_SERVICE" "$container_state_before"
 [[ "$source_state_before" == active ]] && source_was_active=1
 [[ "$container_state_before" == active ]] && container_was_active=1
+source_target_state="$source_state_before"
 container_target_state="$container_state_before"
-if [[ -n "$RECOVER_CONTAINER_FROM_RUN" && "$container_state_before" != active ]]; then
+if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
+  [[ "$container_state_before" != active ]] \
+    || die 'approved recovery no longer matches a stopped container resident'
   # A prior exact external run recorded container_service_before=active and
   # then failed only while restoring that state. This bounded one-shot input
   # asks the next exact run to restore the recorded state after all gates.
   verify_prior_recovery_evidence
+  [[ "$source_target_state" == active ]] && source_was_active=1
   container_was_active=1
   container_target_state=active
   container_recovery_requested=1
@@ -1423,6 +1494,10 @@ if [[ -n "$RECOVER_CONTAINER_FROM_RUN" && "$container_state_before" != active ]]
   # runtime masks. Accept and later remove only those exact inherited masks,
   # and only under an immutable, separately approved recovery receipt.
   capture_inherited_failure_runtime_masks
+  # Both residents are already stopped behind the inherited failure masks.
+  # Any later abort must use the full recovery path and restore the immutable
+  # source/container targets rather than preserving the observed stopped state.
+  services_stop_attempted=1
   printf 'UNIVERSAL_VIDEO_PRECANARY_RECOVERY prior_run=%s observed_container=%s target_container=active\n' \
     "$RECOVER_CONTAINER_FROM_RUN" "$container_state_before"
 fi
@@ -1460,8 +1535,8 @@ services_stop_attempted=1
 stop_frozen_residents \
   || die 'unable to stop exact frozen resident workers safely'
 assert_quiescent
-printf 'UNIVERSAL_VIDEO_PRECANARY_WINDOW source_service_before=%s container_service_before=%s workload_fence=exclusive services_quiescent=true restore_on_exit=true\n' \
-  "$source_state_before" "$container_state_before"
+printf 'UNIVERSAL_VIDEO_PRECANARY_WINDOW source_service_before=%s source_service_observed=%s container_service_before=%s container_service_observed=%s workload_fence=exclusive services_quiescent=true restore_on_exit=true\n' \
+  "$source_target_state" "$source_state_before" "$container_target_state" "$container_state_before"
 
 if [[ "$BUILD_IMAGE" == 1 ]]; then
   # Move the complete prior tree aside atomically. The preparation script sees
@@ -1560,8 +1635,8 @@ run_image(){
 verify_image_identity
 assert_quiescent
 printf 'UNIVERSAL_VIDEO_PRECANARY_RUNTIME commit=%s image_digest=%s\n' "$commit" "$image_id"
-printf 'UNIVERSAL_VIDEO_PRECANARY_STATE source_service_before=%s container_service_before=%s source_service=inactive container_service=inactive running_jobs=0 workload_fence=exclusive restore_on_exit=true\n' \
-  "$source_state_before" "$container_state_before"
+printf 'UNIVERSAL_VIDEO_PRECANARY_STATE source_service_before=%s source_service_observed=%s container_service_before=%s container_service_observed=%s source_service=inactive container_service=inactive running_jobs=0 workload_fence=exclusive restore_on_exit=true\n' \
+  "$source_target_state" "$source_state_before" "$container_target_state" "$container_state_before"
 run_image python -m universal_video.precanary imports
 run_image python -m universal_video.precanary synthetic-result-contract
 run_image python -m universal_video.precanary source-identity \

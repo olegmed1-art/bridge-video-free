@@ -10,6 +10,10 @@ session_log="$RUNNER_TEMP/precanary-session.log"
 recovery_evidence=''
 recovery_sha=''
 recovery_remote_file=''
+attester_pid=''
+remote_attester_terminal=1
+owner_release_file=''
+owner_abort_file=''
 
 root_pr_number=991
 prior_gate_pr_number=1070
@@ -55,14 +59,10 @@ protected_gate_paths=(
   'deploy/oracle-universal-video/universal-video-container.service'
 )
 required_workflows=(
-  'Universal Video Analyzer CI'
   'Issue 881 Exact Canary Contract CI'
   'Issue 881 Exact Pre-Canary Evidence'
   'Issue 881 Current-Main Authoritative CI'
   'Secret gate'
-  'Universal Video Engine Smoke'
-  'Oracle idle STOP guard CI'
-  'Retired Oracle Universal Video Container Evidence Contract'
 )
 root_required_workflows=(
   'Universal Video Analyzer CI'
@@ -254,12 +254,108 @@ verify_no_competing_infrastructure_runs(){
   echo 'UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE other_active=0 other_queued=0 result=PASS'
 }
 
+verify_no_active_oracle_admin_commands(){
+  local config="$RUNNER_TEMP/oci/config" compartment commands_file ids_file
+  local command_id execution_file lifecycle examined=0
+  [[ -f "$config" && ! -L "$config" && "$(stat -c '%a' "$config")" == 600 ]] \
+    || { echo 'Exact OCI configuration is missing or unsafe' >&2; return 1; }
+  compartment="$(oci --config-file "$config" compute instance get \
+    --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)" \
+    || return 1
+  [[ "$compartment" =~ ^ocid1\.compartment\. ]] \
+    || { echo 'Oracle compartment identity is invalid' >&2; return 1; }
+  commands_file="$RUNNER_TEMP/precanary-oci-admin-commands.json"
+  ids_file="$RUNNER_TEMP/precanary-oci-admin-command-ids.txt"
+  oci --config-file "$config" instance-agent command list \
+    --compartment-id "$compartment" --all --output json > "$commands_file" \
+    || return 1
+  python3 - "$commands_file" > "$ids_file" <<'PY' || return 1
+import datetime as dt
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    payload = json.load(source)
+if not isinstance(payload, dict) or "data" not in payload:
+    raise SystemExit("invalid OCI command list")
+items = payload["data"]
+if not isinstance(items, list):
+    raise SystemExit("invalid OCI command collection")
+now = dt.datetime.now(dt.timezone.utc)
+seen: set[str] = set()
+for item in items:
+    if not isinstance(item, dict):
+        raise SystemExit("invalid OCI command item")
+    name = item.get("display-name")
+    if not isinstance(name, str) or not re.fullmatch(
+        r"universal-video-(?:audit|productionize)-[1-9][0-9]{7,19}", name
+    ):
+        continue
+    command_id = item.get("id")
+    created = item.get("time-created")
+    if not isinstance(command_id, str) or not command_id.startswith("ocid1.instanceagentcommand."):
+        raise SystemExit("invalid OCI admin command identity")
+    if not isinstance(created, str):
+        raise SystemExit("missing OCI admin command timestamp")
+    timestamp = dt.datetime.fromisoformat(created.replace("Z", "+00:00"))
+    if timestamp.tzinfo is None:
+        raise SystemExit("timezone-free OCI admin command timestamp")
+    age = (now - timestamp).total_seconds()
+    if age < -300:
+        raise SystemExit("OCI admin command timestamp is in the future")
+    # The remote command has a fixed 3600-second provider timeout. Inspect a
+    # second full timeout window so a runner-cancelled command cannot outlive
+    # the Actions concurrency lease unnoticed.
+    if age <= 7200:
+        if command_id in seen:
+            raise SystemExit("duplicate OCI admin command identity")
+        seen.add(command_id)
+        print(command_id)
+PY
+  mapfile -t command_ids < "$ids_file"
+  for command_id in "${command_ids[@]}"; do
+    ((examined += 1))
+    execution_file="$RUNNER_TEMP/precanary-oci-admin-execution-${examined}.json"
+    oci --config-file "$config" instance-agent command-execution get \
+      --command-id "$command_id" --instance-id "$INSTANCE_ID" --output json \
+      > "$execution_file" || {
+        echo 'A recent Oracle admin command cannot be reconciled' >&2
+        return 1
+      }
+    lifecycle="$(python3 - "$execution_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    value = json.load(source)
+state = value.get("data", {}).get("lifecycle-state") if isinstance(value, dict) else None
+if not isinstance(state, str):
+    raise SystemExit("missing OCI command execution lifecycle")
+print(state)
+PY
+)" || return 1
+    case "$lifecycle" in
+      SUCCEEDED|FAILED|CANCELED|TIMED_OUT) ;;
+      *)
+        echo "A remote Oracle productionize command is not terminal: $lifecycle" >&2
+        return 1
+        ;;
+    esac
+  done
+  printf 'UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE examined_recent=%s active_remote_commands=0 result=PASS\n' \
+    "$examined"
+}
+
 verify_final_mutation_boundary(){
-  local current_infrastructure_marker
+  local current_infrastructure_marker current_oci_admin_marker
   # Receipt validation performs its own paginated Actions read. Take
   # the complete infrastructure snapshot only after that read, then
   # make the exact-main query the final subcheck in this one bounded
   # reconciliation immediately before the host attester.
+  current_oci_admin_marker="$(verify_no_active_oracle_admin_commands)" \
+    || return 1
+  printf '%s\n' "$current_oci_admin_marker" \
+    | tee "$RUNNER_TEMP/precanary-oci-admin-marker.txt"
   current_infrastructure_marker="$(verify_no_competing_infrastructure_runs)" \
     || return 1
   [[ "$current_infrastructure_marker" == \
@@ -327,22 +423,58 @@ c=(scp -i "$SSH_KEY_FILE" -o BatchMode=yes -o IdentitiesOnly=yes \
   -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
   -o ConnectTimeout=15)
 
+abort_remote_attester(){
+  local attempt
+  if [[ "$attester_pid" =~ ^[1-9][0-9]*$ ]]; then
+    if kill -0 "$attester_pid" >/dev/null 2>&1; then
+      # A local runner error must not merely sever SSH while the root cleanup
+      # is waiting for owner proof. Stage an explicit invalidation control so
+      # the host converges to its fail-closed restore path first.
+      if [[ "$owner_abort_file" =~ ^/root/uv-issue881-[1-9][0-9]{7,19}-1/owner-abort$ ]]; then
+        "${s[@]}" "set -e; \
+          if sudo -n test ! -e '$owner_abort_file' && sudo -n test ! -L '$owner_abort_file'; then \
+            printf 'ABORT\\n' > '$remote_stage/owner-abort'; \
+            sudo -n install -o root -g root -m 0600 '$remote_stage/owner-abort' '$owner_abort_file'; \
+            rm -f '$remote_stage/owner-abort'; \
+          fi" >/dev/null 2>&1 || true
+      fi
+      for attempt in {1..120}; do
+        kill -0 "$attester_pid" >/dev/null 2>&1 || break
+        sleep 1
+      done
+      if kill -0 "$attester_pid" >/dev/null 2>&1; then
+        remote_attester_terminal=0
+        kill -TERM "$attester_pid" >/dev/null 2>&1 || true
+        sleep 2
+        kill -KILL "$attester_pid" >/dev/null 2>&1 || true
+      fi
+    fi
+    wait "$attester_pid" >/dev/null 2>&1 || true
+    attester_pid=''
+  fi
+  [[ "$remote_attester_terminal" == 1 ]]
+}
+
 cleanup_remote(){
   trap - EXIT
-  "${s[@]}" "sudo -n rm -rf '$remote_root'; rm -rf '$remote_stage'" >/dev/null 2>&1 || true
+  if abort_remote_attester; then
+    "${s[@]}" "sudo -n rm -rf '$remote_root'; rm -rf '$remote_stage'" >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup_remote EXIT
 
 bounded_failure(){
   rc="${1:-$?}"
   trap - ERR
+  abort_remote_attester || rc=1
   {
     echo "runtime_sha=$EXACT_SHA"
     echo "step_exit=$rc"
     cat "$RUNNER_TEMP/precanary-one-shot-marker.txt" 2>/dev/null || true
     cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt" 2>/dev/null || true
     cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt" 2>/dev/null || true
-    grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|FENCED_START|POSTRESTORE_RUNTIME|RESTORE(_PASS|_FAILED)?)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
+    cat "$RUNNER_TEMP/precanary-oci-admin-marker.txt" 2>/dev/null || true
+    grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|FENCED_START|POSTRESTORE_(RUNTIME|OWNER)|OWNER_RELEASE|RESTORE(_PASS|_FAILED)?)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
       "$session_log" 2>/dev/null || true
     echo 'real_media_canary_run=false'
     echo 'source_media_downloaded=false'
@@ -350,6 +482,7 @@ bounded_failure(){
     echo 'automatic_batch_release=false'
     echo 'canonical_promotion_allowed=false'
     echo 'publication_state=NOT_PUBLISHED'
+    echo "remote_attester_terminal=$remote_attester_terminal"
   } > "$evidence"
   cat "$evidence" >> "$GITHUB_STEP_SUMMARY"
   exit "$rc"
@@ -390,7 +523,13 @@ verify_live_gate
 verify_one_shot_gate
 verify_final_mutation_boundary
 
-set +e
+owner_release_file="$remote_root/owner-release"
+owner_abort_file="$remote_root/owner-abort"
+owner_release_token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+[[ "$owner_release_token" =~ ^[0-9a-f]{64}$ ]]
+owner_release_token_sha="$(printf '%s' "$owner_release_token" | sha256sum | awk '{print $1}')"
+[[ "$owner_release_token_sha" =~ ^[0-9a-f]{64}$ ]]
+
 "${s[@]}" "sudo -n env \
   UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_SHA' \
   UNIVERSAL_VIDEO_PREPARE_SCRIPT='$remote_root/prepare.sh' \
@@ -398,6 +537,10 @@ set +e
   UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB=5242880 \
   UNIVERSAL_VIDEO_QUEUE_PROOF_SCRIPT='$remote_root/queue-proof.py' \
   UNIVERSAL_VIDEO_QUEUE_PROOF_SHA256='$queue_proof_sha' \
+  UNIVERSAL_VIDEO_OWNER_RELEASE_FILE='$owner_release_file' \
+  UNIVERSAL_VIDEO_OWNER_ABORT_FILE='$owner_abort_file' \
+  UNIVERSAL_VIDEO_OWNER_RELEASE_TOKEN_SHA256='$owner_release_token_sha' \
+  UNIVERSAL_VIDEO_OWNER_RELEASE_TIMEOUT_SECONDS=600 \
   UNIVERSAL_VIDEO_RECOVER_CONTAINER_ACTIVE_FROM_RUN='$RECOVER_CONTAINER_FROM_RUN' \
   UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_FILE='$recovery_remote_file' \
   UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256='$recovery_sha' \
@@ -406,9 +549,67 @@ set +e
   UNIVERSAL_VIDEO_CANARY_MIME='video/mp4' \
   UNIVERSAL_VIDEO_CANARY_SIZE='696237577' \
   UNIVERSAL_VIDEO_CANARY_PARENT='1Fr-H2NgBKEpp3q_H4FzNmQwCV6bj2x6b' \
-  bash '$remote_root/attest.sh'" > "$session_log" 2>&1
+  bash '$remote_root/attest.sh'" > "$session_log" 2>&1 &
+attester_pid=$!
+
+# The recreated worker remains blocked on the host workload fence while this
+# runner performs the independent owner read. Only the exact successful owner
+# marker and an unlogged one-use token can authorize the remote unlock.
+runtime_proof_ready=0
+runtime_wait_deadline=$((SECONDS + 6300))
+while (( SECONDS < runtime_wait_deadline )); do
+  runtime_marker_count="$(grep -Ec '^UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME container_id=[0-9a-f]{64} previous_container_id=([0-9a-f]{64}|absent) recreated=true worker_fenced=true project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0 result=PASS$' "$session_log" 2>/dev/null || true)"
+  [[ "$runtime_marker_count" =~ ^[0-9]+$ ]] || bounded_failure 1
+  if [[ "$runtime_marker_count" == 1 ]]; then
+    runtime_proof_ready=1
+    break
+  fi
+  (( runtime_marker_count == 0 )) || bounded_failure 1
+  if ! kill -0 "$attester_pid" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+if [[ "$runtime_proof_ready" != 1 ]]; then
+  session_rc=1
+  if ! kill -0 "$attester_pid" >/dev/null 2>&1; then
+    set +e
+    wait "$attester_pid"
+    session_rc=$?
+    set -e
+    attester_pid=''
+    (( session_rc != 0 )) || session_rc=1
+  fi
+  bounded_failure "$session_rc"
+fi
+
+verify_final_mutation_boundary
+postrestore_owner_marker="$(python3 ops/issue_881_precanary_queue_proof.py owner-after \
+  --baseline "$RUNNER_TEMP/issue-881-owner-baseline.json")"
+[[ "$postrestore_owner_marker" == \
+  'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 max_event_id=NULL sequence_last_value=1 sequence_is_called=false claimable=0 leased=0 unchanged=true result=PASS' ]]
+(umask 077; printf '%s\n' "$postrestore_owner_marker" \
+  > "$RUNNER_TEMP/issue-881-owner-after-marker.txt")
+verify_exact_current_main
+
+owner_release_local="$RUNNER_TEMP/precanary-owner-release.txt"
+(umask 077; printf '%s\n%s\n' "$owner_release_token" "$postrestore_owner_marker" \
+  > "$owner_release_local")
+owner_release_payload_sha="$(sha256sum "$owner_release_local" | awk '{print $1}')"
+[[ "$owner_release_payload_sha" =~ ^[0-9a-f]{64}$ ]]
+"${c[@]}" "$owner_release_local" \
+  "$ORACLE_USER@$ORACLE_HOST:$remote_stage/owner-release"
+"${s[@]}" "set -e; \
+  test \"\$(sha256sum '$remote_stage/owner-release' | awk '{print \$1}')\" = '$owner_release_payload_sha'; \
+  sudo -n test ! -e '$owner_release_file'; \
+  sudo -n install -o root -g root -m 0600 '$remote_stage/owner-release' '$owner_release_file'; \
+  rm -f '$remote_stage/owner-release'"
+
+set +e
+wait "$attester_pid"
 session_rc=$?
 set -e
+attester_pid=''
 if (( session_rc != 0 )); then
   bounded_failure "$session_rc"
 fi
@@ -417,7 +618,9 @@ grep -E "^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=
 grep -E "^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$" "$session_log"
 grep -E '^UNIVERSAL_VIDEO_PRECANARY_FENCED_START service=universal-video-container\.service worker_pid=[1-9][0-9]* stable_seconds=([3-9]|[12][0-9]|30) workload_fence=exclusive result=PASS$' "$session_log"
 grep -E '^UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME container_id=[0-9a-f]{64} previous_container_id=([0-9a-f]{64}|absent) recreated=true worker_fenced=true project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0 result=PASS$' "$session_log"
-grep -E '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=(active|inactive) source_service=\1 container_service_before=(active|inactive) container_target=(active|inactive) container_service=\3 prior_container_recovery=[01]$' "$session_log"
+grep -Fx "$postrestore_owner_marker" "$session_log"
+grep -Fx 'UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE worker_fenced=true owner_snapshot=unchanged result=PASS' "$session_log"
+grep -E '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=(active|inactive) source_service_observed=(active|inactive) source_service=\1 container_service_before=(active|inactive) container_service_observed=(active|inactive) container_target=\3 container_service=\3 prior_container_recovery=[01]$' "$session_log"
 installed_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) activated=0$/\\1/p" "$session_log")"
 attested_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$/\\1/p" "$session_log")"
 [[ "$installed_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -437,7 +640,8 @@ trap - ERR
   cat "$RUNNER_TEMP/precanary-one-shot-marker.txt"
   cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt"
   cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt"
-  grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|FENCED_START|POSTRESTORE_RUNTIME|RESTORE_PASS)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)) ' "$session_log"
+  cat "$RUNNER_TEMP/precanary-oci-admin-marker.txt"
+  grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|FENCED_START|POSTRESTORE_(RUNTIME|OWNER)|OWNER_RELEASE|RESTORE_PASS)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)) ' "$session_log"
   grep -E '"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"' "$session_log"
   echo "image_digest=$installed_digest"
   echo 'real_media_canary_run=false'

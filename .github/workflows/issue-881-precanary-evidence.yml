@@ -2,38 +2,6 @@ name: Issue 881 Exact Pre-Canary Evidence
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/issue-881-precanary-evidence.yml'
-      - '.github/workflows/issue-881-authoritative-external-evidence.yml'
-      - '.github/workflows/issue-881-contract-ci.yml'
-      - '.github/workflows/issue-881-current-main-authoritative-ci.yml'
-      - '.github/workflows/oracle-idle-guard-ci.yml'
-      - '.github/workflows/oracle-universal-video-admin.yml'
-      - '.github/workflows/oracle-universal-video-container-evidence.yml'
-      - '.github/workflows/oracle-universal-video-container-promote.yml'
-      - '.github/workflows/secret-gate.yml'
-      - '.github/workflows/universal-video-ci.yml'
-      - '.github/workflows/universal-video-engine-smoke.yml'
-      - 'deploy/oracle-universal-video/Dockerfile'
-      - 'ops/issue_881_external_precanary_workflow.sh'
-      - 'ops/issue_881_precanary_one_shot.py'
-      - 'ops/issue_881_precanary_queue_proof.py'
-      - 'ops/oracle_known_hosts_from_scan.sh'
-      - 'ops/install_universal_video_operator.sh'
-      - 'ops/oracle_universal_video_container_install.sh'
-      - 'ops/oracle_universal_video_container_promote.sh'
-      - 'ops/oracle_universal_video_prepromotion_preflight.sh'
-      - 'ops/oracle_universal_video_precanary_attest.sh'
-      - 'ops/oracle_universal_video_run_command.sh'
-      - 'ops/universal_video_operator.sh'
-      - 'ops/validate_video_queue_dsn.py'
-      - 'universal_video/**'
-      - 'bridge_vision/**'
-      - 'bridge_contracts/**'
-      - 'database/**'
-      - 'bridge_*.py'
-      - 'route_drive_job_outputs.py'
-      - 'requirements-worker.txt'
 
 permissions:
   contents: read
@@ -70,10 +38,11 @@ jobs:
             ops/issue_881_precanary_queue_proof.py
           grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'bash "$PREPARE_SCRIPT"' ops/oracle_universal_video_precanary_attest.sh
-          grep -F 'restore_service "$SOURCE_SERVICE" "$source_state_before"' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'restore_service "$SOURCE_SERVICE" "$source_target_state"' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'start_container_under_fence' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'validate_started_container_after_fence' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'verify_postrestore_runtime_queue' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'verify_postrestore_owner_release' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'UNIVERSAL_VIDEO_QUEUE_PROOF_SHA256' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM=0' ops/oracle_universal_video_precanary_attest.sh
           ! grep -F 'find "$root_cache"' ops/oracle_universal_video_precanary_attest.sh
@@ -103,6 +72,9 @@ jobs:
           test "$(( $(grep -c 'issue_881_precanary_one_shot.py verify' "$workflow") + $(grep -c 'issue_881_precanary_one_shot.py verify' "$runner") ))" -eq 2
           grep -F 'verify_no_competing_infrastructure_runs(){' "$runner"
           grep -F 'UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE' "$runner"
+          grep -F 'verify_no_active_oracle_admin_commands(){' "$runner"
+          grep -F 'instance-agent command-execution get' "$runner"
+          grep -F 'UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE' "$runner"
           grep -F 'root_pr_number=991' "$runner"
           grep -F 'prior_gate_pr_number=1070' "$runner"
           grep -F 'protected_gate_paths=(' "$runner"

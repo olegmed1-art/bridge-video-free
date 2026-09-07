@@ -248,9 +248,10 @@ def verify_evidence_archive(
     _require(len(restore_lines) == 1, "restore receipt is missing or ambiguous")
     restore_match = re.fullmatch(
         r"UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS "
-        r"source_service_before=(active|inactive) source_service=\1 "
-        r"container_service_before=(active|inactive) container_target=active "
-        r"container_service=active prior_container_recovery=[01]",
+        r"source_service_before=(active|inactive) source_service_observed=(active|inactive) "
+        r"source_service=\1 container_service_before=(active|inactive) "
+        r"container_service_observed=(active|inactive) container_target=\3 "
+        r"container_service=\3 prior_container_recovery=[01]",
         restore_lines[0],
     )
     _require(restore_match is not None, "restore receipt is inconsistent")
@@ -278,6 +279,21 @@ def verify_evidence_archive(
     _require(
         lines.count(infrastructure_line) == 1,
         "infrastructure exclusivity proof is missing or ambiguous",
+    )
+    oci_admin_lines = [
+        line
+        for line in lines
+        if line.startswith("UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE ")
+    ]
+    _require(len(oci_admin_lines) == 1, "OCI admin exclusivity proof is missing or ambiguous")
+    _require(
+        re.fullmatch(
+            r"UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE "
+            r"examined_recent=[0-9]+ active_remote_commands=0 result=PASS",
+            oci_admin_lines[0],
+        )
+        is not None,
+        "OCI admin exclusivity proof is inconsistent",
     )
     fenced_start = [
         line
@@ -315,6 +331,11 @@ def verify_evidence_archive(
         is not None,
         "post-restore runtime proof is inconsistent",
     )
+    owner_release = (
+        "UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE "
+        "worker_fenced=true owner_snapshot=unchanged result=PASS"
+    )
+    _require(lines.count(owner_release) == 1, "owner release proof is missing or ambiguous")
 
     window_lines = [
         line for line in lines if line.startswith("UNIVERSAL_VIDEO_PRECANARY_WINDOW ")
@@ -330,11 +351,13 @@ def verify_evidence_archive(
         lines.index(one_shot_lines[0])
         < lines.index(owner_before)
         < lines.index(infrastructure_line)
+        < lines.index(oci_admin_lines[0])
         < lines.index(window_lines[0])
         < lines.index(fenced_start[0])
         < lines.index(runtime_after[0])
-        < lines.index(restore_lines[0])
-        < lines.index(owner_after),
+        < lines.index(owner_after)
+        < lines.index(owner_release)
+        < lines.index(restore_lines[0]),
         "one-shot, queue, and restoration receipts are out of order",
     )
 

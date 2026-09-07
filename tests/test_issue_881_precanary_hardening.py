@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -339,6 +340,30 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     ).read_text(encoding="utf-8")
     assert "group: oracle-instance-workload-mutation" in admin_workflow
     assert "group: oracle-universal-video-bounded-admin" not in admin_workflow
+    assert "verify_no_active_oracle_admin_commands" in runner
+    assert "instance-agent command list" in runner
+    assert "instance-agent command-execution get" in runner
+    assert "active_remote_commands=0" in runner
+    assert "Reconcile exact OCI command termination" in admin_workflow
+    assert "instance-agent command cancel --command-id" in admin_workflow
+    assert "UNIVERSAL_VIDEO_OCI_ADMIN_RECONCILE" in admin_workflow
+    required = runner[
+        runner.index("required_workflows=(") : runner.index("root_required_workflows=(")
+    ]
+    assert "Issue 881 Exact Canary Contract CI" in required
+    assert "Issue 881 Exact Pre-Canary Evidence" in required
+    assert "Issue 881 Current-Main Authoritative CI" in required
+    assert "Secret gate" in required
+    assert "Retired Oracle Universal Video Container Evidence Contract" not in required
+    for workflow_path in (
+        ".github/workflows/issue-881-contract-ci.yml",
+        ".github/workflows/issue-881-precanary-evidence.yml",
+    ):
+        required_workflow = (ROOT / workflow_path).read_text(encoding="utf-8")
+        pull_request_block = required_workflow.split("pull_request:", 1)[1].split(
+            "permissions:", 1
+        )[0]
+        assert "paths:" not in pull_request_block
     assert "'.github/workflows/oracle-universal-video-container-promote.yml'" in runner
     assert "'ops/oracle_universal_video_container_promote.sh'" in runner
     assert "'universal_video'" in runner and "':(glob)bridge_*.py'" in runner
@@ -381,8 +406,10 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert boundary_infrastructure < boundary_main
     fenced_start = attest.index("if start_container_under_fence; then", attest.index("cleanup(){"))
     runtime_proof = attest.index("verify_postrestore_runtime_queue", fenced_start)
-    workload_unlock = attest.index("flock --unlock 9", runtime_proof)
-    assert fenced_start < runtime_proof < workload_unlock
+    owner_release = attest.index("verify_postrestore_owner_release", runtime_proof)
+    workload_unlock = attest.index("flock --unlock 9", owner_release)
+    assert fenced_start < runtime_proof < owner_release < workload_unlock
+    assert "UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE" in attest
     readiness_failure = attest.index(
         "if ! validate_started_container_after_fence", workload_unlock
     )
@@ -405,8 +432,9 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert unsafe_restore < remask < stop < conditional_unlock < unsafe_unlock
     assert "declare -a inherited_failure_runtime_masks=()" in attest
     recovery_branch = attest.index(
-        'if [[ -n "$RECOVER_CONTAINER_FROM_RUN" && "$container_state_before" != active ]]'
+        'if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]'
     )
+    assert "approved recovery no longer matches a stopped container resident" in attest
     recovery_evidence = attest.index("verify_prior_recovery_evidence", recovery_branch)
     capture_masks = attest.index("capture_inherited_failure_runtime_masks", recovery_evidence)
     recovery_window = attest.index("mask_service_for_window", capture_masks)
@@ -514,6 +542,175 @@ verify_no_competing_infrastructure_runs
     assert "snapshot is incomplete or changed while paginating" in incomplete.stderr
 
 
+def test_recent_oracle_admin_command_must_be_terminal(tmp_path: Path) -> None:
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
+    start = runner.index("verify_no_active_oracle_admin_commands(){")
+    end = runner.index("\n\nverify_final_mutation_boundary(){", start)
+    function = textwrap.dedent(runner[start:end])
+    config_dir = tmp_path / "oci"
+    config_dir.mkdir()
+    config = config_dir / "config"
+    config.write_text("synthetic\n", encoding="utf-8")
+    config.chmod(0o600)
+    commands = tmp_path / "commands.json"
+    execution = tmp_path / "execution.json"
+    command_id = "ocid1.instanceagentcommand.oc1.synthetic"
+    commands.write_text(
+        json.dumps(
+            {
+                "data": [
+                    {
+                        "id": command_id,
+                        "display-name": "universal-video-productionize-34100000001",
+                        "time-created": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    harness = f"""\
+set -euo pipefail
+{function}
+oci(){{
+  case "$*" in
+    *" compute instance get "*) printf '%s\\n' 'ocid1.compartment.oc1.synthetic' ;;
+    *" instance-agent command list "*) command cat "$COMMANDS" ;;
+    *" instance-agent command-execution get "*) command cat "$EXECUTION" ;;
+    *) return 64 ;;
+  esac
+}}
+RUNNER_TEMP={json.dumps(str(tmp_path))}
+INSTANCE_ID=ocid1.instance.oc1.synthetic
+verify_no_active_oracle_admin_commands
+"""
+
+    def run(state: str) -> subprocess.CompletedProcess[str]:
+        execution.write_text(
+            json.dumps({"data": {"lifecycle-state": state}}), encoding="utf-8"
+        )
+        return subprocess.run(
+            ["bash"],
+            input=harness,
+            text=True,
+            capture_output=True,
+            env={
+                "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "COMMANDS": str(commands),
+                "EXECUTION": str(execution),
+            },
+            timeout=10,
+        )
+
+    terminal = run("SUCCEEDED")
+    assert terminal.returncode == 0, terminal.stderr
+    assert "examined_recent=1 active_remote_commands=0 result=PASS" in terminal.stdout
+    active = run("IN_PROGRESS")
+    assert active.returncode != 0
+    assert "not terminal: IN_PROGRESS" in active.stderr
+
+
+def test_owner_snapshot_controls_unlock_while_worker_is_fenced(tmp_path: Path) -> None:
+    script = (
+        ROOT / "ops/oracle_universal_video_precanary_attest.sh"
+    ).read_text(encoding="utf-8")
+    start = script.index("verify_postrestore_owner_release(){")
+    end = script.index("\n\ncleanup(){", start)
+    function = textwrap.dedent(script[start:end])
+    token = "c" * 64
+    token_sha = hashlib.sha256(token.encode()).hexdigest()
+    marker = QUEUE._owner_marker("POSTRESTORE_OWNER", _owner_snapshot(), unchanged=True)
+    control = tmp_path / "owner-release"
+    abort_control = tmp_path / "owner-abort"
+
+    def run(expected_sha: str, *, abort: bool = False) -> subprocess.CompletedProcess[str]:
+        control.write_text(f"{token}\n{marker}\n", encoding="utf-8")
+        if abort:
+            abort_control.write_text("ABORT\n", encoding="utf-8")
+        elif abort_control.exists():
+            abort_control.unlink()
+        harness = f"""\
+set -euo pipefail
+{function}
+stat(){{
+  if [[ "$*" == *"%U:%G:%a:%h"* ]]; then
+    printf '%s\\n' root:root:600:1
+  else
+    command stat "$@"
+  fi
+}}
+lock_held=1
+OWNER_RELEASE_FILE={json.dumps(str(control))}
+OWNER_ABORT_FILE={json.dumps(str(abort_control))}
+OWNER_RELEASE_TOKEN_SHA256={json.dumps(expected_sha)}
+OWNER_RELEASE_TIMEOUT_SECONDS=30
+verify_postrestore_owner_release
+"""
+        return subprocess.run(
+            ["bash"],
+            input=harness,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+
+    accepted = run(token_sha)
+    assert accepted.returncode == 0, accepted.stderr
+    assert marker in accepted.stdout
+    assert "worker_fenced=true owner_snapshot=unchanged result=PASS" in accepted.stdout
+    assert not control.exists()
+    rejected = run("d" * 64)
+    assert rejected.returncode != 0
+    aborted = run(token_sha, abort=True)
+    assert aborted.returncode != 0
+    assert not abort_control.exists()
+    assert control.exists()
+
+
+def test_recovery_parses_and_preserves_original_source_target(tmp_path: Path) -> None:
+    script = (
+        ROOT / "ops/oracle_universal_video_precanary_attest.sh"
+    ).read_text(encoding="utf-8")
+    start = script.index("verify_prior_recovery_evidence(){")
+    end = script.index("\n\nassert_pre_stop_idle(){", start)
+    function = textwrap.dedent(script[start:end])
+    evidence = tmp_path / "recovery.txt"
+    evidence.write_text(
+        "\n".join(
+            [
+                f"runtime_sha={'a' * 40}",
+                "UNIVERSAL_VIDEO_PRECANARY_WINDOW source_service_before=active "
+                "source_service_observed=active container_service_before=active "
+                "container_service_observed=active workload_fence=exclusive "
+                "services_quiescent=true restore_on_exit=true",
+                "UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=container_service "
+                "source_service=inactive container_service=inactive",
+                "real_media_canary_run=false",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    digest = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    harness = f"""\
+set -euo pipefail
+{function}
+die(){{ printf '%s\\n' "$*" >&2; exit 1; }}
+RECOVERY_EVIDENCE_FILE={json.dumps(str(evidence))}
+RECOVERY_EVIDENCE_SHA256={json.dumps(digest)}
+RECOVER_CONTAINER_FROM_RUN=34100000001
+source_target_state=
+verify_prior_recovery_evidence
+[[ "$source_target_state" == active ]]
+"""
+    completed = subprocess.run(
+        ["bash"], input=harness, text=True, capture_output=True, timeout=10
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_post_fence_readiness_failure_is_runtime_masked_for_recovery(
     tmp_path: Path,
 ) -> None:
@@ -538,6 +735,7 @@ resident_image_id=
 SOURCE_SERVICE=source.service
 CONTAINER_SERVICE=container.service
 source_state_before=active
+source_target_state=active
 container_state_before=active
 container_target_state=active
 container_recovery_requested=0
@@ -554,6 +752,7 @@ bounded_systemctl_query(){{ printf 'enabled\n'; }}
 bounded_docker(){{ return 0; }}
 start_container_under_fence(){{ printf 'fenced-start\n' >> "$action_log"; }}
 verify_postrestore_runtime_queue(){{ printf 'queue-proof\n' >> "$action_log"; }}
+verify_postrestore_owner_release(){{ printf 'owner-release\n' >> "$action_log"; }}
 flock(){{ printf 'unlock\n' >> "$action_log"; }}
 validate_started_container_after_fence(){{
   printf 'post-fence-readiness-failed\n' >> "$action_log"
