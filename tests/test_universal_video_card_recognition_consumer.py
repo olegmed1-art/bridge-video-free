@@ -24,7 +24,6 @@ def _unknown(seat: str, slot: int) -> dict:
         "frame_sha256": None,
         "confidence": 0.0,
         "recognizer_version": "recognizer-v1",
-        "recognition_profile_id": "video31-card-consumer-v1",
         "unknown_slot": slot,
     }
 
@@ -34,6 +33,7 @@ def _envelope() -> dict:
         "schema": "bridge-video-deal-evidence/v1",
         "status": "PARTIAL_VISUAL",
         "recognizer_version": "recognizer-v1",
+        "recognition_profile_id": "video31-card-consumer-v1",
         "suit_order": ["H", "C", "D", "S"],
         "card_records": [_unknown(seat, slot) for seat in "NESW" for slot in range(1, 14)],
         "logical_inference": {"requested": False, "performed": False},
