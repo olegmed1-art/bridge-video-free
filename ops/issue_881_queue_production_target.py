@@ -59,7 +59,7 @@ QUEUE_ACL_SQL = """SELECT NOT EXISTS (
 # Drift fingerprints from the independently exercised 0056-0058 rehearsal
 # (source main 6b20bd9e, expanded migration SHA256 b203bc82546dbbb81bb5d1e8e7099e1731e2d628a66b1d54d2784b885fe575e0).
 EXPECTED_QUEUE_VERSION = ('a5eb36f8b89facad2dc49a5c3d13fa4f', 'c738d3e6c8ecdf53b12b04516ac8ea89', 3,
-                          'c7fd96744ef2138f74310af4917470a1')
+                          'c7fd96744ef2138f74310af4917470a1', '1036e807796d9422f9ba968a1bb07087')
 QUEUE_VERSION_SQL = """SELECT
     (SELECT md5(string_agg(pg_get_functiondef(p.oid) || ' OWNER=' || pg_get_userbyid(p.proowner),
         E'\\n' ORDER BY p.proname, oidvectortypes(p.proargtypes)))
@@ -73,7 +73,17 @@ QUEUE_VERSION_SQL = """SELECT
     (SELECT md5(string_agg(c.relname || ':' || pg_get_viewdef(c.oid,false) || ':OWNER='
         || pg_get_userbyid(c.relowner) || ':OPTIONS=' || coalesce(c.reloptions::text,''), E'\\n' ORDER BY c.relname))
      FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-     WHERE n.nspname='video_queue' AND c.relkind IN ('v','m'))"""
+     WHERE n.nspname='video_queue' AND c.relkind IN ('v','m')),
+    (SELECT md5(string_agg(jsonb_build_array(c.relname,c.relkind,pg_get_userbyid(c.relowner),
+        c.relrowsecurity,c.relforcerowsecurity,c.reloptions,a.attnum,a.attname,
+        format_type(a.atttypid,a.atttypmod),a.attnotnull,a.attidentity,a.attgenerated,a.attisdropped,
+        coalesce(pg_get_expr(d.adbin,d.adrelid),''),coalesce(coll.collname,''))::text,
+        E'\\n' ORDER BY c.relname,a.attnum))
+     FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+     JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0
+     LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
+     LEFT JOIN pg_collation coll ON coll.oid=a.attcollation
+     WHERE n.nspname='video_queue' AND c.relkind IN ('r','p'))"""
 
 
 def require(condition):
@@ -210,6 +220,9 @@ def run(mode):
         # A completed repair is checked, never repeated or rolled back implicitly.
         if urlsplit(old.decode("utf-8")).hostname == TARGET_HOST:
             validated_url(old, (TARGET_HOST,))
+            rollback = read_protected(BACKUP, 0, 0o600)
+            require(candidate(rollback) == old)
+            verify(rollback, PREVIEW)
             verify(old, PRODUCTION)
             print("QUEUE_TARGET_ALREADY_PRODUCTION verified=true")
             return
