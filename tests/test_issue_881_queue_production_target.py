@@ -32,6 +32,7 @@ class TargetTest(unittest.TestCase):
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
         for name, value in [('DSN_FILE', self.dsn), ('BACKUP', self.backup),
+                            ('OWNER_ATTESTATION_DEADLINE', int(target.time.time())+299),
                             ('LOCK_FILE', self.directory/'lock'), ('FENCE', self.directory/'fence')]:
             self.stack.enter_context(patch.object(target, name, value))
         self.stack.enter_context(patch.object(target.socket, 'gethostname', return_value='bridge-school-dds3-frankfurt'))
@@ -60,6 +61,11 @@ class TargetTest(unittest.TestCase):
         with self.assertRaises(RuntimeError): target.run('apply')
         self.assertEqual(self.dsn.read_bytes(), self.raw)
         self.assertFalse(self.backup.exists())
+
+    def test_expired_owner_evidence_blocks_replacement(self):
+        self.verify.side_effect = lambda *args: setattr(target, 'OWNER_ATTESTATION_DEADLINE', 0)
+        with self.assertRaises(RuntimeError): target.run('apply')
+        self.assertEqual(self.dsn.read_bytes(), self.raw)
 
     def test_completed_repair_requires_intact_protected_rollback(self):
         target.run('apply')
@@ -117,7 +123,7 @@ class TargetTest(unittest.TestCase):
 
     def test_failure_logging_omits_exception_text(self):
         out = io.StringIO()
-        with patch.object(target, 'run', side_effect=RuntimeError('secret-password')), patch.object(sys, 'argv', ['target','check']), contextlib.redirect_stdout(out):
+        with patch.object(target, 'run', side_effect=RuntimeError('secret-password')), patch.object(sys, 'argv', ['target','check','1']), contextlib.redirect_stdout(out):
             self.assertEqual(target.main(), 1)
         self.assertNotIn('secret-password', out.getvalue())
 
