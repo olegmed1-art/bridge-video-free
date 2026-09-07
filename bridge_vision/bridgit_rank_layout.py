@@ -106,7 +106,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _read_bounded_bytes(path: Path, max_bytes: int, kind: str) -> bytes:
+def _read_bounded_pinned_bytes(path: Path, max_bytes: int, kind: str) -> bytes:
     try:
         with path.open("rb") as source:
             payload = source.read(max_bytes + 1)
@@ -117,7 +117,7 @@ def _read_bounded_bytes(path: Path, max_bytes: int, kind: str) -> bytes:
     return payload
 
 
-def _read_bounded_regular_file(path: Path, max_bytes: int, kind: str) -> bytes:
+def _read_bounded_bytes(path: Path, max_bytes: int, kind: str) -> bytes:
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     flags |= getattr(os, "O_NONBLOCK", 0)
     try:
@@ -151,7 +151,7 @@ def _read_bounded_regular_file(path: Path, max_bytes: int, kind: str) -> bytes:
 
 
 def _bounded_sha256(path: Path, max_bytes: int, kind: str) -> str:
-    return hashlib.sha256(_read_bounded_bytes(path, max_bytes, kind)).hexdigest()
+    return hashlib.sha256(_read_bounded_pinned_bytes(path, max_bytes, kind)).hexdigest()
 
 
 def canonical_hash(value: Mapping[str, Any]) -> str:
@@ -574,7 +574,7 @@ def load_profile(path: Path) -> BridgitRankLayoutProfile:
 
 
 def load_job(path: Path) -> dict[str, Any]:
-    payload = _read_bounded_regular_file(path, MAX_JOB_BYTES, "job")
+    payload = _read_bounded_bytes(path, MAX_JOB_BYTES, "job")
     return _json_object(payload, "job")
 
 
@@ -684,13 +684,13 @@ def find_chain_peaks(
         else None
     )
 
-    merged: list[tuple[int, float]] = []
+    clusters: list[list[tuple[int, float]]] = []
     for x, score in sorted(candidates):
-        if merged and x - merged[-1][0] <= 6:
-            if score > merged[-1][1]:
-                merged[-1] = (x, score)
+        if clusters and x - clusters[-1][0][0] <= 6:
+            clusters[-1].append((x, score))
         else:
-            merged.append((x, score))
+            clusters.append([(x, score)])
+    merged = [max(cluster, key=lambda item: item[1]) for cluster in clusters]
     starts = [item for item in merged if abs(item[0] - edge) <= 5]
     if len(starts) > 1:
         return []
@@ -885,11 +885,16 @@ def _validate_recognition_memory_budget(
 
 def _validate_input_raster_budget(
     frame_paths: Sequence[Path],
+    *,
+    trusted_pinned_inputs: bool = False,
 ) -> list[tuple[int, int]]:
     total = 0
     dimensions = []
     for index, path in enumerate(frame_paths):
-        payload = _read_bounded_bytes(Path(path), MAX_FRAME_BYTES, f"frame[{index}]")
+        reader = (
+            _read_bounded_pinned_bytes if trusted_pinned_inputs else _read_bounded_bytes
+        )
+        payload = reader(Path(path), MAX_FRAME_BYTES, f"frame[{index}]")
         width, height = _encoded_image_dimensions(payload)
         dimensions.append((width, height))
         decoded = width * height * 3
@@ -1011,12 +1016,14 @@ def _read_frame(
     registration_reference: Any | None = None,
     defer_registration: bool = False,
     decoded_job_bytes_so_far: int = 0,
+    trusted_pinned_input: bool = False,
 ):
     remaining_payload_headroom = MAX_DECODED_JOB_BYTES - decoded_job_bytes_so_far
     if remaining_payload_headroom <= 1:
         raise BridgitRankLayoutError("frame payload exceeds job memory budget")
     payload_limit = min(MAX_FRAME_BYTES, remaining_payload_headroom - 1)
-    payload = _read_bounded_bytes(path, payload_limit, "frame")
+    reader = _read_bounded_pinned_bytes if trusted_pinned_input else _read_bounded_bytes
+    payload = reader(path, payload_limit, "frame")
     encoded_width, encoded_height = _encoded_image_dimensions(payload)
     if (registration_reference is None or profile.interface_anchor is None) and (
         encoded_width,
@@ -1463,13 +1470,14 @@ def _calibrate_side_steps(
     return result
 
 
-def recognize_frames(
+def _recognize_frames(
     reference_frame: Path,
     frame_paths: Sequence[Path],
     profile: BridgitRankLayoutProfile,
     *,
     expected_frame_sha256s: Sequence[str] | None = None,
     observation_timestamps_ms: Sequence[int] | None = None,
+    trusted_pinned_inputs: bool,
 ) -> dict[str, Any]:
     """Recognize one stable, fully visible deal as a shadow candidate."""
     if not frame_paths or len(frame_paths) > MAX_FRAMES:
@@ -1511,7 +1519,13 @@ def recognize_frames(
         profile.height,
         observation_count=len(frame_paths),
     )
-    input_dimensions = _validate_input_raster_budget([reference_frame, *frame_paths])
+    all_frame_paths = [reference_frame, *frame_paths]
+    if trusted_pinned_inputs:
+        input_dimensions = _validate_input_raster_budget(
+            all_frame_paths, trusted_pinned_inputs=True
+        )
+    else:
+        input_dimensions = _validate_input_raster_budget(all_frame_paths)
     if profile.interface_anchor is not None:
         try:
             validate_anchor_job_budget(
@@ -1537,8 +1551,11 @@ def recognize_frames(
             observation_count=len(frame_paths),
             matcher_scratch_bytes=header_matcher_scratch_bytes,
         )
+    reference_read_options = (
+        {"trusted_pinned_input": True} if trusted_pinned_inputs else {}
+    )
     reference, reference_hash, reference_pixel_hash, _ = _read_frame(
-        reference_frame, profile
+        reference_frame, profile, **reference_read_options
     )
     if reference_hash != profile.reference_frame_sha256:
         raise BridgitRankLayoutError("reference frame hash mismatch")
@@ -1563,6 +1580,7 @@ def recognize_frames(
             registration_reference=reference,
             defer_registration=profile.interface_anchor is not None,
             decoded_job_bytes_so_far=decoded_job_bytes,
+            **reference_read_options,
         )
         if (
             expected_frame_sha256s is not None
@@ -2012,6 +2030,25 @@ def recognize_frames(
     )
 
 
+def recognize_frames(
+    reference_frame: Path,
+    frame_paths: Sequence[Path],
+    profile: BridgitRankLayoutProfile,
+    *,
+    expected_frame_sha256s: Sequence[str] | None = None,
+    observation_timestamps_ms: Sequence[int] | None = None,
+) -> dict[str, Any]:
+    """Recognize public regular-file inputs as a shadow candidate."""
+    return _recognize_frames(
+        reference_frame,
+        frame_paths,
+        profile,
+        expected_frame_sha256s=expected_frame_sha256s,
+        observation_timestamps_ms=observation_timestamps_ms,
+        trusted_pinned_inputs=False,
+    )
+
+
 def _shadow_result(
     status: str, *, lengths: Mapping[str, Any], reason: str | None, **extra: Any
 ) -> dict[str, Any]:
@@ -2047,12 +2084,13 @@ def _recognize_frames_with_opencv_rejection(
     observation_timestamps_ms: Sequence[int],
 ) -> dict[str, Any]:
     try:
-        return recognize_frames(
+        return _recognize_frames(
             reference_path,
             frame_paths,
             profile,
             expected_frame_sha256s=expected_frame_sha256s,
             observation_timestamps_ms=observation_timestamps_ms,
+            trusted_pinned_inputs=True,
         )
     except Exception as exc:
         cv2, _ = _pixel_runtime()
@@ -2151,7 +2189,9 @@ def _execute_shadow_job_pinned(
         input_root=input_root,
         fd_stack=fd_stack,
     )
-    profile_payload = _read_bounded_bytes(profile_path, MAX_PROFILE_BYTES, "profile")
+    profile_payload = _read_bounded_pinned_bytes(
+        profile_path, MAX_PROFILE_BYTES, "profile"
+    )
     profile_file_sha = hashlib.sha256(profile_payload).hexdigest()
     if profile_file_sha != _required_sha(
         job["profile_ref"].get("sha256"), "profile_ref.sha256"

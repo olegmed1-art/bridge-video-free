@@ -303,6 +303,20 @@ def test_load_job_rejects_fifo_without_blocking(tmp_path: Path):
         load_job(job_path)
 
 
+def test_exported_profile_and_frame_apis_reject_fifo_without_blocking(tmp_path: Path):
+    special_path = tmp_path / "input.fifo"
+    os.mkfifo(special_path)
+
+    with pytest.raises(BridgitRankLayoutError, match="profile must be a regular file"):
+        bridgit_rank_layout.load_profile(special_path)
+
+    profile = parse_profile(profile_raw())
+    with pytest.raises(
+        BridgitRankLayoutError, match=r"frame\[0\] must be a regular file"
+    ):
+        bridgit_rank_layout.recognize_frames(special_path, [special_path], profile)
+
+
 def test_ordered_assignment_is_global_deterministic_and_retains_runner_up():
     lengths = {"N": 4, "E": 3, "S": 3, "W": 3}
     target = tuple("NNESWNESWNESW")
@@ -431,6 +445,33 @@ def test_peak_chain_edge_fallback_cannot_bridge_competing_starts():
     )
 
 
+def test_peak_chain_clustering_is_not_transitive():
+    values = [0.0] * 200
+    for index, score in (
+        (95, 0.80),
+        (100, 0.85),
+        (105, 0.94),
+        (120, 0.91),
+        (130, 0.89),
+        (145, 0.90),
+        (155, 0.88),
+        (180, 0.87),
+    ):
+        values[index] = score
+
+    assert (
+        find_chain_peaks(
+            values,
+            origin=0,
+            edge=100,
+            direction=1,
+            min_height=0.72,
+            min_prominence=0.04,
+        )
+        == []
+    )
+
+
 def test_job_boundary_rejects_production_hidden_information_and_unknown_type():
     with pytest.raises(BridgitRankLayoutError, match="unknown job type"):
         execute_shadow_job({})
@@ -507,6 +548,7 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
         *,
         expected_frame_sha256s=None,
         observation_timestamps_ms=None,
+        trusted_pinned_inputs=False,
     ):
         assert reference_path.resolve() == reference
         assert [path.resolve() for path in frame_paths] == [first, second]
@@ -517,6 +559,7 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
         ]
         assert expected_frame_sha256s == frame_hashes
         assert observation_timestamps_ms == [1000, 2000]
+        assert trusted_pinned_inputs is True
         return {
             "status": "SHADOW_FULL_LAYOUT_CANDIDATE",
             "result_scope": "SHADOW_ONLY",
@@ -551,7 +594,7 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
             ],
         }
 
-    monkeypatch.setattr(bridgit_rank_layout, "recognize_frames", fake_recognize)
+    monkeypatch.setattr(bridgit_rank_layout, "_recognize_frames", fake_recognize)
     job = {
         "job_type": JOB_TYPE,
         "input_root": str(tmp_path),
@@ -623,7 +666,7 @@ def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
     )
     monkeypatch.setattr(
         bridgit_rank_layout,
-        "recognize_frames",
+        "_recognize_frames",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(FakeCv2Error()),
     )
     with pytest.raises(BridgitRankLayoutError, match="OpenCV pixel operation failed"):
@@ -1813,9 +1856,9 @@ def test_validated_ref_is_pinned_when_original_path_is_replaced(tmp_path: Path):
         candidate.unlink()
         candidate.symlink_to(replacement)
 
-        assert bridgit_rank_layout._read_bounded_bytes(pinned, 1024, "frame") == (
-            b"validated bytes"
-        )
+        assert bridgit_rank_layout._read_bounded_pinned_bytes(
+            pinned, 1024, "frame"
+        ) == (b"validated bytes")
 
 
 def test_validated_ref_rejects_fifo_without_blocking(tmp_path: Path):
