@@ -867,13 +867,13 @@ verify_no_competing_infrastructure_runs
 
 def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() -> None:
     direct_mutation = re.compile(
-        r"systemctl (?:restart|start|stop|enable|disable)|systemd-run|"
+        r"systemctl (?:restart|start|stop|enable|disable|daemon-reload)|systemd-run|"
         r"oci compute instance action|"
         r"install -o root.*video-queue|VIDEO_QUEUE_DSN",
         re.DOTALL,
     )
     script_reference = re.compile(
-        r"(?<![A-Za-z0-9_./-])(ops/[A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_./-])"
+        r"(?<![A-Za-z0-9_-])(ops/[A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_./-])"
     )
     owner_mutators: set[str] = set()
     mutation_payloads: set[str] = set()
@@ -921,6 +921,7 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
     assert mutation_payloads == {
         "ops/install_ben_runtime.sh",
         "ops/install_dds3_runtime.sh",
+        "ops/oracle_dds3_mass_install.sh",
         "ops/oracle_dds3_operational_gate.sh",
         "ops/oracle_universal_video_install.sh",
         "ops/oracle_universal_video_run_command.sh",

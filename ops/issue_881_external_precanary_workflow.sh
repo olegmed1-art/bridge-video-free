@@ -66,6 +66,7 @@ protected_gate_paths=(
   'ops/install_ben_runtime.sh'
   'ops/install_dds3_runtime.sh'
   'ops/install_universal_video_operator.sh'
+  'ops/oracle_dds3_mass_install.sh'
   'ops/oracle_dds3_operational_gate.sh'
   'ops/oracle_known_hosts_from_scan.sh'
   'ops/oracle_universal_video_install.sh'
