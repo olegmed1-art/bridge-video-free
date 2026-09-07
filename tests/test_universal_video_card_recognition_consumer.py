@@ -312,6 +312,29 @@ def test_legacy_adapter_does_not_mutate_input_or_complete_fourth_hand() -> None:
     assert sum(card["source"] == "UNKNOWN" for card in adapted["cards"] if card["seat"] == "W") == 13
 
 
+def test_legacy_adapter_preserves_omitted_seat_as_unknown() -> None:
+    hands = {
+        "N": {"H": "AKQ", "C": "", "D": "", "S": ""},
+        "E": {"H": "", "C": "JT", "D": "", "S": ""},
+        "S": {"H": "", "C": "", "D": "9", "S": ""},
+    }
+
+    adapted = adapt_legacy_hands(hands)
+
+    assert adapted["known_card_count"] == 6
+    assert adapted["unknown_slot_count"] == 46
+    assert adapted["complete"] is False
+    assert sum(card["source"] == "UNKNOWN" for card in adapted["cards"] if card["seat"] == "W") == 13
+
+
+def test_legacy_adapter_rejects_malformed_present_seat() -> None:
+    hands = {seat: {suit: "" for suit in "HCDS"} for seat in "NESW"}
+    hands["W"] = None
+
+    with pytest.raises(CardRecognitionContractError, match=r"legacy hands\.W"):
+        adapt_legacy_hands(hands)
+
+
 def test_legacy_adapter_rejects_duplicate_and_hand_overflow() -> None:
     duplicate = {seat: {suit: "" for suit in "HCDS"} for seat in "NESW"}
     duplicate["N"]["S"] = "A"
