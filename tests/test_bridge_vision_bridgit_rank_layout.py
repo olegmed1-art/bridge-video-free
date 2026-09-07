@@ -359,6 +359,24 @@ def test_peak_chain_is_edge_anchored_and_contiguous():
     )
 
 
+def test_peak_chain_rejects_competing_side_branches():
+    values = [0.0] * 80
+    for index, score in ((0, 0.95), (18, 0.91), (31, 0.90), (40, 0.89), (62, 0.88)):
+        values[index] = score
+
+    assert (
+        find_chain_peaks(
+            values,
+            origin=0,
+            edge=0,
+            direction=1,
+            min_height=0.72,
+            min_prominence=0.04,
+        )
+        == []
+    )
+
+
 def test_job_boundary_rejects_production_hidden_information_and_unknown_type():
     with pytest.raises(BridgitRankLayoutError, match="unknown job type"):
         execute_shadow_job({})

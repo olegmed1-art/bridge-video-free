@@ -702,6 +702,8 @@ def find_chain_peaks(
         ]
         if not options:
             break
+        if len(options) != 1:
+            return []
         current = max(
             options,
             key=lambda item: (item[1], -abs(direction * (item[0] - chain[-1]) - 25)),
