@@ -24,6 +24,7 @@ def _unknown(seat: str, slot: int) -> dict:
         "frame_sha256": None,
         "confidence": 0.0,
         "recognizer_version": "recognizer-v1",
+        "recognition_profile_id": "video31-card-consumer-v1",
         "unknown_slot": slot,
     }
 
@@ -58,6 +59,8 @@ def test_accepts_hash_bound_partial_result_and_preserves_unknowns() -> None:
         rank="A",
         source="TEMPORAL_CONSENSUS",
         frame_sha256="a" * 64,
+        frame_sha256s=["a" * 64, "b" * 64],
+        support_count=2,
         confidence=0.97,
     )
     record.pop("unknown_slot")
@@ -138,6 +141,48 @@ def test_rejects_invalid_confidence(confidence) -> None:
     record.pop("unknown_slot")
     _rehash(envelope)
     with pytest.raises(CardRecognitionContractError, match="confidence"):
+        validate_recognition_result(envelope)
+
+
+def test_rejects_recognized_card_below_profile_confidence_gate() -> None:
+    envelope = _envelope()
+    record = envelope["result"]["card_records"][0]
+    record.update(
+        suit="H",
+        rank="A",
+        source="VISUAL",
+        frame_sha256="b" * 64,
+        confidence=0.79,
+    )
+    record.pop("unknown_slot")
+    _rehash(envelope)
+    with pytest.raises(CardRecognitionContractError, match="below confidence gate"):
+        validate_recognition_result(envelope)
+
+
+def test_rejects_temporal_consensus_without_two_distinct_frames() -> None:
+    envelope = _envelope()
+    record = envelope["result"]["card_records"][0]
+    record.update(
+        suit="S",
+        rank="A",
+        source="TEMPORAL_CONSENSUS",
+        frame_sha256="a" * 64,
+        frame_sha256s=["a" * 64],
+        support_count=1,
+        confidence=0.97,
+    )
+    record.pop("unknown_slot")
+    _rehash(envelope)
+    with pytest.raises(CardRecognitionContractError, match="two distinct supporting frames"):
+        validate_recognition_result(envelope)
+
+
+def test_rejects_string_suit_order() -> None:
+    envelope = _envelope()
+    envelope["result"]["suit_order"] = "HCDS"
+    _rehash(envelope)
+    with pytest.raises(CardRecognitionContractError, match="suit_order must be an array"):
         validate_recognition_result(envelope)
 
 
