@@ -76,6 +76,14 @@ def test_rejects_changed_result_after_hashing() -> None:
         validate_recognition_result(envelope)
 
 
+def test_rejects_complete_status_with_unknown_slots() -> None:
+    envelope = _envelope()
+    envelope["result"]["status"] = "COMPLETE_VISUAL"
+    _rehash(envelope)
+    with pytest.raises(CardRecognitionContractError, match="requires 52 recognized cards"):
+        validate_recognition_result(envelope)
+
+
 @pytest.mark.parametrize("confidence", [True, -0.01, 1.01, float("nan"), float("inf")])
 def test_rejects_invalid_confidence(confidence) -> None:
     envelope = _envelope()
@@ -142,6 +150,23 @@ def test_rejects_teacher_pointer_as_card_source() -> None:
         validate_recognition_result(envelope)
 
 
+@pytest.mark.parametrize("rank", [10, 2])
+def test_rejects_non_string_recognizer_rank(rank) -> None:
+    envelope = _envelope()
+    record = envelope["result"]["card_records"][0]
+    record.update(
+        suit="S",
+        rank=rank,
+        source="VISUAL",
+        frame_sha256="d" * 64,
+        confidence=0.9,
+    )
+    record.pop("unknown_slot")
+    _rehash(envelope)
+    with pytest.raises(CardRecognitionContractError, match="card types"):
+        validate_recognition_result(envelope)
+
+
 def test_legacy_adapter_does_not_mutate_input_or_complete_fourth_hand() -> None:
     hands = {
         "N": {"H": "AKQ", "C": "", "D": "", "S": ""},
@@ -172,3 +197,10 @@ def test_legacy_adapter_rejects_duplicate_and_hand_overflow() -> None:
     overflow["N"]["S"] = "A"
     with pytest.raises(CardRecognitionContractError, match="exceeds 13 cards"):
         adapt_legacy_hands(overflow)
+
+
+def test_legacy_adapter_rejects_non_string_ranks() -> None:
+    hands = {seat: {suit: "" for suit in "HCDS"} for seat in "NESW"}
+    hands["N"]["S"] = 10
+    with pytest.raises(CardRecognitionContractError, match="legacy hands.N.S"):
+        adapt_legacy_hands(hands)
