@@ -128,6 +128,14 @@ QUEUE_SEQUENCE_SQL = """SELECT count(*)=1 AND bool_and(
     JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='video_queue'"""
 
 
+EXPECTED_QUEUE_DIGEST = ('a6a529fa70af423db2b3c1f5086b4594', '9fea6e3ad1042481f869b8eeb5ab9f8d',
+    '7eef740b104b09c5ce4d3ace106089908883ec8203eb2472c2b67f5cc137325c')
+QUEUE_DIGEST_SQL = """SELECT
+(SELECT md5(string_agg(pg_get_functiondef(p.oid)||':OWNER='||pg_get_userbyid(p.proowner),E'\\n' ORDER BY oidvectortypes(p.proargtypes))) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname='digest'),
+(SELECT md5(jsonb_build_array(e.extname,e.extversion,pg_get_userbyid(e.extowner),n.nspname)::text) FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='pgcrypto'),
+encode(public.digest(convert_to('issue881','UTF8'),'sha256'),'hex')"""
+
+
 def require(condition):
     if not condition:
         raise RuntimeError("queue_target_guard")
@@ -212,6 +220,8 @@ def verify(raw, branch):
                 require(cur.fetchone() == EXPECTED_QUEUE_CAPABILITIES)
                 cur.execute(QUEUE_SEQUENCE_SQL)
                 require(cur.fetchone() == (True,))
+                cur.execute(QUEUE_DIGEST_SQL)
+                require(cur.fetchone() == EXPECTED_QUEUE_DIGEST)
                 cur.execute("SELECT * FROM video_queue.precanary_idle_snapshot()")
                 require(cur.fetchone() == (0, 0))
 
