@@ -1,0 +1,121 @@
+name: Issue 881 queue production target
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/issue-881-queue-production-target.yml'
+      - 'ops/issue_881_queue_production_target.py'
+      - 'tests/test_issue_881_queue_production_target.py'
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  issues: read
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('queue-target-pr-{0}', github.run_id) || (github.event.issue.number == 881 && github.event.comment.user.login == 'olegmed1-art' && (github.event.comment.body == '/oracle-ops issue-881-queue-production-check' || github.event.comment.body == '/oracle-ops issue-881-queue-production-apply')) && 'oracle-instance-workload-mutation' || format('queue-target-noop-{0}', github.run_id) }}
+  cancel-in-progress: false
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
+      - run: sudo -n python3 tests/test_issue_881_queue_production_target.py
+  target:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      github.event.issue.number == 881 &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      (github.event.comment.body == '/oracle-ops issue-881-queue-production-check' ||
+       github.event.comment.body == '/oracle-ops issue-881-queue-production-apply')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify exact main and pinned SSH identity
+        id: ssh
+        env:
+          SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+          SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+          SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+          SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          EXACT_SHA="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_SHA"
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Check or repair only the fixed queue credential target
+        env:
+          COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          case "$COMMAND" in
+            '/oracle-ops issue-881-queue-production-check') mode=check ;;
+            '/oracle-ops issue-881-queue-production-apply') mode=apply ;;
+            *) exit 1 ;;
+          esac
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/881/comments?per_page=100" > "$RUNNER_TEMP/owner-evidence.json"
+          deadline=$(python3 - "$(git rev-parse HEAD)" "$RUNNER_TEMP/owner-evidence.json" <<'PY'
+          import datetime, json, sys, time
+          prefix = 'ISSUE881_QUEUE_OWNER_ATTESTATION_V1\n'
+          reports = [c for page in json.load(open(sys.argv[2])) for c in page
+                     if c['user']['id'] == 315099490 and c['user']['login'] == 'olegmed1-art'
+                     and c['body'].startswith(prefix)]
+          assert reports, 'missing owner attestation'
+          c = max(reports, key=lambda c: c['id'])
+          def unique_object(pairs):
+              result = {}
+              for key,value in pairs:
+                  assert key not in result, 'duplicate owner evidence key'
+                  result[key] = value
+              return result
+          p = json.loads(c['body'][len(prefix):], object_pairs_hook=unique_object)
+          expected = dict(main=sys.argv[1], project='misty-poetry-18012774',
+              branch='br-wispy-lab-b1rq54of', database='neondb', events=0,
+              batches=0, jobs=0, max_event_id=None, last_value=1, is_called=False)
+          assert type(p) is dict and set(p) == set(expected) | {'observed_at'}
+          assert all(type(p[k]) is type(v) and p[k] == v for k,v in expected.items()), 'owner evidence mismatch'
+          assert type(p['observed_at']) is str
+          def stamp(s):
+              d = datetime.datetime.fromisoformat(s.replace('Z','+00:00'))
+              assert d.tzinfo is not None
+              return d.timestamp()
+          observed, created = stamp(p['observed_at']), stamp(c['created_at'])
+          now = time.time()
+          assert observed <= created + 30 and 0 <= now-created < 300
+          assert 0 <= now-observed < 300, 'stale owner observation'
+          print(int(min(observed, created) + 300))
+          PY
+          )
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$(git rev-parse HEAD)"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n timeout 120 /opt/bridge-school/universal-video/.venv/bin/python -I - $mode $deadline" \
+            < ops/issue_881_queue_production_target.py
