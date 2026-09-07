@@ -944,7 +944,7 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
         assert f"'{relative}'" in runner, relative
 
 
-def test_every_push_triggered_oracle_host_mutator_uses_shared_fence_and_provenance() -> None:
+def test_every_code_triggered_oracle_host_mutator_uses_shared_fence_and_provenance() -> None:
     script_reference = re.compile(
         r"(?<![A-Za-z0-9_-])(ops/[A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_./-])"
     )
@@ -971,10 +971,8 @@ def test_every_push_triggered_oracle_host_mutator_uses_shared_fence_and_provenan
         document = yaml.safe_load(workflow)
         assert isinstance(document, dict), path
         triggers = document.get("on", document.get(True, {}))
-        has_push = triggers == "push" or (
-            isinstance(triggers, dict) and "push" in triggers
-        )
-        if not has_push or not host_marker.search(workflow):
+        event_names = {triggers} if isinstance(triggers, str) else set(triggers)
+        if not event_names.intersection({"push", "pull_request_target"}) or not host_marker.search(workflow):
             continue
         jobs = document.get("jobs")
         assert isinstance(jobs, dict), path
@@ -1024,6 +1022,7 @@ def test_every_push_triggered_oracle_host_mutator_uses_shared_fence_and_provenan
         ".github/workflows/oracle-autopilot-staging-finalize.yml",
         ".github/workflows/oracle-autopilot-staging.yml",
         ".github/workflows/oracle-ben-runtime-rollout.yml",
+        ".github/workflows/oracle-dds3-pilot10k-launch.yml",
         ".github/workflows/oracle-dds3-tls-renewal.yml",
         ".github/workflows/oracle-diana11-002-delivery.yml",
         ".github/workflows/oracle-diana11-002-job.yml",
@@ -1064,6 +1063,7 @@ def test_every_push_triggered_oracle_host_mutator_uses_shared_fence_and_provenan
         "ops/oracle_autopilot_shadow_install.sh",
         "ops/oracle_assistant_lab_control_bridge_install.sh",
         "ops/oracle_assistant_lab_observer_install.sh",
+        "ops/oracle_dds3_mass_install.sh",
         "ops/oracle_universal_video_container_install.sh",
         "ops/oracle_universal_video_container_missing_image_recover.sh",
         "ops/oracle_universal_video_container_promote.sh",
@@ -1106,6 +1106,59 @@ def test_every_push_triggered_oracle_host_mutator_uses_shared_fence_and_provenan
         assert concurrency.get("cancel-in-progress") is False, relative
         assert f"'{relative}'" in runner, relative
     for relative in mutation_payloads:
+        assert f"'{relative}'" in runner, relative
+
+
+def test_every_shared_production_fence_workflow_and_payload_is_provenance_protected() -> None:
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
+    script_reference = re.compile(
+        r"(?<![A-Za-z0-9_-])(ops/[A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_./-])"
+    )
+    mutation = re.compile(
+        r"systemctl\s+(?:restart|start|stop|enable|disable|daemon-reload)\b|"
+        r"systemd-run\b|"
+        r"oci\s+(?:--config-file\s+\S+\s+)?(?:compute\s+instance\s+action|"
+        r"instance-agent\s+command\s+create)\b|"
+        r"(?:^|\n)\s*(?:sudo\s+-n\s+)?install\s+|"
+        r"docker\s+(?:run|rm|restart|stop|start|pull)\b|"
+        r"git\s+-C\s+[^\n]+\s+(?:checkout|reset|pull)\b",
+        re.IGNORECASE,
+    )
+    shared_workflows: set[str] = set()
+    mutation_payloads: set[str] = set()
+    for path in (ROOT / ".github/workflows").glob("*.yml"):
+        workflow = path.read_text(encoding="utf-8")
+        if "oracle-instance-workload-mutation" not in workflow:
+            continue
+        relative = path.relative_to(ROOT).as_posix()
+        shared_workflows.add(relative)
+        pending = {
+            reference
+            for reference in script_reference.findall(workflow)
+            if (ROOT / reference).is_file()
+        }
+        indirect: dict[str, str] = {}
+        while pending:
+            reference = pending.pop()
+            if reference in indirect:
+                continue
+            payload = (ROOT / reference).read_text(encoding="utf-8")
+            indirect[reference] = payload
+            pending.update(
+                child
+                for child in script_reference.findall(payload)
+                if child not in indirect and (ROOT / child).is_file()
+            )
+        mutation_payloads.update(
+            reference
+            for reference, payload in indirect.items()
+            if mutation.search(payload)
+        )
+    assert len(shared_workflows) == 66
+    assert len(mutation_payloads) == 34
+    for relative in shared_workflows | mutation_payloads:
         assert f"'{relative}'" in runner, relative
 
 
