@@ -403,6 +403,34 @@ def test_peak_chain_rejects_competing_edge_anchors():
     )
 
 
+def test_peak_chain_edge_fallback_cannot_bridge_competing_starts():
+    values = [0.0] * 200
+    for index, score in (
+        (95, 0.80),
+        (120, 0.91),
+        (145, 0.90),
+        (105, 0.94),
+        (130, 0.89),
+        (155, 0.88),
+        (180, 0.87),
+    ):
+        values[index] = score
+    for index, score in enumerate((0.81, 0.82, 0.83, 0.84, 0.85), start=100):
+        values[index] = score
+
+    assert (
+        find_chain_peaks(
+            values,
+            origin=0,
+            edge=100,
+            direction=1,
+            min_height=0.72,
+            min_prominence=0.04,
+        )
+        == []
+    )
+
+
 def test_job_boundary_rejects_production_hidden_information_and_unknown_type():
     with pytest.raises(BridgitRankLayoutError, match="unknown job type"):
         execute_shadow_job({})

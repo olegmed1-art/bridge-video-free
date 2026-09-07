@@ -678,8 +678,11 @@ def find_chain_peaks(
         if center - local_floor >= min_prominence:
             candidates.append((origin + index, center))
     edge_index = edge - origin
-    if 0 <= edge_index < len(numeric) and numeric[edge_index] >= min_height:
-        candidates.append((edge, numeric[edge_index]))
+    edge_score = (
+        numeric[edge_index]
+        if 0 <= edge_index < len(numeric) and numeric[edge_index] >= min_height
+        else None
+    )
 
     merged: list[tuple[int, float]] = []
     for x, score in sorted(candidates):
@@ -688,12 +691,17 @@ def find_chain_peaks(
                 merged[-1] = (x, score)
         else:
             merged.append((x, score))
-    if not merged:
-        return []
     starts = [item for item in merged if abs(item[0] - edge) <= 5]
-    if len(starts) != 1:
+    if len(starts) > 1:
         return []
-    current = starts[0]
+    if starts:
+        current = starts[0]
+    elif edge_score is not None and not any(
+        abs(item[0] - edge) <= 6 for item in merged
+    ):
+        current = (edge, edge_score)
+    else:
+        return []
     chain = [current[0]]
     while True:
         options = [
