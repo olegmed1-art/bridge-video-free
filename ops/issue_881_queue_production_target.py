@@ -120,7 +120,9 @@ SELECT
 
 # Mutable sequence position requires the separate owner read in the runbook;
 # the worker deliberately has no SELECT/USAGE on the sequence or base table.
-QUEUE_SEQUENCE_SQL = """SELECT count(*)=1 AND bool_and(
+QUEUE_SEQUENCE_SQL = """SELECT count(*)=1 AND NOT EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='video_queue' AND c.relpersistence <> 'p') AND bool_and(
     c.relname='job_event_event_id_seq' AND s.seqtypid='bigint'::regtype
     AND s.seqstart=1 AND s.seqincrement=1 AND s.seqmin=1
     AND s.seqmax=9223372036854775807 AND s.seqcache=1 AND NOT s.seqcycle)
