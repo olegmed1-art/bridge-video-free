@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -939,6 +940,171 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
         if "  pull_request:" in header:
             assert "github.event_name" in header, relative
             assert "format(" in header, relative
+    for relative in mutation_payloads:
+        assert f"'{relative}'" in runner, relative
+
+
+def test_every_push_triggered_oracle_host_mutator_uses_shared_fence_and_provenance() -> None:
+    script_reference = re.compile(
+        r"(?<![A-Za-z0-9_-])(ops/[A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_./-])"
+    )
+    host_marker = re.compile(
+        r"\b(?:ORACLE_HOST|OCI_INSTANCE_OCID|INSTANCE_ID)\b|\bssh\b|"
+        r"\$\{ssh|oci\s+(?:compute|instance-agent)|158\.180\.47\.161",
+        re.IGNORECASE,
+    )
+    mutation = re.compile(
+        r"systemctl\s+(?:restart|start|stop|enable|disable|daemon-reload)\b|"
+        r"systemd-run\b|"
+        r"oci\s+(?:--config-file\s+\S+\s+)?(?:compute\s+instance\s+action|"
+        r"instance-agent\s+command\s+create)\b|"
+        r"(?:^|\n)\s*(?:sudo\s+-n\s+)?install\s+|"
+        r"docker\s+(?:run|rm|restart|stop|start|pull)\b|"
+        r"git\s+-C\s+[^\n]+\s+(?:checkout|reset|pull)\b",
+        re.IGNORECASE,
+    )
+    push_mutators: set[str] = set()
+    mutation_payloads: set[str] = set()
+    documents: dict[str, dict[str, object]] = {}
+    for path in (ROOT / ".github/workflows").glob("oracle-*.yml"):
+        workflow = path.read_text(encoding="utf-8")
+        document = yaml.safe_load(workflow)
+        assert isinstance(document, dict), path
+        triggers = document.get("on", document.get(True, {}))
+        has_push = triggers == "push" or (
+            isinstance(triggers, dict) and "push" in triggers
+        )
+        if not has_push or not host_marker.search(workflow):
+            continue
+        jobs = document.get("jobs")
+        assert isinstance(jobs, dict), path
+        run_corpus = "\n".join(
+            str(step.get("run", ""))
+            for job in jobs.values()
+            if isinstance(job, dict)
+            for step in job.get("steps", [])
+            if isinstance(step, dict)
+        )
+        pending = {
+            relative
+            for relative in script_reference.findall(run_corpus)
+            if (ROOT / relative).is_file()
+        }
+        indirect: dict[str, str] = {}
+        while pending:
+            relative = pending.pop()
+            if relative in indirect:
+                continue
+            payload = (ROOT / relative).read_text(encoding="utf-8")
+            indirect[relative] = payload
+            pending.update(
+                child
+                for child in script_reference.findall(payload)
+                if child not in indirect and (ROOT / child).is_file()
+            )
+        mutating_payloads = {
+            relative
+            for relative, payload in indirect.items()
+            if mutation.search(payload)
+        }
+        if mutation.search(run_corpus) or mutating_payloads:
+            relative = path.relative_to(ROOT).as_posix()
+            push_mutators.add(relative)
+            mutation_payloads.update(mutating_payloads)
+            documents[relative] = document
+
+    assert push_mutators == {
+        ".github/workflows/oracle-assistant-lab-control-rollout.yml",
+        ".github/workflows/oracle-assistant-lab-oci-diagnostic.yml",
+        ".github/workflows/oracle-assistant-lab-worker-rollout.yml",
+        ".github/workflows/oracle-autopilot-online-observer.yml",
+        ".github/workflows/oracle-autopilot-online-resume.yml",
+        ".github/workflows/oracle-autopilot-production-canary.yml",
+        ".github/workflows/oracle-autopilot-shadow-activation.yml",
+        ".github/workflows/oracle-autopilot-staging-finalize.yml",
+        ".github/workflows/oracle-autopilot-staging.yml",
+        ".github/workflows/oracle-ben-runtime-rollout.yml",
+        ".github/workflows/oracle-dds3-tls-renewal.yml",
+        ".github/workflows/oracle-diana11-002-delivery.yml",
+        ".github/workflows/oracle-diana11-002-job.yml",
+        ".github/workflows/oracle-diana11-002-operator-bootstrap.yml",
+        ".github/workflows/oracle-diana11-003-bootstrap-diagnostic.yml",
+        ".github/workflows/oracle-diana11-003-one-shadow-execution.yml",
+        ".github/workflows/oracle-diana11-delivery.yml",
+        ".github/workflows/oracle-diana11-oauth-repair.yml",
+        ".github/workflows/oracle-diana11-operator-bootstrap.yml",
+        ".github/workflows/oracle-diana11-provenance-sync.yml",
+        ".github/workflows/oracle-diana11-runtime-pin-repair.yml",
+        ".github/workflows/oracle-diana11-ready-before-probe.yml",
+        ".github/workflows/oracle-diana11-shadow-preflight-bootstrap.yml",
+        ".github/workflows/oracle-idle-guard-exact-install.yml",
+        ".github/workflows/oracle-idle-proof-bootstrap.yml",
+        ".github/workflows/oracle-universal-video-activation.yml",
+        ".github/workflows/oracle-universal-video-admin.yml",
+        ".github/workflows/oracle-universal-video-batch-intake.yml",
+        ".github/workflows/oracle-universal-video-container-missing-image-recover.yml",
+        ".github/workflows/oracle-universal-video-container-promote.yml",
+        ".github/workflows/oracle-universal-video-evidence-export.yml",
+        ".github/workflows/oracle-universal-video-job.yml",
+        ".github/workflows/oracle-universal-video-sidecar-repair.yml",
+    }
+    assert mutation_payloads == {
+        "ops/assistant_lab_oci_admin_entrypoint.sh",
+        "ops/install_assistant_lab_ocarun_admin.sh",
+        "ops/install_ben_runtime.sh",
+        "ops/install_oracle_idle_state_ocarun.sh",
+        "ops/install_universal_video_diana11_002_operator.sh",
+        "ops/install_universal_video_diana11_003_operator.sh",
+        "ops/install_universal_video_diana11_operator.sh",
+        "ops/install_universal_video_diana11_shadow_preflight.sh",
+        "ops/install_universal_video_ocarun_admin.sh",
+        "ops/install_universal_video_operator.sh",
+        "ops/oracle_autopilot_online_observer_install.sh",
+        "ops/oracle_autopilot_production_canary_install.sh",
+        "ops/oracle_autopilot_shadow_install.sh",
+        "ops/oracle_assistant_lab_control_bridge_install.sh",
+        "ops/oracle_assistant_lab_observer_install.sh",
+        "ops/oracle_universal_video_container_install.sh",
+        "ops/oracle_universal_video_container_missing_image_recover.sh",
+        "ops/oracle_universal_video_container_promote.sh",
+        "ops/oracle_universal_video_drive_secret_install.sh",
+        "ops/oracle_universal_video_install.sh",
+        "ops/oracle_universal_video_prepromotion_preflight.sh",
+        "ops/oracle_universal_video_productionize.sh",
+        "ops/oracle_universal_video_run_command.sh",
+        "ops/repair_universal_video_runtime_pin.sh",
+        "ops/universal_video_diana11_oauth_repair.sh",
+        "ops/universal_video_diana11_provenance_sync.sh",
+        "ops/universal_video_sidecar_repair.sh",
+    }
+
+    # Three legacy workflows place the shared fence directly on their only
+    # host-mutating job. Every other push mutator must fence the whole run.
+    job_scoped_fences = {
+        ".github/workflows/oracle-autopilot-online-observer.yml": "install",
+        ".github/workflows/oracle-autopilot-online-resume.yml": "resume",
+        ".github/workflows/oracle-autopilot-shadow-activation.yml": "activate",
+    }
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
+    for relative in push_mutators:
+        document = documents[relative]
+        if relative in job_scoped_fences:
+            jobs = document["jobs"]
+            assert isinstance(jobs, dict)
+            job = jobs[job_scoped_fences[relative]]
+            assert isinstance(job, dict)
+            concurrency = job.get("concurrency")
+        else:
+            concurrency = document.get("concurrency")
+        assert isinstance(concurrency, dict), relative
+        assert concurrency.get("group") == "oracle-instance-workload-mutation" or (
+            "oracle-instance-workload-mutation" in str(concurrency.get("group", ""))
+            and "github.event_name" in str(concurrency.get("group", ""))
+        ), relative
+        assert concurrency.get("cancel-in-progress") is False, relative
+        assert f"'{relative}'" in runner, relative
     for relative in mutation_payloads:
         assert f"'{relative}'" in runner, relative
 
