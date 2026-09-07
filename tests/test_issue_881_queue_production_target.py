@@ -89,6 +89,11 @@ class TargetTest(unittest.TestCase):
         self.assertFalse(target.LOCK_FILE.exists())
         self.assertEqual(self.dsn.read_bytes(), self.raw)
 
+    def test_already_production_still_requires_safe_tls(self):
+        self.dsn.write_bytes(target.candidate(self.raw).replace(b'channel_binding=require', b'channel_binding=disable'))
+        with self.assertRaises(RuntimeError): target.run('check')
+        self.verify.assert_not_called()
+
     def test_candidate_rejects_destination_override_and_preserves_password(self):
         self.assertIn(b'encoded%40password@'+target.TARGET_HOST.encode(), target.candidate(self.raw))
         for suffix in [b'&host=evil.example', b'&options=endpoint%3Devil', b'&sslmode=disable', b'&service=other']:
@@ -125,7 +130,8 @@ class TargetTest(unittest.TestCase):
                     def fetchone(self):
                         if 'SELECT *' in calls[-1]: return (1 if busy else 0, 0)
                         return (target.PROJECT, branch, 'neondb', target.USER, True, True, privileged,
-                                ['bridge_school_worker', 'other'] if extra_role else ['bridge_school_worker'], False)
+                                ['bridge_school_app', 'bridge_school_reader', 'bridge_school_worker', 'other'] if extra_role else ['bridge_school_app', 'bridge_school_reader', 'bridge_school_worker'],
+                                False, ['bridge_school_worker'])
                 with patch.object(target.psycopg, 'connect', return_value=Connection(), create=True):
                     if should_pass: real_verify(target.candidate(self.raw), target.PRODUCTION)
                     else:
