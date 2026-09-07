@@ -229,6 +229,12 @@ def validate_recognition_result(payload: Any) -> dict[str, Any]:
         raise CardRecognitionContractError(
             "COMPLETE_VISUAL requires 52 recognized cards and no UNKNOWN slots"
         )
+    if result["status"] == "COMPLETE_VISUAL" and any(
+        record["source"] != "TEMPORAL_CONSENSUS" for record in records
+    ):
+        raise CardRecognitionContractError(
+            "COMPLETE_VISUAL requires independent temporal support for every card"
+        )
     normalized = {
         "schema": CONTRACT_SCHEMA,
         "status": str(result["status"]),
