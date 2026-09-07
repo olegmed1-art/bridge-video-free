@@ -79,6 +79,7 @@ jobs:
             '/oracle-ops issue-881-queue-production-apply') mode=apply ;;
             *) exit 1 ;;
           esac
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$(git rev-parse HEAD)"
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
