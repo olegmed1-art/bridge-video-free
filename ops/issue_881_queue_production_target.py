@@ -150,7 +150,9 @@ def validated_url(raw, hosts):
     require(p.hostname in hosts)
     require(p.username == USER and bool(p.password) and p.path == "/neondb")
     require(p.port in (None, 5432))
-    pairs = parse_qsl(p.query, strict_parsing=True)
+    # Retain blank values so an override such as ``host=`` or a blank duplicate
+    # cannot disappear before the exact query-key allowlist is enforced.
+    pairs = parse_qsl(p.query, strict_parsing=True, keep_blank_values=True)
     require(len(pairs) == len(dict(pairs)))
     require(set(dict(pairs)) <= {"sslmode", "channel_binding"})
     require(dict(pairs).get("sslmode") in ("require", "verify-ca", "verify-full"))

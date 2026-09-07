@@ -121,7 +121,11 @@ class TargetTest(unittest.TestCase):
 
     def test_candidate_rejects_destination_override_and_preserves_password(self):
         self.assertIn(b'encoded%40password@'+target.TARGET_HOST.encode(), target.candidate(self.raw))
-        for suffix in [b'&host=evil.example', b'&options=endpoint%3Devil', b'&sslmode=disable', b'&service=other']:
+        for suffix in [
+            b'&host=evil.example', b'&host=', b'&options=endpoint%3Devil',
+            b'&options=', b'&sslmode=disable', b'&sslmode=',
+            b'&channel_binding=', b'&service=other', b'&service=',
+        ]:
             with self.assertRaises(RuntimeError): target.candidate(self.raw+suffix)
         with self.assertRaises(RuntimeError): target.candidate(self.raw.replace(target.SOURCE_HOST.encode(), b'evil.example'))
         for value in [b'disable', b'prefer', b'']:
