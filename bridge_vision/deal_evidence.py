@@ -31,6 +31,8 @@ MAX_POINTER_EVENTS = 256
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{2,127}$")
+_COORDINATE_QUANTA = 100_000_000
+_MIN_REGION_SPAN_QUANTA = 100
 
 
 class DealEvidenceError(ValueError):
@@ -78,16 +80,17 @@ def _region(value: Any, field: str) -> dict[str, float | str]:
     result: dict[str, float | str] = {"coordinate_space": "NORMALIZED_FRAME"}
     for name in ("x", "y", "width", "height"):
         result[name] = _confidence(value.get(name), f"{field}.{name}")
-    coordinate_quantum = 100_000_000
 
     def quantized_span(start: float, size: float) -> int:
-        return round((start + size) * coordinate_quantum) - round(
-            start * coordinate_quantum
+        return round((start + size) * _COORDINATE_QUANTA) - round(
+            start * _COORDINATE_QUANTA
         )
 
     if (
-        quantized_span(float(result["x"]), float(result["width"])) <= 1
-        or quantized_span(float(result["y"]), float(result["height"])) <= 1
+        quantized_span(float(result["x"]), float(result["width"]))
+        < _MIN_REGION_SPAN_QUANTA
+        or quantized_span(float(result["y"]), float(result["height"]))
+        < _MIN_REGION_SPAN_QUANTA
     ):
         raise DealEvidenceError(f"invalid {field} size")
     if (
@@ -166,10 +169,8 @@ def _contains(region: Mapping[str, Any], point: Mapping[str, Any]) -> bool:
 
 
 def _regions_overlap(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool:
-    coordinate_quantum = 100_000_000
-
     def edge(value: float) -> int:
-        return round(value * coordinate_quantum)
+        return round(value * _COORDINATE_QUANTA)
 
     overlap_x = min(
         edge(float(first["x"]) + float(first["width"])),

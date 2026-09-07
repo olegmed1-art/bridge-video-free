@@ -144,6 +144,13 @@ def test_non_iterable_evidence_inputs_fail_closed():
     with pytest.raises(DealEvidenceError, match="region size"):
         build_deal_evidence_report([edge_rounded_tiny], recognizer_version=VERSION)
 
+    two_quantum_region = observation("N", "AH")
+    two_quantum_region["region"].update(
+        {"x": 0.0, "y": 0.0, "width": 2e-8, "height": 2e-8}
+    )
+    with pytest.raises(DealEvidenceError, match="region size"):
+        build_deal_evidence_report([two_quantum_region], recognizer_version=VERSION)
+
 
 def test_one_frame_is_visual_but_not_temporal_consensus():
     report = build_deal_evidence_report(
