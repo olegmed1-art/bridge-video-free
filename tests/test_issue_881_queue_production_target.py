@@ -111,14 +111,15 @@ class TargetTest(unittest.TestCase):
         self.assertNotIn('secret-password', out.getvalue())
 
     def test_live_query_contract_rejects_wrong_branch_busy_and_privileged_roles(self):
-        for branch, busy, privileged, extra_role, safe_acl, queue_acl, should_pass in [
-            (target.PRODUCTION, False, False, False, True, True, True),
-            (target.PREVIEW, False, False, False, True, True, False),
-            (target.PRODUCTION, True, False, False, True, True, False),
-            (target.PRODUCTION, False, True, False, True, True, False),
-            (target.PRODUCTION, False, False, True, True, True, False),
-            (target.PRODUCTION, False, False, False, False, True, False),
-            (target.PRODUCTION, False, False, False, True, False, False),
+        for branch, busy, privileged, extra_role, safe_acl, queue_acl, current_version, should_pass in [
+            (target.PRODUCTION, False, False, False, True, True, True, True),
+            (target.PREVIEW, False, False, False, True, True, True, False),
+            (target.PRODUCTION, True, False, False, True, True, True, False),
+            (target.PRODUCTION, False, True, False, True, True, True, False),
+            (target.PRODUCTION, False, False, True, True, True, True, False),
+            (target.PRODUCTION, False, False, False, False, True, True, False),
+            (target.PRODUCTION, False, False, False, True, False, True, False),
+            (target.PRODUCTION, False, False, False, True, True, False, False),
         ]:
             with self.subTest(branch=branch, busy=busy, privileged=privileged):
                 calls = []
@@ -132,6 +133,8 @@ class TargetTest(unittest.TestCase):
                         calls.append(sql)
                     def fetchone(self):
                         if 'SELECT *' in calls[-1]: return (1 if busy else 0, 0)
+                        if 'pg_get_functiondef' in calls[-1]:
+                            return target.EXPECTED_QUEUE_VERSION if current_version else ('old-definition','old-constraints',2)
                         if 'has_any_column_privilege' in calls[-1]:
                             return (queue_acl, target.ALLOWED_QUEUE_FUNCTIONS, ['batch_status','job_status'])
                         return (target.PROJECT, branch, 'neondb', target.USER, True, True, privileged,
