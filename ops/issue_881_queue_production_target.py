@@ -116,6 +116,16 @@ SELECT
 (SELECT md5(coalesce(string_agg(jsonb_build_array(c.relname,pg_get_indexdef(c.oid),i.indisvalid,i.indisready,i.indislive,i.indisunique,i.indisprimary,i.indisexclusion,i.indimmediate,i.indisreplident,c.reloptions,pg_get_userbyid(c.relowner))::text,E'\\n' ORDER BY c.relname),'')) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='video_queue') AS indexes"""
 
 
+# Mutable sequence position requires the separate owner read in the runbook;
+# the worker deliberately has no SELECT/USAGE on the sequence or base table.
+QUEUE_SEQUENCE_SQL = """SELECT count(*)=1 AND bool_and(
+    c.relname='job_event_event_id_seq' AND s.seqtypid='bigint'::regtype
+    AND s.seqstart=1 AND s.seqincrement=1 AND s.seqmin=1
+    AND s.seqmax=9223372036854775807 AND s.seqcache=1 AND NOT s.seqcycle)
+    FROM pg_sequence s JOIN pg_class c ON c.oid=s.seqrelid
+    JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='video_queue'"""
+
+
 def require(condition):
     if not condition:
         raise RuntimeError("queue_target_guard")
@@ -198,6 +208,8 @@ def verify(raw, branch):
                 require(cur.fetchone() == EXPECTED_QUEUE_OBJECT_SECURITY)
                 cur.execute(QUEUE_CAPABILITIES_SQL)
                 require(cur.fetchone() == EXPECTED_QUEUE_CAPABILITIES)
+                cur.execute(QUEUE_SEQUENCE_SQL)
+                require(cur.fetchone() == (True,))
                 cur.execute("SELECT * FROM video_queue.precanary_idle_snapshot()")
                 require(cur.fetchone() == (0, 0))
 
