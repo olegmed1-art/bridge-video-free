@@ -9,6 +9,7 @@ on:
     types: [created]
 permissions:
   contents: read
+  issues: read
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('queue-target-pr-{0}', github.run_id) || (github.event.issue.number == 881 && github.event.comment.user.login == 'olegmed1-art' && (github.event.comment.body == '/oracle-ops issue-881-queue-production-check' || github.event.comment.body == '/oracle-ops issue-881-queue-production-apply')) && 'oracle-instance-workload-mutation' || format('queue-target-noop-{0}', github.run_id) }}
   cancel-in-progress: false
@@ -79,9 +80,34 @@ jobs:
             '/oracle-ops issue-881-queue-production-apply') mode=apply ;;
             *) exit 1 ;;
           esac
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/issues/881/comments?per_page=100" > "$RUNNER_TEMP/owner-evidence.json"
+          deadline=$(python3 - "$(git rev-parse HEAD)" "$RUNNER_TEMP/owner-evidence.json" <<'PY'
+          import datetime, json, sys, time
+          prefix = 'ISSUE881_QUEUE_OWNER_ATTESTATION_V1\n'
+          reports = [c for page in json.load(open(sys.argv[2])) for c in page
+                     if c['user']['id'] == 315099490 and c['user']['login'] == 'olegmed1-art'
+                     and c['body'].startswith(prefix)]
+          assert reports, 'missing owner attestation'
+          c = max(reports, key=lambda c: c['id'])
+          p = json.loads(c['body'][len(prefix):])
+          expected = dict(main=sys.argv[1], project='misty-poetry-18012774',
+              branch='br-wispy-lab-b1rq54of', database='neondb', events=0,
+              batches=0, jobs=0, max_event_id=None, last_value=1, is_called=False)
+          assert all(p.get(k) == v for k,v in expected.items()), 'owner evidence mismatch'
+          def stamp(s):
+              d = datetime.datetime.fromisoformat(s.replace('Z','+00:00'))
+              assert d.tzinfo is not None
+              return d.timestamp()
+          observed, created = stamp(p['observed_at']), stamp(c['created_at'])
+          now = time.time()
+          assert observed <= created + 30 and 0 <= now-created < 300
+          assert 0 <= now-observed < 300, 'stale owner observation'
+          print(int(min(observed, created) + 300))
+          PY
+          )
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$(git rev-parse HEAD)"
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n timeout 120 /opt/bridge-school/universal-video/.venv/bin/python -I - $mode" \
+            "sudo -n timeout 120 /opt/bridge-school/universal-video/.venv/bin/python -I - $mode $deadline" \
             < ops/issue_881_queue_production_target.py
