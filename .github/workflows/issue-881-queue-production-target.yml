@@ -89,7 +89,13 @@ jobs:
                      and c['body'].startswith(prefix)]
           assert reports, 'missing owner attestation'
           c = max(reports, key=lambda c: c['id'])
-          p = json.loads(c['body'][len(prefix):])
+          def unique_object(pairs):
+              result = {}
+              for key,value in pairs:
+                  assert key not in result, 'duplicate owner evidence key'
+                  result[key] = value
+              return result
+          p = json.loads(c['body'][len(prefix):], object_pairs_hook=unique_object)
           expected = dict(main=sys.argv[1], project='misty-poetry-18012774',
               branch='br-wispy-lab-b1rq54of', database='neondb', events=0,
               batches=0, jobs=0, max_event_id=None, last_value=1, is_called=False)
