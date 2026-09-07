@@ -106,7 +106,7 @@ SELECT md5(coalesce(string_agg(jsonb_build_array(kind,object,column_name,pg_get_
 FROM grants"""
 
 
-EXPECTED_QUEUE_CAPABILITIES = ('45ef07b83a827ac8a7cada50cc15a52a', '32b00dee1b1d726b471edc26770a6abc',
+EXPECTED_QUEUE_CAPABILITIES = ('45ef07b83a827ac8a7cada50cc15a52a', '9fa28331076bacd831ddf6f9ecab15a0',
                                'e2b009cc6c12ecd7dfc7325c359f87fd')
 QUEUE_CAPABILITIES_SQL = """WITH RECURSIVE caps(oid) AS (
 SELECT DISTINCT a.grantee FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace CROSS JOIN LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE n.nspname='video_queue' AND a.grantee<>0
@@ -114,7 +114,7 @@ UNION SELECT m.member FROM pg_auth_members m JOIN caps c ON c.oid=m.roleid),
 roles AS (SELECT r.* FROM pg_roles r JOIN caps c ON c.oid=r.oid)
 SELECT
 (SELECT md5(coalesce(string_agg(jsonb_build_array(parent.rolname,child.rolname,pg_get_userbyid(m.grantor),m.admin_option,m.inherit_option,m.set_option)::text,E'\\n' ORDER BY parent.rolname,child.rolname,pg_get_userbyid(m.grantor)),'')) FROM pg_auth_members m JOIN roles parent ON parent.oid=m.roleid JOIN pg_roles child ON child.oid=m.member) AS capability_members,
-(SELECT md5(coalesce(string_agg(jsonb_build_array(rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls,rolconfig)::text,E'\\n' ORDER BY rolname),'')) FROM roles) AS capability_attributes,
+(SELECT md5(coalesce(string_agg(jsonb_build_array(rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls,rolconfig,rolvaliduntil::text,rolconnlimit)::text,E'\\n' ORDER BY rolname),'')) FROM roles) AS capability_attributes,
 (SELECT md5(coalesce(string_agg(jsonb_build_array(c.relname,pg_get_indexdef(c.oid),i.indisvalid,i.indisready,i.indislive,i.indisunique,i.indisprimary,i.indisexclusion,i.indimmediate,i.indisreplident,c.reloptions,pg_get_userbyid(c.relowner))::text,E'\\n' ORDER BY c.relname),'')) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='video_queue') AS indexes"""
 
 
