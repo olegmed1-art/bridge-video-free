@@ -20,6 +20,7 @@ SEATS = ("N", "E", "S", "W")
 SUITS = ("H", "C", "D", "S")
 RANKS = tuple("AKQJT98765432")
 KNOWN_SOURCES = frozenset({"VISUAL", "TEMPORAL_CONSENSUS"})
+CONFIDENCE_GATES = {"video31-card-consumer-v1": 0.80}
 ALLOWED_STATUSES = frozenset(
     {
         "COMPLETE_VISUAL",
@@ -87,7 +88,9 @@ def _unknown(seat: str, slot: int, version: str) -> dict[str, Any]:
     }
 
 
-def _validate_record(raw: Any, index: int, version: str) -> dict[str, Any]:
+def _validate_record(
+    raw: Any, index: int, version: str, minimum_confidence: float
+) -> dict[str, Any]:
     record = _mapping(raw, f"card_records[{index}]")
     seat = str(record.get("seat") or "").upper()
     if seat not in SEATS:
@@ -121,7 +124,9 @@ def _validate_record(raw: Any, index: int, version: str) -> dict[str, Any]:
     if rank not in RANKS or suit not in SUITS:
         raise CardRecognitionContractError(f"invalid card_records[{index}] card")
     confidence = _confidence(record.get("confidence"), f"card_records[{index}].confidence")
-    return {
+    if confidence < minimum_confidence:
+        raise CardRecognitionContractError("recognized card is below confidence gate")
+    normalized = {
         "seat": seat,
         "suit": suit,
         "rank": rank,
@@ -132,6 +137,29 @@ def _validate_record(raw: Any, index: int, version: str) -> dict[str, Any]:
         "confidence": confidence,
         "recognizer_version": version,
     }
+    if source == "TEMPORAL_CONSENSUS":
+        frame_hashes = [
+            _sha(item, f"card_records[{index}].frame_sha256s")
+            for item in _sequence(
+                record.get("frame_sha256s"),
+                f"card_records[{index}].frame_sha256s",
+            )
+        ]
+        support_count = record.get("support_count")
+        if (
+            isinstance(support_count, bool)
+            or not isinstance(support_count, int)
+            or support_count != len(frame_hashes)
+            or len(frame_hashes) < 2
+            or len(set(frame_hashes)) != len(frame_hashes)
+            or normalized["frame_sha256"] not in frame_hashes
+        ):
+            raise CardRecognitionContractError(
+                "TEMPORAL_CONSENSUS requires at least two distinct supporting frames"
+            )
+        normalized["frame_sha256s"] = frame_hashes
+        normalized["support_count"] = support_count
+    return normalized
 
 
 def validate_recognition_result(payload: Any) -> dict[str, Any]:
@@ -159,8 +187,12 @@ def validate_recognition_result(payload: Any) -> dict[str, Any]:
         raise CardRecognitionContractError("invalid recognizer_version")
     if result.get("status") not in ALLOWED_STATUSES:
         raise CardRecognitionContractError("unsupported recognition status")
-    if list(result.get("suit_order") or ()) != list(SUITS):
+    if _sequence(result.get("suit_order"), "suit_order") != list(SUITS):
         raise CardRecognitionContractError("suit order must be H,C,D,S")
+    profile_id = result.get("recognition_profile_id")
+    if not isinstance(profile_id, str) or profile_id not in CONFIDENCE_GATES:
+        raise CardRecognitionContractError("unsupported recognition confidence profile")
+    minimum_confidence = CONFIDENCE_GATES[profile_id]
     logical = _mapping(result.get("logical_inference"), "logical_inference")
     if logical.get("requested") is not False or logical.get("performed") is not False:
         raise CardRecognitionContractError("logical card inference is prohibited")
@@ -171,7 +203,7 @@ def validate_recognition_result(payload: Any) -> dict[str, Any]:
         raise CardRecognitionContractError("recognizer crossed its authority boundary")
 
     records = [
-        _validate_record(item, index, version)
+        _validate_record(item, index, version, minimum_confidence)
         for index, item in enumerate(_sequence(result.get("card_records"), "card_records"))
     ]
     if len(records) != 52:
@@ -201,6 +233,8 @@ def validate_recognition_result(payload: Any) -> dict[str, Any]:
         "schema": CONTRACT_SCHEMA,
         "status": str(result["status"]),
         "recognizer_version": version,
+        "recognition_profile_id": profile_id,
+        "minimum_card_confidence": minimum_confidence,
         "cards": records,
         "known_card_count": len(known_cards),
         "unknown_slot_count": 52 - len(known_cards),
