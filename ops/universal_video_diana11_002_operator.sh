@@ -203,6 +203,8 @@ PY
 submit_for(){
   local job_id="$1" profile="$2" purpose="$3" job_file="${1}.json" tmp
   verify_runtime
+  exec 9>/run/lock/oracle-workload-mutation.lock
+  flock -x 9
   local current
   current="$(state_for "$job_id" | sed -n 's/^UV_STATE=//p' | head -n1)"
   if [[ "$current" != MISSING ]]; then
@@ -250,6 +252,8 @@ PY
 
 publish_bridge(){
   verify_runtime
+  exec 9>/run/lock/oracle-workload-mutation.lock
+  flock -x 9
   verify_school_runtime
   [[ -f "$OAUTH_FILE" && ! -L "$OAUTH_FILE" ]] || fail 'protected Drive OAuth file missing'
   local current conformance publication work published_dir receipt artifact_set_sha256

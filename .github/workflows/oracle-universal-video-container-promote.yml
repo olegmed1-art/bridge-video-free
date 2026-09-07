@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: oracle-instance-workload-mutation
+  group: oracle-universal-video-container-promotion-request-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -155,29 +155,36 @@ jobs:
             "sudo -n env UNIVERSAL_VIDEO_EXPECTED_COMMIT='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST='$IMAGE_DIGEST' /bin/bash -s" \
             < "$RUNNER_TEMP/prepromotion-preflight.sh" \
             | grep -E '^UNIVERSAL_VIDEO_PREPROMOTION_PREFLIGHT_PASS commit=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64}$'
-          if ! "${ssh_base[@]}" 'sudo -n systemctl is-active --quiet universal-video-container.service'; then
-            set +e
-            "${ssh_base[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_RUN_SMOKE=0 UNIVERSAL_VIDEO_SOURCE_ONLY=1 /bin/bash -s" < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
-            prepare_rc=$?
-            set -e
-            if (( prepare_rc != 0 )); then
+          staged_prepare="/tmp/uv-container-prepare-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          scp -q -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            "$RUNNER_TEMP/prepare.sh" "$ORACLE_USER@$ORACLE_HOST:$staged_prepare"
+          set +e
+          "${ssh_base[@]}" "sudo -n env EXPECTED_COMMIT='$EXPECTED_COMMIT' IMAGE_DIGEST='$IMAGE_DIGEST' EXPECTED_BLOB='$expected_blob' EXPECTED_PREPARE_BLOB='$expected_prepare_blob' STAGED_PREPARE='$staged_prepare' /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /bin/bash -s" > "$RUNNER_TEMP/promotion.log" 2>&1 <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          trusted_prepare="$(mktemp --tmpdir=/var/tmp .uv-container-prepare.XXXXXX)"
+          cleanup(){ rm -f -- "$STAGED_PREPARE" "$trusted_prepare"; }
+          trap cleanup EXIT INT TERM
+          [[ "$STAGED_PREPARE" =~ ^/tmp/uv-container-prepare-[0-9]+-[0-9]+\.sh$ ]]
+          install -o root -g root -m 0500 "$STAGED_PREPARE" "$trusted_prepare"
+          [[ "$(git hash-object "$trusted_prepare")" == "$EXPECTED_PREPARE_BLOB" ]]
+          /bin/bash -n "$trusted_prepare"
+          if ! systemctl is-active --quiet universal-video-container.service; then
+            if ! env UNIVERSAL_VIDEO_GIT_REF="$EXPECTED_COMMIT" UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_RUN_SMOKE=0 UNIVERSAL_VIDEO_SOURCE_ONLY=1 /bin/bash "$trusted_prepare"; then
               echo UV_CONTAINER_PROMOTION_SOURCE_PREPARE_FAILED
-              exit "$prepare_rc"
+              exit 1
             fi
-            grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$RUNNER_TEMP/prepare.log"
             echo UV_CONTAINER_PROMOTION_SOURCE_PREPARE_PASS
           fi
-          remote_head="$("${ssh_base[@]}" 'sudo -n git -C /opt/bridge-school/universal-video-src rev-parse HEAD')" || { echo UV_CONTAINER_PROMOTION_SOURCE_UNAVAILABLE; exit 1; }
+          remote_head="$(git -C /opt/bridge-school/universal-video-src rev-parse HEAD)" || { echo UV_CONTAINER_PROMOTION_SOURCE_UNAVAILABLE; exit 1; }
           [[ "$remote_head" == "$EXPECTED_COMMIT" ]] || { echo UV_CONTAINER_PROMOTION_SOURCE_MISMATCH; exit 1; }
-          "${ssh_base[@]}" 'sudo -n test -f /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh' || { echo UV_CONTAINER_PROMOTION_ENTRYPOINT_MISSING; exit 1; }
-          remote_blob="$("${ssh_base[@]}" 'sudo -n git hash-object -- /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh')" || { echo UV_CONTAINER_PROMOTION_BLOB_UNAVAILABLE; exit 1; }
-          [[ "$remote_blob" == "$expected_blob" ]] || { echo UV_CONTAINER_PROMOTION_BLOB_MISMATCH; exit 1; }
-          "${ssh_base[@]}" 'sudo -n /bin/bash -n /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh' || { echo UV_CONTAINER_PROMOTION_ENTRYPOINT_INVALID; exit 1; }
+          promote=/opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh
+          [[ -f "$promote" && ! -L "$promote" ]] || { echo UV_CONTAINER_PROMOTION_ENTRYPOINT_MISSING; exit 1; }
+          [[ "$(git hash-object -- "$promote")" == "$EXPECTED_BLOB" ]] || { echo UV_CONTAINER_PROMOTION_BLOB_MISMATCH; exit 1; }
+          /bin/bash -n "$promote" || { echo UV_CONTAINER_PROMOTION_ENTRYPOINT_INVALID; exit 1; }
           echo UV_CONTAINER_PROMOTION_ENTRYPOINT_PASS
-          set +e
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env UNIVERSAL_VIDEO_EXPECTED_COMMIT='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST='$IMAGE_DIGEST' /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" \
-            > "$RUNNER_TEMP/promotion.log" 2>&1
+          env UNIVERSAL_VIDEO_EXPECTED_COMMIT="$EXPECTED_COMMIT" UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST="$IMAGE_DIGEST" /bin/bash "$promote"
+          REMOTE
           rc=$?
           set -e
           grep -E '^(UNIVERSAL_VIDEO_CONTAINER_(INSTALL_PASS|PROMOTION_(PASS|FAILED)) |\{"error_code":"UV_CONTAINER_[A-Z0-9_]+","status":"FAILED"\}$|Result=[A-Za-z-]+$|ExecMain(Code|Status)=[0-9]+$|ExecStart(Pre)?Status[0-9]+=[0-9]+$|NRestarts=[0-9]+$)' "$RUNNER_TEMP/promotion.log" || echo 'UV_CONTAINER_PROMOTION_BOUNDED_DIAGNOSTIC_UNAVAILABLE'

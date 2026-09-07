@@ -18,7 +18,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-universal-video-bounded-admin
+  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-admin-pr-{0}', github.event.pull_request.number) || format('oracle-universal-video-admin-request-{0}', github.sha) }}
   cancel-in-progress: false
 
 jobs:

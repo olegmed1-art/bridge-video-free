@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+if [[ "${ORACLE_WORKLOAD_FENCE_HELD:-0}" != 1 ]]; then
+  exec 9>/run/lock/oracle-workload-mutation.lock
+  flock -x 9
+fi
 umask 077
 
 # Exact repair for the failed Diana 11 transcript job. It never prints OAuth

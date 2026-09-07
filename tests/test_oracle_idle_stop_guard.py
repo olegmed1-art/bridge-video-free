@@ -14,6 +14,8 @@ AUTHORIZER = ROOT / "ops" / "oracle_idle_stop_guard.py"
 SCHEMA = ROOT / "assistant_lab" / "oracle_idle_schema.sql"
 FINALIZER = ROOT / ".github" / "workflows" / "oracle-autopilot-staging-finalize.yml"
 INSTANCE_POWER = ROOT / ".github" / "workflows" / "oracle-instance-power.yml"
+OAUTH_WORKFLOW = ROOT / ".github" / "workflows" / "oracle-diana11-oauth-repair.yml"
+OAUTH_REPAIR = ROOT / "ops" / "universal_video_diana11_oauth_repair.sh"
 CANONICAL_IDLE_REASON = (
     "jobs=0,research=0,research_children=0,control=0,"
     "operator_lease=0,autopilot=0,video=0"
@@ -83,12 +85,16 @@ class ClassifierHarness:
         *,
         pilot: tuple[str, int] = ("inactive", 3),
         main: tuple[str, int] = ("inactive", 3),
+        video_maintenance: tuple[str, int] = ("inactive", 3),
+        tls_maintenance: tuple[str, int] = ("inactive", 3),
     ) -> None:
         script = f"""#!/bin/sh
 case "$*" in
   "is-active assistant-lab.service") echo active; exit 0 ;;
   "is-active dds3-mass@10000.service") echo {pilot[0]}; exit {pilot[1]} ;;
   "is-active dds3-mass@30000.service") echo {main[0]}; exit {main[1]} ;;
+  "is-active universal-video-maintenance.service") echo {video_maintenance[0]}; exit {video_maintenance[1]} ;;
+  "is-active dds3-cert-renew.service") echo {tls_maintenance[0]}; exit {tls_maintenance[1]} ;;
   *) echo unknown; exit 4 ;;
 esac
 """
@@ -343,6 +349,24 @@ class OracleIdleClassifierTests(unittest.TestCase):
         self.assert_state(completed.stdout, "UNKNOWN")
 
     # Required negative family 5: local spool.
+    def test_video_maintenance_service_is_busy(self) -> None:
+        self.harness.set_mass_service_states(video_maintenance=("active", 0))
+        completed = self.harness.run()
+        self.assertIn("ORACLE_IDLE_REASON=maintenance_service_active", completed.stdout)
+        self.assert_state(completed.stdout, "BUSY")
+
+    def test_tls_maintenance_service_is_busy(self) -> None:
+        self.harness.set_mass_service_states(tls_maintenance=("active", 0))
+        completed = self.harness.run()
+        self.assertIn("ORACLE_IDLE_REASON=maintenance_service_active", completed.stdout)
+        self.assert_state(completed.stdout, "BUSY")
+
+    def test_failed_maintenance_service_is_unknown(self) -> None:
+        self.harness.set_mass_service_states(video_maintenance=("failed", 3))
+        completed = self.harness.run()
+        self.assertIn("ORACLE_IDLE_REASON=maintenance_service_failed", completed.stdout)
+        self.assert_state(completed.stdout, "UNKNOWN")
+
     def test_local_spool_with_work_is_busy(self) -> None:
         (self.harness.spool / "queued-work.json").write_text(
             "{}\n", encoding="utf-8"
@@ -674,71 +698,39 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         for terminal_leaf in ("/done", "/failed", "/results", "/progress"):
             self.assertNotIn(terminal_leaf, default_line)
 
-    def test_stop_consumer_uses_exact_authorizer_not_raw_idle_grep(self) -> None:
+    def test_legacy_finalizer_has_no_automatic_stop_surface(self) -> None:
         workflow = FINALIZER.read_text(encoding="utf-8")
         self.assertNotIn("grep -Fx 'ORACLE_IDLE_STATE=IDLE'", workflow)
-        authorizer = workflow.index(
-            "authorization=\"$(python3 ops/oracle_idle_stop_guard.py"
-        )
-        exact_yes = workflow.index(
-            "ORACLE_STOP_AUTHORIZED=YES", authorizer
-        )
-        stop = workflow.index(
-            "oci compute instance action --instance-id "
-            "\"$OCI_INSTANCE_OCID\" --action STOP"
-        )
-        self.assertLess(authorizer, exact_yes)
-        self.assertLess(exact_yes, stop)
-        self.assertIn("idle_stderr", workflow)
+        self.assertNotIn("--action STOP", workflow)
+        self.assertNotIn("oci compute instance action", workflow)
+        self.assertNotIn("oracle-autopilot-finalize-requests/", workflow)
+        self.assertIn("AUTOPILOT_AUTOMATIC_STOP_RETIRED_PASS", workflow)
         self.assertNotIn("schedule:", workflow)
 
-    def test_finalizer_rechecks_autopilot_service_at_final_idle_boundary(self) -> None:
+    def test_legacy_finalizer_is_pull_request_contract_only(self) -> None:
         workflow = FINALIZER.read_text(encoding="utf-8")
-        final_step = workflow.index(
-            "Stop exact instance only after fresh exact IDLE authorization"
-        )
-        final_gate = workflow.index("FINAL_AUTOPILOT_SERVICE_GATE", final_step)
-        active = workflow.index(
-            "systemctl is-active school-autopilot-shadow.service", final_gate
-        )
-        enabled = workflow.index(
-            "systemctl is-enabled school-autopilot-shadow.service", final_gate
-        )
-        inactive_check = workflow.index(
-            '[[ "$active" == inactive && "$enabled" == disabled ]]',
-            final_gate,
-        )
-        revision_read = workflow.index(
-            "current/SOURCE_REVISION", final_gate
-        )
-        revision_check = workflow.index(
-            '[[ "$staged_revision" == "${{ steps.request.outputs.expected_staged_revision }}" ]]',
-            final_gate,
-        )
-        idle_probe = workflow.index(
-            "sudo -n /usr/local/sbin/oracle-idle-state", final_gate
-        )
-        authorizer = workflow.index(
-            "authorization=\"$(python3 ops/oracle_idle_stop_guard.py", idle_probe
-        )
-        stop = workflow.index(
-            "oci compute instance action --instance-id "
-            "\"$OCI_INSTANCE_OCID\" --action STOP",
-            authorizer,
-        )
-        self.assertLess(active, enabled)
-        self.assertLess(enabled, revision_read)
-        self.assertLess(revision_read, inactive_check)
-        self.assertLess(inactive_check, idle_probe)
-        self.assertLess(revision_check, idle_probe)
-        self.assertLess(idle_probe, authorizer)
-        self.assertLess(authorizer, stop)
+        self.assertIn("pull_request:", workflow)
+        self.assertNotIn("push:", workflow)
+        self.assertNotIn("workflow_dispatch:", workflow)
+
+    def test_oauth_install_and_repair_share_one_host_fence(self) -> None:
+        workflow = OAUTH_WORKFLOW.read_text(encoding="utf-8")
+        repair = OAUTH_REPAIR.read_text(encoding="utf-8")
+        boundary = workflow.index("exec 9>/run/lock/oracle-workload-mutation.lock")
+        digest = workflow.index("sha256sum -c -", boundary)
+        install = workflow.index('bash \\"$install_script\\" -', digest)
+        retry = workflow.index('bash \\"$repair_script\\"', install)
+        self.assertLess(boundary, install)
+        self.assertLess(install, retry)
+        self.assertIn("ORACLE_WORKLOAD_FENCE_HELD=1", workflow[install:retry + 100])
+        self.assertIn("${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}", workflow)
+        self.assertIn('if [[ "${ORACLE_WORKLOAD_FENCE_HELD:-0}" != 1 ]]', repair)
 
     def test_instance_power_gets_final_proof_after_paginated_epoch(self) -> None:
         workflow = INSTANCE_POWER.read_text(encoding="utf-8")
         final_step = workflow.index("Stop exact instance only with IDLE proof")
         final_probe = workflow.index(
-            "bridge-school-oracle-final-idle-proof-${GITHUB_RUN_ID}", final_step
+            "bridge-school-oracle-final-idle-fence-${GITHUB_RUN_ID}", final_step
         )
         authorizer = workflow.index(
             "authorization=\"$(python3 ops/oracle_idle_stop_guard.py", final_probe
@@ -767,7 +759,7 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         workflow = INSTANCE_POWER.read_text(encoding="utf-8")
         final_step = workflow.index("Stop exact instance only with IDLE proof")
         final_probe = workflow.index(
-            "bridge-school-oracle-final-idle-proof-${GITHUB_RUN_ID}", final_step
+            "bridge-school-oracle-final-idle-fence-${GITHUB_RUN_ID}", final_step
         )
         first_authorizer = workflow.index(
             "authorization=\"$(python3 ops/oracle_idle_stop_guard.py", final_probe
@@ -794,6 +786,32 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         self.assertLess(second_paginated, post_probe_current)
         self.assertLess(post_probe_current, second_authorizer)
         self.assertLess(second_authorizer, stop)
+
+    def test_instance_power_holds_atomic_host_fence_through_stop(self) -> None:
+        workflow = INSTANCE_POWER.read_text(encoding="utf-8")
+        installer = (ROOT / "ops" / "install_oracle_idle_state_ocarun.sh").read_text(encoding="utf-8")
+        final_step = workflow.index("Stop exact instance only with IDLE proof")
+        hold = workflow.index("oracle-idle-stop-fence hold", final_step)
+        read = workflow.index("oracle-idle-stop-fence read", hold)
+        holder = workflow.index("host fence was lost", read)
+        stop = workflow.index('"$OCI_INSTANCE_OCID" --action STOP', holder)
+        self.assertLess(hold, read)
+        self.assertLess(read, holder)
+        self.assertLess(holder, stop)
+        self.assertIn("readonly FENCE_TARGET='/usr/local/sbin/oracle-idle-stop-fence'", installer)
+        self.assertIn("flock -n 9 || exit 73", installer)
+        self.assertIn("oracle-idle-stop-fence hold *", installer)
+        self.assertIn("oracle-idle-stop-fence read *", installer)
+        self.assertIn("oracle-idle-stop-fence release *", installer)
+        self.assertIn('holder_start="$(cat "$start_file")"', installer)
+        self.assertGreaterEqual(
+            installer.count('[[ "$(awk \'{print $22}\' "/proc/$holder_pid/stat")" == "$holder_start" ]] || exit 74'),
+            2,
+        )
+        self.assertIn('sleep 900 9>&- &', installer)
+        self.assertIn("trap 'cleanup_holder; exit 143' TERM INT", installer)
+        self.assertIn("trap release_final_fence EXIT", workflow)
+        self.assertIn("stop_accepted=1", workflow)
 
     def test_instance_power_stop_uses_exact_authorizer(self) -> None:
         workflow = INSTANCE_POWER.read_text(encoding="utf-8")

@@ -91,7 +91,7 @@ def test_repair_script_is_valid_bash_and_stays_bounded():
 def test_env_shape_gate_matches_the_proven_one_read_probe_path():
     source = text()
     probe = ENV_SHAPE_PROBE.read_text(encoding="utf-8")
-    gate = source.split("failure_stage='ENV_SHAPE'", 1)[1].split("failure_stage='BACKUP'", 1)[0]
+    gate = source.split("failure_stage='ENV_SHAPE'", 1)[1].split("current_pid=", 1)[0]
     assert "UV003_ENV_SHAPE_PROBE_PARITY_V3" in source
     assert 'env_shape="$' not in gate
     assert "while True" not in gate
@@ -162,6 +162,7 @@ def test_workflow_surfaces_every_allowlisted_checkpoint_on_failure():
 def test_all_failure_stages_remain_fixed_and_allowlisted():
     source = text()
     stages = (
+        "LOCK",
         "PRECHECK",
         "READY_BEFORE",
         "SPOOL_BEFORE",
@@ -182,3 +183,59 @@ def test_all_failure_stages_remain_fixed_and_allowlisted():
     for stage in stages:
         assert stage in allowlist
         assert f"failure_stage='{stage}'" in source or stage == "PRECHECK"
+
+
+def test_host_mutation_lock_is_bounded_and_timeout_is_retryable():
+    source = text()
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "flock -w 300 -x 9 || fail" in source
+    assert "failure_stage='LOCK'" in source
+    assert "r'LOCK|PRECHECK" in workflow
+    assert "schedule:" in workflow
+    assert "automatic_retry_on_lock_timeout:true" in workflow
+
+
+def test_retained_receipt_binds_request_runtime_and_workflow_identity():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "Build retained request-bound receipt" in workflow
+    assert "Upload retained request-bound receipt" in workflow
+    assert "request_id:$request_id" in workflow
+    assert "expected_runtime_commit:$expected_runtime_commit" in workflow
+    assert "workflow_sha:$workflow_sha" in workflow
+    assert "run_attempt:$run_attempt" in workflow
+    assert "${{ github.run_attempt }}" in workflow
+    assert "retention-days: 90" in workflow
+
+
+def test_durable_request_has_scheduled_non_lifecycle_recovery():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "schedule:" in workflow
+    assert "17,47 * * * *" in workflow
+    assert "oracle-diana11-runtime-pin-repair-consumer" in workflow
+    assert "git ls-files 'ops/oracle-diana11-runtime-pin-repair-requests/*.json'" in workflow
+    assert "git ls-files 'ops/oracle-diana11-runtime-pin-repair-requests/*.json' | sort)" in workflow
+    assert "request_ids_json" in workflow
+    assert "uv003-runtime-pin-repair-receipts/$request_id.json" in workflow
+    assert 'needs.validate.outputs.execute == \'true\'' in workflow
+    assert "oci compute instance action" not in workflow
+    assert "--action START" not in workflow
+
+
+def test_scheduled_replay_is_idempotent_inside_host_fence():
+    source = text()
+    idempotent = source.split("current_pid=", 1)[1].split("failure_stage='BACKUP'", 1)[0]
+    assert "/proc')/os.environ['PID']/'environ'" in idempotent
+    assert "file_values == [expected]" in idempotent
+    assert "live_values == [expected]" in idempotent
+    assert "UV003_RUNTIME_PIN_REPAIR=PASS" in idempotent
+    assert 'systemctl stop "$SERVICE"' not in idempotent
+
+
+def test_failed_restore_retains_verified_backup_and_does_not_restart():
+    source = text()
+    rollback = source.split("rollback(){", 1)[1].split("trap rollback EXIT", 1)[0]
+    assert 'cmp -s "$backup" "$ENV_FILE"' in rollback
+    assert "rollback_failed=1" in rollback
+    assert "rollback_failed == 0 && service_stopped == 1" in rollback
+    assert "UV003_RUNTIME_PIN_ROLLBACK=FAILED_BACKUP_RETAINED" in rollback
+    assert "rc=70" in rollback

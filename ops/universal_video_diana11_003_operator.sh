@@ -256,6 +256,8 @@ submit_for(){
   local job_id="$1" profile="$2" purpose="$3" job_file="${1}.json" tmp current
   verify_runtime
   verify_school_runtime
+  exec 9>/run/lock/oracle-workload-mutation.lock
+  flock -x 9
   current="$(state_for "$job_id" | sed -n 's/^UV_STATE=//p' | head -n1)"
   if [[ "$current" != MISSING ]]; then
     state_for "$job_id"
@@ -313,6 +315,8 @@ PY
 
 publish_bridge(){
   verify_runtime
+  exec 9>/run/lock/oracle-workload-mutation.lock
+  flock -x 9
   verify_school_runtime
   [[ -f "$OAUTH_FILE" && ! -L "$OAUTH_FILE" ]] || fail OAUTH
   local current conformance publication work receipt artifact_set_sha256

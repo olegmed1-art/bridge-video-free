@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: oracle-assistant-lab-control-rollout
+  group: oracle-assistant-lab-control-rollout-${{ github.event_name == 'push' && github.sha || github.event.pull_request.head.sha || github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
@@ -120,6 +120,11 @@ jobs:
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n env CONTROL_GIT_REF='${{ steps.request.outputs.git_ref }}' bash -s" <<'REMOTE'
           set -Eeuo pipefail
+          touch /run/lock/oracle-workload-mutation.lock
+          chown root:universal-video /run/lock/oracle-workload-mutation.lock
+          chmod 0660 /run/lock/oracle-workload-mutation.lock
+          exec 9>/run/lock/oracle-workload-mutation.lock
+          flock -x 9
           repo=/opt/bridge-school/bridge-video-free
           [[ "$(git -C "$repo" remote get-url origin)" == "https://github.com/olegmed1-art/bridge-video-free.git" ]]
           git -C "$repo" fetch --quiet origin "$CONTROL_GIT_REF"

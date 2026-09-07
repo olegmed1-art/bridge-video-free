@@ -20,6 +20,10 @@ readonly QUEUE_DSN_FILE="$BASE_DIR/secrets/video-queue-dsn"
 fail(){ echo "UV_STATE=REJECTED"; echo "UV_ERROR=$1"; exit 1; }
 intake_reject(){ echo 'UV_STATE=REJECTED'; echo "UV_ERROR_CODE=$1"; }
 safe_id(){ [[ "$1" =~ ^[A-Za-z0-9._:-]{1,160}$ && "$1" != . && "$1" != .. ]]; }
+acquire_mutation_fence(){
+  exec 9>/run/lock/oracle-workload-mutation.lock
+  flock -x 9
+}
 cleanup_staged_files(){
   local path
   for path in "$@"; do
@@ -188,6 +192,34 @@ batch_status(){
     PYTHONPATH="$SOURCE_DIR" \
     BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE="$QUEUE_DSN_FILE" \
     "$PYTHON" -m universal_video.video_queue_intake status "$1"
+}
+resume_batch(){
+  [[ $# -eq 2 && ${#2} -le 24000 ]] || fail 'invalid resumable batch intake'
+  safe_id "$1" || fail 'invalid request key'
+  local status_output disposition
+  if ! status_output="$(batch_status "$1")"; then
+    printf '%s\n' "$status_output"
+    return 1
+  fi
+  if ! disposition="$(STATUS_OUTPUT="$status_output" EXPECTED_REQUEST_KEY="$1" "$SYSTEM_PYTHON" - <<'PY'
+import json
+import os
+
+value = json.loads(os.environ["STATUS_OUTPUT"].splitlines()[-1])
+assert value.get("schema") == "universal-video-batch-status-v1"
+assert value.get("request_key") == os.environ["EXPECTED_REQUEST_KEY"]
+print("MISSING" if value.get("status") == "MISSING" else "ACCEPTED")
+PY
+  )"; then
+    intake_reject 'UV_BATCH_INTAKE_FAILED'
+    return 1
+  fi
+  if [[ "$disposition" == ACCEPTED ]]; then
+    printf '%s\n' "$status_output"
+    return 0
+  fi
+  [[ "$disposition" == MISSING ]] || { intake_reject 'UV_BATCH_INTAKE_FAILED'; return 1; }
+  enqueue_batch "$2"
 }
 conformance_json(){
   local job_id="$1" profile="$2" job_hash="$3" source_file_id="$4" artifact_set_sha256="$5"
@@ -451,11 +483,28 @@ PY
       ;;
   esac
 }
-[[ $# -ge 1 ]] || fail 'usage: universal-video submit-drive-base64 PAYLOAD | status JOB_ID PROFILE JOB_HASH DRIVE_FILE_ID | enqueue-batch-base64 PAYLOAD | batch-status REQUEST_KEY'
+repair_submit_drive(){
+  [[ $# -eq 1 ]] || fail 'invalid repair-submit request'
+  local repair_out
+  if ! repair_out="$(/usr/local/sbin/universal-video-spool-repair 2>/dev/null)"; then
+    echo 'UV_STATE=REJECTED'
+    echo 'UV_ERROR_CODE=UV_SPOOL_REPAIR_COMMAND_FAILED'
+    return 1
+  fi
+  if ! grep -qx 'UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS' <<<"$repair_out"; then
+    echo 'UV_STATE=REJECTED'
+    echo 'UV_ERROR_CODE=UV_SPOOL_REPAIR_MARKER_MISSING'
+    return 1
+  fi
+  submit_drive "$1"
+}
+[[ $# -ge 1 ]] || fail 'usage: universal-video submit-drive-base64 PAYLOAD | repair-submit-drive-base64 PAYLOAD | status JOB_ID PROFILE JOB_HASH DRIVE_FILE_ID | enqueue-batch-base64 PAYLOAD | batch-status REQUEST_KEY | resume-batch-base64 REQUEST_KEY PAYLOAD'
 case "$1" in
-  submit-drive-base64) shift; submit_drive "$@" ;;
+  submit-drive-base64) acquire_mutation_fence; shift; submit_drive "$@" ;;
+  repair-submit-drive-base64) acquire_mutation_fence; shift; repair_submit_drive "$@" ;;
   status) shift; status "$@" ;;
-  enqueue-batch-base64) shift; enqueue_batch "$@" ;;
+  enqueue-batch-base64) acquire_mutation_fence; shift; enqueue_batch "$@" ;;
   batch-status) shift; batch_status "$@" ;;
+  resume-batch-base64) acquire_mutation_fence; shift; resume_batch "$@" ;;
   *) fail 'unsupported operation' ;;
 esac

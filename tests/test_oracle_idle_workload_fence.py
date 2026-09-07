@@ -66,13 +66,13 @@ EXPECTED_PRODUCERS = {
         {"pull_request", "push"},
         "${{ github.event_name == 'pull_request' && "
         "format('oracle-diana11-002-pr-{0}', github.event.pull_request.number) || "
-        "'oracle-instance-workload-mutation' }}",
+        "format('oracle-diana11-002-request-{0}', github.sha) }}",
     ),
     "oracle-diana11-003-one-shadow-execution.yml": (
         {"pull_request", "push"},
         "${{ github.event_name == 'pull_request' && "
         "format('oracle-diana11-003-pr-{0}', github.event.pull_request.number) || "
-        "'oracle-instance-workload-mutation' }}",
+        "format('oracle-diana11-003-request-{0}', github.sha) }}",
     ),
 }
 
@@ -134,6 +134,70 @@ def test_all_submit_bridge_oracle_producers_have_exact_event_to_fence_mapping() 
         _assert_workflow_mapping(name, events, group)
 
 
+def test_durable_diana_requests_use_request_preserving_groups_and_host_fence() -> None:
+    for name, (_, group) in EXPECTED_PRODUCERS.items():
+        assert "github.sha" in group, name
+        assert SHARED_FENCE not in group, name
+    for operator in (
+        "ops/universal_video_diana11_operator.sh",
+        "ops/universal_video_diana11_002_operator.sh",
+        "ops/universal_video_diana11_003_operator.sh",
+    ):
+        text = (ROOT / operator).read_text(encoding="utf-8")
+        assert "/run/lock/oracle-workload-mutation.lock" in text
+
+
+def test_legacy_diana_submit_holds_host_fence_before_state_check_and_enqueue() -> None:
+    text = (ROOT / "ops/universal_video_diana11_operator.sh").read_text(encoding="utf-8")
+    submit = text[text.index("submit_for(){") : text.index("publish_bridge(){")]
+    acquire = submit.index("exec 9>/run/lock/oracle-workload-mutation.lock")
+    lock = submit.index("flock -x 9", acquire)
+    state = submit.index('current="$(state_for "$job_id"', lock)
+    enqueue = submit.index('ln "$tmp" "$SPOOL/inbox/$job_file"', state)
+    assert acquire < lock < state < enqueue
+
+
+def test_generic_operator_mutators_acquire_internal_host_fence() -> None:
+    text = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
+    acquire = text.index("acquire_mutation_fence(){")
+    dispatch = text.index('case "$1" in', acquire)
+    assert "exec 9>/run/lock/oracle-workload-mutation.lock" in text[acquire:dispatch]
+    assert "flock -x 9" in text[acquire:dispatch]
+    for command in (
+        "submit-drive-base64",
+        "repair-submit-drive-base64",
+        "enqueue-batch-base64",
+        "resume-batch-base64",
+    ):
+        assert f"{command}) acquire_mutation_fence;" in text[dispatch:]
+
+
+def test_remaining_host_mutators_acquire_atomic_host_fence() -> None:
+    tls = _workflow_text("oracle-dds3-tls-renewal.yml")
+    admin_workflow = _workflow_text("oracle-universal-video-admin.yml")
+    admin_entry = (ROOT / "ops/universal_video_oci_admin_entrypoint.sh").read_text(encoding="utf-8")
+    maintenance = (ROOT / "deploy/oracle-universal-video/universal-video-maintenance.service").read_text(encoding="utf-8")
+    for text in (tls, admin_entry, maintenance):
+        assert "/run/lock/oracle-workload-mutation.lock" in text
+    assert "flock -x 9" in tls
+    assert "ExecStart=/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock" in tls
+    assert "flock -x 9" in admin_entry
+    assert "/usr/bin/flock -x" in maintenance
+    assert "github.sha" in admin_workflow
+    assert "oracle-instance-workload-mutation" not in admin_workflow.split("concurrency:", 1)[1].split("jobs:", 1)[0]
+
+    for name in (
+        "oracle-assistant-lab-control-rollout.yml",
+        "oracle-assistant-lab-worker-rollout.yml",
+        "oracle-ben-runtime-rollout.yml",
+    ):
+        rollout = _workflow_text(name)
+        concurrency = rollout.split("concurrency:", 1)[1].split("jobs:", 1)[0]
+        assert "github.sha" in concurrency, name
+        assert "cancel-in-progress: false" in concurrency, name
+        assert "/run/lock/oracle-workload-mutation.lock" in rollout, name
+
+
 def test_stop_consumer_has_exact_non_cancelling_event_to_fence_mapping() -> None:
     _assert_workflow_mapping(
         "oracle-instance-power.yml",
@@ -182,6 +246,16 @@ def test_guard_install_executes_only_verified_root_owned_installer_copy() -> Non
     execute = workflow.index("; \\\"\\$trusted\\\"'", syntax)
     assert copy < regular < mode < digest < syntax < execute
     assert "sudo -n env SOURCE_FILE=" not in workflow
+    assert "ADMIN_SHA256=" in workflow
+    assert "INSTALLED_ADMIN_SHA256=" in workflow
+    installer = (ROOT / "ops" / "install_oracle_idle_state_ocarun.sh").read_text()
+    assert 'atomic_copy_executable_verified "$trusted_admin" "$ADMIN_SHA256" "$ADMIN_TARGET"' in installer
+    assert "set -Eeuo pipefail; sudo -n env UPLOADED_INSTALLER=" in workflow
+    assert 'restore_previous_admin' in installer
+    assert "PRE_GUARD_SHA256=" in workflow
+    assert "PRE_ADMIN_SHA256=" in workflow
+    assert "POST_AUTOPILOT_ACTIVE=" in workflow
+    assert "POST_AUTOPILOT_ENABLED=" in workflow
 
 
 def test_install_proof_captures_are_exclusive_root_only_regular_files() -> None:
@@ -221,3 +295,19 @@ def test_instance_power_preserves_confirmed_busy_state() -> None:
     no = workflow.index("stop_authorized=NO", busy)
     mapped = workflow.index("idle_state=BUSY", no)
     assert busy < no < mapped
+
+
+def test_maintenance_handoff_remains_classifier_visible_until_reacquire() -> None:
+    classifier = (ROOT / "ops/oracle_idle_state.sh").read_text(encoding="utf-8")
+    productionize = (ROOT / "ops/oracle_universal_video_productionize.sh").read_text(encoding="utf-8")
+    marker = "/run/bridge-school/universal-video-maintenance-handoff"
+    assert marker in classifier
+    assert "maintenance_fence_handoff_in_progress" in classifier
+    assert marker in productionize
+    assert 'flock -n -x 9' in productionize
+    assert 'if [[ "${ORACLE_WORKLOAD_FENCE_HELD:-0}" != 1 ]]' in productionize
+    create = productionize.index('install -m 0600 -o root -g root /dev/null "$MAINT_HANDOFF_FILE"')
+    release = productionize.index("flock -u 9", create)
+    reacquire = productionize.index("flock -x 9", release)
+    remove = productionize.index('rm -f "$MAINT_HANDOFF_FILE"', reacquire)
+    assert create < release < reacquire < remove

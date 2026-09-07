@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: oracle-ben-runtime-rollout
+  group: oracle-ben-runtime-rollout-${{ github.event_name == 'push' && github.sha || github.event.pull_request.head.sha || github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
@@ -116,4 +116,4 @@ jobs:
           set -euo pipefail
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env BEN_IMAGE='$BEN_IMAGE' bash -s" < ops/install_ben_runtime.sh
+            "sudo -n env BEN_IMAGE='$BEN_IMAGE' /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock bash -s" < ops/install_ben_runtime.sh

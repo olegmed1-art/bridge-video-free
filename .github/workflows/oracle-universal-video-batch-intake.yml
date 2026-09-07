@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('oracle-video-batch-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  group: ${{ github.event_name == 'pull_request' && format('oracle-video-batch-pr-{0}', github.event.pull_request.number) || format('oracle-video-batch-request-{0}', github.sha) }}
   cancel-in-progress: false
 
 jobs:
@@ -69,7 +69,14 @@ jobs:
     if: ${{ github.event_name == 'push' }}
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The longest competing bounded mutator (productionize) may hold the host
+    # fence for 75 minutes. Each immutable request has its own workflow run, so
+    # wait beyond that bound instead of abandoning a durable enqueue.
+    # Three bounded 80-minute SSH attempts plus two worst-case 20-minute
+    # STOPPING -> STOPPED -> RUNNING recoveries fit below this envelope.
+    # GitHub caps one job at 360 minutes. A shared 350-minute deadline leaves
+    # ten minutes for bounded error classification and retained evidence.
+    timeout-minutes: 360
     env:
       INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
       OCI_USER: ${{ secrets.OCI_CLI_USER }}
@@ -89,6 +96,11 @@ jobs:
       PAYLOAD: ${{ needs.validate.outputs.encoded_intake }}
       REQUEST_KEY: ${{ needs.validate.outputs.request_key }}
     steps:
+      - name: Initialize one end-to-end recovery budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "EXECUTION_DEADLINE_EPOCH=$(( $(date +%s) + 21000 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
@@ -96,6 +108,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          budget_max() {
+            local cap="$1" now remaining
+            now="$(date +%s)"
+            remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))
+            (( remaining > 0 )) || return 1
+            (( remaining < cap )) && printf '%s\n' "$remaining" || printf '%s\n' "$cap"
+          }
           python -m pip install --disable-pip-version-check -q oci-cli
           oci_user="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
           oci_tenancy="$(printf '%s\n' "$OCI_TENANCY" | sed -nE 's/^[[:space:]]*(tenancy=)?(ocid1\.tenancy\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
@@ -116,7 +135,12 @@ jobs:
           state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
           case "$state" in
             RUNNING) ;;
-            STOPPED) oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+            STARTING)
+              oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+            STOPPING)
+              oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds "$(budget_max 600)" >/dev/null
+              oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+            STOPPED) oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
             *) echo "Oracle instance is not runnable: $state" >&2; exit 1 ;;
           esac
       - name: Resolve pinned SSH transport
@@ -125,7 +149,42 @@ jobs:
         run: |
           set -euo pipefail
           known="$RUNNER_TEMP/known_hosts"
-          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          budget_max() {
+            local cap="$1" now remaining
+            now="$(date +%s)"
+            remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))
+            (( remaining > 0 )) || return 1
+            (( remaining < cap )) && printf '%s\n' "$remaining" || printf '%s\n' "$cap"
+          }
+          recover_instance_after_scan_loss() {
+            local state
+            state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+            case "$state" in
+              RUNNING) sleep 10 ;;
+              STARTING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+              STOPPING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds "$(budget_max 600)" >/dev/null
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+              STOPPED)
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+              *) return 1 ;;
+            esac
+          }
+          scan_rc=3
+          for attempt in 1 2 3; do
+            rm -f "$known"
+            set +e
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+            scan_rc=$?
+            set -e
+            (( scan_rc == 0 )) && break
+            # Only an unavailable host (exit 3) is lifecycle-retryable. A
+            # fingerprint or contract failure remains immediately fail-closed.
+            (( scan_rc == 3 && attempt < 3 )) || exit "$scan_rc"
+            recover_instance_after_scan_loss || exit "$scan_rc"
+          done
+          (( scan_rc == 0 ))
           selected=''
           for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
             if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
@@ -142,14 +201,47 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "$PAYLOAD" && ${#PAYLOAD} -le 24000 ]]
-          set +e
-          result="$(timeout 180 ssh -i '${{ steps.ssh.outputs.key }}' \
-            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
-            "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video enqueue-batch-base64 '$PAYLOAD'" 2>/dev/null)"
-          enqueue_rc=$?
-          set -e
+          budget_max() {
+            local cap="$1" now remaining
+            now="$(date +%s)"
+            remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))
+            (( remaining > 0 )) || return 1
+            (( remaining < cap )) && printf '%s\n' "$remaining" || printf '%s\n' "$cap"
+          }
+          recover_instance_after_transport_loss() {
+            local state
+            state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+            case "$state" in
+              RUNNING) sleep 10 ;;
+              STARTING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+              STOPPING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds "$(budget_max 600)" >/dev/null
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+              STOPPED)
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+              *) return 1 ;;
+            esac
+          }
+          # The resident command queries REQUEST_KEY before Drive discovery and
+          # only enqueues when it is still missing. The query and optional
+          # enqueue share the operator's internal STOP fence, so a lost SSH response can be
+          # retried without rediscovering a changed Drive folder.
+          command="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video resume-batch-base64 '$REQUEST_KEY' '$PAYLOAD'"
+          result=''; enqueue_rc=255
+          for attempt in 1 2 3; do
+            ssh_timeout="$(budget_max 4800)" || { enqueue_rc=124; break; }
+            set +e
+            result="$(timeout "$ssh_timeout" ssh -i '${{ steps.ssh.outputs.key }}' \
+              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+              -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+              "$ORACLE_USER@$ORACLE_HOST" "$command" 2>/dev/null)"
+            enqueue_rc=$?
+            set -e
+            (( enqueue_rc == 255 && attempt < 3 )) || break
+            recover_instance_after_transport_loss || break
+          done
           if (( enqueue_rc != 0 )); then
             intake_code="$(sed -n 's/^UV_ERROR_CODE=//p' <<<"$result" | tail -n1)"
             if [[ -z "$intake_code" ]]; then
@@ -184,9 +276,9 @@ jobs:
           RESULT="$result" REQUEST_KEY="$REQUEST_KEY" python - <<'PY'
           import json, os
           value=json.loads(os.environ['RESULT'].splitlines()[-1])
-          assert value['schema']=='universal-video-batch-intake-v1'
+          assert value['schema'] in {'universal-video-batch-intake-v1','universal-video-batch-status-v1'}
           assert value['request_key']==os.environ['REQUEST_KEY']
-          assert value['status'] in {'QUEUED_CANARY','RUNNING','CANARY_BLOCKED','REVIEW'}
+          assert value['status'] in {'QUEUED_CANARY','RUNNING','CANARY_BLOCKED','CANARY_REVIEW','REVIEW'}
           assert 1 <= int(value['expected_count']) <= 1000
           assert value['result_mode']=='SHADOW_REVIEW_ONLY'
           assert value['canonical_promotion_allowed'] is False
@@ -197,7 +289,8 @@ jobs:
             'status':value['status'],
             'expected_count':value['expected_count'],
             'inventory_sha256':value['inventory_sha256'],
-            'enqueue_elapsed_seconds':value['enqueue_elapsed_seconds'],
+            'enqueue_elapsed_seconds':value.get('enqueue_elapsed_seconds'),
+            'reconciled_existing':value['schema']=='universal-video-batch-status-v1',
           },sort_keys=True))
           PY
           echo 'ORACLE_UNIVERSAL_VIDEO_BATCH_INTAKE_PASS'

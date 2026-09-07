@@ -13,12 +13,43 @@ def test_batch_transport_is_durable_bounded_and_project_neutral():
     assert "ops/oracle-universal-video-batch-requests/*.json" in text
     assert "expected exactly one batch request" in text
     assert "validate_intake_request" in text
-    assert "enqueue-batch-base64" in text
+    assert "resume-batch-base64 '$REQUEST_KEY' '$PAYLOAD'" in text
+    assert "universal-video-batch-status-v1" in text
+    assert "reconciled_existing" in text
     assert "ORACLE_UNIVERSAL_VIDEO_BATCH_INTAKE_PASS" in text
     assert "StrictHostKeyChecking=yes" in text
     assert "StrictHostKeyChecking=no" not in text
-    assert "oracle-instance-workload-mutation" in text
+    operator = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
+    assert "resume-batch-base64) acquire_mutation_fence;" in operator
+    assert "/run/lock/oracle-workload-mutation.lock" in operator
+    assert "github.sha" in text
     assert "cancel-in-progress: false" in text
+    assert "timeout-minutes: 360" in text
+    assert "EXECUTION_DEADLINE_EPOCH=$(( $(date +%s) + 21000 ))" in text
+    execute_steps = text.split("  enqueue:", 1)[1]
+    assert execute_steps.index("Initialize one end-to-end recovery budget") < execute_steps.index(
+        "actions/checkout@"
+    )
+    assert text.count("timeout \"$ssh_timeout\" ssh") == 1
+    assert "remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))" in text
+    assert 'ssh_timeout="$(budget_max 4800)"' in text
+    assert "for attempt in 1 2 3" in text
+    assert '--max-wait-seconds "$(budget_max 600)"' in text
+    assert "recover_instance_after_transport_loss" in text
+    assert "enqueue_rc == 255 && attempt < 3" in text
+    assert "ServerAliveCountMax=2" in text
+    preflight = text.split("- name: Resolve pinned SSH transport", 1)[0]
+    assert "STARTING)" in preflight
+    assert "STOPPING)" in preflight
+    assert '--wait-for-state STOPPED --max-wait-seconds "$(budget_max 600)"' in preflight
+    assert "'CANARY_REVIEW'" in text
+    ssh_setup = text.split("- name: Resolve pinned SSH transport", 1)[1].split(
+        "- name: Enqueue metadata", 1
+    )[0]
+    assert "recover_instance_after_scan_loss" in ssh_setup
+    assert "for attempt in 1 2 3" in ssh_setup
+    assert "scan_rc == 3 && attempt < 3" in ssh_setup
+    assert "STOPPING)" in ssh_setup
     assert "sleep 60" not in text
     assert "project" not in json.loads(INTAKE_SCHEMA.read_text(encoding="utf-8"))["properties"]
 

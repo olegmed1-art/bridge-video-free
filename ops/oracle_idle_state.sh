@@ -23,6 +23,7 @@ PYTHON="${ASSISTANT_LAB_PYTHON:-$LAB_DIR/.venv/bin/python}"
 UV_SECRETS_ENV="${UNIVERSAL_VIDEO_SECRETS_ENV_FILE:-$VIDEO_DIR/universal-video-secrets.env}"
 QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-}"
 HOST_LEASE_FILE="${ORACLE_HOST_LEASE_FILE:-/run/bridge-school/oracle-host-lease}"
+MAINTENANCE_HANDOFF_FILE="${ORACLE_MAINTENANCE_HANDOFF_FILE:-/run/bridge-school/universal-video-maintenance-handoff}"
 MAX_SOURCE_AGE_SECONDS="${ORACLE_IDLE_MAX_SOURCE_AGE_SECONDS:-60}"
 MAX_FUTURE_SKEW_SECONDS="${ORACLE_IDLE_MAX_FUTURE_SKEW_SECONDS:-5}"
 MAX_HOST_LEASE_REMAINING_SECONDS="${ORACLE_IDLE_MAX_HOST_LEASE_REMAINING_SECONDS:-86400}"
@@ -141,6 +142,29 @@ else
       *) mark_unknown "dds3_mass_service_${mass_state:-unknown}" ;;
     esac
   done
+
+  # Scheduled host writers are independent workload sources. Their unit must
+  # be installed and exactly inactive to prove IDLE; active is BUSY and every
+  # other state (including missing/failed/transitioning) is UNKNOWN.
+  for maintenance_unit in universal-video-maintenance.service dds3-cert-renew.service; do
+    set +e
+    maintenance_state="$(systemctl is-active "$maintenance_unit" 2>/dev/null)"
+    maintenance_rc=$?
+    set -e
+    case "$maintenance_state:$maintenance_rc" in
+      active:0) mark_busy "maintenance_service_active" ;;
+      inactive:3) ;;
+      *) mark_unknown "maintenance_service_${maintenance_state:-unknown}" ;;
+    esac
+  done
+fi
+
+# The productionize caller cannot atomically inherit the flock from a systemd
+# oneshot. It keeps this marker present from before lock release until after
+# reacquisition. Presence, including an unsafe link or crash-left marker, is
+# UNKNOWN and blocks STOP; marker content is never trusted.
+if [[ -e "$MAINTENANCE_HANDOFF_FILE" || -L "$MAINTENANCE_HANDOFF_FILE" ]]; then
+  mark_unknown "maintenance_fence_handoff_in_progress"
 fi
 
 # A local operator/maintenance lease is a bounded keep-alive signal. Absence is

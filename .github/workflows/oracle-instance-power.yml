@@ -288,38 +288,86 @@ jobs:
             echo 'manual stop: final workload epoch binding not applicable'
           fi
 
-          script_text="sudo -n /usr/local/sbin/oracle-idle-state"
+          # Hold the same host lock used by durable spool producers until OCI
+          # accepts STOP. If a producer already owns it, no proof is created.
+          fence_token="stop-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          script_text="sudo -n /usr/local/sbin/oracle-idle-stop-fence hold ${fence_token}"
           content_json="$(SCRIPT_TEXT="$script_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
           target_json="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["OCI_INSTANCE_OCID"]},separators=(",",":")))')"
           if ! command_id="$(oci instance-agent command create \
             --compartment-id "$COMPARTMENT_ID" \
             --content "$content_json" \
             --target "$target_json" \
-            --timeout-in-seconds 120 \
-            --display-name "bridge-school-oracle-final-idle-proof-${GITHUB_RUN_ID}" \
+            --timeout-in-seconds 900 \
+            --display-name "bridge-school-oracle-final-idle-fence-${GITHUB_RUN_ID}" \
             --query data.id --raw-output 2>/dev/null)"; then
-            echo 'STOP REFUSED: final idle command could not be created' >&2
+            echo 'STOP REFUSED: final host fence could not be created' >&2
+            exit 3
+          fi
+
+          stop_accepted=0
+          release_final_fence() {
+            local release_text release_json release_id release_state release_execution
+            (( stop_accepted == 0 )) || return 0
+            release_text="sudo -n /usr/local/sbin/oracle-idle-stop-fence release ${fence_token}"
+            release_json="$(SCRIPT_TEXT="$release_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
+            release_id="$(oci instance-agent command create \
+              --compartment-id "$COMPARTMENT_ID" --content "$release_json" --target "$target_json" \
+              --timeout-in-seconds 60 --display-name "bridge-school-oracle-final-idle-release-${GITHUB_RUN_ID}" \
+              --query data.id --raw-output 2>/dev/null || true)"
+            [[ -n "$release_id" ]] || return 0
+            for _ in $(seq 1 35); do
+              release_execution="$(oci instance-agent command-execution get --command-id "$release_id" --instance-id "$OCI_INSTANCE_OCID" --output json 2>/dev/null || true)"
+              release_state="$(printf '%s' "$release_execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))' 2>/dev/null || true)"
+              case "$release_state" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break ;; esac
+              sleep 2
+            done
+          }
+          trap release_final_fence EXIT
+
+          # Read the proof through a second bounded command while the first
+          # command remains IN_PROGRESS and owns the flock.
+          sleep 5
+          reader_text="sudo -n /usr/local/sbin/oracle-idle-stop-fence read ${fence_token}"
+          reader_json="$(SCRIPT_TEXT="$reader_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
+          if ! reader_id="$(oci instance-agent command create \
+            --compartment-id "$COMPARTMENT_ID" \
+            --content "$reader_json" \
+            --target "$target_json" \
+            --timeout-in-seconds 60 \
+            --display-name "bridge-school-oracle-final-idle-read-${GITHUB_RUN_ID}" \
+            --query data.id --raw-output 2>/dev/null)"; then
+            echo 'STOP REFUSED: final host fence cannot be observed' >&2
             exit 3
           fi
 
           execution_json=''
           lifecycle=''
-          for _ in $(seq 1 36); do
+          for _ in $(seq 1 35); do
             execution_json="$(oci instance-agent command-execution get \
-              --command-id "$command_id" \
+              --command-id "$reader_id" \
               --instance-id "$OCI_INSTANCE_OCID" \
               --output json 2>/dev/null || true)"
             if [[ -n "$execution_json" ]]; then
               lifecycle="$(printf '%s' "$execution_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
               case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break ;; esac
             fi
-            sleep 5
+            sleep 2
           done
           exit_code="$(printf '%s' "$execution_json" | python -c 'import json,sys; value=json.load(sys.stdin).get("data",{}).get("content",{}).get("exit-code",None); print("" if value is None else value)' 2>/dev/null || true)"
           if [[ "$lifecycle" != 'SUCCEEDED' || -z "$exit_code" || "$exit_code" != '0' ]]; then
-            echo 'STOP REFUSED: final host idle classifier did not succeed' >&2
+            echo 'STOP REFUSED: atomic host fence or classifier unavailable' >&2
             exit 3
           fi
+
+          holder_state="$(oci instance-agent command-execution get \
+            --command-id "$command_id" \
+            --instance-id "$OCI_INSTANCE_OCID" \
+            --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true)"
+          [[ "$holder_state" == ACCEPTED || "$holder_state" == IN_PROGRESS ]] || {
+            echo "STOP REFUSED: host fence holder is ${holder_state:-UNKNOWN}" >&2
+            exit 3
+          }
 
           proof="$RUNNER_TEMP/oracle-idle-proof-final.txt"
           if ! printf '%s' "$execution_json" | python -c 'import json,sys; value=json.load(sys.stdin).get("data",{}).get("content",{}).get("text",None); isinstance(value,str) or sys.exit(2); sys.stdout.write(value)' > "$proof"; then
@@ -369,7 +417,11 @@ jobs:
             fi
           fi
 
+          holder_state="$(oci instance-agent command-execution get --command-id "$command_id" --instance-id "$OCI_INSTANCE_OCID" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true)"
+          [[ "$holder_state" == ACCEPTED || "$holder_state" == IN_PROGRESS ]] || { echo 'STOP REFUSED: host fence was lost' >&2; exit 3; }
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action STOP >/dev/null
+          stop_accepted=1
+          trap - EXIT
           state=""
           for _ in $(seq 1 60); do
             state="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --query 'data."lifecycle-state"' --raw-output)"
