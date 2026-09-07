@@ -420,6 +420,21 @@ jobs:
             echo 'UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE other_active=0 other_queued=0 result=PASS'
           }
 
+          verify_final_mutation_boundary(){
+            local current_infrastructure_marker
+            # Receipt validation performs its own paginated Actions read. Take
+            # the complete infrastructure snapshot only after that read, then
+            # make the exact-main query the final subcheck in this one bounded
+            # reconciliation immediately before the host attester.
+            current_infrastructure_marker="$(verify_no_competing_infrastructure_runs)" \
+              || return 1
+            [[ "$current_infrastructure_marker" == \
+              "$(cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt")" ]] \
+              || { echo 'Infrastructure exclusivity changed before host mutation' >&2; return 1; }
+            verify_exact_current_main
+            printf '%s\n' "$current_infrastructure_marker"
+          }
+
           # Initial reconciliation rejects historical, blocked, or stale-green
           # heads before any recovery artifact is accepted.
           verify_no_competing_infrastructure_runs \
@@ -538,15 +553,8 @@ jobs:
           # before invoking the attestation that may quiesce resident services
           # or replace protected runtime files.
           verify_live_gate
-          current_infrastructure_marker="$(verify_no_competing_infrastructure_runs)"
-          [[ "$current_infrastructure_marker" == \
-            "$(cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt")" ]] \
-            || { echo 'Infrastructure exclusivity changed before host mutation' >&2; exit 1; }
           verify_one_shot_gate
-          # Receipt and infrastructure API reads can outlive the preceding live gate.
-          # Re-read live main as the final action before the host attester can
-          # quiesce services or replace protected runtime files.
-          verify_exact_current_main
+          verify_final_mutation_boundary
 
           set +e
           "${s[@]}" "sudo -n env \

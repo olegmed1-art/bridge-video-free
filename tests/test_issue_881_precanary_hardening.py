@@ -351,13 +351,17 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "UNIVERSAL_VIDEO_PRECANARY_FENCED_START" in attest
     final_window = workflow.index("# Staging can outlive the evidence")
     final_live_gate = workflow.index("verify_live_gate", final_window)
-    final_infrastructure = workflow.index(
-        "verify_no_competing_infrastructure_runs", final_live_gate
+    final_receipt = workflow.index("verify_one_shot_gate", final_live_gate)
+    final_boundary = workflow.index("verify_final_mutation_boundary", final_receipt)
+    host_attest = workflow.index('"${s[@]}" "sudo -n env', final_boundary)
+    assert final_live_gate < final_receipt < final_boundary < host_attest
+    boundary_definition = workflow.index("verify_final_mutation_boundary(){")
+    boundary_infrastructure = workflow.index(
+        'current_infrastructure_marker="$(verify_no_competing_infrastructure_runs)"',
+        boundary_definition,
     )
-    final_receipt = workflow.index("verify_one_shot_gate", final_infrastructure)
-    final_main = workflow.index("verify_exact_current_main", final_receipt)
-    host_attest = workflow.index('"${s[@]}" "sudo -n env', final_main)
-    assert final_live_gate < final_infrastructure < final_receipt < final_main < host_attest
+    boundary_main = workflow.index("verify_exact_current_main", boundary_infrastructure)
+    assert boundary_infrastructure < boundary_main
     fenced_start = attest.index("if start_container_under_fence; then", attest.index("cleanup(){"))
     runtime_proof = attest.index("verify_postrestore_runtime_queue", fenced_start)
     workload_unlock = attest.index("flock --unlock 9", runtime_proof)
