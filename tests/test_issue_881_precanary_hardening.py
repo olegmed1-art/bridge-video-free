@@ -668,6 +668,7 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
         "verify_no_competing_infrastructure_runs", initial_reconciliation
     )
     dispatch_trap = runner.index("trap control_plane_cleanup EXIT", initial_sweep)
+    assert runner.count("trap '' HUP INT TERM") == 2
     assert "trap 'exit 129' HUP" in runner
     assert "trap 'exit 130' INT" in runner
     assert "trap 'exit 143' TERM" in runner
@@ -678,10 +679,21 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
         'ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST"', dispatch_suspend
     )
     assert initial_sweep < dispatch_trap < dispatch_suspend < first_host_access
+    control_plane_cleanup_definition = runner[
+        runner.index("control_plane_cleanup(){") : runner.index(
+            "verify_final_mutation_boundary(){"
+        )
+    ]
+    assert control_plane_cleanup_definition.index("trap '' HUP INT TERM") < (
+        control_plane_cleanup_definition.index("restore_process_video_dispatch || rc=1")
+    )
     cleanup_definition = runner[
         runner.index("cleanup_remote(){") : runner.index("bounded_failure(){")
     ]
     assert "restore_process_video_dispatch || rc=1" in cleanup_definition
+    assert cleanup_definition.index("trap '' HUP INT TERM") < cleanup_definition.index(
+        "abort_remote_attester"
+    ) < cleanup_definition.index("restore_process_video_dispatch || rc=1")
     assert "cat \"$process_video_suspend_marker_file\"" in runner
     assert "PROCESS_VIDEO_DISPATCH_RESTORE" in workflow
     fenced_start = attest.index("if start_container_under_fence; then", attest.index("cleanup(){"))
@@ -1381,16 +1393,27 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
     shell_token = re.compile(
         r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_./${}-]+\.sh)(?![A-Za-z0-9_./-])"
     )
+    shell_by_name: dict[str, set[str]] = {}
+    for path in ROOT.rglob("*.sh"):
+        if ".git" in path.parts:
+            continue
+        shell_by_name.setdefault(path.name, set()).add(
+            path.relative_to(ROOT).as_posix()
+        )
 
     def repository_shell_references(source: str) -> set[str]:
         references: set[str] = set()
         for token in shell_token.findall(source):
             parts = token.replace("${", "").replace("}", "").lstrip("./").split("/")
+            matched = False
             for offset in range(len(parts) - 1):
                 candidate = "/".join(parts[offset:])
                 if (ROOT / candidate).is_file():
                     references.add(candidate)
+                    matched = True
                     break
+            if not matched:
+                references.update(shell_by_name.get(parts[-1], set()))
         return references
     shared_workflows: set[str] = set()
     referenced_payloads: set[str] = set()
@@ -1411,7 +1434,9 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
             pending.update(repository_shell_references(payload) - set(indirect))
         referenced_payloads.update(indirect)
     assert len(shared_workflows) == 65
-    assert len(referenced_payloads) == 53
+    assert len(referenced_payloads) == 55
+    assert "ops/universal_video_spool_repair.sh" in referenced_payloads
+    assert "ops/universal_video_evidence_export_entrypoint.sh" in referenced_payloads
     for relative in shared_workflows | referenced_payloads:
         assert f"'{relative}'" in runner, relative
 

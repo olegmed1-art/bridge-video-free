@@ -154,10 +154,12 @@ protected_gate_paths=(
   'ops/universal_video_diana11_002_operator.sh'
   'ops/universal_video_diana11_003_operator.sh'
   'ops/universal_video_diana11_operator.sh'
+  'ops/universal_video_evidence_export_entrypoint.sh'
   'ops/universal_video_oci_admin_entrypoint.sh'
   'ops/universal_video_operator.sh'
   'ops/universal_video_sidecar_diagnostic.sh'
   'ops/universal_video_sidecar_repair.sh'
+  'ops/universal_video_spool_repair.sh'
   'ops/validate_video_queue_dsn.py'
   'ops/validate_universal_video_promotion_evidence.py'
   'ops/verify_uv_runtime_pr_gate.sh'
@@ -502,7 +504,8 @@ restore_process_video_dispatch(){
 
 control_plane_cleanup(){
   local rc=$?
-  trap - EXIT HUP INT TERM
+  trap '' HUP INT TERM
+  trap - EXIT
   restore_process_video_dispatch || rc=1
   exit "$rc"
 }
@@ -692,7 +695,8 @@ release_database_gate(){
 
 cleanup_remote(){
   local rc=$?
-  trap - EXIT HUP INT TERM
+  trap '' HUP INT TERM
+  trap - EXIT
   if abort_remote_attester; then
     "${s[@]}" "sudo -n rm -rf '$remote_root'; rm -rf '$remote_stage'" >/dev/null 2>&1 || true
   else
