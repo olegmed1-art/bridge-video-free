@@ -30,13 +30,13 @@ def require(condition):
         raise RuntimeError("queue_target_guard")
 
 
-def candidate(raw):
+def validated_url(raw, hosts):
     require(0 < len(raw) <= 4096)
     text = raw.decode("utf-8")
     require(not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in text))
     p = urlsplit(text)
     require(p.scheme in ("postgres", "postgresql") and not p.fragment)
-    require(p.hostname in (SOURCE_HOST, SOURCE_HOST.replace(".c-5", "-pooler.c-5")))
+    require(p.hostname in hosts)
     require(p.username == USER and bool(p.password) and p.path == "/neondb")
     require(p.port in (None, 5432))
     pairs = parse_qsl(p.query, strict_parsing=True)
@@ -44,6 +44,11 @@ def candidate(raw):
     require(set(dict(pairs)) <= {"sslmode", "channel_binding"})
     require(dict(pairs).get("sslmode") in ("require", "verify-ca", "verify-full"))
     require(dict(pairs).get("channel_binding") == "require")
+    return p
+
+
+def candidate(raw):
+    p = validated_url(raw, (SOURCE_HOST, SOURCE_HOST.replace(".c-5", "-pooler.c-5")))
     # Preserve raw escaped credentials, TLS options and database. No host scan,
     # endpoint guessing, role changes, or credential retrieval from other files.
     authority = p.netloc.rsplit("@", 1)[0] + "@" + TARGET_HOST + ":5432"
@@ -61,16 +66,22 @@ def verify(raw, branch):
                 current_setting('neon.branch_id',true), current_database(), current_user,
                 EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='video_queue'),
                 pg_has_role(current_user,'bridge_school_worker','MEMBER'),
-                EXISTS (SELECT 1 FROM pg_roles WHERE rolname=current_user
+                EXISTS (SELECT 1 FROM pg_roles WHERE (rolname=current_user OR pg_has_role(current_user,oid,'MEMBER'))
                     AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolbypassrls)),
                 (SELECT array_agg(rolname ORDER BY rolname) FROM pg_roles
                     WHERE rolname <> current_user AND pg_has_role(current_user,oid,'MEMBER')),
                 EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member
-                    WHERE r.rolname=current_user AND m.admin_option)""")
+                    WHERE (r.rolname=current_user OR pg_has_role(current_user,r.oid,'MEMBER')) AND m.admin_option),
+                (SELECT array_agg(parent.rolname ORDER BY parent.rolname)
+                    FROM pg_auth_members m JOIN pg_roles parent ON parent.oid=m.roleid
+                    JOIN pg_roles child ON child.oid=m.member WHERE child.rolname=current_user)""")
             row = cur.fetchone()
             require(row is not None and row[:4] == (PROJECT, branch, "neondb", USER))
             require(row[5] and not row[6])
-            require(row[7] == ['bridge_school_worker'] and not row[8])
+            # 0005 defines worker -> app -> reader; 0016 gives the principal
+            # exactly one direct membership in worker. Preserve that hierarchy.
+            require(row[7] == ['bridge_school_app', 'bridge_school_reader', 'bridge_school_worker'])
+            require(not row[8] and row[9] == ['bridge_school_worker'])
             if branch == PREVIEW:
                 require(not row[4])
             else:
@@ -132,6 +143,7 @@ def run(mode):
         old = read_protected(DSN_FILE, gid)
         # A completed repair is checked, never repeated or rolled back implicitly.
         if urlsplit(old.decode("utf-8")).hostname == TARGET_HOST:
+            validated_url(old, (TARGET_HOST,))
             verify(old, PRODUCTION)
             print("QUEUE_TARGET_ALREADY_PRODUCTION verified=true")
             return
