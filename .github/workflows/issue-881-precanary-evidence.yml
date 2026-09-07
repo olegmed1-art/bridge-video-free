@@ -94,7 +94,7 @@ jobs:
           grep -F 'Reviewed head has no current independent approval at final reconciliation' "$runner"
           grep -F 'exact clean Codex bot receipt' "$runner"
           grep -F 'issue_881_precanary_queue_proof.py owner-before' "$workflow"
-          grep -F 'issue_881_precanary_queue_proof.py owner-after' "$workflow"
+          grep -F 'issue_881_precanary_queue_proof.py owner-after' "$runner"
           grep -F 'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME' "$runner"
           retired=.github/workflows/oracle-universal-video-container-evidence.yml
           grep -F 'UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true' "$retired"

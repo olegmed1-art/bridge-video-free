@@ -1297,6 +1297,10 @@ def test_external_precanary_is_pr_only_exact_head_validation():
     assert "Prove the only external entrypoint is Director-gated" in workflow
     assert "oracle-universal-video-container-evidence.yml" in workflow
     assert "UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true" in workflow
+    assert (
+        "grep -F 'issue_881_precanary_queue_proof.py owner-after' \"$runner\""
+        in workflow
+    )
     retired = (
         ROOT / ".github/workflows/oracle-universal-video-container-evidence.yml"
     ).read_text(encoding="utf-8")
