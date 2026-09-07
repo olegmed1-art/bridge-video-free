@@ -58,6 +58,7 @@ A passing artifact contains exactly one of each material receipt, in order:
 
 - `UNIVERSAL_VIDEO_PRECANARY_ONE_SHOT ... run_attempt=1 result=PASS`
 - `UNIVERSAL_VIDEO_PRECANARY_OWNER_BEFORE ... result=PASS`
+- `UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE ... result=PASS`
 - the exclusive quiescent window and immutable image digest
 - no-media/no-Drive synthetic and metadata-only gates
 - `UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME ... recreated=true ... result=PASS`

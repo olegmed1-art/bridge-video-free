@@ -362,8 +362,42 @@ jobs:
               || { echo 'One-shot receipt changed after initial validation' >&2; return 1; }
           }
 
+          verify_no_competing_infrastructure_runs(){
+            local active_json queued_json competing_count
+            local path_pattern='^\.github/workflows/(oracle-|issue-881-|autopilot-|database-production\.yml$|database-worker-runtime-smoke\.yml$|process-video\.yml$|video-job-monitor\.yml$|bridge-ai-|research-job-|dds3-runtime-container-proof\.yml$|dds3-production-health-monitor\.yml$|dds-training-|dds-main-)'
+            active_json="$(gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/actions/runs?status=in_progress&per_page=100")"
+            queued_json="$(gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/actions/runs?status=queued&per_page=100")"
+            competing_count="$(jq -n \
+              --argjson active "$active_json" \
+              --argjson queued "$queued_json" \
+              --argjson current "$GITHUB_RUN_ID" \
+              --arg pattern "$path_pattern" \
+              '[($active + $queued)[].workflow_runs[]
+                | select(.id != $current)
+                | select((.path // "") | test($pattern))]
+               | unique_by(.id) | length')"
+            [[ "$competing_count" == 0 ]] || {
+              jq -r -n \
+                --argjson active "$active_json" \
+                --argjson queued "$queued_json" \
+                --argjson current "$GITHUB_RUN_ID" \
+                --arg pattern "$path_pattern" \
+                '[($active + $queued)[].workflow_runs[]
+                  | select(.id != $current)
+                  | select((.path // "") | test($pattern))
+                  | {id, path, status}] | unique_by(.id)' >&2
+              echo 'A competing infrastructure workflow is active or queued' >&2
+              return 1
+            }
+            echo 'UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE other_active=0 other_queued=0 result=PASS'
+          }
+
           # Initial reconciliation rejects historical, blocked, or stale-green
           # heads before any recovery artifact is accepted.
+          verify_no_competing_infrastructure_runs \
+            | tee "$RUNNER_TEMP/precanary-infrastructure-marker.txt"
           verify_live_gate
 
           if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
@@ -421,6 +455,7 @@ jobs:
               echo "step_exit=$rc"
               cat "$RUNNER_TEMP/precanary-one-shot-marker.txt" 2>/dev/null || true
               cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt" 2>/dev/null || true
+              cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt" 2>/dev/null || true
               grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|POSTRESTORE_RUNTIME|RESTORE(_PASS|_FAILED)?)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
                 "$session_log" 2>/dev/null || true
               echo 'real_media_canary_run=false'
@@ -466,6 +501,10 @@ jobs:
           # before invoking the attestation that may quiesce resident services
           # or replace protected runtime files.
           verify_live_gate
+          current_infrastructure_marker="$(verify_no_competing_infrastructure_runs)"
+          [[ "$current_infrastructure_marker" == \
+            "$(cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt")" ]] \
+            || { echo 'Infrastructure exclusivity changed before host mutation' >&2; exit 1; }
           verify_one_shot_gate
 
           set +e
@@ -513,6 +552,7 @@ jobs:
             echo "runtime_sha=$EXACT_SHA"
             cat "$RUNNER_TEMP/precanary-one-shot-marker.txt"
             cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt"
+            cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt"
             grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|POSTRESTORE_RUNTIME|RESTORE_PASS)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)) ' "$session_log"
             grep -E '"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"' "$session_log"
             echo "image_digest=$installed_digest"

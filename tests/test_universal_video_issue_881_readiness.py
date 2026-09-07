@@ -1355,6 +1355,8 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "approval_nonce:" in workflow
     assert "issue_881_precanary_one_shot.py verify" in workflow
     assert "workflow reruns are forbidden" in workflow.lower()
+    assert "verify_no_competing_infrastructure_runs(){" in workflow
+    assert "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE" in workflow
     assert "issue_881_precanary_queue_proof.py owner-before" in workflow
     assert "issue_881_precanary_queue_proof.py owner-after" in workflow
     assert "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME" in workflow

@@ -75,6 +75,8 @@ def _evidence() -> str:
             "principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 "
             "max_event_id=NULL sequence_last_value=1 sequence_is_called=false "
             "claimable=0 leased=0 result=PASS",
+            "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE "
+            "other_active=0 other_queued=0 result=PASS",
             "UNIVERSAL_VIDEO_PRECANARY_WINDOW source_service_before=active "
             "container_service_before=active workload_fence=exclusive "
             "services_quiescent=true restore_on_exit=true",
@@ -204,6 +206,15 @@ def test_rejects_tampered_or_ambiguous_archive_evidence(tmp_path: Path) -> None:
         (
             _archive_bytes(
                 evidence.replace("UNIVERSAL_VIDEO_PRECANARY_ONE_SHOT ", "REMOVED_ONE_SHOT ")
+            ),
+            None,
+        ),
+        (
+            _archive_bytes(
+                evidence.replace(
+                    "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE ",
+                    "REMOVED_INFRASTRUCTURE_EXCLUSIVE ",
+                )
             ),
             None,
         ),

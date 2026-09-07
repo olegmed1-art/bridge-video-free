@@ -320,6 +320,9 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "'ops/oracle_universal_video_run_command.sh'" in workflow
     assert "'universal_video'" in workflow and "':(glob)bridge_*.py'" in workflow
     assert "GITHUB_RUN_ATTEMPT" in workflow
+    assert "verify_no_competing_infrastructure_runs" in workflow
+    assert "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE" in workflow
+    assert "status=in_progress" in workflow and "status=queued" in workflow
     assert "UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1" not in workflow
     assert "UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM=0" in attest
     assert 'find "$root_cache" -xdev -mindepth 1 -delete' not in attest

@@ -82,6 +82,8 @@ jobs:
           grep -F 'verify_one_shot_gate(){' "$workflow"
           test "$(grep -c '^[[:space:]]*verify_one_shot_gate$' "$workflow")" -eq 1
           test "$(grep -c 'issue_881_precanary_one_shot.py verify' "$workflow")" -eq 2
+          grep -F 'verify_no_competing_infrastructure_runs(){' "$workflow"
+          grep -F 'UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE' "$workflow"
           grep -F 'root_pr_number=991' "$workflow"
           grep -F 'prior_gate_pr_number=1070' "$workflow"
           grep -F 'protected_gate_paths=(' "$workflow"

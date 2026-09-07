@@ -271,6 +271,14 @@ def verify_evidence_archive(
     )
     _require(lines.count(owner_before) == 1, "owner baseline is missing or ambiguous")
     _require(lines.count(owner_after) == 1, "post-restore owner proof is missing or ambiguous")
+    infrastructure_line = (
+        "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE "
+        "other_active=0 other_queued=0 result=PASS"
+    )
+    _require(
+        lines.count(infrastructure_line) == 1,
+        "infrastructure exclusivity proof is missing or ambiguous",
+    )
     runtime_after = [
         line
         for line in lines
@@ -303,6 +311,7 @@ def verify_evidence_archive(
     _require(
         lines.index(one_shot_lines[0])
         < lines.index(owner_before)
+        < lines.index(infrastructure_line)
         < lines.index(window_lines[0])
         < lines.index(runtime_after[0])
         < lines.index(restore_lines[0])
