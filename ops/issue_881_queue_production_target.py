@@ -23,6 +23,36 @@ DSN_FILE = Path("/opt/bridge-school/universal-video/secrets/video-queue-dsn")
 BACKUP = DSN_FILE.with_name("video-queue-dsn.preview-before-production")
 FENCE = Path("/var/lib/bridge-school/issue-881-capacity-lease")
 LOCK_FILE = Path("/run/lock/oracle-workload-mutation.lock")
+ALLOWED_QUEUE_FUNCTIONS = [
+    'claim_job(text, integer, text, text)',
+    'enqueue_drive_batch(text, text, text, text, text, text, text, text, jsonb)',
+    'finish_job(uuid, uuid, text, text, jsonb, text)',
+    'heartbeat_job(uuid, uuid, text, integer)',
+    'precanary_idle_snapshot()',
+    'retry_job(uuid, uuid, text, text, integer, integer)',
+]
+QUEUE_ACL_SQL = """SELECT NOT EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='video_queue' AND CASE
+        WHEN c.relkind IN ('r','p','f') THEN
+            has_table_privilege(current_user,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+            OR has_any_column_privilege(current_user,c.oid,'SELECT,INSERT,UPDATE,REFERENCES')
+            OR CASE WHEN current_setting('server_version_num')::integer >= 170000
+                THEN has_table_privilege(current_user,c.oid,'MAINTAIN') ELSE false END
+        WHEN c.relkind IN ('v','m') THEN
+            has_table_privilege(current_user,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+            OR has_any_column_privilege(current_user,c.oid,'INSERT,UPDATE,REFERENCES')
+            OR CASE WHEN current_setting('server_version_num')::integer >= 170000
+                THEN has_table_privilege(current_user,c.oid,'MAINTAIN') ELSE false END
+        WHEN c.relkind='S' THEN has_sequence_privilege(current_user,c.oid,'USAGE,SELECT,UPDATE')
+        ELSE false END) AS base_acl_safe,
+    (SELECT array_agg(p.proname || '(' || oidvectortypes(p.proargtypes) || ')' ORDER BY p.proname, oidvectortypes(p.proargtypes))
+     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+     WHERE n.nspname='video_queue' AND has_function_privilege(current_user,p.oid,'EXECUTE')) AS executable_functions,
+    (SELECT array_agg(c.relname ORDER BY c.relname)
+     FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE n.nspname='video_queue' AND c.relkind IN ('v','m')
+       AND has_table_privilege(current_user,c.oid,'SELECT')) AS readable_views"""
 
 
 def require(condition):
@@ -97,6 +127,8 @@ def verify(raw, branch):
                 # Only the destination credential is being installed; enforce
                 # the current production object-privilege contract there.
                 require(row[10])
+                cur.execute(QUEUE_ACL_SQL)
+                require(cur.fetchone() == (True, ALLOWED_QUEUE_FUNCTIONS, ['batch_status', 'job_status']))
                 cur.execute("SELECT * FROM video_queue.precanary_idle_snapshot()")
                 require(cur.fetchone() == (0, 0))
 
