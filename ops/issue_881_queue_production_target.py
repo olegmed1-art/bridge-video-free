@@ -9,6 +9,7 @@ import re
 import socket
 import stat
 import tempfile
+import time
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import psycopg
@@ -23,6 +24,7 @@ DSN_FILE = Path("/opt/bridge-school/universal-video/secrets/video-queue-dsn")
 BACKUP = DSN_FILE.with_name("video-queue-dsn.preview-before-production")
 FENCE = Path("/var/lib/bridge-school/issue-881-capacity-lease")
 LOCK_FILE = Path("/run/lock/oracle-workload-mutation.lock")
+OWNER_ATTESTATION_DEADLINE = 0
 ALLOWED_QUEUE_FUNCTIONS = [
     'claim_job(text, integer, text, text)',
     'enqueue_drive_batch(text, text, text, text, text, text, text, text, jsonb)',
@@ -251,6 +253,7 @@ def replace_protected(path, raw, gid):
 
 
 def run(mode):
+    require(time.time() < OWNER_ATTESTATION_DEADLINE <= time.time() + 300)
     require(os.geteuid() == 0 and socket.gethostname() == "bridge-school-dds3-frankfurt")
     gid = grp.getgrnam("universal-video").gr_gid
     require(LOCK_FILE.resolve() == LOCK_FILE)
@@ -291,6 +294,7 @@ def run(mode):
             os.fsync(f.fileno())
         sync_directory(BACKUP.parent)
         require(read_protected(DSN_FILE, gid) == old and not os.path.lexists(FENCE))
+        require(time.time() < OWNER_ATTESTATION_DEADLINE)
         try:
             replace_protected(DSN_FILE, new, gid)
             require(read_protected(DSN_FILE, gid) == new)
@@ -305,9 +309,12 @@ def run(mode):
 
 
 def main():
+    global OWNER_ATTESTATION_DEADLINE
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("check", "apply"))
+    parser.add_argument("owner_attestation_deadline", type=int)
     args = parser.parse_args()
+    OWNER_ATTESTATION_DEADLINE = args.owner_attestation_deadline
     try:
         run(args.mode)
         return 0
