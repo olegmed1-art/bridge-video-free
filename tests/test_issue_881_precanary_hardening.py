@@ -587,17 +587,23 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "verify_no_competing_infrastructure_runs" in runner
     assert "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE" in runner
     infrastructure_gate = runner[
-        runner.index("verify_no_competing_infrastructure_runs(){") :
+        runner.index("collect_active_workflow_run_sweep(){") :
         runner.index("# Initial reconciliation rejects historical")
     ]
-    assert infrastructure_gate.count("actions/runs?per_page=100") == 1
-    assert "status=in_progress" not in infrastructure_gate
-    assert "status=queued" not in infrastructure_gate
-    assert 'select(.status != "completed")' in infrastructure_gate
+    assert "actions/runs?per_page=100" not in infrastructure_gate
+    assert infrastructure_gate.count("actions/runs?status=$status&per_page=100") == 1
+    assert "--paginate" not in infrastructure_gate
+    assert "--slurp" not in infrastructure_gate
+    assert "statuses=(requested waiting pending queued in_progress)" in infrastructure_gate
+    assert "statuses=(in_progress queued pending waiting requested)" in infrastructure_gate
+    assert "collect_active_workflow_run_sweep forward" in infrastructure_gate
+    assert "collect_active_workflow_run_sweep reverse" in infrastructure_gate
+    assert ".status == $status" in infrastructure_gate
     assert "reported_total" in infrastructure_gate
     assert "loaded_total" in infrastructure_gate
     assert "unique_total" in infrastructure_gate
-    assert "snapshot is incomplete or changed while paginating" in infrastructure_gate
+    assert "Active workflow snapshot is incomplete for status" in infrastructure_gate
+    assert "Current pre-canary run is missing from an active workflow sweep" in infrastructure_gate
     assert "UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1" not in runner
     assert "UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM=0" in attest
     assert 'find "$root_cache" -xdev -mindepth 1 -delete' not in attest
@@ -687,94 +693,160 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert 'ALLOW_CACHE_RECLAIM="${UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM:-1}"' in installer
 
 
-def test_infrastructure_snapshot_is_single_complete_and_fail_closed(tmp_path: Path) -> None:
+def test_infrastructure_snapshot_is_active_race_safe_and_fail_closed(tmp_path: Path) -> None:
     runner = (
         ROOT / "ops/issue_881_external_precanary_workflow.sh"
     ).read_text(encoding="utf-8")
-    start = runner.index("verify_no_competing_infrastructure_runs(){")
+    start = runner.index("collect_active_workflow_run_sweep(){")
     end = runner.index("\n\n# Initial reconciliation rejects historical", start)
     function = textwrap.dedent(runner[start:end])
-    snapshot = tmp_path / "runs.json"
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
     harness = f"""\
 set -euo pipefail
 {function}
-gh(){{ command cat "$SNAPSHOT"; }}
+gh(){{
+  endpoint="${{!#}}"
+  status="${{endpoint#*status=}}"
+  status="${{status%%&*}}"
+  counter="$SNAPSHOT_DIR/$status.count"
+  call=0
+  [[ ! -f "$counter" ]] || call="$(cat "$counter")"
+  call=$((call + 1))
+  printf '%s\n' "$call" > "$counter"
+  command cat "$SNAPSHOT_DIR/$status-$call.json"
+}}
 GITHUB_REPOSITORY=olegmed1-art/bridge-video-free
 GITHUB_RUN_ID=42
 verify_no_competing_infrastructure_runs
 """
 
-    def run(payload: list[dict[str, object]]) -> subprocess.CompletedProcess[str]:
-        snapshot.write_text(json.dumps(payload), encoding="utf-8")
+    statuses = ("requested", "waiting", "pending", "queued", "in_progress")
+    current = {
+        "id": 42,
+        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
+        "status": "in_progress",
+    }
+
+    def page(
+        runs: list[dict[str, object]], *, total_count: int | None = None
+    ) -> dict[str, object]:
+        return {
+            "total_count": len(runs) if total_count is None else total_count,
+            "workflow_runs": runs,
+        }
+
+    def run(
+        first: dict[str, list[dict[str, object]]] | None = None,
+        second: dict[str, list[dict[str, object]]] | None = None,
+        *, first_total: dict[str, int] | None = None,
+        second_total: dict[str, int] | None = None,
+        include_current: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        first = first or {}
+        second = second or first
+        first_total = first_total or {}
+        second_total = second_total or {}
+        for counter in snapshots.glob("*.count"):
+            counter.unlink()
+        for status in statuses:
+            first_runs = list(first.get(status, []))
+            second_runs = list(second.get(status, []))
+            if status == "in_progress" and include_current:
+                first_runs.insert(0, current)
+                second_runs.insert(0, current)
+            (snapshots / f"{status}-1.json").write_text(
+                json.dumps(
+                    page(first_runs, total_count=first_total.get(status))
+                ),
+                encoding="utf-8",
+            )
+            (snapshots / f"{status}-2.json").write_text(
+                json.dumps(
+                    page(second_runs, total_count=second_total.get(status))
+                ),
+                encoding="utf-8",
+            )
         return subprocess.run(
             ["bash"],
             input=harness,
             text=True,
             capture_output=True,
-            env={"PATH": "/usr/local/bin:/usr/bin:/bin", "SNAPSHOT": str(snapshot)},
+            env={
+                "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "RUNNER_TEMP": str(runtime),
+                "SNAPSHOT_DIR": str(snapshots),
+            },
             timeout=10,
         )
 
-    safe = run(
-        [
-            {
-                "total_count": 2,
-                "workflow_runs": [
-                    {
-                        "id": 42,
-                        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
-                        "status": "in_progress",
-                    },
-                    {
-                        "id": 7,
-                        "path": ".github/workflows/oracle-universal-video-admin.yml",
-                        "status": "completed",
-                    },
-                ],
-            }
-        ]
-    )
+    safe = run()
     assert safe.returncode == 0, safe.stderr
     assert "other_active=0 other_queued=0 result=PASS" in safe.stdout
-
-    competing = run(
-        [
-            {
-                "total_count": 2,
-                "workflow_runs": [
-                    {
-                        "id": 42,
-                        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
-                        "status": "in_progress",
-                    },
-                    {
-                        "id": 8,
-                        "path": ".github/workflows/oracle-universal-video-admin.yml",
-                        "status": "in_progress",
-                    },
-                ],
-            }
-        ]
+    assert all(
+        (snapshots / f"{status}.count").read_text(encoding="utf-8").strip() == "2"
+        for status in statuses
     )
+
+    unrelated_run = {
+        "id": 7,
+        "path": ".github/workflows/unit-tests.yml",
+        "status": "queued",
+    }
+    unrelated = run({"queued": [unrelated_run]})
+    assert unrelated.returncode == 0, unrelated.stderr
+
+    competing_run = {
+        "id": 8,
+        "path": ".github/workflows/oracle-universal-video-admin.yml",
+        "status": "in_progress",
+    }
+    competing = run({"in_progress": [competing_run]})
     assert competing.returncode != 0
     assert "A competing infrastructure workflow is active or queued" in competing.stderr
 
+    queued_run = {
+        "id": 9,
+        "path": ".github/workflows/oracle-instance-power.yml",
+        "status": "queued",
+    }
+    transitioned_run = dict(queued_run, status="in_progress")
+    transition = run(
+        {"queued": [queued_run]},
+        {"in_progress": [transitioned_run]},
+    )
+    assert transition.returncode != 0
+    assert "A competing infrastructure workflow is active or queued" in transition.stderr
+
+    late_run = dict(queued_run, id=10, status="pending")
+    late = run({}, {"pending": [late_run]})
+    assert late.returncode != 0
+    assert "A competing infrastructure workflow is active or queued" in late.stderr
+
     incomplete = run(
-        [
-            {
-                "total_count": 2,
-                "workflow_runs": [
-                    {
-                        "id": 42,
-                        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
-                        "status": "in_progress",
-                    }
-                ],
-            }
-        ]
+        {"queued": [queued_run]},
+        first_total={"queued": 2},
     )
     assert incomplete.returncode != 0
-    assert "snapshot is incomplete or changed while paginating" in incomplete.stderr
+    assert "Active workflow snapshot is incomplete for status: queued" in incomplete.stderr
+
+    wrong_status = run(
+        {"queued": [dict(queued_run, status="in_progress")]},
+    )
+    assert wrong_status.returncode != 0
+    assert "Active workflow snapshot is incomplete for status: queued" in wrong_status.stderr
+
+    invalid_id = run(
+        {"queued": [dict(queued_run, id="9")]},
+    )
+    assert invalid_id.returncode != 0
+    assert "Active workflow snapshot is incomplete for status: queued" in invalid_id.stderr
+
+    missing_current = run(include_current=False)
+    assert missing_current.returncode != 0
+    assert "Current pre-canary run is missing from an active workflow sweep" in missing_current.stderr
 
 
 def test_every_instance_agent_command_must_be_terminal(tmp_path: Path) -> None:

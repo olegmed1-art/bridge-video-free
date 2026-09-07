@@ -225,42 +225,110 @@ verify_exact_current_main(){
   printf 'UNIVERSAL_VIDEO_PRECANARY_FINAL_MAIN exact_sha=%s result=PASS\n' "$EXACT_SHA"
 }
 
-verify_no_competing_infrastructure_runs(){
-  local runs_json reported_total loaded_total unique_total competing_count
-  local path_pattern='^\.github/workflows/(oracle-|issue-881-|autopilot-|database-production\.yml$|database-worker-runtime-smoke\.yml$|process-video\.yml$|video-job-monitor\.yml$|bridge-ai-|research-job-|dds3-runtime-container-proof\.yml$|dds3-production-health-monitor\.yml$|dds-training-|dds-main-)'
-  # One unfiltered paginated snapshot prevents a queued ->
-  # in_progress transition from disappearing between status-filtered
-  # API calls. Any incomplete or shifting page set is uncertainty.
-  runs_json="$(gh api --paginate --slurp \
-    "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100")"
-  reported_total="$(jq \
-    '[.[].total_count] | unique | if length == 1 then .[0] else -1 end' \
-    <<<"$runs_json")"
-  loaded_total="$(jq '[.[].workflow_runs[]] | length' <<<"$runs_json")"
-  unique_total="$(jq '[.[].workflow_runs[].id] | unique | length' <<<"$runs_json")"
-  [[ "$reported_total" =~ ^[0-9]+$ \
-    && "$reported_total" == "$loaded_total" \
-    && "$loaded_total" == "$unique_total" ]] || {
-    echo 'Infrastructure workflow snapshot is incomplete or changed while paginating' >&2
+collect_active_workflow_run_sweep(){
+  local direction="$1" destination="$2" parts status snapshot
+  local reported_total loaded_total unique_total valid_shape
+  local -a statuses=()
+  case "$direction" in
+    forward) statuses=(requested waiting pending queued in_progress) ;;
+    reverse) statuses=(in_progress queued pending waiting requested) ;;
+    *) echo 'Active workflow sweep direction is invalid' >&2; return 1 ;;
+  esac
+  parts="${destination}.parts"
+  rm -f -- "$destination" "$parts"
+  (umask 077; : > "$parts")
+
+  for status in "${statuses[@]}"; do
+    # Active populations must fit in one bounded response.  Never walk the
+    # completed run history: if an active state ever exceeds the API page,
+    # completeness is uncertain and the pre-canary stops fail-closed.
+    snapshot="$(gh api \
+      "repos/$GITHUB_REPOSITORY/actions/runs?status=$status&per_page=100")" || {
+      echo "Active workflow query failed for status: $status" >&2
+      return 1
+    }
+    valid_shape="$(jq --arg status "$status" \
+      'try (
+        type == "object"
+        and (.total_count | type) == "number"
+        and .total_count >= 0
+        and .total_count == (.total_count | floor)
+        and (.workflow_runs | type) == "array"
+        and all(.workflow_runs[];
+          (.id | type) == "number"
+          and .id > 0
+          and .id == (.id | floor)
+          and (.path | type) == "string"
+          and (.path | length) > 0
+          and .status == $status)
+      ) catch false' <<<"$snapshot")" || return 1
+    reported_total="$(jq -r '.total_count' <<<"$snapshot")" || return 1
+    loaded_total="$(jq '.workflow_runs | length' <<<"$snapshot")" || return 1
+    unique_total="$(jq '[.workflow_runs[].id] | unique | length' \
+      <<<"$snapshot")" || return 1
+    [[ "$valid_shape" == true \
+      && "$reported_total" =~ ^[0-9]+$ \
+      && "$reported_total" == "$loaded_total" \
+      && "$reported_total" -le 100 \
+      && "$loaded_total" == "$unique_total" ]] || {
+      echo "Active workflow snapshot is incomplete for status: $status" >&2
+      return 1
+    }
+    jq -c '.workflow_runs' <<<"$snapshot" >> "$parts" || return 1
+  done
+
+  (umask 077; jq -cs 'add | unique_by(.id)' "$parts" > "$destination") \
+    || return 1
+  rm -f -- "$parts"
+  [[ -f "$destination" && ! -L "$destination" \
+    && "$(stat -c '%a:%h' "$destination")" == '600:1' ]] || {
+    echo 'Active workflow sweep output is unsafe' >&2
     return 1
   }
-  competing_count="$(jq \
+}
+
+verify_no_competing_infrastructure_runs(){
+  local forward_runs reverse_runs current_forward current_reverse competing_count
+  local path_pattern='^\.github/workflows/(oracle-|issue-881-|autopilot-|database-production\.yml$|database-worker-runtime-smoke\.yml$|process-video\.yml$|video-job-monitor\.yml$|bridge-ai-|research-job-|dds3-runtime-container-proof\.yml$|dds3-production-health-monitor\.yml$|dds-training-|dds-main-)'
+  forward_runs="$RUNNER_TEMP/precanary-active-runs-forward.json"
+  reverse_runs="$RUNNER_TEMP/precanary-active-runs-reverse.json"
+
+  collect_active_workflow_run_sweep forward "$forward_runs" || return 1
+  collect_active_workflow_run_sweep reverse "$reverse_runs" || return 1
+
+  # The current run is a fail-closed API witness: both independently collected
+  # active sweeps must see it exactly once.  This prevents an empty, stale, or
+  # permission-filtered response from being accepted as infrastructure-idle.
+  current_forward="$(jq --argjson current "$GITHUB_RUN_ID" \
+    '[.[] | select(.id == $current)] | length' "$forward_runs")"
+  current_reverse="$(jq --argjson current "$GITHUB_RUN_ID" \
+    '[.[] | select(.id == $current)] | length' "$reverse_runs")"
+  [[ "$current_forward" == 1 && "$current_reverse" == 1 ]] || {
+    echo 'Current pre-canary run is missing from an active workflow sweep' >&2
+    return 1
+  }
+
+  # Union both opposite-order sweeps.  The lifecycle-ordered first sweep closes
+  # the queued -> in_progress transition gap, while the reverse sweep provides
+  # a second independent read.  Host mutators cannot advance behind this check:
+  # they share this run's non-cancelling Actions fence, and already-launched OCI
+  # commands are reconciled separately at the final mutation boundary.
+  competing_count="$(jq -s \
     --argjson current "$GITHUB_RUN_ID" \
     --arg pattern "$path_pattern" \
-    '[.[].workflow_runs[]
+    '[.[][]
       | select(.id != $current)
-      | select(.status != "completed")
       | select((.path // "") | test($pattern))]
-     | unique_by(.id) | length' <<<"$runs_json")"
+     | unique_by(.id) | length' "$forward_runs" "$reverse_runs")"
   [[ "$competing_count" == 0 ]] || {
-    jq -r \
+    jq -sr \
       --argjson current "$GITHUB_RUN_ID" \
       --arg pattern "$path_pattern" \
-      '[.[].workflow_runs[]
+      '[.[][]
         | select(.id != $current)
-        | select(.status != "completed")
         | select((.path // "") | test($pattern))
-        | {id, path, status}] | unique_by(.id)' <<<"$runs_json" >&2
+        | {id, path, status}] | unique_by(.id)' \
+      "$forward_runs" "$reverse_runs" >&2
     echo 'A competing infrastructure workflow is active or queued' >&2
     return 1
   }
