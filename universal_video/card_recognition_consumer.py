@@ -57,12 +57,9 @@ def _sequence(value: Any, field: str) -> list[Any]:
 
 
 def _confidence(value: Any, field: str) -> float:
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise CardRecognitionContractError(f"invalid {field}")
-    try:
-        number = float(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise CardRecognitionContractError(f"invalid {field}") from exc
+    number = float(value)
     if not math.isfinite(number) or not 0.0 <= number <= 1.0:
         raise CardRecognitionContractError(f"invalid {field}")
     return number
@@ -96,7 +93,9 @@ def _validate_record(raw: Any, index: int, version: str) -> dict[str, Any]:
     if seat not in SEATS:
         raise CardRecognitionContractError(f"invalid card_records[{index}].seat")
     source = str(record.get("source") or "")
-    record_version = str(record.get("recognizer_version") or "")
+    record_version = record.get("recognizer_version")
+    if not isinstance(record_version, str):
+        raise CardRecognitionContractError("invalid card recognizer_version type")
     if record_version != version:
         raise CardRecognitionContractError("mixed recognizer versions")
     if source == "UNKNOWN":
@@ -153,7 +152,9 @@ def validate_recognition_result(payload: Any) -> dict[str, Any]:
         raise CardRecognitionContractError("recognition result hash mismatch")
     if result.get("schema") != DEAL_EVIDENCE_SCHEMA:
         raise CardRecognitionContractError("unsupported deal evidence schema")
-    version = str(result.get("recognizer_version") or "")
+    version = result.get("recognizer_version")
+    if not isinstance(version, str):
+        raise CardRecognitionContractError("invalid recognizer_version type")
     if not _VERSION.fullmatch(version):
         raise CardRecognitionContractError("invalid recognizer_version")
     if result.get("status") not in ALLOWED_STATUSES:
