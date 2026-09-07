@@ -11,10 +11,10 @@ import types
 import unittest
 from unittest.mock import patch
 
-sys.modules['psycopg'] = types.SimpleNamespace()
 spec = importlib.util.spec_from_file_location('target', Path(__file__).resolve().parents[1] / 'ops/issue_881_queue_production_target.py')
 target = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(target)
+with patch.dict(sys.modules, {'psycopg': types.SimpleNamespace()}):
+    spec.loader.exec_module(target)
 real_verify = target.verify
 
 
