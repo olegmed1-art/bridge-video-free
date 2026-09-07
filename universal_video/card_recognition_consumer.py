@@ -137,6 +137,10 @@ def _validate_record(
         "confidence": confidence,
         "recognizer_version": version,
     }
+    if source == "VISUAL":
+        raise CardRecognitionContractError(
+            "single-frame VISUAL evidence remains pending until temporal consensus"
+        )
     if source == "TEMPORAL_CONSENSUS":
         frame_hashes = [
             _sha(item, f"card_records[{index}].frame_sha256s")
@@ -287,7 +291,7 @@ def adapt_legacy_hands(hands: Any, *, recognizer_version: str = "legacy-video31"
                         "seat": seat,
                         "suit": suit,
                         "rank": rank,
-                        "source": "VISUAL",
+                        "source": "LEGACY_UNVERIFIED",
                         "frame_sha256": None,
                         "confidence": None,
                         "recognizer_version": recognizer_version,
