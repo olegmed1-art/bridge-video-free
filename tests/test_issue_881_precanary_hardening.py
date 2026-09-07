@@ -335,6 +335,15 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert 'sha256sum "$QUEUE_PROOF_SCRIPT"' in attest
     assert "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME" in attest
     assert "UNIVERSAL_VIDEO_PRECANARY_FENCED_START" in attest
+    final_window = workflow.index("# Staging can outlive the evidence")
+    final_live_gate = workflow.index("verify_live_gate", final_window)
+    final_infrastructure = workflow.index(
+        "verify_no_competing_infrastructure_runs", final_live_gate
+    )
+    final_receipt = workflow.index("verify_one_shot_gate", final_infrastructure)
+    final_main = workflow.index("verify_exact_current_main", final_receipt)
+    host_attest = workflow.index('"${s[@]}" "sudo -n env', final_main)
+    assert final_live_gate < final_infrastructure < final_receipt < final_main < host_attest
     fenced_start = attest.index("if start_container_under_fence; then", attest.index("cleanup(){"))
     runtime_proof = attest.index("verify_postrestore_runtime_queue", fenced_start)
     workload_unlock = attest.index("flock --unlock 9", runtime_proof)
@@ -352,5 +361,22 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     )
     unsafe_unlock = attest.index("flock --unlock 9", stop)
     assert unsafe_restore < remask < stop < unsafe_unlock
+    assert "declare -a inherited_failure_runtime_masks=()" in attest
+    recovery_branch = attest.index(
+        'if [[ -n "$RECOVER_CONTAINER_FROM_RUN" && "$container_state_before" != active ]]'
+    )
+    recovery_evidence = attest.index("verify_prior_recovery_evidence", recovery_branch)
+    capture_masks = attest.index("capture_inherited_failure_runtime_masks", recovery_evidence)
+    recovery_window = attest.index("mask_service_for_window", capture_masks)
+    assert recovery_evidence < capture_masks < recovery_window
+    cleanup_start = attest.index("cleanup(){")
+    cleanup_full_restore = attest.index("restore_source_checkout", cleanup_start)
+    inherited_unmask = attest.index(
+        '"${inherited_failure_runtime_masks[@]}"', cleanup_full_restore
+    )
+    verified_unmask = attest.index("bounded_systemctl_query is-enabled", inherited_unmask)
+    fenced_restore = attest.index("if start_container_under_fence; then", inherited_unmask)
+    assert cleanup_full_restore < inherited_unmask < verified_unmask < fenced_restore
+    assert "enabled|disabled|static|indirect" in attest[verified_unmask:fenced_restore]
     assert "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER" in workflow
     assert 'ALLOW_CACHE_RECLAIM="${UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM:-1}"' in installer

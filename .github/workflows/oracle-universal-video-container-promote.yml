@@ -157,9 +157,20 @@ jobs:
           REQUEST_FILE: ${{ steps.request.outputs.request_file }}
         run: |
           set -euo pipefail
+          verify_promotion_current_main(){
+            local boundary="$1" current_main
+            current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+            [[ "$current_main" == "$GITHUB_SHA" ]] || {
+              printf 'UV_CONTAINER_PROMOTION_MAIN_MOVED boundary=%s expected=%s actual=%s\n' \
+                "$boundary" "$GITHUB_SHA" "$current_main" >&2
+              return 1
+            }
+            printf 'UNIVERSAL_VIDEO_PROMOTION_MAIN_FRESH boundary=%s sha=%s result=PASS\n' \
+              "$boundary" "$GITHUB_SHA"
+          }
           # Fail closed if main advanced after the fresh one-file request gate;
           # no host preflight or mutation may use evidence for older runtime.
-          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$GITHUB_SHA" ]]
+          verify_promotion_current_main host-preflight
           [[ "$(git rev-list --count "$EXPECTED_COMMIT..$GITHUB_SHA")" == 1 ]]
           mapfile -t changed_since_evidence < <(git diff --name-only "$EXPECTED_COMMIT" "$GITHUB_SHA")
           [[ "${#changed_since_evidence[@]}" -eq 1 \
@@ -189,6 +200,9 @@ jobs:
             < "$RUNNER_TEMP/prepromotion-preflight.sh" \
             | grep -E '^UNIVERSAL_VIDEO_PREPROMOTION_PREFLIGHT_PASS commit=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64}$'
           if ! "${ssh_base[@]}" 'sudo -n systemctl is-active --quiet universal-video-container.service'; then
+            # The source preparation can stop/restart residents and replace
+            # the checkout, so current main must be fresh at this boundary.
+            verify_promotion_current_main source-prepare
             set +e
             "${ssh_base[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_RUN_SMOKE=0 UNIVERSAL_VIDEO_SOURCE_ONLY=1 /bin/bash -s" < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
             prepare_rc=$?
@@ -207,6 +221,9 @@ jobs:
           [[ "$remote_blob" == "$expected_blob" ]] || { echo UV_CONTAINER_PROMOTION_BLOB_MISMATCH; exit 1; }
           "${ssh_base[@]}" 'sudo -n /bin/bash -n /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh' || { echo UV_CONTAINER_PROMOTION_ENTRYPOINT_INVALID; exit 1; }
           echo UV_CONTAINER_PROMOTION_ENTRYPOINT_PASS
+          # Remote preflights can take long enough for main to advance. Make
+          # the live-main read the final gate before the promotion mutation.
+          verify_promotion_current_main image-promotion
           set +e
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n env UNIVERSAL_VIDEO_EXPECTED_COMMIT='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST='$IMAGE_DIGEST' /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" \

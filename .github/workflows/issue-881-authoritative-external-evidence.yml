@@ -370,6 +370,14 @@ jobs:
               || { echo 'One-shot receipt changed after initial validation' >&2; return 1; }
           }
 
+          verify_exact_current_main(){
+            local current_main
+            current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+            [[ "$current_main" == "$EXACT_SHA" ]] \
+              || { echo 'Main changed at the final pre-canary mutation boundary' >&2; return 1; }
+            printf 'UNIVERSAL_VIDEO_PRECANARY_FINAL_MAIN exact_sha=%s result=PASS\n' "$EXACT_SHA"
+          }
+
           verify_no_competing_infrastructure_runs(){
             local active_json queued_json competing_count
             local path_pattern='^\.github/workflows/(oracle-|issue-881-|autopilot-|database-production\.yml$|database-worker-runtime-smoke\.yml$|process-video\.yml$|video-job-monitor\.yml$|bridge-ai-|research-job-|dds3-runtime-container-proof\.yml$|dds3-production-health-monitor\.yml$|dds-training-|dds-main-)'
@@ -525,6 +533,10 @@ jobs:
             "$(cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt")" ]] \
             || { echo 'Infrastructure exclusivity changed before host mutation' >&2; exit 1; }
           verify_one_shot_gate
+          # Receipt and infrastructure API reads can outlive the preceding live gate.
+          # Re-read live main as the final action before the host attester can
+          # quiesce services or replace protected runtime files.
+          verify_exact_current_main
 
           set +e
           "${s[@]}" "sudo -n env \

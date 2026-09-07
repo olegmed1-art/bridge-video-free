@@ -153,6 +153,7 @@ restored_container_pid=""
 restored_container_start_ticks=""
 restored_container_started_unix=""
 declare -a added_runtime_masks=()
+declare -a inherited_failure_runtime_masks=()
 declare -a restore_failures=()
 declare -a prestop_frozen_services=()
 declare -a prestop_frozen_pids=()
@@ -1071,7 +1072,7 @@ verify_postrestore_runtime_queue(){
 }
 
 cleanup(){
-  local rc=$? service source_after container_after runtime_release_safe=0
+  local rc=$? service enabled_state source_after container_after runtime_release_safe=0
   trap - EXIT
   # Once cleanup starts, finish the bounded restore instead of allowing a
   # second signal to strand a frozen worker or a runtime-masked service.
@@ -1096,8 +1097,15 @@ cleanup(){
   if [[ "$window_started" == 1 ]]; then
     if [[ "$services_stop_attempted" != 1 ]]; then
       for service in "${added_runtime_masks[@]}"; do
-        bounded_systemctl unmask --runtime "$service" >/dev/null 2>&1 \
-          || record_restore_failure "unmask_${service}"
+        if bounded_systemctl unmask --runtime "$service" >/dev/null 2>&1; then
+          enabled_state="$(bounded_systemctl_query is-enabled "$service" 2>/dev/null || true)"
+          case "$enabled_state" in
+            enabled|disabled|static|indirect) ;;
+            *) record_restore_failure "unmask_${service}" ;;
+          esac
+        else
+          record_restore_failure "unmask_${service}"
+        fi
       done
       bounded_systemctl daemon-reload >/dev/null 2>&1 \
         || record_restore_failure daemon_reload
@@ -1160,9 +1168,19 @@ cleanup(){
         exit 1
       fi
     fi
-    for service in "${added_runtime_masks[@]}"; do
-      bounded_systemctl unmask --runtime "$service" >/dev/null 2>&1 \
-        || record_restore_failure "unmask_${service}"
+    for service in "${added_runtime_masks[@]}" "${inherited_failure_runtime_masks[@]}"; do
+      if bounded_systemctl unmask --runtime "$service" >/dev/null 2>&1; then
+        enabled_state="$(bounded_systemctl_query is-enabled "$service" 2>/dev/null || true)"
+        case "$enabled_state" in
+          enabled|disabled|static|indirect)
+            printf 'UNIVERSAL_VIDEO_PRECANARY_RUNTIME_UNMASK service=%s enabled_state=%s result=PASS\n' \
+              "$service" "$enabled_state"
+            ;;
+          *) record_restore_failure "unmask_${service}" ;;
+        esac
+      else
+        record_restore_failure "unmask_${service}"
+      fi
     done
     bounded_systemctl daemon-reload >/dev/null 2>&1 \
       || record_restore_failure daemon_reload
@@ -1342,6 +1360,17 @@ mask_service_for_window(){
   added_runtime_masks+=("$service")
 }
 
+capture_inherited_failure_runtime_masks(){
+  local service enabled_state
+  [[ "$container_recovery_requested" == 1 ]] || return 1
+  for service in "$SOURCE_SERVICE" "$CONTAINER_SERVICE"; do
+    enabled_state="$(bounded_systemctl_query is-enabled "$service" 2>/dev/null || true)"
+    [[ "$enabled_state" == masked-runtime ]] \
+      || die "approved recovery is missing the prior failure runtime mask: $service"
+    inherited_failure_runtime_masks+=("$service")
+  done
+}
+
 command -v flock >/dev/null || die 'flock is unavailable'
 command -v docker >/dev/null || die 'docker is unavailable'
 command -v runuser >/dev/null || die 'runuser is unavailable'
@@ -1384,6 +1413,10 @@ if [[ -n "$RECOVER_CONTAINER_FROM_RUN" && "$container_state_before" != active ]]
   container_was_active=1
   container_target_state=active
   container_recovery_requested=1
+  # A failed fenced start deliberately leaves both residents stopped behind
+  # runtime masks. Accept and later remove only those exact inherited masks,
+  # and only under an immutable, separately approved recovery receipt.
+  capture_inherited_failure_runtime_masks
   printf 'UNIVERSAL_VIDEO_PRECANARY_RECOVERY prior_run=%s observed_container=%s target_container=active\n' \
     "$RECOVER_CONTAINER_FROM_RUN" "$container_state_before"
 fi

@@ -70,6 +70,33 @@ def test_promotion_accepts_only_one_fresh_request_commit_after_evidence() -> Non
     assert freshness < oracle_mutation < final_main < remote_preflight
 
 
+def test_promotion_rechecks_live_main_at_each_host_mutation_boundary() -> None:
+    promote_step = WORKFLOW.index("- name: Promote attested image with rollback")
+    initial_check = WORKFLOW.index(
+        "verify_promotion_current_main host-preflight", promote_step
+    )
+    source_condition = WORKFLOW.index(
+        "systemctl is-active --quiet universal-video-container.service", initial_check
+    )
+    source_check = WORKFLOW.index(
+        "verify_promotion_current_main source-prepare", source_condition
+    )
+    source_mutation = WORKFLOW.index(
+        "UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT'", source_check
+    )
+    entrypoint_pass = WORKFLOW.index("UV_CONTAINER_PROMOTION_ENTRYPOINT_PASS", source_mutation)
+    promotion_check = WORKFLOW.index(
+        "verify_promotion_current_main image-promotion", entrypoint_pass
+    )
+    promotion_mutation = WORKFLOW.index(
+        " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh",
+        promotion_check,
+    )
+
+    assert initial_check < source_condition < source_check < source_mutation
+    assert source_mutation < entrypoint_pass < promotion_check < promotion_mutation
+
+
 def test_promotion_hands_off_exclusive_fence_after_old_resident_stops() -> None:
     lock_path = SCRIPT.index('readonly WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"')
     lock_metadata = SCRIPT.index("root:universal-video:640:1", lock_path)
