@@ -21,6 +21,7 @@ on:
       - 'deploy/oracle-universal-video/**'
       - 'deploy/oracle-universal-video/Dockerfile'
       - 'ops/oracle_universal_video_*.sh'
+      - 'ops/issue_881_external_precanary_workflow.sh'
       - 'ops/validate_video_queue_dsn.py'
       - 'ops/universal_video_receipt_reader.py'
       - 'tests/test_universal_video_*.py'
@@ -51,6 +52,7 @@ jobs:
           bash -n ops/oracle_universal_video_drive_secret_install.sh
           bash -n ops/oracle_universal_video_productionize.sh
           bash -n ops/oracle_universal_video_container_install.sh
+          bash -n ops/issue_881_external_precanary_workflow.sh
           python -m py_compile ops/universal_video_receipt_reader.py
           grep -q 'requirements-universal-video-speaker.txt' ops/oracle_universal_video_install.sh
           grep -q 'from universal_video.speaker_structure import run_speaker_structure' ops/oracle_universal_video_install.sh

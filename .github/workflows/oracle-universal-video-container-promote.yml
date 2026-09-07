@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Validate promotion request and successful evidence gate
         id: request
         run: |
@@ -57,10 +57,26 @@ jobs:
           print('expected_commit='+x['expected_commit'])
           print('evidence_run_id='+str(x['evidence_run_id']))
           print('image_digest='+x['image_digest'])
+          print('request_file='+os.environ['REQUEST_FILE'])
           PY
           expected_commit="$(sed -n 's/^expected_commit=//p' "$GITHUB_OUTPUT" | tail -n1)"
           evidence_run_id="$(sed -n 's/^evidence_run_id=//p' "$GITHUB_OUTPUT" | tail -n1)"
           image_digest="$(sed -n 's/^image_digest=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          request_file="$(sed -n 's/^request_file=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          [[ "$request_file" == "${files[0]}" ]]
+          git cat-file -e "$expected_commit^{commit}"
+          git merge-base --is-ancestor "$expected_commit" "$GITHUB_SHA"
+          [[ "$(git rev-list --count "$expected_commit..$GITHUB_SHA")" == 1 ]]
+          if git cat-file -e "$expected_commit:$request_file" 2>/dev/null; then
+            echo 'Promotion request already existed in the attested revision' >&2
+            exit 1
+          fi
+          mapfile -t changed_since_evidence < <(git diff --name-only "$expected_commit" "$GITHUB_SHA")
+          [[ "${#changed_since_evidence[@]}" -eq 1 \
+            && "${changed_since_evidence[0]}" == "$request_file" ]]
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$GITHUB_SHA" ]]
+          printf 'UNIVERSAL_VIDEO_PROMOTION_FRESH_REQUEST expected_commit=%s request_commit=%s request_file=%s commits=1 result=PASS\n' \
+            "$expected_commit" "$GITHUB_SHA" "$request_file"
           run_json="$RUNNER_TEMP/authoritative-evidence-run.json"
           artifacts_json="$RUNNER_TEMP/authoritative-evidence-artifacts.json"
           artifact_zip="$RUNNER_TEMP/authoritative-evidence.zip"
@@ -74,16 +90,22 @@ jobs:
             --expected-commit "$expected_commit")"
           artifact_id="$(jq -er '.artifact_id' <<<"$selection")"
           artifact_digest="$(jq -er '.artifact_digest' <<<"$selection")"
+          receipt_id="$(jq -er '.receipt_id' <<<"$selection")"
+          selected_run_id="$(jq -er '.run_id' <<<"$selection")"
+          [[ "$selected_run_id" == "$evidence_run_id" ]]
           gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$artifact_zip"
           python ops/validate_universal_video_promotion_evidence.py verify-archive \
             --archive "$artifact_zip" \
             --expected-artifact-digest "$artifact_digest" \
             --expected-commit "$expected_commit" \
-            --expected-image-digest "$image_digest"
+            --expected-image-digest "$image_digest" \
+            --expected-run-id "$evidence_run_id" \
+            --expected-receipt-id "$receipt_id"
           printf 'evidence_artifact_digest=%s\n' "$artifact_digest" >> "$GITHUB_OUTPUT"
       - name: Ensure Oracle instance is running
         run: |
           set -euo pipefail
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$GITHUB_SHA" ]]
           python -m pip install --disable-pip-version-check -q oci-cli
           oci_user="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
           oci_fingerprint="$(printf '%s\n' "$OCI_FINGERPRINT" | sed -nE 's/^[[:space:]]*(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})[[:space:]]*$/\2/p' | head -n1)"
@@ -101,10 +123,26 @@ jobs:
           key_file=$RUNNER_TEMP/oci/key.pem
           EOF
           chmod 0600 "$RUNNER_TEMP/oci/config"
+          compartment="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get \
+            --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
+          [[ "$compartment" =~ ^ocid1\.compartment\. ]]
+          executions="$RUNNER_TEMP/promotion-oci-executions-instance-lifecycle.json"
+          oci --config-file "$RUNNER_TEMP/oci/config" \
+            instance-agent command-execution list \
+            --compartment-id "$compartment" --instance-id "$INSTANCE_ID" \
+            --all --output json > "$executions"
+          examined="$(python3 ops/verify_oci_instance_command_executions.py \
+            --executions-json "$executions" --instance-id "$INSTANCE_ID")"
+          [[ "$examined" =~ ^[0-9]+$ ]]
+          printf 'UNIVERSAL_VIDEO_PROMOTION_OCI_INSTANCE_COMMAND_EXCLUSIVE boundary=instance-lifecycle examined_instance_executions=%s active_remote_commands=0 result=PASS\n' \
+            "$examined"
           state="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
           case "$state" in
             RUNNING) ;;
-            STOPPED) oci --config-file "$RUNNER_TEMP/oci/config" compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+            STOPPED)
+              [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$GITHUB_SHA" ]]
+              oci --config-file "$RUNNER_TEMP/oci/config" compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null
+              ;;
             *) echo "ORACLE_INSTANCE_STATE_UNSUPPORTED=$state"; exit 1 ;;
           esac
           echo ORACLE_INSTANCE_RUNNING_PASS
@@ -129,8 +167,43 @@ jobs:
         env:
           EXPECTED_COMMIT: ${{ steps.request.outputs.expected_commit }}
           IMAGE_DIGEST: ${{ steps.request.outputs.image_digest }}
+          REQUEST_FILE: ${{ steps.request.outputs.request_file }}
         run: |
           set -euo pipefail
+          verify_promotion_current_main(){
+            local boundary="$1" current_main
+            current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+            [[ "$current_main" == "$GITHUB_SHA" ]] || {
+              printf 'UV_CONTAINER_PROMOTION_MAIN_MOVED boundary=%s expected=%s actual=%s\n' \
+                "$boundary" "$GITHUB_SHA" "$current_main" >&2
+              return 1
+            }
+            printf 'UNIVERSAL_VIDEO_PROMOTION_MAIN_FRESH boundary=%s sha=%s result=PASS\n' \
+              "$boundary" "$GITHUB_SHA"
+          }
+          verify_no_active_instance_agent_commands(){
+            local boundary="$1" config="$RUNNER_TEMP/oci/config" compartment executions examined
+            [[ -f "$config" && ! -L "$config" && "$(stat -c '%a' "$config")" == 600 ]]
+            compartment="$(oci --config-file "$config" compute instance get \
+              --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
+            [[ "$compartment" =~ ^ocid1\.compartment\. ]]
+            executions="$RUNNER_TEMP/promotion-oci-executions-$boundary.json"
+            oci --config-file "$config" instance-agent command-execution list \
+              --compartment-id "$compartment" --instance-id "$INSTANCE_ID" \
+              --all --output json > "$executions"
+            examined="$(python3 ops/verify_oci_instance_command_executions.py \
+              --executions-json "$executions" --instance-id "$INSTANCE_ID")"
+            [[ "$examined" =~ ^[0-9]+$ ]]
+            printf 'UNIVERSAL_VIDEO_PROMOTION_OCI_INSTANCE_COMMAND_EXCLUSIVE boundary=%s examined_instance_executions=%s active_remote_commands=0 result=PASS\n' \
+              "$boundary" "$examined"
+          }
+          # Fail closed if main advanced after the fresh one-file request gate;
+          # no host preflight or mutation may use evidence for older runtime.
+          verify_promotion_current_main host-preflight
+          [[ "$(git rev-list --count "$EXPECTED_COMMIT..$GITHUB_SHA")" == 1 ]]
+          mapfile -t changed_since_evidence < <(git diff --name-only "$EXPECTED_COMMIT" "$GITHUB_SHA")
+          [[ "${#changed_since_evidence[@]}" -eq 1 \
+            && "${changed_since_evidence[0]}" == "$REQUEST_FILE" ]]
           expected_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_container_promote.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
           expected_prepare_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_run_command.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
           expected_preflight_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_prepromotion_preflight.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
@@ -156,6 +229,10 @@ jobs:
             < "$RUNNER_TEMP/prepromotion-preflight.sh" \
             | grep -E '^UNIVERSAL_VIDEO_PREPROMOTION_PREFLIGHT_PASS commit=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64}$'
           if ! "${ssh_base[@]}" 'sudo -n systemctl is-active --quiet universal-video-container.service'; then
+            # The source preparation can stop/restart residents and replace
+            # the checkout, so current main must be fresh at this boundary.
+            verify_no_active_instance_agent_commands source-prepare
+            verify_promotion_current_main source-prepare
             set +e
             "${ssh_base[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_RUN_SMOKE=0 UNIVERSAL_VIDEO_SOURCE_ONLY=1 /bin/bash -s" < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
             prepare_rc=$?
@@ -174,6 +251,10 @@ jobs:
           [[ "$remote_blob" == "$expected_blob" ]] || { echo UV_CONTAINER_PROMOTION_BLOB_MISMATCH; exit 1; }
           "${ssh_base[@]}" 'sudo -n /bin/bash -n /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh' || { echo UV_CONTAINER_PROMOTION_ENTRYPOINT_INVALID; exit 1; }
           echo UV_CONTAINER_PROMOTION_ENTRYPOINT_PASS
+          # Remote preflights can take long enough for main to advance. Make
+          # the live-main read the final gate before the promotion mutation.
+          verify_no_active_instance_agent_commands image-promotion
+          verify_promotion_current_main image-promotion
           set +e
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n env UNIVERSAL_VIDEO_EXPECTED_COMMIT='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST='$IMAGE_DIGEST' /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" \

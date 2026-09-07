@@ -13,7 +13,6 @@ EXPECTED_SHA="${UNIVERSAL_VIDEO_EXPECTED_SHA:-}"
 PREPARE_SCRIPT="${UNIVERSAL_VIDEO_PREPARE_SCRIPT:-}"
 BUILD_IMAGE="${UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE:-0}"
 MIN_FREE_KB="${UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-5242880}"
-RECLAIM_ROOT_CACHE="${UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE:-0}"
 RECOVER_CONTAINER_FROM_RUN="${UNIVERSAL_VIDEO_RECOVER_CONTAINER_ACTIVE_FROM_RUN:-}"
 RECOVERY_EVIDENCE_FILE="${UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_FILE:-}"
 RECOVERY_EVIDENCE_SHA256="${UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256:-}"
@@ -21,6 +20,12 @@ RESTORE_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_RESTORE_TIMEOUT_SECONDS:-45}"
 RESTORE_STABLE_SECONDS="${UNIVERSAL_VIDEO_RESTORE_STABLE_SECONDS:-5}"
 QUEUE_DSN_FILE="${UNIVERSAL_VIDEO_QUEUE_DSN_FILE:-$BASE_DIR/secrets/video-queue-dsn}"
 QUEUE_PYTHON="${UNIVERSAL_VIDEO_QUEUE_PYTHON:-$BASE_DIR/.venv/bin/python}"
+QUEUE_PROOF_SCRIPT="${UNIVERSAL_VIDEO_QUEUE_PROOF_SCRIPT:-}"
+QUEUE_PROOF_SHA256="${UNIVERSAL_VIDEO_QUEUE_PROOF_SHA256:-}"
+OWNER_RELEASE_FILE="${UNIVERSAL_VIDEO_OWNER_RELEASE_FILE:-}"
+OWNER_ABORT_FILE="${UNIVERSAL_VIDEO_OWNER_ABORT_FILE:-}"
+OWNER_RELEASE_TOKEN_SHA256="${UNIVERSAL_VIDEO_OWNER_RELEASE_TOKEN_SHA256:-}"
+OWNER_RELEASE_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_OWNER_RELEASE_TIMEOUT_SECONDS:-600}"
 ENV_FILE="${UNIVERSAL_VIDEO_CONTAINER_ENV_FILE:-}"
 PERSISTENT_ENV_FILE="$BASE_DIR/universal-video-container.env"
 if [[ -z "$ENV_FILE" ]]; then
@@ -89,7 +94,6 @@ validate_source_dir_scope(){
 [[ "$(id -u)" -eq 0 ]] || die 'run as root on the Oracle host'
 [[ "$SIZE" =~ ^[0-9]+$ && "$SIZE" -gt 0 ]] || die 'invalid source size'
 [[ "$BUILD_IMAGE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE must be 0 or 1'
-[[ "$RECLAIM_ROOT_CACHE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE must be 0 or 1'
 [[ "$MIN_FREE_KB" =~ ^[0-9]+$ && "$MIN_FREE_KB" -gt 0 ]] || die 'invalid build free-space threshold'
 [[ "$RESTORE_TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$RESTORE_TIMEOUT_SECONDS" -ge 5 && "$RESTORE_TIMEOUT_SECONDS" -le 180 ]] \
   || die 'invalid resident restore timeout'
@@ -118,8 +122,28 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
   [[ -n "$EXPECTED_SHA" ]] || die 'exact source SHA required for build'
   [[ -f "$PREPARE_SCRIPT" && ! -L "$PREPARE_SCRIPT" ]] || die 'safe prepare script missing'
 fi
+command -v sha256sum >/dev/null || die 'sha256sum is unavailable'
+[[ -f "$QUEUE_PROOF_SCRIPT" && ! -L "$QUEUE_PROOF_SCRIPT" ]] \
+  || die 'safe post-restore production queue proof is missing'
+[[ "$QUEUE_PROOF_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+  || die 'exact post-restore production queue proof digest is missing'
+[[ "$(stat -c '%U:%G:%a:%h' "$QUEUE_PROOF_SCRIPT")" == 'root:root:600:1' ]] \
+  || die 'post-restore production queue proof metadata is unsafe'
+[[ "$(sha256sum "$QUEUE_PROOF_SCRIPT" | awk '{print $1}')" == "$QUEUE_PROOF_SHA256" ]] \
+  || die 'post-restore production queue proof digest mismatch'
+[[ "$OWNER_RELEASE_FILE" =~ ^/root/uv-issue881-[1-9][0-9]{7,19}-1/owner-release$ ]] \
+  || die 'post-restore owner release path is invalid'
+[[ "$OWNER_ABORT_FILE" =~ ^/root/uv-issue881-[1-9][0-9]{7,19}-1/owner-abort$ ]] \
+  || die 'post-restore owner abort path is invalid'
+[[ "$OWNER_RELEASE_TOKEN_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+  || die 'post-restore owner release token digest is invalid'
+[[ "$OWNER_RELEASE_TIMEOUT_SECONDS" =~ ^[0-9]+$ \
+  && "$OWNER_RELEASE_TIMEOUT_SECONDS" -ge 30 \
+  && "$OWNER_RELEASE_TIMEOUT_SECONDS" -le 900 ]] \
+  || die 'post-restore owner release timeout is invalid'
 
 source_state_before=""
+source_target_state=""
 container_state_before=""
 source_was_active=0
 container_was_active=0
@@ -134,6 +158,7 @@ source_backup_dir=""
 source_backup_device_inode=""
 source_quarantine_dir=""
 resident_image_id=""
+container_id_before=""
 isolated_peer_service=""
 isolated_peer_pid=""
 isolated_peer_start_ticks=""
@@ -141,7 +166,9 @@ restored_source_pid=""
 restored_source_start_ticks=""
 restored_container_pid=""
 restored_container_start_ticks=""
+restored_container_started_unix=""
 declare -a added_runtime_masks=()
+declare -a inherited_failure_runtime_masks=()
 declare -a restore_failures=()
 declare -a prestop_frozen_services=()
 declare -a prestop_frozen_pids=()
@@ -858,6 +885,97 @@ restore_service(){
   return 1
 }
 
+start_container_under_fence(){
+  local state worker_pid start_ticks last_worker_pid="" stable=0 deadline
+  [[ "$container_target_state" == active && "$lock_held" == 1 ]] || return 1
+  bounded_systemctl reset-failed "$CONTAINER_SERVICE" >/dev/null 2>&1 || true
+  if ! clear_restore_status; then
+    service_failure_snapshot "$CONTAINER_SERVICE"
+    return 1
+  fi
+  restored_container_started_unix="$(date +%s)"
+  deadline=$((SECONDS + RESTORE_TIMEOUT_SECONDS))
+  if ! bounded_systemctl start --no-block "$CONTAINER_SERVICE" >/dev/null 2>&1; then
+    service_failure_snapshot "$CONTAINER_SERVICE"
+    return 1
+  fi
+  while (( SECONDS < deadline )); do
+    state="$(service_state "$CONTAINER_SERVICE")"
+    if [[ "$state" == active ]]; then
+      worker_pid="$(resident_worker_pid "$CONTAINER_SERVICE" 2>/dev/null || true)"
+      if [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]]; then
+        start_ticks="$(process_start_ticks "$worker_pid" 2>/dev/null || true)"
+        if [[ "$start_ticks" =~ ^[1-9][0-9]*$ ]] \
+          && exact_process_signal "$worker_pid" "$start_ticks" CHECK; then
+          if [[ "$worker_pid" == "$last_worker_pid" ]]; then
+            ((stable += 1))
+          else
+            last_worker_pid="$worker_pid"
+            stable=1
+          fi
+          if (( stable >= RESTORE_STABLE_SECONDS )); then
+            # The reviewed resident must still be waiting on the startup
+            # recovery fence. A status receipt here would mean it crossed the
+            # exclusive lock and could claim work before the queue proof.
+            [[ ! -e "$STATUS_FILE" && ! -L "$STATUS_FILE" ]] || return 1
+            restored_container_pid="$worker_pid"
+            restored_container_start_ticks="$start_ticks"
+            printf 'UNIVERSAL_VIDEO_PRECANARY_FENCED_START service=%s worker_pid=%s stable_seconds=%s workload_fence=exclusive result=PASS\n' \
+              "$CONTAINER_SERVICE" "$worker_pid" "$stable"
+            return 0
+          fi
+        else
+          last_worker_pid=""
+          stable=0
+        fi
+      else
+        last_worker_pid=""
+        stable=0
+      fi
+    else
+      last_worker_pid=""
+      stable=0
+    fi
+    [[ "$state" == failed ]] && break
+    sleep 1
+  done
+  service_failure_snapshot "$CONTAINER_SERVICE"
+  return 1
+}
+
+validate_started_container_after_fence(){
+  local state stable=0 deadline verified_start_ticks
+  [[ "$lock_held" == 0 \
+    && "$restored_container_started_unix" =~ ^[0-9]+$ \
+    && "$restored_container_pid" =~ ^[1-9][0-9]*$ \
+    && "$restored_container_start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
+  deadline=$((SECONDS + RESTORE_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    state="$(service_state "$CONTAINER_SERVICE")"
+    if [[ "$state" == active \
+      && "$(resident_worker_pid "$CONTAINER_SERVICE" 2>/dev/null || true)" == "$restored_container_pid" \
+      && "$(process_start_ticks "$restored_container_pid" 2>/dev/null || true)" == "$restored_container_start_ticks" \
+      ]] && exact_process_signal "$restored_container_pid" "$restored_container_start_ticks" CHECK; then
+      ((stable += 1))
+      if (( stable >= RESTORE_STABLE_SECONDS )) \
+        && verified_start_ticks="$(resident_status_ready \
+          "$CONTAINER_SERVICE" "$restored_container_started_unix" \
+          "$restored_container_pid" 0)"; then
+        [[ "$verified_start_ticks" == "$restored_container_start_ticks" ]] || return 1
+        printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE service=%s target=active observed=active worker_pid=%s stable_seconds=%s result=PASS\n' \
+          "$CONTAINER_SERVICE" "$restored_container_pid" "$stable"
+        return 0
+      fi
+    else
+      stable=0
+    fi
+    [[ "$state" == failed ]] && break
+    sleep 1
+  done
+  service_failure_snapshot "$CONTAINER_SERVICE"
+  return 1
+}
+
 restore_source_checkout(){
   local attempt candidate_remove_failed=0 quarantine_prefix restored_device_inode
   [[ "$BUILD_IMAGE" == 1 ]] || return 0
@@ -938,12 +1056,82 @@ restore_source_checkout(){
   return 0
 }
 
+verify_postrestore_runtime_queue(){
+  local inspect_value container_id running container_root_pid container_image runtime_result
+  [[ "$container_target_state" == active ]] || return 1
+  [[ "$restored_container_pid" =~ ^[1-9][0-9]*$ \
+        && "$restored_container_start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
+  inspect_value="$(bounded_docker_query inspect \
+    --format '{{.Id}}|{{.State.Running}}|{{.State.Pid}}|{{.Image}}' \
+    universal-video-container 2>/dev/null || true)"
+  IFS='|' read -r container_id running container_root_pid container_image <<<"$inspect_value"
+  [[ "$container_id" =~ ^[0-9a-f]{64}$ && "$running" == true \
+        && "$container_root_pid" =~ ^[1-9][0-9]*$ \
+        && "$container_image" == "$resident_image_id" ]] || return 1
+  [[ -z "$container_id_before" || "$container_id" != "$container_id_before" ]] || return 1
+  pid_descends_from "$restored_container_pid" "$container_root_pid" || return 1
+  exact_process_signal "$restored_container_pid" "$restored_container_start_ticks" CHECK \
+    || return 1
+  [[ "$(stat -c '%U:%G:%a:%h' "$QUEUE_PROOF_SCRIPT")" == 'root:root:600:1' ]] \
+    || return 1
+  [[ "$(sha256sum "$QUEUE_PROOF_SCRIPT" | awk '{print $1}')" == "$QUEUE_PROOF_SHA256" ]] \
+    || return 1
+  runtime_result="$(bounded_docker exec -i --user="$uid:$gid" \
+    universal-video-container python -I - runtime < "$QUEUE_PROOF_SCRIPT")" || return 1
+  [[ "$runtime_result" == \
+    'project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0' ]] \
+    || return 1
+  [[ "$lock_held" == 1 ]] || return 1
+  printf 'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME container_id=%s previous_container_id=%s recreated=true worker_fenced=true %s result=PASS\n' \
+    "$container_id" "${container_id_before:-absent}" "$runtime_result"
+}
+
+verify_postrestore_owner_release(){
+  local deadline actual_token_sha owner_marker
+  local -a release_lines=()
+  [[ "$lock_held" == 1 ]] || return 1
+  deadline=$((SECONDS + OWNER_RELEASE_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if [[ -e "$OWNER_ABORT_FILE" || -L "$OWNER_ABORT_FILE" ]]; then
+      [[ -f "$OWNER_ABORT_FILE" && ! -L "$OWNER_ABORT_FILE" ]] || return 1
+      [[ "$(stat -c '%U:%G:%a:%h' "$OWNER_ABORT_FILE")" == 'root:root:600:1' ]] \
+        || return 1
+      [[ "$(cat "$OWNER_ABORT_FILE")" == ABORT ]] || return 1
+      rm -f -- "$OWNER_ABORT_FILE" || return 1
+      [[ ! -e "$OWNER_ABORT_FILE" && ! -L "$OWNER_ABORT_FILE" ]] || return 1
+      return 1
+    fi
+    if [[ -e "$OWNER_RELEASE_FILE" || -L "$OWNER_RELEASE_FILE" ]]; then
+      [[ -f "$OWNER_RELEASE_FILE" && ! -L "$OWNER_RELEASE_FILE" ]] || return 1
+      [[ "$(stat -c '%U:%G:%a:%h' "$OWNER_RELEASE_FILE")" == 'root:root:600:1' ]] \
+        || return 1
+      [[ "$(stat -c '%s' "$OWNER_RELEASE_FILE")" =~ ^[1-9][0-9]{1,3}$ ]] \
+        || return 1
+      mapfile -t release_lines < "$OWNER_RELEASE_FILE" || return 1
+      [[ "${#release_lines[@]}" -eq 2 ]] || return 1
+      actual_token_sha="$(printf '%s' "${release_lines[0]}" | sha256sum | awk '{print $1}')"
+      [[ "$actual_token_sha" == "$OWNER_RELEASE_TOKEN_SHA256" ]] || return 1
+      owner_marker="${release_lines[1]}"
+      [[ "$owner_marker" == \
+        'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 max_event_id=NULL sequence_last_value=1 sequence_is_called=false claimable=0 leased=0 unchanged=true result=PASS' ]] \
+        || return 1
+      rm -f -- "$OWNER_RELEASE_FILE" || return 1
+      [[ ! -e "$OWNER_RELEASE_FILE" && ! -L "$OWNER_RELEASE_FILE" ]] || return 1
+      printf '%s\n' "$owner_marker"
+      printf 'UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE worker_fenced=true owner_snapshot=unchanged result=PASS\n'
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 cleanup(){
-  local rc=$? service source_after container_after
+  local rc=$? service enabled_state source_after container_after runtime_release_safe=0
   trap - EXIT
   # Once cleanup starts, finish the bounded restore instead of allowing a
   # second signal to strand a frozen worker or a runtime-masked service.
-  trap '' INT TERM
+  trap '' HUP INT TERM
   if [[ "${#prestop_frozen_pids[@]}" -gt 0 ]]; then
     if [[ "$services_stop_attempted" == 1 ]]; then
       resume_prestop_frozen stopping || record_restore_failure prestop_resume
@@ -964,8 +1152,15 @@ cleanup(){
   if [[ "$window_started" == 1 ]]; then
     if [[ "$services_stop_attempted" != 1 ]]; then
       for service in "${added_runtime_masks[@]}"; do
-        bounded_systemctl unmask --runtime "$service" >/dev/null 2>&1 \
-          || record_restore_failure "unmask_${service}"
+        if bounded_systemctl unmask --runtime "$service" >/dev/null 2>&1; then
+          enabled_state="$(bounded_systemctl_query is-enabled "$service" 2>/dev/null || true)"
+          case "$enabled_state" in
+            enabled|disabled|static|indirect) ;;
+            *) record_restore_failure "unmask_${service}" ;;
+          esac
+        else
+          record_restore_failure "unmask_${service}"
+        fi
       done
       bounded_systemctl daemon-reload >/dev/null 2>&1 \
         || record_restore_failure daemon_reload
@@ -996,7 +1191,7 @@ cleanup(){
           "$(IFS=,; echo "${restore_failures[*]}")" "${source_after:-unknown}" "${container_after:-unknown}" >&2
         if [[ "$rc" == 0 ]]; then rc=1; fi
       fi
-      trap - INT TERM
+      trap - HUP INT TERM
       exit "$rc"
     fi
     # Keep the exclusive workload fence while claim paths are quiet, candidate
@@ -1008,7 +1203,7 @@ cleanup(){
         printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
           "$(IFS=,; echo "${restore_failures[*]}")" \
           "$(service_state "$SOURCE_SERVICE")" "$(service_state "$CONTAINER_SERVICE")" >&2
-        trap - INT TERM
+        trap - HUP INT TERM
         exit 1
       fi
     fi
@@ -1024,13 +1219,23 @@ cleanup(){
         printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
           "$(IFS=,; echo "${restore_failures[*]}")" \
           "$(service_state "$SOURCE_SERVICE")" "$(service_state "$CONTAINER_SERVICE")" >&2
-        trap - INT TERM
+        trap - HUP INT TERM
         exit 1
       fi
     fi
-    for service in "${added_runtime_masks[@]}"; do
-      bounded_systemctl unmask --runtime "$service" >/dev/null 2>&1 \
-        || record_restore_failure "unmask_${service}"
+    for service in "${added_runtime_masks[@]}" "${inherited_failure_runtime_masks[@]}"; do
+      if bounded_systemctl unmask --runtime "$service" >/dev/null 2>&1; then
+        enabled_state="$(bounded_systemctl_query is-enabled "$service" 2>/dev/null || true)"
+        case "$enabled_state" in
+          enabled|disabled|static|indirect)
+            printf 'UNIVERSAL_VIDEO_PRECANARY_RUNTIME_UNMASK service=%s enabled_state=%s result=PASS\n' \
+              "$service" "$enabled_state"
+            ;;
+          *) record_restore_failure "unmask_${service}" ;;
+        esac
+      else
+        record_restore_failure "unmask_${service}"
+      fi
     done
     bounded_systemctl daemon-reload >/dev/null 2>&1 \
       || record_restore_failure daemon_reload
@@ -1038,42 +1243,82 @@ cleanup(){
       bounded_docker image inspect "$resident_image_id" >/dev/null 2>&1 \
         || record_restore_failure resident_image_missing
     fi
-    # Release the attestation fence before starting either resident. A current
-    # worker performs startup recovery under this same lock and publishes its
-    # readiness only after the lock is released; checking it while fd 9 is held
-    # would prove only that the process is blocked, not that startup succeeded.
-    if [[ "$lock_held" == 1 ]]; then
+    # Recreate the resident container while its worker is still blocked on the
+    # exclusive workload fence. Prove the freshly bound production credential
+    # and idle queue from that exact container before any worker can claim.
+    if start_container_under_fence; then
+      if verify_postrestore_runtime_queue; then
+        if verify_postrestore_owner_release; then
+          runtime_release_safe=1
+        else
+          record_restore_failure postrestore_owner_release
+        fi
+      else
+        record_restore_failure postrestore_runtime_queue
+      fi
+    else
+      record_restore_failure container_fenced_start
+    fi
+    if [[ "$runtime_release_safe" == 1 ]]; then
       if ! flock --unlock 9 >/dev/null 2>&1; then
         record_restore_failure workload_unlock
+        runtime_release_safe=0
+      else
+        exec 9>&-
+        lock_held=0
       fi
-      exec 9>&-
-      lock_held=0
     fi
-
-    # Start and validate the prior residents sequentially after the handoff.
-    # restore_service requires the same descendant worker PID to remain live
-    # for the bounded stability interval after startup recovery can run.
-    restore_service "$SOURCE_SERVICE" "$source_state_before" \
-      || record_restore_failure source_service
-    restore_service "$CONTAINER_SERVICE" "$container_target_state" \
-      || record_restore_failure container_service
+    if [[ "$runtime_release_safe" == 1 ]]; then
+      if ! validate_started_container_after_fence; then
+        record_restore_failure container_service
+        # The worker has crossed the workload fence, so make every later
+        # restore failure converge on the same stopped, runtime-masked state
+        # accepted by the separately approved recovery gate.
+        runtime_release_safe=0
+      else
+        restore_service "$SOURCE_SERVICE" "$source_target_state" \
+          || record_restore_failure source_service
+      fi
+    fi
     resume_isolated_peer || record_restore_failure legacy_peer_resume
+
+    # Never release a resident into claim-capable execution after a failed
+    # fenced start, queue proof, or post-fence readiness check. Leave both
+    # services stopped and require the separately approved recovery gate
+    # instead of processing uncertain work.
+    if [[ "$runtime_release_safe" != 1 ]]; then
+      bounded_systemctl mask --runtime "$SOURCE_SERVICE" "$CONTAINER_SERVICE" \
+        >/dev/null 2>&1 || record_restore_failure failed_restore_runtime_mask
+      bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null 2>&1 \
+        || record_restore_failure failed_restore_service_stop
+      residents_are_quiescent \
+        || record_restore_failure failed_restore_not_quiescent
+      if [[ "$lock_held" == 1 ]]; then
+        if ! flock --unlock 9 >/dev/null 2>&1; then
+          record_restore_failure workload_unlock
+        else
+          exec 9>&-
+          lock_held=0
+        fi
+      fi
+    fi
 
     source_after="$(service_state "$SOURCE_SERVICE")"
     container_after="$(service_state "$CONTAINER_SERVICE")"
-    [[ "$source_after" == "$source_state_before" ]] \
+    [[ "$source_after" == "$source_target_state" ]] \
       || record_restore_failure source_state_mismatch
     [[ "$container_after" == "$container_target_state" ]] \
       || record_restore_failure container_state_mismatch
-    restored_service_ready "$SOURCE_SERVICE" "$source_state_before" \
+    restored_service_ready "$SOURCE_SERVICE" "$source_target_state" \
       "$restored_source_pid" "$restored_source_start_ticks" \
       || record_restore_failure source_readiness_mismatch
     restored_service_ready "$CONTAINER_SERVICE" "$container_target_state" \
       "$restored_container_pid" "$restored_container_start_ticks" \
       || record_restore_failure container_readiness_mismatch
     if [[ "${#restore_failures[@]}" -eq 0 ]]; then
-      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=%s source_service=%s container_service_before=%s container_target=%s container_service=%s prior_container_recovery=%s\n' \
-        "$source_state_before" "$source_after" "$container_state_before" "$container_target_state" \
+      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=%s source_service_observed=%s source_service=%s container_service_before=%s container_service_observed=%s container_target=%s container_service=%s prior_container_recovery=%s\n' \
+        "$source_target_state" "$source_state_before" "$source_after" \
+        "$container_target_state" "$container_state_before" "$container_target_state" \
         "$container_after" "$container_recovery_requested"
     else
       printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
@@ -1081,10 +1326,11 @@ cleanup(){
       if [[ "$rc" == 0 ]]; then rc=1; fi
     fi
   fi
-  trap - INT TERM
+  trap - HUP INT TERM
   exit "$rc"
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -1101,7 +1347,8 @@ assert_quiescent(){
 }
 
 verify_prior_recovery_evidence(){
-  local actual_sha prior_sha
+  local actual_sha prior_sha prior_window
+  local -a prior_window_lines=()
   actual_sha="$(sha256sum "$RECOVERY_EVIDENCE_FILE" | awk '{print $1}')"
   [[ "$actual_sha" == "$RECOVERY_EVIDENCE_SHA256" ]] \
     || die 'immutable prior-run recovery evidence digest mismatch'
@@ -1111,9 +1358,15 @@ verify_prior_recovery_evidence(){
   [[ "${#prior_sha_lines[@]}" -eq 1 ]] \
     || die 'immutable prior-run recovery runtime identity is missing or ambiguous'
   prior_sha="${prior_sha_lines[0]#runtime_sha=}"
-  grep -Eq '^UNIVERSAL_VIDEO_PRECANARY_WINDOW .*container_service_before=active .*restore_on_exit=true$' \
-    "$RECOVERY_EVIDENCE_FILE" \
-    || die 'prior-run evidence does not record an active container entry state'
+  mapfile -t prior_window_lines < <(
+    grep -E '^UNIVERSAL_VIDEO_PRECANARY_WINDOW ' "$RECOVERY_EVIDENCE_FILE" || true
+  )
+  [[ "${#prior_window_lines[@]}" -eq 1 ]] \
+    || die 'prior-run window evidence is missing or ambiguous'
+  prior_window="${prior_window_lines[0]}"
+  [[ "$prior_window" =~ ^UNIVERSAL_VIDEO_PRECANARY_WINDOW[[:space:]]source_service_before=(active|inactive)[[:space:]]source_service_observed=(active|inactive)[[:space:]]container_service_before=active[[:space:]]container_service_observed=(active|inactive)[[:space:]]workload_fence=exclusive[[:space:]]services_quiescent=true[[:space:]]restore_on_exit=true$ ]] \
+    || die 'prior-run evidence does not record exact resident target states'
+  source_target_state="${BASH_REMATCH[1]}"
   grep -Eq '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED .*container_service=(inactive|failed)$' \
     "$RECOVERY_EVIDENCE_FILE" \
     || die 'prior-run evidence does not record a bounded container restoration failure'
@@ -1180,10 +1433,20 @@ mask_service_for_window(){
   added_runtime_masks+=("$service")
 }
 
+capture_inherited_failure_runtime_masks(){
+  local service enabled_state
+  [[ "$container_recovery_requested" == 1 ]] || return 1
+  for service in "$SOURCE_SERVICE" "$CONTAINER_SERVICE"; do
+    enabled_state="$(bounded_systemctl_query is-enabled "$service" 2>/dev/null || true)"
+    [[ "$enabled_state" == masked-runtime ]] \
+      || die "approved recovery is missing the prior failure runtime mask: $service"
+    inherited_failure_runtime_masks+=("$service")
+  done
+}
+
 command -v flock >/dev/null || die 'flock is unavailable'
 command -v docker >/dev/null || die 'docker is unavailable'
 command -v runuser >/dev/null || die 'runuser is unavailable'
-command -v sha256sum >/dev/null || die 'sha256sum is unavailable'
 command -v timeout >/dev/null || die 'timeout is unavailable'
 python3 -c 'import os,signal; assert hasattr(os,"pidfd_open") and hasattr(signal,"pidfd_send_signal")' \
   >/dev/null 2>&1 || die 'pidfd signaling is unavailable'
@@ -1214,15 +1477,27 @@ assert_known_state "$SOURCE_SERVICE" "$source_state_before"
 assert_known_state "$CONTAINER_SERVICE" "$container_state_before"
 [[ "$source_state_before" == active ]] && source_was_active=1
 [[ "$container_state_before" == active ]] && container_was_active=1
+source_target_state="$source_state_before"
 container_target_state="$container_state_before"
-if [[ -n "$RECOVER_CONTAINER_FROM_RUN" && "$container_state_before" != active ]]; then
+if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
+  [[ "$container_state_before" != active ]] \
+    || die 'approved recovery no longer matches a stopped container resident'
   # A prior exact external run recorded container_service_before=active and
   # then failed only while restoring that state. This bounded one-shot input
   # asks the next exact run to restore the recorded state after all gates.
   verify_prior_recovery_evidence
+  [[ "$source_target_state" == active ]] && source_was_active=1
   container_was_active=1
   container_target_state=active
   container_recovery_requested=1
+  # A failed fenced start deliberately leaves both residents stopped behind
+  # runtime masks. Accept and later remove only those exact inherited masks,
+  # and only under an immutable, separately approved recovery receipt.
+  capture_inherited_failure_runtime_masks
+  # Both residents are already stopped behind the inherited failure masks.
+  # Any later abort must use the full recovery path and restore the immutable
+  # source/container targets rather than preserving the observed stopped state.
+  services_stop_attempted=1
   printf 'UNIVERSAL_VIDEO_PRECANARY_RECOVERY prior_run=%s observed_container=%s target_container=active\n' \
     "$RECOVER_CONTAINER_FROM_RUN" "$container_state_before"
 fi
@@ -1236,6 +1511,14 @@ if [[ "$container_was_active" == 1 ]]; then
   bounded_docker image inspect "$resident_image_id" >/dev/null \
     || die 'active container resident image is unavailable'
 fi
+if [[ "$container_state_before" == active ]]; then
+  container_id_before="$(bounded_docker_query inspect --format '{{.Id}}' \
+    universal-video-container 2>/dev/null || true)"
+  [[ "$container_id_before" =~ ^[0-9a-f]{64}$ ]] \
+    || die 'active container resident identity is unavailable'
+fi
+[[ "$container_target_state" == active ]] \
+  || die 'bounded pre-canary recreation requires an active container target'
 window_started=1
 
 # Acquire the exclusive fence before source checkout, cache reclamation, image
@@ -1252,8 +1535,8 @@ services_stop_attempted=1
 stop_frozen_residents \
   || die 'unable to stop exact frozen resident workers safely'
 assert_quiescent
-printf 'UNIVERSAL_VIDEO_PRECANARY_WINDOW source_service_before=%s container_service_before=%s workload_fence=exclusive services_quiescent=true restore_on_exit=true\n' \
-  "$source_state_before" "$container_state_before"
+printf 'UNIVERSAL_VIDEO_PRECANARY_WINDOW source_service_before=%s source_service_observed=%s container_service_before=%s container_service_observed=%s workload_fence=exclusive services_quiescent=true restore_on_exit=true\n' \
+  "$source_target_state" "$source_state_before" "$container_target_state" "$container_state_before"
 
 if [[ "$BUILD_IMAGE" == 1 ]]; then
   # Move the complete prior tree aside atomically. The preparation script sees
@@ -1298,22 +1581,17 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
 
   disk_available_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
   [[ "$disk_available_kb" =~ ^[0-9]+$ ]] || die 'build capacity unavailable'
-  if (( disk_available_kb < MIN_FREE_KB )) && [[ "$RECLAIM_ROOT_CACHE" == 1 ]]; then
-    root_cache=/root/.cache
-    [[ -d "$root_cache" && ! -L "$root_cache" ]] || die 'root cache is unsafe or missing'
-    cache_before_kb="$(du -skx "$root_cache" | awk '{print $1}')"
-    # Cache-only reclamation under the exclusive workload fence. No source,
-    # model mount, spool, output, media, or database path is touched.
-    find "$root_cache" -xdev -mindepth 1 -delete
-    cache_after_kb="$(du -skx "$root_cache" | awk '{print $1}')"
-    disk_after_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
-    printf 'UNIVERSAL_VIDEO_CONTAINER_CLEANUP area=root-cache-all before_kb=%s after_kb=%s disk_available_kb=%s\n' \
-      "$cache_before_kb" "$cache_after_kb" "$disk_after_kb"
+  printf 'UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=%s disk_required_kb=%s cache_reclaim=forbidden\n' \
+    "$disk_available_kb" "$MIN_FREE_KB"
+  if (( disk_available_kb < MIN_FREE_KB )); then
+    printf '{"error_code":"UV_CONTAINER_DISK_INSUFFICIENT","status":"FAILED"}\n' >&2
+    die 'container image build requires explicit capacity repair and a new Director GO'
   fi
 
   env \
     UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 \
     UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB="$MIN_FREE_KB" \
+    UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM=0 \
     UNIVERSAL_VIDEO_CONTAINER_PRESERVE_IMAGE_ID="$resident_image_id" \
     bash "$SOURCE_DIR/ops/oracle_universal_video_container_install.sh"
   assert_quiescent
@@ -1357,8 +1635,8 @@ run_image(){
 verify_image_identity
 assert_quiescent
 printf 'UNIVERSAL_VIDEO_PRECANARY_RUNTIME commit=%s image_digest=%s\n' "$commit" "$image_id"
-printf 'UNIVERSAL_VIDEO_PRECANARY_STATE source_service_before=%s container_service_before=%s source_service=inactive container_service=inactive running_jobs=0 workload_fence=exclusive restore_on_exit=true\n' \
-  "$source_state_before" "$container_state_before"
+printf 'UNIVERSAL_VIDEO_PRECANARY_STATE source_service_before=%s source_service_observed=%s container_service_before=%s container_service_observed=%s source_service=inactive container_service=inactive running_jobs=0 workload_fence=exclusive restore_on_exit=true\n' \
+  "$source_target_state" "$source_state_before" "$container_target_state" "$container_state_before"
 run_image python -m universal_video.precanary imports
 run_image python -m universal_video.precanary synthetic-result-contract
 run_image python -m universal_video.precanary source-identity \

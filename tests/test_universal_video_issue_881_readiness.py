@@ -386,8 +386,9 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "freeze_residents_for_idle_snapshot" in script
     assert "stop_frozen_residents" in script
     assert "flock --exclusive --nonblock 9" in script
-    assert 'restore_service "$SOURCE_SERVICE" "$source_state_before"' in script
-    assert 'restore_service "$CONTAINER_SERVICE" "$container_target_state"' in script
+    assert 'restore_service "$SOURCE_SERVICE" "$source_target_state"' in script
+    assert "start_container_under_fence" in script
+    assert "validate_started_container_after_fence" in script
     assert 'source_candidate_path_owned=0' in script
     assert 'source_candidate_path_owned=1' in script
     assert '"$source_candidate_path_owned" == 1' in script
@@ -400,7 +401,9 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "org.opencontainers.image.revision" in script
     assert "UNIVERSAL_VIDEO_PREWARM_MODEL=0" in script
     assert "UNIVERSAL_VIDEO_RUN_SMOKE=0" in script
-    assert 'find "$root_cache" -xdev -mindepth 1 -delete' in script
+    assert 'find "$root_cache" -xdev -mindepth 1 -delete' not in script
+    assert "cache_reclaim=forbidden" in script
+    assert "UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM=0" in script
     assert "assert_pre_stop_idle" in script
     assert "video_queue.precanary_idle_snapshot()" in script
     assert "authoritative Neon claimable/LEASED state is busy or unverifiable" in script
@@ -431,7 +434,7 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "observed_at <= time.time() + 5" in script
     assert 'value.get("active_jobs") == []' in script
     assert 'if ! clear_restore_status; then' in script
-    assert script.count('if ! clear_restore_status; then') == 2
+    assert script.count('if ! clear_restore_status; then') == 3
     assert "RESTORE_STABLE_SECONDS" in script
     assert "stable_seconds=%s result=PASS" in script
     assert "services_stop_attempted=1" in script
@@ -443,7 +446,7 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     prestop_index = script.index("assert_pre_stop_idle", lock_index)
     stop_index = script.index("stop_frozen_residents", prestop_index)
     prepare_index = script.index('bash "$PREPARE_SCRIPT"', stop_index)
-    cleanup_index = script.index('find "$root_cache" -xdev -mindepth 1 -delete', stop_index)
+    capacity_index = script.index("cache_reclaim=forbidden", stop_index)
     installer_index = script.index(
         'bash "$SOURCE_DIR/ops/oracle_universal_video_container_install.sh"',
         prepare_index,
@@ -458,7 +461,7 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
         < installer_index
         < run_index
     )
-    assert stop_index < cleanup_index < installer_index
+    assert stop_index < capacity_index < installer_index
 
     source_worker = (ROOT / "universal_video/spool_worker.py").read_text(encoding="utf-8")
     neon_worker_source = (ROOT / "universal_video/neon_worker.py").read_text(encoding="utf-8")
@@ -466,34 +469,51 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "with shared_workload_lock(spool_root, exclusive=True):" in source_worker
     assert "with shared_workload_lock():" in neon_worker_source
 
-    restore_source_index = script.index(
-        'restore_service "$SOURCE_SERVICE" "$source_state_before"'
+    cleanup_index = script.index("cleanup(){")
+    fenced_start_index = script.index(
+        "if start_container_under_fence; then", cleanup_index
     )
-    restore_container_index = script.index(
-        'restore_service "$CONTAINER_SERVICE" "$container_target_state"'
+    postrestore_queue_index = script.index(
+        "verify_postrestore_runtime_queue", fenced_start_index
+    )
+    owner_release_index = script.index(
+        "verify_postrestore_owner_release", postrestore_queue_index
+    )
+    unlock_index = script.index("flock --unlock 9", owner_release_index)
+    validate_container_index = script.index(
+        "validate_started_container_after_fence", unlock_index
+    )
+    restore_source_index = script.index(
+        'restore_service "$SOURCE_SERVICE" "$source_target_state"',
+        validate_container_index,
     )
     restore_pass_index = script.index("UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS")
     source_recheck_index = script.index(
-        '[[ "$source_after" == "$source_state_before" ]]',
-        restore_container_index,
+        '[[ "$source_after" == "$source_target_state" ]]',
+        restore_source_index,
     )
     container_recheck_index = script.index(
         '[[ "$container_after" == "$container_target_state" ]]'
     )
     readiness_recheck_index = script.index(
-        'restored_service_ready "$SOURCE_SERVICE" "$source_state_before"',
+        'restored_service_ready "$SOURCE_SERVICE" "$source_target_state"',
         container_recheck_index,
     )
-    unlock_index = script.index("flock --unlock 9", script.index("cleanup(){"))
     restore_body = script[
         script.index("restore_service(){") : script.index("restore_source_checkout(){")
     ]
     assert 'verified_start_ticks="$(resident_status_ready "$service" "$started_unix" "$worker_pid"' in restore_body
+    queue_proof_body = script[
+        script.index("verify_postrestore_runtime_queue(){") : cleanup_index
+    ]
+    assert '[[ "$lock_held" == 1 ]] || return 1' in queue_proof_body
     assert (
-        restore_source_index
-        > unlock_index
-        and restore_source_index
-        < restore_container_index
+        fenced_start_index
+        < postrestore_queue_index
+        < owner_release_index
+        < unlock_index
+        < validate_container_index
+        < restore_source_index
         < source_recheck_index
         < container_recheck_index
         < readiness_recheck_index
@@ -680,7 +700,8 @@ def test_prestop_freeze_closes_the_legacy_claim_race_before_shutdown():
     attempted_index = execution.index("services_stop_attempted=1", idle_index)
     stop_index = execution.index("stop_frozen_residents", attempted_index)
     assert freeze_index < idle_index < attempted_index < stop_index
-    assert "trap '' INT TERM" in cleanup
+    assert "trap '' HUP INT TERM" in cleanup
+    assert "trap 'exit 129' HUP" in script
     assert "PRESTOP_ABORT_RESTORE_PASS" in cleanup
     assert "prestop_preserve_requires_restart" in cleanup
     preserve_failure_start = cleanup.index("if ! resume_prestop_frozen preserve; then")
@@ -924,7 +945,8 @@ resident_image_id=
 SOURCE_SERVICE=source.service
 CONTAINER_SERVICE=container.service
 source_state_before=active
-container_target_state=inactive
+source_target_state=active
+container_target_state=active
 restored_source_pid=111
 restored_source_start_ticks=222
 restored_container_pid=
@@ -937,6 +959,10 @@ bounded_filesystem(){{
 }}
 stop_frozen_residents(){{ return 0; }}
 residents_are_quiescent(){{ return 0; }}
+start_container_under_fence(){{ return 0; }}
+verify_postrestore_runtime_queue(){{ return 0; }}
+verify_postrestore_owner_release(){{ return 0; }}
+validate_started_container_after_fence(){{ return 0; }}
 bounded_systemctl(){{ printf 'systemctl:%s\n' "$*" >> "$service_log"; }}
 bounded_docker(){{ return 0; }}
 flock(){{ return 0; }}
@@ -946,7 +972,7 @@ restore_service(){{
 }}
 resume_isolated_peer(){{ return 0; }}
 service_state(){{
-  [[ "$1" == "$SOURCE_SERVICE" ]] && printf 'active\n' || printf 'inactive\n'
+  printf 'active\n'
 }}
 restored_service_ready(){{ return 0; }}
 cleanup
@@ -967,7 +993,6 @@ cleanup
         "systemctl:unmask --runtime container.service",
         "systemctl:daemon-reload",
         "source.service",
-        "container.service",
     ]
     assert "source_candidate_remove,source_candidate_quarantined" in completed.stderr
     assert "result=DEGRADED" in completed.stderr
@@ -1081,6 +1106,7 @@ resident_image_id=
 SOURCE_SERVICE=source.service
 CONTAINER_SERVICE=container.service
 source_state_before=active
+source_target_state=active
 container_target_state=inactive
 restored_source_pid=
 restored_source_start_ticks=
@@ -1271,6 +1297,11 @@ def test_external_precanary_is_pr_only_exact_head_validation():
     assert "Prove the only external entrypoint is Director-gated" in workflow
     assert "oracle-universal-video-container-evidence.yml" in workflow
     assert "UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true" in workflow
+    assert (
+        "grep -F 'issue_881_precanary_queue_proof.py owner-release-gate' \"$runner\""
+        in workflow
+    )
+    assert "UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE" in workflow
     retired = (
         ROOT / ".github/workflows/oracle-universal-video-container-evidence.yml"
     ).read_text(encoding="utf-8")
@@ -1282,9 +1313,16 @@ def test_external_precanary_is_pr_only_exact_head_validation():
 
 
 def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery():
-    workflow = (
+    entrypoint = (
         ROOT / ".github/workflows/issue-881-authoritative-external-evidence.yml"
     ).read_text(encoding="utf-8")
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
+    workflow = entrypoint + "\n" + runner
+    assert len(entrypoint) < 21_000
+    assert "run: bash ops/issue_881_external_precanary_workflow.sh" in entrypoint
+    assert "${{" not in runner
     assert "exact_sha:" in workflow
     assert "director_go:" in workflow
     assert "if: ${{ inputs.director_go && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}" in workflow
@@ -1293,11 +1331,23 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "issues: read" in workflow
     assert "root_pr_number=991" in workflow
     assert "prior_gate_pr_number=1070" in workflow
-    assert "pr_number=1071" in workflow
+    assert "protected_gate_paths=(" in workflow
+    assert "'ops/oracle_universal_video_run_command.sh'" in workflow
+    assert "'ops/oracle_known_hosts_from_scan.sh'" in workflow
+    assert "'.github/workflows/oracle-universal-video-container-promote.yml'" in workflow
+    assert "'ops/oracle_universal_video_container_promote.sh'" in workflow
+    assert "'ops/validate_video_queue_dsn.py'" in workflow
+    assert "'universal_video'" in workflow
+    assert "':(glob)bridge_*.py'" in workflow
+    assert "'requirements-worker.txt'" in workflow
+    assert "'deploy/oracle-universal-video/universal-video-container-entrypoint.sh'" in workflow
+    assert '"repos/$GITHUB_REPOSITORY/commits/$gate_commit/pulls"' in workflow
+    assert "Protected gate commit is not bound to one merged PR" in workflow
+    assert 'git diff --quiet "$reviewed_sha" "$gate_commit"' in workflow
+    assert "Protected gate files changed after the reviewed merge" in workflow
     assert "Root Autopilot PR #991 is not merged" in workflow
     assert 'gate_merge_sha="$(jq -r' in workflow
     assert 'git merge-base --is-ancestor "$prior_gate_merge_sha" "$gate_merge_sha"' in workflow
-    assert 'git merge-base --is-ancestor "$reviewed_sha" "$gate_merge_sha"' in workflow
     assert 'git merge-base --is-ancestor "$gate_merge_sha" "$EXACT_SHA"' in workflow
     assert "chatgpt-codex-connector[bot]" in workflow
     assert "Codex Review: Didn\\u0027t find any major issues." in workflow
@@ -1309,8 +1359,8 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' in workflow
     assert "Reviewed head has no current independent approval at final reconciliation" in workflow
     assert "root_required_workflows=(" in workflow
-    assert "Oracle idle STOP guard CI" in workflow
-    assert "Retired Oracle Universal Video Container Evidence Contract" in workflow
+    assert "Issue 881 Exact Canary Contract CI" in workflow
+    assert "Issue 881 Exact Pre-Canary Evidence" in workflow
     assert "root_reviewed_sha" in workflow
     assert "group_by(.user.login) | map(max_by(.submitted_at))" in workflow
     assert "Main changed while live review and CI gates were evaluated" in workflow
@@ -1321,13 +1371,10 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert '[[ "$live_state" == \'closed\'' in workflow
     assert 'git/ref/heads/main" --jq \'.object.sha\'' in workflow
     assert '"$main_sha" == "$EXACT_SHA"' in workflow
-    assert 'git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA"' in workflow
     assert ".commit_id ==" in workflow and "$reviewed_sha" in workflow
     assert "required_workflows=(" in workflow
     assert "verify_live_gate(){" in workflow
-    # One gate before preparation and one fresh gate after all SSH/SCP staging.
-    # Keeping exactly these two calls avoids spending another API-heavy review
-    # pass while still binding the mutating attestation to current evidence.
+    # One gate before the reviewed SSH helper and one fresh gate after staging.
     assert workflow.count("verify_live_gate") == 3
     assert "reviewThreads(first:100)" in workflow
     assert "unresolved current threads" in workflow
@@ -1336,15 +1383,42 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "Oracle instance is STOPPED" in workflow
     assert "actions/runs/$RECOVER_CONTAINER_FROM_RUN" in workflow
     assert ".github/workflows/issue-881-authoritative-external-evidence.yml" in workflow
+    assert "approval_receipt_id:" in workflow
+    assert "approval_nonce:" in workflow
+    assert "issue_881_precanary_one_shot.py verify" in workflow
+    assert workflow.count("issue_881_precanary_one_shot.py verify") == 2
+    assert "workflow reruns are forbidden" in workflow.lower()
+    assert "verify_no_competing_infrastructure_runs(){" in workflow
+    assert "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE" in workflow
+    assert "issue_881_precanary_queue_proof.py owner-before" in workflow
+    assert "issue_881_precanary_queue_proof.py owner-release-gate" in workflow
+    assert "UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE" in workflow
+    assert "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME" in workflow
     assert "prior-recovery-evidence.txt" in workflow
     assert "UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256='$recovery_sha'" in workflow
-    initial_check = workflow.index("          verify_live_gate")
-    first_remote_mutation = workflow.index(
-        '"${s[@]}" "umask 077; rm -rf', initial_check
+    initial_window = runner.index("# Initial reconciliation rejects historical")
+    initial_check = runner.index("verify_live_gate", initial_window)
+    pre_stage_one_shot_check = runner.index(
+        "verify_one_shot_gate", initial_check
     )
-    final_head_check = workflow.rindex("          verify_live_gate")
-    attestation_call = workflow.index("          set +e", final_head_check)
-    assert initial_check < first_remote_mutation < final_head_check < attestation_call
+    known_hosts_call = runner.index(
+        "ops/oracle_known_hosts_from_scan.sh", pre_stage_one_shot_check
+    )
+    first_remote_mutation = runner.index(
+        '"${s[@]}" "umask 077; rm -rf', known_hosts_call
+    )
+    final_head_check = runner.rindex("verify_live_gate")
+    final_one_shot_check = runner.rindex("verify_one_shot_gate")
+    attestation_call = runner.index("set +e", final_one_shot_check)
+    assert (
+        initial_check
+        < pre_stage_one_shot_check
+        < known_hosts_call
+        < first_remote_mutation
+        < final_head_check
+        < final_one_shot_check
+        < attestation_call
+    )
 
 
 def test_canary_sql_and_rollback_remain_null_safe_and_fail_closed():

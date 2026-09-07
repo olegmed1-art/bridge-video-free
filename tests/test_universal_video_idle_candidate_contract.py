@@ -43,15 +43,12 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
     assert "options: [status, start, stop]" in text
     assert "idle_source_run_id:" in text
     assert "actions: read" in text
-    # Read-only status requests use unique groups and cannot replace pending
-    # lifecycle mutations. Only start/stop retain the shared mutation fence.
-    assert "inputs.action == 'status'" in text
-    assert "github.event.comment.body == '/oracle-instance status'" in text
-    assert "format('oracle-instance-status-{0}', github.run_id)" in text
-    assert "contains(fromJSON('[\"start\",\"stop\"]'), inputs.action)" in text
-    assert "contains(fromJSON('[\"/oracle-instance start\",\"/oracle-instance stop\"]'), github.event.comment.body)" in text
-    assert "&& 'oracle-instance-workload-mutation'" in text
-    assert "format('oracle-instance-power-noop-{0}', github.run_id) }}" in text
+    # Every authorized status/start/stop is serialized; unrelated issue
+    # comments cannot occupy the production fence before the job condition.
+    assert "contains(fromJSON('[\"status\",\"start\",\"stop\"]'), inputs.action)" in text
+    assert "github.actor == github.repository_owner" in text
+    assert "&& 'oracle-instance-workload-mutation' ||" in text
+    assert "oracle-instance-power-noop-{0}" in text
     assert "Revalidate automatic stop epoch" in text
     assert "gh api --paginate --slurp" in text
     assert "final_epoch_state" in text
@@ -87,7 +84,6 @@ def test_video_and_power_mutations_share_a_non_cancelling_lock():
     assert "'oracle-instance-workload-mutation'" in video
     assert "oracle-universal-video-pr-{0}" in video
     assert "'oracle-instance-workload-mutation'" in power
-    assert "oracle-instance-status-{0}" in power
     assert "oracle-instance-power-noop-{0}" in power
     for text in (video, power):
         assert "cancel-in-progress: false" in text
