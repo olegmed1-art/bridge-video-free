@@ -32,6 +32,7 @@ on:
       - 'ops/oracle_universal_video_precanary_attest.sh'
       - 'ops/validate_universal_video_promotion_evidence.py'
       - '.github/workflows/issue-881-authoritative-external-evidence.yml'
+      - '.github/workflows/oracle-universal-video-admin.yml'
       - '.github/workflows/oracle-universal-video-container-promote.yml'
       - 'tests/test_universal_video_container_promotion_contract.py'
       - 'tests/test_universal_video_promotion_evidence_validator.py'

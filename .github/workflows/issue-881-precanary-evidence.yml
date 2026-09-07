@@ -8,6 +8,7 @@ on:
       - '.github/workflows/issue-881-contract-ci.yml'
       - '.github/workflows/issue-881-current-main-authoritative-ci.yml'
       - '.github/workflows/oracle-idle-guard-ci.yml'
+      - '.github/workflows/oracle-universal-video-admin.yml'
       - '.github/workflows/oracle-universal-video-container-evidence.yml'
       - '.github/workflows/oracle-universal-video-container-promote.yml'
       - '.github/workflows/secret-gate.yml'
@@ -101,6 +102,9 @@ jobs:
           grep -F 'prior_gate_pr_number=1070' "$workflow"
           grep -F 'protected_gate_paths=(' "$workflow"
           grep -F "'ops/oracle_known_hosts_from_scan.sh'" "$workflow"
+          grep -F "'.github/workflows/oracle-universal-video-admin.yml'" "$workflow"
+          grep -F 'group: oracle-instance-workload-mutation' \
+            .github/workflows/oracle-universal-video-admin.yml
           grep -F "'.github/workflows/oracle-universal-video-container-promote.yml'" "$workflow"
           grep -F "'ops/oracle_universal_video_container_promote.sh'" "$workflow"
           grep -F 'commits/$gate_commit/pulls' "$workflow"

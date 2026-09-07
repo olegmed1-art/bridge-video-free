@@ -322,6 +322,12 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert workflow.count("issue_881_precanary_one_shot.py verify") == 2
     assert "'ops/oracle_universal_video_run_command.sh'" in workflow
     assert "'ops/oracle_known_hosts_from_scan.sh'" in workflow
+    assert "'.github/workflows/oracle-universal-video-admin.yml'" in workflow
+    admin_workflow = (
+        ROOT / ".github/workflows/oracle-universal-video-admin.yml"
+    ).read_text(encoding="utf-8")
+    assert "group: oracle-instance-workload-mutation" in admin_workflow
+    assert "group: oracle-universal-video-bounded-admin" not in admin_workflow
     assert "'.github/workflows/oracle-universal-video-container-promote.yml'" in workflow
     assert "'ops/oracle_universal_video_container_promote.sh'" in workflow
     assert "'universal_video'" in workflow and "':(glob)bridge_*.py'" in workflow
@@ -366,9 +372,14 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     runtime_proof = attest.index("verify_postrestore_runtime_queue", fenced_start)
     workload_unlock = attest.index("flock --unlock 9", runtime_proof)
     assert fenced_start < runtime_proof < workload_unlock
+    readiness_failure = attest.index(
+        "if ! validate_started_container_after_fence", workload_unlock
+    )
+    readiness_fail_closed = attest.index(
+        "runtime_release_safe=0", readiness_failure
+    )
     unsafe_restore = attest.index(
-        'if [[ "$runtime_release_safe" != 1 && "$lock_held" == 1 ]]',
-        workload_unlock,
+        'if [[ "$runtime_release_safe" != 1 ]]', readiness_fail_closed
     )
     remask = attest.index(
         'bounded_systemctl mask --runtime "$SOURCE_SERVICE" "$CONTAINER_SERVICE"',
@@ -377,8 +388,10 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     stop = attest.index(
         'bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"', remask
     )
-    unsafe_unlock = attest.index("flock --unlock 9", stop)
-    assert unsafe_restore < remask < stop < unsafe_unlock
+    conditional_unlock = attest.index('if [[ "$lock_held" == 1 ]]', stop)
+    unsafe_unlock = attest.index("flock --unlock 9", conditional_unlock)
+    assert readiness_failure < readiness_fail_closed < unsafe_restore
+    assert unsafe_restore < remask < stop < conditional_unlock < unsafe_unlock
     assert "declare -a inherited_failure_runtime_masks=()" in attest
     recovery_branch = attest.index(
         'if [[ -n "$RECOVER_CONTAINER_FROM_RUN" && "$container_state_before" != active ]]'
@@ -488,3 +501,67 @@ verify_no_competing_infrastructure_runs
     )
     assert incomplete.returncode != 0
     assert "snapshot is incomplete or changed while paginating" in incomplete.stderr
+
+
+def test_post_fence_readiness_failure_is_runtime_masked_for_recovery(
+    tmp_path: Path,
+) -> None:
+    script = (
+        ROOT / "ops/oracle_universal_video_precanary_attest.sh"
+    ).read_text(encoding="utf-8")
+    cleanup = script[script.index("cleanup(){") : script.index("assert_known_state(){")]
+    action_log = tmp_path / "actions.log"
+    probe = cleanup + f'''\
+set -u
+action_log={json.dumps(str(action_log))}
+restore_failures=()
+prestop_frozen_pids=()
+added_runtime_masks=(source.service container.service)
+inherited_failure_runtime_masks=()
+window_started=1
+services_stop_attempted=1
+BUILD_IMAGE=0
+lock_held=1
+container_was_active=0
+resident_image_id=
+SOURCE_SERVICE=source.service
+CONTAINER_SERVICE=container.service
+source_state_before=active
+container_state_before=active
+container_target_state=active
+container_recovery_requested=0
+restored_source_pid=
+restored_source_start_ticks=
+restored_container_pid=111
+restored_container_start_ticks=222
+exec 9</dev/null
+record_restore_failure(){{ restore_failures+=("$1"); }}
+stop_frozen_residents(){{ return 0; }}
+residents_are_quiescent(){{ return 0; }}
+bounded_systemctl(){{ printf 'systemctl:%s\n' "$*" >> "$action_log"; }}
+bounded_systemctl_query(){{ printf 'enabled\n'; }}
+bounded_docker(){{ return 0; }}
+start_container_under_fence(){{ printf 'fenced-start\n' >> "$action_log"; }}
+verify_postrestore_runtime_queue(){{ printf 'queue-proof\n' >> "$action_log"; }}
+flock(){{ printf 'unlock\n' >> "$action_log"; }}
+validate_started_container_after_fence(){{
+  printf 'post-fence-readiness-failed\n' >> "$action_log"
+  return 1
+}}
+restore_service(){{ printf 'unexpected-restore:%s\n' "$1" >> "$action_log"; }}
+resume_isolated_peer(){{ return 0; }}
+service_state(){{ printf 'inactive\n'; }}
+restored_service_ready(){{ return 1; }}
+cleanup
+'''
+    completed = subprocess.run(
+        ["bash"], input=probe, text=True, capture_output=True, timeout=10
+    )
+    assert completed.returncode == 1
+    actions = action_log.read_text(encoding="utf-8").splitlines()
+    readiness = actions.index("post-fence-readiness-failed")
+    remask = actions.index("systemctl:mask --runtime source.service container.service")
+    stop = actions.index("systemctl:stop source.service container.service")
+    assert readiness < remask < stop
+    assert not any(action.startswith("unexpected-restore:") for action in actions)
+    assert "container_service" in completed.stderr

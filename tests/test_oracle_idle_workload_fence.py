@@ -142,6 +142,14 @@ def test_stop_consumer_has_exact_non_cancelling_event_to_fence_mapping() -> None
     )
 
 
+def test_universal_video_bounded_admin_mutation_shares_stop_fence() -> None:
+    _assert_workflow_mapping(
+        "oracle-universal-video-admin.yml",
+        {"pull_request", "push"},
+        SHARED_FENCE,
+    )
+
+
 def test_research_job_canaries_have_exact_event_to_fence_mapping() -> None:
     assert _workflows_containing("research_runtime import enqueue") == set(
         EXPECTED_RESEARCH_PRODUCERS

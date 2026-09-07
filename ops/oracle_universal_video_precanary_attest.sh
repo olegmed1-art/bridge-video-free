@@ -1212,29 +1212,35 @@ cleanup(){
     if [[ "$runtime_release_safe" == 1 ]]; then
       if ! validate_started_container_after_fence; then
         record_restore_failure container_service
-        bounded_systemctl stop "$CONTAINER_SERVICE" >/dev/null 2>&1 \
-          || record_restore_failure failed_container_stop
+        # The worker has crossed the workload fence, so make every later
+        # restore failure converge on the same stopped, runtime-masked state
+        # accepted by the separately approved recovery gate.
+        runtime_release_safe=0
+      else
+        restore_service "$SOURCE_SERVICE" "$source_state_before" \
+          || record_restore_failure source_service
       fi
-      restore_service "$SOURCE_SERVICE" "$source_state_before" \
-        || record_restore_failure source_service
     fi
     resume_isolated_peer || record_restore_failure legacy_peer_resume
 
     # Never release a resident into claim-capable execution after a failed
-    # fenced start or queue proof. Leave both services stopped and require the
-    # separately approved recovery gate instead of processing uncertain work.
-    if [[ "$runtime_release_safe" != 1 && "$lock_held" == 1 ]]; then
+    # fenced start, queue proof, or post-fence readiness check. Leave both
+    # services stopped and require the separately approved recovery gate
+    # instead of processing uncertain work.
+    if [[ "$runtime_release_safe" != 1 ]]; then
       bounded_systemctl mask --runtime "$SOURCE_SERVICE" "$CONTAINER_SERVICE" \
         >/dev/null 2>&1 || record_restore_failure failed_restore_runtime_mask
       bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null 2>&1 \
         || record_restore_failure failed_restore_service_stop
       residents_are_quiescent \
         || record_restore_failure failed_restore_not_quiescent
-      if ! flock --unlock 9 >/dev/null 2>&1; then
-        record_restore_failure workload_unlock
-      else
-        exec 9>&-
-        lock_held=0
+      if [[ "$lock_held" == 1 ]]; then
+        if ! flock --unlock 9 >/dev/null 2>&1; then
+          record_restore_failure workload_unlock
+        else
+          exec 9>&-
+          lock_held=0
+        fi
       fi
     fi
 

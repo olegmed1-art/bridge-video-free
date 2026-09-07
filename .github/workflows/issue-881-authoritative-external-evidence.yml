@@ -188,6 +188,7 @@ jobs:
             '.github/workflows/issue-881-current-main-authoritative-ci.yml'
             '.github/workflows/issue-881-precanary-evidence.yml'
             '.github/workflows/oracle-idle-guard-ci.yml'
+            '.github/workflows/oracle-universal-video-admin.yml'
             '.github/workflows/oracle-universal-video-container-evidence.yml'
             '.github/workflows/oracle-universal-video-container-promote.yml'
             '.github/workflows/secret-gate.yml'
