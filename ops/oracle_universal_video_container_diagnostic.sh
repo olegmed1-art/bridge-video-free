@@ -12,6 +12,28 @@ fail(){ printf 'UV_CONTAINER_DIAGNOSTIC_FAIL=%s\n' "$1" >&2; exit 1; }
 [[ $# -eq 0 ]] || fail USAGE
 [[ $(id -u) -eq 0 ]] || fail MUST_RUN_AS_ROOT
 
+# Fixed namespace prerequisites only; never print unit contents or journal text.
+for path in /var/lib/docker /run/docker.sock /opt/bridge-school/universal-video /run/bridge-school /tmp /var/tmp; do
+  state=missing
+  [[ -e "$path" ]] && state=present
+  printf 'namespace_path=%s state=%s\n' "$path" "$state"
+done
+printf 'root_space_kb='
+df -Pk / | awk 'NR==2 {print $2 ":" $3 ":" $4}'
+printf 'root_inodes='
+df -Pi / | awk 'NR==2 {print $2 ":" $3 ":" $4}'
+# Only aggregate known systemd failure signatures, not application log payloads.
+if journal_counts="$(journalctl -u "$SERVICE" --since '5 minutes ago' -n 100 --no-pager -o cat 2>/dev/null | python3 -c '
+import sys
+text = sys.stdin.read()
+print("namespace_failure_mentions=" + str(text.count("Failed at step NAMESPACE")))
+print("namespace_missing_runtime_mentions=" + str(sum("/run/bridge-school" in line and "No such file or directory" in line for line in text.splitlines())))
+')"; then
+  printf '%s\n' "$journal_counts"
+else
+  echo 'namespace_journal_counts=unavailable'
+fi
+
 systemctl show "$SERVICE" --no-pager \
   -p LoadState -p ActiveState -p SubState -p Result \
   -p ExecMainCode -p ExecMainStatus -p NRestarts -p MainPID -p ControlPID \
