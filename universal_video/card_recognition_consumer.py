@@ -69,7 +69,9 @@ def _confidence(value: Any, field: str) -> float:
 
 
 def _sha(value: Any, field: str) -> str:
-    text = str(value or "").lower()
+    if not isinstance(value, str):
+        raise CardRecognitionContractError(f"invalid {field}")
+    text = value.lower()
     if not _SHA256.fullmatch(text):
         raise CardRecognitionContractError(f"invalid {field}")
     return text
