@@ -22,7 +22,17 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-instance-workload-mutation
+  # Valid operational requests share the production mutation fence. PR checks
+  # and inert comments use unique groups and cannot evict a pending operation.
+  group: >-
+    ${{ github.event_name == 'workflow_dispatch' &&
+        contains(fromJSON('["preflight","restore-preflight","reboot"]'), inputs.operation) &&
+        'oracle-instance-workload-mutation' ||
+        github.event_name == 'issue_comment' &&
+        github.event.comment.user.login == github.repository_owner &&
+        contains(fromJSON('["/oracle-ops preflight","/oracle-ops restore-preflight","/oracle-ops reboot"]'), github.event.comment.body) &&
+        'oracle-instance-workload-mutation' ||
+        format('oracle-operational-safety-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:

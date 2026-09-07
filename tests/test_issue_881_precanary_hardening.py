@@ -569,7 +569,7 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
         )
         header = mutator_workflow.split("\njobs:", 1)[0]
         assert header.count("\nconcurrency:\n") == 1
-        assert "  group: oracle-instance-workload-mutation" in header
+        assert "oracle-instance-workload-mutation" in header
         assert "  cancel-in-progress: false" in header
     assert "verify_no_active_instance_agent_commands" in runner
     assert "instance-agent command-execution list" in runner
@@ -901,6 +901,9 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
         assert "oracle-instance-workload-mutation" in header, relative
         assert "cancel-in-progress: false" in header, relative
         assert f"'{relative}'" in runner, relative
+        if "  pull_request:" in header:
+            assert "github.event_name" in header, relative
+            assert "format(" in header, relative
 
 
 def test_every_instance_agent_command_must_be_terminal(tmp_path: Path) -> None:
