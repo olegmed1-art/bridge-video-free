@@ -872,17 +872,39 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
         r"install -o root.*video-queue|VIDEO_QUEUE_DSN",
         re.DOTALL,
     )
-    owner_mutators = {
-        path.relative_to(ROOT).as_posix()
-        for path in (ROOT / ".github/workflows").glob("oracle-*.yml")
-        if (
-            (
-                "  workflow_dispatch:" in path.read_text(encoding="utf-8")
-                or "  issue_comment:" in path.read_text(encoding="utf-8")
+    script_reference = re.compile(
+        r"(?<![A-Za-z0-9_./-])(ops/[A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_./-])"
+    )
+    owner_mutators: set[str] = set()
+    mutation_payloads: set[str] = set()
+    for path in (ROOT / ".github/workflows").glob("oracle-*.yml"):
+        workflow = path.read_text(encoding="utf-8")
+        if "  workflow_dispatch:" not in workflow and "  issue_comment:" not in workflow:
+            continue
+        pending = {
+            relative
+            for relative in script_reference.findall(workflow)
+            if (ROOT / relative).is_file()
+        }
+        indirect: dict[str, str] = {}
+        while pending:
+            relative = pending.pop()
+            if relative in indirect:
+                continue
+            payload = (ROOT / relative).read_text(encoding="utf-8")
+            indirect[relative] = payload
+            pending.update(
+                child
+                for child in script_reference.findall(payload)
+                if child not in indirect and (ROOT / child).is_file()
             )
-            and direct_mutation.search(path.read_text(encoding="utf-8"))
-        )
-    }
+        if direct_mutation.search(workflow + "\n" + "\n".join(indirect.values())):
+            owner_mutators.add(path.relative_to(ROOT).as_posix())
+            mutation_payloads.update(
+                relative
+                for relative, payload in indirect.items()
+                if direct_mutation.search(payload)
+            )
     assert owner_mutators == {
         ".github/workflows/oracle-ben-dds3-health-monitor.yml",
         ".github/workflows/oracle-dds3-pilot10k-operator.yml",
@@ -894,6 +916,15 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
         ".github/workflows/oracle-universal-video-activation.yml",
         ".github/workflows/oracle-universal-video-job.yml",
         ".github/workflows/oracle-universal-video-queue-credential-install.yml",
+        ".github/workflows/oracle-universal-video-sidecar-repair.yml",
+    }
+    assert mutation_payloads == {
+        "ops/install_ben_runtime.sh",
+        "ops/install_dds3_runtime.sh",
+        "ops/oracle_dds3_operational_gate.sh",
+        "ops/oracle_universal_video_install.sh",
+        "ops/oracle_universal_video_run_command.sh",
+        "ops/universal_video_sidecar_repair.sh",
     }
     runner = (
         ROOT / "ops/issue_881_external_precanary_workflow.sh"
@@ -907,6 +938,8 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
         if "  pull_request:" in header:
             assert "github.event_name" in header, relative
             assert "format(" in header, relative
+    for relative in mutation_payloads:
+        assert f"'{relative}'" in runner, relative
 
 
 def test_every_direct_oracle_rollout_uses_a_trusted_shared_fence() -> None:
