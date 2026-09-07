@@ -215,8 +215,10 @@ def test_rejects_duplicate_card_across_seats() -> None:
         record.update(
             suit="D",
             rank="K",
-            source="VISUAL",
+            source="TEMPORAL_CONSENSUS",
             frame_sha256=str(ordinal) * 64,
+            frame_sha256s=[str(ordinal) * 64, ("a" if ordinal == 1 else "b") * 64],
+            support_count=2,
             confidence=0.9,
         )
         record.pop("unknown_slot")
