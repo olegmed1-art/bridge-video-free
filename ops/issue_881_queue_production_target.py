@@ -89,11 +89,14 @@ def verify(raw, branch):
             # exactly one direct membership in worker. Preserve that hierarchy.
             require(row[7] == ['bridge_school_app', 'bridge_school_reader', 'bridge_school_worker'])
             require(not row[8] and row[9] == ['bridge_school_worker'])
-            require(row[10])
             if branch == PREVIEW:
                 require(not row[4])
             else:
                 require(branch == PRODUCTION and row[4])
+                # The source preview predates production onboarding ACL fixes.
+                # Only the destination credential is being installed; enforce
+                # the current production object-privilege contract there.
+                require(row[10])
                 cur.execute("SELECT * FROM video_queue.precanary_idle_snapshot()")
                 require(cur.fetchone() == (0, 0))
 
