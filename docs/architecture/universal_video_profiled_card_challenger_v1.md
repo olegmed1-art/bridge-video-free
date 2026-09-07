@@ -4,11 +4,13 @@ Date: 2026-08-28
 
 Governance mode: ASSURED
 
-Status: implemented for opt-in shadow/test use; no pixel backend approved; no production promotion
+Status: profiled boundary and one experimental Bridgit rank-layout backend implemented for opt-in shadow/test use; no pixel backend approved; no production promotion
 
 ## Outcome
 
-Universal Video now has a deterministic, interface-profiled decision boundary for a future card pixel recognizer. The boundary adopts the transferable principles found in Dealer4, BridgeSorter and TCG-AR without importing proprietary code, model weights, accuracy claims or special-card hardware.
+Universal Video now has a deterministic, interface-profiled decision boundary for a card pixel recognizer. The boundary adopts the transferable principles found in Dealer4, BridgeSorter and TCG-AR without importing proprietary code, model weights, accuracy claims or special-card hardware.
+
+An experimental school-owned backend now exists in `bridge_vision/bridgit_rank_layout.py`. It recognizes the verified Bridgit desktop layout with OpenCV template correlation, independently measured per-frame fan geometry, per-frame card-to-seat agreement, temporal pixel fusion and an ordered per-suit assignment. Its profile, reference frame, input frames, decoded-pixel identities and receipt are hash-bound. It validates JPEG/PNG dimensions and per-frame/aggregate decoded-raster budgets before decode, and rejects observations that decode to the reviewed reference pixels. It is not injected into the default runtime, does not implement the independent full-card channel required by this challenger, and always emits `result_scope=SHADOW_ONLY`, `provenance_class=MODEL_CANDIDATE` and `canonical_promotion_allowed=false`.
 
 The default Native Bridge Vision runtime is unchanged. With no explicitly injected challenger it still has zero detector families and returns `UNAVAILABLE`. The old BBO adapter remains separately opt-in.
 
@@ -103,7 +105,7 @@ precedence over file/timeline matching. Speech fusion is enabled only with the
 profiled shadow challenger and is emitted separately as `speech_fusion` and
 `fused_deal`; it never replaces the raw vision result.
 
-The challenger output keeps `canonical_promotion_allowed=false`. It may produce a shadow `OBSERVED` deal or the existing exact `39 observed → 13 DERIVED` result, but neither is automatically published to the School Canon. Profiled output is written only to `bridge_positions_profiled_shadow.jsonl`; the canonical downstream filename `bridge_positions.jsonl` is never created or overwritten by this path.
+The challenger output keeps `canonical_promotion_allowed=false`. It may produce only directly supported shadow observations. It may not compute a missing hand or card from the deck complement; absent cards remain `UNKNOWN` under the newer hidden-hand prohibition. Profiled output is written only to `bridge_positions_profiled_shadow.jsonl`; the canonical downstream filename `bridge_positions.jsonl` is never created or overwritten by this path.
 
 ## Activation and rollback
 
@@ -124,6 +126,7 @@ Rollback is removal of the injected challenger or revert of this change. Existin
 ## Gates before any production promotion
 
 - a real pixel backend exists and is independently versioned;
+- rank/suit evidence and a separately trained or formal full-card channel agree; layout order plus the deck bijection is not an independent channel;
 - its artifacts and human-verified train/test split are hash-bound;
 - frozen real-video holdout covers multiple layouts, compression levels, partial hands, played cards, overlaps and all missing-seat positions;
 - exact `card + seat` precision meets the approved gate (currently the repository gold gate is stricter than 95%: 99.5% precision and 95% recall);

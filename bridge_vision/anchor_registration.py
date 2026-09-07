@@ -1,0 +1,639 @@
+"""Scale/translation registration from a verified upper-right UI anchor."""
+
+from __future__ import annotations
+
+import hashlib
+import math
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+MAX_ANCHOR_TEMPLATE_PIXELS = 512 * 512
+ANCHOR_WORK_BLOCK_PIXELS = 256
+MAX_ANCHOR_FRAME_WORK_UNITS = 250_000_000
+MAX_ANCHOR_JOB_WORK_UNITS = 500_000_000
+
+
+class AnchorRegistrationError(ValueError):
+    """The anchor is absent, ambiguous or cannot define a full game window."""
+
+
+def _runtime():
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except ImportError as exc:  # pragma: no cover - worker dependency
+        raise RuntimeError("anchor registration requires OpenCV and NumPy") from exc
+    return cv2, np
+
+
+def _number(value: Any, field: str, minimum: float, maximum: float) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise AnchorRegistrationError(f"invalid {field}") from exc
+    if not math.isfinite(result) or not minimum <= result <= maximum:
+        raise AnchorRegistrationError(f"invalid {field}")
+    return result
+
+
+def _dimension(value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 8192:
+        raise AnchorRegistrationError(f"invalid {field}")
+    return value
+
+
+def _scaled_anchor_geometry(
+    *,
+    reference_width: int,
+    reference_height: int,
+    anchor_x: int,
+    anchor_y: int,
+    anchor_width: int,
+    anchor_height: int,
+    scale: float,
+) -> tuple[int, int, int, int, int, int]:
+    anchor_offset_x = round(anchor_x * scale)
+    anchor_offset_y = round(anchor_y * scale)
+    width = round((anchor_x + anchor_width) * scale) - anchor_offset_x
+    height = round((anchor_y + anchor_height) * scale) - anchor_offset_y
+    if width < 8 or height < 8:
+        raise AnchorRegistrationError("scaled interface anchor is too small")
+    return (
+        width,
+        height,
+        round(reference_width * scale),
+        round(reference_height * scale),
+        anchor_offset_x,
+        anchor_offset_y,
+    )
+
+
+def validate_anchor_spec(raw: Any) -> dict[str, Any]:
+    """Validate a bounded profile fragment using normalized coordinates."""
+
+    if not isinstance(raw, Mapping) or raw.get("type") != "UPPER_RIGHT_TEMPLATE":
+        raise AnchorRegistrationError("unsupported interface anchor")
+    region = raw.get("reference_region")
+    if not isinstance(region, Mapping):
+        raise AnchorRegistrationError("interface anchor reference_region is required")
+    normalized = {
+        name: _number(region.get(name), f"reference_region.{name}", 0.0, 1.0)
+        for name in ("x", "y", "width", "height")
+    }
+    if normalized["width"] <= 0 or normalized["height"] <= 0:
+        raise AnchorRegistrationError("interface anchor region is empty")
+    if normalized["x"] + normalized["width"] > 1.0 + 1e-9:
+        raise AnchorRegistrationError("interface anchor leaves reference width")
+    if normalized["y"] + normalized["height"] > 1.0 + 1e-9:
+        raise AnchorRegistrationError("interface anchor leaves reference height")
+    if normalized["x"] + normalized["width"] / 2 < 0.5:
+        raise AnchorRegistrationError("interface anchor is not in the right half")
+    if normalized["y"] + normalized["height"] / 2 > 0.5:
+        raise AnchorRegistrationError("interface anchor is not in the upper half")
+    scales_raw = raw.get("scales")
+    if (
+        not isinstance(scales_raw, Sequence)
+        or isinstance(scales_raw, (str, bytes))
+        or not 1 <= len(scales_raw) <= 33
+    ):
+        raise AnchorRegistrationError("interface anchor scales are invalid")
+    scales = sorted(
+        {_number(value, "interface anchor scale", 0.25, 4.0) for value in scales_raw}
+    )
+    if len(scales) != len(scales_raw):
+        raise AnchorRegistrationError("interface anchor scales must be unique")
+    return {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": normalized,
+        "scales": scales,
+        "minimum_score": _number(
+            raw.get("minimum_score"), "minimum_score", 0.000001, 1.0
+        ),
+        "minimum_margin": _number(
+            raw.get("minimum_margin"), "minimum_margin", 0.000001, 1.0
+        ),
+        "appearance": "INTENSITY_INVERSION_INVARIANT",
+    }
+
+
+def _appearance(image: Any):
+    cv2, _ = _runtime()
+    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+
+def _rounded_reference_anchor(
+    region: Mapping[str, float], reference_width: int, reference_height: int
+) -> tuple[int, int, int, int]:
+    anchor_x = round(region["x"] * reference_width)
+    anchor_y = round(region["y"] * reference_height)
+    anchor_right = round((region["x"] + region["width"]) * reference_width)
+    anchor_bottom = round((region["y"] + region["height"]) * reference_height)
+    return (
+        anchor_x,
+        anchor_y,
+        anchor_right - anchor_x,
+        anchor_bottom - anchor_y,
+    )
+
+
+def _reject_rounded_scale_aliases(scaled_dimensions: Sequence[tuple[int, ...]]) -> None:
+    matcher_geometries = [geometry[:4] for geometry in scaled_dimensions]
+    if len(set(matcher_geometries)) != len(matcher_geometries):
+        raise AnchorRegistrationError(
+            "interface anchor scales collapse to duplicate pixel geometry"
+        )
+
+
+def _rounded_normalized_interval(
+    start: int, end: int, total: int
+) -> tuple[float, float]:
+    rounded_start = round(start / total, 8)
+    rounded_end = round(end / total, 8)
+    return rounded_start, round(rounded_end - rounded_start, 8)
+
+
+def estimate_anchor_work_units(
+    reference_size: tuple[int, int],
+    observed_sizes: Sequence[tuple[int, int]],
+    spec: Mapping[str, Any],
+) -> tuple[int, tuple[int, ...]]:
+    """Estimate bounded matching work, weighted by template pixel blocks."""
+
+    checked = validate_anchor_spec(spec)
+    reference_width = _dimension(reference_size[0], "reference width")
+    reference_height = _dimension(reference_size[1], "reference height")
+    region = checked["reference_region"]
+    anchor_x, anchor_y, anchor_width, anchor_height = _rounded_reference_anchor(
+        region, reference_width, reference_height
+    )
+    if anchor_width < 8 or anchor_height < 8:
+        raise AnchorRegistrationError("reference interface anchor is too small")
+    if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
+        raise AnchorRegistrationError("interface anchor exceeds template budget")
+    scaled_dimensions = [
+        _scaled_anchor_geometry(
+            reference_width=reference_width,
+            reference_height=reference_height,
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            anchor_width=anchor_width,
+            anchor_height=anchor_height,
+            scale=scale,
+        )
+        for scale in checked["scales"]
+    ]
+    _reject_rounded_scale_aliases(scaled_dimensions)
+    per_frame: list[int] = []
+    for index, size in enumerate(observed_sizes):
+        if not isinstance(size, tuple) or len(size) != 2:
+            raise AnchorRegistrationError(f"invalid observed size {index}")
+        observed_width = _dimension(size[0], f"observed width {index}")
+        observed_height = _dimension(size[1], f"observed height {index}")
+        work = 0
+        for (
+            template_width,
+            template_height,
+            game_width,
+            game_height,
+            _,
+            _,
+        ) in scaled_dimensions:
+            if (
+                template_width > observed_width
+                or template_height > observed_height
+                or game_width > observed_width
+                or game_height > observed_height
+            ):
+                continue
+            match_positions = (observed_width - template_width + 1) * (
+                observed_height - template_height + 1
+            )
+            template_blocks = math.ceil(
+                template_width * template_height / ANCHOR_WORK_BLOCK_PIXELS
+            )
+            work += match_positions * template_blocks
+        if work == 0:
+            raise AnchorRegistrationError(
+                f"no feasible interface anchor scale for observed frame {index}"
+            )
+        per_frame.append(work)
+    return sum(per_frame), tuple(per_frame)
+
+
+def estimate_anchor_peak_scratch_bytes(
+    reference_size: tuple[int, int],
+    observed_sizes: Sequence[tuple[int, int]],
+    spec: Mapping[str, Any],
+) -> int:
+    """Conservatively bound grayscale, resized-template and score scratch."""
+
+    checked = validate_anchor_spec(spec)
+    reference_width = _dimension(reference_size[0], "reference width")
+    reference_height = _dimension(reference_size[1], "reference height")
+    region = checked["reference_region"]
+    anchor_x, anchor_y, anchor_width, anchor_height = _rounded_reference_anchor(
+        region, reference_width, reference_height
+    )
+    if anchor_width < 8 or anchor_height < 8:
+        raise AnchorRegistrationError("reference interface anchor is too small")
+    if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
+        raise AnchorRegistrationError("interface anchor exceeds template budget")
+    scaled_dimensions = [
+        _scaled_anchor_geometry(
+            reference_width=reference_width,
+            reference_height=reference_height,
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            anchor_width=anchor_width,
+            anchor_height=anchor_height,
+            scale=scale,
+        )
+        for scale in checked["scales"]
+    ]
+    _reject_rounded_scale_aliases(scaled_dimensions)
+    peak = 0
+    for index, size in enumerate(observed_sizes):
+        if not isinstance(size, tuple) or len(size) != 2:
+            raise AnchorRegistrationError(f"invalid observed size {index}")
+        observed_width = _dimension(size[0], f"observed width {index}")
+        observed_height = _dimension(size[1], f"observed height {index}")
+        observed_pixels = observed_width * observed_height
+        peak = max(peak, observed_pixels + anchor_width * anchor_height)
+        for (
+            template_width,
+            template_height,
+            game_width,
+            game_height,
+            _,
+            _,
+        ) in scaled_dimensions:
+            if (
+                template_width > observed_width
+                or template_height > observed_height
+                or game_width > observed_width
+                or game_height > observed_height
+            ):
+                continue
+            match_positions = (observed_width - template_width + 1) * (
+                observed_height - template_height + 1
+            )
+            template_pixels = template_width * template_height
+            scratch = (
+                2 * observed_pixels
+                + 16 * (observed_width + 1) * (observed_height + 1)
+                + anchor_width * anchor_height
+                + template_pixels
+                + 8 * match_positions
+            )
+            peak = max(peak, scratch)
+    return peak
+
+
+def validate_anchor_job_budget(
+    reference_size: tuple[int, int],
+    observed_sizes: Sequence[tuple[int, int]],
+    spec: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Reject an over-budget registration job before image decode/matching."""
+
+    total, per_frame = estimate_anchor_work_units(reference_size, observed_sizes, spec)
+    if any(work > MAX_ANCHOR_FRAME_WORK_UNITS for work in per_frame):
+        raise AnchorRegistrationError("interface anchor frame exceeds work budget")
+    if total > MAX_ANCHOR_JOB_WORK_UNITS:
+        raise AnchorRegistrationError("interface anchor job exceeds work budget")
+    return {
+        "work_units": total,
+        "per_frame_work_units": list(per_frame),
+        "template_block_pixels": ANCHOR_WORK_BLOCK_PIXELS,
+        "peak_matcher_scratch_bytes": estimate_anchor_peak_scratch_bytes(
+            reference_size, observed_sizes, spec
+        ),
+    }
+
+
+def validate_anchor_reference_detail(
+    reference: Any,
+    observed_sizes: Sequence[tuple[int, int]],
+    spec: Mapping[str, Any],
+) -> None:
+    """Reject detail-free feasible templates before observation decoding."""
+
+    cv2, _ = _runtime()
+    checked = validate_anchor_spec(spec)
+    if not hasattr(reference, "shape"):
+        raise AnchorRegistrationError("reference must be a decoded image")
+    reference_height, reference_width = reference.shape[:2]
+    region = checked["reference_region"]
+    anchor_x, anchor_y, anchor_width, anchor_height = _rounded_reference_anchor(
+        region, reference_width, reference_height
+    )
+    if anchor_width < 8 or anchor_height < 8:
+        raise AnchorRegistrationError("reference interface anchor is too small")
+    if (
+        anchor_x + anchor_width > reference_width
+        or anchor_y + anchor_height > reference_height
+    ):
+        raise AnchorRegistrationError("rounded interface anchor leaves reference")
+    template = _appearance(
+        reference[
+            anchor_y : anchor_y + anchor_height, anchor_x : anchor_x + anchor_width
+        ]
+    )
+    if float(template.std()) < 8.0:
+        raise AnchorRegistrationError("interface anchor has insufficient visual detail")
+    scaled_dimensions = [
+        _scaled_anchor_geometry(
+            reference_width=reference_width,
+            reference_height=reference_height,
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            anchor_width=anchor_width,
+            anchor_height=anchor_height,
+            scale=scale,
+        )
+        for scale in checked["scales"]
+    ]
+    _reject_rounded_scale_aliases(scaled_dimensions)
+    normalized_sizes = [
+        (
+            _dimension(size[0], f"observed width {index}"),
+            _dimension(size[1], f"observed height {index}"),
+        )
+        for index, size in enumerate(observed_sizes)
+        if isinstance(size, tuple) and len(size) == 2
+    ]
+    if len(normalized_sizes) != len(observed_sizes):
+        raise AnchorRegistrationError("invalid observed size")
+    for scaled_geometry in scaled_dimensions:
+        width, height, game_width, game_height, _, _ = scaled_geometry
+        if not any(
+            width <= observed_width
+            and height <= observed_height
+            and game_width <= observed_width
+            and game_height <= observed_height
+            for observed_width, observed_height in normalized_sizes
+        ):
+            continue
+        scaled = cv2.resize(template, (width, height), interpolation=cv2.INTER_NEAREST)
+        if float(scaled.std()) < 8.0:
+            raise AnchorRegistrationError(
+                "scaled interface anchor has insufficient visual detail"
+            )
+
+
+def _implies_distinct_window(
+    best: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> bool:
+    return (
+        not math.isclose(float(candidate["scale"]), float(best["scale"]), abs_tol=1e-12)
+        or abs(candidate["window_x"] - best["window_x"])
+        > max(4, best["window_width"] * 0.03)
+        or abs(candidate["window_y"] - best["window_y"])
+        > max(4, best["window_height"] * 0.03)
+        or abs(candidate["window_width"] - best["window_width"])
+        > max(4, best["window_width"] * 0.03)
+        or abs(candidate["window_height"] - best["window_height"])
+        > max(4, best["window_height"] * 0.03)
+    )
+
+
+def _suppress_equivalent_window_peak(
+    scores: Any,
+    location: tuple[int, int],
+    *,
+    game_width: int,
+    game_height: int,
+) -> None:
+    """Suppress every integer origin treated as the same registered window."""
+
+    local_x, local_y = location
+    radius_x = math.floor(max(4, game_width * 0.03))
+    radius_y = math.floor(max(4, game_height * 0.03))
+    scores[
+        max(0, local_y - radius_y) : min(scores.shape[0], local_y + radius_y + 1),
+        max(0, local_x - radius_x) : min(scores.shape[1], local_x + radius_x + 1),
+    ] = -1.0
+
+
+def _anchor_origin_bounds(
+    *,
+    observed_width: int,
+    observed_height: int,
+    score_width: int,
+    score_height: int,
+    game_width: int,
+    game_height: int,
+    anchor_offset_x: int,
+    anchor_offset_y: int,
+) -> tuple[int, int, int, int]:
+    """Return legal matcher origins from the rounded registered window."""
+    return (
+        max(0, anchor_offset_x),
+        min(score_width - 1, observed_width - game_width + anchor_offset_x),
+        max(0, anchor_offset_y),
+        min(score_height - 1, observed_height - game_height + anchor_offset_y),
+    )
+
+
+def register_from_upper_right_anchor(
+    reference: Any,
+    observed: Any,
+    spec: Mapping[str, Any],
+) -> tuple[Any, dict[str, Any]]:
+    """Return ``observed`` warped to reference pixels plus registration evidence."""
+
+    cv2, np = _runtime()
+    checked = validate_anchor_spec(spec)
+    if not hasattr(reference, "shape") or not hasattr(observed, "shape"):
+        raise AnchorRegistrationError("registration inputs must be decoded images")
+    reference_height, reference_width = reference.shape[:2]
+    observed_height, observed_width = observed.shape[:2]
+    region = checked["reference_region"]
+    anchor_x, anchor_y, anchor_width, anchor_height = _rounded_reference_anchor(
+        region, reference_width, reference_height
+    )
+    if anchor_width < 8 or anchor_height < 8:
+        raise AnchorRegistrationError("reference interface anchor is too small")
+    if (
+        anchor_x + anchor_width > reference_width
+        or anchor_y + anchor_height > reference_height
+    ):
+        raise AnchorRegistrationError("rounded interface anchor leaves reference")
+    work_receipt = validate_anchor_job_budget(
+        (reference_width, reference_height),
+        [(observed_width, observed_height)],
+        checked,
+    )
+    template = _appearance(
+        reference[
+            anchor_y : anchor_y + anchor_height, anchor_x : anchor_x + anchor_width
+        ]
+    )
+    if float(template.std()) < 8.0:
+        raise AnchorRegistrationError("interface anchor has insufficient visual detail")
+    observed_appearance = _appearance(observed)
+    scaled_dimensions = [
+        _scaled_anchor_geometry(
+            reference_width=reference_width,
+            reference_height=reference_height,
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
+            anchor_width=anchor_width,
+            anchor_height=anchor_height,
+            scale=scale,
+        )
+        for scale in checked["scales"]
+    ]
+    _reject_rounded_scale_aliases(scaled_dimensions)
+    candidates: list[dict[str, Any]] = []
+    for scale, scaled_geometry in zip(checked["scales"], scaled_dimensions):
+        (
+            width,
+            height,
+            game_width,
+            game_height,
+            anchor_offset_x,
+            anchor_offset_y,
+        ) = scaled_geometry
+        if width > observed_width or height > observed_height:
+            continue
+        if game_width > observed_width or game_height > observed_height:
+            continue
+        scaled = cv2.resize(template, (width, height), interpolation=cv2.INTER_NEAREST)
+        if float(scaled.std()) < 8.0:
+            raise AnchorRegistrationError(
+                "scaled interface anchor has insufficient visual detail"
+            )
+        scores = cv2.matchTemplate(observed_appearance, scaled, cv2.TM_CCOEFF_NORMED)
+        np.abs(scores, out=scores)
+        x_min, x_max, y_min, y_max = _anchor_origin_bounds(
+            observed_width=observed_width,
+            observed_height=observed_height,
+            score_width=scores.shape[1],
+            score_height=scores.shape[0],
+            game_width=game_width,
+            game_height=game_height,
+            anchor_offset_x=anchor_offset_x,
+            anchor_offset_y=anchor_offset_y,
+        )
+        if x_min > x_max or y_min > y_max:
+            continue
+        valid = scores[y_min : y_max + 1, x_min : x_max + 1]
+        for _ in range(2):
+            _, maximum, _, location = cv2.minMaxLoc(valid)
+            x = x_min + location[0]
+            y = y_min + location[1]
+            left = x - anchor_offset_x
+            top = y - anchor_offset_y
+            candidates.append(
+                {
+                    "score": float(maximum),
+                    "scale": float(scale),
+                    "anchor_x": x,
+                    "anchor_y": y,
+                    "anchor_width": width,
+                    "anchor_height": height,
+                    "window_x": left,
+                    "window_y": top,
+                    "window_width": game_width,
+                    "window_height": game_height,
+                }
+            )
+            _suppress_equivalent_window_peak(
+                valid,
+                location,
+                game_width=game_width,
+                game_height=game_height,
+            )
+    if not candidates:
+        raise AnchorRegistrationError("upper-right interface anchor was not found")
+    candidates.sort(
+        key=lambda item: (
+            -item["score"],
+            item["scale"],
+            item["window_y"],
+            item["window_x"],
+        )
+    )
+    best = candidates[0]
+    if best["score"] < checked["minimum_score"]:
+        raise AnchorRegistrationError("upper-right interface anchor score is too low")
+    distant = next(
+        (item for item in candidates[1:] if _implies_distinct_window(best, item)),
+        None,
+    )
+    runner_up_score = float(distant["score"]) if distant is not None else -1.0
+    if runner_up_score >= best["score"] - checked["minimum_margin"]:
+        raise AnchorRegistrationError("upper-right interface anchor is ambiguous")
+    left = int(best["window_x"])
+    top = int(best["window_y"])
+    right = left + int(best["window_width"])
+    bottom = top + int(best["window_height"])
+    if left < 0 or top < 0 or right > observed_width or bottom > observed_height:
+        raise AnchorRegistrationError("registered game window leaves observed frame")
+    crop = observed[top:bottom, left:right]
+    registered = cv2.resize(
+        crop, (reference_width, reference_height), interpolation=cv2.INTER_AREA
+    )
+    if registered.shape[:2] != (reference_height, reference_width):
+        raise AnchorRegistrationError("registered game window has invalid dimensions")
+    anchor_x_normalized, anchor_width_normalized = _rounded_normalized_interval(
+        int(best["anchor_x"]),
+        int(best["anchor_x"]) + int(best["anchor_width"]),
+        observed_width,
+    )
+    anchor_y_normalized, anchor_height_normalized = _rounded_normalized_interval(
+        int(best["anchor_y"]),
+        int(best["anchor_y"]) + int(best["anchor_height"]),
+        observed_height,
+    )
+    window_x_normalized, window_width_normalized = _rounded_normalized_interval(
+        left, right, observed_width
+    )
+    window_y_normalized, window_height_normalized = _rounded_normalized_interval(
+        top, bottom, observed_height
+    )
+    return registered, {
+        "mode": "UPPER_RIGHT_ANCHOR",
+        "anchor_type": checked["type"],
+        "appearance": checked["appearance"],
+        "score": round(float(best["score"]), 6),
+        "runner_up_score": round(runner_up_score, 6),
+        "score_margin": round(float(best["score"] - runner_up_score), 6),
+        "scale": round(float(best["scale"]), 6),
+        "anchor_region": {
+            "coordinate_space": "NORMALIZED_INPUT_FRAME",
+            "x": anchor_x_normalized,
+            "y": anchor_y_normalized,
+            "width": anchor_width_normalized,
+            "height": anchor_height_normalized,
+        },
+        "game_window": {
+            "coordinate_space": "NORMALIZED_INPUT_FRAME",
+            "x": window_x_normalized,
+            "y": window_y_normalized,
+            "width": window_width_normalized,
+            "height": window_height_normalized,
+        },
+        "input_size": {"width": observed_width, "height": observed_height},
+        "registered_size": {"width": reference_width, "height": reference_height},
+        "anchor_work": work_receipt,
+        "registered_pixel_sha256": hashlib.sha256(
+            np.ascontiguousarray(registered)
+        ).hexdigest(),
+    }
+
+
+__all__ = [
+    "ANCHOR_WORK_BLOCK_PIXELS",
+    "AnchorRegistrationError",
+    "MAX_ANCHOR_FRAME_WORK_UNITS",
+    "MAX_ANCHOR_JOB_WORK_UNITS",
+    "MAX_ANCHOR_TEMPLATE_PIXELS",
+    "estimate_anchor_peak_scratch_bytes",
+    "estimate_anchor_work_units",
+    "register_from_upper_right_anchor",
+    "validate_anchor_reference_detail",
+    "validate_anchor_spec",
+    "validate_anchor_job_budget",
+]
