@@ -1,4 +1,5 @@
 name: Issue 881 Authoritative External Pre-Canary Evidence
+run-name: issue881-precanary/${{ inputs.exact_sha }}/receipt-${{ inputs.approval_receipt_id }}
 
 on:
   workflow_dispatch:
@@ -11,6 +12,14 @@ on:
         description: Explicit Director GO for the bounded external pre-canary run
         required: true
         type: boolean
+      approval_receipt_id:
+        description: Fresh unedited owner comment on Issue 881 containing the exact one-shot receipt
+        required: true
+        type: string
+      approval_nonce:
+        description: Unique lowercase 64-hex nonce bound by the one-shot receipt
+        required: true
+        type: string
       recover_container_from_run:
         description: Optional prior failed external run whose recorded active container state must be restored
         required: false
@@ -34,6 +43,8 @@ jobs:
     timeout-minutes: 120
     env:
       EXACT_SHA: ${{ inputs.exact_sha }}
+      APPROVAL_RECEIPT_ID: ${{ inputs.approval_receipt_id }}
+      APPROVAL_NONCE: ${{ inputs.approval_nonce }}
       RECOVER_CONTAINER_FROM_RUN: ${{ inputs.recover_container_from_run }}
       INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
       OCI_USER: ${{ secrets.OCI_CLI_USER }}
@@ -63,11 +74,16 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$EXACT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$APPROVAL_RECEIPT_ID" =~ ^[1-9][0-9]{8,19}$ ]]
+          [[ "$APPROVAL_NONCE" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]
           test "$(git rev-parse HEAD)" = "$EXACT_SHA"
           [[ -z "$RECOVER_CONTAINER_FROM_RUN" || "$RECOVER_CONTAINER_FROM_RUN" =~ ^[0-9]{8,20}$ ]]
           grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
           bash -n ops/oracle_universal_video_precanary_attest.sh
           bash -n ops/oracle_universal_video_container_install.sh
+          python3 -m py_compile ops/issue_881_precanary_one_shot.py \
+            ops/issue_881_precanary_queue_proof.py
           grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS' ops/oracle_universal_video_precanary_attest.sh
           grep -F '"$image_id" "$@"' ops/oracle_universal_video_precanary_attest.sh
@@ -78,6 +94,26 @@ jobs:
           cp ops/oracle_universal_video_precanary_attest.sh "$RUNNER_TEMP/attest.sh"
           chmod 0700 "$RUNNER_TEMP/attest.sh"
           : > "$RUNNER_TEMP/issue-881-authoritative-external-evidence.txt"
+
+      - name: Validate fresh one-shot Director receipt
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/issues/comments/$APPROVAL_RECEIPT_ID" \
+            > "$RUNNER_TEMP/precanary-approval-comment.json"
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/runs?event=workflow_dispatch&per_page=100" \
+            > "$RUNNER_TEMP/precanary-workflow-runs.json"
+          python3 ops/issue_881_precanary_one_shot.py verify \
+            --comment-json "$RUNNER_TEMP/precanary-approval-comment.json" \
+            --runs-json "$RUNNER_TEMP/precanary-workflow-runs.json" \
+            --exact-sha "$EXACT_SHA" \
+            --approval-nonce "$APPROVAL_NONCE" \
+            --recover-container-from-run "$RECOVER_CONTAINER_FROM_RUN" \
+            --receipt-id "$APPROVAL_RECEIPT_ID" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --current-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            | tee "$RUNNER_TEMP/precanary-one-shot-marker.txt"
 
       - name: Verify Oracle is already running
         run: |
@@ -128,7 +164,19 @@ jobs:
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
 
+      - name: Capture pristine production queue owner baseline
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --no-input -q 'psycopg[binary]==3.3.4'
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_SHA"
+          python3 ops/issue_881_precanary_queue_proof.py owner-before \
+            --output "$RUNNER_TEMP/issue-881-owner-baseline.json" \
+            | tee "$RUNNER_TEMP/issue-881-owner-before-marker.txt"
+
       - name: Build exact image and attest metadata only under one fence
+        id: external_precanary
         run: |
           set -Eeuo pipefail
           evidence="$RUNNER_TEMP/issue-881-authoritative-external-evidence.txt"
@@ -139,15 +187,36 @@ jobs:
 
           root_pr_number=991
           prior_gate_pr_number=1070
-          pr_number=1071
-          pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
-          reviewed_sha="$(jq -r '.head.sha' <<<"$pr_json")"
-          [[ "$reviewed_sha" =~ ^[0-9a-f]{40}$ ]]
-          runs_endpoint="repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$reviewed_sha&event=pull_request&per_page=100"
+          protected_gate_paths=(
+            '.dockerignore'
+            '.github/workflows/issue-881-authoritative-external-evidence.yml'
+            'requirements-worker.txt'
+            'ops/issue_881_precanary_one_shot.py'
+            'ops/issue_881_precanary_queue_proof.py'
+            'ops/oracle_universal_video_run_command.sh'
+            'ops/oracle_universal_video_precanary_attest.sh'
+            'ops/oracle_universal_video_container_install.sh'
+            'ops/validate_video_queue_dsn.py'
+            'ops/validate_universal_video_promotion_evidence.py'
+            'universal_video'
+            'bridge_contracts'
+            'bridge_vision'
+            'database'
+            ':(glob)bridge_*.py'
+            'diana_longitudinal_quality_v2.py'
+            'r29_identity_overlay_probe.py'
+            'route_drive_job_outputs.py'
+            ':(glob)run_*.py'
+            'transcript_stage_checkpoint_v1.py'
+            'deploy/oracle-universal-video/Dockerfile'
+            'deploy/oracle-universal-video/universal-video-container-entrypoint.sh'
+            'deploy/oracle-universal-video/universal-video-container.service'
+          )
           required_workflows=(
             'Universal Video Analyzer CI'
             'Issue 881 Exact Canary Contract CI'
             'Issue 881 Exact Pre-Canary Evidence'
+            'Issue 881 Current-Main Authoritative CI'
             'Secret gate'
             'Universal Video Engine Smoke'
             'Oracle idle STOP guard CI'
@@ -165,19 +234,43 @@ jobs:
           )
 
           verify_live_gate(){
-            local live_head live_state main_sha root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha gate_merge_sha review_count codex_comments_json codex_clean_count reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
-            pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
-            live_state="$(jq -r '.state' <<<"$pr_json")"
-            [[ "$live_state" == 'closed' && "$(jq -r '.merged' <<<"$pr_json")" == true ]] \
-              || { echo 'Current canary gate PR is not merged' >&2; return 1; }
-            live_head="$(jq -r '.head.sha' <<<"$pr_json")"
-            [[ "$live_head" == "$reviewed_sha" ]] \
-              || { echo 'Reviewed canary gate head changed unexpectedly' >&2; return 1; }
+            local main_sha gate_commit associated_json pr_count pr_number pr_json live_head live_state reviewed_sha reviewed_ref runs_endpoint root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha gate_merge_sha review_count codex_comments_json codex_clean_count reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
             main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
             [[ "$main_sha" == "$EXACT_SHA" ]] \
               || { echo 'Exact SHA is not immutable current main' >&2; return 1; }
-            git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA" \
-              || { echo 'Reviewed canary gate head is not an ancestor of exact main' >&2; return 1; }
+            gate_commit="$(git log -1 --format=%H "$EXACT_SHA" -- "${protected_gate_paths[@]}")"
+            [[ "$gate_commit" =~ ^[0-9a-f]{40}$ ]] \
+              || { echo 'Protected pre-canary gate commit is unavailable' >&2; return 1; }
+            associated_json="$(gh api -H 'Accept: application/vnd.github+json' \
+              "repos/$GITHUB_REPOSITORY/commits/$gate_commit/pulls")"
+            pr_count="$(jq --arg commit "$gate_commit" \
+              '[.[] | select(.merged_at != null and .merge_commit_sha == $commit)] | length' \
+              <<<"$associated_json")"
+            [[ "$pr_count" == 1 ]] \
+              || { echo 'Protected gate commit is not bound to one merged PR' >&2; return 1; }
+            pr_number="$(jq -r --arg commit "$gate_commit" \
+              '.[] | select(.merged_at != null and .merge_commit_sha == $commit) | .number' \
+              <<<"$associated_json")"
+            pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
+            live_state="$(jq -r '.state' <<<"$pr_json")"
+            [[ "$live_state" == 'closed' && "$(jq -r '.merged' <<<"$pr_json")" == true ]] \
+              || { echo 'Current protected pre-canary gate PR is not merged' >&2; return 1; }
+            gate_merge_sha="$(jq -r '.merge_commit_sha' <<<"$pr_json")"
+            [[ "$gate_merge_sha" == "$gate_commit" ]] \
+              || { echo 'Protected gate PR merge identity changed unexpectedly' >&2; return 1; }
+            live_head="$(jq -r '.head.sha' <<<"$pr_json")"
+            reviewed_sha="$live_head"
+            [[ "$reviewed_sha" =~ ^[0-9a-f]{40}$ ]]
+            reviewed_ref="refs/remotes/origin/issue881-reviewed-$pr_number"
+            git fetch --no-tags --force origin \
+              "pull/$pr_number/head:$reviewed_ref" >/dev/null 2>&1
+            [[ "$(git rev-parse "$reviewed_ref")" == "$reviewed_sha" ]] \
+              || { echo 'Reviewed gate head cannot be fetched exactly' >&2; return 1; }
+            git diff --quiet "$reviewed_sha" "$gate_commit" -- "${protected_gate_paths[@]}" \
+              || { echo 'Merged protected gate files differ from the reviewed head' >&2; return 1; }
+            [[ "$(git log -1 --format=%H "$EXACT_SHA" -- "${protected_gate_paths[@]}")" == "$gate_commit" ]] \
+              || { echo 'Protected gate files changed after the reviewed merge' >&2; return 1; }
+            runs_endpoint="repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$reviewed_sha&event=pull_request&per_page=100"
             root_pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$root_pr_number")"
             [[ "$(jq -r '.merged' <<<"$root_pr_json")" == true ]] \
               || { echo 'Root Autopilot PR #991 is not merged' >&2; return 1; }
@@ -190,12 +283,8 @@ jobs:
             [[ "$prior_gate_merge_sha" =~ ^[0-9a-f]{40}$ ]]
             git merge-base --is-ancestor "$root_merge_sha" "$prior_gate_merge_sha" \
               || { echo 'Root Autopilot merge is not an ancestor of the prior gate merge' >&2; return 1; }
-            gate_merge_sha="$(jq -r '.merge_commit_sha' <<<"$pr_json")"
-            [[ "$gate_merge_sha" =~ ^[0-9a-f]{40}$ ]]
             git merge-base --is-ancestor "$prior_gate_merge_sha" "$gate_merge_sha" \
               || { echo 'Prior gate merge is not an ancestor of the reviewed canary gate merge' >&2; return 1; }
-            git merge-base --is-ancestor "$reviewed_sha" "$gate_merge_sha" \
-              || { echo 'Reviewed canary gate head is not an ancestor of its merge commit' >&2; return 1; }
             git merge-base --is-ancestor "$gate_merge_sha" "$EXACT_SHA" \
               || { echo 'Reviewed canary gate merge is not an ancestor of exact current main' >&2; return 1; }
             root_reviewed_sha="$(jq -r '.head.sha' <<<"$root_pr_json")"
@@ -248,6 +337,29 @@ jobs:
               || { echo 'Reviewed head has no current independent approval at final reconciliation' >&2; return 1; }
             [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$EXACT_SHA" ]] \
               || { echo 'Main changed while live review and CI gates were evaluated' >&2; return 1; }
+          }
+
+          verify_one_shot_gate(){
+            local current_marker initial_marker
+            [[ "$GITHUB_RUN_ATTEMPT" == 1 ]] \
+              || { echo 'Workflow reruns are forbidden' >&2; return 1; }
+            gh api "repos/$GITHUB_REPOSITORY/issues/comments/$APPROVAL_RECEIPT_ID" \
+              > "$RUNNER_TEMP/precanary-approval-comment-final.json"
+            gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/actions/runs?event=workflow_dispatch&per_page=100" \
+              > "$RUNNER_TEMP/precanary-workflow-runs-final.json"
+            current_marker="$(python3 ops/issue_881_precanary_one_shot.py verify \
+              --comment-json "$RUNNER_TEMP/precanary-approval-comment-final.json" \
+              --runs-json "$RUNNER_TEMP/precanary-workflow-runs-final.json" \
+              --exact-sha "$EXACT_SHA" \
+              --approval-nonce "$APPROVAL_NONCE" \
+              --recover-container-from-run "$RECOVER_CONTAINER_FROM_RUN" \
+              --receipt-id "$APPROVAL_RECEIPT_ID" \
+              --current-run-id "$GITHUB_RUN_ID" \
+              --current-run-attempt "$GITHUB_RUN_ATTEMPT")" || return 1
+            initial_marker="$(cat "$RUNNER_TEMP/precanary-one-shot-marker.txt")"
+            [[ "$current_marker" == "$initial_marker" ]] \
+              || { echo 'One-shot receipt changed after initial validation' >&2; return 1; }
           }
 
           # Initial reconciliation rejects historical, blocked, or stale-green
@@ -307,7 +419,9 @@ jobs:
             {
               echo "runtime_sha=$EXACT_SHA"
               echo "step_exit=$rc"
-              grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|RESTORE(_PASS|_FAILED)?)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
+              cat "$RUNNER_TEMP/precanary-one-shot-marker.txt" 2>/dev/null || true
+              cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt" 2>/dev/null || true
+              grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|POSTRESTORE_RUNTIME|RESTORE(_PASS|_FAILED)?)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
                 "$session_log" 2>/dev/null || true
               echo 'real_media_canary_run=false'
               echo 'source_media_downloaded=false'
@@ -324,12 +438,15 @@ jobs:
           "${s[@]}" "umask 077; rm -rf '$remote_stage'; mkdir -m 0700 '$remote_stage'"
           "${c[@]}" "$RUNNER_TEMP/prepare.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/prepare.sh"
           "${c[@]}" "$RUNNER_TEMP/attest.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/attest.sh"
+          "${c[@]}" ops/issue_881_precanary_queue_proof.py \
+            "$ORACLE_USER@$ORACLE_HOST:$remote_stage/queue-proof.py"
           if [[ -n "$recovery_evidence" ]]; then
             recovery_remote_file="$remote_root/recovery-evidence.txt"
             "${c[@]}" "$recovery_evidence" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/recovery-evidence.txt"
           fi
           prepare_sha="$(sha256sum "$RUNNER_TEMP/prepare.sh" | awk '{print $1}')"
           attest_sha="$(sha256sum "$RUNNER_TEMP/attest.sh" | awk '{print $1}')"
+          queue_proof_sha="$(sha256sum ops/issue_881_precanary_queue_proof.py | awk '{print $1}')"
           recovery_install=''
           if [[ -n "$recovery_evidence" ]]; then
             recovery_install="test \"\$(sha256sum '$remote_stage/recovery-evidence.txt' | awk '{print \$1}')\" = '$recovery_sha'; sudo -n install -o root -g root -m 0400 '$remote_stage/recovery-evidence.txt' '$remote_root/recovery-evidence.txt';"
@@ -337,9 +454,11 @@ jobs:
           "${s[@]}" "set -e; \
             test \"\$(sha256sum '$remote_stage/prepare.sh' | awk '{print \$1}')\" = '$prepare_sha'; \
             test \"\$(sha256sum '$remote_stage/attest.sh' | awk '{print \$1}')\" = '$attest_sha'; \
+            test \"\$(sha256sum '$remote_stage/queue-proof.py' | awk '{print \$1}')\" = '$queue_proof_sha'; \
             sudo -n install -d -o root -g root -m 0700 '$remote_root'; \
             sudo -n install -o root -g root -m 0700 '$remote_stage/prepare.sh' '$remote_root/prepare.sh'; \
             sudo -n install -o root -g root -m 0700 '$remote_stage/attest.sh' '$remote_root/attest.sh'; \
+            sudo -n install -o root -g root -m 0600 '$remote_stage/queue-proof.py' '$remote_root/queue-proof.py'; \
             $recovery_install"
 
           # Staging can outlive the evidence used by the earlier gate. Check
@@ -347,6 +466,7 @@ jobs:
           # before invoking the attestation that may quiesce resident services
           # or replace protected runtime files.
           verify_live_gate
+          verify_one_shot_gate
 
           set +e
           "${s[@]}" "sudo -n env \
@@ -354,7 +474,8 @@ jobs:
             UNIVERSAL_VIDEO_PREPARE_SCRIPT='$remote_root/prepare.sh' \
             UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE=1 \
             UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB=5242880 \
-            UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1 \
+            UNIVERSAL_VIDEO_QUEUE_PROOF_SCRIPT='$remote_root/queue-proof.py' \
+            UNIVERSAL_VIDEO_QUEUE_PROOF_SHA256='$queue_proof_sha' \
             UNIVERSAL_VIDEO_RECOVER_CONTAINER_ACTIVE_FROM_RUN='$RECOVER_CONTAINER_FROM_RUN' \
             UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_FILE='$recovery_remote_file' \
             UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256='$recovery_sha' \
@@ -372,6 +493,7 @@ jobs:
 
           grep -E "^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} activated=0$" "$session_log"
           grep -E "^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$" "$session_log"
+          grep -E '^UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME container_id=[0-9a-f]{64} previous_container_id=([0-9a-f]{64}|absent) recreated=true project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0 result=PASS$' "$session_log"
           grep -E '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=(active|inactive) source_service=\1 container_service_before=(active|inactive) container_target=(active|inactive) container_service=\3 prior_container_recovery=[01]$' "$session_log"
           installed_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) activated=0$/\\1/p" "$session_log")"
           attested_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$/\\1/p" "$session_log")"
@@ -389,7 +511,9 @@ jobs:
           trap - ERR
           {
             echo "runtime_sha=$EXACT_SHA"
-            grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|RESTORE_PASS)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)) ' "$session_log"
+            cat "$RUNNER_TEMP/precanary-one-shot-marker.txt"
+            cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt"
+            grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|POSTRESTORE_RUNTIME|RESTORE_PASS)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)) ' "$session_log"
             grep -E '"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"' "$session_log"
             echo "image_digest=$installed_digest"
             echo 'real_media_canary_run=false'
@@ -400,6 +524,25 @@ jobs:
             echo 'publication_state=NOT_PUBLISHED'
           } > "$evidence"
           cat "$evidence" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify unchanged pristine production queue after restoration
+        if: always()
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/issue-881-authoritative-external-evidence.txt"
+          postrestore_marker=''
+          if [[ ! -f "$RUNNER_TEMP/issue-881-owner-baseline.json" ]]; then
+            echo 'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER result=FAILED reason=baseline_missing' \
+              | tee -a "$evidence" "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_SHA"
+          postrestore_marker="$(python3 ops/issue_881_precanary_queue_proof.py owner-after \
+            --baseline "$RUNNER_TEMP/issue-881-owner-baseline.json")"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_SHA"
+          printf '%s\n' "$postrestore_marker" | tee -a "$evidence" "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()

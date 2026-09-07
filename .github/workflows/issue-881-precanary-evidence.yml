@@ -7,6 +7,8 @@ on:
       - '.github/workflows/issue-881-authoritative-external-evidence.yml'
       - '.github/workflows/oracle-universal-video-container-evidence.yml'
       - 'deploy/oracle-universal-video/Dockerfile'
+      - 'ops/issue_881_precanary_one_shot.py'
+      - 'ops/issue_881_precanary_queue_proof.py'
       - 'ops/oracle_universal_video_container_install.sh'
       - 'ops/oracle_universal_video_precanary_attest.sh'
       - 'ops/oracle_universal_video_run_command.sh'
@@ -49,10 +51,16 @@ jobs:
           grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
           bash -n ops/oracle_universal_video_precanary_attest.sh
           bash -n ops/oracle_universal_video_container_install.sh
+          python3 -m py_compile ops/issue_881_precanary_one_shot.py \
+            ops/issue_881_precanary_queue_proof.py
           grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'bash "$PREPARE_SCRIPT"' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'restore_service "$SOURCE_SERVICE" "$source_state_before"' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'restore_service "$CONTAINER_SERVICE" "$container_target_state"' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'verify_postrestore_runtime_queue' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'UNIVERSAL_VIDEO_QUEUE_PROOF_SHA256' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM=0' ops/oracle_universal_video_precanary_attest.sh
+          ! grep -F 'find "$root_cache"' ops/oracle_universal_video_precanary_attest.sh
           grep -F '"$image_id" "$@"' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'UNIVERSAL_VIDEO_IMAGE=$image_id' ops/oracle_universal_video_container_install.sh
           grep -F '"$image_id" true' ops/oracle_universal_video_container_install.sh
@@ -65,18 +73,29 @@ jobs:
           set -euo pipefail
           workflow=.github/workflows/issue-881-authoritative-external-evidence.yml
           grep -F 'director_go:' "$workflow"
+          grep -F 'approval_receipt_id:' "$workflow"
+          grep -F 'approval_nonce:' "$workflow"
           grep -F 'github.actor == github.repository_owner' "$workflow"
           grep -F "github.repository == 'olegmed1-art/bridge-video-free'" "$workflow"
           grep -F 'verify_live_gate(){' "$workflow"
           test "$(grep -c '^[[:space:]]*verify_live_gate$' "$workflow")" -eq 2
+          grep -F 'verify_one_shot_gate(){' "$workflow"
+          test "$(grep -c '^[[:space:]]*verify_one_shot_gate$' "$workflow")" -eq 1
+          test "$(grep -c 'issue_881_precanary_one_shot.py verify' "$workflow")" -eq 2
           grep -F 'root_pr_number=991' "$workflow"
           grep -F 'prior_gate_pr_number=1070' "$workflow"
-          grep -F 'pr_number=1071' "$workflow"
+          grep -F 'protected_gate_paths=(' "$workflow"
+          grep -F 'commits/$gate_commit/pulls' "$workflow"
+          grep -F 'git diff --quiet "$reviewed_sha" "$gate_commit"' "$workflow"
+          grep -F 'Protected gate files changed after the reviewed merge' "$workflow"
           grep -F 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' "$workflow"
           grep -F 'Root Autopilot PR #991 is not merged' "$workflow"
-          grep -F 'git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA"' "$workflow"
+          grep -F 'git merge-base --is-ancestor "$gate_merge_sha" "$EXACT_SHA"' "$workflow"
           grep -F 'Reviewed head has no current independent approval at final reconciliation' "$workflow"
           grep -F 'exact clean Codex bot receipt' "$workflow"
+          grep -F 'issue_881_precanary_queue_proof.py owner-before' "$workflow"
+          grep -F 'issue_881_precanary_queue_proof.py owner-after' "$workflow"
+          grep -F 'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME' "$workflow"
           retired=.github/workflows/oracle-universal-video-container-evidence.yml
           grep -F 'UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true' "$retired"
           ! grep -E 'workflow[_]dispatch:' "$retired"

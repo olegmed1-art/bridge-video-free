@@ -13,7 +13,6 @@ EXPECTED_SHA="${UNIVERSAL_VIDEO_EXPECTED_SHA:-}"
 PREPARE_SCRIPT="${UNIVERSAL_VIDEO_PREPARE_SCRIPT:-}"
 BUILD_IMAGE="${UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE:-0}"
 MIN_FREE_KB="${UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-5242880}"
-RECLAIM_ROOT_CACHE="${UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE:-0}"
 RECOVER_CONTAINER_FROM_RUN="${UNIVERSAL_VIDEO_RECOVER_CONTAINER_ACTIVE_FROM_RUN:-}"
 RECOVERY_EVIDENCE_FILE="${UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_FILE:-}"
 RECOVERY_EVIDENCE_SHA256="${UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256:-}"
@@ -21,6 +20,8 @@ RESTORE_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_RESTORE_TIMEOUT_SECONDS:-45}"
 RESTORE_STABLE_SECONDS="${UNIVERSAL_VIDEO_RESTORE_STABLE_SECONDS:-5}"
 QUEUE_DSN_FILE="${UNIVERSAL_VIDEO_QUEUE_DSN_FILE:-$BASE_DIR/secrets/video-queue-dsn}"
 QUEUE_PYTHON="${UNIVERSAL_VIDEO_QUEUE_PYTHON:-$BASE_DIR/.venv/bin/python}"
+QUEUE_PROOF_SCRIPT="${UNIVERSAL_VIDEO_QUEUE_PROOF_SCRIPT:-}"
+QUEUE_PROOF_SHA256="${UNIVERSAL_VIDEO_QUEUE_PROOF_SHA256:-}"
 ENV_FILE="${UNIVERSAL_VIDEO_CONTAINER_ENV_FILE:-}"
 PERSISTENT_ENV_FILE="$BASE_DIR/universal-video-container.env"
 if [[ -z "$ENV_FILE" ]]; then
@@ -89,7 +90,6 @@ validate_source_dir_scope(){
 [[ "$(id -u)" -eq 0 ]] || die 'run as root on the Oracle host'
 [[ "$SIZE" =~ ^[0-9]+$ && "$SIZE" -gt 0 ]] || die 'invalid source size'
 [[ "$BUILD_IMAGE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE must be 0 or 1'
-[[ "$RECLAIM_ROOT_CACHE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE must be 0 or 1'
 [[ "$MIN_FREE_KB" =~ ^[0-9]+$ && "$MIN_FREE_KB" -gt 0 ]] || die 'invalid build free-space threshold'
 [[ "$RESTORE_TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$RESTORE_TIMEOUT_SECONDS" -ge 5 && "$RESTORE_TIMEOUT_SECONDS" -le 180 ]] \
   || die 'invalid resident restore timeout'
@@ -118,6 +118,15 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
   [[ -n "$EXPECTED_SHA" ]] || die 'exact source SHA required for build'
   [[ -f "$PREPARE_SCRIPT" && ! -L "$PREPARE_SCRIPT" ]] || die 'safe prepare script missing'
 fi
+command -v sha256sum >/dev/null || die 'sha256sum is unavailable'
+[[ -f "$QUEUE_PROOF_SCRIPT" && ! -L "$QUEUE_PROOF_SCRIPT" ]] \
+  || die 'safe post-restore production queue proof is missing'
+[[ "$QUEUE_PROOF_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+  || die 'exact post-restore production queue proof digest is missing'
+[[ "$(stat -c '%U:%G:%a:%h' "$QUEUE_PROOF_SCRIPT")" == 'root:root:600:1' ]] \
+  || die 'post-restore production queue proof metadata is unsafe'
+[[ "$(sha256sum "$QUEUE_PROOF_SCRIPT" | awk '{print $1}')" == "$QUEUE_PROOF_SHA256" ]] \
+  || die 'post-restore production queue proof digest mismatch'
 
 source_state_before=""
 container_state_before=""
@@ -134,6 +143,7 @@ source_backup_dir=""
 source_backup_device_inode=""
 source_quarantine_dir=""
 resident_image_id=""
+container_id_before=""
 isolated_peer_service=""
 isolated_peer_pid=""
 isolated_peer_start_ticks=""
@@ -938,12 +948,41 @@ restore_source_checkout(){
   return 0
 }
 
+verify_postrestore_runtime_queue(){
+  local inspect_value container_id running container_root_pid container_image runtime_result
+  [[ "$container_target_state" == active ]] || return 1
+  [[ "$restored_container_pid" =~ ^[1-9][0-9]*$ \
+        && "$restored_container_start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
+  inspect_value="$(bounded_docker_query inspect \
+    --format '{{.Id}}|{{.State.Running}}|{{.State.Pid}}|{{.Image}}' \
+    universal-video-container 2>/dev/null || true)"
+  IFS='|' read -r container_id running container_root_pid container_image <<<"$inspect_value"
+  [[ "$container_id" =~ ^[0-9a-f]{64}$ && "$running" == true \
+        && "$container_root_pid" =~ ^[1-9][0-9]*$ \
+        && "$container_image" == "$resident_image_id" ]] || return 1
+  [[ -z "$container_id_before" || "$container_id" != "$container_id_before" ]] || return 1
+  pid_descends_from "$restored_container_pid" "$container_root_pid" || return 1
+  exact_process_signal "$restored_container_pid" "$restored_container_start_ticks" CHECK \
+    || return 1
+  [[ "$(stat -c '%U:%G:%a:%h' "$QUEUE_PROOF_SCRIPT")" == 'root:root:600:1' ]] \
+    || return 1
+  [[ "$(sha256sum "$QUEUE_PROOF_SCRIPT" | awk '{print $1}')" == "$QUEUE_PROOF_SHA256" ]] \
+    || return 1
+  runtime_result="$(bounded_docker exec -i --user="$uid:$gid" \
+    universal-video-container python -I - runtime < "$QUEUE_PROOF_SCRIPT")" || return 1
+  [[ "$runtime_result" == \
+    'project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0' ]] \
+    || return 1
+  printf 'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME container_id=%s previous_container_id=%s recreated=true %s result=PASS\n' \
+    "$container_id" "${container_id_before:-absent}" "$runtime_result"
+}
+
 cleanup(){
   local rc=$? service source_after container_after
   trap - EXIT
   # Once cleanup starts, finish the bounded restore instead of allowing a
   # second signal to strand a frozen worker or a runtime-masked service.
-  trap '' INT TERM
+  trap '' HUP INT TERM
   if [[ "${#prestop_frozen_pids[@]}" -gt 0 ]]; then
     if [[ "$services_stop_attempted" == 1 ]]; then
       resume_prestop_frozen stopping || record_restore_failure prestop_resume
@@ -996,7 +1035,7 @@ cleanup(){
           "$(IFS=,; echo "${restore_failures[*]}")" "${source_after:-unknown}" "${container_after:-unknown}" >&2
         if [[ "$rc" == 0 ]]; then rc=1; fi
       fi
-      trap - INT TERM
+      trap - HUP INT TERM
       exit "$rc"
     fi
     # Keep the exclusive workload fence while claim paths are quiet, candidate
@@ -1008,7 +1047,7 @@ cleanup(){
         printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
           "$(IFS=,; echo "${restore_failures[*]}")" \
           "$(service_state "$SOURCE_SERVICE")" "$(service_state "$CONTAINER_SERVICE")" >&2
-        trap - INT TERM
+        trap - HUP INT TERM
         exit 1
       fi
     fi
@@ -1024,7 +1063,7 @@ cleanup(){
         printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
           "$(IFS=,; echo "${restore_failures[*]}")" \
           "$(service_state "$SOURCE_SERVICE")" "$(service_state "$CONTAINER_SERVICE")" >&2
-        trap - INT TERM
+        trap - HUP INT TERM
         exit 1
       fi
     fi
@@ -1072,6 +1111,10 @@ cleanup(){
       "$restored_container_pid" "$restored_container_start_ticks" \
       || record_restore_failure container_readiness_mismatch
     if [[ "${#restore_failures[@]}" -eq 0 ]]; then
+      verify_postrestore_runtime_queue \
+        || record_restore_failure postrestore_runtime_queue
+    fi
+    if [[ "${#restore_failures[@]}" -eq 0 ]]; then
       printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=%s source_service=%s container_service_before=%s container_target=%s container_service=%s prior_container_recovery=%s\n' \
         "$source_state_before" "$source_after" "$container_state_before" "$container_target_state" \
         "$container_after" "$container_recovery_requested"
@@ -1081,10 +1124,11 @@ cleanup(){
       if [[ "$rc" == 0 ]]; then rc=1; fi
     fi
   fi
-  trap - INT TERM
+  trap - HUP INT TERM
   exit "$rc"
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -1183,7 +1227,6 @@ mask_service_for_window(){
 command -v flock >/dev/null || die 'flock is unavailable'
 command -v docker >/dev/null || die 'docker is unavailable'
 command -v runuser >/dev/null || die 'runuser is unavailable'
-command -v sha256sum >/dev/null || die 'sha256sum is unavailable'
 command -v timeout >/dev/null || die 'timeout is unavailable'
 python3 -c 'import os,signal; assert hasattr(os,"pidfd_open") and hasattr(signal,"pidfd_send_signal")' \
   >/dev/null 2>&1 || die 'pidfd signaling is unavailable'
@@ -1236,6 +1279,14 @@ if [[ "$container_was_active" == 1 ]]; then
   bounded_docker image inspect "$resident_image_id" >/dev/null \
     || die 'active container resident image is unavailable'
 fi
+if [[ "$container_state_before" == active ]]; then
+  container_id_before="$(bounded_docker_query inspect --format '{{.Id}}' \
+    universal-video-container 2>/dev/null || true)"
+  [[ "$container_id_before" =~ ^[0-9a-f]{64}$ ]] \
+    || die 'active container resident identity is unavailable'
+fi
+[[ "$container_target_state" == active ]] \
+  || die 'bounded pre-canary recreation requires an active container target'
 window_started=1
 
 # Acquire the exclusive fence before source checkout, cache reclamation, image
@@ -1298,22 +1349,17 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
 
   disk_available_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
   [[ "$disk_available_kb" =~ ^[0-9]+$ ]] || die 'build capacity unavailable'
-  if (( disk_available_kb < MIN_FREE_KB )) && [[ "$RECLAIM_ROOT_CACHE" == 1 ]]; then
-    root_cache=/root/.cache
-    [[ -d "$root_cache" && ! -L "$root_cache" ]] || die 'root cache is unsafe or missing'
-    cache_before_kb="$(du -skx "$root_cache" | awk '{print $1}')"
-    # Cache-only reclamation under the exclusive workload fence. No source,
-    # model mount, spool, output, media, or database path is touched.
-    find "$root_cache" -xdev -mindepth 1 -delete
-    cache_after_kb="$(du -skx "$root_cache" | awk '{print $1}')"
-    disk_after_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
-    printf 'UNIVERSAL_VIDEO_CONTAINER_CLEANUP area=root-cache-all before_kb=%s after_kb=%s disk_available_kb=%s\n' \
-      "$cache_before_kb" "$cache_after_kb" "$disk_after_kb"
+  printf 'UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=%s disk_required_kb=%s cache_reclaim=forbidden\n' \
+    "$disk_available_kb" "$MIN_FREE_KB"
+  if (( disk_available_kb < MIN_FREE_KB )); then
+    printf '{"error_code":"UV_CONTAINER_DISK_INSUFFICIENT","status":"FAILED"}\n' >&2
+    die 'container image build requires explicit capacity repair and a new Director GO'
   fi
 
   env \
     UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 \
     UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB="$MIN_FREE_KB" \
+    UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM=0 \
     UNIVERSAL_VIDEO_CONTAINER_PRESERVE_IMAGE_ID="$resident_image_id" \
     bash "$SOURCE_DIR/ops/oracle_universal_video_container_install.sh"
   assert_quiescent

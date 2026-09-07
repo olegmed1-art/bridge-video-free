@@ -20,14 +20,18 @@ SPEC.loader.exec_module(VALIDATOR)
 
 COMMIT = "a" * 40
 IMAGE_DIGEST = "sha256:" + "b" * 64
+RECEIPT_ID = 5_600_000_001
+RUN_ID = 34_100_000_001
 
 
 def _run() -> dict[str, object]:
     return {
-        "id": 12345,
+        "id": RUN_ID,
         "name": VALIDATOR.AUTHORITATIVE_WORKFLOW_NAME,
         "path": VALIDATOR.AUTHORITATIVE_WORKFLOW_PATH,
         "event": "workflow_dispatch",
+        "display_title": f"issue881-precanary/{COMMIT}/receipt-{RECEIPT_ID}",
+        "run_attempt": 1,
         "status": "completed",
         "conclusion": "success",
         "head_sha": COMMIT,
@@ -44,7 +48,7 @@ def _artifact(digest: str = "sha256:" + "c" * 64) -> dict[str, object]:
         "expired": False,
         "digest": digest,
         "size_in_bytes": 4096,
-        "workflow_run": {"id": 12345, "head_sha": COMMIT},
+        "workflow_run": {"id": RUN_ID, "head_sha": COMMIT},
     }
 
 
@@ -63,8 +67,16 @@ def _evidence() -> str:
     return "\n".join(
         [
             f"runtime_sha={COMMIT}",
+            "UNIVERSAL_VIDEO_PRECANARY_ONE_SHOT "
+            f"receipt_id={RECEIPT_ID} receipt_sha256={'d' * 64} "
+            f"exact_sha={COMMIT} run_id={RUN_ID} run_attempt=1 result=PASS",
+            "UNIVERSAL_VIDEO_PRECANARY_OWNER_BEFORE "
+            "project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb "
+            "principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 "
+            "max_event_id=NULL sequence_last_value=1 sequence_is_called=false "
+            "claimable=0 leased=0 result=PASS",
             "UNIVERSAL_VIDEO_PRECANARY_WINDOW source_service_before=active "
-            "container_service_before=inactive workload_fence=exclusive "
+            "container_service_before=active workload_fence=exclusive "
             "services_quiescent=true restore_on_exit=true",
             f"UNIVERSAL_VIDEO_PRECANARY_RUNTIME commit={COMMIT} image_digest={IMAGE_DIGEST}",
             f"UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit={COMMIT} "
@@ -73,9 +85,14 @@ def _evidence() -> str:
             f"image_digest={IMAGE_DIGEST} video_job_submitted=false "
             "drive_write_performed=false canonical_promotion_allowed=false "
             "publication_state=NOT_PUBLISHED",
+            "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME "
+            f"container_id={'e' * 64} previous_container_id={'f' * 64} "
+            "recreated=true project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of "
+            "database=neondb principal=bridge_school_worker_principal schema=true "
+            "function=true claimable=0 leased=0 result=PASS",
             "UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=active "
-            "source_service=active container_service_before=inactive "
-            "container_target=inactive container_service=inactive prior_container_recovery=0",
+            "source_service=active container_service_before=active "
+            "container_target=active container_service=active prior_container_recovery=0",
             _gate("IMPORT_CLOSURE"),
             _gate(
                 "SYNTHETIC_RESULT_CONTRACT",
@@ -94,6 +111,11 @@ def _evidence() -> str:
             "automatic_batch_release=false",
             "canonical_promotion_allowed=false",
             "publication_state=NOT_PUBLISHED",
+            "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER "
+            "project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb "
+            "principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 "
+            "max_event_id=NULL sequence_last_value=1 sequence_is_called=false "
+            "claimable=0 leased=0 unchanged=true result=PASS",
         ]
     ) + "\n"
 
@@ -113,6 +135,8 @@ def test_selects_only_exact_authoritative_director_run_artifact() -> None:
     assert selected == {
         "artifact_id": artifact["id"],
         "artifact_digest": artifact["digest"],
+        "receipt_id": RECEIPT_ID,
+        "run_id": RUN_ID,
     }
 
 
@@ -122,6 +146,8 @@ def test_selects_only_exact_authoritative_director_run_artifact() -> None:
         ("name", "Oracle Universal Video Container Evidence"),
         ("path", ".github/workflows/oracle-universal-video-container-evidence.yml"),
         ("event", "pull_request"),
+        ("display_title", "unsafe title"),
+        ("run_attempt", 2),
         ("conclusion", "failure"),
         ("head_sha", "d" * 40),
         ("actor", {"login": "not-the-director"}),
@@ -155,18 +181,50 @@ def test_verifies_archive_digest_and_exact_runtime_receipt(tmp_path: Path) -> No
     archive = tmp_path / "evidence.zip"
     archive.write_bytes(content)
     artifact_digest = "sha256:" + hashlib.sha256(content).hexdigest()
-    VALIDATOR.verify_evidence_archive(archive, artifact_digest, COMMIT, IMAGE_DIGEST)
+    VALIDATOR.verify_evidence_archive(
+        archive, artifact_digest, COMMIT, IMAGE_DIGEST, RUN_ID, RECEIPT_ID
+    )
 
 
 def test_rejects_tampered_or_ambiguous_archive_evidence(tmp_path: Path) -> None:
     valid = _archive_bytes()
+    evidence = _evidence()
     cases = [
         (valid, "sha256:" + "0" * 64),
         (
-            _archive_bytes(_evidence().replace(f"image_digest={IMAGE_DIGEST}\n", "image_digest=sha256:" + "e" * 64 + "\n")),
+            _archive_bytes(
+                evidence.replace(
+                    f"image_digest={IMAGE_DIGEST}\n",
+                    "image_digest=sha256:" + "e" * 64 + "\n",
+                )
+            ),
             None,
         ),
-        (_archive_bytes(_evidence() + f"runtime_sha={COMMIT}\n"), None),
+        (_archive_bytes(evidence + f"runtime_sha={COMMIT}\n"), None),
+        (
+            _archive_bytes(
+                evidence.replace("UNIVERSAL_VIDEO_PRECANARY_ONE_SHOT ", "REMOVED_ONE_SHOT ")
+            ),
+            None,
+        ),
+        (
+            _archive_bytes(
+                evidence.replace(
+                    "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME ",
+                    "REMOVED_POSTRESTORE_RUNTIME ",
+                )
+            ),
+            None,
+        ),
+        (
+            _archive_bytes(
+                evidence.replace(
+                    "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER ",
+                    "REMOVED_POSTRESTORE_OWNER ",
+                )
+            ),
+            None,
+        ),
         (_archive_bytes(filename="nested/evidence.txt"), None),
     ]
     for index, (content, forced_digest) in enumerate(cases):
@@ -174,4 +232,6 @@ def test_rejects_tampered_or_ambiguous_archive_evidence(tmp_path: Path) -> None:
         archive.write_bytes(content)
         digest = forced_digest or "sha256:" + hashlib.sha256(content).hexdigest()
         with pytest.raises(VALIDATOR.EvidenceValidationError):
-            VALIDATOR.verify_evidence_archive(archive, digest, COMMIT, IMAGE_DIGEST)
+            VALIDATOR.verify_evidence_archive(
+                archive, digest, COMMIT, IMAGE_DIGEST, RUN_ID, RECEIPT_ID
+            )

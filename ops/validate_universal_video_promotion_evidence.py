@@ -25,6 +25,7 @@ MAX_ARCHIVE_BYTES = 2_000_000
 MAX_EVIDENCE_BYTES = 1_000_000
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+RUN_NAME_RE = re.compile(r"issue881-precanary/([0-9a-f]{40})/receipt-([1-9][0-9]{8,19})")
 
 
 class EvidenceValidationError(ValueError):
@@ -57,7 +58,15 @@ def select_authoritative_artifact(
     _require(run.get("event") == "workflow_dispatch", "wrong workflow event")
     _require(run.get("status") == "completed", "evidence workflow is not complete")
     _require(run.get("conclusion") == "success", "evidence workflow did not succeed")
+    _require(run.get("run_attempt") == 1, "evidence workflow rerun is forbidden")
     _require(run.get("head_sha") == expected_commit, "evidence head mismatch")
+    run_name = run.get("display_title")
+    run_name_match = RUN_NAME_RE.fullmatch(run_name) if isinstance(run_name, str) else None
+    _require(
+        run_name_match is not None and run_name_match.group(1) == expected_commit,
+        "evidence run has no exact one-shot title",
+    )
+    receipt_id = int(run_name_match.group(2))
     repository = run.get("repository")
     _require(
         isinstance(repository, dict)
@@ -114,7 +123,12 @@ def select_authoritative_artifact(
         and artifact_run.get("head_sha") == expected_commit,
         "artifact is not bound to the selected workflow run",
     )
-    return {"artifact_id": artifact_id, "artifact_digest": artifact_digest}
+    return {
+        "artifact_id": artifact_id,
+        "artifact_digest": artifact_digest,
+        "receipt_id": receipt_id,
+        "run_id": run_id,
+    }
 
 
 def _one_exact(lines: list[str], key: str, expected: str) -> None:
@@ -127,6 +141,8 @@ def verify_evidence_archive(
     expected_artifact_digest: str,
     expected_commit: str,
     expected_image_digest: str,
+    expected_run_id: int,
+    expected_receipt_id: int,
 ) -> None:
     """Verify archive integrity and bind its exact PASS receipt to the request."""
 
@@ -138,6 +154,11 @@ def verify_evidence_archive(
     _require(
         DIGEST_RE.fullmatch(expected_artifact_digest) is not None,
         "invalid expected artifact digest",
+    )
+    _require(type(expected_run_id) is int and expected_run_id > 0, "invalid expected run id")
+    _require(
+        type(expected_receipt_id) is int and expected_receipt_id > 0,
+        "invalid expected receipt id",
     )
     _require(
         archive_path.is_file() and not archive_path.is_symlink(),
@@ -175,6 +196,21 @@ def verify_evidence_archive(
 
     _one_exact(lines, "runtime_sha", expected_commit)
     _one_exact(lines, "image_digest", expected_image_digest)
+
+    one_shot_lines = [
+        line for line in lines if line.startswith("UNIVERSAL_VIDEO_PRECANARY_ONE_SHOT ")
+    ]
+    _require(len(one_shot_lines) == 1, "one-shot receipt is missing or ambiguous")
+    _require(
+        re.fullmatch(
+            rf"UNIVERSAL_VIDEO_PRECANARY_ONE_SHOT receipt_id={expected_receipt_id} "
+            rf"receipt_sha256=[0-9a-f]{{64}} exact_sha={expected_commit} "
+            rf"run_id={expected_run_id} run_attempt=1 result=PASS",
+            one_shot_lines[0],
+        )
+        is not None,
+        "one-shot receipt is inconsistent",
+    )
     for key, value in (
         ("real_media_canary_run", "false"),
         ("source_media_downloaded", "false"),
@@ -213,11 +249,46 @@ def verify_evidence_archive(
     restore_match = re.fullmatch(
         r"UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS "
         r"source_service_before=(active|inactive) source_service=\1 "
-        r"container_service_before=(active|inactive) container_target=(active|inactive) "
-        r"container_service=\3 prior_container_recovery=[01]",
+        r"container_service_before=(active|inactive) container_target=active "
+        r"container_service=active prior_container_recovery=[01]",
         restore_lines[0],
     )
     _require(restore_match is not None, "restore receipt is inconsistent")
+
+    owner_before = (
+        "UNIVERSAL_VIDEO_PRECANARY_OWNER_BEFORE "
+        "project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb "
+        "principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 "
+        "max_event_id=NULL sequence_last_value=1 sequence_is_called=false "
+        "claimable=0 leased=0 result=PASS"
+    )
+    owner_after = (
+        "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER "
+        "project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb "
+        "principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 "
+        "max_event_id=NULL sequence_last_value=1 sequence_is_called=false "
+        "claimable=0 leased=0 unchanged=true result=PASS"
+    )
+    _require(lines.count(owner_before) == 1, "owner baseline is missing or ambiguous")
+    _require(lines.count(owner_after) == 1, "post-restore owner proof is missing or ambiguous")
+    runtime_after = [
+        line
+        for line in lines
+        if line.startswith("UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME ")
+    ]
+    _require(len(runtime_after) == 1, "post-restore runtime proof is missing or ambiguous")
+    _require(
+        re.fullmatch(
+            r"UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME "
+            r"container_id=[0-9a-f]{64} previous_container_id=([0-9a-f]{64}|absent) "
+            r"recreated=true project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of "
+            r"database=neondb principal=bridge_school_worker_principal schema=true "
+            r"function=true claimable=0 leased=0 result=PASS",
+            runtime_after[0],
+        )
+        is not None,
+        "post-restore runtime proof is inconsistent",
+    )
 
     window_lines = [
         line for line in lines if line.startswith("UNIVERSAL_VIDEO_PRECANARY_WINDOW ")
@@ -228,6 +299,15 @@ def verify_evidence_archive(
         and "services_quiescent=true" in window_lines[0]
         and "restore_on_exit=true" in window_lines[0],
         "pre-canary window was not safely fenced",
+    )
+    _require(
+        lines.index(one_shot_lines[0])
+        < lines.index(owner_before)
+        < lines.index(window_lines[0])
+        < lines.index(runtime_after[0])
+        < lines.index(restore_lines[0])
+        < lines.index(owner_after),
+        "one-shot, queue, and restoration receipts are out of order",
     )
 
     gate_records: dict[str, list[dict[str, Any]]] = {}
@@ -277,6 +357,8 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--expected-artifact-digest", required=True)
     verify.add_argument("--expected-commit", required=True)
     verify.add_argument("--expected-image-digest", required=True)
+    verify.add_argument("--expected-run-id", type=int, required=True)
+    verify.add_argument("--expected-receipt-id", type=int, required=True)
     return parser
 
 
@@ -296,6 +378,8 @@ def main() -> int:
                 args.expected_artifact_digest,
                 args.expected_commit,
                 args.expected_image_digest,
+                args.expected_run_id,
+                args.expected_receipt_id,
             )
             print("UNIVERSAL_VIDEO_PROMOTION_EVIDENCE_PASS")
     except EvidenceValidationError as exc:

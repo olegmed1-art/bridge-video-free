@@ -74,12 +74,17 @@ jobs:
             --expected-commit "$expected_commit")"
           artifact_id="$(jq -er '.artifact_id' <<<"$selection")"
           artifact_digest="$(jq -er '.artifact_digest' <<<"$selection")"
+          receipt_id="$(jq -er '.receipt_id' <<<"$selection")"
+          selected_run_id="$(jq -er '.run_id' <<<"$selection")"
+          [[ "$selected_run_id" == "$evidence_run_id" ]]
           gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$artifact_zip"
           python ops/validate_universal_video_promotion_evidence.py verify-archive \
             --archive "$artifact_zip" \
             --expected-artifact-digest "$artifact_digest" \
             --expected-commit "$expected_commit" \
-            --expected-image-digest "$image_digest"
+            --expected-image-digest "$image_digest" \
+            --expected-run-id "$evidence_run_id" \
+            --expected-receipt-id "$receipt_id"
           printf 'evidence_artifact_digest=%s\n' "$artifact_digest" >> "$GITHUB_OUTPUT"
       - name: Ensure Oracle instance is running
         run: |

@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/issue-881-contract-ci.yml'
       - 'universal_video/**'
+      - 'ops/issue_881_precanary_one_shot.py'
+      - 'ops/issue_881_precanary_queue_proof.py'
       - 'ops/oracle_universal_video_container_install.sh'
       - 'ops/validate_video_queue_dsn.py'
       - 'database/migrations/0056_universal_video_queue.sql'
@@ -21,6 +23,7 @@ on:
       - 'tests/test_universal_video_terminal_evidence_v2.py'
       - 'tests/test_universal_video_drive_adapter.py'
       - 'tests/test_issue_881_queue_dsn.py'
+      - 'tests/test_issue_881_precanary_hardening.py'
       - 'ops/oracle_universal_video_precanary_attest.sh'
       - 'ops/validate_universal_video_promotion_evidence.py'
       - '.github/workflows/issue-881-authoritative-external-evidence.yml'
@@ -59,10 +62,13 @@ jobs:
             tests/test_universal_video_terminal_evidence_v2.py \
             tests/test_universal_video_drive_adapter.py \
             tests/test_issue_881_queue_dsn.py \
+            tests/test_issue_881_precanary_hardening.py \
             tests/test_universal_video_container_promotion_contract.py \
             tests/test_universal_video_promotion_evidence_validator.py
           python -m compileall -q universal_video ops/validate_video_queue_dsn.py \
-            ops/validate_universal_video_promotion_evidence.py
+            ops/validate_universal_video_promotion_evidence.py \
+            ops/issue_881_precanary_one_shot.py \
+            ops/issue_881_precanary_queue_proof.py
 
   database-contract:
     runs-on: ubuntu-latest
