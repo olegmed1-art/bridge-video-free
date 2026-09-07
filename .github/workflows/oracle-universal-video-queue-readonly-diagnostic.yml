@@ -76,10 +76,13 @@ jobs:
                   dsn,
                   connect_timeout=8,
                   application_name="uv-readonly-queue-diagnostic",
-                  options="-c statement_timeout=10000 -c lock_timeout=2000",
               ) as conn:
                   conn.read_only = True
                   with conn.cursor() as cur:
+                      # Preserve DSN startup options (including proxy routing).
+                      # Transaction-local settings also work with poolers.
+                      cur.execute("SET LOCAL statement_timeout = '10s'")
+                      cur.execute("SET LOCAL lock_timeout = '2s'")
                       # Catalog lookup works even when the schema is absent.
                       # Never print connection strings, endpoint URLs or errors.
                       cur.execute("""

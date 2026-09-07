@@ -690,9 +690,10 @@ def find_chain_peaks(
             merged.append((x, score))
     if not merged:
         return []
-    current = min(merged, key=lambda item: (abs(item[0] - edge), -item[1]))
-    if abs(current[0] - edge) > 5:
+    starts = [item for item in merged if abs(item[0] - edge) <= 5]
+    if len(starts) != 1:
         return []
+    current = starts[0]
     chain = [current[0]]
     while True:
         options = [
