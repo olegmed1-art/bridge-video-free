@@ -93,7 +93,9 @@ jobs:
           expected = dict(main=sys.argv[1], project='misty-poetry-18012774',
               branch='br-wispy-lab-b1rq54of', database='neondb', events=0,
               batches=0, jobs=0, max_event_id=None, last_value=1, is_called=False)
-          assert all(p.get(k) == v for k,v in expected.items()), 'owner evidence mismatch'
+          assert type(p) is dict and set(p) == set(expected) | {'observed_at'}
+          assert all(type(p[k]) is type(v) and p[k] == v for k,v in expected.items()), 'owner evidence mismatch'
+          assert type(p['observed_at']) is str
           def stamp(s):
               d = datetime.datetime.fromisoformat(s.replace('Z','+00:00'))
               assert d.tzinfo is not None
