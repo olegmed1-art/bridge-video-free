@@ -22,7 +22,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-operational-safety-gate
+  group: oracle-instance-workload-mutation
   cancel-in-progress: false
 
 jobs:

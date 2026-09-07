@@ -15,7 +15,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: oracle-operator-v3-${{ github.event.issue.number || github.run_id }}
+  group: oracle-instance-workload-mutation
   cancel-in-progress: false
 
 jobs:

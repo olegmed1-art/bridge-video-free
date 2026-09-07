@@ -557,6 +557,9 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "group: oracle-universal-video-bounded-admin" not in admin_workflow
     for protected_external_mutator in (
         ".github/workflows/database-production.yml",
+        ".github/workflows/oracle-operational-safety-gate.yml",
+        ".github/workflows/oracle-operator-commands.yml",
+        ".github/workflows/oracle-operator-v3.yml",
         ".github/workflows/process-video.yml",
         ".github/workflows/video-job-monitor.yml",
     ):
@@ -860,6 +863,44 @@ verify_no_competing_infrastructure_runs
     missing_current = run(include_current=False)
     assert missing_current.returncode != 0
     assert "Current pre-canary run is missing from an active workflow sweep" in missing_current.stderr
+
+
+def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() -> None:
+    direct_mutation = re.compile(
+        r"systemctl restart|oci compute instance action|"
+        r"install -o root.*video-queue|VIDEO_QUEUE_DSN",
+        re.DOTALL,
+    )
+    owner_mutators = {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / ".github/workflows").glob("oracle-*.yml")
+        if (
+            (
+                "  workflow_dispatch:" in path.read_text(encoding="utf-8")
+                or "  issue_comment:" in path.read_text(encoding="utf-8")
+            )
+            and direct_mutation.search(path.read_text(encoding="utf-8"))
+        )
+    }
+    assert owner_mutators == {
+        ".github/workflows/oracle-instance-power.yml",
+        ".github/workflows/oracle-operational-safety-gate.yml",
+        ".github/workflows/oracle-operator-commands.yml",
+        ".github/workflows/oracle-operator-v2.yml",
+        ".github/workflows/oracle-operator-v3.yml",
+        ".github/workflows/oracle-universal-video-activation.yml",
+        ".github/workflows/oracle-universal-video-job.yml",
+        ".github/workflows/oracle-universal-video-queue-credential-install.yml",
+    }
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
+    for relative in owner_mutators:
+        workflow = (ROOT / relative).read_text(encoding="utf-8")
+        header = workflow.split("\njobs:", 1)[0]
+        assert "oracle-instance-workload-mutation" in header, relative
+        assert "cancel-in-progress: false" in header, relative
+        assert f"'{relative}'" in runner, relative
 
 
 def test_every_instance_agent_command_must_be_terminal(tmp_path: Path) -> None:
