@@ -363,6 +363,14 @@ def test_legacy_adapter_rejects_duplicate_and_hand_overflow() -> None:
         adapt_legacy_hands(overflow)
 
 
+def test_legacy_adapter_rejects_explicit_null_suit() -> None:
+    hands = {seat: {} for seat in "NESW"}
+    hands["N"]["S"] = None
+
+    with pytest.raises(CardRecognitionContractError, match=r"legacy hands\.N\.S"):
+        adapt_legacy_hands(hands)
+
+
 def test_legacy_adapter_rejects_non_string_ranks() -> None:
     hands = {seat: {suit: "" for suit in "HCDS"} for seat in "NESW"}
     hands["N"]["S"] = 10
