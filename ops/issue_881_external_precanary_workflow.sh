@@ -103,6 +103,7 @@ protected_gate_paths=(
   'ops/issue_881_external_precanary_workflow.sh'
   'ops/issue_881_precanary_one_shot.py'
   'ops/issue_881_precanary_queue_proof.py'
+  'ops/process_video_precanary_fence.sh'
   'ops/verify_oci_instance_command_executions.py'
   'ops/assistant_lab_oci_admin_entrypoint.sh'
   'ops/install_assistant_lab_ocarun_admin.sh'

@@ -561,7 +561,6 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
         ".github/workflows/oracle-operational-safety-gate.yml",
         ".github/workflows/oracle-operator-commands.yml",
         ".github/workflows/oracle-operator-v3.yml",
-        ".github/workflows/process-video.yml",
         ".github/workflows/video-job-monitor.yml",
     ):
         assert f"'{protected_external_mutator}'" in runner
@@ -572,6 +571,16 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
         assert header.count("\nconcurrency:\n") == 1
         assert "oracle-instance-workload-mutation" in header
         assert "  cancel-in-progress: false" in header
+    process_video = (ROOT / ".github/workflows/process-video.yml").read_text(
+        encoding="utf-8"
+    )
+    process_header = process_video.split("\njobs:", 1)[0]
+    assert "oracle-instance-workload-mutation" not in process_header
+    assert "actions: read" in process_header
+    assert "precanary-fence:" in process_video
+    assert "needs: precanary-fence" in process_video
+    assert "run: bash ops/process_video_precanary_fence.sh" in process_video
+    assert "'ops/process_video_precanary_fence.sh'" in runner
     assert "verify_no_active_instance_agent_commands" in runner
     assert "instance-agent command-execution list" in runner
     assert '--instance-id "$INSTANCE_ID"' in runner
@@ -866,6 +875,136 @@ verify_no_competing_infrastructure_runs
     assert "Current pre-canary run is missing from an active workflow sweep" in missing_current.stderr
 
 
+def test_process_video_fence_preserves_dispatch_and_closes_precanary_race(
+    tmp_path: Path,
+) -> None:
+    fence = ROOT / "ops/process_video_precanary_fence.sh"
+    workflow = (ROOT / ".github/workflows/process-video.yml").read_text(
+        encoding="utf-8"
+    )
+    script = fence.read_text(encoding="utf-8")
+    assert "--paginate" not in script
+    assert "PROCESS_VIDEO_PRECANARY_FENCE_PASS" in script
+    assert "needs: precanary-fence" in workflow
+    assert "timeout-minutes: 130" in workflow
+    assert "timeout-minutes: 330" in workflow
+
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+endpoint="${!#}"
+if [[ "$endpoint" == *"/actions/runs/$GITHUB_RUN_ID" ]]; then
+  cat "$SNAPSHOT_DIR/self.json"
+  exit 0
+fi
+status="${endpoint#*status=}"
+status="${status%%&*}"
+counter="$SNAPSHOT_DIR/$status.count"
+call=0
+[[ ! -f "$counter" ]] || call="$(cat "$counter")"
+call=$((call + 1))
+printf '%s\n' "$call" > "$counter"
+cat "$SNAPSHOT_DIR/$status-$call.json"
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    statuses = ("requested", "waiting", "pending", "queued", "in_progress")
+
+    def page(
+        runs: list[dict[str, object]], *, total_count: int | None = None
+    ) -> dict[str, object]:
+        return {
+            "total_count": len(runs) if total_count is None else total_count,
+            "workflow_runs": runs,
+        }
+
+    def run(
+        first: dict[str, list[dict[str, object]]] | None = None,
+        second: dict[str, list[dict[str, object]]] | None = None,
+        *, first_total: dict[str, int] | None = None,
+        self_status: str = "in_progress",
+    ) -> subprocess.CompletedProcess[str]:
+        first = first or {}
+        second = second or first
+        first_total = first_total or {}
+        for counter in snapshots.glob("*.count"):
+            counter.unlink()
+        (snapshots / "self.json").write_text(
+            json.dumps(
+                {
+                    "id": 42,
+                    "path": ".github/workflows/process-video.yml",
+                    "event": "workflow_dispatch",
+                    "status": self_status,
+                }
+            ),
+            encoding="utf-8",
+        )
+        for status in statuses:
+            (snapshots / f"{status}-1.json").write_text(
+                json.dumps(
+                    page(first.get(status, []), total_count=first_total.get(status))
+                ),
+                encoding="utf-8",
+            )
+            (snapshots / f"{status}-2.json").write_text(
+                json.dumps(page(second.get(status, []))),
+                encoding="utf-8",
+            )
+        return subprocess.run(
+            ["bash", str(fence)],
+            text=True,
+            capture_output=True,
+            env={
+                "PATH": f"{fake_bin}:/usr/bin:/bin",
+                "GH_TOKEN": "synthetic",
+                "GITHUB_REPOSITORY": "olegmed1-art/bridge-video-free",
+                "GITHUB_RUN_ID": "42",
+                "RUNNER_TEMP": str(runtime),
+                "SNAPSHOT_DIR": str(snapshots),
+                "PROCESS_VIDEO_PRECANARY_MAX_WAIT_SECONDS": "0",
+                "PROCESS_VIDEO_PRECANARY_POLL_SECONDS": "1",
+            },
+            timeout=10,
+        )
+
+    safe = run()
+    assert safe.returncode == 0, safe.stderr
+    assert "request_preserved=true" in safe.stdout
+    assert all(
+        (snapshots / f"{status}.count").read_text(encoding="utf-8").strip()
+        == "2"
+        for status in statuses
+    )
+
+    blocker = {
+        "id": 99,
+        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
+        "status": "queued",
+    }
+    transitioned = dict(blocker, status="in_progress")
+    blocked = run({"queued": [blocker]}, {"in_progress": [transitioned]})
+    assert blocked.returncode == 75
+    assert "request remains preserved in run 42" in blocked.stderr
+    assert "blockers=99" in blocked.stderr
+
+    incomplete = run({"queued": [blocker]}, first_total={"queued": 2})
+    assert incomplete.returncode != 0
+    assert "snapshot is incomplete for status: queued" in incomplete.stderr
+
+    missing_self = run(self_status="completed")
+    assert missing_self.returncode != 0
+    assert "not an active workflow witness" in missing_self.stderr
+
+
 def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() -> None:
     direct_mutation = re.compile(
         r"systemctl (?:restart|start|stop|enable|disable|daemon-reload)|systemd-run|"
@@ -1156,7 +1295,7 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
             for reference, payload in indirect.items()
             if mutation.search(payload)
         )
-    assert len(shared_workflows) == 66
+    assert len(shared_workflows) == 65
     assert len(mutation_payloads) == 34
     for relative in shared_workflows | mutation_payloads:
         assert f"'{relative}'" in runner, relative
