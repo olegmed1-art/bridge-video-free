@@ -67,14 +67,21 @@ def verify(raw, branch):
                 EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='video_queue'),
                 pg_has_role(current_user,'bridge_school_worker','MEMBER'),
                 EXISTS (SELECT 1 FROM pg_roles WHERE (rolname=current_user OR pg_has_role(current_user,oid,'MEMBER'))
-                    AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolbypassrls)),
+                    AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)),
                 (SELECT array_agg(rolname ORDER BY rolname) FROM pg_roles
                     WHERE rolname <> current_user AND pg_has_role(current_user,oid,'MEMBER')),
                 EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member
                     WHERE (r.rolname=current_user OR pg_has_role(current_user,r.oid,'MEMBER')) AND m.admin_option),
                 (SELECT array_agg(parent.rolname ORDER BY parent.rolname)
                     FROM pg_auth_members m JOIN pg_roles parent ON parent.oid=m.roleid
-                    JOIN pg_roles child ON child.oid=m.member WHERE child.rolname=current_user)""")
+                    JOIN pg_roles child ON child.oid=m.member WHERE child.rolname=current_user),
+                (NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname IN ('public','video_queue')
+                    AND has_schema_privilege(current_user,oid,'CREATE'))
+                 AND NOT has_table_privilege(current_user,'public.person','INSERT,DELETE')
+                 AND has_table_privilege(current_user,'public.source_observation','INSERT')
+                 AND NOT has_table_privilege(current_user,'public.source_observation','UPDATE,DELETE')
+                 AND NOT has_table_privilege(current_user,'public.operational_health_policy','UPDATE')
+                 AND has_table_privilege(current_user,'public.school','SELECT'))""")
             row = cur.fetchone()
             require(row is not None and row[:4] == (PROJECT, branch, "neondb", USER))
             require(row[5] and not row[6])
@@ -82,6 +89,7 @@ def verify(raw, branch):
             # exactly one direct membership in worker. Preserve that hierarchy.
             require(row[7] == ['bridge_school_app', 'bridge_school_reader', 'bridge_school_worker'])
             require(not row[8] and row[9] == ['bridge_school_worker'])
+            require(row[10])
             if branch == PREVIEW:
                 require(not row[4])
             else:
@@ -148,6 +156,7 @@ def run(mode):
             print("QUEUE_TARGET_ALREADY_PRODUCTION verified=true")
             return
         new = candidate(old)
+        require(not os.path.lexists(BACKUP))
         verify(old, PREVIEW)
         verify(new, PRODUCTION)
         print("QUEUE_TARGET_PREFLIGHT_PASS source=preview target=production idle=true", flush=True)
