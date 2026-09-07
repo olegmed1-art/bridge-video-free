@@ -20,6 +20,10 @@ database_gate_ready_file="$RUNNER_TEMP/issue-881-owner-gate-ready.txt"
 database_gate_control_file="$RUNNER_TEMP/issue-881-owner-gate-control.txt"
 database_gate_output="$RUNNER_TEMP/issue-881-owner-gate-output.txt"
 database_gate_marker_file="$RUNNER_TEMP/issue-881-db-enqueue-fence-marker.txt"
+process_video_state_file="$RUNNER_TEMP/issue-881-process-video-workflow-state"
+process_video_suspend_marker_file="$RUNNER_TEMP/issue-881-process-video-suspend.txt"
+process_video_restore_marker_file="$RUNNER_TEMP/issue-881-process-video-restore.txt"
+process_video_gate_armed=0
 
 root_pr_number=991
 prior_gate_pr_number=1070
@@ -100,9 +104,12 @@ protected_gate_paths=(
   '.github/workflows/universal-video-ci.yml'
   '.github/workflows/universal-video-engine-smoke.yml'
   'requirements-worker.txt'
+  'database/scripts/migrate.sh'
+  'dds_training/bootstrap_linux.sh'
   'ops/issue_881_external_precanary_workflow.sh'
   'ops/issue_881_precanary_one_shot.py'
   'ops/issue_881_precanary_queue_proof.py'
+  'ops/issue_881_process_video_dispatch_gate.sh'
   'ops/issue_881_runtime_directory_repair.sh'
   'ops/process_video_precanary_fence.sh'
   'ops/verify_oci_instance_command_executions.py'
@@ -458,12 +465,55 @@ verify_no_active_instance_agent_commands(){
     "$examined"
 }
 
+verify_process_video_dispatch_suspended(){
+  local marker
+  [[ "$process_video_gate_armed" == 1 ]] \
+    || { echo 'Process-video dispatch suspension is not armed' >&2; return 1; }
+  marker="$(bash ops/issue_881_process_video_dispatch_gate.sh \
+    verify "$process_video_state_file")" || return 1
+  [[ "$marker" == \
+    'PROCESS_VIDEO_DISPATCH_VERIFY state=disabled_manually result=PASS' ]] \
+    || { echo 'Process-video dispatch suspension receipt is invalid' >&2; return 1; }
+  printf '%s\n' "$marker"
+}
+
+restore_process_video_dispatch(){
+  local marker
+  [[ "$process_video_gate_armed" == 1 ]] || return 0
+  marker="$(bash ops/issue_881_process_video_dispatch_gate.sh \
+    restore "$process_video_state_file")" \
+    || {
+      echo 'PROCESS_VIDEO_DISPATCH_RESTORE result=FAILED' \
+        | tee -a "$evidence" "$GITHUB_STEP_SUMMARY" >&2
+      return 1
+    }
+  case "$marker" in
+    'PROCESS_VIDEO_DISPATCH_RESTORE initial_state=active final_state=active result=PASS'|'PROCESS_VIDEO_DISPATCH_RESTORE initial_state=disabled_manually final_state=disabled_manually result=PASS') ;;
+    *)
+      echo 'PROCESS_VIDEO_DISPATCH_RESTORE result=FAILED reason=invalid_receipt' \
+        | tee -a "$evidence" "$GITHUB_STEP_SUMMARY" >&2
+      return 1
+      ;;
+  esac
+  process_video_gate_armed=0
+  (umask 077; printf '%s\n' "$marker" > "$process_video_restore_marker_file")
+  printf '%s\n' "$marker" | tee -a "$evidence" "$GITHUB_STEP_SUMMARY"
+}
+
+control_plane_cleanup(){
+  local rc=$?
+  trap - EXIT
+  restore_process_video_dispatch || rc=1
+  exit "$rc"
+}
+
 verify_final_mutation_boundary(){
   local current_infrastructure_marker current_oci_command_marker
   # Receipt validation performs its own paginated Actions read. Take
   # the complete infrastructure snapshot only after that read, then
   # make the exact-main query the final subcheck in this one bounded
   # reconciliation immediately before the host attester.
+  verify_process_video_dispatch_suspended >/dev/null || return 1
   current_infrastructure_marker="$(verify_no_competing_infrastructure_runs)" \
     || return 1
   [[ "$current_infrastructure_marker" == \
@@ -482,6 +532,11 @@ verify_final_mutation_boundary(){
 verify_no_competing_infrastructure_runs \
   | tee "$RUNNER_TEMP/precanary-infrastructure-marker.txt"
 verify_live_gate
+trap control_plane_cleanup EXIT
+process_video_gate_armed=1
+bash ops/issue_881_process_video_dispatch_gate.sh \
+  suspend "$process_video_state_file" | tee "$process_video_suspend_marker_file"
+verify_process_video_dispatch_suspended
 
 if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
   prior_run="$RUNNER_TEMP/prior-run.json"
@@ -633,11 +688,16 @@ release_database_gate(){
 }
 
 cleanup_remote(){
+  local rc=$?
   trap - EXIT
   if abort_remote_attester; then
     "${s[@]}" "sudo -n rm -rf '$remote_root'; rm -rf '$remote_stage'" >/dev/null 2>&1 || true
+  else
+    rc=1
   fi
-  abort_database_gate >/dev/null 2>&1 || true
+  abort_database_gate >/dev/null 2>&1 || rc=1
+  restore_process_video_dispatch || rc=1
+  exit "$rc"
 }
 trap cleanup_remote EXIT
 
@@ -650,6 +710,7 @@ bounded_failure(){
     echo "runtime_sha=$EXACT_SHA"
     echo "step_exit=$rc"
     cat "$RUNNER_TEMP/precanary-one-shot-marker.txt" 2>/dev/null || true
+    cat "$process_video_suspend_marker_file" 2>/dev/null || true
     cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt" 2>/dev/null || true
     cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt" 2>/dev/null || true
     cat "$RUNNER_TEMP/precanary-oci-instance-command-marker.txt" 2>/dev/null || true
@@ -843,6 +904,7 @@ trap - ERR
 {
   echo "runtime_sha=$EXACT_SHA"
   cat "$RUNNER_TEMP/precanary-one-shot-marker.txt"
+  cat "$process_video_suspend_marker_file"
   cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt"
   cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt"
   cat "$RUNNER_TEMP/precanary-oci-instance-command-marker.txt"

@@ -530,6 +530,8 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "/recover-${{ inputs.recover_container_from_run || 'none' }}" in workflow
     assert len(workflow) < 21_000
     assert "run: bash ops/issue_881_external_precanary_workflow.sh" in workflow
+    workflow_header = workflow.split("\njobs:", 1)[0]
+    assert "actions: write" in workflow_header
     assert "${{" not in runner
     assert (
         workflow.count("issue_881_precanary_one_shot.py verify")
@@ -580,7 +582,9 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "precanary-fence:" in process_video
     assert "needs: precanary-fence" in process_video
     assert "run: bash ops/process_video_precanary_fence.sh" in process_video
+    assert "'.github/workflows/process-video.yml'" in runner
     assert "'ops/process_video_precanary_fence.sh'" in runner
+    assert "'ops/issue_881_process_video_dispatch_gate.sh'" in runner
     assert "verify_no_active_instance_agent_commands" in runner
     assert "instance-agent command-execution list" in runner
     assert '--instance-id "$INSTANCE_ID"' in runner
@@ -646,6 +650,9 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     host_attest = runner.index('"${s[@]}" "sudo -n env', final_boundary)
     assert final_live_gate < final_receipt < final_boundary < host_attest
     boundary_definition = runner.index("verify_final_mutation_boundary(){")
+    boundary_dispatch = runner.index(
+        "verify_process_video_dispatch_suspended", boundary_definition
+    )
     boundary_infrastructure = runner.index(
         'current_infrastructure_marker="$(verify_no_competing_infrastructure_runs)"',
         boundary_definition,
@@ -655,7 +662,25 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
         boundary_infrastructure,
     )
     boundary_main = runner.index("verify_exact_current_main", boundary_oci_commands)
-    assert boundary_infrastructure < boundary_oci_commands < boundary_main
+    assert boundary_dispatch < boundary_infrastructure < boundary_oci_commands < boundary_main
+    initial_reconciliation = runner.index("# Initial reconciliation rejects historical")
+    initial_sweep = runner.index(
+        "verify_no_competing_infrastructure_runs", initial_reconciliation
+    )
+    dispatch_trap = runner.index("trap control_plane_cleanup EXIT", initial_sweep)
+    dispatch_suspend = runner.index(
+        "bash ops/issue_881_process_video_dispatch_gate.sh", dispatch_trap
+    )
+    first_host_access = runner.index(
+        'ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST"', dispatch_suspend
+    )
+    assert initial_sweep < dispatch_trap < dispatch_suspend < first_host_access
+    cleanup_definition = runner[
+        runner.index("cleanup_remote(){") : runner.index("bounded_failure(){")
+    ]
+    assert "restore_process_video_dispatch || rc=1" in cleanup_definition
+    assert "cat \"$process_video_suspend_marker_file\"" in runner
+    assert "PROCESS_VIDEO_DISPATCH_RESTORE" in workflow
     fenced_start = attest.index("if start_container_under_fence; then", attest.index("cleanup(){"))
     runtime_proof = attest.index("verify_postrestore_runtime_queue", fenced_start)
     owner_release = attest.index("verify_postrestore_owner_release", runtime_proof)
@@ -1005,6 +1030,94 @@ cat "$SNAPSHOT_DIR/$status-$call.json"
     assert "not an active workflow witness" in missing_self.stderr
 
 
+def test_process_video_dispatch_gate_suspends_verifies_and_restores_exact_state(
+    tmp_path: Path,
+) -> None:
+    gate = ROOT / "ops/issue_881_process_video_dispatch_gate.sh"
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    workflow_state = tmp_path / "workflow-state"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+method=GET
+endpoint=''
+[[ "${1:-}" == api ]] && shift
+while (($#)); do
+  case "$1" in
+    --method) method="$2"; shift 2 ;;
+    *) endpoint="$1"; shift ;;
+  esac
+done
+case "$method:$endpoint" in
+  PUT:*/disable) printf '%s\n' disabled_manually > "$WORKFLOW_STATE" ;;
+  PUT:*/enable) printf '%s\n' active > "$WORKFLOW_STATE" ;;
+  GET:*/actions/workflows/process-video.yml)
+    jq -n --arg state "$(cat "$WORKFLOW_STATE")" \
+      '{id: 123, path: ".github/workflows/process-video.yml", name: "Process bridge video", state: $state}'
+    ;;
+  *) printf 'unexpected fake gh call: %s:%s\n' "$method" "$endpoint" >&2; exit 64 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    state_receipt = runtime / "issue-881-process-video-workflow-state"
+    env = {
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "GH_TOKEN": "synthetic",
+        "GITHUB_REPOSITORY": "olegmed1-art/bridge-video-free",
+        "RUNNER_TEMP": str(runtime),
+        "WORKFLOW_STATE": str(workflow_state),
+    }
+
+    def invoke(action: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(gate), action, str(state_receipt)],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=10,
+        )
+
+    workflow_state.write_text("active\n", encoding="utf-8")
+    suspended = invoke("suspend")
+    assert suspended.returncode == 0, suspended.stderr
+    assert workflow_state.read_text(encoding="utf-8") == "disabled_manually\n"
+    assert state_receipt.read_text(encoding="utf-8") == "active\n"
+    assert state_receipt.stat().st_mode & 0o777 == 0o600
+    assert "initial_state=active final_state=disabled_manually changed=true" in suspended.stdout
+    verified = invoke("verify")
+    assert verified.returncode == 0, verified.stderr
+    assert verified.stdout.strip() == (
+        "PROCESS_VIDEO_DISPATCH_VERIFY state=disabled_manually result=PASS"
+    )
+    restored = invoke("restore")
+    assert restored.returncode == 0, restored.stderr
+    assert workflow_state.read_text(encoding="utf-8") == "active\n"
+    assert "initial_state=active final_state=active result=PASS" in restored.stdout
+
+    state_receipt.unlink()
+    workflow_state.write_text("disabled_manually\n", encoding="utf-8")
+    preserved = invoke("suspend")
+    assert preserved.returncode == 0, preserved.stderr
+    assert "initial_state=disabled_manually" in preserved.stdout
+    assert "changed=false" in preserved.stdout
+    restored_disabled = invoke("restore")
+    assert restored_disabled.returncode == 0, restored_disabled.stderr
+    assert workflow_state.read_text(encoding="utf-8") == "disabled_manually\n"
+
+    state_receipt.unlink()
+    workflow_state.write_text("completed\n", encoding="utf-8")
+    unsafe = invoke("suspend")
+    assert unsafe.returncode != 0
+    assert "identity or state is unsafe" in unsafe.stderr
+    assert not state_receipt.exists()
+
+
 def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() -> None:
     direct_mutation = re.compile(
         r"systemctl (?:restart|start|stop|enable|disable|daemon-reload)|systemd-run|"
@@ -1015,6 +1128,7 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
     script_reference = re.compile(
         r"(?<![A-Za-z0-9_-])(ops/[A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_./-])"
     )
+
     owner_mutators: set[str] = set()
     mutation_payloads: set[str] = set()
     for path in (ROOT / ".github/workflows").glob("oracle-*.yml"):
@@ -1252,9 +1366,20 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
     runner = (
         ROOT / "ops/issue_881_external_precanary_workflow.sh"
     ).read_text(encoding="utf-8")
-    script_reference = re.compile(
-        r"(?<![A-Za-z0-9_-])(ops/[A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_./-])"
+    shell_token = re.compile(
+        r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_./${}-]+\.sh)(?![A-Za-z0-9_./-])"
     )
+
+    def repository_shell_references(source: str) -> set[str]:
+        references: set[str] = set()
+        for token in shell_token.findall(source):
+            parts = token.replace("${", "").replace("}", "").lstrip("./").split("/")
+            for offset in range(len(parts) - 1):
+                candidate = "/".join(parts[offset:])
+                if (ROOT / candidate).is_file():
+                    references.add(candidate)
+                    break
+        return references
     shared_workflows: set[str] = set()
     referenced_payloads: set[str] = set()
     for path in (ROOT / ".github/workflows").glob("*.yml"):
@@ -1263,11 +1388,7 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
             continue
         relative = path.relative_to(ROOT).as_posix()
         shared_workflows.add(relative)
-        pending = {
-            reference
-            for reference in script_reference.findall(workflow)
-            if (ROOT / reference).is_file()
-        }
+        pending = repository_shell_references(workflow)
         indirect: dict[str, str] = {}
         while pending:
             reference = pending.pop()
@@ -1275,14 +1396,10 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
                 continue
             payload = (ROOT / reference).read_text(encoding="utf-8")
             indirect[reference] = payload
-            pending.update(
-                child
-                for child in script_reference.findall(payload)
-                if child not in indirect and (ROOT / child).is_file()
-            )
+            pending.update(repository_shell_references(payload) - set(indirect))
         referenced_payloads.update(indirect)
     assert len(shared_workflows) == 65
-    assert len(referenced_payloads) == 49
+    assert len(referenced_payloads) == 53
     for relative in shared_workflows | referenced_payloads:
         assert f"'{relative}'" in runner, relative
 

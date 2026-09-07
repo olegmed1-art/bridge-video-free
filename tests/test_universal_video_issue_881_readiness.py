@@ -1326,7 +1326,7 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "exact_sha:" in workflow
     assert "director_go:" in workflow
     assert "if: ${{ inputs.director_go && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}" in workflow
-    assert "actions: read" in workflow
+    assert "actions: write" in entrypoint.split("\njobs:", 1)[0]
     assert "pull-requests: read" in workflow
     assert "issues: read" in workflow
     assert "root_pr_number=991" in workflow
@@ -1334,6 +1334,7 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "protected_gate_paths=(" in workflow
     assert "'ops/oracle_universal_video_run_command.sh'" in workflow
     assert "'ops/oracle_known_hosts_from_scan.sh'" in workflow
+    assert "'ops/issue_881_process_video_dispatch_gate.sh'" in workflow
     assert "'.github/workflows/oracle-universal-video-container-promote.yml'" in workflow
     assert "'ops/oracle_universal_video_container_promote.sh'" in workflow
     assert "'ops/validate_video_queue_dsn.py'" in workflow
