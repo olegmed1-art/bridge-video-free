@@ -263,6 +263,21 @@ jobs:
           [[ "$source_public_ip" == "$ORACLE_HOST" ]] || exit 34
           shape="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["shape"])')"
           shape_config="$(printf '%s' "$instance_json" | python -c 'import json,sys; d=json.load(sys.stdin)["data"].get("shape-config") or {}; print(json.dumps({"ocpus":d.get("ocpus"),"memoryInGBs":d.get("memory-in-gbs")},separators=(",",":")))')"
+          readarray -t source_capacity < <(INSTANCE="$instance_json" python - <<'PY'
+          import json, os
+          d=json.loads(os.environ['INSTANCE'])['data']
+          c=d.get('shape-config') or {}
+          ocpus=c.get('ocpus'); memory=c.get('memory-in-gbs')
+          assert d.get('shape')=='VM.Standard.E5.Flex'
+          assert isinstance(ocpus,(int,float)) and float(ocpus).is_integer()
+          assert isinstance(memory,(int,float)) and float(memory).is_integer()
+          print(int(ocpus)); print(int(memory))
+          PY
+          )
+          source_original_ocpus="${source_capacity[0]}"
+          source_original_memory="${source_capacity[1]}"
+          source_lease_ocpus=$((source_original_ocpus - 1))
+          source_lease_memory=$((source_original_memory - 1))
           boot_tag="$(printf '%s' "$boot_id" | sha256sum | cut -c1-16)"
           backup_prefix="issue-881-root-recovery-${boot_tag}"
           operation_run_prefix="${backup_prefix}-run-"
@@ -287,6 +302,9 @@ jobs:
           drill_vcn_id="" drill_ig_id="" drill_route_id="" drill_security_id="" drill_subnet_id=""
           restored_attempted=0 drill_instance_attempted=0 drill_vcn_attempted=0 drill_ig_attempted=0
           drill_route_attempted=0 drill_security_attempted=0 drill_subnet_attempted=0
+          capacity_lease_active=0 source_fence_active=0 paid_launch_request_started=0 paid_instance_terminal_proven=0
+          source_known="$RUNNER_TEMP/issue-881-source-known-hosts"
+          source_key="$RUNNER_TEMP/issue-881-source-key"
           receipt_state="$RUNNER_TEMP/issue-881-step4-state.json"
           state_set() {
             STATE_PATH="$receipt_state" STATE_KEY="$1" STATE_VALUE="$2" python - <<'PY'
@@ -377,6 +395,10 @@ jobs:
           state_set paid_watchdog_status NOT_STARTED
           state_set paid_launch_utc none
           state_set paid_termination_utc none
+          state_set capacity_lease_status NOT_STARTED
+          state_set capacity_workload_fence NOT_STARTED
+          state_set capacity_original_shape_config "ocpus=${source_original_ocpus},memory_gb=${source_original_memory}"
+          state_set capacity_lease_shape_config "ocpus=${source_lease_ocpus},memory_gb=${source_lease_memory}"
           mark_phase initialized
           discover_named_id() {
             local resource="$1" expected="$2" max_seconds="${3:-90}" budget_deadline="${4:-$primary_deadline}" output id deadline remaining request_timeout sleep_seconds rc discovery_key receipt_key saw_timeout=0
@@ -746,10 +768,11 @@ jobs:
           }
           wait_oci_resource_ready() {
             local resource="$1" id="$2" desired="$3" max_seconds="$4" receipt_prefix="$5" expected_name="$6"
+            local absolute_deadline="${7:-$primary_deadline}"
             local deadline remaining request_timeout sleep_seconds state rc
             local -r per_request_max_seconds=30
             local -a command
-            max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$absolute_deadline")" || return 42
             case "$resource" in
               boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
               vcn) command=(oci network vcn get --vcn-id "$id") ;;
@@ -768,7 +791,7 @@ jobs:
               remaining=$((deadline - SECONDS))
               request_timeout=$((remaining < per_request_max_seconds ? remaining : per_request_max_seconds))
               (( request_timeout > 0 )) || break
-              if OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+              if OCI_JSON_ABSOLUTE_DEADLINE="$absolute_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
                   oci_json_request "${command[@]}"; then
                 if ! state="$(RESOURCE_KIND="$resource" EXPECTED_ID="$id" EXPECTED_DISPLAY_NAME="$expected_name" TENANCY_ID="$tenancy_id" AD="$ad" VCN_ID="${drill_vcn_id:-}" python -c 'import json,os,sys; p=json.load(sys.stdin); data=p.get("data"); assert isinstance(data,dict) and data.get("id")==os.environ["EXPECTED_ID"] and data.get("display-name")==os.environ["EXPECTED_DISPLAY_NAME"] and data.get("compartment-id")==os.environ["TENANCY_ID"]; kind=os.environ["RESOURCE_KIND"]; assert kind not in {"boot-volume","subnet","instance"} or data.get("availability-domain")==os.environ["AD"]; assert kind not in {"internet-gateway","route-table","security-list","subnet"} or data.get("vcn-id")==os.environ["VCN_ID"]; s=data.get("lifecycle-state"); allowed={"boot-volume":{"AVAILABLE","PROVISIONING","RESTORING","TERMINATING","TERMINATED","FAULTY"},"vcn":{"AVAILABLE","PROVISIONING","TERMINATING","TERMINATED"},"internet-gateway":{"AVAILABLE","PROVISIONING","TERMINATING","TERMINATED"},"route-table":{"AVAILABLE","PROVISIONING","TERMINATING","TERMINATED"},"security-list":{"AVAILABLE","PROVISIONING","TERMINATING","TERMINATED"},"subnet":{"AVAILABLE","PROVISIONING","TERMINATING","TERMINATED"},"instance":{"RUNNING","PROVISIONING","STARTING","STOPPING","STOPPED","TERMINATING","TERMINATED"}}[kind]; print(s if isinstance(s,str) and s in allowed else "INVALID" if not isinstance(s,str) else "UNKNOWN")' <<<"$OCI_JSON_OUTPUT")"; then
                   state_set "${receipt_prefix}_status" INVALID_GET_PAYLOAD
@@ -793,8 +816,10 @@ jobs:
                   state_set "${receipt_prefix}_status" READY
                   return 0
                 fi
-                if [[ "$state" == TERMINATING || "$state" == TERMINATED || "$state" == FAULTY \
-                    || "$state" == STOPPING || "$state" == STOPPED ]]; then
+                # Instance STOPPING/STOPPED are normal asynchronous states
+                # both after SOFTSTOP and while a subsequent START becomes
+                # visible. Only lifecycle termination is terminal for compute.
+                if [[ "$state" == TERMINATING || "$state" == TERMINATED || "$state" == FAULTY ]]; then
                   state_set "${receipt_prefix}_status" "TERMINAL_${state}"
                   state_set "${receipt_prefix}_failure_rc" 44
                   return 44
@@ -1196,6 +1221,148 @@ jobs:
             state_set prior_cleanup_status RECONCILED_PROVEN_ABSENT
             echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=$prior_count authoritative_receipt_sha256=${authoritative_receipt_sha256:-not_applicable} verdict=RECONCILED_PROVEN_ABSENT"
           }
+          acquire_source_workload_fence() {
+            state_set capacity_workload_fence ACQUIRING
+            source_fence_active=1
+            scan_seconds="$(bounded_wait_seconds 120 "$primary_deadline")" || return 42
+            timeout --signal=KILL "${scan_seconds}s" ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$source_known" || return $?
+            printf '%s\n' "$SSH_KEY_ORACLE" >"$source_key"; chmod 0600 "$source_key"
+            ssh-keygen -y -f "$source_key" >/dev/null || return $?
+            fence_seconds="$(bounded_wait_seconds 180 "$primary_deadline")" || return 42
+            timeout --signal=KILL "${fence_seconds}s" ssh -i "$source_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$source_known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+              "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' LEASE_STAMP='$stamp' /bin/bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          [[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]]
+          base=/opt/bridge-school/universal-video
+          marker=/var/lib/bridge-school/issue-881-capacity-lease
+          [[ -d "$base/spool/running" && ! -L "$base/spool/running" ]]
+          [[ ! -e "$marker" && ! -L "$marker" ]]
+          exec 8>/run/lock/oracle-workload-mutation.lock; flock --exclusive --nonblock 8
+          exec 9>"$base/spool/.workload.lock"; flock --exclusive --nonblock 9
+          ! find "$base/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .
+          [[ "$(systemctl is-active universal-video-container.service)" == active ]]
+          [[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]
+          install -o root -g root -m 0600 /dev/null "$marker"
+          printf '%s\n' "$LEASE_STAMP" >"$marker"
+          systemctl disable --now universal-video-container.service
+          [[ "$(systemctl is-enabled universal-video-container.service)" == disabled ]]
+          [[ "$(systemctl is-active universal-video-container.service 2>/dev/null || true)" != active ]]
+          ! find "$base/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .
+          echo UV_ROOT_CAPACITY_WORKLOAD_FENCE_PASS
+          REMOTE
+            state_set capacity_workload_fence HELD_SERVICE_DISABLED
+          }
+          release_source_workload_fence() {
+            (( source_fence_active == 1 )) || return 0
+            release_seconds="$(bounded_wait_seconds 300 "$cleanup_deadline")" || return 42
+            timeout --signal=KILL "${release_seconds}s" ssh -i "$source_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$source_known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+              "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' LEASE_STAMP='$stamp' /bin/bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          [[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]]
+          marker=/var/lib/bridge-school/issue-881-capacity-lease
+          exec 8>/run/lock/oracle-workload-mutation.lock; flock --exclusive 8
+          if [[ -e "$marker" ]]; then
+            [[ -f "$marker" && ! -L "$marker" && "$(stat -c '%u:%g:%a:%h' "$marker")" == 0:0:600:1 ]]
+            [[ "$(<"$marker")" == "$LEASE_STAMP" ]]
+            rm -f -- "$marker"
+          fi
+          # Idempotent recovery must also finish a prior release that removed
+          # the marker before its SSH connection was lost.
+          systemctl unmask universal-video-container.service
+          systemctl enable universal-video-container.service
+          systemctl start universal-video-container.service
+          [[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]
+          [[ "$(systemctl is-active universal-video-container.service)" == active ]]
+          echo UV_ROOT_CAPACITY_WORKLOAD_FENCE_RELEASED
+          REMOTE
+            source_fence_active=0
+            state_set capacity_workload_fence RELEASED_SERVICE_ACTIVE
+          }
+          set_source_capacity() {
+            local target_ocpus="$1" target_memory="$2" deadline="$3" label="$4" current_json current_state current_ocpus current_memory
+            OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance get --instance-id "$instance_id" || return $?
+            current_json="$OCI_JSON_OUTPUT"
+            current_state_file="$RUNNER_TEMP/source-capacity-state"
+            if ! INSTANCE="$current_json" EXPECTED_ID="$instance_id" EXPECTED_AD="$ad" EXPECTED_TENANCY="$tenancy_id" python - >"$current_state_file" <<'PY'
+          import json,os
+          d=json.loads(os.environ['INSTANCE']).get('data'); assert isinstance(d,dict)
+          assert d.get('id')==os.environ['EXPECTED_ID'] and d.get('display-name')=='bridge-school-dds3-frankfurt'
+          assert d.get('compartment-id')==os.environ['EXPECTED_TENANCY'] and d.get('availability-domain')==os.environ['EXPECTED_AD']
+          assert d.get('shape')=='VM.Standard.E5.Flex'
+          c=d.get('shape-config') or {}; o=c.get('ocpus'); m=c.get('memory-in-gbs')
+          assert isinstance(o,(int,float)) and float(o).is_integer()
+          assert isinstance(m,(int,float)) and float(m).is_integer()
+          print(d.get('lifecycle-state')); print(int(o)); print(int(m))
+          PY
+            then return 93; fi
+            mapfile -t current <"$current_state_file"
+            (( ${#current[@]} == 3 )) || return 93
+            current_state="${current[0]}"; current_ocpus="${current[1]}"; current_memory="${current[2]}"
+            if [[ "$label" == capacity_lease ]]; then
+              [[ "$current_ocpus/$current_memory" == "$source_original_ocpus/$source_original_memory" ]] || return 93
+            elif [[ "$label" == capacity_restore ]]; then
+              [[ "$current_ocpus/$current_memory" == "$source_original_ocpus/$source_original_memory" \
+                  || "$current_ocpus/$current_memory" == "$source_lease_ocpus/$source_lease_memory" ]] || return 93
+            else
+              return 93
+            fi
+            if [[ "$current_state" == RUNNING && "$current_ocpus" == "$target_ocpus" && "$current_memory" == "$target_memory" ]]; then
+              return 0
+            fi
+            if [[ "$current_state" == STARTING ]]; then
+              wait_oci_resource_ready instance "$instance_id" RUNNING 600 "${label}_starting" bridge-school-dds3-frankfurt "$deadline" || return $?
+              # Re-read identity and capacity after the transition. A previous
+              # accepted restore may already have reached the requested shape.
+              set_source_capacity "$target_ocpus" "$target_memory" "$deadline" "$label"
+              return $?
+            elif [[ "$current_state" == STOPPING ]]; then
+              wait_oci_resource_ready instance "$instance_id" STOPPED 600 "${label}_stopping" bridge-school-dds3-frankfurt "$deadline" || return $?
+              current_state=STOPPED
+            fi
+            if [[ "$current_state" == RUNNING ]]; then
+              OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance action --instance-id "$instance_id" --action SOFTSTOP || return $?
+              wait_oci_resource_ready instance "$instance_id" STOPPED 600 "${label}_stop" bridge-school-dds3-frankfurt "$deadline" || return $?
+              current_state=STOPPED
+            fi
+            [[ "$current_state" == STOPPED ]] || return 93
+            OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance update --instance-id "$instance_id" --shape-config "{\"ocpus\":${target_ocpus},\"memoryInGBs\":${target_memory}}" --force || return $?
+            OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance action --instance-id "$instance_id" --action START || return $?
+            wait_oci_resource_ready instance "$instance_id" RUNNING 600 "${label}_start" bridge-school-dds3-frankfurt "$deadline" || return $?
+            OCI_JSON_ABSOLUTE_DEADLINE="$deadline" OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute instance get --instance-id "$instance_id" || return $?
+            INSTANCE="$OCI_JSON_OUTPUT" EXPECTED_ID="$instance_id" EXPECTED_OCPUS="$target_ocpus" EXPECTED_MEMORY="$target_memory" python - <<'PY'
+          import json,os
+          d=json.loads(os.environ['INSTANCE'])['data']; c=d.get('shape-config') or {}
+          assert d.get('id')==os.environ['EXPECTED_ID'] and d.get('display-name')=='bridge-school-dds3-frankfurt'
+          assert d.get('shape')=='VM.Standard.E5.Flex' and d.get('lifecycle-state')=='RUNNING'
+          assert c.get('ocpus')==int(os.environ['EXPECTED_OCPUS'])
+          assert c.get('memory-in-gbs')==int(os.environ['EXPECTED_MEMORY'])
+          PY
+          }
+          arm_source_capacity_lease() {
+            [[ "$source_original_ocpus" == 6 && "$source_original_memory" == 12 ]] || return 93
+            [[ "$source_lease_ocpus" == 5 && "$source_lease_memory" == 11 ]] || return 93
+            capacity_lease_active=1
+            state_set capacity_lease_status ARMED
+            lease_restore_epoch=$(( $(date -u +%s) + 2700 ))
+            gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="CAPACITY_LEASE_OPEN stamp=${stamp} restore_epoch=${lease_restore_epoch} source_shape=VM.Standard.E5.Flex original=6/12 lease=5/11 run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          }
+          open_source_capacity_lease() {
+            (( capacity_lease_active == 1 )) || return 93
+            state_set capacity_lease_status OPENING
+            set_source_capacity "$source_lease_ocpus" "$source_lease_memory" "$primary_deadline" capacity_lease || return $?
+            state_set capacity_lease_status OPEN
+          }
+          restore_source_capacity() {
+            (( capacity_lease_active == 1 )) || return 0
+            state_set capacity_lease_status RESTORING
+            if set_source_capacity "$source_original_ocpus" "$source_original_memory" "$cleanup_deadline" capacity_restore; then
+              capacity_lease_active=0
+              state_set capacity_lease_status RESTORED
+              return 0
+            fi
+            state_set capacity_lease_status RESTORE_FAILED
+            return 1
+          }
           cleanup_temp_resources() {
             local failed=0 state
             state_set current_cleanup_status IN_PROGRESS
@@ -1230,7 +1397,19 @@ jobs:
               state_set temporary_instance_id "$drill_instance_id"
               delete_resource_once instance "$drill_instance_id" || true
               if wait_instance_terminated "$drill_instance_id"; then
+                paid_instance_terminal_proven=1
                 state_set paid_termination_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                # Restore production at the exact compute-quota release proof
+                # point, before any unrelated storage/network cleanup waits.
+                # Keep the workload fence held for the later root mutation.
+                if restore_source_capacity; then
+                  post_termination_fence_epoch=$(( $(date -u +%s) + 2700 ))
+                  if ! gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="CAPACITY_FENCE_HELD stamp=${stamp} release_epoch=${post_termination_fence_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"; then
+                    failed=1
+                  fi
+                else
+                  failed=1
+                fi
               else
                 failed=1
               fi
@@ -1274,8 +1453,17 @@ jobs:
             set +e
             state_set failure_rc "$rc"
             state_set failure_phase "${phase:-unknown}"
-            cleanup_temp_resources
-            cleanup_rc=$?
+            # No paid launch can be in flight here: prioritize production
+            # recovery before storage/network waits consume the shared reserve.
+            if (( paid_launch_request_started == 0 )); then
+              restore_source_capacity || cleanup_rc=1
+              release_source_workload_fence || cleanup_rc=1
+            fi
+            cleanup_temp_resources || cleanup_rc=1
+            if (( paid_launch_request_started == 0 || paid_instance_terminal_proven == 1 )); then
+              restore_source_capacity || cleanup_rc=1
+              release_source_workload_fence || cleanup_rc=1
+            fi
             # The create response can be lost before OCI's eventually
             # consistent list exposes the exact-name backup.  Repeat bounded
             # rediscovery during EXIT cleanup before deciding there is nothing
@@ -1482,7 +1670,9 @@ jobs:
           # mutation. Runner loss during create, hydration, or network setup
           # must not leave the exact-stamped 97 GB volume allocated.
           watchdog_cleanup_epoch=$(( $(date -u +%s) + 14400 ))
-          watchdog_payload="${stamp}|${watchdog_cleanup_epoch}|${ad}|${GITHUB_RUN_ID}|${GITHUB_RUN_ATTEMPT}"
+          source_instance_hmac="$(SOURCE_INSTANCE_ID="$instance_id" python -c 'import hashlib,hmac,os; print(hmac.new(os.environ["OCI_KEY"].encode(),("source-instance|"+os.environ["SOURCE_INSTANCE_ID"]).encode(),hashlib.sha256).hexdigest())')"
+          [[ "$source_instance_hmac" =~ ^[0-9a-f]{64}$ ]] || exit 95
+          watchdog_payload="${stamp}|${watchdog_cleanup_epoch}|${ad}|${GITHUB_RUN_ID}|${GITHUB_RUN_ATTEMPT}|${source_instance_hmac}|${source_original_ocpus}|${source_original_memory}|${source_lease_ocpus}|${source_lease_memory}"
           watchdog_authorization_hmac="$(WATCHDOG_PAYLOAD="$watchdog_payload" python -c 'import hashlib,hmac,os; print(hmac.new(os.environ["OCI_KEY"].encode(),os.environ["WATCHDOG_PAYLOAD"].encode(),hashlib.sha256).hexdigest())')"
           [[ "$watchdog_authorization_hmac" =~ ^[0-9a-f]{64}$ ]] || exit 95
           mark_phase dispatch_paid_instance_watchdog
@@ -1493,8 +1683,14 @@ jobs:
             -f "inputs[expected_ad]=$ad" \
             -f "inputs[parent_run_id]=${GITHUB_RUN_ID}" \
             -f "inputs[parent_run_attempt]=${GITHUB_RUN_ATTEMPT}" \
+            -f "inputs[source_instance_hmac]=${source_instance_hmac}" \
+            -f "inputs[source_original_ocpus]=${source_original_ocpus}" \
+            -f "inputs[source_original_memory]=${source_original_memory}" \
+            -f "inputs[source_lease_ocpus]=${source_lease_ocpus}" \
+            -f "inputs[source_lease_memory]=${source_lease_memory}" \
             -f "inputs[authorization_hmac]=$watchdog_authorization_hmac"
           unset watchdog_authorization_hmac watchdog_payload
+          unset source_instance_hmac
           state_set paid_watchdog_status DISPATCHED
           watchdog_arm_deadline=$(( $(monotonic_now) + 180 ))
           watchdog_armed=0
@@ -1603,6 +1799,21 @@ jobs:
           # The production source is already E5 paid capacity. Never attempt
           # its larger source configuration outside the bounded paid guard.
           [[ "$shape" == VM.Standard.E5.Flex ]] || exit 92
+          # Publish the authenticated 45-minute restore deadline before the
+          # first action that can mask production. The watchdog can therefore
+          # recover even if this runner disappears while acquiring the fence.
+          mark_phase arm_temporary_capacity_lease
+          if arm_source_capacity_lease; then :; else lease_rc=$?; exit "$lease_rc"; fi
+          mark_phase acquire_capacity_workload_fence
+          if acquire_source_workload_fence; then :; else fence_rc=$?; exit "$fence_rc"; fi
+          mark_phase open_temporary_capacity_lease
+          if open_source_capacity_lease; then
+            :
+          else
+            lease_rc=$?
+            state_set capacity_lease_status OPEN_FAILED
+            exit "$lease_rc"
+          fi
           drill_instance_attempted=1
           launch=""
           mark_phase paid_capacity_preflight
@@ -1674,6 +1885,7 @@ jobs:
             gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="PAID_WATCHDOG_LAUNCH stamp=${stamp} expiry_epoch=${paid_expiry_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             state_set paid_launch_utc "$paid_launch_utc"
             mark_phase launch_bounded_paid_acceptance_instance
+            paid_launch_request_started=1
             if create_json_once paid_instance_create "$stamp-boot-acceptance" oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$paid_shape" --shape-config "$paid_shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true; then
               launch="$OCI_CREATE_JSON"
               state_set paid_fallback_status LAUNCHED
@@ -1716,6 +1928,13 @@ jobs:
           state_set retained_backup_status ACCEPTED_ISOLATED_BOOT
           drill_seconds="$(( $(date -u +%s) - drill_started ))"
           if ! cleanup_temp_resources; then
+            # No mutation will follow this failed cleanup, so do not leave the
+            # service fenced once paid compute is proven absent. Before that
+            # proof, the watchdog must retain the fence while freeing quota.
+            if (( paid_instance_terminal_proven == 1 )); then
+              restore_source_capacity || true
+              release_source_workload_fence || true
+            fi
             # Do not invoke the EXIT trap a second time after a fully bounded
             # explicit cleanup attempt; fail closed with the retained IDs/name
             # stamp available in this run's log for operator reconciliation.
@@ -1723,9 +1942,13 @@ jobs:
             echo 'UV_ROOT_TEMP_CLEANUP_INCOMPLETE' >&2
             exit 90
           fi
+          if ! restore_source_capacity; then
+            trap - EXIT
+            echo 'UV_ROOT_CAPACITY_RESTORE_FAILED watchdog_remains_armed=true' >&2
+            exit 91
+          fi
           drill_instance_id=""; restored_id=""; drill_subnet_id=""; drill_security_id=""
           drill_route_id=""; drill_ig_id=""; drill_vcn_id=""
-          trap - EXIT
           state_set current_cleanup_status PROVEN_ABSENT
           # Retire older operation-scoped backups only after the retained FULL
           # backup has passed isolated restored-root boot acceptance. This keeps
@@ -1758,7 +1981,12 @@ jobs:
           echo "backup_id=$backup_id" >> "$GITHUB_OUTPUT"
           echo "source_boot_id=$boot_id" >> "$GITHUB_OUTPUT"
           echo "source_instance_id=$instance_id" >> "$GITHUB_OUTPUT"
+          echo "capacity_fence_stamp=$stamp" >> "$GITHUB_OUTPUT"
           echo "temporary_instance_seconds=$drill_seconds" >> "$GITHUB_OUTPUT"
+          # Keep EXIT cleanup armed through every fallible post-restore backup
+          # operation. On success the workload fence intentionally remains for
+          # the following host mutation step; on failure cleanup releases it.
+          trap - EXIT
           echo 'UV_ROOT_BACKUP_GATE_PASS type=FULL size_gb=97 state=AVAILABLE age_lt_24h=true restored_root_boot_acceptance=true isolated_no_egress_network=true source_public_ip_bound=true temporary_instance_deleted=true temporary_volume_deleted=true temporary_network_deleted=true temporary_paid_capacity_authorized=true'
       - name: Resolve pinned SSH identity
         if: ${{ steps.backup.outputs.cleanup_only != 'true' }}
@@ -1896,17 +2124,68 @@ jobs:
           monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
           remaining=$((mutation_deadline - monotonic_now))
           (( remaining > 0 )) || exit 42
+          capacity_fence_stamp='${{ steps.backup.outputs.capacity_fence_stamp }}'
+          [[ "$capacity_fence_stamp" =~ ^issue-881-root-recovery-[0-9a-f]{16}-run-[0-9]+-a[1-9][0-9]*$ ]]
           mutation="$RUNNER_TEMP/issue-881-locked-mutation.sh"
           {
+            printf '%s\n' \
+              'set -Eeuo pipefail' \
+              'capacity_marker=/var/lib/bridge-school/issue-881-capacity-lease' \
+              '[[ -f "$capacity_marker" && ! -L "$capacity_marker" && "$(stat -c '\''%u:%g:%a:%h'\'' "$capacity_marker")" == 0:0:600:1 ]]' \
+              '[[ "$(<"$capacity_marker")" == "$CAPACITY_FENCE_STAMP" ]]' \
+              'systemctl unmask universal-video-container.service' \
+              'systemctl enable universal-video-container.service' \
+              'rm -f -- "$capacity_marker"' \
+              '[[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]'
             cat ops/oracle_universal_video_root_filesystem_expand.sh
             printf '\n'
             cat ops/oracle_universal_video_container_missing_image_recover.sh
           } > "$mutation"
           timeout --signal=KILL "${remaining}s" ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' EXPECTED_MIN_DISK_BYTES=90000000000 EXPECTED_MAX_DISK_BYTES=105000000000 MIN_FREE_KB=5242880 UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_RUNTIME_SHA' /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /bin/bash -s" \
+            "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' EXPECTED_MIN_DISK_BYTES=90000000000 EXPECTED_MAX_DISK_BYTES=105000000000 MIN_FREE_KB=5242880 UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_RUNTIME_SHA' CAPACITY_FENCE_STAMP='$capacity_fence_stamp' /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /bin/bash -s" \
             < "$mutation" | tee "$RUNNER_TEMP/locked-mutation.txt"
           grep -E '^UV_ROOT_EXPAND_PASS .*disk_bytes=[0-9]+ .*free_kb_after=[0-9]+$' "$RUNNER_TEMP/locked-mutation.txt"
           grep -E '^UV_CONTAINER_RECOVERY_PASS runtime_sha=[0-9a-f]{40} backup=/var/lib/bridge-school/universal-video-container-recovery/[^ ]+ image_digest=sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/locked-mutation.txt"
+      - name: Release capacity workload fence and ensure sole service active
+        if: ${{ always() && steps.backup.outcome == 'success' && steps.backup.outputs.cleanup_only != 'true' }}
+        run: |
+          set -euo pipefail
+          capacity_fence_stamp='${{ steps.backup.outputs.capacity_fence_stamp }}'
+          [[ "$capacity_fence_stamp" =~ ^issue-881-root-recovery-[0-9a-f]{16}-run-[0-9]+-a[1-9][0-9]*$ ]]
+          # This is an always-run outage guard. Recreate the pinned SSH
+          # identity independently because the preceding resolver may have
+          # failed before publishing either output.
+          release_known="$RUNNER_TEMP/issue-881-release-known-hosts"
+          release_key="$RUNNER_TEMP/issue-881-release-key"
+          timeout --signal=KILL 120s ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$release_known"
+          printf '%s\n' "$SSH_KEY_ORACLE" >"$release_key"
+          chmod 0600 "$release_key"
+          ssh-keygen -y -f "$release_key" >/dev/null
+          timeout --signal=KILL 180s ssh -i "$release_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$release_known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' LEASE_STAMP='$capacity_fence_stamp' /bin/bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          [[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]]
+          marker=/var/lib/bridge-school/issue-881-capacity-lease
+          exec 8>/run/lock/oracle-workload-mutation.lock; flock --exclusive 8
+          if [[ -e "$marker" ]]; then
+            [[ -f "$marker" && ! -L "$marker" && "$(stat -c '%u:%g:%a:%h' "$marker")" == 0:0:600:1 ]]
+            [[ "$(<"$marker")" == "$LEASE_STAMP" ]]
+            rm -f -- "$marker"
+          fi
+          systemctl unmask universal-video-container.service
+          systemctl enable universal-video-container.service
+          [[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]
+          systemctl start universal-video-container.service
+          [[ "$(systemctl is-active universal-video-container.service)" == active ]]
+          echo UV_ROOT_CAPACITY_WORKLOAD_FENCE_RELEASED
+          REMOTE
+          STATE_PATH="$RUNNER_TEMP/issue-881-step4-state.json" python - <<'PY'
+          import json,os
+          from pathlib import Path
+          p=Path(os.environ['STATE_PATH']); d=json.loads(p.read_text())
+          d['capacity_workload_fence']='RELEASED_SERVICE_ACTIVE'
+          q=p.with_suffix('.tmp'); q.write_text(json.dumps(d,sort_keys=True)); q.replace(p)
+          PY
       - name: Publish bounded operational receipt
         if: ${{ always() }}
         env:
@@ -2016,6 +2295,8 @@ jobs:
               '- paid price basis valid until: ' + code(value('paid_price_basis_valid_until', 'none')),
               '- paid hourly/runtime/budget caps: ' + code(value('paid_hourly_rate_max_usd', 'none') + '/' + value('paid_runtime_limit_seconds', 'none') + '/' + value('paid_compute_budget_usd', 'none')),
               '- independent paid watchdog: ' + code(value('paid_watchdog_status', 'NOT_RECORDED')),
+              '- temporary production capacity lease: ' + code(value('capacity_lease_status', 'NOT_RECORDED')) + '; original/lease: ' + code(value('capacity_original_shape_config', 'none') + '/' + value('capacity_lease_shape_config', 'none')),
+              '- capacity workload fence: ' + code(value('capacity_workload_fence', 'NOT_RECORDED')),
               '- paid launch/termination UTC: ' + code(value('paid_launch_utc', 'none') + '/' + value('paid_termination_utc', 'none')),
               '- restored volume readiness: ' + code(value('restored_volume_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('restored_volume_wait_last_state', 'none')) + '; rc: ' + code(value('restored_volume_wait_failure_rc', 'none')),
               '- restored volume hydration: ' + code(value('restored_volume_hydration_status', 'NOT_RECORDED')) + '; state: ' + code(value('restored_volume_hydration_last_state', 'none')) + '; rc: ' + code(value('restored_volume_hydration_failure_rc', 'none')),

@@ -149,6 +149,8 @@ def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
     assert "oci bv boot-volume get" in volume_loop
     assert "volume_terminal_proven == 1" in volume_loop
     assert "launch_expiry <= now + 1800" in WATCHDOG
+    assert "launch_expiry <= effective_expiry" not in WATCHDOG
+    assert "launch_expiry < effective_expiry" in WATCHDOG
     assert 'effective_expiry="$now"' in WATCHDOG
     assert "if launch_comments=\"$(timeout --signal=KILL 30s gh api" in WATCHDOG
     assert "while ! timeout --signal=KILL 30s oci bv boot-volume list" in WATCHDOG
@@ -184,7 +186,7 @@ def test_watchdog_propagates_all_inventory_validator_failures() -> None:
     assert "< <(STAMP=" not in WATCHDOG
     for name in ("instance-ids", "late-instance-ids", "volume-ids", "late-volume-ids"):
         assert f'$RUNNER_TEMP/{name}' in WATCHDOG
-    assert WATCHDOG.count("then exit 101; fi") == 2
+    assert WATCHDOG.count("then return 101; fi") == 2
     assert WATCHDOG.count("then exit 102; fi") == 2
     assert WATCHDOG.count("sys.stdout.write('\\n'.join(matched)+('\\n' if matched else ''))") == 4
     assert "print('\\n'.join(matched))" not in WATCHDOG
@@ -1823,7 +1825,11 @@ def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:
         "oracle_universal_video_container_missing_image_recover.sh"
     )
     assert "/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /bin/bash -s" in block
-    assert block.count("/run/lock/oracle-workload-mutation.lock") == 1
+    # The mutation and the always-run fence release each serialize on the
+    # shared host lock.  The recovery payload itself must still be invoked
+    # under exactly one flock.
+    mutation_step = block[: block.index("Release capacity workload fence")]
+    assert mutation_step.count("/run/lock/oracle-workload-mutation.lock") == 1
     assert "EXACT_RUNTIME_SHA: bba508350cbe63a7a8ec93fa9c007db9ee9eae6c" in WORKFLOW
     assert "'oracle-instance-workload-mutation'" in WORKFLOW
     assert 'systemctl restart "$SERVICE"' in (ROOT / "ops/oracle_universal_video_container_missing_image_recover.sh").read_text()
@@ -1900,7 +1906,8 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
     ).read_text()
     assert "Each known ID must" in WORKFLOW
     cleanup_only_branch = WORKFLOW[
-        WORKFLOW.index("if (( cleanup_only == 1 )); then") : WORKFLOW.index("trap cleanup EXIT")
+        WORKFLOW.index("if (( cleanup_only == 1 )); then", WORKFLOW.index("record_reconcile_failure()")) :
+        WORKFLOW.index("trap cleanup EXIT")
     ]
     assert "boot-volume-backup create" not in cleanup_only_branch
     assert "boot-volume create" not in cleanup_only_branch
@@ -2134,3 +2141,312 @@ def test_receipt_is_literal_safe_and_retains_cleanup_evidence() -> None:
         "failure_rc",
     ):
         assert field in receipt
+
+
+def test_positive_capacity_lease_is_watchdog_armed_restored_and_receipted() -> None:
+    dispatch = WORKFLOW.index("mark_phase dispatch_paid_instance_watchdog")
+    armed = WORKFLOW.index("mark_phase arm_temporary_capacity_lease")
+    fence = WORKFLOW.index("mark_phase acquire_capacity_workload_fence")
+    lease = WORKFLOW.index("mark_phase open_temporary_capacity_lease")
+    preflight = WORKFLOW.index("mark_phase paid_capacity_preflight")
+    assert dispatch < armed < fence < lease < preflight
+    success_cleanup = WORKFLOW.index("if ! cleanup_temp_resources; then", preflight)
+    restore = WORKFLOW.index("if ! restore_source_capacity; then", success_cleanup)
+    disable_trap = WORKFLOW.index("trap - EXIT", restore)
+    assert success_cleanup < restore < disable_trap
+    assert "temporary production capacity lease:" in WORKFLOW
+
+
+def test_negative_capacity_lease_rejects_unexpected_source_or_third_config() -> None:
+    assert '[[ "$source_original_ocpus" == 6 && "$source_original_memory" == 12 ]] || return 93' in WORKFLOW
+    assert '[[ "$source_lease_ocpus" == 5 && "$source_lease_memory" == 11 ]] || return 93' in WORKFLOW
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    assert 'if [[ "$ocpus/$memory" != "$SOURCE_ORIGINAL_OCPUS/$SOURCE_ORIGINAL_MEMORY" && "$ocpus/$memory" != "$SOURCE_LEASE_OCPUS/$SOURCE_LEASE_MEMORY" ]]; then' in watchdog
+    assert "return 103" in watchdog
+    resize = WORKFLOW[WORKFLOW.index("set_source_capacity() {") : WORKFLOW.index("open_source_capacity_lease()")]
+    assert '[[ "$label" == capacity_lease ]]' in resize
+    assert 'current_ocpus/$current_memory" == "$source_original_ocpus/$source_original_memory' in resize
+    assert '[[ "$label" == capacity_restore ]]' in resize
+    assert 'current_ocpus/$current_memory" == "$source_lease_ocpus/$source_lease_memory' in resize
+
+
+def test_boundary_capacity_lease_is_exactly_one_ocpu_one_gib_and_45_minutes() -> None:
+    assert "source_lease_ocpus=$((source_original_ocpus - 1))" in WORKFLOW
+    assert "source_lease_memory=$((source_original_memory - 1))" in WORKFLOW
+    assert "lease_restore_epoch=$(( $(date -u +%s) + 2700 ))" in WORKFLOW
+    arm = WORKFLOW.index("if arm_source_capacity_lease")
+    fence = WORKFLOW.index("if acquire_source_workload_fence", arm)
+    resize = WORKFLOW.index("if open_source_capacity_lease", fence)
+    assert arm < fence < resize
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    assert "lease_restore_epoch <= now + 2700" in watchdog
+
+
+def test_capacity_resize_waits_through_compute_transitions_with_supplied_deadline() -> None:
+    helper = WORKFLOW[
+        WORKFLOW.index("wait_oci_resource_ready() {") :
+        WORKFLOW.index("wait_restored_boot_volume_hydrated()")
+    ]
+    assert 'absolute_deadline="${7:-$primary_deadline}"' in helper
+    assert 'bounded_wait_seconds "$max_seconds" "$absolute_deadline"' in helper
+    assert 'OCI_JSON_ABSOLUTE_DEADLINE="$absolute_deadline" OCI_JSON_MAX_ATTEMPTS=1' in helper
+    terminal = helper[helper.index('if [[ "$state" == TERMINATING') : helper.index("return 44", helper.index('if [[ "$state" == TERMINATING'))]
+    assert "STOPPING" not in terminal
+    assert "STOPPED" not in terminal
+    resize = WORKFLOW[WORKFLOW.index("set_source_capacity() {") : WORKFLOW.index("open_source_capacity_lease()")]
+    assert resize.count('bridge-school-dds3-frankfurt "$deadline"') == 4
+
+
+def test_parent_capacity_parser_checks_status_and_cardinality_before_indexing() -> None:
+    resize = WORKFLOW[WORKFLOW.index("set_source_capacity() {") : WORKFLOW.index("arm_source_capacity_lease()")]
+    parser = resize.index('if ! INSTANCE="$current_json"')
+    mapfile = resize.index('mapfile -t current <"$current_state_file"', parser)
+    cardinality = resize.index('(( ${#current[@]} == 3 )) || return 93', mapfile)
+    indexing = resize.index('current_state="${current[0]}"', cardinality)
+    assert parser < mapfile < cardinality < indexing
+
+
+def test_watchdog_service_release_is_retryable_after_marker_removal() -> None:
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    release = watchdog[
+        watchdog.index("release_source_workload_fence() {") :
+        watchdog.index("roots=", watchdog.index("release_source_workload_fence() {"))
+    ]
+    conditional_end = release.index("          fi", release.index('if [[ -e "$marker" ]]'))
+    assert release.index("rm -f -- \"$marker\"") < conditional_end
+    assert release.index("systemctl unmask universal-video-container.service") > conditional_end
+    assert release.index("systemctl enable universal-video-container.service") > conditional_end
+    assert release.index("systemctl start universal-video-container.service") > conditional_end
+    parent_release = WORKFLOW[WORKFLOW.index("release_source_workload_fence() {") : WORKFLOW.index("set_source_capacity() {")]
+    parent_end = parent_release.index("          fi", parent_release.index('if [[ -e "$marker" ]]'))
+    assert parent_release.index("systemctl unmask universal-video-container.service") > parent_end
+    assert parent_release.index("systemctl enable universal-video-container.service") > parent_end
+    assert parent_release.index("systemctl start universal-video-container.service") > parent_end
+
+
+def test_regression_capacity_is_restored_only_after_paid_instance_cleanup() -> None:
+    exit_cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
+    temporary = exit_cleanup.index("cleanup_temp_resources")
+    terminal_gate = exit_cleanup.index("paid_launch_request_started == 0 || paid_instance_terminal_proven == 1", temporary)
+    assert temporary < terminal_gate < exit_cleanup.index("restore_source_capacity", terminal_gate)
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    terminate = watchdog.index("oci compute instance terminate")
+    early_restore = watchdog.index("restore_source_capacity", terminate)
+    volume_cleanup = watchdog.index("oci bv boot-volume delete", early_restore)
+    restore_comment = watchdog.index("temporary production capacity lease is RESTORED")
+    assert terminate < early_restore < volume_cleanup < restore_comment
+    assert "'- media canary: ' + code('false')" in WORKFLOW
+
+
+def test_cleanup_failure_restores_after_paid_compute_is_proven_terminal() -> None:
+    cleanup = WORKFLOW[WORKFLOW.index("cleanup_temp_resources() {") : WORKFLOW.index("cleanup() {")]
+    terminated = cleanup.index("paid_instance_terminal_proven=1")
+    volume_cleanup = cleanup.index('if [[ -n "$restored_id" ]]', terminated)
+    restore = cleanup.index("if restore_source_capacity; then", terminated)
+    fence_receipt = cleanup.index("CAPACITY_FENCE_HELD", restore)
+    assert terminated < restore < fence_receipt < volume_cleanup
+    assert "release_source_workload_fence" not in cleanup[terminated:volume_cleanup]
+    failure = WORKFLOW[WORKFLOW.index("if ! cleanup_temp_resources; then", WORKFLOW.index("mark_phase paid_capacity_preflight")) :]
+    failure = failure[:failure.index("if ! restore_source_capacity; then")]
+    assert "if (( paid_instance_terminal_proven == 1 )); then" in failure
+    assert failure.index("restore_source_capacity || true") < failure.index("trap - EXIT")
+    assert failure.index("release_source_workload_fence || true") < failure.index("trap - EXIT")
+
+
+def test_watchdog_releases_fence_even_when_capacity_restore_fails() -> None:
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    start = watchdog.index("source_restore_rc=0")
+    block = watchdog[start:watchdog.index("# The primary runner normally removes", start)]
+    assert block.index("restore_source_capacity || source_restore_rc=$?") < block.index("release_source_workload_fence || source_release_rc=$?")
+    assert "exit 105" not in block
+    volume_cleanup = watchdog.index("oci bv boot-volume delete", start)
+    deferred_failure = watchdog.index("if (( source_restore_rc != 0 || source_release_rc != 0 )); then", volume_cleanup)
+    assert volume_cleanup < deferred_failure < watchdog.index("exit 105", deferred_failure)
+
+
+def test_watchdog_propagates_source_identity_and_parser_failures() -> None:
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    restore = watchdog[watchdog.index("restore_source_capacity() {") : watchdog.index("release_source_workload_fence() {")]
+    hmac_check = restore.index("assert hmac.compare_digest")
+    assert restore.index("[[ $? == 0 ]] || return 103", hmac_check) > hmac_check
+    parser = restore.index('if ! EXPECTED_ID="$source_id"')
+    mapfile = restore.index('mapfile -t source_state <"$source_state_file"', parser)
+    cardinality = restore.index('(( ${#source_state[@]} == 3 )) || return 104', mapfile)
+    indexing = restore.index('lifecycle="${source_state[0]}"', cardinality)
+    assert parser < mapfile < cardinality < indexing
+    softstop = restore.index("--action SOFTSTOP")
+    first_only = restore.index("if (( source_stop_budget_committed == 0 )); then", indexing)
+    budget = restore.index("source_restore_deadline - SECONDS >= 1380", first_only)
+    committed = restore.index("source_stop_budget_committed=1", budget)
+    assert first_only < budget < committed < softstop
+    assert restore.count("source_restore_deadline - SECONDS >= 1380") == 1
+    assert "source_restore_deadline=$((SECONDS + 1500))" in restore
+    conditional_end = restore.index("fi", committed)
+    assert softstop > conditional_end
+
+
+def test_capacity_fence_disables_installed_unit_across_reboot() -> None:
+    acquire = WORKFLOW[WORKFLOW.index("acquire_source_workload_fence() {") : WORKFLOW.index("release_source_workload_fence() {")]
+    assert "systemctl disable --now universal-video-container.service" in acquire
+    assert '== disabled' in acquire
+    assert "systemctl mask" not in acquire
+    mutation = WORKFLOW[WORKFLOW.index("mutation=\"$RUNNER_TEMP/issue-881-locked-mutation.sh\"") : WORKFLOW.index("Release capacity workload fence and ensure sole service active")]
+    assert mutation.index("systemctl enable universal-video-container.service") < mutation.index('[[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]')
+    release = WORKFLOW[WORKFLOW.index("Release capacity workload fence and ensure sole service active") : WORKFLOW.index("Publish bounded operational receipt")]
+    assert release.index("systemctl enable universal-video-container.service") < release.index('[[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]')
+
+
+def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> None:
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    start = watchdog.index("CAPACITY_FENCE_HELD")
+    release = watchdog.index("release_source_workload_fence || source_release_rc=$?", start)
+    block = watchdog[start:release]
+    assert "fence_wait_deadline=$((fence_now + 2700))" in block
+    assert 'fence_wait_deadline="$watchdog_cleanup_cutoff_epoch"' in block
+    assert "fence_release_epoch <= fence_now" in block
+    assert "fence_release_epoch <= fence_wait_deadline" in block
+    assert 'actions/runs/${PARENT_RUN_ID}' in block
+    assert 'if [[ "$parent_status" != completed ]]; then' in block
+    assert '[[ "$parent_status" == completed ]] && break' in block
+    assert "release_source_workload_fence" not in block
+
+
+def test_watchdog_retries_paid_reconciliation_with_reserved_cleanup_time() -> None:
+    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+    assert "watchdog_hard_deadline=$((SECONDS + 17400))" in watchdog
+    assert "watchdog_cleanup_cutoff=$((watchdog_hard_deadline - 1200))" in watchdog
+    # Fence + both discoveries + deletion proof, with loop/request overruns
+    # and a final receipt window, must fit independently of setup slack.
+    assert 300 + 120 + 120 + 120 + 4 * 60 + 60 < 1200
+    assert "watchdog_cleanup_cutoff_epoch=$(( $(date -u +%s) + watchdog_cleanup_cutoff - SECONDS ))" in watchdog
+    start = watchdog.index("reconcile_paid_instance_once() {")
+    loop = watchdog.index("while (( SECONDS < watchdog_cleanup_cutoff )); do", start)
+    proof = watchdog.index("instance_terminal_proven == 1 || instance_inventory_clean == 1", loop)
+    assert start < loop < proof
+    reconcile = watchdog[start:loop]
+    assert "exit 97" not in reconcile
+    assert "exit 99" not in reconcile
+    assert "exit 101" not in reconcile
+    restore = watchdog[watchdog.index("restore_source_capacity() {") : watchdog.index("release_source_workload_fence() {")]
+    assert 'source_restore_deadline="$watchdog_cleanup_cutoff"' in restore
+
+
+def test_exit_cleanup_does_not_reclaim_capacity_before_paid_terminal_proof() -> None:
+    cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
+    gate = cleanup.index("if (( paid_launch_request_started == 0 || paid_instance_terminal_proven == 1 )); then")
+    restore = cleanup.index("restore_source_capacity || cleanup_rc=1", gate)
+    release = cleanup.index("release_source_workload_fence || cleanup_rc=1", restore)
+    conditional_end = cleanup.index("fi", release)
+    assert gate < restore < release < conditional_end
+    launch = WORKFLOW.index("paid_launch_request_started=1")
+    create = WORKFLOW.index("create_json_once paid_instance_create", launch)
+    assert launch < create
+
+
+def test_prelaunch_failure_restores_source_before_temporary_cleanup() -> None:
+    cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
+    gate = cleanup.index("if (( paid_launch_request_started == 0 )); then")
+    restore = cleanup.index("restore_source_capacity || cleanup_rc=1", gate)
+    release = cleanup.index("release_source_workload_fence || cleanup_rc=1", restore)
+    temporary = cleanup.index("cleanup_temp_resources || cleanup_rc=1")
+    assert gate < restore < release < temporary
+
+
+def test_starting_capacity_retry_rechecks_target_before_another_stop() -> None:
+    start = WORKFLOW.index('if [[ "$current_state" == STARTING ]]; then')
+    block = WORKFLOW[start:WORKFLOW.index('elif [[ "$current_state" == STOPPING ]]; then', start)]
+    assert 'set_source_capacity "$target_ocpus" "$target_memory" "$deadline" "$label"' in block
+    assert 'return $?' in block
+    assert 'current_state=RUNNING' not in block
+
+
+def test_exit_cleanup_stays_armed_through_fallible_backup_retirement() -> None:
+    acceptance = WORKFLOW.index("backup_accepted=1")
+    retirement = WORKFLOW.index("wait_all_absent backup", acceptance)
+    disable = WORKFLOW.index("trap - EXIT", retirement)
+    gate = WORKFLOW.index("UV_ROOT_BACKUP_GATE_PASS", disable)
+    assert acceptance < retirement < disable < gate
+    cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
+    assert "release_source_workload_fence || cleanup_rc=1" in cleanup
+
+
+def test_always_run_fence_release_rebuilds_pinned_ssh_identity() -> None:
+    start = WORKFLOW.index("Release capacity workload fence and ensure sole service active")
+    release = WORKFLOW[start:WORKFLOW.index("Publish bounded operational receipt", start)]
+    assert "steps.ssh.outputs.key" not in release
+    assert "steps.ssh.outputs.known" not in release
+    assert 'ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$release_known"' in release
+    assert 'printf \'%s\\n\' "$SSH_KEY_ORACLE" >"$release_key"' in release
+    assert 'ssh-keygen -y -f "$release_key"' in release
+    assert 'ssh -i "$release_key"' in release
+    assert 'UserKnownHostsFile="$release_known"' in release
+
+
+def test_watchdog_failed_resize_restarts_once_and_preserves_restart_budget() -> None:
+    import hashlib
+    import hmac
+    block = WATCHDOG[WATCHDOG.index('          restore_source_capacity() {'):WATCHDOG.index('          release_source_workload_fence() {')]
+    block = '\n'.join(line[10:] if line.startswith('          ') else line for line in block.splitlines())
+    for scenario in ('failed_update', 'exhausted_update', 'lost_start', 'success', 'late_stop'):
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = r'''
+set -uo pipefail
+SECONDS=0
+watchdog_cleanup_cutoff=2000
+tenancy_id=test
+state=RUNNING
+mock_ocpus=5
+mock_memory=11
+stops=0
+starts=0
+updates=0
+pending_stop=0
+sleep() { SECONDS=$((SECONDS + 5)); }
+oci_retry_json() {
+  local output="$1"; shift 2
+  if [[ "$SCENARIO" == late_stop && "$pending_stop" == 1 ]]; then
+    pending_stop=2
+  elif [[ "$SCENARIO" == late_stop && "$pending_stop" == 2 ]]; then
+    state=STOPPING; pending_stop=3
+  elif [[ "$SCENARIO" == late_stop && "$pending_stop" == 3 ]]; then
+    SECONDS=$((SECONDS + 600)); state=STOPPED; pending_stop=4
+  fi
+  MOCK_STATE="$state" MOCK_OCPUS="$mock_ocpus" MOCK_MEMORY="$mock_memory" python - "$output" "$@" <<'MOCK'
+import json,os,sys
+d={'id':'test-id','display-name':'bridge-school-dds3-frankfurt','compartment-id':'test','availability-domain':'test-ad','shape':'VM.Standard.E5.Flex','lifecycle-state':os.environ['MOCK_STATE'],'shape-config':{'ocpus':int(os.environ['MOCK_OCPUS']),'memory-in-gbs':int(os.environ['MOCK_MEMORY'])}}
+json.dump({'data':[d] if 'list' in sys.argv else d},open(sys.argv[1],'w'))
+MOCK
+}
+oci_retry_quiet() {
+  local deadline="$1"; shift
+  case "$*" in
+    *SOFTSTOP*)
+      stops=$((stops + 1))
+      if [[ "$SCENARIO" == late_stop ]]; then
+        SECONDS="$deadline"; pending_stop=1; return 1
+      fi
+      state=STOPPED ;;
+    *update*)
+      updates=$((updates + 1))
+      if [[ "$SCENARIO" == success ]]; then mock_ocpus=6; mock_memory=12; return 0; fi
+      if [[ "$SCENARIO" == exhausted_update ]]; then SECONDS="$deadline"; fi
+      return 1 ;;
+    *START*)
+      starts=$((starts + 1))
+      if [[ "$SCENARIO" == lost_start && "$starts" == 1 ]]; then return 1; fi
+      if [[ "$SCENARIO" == late_stop ]]; then SECONDS=$((SECONDS + 660)); fi
+      state=RUNNING ;;
+    *) return 99 ;;
+  esac
+}
+'''
+            harness += block + '\nrc=0\nrestore_source_capacity || rc=$?\nprintf "%s %s %s %s %s %s\\n" "$rc" "$state" "$stops" "$starts" "$updates" "$SECONDS"\n'
+            env = dict(os.environ, RUNNER_TEMP=tmp, EXPECTED_AD='test-ad', OCI_KEY='test-key', SOURCE_INSTANCE_HMAC=hmac.new(b'test-key', b'source-instance|test-id', hashlib.sha256).hexdigest(), SOURCE_ORIGINAL_OCPUS='6', SOURCE_ORIGINAL_MEMORY='12', SOURCE_LEASE_OCPUS='5', SOURCE_LEASE_MEMORY='11', SCENARIO=scenario)
+            result = subprocess.run(['bash', '-c', harness], env=env, text=True, capture_output=True, timeout=15)
+            assert result.returncode == 0, result.stderr
+            rc, state, stops, starts, updates, elapsed = result.stdout.strip().split()
+            assert state == 'RUNNING', result.stdout
+            assert int(stops) == 1 and int(updates) == 1, result.stdout
+            assert int(starts) == (2 if scenario == 'lost_start' else 1), result.stdout
+            assert int(rc) == (0 if scenario == 'success' else 105), result.stdout
+            assert int(elapsed) < (1500 if scenario == "late_stop" else 900), result.stdout

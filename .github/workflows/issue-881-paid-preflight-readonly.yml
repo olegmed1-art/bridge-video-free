@@ -182,13 +182,20 @@ jobs:
           for key in ('id', 'availability-domain', 'compartment-id', 'shape'):
               assert isinstance(row.get(key), str) and row[key]
               print(row[key])
+          config = row.get('shape-config') or {}
+          for key in ('ocpus', 'memory-in-gbs'):
+              value = config.get(key)
+              assert type(value) in (int, float) and 0 < value <= 65536
+              print(value)
           PY
           )
-          [[ ${#source[@]} -eq 4 ]]
+          [[ ${#source[@]} -eq 6 ]]
           instance_id="${source[0]}"
           ad="${source[1]}"
           compartment_id="${source[2]}"
           source_shape="${source[3]}"
+          source_ocpus="${source[4]}"
+          source_memory_gb="${source[5]}"
           compartment_known=0
           for known_compartment in "${compartments[@]}"; do
             if [[ "$known_compartment" == "$compartment_id" ]]; then
@@ -326,6 +333,7 @@ jobs:
           print('price_basis=' + module.PRICE_BASIS)
           print('price_basis_valid_until=' + module.PRICE_BASIS_VALID_UNTIL.isoformat().replace('+00:00', 'Z'))
           PY
+          printf 'source_lifecycle=RUNNING\nsource_ocpus=%s\nsource_memory_gb=%s\n' "$source_ocpus" "$source_memory_gb" >> "$evidence"
           cat "$evidence"
           echo "status=$(grep '^status=' "$evidence" | cut -d= -f2-)" >> "$GITHUB_OUTPUT"
 

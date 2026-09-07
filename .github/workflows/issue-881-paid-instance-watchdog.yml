@@ -23,6 +23,26 @@ on:
         description: Exact parent workflow run attempt
         required: true
         type: string
+      source_original_ocpus:
+        description: Sanitized production OCPU count before the temporary lease
+        required: true
+        type: string
+      source_instance_hmac:
+        description: HMAC-bound exact production instance identity (never its OCID)
+        required: true
+        type: string
+      source_original_memory:
+        description: Sanitized production memory GiB before the temporary lease
+        required: true
+        type: string
+      source_lease_ocpus:
+        description: Sanitized temporary production OCPU count
+        required: true
+        type: string
+      source_lease_memory:
+        description: Sanitized temporary production memory GiB
+        required: true
+        type: string
       authorization_hmac:
         description: HMAC correlation issued by the owner-authorized parent
         required: true
@@ -50,26 +70,48 @@ jobs:
       OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
       OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_HOSTNAME: bridge-school-dds3-frankfurt
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       GH_TOKEN: ${{ github.token }}
       STAMP: ${{ inputs.stamp }}
       EXPIRY_EPOCH: ${{ inputs.expiry_epoch }}
       EXPECTED_AD: ${{ inputs.expected_ad }}
       PARENT_RUN_ID: ${{ inputs.parent_run_id }}
       PARENT_RUN_ATTEMPT: ${{ inputs.parent_run_attempt }}
+      SOURCE_ORIGINAL_OCPUS: ${{ inputs.source_original_ocpus }}
+      SOURCE_ORIGINAL_MEMORY: ${{ inputs.source_original_memory }}
+      SOURCE_LEASE_OCPUS: ${{ inputs.source_lease_ocpus }}
+      SOURCE_LEASE_MEMORY: ${{ inputs.source_lease_memory }}
+      SOURCE_INSTANCE_HMAC: ${{ inputs.source_instance_hmac }}
       AUTHORIZATION_HMAC: ${{ inputs.authorization_hmac }}
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
       - name: Wait for provider-independent expiry and terminate exact paid VM
         run: |
           set -euo pipefail
           [[ "$STAMP" =~ ^issue-881-root-recovery-[0-9a-f]{16}-run-[0-9]+-a[1-9][0-9]*$ ]]
           [[ "$EXPIRY_EPOCH" =~ ^[0-9]+$ ]]
           [[ "$PARENT_RUN_ID" =~ ^[0-9]+$ && "$PARENT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_ORIGINAL_OCPUS" == 6 && "$SOURCE_ORIGINAL_MEMORY" == 12 ]]
+          [[ "$SOURCE_LEASE_OCPUS" == 5 && "$SOURCE_LEASE_MEMORY" == 11 ]]
+          [[ "$SOURCE_INSTANCE_HMAC" =~ ^[0-9a-f]{64}$ ]]
           [[ "$STAMP" == *"-run-${PARENT_RUN_ID}-a${PARENT_RUN_ATTEMPT}" ]]
           [[ "$GITHUB_ACTOR" == 'github-actions[bot]' ]]
           [[ -n "$EXPECTED_AD" && "$EXPECTED_AD" != *$'\n'* ]]
           [[ "$OCI_REGION" == eu-frankfurt-1 ]]
+          # Reserve twenty minutes for the full cleanup chain: fence release
+          # 300s, discovery 120s, late discovery 120s, deletion/proof 120s,
+          # plus request overruns and receipt slack. The separate 600s setup
+          # allowance remains outside this reserve before the 300m hard kill.
+          watchdog_hard_deadline=$((SECONDS + 17400))
+          watchdog_cleanup_cutoff=$((watchdog_hard_deadline - 1200))
+          watchdog_cleanup_cutoff_epoch=$(( $(date -u +%s) + watchdog_cleanup_cutoff - SECONDS ))
           for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY; do [[ -n "${!value:-}" ]]; done
-          WATCHDOG_PAYLOAD="${STAMP}|${EXPIRY_EPOCH}|${EXPECTED_AD}|${PARENT_RUN_ID}|${PARENT_RUN_ATTEMPT}" python - <<'PY'
+          WATCHDOG_PAYLOAD="${STAMP}|${EXPIRY_EPOCH}|${EXPECTED_AD}|${PARENT_RUN_ID}|${PARENT_RUN_ATTEMPT}|${SOURCE_INSTANCE_HMAC}|${SOURCE_ORIGINAL_OCPUS}|${SOURCE_ORIGINAL_MEMORY}|${SOURCE_LEASE_OCPUS}|${SOURCE_LEASE_MEMORY}" python - <<'PY'
           import hashlib,hmac,os
           supplied=os.environ.get('AUTHORIZATION_HMAC','')
           expected=hmac.new(os.environ['OCI_KEY'].encode(),os.environ['WATCHDOG_PAYLOAD'].encode(),hashlib.sha256).hexdigest()
@@ -115,6 +157,163 @@ jobs:
           chmod 0600 "$HOME/.oci/config"
           export OCI_CLI_REGION="$OCI_REGION"
 
+          oci_retry_json() {
+            local output="$1" deadline="$2"; shift 2
+            local remaining request_seconds
+            while (( SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS)); request_seconds=$((remaining < 30 ? remaining : 30))
+              if timeout --signal=KILL "${request_seconds}s" "$@" --output json >"$output" 2>/dev/null \
+                  && python -c 'import json,sys; assert isinstance(json.load(open(sys.argv[1])),dict)' "$output"; then
+                return 0
+              fi
+              (( SECONDS < deadline )) && sleep 5
+            done
+            return 1
+          }
+          oci_retry_quiet() {
+            local deadline="$1"; shift
+            local remaining request_seconds
+            while (( SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS)); request_seconds=$((remaining < 30 ? remaining : 30))
+              if timeout --signal=KILL "${request_seconds}s" "$@" --output json >/dev/null 2>/dev/null; then return 0; fi
+              (( SECONDS < deadline )) && sleep 5
+            done
+            return 1
+          }
+
+          restore_source_capacity() {
+            local source_list="$RUNNER_TEMP/source-instances.json" source_id_file="$RUNNER_TEMP/source-instance-id"
+            local source_id source_restore_deadline source_restored=0 source_stop_budget_committed=0 source_get lifecycle ocpus memory command_deadline
+            local source_restart_phase=0 source_resize_deadline source_stop_deadline
+            local -a source_state
+            source_restore_deadline=$((SECONDS + 1500))
+            (( source_restore_deadline < watchdog_cleanup_cutoff )) || source_restore_deadline="$watchdog_cleanup_cutoff"
+            # Reserve the final twelve minutes for START retries and RUNNING
+            # verification. Once restart begins, never issue another resize/stop.
+            source_resize_deadline=$((source_restore_deadline - 720))
+            # Last STOP submission must leave room for STOPPING as well as
+            # update, START, polling, and RUNNING verification.
+            source_stop_deadline=$((source_restore_deadline - 1440))
+            oci_retry_json "$source_list" "$source_restore_deadline" oci compute instance list --compartment-id "$tenancy_id" --display-name bridge-school-dds3-frankfurt --all
+            EXPECTED_AD="$EXPECTED_AD" TENANCY_ID="$tenancy_id" python - "$source_list" >"$source_id_file" <<'PY'
+          import json,os,sys
+          data=json.load(open(sys.argv[1])).get('data')
+          assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
+          matched=[x for x in data if x.get('display-name')=='bridge-school-dds3-frankfurt' and x.get('lifecycle-state') not in {'TERMINATED','TERMINATING'}]
+          assert len(matched)==1
+          d=matched[0]
+          assert d.get('compartment-id')==os.environ['TENANCY_ID'] and d.get('availability-domain')==os.environ['EXPECTED_AD']
+          assert d.get('shape')=='VM.Standard.E5.Flex' and isinstance(d.get('id'),str) and d['id']
+          print(d['id'])
+          PY
+            source_id="$(<"$source_id_file")"
+            SOURCE_ID="$source_id" python - <<'PY'
+          import hashlib,hmac,os
+          observed=hmac.new(os.environ['OCI_KEY'].encode(),('source-instance|'+os.environ['SOURCE_ID']).encode(),hashlib.sha256).hexdigest()
+          assert hmac.compare_digest(observed,os.environ['SOURCE_INSTANCE_HMAC'])
+          PY
+            [[ $? == 0 ]] || return 103
+            while (( SECONDS < source_restore_deadline )); do
+              source_get="$RUNNER_TEMP/source-get.json"
+              command_deadline=$((SECONDS + 60)); (( command_deadline > source_restore_deadline )) && command_deadline="$source_restore_deadline"
+              oci_retry_json "$source_get" "$command_deadline" oci compute instance get --instance-id "$source_id" || continue
+              source_state_file="$RUNNER_TEMP/source-state"
+              if ! EXPECTED_ID="$source_id" EXPECTED_AD="$EXPECTED_AD" TENANCY_ID="$tenancy_id" python - "$source_get" >"$source_state_file" <<'PY'
+          import json,os,sys
+          d=json.load(open(sys.argv[1])).get('data'); assert isinstance(d,dict)
+          assert d.get('id')==os.environ['EXPECTED_ID'] and d.get('display-name')=='bridge-school-dds3-frankfurt'
+          assert d.get('compartment-id')==os.environ['TENANCY_ID'] and d.get('availability-domain')==os.environ['EXPECTED_AD']
+          assert d.get('shape')=='VM.Standard.E5.Flex'
+          c=d.get('shape-config') or {}; o=c.get('ocpus'); m=c.get('memory-in-gbs')
+          assert isinstance(o,(int,float)) and float(o).is_integer()
+          assert isinstance(m,(int,float)) and float(m).is_integer()
+          print(d.get('lifecycle-state')); print(int(o)); print(int(m))
+          PY
+              then return 104; fi
+              mapfile -t source_state <"$source_state_file"
+              (( ${#source_state[@]} == 3 )) || return 104
+              lifecycle="${source_state[0]}"; ocpus="${source_state[1]}"; memory="${source_state[2]}"
+              if [[ "$ocpus/$memory" != "$SOURCE_ORIGINAL_OCPUS/$SOURCE_ORIGINAL_MEMORY" && "$ocpus/$memory" != "$SOURCE_LEASE_OCPUS/$SOURCE_LEASE_MEMORY" ]]; then
+                return 103
+              fi
+              if [[ "$lifecycle" == RUNNING && "$ocpus/$memory" == "$SOURCE_ORIGINAL_OCPUS/$SOURCE_ORIGINAL_MEMORY" ]]; then
+                source_restored=1
+                break
+              fi
+              if [[ "$lifecycle" == RUNNING ]]; then
+                (( source_restart_phase == 0 )) || return 105
+                if (( SECONDS >= source_stop_deadline )); then
+                  # An earlier timed-out STOP may still have been accepted.
+                  # Keep observing/restarting, but never submit another STOP.
+                  (( source_stop_budget_committed == 1 )) || return 105
+                  sleep 5
+                  continue
+                fi
+                if (( source_stop_budget_committed == 0 )); then
+                  # Reserve both independently bounded stop and restart
+                  # transitions before the first request.
+                  (( source_restore_deadline - SECONDS >= 1380 )) || return 105
+                  source_stop_budget_committed=1
+                fi
+                # A fresh RUNNING observation permits an idempotent retry. This
+                # recovers from definitely unsubmitted network/DNS failures and
+                # remains safe when an earlier request was merely delayed.
+                command_deadline=$((SECONDS + 60)); (( command_deadline > source_stop_deadline )) && command_deadline="$source_stop_deadline"
+                oci_retry_quiet "$command_deadline" oci compute instance action --instance-id "$source_id" --action SOFTSTOP || true
+              elif [[ "$lifecycle" == STOPPED ]]; then
+                if (( source_restart_phase == 0 && SECONDS < source_resize_deadline )) && [[ "$ocpus/$memory" == "$SOURCE_LEASE_OCPUS/$SOURCE_LEASE_MEMORY" ]]; then
+                  command_deadline=$((SECONDS + 60)); (( command_deadline > source_resize_deadline )) && command_deadline="$source_resize_deadline"
+                  oci_retry_quiet "$command_deadline" oci compute instance update --instance-id "$source_id" --shape-config "{\"ocpus\":${SOURCE_ORIGINAL_OCPUS},\"memoryInGBs\":${SOURCE_ORIGINAL_MEMORY}}" --force || true
+                fi
+                # Even an uncertain/failed update must end in a reachable host.
+                # Latch before START, whose response can also be lost.
+                source_restart_phase=1
+                command_deadline=$((SECONDS + 60)); (( command_deadline > source_restore_deadline )) && command_deadline="$source_restore_deadline"
+                oci_retry_quiet "$command_deadline" oci compute instance action --instance-id "$source_id" --action START || true
+              elif [[ "$lifecycle" != STARTING && "$lifecycle" != STOPPING ]]; then
+                return 104
+              fi
+              sleep 5
+            done
+            (( source_restored == 1 )) || return 105
+          }
+          release_source_workload_fence() {
+            local known="$RUNNER_TEMP/source-known-hosts" key="$RUNNER_TEMP/source-key" deadline=$((SECONDS + 300)) remaining attempt_seconds
+            while (( SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS)); attempt_seconds=$((remaining < 60 ? remaining : 60))
+              if timeout --signal=KILL "${attempt_seconds}s" ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known" 2>/dev/null; then break; fi
+              sleep 5
+            done
+            [[ -s "$known" ]] || return 106
+            printf '%s\n' "$SSH_KEY_ORACLE" >"$key"; chmod 0600 "$key"; ssh-keygen -y -f "$key" >/dev/null || return 106
+            while (( SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS)); attempt_seconds=$((remaining < 60 ? remaining : 60))
+              if timeout --signal=KILL "${attempt_seconds}s" ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+                  "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' LEASE_STAMP='$STAMP' /bin/bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          [[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]]
+          marker=/var/lib/bridge-school/issue-881-capacity-lease
+          exec 8>/run/lock/oracle-workload-mutation.lock; flock --exclusive 8
+          if [[ -e "$marker" ]]; then
+            [[ -f "$marker" && ! -L "$marker" && "$(stat -c '%u:%g:%a:%h' "$marker")" == 0:0:600:1 ]]
+            [[ "$(<"$marker")" == "$LEASE_STAMP" ]]
+            rm -f -- "$marker"
+          fi
+          # These operations are deliberately idempotent and unconditional.
+          # A prior attempt may have removed the marker after unmasking but
+          # lost its connection before enable/start completed.
+          systemctl unmask universal-video-container.service
+          systemctl enable universal-video-container.service
+          systemctl start universal-video-container.service
+          [[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]
+          [[ "$(systemctl is-active universal-video-container.service)" == active ]]
+          REMOTE
+              then return 0; fi
+              sleep 5
+            done
+            return 106
+          }
+
           roots="$RUNNER_TEMP/roots.json"
           instances="$RUNNER_TEMP/instances.json"
           timeout --signal=KILL 30s oci iam compartment list --include-root --all --output json >"$roots" 2>/dev/null
@@ -139,13 +338,23 @@ jobs:
             now="$(date -u +%s)"
             (( now >= effective_expiry )) && break
             if launch_comments="$(timeout --signal=KILL 30s gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[] | select(.user.login=="github-actions[bot]") | .body' 2>/dev/null)"; then
+              lease_restore_epoch="$(sed -n "s|^CAPACITY_LEASE_OPEN stamp=${STAMP} restore_epoch=\([0-9][0-9]*\) source_shape=VM.Standard.E5.Flex original=6/12 lease=5/11 run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${PARENT_RUN_ID}$|\1|p" <<<"$launch_comments" | tail -n1)"
+              if [[ "$lease_restore_epoch" =~ ^[0-9]+$ ]]; then
+                (( lease_restore_epoch <= now + 2700 && lease_restore_epoch <= effective_expiry )) || exit 96
+                (( lease_restore_epoch > now )) && effective_expiry="$lease_restore_epoch" || effective_expiry="$now"
+              fi
               launch_expiry="$(sed -n "s/^PAID_WATCHDOG_LAUNCH stamp=${STAMP} expiry_epoch=\([0-9][0-9]*\) run=.*/\1/p" <<<"$launch_comments" | tail -n1)"
               if [[ "$launch_expiry" =~ ^[0-9]+$ ]]; then
-                (( launch_expiry <= now + 1800 && launch_expiry <= effective_expiry )) || exit 96
+                (( launch_expiry <= now + 1800 )) || exit 96
                 # A delayed authenticated read may discover the launch receipt
-                # after its deadline. That means clean up now, never exit before
-                # issuing the provider termination requests.
-                (( launch_expiry > now )) && effective_expiry="$launch_expiry" || effective_expiry="$now"
+                # after its deadline. A later valid launch deadline is capped
+                # by the already authenticated capacity-lease deadline; it can
+                # never abort or postpone cleanup.
+                if (( launch_expiry <= now )); then
+                  effective_expiry="$now"
+                elif (( launch_expiry < effective_expiry )); then
+                  effective_expiry="$launch_expiry"
+                fi
                 break
               fi
             fi
@@ -155,9 +364,11 @@ jobs:
           now="$(date -u +%s)"
           remaining=$((effective_expiry - now))
           (( remaining > 0 )) && sleep "$remaining"
+          reconcile_paid_instance_once() {
           instance_discovery_deadline=$((SECONDS + 120))
+          (( instance_discovery_deadline < watchdog_cleanup_cutoff )) || instance_discovery_deadline="$watchdog_cleanup_cutoff"
           while ! timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --all --output json >"$instances" 2>/dev/null; do
-            (( SECONDS < instance_discovery_deadline )) || exit 97
+            (( SECONDS < instance_discovery_deadline )) || return 97
             sleep 5
           done
           ids_file="$RUNNER_TEMP/instance-ids"
@@ -176,12 +387,13 @@ jobs:
           assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
           sys.stdout.write('\n'.join(matched)+('\n' if matched else ''))
           PY
-          then exit 101; fi
+          then return 101; fi
           mapfile -t ids <"$ids_file"
           instance_terminal_proven=0
           if (( ${#ids[@]} == 1 )); then
             instance_get_error="$RUNNER_TEMP/instance-get.err"
             instance_cleanup_deadline=$((SECONDS + 600))
+            (( instance_cleanup_deadline < watchdog_cleanup_cutoff )) || instance_cleanup_deadline="$watchdog_cleanup_cutoff"
             while (( SECONDS < instance_cleanup_deadline )); do
               timeout --signal=KILL 30s oci compute instance terminate --instance-id "${ids[0]}" --preserve-boot-volume true --force --output json >/dev/null 2>/dev/null || true
               if timeout --signal=KILL 20s oci compute instance get --instance-id "${ids[0]}" --output json >"$instances" 2>"$instance_get_error"; then
@@ -198,13 +410,14 @@ jobs:
               sleep 5
             done
             # A known exact ID can never be downgraded to LIST-based absence.
-            (( instance_terminal_proven == 1 )) || exit 99
+            (( instance_terminal_proven == 1 )) || return 99
           fi
           # A direct GET terminal result for the known exact ID is stronger
           # than an eventually consistent LIST and permits storage cleanup to
           # proceed. If no ID was observed, require a bounded clean inventory.
           if (( ${#ids[@]} == 0 )); then
             instance_confirmation_deadline=$((SECONDS + 120))
+            (( instance_confirmation_deadline < watchdog_cleanup_cutoff )) || instance_confirmation_deadline="$watchdog_cleanup_cutoff"
             instance_inventory_clean=0
             late_instance_clean_count=0
             late_instance_id=""
@@ -225,7 +438,7 @@ jobs:
           assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
           sys.stdout.write('\n'.join(matched)+('\n' if matched else ''))
           PY
-                then exit 101; fi
+                then return 101; fi
                 mapfile -t late_ids <"$late_ids_file"
                 if (( ${#late_ids[@]} == 1 )); then late_instance_id="${late_ids[0]}"; break; fi
                 late_instance_clean_count=$((late_instance_clean_count + 1))
@@ -239,6 +452,7 @@ jobs:
             if [[ -n "$late_instance_id" ]]; then
               late_instance_get_error="$RUNNER_TEMP/late-instance-get.err"
               late_cleanup_deadline=$((SECONDS + 600))
+              (( late_cleanup_deadline < watchdog_cleanup_cutoff )) || late_cleanup_deadline="$watchdog_cleanup_cutoff"
               while (( SECONDS < late_cleanup_deadline )); do
                 timeout --signal=KILL 30s oci compute instance terminate --instance-id "$late_instance_id" --preserve-boot-volume true --force --output json >/dev/null 2>/dev/null || true
                 if timeout --signal=KILL 20s oci compute instance get --instance-id "$late_instance_id" --output json >"$instances" 2>"$late_instance_get_error"; then
@@ -251,11 +465,54 @@ jobs:
                 : >"$late_instance_get_error"
                 sleep 5
               done
-              (( instance_terminal_proven == 1 )) || exit 99
+              (( instance_terminal_proven == 1 )) || return 99
             else
-              (( instance_inventory_clean == 1 )) || exit 99
+              (( instance_inventory_clean == 1 )) || return 99
             fi
           fi
+          }
+          instance_terminal_proven=0
+          instance_inventory_clean=0
+          while (( SECONDS < watchdog_cleanup_cutoff )); do
+            if reconcile_paid_instance_once; then break; fi
+            sleep 5
+          done
+          (( instance_terminal_proven == 1 || instance_inventory_clean == 1 )) || exit 99
+
+          # Once compute quota is proven free, restore production before any
+          # storage/network cleanup that could fail independently.
+          source_restore_rc=0
+          source_release_rc=0
+          restore_source_capacity || source_restore_rc=$?
+          # After paid compute is absent, an authenticated live parent may
+          # retain the marker for its root mutation. Bound that distinct fence
+          # phase independently; never extend paid compute or capacity lease.
+          if (( source_restore_rc == 0 )); then
+            fence_now="$(date -u +%s)"
+            parent_status="$(timeout --signal=KILL 30s gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PARENT_RUN_ID}" --jq '.status' 2>/dev/null || true)"
+            fence_comments="$(timeout --signal=KILL 30s gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[] | select(.user.login=="github-actions[bot]") | .body' 2>/dev/null || true)"
+            fence_release_epoch="$(sed -n "s|^CAPACITY_FENCE_HELD stamp=${STAMP} release_epoch=\([0-9][0-9]*\) run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${PARENT_RUN_ID}$|\1|p" <<<"$fence_comments" | tail -n1)"
+            # Missing phase evidence or an unreadable API is not permission
+            # to disturb a non-completed exact parent. A valid receipt may
+            # shorten, but never extend, the bounded fail-safe hold.
+            if [[ "$parent_status" != completed ]]; then
+              fence_wait_deadline=$((fence_now + 2700))
+              (( fence_wait_deadline < watchdog_cleanup_cutoff_epoch )) || fence_wait_deadline="$watchdog_cleanup_cutoff_epoch"
+              if [[ "$fence_release_epoch" =~ ^[0-9]+$ ]] && (( fence_release_epoch <= fence_now )); then
+                fence_wait_deadline="$fence_now"
+              elif [[ "$fence_release_epoch" =~ ^[0-9]+$ ]] && (( fence_release_epoch <= fence_wait_deadline )); then
+                fence_wait_deadline="$fence_release_epoch"
+              fi
+              while (( $(date -u +%s) < fence_wait_deadline )); do
+                parent_status="$(timeout --signal=KILL 30s gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PARENT_RUN_ID}" --jq '.status' 2>/dev/null || true)"
+                [[ "$parent_status" == completed ]] && break
+                sleep 5
+              done
+            fi
+          fi
+          # Even when OCI is unavailable for the entire bounded restore
+          # budget, independently try to unmask and start the reachable host.
+          release_source_workload_fence || source_release_rc=$?
 
           # The primary runner normally removes the restored boot volume. If
           # that runner disappeared, the independent watchdog owns the same
@@ -349,4 +606,8 @@ jobs:
               (( late_volume_clean_count >= 3 )) || exit 100
             fi
           fi
-          gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="Paid acceptance watchdog: exact-stamped instance and restored boot volume are PROVEN_ABSENT; run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. No resource IDs retained."
+          if (( source_restore_rc != 0 || source_release_rc != 0 )); then
+            gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="Paid acceptance watchdog: exact-stamped instance and restored boot volume are PROVEN_ABSENT; production restore requires operator reconciliation; run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. No temporary resource IDs retained."
+            exit 105
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="Paid acceptance watchdog: exact-stamped instance and restored boot volume are PROVEN_ABSENT; temporary production capacity lease is RESTORED; run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. No resource IDs retained."
