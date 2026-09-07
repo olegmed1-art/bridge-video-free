@@ -19,6 +19,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
 jobs:
   process:
     runs-on: ubuntu-latest

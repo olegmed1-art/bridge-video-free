@@ -555,6 +555,19 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "oracle-universal-video-admin-pr-{0}" in admin_workflow
     assert "'oracle-instance-workload-mutation'" in admin_workflow
     assert "group: oracle-universal-video-bounded-admin" not in admin_workflow
+    for protected_external_mutator in (
+        ".github/workflows/database-production.yml",
+        ".github/workflows/process-video.yml",
+        ".github/workflows/video-job-monitor.yml",
+    ):
+        assert f"'{protected_external_mutator}'" in runner
+        mutator_workflow = (ROOT / protected_external_mutator).read_text(
+            encoding="utf-8"
+        )
+        header = mutator_workflow.split("\njobs:", 1)[0]
+        assert header.count("\nconcurrency:\n") == 1
+        assert "  group: oracle-instance-workload-mutation" in header
+        assert "  cancel-in-progress: false" in header
     assert "verify_no_active_instance_agent_commands" in runner
     assert "instance-agent command-execution list" in runner
     assert '--instance-id "$INSTANCE_ID"' in runner
