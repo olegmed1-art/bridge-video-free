@@ -261,7 +261,7 @@ def adapt_legacy_hands(hands: Any, *, recognizer_version: str = "legacy-video31"
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
     for seat in SEATS:
-        hand = _mapping(source.get(seat), f"legacy hands.{seat}")
+        hand = {} if seat not in source else _mapping(source[seat], f"legacy hands.{seat}")
         known = 0
         for suit in SUITS:
             raw_ranks = hand.get(suit)
