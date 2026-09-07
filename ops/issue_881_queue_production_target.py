@@ -45,7 +45,9 @@ QUEUE_ACL_SQL = """SELECT NOT EXISTS (
             OR CASE WHEN current_setting('server_version_num')::integer >= 170000
                 THEN has_table_privilege(current_user,c.oid,'MAINTAIN') ELSE false END
         WHEN c.relkind='S' THEN has_sequence_privilege(current_user,c.oid,'USAGE,SELECT,UPDATE')
-        ELSE false END) AS base_acl_safe,
+        ELSE false END)
+    AND has_table_privilege(current_user,'video_queue.batch_status','SELECT')
+    AND has_table_privilege(current_user,'video_queue.job_status','SELECT') AS base_acl_safe,
     (SELECT array_agg(p.proname || '(' || oidvectortypes(p.proargtypes) || ')' ORDER BY p.proname, oidvectortypes(p.proargtypes))
      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
      WHERE n.nspname='video_queue' AND has_function_privilege(current_user,p.oid,'EXECUTE')) AS executable_functions,
@@ -56,7 +58,8 @@ QUEUE_ACL_SQL = """SELECT NOT EXISTS (
             OR has_any_column_privilege(current_user,c.oid,'SELECT'))) AS readable_views"""
 # Drift fingerprints from the independently exercised 0056-0058 rehearsal
 # (source main 6b20bd9e, expanded migration SHA256 b203bc82546dbbb81bb5d1e8e7099e1731e2d628a66b1d54d2784b885fe575e0).
-EXPECTED_QUEUE_VERSION = ('a5eb36f8b89facad2dc49a5c3d13fa4f', 'c738d3e6c8ecdf53b12b04516ac8ea89', 3)
+EXPECTED_QUEUE_VERSION = ('a5eb36f8b89facad2dc49a5c3d13fa4f', 'c738d3e6c8ecdf53b12b04516ac8ea89', 3,
+                          'c7fd96744ef2138f74310af4917470a1')
 QUEUE_VERSION_SQL = """SELECT
     (SELECT md5(string_agg(pg_get_functiondef(p.oid) || ' OWNER=' || pg_get_userbyid(p.proowner),
         E'\\n' ORDER BY p.proname, oidvectortypes(p.proargtypes)))
@@ -66,7 +69,11 @@ QUEUE_VERSION_SQL = """SELECT
      FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid
      JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='video_queue'),
     (SELECT count(*) FROM public.schema_migration WHERE migration_key IN
-        ('0056_universal_video_queue','0057_universal_video_canary_review_gate','0058_universal_video_terminal_v2_gate'))"""
+        ('0056_universal_video_queue','0057_universal_video_canary_review_gate','0058_universal_video_terminal_v2_gate')),
+    (SELECT md5(string_agg(c.relname || ':' || pg_get_viewdef(c.oid,false) || ':OWNER='
+        || pg_get_userbyid(c.relowner) || ':OPTIONS=' || coalesce(c.reloptions::text,''), E'\\n' ORDER BY c.relname))
+     FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE n.nspname='video_queue' AND c.relkind IN ('v','m'))"""
 
 
 def require(condition):
