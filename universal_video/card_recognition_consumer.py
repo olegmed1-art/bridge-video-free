@@ -270,9 +270,7 @@ def adapt_legacy_hands(hands: Any, *, recognizer_version: str = "legacy-video31"
             raise CardRecognitionContractError(f"unsupported legacy suit key for {seat}")
         known = 0
         for suit in SUITS:
-            raw_ranks = hand.get(suit)
-            if raw_ranks is None:
-                raw_ranks = ""
+            raw_ranks = "" if suit not in hand else hand[suit]
             if not isinstance(raw_ranks, str):
                 raise CardRecognitionContractError(f"invalid legacy hands.{seat}.{suit}")
             ranks = raw_ranks.upper().replace("10", "T").replace("-", "")
