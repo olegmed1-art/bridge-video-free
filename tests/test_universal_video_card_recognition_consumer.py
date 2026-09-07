@@ -125,6 +125,30 @@ def test_rejects_complete_status_with_unknown_slots() -> None:
         validate_recognition_result(envelope)
 
 
+def test_rejects_complete_deal_built_from_single_frame_visual_cards() -> None:
+    envelope = _envelope()
+    records = []
+    deck = [(suit, rank) for suit in "HCDS" for rank in "AKQJT98765432"]
+    for index, (suit, rank) in enumerate(deck):
+        records.append(
+            {
+                "seat": "NESW"[index // 13],
+                "suit": suit,
+                "rank": rank,
+                "source": "VISUAL",
+                "frame_sha256": f"{index + 1:064x}",
+                "confidence": 0.95,
+                "recognizer_version": "recognizer-v1",
+            }
+        )
+    envelope["result"]["status"] = "COMPLETE_VISUAL"
+    envelope["result"]["card_records"] = records
+    _rehash(envelope)
+
+    with pytest.raises(CardRecognitionContractError, match="temporal support for every card"):
+        validate_recognition_result(envelope)
+
+
 @pytest.mark.parametrize(
     "confidence", [True, "0.95", -0.01, 1.01, float("nan"), float("inf")]
 )
