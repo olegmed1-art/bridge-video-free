@@ -61,6 +61,17 @@ class TargetTest(unittest.TestCase):
         self.assertEqual(self.dsn.read_bytes(), self.raw)
         self.assertFalse(self.backup.exists())
 
+    def test_completed_repair_requires_intact_protected_rollback(self):
+        target.run('apply')
+        for data, mode in [(b'', 0o600), (self.raw, 0o640),
+                           (self.raw.replace(b'encoded%40password', b'wrong'), 0o600)]:
+            self.backup.write_bytes(data)
+            self.backup.chmod(mode)
+            with self.assertRaises(RuntimeError): target.run('check')
+        self.backup.unlink()
+        with self.assertRaises(FileNotFoundError): target.run('check')
+        self.assertEqual(self.dsn.read_bytes(), target.candidate(self.raw))
+
     def test_post_install_failure_rolls_back(self):
         self.verify.side_effect = [None, None, RuntimeError('lost_connection')]
         with self.assertRaises(RuntimeError): target.run('apply')
