@@ -20,6 +20,10 @@ database_gate_ready_file="$RUNNER_TEMP/issue-881-owner-gate-ready.txt"
 database_gate_control_file="$RUNNER_TEMP/issue-881-owner-gate-control.txt"
 database_gate_output="$RUNNER_TEMP/issue-881-owner-gate-output.txt"
 database_gate_marker_file="$RUNNER_TEMP/issue-881-db-enqueue-fence-marker.txt"
+process_video_state_file="$RUNNER_TEMP/issue-881-process-video-workflow-state"
+process_video_suspend_marker_file="$RUNNER_TEMP/issue-881-process-video-suspend.txt"
+process_video_restore_marker_file="$RUNNER_TEMP/issue-881-process-video-restore.txt"
+process_video_gate_armed=0
 
 root_pr_number=991
 prior_gate_pr_number=1070
@@ -29,34 +33,136 @@ protected_gate_paths=(
   '.github/workflows/issue-881-contract-ci.yml'
   '.github/workflows/issue-881-current-main-authoritative-ci.yml'
   '.github/workflows/issue-881-precanary-evidence.yml'
+  '.github/workflows/issue-881-paid-instance-watchdog.yml'
+  '.github/workflows/issue-881-queue-production-target.yml'
+  '.github/workflows/issue-881-root-filesystem-expand.yml'
+  '.github/workflows/issue-881-runtime-directory-repair.yml'
   '.github/workflows/oracle-idle-guard-ci.yml'
+  '.github/workflows/autopilot-bootstrap-helper-v2-health-once.yml'
+  '.github/workflows/autopilot-oracle-bootstrap-envelope-once.yml'
+  '.github/workflows/autopilot-oracle-bootstrap-key-once.yml'
+  '.github/workflows/autopilot-oracle-queue-credential-diagnostics-once.yml'
+  '.github/workflows/autopilot-oracle-runtime-diagnostics-once.yml'
+  '.github/workflows/autopilot-oracle-runtime-diagnostics-v2-once.yml'
+  '.github/workflows/autopilot-oracle-secret-key-inventory-once.yml'
+  '.github/workflows/autopilot-owner-auth-preflight-once.yml'
+  '.github/workflows/autopilot-production-canary-cleanup-once.yml'
+  '.github/workflows/autopilot-temp-neon-owner-credential-probe.yml'
+  '.github/workflows/autopilot-uv-runtime-exact-image-gate.yml'
+  '.github/workflows/autopilot-vercel-capability-probe-once.yml'
   '.github/workflows/oracle-assistant-lab-oci-diagnostic.yml'
+  '.github/workflows/oracle-assistant-lab-control-rollout.yml'
+  '.github/workflows/oracle-assistant-lab-worker-rollout.yml'
+  '.github/workflows/oracle-autopilot-online-observer.yml'
+  '.github/workflows/oracle-autopilot-online-resume.yml'
+  '.github/workflows/oracle-autopilot-production-canary.yml'
+  '.github/workflows/oracle-autopilot-shadow-activation.yml'
+  '.github/workflows/oracle-autopilot-staging-finalize.yml'
+  '.github/workflows/oracle-autopilot-staging.yml'
+  '.github/workflows/oracle-ben-dds3-health-monitor.yml'
+  '.github/workflows/oracle-ben-runtime-rollout.yml'
+  '.github/workflows/oracle-dds3-pilot10k-operator.yml'
+  '.github/workflows/oracle-dds3-pilot10k-launch.yml'
+  '.github/workflows/oracle-dds3-tls-renewal.yml'
   '.github/workflows/oracle-diana11-002-delivery.yml'
   '.github/workflows/oracle-diana11-002-job.yml'
+  '.github/workflows/oracle-diana11-002-operator-bootstrap.yml'
+  '.github/workflows/oracle-diana11-003-bootstrap-diagnostic.yml'
+  '.github/workflows/oracle-diana11-003-one-shadow-execution.yml'
   '.github/workflows/oracle-diana11-delivery.yml'
+  '.github/workflows/oracle-diana11-oauth-repair.yml'
+  '.github/workflows/oracle-diana11-operator-bootstrap.yml'
+  '.github/workflows/oracle-diana11-provenance-sync.yml'
+  '.github/workflows/oracle-diana11-ready-before-probe.yml'
+  '.github/workflows/oracle-diana11-runtime-pin-repair.yml'
+  '.github/workflows/oracle-diana11-shadow-preflight-bootstrap.yml'
+  '.github/workflows/oracle-idle-guard-exact-install.yml'
+  '.github/workflows/oracle-idle-proof-bootstrap.yml'
   '.github/workflows/oracle-instance-power.yml'
+  '.github/workflows/oracle-operational-safety-gate.yml'
+  '.github/workflows/oracle-operator-commands.yml'
+  '.github/workflows/oracle-operator-v2.yml'
+  '.github/workflows/oracle-operator-v3.yml'
+  '.github/workflows/oracle-universal-video-activation.yml'
   '.github/workflows/oracle-universal-video-admin.yml'
+  '.github/workflows/oracle-universal-video-batch-intake.yml'
+  '.github/workflows/oracle-universal-video-container-missing-image-recover.yml'
+  '.github/workflows/oracle-universal-video-container-diagnostic.yml'
   '.github/workflows/oracle-universal-video-container-evidence.yml'
   '.github/workflows/oracle-universal-video-container-promote.yml'
   '.github/workflows/oracle-universal-video-evidence-export.yml'
+  '.github/workflows/oracle-universal-video-job.yml'
+  '.github/workflows/oracle-universal-video-queue-credential-install.yml'
+  '.github/workflows/oracle-universal-video-sidecar-diagnostic.yml'
+  '.github/workflows/oracle-universal-video-sidecar-repair.yml'
+  '.github/workflows/database-production.yml'
+  '.github/workflows/process-video.yml'
+  '.github/workflows/research-job-dds3-canary.yml'
+  '.github/workflows/research-job-neon-operator.yml'
+  '.github/workflows/video-job-monitor.yml'
   '.github/workflows/secret-gate.yml'
   '.github/workflows/universal-video-ci.yml'
   '.github/workflows/universal-video-engine-smoke.yml'
   'requirements-worker.txt'
+  'database/scripts/migrate.sh'
+  'dds_training/bootstrap_linux.sh'
   'ops/issue_881_external_precanary_workflow.sh'
   'ops/issue_881_precanary_one_shot.py'
   'ops/issue_881_precanary_queue_proof.py'
+  'ops/issue_881_process_video_dispatch_gate.sh'
+  'ops/issue_881_runtime_directory_repair.sh'
+  'ops/process_video_precanary_fence.sh'
   'ops/verify_oci_instance_command_executions.py'
+  'ops/assistant_lab_oci_admin_entrypoint.sh'
+  'ops/cloud_shell_install_bounded_oci_admin.sh'
+  'ops/install_assistant_lab_ocarun_admin.sh'
+  'ops/install_ben_runtime.sh'
+  'ops/install_dds3_runtime.sh'
+  'ops/install_oracle_idle_state_ocarun.sh'
+  'ops/install_universal_video_diana11_002_operator.sh'
+  'ops/install_universal_video_diana11_003_operator.sh'
+  'ops/install_universal_video_diana11_operator.sh'
+  'ops/install_universal_video_diana11_shadow_preflight.sh'
+  'ops/install_universal_video_ocarun_admin.sh'
   'ops/install_universal_video_operator.sh'
+  'ops/oracle_autopilot_online_observer_install.sh'
+  'ops/oracle_autopilot_production_canary_install.sh'
+  'ops/oracle_autopilot_shadow_install.sh'
+  'ops/oracle_assistant_lab_control_bridge_install.sh'
+  'ops/oracle_assistant_lab_observer_install.sh'
+  'ops/oracle_dds3_mass_install.sh'
+  'ops/oracle_dds3_operational_gate.sh'
+  'ops/oracle_idle_state.sh'
   'ops/oracle_known_hosts_from_scan.sh'
+  'ops/oracle_universal_video_install.sh'
   'ops/oracle_universal_video_run_command.sh'
   'ops/oracle_universal_video_precanary_attest.sh'
   'ops/oracle_universal_video_container_install.sh'
+  'ops/oracle_universal_video_container_build_preflight.sh'
+  'ops/oracle_universal_video_container_diagnostic.sh'
+  'ops/oracle_universal_video_container_missing_image_recover.sh'
   'ops/oracle_universal_video_container_promote.sh'
+  'ops/oracle_universal_video_drive_secret_install.sh'
+  'ops/oracle_universal_video_preflight.sh'
   'ops/oracle_universal_video_prepromotion_preflight.sh'
+  'ops/oracle_universal_video_productionize.sh'
+  'ops/oracle_universal_video_root_filesystem_expand.sh'
+  'ops/oracle_universal_video_spool_guard.sh'
+  'ops/repair_universal_video_runtime_pin.sh'
+  'ops/universal_video_diana11_oauth_repair.sh'
+  'ops/universal_video_diana11_provenance_sync.sh'
+  'ops/universal_video_diana11_002_operator.sh'
+  'ops/universal_video_diana11_003_operator.sh'
+  'ops/universal_video_diana11_operator.sh'
+  'ops/universal_video_evidence_export_entrypoint.sh'
+  'ops/universal_video_oci_admin_entrypoint.sh'
   'ops/universal_video_operator.sh'
+  'ops/universal_video_sidecar_diagnostic.sh'
+  'ops/universal_video_sidecar_repair.sh'
+  'ops/universal_video_spool_repair.sh'
   'ops/validate_video_queue_dsn.py'
   'ops/validate_universal_video_promotion_evidence.py'
+  'ops/verify_uv_runtime_pr_gate.sh'
   'universal_video'
   'bridge_contracts'
   'bridge_vision'
@@ -225,42 +331,110 @@ verify_exact_current_main(){
   printf 'UNIVERSAL_VIDEO_PRECANARY_FINAL_MAIN exact_sha=%s result=PASS\n' "$EXACT_SHA"
 }
 
-verify_no_competing_infrastructure_runs(){
-  local runs_json reported_total loaded_total unique_total competing_count
-  local path_pattern='^\.github/workflows/(oracle-|issue-881-|autopilot-|database-production\.yml$|database-worker-runtime-smoke\.yml$|process-video\.yml$|video-job-monitor\.yml$|bridge-ai-|research-job-|dds3-runtime-container-proof\.yml$|dds3-production-health-monitor\.yml$|dds-training-|dds-main-)'
-  # One unfiltered paginated snapshot prevents a queued ->
-  # in_progress transition from disappearing between status-filtered
-  # API calls. Any incomplete or shifting page set is uncertainty.
-  runs_json="$(gh api --paginate --slurp \
-    "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100")"
-  reported_total="$(jq \
-    '[.[].total_count] | unique | if length == 1 then .[0] else -1 end' \
-    <<<"$runs_json")"
-  loaded_total="$(jq '[.[].workflow_runs[]] | length' <<<"$runs_json")"
-  unique_total="$(jq '[.[].workflow_runs[].id] | unique | length' <<<"$runs_json")"
-  [[ "$reported_total" =~ ^[0-9]+$ \
-    && "$reported_total" == "$loaded_total" \
-    && "$loaded_total" == "$unique_total" ]] || {
-    echo 'Infrastructure workflow snapshot is incomplete or changed while paginating' >&2
+collect_active_workflow_run_sweep(){
+  local direction="$1" destination="$2" parts status snapshot
+  local reported_total loaded_total unique_total valid_shape
+  local -a statuses=()
+  case "$direction" in
+    forward) statuses=(requested waiting pending queued in_progress) ;;
+    reverse) statuses=(in_progress queued pending waiting requested) ;;
+    *) echo 'Active workflow sweep direction is invalid' >&2; return 1 ;;
+  esac
+  parts="${destination}.parts"
+  rm -f -- "$destination" "$parts"
+  (umask 077; : > "$parts")
+
+  for status in "${statuses[@]}"; do
+    # Active populations must fit in one bounded response.  Never walk the
+    # completed run history: if an active state ever exceeds the API page,
+    # completeness is uncertain and the pre-canary stops fail-closed.
+    snapshot="$(gh api \
+      "repos/$GITHUB_REPOSITORY/actions/runs?status=$status&per_page=100")" || {
+      echo "Active workflow query failed for status: $status" >&2
+      return 1
+    }
+    valid_shape="$(jq --arg status "$status" \
+      'try (
+        type == "object"
+        and (.total_count | type) == "number"
+        and .total_count >= 0
+        and .total_count == (.total_count | floor)
+        and (.workflow_runs | type) == "array"
+        and all(.workflow_runs[];
+          (.id | type) == "number"
+          and .id > 0
+          and .id == (.id | floor)
+          and (.path | type) == "string"
+          and (.path | length) > 0
+          and .status == $status)
+      ) catch false' <<<"$snapshot")" || return 1
+    reported_total="$(jq -r '.total_count' <<<"$snapshot")" || return 1
+    loaded_total="$(jq '.workflow_runs | length' <<<"$snapshot")" || return 1
+    unique_total="$(jq '[.workflow_runs[].id] | unique | length' \
+      <<<"$snapshot")" || return 1
+    [[ "$valid_shape" == true \
+      && "$reported_total" =~ ^[0-9]+$ \
+      && "$reported_total" == "$loaded_total" \
+      && "$reported_total" -le 100 \
+      && "$loaded_total" == "$unique_total" ]] || {
+      echo "Active workflow snapshot is incomplete for status: $status" >&2
+      return 1
+    }
+    jq -c '.workflow_runs' <<<"$snapshot" >> "$parts" || return 1
+  done
+
+  (umask 077; jq -cs 'add | unique_by(.id)' "$parts" > "$destination") \
+    || return 1
+  rm -f -- "$parts"
+  [[ -f "$destination" && ! -L "$destination" \
+    && "$(stat -c '%a:%h' "$destination")" == '600:1' ]] || {
+    echo 'Active workflow sweep output is unsafe' >&2
     return 1
   }
-  competing_count="$(jq \
+}
+
+verify_no_competing_infrastructure_runs(){
+  local forward_runs reverse_runs current_forward current_reverse competing_count
+  local path_pattern='^\.github/workflows/(oracle-|issue-881-|autopilot-|database-production\.yml$|database-worker-runtime-smoke\.yml$|process-video\.yml$|video-job-monitor\.yml$|bridge-ai-|research-job-|dds3-runtime-container-proof\.yml$|dds3-production-health-monitor\.yml$|dds-training-|dds-main-)'
+  forward_runs="$RUNNER_TEMP/precanary-active-runs-forward.json"
+  reverse_runs="$RUNNER_TEMP/precanary-active-runs-reverse.json"
+
+  collect_active_workflow_run_sweep forward "$forward_runs" || return 1
+  collect_active_workflow_run_sweep reverse "$reverse_runs" || return 1
+
+  # The current run is a fail-closed API witness: both independently collected
+  # active sweeps must see it exactly once.  This prevents an empty, stale, or
+  # permission-filtered response from being accepted as infrastructure-idle.
+  current_forward="$(jq --argjson current "$GITHUB_RUN_ID" \
+    '[.[] | select(.id == $current)] | length' "$forward_runs")"
+  current_reverse="$(jq --argjson current "$GITHUB_RUN_ID" \
+    '[.[] | select(.id == $current)] | length' "$reverse_runs")"
+  [[ "$current_forward" == 1 && "$current_reverse" == 1 ]] || {
+    echo 'Current pre-canary run is missing from an active workflow sweep' >&2
+    return 1
+  }
+
+  # Union both opposite-order sweeps.  The lifecycle-ordered first sweep closes
+  # the queued -> in_progress transition gap, while the reverse sweep provides
+  # a second independent read.  Host mutators cannot advance behind this check:
+  # they share this run's non-cancelling Actions fence, and already-launched OCI
+  # commands are reconciled separately at the final mutation boundary.
+  competing_count="$(jq -s \
     --argjson current "$GITHUB_RUN_ID" \
     --arg pattern "$path_pattern" \
-    '[.[].workflow_runs[]
+    '[.[][]
       | select(.id != $current)
-      | select(.status != "completed")
       | select((.path // "") | test($pattern))]
-     | unique_by(.id) | length' <<<"$runs_json")"
+     | unique_by(.id) | length' "$forward_runs" "$reverse_runs")"
   [[ "$competing_count" == 0 ]] || {
-    jq -r \
+    jq -sr \
       --argjson current "$GITHUB_RUN_ID" \
       --arg pattern "$path_pattern" \
-      '[.[].workflow_runs[]
+      '[.[][]
         | select(.id != $current)
-        | select(.status != "completed")
         | select((.path // "") | test($pattern))
-        | {id, path, status}] | unique_by(.id)' <<<"$runs_json" >&2
+        | {id, path, status}] | unique_by(.id)' \
+      "$forward_runs" "$reverse_runs" >&2
     echo 'A competing infrastructure workflow is active or queued' >&2
     return 1
   }
@@ -293,12 +467,56 @@ verify_no_active_instance_agent_commands(){
     "$examined"
 }
 
+verify_process_video_dispatch_suspended(){
+  local marker
+  [[ "$process_video_gate_armed" == 1 ]] \
+    || { echo 'Process-video dispatch suspension is not armed' >&2; return 1; }
+  marker="$(bash ops/issue_881_process_video_dispatch_gate.sh \
+    verify "$process_video_state_file")" || return 1
+  [[ "$marker" == \
+    'PROCESS_VIDEO_DISPATCH_VERIFY state=disabled_manually result=PASS' ]] \
+    || { echo 'Process-video dispatch suspension receipt is invalid' >&2; return 1; }
+  printf '%s\n' "$marker"
+}
+
+restore_process_video_dispatch(){
+  local marker
+  [[ "$process_video_gate_armed" == 1 ]] || return 0
+  marker="$(bash ops/issue_881_process_video_dispatch_gate.sh \
+    restore "$process_video_state_file")" \
+    || {
+      echo 'PROCESS_VIDEO_DISPATCH_RESTORE result=FAILED' \
+        | tee -a "$evidence" "$GITHUB_STEP_SUMMARY" >&2
+      return 1
+    }
+  case "$marker" in
+    'PROCESS_VIDEO_DISPATCH_RESTORE initial_state=active final_state=active result=PASS'|'PROCESS_VIDEO_DISPATCH_RESTORE initial_state=disabled_manually final_state=disabled_manually result=PASS') ;;
+    *)
+      echo 'PROCESS_VIDEO_DISPATCH_RESTORE result=FAILED reason=invalid_receipt' \
+        | tee -a "$evidence" "$GITHUB_STEP_SUMMARY" >&2
+      return 1
+      ;;
+  esac
+  process_video_gate_armed=0
+  (umask 077; printf '%s\n' "$marker" > "$process_video_restore_marker_file")
+  printf '%s\n' "$marker" | tee -a "$evidence" "$GITHUB_STEP_SUMMARY"
+}
+
+control_plane_cleanup(){
+  local rc=$?
+  trap '' HUP INT TERM
+  trap - EXIT
+  restore_process_video_dispatch || rc=1
+  exit "$rc"
+}
+
 verify_final_mutation_boundary(){
   local current_infrastructure_marker current_oci_command_marker
   # Receipt validation performs its own paginated Actions read. Take
   # the complete infrastructure snapshot only after that read, then
   # make the exact-main query the final subcheck in this one bounded
   # reconciliation immediately before the host attester.
+  verify_process_video_dispatch_suspended >/dev/null || return 1
   current_infrastructure_marker="$(verify_no_competing_infrastructure_runs)" \
     || return 1
   [[ "$current_infrastructure_marker" == \
@@ -317,6 +535,14 @@ verify_final_mutation_boundary(){
 verify_no_competing_infrastructure_runs \
   | tee "$RUNNER_TEMP/precanary-infrastructure-marker.txt"
 verify_live_gate
+trap control_plane_cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+process_video_gate_armed=1
+bash ops/issue_881_process_video_dispatch_gate.sh \
+  suspend "$process_video_state_file" | tee "$process_video_suspend_marker_file"
+verify_process_video_dispatch_suspended
 
 if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
   prior_run="$RUNNER_TEMP/prior-run.json"
@@ -468,11 +694,17 @@ release_database_gate(){
 }
 
 cleanup_remote(){
+  local rc=$?
+  trap '' HUP INT TERM
   trap - EXIT
   if abort_remote_attester; then
     "${s[@]}" "sudo -n rm -rf '$remote_root'; rm -rf '$remote_stage'" >/dev/null 2>&1 || true
+  else
+    rc=1
   fi
-  abort_database_gate >/dev/null 2>&1 || true
+  abort_database_gate >/dev/null 2>&1 || rc=1
+  restore_process_video_dispatch || rc=1
+  exit "$rc"
 }
 trap cleanup_remote EXIT
 
@@ -485,6 +717,7 @@ bounded_failure(){
     echo "runtime_sha=$EXACT_SHA"
     echo "step_exit=$rc"
     cat "$RUNNER_TEMP/precanary-one-shot-marker.txt" 2>/dev/null || true
+    cat "$process_video_suspend_marker_file" 2>/dev/null || true
     cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt" 2>/dev/null || true
     cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt" 2>/dev/null || true
     cat "$RUNNER_TEMP/precanary-oci-instance-command-marker.txt" 2>/dev/null || true
@@ -678,6 +911,7 @@ trap - ERR
 {
   echo "runtime_sha=$EXACT_SHA"
   cat "$RUNNER_TEMP/precanary-one-shot-marker.txt"
+  cat "$process_video_suspend_marker_file"
   cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt"
   cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt"
   cat "$RUNNER_TEMP/precanary-oci-instance-command-marker.txt"

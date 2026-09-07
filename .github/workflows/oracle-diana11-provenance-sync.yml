@@ -17,7 +17,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-diana11-provenance-sync
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'oracle-instance-workload-mutation' || format('oracle-diana11-provenance-sync-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:

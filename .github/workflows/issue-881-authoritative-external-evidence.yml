@@ -27,7 +27,7 @@ on:
         type: string
 
 permissions:
-  actions: read
+  actions: write
   contents: read
   issues: read
   pull-requests: read
@@ -81,6 +81,7 @@ jobs:
           [[ -z "$RECOVER_CONTAINER_FROM_RUN" || "$RECOVER_CONTAINER_FROM_RUN" =~ ^[0-9]{8,20}$ ]]
           grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
           bash -n ops/issue_881_external_precanary_workflow.sh
+          bash -n ops/issue_881_process_video_dispatch_gate.sh
           bash -n ops/oracle_universal_video_precanary_attest.sh
           bash -n ops/oracle_universal_video_container_install.sh
           python3 -m py_compile ops/issue_881_precanary_one_shot.py \
@@ -185,7 +186,18 @@ jobs:
           set -euo pipefail
           evidence="$RUNNER_TEMP/issue-881-authoritative-external-evidence.txt"
           marker_file="$RUNNER_TEMP/issue-881-owner-after-marker.txt"
+          dispatch_state_file="$RUNNER_TEMP/issue-881-process-video-workflow-state"
+          dispatch_restore_file="$RUNNER_TEMP/issue-881-process-video-restore.txt"
           expected='UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 max_event_id=NULL sequence_last_value=1 sequence_is_called=false claimable=0 leased=0 unchanged=true result=PASS'
+          if [[ -e "$dispatch_state_file" || -L "$dispatch_state_file" ]]; then
+            [[ -f "$dispatch_state_file" && ! -L "$dispatch_state_file" ]]
+            [[ -f "$dispatch_restore_file" && ! -L "$dispatch_restore_file" \
+              && "$(stat -c '%a:%h' "$dispatch_restore_file")" == '600:1' ]]
+            dispatch_restore="$(cat "$dispatch_restore_file")"
+            [[ "$dispatch_restore" =~ ^PROCESS_VIDEO_DISPATCH_RESTORE\ initial_state=(active|disabled_manually)\ final_state=(active|disabled_manually)\ result=PASS$ ]]
+            [[ "${BASH_REMATCH[1]}" == "${BASH_REMATCH[2]}" ]]
+            [[ "$(grep -Fxc "$dispatch_restore" "$evidence")" == 1 ]]
+          fi
           if [[ "$EXTERNAL_OUTCOME" != success ]]; then
             echo 'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER result=FAILED reason=owner_release_not_proved' \
               | tee -a "$evidence" "$GITHUB_STEP_SUMMARY"

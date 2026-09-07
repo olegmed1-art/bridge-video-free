@@ -21,7 +21,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: oracle-assistant-lab-worker-rollout
+  # Only trusted rollout events occupy the shared Oracle mutation slot. PR
+  # validation and rejected PR-target events remain run-scoped.
+  group: >-
+    ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+        'oracle-instance-workload-mutation' ||
+        github.event_name == 'pull_request_target' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.user.login == github.repository_owner &&
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.changed_files == 1 &&
+        'oracle-instance-workload-mutation' ||
+        format('oracle-assistant-lab-worker-rollout-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -48,7 +59,15 @@ jobs:
           PY
 
   rollout:
-    if: ${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request_target') && (needs.contract.result == 'success' || needs.contract.result == 'skipped') }}
+    if: >-
+      ${{ always() &&
+          (github.event_name == 'push' && github.ref == 'refs/heads/main' ||
+           github.event_name == 'pull_request_target' &&
+           github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.user.login == github.repository_owner &&
+           github.event.pull_request.base.ref == 'main' &&
+           github.event.pull_request.changed_files == 1) &&
+          (needs.contract.result == 'success' || needs.contract.result == 'skipped') }}
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 20

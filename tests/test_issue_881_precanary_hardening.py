@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -529,6 +530,8 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "/recover-${{ inputs.recover_container_from_run || 'none' }}" in workflow
     assert len(workflow) < 21_000
     assert "run: bash ops/issue_881_external_precanary_workflow.sh" in workflow
+    workflow_header = workflow.split("\njobs:", 1)[0]
+    assert "actions: write" in workflow_header
     assert "${{" not in runner
     assert (
         workflow.count("issue_881_precanary_one_shot.py verify")
@@ -555,6 +558,33 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "oracle-universal-video-admin-pr-{0}" in admin_workflow
     assert "'oracle-instance-workload-mutation'" in admin_workflow
     assert "group: oracle-universal-video-bounded-admin" not in admin_workflow
+    for protected_external_mutator in (
+        ".github/workflows/database-production.yml",
+        ".github/workflows/oracle-operational-safety-gate.yml",
+        ".github/workflows/oracle-operator-commands.yml",
+        ".github/workflows/oracle-operator-v3.yml",
+        ".github/workflows/video-job-monitor.yml",
+    ):
+        assert f"'{protected_external_mutator}'" in runner
+        mutator_workflow = (ROOT / protected_external_mutator).read_text(
+            encoding="utf-8"
+        )
+        header = mutator_workflow.split("\njobs:", 1)[0]
+        assert header.count("\nconcurrency:\n") == 1
+        assert "oracle-instance-workload-mutation" in header
+        assert "  cancel-in-progress: false" in header
+    process_video = (ROOT / ".github/workflows/process-video.yml").read_text(
+        encoding="utf-8"
+    )
+    process_header = process_video.split("\njobs:", 1)[0]
+    assert "oracle-instance-workload-mutation" not in process_header
+    assert "actions: read" in process_header
+    assert "precanary-fence:" in process_video
+    assert "needs: precanary-fence" in process_video
+    assert "run: bash ops/process_video_precanary_fence.sh" in process_video
+    assert "'.github/workflows/process-video.yml'" in runner
+    assert "'ops/process_video_precanary_fence.sh'" in runner
+    assert "'ops/issue_881_process_video_dispatch_gate.sh'" in runner
     assert "verify_no_active_instance_agent_commands" in runner
     assert "instance-agent command-execution list" in runner
     assert '--instance-id "$INSTANCE_ID"' in runner
@@ -587,17 +617,23 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "verify_no_competing_infrastructure_runs" in runner
     assert "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE" in runner
     infrastructure_gate = runner[
-        runner.index("verify_no_competing_infrastructure_runs(){") :
+        runner.index("collect_active_workflow_run_sweep(){") :
         runner.index("# Initial reconciliation rejects historical")
     ]
-    assert infrastructure_gate.count("actions/runs?per_page=100") == 1
-    assert "status=in_progress" not in infrastructure_gate
-    assert "status=queued" not in infrastructure_gate
-    assert 'select(.status != "completed")' in infrastructure_gate
+    assert "actions/runs?per_page=100" not in infrastructure_gate
+    assert infrastructure_gate.count("actions/runs?status=$status&per_page=100") == 1
+    assert "--paginate" not in infrastructure_gate
+    assert "--slurp" not in infrastructure_gate
+    assert "statuses=(requested waiting pending queued in_progress)" in infrastructure_gate
+    assert "statuses=(in_progress queued pending waiting requested)" in infrastructure_gate
+    assert "collect_active_workflow_run_sweep forward" in infrastructure_gate
+    assert "collect_active_workflow_run_sweep reverse" in infrastructure_gate
+    assert ".status == $status" in infrastructure_gate
     assert "reported_total" in infrastructure_gate
     assert "loaded_total" in infrastructure_gate
     assert "unique_total" in infrastructure_gate
-    assert "snapshot is incomplete or changed while paginating" in infrastructure_gate
+    assert "Active workflow snapshot is incomplete for status" in infrastructure_gate
+    assert "Current pre-canary run is missing from an active workflow sweep" in infrastructure_gate
     assert "UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1" not in runner
     assert "UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM=0" in attest
     assert 'find "$root_cache" -xdev -mindepth 1 -delete' not in attest
@@ -614,6 +650,9 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     host_attest = runner.index('"${s[@]}" "sudo -n env', final_boundary)
     assert final_live_gate < final_receipt < final_boundary < host_attest
     boundary_definition = runner.index("verify_final_mutation_boundary(){")
+    boundary_dispatch = runner.index(
+        "verify_process_video_dispatch_suspended", boundary_definition
+    )
     boundary_infrastructure = runner.index(
         'current_infrastructure_marker="$(verify_no_competing_infrastructure_runs)"',
         boundary_definition,
@@ -623,7 +662,40 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
         boundary_infrastructure,
     )
     boundary_main = runner.index("verify_exact_current_main", boundary_oci_commands)
-    assert boundary_infrastructure < boundary_oci_commands < boundary_main
+    assert boundary_dispatch < boundary_infrastructure < boundary_oci_commands < boundary_main
+    initial_reconciliation = runner.index("# Initial reconciliation rejects historical")
+    initial_sweep = runner.index(
+        "verify_no_competing_infrastructure_runs", initial_reconciliation
+    )
+    dispatch_trap = runner.index("trap control_plane_cleanup EXIT", initial_sweep)
+    assert runner.count("trap '' HUP INT TERM") == 2
+    assert "trap 'exit 129' HUP" in runner
+    assert "trap 'exit 130' INT" in runner
+    assert "trap 'exit 143' TERM" in runner
+    dispatch_suspend = runner.index(
+        "bash ops/issue_881_process_video_dispatch_gate.sh", dispatch_trap
+    )
+    first_host_access = runner.index(
+        'ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST"', dispatch_suspend
+    )
+    assert initial_sweep < dispatch_trap < dispatch_suspend < first_host_access
+    control_plane_cleanup_definition = runner[
+        runner.index("control_plane_cleanup(){") : runner.index(
+            "verify_final_mutation_boundary(){"
+        )
+    ]
+    assert control_plane_cleanup_definition.index("trap '' HUP INT TERM") < (
+        control_plane_cleanup_definition.index("restore_process_video_dispatch || rc=1")
+    )
+    cleanup_definition = runner[
+        runner.index("cleanup_remote(){") : runner.index("bounded_failure(){")
+    ]
+    assert "restore_process_video_dispatch || rc=1" in cleanup_definition
+    assert cleanup_definition.index("trap '' HUP INT TERM") < cleanup_definition.index(
+        "abort_remote_attester"
+    ) < cleanup_definition.index("restore_process_video_dispatch || rc=1")
+    assert "cat \"$process_video_suspend_marker_file\"" in runner
+    assert "PROCESS_VIDEO_DISPATCH_RESTORE" in workflow
     fenced_start = attest.index("if start_container_under_fence; then", attest.index("cleanup(){"))
     runtime_proof = attest.index("verify_postrestore_runtime_queue", fenced_start)
     owner_release = attest.index("verify_postrestore_owner_release", runtime_proof)
@@ -687,94 +759,731 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert 'ALLOW_CACHE_RECLAIM="${UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM:-1}"' in installer
 
 
-def test_infrastructure_snapshot_is_single_complete_and_fail_closed(tmp_path: Path) -> None:
+def test_infrastructure_snapshot_is_active_race_safe_and_fail_closed(tmp_path: Path) -> None:
     runner = (
         ROOT / "ops/issue_881_external_precanary_workflow.sh"
     ).read_text(encoding="utf-8")
-    start = runner.index("verify_no_competing_infrastructure_runs(){")
+    start = runner.index("collect_active_workflow_run_sweep(){")
     end = runner.index("\n\n# Initial reconciliation rejects historical", start)
     function = textwrap.dedent(runner[start:end])
-    snapshot = tmp_path / "runs.json"
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
     harness = f"""\
 set -euo pipefail
 {function}
-gh(){{ command cat "$SNAPSHOT"; }}
+gh(){{
+  endpoint="${{!#}}"
+  status="${{endpoint#*status=}}"
+  status="${{status%%&*}}"
+  counter="$SNAPSHOT_DIR/$status.count"
+  call=0
+  [[ ! -f "$counter" ]] || call="$(cat "$counter")"
+  call=$((call + 1))
+  printf '%s\n' "$call" > "$counter"
+  command cat "$SNAPSHOT_DIR/$status-$call.json"
+}}
 GITHUB_REPOSITORY=olegmed1-art/bridge-video-free
 GITHUB_RUN_ID=42
 verify_no_competing_infrastructure_runs
 """
 
-    def run(payload: list[dict[str, object]]) -> subprocess.CompletedProcess[str]:
-        snapshot.write_text(json.dumps(payload), encoding="utf-8")
+    statuses = ("requested", "waiting", "pending", "queued", "in_progress")
+    current = {
+        "id": 42,
+        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
+        "status": "in_progress",
+    }
+
+    def page(
+        runs: list[dict[str, object]], *, total_count: int | None = None
+    ) -> dict[str, object]:
+        return {
+            "total_count": len(runs) if total_count is None else total_count,
+            "workflow_runs": runs,
+        }
+
+    def run(
+        first: dict[str, list[dict[str, object]]] | None = None,
+        second: dict[str, list[dict[str, object]]] | None = None,
+        *, first_total: dict[str, int] | None = None,
+        second_total: dict[str, int] | None = None,
+        include_current: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        first = first or {}
+        second = second or first
+        first_total = first_total or {}
+        second_total = second_total or {}
+        for counter in snapshots.glob("*.count"):
+            counter.unlink()
+        for status in statuses:
+            first_runs = list(first.get(status, []))
+            second_runs = list(second.get(status, []))
+            if status == "in_progress" and include_current:
+                first_runs.insert(0, current)
+                second_runs.insert(0, current)
+            (snapshots / f"{status}-1.json").write_text(
+                json.dumps(
+                    page(first_runs, total_count=first_total.get(status))
+                ),
+                encoding="utf-8",
+            )
+            (snapshots / f"{status}-2.json").write_text(
+                json.dumps(
+                    page(second_runs, total_count=second_total.get(status))
+                ),
+                encoding="utf-8",
+            )
         return subprocess.run(
             ["bash"],
             input=harness,
             text=True,
             capture_output=True,
-            env={"PATH": "/usr/local/bin:/usr/bin:/bin", "SNAPSHOT": str(snapshot)},
+            env={
+                "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "RUNNER_TEMP": str(runtime),
+                "SNAPSHOT_DIR": str(snapshots),
+            },
             timeout=10,
         )
 
-    safe = run(
-        [
-            {
-                "total_count": 2,
-                "workflow_runs": [
-                    {
-                        "id": 42,
-                        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
-                        "status": "in_progress",
-                    },
-                    {
-                        "id": 7,
-                        "path": ".github/workflows/oracle-universal-video-admin.yml",
-                        "status": "completed",
-                    },
-                ],
-            }
-        ]
-    )
+    safe = run()
     assert safe.returncode == 0, safe.stderr
     assert "other_active=0 other_queued=0 result=PASS" in safe.stdout
-
-    competing = run(
-        [
-            {
-                "total_count": 2,
-                "workflow_runs": [
-                    {
-                        "id": 42,
-                        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
-                        "status": "in_progress",
-                    },
-                    {
-                        "id": 8,
-                        "path": ".github/workflows/oracle-universal-video-admin.yml",
-                        "status": "in_progress",
-                    },
-                ],
-            }
-        ]
+    assert all(
+        (snapshots / f"{status}.count").read_text(encoding="utf-8").strip() == "2"
+        for status in statuses
     )
+
+    unrelated_run = {
+        "id": 7,
+        "path": ".github/workflows/unit-tests.yml",
+        "status": "queued",
+    }
+    unrelated = run({"queued": [unrelated_run]})
+    assert unrelated.returncode == 0, unrelated.stderr
+
+    competing_run = {
+        "id": 8,
+        "path": ".github/workflows/oracle-universal-video-admin.yml",
+        "status": "in_progress",
+    }
+    competing = run({"in_progress": [competing_run]})
     assert competing.returncode != 0
     assert "A competing infrastructure workflow is active or queued" in competing.stderr
 
+    queued_run = {
+        "id": 9,
+        "path": ".github/workflows/oracle-instance-power.yml",
+        "status": "queued",
+    }
+    transitioned_run = dict(queued_run, status="in_progress")
+    transition = run(
+        {"queued": [queued_run]},
+        {"in_progress": [transitioned_run]},
+    )
+    assert transition.returncode != 0
+    assert "A competing infrastructure workflow is active or queued" in transition.stderr
+
+    late_run = dict(queued_run, id=10, status="pending")
+    late = run({}, {"pending": [late_run]})
+    assert late.returncode != 0
+    assert "A competing infrastructure workflow is active or queued" in late.stderr
+
     incomplete = run(
-        [
-            {
-                "total_count": 2,
-                "workflow_runs": [
-                    {
-                        "id": 42,
-                        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
-                        "status": "in_progress",
-                    }
-                ],
-            }
-        ]
+        {"queued": [queued_run]},
+        first_total={"queued": 2},
     )
     assert incomplete.returncode != 0
-    assert "snapshot is incomplete or changed while paginating" in incomplete.stderr
+    assert "Active workflow snapshot is incomplete for status: queued" in incomplete.stderr
+
+    wrong_status = run(
+        {"queued": [dict(queued_run, status="in_progress")]},
+    )
+    assert wrong_status.returncode != 0
+    assert "Active workflow snapshot is incomplete for status: queued" in wrong_status.stderr
+
+    invalid_id = run(
+        {"queued": [dict(queued_run, id="9")]},
+    )
+    assert invalid_id.returncode != 0
+    assert "Active workflow snapshot is incomplete for status: queued" in invalid_id.stderr
+
+    missing_current = run(include_current=False)
+    assert missing_current.returncode != 0
+    assert "Current pre-canary run is missing from an active workflow sweep" in missing_current.stderr
+
+
+def test_process_video_fence_preserves_dispatch_and_closes_precanary_race(
+    tmp_path: Path,
+) -> None:
+    fence = ROOT / "ops/process_video_precanary_fence.sh"
+    workflow = (ROOT / ".github/workflows/process-video.yml").read_text(
+        encoding="utf-8"
+    )
+    script = fence.read_text(encoding="utf-8")
+    assert "--paginate" not in script
+    assert "PROCESS_VIDEO_PRECANARY_FENCE_PASS" in script
+    assert "needs: precanary-fence" in workflow
+    assert "timeout-minutes: 130" in workflow
+    assert "timeout-minutes: 330" in workflow
+
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+endpoint="${!#}"
+if [[ "$endpoint" == *"/actions/runs/$GITHUB_RUN_ID" ]]; then
+  cat "$SNAPSHOT_DIR/self.json"
+  exit 0
+fi
+status="${endpoint#*status=}"
+status="${status%%&*}"
+counter="$SNAPSHOT_DIR/$status.count"
+call=0
+[[ ! -f "$counter" ]] || call="$(cat "$counter")"
+call=$((call + 1))
+printf '%s\n' "$call" > "$counter"
+cat "$SNAPSHOT_DIR/$status-$call.json"
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    statuses = ("requested", "waiting", "pending", "queued", "in_progress")
+
+    def page(
+        runs: list[dict[str, object]], *, total_count: int | None = None
+    ) -> dict[str, object]:
+        return {
+            "total_count": len(runs) if total_count is None else total_count,
+            "workflow_runs": runs,
+        }
+
+    def run(
+        first: dict[str, list[dict[str, object]]] | None = None,
+        second: dict[str, list[dict[str, object]]] | None = None,
+        *, first_total: dict[str, int] | None = None,
+        self_status: str = "in_progress",
+    ) -> subprocess.CompletedProcess[str]:
+        first = first or {}
+        second = second or first
+        first_total = first_total or {}
+        for counter in snapshots.glob("*.count"):
+            counter.unlink()
+        (snapshots / "self.json").write_text(
+            json.dumps(
+                {
+                    "id": 42,
+                    "path": ".github/workflows/process-video.yml",
+                    "event": "workflow_dispatch",
+                    "status": self_status,
+                }
+            ),
+            encoding="utf-8",
+        )
+        for status in statuses:
+            (snapshots / f"{status}-1.json").write_text(
+                json.dumps(
+                    page(first.get(status, []), total_count=first_total.get(status))
+                ),
+                encoding="utf-8",
+            )
+            (snapshots / f"{status}-2.json").write_text(
+                json.dumps(page(second.get(status, []))),
+                encoding="utf-8",
+            )
+        return subprocess.run(
+            ["bash", str(fence)],
+            text=True,
+            capture_output=True,
+            env={
+                "PATH": f"{fake_bin}:/usr/bin:/bin",
+                "GH_TOKEN": "synthetic",
+                "GITHUB_REPOSITORY": "olegmed1-art/bridge-video-free",
+                "GITHUB_RUN_ID": "42",
+                "RUNNER_TEMP": str(runtime),
+                "SNAPSHOT_DIR": str(snapshots),
+                "PROCESS_VIDEO_PRECANARY_MAX_WAIT_SECONDS": "0",
+                "PROCESS_VIDEO_PRECANARY_POLL_SECONDS": "1",
+            },
+            timeout=10,
+        )
+
+    safe = run()
+    assert safe.returncode == 0, safe.stderr
+    assert "request_preserved=true" in safe.stdout
+    assert all(
+        (snapshots / f"{status}.count").read_text(encoding="utf-8").strip()
+        == "2"
+        for status in statuses
+    )
+
+    blocker = {
+        "id": 99,
+        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
+        "status": "queued",
+    }
+    transitioned = dict(blocker, status="in_progress")
+    blocked = run({"queued": [blocker]}, {"in_progress": [transitioned]})
+    assert blocked.returncode == 75
+    assert "request remains preserved in run 42" in blocked.stderr
+    assert "blockers=99" in blocked.stderr
+
+    incomplete = run({"queued": [blocker]}, first_total={"queued": 2})
+    assert incomplete.returncode != 0
+    assert "snapshot is incomplete for status: queued" in incomplete.stderr
+
+    missing_self = run(self_status="completed")
+    assert missing_self.returncode != 0
+    assert "not an active workflow witness" in missing_self.stderr
+
+
+def test_process_video_dispatch_gate_suspends_verifies_and_restores_exact_state(
+    tmp_path: Path,
+) -> None:
+    gate = ROOT / "ops/issue_881_process_video_dispatch_gate.sh"
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    workflow_state = tmp_path / "workflow-state"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+method=GET
+endpoint=''
+[[ "${1:-}" == api ]] && shift
+while (($#)); do
+  case "$1" in
+    --method) method="$2"; shift 2 ;;
+    *) endpoint="$1"; shift ;;
+  esac
+done
+case "$method:$endpoint" in
+  PUT:*/disable) printf '%s\n' disabled_manually > "$WORKFLOW_STATE" ;;
+  PUT:*/enable) printf '%s\n' active > "$WORKFLOW_STATE" ;;
+  GET:*/actions/workflows/process-video.yml)
+    jq -n --arg state "$(cat "$WORKFLOW_STATE")" \
+      '{id: 123, path: ".github/workflows/process-video.yml", name: "Process bridge video", state: $state}'
+    ;;
+  *) printf 'unexpected fake gh call: %s:%s\n' "$method" "$endpoint" >&2; exit 64 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    state_receipt = runtime / "issue-881-process-video-workflow-state"
+    env = {
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "GH_TOKEN": "synthetic",
+        "GITHUB_REPOSITORY": "olegmed1-art/bridge-video-free",
+        "RUNNER_TEMP": str(runtime),
+        "WORKFLOW_STATE": str(workflow_state),
+    }
+
+    def invoke(action: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(gate), action, str(state_receipt)],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=10,
+        )
+
+    workflow_state.write_text("active\n", encoding="utf-8")
+    suspended = invoke("suspend")
+    assert suspended.returncode == 0, suspended.stderr
+    assert workflow_state.read_text(encoding="utf-8") == "disabled_manually\n"
+    assert state_receipt.read_text(encoding="utf-8") == "active\n"
+    assert state_receipt.stat().st_mode & 0o777 == 0o600
+    assert "initial_state=active final_state=disabled_manually changed=true" in suspended.stdout
+    verified = invoke("verify")
+    assert verified.returncode == 0, verified.stderr
+    assert verified.stdout.strip() == (
+        "PROCESS_VIDEO_DISPATCH_VERIFY state=disabled_manually result=PASS"
+    )
+    restored = invoke("restore")
+    assert restored.returncode == 0, restored.stderr
+    assert workflow_state.read_text(encoding="utf-8") == "active\n"
+    assert "initial_state=active final_state=active result=PASS" in restored.stdout
+
+    state_receipt.unlink()
+    workflow_state.write_text("disabled_manually\n", encoding="utf-8")
+    preserved = invoke("suspend")
+    assert preserved.returncode == 0, preserved.stderr
+    assert "initial_state=disabled_manually" in preserved.stdout
+    assert "changed=false" in preserved.stdout
+    restored_disabled = invoke("restore")
+    assert restored_disabled.returncode == 0, restored_disabled.stderr
+    assert workflow_state.read_text(encoding="utf-8") == "disabled_manually\n"
+
+    state_receipt.unlink()
+    workflow_state.write_text("active\n", encoding="utf-8")
+    assert invoke("suspend").returncode == 0
+    workflow_state.write_text("active\n", encoding="utf-8")
+    lost_suspension = invoke("restore")
+    assert lost_suspension.returncode != 0
+    assert "suspension was lost before restoration" in lost_suspension.stderr
+    assert workflow_state.read_text(encoding="utf-8") == "active\n"
+
+    state_receipt.unlink()
+    workflow_state.write_text("completed\n", encoding="utf-8")
+    unsafe = invoke("suspend")
+    assert unsafe.returncode != 0
+    assert "identity or state is unsafe" in unsafe.stderr
+    assert not state_receipt.exists()
+
+
+def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() -> None:
+    direct_mutation = re.compile(
+        r"systemctl (?:restart|start|stop|enable|disable|daemon-reload)|systemd-run|"
+        r"oci compute instance action|"
+        r"install -o root.*video-queue|VIDEO_QUEUE_DSN",
+        re.DOTALL,
+    )
+    script_reference = re.compile(
+        r"(?<![A-Za-z0-9_-])(ops/[A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_./-])"
+    )
+
+    owner_mutators: set[str] = set()
+    mutation_payloads: set[str] = set()
+    for path in (ROOT / ".github/workflows").glob("oracle-*.yml"):
+        workflow = path.read_text(encoding="utf-8")
+        if "  workflow_dispatch:" not in workflow and "  issue_comment:" not in workflow:
+            continue
+        pending = {
+            relative
+            for relative in script_reference.findall(workflow)
+            if (ROOT / relative).is_file()
+        }
+        indirect: dict[str, str] = {}
+        while pending:
+            relative = pending.pop()
+            if relative in indirect:
+                continue
+            payload = (ROOT / relative).read_text(encoding="utf-8")
+            indirect[relative] = payload
+            pending.update(
+                child
+                for child in script_reference.findall(payload)
+                if child not in indirect and (ROOT / child).is_file()
+            )
+        if direct_mutation.search(workflow + "\n" + "\n".join(indirect.values())):
+            owner_mutators.add(path.relative_to(ROOT).as_posix())
+            mutation_payloads.update(
+                relative
+                for relative, payload in indirect.items()
+                if direct_mutation.search(payload)
+            )
+    assert owner_mutators == {
+        ".github/workflows/oracle-ben-dds3-health-monitor.yml",
+        ".github/workflows/oracle-dds3-pilot10k-operator.yml",
+        ".github/workflows/oracle-instance-power.yml",
+        ".github/workflows/oracle-operational-safety-gate.yml",
+        ".github/workflows/oracle-operator-commands.yml",
+        ".github/workflows/oracle-operator-v2.yml",
+        ".github/workflows/oracle-operator-v3.yml",
+        ".github/workflows/oracle-universal-video-activation.yml",
+        ".github/workflows/oracle-universal-video-job.yml",
+        ".github/workflows/oracle-universal-video-queue-credential-install.yml",
+        ".github/workflows/oracle-universal-video-sidecar-repair.yml",
+    }
+    assert mutation_payloads == {
+        "ops/install_ben_runtime.sh",
+        "ops/install_dds3_runtime.sh",
+        "ops/oracle_dds3_mass_install.sh",
+        "ops/oracle_dds3_operational_gate.sh",
+        "ops/oracle_universal_video_install.sh",
+        "ops/oracle_universal_video_run_command.sh",
+        "ops/universal_video_sidecar_repair.sh",
+    }
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
+    for relative in owner_mutators:
+        workflow = (ROOT / relative).read_text(encoding="utf-8")
+        header = workflow.split("\njobs:", 1)[0]
+        assert "oracle-instance-workload-mutation" in header, relative
+        assert "cancel-in-progress: false" in header, relative
+        assert f"'{relative}'" in runner, relative
+        if "  pull_request:" in header:
+            assert "github.event_name" in header, relative
+            assert "format(" in header, relative
+    for relative in mutation_payloads:
+        assert f"'{relative}'" in runner, relative
+
+
+def test_every_code_triggered_oracle_host_mutator_uses_shared_fence_and_provenance() -> None:
+    script_reference = re.compile(
+        r"(?<![A-Za-z0-9_-])(ops/[A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_./-])"
+    )
+    host_marker = re.compile(
+        r"\b(?:ORACLE_HOST|OCI_INSTANCE_OCID|INSTANCE_ID)\b|\bssh\b|"
+        r"\$\{ssh|oci\s+(?:compute|instance-agent)|158\.180\.47\.161",
+        re.IGNORECASE,
+    )
+    mutation = re.compile(
+        r"systemctl\s+(?:restart|start|stop|enable|disable|daemon-reload)\b|"
+        r"systemd-run\b|"
+        r"oci\s+(?:--config-file\s+\S+\s+)?(?:compute\s+instance\s+action|"
+        r"instance-agent\s+command\s+create)\b|"
+        r"(?:^|\n)\s*(?:sudo\s+-n\s+)?install\s+|"
+        r"docker\s+(?:run|rm|restart|stop|start|pull)\b|"
+        r"git\s+-C\s+[^\n]+\s+(?:checkout|reset|pull)\b",
+        re.IGNORECASE,
+    )
+    push_mutators: set[str] = set()
+    mutation_payloads: set[str] = set()
+    documents: dict[str, dict[str, object]] = {}
+    for path in (ROOT / ".github/workflows").glob("oracle-*.yml"):
+        workflow = path.read_text(encoding="utf-8")
+        document = yaml.safe_load(workflow)
+        assert isinstance(document, dict), path
+        triggers = document.get("on", document.get(True, {}))
+        event_names = {triggers} if isinstance(triggers, str) else set(triggers)
+        if not event_names.intersection({"push", "pull_request_target"}) or not host_marker.search(workflow):
+            continue
+        jobs = document.get("jobs")
+        assert isinstance(jobs, dict), path
+        run_corpus = "\n".join(
+            str(step.get("run", ""))
+            for job in jobs.values()
+            if isinstance(job, dict)
+            for step in job.get("steps", [])
+            if isinstance(step, dict)
+        )
+        pending = {
+            relative
+            for relative in script_reference.findall(run_corpus)
+            if (ROOT / relative).is_file()
+        }
+        indirect: dict[str, str] = {}
+        while pending:
+            relative = pending.pop()
+            if relative in indirect:
+                continue
+            payload = (ROOT / relative).read_text(encoding="utf-8")
+            indirect[relative] = payload
+            pending.update(
+                child
+                for child in script_reference.findall(payload)
+                if child not in indirect and (ROOT / child).is_file()
+            )
+        mutating_payloads = {
+            relative
+            for relative, payload in indirect.items()
+            if mutation.search(payload)
+        }
+        if mutation.search(run_corpus) or mutating_payloads:
+            relative = path.relative_to(ROOT).as_posix()
+            push_mutators.add(relative)
+            mutation_payloads.update(mutating_payloads)
+            documents[relative] = document
+
+    assert push_mutators == {
+        ".github/workflows/oracle-assistant-lab-control-rollout.yml",
+        ".github/workflows/oracle-assistant-lab-oci-diagnostic.yml",
+        ".github/workflows/oracle-assistant-lab-worker-rollout.yml",
+        ".github/workflows/oracle-autopilot-online-observer.yml",
+        ".github/workflows/oracle-autopilot-online-resume.yml",
+        ".github/workflows/oracle-autopilot-production-canary.yml",
+        ".github/workflows/oracle-autopilot-shadow-activation.yml",
+        ".github/workflows/oracle-autopilot-staging-finalize.yml",
+        ".github/workflows/oracle-autopilot-staging.yml",
+        ".github/workflows/oracle-ben-runtime-rollout.yml",
+        ".github/workflows/oracle-dds3-pilot10k-launch.yml",
+        ".github/workflows/oracle-dds3-tls-renewal.yml",
+        ".github/workflows/oracle-diana11-002-delivery.yml",
+        ".github/workflows/oracle-diana11-002-job.yml",
+        ".github/workflows/oracle-diana11-002-operator-bootstrap.yml",
+        ".github/workflows/oracle-diana11-003-bootstrap-diagnostic.yml",
+        ".github/workflows/oracle-diana11-003-one-shadow-execution.yml",
+        ".github/workflows/oracle-diana11-delivery.yml",
+        ".github/workflows/oracle-diana11-oauth-repair.yml",
+        ".github/workflows/oracle-diana11-operator-bootstrap.yml",
+        ".github/workflows/oracle-diana11-provenance-sync.yml",
+        ".github/workflows/oracle-diana11-runtime-pin-repair.yml",
+        ".github/workflows/oracle-diana11-ready-before-probe.yml",
+        ".github/workflows/oracle-diana11-shadow-preflight-bootstrap.yml",
+        ".github/workflows/oracle-idle-guard-exact-install.yml",
+        ".github/workflows/oracle-idle-proof-bootstrap.yml",
+        ".github/workflows/oracle-universal-video-activation.yml",
+        ".github/workflows/oracle-universal-video-admin.yml",
+        ".github/workflows/oracle-universal-video-batch-intake.yml",
+        ".github/workflows/oracle-universal-video-container-missing-image-recover.yml",
+        ".github/workflows/oracle-universal-video-container-promote.yml",
+        ".github/workflows/oracle-universal-video-evidence-export.yml",
+        ".github/workflows/oracle-universal-video-job.yml",
+        ".github/workflows/oracle-universal-video-sidecar-repair.yml",
+    }
+    assert mutation_payloads == {
+        "ops/assistant_lab_oci_admin_entrypoint.sh",
+        "ops/install_assistant_lab_ocarun_admin.sh",
+        "ops/install_ben_runtime.sh",
+        "ops/install_oracle_idle_state_ocarun.sh",
+        "ops/install_universal_video_diana11_002_operator.sh",
+        "ops/install_universal_video_diana11_003_operator.sh",
+        "ops/install_universal_video_diana11_operator.sh",
+        "ops/install_universal_video_diana11_shadow_preflight.sh",
+        "ops/install_universal_video_ocarun_admin.sh",
+        "ops/install_universal_video_operator.sh",
+        "ops/oracle_autopilot_online_observer_install.sh",
+        "ops/oracle_autopilot_production_canary_install.sh",
+        "ops/oracle_autopilot_shadow_install.sh",
+        "ops/oracle_assistant_lab_control_bridge_install.sh",
+        "ops/oracle_assistant_lab_observer_install.sh",
+        "ops/oracle_dds3_mass_install.sh",
+        "ops/oracle_universal_video_container_install.sh",
+        "ops/oracle_universal_video_container_missing_image_recover.sh",
+        "ops/oracle_universal_video_container_promote.sh",
+        "ops/oracle_universal_video_drive_secret_install.sh",
+        "ops/oracle_universal_video_install.sh",
+        "ops/oracle_universal_video_prepromotion_preflight.sh",
+        "ops/oracle_universal_video_productionize.sh",
+        "ops/oracle_universal_video_run_command.sh",
+        "ops/repair_universal_video_runtime_pin.sh",
+        "ops/universal_video_diana11_oauth_repair.sh",
+        "ops/universal_video_diana11_provenance_sync.sh",
+        "ops/universal_video_sidecar_repair.sh",
+    }
+
+    # Three legacy workflows place the shared fence directly on their only
+    # host-mutating job. Every other push mutator must fence the whole run.
+    job_scoped_fences = {
+        ".github/workflows/oracle-autopilot-online-observer.yml": "install",
+        ".github/workflows/oracle-autopilot-online-resume.yml": "resume",
+        ".github/workflows/oracle-autopilot-shadow-activation.yml": "activate",
+    }
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
+    for relative in push_mutators:
+        document = documents[relative]
+        if relative in job_scoped_fences:
+            jobs = document["jobs"]
+            assert isinstance(jobs, dict)
+            job = jobs[job_scoped_fences[relative]]
+            assert isinstance(job, dict)
+            concurrency = job.get("concurrency")
+        else:
+            concurrency = document.get("concurrency")
+        assert isinstance(concurrency, dict), relative
+        assert concurrency.get("group") == "oracle-instance-workload-mutation" or (
+            "oracle-instance-workload-mutation" in str(concurrency.get("group", ""))
+            and "github.event_name" in str(concurrency.get("group", ""))
+        ), relative
+        assert concurrency.get("cancel-in-progress") is False, relative
+        assert f"'{relative}'" in runner, relative
+    for relative in mutation_payloads:
+        assert f"'{relative}'" in runner, relative
+
+
+def test_every_shared_production_fence_workflow_and_payload_is_provenance_protected() -> None:
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
+    shell_token = re.compile(
+        r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_./${}-]+\.sh)(?![A-Za-z0-9_./-])"
+    )
+    shell_by_name: dict[str, set[str]] = {}
+    for path in ROOT.rglob("*.sh"):
+        if ".git" in path.parts:
+            continue
+        shell_by_name.setdefault(path.name, set()).add(
+            path.relative_to(ROOT).as_posix()
+        )
+
+    def repository_shell_references(source: str) -> set[str]:
+        references: set[str] = set()
+        for token in shell_token.findall(source):
+            parts = token.replace("${", "").replace("}", "").lstrip("./").split("/")
+            matched = False
+            for offset in range(len(parts) - 1):
+                candidate = "/".join(parts[offset:])
+                if (ROOT / candidate).is_file():
+                    references.add(candidate)
+                    matched = True
+                    break
+            if not matched:
+                references.update(shell_by_name.get(parts[-1], set()))
+        return references
+    shared_workflows: set[str] = set()
+    referenced_payloads: set[str] = set()
+    for path in (ROOT / ".github/workflows").glob("*.yml"):
+        workflow = path.read_text(encoding="utf-8")
+        if "oracle-instance-workload-mutation" not in workflow:
+            continue
+        relative = path.relative_to(ROOT).as_posix()
+        shared_workflows.add(relative)
+        pending = repository_shell_references(workflow)
+        indirect: dict[str, str] = {}
+        while pending:
+            reference = pending.pop()
+            if reference in indirect:
+                continue
+            payload = (ROOT / reference).read_text(encoding="utf-8")
+            indirect[reference] = payload
+            pending.update(repository_shell_references(payload) - set(indirect))
+        referenced_payloads.update(indirect)
+    assert len(shared_workflows) == 65
+    assert len(referenced_payloads) == 55
+    assert "ops/universal_video_spool_repair.sh" in referenced_payloads
+    assert "ops/universal_video_evidence_export_entrypoint.sh" in referenced_payloads
+    for relative in shared_workflows | referenced_payloads:
+        assert f"'{relative}'" in runner, relative
+
+
+def test_every_direct_oracle_rollout_uses_a_trusted_shared_fence() -> None:
+    workflows = ROOT / ".github/workflows"
+    rollouts = {
+        path.relative_to(ROOT).as_posix()
+        for path in workflows.glob("oracle-*rollout.yml")
+        if "ORACLE_HOST:" in path.read_text(encoding="utf-8")
+    }
+    assert rollouts == {
+        ".github/workflows/oracle-assistant-lab-control-rollout.yml",
+        ".github/workflows/oracle-assistant-lab-worker-rollout.yml",
+        ".github/workflows/oracle-ben-runtime-rollout.yml",
+    }
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
+    for relative in rollouts:
+        workflow = (ROOT / relative).read_text(encoding="utf-8")
+        header = workflow.split("\njobs:", 1)[0]
+        assert "oracle-instance-workload-mutation" in header, relative
+        assert "cancel-in-progress: false" in header, relative
+        assert "format(" in header, relative
+        assert "github.event_name" in header, relative
+        assert f"'{relative}'" in runner, relative
+        if "  pull_request_target:" in header:
+            for trust_gate in (
+                "github.event.pull_request.head.repo.full_name == github.repository",
+                "github.event.pull_request.user.login == github.repository_owner",
+                "github.event.pull_request.base.ref == 'main'",
+                "github.event.pull_request.changed_files == 1",
+            ):
+                assert workflow.count(trust_gate) >= 2, (relative, trust_gate)
+
+
+def test_database_production_fence_excludes_rejected_dispatches() -> None:
+    workflow = (ROOT / ".github/workflows/database-production.yml").read_text(
+        encoding="utf-8"
+    )
+    header = workflow.split("\njobs:", 1)[0]
+    assert "github.ref == 'refs/heads/database-production'" in header
+    assert "inputs.confirmation == 'MIGRATE'" in header
+    assert "'oracle-instance-workload-mutation'" in header
+    assert "database-production-noop-{0}" in header
+    assert "cancel-in-progress: false" in header
 
 
 def test_every_instance_agent_command_must_be_terminal(tmp_path: Path) -> None:
