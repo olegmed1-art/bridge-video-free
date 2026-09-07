@@ -668,6 +668,9 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
         "verify_no_competing_infrastructure_runs", initial_reconciliation
     )
     dispatch_trap = runner.index("trap control_plane_cleanup EXIT", initial_sweep)
+    assert "trap 'exit 129' HUP" in runner
+    assert "trap 'exit 130' INT" in runner
+    assert "trap 'exit 143' TERM" in runner
     dispatch_suspend = runner.index(
         "bash ops/issue_881_process_video_dispatch_gate.sh", dispatch_trap
     )
@@ -1109,6 +1112,15 @@ esac
     restored_disabled = invoke("restore")
     assert restored_disabled.returncode == 0, restored_disabled.stderr
     assert workflow_state.read_text(encoding="utf-8") == "disabled_manually\n"
+
+    state_receipt.unlink()
+    workflow_state.write_text("active\n", encoding="utf-8")
+    assert invoke("suspend").returncode == 0
+    workflow_state.write_text("active\n", encoding="utf-8")
+    lost_suspension = invoke("restore")
+    assert lost_suspension.returncode != 0
+    assert "suspension was lost before restoration" in lost_suspension.stderr
+    assert workflow_state.read_text(encoding="utf-8") == "active\n"
 
     state_receipt.unlink()
     workflow_state.write_text("completed\n", encoding="utf-8")

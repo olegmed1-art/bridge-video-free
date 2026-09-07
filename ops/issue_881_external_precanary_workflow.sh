@@ -502,7 +502,7 @@ restore_process_video_dispatch(){
 
 control_plane_cleanup(){
   local rc=$?
-  trap - EXIT
+  trap - EXIT HUP INT TERM
   restore_process_video_dispatch || rc=1
   exit "$rc"
 }
@@ -533,6 +533,9 @@ verify_no_competing_infrastructure_runs \
   | tee "$RUNNER_TEMP/precanary-infrastructure-marker.txt"
 verify_live_gate
 trap control_plane_cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 process_video_gate_armed=1
 bash ops/issue_881_process_video_dispatch_gate.sh \
   suspend "$process_video_state_file" | tee "$process_video_suspend_marker_file"
@@ -689,7 +692,7 @@ release_database_gate(){
 
 cleanup_remote(){
   local rc=$?
-  trap - EXIT
+  trap - EXIT HUP INT TERM
   if abort_remote_attester; then
     "${s[@]}" "sudo -n rm -rf '$remote_root'; rm -rf '$remote_stage'" >/dev/null 2>&1 || true
   else

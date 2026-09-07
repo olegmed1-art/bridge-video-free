@@ -71,6 +71,8 @@ case "$action" in
   restore)
     validate_state_file
     initial_state="$(cat "$state_file")"
+    suspension_intact=true
+    [[ "$(read_workflow)" == disabled_manually ]] || suspension_intact=false
     case "$initial_state" in
       active)
         gh api --method PUT \
@@ -84,6 +86,8 @@ case "$action" in
     esac
     [[ "$(read_workflow)" == "$initial_state" ]] \
       || { echo 'Process-video workflow state restoration failed' >&2; exit 1; }
+    [[ "$suspension_intact" == true ]] \
+      || { echo 'Process-video workflow suspension was lost before restoration' >&2; exit 1; }
     printf 'PROCESS_VIDEO_DISPATCH_RESTORE initial_state=%s final_state=%s result=PASS\n' \
       "$initial_state" "$initial_state"
     ;;
