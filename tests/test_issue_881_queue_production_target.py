@@ -66,6 +66,13 @@ class TargetTest(unittest.TestCase):
         self.verify.side_effect = lambda *args: setattr(target, 'OWNER_ATTESTATION_DEADLINE', 0)
         with self.assertRaises(RuntimeError): target.run('apply')
         self.assertEqual(self.dsn.read_bytes(), self.raw)
+        self.assertFalse(self.backup.exists())
+
+    def test_expiry_during_backup_sync_removes_only_new_backup(self):
+        with patch.object(target, 'sync_directory', side_effect=lambda *args: setattr(target, 'OWNER_ATTESTATION_DEADLINE', 0)):
+            with self.assertRaises(RuntimeError): target.run('apply')
+        self.assertEqual(self.dsn.read_bytes(), self.raw)
+        self.assertFalse(self.backup.exists())
 
     def test_completed_repair_requires_intact_protected_rollback(self):
         target.run('apply')
