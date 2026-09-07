@@ -77,8 +77,8 @@ def _evidence() -> str:
             "claimable=0 leased=0 result=PASS",
             "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE "
             "other_active=0 other_queued=0 result=PASS",
-            "UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE "
-            "examined_recent=1 active_remote_commands=0 result=PASS",
+            "UNIVERSAL_VIDEO_PRECANARY_OCI_INSTANCE_COMMAND_EXCLUSIVE "
+            "examined_instance_executions=1 active_remote_commands=0 result=PASS",
             "UNIVERSAL_VIDEO_PRECANARY_WINDOW source_service_before=active "
             "source_service_observed=active container_service_before=active "
             "container_service_observed=active workload_fence=exclusive "
@@ -231,8 +231,8 @@ def test_rejects_tampered_or_ambiguous_archive_evidence(tmp_path: Path) -> None:
         (
             _archive_bytes(
                 evidence.replace(
-                    "UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE ",
-                    "REMOVED_OCI_ADMIN_EXCLUSIVE ",
+                    "UNIVERSAL_VIDEO_PRECANARY_OCI_INSTANCE_COMMAND_EXCLUSIVE ",
+                    "REMOVED_OCI_INSTANCE_COMMAND_EXCLUSIVE ",
                 )
             ),
             None,

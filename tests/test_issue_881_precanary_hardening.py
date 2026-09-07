@@ -340,9 +340,10 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     ).read_text(encoding="utf-8")
     assert "group: oracle-instance-workload-mutation" in admin_workflow
     assert "group: oracle-universal-video-bounded-admin" not in admin_workflow
-    assert "verify_no_active_oracle_admin_commands" in runner
-    assert "instance-agent command list" in runner
-    assert "instance-agent command-execution get" in runner
+    assert "verify_no_active_instance_agent_commands" in runner
+    assert "instance-agent command-execution list" in runner
+    assert '--instance-id "$INSTANCE_ID"' in runner
+    assert "universal-video-(?:audit|productionize)" not in runner
     assert "active_remote_commands=0" in runner
     assert "Reconcile exact OCI command termination" in admin_workflow
     assert "instance-agent command cancel --command-id" in admin_workflow
@@ -402,8 +403,12 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
         'current_infrastructure_marker="$(verify_no_competing_infrastructure_runs)"',
         boundary_definition,
     )
-    boundary_main = runner.index("verify_exact_current_main", boundary_infrastructure)
-    assert boundary_infrastructure < boundary_main
+    boundary_oci_commands = runner.index(
+        'current_oci_command_marker="$(verify_no_active_instance_agent_commands)"',
+        boundary_infrastructure,
+    )
+    boundary_main = runner.index("verify_exact_current_main", boundary_oci_commands)
+    assert boundary_infrastructure < boundary_oci_commands < boundary_main
     fenced_start = attest.index("if start_container_under_fence; then", attest.index("cleanup(){"))
     runtime_proof = attest.index("verify_postrestore_runtime_queue", fenced_start)
     owner_release = attest.index("verify_postrestore_owner_release", runtime_proof)
@@ -542,11 +547,11 @@ verify_no_competing_infrastructure_runs
     assert "snapshot is incomplete or changed while paginating" in incomplete.stderr
 
 
-def test_recent_oracle_admin_command_must_be_terminal(tmp_path: Path) -> None:
+def test_every_instance_agent_command_must_be_terminal(tmp_path: Path) -> None:
     runner = (
         ROOT / "ops/issue_881_external_precanary_workflow.sh"
     ).read_text(encoding="utf-8")
-    start = runner.index("verify_no_active_oracle_admin_commands(){")
+    start = runner.index("verify_no_active_instance_agent_commands(){")
     end = runner.index("\n\nverify_final_mutation_boundary(){", start)
     function = textwrap.dedent(runner[start:end])
     config_dir = tmp_path / "oci"
@@ -554,42 +559,41 @@ def test_recent_oracle_admin_command_must_be_terminal(tmp_path: Path) -> None:
     config = config_dir / "config"
     config.write_text("synthetic\n", encoding="utf-8")
     config.chmod(0o600)
-    commands = tmp_path / "commands.json"
-    execution = tmp_path / "execution.json"
+    executions = tmp_path / "executions.json"
     command_id = "ocid1.instanceagentcommand.oc1.synthetic"
-    commands.write_text(
-        json.dumps(
-            {
-                "data": [
-                    {
-                        "id": command_id,
-                        "display-name": "universal-video-productionize-34100000001",
-                        "time-created": dt.datetime.now(dt.timezone.utc).isoformat(),
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
     harness = f"""\
 set -euo pipefail
 {function}
 oci(){{
   case "$*" in
     *" compute instance get "*) printf '%s\\n' 'ocid1.compartment.oc1.synthetic' ;;
-    *" instance-agent command list "*) command cat "$COMMANDS" ;;
-    *" instance-agent command-execution get "*) command cat "$EXECUTION" ;;
+    *" instance-agent command-execution list "*) command cat "$EXECUTIONS" ;;
     *) return 64 ;;
   esac
 }}
 RUNNER_TEMP={json.dumps(str(tmp_path))}
 INSTANCE_ID=ocid1.instance.oc1.synthetic
-verify_no_active_oracle_admin_commands
+verify_no_active_instance_agent_commands
 """
 
-    def run(state: str) -> subprocess.CompletedProcess[str]:
-        execution.write_text(
-            json.dumps({"data": {"lifecycle-state": state}}), encoding="utf-8"
+    def run(
+        state: str, *, instance_id: str = "ocid1.instance.oc1.synthetic"
+    ) -> subprocess.CompletedProcess[str]:
+        executions.write_text(
+            json.dumps(
+                {
+                    "data": [
+                        {
+                            "instance-agent-command-id": command_id,
+                            "instance-id": instance_id,
+                            "display-name": "diana11-delivery-34100000001",
+                            "lifecycle-state": state,
+                            "time-created": dt.datetime.now(dt.timezone.utc).isoformat(),
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
         )
         return subprocess.run(
             ["bash"],
@@ -598,18 +602,26 @@ verify_no_active_oracle_admin_commands
             capture_output=True,
             env={
                 "PATH": "/usr/local/bin:/usr/bin:/bin",
-                "COMMANDS": str(commands),
-                "EXECUTION": str(execution),
+                "EXECUTIONS": str(executions),
             },
             timeout=10,
         )
 
     terminal = run("SUCCEEDED")
     assert terminal.returncode == 0, terminal.stderr
-    assert "examined_recent=1 active_remote_commands=0 result=PASS" in terminal.stdout
+    assert (
+        "examined_instance_executions=1 active_remote_commands=0 result=PASS"
+        in terminal.stdout
+    )
     active = run("IN_PROGRESS")
     assert active.returncode != 0
-    assert "not terminal: IN_PROGRESS" in active.stderr
+    assert "Run Command on target instance is not terminal: IN_PROGRESS" in active.stderr
+    unknown = run("QUEUED")
+    assert unknown.returncode != 0
+    assert "unknown OCI Run Command lifecycle" in unknown.stderr
+    wrong_instance = run("SUCCEEDED", instance_id="ocid1.instance.oc1.other")
+    assert wrong_instance.returncode != 0
+    assert "belongs to another instance" in wrong_instance.stderr
 
 
 def test_owner_snapshot_controls_unlock_while_worker_is_fenced(tmp_path: Path) -> None:

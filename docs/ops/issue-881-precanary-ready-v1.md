@@ -59,7 +59,7 @@ A passing artifact contains exactly one of each material receipt, in order:
 - `UNIVERSAL_VIDEO_PRECANARY_ONE_SHOT ... run_attempt=1 result=PASS`
 - `UNIVERSAL_VIDEO_PRECANARY_OWNER_BEFORE ... result=PASS`
 - `UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE ... result=PASS`
-- `UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE ... active_remote_commands=0 result=PASS`
+- `UNIVERSAL_VIDEO_PRECANARY_OCI_INSTANCE_COMMAND_EXCLUSIVE ... active_remote_commands=0 result=PASS`
 - the exclusive quiescent window and immutable image digest
 - no-media/no-Drive synthetic and metadata-only gates
 - `UNIVERSAL_VIDEO_PRECANARY_FENCED_START ... workload_fence=exclusive result=PASS`
@@ -78,11 +78,12 @@ fenced. Only a root-only one-use control carrying the exact proof may release
 the fence; resident readiness is checked afterwards.
 
 Immediately before host mutation and again before the owner release, the runner
-reconciles both the complete GitHub Actions snapshot and recent OCI Instance
-Agent admin commands. A command from a cancelled admin workflow must be in a
-terminal OCI lifecycle. The admin workflow also reconciles on every exit,
-attempts cancellation whenever the command is not terminal, and fails unless
-that exact remote command becomes provably terminal.
+reconciles both the complete GitHub Actions snapshot and every OCI Instance
+Agent command execution visible for the exact Oracle instance. No display-name
+allowlist is used: a command left behind by any cancelled workflow must be in a
+terminal OCI lifecycle. The bounded admin workflow also reconciles its own
+command on every exit, attempts cancellation whenever it is not terminal, and
+fails unless that exact remote command becomes provably terminal.
 
 ## STOP and rollback
 

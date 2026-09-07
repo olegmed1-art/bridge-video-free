@@ -72,9 +72,10 @@ jobs:
           test "$(( $(grep -c 'issue_881_precanary_one_shot.py verify' "$workflow") + $(grep -c 'issue_881_precanary_one_shot.py verify' "$runner") ))" -eq 2
           grep -F 'verify_no_competing_infrastructure_runs(){' "$runner"
           grep -F 'UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE' "$runner"
-          grep -F 'verify_no_active_oracle_admin_commands(){' "$runner"
-          grep -F 'instance-agent command-execution get' "$runner"
-          grep -F 'UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE' "$runner"
+          grep -F 'verify_no_active_instance_agent_commands(){' "$runner"
+          grep -F 'instance-agent command-execution list' "$runner"
+          grep -F -- '--instance-id "$INSTANCE_ID"' "$runner"
+          grep -F 'UNIVERSAL_VIDEO_PRECANARY_OCI_INSTANCE_COMMAND_EXCLUSIVE' "$runner"
           grep -F 'root_pr_number=991' "$runner"
           grep -F 'prior_gate_pr_number=1070' "$runner"
           grep -F 'protected_gate_paths=(' "$runner"

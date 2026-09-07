@@ -254,9 +254,8 @@ verify_no_competing_infrastructure_runs(){
   echo 'UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE other_active=0 other_queued=0 result=PASS'
 }
 
-verify_no_active_oracle_admin_commands(){
-  local config="$RUNNER_TEMP/oci/config" compartment commands_file ids_file
-  local command_id execution_file lifecycle examined=0
+verify_no_active_instance_agent_commands(){
+  local config="$RUNNER_TEMP/oci/config" compartment executions_file examined
   [[ -f "$config" && ! -L "$config" && "$(stat -c '%a' "$config")" == 600 ]] \
     || { echo 'Exact OCI configuration is missing or unsafe' >&2; return 1; }
   compartment="$(oci --config-file "$config" compute instance get \
@@ -264,103 +263,81 @@ verify_no_active_oracle_admin_commands(){
     || return 1
   [[ "$compartment" =~ ^ocid1\.compartment\. ]] \
     || { echo 'Oracle compartment identity is invalid' >&2; return 1; }
-  commands_file="$RUNNER_TEMP/precanary-oci-admin-commands.json"
-  ids_file="$RUNNER_TEMP/precanary-oci-admin-command-ids.txt"
-  oci --config-file "$config" instance-agent command list \
-    --compartment-id "$compartment" --all --output json > "$commands_file" \
+  executions_file="$RUNNER_TEMP/precanary-oci-instance-command-executions.json"
+  # This OCI API is scoped by the exact instance ID. Do not filter by display
+  # name: any Run Command can outlive a cancelled Actions run and overlap the
+  # resident lifecycle window.
+  oci --config-file "$config" instance-agent command-execution list \
+    --compartment-id "$compartment" --instance-id "$INSTANCE_ID" \
+    --all --output json > "$executions_file" \
     || return 1
-  python3 - "$commands_file" > "$ids_file" <<'PY' || return 1
+  examined="$(python3 - "$executions_file" "$INSTANCE_ID" <<'PY'
 import datetime as dt
 import json
-import re
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as source:
     payload = json.load(source)
 if not isinstance(payload, dict) or "data" not in payload:
-    raise SystemExit("invalid OCI command list")
+    raise SystemExit("invalid OCI command execution list")
 items = payload["data"]
 if not isinstance(items, list):
-    raise SystemExit("invalid OCI command collection")
-now = dt.datetime.now(dt.timezone.utc)
+    raise SystemExit("invalid OCI command execution collection")
+expected_instance = sys.argv[2]
+terminal = {"SUCCEEDED", "FAILED", "CANCELED", "TIMED_OUT"}
+known = terminal | {"ACCEPTED", "IN_PROGRESS"}
 seen: set[str] = set()
 for item in items:
     if not isinstance(item, dict):
-        raise SystemExit("invalid OCI command item")
-    name = item.get("display-name")
-    if not isinstance(name, str) or not re.fullmatch(
-        r"universal-video-(?:audit|productionize)-[1-9][0-9]{7,19}", name
-    ):
-        continue
-    command_id = item.get("id")
+        raise SystemExit("invalid OCI command execution item")
+    command_id = item.get("instance-agent-command-id")
+    instance_id = item.get("instance-id")
+    lifecycle = item.get("lifecycle-state")
     created = item.get("time-created")
-    if not isinstance(command_id, str) or not command_id.startswith("ocid1.instanceagentcommand."):
-        raise SystemExit("invalid OCI admin command identity")
+    if not isinstance(command_id, str) or not command_id.startswith(
+        "ocid1.instanceagentcommand."
+    ):
+        raise SystemExit("invalid OCI Run Command identity")
+    if instance_id != expected_instance:
+        raise SystemExit("OCI Run Command execution belongs to another instance")
+    if not isinstance(lifecycle, str) or lifecycle not in known:
+        raise SystemExit("unknown OCI Run Command lifecycle")
     if not isinstance(created, str):
-        raise SystemExit("missing OCI admin command timestamp")
+        raise SystemExit("missing OCI Run Command timestamp")
     timestamp = dt.datetime.fromisoformat(created.replace("Z", "+00:00"))
     if timestamp.tzinfo is None:
-        raise SystemExit("timezone-free OCI admin command timestamp")
-    age = (now - timestamp).total_seconds()
-    if age < -300:
-        raise SystemExit("OCI admin command timestamp is in the future")
-    # The remote command has a fixed 3600-second provider timeout. Inspect a
-    # second full timeout window so a runner-cancelled command cannot outlive
-    # the Actions concurrency lease unnoticed.
-    if age <= 7200:
-        if command_id in seen:
-            raise SystemExit("duplicate OCI admin command identity")
-        seen.add(command_id)
-        print(command_id)
-PY
-  mapfile -t command_ids < "$ids_file"
-  for command_id in "${command_ids[@]}"; do
-    ((examined += 1))
-    execution_file="$RUNNER_TEMP/precanary-oci-admin-execution-${examined}.json"
-    oci --config-file "$config" instance-agent command-execution get \
-      --command-id "$command_id" --instance-id "$INSTANCE_ID" --output json \
-      > "$execution_file" || {
-        echo 'A recent Oracle admin command cannot be reconciled' >&2
-        return 1
-      }
-    lifecycle="$(python3 - "$execution_file" <<'PY'
-import json
-import sys
-with open(sys.argv[1], encoding="utf-8") as source:
-    value = json.load(source)
-state = value.get("data", {}).get("lifecycle-state") if isinstance(value, dict) else None
-if not isinstance(state, str):
-    raise SystemExit("missing OCI command execution lifecycle")
-print(state)
+        raise SystemExit("timezone-free OCI Run Command timestamp")
+    if command_id in seen:
+        raise SystemExit("duplicate OCI Run Command execution identity")
+    seen.add(command_id)
+    if lifecycle not in terminal:
+        raise SystemExit(
+            f"OCI Run Command on target instance is not terminal: {lifecycle}"
+        )
+print(len(seen))
 PY
 )" || return 1
-    case "$lifecycle" in
-      SUCCEEDED|FAILED|CANCELED|TIMED_OUT) ;;
-      *)
-        echo "A remote Oracle productionize command is not terminal: $lifecycle" >&2
-        return 1
-        ;;
-    esac
-  done
-  printf 'UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE examined_recent=%s active_remote_commands=0 result=PASS\n' \
+  [[ "$examined" =~ ^[0-9]+$ ]] \
+    || { echo 'OCI Run Command execution count is invalid' >&2; return 1; }
+  printf 'UNIVERSAL_VIDEO_PRECANARY_OCI_INSTANCE_COMMAND_EXCLUSIVE examined_instance_executions=%s active_remote_commands=0 result=PASS\n' \
     "$examined"
 }
 
 verify_final_mutation_boundary(){
-  local current_infrastructure_marker current_oci_admin_marker
+  local current_infrastructure_marker current_oci_command_marker
   # Receipt validation performs its own paginated Actions read. Take
   # the complete infrastructure snapshot only after that read, then
   # make the exact-main query the final subcheck in this one bounded
   # reconciliation immediately before the host attester.
-  current_oci_admin_marker="$(verify_no_active_oracle_admin_commands)" \
-    || return 1
-  printf '%s\n' "$current_oci_admin_marker" \
-    | tee "$RUNNER_TEMP/precanary-oci-admin-marker.txt"
   current_infrastructure_marker="$(verify_no_competing_infrastructure_runs)" \
     || return 1
   [[ "$current_infrastructure_marker" == \
     "$(cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt")" ]] \
     || { echo 'Infrastructure exclusivity changed before host mutation' >&2; return 1; }
+  current_oci_command_marker="$(verify_no_active_instance_agent_commands)" \
+    || return 1
+  printf '%s\n' "$current_oci_command_marker" \
+    | tee "$RUNNER_TEMP/precanary-oci-instance-command-marker.txt"
   verify_exact_current_main
   printf '%s\n' "$current_infrastructure_marker"
 }
@@ -473,7 +450,7 @@ bounded_failure(){
     cat "$RUNNER_TEMP/precanary-one-shot-marker.txt" 2>/dev/null || true
     cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt" 2>/dev/null || true
     cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt" 2>/dev/null || true
-    cat "$RUNNER_TEMP/precanary-oci-admin-marker.txt" 2>/dev/null || true
+    cat "$RUNNER_TEMP/precanary-oci-instance-command-marker.txt" 2>/dev/null || true
     grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|FENCED_START|POSTRESTORE_(RUNTIME|OWNER)|OWNER_RELEASE|RESTORE(_PASS|_FAILED)?)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
       "$session_log" 2>/dev/null || true
     echo 'real_media_canary_run=false'
@@ -640,7 +617,7 @@ trap - ERR
   cat "$RUNNER_TEMP/precanary-one-shot-marker.txt"
   cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt"
   cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt"
-  cat "$RUNNER_TEMP/precanary-oci-admin-marker.txt"
+  cat "$RUNNER_TEMP/precanary-oci-instance-command-marker.txt"
   grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|FENCED_START|POSTRESTORE_(RUNTIME|OWNER)|OWNER_RELEASE|RESTORE_PASS)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)) ' "$session_log"
   grep -E '"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"' "$session_log"
   echo "image_digest=$installed_digest"

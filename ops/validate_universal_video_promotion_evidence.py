@@ -280,20 +280,26 @@ def verify_evidence_archive(
         lines.count(infrastructure_line) == 1,
         "infrastructure exclusivity proof is missing or ambiguous",
     )
-    oci_admin_lines = [
+    oci_command_lines = [
         line
         for line in lines
-        if line.startswith("UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE ")
+        if line.startswith(
+            "UNIVERSAL_VIDEO_PRECANARY_OCI_INSTANCE_COMMAND_EXCLUSIVE "
+        )
     ]
-    _require(len(oci_admin_lines) == 1, "OCI admin exclusivity proof is missing or ambiguous")
+    _require(
+        len(oci_command_lines) == 1,
+        "OCI instance-command exclusivity proof is missing or ambiguous",
+    )
     _require(
         re.fullmatch(
-            r"UNIVERSAL_VIDEO_PRECANARY_OCI_ADMIN_EXCLUSIVE "
-            r"examined_recent=[0-9]+ active_remote_commands=0 result=PASS",
-            oci_admin_lines[0],
+            r"UNIVERSAL_VIDEO_PRECANARY_OCI_INSTANCE_COMMAND_EXCLUSIVE "
+            r"examined_instance_executions=[0-9]+ "
+            r"active_remote_commands=0 result=PASS",
+            oci_command_lines[0],
         )
         is not None,
-        "OCI admin exclusivity proof is inconsistent",
+        "OCI instance-command exclusivity proof is inconsistent",
     )
     fenced_start = [
         line
@@ -351,7 +357,7 @@ def verify_evidence_archive(
         lines.index(one_shot_lines[0])
         < lines.index(owner_before)
         < lines.index(infrastructure_line)
-        < lines.index(oci_admin_lines[0])
+        < lines.index(oci_command_lines[0])
         < lines.index(window_lines[0])
         < lines.index(fenced_start[0])
         < lines.index(runtime_after[0])
