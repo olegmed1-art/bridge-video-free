@@ -209,12 +209,13 @@ def test_legacy_adapter_rejects_non_string_ranks() -> None:
 
 
 def test_existing_tournament_json_remains_consumable_without_inference() -> None:
-    fixture = (
-        Path(__file__).parents[1]
-        / "data"
-        / "tournaments"
-        / "tournament_30041_round2_diana_facts_v1.json"
+    candidates = list(
+        (Path(__file__).parents[1] / "data" / "tournaments").glob(
+            "tournament_30041_round2_*_facts_v1.json"
+        )
     )
+    assert len(candidates) == 1
+    fixture = candidates[0]
     payload = json.loads(fixture.read_text(encoding="utf-8"))
     columns = payload["columns"]
     row = dict(zip(columns, payload["rows"][1].split("|"), strict=True))
