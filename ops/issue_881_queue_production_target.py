@@ -52,7 +52,21 @@ QUEUE_ACL_SQL = """SELECT NOT EXISTS (
     (SELECT array_agg(c.relname ORDER BY c.relname)
      FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
      WHERE n.nspname='video_queue' AND c.relkind IN ('v','m')
-       AND has_table_privilege(current_user,c.oid,'SELECT')) AS readable_views"""
+       AND (has_table_privilege(current_user,c.oid,'SELECT')
+            OR has_any_column_privilege(current_user,c.oid,'SELECT'))) AS readable_views"""
+# Drift fingerprints from the independently exercised 0056-0058 rehearsal
+# (source main 6b20bd9e, expanded migration SHA256 b203bc82546dbbb81bb5d1e8e7099e1731e2d628a66b1d54d2784b885fe575e0).
+EXPECTED_QUEUE_VERSION = ('a5eb36f8b89facad2dc49a5c3d13fa4f', 'c738d3e6c8ecdf53b12b04516ac8ea89', 3)
+QUEUE_VERSION_SQL = """SELECT
+    (SELECT md5(string_agg(pg_get_functiondef(p.oid) || ' OWNER=' || pg_get_userbyid(p.proowner),
+        E'\\n' ORDER BY p.proname, oidvectortypes(p.proargtypes)))
+     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='video_queue'),
+    (SELECT md5(string_agg(c.relname || ':' || k.conname || ':' || pg_get_constraintdef(k.oid)
+        || ':' || k.convalidated::text, E'\\n' ORDER BY c.relname,k.conname))
+     FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid
+     JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='video_queue'),
+    (SELECT count(*) FROM public.schema_migration WHERE migration_key IN
+        ('0056_universal_video_queue','0057_universal_video_canary_review_gate','0058_universal_video_terminal_v2_gate'))"""
 
 
 def require(condition):
@@ -129,6 +143,8 @@ def verify(raw, branch):
                 require(row[10])
                 cur.execute(QUEUE_ACL_SQL)
                 require(cur.fetchone() == (True, ALLOWED_QUEUE_FUNCTIONS, ['batch_status', 'job_status']))
+                cur.execute(QUEUE_VERSION_SQL)
+                require(cur.fetchone() == EXPECTED_QUEUE_VERSION)
                 cur.execute("SELECT * FROM video_queue.precanary_idle_snapshot()")
                 require(cur.fetchone() == (0, 0))
 
