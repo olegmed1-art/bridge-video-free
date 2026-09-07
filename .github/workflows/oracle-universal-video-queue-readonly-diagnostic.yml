@@ -64,6 +64,7 @@ jobs:
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n -u universal-video /opt/bridge-school/universal-video/.venv/bin/python - /opt/bridge-school/universal-video/secrets/video-queue-dsn' <<'PY'
           from pathlib import Path
+          import re
           import sys
           import psycopg
 
@@ -75,11 +76,30 @@ jobs:
                   dsn,
                   connect_timeout=8,
                   application_name="uv-readonly-queue-diagnostic",
+                  options="-c statement_timeout=10000 -c lock_timeout=2000",
               ) as conn:
                   conn.read_only = True
                   with conn.cursor() as cur:
-                      cur.execute("SELECT current_user, current_database(), to_regprocedure('video_queue.precanary_idle_snapshot()') IS NOT NULL")
-                      user, database, function_exists = cur.fetchone()
+                      # Catalog lookup works even when the schema is absent.
+                      # Never print connection strings, endpoint URLs or errors.
+                      cur.execute("""
+                          SELECT current_user, current_database(),
+                              current_setting('neon.project_id', true),
+                              current_setting('neon.branch_id', true),
+                              EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'video_queue'),
+                              EXISTS (SELECT 1 FROM pg_proc p
+                                  JOIN pg_namespace n ON n.oid = p.pronamespace
+                                  WHERE n.nspname = 'video_queue'
+                                    AND p.proname = 'precanary_idle_snapshot'
+                                    AND p.pronargs = 0)
+                      """)
+                      user, database, project, branch, schema_exists, function_exists = cur.fetchone()
+                      def label(value):
+                          return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value) else "unknown"
+                      user, database, project, branch = map(label, (user, database, project, branch))
+                      print(f"UV_QUEUE_IDENTITY user={user} database={database} project={project} branch={branch} schema_exists={str(schema_exists).lower()} function_exists={str(function_exists).lower()} data_mutated=false", flush=True)
+                      if not schema_exists or not function_exists:
+                          raise RuntimeError("queue_schema_or_function_missing")
                       cur.execute("SELECT * FROM video_queue.precanary_idle_snapshot()")
                       row = cur.fetchone()
               if not row or len(row) != 2:
