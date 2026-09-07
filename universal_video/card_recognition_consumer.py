@@ -111,8 +111,12 @@ def _validate_record(raw: Any, index: int, version: str) -> dict[str, Any]:
         return _unknown(seat, slot, version)
     if source not in KNOWN_SOURCES:
         raise CardRecognitionContractError("unsupported or inferred card provenance")
-    rank = str(record.get("rank") or "").upper().replace("10", "T")
-    suit = str(record.get("suit") or "").upper()
+    raw_rank = record.get("rank")
+    raw_suit = record.get("suit")
+    if not isinstance(raw_rank, str) or not isinstance(raw_suit, str):
+        raise CardRecognitionContractError(f"invalid card_records[{index}] card types")
+    rank = raw_rank.upper().replace("10", "T")
+    suit = raw_suit.upper()
     if rank not in RANKS or suit not in SUITS:
         raise CardRecognitionContractError(f"invalid card_records[{index}] card")
     confidence = _confidence(record.get("confidence"), f"card_records[{index}].confidence")
@@ -186,6 +190,10 @@ def validate_recognition_result(payload: Any) -> dict[str, Any]:
         if card in known_cards:
             raise CardRecognitionContractError("duplicate recognized card")
         known_cards.add(card)
+    if result["status"] == "COMPLETE_VISUAL" and len(known_cards) != 52:
+        raise CardRecognitionContractError(
+            "COMPLETE_VISUAL requires 52 recognized cards and no UNKNOWN slots"
+        )
     normalized = {
         "schema": CONTRACT_SCHEMA,
         "status": str(result["status"]),
@@ -213,7 +221,12 @@ def adapt_legacy_hands(hands: Any, *, recognizer_version: str = "legacy-video31"
         hand = _mapping(source.get(seat), f"legacy hands.{seat}")
         known = 0
         for suit in SUITS:
-            ranks = str(hand.get(suit) or "").upper().replace("10", "T").replace("-", "")
+            raw_ranks = hand.get(suit)
+            if raw_ranks is None:
+                raw_ranks = ""
+            if not isinstance(raw_ranks, str):
+                raise CardRecognitionContractError(f"invalid legacy hands.{seat}.{suit}")
+            ranks = raw_ranks.upper().replace("10", "T").replace("-", "")
             if any(rank not in RANKS for rank in ranks) or len(set(ranks)) != len(ranks):
                 raise CardRecognitionContractError(f"invalid legacy hands.{seat}.{suit}")
             for rank in ranks:
