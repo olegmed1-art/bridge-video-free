@@ -87,11 +87,12 @@ must still be unchanged before the database fence is released.
 
 Immediately before host mutation and again before the owner release, the runner
 reconciles both the complete GitHub Actions snapshot and every OCI Instance
-Agent command execution visible for the exact Oracle instance. Every repository
-workflow that can create such a command shares the same
-`oracle-instance-workload-mutation` concurrency fence. No display-name
-allowlist is used: a command left behind by any cancelled workflow must be in a
-terminal OCI lifecycle. Promotion repeats the exact-instance reconciliation
+Agent command execution visible for the exact Oracle instance. Every
+command-capable event in a repository workflow shares the same
+`oracle-instance-workload-mutation` concurrency fence; PR-only validation
+events use isolated non-production groups. No display-name allowlist is used:
+a command left behind by any cancelled workflow must be in a terminal OCI
+lifecycle. Promotion repeats the exact-instance reconciliation
 before instance lifecycle, source preparation, and image promotion mutations.
 The bounded admin workflow also reconciles its own command on every exit,
 attempts cancellation whenever it is not terminal, and fails unless that exact

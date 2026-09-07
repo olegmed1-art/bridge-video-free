@@ -52,7 +52,9 @@ ORACLE_V2_GROUP = (
 EXPECTED_PRODUCERS = {
     "oracle-diana11-002-job.yml": (
         {"pull_request", "push"},
-        SHARED_FENCE,
+        "${{ github.event_name == 'pull_request' && "
+        "format('oracle-diana11-002-pr-{0}', github.event.pull_request.number) || "
+        "'oracle-instance-workload-mutation' }}",
     ),
     "oracle-diana11-003-one-shadow-execution.yml": (
         {"pull_request", "push"},

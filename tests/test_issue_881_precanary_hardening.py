@@ -854,15 +854,27 @@ def test_every_live_instance_command_creator_uses_the_common_actions_fence() -> 
         ".github/workflows/oracle-universal-video-admin.yml",
         ".github/workflows/oracle-universal-video-evidence-export.yml",
     }
+    conditional_pr_groups = {
+        ".github/workflows/oracle-diana11-002-delivery.yml":
+            "oracle-diana11-002-delivery-pr-{0}",
+        ".github/workflows/oracle-diana11-002-job.yml":
+            "oracle-diana11-002-pr-{0}",
+        ".github/workflows/oracle-diana11-delivery.yml":
+            "oracle-diana11-delivery-pr-{0}",
+        ".github/workflows/oracle-universal-video-evidence-export.yml":
+            "oracle-universal-video-evidence-export-pr-{0}",
+    }
     for relative in creators:
         header = (ROOT / relative).read_text(encoding="utf-8").split("\njobs:", 1)[0]
         assert header.count("\nconcurrency:\n") == 1, relative
-        assert (
-            re.search(
+        if relative in conditional_pr_groups:
+            assert "github.event_name == 'pull_request'" in header, relative
+            assert conditional_pr_groups[relative] in header, relative
+            assert "|| 'oracle-instance-workload-mutation' }}" in header, relative
+        else:
+            assert re.search(
                 r"(?m)^  group: oracle-instance-workload-mutation$", header
-            )
-            is not None
-        ), relative
+            ), relative
 
 
 def test_shared_oci_execution_validator_rejects_active_unknown_and_ambiguous() -> None:

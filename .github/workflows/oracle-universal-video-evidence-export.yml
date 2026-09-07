@@ -15,7 +15,9 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-instance-workload-mutation
+  # PR validation has no OCI authority. Every push that can create a command
+  # stays serialized with the exact-instance production mutation fence.
+  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-evidence-export-pr-{0}', github.event.pull_request.number) || 'oracle-instance-workload-mutation' }}
   cancel-in-progress: false
 
 jobs:

@@ -14,10 +14,9 @@ permissions:
   issues: write
 
 concurrency:
-  # Even a cancelled Actions run can leave its OCI Run Command executing.
-  # Serialize the complete workflow, including contract validation, with every
-  # other creator that targets this exact instance.
-  group: oracle-instance-workload-mutation
+  # PR validation has no OCI authority. Every push that can create a command
+  # stays serialized with the exact-instance production mutation fence.
+  group: ${{ github.event_name == 'pull_request' && format('oracle-diana11-002-pr-{0}', github.event.pull_request.number) || 'oracle-instance-workload-mutation' }}
   cancel-in-progress: false
 
 jobs:
