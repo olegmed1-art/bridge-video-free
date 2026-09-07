@@ -143,6 +143,7 @@ class TargetTest(unittest.TestCase):
                         if not self.read_only: raise AssertionError('not read-only')
                         calls.append(sql)
                     def fetchone(self):
+                        if calls[-1] == target.QUEUE_CAPABILITIES_SQL: return target.EXPECTED_QUEUE_CAPABILITIES
                         if calls[-1] == target.QUEUE_OBJECT_SECURITY_SQL: return target.EXPECTED_QUEUE_OBJECT_SECURITY
                         if calls[-1] == target.QUEUE_SECURITY_SQL: return target.EXPECTED_QUEUE_SECURITY
                         if 'SELECT *' in calls[-1]: return (1 if busy else 0, 0)
