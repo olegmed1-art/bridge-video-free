@@ -8,9 +8,9 @@ from bridge_vision.anchor_registration import (
     estimate_anchor_peak_scratch_bytes,
     estimate_anchor_work_units,
     register_from_upper_right_anchor,
+    validate_anchor_job_budget,
     validate_anchor_reference_detail,
     validate_anchor_spec,
-    validate_anchor_job_budget,
 )
 
 cv2 = pytest.importorskip("cv2")
@@ -88,6 +88,11 @@ def test_missing_and_ambiguous_anchor_fail_closed():
         register_from_upper_right_anchor(
             reference, ambiguous, anchor_spec(scales=[1.0])
         )
+
+
+def test_anchor_float_fields_reject_booleans():
+    with pytest.raises(AnchorRegistrationError, match="invalid minimum_score"):
+        validate_anchor_spec(anchor_spec(minimum_score=True))
 
 
 def test_scaled_anchor_must_retain_visual_variance(monkeypatch):

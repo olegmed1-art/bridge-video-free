@@ -126,6 +126,14 @@ def test_non_iterable_evidence_inputs_fail_closed():
     overflowing = observation("N", "AH", confidence=10**3999)
     with pytest.raises(DealEvidenceError, match="confidence"):
         build_deal_evidence_report([overflowing], recognizer_version=VERSION)
+    boolean_confidence = observation("N", "AH")
+    boolean_confidence["confidence"] = True
+    with pytest.raises(DealEvidenceError, match="confidence"):
+        build_deal_evidence_report([boolean_confidence], recognizer_version=VERSION)
+    boolean_coordinate = observation("N", "AH")
+    boolean_coordinate["region"]["x"] = False
+    with pytest.raises(DealEvidenceError, match=r"region\.x"):
+        build_deal_evidence_report([boolean_coordinate], recognizer_version=VERSION)
     with pytest.raises(DealEvidenceError, match="required_visual_frames"):
         build_deal_evidence_report(
             [observation("N", "AH")],

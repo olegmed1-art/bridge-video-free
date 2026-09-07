@@ -284,6 +284,16 @@ def test_profile_hash_and_duplicate_json_keys_fail_closed(tmp_path: Path):
     with pytest.raises(BridgitRankLayoutError, match="profile hash mismatch"):
         parse_profile(raw)
 
+    raw = profile_raw()
+    raw["gates"]["min_template_score"] = True
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(
+        BridgitRankLayoutError, match="invalid gates.min_template_score"
+    ):
+        parse_profile(raw)
+
     duplicate = tmp_path / "profile.json"
     duplicate.write_text('{"schema":"one","schema":"two"}', encoding="utf-8")
     with pytest.raises(BridgitRankLayoutError, match="duplicate JSON keys"):
@@ -1690,6 +1700,76 @@ def test_ambiguous_side_step_calibration_returns_structured_status(monkeypatch):
     assert result["reason"] == "side_step_calibration_ambiguous"
 
 
+def test_side_chain_coordinates_must_agree_across_frames(monkeypatch):
+    profile = parse_profile(profile_raw())
+
+    class Raster:
+        shape = (720, 1000, 3)
+
+    reads = iter(
+        [
+            (Raster(), profile.reference_frame_sha256, "b" * 64, {}),
+            (Raster(), "c" * 64, "d" * 64, {}),
+            (Raster(), "e" * 64, "f" * 64, {}),
+        ]
+    )
+    lengths = {
+        "N": {"H": 13, "C": 0, "D": 0, "S": 0},
+        "E": {"H": 0, "C": 13, "D": 0, "S": 0},
+        "S": {"H": 0, "C": 0, "D": 13, "S": 0},
+        "W": {"H": 0, "C": 0, "D": 0, "S": 13},
+    }
+    side_results = []
+    for offset in (0, 1):
+        side_results.append(
+            {
+                "W": lengths["W"],
+                "E": lengths["E"],
+                "_chains": {
+                    seat: {
+                        suit: tuple(
+                            offset + index for index in range(lengths[seat][suit])
+                        )
+                        for suit in "HCDS"
+                    }
+                    for seat in ("W", "E")
+                },
+            }
+        )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_validate_input_raster_budget",
+        lambda paths: [(1000, 720)] * len(paths),
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout, "_read_frame", lambda *_args, **_kwargs: next(reads)
+    )
+    monkeypatch.setattr(bridgit_rank_layout, "_template_bank", lambda *_args: {})
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_horizontal_geometry",
+        lambda _frame, seat, _profile: (
+            lengths[seat],
+            dict(profile.anchors[seat]),
+        ),
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_side_lengths",
+        lambda *_args: side_results.pop(0),
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout, "_glyph_coords_fit_frame", lambda *_args: True
+    )
+
+    result = bridgit_rank_layout.recognize_frames(
+        Path("reference.png"), [Path("first.png"), Path("second.png")], profile
+    )
+
+    assert result["status"] == "LAYOUT_AMBIGUOUS"
+    assert result["reason"] == "per_frame_side_geometry_disagreement"
+
+
 def test_side_fan_coordinate_preflight_includes_registration_radius():
     profile = parse_profile(profile_raw())
     assert bridgit_rank_layout._glyph_coords_fit_frame([(2, 100), (20, 100)], profile)
@@ -1813,6 +1893,32 @@ def test_cli_rejection_is_retained_as_fail_closed_receipt(tmp_path: Path, monkey
     receipt = json.loads(output_path.read_text(encoding="utf-8"))
     assert receipt["status"] == "REJECTED"
     assert receipt["reason"] == "MemoryError"
+
+
+def test_cli_receipt_never_overwrites_recognition_inputs(tmp_path: Path):
+    job_path = tmp_path / "job.json"
+    profile_path = tmp_path / "profile.json"
+    reference_path = tmp_path / "reference.png"
+    frame_path = tmp_path / "frame.png"
+    profile_path.write_bytes(b"profile evidence")
+    reference_path.write_bytes(b"reference evidence")
+    frame_path.write_bytes(b"frame evidence")
+    job = {
+        "profile_ref": {"path": str(profile_path)},
+        "reference_frame_ref": {"path": str(reference_path)},
+        "frame_refs": [{"path": str(frame_path)}],
+    }
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+
+    for protected_path in (job_path, profile_path, reference_path, frame_path):
+        before = protected_path.read_bytes()
+        assert (
+            bridgit_rank_layout.main(
+                ["--job", str(job_path), "--output", str(protected_path)]
+            )
+            == 2
+        )
+        assert protected_path.read_bytes() == before
 
 
 def test_path_resolution_runtime_errors_are_translated(

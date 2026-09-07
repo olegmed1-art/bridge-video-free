@@ -27,6 +27,8 @@ def _runtime():
 
 
 def _number(value: Any, field: str, minimum: float, maximum: float) -> float:
+    if isinstance(value, bool):
+        raise AnchorRegistrationError(f"invalid {field}")
     try:
         result = float(value)
     except (TypeError, ValueError, OverflowError) as exc:

@@ -86,6 +86,10 @@ class BridgitPixelRuntimeUnavailable(RuntimeError):
     """The optional OpenCV/NumPy pixel runtime is not installed."""
 
 
+class _ReceiptPathConflict(BridgitRankLayoutError):
+    """A receipt target aliases replayable recognition input."""
+
+
 @lru_cache(maxsize=1)
 def _pixel_runtime():
     try:
@@ -186,6 +190,8 @@ def _integer(value: Any, field: str, *, minimum: int, maximum: int) -> int:
 
 
 def _number(value: Any, field: str, *, minimum: float, maximum: float) -> float:
+    if isinstance(value, bool):
+        raise BridgitRankLayoutError(f"invalid {field}")
     try:
         number = float(value)
     except (TypeError, ValueError, OverflowError) as exc:
@@ -1291,7 +1297,11 @@ def _side_lengths(
     frames: Sequence[Any], bank: Mapping[str, Any], profile: BridgitRankLayoutProfile
 ):
     _, np = _pixel_runtime()
-    result = {seat: {} for seat in ("W", "E")}
+    result: dict[str, Any] = {
+        "W": {},
+        "E": {},
+        "_chains": {"W": {}, "E": {}},
+    }
     for seat in ("W", "E"):
         x_min, x_max, edge = profile.vertical_search[seat]
         direction = 1 if seat == "W" else -1
@@ -1318,6 +1328,7 @@ def _side_lengths(
                 min_prominence=profile.min_peak_prominence,
             )
             result[seat][suit] = len(chain)
+            result["_chains"][seat][suit] = tuple(chain)
     return result
 
 
@@ -1678,6 +1689,7 @@ def _recognize_frames(
     anchors = {seat: dict(values) for seat, values in profile.anchors.items()}
     frame_geometries: list[dict[str, dict[str, int]]] = []
     frame_horizontal_anchors: list[dict[str, dict[str, tuple[int, int]]]] = []
+    frame_side_chains: list[dict[str, dict[str, tuple[int, ...]]]] = []
     for frame in frames:
         frame_lengths: dict[str, dict[str, int]] = {}
         detected_anchors: dict[str, dict[str, tuple[int, int]]] = {}
@@ -1709,6 +1721,23 @@ def _recognize_frames(
         if geometry_failure is None:
             side = _side_lengths([frame], bank, profile)
             frame_lengths["W"], frame_lengths["E"] = side["W"], side["E"]
+            raw_side_chains = side.get("_chains")
+            if isinstance(raw_side_chains, Mapping):
+                side_chains = {
+                    seat: {
+                        suit: tuple(int(value) for value in raw_side_chains[seat][suit])
+                        for suit in SUITS
+                    }
+                    for seat in ("W", "E")
+                }
+            else:
+                side_chains = {
+                    seat: {
+                        suit: tuple(range(frame_lengths[seat][suit])) for suit in SUITS
+                    }
+                    for seat in ("W", "E")
+                }
+            frame_side_chains.append(side_chains)
             if any(sum(frame_lengths[seat].values()) != 13 for seat in SEATS):
                 geometry_failure = "rank_peak_counts_fail_hand_total"
             elif any(
@@ -1738,6 +1767,16 @@ def _recognize_frames(
             "LAYOUT_AMBIGUOUS",
             lengths=lengths,
             reason="per_frame_geometry_disagreement",
+            input_hashes=input_hashes,
+            frame_registrations=frame_registration_receipts,
+        )
+    if any(
+        side_chains != frame_side_chains[0] for side_chains in frame_side_chains[1:]
+    ):
+        return _shadow_result(
+            "LAYOUT_AMBIGUOUS",
+            lengths=lengths,
+            reason="per_frame_side_geometry_disagreement",
             input_hashes=input_hashes,
             frame_registrations=frame_registration_receipts,
         )
@@ -2349,6 +2388,43 @@ def atomic_write_receipt(path: Path, receipt: Mapping[str, Any]) -> None:
             os.unlink(temporary)
 
 
+def _validate_receipt_output_path(
+    job_path: Path,
+    output_path: Path,
+    job: Mapping[str, Any] | None = None,
+) -> None:
+    candidates = [job_path]
+    if job is not None:
+        for field in ("profile_ref", "reference_frame_ref"):
+            ref = job.get(field)
+            if isinstance(ref, Mapping):
+                candidates.append(Path(str(ref.get("path") or "")))
+        frame_refs = job.get("frame_refs")
+        if isinstance(frame_refs, Sequence) and not isinstance(
+            frame_refs, (str, bytes)
+        ):
+            candidates.extend(
+                Path(str(ref.get("path") or ""))
+                for ref in frame_refs
+                if isinstance(ref, Mapping)
+            )
+    try:
+        resolved_output = output_path.resolve(strict=False)
+        for candidate in candidates:
+            if resolved_output == candidate.resolve(strict=False):
+                raise _ReceiptPathConflict("output path aliases recognition input")
+            if (
+                output_path.exists()
+                and candidate.exists()
+                and os.path.samefile(output_path, candidate)
+            ):
+                raise _ReceiptPathConflict("output path aliases recognition input")
+    except _ReceiptPathConflict:
+        raise
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise _ReceiptPathConflict("output path cannot be validated") from exc
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run the opt-in Bridgit rank-layout shadow backend"
@@ -2357,8 +2433,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output", required=True, type=Path)
     arguments = parser.parse_args(argv)
     exit_code = 0
+    write_receipt = True
     try:
-        receipt = execute_shadow_job(load_job(arguments.job))
+        _validate_receipt_output_path(arguments.job, arguments.output)
+        job = load_job(arguments.job)
+        _validate_receipt_output_path(arguments.job, arguments.output, job)
+        receipt = execute_shadow_job(job)
         status = str(receipt["result"]["status"])
     except (
         BridgitPixelRuntimeUnavailable,
@@ -2367,6 +2447,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         MemoryError,
         OSError,
     ) as exc:
+        if isinstance(exc, _ReceiptPathConflict):
+            write_receipt = False
         detail = str(exc) or exc.__class__.__name__
         detail = detail.replace("\n", " ").replace("\r", " ")[:MAX_DIAGNOSTIC_DETAIL]
         receipt = {
@@ -2382,7 +2464,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         receipt["receipt_sha256"] = canonical_hash(receipt)
         status = "REJECTED"
         exit_code = 2
-    atomic_write_receipt(arguments.output, receipt)
+    if write_receipt:
+        atomic_write_receipt(arguments.output, receipt)
     print(
         json.dumps(
             {"status": status, "receipt_sha256": receipt["receipt_sha256"]},
