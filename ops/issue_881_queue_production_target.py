@@ -281,6 +281,7 @@ def run(mode):
         require(not os.path.lexists(BACKUP))
         verify(old, PREVIEW)
         verify(new, PRODUCTION)
+        require(time.time() < OWNER_ATTESTATION_DEADLINE)
         print("QUEUE_TARGET_PREFLIGHT_PASS source=preview target=production idle=true", flush=True)
         if mode == "check":
             return
@@ -288,13 +289,24 @@ def run(mode):
         # Root-only rollback copy; never overwrite a prior receipt or backup.
         fd = os.open(BACKUP, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "wb") as f:
+            backup_identity = os.fstat(f.fileno())
             os.fchown(f.fileno(), 0, 0)
             f.write(old)
             f.flush()
             os.fsync(f.fileno())
-        sync_directory(BACKUP.parent)
-        require(read_protected(DSN_FILE, gid) == old and not os.path.lexists(FENCE))
-        require(time.time() < OWNER_ATTESTATION_DEADLINE)
+        try:
+            sync_directory(BACKUP.parent)
+            require(read_protected(DSN_FILE, gid) == old and not os.path.lexists(FENCE))
+            require(time.time() < OWNER_ATTESTATION_DEADLINE)
+        except Exception:
+            # Before replacement starts, remove only this attempt's intact copy.
+            current_backup = BACKUP.lstat()
+            if ((current_backup.st_dev, current_backup.st_ino) ==
+                    (backup_identity.st_dev, backup_identity.st_ino)
+                    and read_protected(BACKUP, 0, 0o600) == old):
+                BACKUP.unlink()
+                sync_directory(BACKUP.parent)
+            raise
         try:
             replace_protected(DSN_FILE, new, gid)
             require(read_protected(DSN_FILE, gid) == new)
