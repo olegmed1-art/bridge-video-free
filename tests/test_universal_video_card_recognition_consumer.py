@@ -122,7 +122,9 @@ def test_rejects_complete_status_with_unknown_slots() -> None:
         validate_recognition_result(envelope)
 
 
-@pytest.mark.parametrize("confidence", [True, -0.01, 1.01, float("nan"), float("inf")])
+@pytest.mark.parametrize(
+    "confidence", [True, "0.95", -0.01, 1.01, float("nan"), float("inf")]
+)
 def test_rejects_invalid_confidence(confidence) -> None:
     envelope = _envelope()
     record = envelope["result"]["card_records"][0]
@@ -202,6 +204,24 @@ def test_rejects_non_string_recognizer_rank(rank) -> None:
     record.pop("unknown_slot")
     _rehash(envelope)
     with pytest.raises(CardRecognitionContractError, match="card types"):
+        validate_recognition_result(envelope)
+
+
+def test_rejects_numeric_top_level_recognizer_version() -> None:
+    envelope = _envelope()
+    envelope["result"]["recognizer_version"] = 123
+    for record in envelope["result"]["card_records"]:
+        record["recognizer_version"] = 123
+    _rehash(envelope)
+    with pytest.raises(CardRecognitionContractError, match="recognizer_version type"):
+        validate_recognition_result(envelope)
+
+
+def test_rejects_numeric_card_recognizer_version() -> None:
+    envelope = _envelope()
+    envelope["result"]["card_records"][0]["recognizer_version"] = 123
+    _rehash(envelope)
+    with pytest.raises(CardRecognitionContractError, match="card recognizer_version type"):
         validate_recognition_result(envelope)
 
 
