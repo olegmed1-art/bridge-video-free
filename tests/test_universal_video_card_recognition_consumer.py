@@ -74,7 +74,7 @@ def test_accepts_hash_bound_partial_result_and_preserves_unknowns() -> None:
     assert consumed["logical_inference_performed"] is False
 
 
-def test_accepts_string_frame_sha256_as_visual_evidence() -> None:
+def test_keeps_single_frame_visual_evidence_pending() -> None:
     envelope = _envelope()
     record = envelope["result"]["card_records"][0]
     record.update(
@@ -87,10 +87,8 @@ def test_accepts_string_frame_sha256_as_visual_evidence() -> None:
     record.pop("unknown_slot")
     _rehash(envelope)
 
-    consumed = validate_recognition_result(envelope)
-
-    assert consumed["cards"][0]["frame_sha256"] == "1" * 64
-    assert consumed["cards"][0]["source"] == "VISUAL"
+    with pytest.raises(CardRecognitionContractError, match="remains pending"):
+        validate_recognition_result(envelope)
 
 
 def test_rejects_numeric_frame_sha_without_creating_visual_evidence() -> None:
@@ -145,7 +143,7 @@ def test_rejects_complete_deal_built_from_single_frame_visual_cards() -> None:
     envelope["result"]["card_records"] = records
     _rehash(envelope)
 
-    with pytest.raises(CardRecognitionContractError, match="temporal support for every card"):
+    with pytest.raises(CardRecognitionContractError, match="remains pending"):
         validate_recognition_result(envelope)
 
 
@@ -310,6 +308,11 @@ def test_legacy_adapter_does_not_mutate_input_or_complete_fourth_hand() -> None:
     assert adapted["unknown_slot_count"] == 46
     assert adapted["complete"] is False
     assert sum(card["source"] == "UNKNOWN" for card in adapted["cards"] if card["seat"] == "W") == 13
+    assert all(
+        card["source"] == "LEGACY_UNVERIFIED"
+        for card in adapted["cards"]
+        if card["source"] != "UNKNOWN"
+    )
 
 
 def test_legacy_adapter_preserves_omitted_seat_as_unknown() -> None:
