@@ -12,7 +12,6 @@ from bridge_vision.deal_evidence import (
     render_deal_diagram_markdown,
 )
 
-
 VERSION = "test-recognizer-v1"
 FRAMES = ("a" * 64, "b" * 64)
 SUITS = "HCDS"
@@ -137,6 +136,13 @@ def test_non_iterable_evidence_inputs_fail_closed():
     tiny["region"]["width"] = 1.0001e-8
     with pytest.raises(DealEvidenceError, match="region size"):
         build_deal_evidence_report([tiny], recognizer_version=VERSION)
+
+    edge_rounded_tiny = observation("N", "AH")
+    edge_rounded_tiny["region"].update(
+        {"x": 5.1e-9, "y": 5.1e-9, "width": 1.51e-8, "height": 1.51e-8}
+    )
+    with pytest.raises(DealEvidenceError, match="region size"):
+        build_deal_evidence_report([edge_rounded_tiny], recognizer_version=VERSION)
 
 
 def test_one_frame_is_visual_but_not_temporal_consensus():

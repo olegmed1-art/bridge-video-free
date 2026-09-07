@@ -23,8 +23,8 @@ import math
 import os
 import re
 import stat
-import tempfile
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -112,6 +112,39 @@ def _read_bounded_bytes(path: Path, max_bytes: int, kind: str) -> bytes:
             payload = source.read(max_bytes + 1)
     except OSError as exc:
         raise BridgitRankLayoutError(f"{kind} is unavailable") from exc
+    if len(payload) > max_bytes:
+        raise BridgitRankLayoutError(f"{kind} exceeds size limit")
+    return payload
+
+
+def _read_bounded_regular_file(path: Path, max_bytes: int, kind: str) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise BridgitRankLayoutError(f"{kind} is unavailable") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise BridgitRankLayoutError(f"{kind} must be a regular file")
+        if metadata.st_size > max_bytes:
+            raise BridgitRankLayoutError(f"{kind} exceeds size limit")
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except BridgitRankLayoutError:
+        raise
+    except OSError as exc:
+        raise BridgitRankLayoutError(f"{kind} is unavailable") from exc
+    finally:
+        os.close(descriptor)
+    payload = b"".join(chunks)
     if len(payload) > max_bytes:
         raise BridgitRankLayoutError(f"{kind} exceeds size limit")
     return payload
@@ -541,7 +574,7 @@ def load_profile(path: Path) -> BridgitRankLayoutProfile:
 
 
 def load_job(path: Path) -> dict[str, Any]:
-    payload = _read_bounded_bytes(path, MAX_JOB_BYTES, "job")
+    payload = _read_bounded_regular_file(path, MAX_JOB_BYTES, "job")
     return _json_object(payload, "job")
 
 

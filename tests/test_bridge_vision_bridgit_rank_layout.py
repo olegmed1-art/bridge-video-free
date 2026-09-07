@@ -295,6 +295,14 @@ def test_profile_hash_and_duplicate_json_keys_fail_closed(tmp_path: Path):
         load_job(oversized_job)
 
 
+def test_load_job_rejects_fifo_without_blocking(tmp_path: Path):
+    job_path = tmp_path / "job.fifo"
+    os.mkfifo(job_path)
+
+    with pytest.raises(BridgitRankLayoutError, match="job must be a regular file"):
+        load_job(job_path)
+
+
 def test_ordered_assignment_is_global_deterministic_and_retains_runner_up():
     lengths = {"N": 4, "E": 3, "S": 3, "W": 3}
     target = tuple("NNESWNESWNESW")

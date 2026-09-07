@@ -78,9 +78,16 @@ def _region(value: Any, field: str) -> dict[str, float | str]:
     result: dict[str, float | str] = {"coordinate_space": "NORMALIZED_FRAME"}
     for name in ("x", "y", "width", "height"):
         result[name] = _confidence(value.get(name), f"{field}.{name}")
+    coordinate_quantum = 100_000_000
+
+    def quantized_span(start: float, size: float) -> int:
+        return round((start + size) * coordinate_quantum) - round(
+            start * coordinate_quantum
+        )
+
     if (
-        round(float(result["width"]) * 100_000_000) <= 1
-        or round(float(result["height"]) * 100_000_000) <= 1
+        quantized_span(float(result["x"]), float(result["width"])) <= 1
+        or quantized_span(float(result["y"]), float(result["height"])) <= 1
     ):
         raise DealEvidenceError(f"invalid {field} size")
     if (
