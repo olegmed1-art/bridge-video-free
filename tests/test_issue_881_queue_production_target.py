@@ -28,6 +28,7 @@ class TargetTest(unittest.TestCase):
         self.raw = f'postgresql://{target.USER}:encoded%40password@{target.SOURCE_HOST}/neondb?sslmode=require&channel_binding=require'.encode()
         self.dsn.write_bytes(self.raw)
         self.dsn.chmod(0o640)
+        (self.directory/'lock').touch(mode=0o600)
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
         for name, value in [('DSN_FILE', self.dsn), ('BACKUP', self.backup),
@@ -82,11 +83,20 @@ class TargetTest(unittest.TestCase):
         with self.assertRaises(RuntimeError): target.run('apply')
         self.assertEqual(actual.read_bytes(), self.raw)
 
+    def test_check_does_not_create_missing_lock(self):
+        target.LOCK_FILE.unlink()
+        with self.assertRaises(FileNotFoundError): target.run('check')
+        self.assertFalse(target.LOCK_FILE.exists())
+        self.assertEqual(self.dsn.read_bytes(), self.raw)
+
     def test_candidate_rejects_destination_override_and_preserves_password(self):
         self.assertIn(b'encoded%40password@'+target.TARGET_HOST.encode(), target.candidate(self.raw))
         for suffix in [b'&host=evil.example', b'&options=endpoint%3Devil', b'&sslmode=disable', b'&service=other']:
             with self.assertRaises(RuntimeError): target.candidate(self.raw+suffix)
         with self.assertRaises(RuntimeError): target.candidate(self.raw.replace(target.SOURCE_HOST.encode(), b'evil.example'))
+        for value in [b'disable', b'prefer', b'']:
+            with self.assertRaises(RuntimeError): target.candidate(self.raw.replace(b'channel_binding=require', b'channel_binding='+value))
+        with self.assertRaises(RuntimeError): target.candidate(self.raw.replace(b'&channel_binding=require', b''))
 
     def test_failure_logging_omits_exception_text(self):
         out = io.StringIO()
@@ -95,11 +105,12 @@ class TargetTest(unittest.TestCase):
         self.assertNotIn('secret-password', out.getvalue())
 
     def test_live_query_contract_rejects_wrong_branch_busy_and_privileged_roles(self):
-        for branch, busy, privileged, should_pass in [
-            (target.PRODUCTION, False, False, True),
-            (target.PREVIEW, False, False, False),
-            (target.PRODUCTION, True, False, False),
-            (target.PRODUCTION, False, True, False),
+        for branch, busy, privileged, extra_role, should_pass in [
+            (target.PRODUCTION, False, False, False, True),
+            (target.PREVIEW, False, False, False, False),
+            (target.PRODUCTION, True, False, False, False),
+            (target.PRODUCTION, False, True, False, False),
+            (target.PRODUCTION, False, False, True, False),
         ]:
             with self.subTest(branch=branch, busy=busy, privileged=privileged):
                 calls = []
@@ -113,7 +124,8 @@ class TargetTest(unittest.TestCase):
                         calls.append(sql)
                     def fetchone(self):
                         if 'SELECT *' in calls[-1]: return (1 if busy else 0, 0)
-                        return (target.PROJECT, branch, 'neondb', target.USER, True, True, privileged)
+                        return (target.PROJECT, branch, 'neondb', target.USER, True, True, privileged,
+                                ['bridge_school_worker', 'other'] if extra_role else ['bridge_school_worker'], False)
                 with patch.object(target.psycopg, 'connect', return_value=Connection(), create=True):
                     if should_pass: real_verify(target.candidate(self.raw), target.PRODUCTION)
                     else:
