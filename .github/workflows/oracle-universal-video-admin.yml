@@ -18,7 +18,9 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-instance-workload-mutation
+  # PR validation cannot execute OCI. Only a push request that can create a
+  # Run Command enters the exact-instance production mutation fence.
+  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-admin-pr-{0}', github.event.pull_request.number) || 'oracle-instance-workload-mutation' }}
   cancel-in-progress: false
 
 jobs:

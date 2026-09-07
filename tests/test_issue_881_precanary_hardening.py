@@ -156,7 +156,7 @@ def test_one_shot_receipt_rejects_duplicate_receipt_or_second_sha_run() -> None:
         _validate(runs=[{"workflow_runs": [_run(), second_receipt]}])
 
 
-def test_recovery_allows_only_a_linear_chain_of_failed_first_attempts() -> None:
+def test_recovery_retains_initial_state_source_across_failed_attempts() -> None:
     recovery_id = RUN_ID - 1
     recovery = str(recovery_id)
     comment = _comment(recovery=recovery)
@@ -201,10 +201,13 @@ def test_recovery_allows_only_a_linear_chain_of_failed_first_attempts() -> None:
         status="completed",
         conclusion="failure",
     )
+    state_source = str(initial_id)
+    current = _run(recovery=state_source)
+    comment = _comment(recovery=state_source)
     chained = _validate(
         comment=comment,
         runs=[{"workflow_runs": [initial, prior_recovery, current]}],
-        recover_container_from_run=recovery,
+        recover_container_from_run=state_source,
     )
     assert chained["recovery_depth"] == 2
 
@@ -212,17 +215,17 @@ def test_recovery_allows_only_a_linear_chain_of_failed_first_attempts() -> None:
     broken["display_title"] = ONE_SHOT.expected_run_name(
         SHA, RECEIPT_ID - 1, str(RUN_ID - 9)
     )
-    with pytest.raises(ONE_SHOT.OneShotValidationError, match="immediate predecessor"):
+    with pytest.raises(ONE_SHOT.OneShotValidationError, match="state-bearing source"):
         _validate(
             comment=comment,
             runs=[{"workflow_runs": [initial, broken, current]}],
-            recover_container_from_run=recovery,
+            recover_container_from_run=state_source,
         )
 
 
 def test_recovery_chain_has_a_hard_total_run_limit() -> None:
     runs = []
-    previous = ""
+    state_source = str(RUN_ID - ONE_SHOT.MAX_RUNS_PER_EXACT_SHA)
     for offset in range(ONE_SHOT.MAX_RUNS_PER_EXACT_SHA + 1):
         run_id = RUN_ID - ONE_SHOT.MAX_RUNS_PER_EXACT_SHA + offset
         runs.append(
@@ -230,23 +233,22 @@ def test_recovery_chain_has_a_hard_total_run_limit() -> None:
                 run_id=run_id,
                 receipt_id=RECEIPT_ID - ONE_SHOT.MAX_RUNS_PER_EXACT_SHA + offset,
                 run_number=100 - ONE_SHOT.MAX_RUNS_PER_EXACT_SHA + offset,
-                recovery=previous,
+                recovery=("" if offset == 0 else state_source),
                 status=("in_progress" if offset == ONE_SHOT.MAX_RUNS_PER_EXACT_SHA else "completed"),
                 conclusion=(None if offset == ONE_SHOT.MAX_RUNS_PER_EXACT_SHA else "failure"),
             )
         )
-        previous = str(run_id)
     current = runs[-1]
     current_receipt = int(str(current["display_title"]).split("receipt-", 1)[1].split("/", 1)[0])
     created = dt.datetime.fromtimestamp(NOW - 60, dt.timezone.utc).isoformat().replace(
         "+00:00", "Z"
     )
-    comment = _comment(recovery=str(runs[-2]["id"]))
+    comment = _comment(recovery=state_source)
     comment["id"] = current_receipt
     comment["body"] = ONE_SHOT.render_receipt(
         exact_sha=SHA,
         approval_nonce=NONCE,
-        recover_container_from_run=str(runs[-2]["id"]),
+        recover_container_from_run=state_source,
     )
     comment["created_at"] = created
     comment["updated_at"] = created
@@ -257,7 +259,7 @@ def test_recovery_chain_has_a_hard_total_run_limit() -> None:
             exact_sha=SHA,
             receipt_id=current_receipt,
             approval_nonce=NONCE,
-            recover_container_from_run=str(runs[-2]["id"]),
+            recover_container_from_run=state_source,
             current_run_id=int(current["id"]),
             current_run_attempt=1,
             now=NOW,
@@ -404,8 +406,12 @@ def test_owner_release_gate_holds_all_queue_tables_until_release(
         timeout_seconds=30,
     )
 
-    assert connection.read_only is True
+    assert connection.read_only is False
     assert connection.cursor_value.statements[-1] == QUEUE.OWNER_RELEASE_LOCK_SQL
+    assert all(
+        statement.startswith(("SET LOCAL ", "LOCK TABLE "))
+        for statement in connection.cursor_value.statements
+    )
     assert QUEUE.OWNER_RELEASE_LOCK_SQL == (
         "LOCK TABLE video_queue.batch, video_queue.job, video_queue.job_event "
         "IN SHARE MODE NOWAIT"
@@ -441,6 +447,19 @@ def test_owner_release_gate_holds_all_queue_tables_until_release(
             timeout_seconds=30,
         )
     assert aborted_connection.rollbacks == 1
+
+
+def test_database_ci_proves_real_share_lock_and_rollback_contract() -> None:
+    workflow = (
+        ROOT / ".github/workflows/issue-881-contract-ci.yml"
+    ).read_text(encoding="utf-8")
+    step = workflow.index("Prove rollback-only owner release lock blocks queue writers")
+    read_write = workflow.index("BEGIN READ WRITE;", step)
+    share = workflow.index("IN SHARE MODE NOWAIT;", read_write)
+    row_exclusive = workflow.index("IN ROW EXCLUSIVE MODE NOWAIT;", share)
+    rollback = workflow.index("ROLLBACK;", row_exclusive)
+    marker = workflow.index("ISSUE881_OWNER_RELEASE_DB_FENCE_PASS", rollback)
+    assert step < read_write < share < row_exclusive < rollback < marker
 
 
 def test_runtime_dsn_is_read_once_from_exact_protected_file(
@@ -533,7 +552,8 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     admin_workflow = (
         ROOT / ".github/workflows/oracle-universal-video-admin.yml"
     ).read_text(encoding="utf-8")
-    assert "group: oracle-instance-workload-mutation" in admin_workflow
+    assert "oracle-universal-video-admin-pr-{0}" in admin_workflow
+    assert "'oracle-instance-workload-mutation'" in admin_workflow
     assert "group: oracle-universal-video-bounded-admin" not in admin_workflow
     assert "verify_no_active_instance_agent_commands" in runner
     assert "instance-agent command-execution list" in runner
@@ -863,6 +883,8 @@ def test_every_live_instance_command_creator_uses_the_common_actions_fence() -> 
             "oracle-diana11-delivery-pr-{0}",
         ".github/workflows/oracle-universal-video-evidence-export.yml":
             "oracle-universal-video-evidence-export-pr-{0}",
+        ".github/workflows/oracle-universal-video-admin.yml":
+            "oracle-universal-video-admin-pr-{0}",
     }
     for relative in creators:
         header = (ROOT / relative).read_text(encoding="utf-8").split("\njobs:", 1)[0]
@@ -871,6 +893,11 @@ def test_every_live_instance_command_creator_uses_the_common_actions_fence() -> 
             assert "github.event_name == 'pull_request'" in header, relative
             assert conditional_pr_groups[relative] in header, relative
             assert "|| 'oracle-instance-workload-mutation' }}" in header, relative
+        elif relative == ".github/workflows/oracle-instance-power.yml":
+            assert "github.event_name == 'workflow_dispatch'" in header
+            assert "github.actor == github.repository_owner" in header
+            assert "oracle-instance-power-noop-{0}" in header
+            assert "&& 'oracle-instance-workload-mutation' ||" in header
         else:
             assert re.search(
                 r"(?m)^  group: oracle-instance-workload-mutation$", header

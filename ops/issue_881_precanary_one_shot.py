@@ -260,14 +260,18 @@ def validate_one_shot(
         "current recovery-chain title does not match its approval",
     )
     _require(ordered[0][2] == "", "recovery chain has no initial run")
-    for index, (_, _, recovery, run) in enumerate(ordered):
-        if index == 0:
-            continue
-        previous = ordered[index - 1][3]
-        _require(
-            recovery == str(previous.get("id")),
-            "recovery chain does not name its immediate predecessor",
-        )
+    if len(ordered) > 1:
+        # The initial failed host window is the immutable source of the
+        # original resident target states. A later recovery can fail before it
+        # reaches the host and therefore have no state-bearing artifact of its
+        # own. Retain the initial source throughout the bounded sequence rather
+        # than forcing the next approval to reference that empty predecessor.
+        recovery_state_source = str(ordered[0][3].get("id"))
+        for _, _, recovery, _ in ordered[1:]:
+            _require(
+                recovery == recovery_state_source,
+                "recovery chain did not retain its state-bearing source",
+            )
     for _, _, _, prior in ordered[:-1]:
         _require(
             prior.get("status") == "completed" and prior.get("conclusion") == "failure",

@@ -84,7 +84,9 @@ jobs:
           grep -F "'ops/issue_881_external_precanary_workflow.sh'" "$runner"
           grep -F "'ops/oracle_known_hosts_from_scan.sh'" "$runner"
           grep -F "'.github/workflows/oracle-universal-video-admin.yml'" "$runner"
-          grep -F 'group: oracle-instance-workload-mutation' \
+          grep -F "oracle-universal-video-admin-pr-{0}" \
+            .github/workflows/oracle-universal-video-admin.yml
+          grep -F "'oracle-instance-workload-mutation'" \
             .github/workflows/oracle-universal-video-admin.yml
           grep -F "'.github/workflows/oracle-universal-video-container-promote.yml'" "$runner"
           grep -F "'ops/oracle_universal_video_container_promote.sh'" "$runner"

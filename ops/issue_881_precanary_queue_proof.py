@@ -314,35 +314,42 @@ def hold_owner_release_gate(
     _require(ready_file != control_file, "owner gate control paths overlap")
     _require(not ready_file.exists() and not ready_file.is_symlink(), "owner gate ready file exists")
     _require(not control_file.exists() and not control_file.is_symlink(), "owner gate control exists")
-    connection.read_only = True
-    with connection.cursor() as cursor:
-        cursor.execute("SET LOCAL statement_timeout='10s'")
-        cursor.execute("SET LOCAL lock_timeout='2s'")
-        cursor.execute(OWNER_RELEASE_LOCK_SQL)
-    first = validate_owner_snapshot(_database_snapshot_on_connection(connection, owner=True))
-    _require(first == baseline, "locked owner snapshot differs from baseline")
-    owner_marker = _owner_marker("POSTRESTORE_OWNER", first, unchanged=True)
-    _write_private_file(ready_file, (owner_marker + "\n").encode("utf-8"))
-
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        signal = _read_control_signal(control_file)
-        if signal is None:
-            time.sleep(0.2)
-            continue
-        if signal == OWNER_ABORT_SIGNAL:
-            connection.rollback()
-            raise QueueProofError("owner release gate was aborted")
-        final = validate_owner_snapshot(_database_snapshot_on_connection(connection, owner=True))
-        _require(final == baseline, "final locked owner snapshot differs from baseline")
-        connection.rollback()
-        return (
-            "UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE "
-            "tables=batch,job,job_event lock=SHARE owner_release=observed "
-            "final_snapshot=unchanged result=PASS"
+    # PostgreSQL forbids SHARE table locks in a read-only transaction. Keep
+    # the transaction write-capable, execute only SET/LOCK/SELECT statements,
+    # and unconditionally roll it back before returning.
+    connection.read_only = False
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SET LOCAL statement_timeout='10s'")
+            cursor.execute("SET LOCAL lock_timeout='2s'")
+            cursor.execute(OWNER_RELEASE_LOCK_SQL)
+        first = validate_owner_snapshot(
+            _database_snapshot_on_connection(connection, owner=True)
         )
-    connection.rollback()
-    raise QueueProofError("owner release gate timed out")
+        _require(first == baseline, "locked owner snapshot differs from baseline")
+        owner_marker = _owner_marker("POSTRESTORE_OWNER", first, unchanged=True)
+        _write_private_file(ready_file, (owner_marker + "\n").encode("utf-8"))
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            signal = _read_control_signal(control_file)
+            if signal is None:
+                time.sleep(0.2)
+                continue
+            if signal == OWNER_ABORT_SIGNAL:
+                raise QueueProofError("owner release gate was aborted")
+            final = validate_owner_snapshot(
+                _database_snapshot_on_connection(connection, owner=True)
+            )
+            _require(final == baseline, "final locked owner snapshot differs from baseline")
+            return (
+                "UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE "
+                "tables=batch,job,job_event lock=SHARE owner_release=observed "
+                "final_snapshot=unchanged result=PASS"
+            )
+        raise QueueProofError("owner release gate timed out")
+    finally:
+        connection.rollback()
 
 
 def _owner_release_gate(

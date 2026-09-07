@@ -78,33 +78,33 @@ def test_promotion_rechecks_live_main_at_each_host_mutation_boundary() -> None:
     source_condition = WORKFLOW.index(
         "systemctl is-active --quiet universal-video-container.service", initial_check
     )
-    source_check = WORKFLOW.index(
-        "verify_promotion_current_main source-prepare", source_condition
-    )
     source_oci_check = WORKFLOW.index(
-        "verify_no_active_instance_agent_commands source-prepare", source_check
+        "verify_no_active_instance_agent_commands source-prepare", source_condition
+    )
+    source_check = WORKFLOW.index(
+        "verify_promotion_current_main source-prepare", source_oci_check
     )
     source_mutation = WORKFLOW.index(
-        "UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT'", source_oci_check
+        "UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT'", source_check
     )
     entrypoint_pass = WORKFLOW.index("UV_CONTAINER_PROMOTION_ENTRYPOINT_PASS", source_mutation)
-    promotion_check = WORKFLOW.index(
-        "verify_promotion_current_main image-promotion", entrypoint_pass
-    )
     promotion_oci_check = WORKFLOW.index(
-        "verify_no_active_instance_agent_commands image-promotion", promotion_check
+        "verify_no_active_instance_agent_commands image-promotion", entrypoint_pass
+    )
+    promotion_check = WORKFLOW.index(
+        "verify_promotion_current_main image-promotion", promotion_oci_check
     )
     promotion_mutation = WORKFLOW.index(
         " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh",
-        promotion_oci_check,
+        promotion_check,
     )
 
-    assert initial_check < source_condition < source_check < source_oci_check < source_mutation
+    assert initial_check < source_condition < source_oci_check < source_check < source_mutation
     assert (
         source_mutation
         < entrypoint_pass
-        < promotion_check
         < promotion_oci_check
+        < promotion_check
         < promotion_mutation
     )
 

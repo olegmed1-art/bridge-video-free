@@ -20,9 +20,10 @@ permissions:
   contents: read
 
 concurrency:
-  # Status also uses OCI Run Command and can outlive a cancelled Actions run.
-  # Keep every exact-instance command creator behind the common fence.
-  group: oracle-instance-workload-mutation
+  # Every authorized status/start/stop can create an exact-instance Run
+  # Command and shares the production fence. Unrelated comments are inert and
+  # must not be able to occupy that non-cancelling mutation slot.
+  group: ${{ ((github.event_name == 'workflow_dispatch' && contains(fromJSON('["status","start","stop"]'), inputs.action)) || (github.event_name == 'issue_comment' && github.actor == github.repository_owner && contains(fromJSON('["/oracle-instance status","/oracle-instance start","/oracle-instance stop"]'), github.event.comment.body))) && 'oracle-instance-workload-mutation' || format('oracle-instance-power-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:

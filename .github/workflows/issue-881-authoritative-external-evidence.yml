@@ -21,7 +21,7 @@ on:
         required: true
         type: string
       recover_container_from_run:
-        description: Optional prior failed external run whose recorded active container state must be restored
+        description: Optional initial state-bearing failed run whose recorded active container state must be restored
         required: false
         default: ''
         type: string

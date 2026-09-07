@@ -21,11 +21,12 @@ python3 ops/issue_881_precanary_one_shot.py render \
 The repository owner must post the rendered text as a fresh, unedited comment
 on Issue #881. It expires in 15 minutes. Its numeric comment ID is the
 `approval_receipt_id`. The nonce is the `approval_nonce` input. Recovery is a
-separate fail-closed case: name the immediately preceding completed
-first-attempt failed run in both the receipt and
-`recover_container_from_run`, and obtain a new GO. A machine-validated linear
-chain is capped at four total runs for one exact SHA; every link needs a unique
-receipt and may reference only its immediate predecessor.
+separate fail-closed case: name the initial completed first-attempt failed run
+that recorded the original resident target states in both the receipt and
+`recover_container_from_run`, and obtain a new GO. Every later attempt retains
+that immutable state-bearing source even if an intervening recovery fails
+before host mutation. The machine-validated sequence is capped at four total
+runs for one exact SHA and every attempt needs a unique receipt.
 
 ## Authoritative workflow and exact inputs
 
@@ -42,9 +43,9 @@ recover_container_from_run: ""
 
 GitHub's run title must become
 `issue881-precanary/<exact_sha>/receipt-<approval_receipt_id>/recover-none` for
-the initial run, or end in `recover-<immediate-failed-run-id>` for an approved
-recovery. The workflow rejects attempts greater than one, reuse of a receipt,
-a forked/skipped recovery link, more than four same-SHA runs, a changed `main`,
+the initial run, or end in `recover-<initial-state-bearing-failed-run-id>` for
+an approved recovery. The workflow rejects attempts greater than one, reuse of
+a receipt, a changed recovery state source, more than four same-SHA runs, a changed `main`,
 a stale or edited receipt, and an exact protected gate head without clean
 independent review and required CI. Concurrency is held under
 `oracle-instance-workload-mutation`, but the receipt/run checks—not
@@ -78,8 +79,10 @@ The post-restore runtime proof executes inside the newly resident container as
 its service UID/GID while that exact worker remains blocked by the exclusive
 claim fence. It must read only `/run/secrets/video-queue-dsn`, identify the
 production worker principal and schema/function, and return zero
-claimable/leased jobs. The independent owner transaction then acquires `SHARE
-NOWAIT` locks on `video_queue.batch`, `video_queue.job`, and
+claimable/leased jobs. The independent owner transaction is write-capable
+because PostgreSQL rejects `SHARE` table locks in a read-only transaction; the
+reviewed code executes only `SET`, `LOCK`, and `SELECT`, and always ends with
+`ROLLBACK`. It acquires `SHARE NOWAIT` locks on `video_queue.batch`, `video_queue.job`, and
 `video_queue.job_event` and must match the complete pre-window baseline while
 that worker is still fenced. Those locks block every queue writer through the
 root-only one-use host release and full resident restoration. A final snapshot
