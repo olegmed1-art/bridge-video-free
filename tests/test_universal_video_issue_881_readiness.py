@@ -1301,9 +1301,16 @@ def test_external_precanary_is_pr_only_exact_head_validation():
 
 
 def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery():
-    workflow = (
+    entrypoint = (
         ROOT / ".github/workflows/issue-881-authoritative-external-evidence.yml"
     ).read_text(encoding="utf-8")
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
+    workflow = entrypoint + "\n" + runner
+    assert len(entrypoint) < 21_000
+    assert "run: bash ops/issue_881_external_precanary_workflow.sh" in entrypoint
+    assert "${{" not in runner
     assert "exact_sha:" in workflow
     assert "director_go:" in workflow
     assert "if: ${{ inputs.director_go && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}" in workflow
@@ -1376,19 +1383,20 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME" in workflow
     assert "prior-recovery-evidence.txt" in workflow
     assert "UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256='$recovery_sha'" in workflow
-    initial_check = workflow.index("          verify_live_gate")
-    pre_stage_one_shot_check = workflow.index(
-        "          verify_one_shot_gate", initial_check
+    initial_window = runner.index("# Initial reconciliation rejects historical")
+    initial_check = runner.index("verify_live_gate", initial_window)
+    pre_stage_one_shot_check = runner.index(
+        "verify_one_shot_gate", initial_check
     )
-    known_hosts_call = workflow.index(
-        '          ops/oracle_known_hosts_from_scan.sh', pre_stage_one_shot_check
+    known_hosts_call = runner.index(
+        "ops/oracle_known_hosts_from_scan.sh", pre_stage_one_shot_check
     )
-    first_remote_mutation = workflow.index(
+    first_remote_mutation = runner.index(
         '"${s[@]}" "umask 077; rm -rf', known_hosts_call
     )
-    final_head_check = workflow.rindex("          verify_live_gate")
-    final_one_shot_check = workflow.rindex("          verify_one_shot_gate")
-    attestation_call = workflow.index("          set +e", final_one_shot_check)
+    final_head_check = runner.rindex("verify_live_gate")
+    final_one_shot_check = runner.rindex("verify_one_shot_gate")
+    attestation_call = runner.index("set +e", final_one_shot_check)
     assert (
         initial_check
         < pre_stage_one_shot_check

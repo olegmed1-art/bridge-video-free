@@ -310,6 +310,9 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     workflow = (
         ROOT / ".github/workflows/issue-881-authoritative-external-evidence.yml"
     ).read_text(encoding="utf-8")
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
     attest = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(
         encoding="utf-8"
     )
@@ -319,24 +322,32 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
 
     assert "approval_receipt_id:" in workflow and "approval_nonce:" in workflow
     assert "run-name: issue881-precanary/" in workflow
-    assert workflow.count("issue_881_precanary_one_shot.py verify") == 2
-    assert "'ops/oracle_universal_video_run_command.sh'" in workflow
-    assert "'ops/oracle_known_hosts_from_scan.sh'" in workflow
-    assert "'.github/workflows/oracle-universal-video-admin.yml'" in workflow
+    assert len(workflow) < 21_000
+    assert "run: bash ops/issue_881_external_precanary_workflow.sh" in workflow
+    assert "${{" not in runner
+    assert (
+        workflow.count("issue_881_precanary_one_shot.py verify")
+        + runner.count("issue_881_precanary_one_shot.py verify")
+        == 2
+    )
+    assert "'ops/issue_881_external_precanary_workflow.sh'" in runner
+    assert "'ops/oracle_universal_video_run_command.sh'" in runner
+    assert "'ops/oracle_known_hosts_from_scan.sh'" in runner
+    assert "'.github/workflows/oracle-universal-video-admin.yml'" in runner
     admin_workflow = (
         ROOT / ".github/workflows/oracle-universal-video-admin.yml"
     ).read_text(encoding="utf-8")
     assert "group: oracle-instance-workload-mutation" in admin_workflow
     assert "group: oracle-universal-video-bounded-admin" not in admin_workflow
-    assert "'.github/workflows/oracle-universal-video-container-promote.yml'" in workflow
-    assert "'ops/oracle_universal_video_container_promote.sh'" in workflow
-    assert "'universal_video'" in workflow and "':(glob)bridge_*.py'" in workflow
-    assert "GITHUB_RUN_ATTEMPT" in workflow
-    assert "verify_no_competing_infrastructure_runs" in workflow
-    assert "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE" in workflow
-    infrastructure_gate = workflow[
-        workflow.index("verify_no_competing_infrastructure_runs(){") :
-        workflow.index("# Initial reconciliation rejects historical")
+    assert "'.github/workflows/oracle-universal-video-container-promote.yml'" in runner
+    assert "'ops/oracle_universal_video_container_promote.sh'" in runner
+    assert "'universal_video'" in runner and "':(glob)bridge_*.py'" in runner
+    assert "GITHUB_RUN_ATTEMPT" in runner
+    assert "verify_no_competing_infrastructure_runs" in runner
+    assert "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE" in runner
+    infrastructure_gate = runner[
+        runner.index("verify_no_competing_infrastructure_runs(){") :
+        runner.index("# Initial reconciliation rejects historical")
     ]
     assert infrastructure_gate.count("actions/runs?per_page=100") == 1
     assert "status=in_progress" not in infrastructure_gate
@@ -346,7 +357,7 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "loaded_total" in infrastructure_gate
     assert "unique_total" in infrastructure_gate
     assert "snapshot is incomplete or changed while paginating" in infrastructure_gate
-    assert "UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1" not in workflow
+    assert "UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1" not in runner
     assert "UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM=0" in attest
     assert 'find "$root_cache" -xdev -mindepth 1 -delete' not in attest
     assert "verify_postrestore_runtime_queue" in attest
@@ -355,18 +366,18 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert 'sha256sum "$QUEUE_PROOF_SCRIPT"' in attest
     assert "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME" in attest
     assert "UNIVERSAL_VIDEO_PRECANARY_FENCED_START" in attest
-    final_window = workflow.index("# Staging can outlive the evidence")
-    final_live_gate = workflow.index("verify_live_gate", final_window)
-    final_receipt = workflow.index("verify_one_shot_gate", final_live_gate)
-    final_boundary = workflow.index("verify_final_mutation_boundary", final_receipt)
-    host_attest = workflow.index('"${s[@]}" "sudo -n env', final_boundary)
+    final_window = runner.index("# Staging can outlive the evidence")
+    final_live_gate = runner.index("verify_live_gate", final_window)
+    final_receipt = runner.index("verify_one_shot_gate", final_live_gate)
+    final_boundary = runner.index("verify_final_mutation_boundary", final_receipt)
+    host_attest = runner.index('"${s[@]}" "sudo -n env', final_boundary)
     assert final_live_gate < final_receipt < final_boundary < host_attest
-    boundary_definition = workflow.index("verify_final_mutation_boundary(){")
-    boundary_infrastructure = workflow.index(
+    boundary_definition = runner.index("verify_final_mutation_boundary(){")
+    boundary_infrastructure = runner.index(
         'current_infrastructure_marker="$(verify_no_competing_infrastructure_runs)"',
         boundary_definition,
     )
-    boundary_main = workflow.index("verify_exact_current_main", boundary_infrastructure)
+    boundary_main = runner.index("verify_exact_current_main", boundary_infrastructure)
     assert boundary_infrastructure < boundary_main
     fenced_start = attest.index("if start_container_under_fence; then", attest.index("cleanup(){"))
     runtime_proof = attest.index("verify_postrestore_runtime_queue", fenced_start)
@@ -414,12 +425,12 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
 
 
 def test_infrastructure_snapshot_is_single_complete_and_fail_closed(tmp_path: Path) -> None:
-    workflow = (
-        ROOT / ".github/workflows/issue-881-authoritative-external-evidence.yml"
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
     ).read_text(encoding="utf-8")
-    start = workflow.index("          verify_no_competing_infrastructure_runs(){")
-    end = workflow.index("\n\n          # Initial reconciliation rejects historical", start)
-    function = textwrap.dedent(workflow[start:end])
+    start = runner.index("verify_no_competing_infrastructure_runs(){")
+    end = runner.index("\n\n# Initial reconciliation rejects historical", start)
+    function = textwrap.dedent(runner[start:end])
     snapshot = tmp_path / "runs.json"
     harness = f"""\
 set -euo pipefail

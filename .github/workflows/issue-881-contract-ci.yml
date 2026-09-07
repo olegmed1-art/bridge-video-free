@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/issue-881-contract-ci.yml'
       - 'universal_video/**'
+      - 'ops/issue_881_external_precanary_workflow.sh'
       - 'ops/issue_881_precanary_one_shot.py'
       - 'ops/issue_881_precanary_queue_proof.py'
       - 'ops/oracle_known_hosts_from_scan.sh'
@@ -60,6 +61,7 @@ jobs:
       - name: Exact image, import closure and fail-closed recovery contracts
         run: |
           grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
+          bash -n ops/issue_881_external_precanary_workflow.sh
           python -m universal_video.precanary imports
           python -m universal_video.precanary synthetic-result-contract
           python -m pytest -q \
