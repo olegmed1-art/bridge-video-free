@@ -151,6 +151,7 @@ restored_source_pid=""
 restored_source_start_ticks=""
 restored_container_pid=""
 restored_container_start_ticks=""
+restored_container_started_unix=""
 declare -a added_runtime_masks=()
 declare -a restore_failures=()
 declare -a prestop_frozen_services=()
@@ -868,6 +869,97 @@ restore_service(){
   return 1
 }
 
+start_container_under_fence(){
+  local state worker_pid start_ticks last_worker_pid="" stable=0 deadline
+  [[ "$container_target_state" == active && "$lock_held" == 1 ]] || return 1
+  bounded_systemctl reset-failed "$CONTAINER_SERVICE" >/dev/null 2>&1 || true
+  if ! clear_restore_status; then
+    service_failure_snapshot "$CONTAINER_SERVICE"
+    return 1
+  fi
+  restored_container_started_unix="$(date +%s)"
+  deadline=$((SECONDS + RESTORE_TIMEOUT_SECONDS))
+  if ! bounded_systemctl start --no-block "$CONTAINER_SERVICE" >/dev/null 2>&1; then
+    service_failure_snapshot "$CONTAINER_SERVICE"
+    return 1
+  fi
+  while (( SECONDS < deadline )); do
+    state="$(service_state "$CONTAINER_SERVICE")"
+    if [[ "$state" == active ]]; then
+      worker_pid="$(resident_worker_pid "$CONTAINER_SERVICE" 2>/dev/null || true)"
+      if [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]]; then
+        start_ticks="$(process_start_ticks "$worker_pid" 2>/dev/null || true)"
+        if [[ "$start_ticks" =~ ^[1-9][0-9]*$ ]] \
+          && exact_process_signal "$worker_pid" "$start_ticks" CHECK; then
+          if [[ "$worker_pid" == "$last_worker_pid" ]]; then
+            ((stable += 1))
+          else
+            last_worker_pid="$worker_pid"
+            stable=1
+          fi
+          if (( stable >= RESTORE_STABLE_SECONDS )); then
+            # The reviewed resident must still be waiting on the startup
+            # recovery fence. A status receipt here would mean it crossed the
+            # exclusive lock and could claim work before the queue proof.
+            [[ ! -e "$STATUS_FILE" && ! -L "$STATUS_FILE" ]] || return 1
+            restored_container_pid="$worker_pid"
+            restored_container_start_ticks="$start_ticks"
+            printf 'UNIVERSAL_VIDEO_PRECANARY_FENCED_START service=%s worker_pid=%s stable_seconds=%s workload_fence=exclusive result=PASS\n' \
+              "$CONTAINER_SERVICE" "$worker_pid" "$stable"
+            return 0
+          fi
+        else
+          last_worker_pid=""
+          stable=0
+        fi
+      else
+        last_worker_pid=""
+        stable=0
+      fi
+    else
+      last_worker_pid=""
+      stable=0
+    fi
+    [[ "$state" == failed ]] && break
+    sleep 1
+  done
+  service_failure_snapshot "$CONTAINER_SERVICE"
+  return 1
+}
+
+validate_started_container_after_fence(){
+  local state stable=0 deadline verified_start_ticks
+  [[ "$lock_held" == 0 \
+    && "$restored_container_started_unix" =~ ^[0-9]+$ \
+    && "$restored_container_pid" =~ ^[1-9][0-9]*$ \
+    && "$restored_container_start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
+  deadline=$((SECONDS + RESTORE_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    state="$(service_state "$CONTAINER_SERVICE")"
+    if [[ "$state" == active \
+      && "$(resident_worker_pid "$CONTAINER_SERVICE" 2>/dev/null || true)" == "$restored_container_pid" \
+      && "$(process_start_ticks "$restored_container_pid" 2>/dev/null || true)" == "$restored_container_start_ticks" \
+      ]] && exact_process_signal "$restored_container_pid" "$restored_container_start_ticks" CHECK; then
+      ((stable += 1))
+      if (( stable >= RESTORE_STABLE_SECONDS )) \
+        && verified_start_ticks="$(resident_status_ready \
+          "$CONTAINER_SERVICE" "$restored_container_started_unix" \
+          "$restored_container_pid" 0)"; then
+        [[ "$verified_start_ticks" == "$restored_container_start_ticks" ]] || return 1
+        printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE service=%s target=active observed=active worker_pid=%s stable_seconds=%s result=PASS\n' \
+          "$CONTAINER_SERVICE" "$restored_container_pid" "$stable"
+        return 0
+      fi
+    else
+      stable=0
+    fi
+    [[ "$state" == failed ]] && break
+    sleep 1
+  done
+  service_failure_snapshot "$CONTAINER_SERVICE"
+  return 1
+}
+
 restore_source_checkout(){
   local attempt candidate_remove_failed=0 quarantine_prefix restored_device_inode
   [[ "$BUILD_IMAGE" == 1 ]] || return 0
@@ -973,12 +1065,13 @@ verify_postrestore_runtime_queue(){
   [[ "$runtime_result" == \
     'project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0' ]] \
     || return 1
-  printf 'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME container_id=%s previous_container_id=%s recreated=true %s result=PASS\n' \
+  [[ "$lock_held" == 1 ]] || return 1
+  printf 'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME container_id=%s previous_container_id=%s recreated=true worker_fenced=true %s result=PASS\n' \
     "$container_id" "${container_id_before:-absent}" "$runtime_result"
 }
 
 cleanup(){
-  local rc=$? service source_after container_after
+  local rc=$? service source_after container_after runtime_release_safe=0
   trap - EXIT
   # Once cleanup starts, finish the bounded restore instead of allowing a
   # second signal to strand a frozen worker or a runtime-masked service.
@@ -1077,26 +1170,55 @@ cleanup(){
       bounded_docker image inspect "$resident_image_id" >/dev/null 2>&1 \
         || record_restore_failure resident_image_missing
     fi
-    # Release the attestation fence before starting either resident. A current
-    # worker performs startup recovery under this same lock and publishes its
-    # readiness only after the lock is released; checking it while fd 9 is held
-    # would prove only that the process is blocked, not that startup succeeded.
-    if [[ "$lock_held" == 1 ]]; then
+    # Recreate the resident container while its worker is still blocked on the
+    # exclusive workload fence. Prove the freshly bound production credential
+    # and idle queue from that exact container before any worker can claim.
+    if start_container_under_fence; then
+      if verify_postrestore_runtime_queue; then
+        runtime_release_safe=1
+      else
+        record_restore_failure postrestore_runtime_queue
+      fi
+    else
+      record_restore_failure container_fenced_start
+    fi
+    if [[ "$runtime_release_safe" == 1 ]]; then
       if ! flock --unlock 9 >/dev/null 2>&1; then
         record_restore_failure workload_unlock
+        runtime_release_safe=0
+      else
+        exec 9>&-
+        lock_held=0
       fi
-      exec 9>&-
-      lock_held=0
     fi
-
-    # Start and validate the prior residents sequentially after the handoff.
-    # restore_service requires the same descendant worker PID to remain live
-    # for the bounded stability interval after startup recovery can run.
-    restore_service "$SOURCE_SERVICE" "$source_state_before" \
-      || record_restore_failure source_service
-    restore_service "$CONTAINER_SERVICE" "$container_target_state" \
-      || record_restore_failure container_service
+    if [[ "$runtime_release_safe" == 1 ]]; then
+      if ! validate_started_container_after_fence; then
+        record_restore_failure container_service
+        bounded_systemctl stop "$CONTAINER_SERVICE" >/dev/null 2>&1 \
+          || record_restore_failure failed_container_stop
+      fi
+      restore_service "$SOURCE_SERVICE" "$source_state_before" \
+        || record_restore_failure source_service
+    fi
     resume_isolated_peer || record_restore_failure legacy_peer_resume
+
+    # Never release a resident into claim-capable execution after a failed
+    # fenced start or queue proof. Leave both services stopped and require the
+    # separately approved recovery gate instead of processing uncertain work.
+    if [[ "$runtime_release_safe" != 1 && "$lock_held" == 1 ]]; then
+      bounded_systemctl mask --runtime "$SOURCE_SERVICE" "$CONTAINER_SERVICE" \
+        >/dev/null 2>&1 || record_restore_failure failed_restore_runtime_mask
+      bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null 2>&1 \
+        || record_restore_failure failed_restore_service_stop
+      residents_are_quiescent \
+        || record_restore_failure failed_restore_not_quiescent
+      if ! flock --unlock 9 >/dev/null 2>&1; then
+        record_restore_failure workload_unlock
+      else
+        exec 9>&-
+        lock_held=0
+      fi
+    fi
 
     source_after="$(service_state "$SOURCE_SERVICE")"
     container_after="$(service_state "$CONTAINER_SERVICE")"
@@ -1110,10 +1232,6 @@ cleanup(){
     restored_service_ready "$CONTAINER_SERVICE" "$container_target_state" \
       "$restored_container_pid" "$restored_container_start_ticks" \
       || record_restore_failure container_readiness_mismatch
-    if [[ "${#restore_failures[@]}" -eq 0 ]]; then
-      verify_postrestore_runtime_queue \
-        || record_restore_failure postrestore_runtime_queue
-    fi
     if [[ "${#restore_failures[@]}" -eq 0 ]]; then
       printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=%s source_service=%s container_service_before=%s container_target=%s container_service=%s prior_container_recovery=%s\n' \
         "$source_state_before" "$source_after" "$container_state_before" "$container_target_state" \

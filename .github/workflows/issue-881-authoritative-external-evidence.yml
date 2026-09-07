@@ -143,12 +143,10 @@ jobs:
               ;;
           esac
 
-      - name: Establish pinned SSH identity
+      - name: Prepare pinned SSH credential
         id: ssh
         run: |
           set -euo pipefail
-          known="$RUNNER_TEMP/known_hosts"
-          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$HOST_FINGERPRINT" "$known"
           selected=''
           for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
             if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
@@ -158,11 +156,7 @@ jobs:
           printf '%s\n' "${!selected}" > "$key"
           chmod 0600 "$key"
           ssh-keygen -y -f "$key" >/dev/null
-          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
-            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
           echo "key=$key" >> "$GITHUB_OUTPUT"
-          echo "known=$known" >> "$GITHUB_OUTPUT"
 
       - name: Capture pristine production queue owner baseline
         env:
@@ -190,12 +184,26 @@ jobs:
           protected_gate_paths=(
             '.dockerignore'
             '.github/workflows/issue-881-authoritative-external-evidence.yml'
+            '.github/workflows/issue-881-contract-ci.yml'
+            '.github/workflows/issue-881-current-main-authoritative-ci.yml'
+            '.github/workflows/issue-881-precanary-evidence.yml'
+            '.github/workflows/oracle-idle-guard-ci.yml'
+            '.github/workflows/oracle-universal-video-container-evidence.yml'
+            '.github/workflows/oracle-universal-video-container-promote.yml'
+            '.github/workflows/secret-gate.yml'
+            '.github/workflows/universal-video-ci.yml'
+            '.github/workflows/universal-video-engine-smoke.yml'
             'requirements-worker.txt'
             'ops/issue_881_precanary_one_shot.py'
             'ops/issue_881_precanary_queue_proof.py'
+            'ops/install_universal_video_operator.sh'
+            'ops/oracle_known_hosts_from_scan.sh'
             'ops/oracle_universal_video_run_command.sh'
             'ops/oracle_universal_video_precanary_attest.sh'
             'ops/oracle_universal_video_container_install.sh'
+            'ops/oracle_universal_video_container_promote.sh'
+            'ops/oracle_universal_video_prepromotion_preflight.sh'
+            'ops/universal_video_operator.sh'
             'ops/validate_video_queue_dsn.py'
             'ops/validate_universal_video_promotion_evidence.py'
             'universal_video'
@@ -432,13 +440,24 @@ jobs:
             recovery_sha="$(sha256sum "$recovery_evidence" | awk '{print $1}')"
           fi
 
+          # Revalidate the still-fresh one-shot receipt after any bounded
+          # evidence download and before the first SSH/SCP/root host action.
+          # The reviewed known-hosts helper is invoked only after the live
+          # protected-path provenance gate above has passed.
+          verify_one_shot_gate
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$HOST_FINGERPRINT" "$known"
+          ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+
           remote_stage="/tmp/uv-issue881-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           remote_root="/root/uv-issue881-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           s=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
           c=(scp -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
             -o ConnectTimeout=15)
 
           cleanup_remote(){
@@ -456,7 +475,7 @@ jobs:
               cat "$RUNNER_TEMP/precanary-one-shot-marker.txt" 2>/dev/null || true
               cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt" 2>/dev/null || true
               cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt" 2>/dev/null || true
-              grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|POSTRESTORE_RUNTIME|RESTORE(_PASS|_FAILED)?)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
+              grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|FENCED_START|POSTRESTORE_RUNTIME|RESTORE(_PASS|_FAILED)?)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
                 "$session_log" 2>/dev/null || true
               echo 'real_media_canary_run=false'
               echo 'source_media_downloaded=false'
@@ -532,7 +551,8 @@ jobs:
 
           grep -E "^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} activated=0$" "$session_log"
           grep -E "^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$" "$session_log"
-          grep -E '^UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME container_id=[0-9a-f]{64} previous_container_id=([0-9a-f]{64}|absent) recreated=true project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0 result=PASS$' "$session_log"
+          grep -E '^UNIVERSAL_VIDEO_PRECANARY_FENCED_START service=universal-video-container\.service worker_pid=[1-9][0-9]* stable_seconds=([3-9]|[12][0-9]|30) workload_fence=exclusive result=PASS$' "$session_log"
+          grep -E '^UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME container_id=[0-9a-f]{64} previous_container_id=([0-9a-f]{64}|absent) recreated=true worker_fenced=true project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0 result=PASS$' "$session_log"
           grep -E '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=(active|inactive) source_service=\1 container_service_before=(active|inactive) container_target=(active|inactive) container_service=\3 prior_container_recovery=[01]$' "$session_log"
           installed_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) activated=0$/\\1/p" "$session_log")"
           attested_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$/\\1/p" "$session_log")"
@@ -553,7 +573,7 @@ jobs:
             cat "$RUNNER_TEMP/precanary-one-shot-marker.txt"
             cat "$RUNNER_TEMP/issue-881-owner-before-marker.txt"
             cat "$RUNNER_TEMP/precanary-infrastructure-marker.txt"
-            grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|POSTRESTORE_RUNTIME|RESTORE_PASS)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)) ' "$session_log"
+            grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|FENCED_START|POSTRESTORE_RUNTIME|RESTORE_PASS)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)) ' "$session_log"
             grep -E '"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"' "$session_log"
             echo "image_digest=$installed_digest"
             echo 'real_media_canary_run=false'

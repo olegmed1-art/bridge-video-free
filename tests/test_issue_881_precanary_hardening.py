@@ -318,6 +318,9 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "run-name: issue881-precanary/" in workflow
     assert workflow.count("issue_881_precanary_one_shot.py verify") == 2
     assert "'ops/oracle_universal_video_run_command.sh'" in workflow
+    assert "'ops/oracle_known_hosts_from_scan.sh'" in workflow
+    assert "'.github/workflows/oracle-universal-video-container-promote.yml'" in workflow
+    assert "'ops/oracle_universal_video_container_promote.sh'" in workflow
     assert "'universal_video'" in workflow and "':(glob)bridge_*.py'" in workflow
     assert "GITHUB_RUN_ATTEMPT" in workflow
     assert "verify_no_competing_infrastructure_runs" in workflow
@@ -331,5 +334,23 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "'root:root:600:1'" in attest
     assert 'sha256sum "$QUEUE_PROOF_SCRIPT"' in attest
     assert "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME" in attest
+    assert "UNIVERSAL_VIDEO_PRECANARY_FENCED_START" in attest
+    fenced_start = attest.index("if start_container_under_fence; then", attest.index("cleanup(){"))
+    runtime_proof = attest.index("verify_postrestore_runtime_queue", fenced_start)
+    workload_unlock = attest.index("flock --unlock 9", runtime_proof)
+    assert fenced_start < runtime_proof < workload_unlock
+    unsafe_restore = attest.index(
+        'if [[ "$runtime_release_safe" != 1 && "$lock_held" == 1 ]]',
+        workload_unlock,
+    )
+    remask = attest.index(
+        'bounded_systemctl mask --runtime "$SOURCE_SERVICE" "$CONTAINER_SERVICE"',
+        unsafe_restore,
+    )
+    stop = attest.index(
+        'bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"', remask
+    )
+    unsafe_unlock = attest.index("flock --unlock 9", stop)
+    assert unsafe_restore < remask < stop < unsafe_unlock
     assert "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER" in workflow
     assert 'ALLOW_CACHE_RECLAIM="${UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM:-1}"' in installer

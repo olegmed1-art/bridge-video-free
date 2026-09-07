@@ -279,6 +279,23 @@ def verify_evidence_archive(
         lines.count(infrastructure_line) == 1,
         "infrastructure exclusivity proof is missing or ambiguous",
     )
+    fenced_start = [
+        line
+        for line in lines
+        if line.startswith("UNIVERSAL_VIDEO_PRECANARY_FENCED_START ")
+    ]
+    _require(len(fenced_start) == 1, "fenced resident start proof is missing or ambiguous")
+    _require(
+        re.fullmatch(
+            r"UNIVERSAL_VIDEO_PRECANARY_FENCED_START "
+            r"service=universal-video-container\.service worker_pid=[1-9][0-9]* "
+            r"stable_seconds=(?:[3-9]|[12][0-9]|30) "
+            r"workload_fence=exclusive result=PASS",
+            fenced_start[0],
+        )
+        is not None,
+        "fenced resident start proof is inconsistent",
+    )
     runtime_after = [
         line
         for line in lines
@@ -289,7 +306,8 @@ def verify_evidence_archive(
         re.fullmatch(
             r"UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME "
             r"container_id=[0-9a-f]{64} previous_container_id=([0-9a-f]{64}|absent) "
-            r"recreated=true project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of "
+            r"recreated=true worker_fenced=true "
+            r"project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of "
             r"database=neondb principal=bridge_school_worker_principal schema=true "
             r"function=true claimable=0 leased=0 result=PASS",
             runtime_after[0],
@@ -313,6 +331,7 @@ def verify_evidence_archive(
         < lines.index(owner_before)
         < lines.index(infrastructure_line)
         < lines.index(window_lines[0])
+        < lines.index(fenced_start[0])
         < lines.index(runtime_after[0])
         < lines.index(restore_lines[0])
         < lines.index(owner_after),

@@ -87,9 +87,13 @@ def _evidence() -> str:
             f"image_digest={IMAGE_DIGEST} video_job_submitted=false "
             "drive_write_performed=false canonical_promotion_allowed=false "
             "publication_state=NOT_PUBLISHED",
+            "UNIVERSAL_VIDEO_PRECANARY_FENCED_START "
+            "service=universal-video-container.service worker_pid=1234 "
+            "stable_seconds=5 workload_fence=exclusive result=PASS",
             "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME "
             f"container_id={'e' * 64} previous_container_id={'f' * 64} "
-            "recreated=true project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of "
+            "recreated=true worker_fenced=true project=misty-poetry-18012774 "
+            "branch=br-wispy-lab-b1rq54of "
             "database=neondb principal=bridge_school_worker_principal schema=true "
             "function=true claimable=0 leased=0 result=PASS",
             "UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=active "
@@ -214,6 +218,15 @@ def test_rejects_tampered_or_ambiguous_archive_evidence(tmp_path: Path) -> None:
                 evidence.replace(
                     "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE ",
                     "REMOVED_INFRASTRUCTURE_EXCLUSIVE ",
+                )
+            ),
+            None,
+        ),
+        (
+            _archive_bytes(
+                evidence.replace(
+                    "UNIVERSAL_VIDEO_PRECANARY_FENCED_START ",
+                    "REMOVED_FENCED_START ",
                 )
             ),
             None,

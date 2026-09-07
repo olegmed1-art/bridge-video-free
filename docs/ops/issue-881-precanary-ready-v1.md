@@ -61,23 +61,29 @@ A passing artifact contains exactly one of each material receipt, in order:
 - `UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE ... result=PASS`
 - the exclusive quiescent window and immutable image digest
 - no-media/no-Drive synthetic and metadata-only gates
-- `UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME ... recreated=true ... result=PASS`
+- `UNIVERSAL_VIDEO_PRECANARY_FENCED_START ... workload_fence=exclusive result=PASS`
+- `UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME ... recreated=true worker_fenced=true ... result=PASS`
 - `UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS ... container_target=active ...`
 - `UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER ... unchanged=true result=PASS`
 
 The post-restore runtime proof executes inside the newly resident container as
-its service UID/GID. It must read only `/run/secrets/video-queue-dsn`, identify
-the production worker principal and schema/function, and return zero
-claimable/leased jobs. The independent owner proof must match the complete
+its service UID/GID while that exact worker remains blocked by the exclusive
+claim fence. It must read only `/run/secrets/video-queue-dsn`, identify the
+production worker principal and schema/function, and return zero
+claimable/leased jobs. Only then may the fence be released and resident
+readiness checked. The independent owner proof must match the complete
 pre-window baseline byte-for-byte at the field level.
 
 ## STOP and rollback
 
-The host trap restores the prior source checkout and the recorded active or
-inactive states of resident services on normal failure, `EXIT`, `INT`, or
+The host trap restores the prior source checkout and attempts the recorded
+active or inactive resident states on normal failure, `EXIT`, `INT`, or
 `TERM`. This bounded recreation requires the resident container target to be
-active. A same-container identity, wrong image/process ancestry, queue drift,
-identity ambiguity, or failed readiness check makes restoration fail closed.
+active. The worker stays fenced until the new container identity and runtime
+queue proof pass. A same-container identity, wrong image/process ancestry,
+queue drift, or identity ambiguity keeps claim-capable residents stopped and
+emits `UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED`; failed later readiness also
+fails the receipt and requires reconciliation before recovery.
 
 The pre-canary never deletes `/root/.cache` or other host content to create
 space. If the disk threshold is not met, it stops before the build and requires
@@ -94,3 +100,9 @@ The exact future authorization text is:
 
 Vercel production publication and any limited E2E pilot remain separate gates
 with separate future Director approvals.
+
+Any later container promotion is also fail-closed against stale evidence. The
+attested commit must be the direct parent of the current protected `main`, and
+the only changed path may be the newly added, exact promotion-request JSON.
+Any intervening runtime, workflow, helper, documentation, or unrelated change
+requires a new bounded pre-canary receipt and evidence run.

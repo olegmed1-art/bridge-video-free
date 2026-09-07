@@ -53,6 +53,23 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" in WORKFLOW
 
 
+def test_promotion_accepts_only_one_fresh_request_commit_after_evidence() -> None:
+    assert "fetch-depth: 0" in WORKFLOW
+    assert 'git merge-base --is-ancestor "$expected_commit" "$GITHUB_SHA"' in WORKFLOW
+    assert 'git rev-list --count "$expected_commit..$GITHUB_SHA"' in WORKFLOW
+    assert 'git cat-file -e "$expected_commit:$request_file"' in WORKFLOW
+    assert 'git diff --name-only "$expected_commit" "$GITHUB_SHA"' in WORKFLOW
+    assert '"${changed_since_evidence[0]}" == "$request_file"' in WORKFLOW
+    assert "UNIVERSAL_VIDEO_PROMOTION_FRESH_REQUEST" in WORKFLOW
+    assert WORKFLOW.count('git/ref/heads/main" --jq') >= 3
+    freshness = WORKFLOW.index("UNIVERSAL_VIDEO_PROMOTION_FRESH_REQUEST")
+    oracle_mutation = WORKFLOW.index("compute instance action", freshness)
+    host_mutation = WORKFLOW.index("Promote attested image with rollback", oracle_mutation)
+    final_main = WORKFLOW.index('git/ref/heads/main" --jq', host_mutation)
+    remote_preflight = WORKFLOW.index("ssh_base=(ssh", final_main)
+    assert freshness < oracle_mutation < final_main < remote_preflight
+
+
 def test_promotion_hands_off_exclusive_fence_after_old_resident_stops() -> None:
     lock_path = SCRIPT.index('readonly WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"')
     lock_metadata = SCRIPT.index("root:universal-video:640:1", lock_path)

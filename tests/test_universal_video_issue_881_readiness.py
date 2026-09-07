@@ -387,7 +387,8 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "stop_frozen_residents" in script
     assert "flock --exclusive --nonblock 9" in script
     assert 'restore_service "$SOURCE_SERVICE" "$source_state_before"' in script
-    assert 'restore_service "$CONTAINER_SERVICE" "$container_target_state"' in script
+    assert "start_container_under_fence" in script
+    assert "validate_started_container_after_fence" in script
     assert 'source_candidate_path_owned=0' in script
     assert 'source_candidate_path_owned=1' in script
     assert '"$source_candidate_path_owned" == 1' in script
@@ -433,7 +434,7 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "observed_at <= time.time() + 5" in script
     assert 'value.get("active_jobs") == []' in script
     assert 'if ! clear_restore_status; then' in script
-    assert script.count('if ! clear_restore_status; then') == 2
+    assert script.count('if ! clear_restore_status; then') == 3
     assert "RESTORE_STABLE_SECONDS" in script
     assert "stable_seconds=%s result=PASS" in script
     assert "services_stop_attempted=1" in script
@@ -468,19 +469,25 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "with shared_workload_lock(spool_root, exclusive=True):" in source_worker
     assert "with shared_workload_lock():" in neon_worker_source
 
-    restore_source_index = script.index(
-        'restore_service "$SOURCE_SERVICE" "$source_state_before"'
+    cleanup_index = script.index("cleanup(){")
+    fenced_start_index = script.index(
+        "if start_container_under_fence; then", cleanup_index
     )
-    restore_container_index = script.index(
-        'restore_service "$CONTAINER_SERVICE" "$container_target_state"'
+    postrestore_queue_index = script.index(
+        "verify_postrestore_runtime_queue", fenced_start_index
+    )
+    unlock_index = script.index("flock --unlock 9", postrestore_queue_index)
+    validate_container_index = script.index(
+        "validate_started_container_after_fence", unlock_index
+    )
+    restore_source_index = script.index(
+        'restore_service "$SOURCE_SERVICE" "$source_state_before"',
+        validate_container_index,
     )
     restore_pass_index = script.index("UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS")
-    postrestore_queue_index = script.index(
-        "verify_postrestore_runtime_queue", restore_container_index
-    )
     source_recheck_index = script.index(
         '[[ "$source_after" == "$source_state_before" ]]',
-        restore_container_index,
+        restore_source_index,
     )
     container_recheck_index = script.index(
         '[[ "$container_after" == "$container_target_state" ]]'
@@ -489,20 +496,23 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
         'restored_service_ready "$SOURCE_SERVICE" "$source_state_before"',
         container_recheck_index,
     )
-    unlock_index = script.index("flock --unlock 9", script.index("cleanup(){"))
     restore_body = script[
         script.index("restore_service(){") : script.index("restore_source_checkout(){")
     ]
     assert 'verified_start_ticks="$(resident_status_ready "$service" "$started_unix" "$worker_pid"' in restore_body
+    queue_proof_body = script[
+        script.index("verify_postrestore_runtime_queue(){") : cleanup_index
+    ]
+    assert '[[ "$lock_held" == 1 ]] || return 1' in queue_proof_body
     assert (
-        restore_source_index
-        > unlock_index
-        and restore_source_index
-        < restore_container_index
+        fenced_start_index
+        < postrestore_queue_index
+        < unlock_index
+        < validate_container_index
+        < restore_source_index
         < source_recheck_index
         < container_recheck_index
         < readiness_recheck_index
-        < postrestore_queue_index
         < restore_pass_index
     )
 
@@ -931,7 +941,7 @@ resident_image_id=
 SOURCE_SERVICE=source.service
 CONTAINER_SERVICE=container.service
 source_state_before=active
-container_target_state=inactive
+container_target_state=active
 restored_source_pid=111
 restored_source_start_ticks=222
 restored_container_pid=
@@ -944,6 +954,9 @@ bounded_filesystem(){{
 }}
 stop_frozen_residents(){{ return 0; }}
 residents_are_quiescent(){{ return 0; }}
+start_container_under_fence(){{ return 0; }}
+verify_postrestore_runtime_queue(){{ return 0; }}
+validate_started_container_after_fence(){{ return 0; }}
 bounded_systemctl(){{ printf 'systemctl:%s\n' "$*" >> "$service_log"; }}
 bounded_docker(){{ return 0; }}
 flock(){{ return 0; }}
@@ -953,7 +966,7 @@ restore_service(){{
 }}
 resume_isolated_peer(){{ return 0; }}
 service_state(){{
-  [[ "$1" == "$SOURCE_SERVICE" ]] && printf 'active\n' || printf 'inactive\n'
+  printf 'active\n'
 }}
 restored_service_ready(){{ return 0; }}
 cleanup
@@ -974,7 +987,6 @@ cleanup
         "systemctl:unmask --runtime container.service",
         "systemctl:daemon-reload",
         "source.service",
-        "container.service",
     ]
     assert "source_candidate_remove,source_candidate_quarantined" in completed.stderr
     assert "result=DEGRADED" in completed.stderr
@@ -1302,6 +1314,9 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "prior_gate_pr_number=1070" in workflow
     assert "protected_gate_paths=(" in workflow
     assert "'ops/oracle_universal_video_run_command.sh'" in workflow
+    assert "'ops/oracle_known_hosts_from_scan.sh'" in workflow
+    assert "'.github/workflows/oracle-universal-video-container-promote.yml'" in workflow
+    assert "'ops/oracle_universal_video_container_promote.sh'" in workflow
     assert "'ops/validate_video_queue_dsn.py'" in workflow
     assert "'universal_video'" in workflow
     assert "':(glob)bridge_*.py'" in workflow
@@ -1340,9 +1355,7 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert ".commit_id ==" in workflow and "$reviewed_sha" in workflow
     assert "required_workflows=(" in workflow
     assert "verify_live_gate(){" in workflow
-    # One gate before preparation and one fresh gate after all SSH/SCP staging.
-    # Keeping exactly these two calls avoids spending another API-heavy review
-    # pass while still binding the mutating attestation to current evidence.
+    # One gate before the reviewed SSH helper and one fresh gate after staging.
     assert workflow.count("verify_live_gate") == 3
     assert "reviewThreads(first:100)" in workflow
     assert "unresolved current threads" in workflow
@@ -1354,6 +1367,7 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "approval_receipt_id:" in workflow
     assert "approval_nonce:" in workflow
     assert "issue_881_precanary_one_shot.py verify" in workflow
+    assert workflow.count("issue_881_precanary_one_shot.py verify") == 2
     assert "workflow reruns are forbidden" in workflow.lower()
     assert "verify_no_competing_infrastructure_runs(){" in workflow
     assert "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE" in workflow
@@ -1363,14 +1377,22 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "prior-recovery-evidence.txt" in workflow
     assert "UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256='$recovery_sha'" in workflow
     initial_check = workflow.index("          verify_live_gate")
+    pre_stage_one_shot_check = workflow.index(
+        "          verify_one_shot_gate", initial_check
+    )
+    known_hosts_call = workflow.index(
+        '          ops/oracle_known_hosts_from_scan.sh', pre_stage_one_shot_check
+    )
     first_remote_mutation = workflow.index(
-        '"${s[@]}" "umask 077; rm -rf', initial_check
+        '"${s[@]}" "umask 077; rm -rf', known_hosts_call
     )
     final_head_check = workflow.rindex("          verify_live_gate")
     final_one_shot_check = workflow.rindex("          verify_one_shot_gate")
     attestation_call = workflow.index("          set +e", final_one_shot_check)
     assert (
         initial_check
+        < pre_stage_one_shot_check
+        < known_hosts_call
         < first_remote_mutation
         < final_head_check
         < final_one_shot_check

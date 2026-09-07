@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Validate promotion request and successful evidence gate
         id: request
         run: |
@@ -57,10 +57,26 @@ jobs:
           print('expected_commit='+x['expected_commit'])
           print('evidence_run_id='+str(x['evidence_run_id']))
           print('image_digest='+x['image_digest'])
+          print('request_file='+os.environ['REQUEST_FILE'])
           PY
           expected_commit="$(sed -n 's/^expected_commit=//p' "$GITHUB_OUTPUT" | tail -n1)"
           evidence_run_id="$(sed -n 's/^evidence_run_id=//p' "$GITHUB_OUTPUT" | tail -n1)"
           image_digest="$(sed -n 's/^image_digest=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          request_file="$(sed -n 's/^request_file=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          [[ "$request_file" == "${files[0]}" ]]
+          git cat-file -e "$expected_commit^{commit}"
+          git merge-base --is-ancestor "$expected_commit" "$GITHUB_SHA"
+          [[ "$(git rev-list --count "$expected_commit..$GITHUB_SHA")" == 1 ]]
+          if git cat-file -e "$expected_commit:$request_file" 2>/dev/null; then
+            echo 'Promotion request already existed in the attested revision' >&2
+            exit 1
+          fi
+          mapfile -t changed_since_evidence < <(git diff --name-only "$expected_commit" "$GITHUB_SHA")
+          [[ "${#changed_since_evidence[@]}" -eq 1 \
+            && "${changed_since_evidence[0]}" == "$request_file" ]]
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$GITHUB_SHA" ]]
+          printf 'UNIVERSAL_VIDEO_PROMOTION_FRESH_REQUEST expected_commit=%s request_commit=%s request_file=%s commits=1 result=PASS\n' \
+            "$expected_commit" "$GITHUB_SHA" "$request_file"
           run_json="$RUNNER_TEMP/authoritative-evidence-run.json"
           artifacts_json="$RUNNER_TEMP/authoritative-evidence-artifacts.json"
           artifact_zip="$RUNNER_TEMP/authoritative-evidence.zip"
@@ -89,6 +105,7 @@ jobs:
       - name: Ensure Oracle instance is running
         run: |
           set -euo pipefail
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$GITHUB_SHA" ]]
           python -m pip install --disable-pip-version-check -q oci-cli
           oci_user="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
           oci_fingerprint="$(printf '%s\n' "$OCI_FINGERPRINT" | sed -nE 's/^[[:space:]]*(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})[[:space:]]*$/\2/p' | head -n1)"
@@ -109,7 +126,10 @@ jobs:
           state="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
           case "$state" in
             RUNNING) ;;
-            STOPPED) oci --config-file "$RUNNER_TEMP/oci/config" compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+            STOPPED)
+              [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$GITHUB_SHA" ]]
+              oci --config-file "$RUNNER_TEMP/oci/config" compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null
+              ;;
             *) echo "ORACLE_INSTANCE_STATE_UNSUPPORTED=$state"; exit 1 ;;
           esac
           echo ORACLE_INSTANCE_RUNNING_PASS
@@ -134,8 +154,16 @@ jobs:
         env:
           EXPECTED_COMMIT: ${{ steps.request.outputs.expected_commit }}
           IMAGE_DIGEST: ${{ steps.request.outputs.image_digest }}
+          REQUEST_FILE: ${{ steps.request.outputs.request_file }}
         run: |
           set -euo pipefail
+          # Fail closed if main advanced after the fresh one-file request gate;
+          # no host preflight or mutation may use evidence for older runtime.
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$GITHUB_SHA" ]]
+          [[ "$(git rev-list --count "$EXPECTED_COMMIT..$GITHUB_SHA")" == 1 ]]
+          mapfile -t changed_since_evidence < <(git diff --name-only "$EXPECTED_COMMIT" "$GITHUB_SHA")
+          [[ "${#changed_since_evidence[@]}" -eq 1 \
+            && "${changed_since_evidence[0]}" == "$REQUEST_FILE" ]]
           expected_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_container_promote.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
           expected_prepare_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_run_command.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
           expected_preflight_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_prepromotion_preflight.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
