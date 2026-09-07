@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 
 import pytest
 
@@ -204,3 +206,26 @@ def test_legacy_adapter_rejects_non_string_ranks() -> None:
     hands["N"]["S"] = 10
     with pytest.raises(CardRecognitionContractError, match="legacy hands.N.S"):
         adapt_legacy_hands(hands)
+
+
+def test_existing_tournament_json_remains_consumable_without_inference() -> None:
+    fixture = (
+        Path(__file__).parents[1]
+        / "data"
+        / "tournaments"
+        / "tournament_30041_round2_diana_facts_v1.json"
+    )
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+    columns = payload["columns"]
+    row = dict(zip(columns, payload["rows"][1].split("|"), strict=True))
+    hands = {}
+    for seat in "NESW":
+        spades, hearts, diamonds, clubs = row[seat].split(".")
+        hands[seat] = {"H": hearts, "C": clubs, "D": diamonds, "S": spades}
+
+    adapted = adapt_legacy_hands(hands)
+
+    assert adapted["known_card_count"] == 52
+    assert adapted["unknown_slot_count"] == 0
+    assert adapted["complete"] is False
+    assert adapted["status"] == "LEGACY_UNVERIFIED"
