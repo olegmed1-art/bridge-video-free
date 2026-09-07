@@ -1,0 +1,69 @@
+{
+  "plan_type": "BRIDGIT_RANK_LAYOUT_HOLDOUT_MANIFEST_PLAN_V1",
+  "status": "UNFROZEN_PLANNING_ONLY",
+  "note": "This file allocates the required 24 unseen holdout case slots. It is not the frozen manifest and intentionally contains no invented frame hashes, decoded-pixel hashes, timestamps, gold labels, or source identities. Replace planning placeholders only with independently collected and frozen evidence before recognition.",
+  "target_schema": "docs/evidence/bridgit_rank_layout_holdout_manifest_v1.schema.json",
+  "recognizer_baseline_sha256": "336553ab14fe9cf797da432e6eff61f31c1d255d",
+  "minimum_source_sessions": 4,
+  "planned_case_count": 24,
+  "planned_complete_cases": 12,
+  "planned_non_complete_cases": 12,
+  "source_session_slots": [
+    {"slot": "src-a", "minimum_cases": 6, "status": "UNASSIGNED"},
+    {"slot": "src-b", "minimum_cases": 6, "status": "UNASSIGNED"},
+    {"slot": "src-c", "minimum_cases": 6, "status": "UNASSIGNED"},
+    {"slot": "src-d", "minimum_cases": 6, "status": "UNASSIGNED"}
+  ],
+  "required_strata": {
+    "capture_resolution_groups_min": 3,
+    "layout_theme_families_min_if_available": 2,
+    "complete_deals_with_void_min": 4,
+    "partial_play_min": 3,
+    "deal_transition_min": 2,
+    "blur_or_compression_min": 2,
+    "overlap_or_occlusion_min": 2,
+    "pointer_transition_or_stale_pointer_min": 2,
+    "anchor_or_wrong_layout_negative_min": 1,
+    "temporally_distinct_frames_per_temporal_consensus_case_min": 2
+  },
+  "cases": [
+    {"case_id":"holdout-001","source_session_slot":"src-a","class":"COMPLETE","planned_tags":["complete","void"],"resolution_group":"r1","layout_theme_slot":"theme-1","requires_temporal_frames":true,"evidence_status":"MISSING"},
+    {"case_id":"holdout-002","source_session_slot":"src-a","class":"COMPLETE","planned_tags":["complete"],"resolution_group":"r1","layout_theme_slot":"theme-1","requires_temporal_frames":true,"evidence_status":"MISSING"},
+    {"case_id":"holdout-003","source_session_slot":"src-a","class":"COMPLETE","planned_tags":["complete"],"resolution_group":"r2","layout_theme_slot":"theme-1","requires_temporal_frames":true,"evidence_status":"MISSING"},
+    {"case_id":"holdout-004","source_session_slot":"src-a","class":"NON_COMPLETE","planned_tags":["partial_play"],"resolution_group":"r1","layout_theme_slot":"theme-1","requires_temporal_frames":false,"evidence_status":"MISSING"},
+    {"case_id":"holdout-005","source_session_slot":"src-a","class":"NON_COMPLETE","planned_tags":["blur"],"resolution_group":"r2","layout_theme_slot":"theme-1","requires_temporal_frames":false,"evidence_status":"MISSING"},
+    {"case_id":"holdout-006","source_session_slot":"src-a","class":"NON_COMPLETE","planned_tags":["deal_transition"],"resolution_group":"r1","layout_theme_slot":"theme-1","requires_temporal_frames":false,"evidence_status":"MISSING"},
+
+    {"case_id":"holdout-007","source_session_slot":"src-b","class":"COMPLETE","planned_tags":["complete","void"],"resolution_group":"r2","layout_theme_slot":"theme-1","requires_temporal_frames":true,"evidence_status":"MISSING"},
+    {"case_id":"holdout-008","source_session_slot":"src-b","class":"COMPLETE","planned_tags":["complete"],"resolution_group":"r2","layout_theme_slot":"theme-1","requires_temporal_frames":true,"evidence_status":"MISSING"},
+    {"case_id":"holdout-009","source_session_slot":"src-b","class":"COMPLETE","planned_tags":["complete"],"resolution_group":"r3","layout_theme_slot":"theme-1","requires_temporal_frames":true,"evidence_status":"MISSING"},
+    {"case_id":"holdout-010","source_session_slot":"src-b","class":"NON_COMPLETE","planned_tags":["partial_play"],"resolution_group":"r2","layout_theme_slot":"theme-1","requires_temporal_frames":false,"evidence_status":"MISSING"},
+    {"case_id":"holdout-011","source_session_slot":"src-b","class":"NON_COMPLETE","planned_tags":["compression"],"resolution_group":"r3","layout_theme_slot":"theme-1","requires_temporal_frames":false,"evidence_status":"MISSING"},
+    {"case_id":"holdout-012","source_session_slot":"src-b","class":"NON_COMPLETE","planned_tags":["overlap"],"resolution_group":"r2","layout_theme_slot":"theme-1","requires_temporal_frames":false,"evidence_status":"MISSING"},
+
+    {"case_id":"holdout-013","source_session_slot":"src-c","class":"COMPLETE","planned_tags":["complete","void"],"resolution_group":"r3","layout_theme_slot":"theme-2","requires_temporal_frames":true,"evidence_status":"MISSING"},
+    {"case_id":"holdout-014","source_session_slot":"src-c","class":"COMPLETE","planned_tags":["complete"],"resolution_group":"r3","layout_theme_slot":"theme-2","requires_temporal_frames":true,"evidence_status":"MISSING"},
+    {"case_id":"holdout-015","source_session_slot":"src-c","class":"COMPLETE","planned_tags":["complete"],"resolution_group":"r1","layout_theme_slot":"theme-2","requires_temporal_frames":true,"evidence_status":"MISSING"},
+    {"case_id":"holdout-016","source_session_slot":"src-c","class":"NON_COMPLETE","planned_tags":["partial_play"],"resolution_group":"r3","layout_theme_slot":"theme-2","requires_temporal_frames":false,"evidence_status":"MISSING"},
+    {"case_id":"holdout-017","source_session_slot":"src-c","class":"NON_COMPLETE","planned_tags":["deal_transition"],"resolution_group":"r1","layout_theme_slot":"theme-2","requires_temporal_frames":false,"evidence_status":"MISSING"},
+    {"case_id":"holdout-018","source_session_slot":"src-c","class":"NON_COMPLETE","planned_tags":["pointer_transition"],"resolution_group":"r3","layout_theme_slot":"theme-2","requires_temporal_frames":false,"evidence_status":"MISSING"},
+
+    {"case_id":"holdout-019","source_session_slot":"src-d","class":"COMPLETE","planned_tags":["complete","void"],"resolution_group":"r1","layout_theme_slot":"theme-2","requires_temporal_frames":true,"evidence_status":"MISSING"},
+    {"case_id":"holdout-020","source_session_slot":"src-d","class":"COMPLETE","planned_tags":["complete"],"resolution_group":"r2","layout_theme_slot":"theme-2","requires_temporal_frames":true,"evidence_status":"MISSING"},
+    {"case_id":"holdout-021","source_session_slot":"src-d","class":"COMPLETE","planned_tags":["complete"],"resolution_group":"r3","layout_theme_slot":"theme-2","requires_temporal_frames":true,"evidence_status":"MISSING"},
+    {"case_id":"holdout-022","source_session_slot":"src-d","class":"NON_COMPLETE","planned_tags":["overlap"],"resolution_group":"r1","layout_theme_slot":"theme-2","requires_temporal_frames":false,"evidence_status":"MISSING"},
+    {"case_id":"holdout-023","source_session_slot":"src-d","class":"NON_COMPLETE","planned_tags":["pointer_transition"],"resolution_group":"r2","layout_theme_slot":"theme-2","requires_temporal_frames":false,"evidence_status":"MISSING"},
+    {"case_id":"holdout-024","source_session_slot":"src-d","class":"NON_COMPLETE","planned_tags":["anchor_negative"],"resolution_group":"r3","layout_theme_slot":"theme-2","requires_temporal_frames":false,"evidence_status":"MISSING"}
+  ],
+  "freeze_requirements_before_recognition": [
+    "Assign each src-* slot to a genuinely unseen independent source/session.",
+    "Replace resolution_group and layout_theme_slot planning labels with observed source-native metadata.",
+    "Populate all frame byte SHA-256, decoded-pixel SHA-256 and timestamps.",
+    "Freeze independent gold visible card+seat labels and completeness state before recognizer execution.",
+    "Compute gold digest and bind the evaluated recognizer head/profile digest.",
+    "Verify no development-source overlap and no case previously used for tuning.",
+    "Mechanically verify at least 24 cases, at least 4 source sessions and all required strata.",
+    "Only then convert this plan into a schema-valid frozen manifest and execute one untuned shadow run."
+  ],
+  "readiness": "BLOCKED_UNTIL_REAL_EVIDENCE_IS_FROZEN"
+}
