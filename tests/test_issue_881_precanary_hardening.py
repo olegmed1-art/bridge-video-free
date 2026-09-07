@@ -4,6 +4,7 @@ import copy
 import datetime as dt
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -268,6 +269,20 @@ def test_runtime_dsn_is_read_once_from_exact_protected_file(
     monkeypatch.setenv("BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE", str(dsn_file))
     monkeypatch.delenv("BRIDGE_VIDEO_QUEUE_DATABASE_URL", raising=False)
     monkeypatch.delenv("BRIDGE_WORKER_DATABASE_URL", raising=False)
+    real_fstat = QUEUE.os.fstat
+
+    def root_owned_fstat(descriptor: int) -> SimpleNamespace:
+        metadata = real_fstat(descriptor)
+        return SimpleNamespace(
+            st_mode=metadata.st_mode,
+            st_uid=0,
+            st_nlink=metadata.st_nlink,
+            st_size=metadata.st_size,
+        )
+
+    # GitHub-hosted test runners are non-root. Preserve the production
+    # requirement while injecting only the expected root ownership field.
+    monkeypatch.setattr(QUEUE.os, "fstat", root_owned_fstat)
     assert QUEUE._runtime_dsn() == dsn
 
     link = tmp_path / "linked-dsn"
