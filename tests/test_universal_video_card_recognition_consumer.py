@@ -335,6 +335,20 @@ def test_legacy_adapter_rejects_malformed_present_seat() -> None:
         adapt_legacy_hands(hands)
 
 
+@pytest.mark.parametrize(
+    ("hands", "message"),
+    [
+        ({"N": {}, "E": {}, "S": {}, "WEST": {"S": "A"}}, "unsupported legacy seat key"),
+        ({"N": {"SPADES": "A"}, "E": {}, "S": {}, "W": {}}, "unsupported legacy suit key"),
+    ],
+)
+def test_legacy_adapter_rejects_unsupported_keys(
+    hands: dict[str, dict[str, str]], message: str
+) -> None:
+    with pytest.raises(CardRecognitionContractError, match=message):
+        adapt_legacy_hands(hands)
+
+
 def test_legacy_adapter_rejects_duplicate_and_hand_overflow() -> None:
     duplicate = {seat: {suit: "" for suit in "HCDS"} for seat in "NESW"}
     duplicate["N"]["S"] = "A"
