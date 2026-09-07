@@ -69,6 +69,7 @@ class TargetTest(unittest.TestCase):
 
     def test_existing_backup_blocks_apply(self):
         self.backup.write_bytes(b'prior-backup')
+        with self.assertRaises(RuntimeError): target.run('check')
         with self.assertRaises(RuntimeError): target.run('apply')
         self.assertEqual(self.dsn.read_bytes(), self.raw)
         self.assertEqual(self.backup.read_bytes(), b'prior-backup')
@@ -110,12 +111,13 @@ class TargetTest(unittest.TestCase):
         self.assertNotIn('secret-password', out.getvalue())
 
     def test_live_query_contract_rejects_wrong_branch_busy_and_privileged_roles(self):
-        for branch, busy, privileged, extra_role, should_pass in [
-            (target.PRODUCTION, False, False, False, True),
-            (target.PREVIEW, False, False, False, False),
-            (target.PRODUCTION, True, False, False, False),
-            (target.PRODUCTION, False, True, False, False),
-            (target.PRODUCTION, False, False, True, False),
+        for branch, busy, privileged, extra_role, safe_acl, should_pass in [
+            (target.PRODUCTION, False, False, False, True, True),
+            (target.PREVIEW, False, False, False, True, False),
+            (target.PRODUCTION, True, False, False, True, False),
+            (target.PRODUCTION, False, True, False, True, False),
+            (target.PRODUCTION, False, False, True, True, False),
+            (target.PRODUCTION, False, False, False, False, False),
         ]:
             with self.subTest(branch=branch, busy=busy, privileged=privileged):
                 calls = []
@@ -131,7 +133,7 @@ class TargetTest(unittest.TestCase):
                         if 'SELECT *' in calls[-1]: return (1 if busy else 0, 0)
                         return (target.PROJECT, branch, 'neondb', target.USER, True, True, privileged,
                                 ['bridge_school_app', 'bridge_school_reader', 'bridge_school_worker', 'other'] if extra_role else ['bridge_school_app', 'bridge_school_reader', 'bridge_school_worker'],
-                                False, ['bridge_school_worker'])
+                                False, ['bridge_school_worker'], safe_acl)
                 with patch.object(target.psycopg, 'connect', return_value=Connection(), create=True):
                     if should_pass: real_verify(target.candidate(self.raw), target.PRODUCTION)
                     else:
