@@ -93,6 +93,17 @@ QUEUE_SECURITY_SQL = """SELECT
 (SELECT md5(coalesce(string_agg(jsonb_build_array(c.relname,t.tgisinternal,CASE WHEN t.tgisinternal THEN replace(pg_get_triggerdef(t.oid),quote_ident(t.tgname),'INTERNAL') ELSE pg_get_triggerdef(t.oid) END,t.tgenabled,pg_get_userbyid(c.relowner),pg_get_functiondef(p.oid),pg_get_userbyid(p.proowner))::text,E'\\n' ORDER BY c.relname,CASE WHEN t.tgisinternal THEN replace(pg_get_triggerdef(t.oid),quote_ident(t.tgname),'INTERNAL') ELSE pg_get_triggerdef(t.oid) END),'')) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_proc p ON p.oid=t.tgfoid WHERE n.nspname='video_queue') AS triggers"""
 
 
+EXPECTED_QUEUE_OBJECT_SECURITY = ('9cedb5db7b79596362f52d28442c105c', 0)
+QUEUE_OBJECT_SECURITY_SQL = """WITH grants AS (
+SELECT 'schema'::text AS kind,n.nspname::text AS object,''::text AS column_name,n.nspowner AS owner,a.*
+FROM pg_namespace n CROSS JOIN LATERAL aclexplode(coalesce(n.nspacl,acldefault('n',n.nspowner))) a WHERE n.nspname='video_queue'
+UNION ALL SELECT c.relkind::text,c.relname::text,'',c.relowner,a.* FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace CROSS JOIN LATERAL aclexplode(coalesce(c.relacl,acldefault(CASE WHEN c.relkind='S' THEN 'S'::"char" ELSE 'r'::"char" END,c.relowner))) a WHERE n.nspname='video_queue'
+UNION ALL SELECT 'column',c.relname::text,t.attname::text,c.relowner,a.* FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute t ON t.attrelid=c.oid CROSS JOIN LATERAL aclexplode(t.attacl) a WHERE n.nspname='video_queue')
+SELECT md5(coalesce(string_agg(jsonb_build_array(kind,object,column_name,pg_get_userbyid(owner),pg_get_userbyid(grantor),CASE WHEN grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(grantee) END,privilege_type,is_grantable)::text,E'\\n' ORDER BY kind,object,column_name,pg_get_userbyid(grantor),CASE WHEN grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(grantee) END,privilege_type,is_grantable),'')) AS object_acl,
+(SELECT count(*) FROM pg_rewrite r JOIN pg_class c ON c.oid=r.ev_class JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='video_queue' AND NOT(c.relkind IN ('v','m') AND r.rulename='_RETURN' AND r.ev_type='1')) AS unexpected_rules
+FROM grants"""
+
+
 def require(condition):
     if not condition:
         raise RuntimeError("queue_target_guard")
@@ -171,6 +182,8 @@ def verify(raw, branch):
                 require(cur.fetchone() == EXPECTED_QUEUE_VERSION)
                 cur.execute(QUEUE_SECURITY_SQL)
                 require(cur.fetchone() == EXPECTED_QUEUE_SECURITY)
+                cur.execute(QUEUE_OBJECT_SECURITY_SQL)
+                require(cur.fetchone() == EXPECTED_QUEUE_OBJECT_SECURITY)
                 cur.execute("SELECT * FROM video_queue.precanary_idle_snapshot()")
                 require(cur.fetchone() == (0, 0))
 
