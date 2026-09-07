@@ -87,7 +87,7 @@ class BridgitPixelRuntimeUnavailable(RuntimeError):
 
 
 class _ReceiptPathConflict(BridgitRankLayoutError):
-    """A receipt target aliases replayable recognition input."""
+    """A receipt target aliases input or cannot safely receive a receipt."""
 
 
 @lru_cache(maxsize=1)
@@ -1350,6 +1350,27 @@ def _coords(
     return [(round(x + step * index), y) for index in range(count)]
 
 
+def _calibrated_side_slots_match_chains(
+    lengths: Mapping[str, Mapping[str, int]],
+    anchors: Mapping[str, Mapping[str, tuple[int, int]]],
+    side_steps: Mapping[str, Mapping[str, float]],
+    side_chains: Mapping[str, Mapping[str, tuple[int, ...]]],
+) -> bool:
+    """Bind every scored base slot to its retained detected peak, without drift."""
+    for seat in ("W", "E"):
+        for suit in SUITS:
+            detected = side_chains[seat][suit]
+            # East is detected from the right edge inward, but scored left to right.
+            expected = tuple(reversed(detected)) if seat == "E" else tuple(detected)
+            calibrated = tuple(
+                x
+                for x, _ in _coords(seat, suit, lengths[seat][suit], anchors, side_steps)
+            )
+            if calibrated != expected:
+                return False
+    return True
+
+
 def _glyph_coords_fit_frame(
     coords: Sequence[tuple[int, int]], profile: BridgitRankLayoutProfile
 ) -> bool:
@@ -1612,16 +1633,15 @@ def _recognize_frames(
                 "duplicate frame bytes do not provide independent evidence"
             )
         exact_byte_hashes.add(loaded[1])
-        if profile.interface_anchor is None:
-            if loaded[2] == reference_pixel_hash:
-                raise BridgitRankLayoutError(
-                    "reference template pixels cannot count as an observation"
-                )
-            if loaded[2] in exact_pixel_hashes:
-                raise BridgitRankLayoutError(
-                    "duplicate decoded frame pixels do not provide independent evidence"
-                )
-            exact_pixel_hashes.add(loaded[2])
+        if loaded[2] == reference_pixel_hash:
+            raise BridgitRankLayoutError(
+                "reference template pixels cannot count as an observation"
+            )
+        if loaded[2] in exact_pixel_hashes:
+            raise BridgitRankLayoutError(
+                "duplicate decoded frame pixels do not provide independent evidence"
+            )
+        exact_pixel_hashes.add(loaded[2])
         loaded_frames.append(loaded)
         decoded_job_bytes += int(loaded[0].shape[0] * loaded[0].shape[1] * 3)
     del loaded
@@ -1815,6 +1835,16 @@ def _recognize_frames(
             "AMBIGUOUS",
             lengths=lengths,
             reason="side_step_calibration_ambiguous",
+            input_hashes=input_hashes,
+            frame_registrations=frame_registration_receipts,
+        )
+    if not _calibrated_side_slots_match_chains(
+        lengths, anchors, side_steps, frame_side_chains[0]
+    ):
+        return _shadow_result(
+            "LAYOUT_AMBIGUOUS",
+            lengths=lengths,
+            reason="side_calibration_peak_mismatch",
             input_hashes=input_hashes,
             frame_registrations=frame_registration_receipts,
         )
@@ -2381,8 +2411,8 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _pin_receipt_directory(path: Path) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         resolved_parent = path.parent.resolve(strict=True)
         flags = (
             os.O_RDONLY
@@ -2390,11 +2420,13 @@ def _pin_receipt_directory(path: Path) -> int:
             | getattr(os, "O_DIRECTORY", 0)
             | getattr(os, "O_NOFOLLOW", 0)
         )
-        descriptor = os.open(resolved_parent, flags)
-        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
-            os.close(descriptor)
-            raise BridgitRankLayoutError("output parent must be a directory")
-        return descriptor
+        with ExitStack() as cleanup:
+            descriptor = os.open(resolved_parent, flags)
+            cleanup.callback(os.close, descriptor)
+            if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise BridgitRankLayoutError("output parent must be a directory")
+            cleanup.pop_all()
+            return descriptor
     except (OSError, ValueError, RuntimeError) as exc:
         raise BridgitRankLayoutError("output directory is unavailable") from exc
 
@@ -2405,26 +2437,26 @@ def atomic_write_receipt(
     *,
     directory_descriptor: int | None = None,
 ) -> None:
-    owned_descriptor = directory_descriptor is None
-    if directory_descriptor is None:
-        directory_descriptor = _pin_receipt_directory(path)
-    payload = (
-        json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
-    pinned_parent = Path(f"/proc/self/fd/{directory_descriptor}")
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=pinned_parent)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
+    with ExitStack() as cleanup:
+        if directory_descriptor is None:
+            directory_descriptor = _pin_receipt_directory(path)
+            cleanup.callback(os.close, directory_descriptor)
+        payload = (
+            json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        pinned_parent = Path(f"/proc/self/fd/{directory_descriptor}")
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{path.name}.", dir=pinned_parent
+        )
+        cleanup.callback(Path(temporary).unlink, missing_ok=True)
+        cleanup.callback(os.close, descriptor)
+        # The stack owns the descriptor even if fdopen or a stream operation fails.
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path.name, dst_dir_fd=directory_descriptor)
         os.fsync(directory_descriptor)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-        if owned_descriptor:
-            os.close(directory_descriptor)
 
 
 def _validate_receipt_output_path(
@@ -2449,6 +2481,8 @@ def _validate_receipt_output_path(
             )
     try:
         resolved_output = output_path.resolve(strict=False)
+        if resolved_output.is_dir():
+            raise _ReceiptPathConflict("output target must not be a directory")
         for candidate in candidates:
             if resolved_output == candidate.resolve(strict=False):
                 raise _ReceiptPathConflict("output path aliases recognition input")
@@ -2464,6 +2498,23 @@ def _validate_receipt_output_path(
         raise _ReceiptPathConflict("output path cannot be validated") from exc
 
 
+def _rejected_receipt(exc: Exception) -> dict[str, Any]:
+    detail = str(exc) or exc.__class__.__name__
+    detail = detail.replace("\n", " ").replace("\r", " ")[:MAX_DIAGNOSTIC_DETAIL]
+    receipt = {
+        "receipt_type": RECEIPT_TYPE,
+        "backend_version": BACKEND_VERSION,
+        "status": "REJECTED",
+        "reason": detail,
+        "result_scope": "SHADOW_ONLY",
+        "canonical_promotion_allowed": False,
+        "production_write_performed": False,
+        "school_canon_write_performed": False,
+    }
+    receipt["receipt_sha256"] = canonical_hash(receipt)
+    return receipt
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run the opt-in Bridgit rank-layout shadow backend"
@@ -2472,52 +2523,47 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output", required=True, type=Path)
     arguments = parser.parse_args(argv)
     exit_code = 0
-    write_receipt = True
-    output_directory_descriptor: int | None = None
-    try:
-        _validate_receipt_output_path(arguments.job, arguments.output)
-        output_directory_descriptor = _pin_receipt_directory(arguments.output)
-        pinned_output = (
-            Path(f"/proc/self/fd/{output_directory_descriptor}") / arguments.output.name
-        )
-        _validate_receipt_output_path(arguments.job, pinned_output)
-        job = load_job(arguments.job)
-        _validate_receipt_output_path(arguments.job, arguments.output, job)
-        _validate_receipt_output_path(arguments.job, pinned_output, job)
-        receipt = execute_shadow_job(job)
-        status = str(receipt["result"]["status"])
-    except (
+    handled_errors = (
         BridgitPixelRuntimeUnavailable,
         BridgitRankLayoutError,
         KeyError,
         MemoryError,
         OSError,
-    ) as exc:
-        if isinstance(exc, _ReceiptPathConflict):
-            write_receipt = False
-        detail = str(exc) or exc.__class__.__name__
-        detail = detail.replace("\n", " ").replace("\r", " ")[:MAX_DIAGNOSTIC_DETAIL]
-        receipt = {
-            "receipt_type": RECEIPT_TYPE,
-            "backend_version": BACKEND_VERSION,
-            "status": "REJECTED",
-            "reason": detail,
-            "result_scope": "SHADOW_ONLY",
-            "canonical_promotion_allowed": False,
-            "production_write_performed": False,
-            "school_canon_write_performed": False,
-        }
-        receipt["receipt_sha256"] = canonical_hash(receipt)
+    )
+    try:
+        with ExitStack() as output_cleanup:
+            _validate_receipt_output_path(arguments.job, arguments.output)
+            output_directory_descriptor = _pin_receipt_directory(arguments.output)
+            output_cleanup.callback(os.close, output_directory_descriptor)
+            pinned_output = (
+                Path(f"/proc/self/fd/{output_directory_descriptor}")
+                / arguments.output.name
+            )
+            _validate_receipt_output_path(arguments.job, pinned_output)
+            try:
+                job = load_job(arguments.job)
+                _validate_receipt_output_path(arguments.job, arguments.output, job)
+                _validate_receipt_output_path(arguments.job, pinned_output, job)
+                receipt = execute_shadow_job(job)
+                status = str(receipt["result"]["status"])
+            except _ReceiptPathConflict:
+                # Unsafe targets must never receive even a rejection receipt.
+                raise
+            except handled_errors as exc:
+                receipt = _rejected_receipt(exc)
+                status = "REJECTED"
+                exit_code = 2
+            atomic_write_receipt(
+                arguments.output,
+                receipt,
+                directory_descriptor=output_directory_descriptor,
+            )
+    except handled_errors as exc:
+        # Includes target validation, atomic write, and descriptor cleanup failures.
+        # Do not retry a failed write; stdout remains the bounded rejection channel.
+        receipt = _rejected_receipt(exc)
         status = "REJECTED"
         exit_code = 2
-    if write_receipt and output_directory_descriptor is not None:
-        atomic_write_receipt(
-            arguments.output,
-            receipt,
-            directory_descriptor=output_directory_descriptor,
-        )
-    if output_directory_descriptor is not None:
-        os.close(output_directory_descriptor)
     print(
         json.dumps(
             {"status": status, "receipt_sha256": receipt["receipt_sha256"]},
