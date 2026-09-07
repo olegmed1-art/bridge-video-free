@@ -1,0 +1,85 @@
+name: Issue 881 queue production target
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/issue-881-queue-production-target.yml'
+      - 'ops/issue_881_queue_production_target.py'
+      - 'tests/test_issue_881_queue_production_target.py'
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('queue-target-pr-{0}', github.run_id) || (github.event.issue.number == 881 && github.event.comment.user.login == 'olegmed1-art' && (github.event.comment.body == '/oracle-ops issue-881-queue-production-check' || github.event.comment.body == '/oracle-ops issue-881-queue-production-apply')) && 'oracle-instance-workload-mutation' || format('queue-target-noop-{0}', github.run_id) }}
+  cancel-in-progress: false
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
+      - run: sudo -n python3 tests/test_issue_881_queue_production_target.py
+  target:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      github.event.issue.number == 881 &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      (github.event.comment.body == '/oracle-ops issue-881-queue-production-check' ||
+       github.event.comment.body == '/oracle-ops issue-881-queue-production-apply')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify exact main and pinned SSH identity
+        id: ssh
+        run: |
+          set -euo pipefail
+          EXACT_SHA="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_SHA"
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Check or repair only the fixed queue credential target
+        env:
+          COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          case "$COMMAND" in
+            '/oracle-ops issue-881-queue-production-check') mode=check ;;
+            '/oracle-ops issue-881-queue-production-apply') mode=apply ;;
+            *) exit 1 ;;
+          esac
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n timeout 120 /opt/bridge-school/universal-video/.venv/bin/python -I - $mode" \
+            < ops/issue_881_queue_production_target.py
