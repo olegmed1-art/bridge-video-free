@@ -421,6 +421,10 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
             raise BridgitRankLayoutError(
                 f"vertical_search.{seat} span exceeds scoring budget"
             )
+        if any(anchors[seat][suit][0] != edge_x for suit in SUITS):
+            raise BridgitRankLayoutError(
+                f"vertical_search.{seat}.edge_x must match side anchors"
+            )
         vertical_search[seat] = (x_min, x_max, edge_x)
 
     interface_anchor_raw = geometry.get("interface_anchor")
@@ -1582,6 +1586,7 @@ def _recognize_frames(
                 f"interface anchor detail failed: {exc}"
             ) from exc
     loaded_frames = []
+    exact_byte_hashes = {reference_hash}
     exact_pixel_hashes = {reference_pixel_hash}
     decoded_job_bytes = int(reference.shape[0] * reference.shape[1] * 3)
     for index, path in enumerate(frame_paths):
@@ -1598,6 +1603,15 @@ def _recognize_frames(
             and loaded[1] != expected_frame_sha256s[index]
         ):
             raise BridgitRankLayoutError("observation frame changed before recognition")
+        if loaded[1] == reference_hash:
+            raise BridgitRankLayoutError(
+                "reference template bytes cannot count as an observation"
+            )
+        if loaded[1] in exact_byte_hashes:
+            raise BridgitRankLayoutError(
+                "duplicate frame bytes do not provide independent evidence"
+            )
+        exact_byte_hashes.add(loaded[1])
         if profile.interface_anchor is None:
             if loaded[2] == reference_pixel_hash:
                 raise BridgitRankLayoutError(
@@ -2366,26 +2380,51 @@ def execute_shadow_job(job: Mapping[str, Any]) -> dict[str, Any]:
         return _execute_shadow_job_pinned(job, fd_stack)
 
 
-def atomic_write_receipt(path: Path, receipt: Mapping[str, Any]) -> None:
+def _pin_receipt_directory(path: Path) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        resolved_parent = path.parent.resolve(strict=True)
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(resolved_parent, flags)
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            raise BridgitRankLayoutError("output parent must be a directory")
+        return descriptor
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise BridgitRankLayoutError("output directory is unavailable") from exc
+
+
+def atomic_write_receipt(
+    path: Path,
+    receipt: Mapping[str, Any],
+    *,
+    directory_descriptor: int | None = None,
+) -> None:
+    owned_descriptor = directory_descriptor is None
+    if directory_descriptor is None:
+        directory_descriptor = _pin_receipt_directory(path)
     payload = (
         json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    pinned_parent = Path(f"/proc/self/fd/{directory_descriptor}")
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=pinned_parent)
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        directory_descriptor = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
+        os.replace(temporary, path.name, dst_dir_fd=directory_descriptor)
+        os.fsync(directory_descriptor)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+        if owned_descriptor:
+            os.close(directory_descriptor)
 
 
 def _validate_receipt_output_path(
@@ -2434,10 +2473,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     exit_code = 0
     write_receipt = True
+    output_directory_descriptor: int | None = None
     try:
         _validate_receipt_output_path(arguments.job, arguments.output)
+        output_directory_descriptor = _pin_receipt_directory(arguments.output)
+        pinned_output = (
+            Path(f"/proc/self/fd/{output_directory_descriptor}") / arguments.output.name
+        )
+        _validate_receipt_output_path(arguments.job, pinned_output)
         job = load_job(arguments.job)
         _validate_receipt_output_path(arguments.job, arguments.output, job)
+        _validate_receipt_output_path(arguments.job, pinned_output, job)
         receipt = execute_shadow_job(job)
         status = str(receipt["result"]["status"])
     except (
@@ -2464,8 +2510,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         receipt["receipt_sha256"] = canonical_hash(receipt)
         status = "REJECTED"
         exit_code = 2
-    if write_receipt:
-        atomic_write_receipt(arguments.output, receipt)
+    if write_receipt and output_directory_descriptor is not None:
+        atomic_write_receipt(
+            arguments.output,
+            receipt,
+            directory_descriptor=output_directory_descriptor,
+        )
+    if output_directory_descriptor is not None:
+        os.close(output_directory_descriptor)
     print(
         json.dumps(
             {"status": status, "receipt_sha256": receipt["receipt_sha256"]},

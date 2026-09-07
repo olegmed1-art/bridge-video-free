@@ -40,7 +40,9 @@ def profile_raw(reference_sha: str = "a" * 64) -> dict:
     anchors = {
         seat: {
             suit: {
-                "x": 100 + suit_index * 40,
+                "x": (
+                    14 if seat == "W" else 930 if seat == "E" else 100 + suit_index * 40
+                ),
                 "y": 100 + seat_index * 80 + suit_index * 12,
             }
             for suit_index, suit in enumerate("HCDS")
@@ -117,6 +119,14 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
         parse_profile(raw)
 
     raw = profile_raw()
+    raw["geometry"]["vertical_search"]["W"]["edge_x"] = 15
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="must match side anchors"):
+        parse_profile(raw)
+
+    raw = profile_raw()
     raw["geometry"]["anchors"]["S"]["S"]["y"] = (
         raw["frame_size"]["height"] - raw["gates"]["glyph_height"]
     )
@@ -126,7 +136,10 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
     assert parse_profile(raw).anchors["S"]["S"][1] == 704
 
     raw = profile_raw()
-    raw["geometry"]["anchors"]["W"]["H"]["x"] = 1
+    for suit in "HCDS":
+        raw["geometry"]["anchors"]["W"][suit]["x"] = 1
+    raw["geometry"]["vertical_search"]["W"]["x_min"] = 0
+    raw["geometry"]["vertical_search"]["W"]["edge_x"] = 1
     raw["profile_sha256"] = canonical_hash(
         {key: value for key, value in raw.items() if key != "profile_sha256"}
     )
@@ -1083,6 +1096,68 @@ def test_decoded_observation_hash_is_checked_before_registration(monkeypatch):
     assert read_count == 2
 
 
+def test_anchored_byte_replay_is_rejected_before_registration(monkeypatch):
+    raw = profile_raw()
+    raw["geometry"]["interface_anchor"] = {
+        "type": "UPPER_RIGHT_TEMPLATE",
+        "reference_region": {
+            "x": 0.72,
+            "y": 0.02,
+            "width": 0.08,
+            "height": 0.10,
+        },
+        "scales": [1.0],
+        "minimum_score": 0.80,
+        "minimum_margin": 0.03,
+    }
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    profile = parse_profile(raw)
+
+    class Raster:
+        shape = (720, 1000, 3)
+
+    reads = iter(
+        [
+            (Raster(), "a" * 64, "b" * 64, None),
+            (Raster(), "c" * 64, "d" * 64, None),
+            (Raster(), "c" * 64, "e" * 64, None),
+        ]
+    )
+    read_count = 0
+
+    def read_until_replay(*_args, **_kwargs):
+        nonlocal read_count
+        read_count += 1
+        if read_count > 3:
+            pytest.fail("must reject before decoding another observation")
+        return next(reads)
+
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "_validate_input_raster_budget",
+        lambda paths: [(1000, 720)] * len(paths),
+    )
+    monkeypatch.setattr(bridgit_rank_layout, "_read_frame", read_until_replay)
+    monkeypatch.setattr(
+        bridgit_rank_layout, "validate_anchor_reference_detail", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        bridgit_rank_layout,
+        "register_from_upper_right_anchor",
+        lambda *_args, **_kwargs: pytest.fail("must reject before registration"),
+    )
+
+    with pytest.raises(BridgitRankLayoutError, match="duplicate frame bytes"):
+        bridgit_rank_layout.recognize_frames(
+            Path("reference.png"),
+            [Path("first.png"), Path("replay.png"), Path("unread.png")],
+            profile,
+        )
+    assert read_count == 3
+
+
 def test_anchor_detail_is_checked_before_observation_decode(monkeypatch):
     np = pytest.importorskip("numpy")
     raw = profile_raw()
@@ -1919,6 +1994,41 @@ def test_cli_receipt_never_overwrites_recognition_inputs(tmp_path: Path):
             == 2
         )
         assert protected_path.read_bytes() == before
+
+
+def test_cli_pins_output_directory_before_recognition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    original_directory = tmp_path / "original"
+    retargeted_directory = tmp_path / "retargeted"
+    original_directory.mkdir()
+    retargeted_directory.mkdir()
+    protected_input = retargeted_directory / "receipt.json"
+    protected_input.write_bytes(b"replayable input")
+    output_parent = tmp_path / "output-link"
+    output_parent.symlink_to(original_directory, target_is_directory=True)
+    output_path = output_parent / "receipt.json"
+    job_path = tmp_path / "job.json"
+    job_path.write_text(
+        json.dumps({"reference_frame_ref": {"path": str(protected_input)}}),
+        encoding="utf-8",
+    )
+
+    def retarget_then_reject(_job):
+        output_parent.unlink()
+        output_parent.symlink_to(retargeted_directory, target_is_directory=True)
+        raise MemoryError()
+
+    monkeypatch.setattr(bridgit_rank_layout, "execute_shadow_job", retarget_then_reject)
+
+    assert (
+        bridgit_rank_layout.main(["--job", str(job_path), "--output", str(output_path)])
+        == 2
+    )
+    assert protected_input.read_bytes() == b"replayable input"
+    assert json.loads((original_directory / "receipt.json").read_text())["status"] == (
+        "REJECTED"
+    )
 
 
 def test_path_resolution_runtime_errors_are_translated(
