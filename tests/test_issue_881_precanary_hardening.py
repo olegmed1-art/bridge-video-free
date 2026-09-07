@@ -1255,18 +1255,8 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
     script_reference = re.compile(
         r"(?<![A-Za-z0-9_-])(ops/[A-Za-z0-9_.-]+\.sh)(?![A-Za-z0-9_./-])"
     )
-    mutation = re.compile(
-        r"systemctl\s+(?:restart|start|stop|enable|disable|daemon-reload)\b|"
-        r"systemd-run\b|"
-        r"oci\s+(?:--config-file\s+\S+\s+)?(?:compute\s+instance\s+action|"
-        r"instance-agent\s+command\s+create)\b|"
-        r"(?:^|\n)\s*(?:sudo\s+-n\s+)?install\s+|"
-        r"docker\s+(?:run|rm|restart|stop|start|pull)\b|"
-        r"git\s+-C\s+[^\n]+\s+(?:checkout|reset|pull)\b",
-        re.IGNORECASE,
-    )
     shared_workflows: set[str] = set()
-    mutation_payloads: set[str] = set()
+    referenced_payloads: set[str] = set()
     for path in (ROOT / ".github/workflows").glob("*.yml"):
         workflow = path.read_text(encoding="utf-8")
         if "oracle-instance-workload-mutation" not in workflow:
@@ -1290,14 +1280,10 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
                 for child in script_reference.findall(payload)
                 if child not in indirect and (ROOT / child).is_file()
             )
-        mutation_payloads.update(
-            reference
-            for reference, payload in indirect.items()
-            if mutation.search(payload)
-        )
+        referenced_payloads.update(indirect)
     assert len(shared_workflows) == 65
-    assert len(mutation_payloads) == 34
-    for relative in shared_workflows | mutation_payloads:
+    assert len(referenced_payloads) == 49
+    for relative in shared_workflows | referenced_payloads:
         assert f"'{relative}'" in runner, relative
 
 
