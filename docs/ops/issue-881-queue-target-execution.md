@@ -8,6 +8,7 @@ project `misty-poetry-18012774`, production branch `br-wispy-lab-b1rq54of`, data
 
 ```sql
 SELECT current_setting('neon.project_id') AS project,
+       clock_timestamp() AS observed_at,
        current_setting('neon.branch_id') AS branch,
        current_database() AS database,
        s.last_value, s.is_called,
@@ -23,6 +24,12 @@ NULL, `last_value=1`, and `is_called=false`. Otherwise stop and reconcile the
 changed state; do not reset the sequence or widen runtime privileges. Confirm
 the exact main SHA, no concurrent infrastructure operation, and clean review/CI.
 Record the timestamped result and main SHA in issue #881 before the host command.
+Use a comment beginning exactly `ISSUE881_QUEUE_OWNER_ATTESTATION_V1` followed
+by one newline and a JSON object with the query's fields plus `main` (the exact
+SHA). The workflow verifies the owner's immutable user ID and login, exact
+identity/state, and both observation/comment timestamps. Evidence expires after
+five minutes; the host rechecks expiry immediately before replacement. A stale
+or missing report requires a new independent owner query and report.
 The host independently rejects noncanonical sequence bounds, increment, cache,
 cycling, type or sequence set, along with schema/ACL/role drift and non-idle work.
 
