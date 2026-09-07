@@ -379,31 +379,41 @@ jobs:
           }
 
           verify_no_competing_infrastructure_runs(){
-            local active_json queued_json competing_count
+            local runs_json reported_total loaded_total unique_total competing_count
             local path_pattern='^\.github/workflows/(oracle-|issue-881-|autopilot-|database-production\.yml$|database-worker-runtime-smoke\.yml$|process-video\.yml$|video-job-monitor\.yml$|bridge-ai-|research-job-|dds3-runtime-container-proof\.yml$|dds3-production-health-monitor\.yml$|dds-training-|dds-main-)'
-            active_json="$(gh api --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/actions/runs?status=in_progress&per_page=100")"
-            queued_json="$(gh api --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/actions/runs?status=queued&per_page=100")"
-            competing_count="$(jq -n \
-              --argjson active "$active_json" \
-              --argjson queued "$queued_json" \
+            # One unfiltered paginated snapshot prevents a queued ->
+            # in_progress transition from disappearing between status-filtered
+            # API calls. Any incomplete or shifting page set is uncertainty.
+            runs_json="$(gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100")"
+            reported_total="$(jq \
+              '[.[].total_count] | unique | if length == 1 then .[0] else -1 end' \
+              <<<"$runs_json")"
+            loaded_total="$(jq '[.[].workflow_runs[]] | length' <<<"$runs_json")"
+            unique_total="$(jq '[.[].workflow_runs[].id] | unique | length' <<<"$runs_json")"
+            [[ "$reported_total" =~ ^[0-9]+$ \
+              && "$reported_total" == "$loaded_total" \
+              && "$loaded_total" == "$unique_total" ]] || {
+              echo 'Infrastructure workflow snapshot is incomplete or changed while paginating' >&2
+              return 1
+            }
+            competing_count="$(jq \
               --argjson current "$GITHUB_RUN_ID" \
               --arg pattern "$path_pattern" \
-              '[($active + $queued)[].workflow_runs[]
+              '[.[].workflow_runs[]
                 | select(.id != $current)
+                | select(.status != "completed")
                 | select((.path // "") | test($pattern))]
-               | unique_by(.id) | length')"
+               | unique_by(.id) | length' <<<"$runs_json")"
             [[ "$competing_count" == 0 ]] || {
-              jq -r -n \
-                --argjson active "$active_json" \
-                --argjson queued "$queued_json" \
+              jq -r \
                 --argjson current "$GITHUB_RUN_ID" \
                 --arg pattern "$path_pattern" \
-                '[($active + $queued)[].workflow_runs[]
+                '[.[].workflow_runs[]
                   | select(.id != $current)
+                  | select(.status != "completed")
                   | select((.path // "") | test($pattern))
-                  | {id, path, status}] | unique_by(.id)' >&2
+                  | {id, path, status}] | unique_by(.id)' <<<"$runs_json" >&2
               echo 'A competing infrastructure workflow is active or queued' >&2
               return 1
             }

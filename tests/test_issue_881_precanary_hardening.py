@@ -3,6 +3,9 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import importlib.util
+import json
+import subprocess
+import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -325,7 +328,18 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "GITHUB_RUN_ATTEMPT" in workflow
     assert "verify_no_competing_infrastructure_runs" in workflow
     assert "UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE" in workflow
-    assert "status=in_progress" in workflow and "status=queued" in workflow
+    infrastructure_gate = workflow[
+        workflow.index("verify_no_competing_infrastructure_runs(){") :
+        workflow.index("# Initial reconciliation rejects historical")
+    ]
+    assert infrastructure_gate.count("actions/runs?per_page=100") == 1
+    assert "status=in_progress" not in infrastructure_gate
+    assert "status=queued" not in infrastructure_gate
+    assert 'select(.status != "completed")' in infrastructure_gate
+    assert "reported_total" in infrastructure_gate
+    assert "loaded_total" in infrastructure_gate
+    assert "unique_total" in infrastructure_gate
+    assert "snapshot is incomplete or changed while paginating" in infrastructure_gate
     assert "UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1" not in workflow
     assert "UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM=0" in attest
     assert 'find "$root_cache" -xdev -mindepth 1 -delete' not in attest
@@ -380,3 +394,93 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "enabled|disabled|static|indirect" in attest[verified_unmask:fenced_restore]
     assert "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER" in workflow
     assert 'ALLOW_CACHE_RECLAIM="${UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM:-1}"' in installer
+
+
+def test_infrastructure_snapshot_is_single_complete_and_fail_closed(tmp_path: Path) -> None:
+    workflow = (
+        ROOT / ".github/workflows/issue-881-authoritative-external-evidence.yml"
+    ).read_text(encoding="utf-8")
+    start = workflow.index("          verify_no_competing_infrastructure_runs(){")
+    end = workflow.index("\n\n          # Initial reconciliation rejects historical", start)
+    function = textwrap.dedent(workflow[start:end])
+    snapshot = tmp_path / "runs.json"
+    harness = f"""\
+set -euo pipefail
+{function}
+gh(){{ command cat "$SNAPSHOT"; }}
+GITHUB_REPOSITORY=olegmed1-art/bridge-video-free
+GITHUB_RUN_ID=42
+verify_no_competing_infrastructure_runs
+"""
+
+    def run(payload: list[dict[str, object]]) -> subprocess.CompletedProcess[str]:
+        snapshot.write_text(json.dumps(payload), encoding="utf-8")
+        return subprocess.run(
+            ["bash"],
+            input=harness,
+            text=True,
+            capture_output=True,
+            env={"PATH": "/usr/local/bin:/usr/bin:/bin", "SNAPSHOT": str(snapshot)},
+            timeout=10,
+        )
+
+    safe = run(
+        [
+            {
+                "total_count": 2,
+                "workflow_runs": [
+                    {
+                        "id": 42,
+                        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
+                        "status": "in_progress",
+                    },
+                    {
+                        "id": 7,
+                        "path": ".github/workflows/oracle-universal-video-admin.yml",
+                        "status": "completed",
+                    },
+                ],
+            }
+        ]
+    )
+    assert safe.returncode == 0, safe.stderr
+    assert "other_active=0 other_queued=0 result=PASS" in safe.stdout
+
+    competing = run(
+        [
+            {
+                "total_count": 2,
+                "workflow_runs": [
+                    {
+                        "id": 42,
+                        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
+                        "status": "in_progress",
+                    },
+                    {
+                        "id": 8,
+                        "path": ".github/workflows/oracle-universal-video-admin.yml",
+                        "status": "in_progress",
+                    },
+                ],
+            }
+        ]
+    )
+    assert competing.returncode != 0
+    assert "A competing infrastructure workflow is active or queued" in competing.stderr
+
+    incomplete = run(
+        [
+            {
+                "total_count": 2,
+                "workflow_runs": [
+                    {
+                        "id": 42,
+                        "path": ".github/workflows/issue-881-authoritative-external-evidence.yml",
+                        "status": "in_progress",
+                    }
+                ],
+            }
+        ]
+    )
+    assert incomplete.returncode != 0
+    assert "snapshot is incomplete or changed while paginating" in incomplete.stderr
