@@ -18,7 +18,7 @@ PREVIEW = "br-winter-glade-b1sag2el"
 PRODUCTION = "br-wispy-lab-b1rq54of"
 USER = "bridge_school_worker_principal"
 SOURCE_HOST = "ep-wandering-night-b1ej3ow6.c-5.eu-central-1.aws.neon.tech"
-TARGET_HOST = "ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech"
+TARGET_HOST = "ep-noisy-pine-b1pe30sf-pooler.c-5.eu-central-1.aws.neon.tech"
 DSN_FILE = Path("/opt/bridge-school/universal-video/secrets/video-queue-dsn")
 BACKUP = DSN_FILE.with_name("video-queue-dsn.preview-before-production")
 FENCE = Path("/var/lib/bridge-school/issue-881-capacity-lease")
@@ -43,6 +43,7 @@ def candidate(raw):
     require(len(pairs) == len(dict(pairs)))
     require(set(dict(pairs)) <= {"sslmode", "channel_binding"})
     require(dict(pairs).get("sslmode") in ("require", "verify-ca", "verify-full"))
+    require(dict(pairs).get("channel_binding") == "require")
     # Preserve raw escaped credentials, TLS options and database. No host scan,
     # endpoint guessing, role changes, or credential retrieval from other files.
     authority = p.netloc.rsplit("@", 1)[0] + "@" + TARGET_HOST + ":5432"
@@ -61,10 +62,15 @@ def verify(raw, branch):
                 EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='video_queue'),
                 pg_has_role(current_user,'bridge_school_worker','MEMBER'),
                 EXISTS (SELECT 1 FROM pg_roles WHERE rolname=current_user
-                    AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolbypassrls))""")
+                    AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolbypassrls)),
+                (SELECT array_agg(rolname ORDER BY rolname) FROM pg_roles
+                    WHERE rolname <> current_user AND pg_has_role(current_user,oid,'MEMBER')),
+                EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member
+                    WHERE r.rolname=current_user AND m.admin_option)""")
             row = cur.fetchone()
             require(row is not None and row[:4] == (PROJECT, branch, "neondb", USER))
             require(row[5] and not row[6])
+            require(row[7] == ['bridge_school_worker'] and not row[8])
             if branch == PREVIEW:
                 require(not row[4])
             else:
@@ -112,7 +118,12 @@ def replace_protected(path, raw, gid):
 def run(mode):
     require(os.geteuid() == 0 and socket.gethostname() == "bridge-school-dds3-frankfurt")
     gid = grp.getgrnam("universal-video").gr_gid
-    with open(LOCK_FILE, "a") as lock:
+    require(LOCK_FILE.resolve() == LOCK_FILE)
+    fd = os.open(LOCK_FILE, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "r") as lock:
+        metadata = os.fstat(lock.fileno())
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == 0)
+        require(metadata.st_nlink == 1 and not stat.S_IMODE(metadata.st_mode) & 0o022)
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         require(not os.path.lexists(FENCE))
         parent = DSN_FILE.parent.stat()
