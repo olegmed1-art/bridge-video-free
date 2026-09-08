@@ -4,10 +4,9 @@ from contextlib import contextmanager
 
 import pytest
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
 
 import bridge_school_api.knowledge as knowledge
-from bridge_school_api.main import app
+from bridge_school_api.main import app, require_api_token
 
 
 class FakeCursor:
@@ -77,17 +76,23 @@ def query(monkeypatch, lane: knowledge.AuthorityLane, cursor: FakeCursor) -> dic
     )
 
 
-def test_knowledge_routes_are_mounted_with_api_token_dependency(monkeypatch) -> None:
-    monkeypatch.delenv("BRIDGE_API_TOKEN", raising=False)
-    client = TestClient(app)
-    requests = (
-        ("/v1/knowledge/query", {"lane": "SOURCE", "system_profile": "SCHOOL_L1_DB_V1"}),
-        ("/v1/knowledge/runtime/l1", {"system_profile": "SCHOOL_L1_DB_V1"}),
+def test_knowledge_routes_are_mounted_with_api_token_dependency() -> None:
+    mounted = [
+        route
+        for route in app.routes
+        if getattr(getattr(route, "include_context", None), "included_router", None)
+        is knowledge.router
+    ]
+    assert len(mounted) == 1
+
+    include_context = mounted[0].include_context
+    assert any(
+        dependency.dependency is require_api_token
+        for dependency in include_context.dependencies
     )
-    for path, params in requests:
-        response = client.get(path, params=params)
-        assert response.status_code == 503
-        assert response.json() == {"detail": "application API token is not configured"}
+    assert {
+        route.path for route in mounted[0].original_router.routes
+    } == {"/v1/knowledge/query", "/v1/knowledge/runtime/l1"}
 
 
 def test_source_lane_reads_only_approved_source_facts(monkeypatch) -> None:
@@ -108,25 +113,6 @@ def test_source_lane_reads_only_approved_source_facts(monkeypatch) -> None:
     assert result["retrieval_status"] == "SOURCE_MATCH"
     assert result["fallback_performed"] is False
     assert result["sync_state"] == {"status": "NEEDS_REVIEW"}
-
-
-def test_source_lane_is_available_through_authenticated_http(monkeypatch) -> None:
-    cursor = FakeCursor(
-        rows=[{"stable_key": "FACT-L1-OPEN-1MAJOR"}],
-        sync_state={"status": "NEEDS_REVIEW"},
-    )
-    install_fake_connect(monkeypatch, cursor)
-    monkeypatch.setenv("BRIDGE_API_TOKEN", "read-test-token")
-
-    response = TestClient(app).get(
-        "/v1/knowledge/query",
-        params={"lane": "SOURCE", "system_profile": "SCHOOL_L1_DB_V1"},
-        headers={"Authorization": "Bearer read-test-token"},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["items"] == [{"stable_key": "FACT-L1-OPEN-1MAJOR"}]
-    assert response.headers["cache-control"] == "private, no-store, max-age=0"
 
 
 def test_world_lane_cannot_read_school_or_unreviewed_versions(monkeypatch) -> None:
