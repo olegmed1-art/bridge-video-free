@@ -115,6 +115,19 @@ def test_codex_clean_receipt_accepts_current_bot_status_suffixes(
     assert result["codex_clean_count"] == 1
 
 
+def test_codex_clean_receipt_rejects_noncanonical_status_qualifier() -> None:
+    for suffix in (" except the production gate is unsafe", chr(9) + ":+1:"):
+        comment = _codex_clean_comment(SHA[:10])
+        comment["body"] = str(comment["body"]).replace(" :rocket:", suffix)
+        with pytest.raises(REVIEW_GATE.ReviewEvidenceError, match="neither a Codex"):
+            REVIEW_GATE.validate_review_evidence(
+                [[]],
+                [[comment]],
+                exact_sha=SHA,
+                owner_login="olegmed1-art",
+            )
+
+
 @pytest.mark.parametrize("malformed_token", [SHA[:9], SHA[:10].upper()])
 def test_codex_clean_receipt_rejects_malformed_duplicate_commit_lines(
     malformed_token: str,

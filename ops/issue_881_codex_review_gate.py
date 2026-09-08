@@ -15,7 +15,14 @@ SHA_RE = re.compile(r"[0-9a-f]{40}")
 OWNER_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
 CODEX_BOT_LOGIN = "chatgpt-codex-connector[bot]"
 CODEX_CLEAN_PREFIX = "Codex Review: Didn\'t find any major issues."
-MAX_CODEX_CLEAN_SUFFIX_CHARS = 160
+CODEX_CLEAN_SUFFIXES = frozenset(
+    {
+        "",
+        " :rocket:",
+        " :+1:",
+        " Can\'t wait for the next one!",
+    }
+)
 
 REVIEWED_COMMIT_LINE_RE = re.compile(
     r"^\*\*Reviewed commit:\*\* `([0-9a-f]{10}|[0-9a-f]{40})`[ \t]*$",
@@ -71,16 +78,9 @@ def _login(item: dict[str, Any]) -> str:
 
 
 def _is_codex_clean_status_line(line: str) -> bool:
-    if line == CODEX_CLEAN_PREFIX:
-        return True
     if not line.startswith(CODEX_CLEAN_PREFIX):
         return False
-    suffix = line[len(CODEX_CLEAN_PREFIX) :]
-    return (
-        suffix[:1] in {" ", chr(9)}
-        and 1 <= len(suffix.strip(" " + chr(9))) <= MAX_CODEX_CLEAN_SUFFIX_CHARS
-        and len(suffix) <= MAX_CODEX_CLEAN_SUFFIX_CHARS + 1
-    )
+    return line[len(CODEX_CLEAN_PREFIX) :] in CODEX_CLEAN_SUFFIXES
 
 
 def _is_exact_clean_receipt(comment: dict[str, Any], exact_sha: str) -> bool:
