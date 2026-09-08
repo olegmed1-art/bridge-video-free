@@ -6,6 +6,7 @@ from bridge_vision.bridgit_holdout_measurement import HoldoutMeasurementError
 from bridge_vision.bridgit_holdout_portable import (
     FREEZE_RECEIPT_VERSION,
     PORTABLE_EVALUATOR_VERSION,
+    evaluator_source_sha256,
     frozen_thresholds_sha256,
     score_portable_frozen_holdout,
 )
@@ -42,7 +43,7 @@ def freeze_receipt():
         "holdout_manifest_sha256": "4" * 64,
         "human_gold_sha256": "5" * 64,
         "recognizer_output_sha256": "6" * 64,
-        "evaluator_source_sha256": "7" * 64,
+        "evaluator_source_sha256": evaluator_source_sha256(),
         "portable_evaluator_version": PORTABLE_EVALUATOR_VERSION,
         "measurement_scorer_version": "bridgit-holdout-measurement-v2",
         "thresholds_sha256": frozen_thresholds_sha256(),
@@ -103,6 +104,7 @@ def test_portable_scoring_is_deterministic_under_case_order():
     [
         ("recognizer_head_git_sha", "x" * 40, "recognizer_head_git_sha"),
         ("profile_sha256", "x" * 64, "profile_sha256"),
+        ("evaluator_source_sha256", "0" * 64, "evaluator source digest"),
         ("thresholds_sha256", "0" * 64, "threshold digest"),
         ("portable_evaluator_version", "other", "evaluator version"),
         ("measurement_scorer_version", "other", "scorer version"),
