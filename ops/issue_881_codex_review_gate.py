@@ -77,8 +77,8 @@ def _is_codex_clean_status_line(line: str) -> bool:
         return False
     suffix = line[len(CODEX_CLEAN_PREFIX) :]
     return (
-        suffix[:1] in {" ", "\\t"}
-        and 1 <= len(suffix.strip(" \\t")) <= MAX_CODEX_CLEAN_SUFFIX_CHARS
+        suffix[:1] in {" ", chr(9)}
+        and 1 <= len(suffix.strip(" " + chr(9))) <= MAX_CODEX_CLEAN_SUFFIX_CHARS
         and len(suffix) <= MAX_CODEX_CLEAN_SUFFIX_CHARS + 1
     )
 
