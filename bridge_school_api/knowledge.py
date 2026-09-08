@@ -168,6 +168,10 @@ _ACTIVE_CONFLICT_SQL = """
     LIMIT 1
 """
 
+_ACTIVE_SNAPSHOT_SQL = (
+    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+)
+
 _SYNC_STATE_SQL = """
     SELECT
         sync_key,
@@ -280,6 +284,10 @@ def query_knowledge(
                 else "school_canon"
             )
             if lane is AuthorityLane.ACTIVE_SCHOOL_CANON:
+                # The conflict guard and retrieval must observe one MVCC
+                # snapshot. READ COMMITTED would allow a concurrent activation
+                # or contradiction to appear between the two SELECTs.
+                cur.execute(_ACTIVE_SNAPSHOT_SQL, ())
                 cur.execute(
                     _ACTIVE_CONFLICT_SQL,
                     (
