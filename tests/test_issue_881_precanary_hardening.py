@@ -97,6 +97,22 @@ def test_codex_clean_receipt_requires_bot_identity_and_one_canonical_commit_line
             )
 
 
+@pytest.mark.parametrize("malformed_token", [SHA[:9], SHA[:10].upper()])
+def test_codex_clean_receipt_rejects_malformed_duplicate_commit_lines(
+    malformed_token: str,
+) -> None:
+    comment = _codex_clean_comment(SHA[:10])
+    comment["body"] = (
+        f"{comment['body']}**Reviewed commit:** \`{malformed_token}\`\\n"
+    )
+    with pytest.raises(REVIEW_GATE.ReviewEvidenceError, match="neither a Codex"):
+        REVIEW_GATE.validate_review_evidence(
+            [[]],
+            [[comment]],
+            exact_sha=SHA,
+            owner_login="olegmed1-art",
+        )
+
 def test_exact_non_owner_approval_remains_valid_after_codex_review_object() -> None:
     reviews = [[
         {

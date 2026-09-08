@@ -22,6 +22,10 @@ REVIEWED_COMMIT_LINE_RE = re.compile(
     r"^\*\*Reviewed commit:\*\* `([0-9a-f]{10}|[0-9a-f]{40})`[ \t]*$",
     re.MULTILINE,
 )
+REVIEWED_COMMIT_CLAIM_RE = re.compile(
+    r"^.*\\*\\*Reviewed commit:\\*\\*.*$",
+    re.MULTILINE,
+)
 MAX_JSON_BYTES = 5_000_000
 
 
@@ -75,6 +79,9 @@ def _is_exact_clean_receipt(comment: dict[str, Any], exact_sha: str) -> bool:
         return False
     body = comment.get("body")
     if not isinstance(body, str) or CODEX_CLEAN_LINE_RE.search(body) is None:
+        return False
+    reviewed_claims = REVIEWED_COMMIT_CLAIM_RE.findall(body)
+    if len(reviewed_claims) != 1:
         return False
     reviewed_tokens = REVIEWED_COMMIT_LINE_RE.findall(body)
     if len(reviewed_tokens) != 1:
