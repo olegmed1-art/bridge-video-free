@@ -22,7 +22,8 @@ REVIEWED_COMMIT_LINE_RE = re.compile(
     r"^\*\*Reviewed commit:\*\* `([0-9a-f]{10}|[0-9a-f]{40})`[ \t]*$",
     re.MULTILINE,
 )
-REVIEWED_COMMIT_CLAIM = "**Reviewed commit:**"\nMAX_JSON_BYTES = 5_000_000
+REVIEWED_COMMIT_CLAIM = "**Reviewed commit:**"
+MAX_JSON_BYTES = 5_000_000
 
 
 class ReviewEvidenceError(ValueError):

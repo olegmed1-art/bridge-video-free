@@ -107,7 +107,7 @@ def test_codex_clean_receipt_rejects_malformed_duplicate_commit_lines(
         + chr(96)
         + malformed_token
         + chr(96)
-        + "\\n"
+        + chr(10)
     )
     comment["body"] = f"{comment['body']}{malformed_line}"
     with pytest.raises(REVIEW_GATE.ReviewEvidenceError, match="neither a Codex"):
