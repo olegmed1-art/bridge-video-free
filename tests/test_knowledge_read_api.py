@@ -147,8 +147,14 @@ def test_active_canon_gap_does_not_fall_back_to_world(monkeypatch) -> None:
     cursor = FakeCursor()
     result = query(monkeypatch, knowledge.AuthorityLane.ACTIVE_SCHOOL_CANON, cursor)
 
-    assert len(cursor.executions) == 2
-    sql, params = cursor.executions[1]
+    assert len(cursor.executions) == 3
+    snapshot_sql, snapshot_params = cursor.executions[0]
+    assert snapshot_sql == (
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+    )
+    assert snapshot_params == ()
+    assert "knowledge_relation relation" in cursor.executions[1][0]
+    sql, params = cursor.executions[2]
     assert params[1] == "school_canon"
     assert "JOIN public.canon_activation activation" in sql
     assert "activation.status = 'active'" in sql
@@ -173,7 +179,12 @@ def test_active_canon_conflict_stops_before_retrieval(monkeypatch) -> None:
 
     assert error.value.status_code == 409
     assert error.value.detail["code"] == "CANON_CONFLICT"
-    assert len(cursor.executions) == 1
+    assert len(cursor.executions) == 2
+    assert cursor.executions[0] == (
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
+        (),
+    )
+    assert "knowledge_relation relation" in cursor.executions[1][0]
 
 
 def test_runtime_snapshot_is_explicit_and_not_a_db_activation() -> None:
