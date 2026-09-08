@@ -15,9 +15,11 @@ SHA_RE = re.compile(r"[0-9a-f]{40}")
 OWNER_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
 CODEX_BOT_LOGIN = "chatgpt-codex-connector[bot]"
 CODEX_CLEAN_LINE_RE = re.compile(
-    r"^Codex Review: Didn't find any major issues\.(?: :rocket:)?[ \t]*$",
+    r"^Codex Review: Didn't find any major issues\\."
+    r"(?:[ \\t]+[^\\r\\n]{1,160})?[ \\t]*$",
     re.MULTILINE,
 )
+
 REVIEWED_COMMIT_LINE_RE = re.compile(
     r"^\*\*Reviewed commit:\*\* `([0-9a-f]{10}|[0-9a-f]{40})`[ \t]*$",
     re.MULTILINE,

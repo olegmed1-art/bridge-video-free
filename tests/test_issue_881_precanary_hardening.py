@@ -97,6 +97,24 @@ def test_codex_clean_receipt_requires_bot_identity_and_one_canonical_commit_line
             )
 
 
+@pytest.mark.parametrize(
+    "clean_suffix",
+    [":+1:", "Can\'t wait for the next one!"],
+)
+def test_codex_clean_receipt_accepts_current_bot_status_suffixes(
+    clean_suffix: str,
+) -> None:
+    comment = _codex_clean_comment(SHA[:10])
+    comment["body"] = str(comment["body"]).replace(" :rocket:", f" {clean_suffix}")
+    result = REVIEW_GATE.validate_review_evidence(
+        [[]],
+        [[comment]],
+        exact_sha=SHA,
+        owner_login="olegmed1-art",
+    )
+    assert result["codex_clean_count"] == 1
+
+
 @pytest.mark.parametrize("malformed_token", [SHA[:9], SHA[:10].upper()])
 def test_codex_clean_receipt_rejects_malformed_duplicate_commit_lines(
     malformed_token: str,
