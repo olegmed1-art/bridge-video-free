@@ -102,9 +102,14 @@ def test_codex_clean_receipt_rejects_malformed_duplicate_commit_lines(
     malformed_token: str,
 ) -> None:
     comment = _codex_clean_comment(SHA[:10])
-    comment["body"] = (
-        f"{comment['body']}**Reviewed commit:** \`{malformed_token}\`\\n"
+    malformed_line = (
+        "**Reviewed commit:** "
+        + chr(96)
+        + malformed_token
+        + chr(96)
+        + "\\n"
     )
+    comment["body"] = f"{comment['body']}{malformed_line}"
     with pytest.raises(REVIEW_GATE.ReviewEvidenceError, match="neither a Codex"):
         REVIEW_GATE.validate_review_evidence(
             [[]],
@@ -112,6 +117,7 @@ def test_codex_clean_receipt_rejects_malformed_duplicate_commit_lines(
             exact_sha=SHA,
             owner_login="olegmed1-art",
         )
+
 
 def test_exact_non_owner_approval_remains_valid_after_codex_review_object() -> None:
     reviews = [[
