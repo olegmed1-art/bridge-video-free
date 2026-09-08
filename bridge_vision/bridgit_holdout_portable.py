@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from bridge_vision.bridgit_holdout_measurement import (
@@ -58,6 +59,11 @@ def frozen_thresholds_sha256() -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def evaluator_source_sha256() -> str:
+    """Hash the exact evaluator bytes that must be identical on Oracle and IBM."""
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
 def _require_bool(raw: Mapping[str, Any], field: str, expected: bool) -> None:
     if raw.get(field) is not expected:
         raise HoldoutMeasurementError(f"freeze receipt requires {field}={expected}")
@@ -84,6 +90,8 @@ def _validate_freeze_receipt(raw: Any) -> dict[str, Any]:
         raise HoldoutMeasurementError("measurement scorer version mismatch")
     for field in _HASH_BINDINGS:
         _require_hash(raw, field)
+    if raw.get("evaluator_source_sha256") != evaluator_source_sha256():
+        raise HoldoutMeasurementError("evaluator source digest mismatch")
     if raw.get("thresholds_sha256") != frozen_thresholds_sha256():
         raise HoldoutMeasurementError("frozen threshold digest mismatch")
     _require_bool(raw, "frozen_before_holdout_reveal", True)
