@@ -63,6 +63,25 @@ CONTAINER = 'universal-video-container'
 HOST = '/opt/bridge-school/universal-video/secrets/video-queue-dsn'
 RESIDENT = '/run/secrets/video-queue-dsn'
 
+# Shared verbatim by the remote probe and local pre-network regression tests.
+DSN_VALIDATOR = '''from urllib.parse import urlsplit, parse_qsl
+def validated_dsn(value):
+ if type(value) is not str or not 0 < len(value) <= 4096: raise ValueError()
+ if any(c.isspace() or ord(c)<32 or ord(c)==127 for c in value): raise ValueError()
+ p=urlsplit(value)
+ if p.scheme not in ('postgres','postgresql'): raise ValueError()
+ if p.hostname!='ep-noisy-pine-b1pe30sf-pooler.c-5.eu-central-1.aws.neon.tech' or p.port not in (None,5432): raise ValueError()
+ if p.username!='bridge_school_worker_principal' or not p.password: raise ValueError()
+ if p.path!='/neondb' or p.fragment: raise ValueError()
+ pairs=parse_qsl(p.query,strict_parsing=True,keep_blank_values=True)
+ if len(pairs)!=len(dict(pairs)): raise ValueError()
+ options=dict(pairs)
+ if set(options)-{'sslmode','channel_binding'}: raise ValueError()
+ if options.get('sslmode') not in ('require','verify-ca','verify-full'): raise ValueError()
+ if options.get('channel_binding')!='require': raise ValueError()
+ return value
+'''
+
 
 def run(argv, stdin=None):
     return subprocess.run(argv, input=stdin, text=True, capture_output=True,
@@ -70,10 +89,8 @@ def run(argv, stdin=None):
 
 
 def decision(e):
-    if e.get('observation_stable') is True and e.get('inode_match') == 'NO':
-        return 'RECREATE_REQUIRED'
-    # No YES until effective worker configuration, OCI state and conflicts
-    # are independently bound to this same observation.
+    # Inode mismatch is an observation, not authority to load an unverified
+    # host credential. Both target proofs and conflict fencing are missing.
     return 'BLOCKED_CAPABILITY'
 
 
@@ -115,10 +132,20 @@ def collect():
         e['inode_match'] = 'YES' if (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino) else 'NO'
         # Probe uses the resident filesystem and installed interpreter only.
         # It never imports application/worker code or performs inference.
-        probe = '''import json
+        probe = DSN_VALIDATOR + '''
+import json, os, stat
 from pathlib import Path
+fd=os.open('/run/secrets/video-queue-dsn',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+with os.fdopen(fd,'rb') as f:
+ m=os.fstat(f.fileno())
+ if not stat.S_ISREG(m.st_mode) or m.st_nlink!=1 or not 0<m.st_size<=4096: raise ValueError()
+ raw=f.read(4097)
+ if len(raw)>4096: raise ValueError()
+ dsn=validated_dsn(raw.decode('utf-8').strip())
+# Do not let inherited libpq defaults redirect an allowlisted URI.
+if any(k.startswith('PG') and v for k,v in os.environ.items()): raise ValueError()
 import psycopg
-with psycopg.connect(Path('/run/secrets/video-queue-dsn').read_text().strip(), connect_timeout=8) as c:
+with psycopg.connect(dsn, connect_timeout=8) as c:
  c.read_only = True
  with c.cursor() as q:
   q.execute("SET LOCAL statement_timeout = '5s'")
@@ -157,11 +184,7 @@ print(json.dumps(result))
         e['resident_mounted_credential_probe'] = 'UNKNOWN'
         e['observation_stable'] = False
     e['status'] = decision(e)
-    if e['status'] == 'RECREATE_REQUIRED':
-        e['container_recreation_required'] = 'YES'
-        e['BLOCKER'] = 'credential_inode_mismatch'
-    else:
-        e['BLOCKER'] = 'effective_worker_configuration_and_full_server_witness_unproved'
+    e['BLOCKER'] = 'effective_worker_configuration_and_full_server_witness_unproved'
     e['NEXT_STEP'] = 'independent_review_and_complete_missing_observers_before_any_GO'
     return e
 

@@ -1,6 +1,9 @@
 import copy
 import datetime
 import json
+import base64
+import hashlib
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -43,7 +46,7 @@ class Integration(unittest.TestCase):
         identity = self_run_identity(detail, detail['id'], SHA)
         pages = {s: dict(total_count=0, workflow_runs=[]) for s in ACTIVE}
         pages['in_progress'] = dict(total_count=1, workflow_runs=[detail])
-        self.assertEqual(actions_summary(pages, identity), 'IDLE')
+        self.assertEqual(actions_summary(pages, identity), 'NO_ACTIVE_OBSERVED')
         other = dict(detail, id=12346)
         pages['in_progress'] = dict(total_count=2, workflow_runs=[detail, other])
         self.assertEqual(actions_summary(pages, identity), 'BUSY')
@@ -79,7 +82,7 @@ class Integration(unittest.TestCase):
         with self.assertRaises(ValueError):
             resident_summary('{"x":1,"x":2}', now, now)
 
-    def run_mocked(self, change=None, postfailure=False):
+    def run_mocked(self, change=None, postfailure=False, wrong_source=False):
         calls = []
         oci_count = 0
         def call(args, body=None):
@@ -94,6 +97,13 @@ class Integration(unittest.TestCase):
                 return json.dumps({'data': {'id': INSTANCE, 'lifecycle-state': 'RUNNING',
                               'shape-config': {'ocpus': 4, 'memory-in-gbs': 12}}})
             if args[:2] == ['gh', 'api']:
+                if '/contents/' in args[2]:
+                    data = Path(__file__).with_name('witness.py').read_bytes()
+                    if wrong_source:
+                        data += b'\n# altered\n'
+                    return json.dumps(dict(type='file', path='witness-draft/witness.py',
+                         encoding='base64', size=len(data), content=base64.b64encode(data).decode(),
+                         sha=hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()))
                 if 'git/ref' in args[2]:
                     return json.dumps({'object': {'sha': SHA}})
                 if args[2].endswith('/12345'):
@@ -114,7 +124,8 @@ class Integration(unittest.TestCase):
 
     def test_full_mocked_roundtrip_stays_unknown(self):
         r, calls = self.run_mocked()
-        self.assertTrue(r['window_stable'])
+        self.assertEqual(r['window_stable'], 'UNKNOWN')
+        self.assertTrue(r['sampled_metadata_equal'])
         self.assertEqual(r['inode_match'], 'YES')
         self.assertEqual(r['resident_target'], 'UNKNOWN')
         self.assertEqual(r['status'], 'BLOCKED_CAPABILITY')
@@ -125,12 +136,18 @@ class Integration(unittest.TestCase):
             e['resident_device_inode'] = [1, 201]
             e['inode_match'] = 'NO'
         r, _ = self.run_mocked(change)
-        self.assertEqual(r['status'], 'RECREATE_REQUIRED')
+        self.assertEqual(r['status'], 'BLOCKED_CAPABILITY')
+        self.assertEqual(r['container_recreation_required'], 'UNKNOWN')
         r, _ = self.run_mocked(change, postfailure=True)
         self.assertEqual(r['status'], 'BLOCKED_CAPABILITY')
         self.assertEqual(r['inode_match'], 'UNKNOWN')
         self.assertNotIn('resident_observation', r)
         self.assertNotIn('SECRET_CANARY', str(r))
+
+    def test_source_mismatch_stops_before_ssh(self):
+        r, calls = self.run_mocked(wrong_source=True)
+        self.assertEqual(r['failed_stage'], 'resident_probe')
+        self.assertFalse(any(x[0] == 'timeout' for x in calls))
 
     def test_unexpected_payload_not_published(self):
         def change(e):

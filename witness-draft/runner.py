@@ -11,6 +11,8 @@ import re
 import subprocess
 import time
 import datetime
+import base64
+import hashlib
 
 from evidence_contract import (ACTIVE, INSTANCE, actions_summary, draft_report,
                                oci_summary, self_run_identity, resident_summary)
@@ -66,7 +68,7 @@ def execute(exact_sha, key, known_hosts, call=invoke, run_id=None):
             raise ValueError()
         stage = 'actions_before'
         receipt['actions_before'] = github_snapshot(call, run_id, exact_sha)
-        if receipt['actions_before'] != 'IDLE':
+        if receipt['actions_before'] != 'NO_ACTIVE_OBSERVED':
             raise ValueError()
         stage = 'oci_before'
         before = oci_summary(json.loads(call(['oci', 'compute', 'instance', 'get', '--instance-id', INSTANCE])))
@@ -76,7 +78,25 @@ def execute(exact_sha, key, known_hosts, call=invoke, run_id=None):
         if time.monotonic() - started > 180:
             raise TimeoutError()
         stage = 'resident_probe'
-        source = Path(__file__).with_name('witness.py').read_text()
+        # Obtain observer bytes from the immutable attested commit, never
+        # execute the mutable local file with a different claimed SHA.
+        source_record = json.loads(call(['gh', 'api', 'repos/' + REPO +
+            '/contents/witness-draft/witness.py?ref=' + exact_sha]))
+        if source_record.get('encoding') != 'base64' or source_record.get('type') != 'file':
+            raise ValueError()
+        if source_record.get('path') != 'witness-draft/witness.py':
+            raise ValueError()
+        encoded = source_record['content']
+        if type(encoded) is not str or len(encoded) > 100000:
+            raise ValueError()
+        data = base64.b64decode(encoded.replace('\n', ''), validate=True)
+        blob_sha = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+        if blob_sha != source_record.get('sha') or len(data) != source_record.get('size'):
+            raise ValueError()
+        if data != Path(__file__).with_name('witness.py').read_bytes():
+            raise ValueError()
+        source = data.decode('utf-8')
+        receipt['observer_blob_sha'] = blob_sha
         # __name__ is not __main__; witness.py's disabled CLI is not invoked.
         # The outer EXECUTION_ENABLED gate must remain false until review/GO.
         body = 'ns={"__name__":"bounded_observer"}\nexec(' + repr(source) + ',ns)\nprint(ns["json"].dumps(ns["collect"]()))\n'
@@ -93,19 +113,15 @@ def execute(exact_sha, key, known_hosts, call=invoke, run_id=None):
         receipt['oci_after'] = after
         receipt['actions_after'] = github_snapshot(call, run_id, exact_sha)
         receipt['source_stable'] = main() == exact_sha
-        receipt['window_stable'] = (before == after and receipt['actions_after'] == 'IDLE'
+        snapshots_equal = (before == after and receipt['actions_after'] == 'NO_ACTIVE_OBSERVED'
                                     and receipt['source_stable'] and time.monotonic() - started <= 240)
-        if not receipt['window_stable']:
+        receipt['window_stable'] = 'UNKNOWN'
+        receipt['sampled_metadata_equal'] = snapshots_equal
+        if not snapshots_equal:
             raise ValueError()
         receipt['resident_observation'] = observed
         receipt['inode_match'] = observed['inode_match']
-        if observed['inode_match'] == 'NO':
-            receipt['status'] = 'RECREATE_REQUIRED'
-            receipt['container_recreation_required'] = 'YES'
-            receipt['BLOCKER'] = 'credential_inode_mismatch'
-            receipt['NEXT_STEP'] = 'prepare_separate_bounded_recreation_contract'
-        else:
-            receipt['BLOCKER'] = 'effective_worker_target_and_conflict_inventory_unproved'
+        receipt['BLOCKER'] = 'effective_worker_target_and_conflict_inventory_unproved'
     except Exception:
         # Fixed stage enum only; never exception, argv, raw stdout or stderr.
         receipt['failed_stage'] = stage

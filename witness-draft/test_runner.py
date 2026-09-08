@@ -22,7 +22,7 @@ class RunnerTests(unittest.TestCase):
         def call(args):
             calls.append(args)
             return json.dumps({'total_count': 0, 'workflow_runs': []})
-        self.assertEqual(runner.github_snapshot(call), 'IDLE')
+        self.assertEqual(runner.github_snapshot(call), 'NO_ACTIVE_OBSERVED')
         self.assertEqual(len(calls), 5)
         self.assertTrue(all(args[:2] == ['gh', 'api'] and len(args) == 3 for args in calls))
 

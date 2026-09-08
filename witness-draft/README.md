@@ -111,3 +111,24 @@ secret-canary rejection and mismatching inode. No live calls were used in tests.
 Not ready for dispatch: workflow still disabled/unwired, entry point disabled;
 runtime identity/configuration, comprehensive process inventory, approved
 transport setup and independent exact-code review remain outstanding.
+
+## Revision 6 — response to five P1 findings on d075936
+
+- Validate the DSN before connection: exact production pooler, runtime principal,
+  database, port, TLS/channel binding and option allowlist. Reject inherited PG*
+  libpq overrides. Read a bounded regular no-follow file. This follows the URI
+  rules in ops/issue_881_precanary_queue_proof.py at base e389b644.
+- Remove recreation recommendations from both collector and runner. No host
+  target proof exists; inode mismatch alone cannot authorize loading that file.
+- window_stable remains UNKNOWN. Matching sampled metadata is reported under
+  a separate explicitly observational field, never a conflict-fence proof.
+- Filtered Actions responses can only say NO_ACTIVE_OBSERVED, not IDLE. No
+  atomic snapshot or exclusion of OCI/host conflicts is claimed.
+- Fetch observer bytes from the immutable GitHub contents endpoint at exact_sha,
+  validate the Git blob hash/size, and compare local bytes before SSH. Modified
+  local observer content fails before any SSH invocation.
+
+32 mocked/pure local tests pass. These corrections remove unsafe conclusions;
+they do not implement the outstanding host target/conflict collectors or enable
+the workflow. All earlier notes describing RECREATE_REQUIRED from inode alone,
+IDLE from filtered pages or stable windows are superseded by this revision.

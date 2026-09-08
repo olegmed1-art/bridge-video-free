@@ -22,7 +22,7 @@ class Evidence(unittest.TestCase):
 
     def test_empty_actions_complete(self):
         pages = {s: {'total_count': 0, 'workflow_runs': []} for s in ACTIVE}
-        self.assertEqual(actions_summary(pages), 'IDLE')
+        self.assertEqual(actions_summary(pages), 'NO_ACTIVE_OBSERVED')
         del pages['waiting']
         self.assertEqual(actions_summary(pages), 'UNKNOWN')
 

@@ -11,8 +11,8 @@ class Contract(unittest.TestCase):
     def test_equal_inode_not_sufficient(self):
         self.assertEqual(witness.decision({'inode_match': 'YES'}), 'BLOCKED_CAPABILITY')
 
-    def test_mismatch_requires_recreation(self):
-        self.assertEqual(witness.decision({'inode_match': 'NO', 'observation_stable': True}), 'RECREATE_REQUIRED')
+    def test_mismatch_without_host_target_proof_cannot_recommend_recreation(self):
+        self.assertEqual(witness.decision({'inode_match': 'NO', 'observation_stable': True}), 'BLOCKED_CAPABILITY')
 
     def test_unstable_mismatch_is_unknown(self):
         self.assertEqual(witness.decision({'inode_match': 'NO'}), 'BLOCKED_CAPABILITY')

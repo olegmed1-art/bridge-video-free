@@ -189,7 +189,9 @@ def actions_summary(pages, self_identity=None):
                 busy = True
     if self_identity is not None and self_seen != 1:
         return 'UNKNOWN'
-    return 'BUSY' if busy else 'IDLE'
+    # Filtered pages are not atomic. A queued->running transition can be
+    # missed. This is only a weak observation, never an idleness/fence proof.
+    return 'BUSY' if busy else 'NO_ACTIVE_OBSERVED'
 
 
 def host_process_summary(records):
