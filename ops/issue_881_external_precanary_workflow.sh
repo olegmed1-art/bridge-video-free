@@ -307,6 +307,16 @@ verify_live_gate(){
     --exact-sha "$reviewed_sha" \
     --owner-login "$GITHUB_REPOSITORY_OWNER")" || return 1
   printf '%s\n' "$review_marker"
+  threads_json="$(gh api graphql \
+    -f owner="${GITHUB_REPOSITORY%%/*}" \
+    -f name="${GITHUB_REPOSITORY#*/}" \
+    -F number="$pr_number" \
+    -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved isOutdated comments(first:100){nodes{author{login}}}}}}}}')"
+  [[ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$threads_json")" == false ]] \
+    || { echo 'Review thread set exceeds the bounded verification page' >&2; return 1; }
+  blocker_count="$(jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select((.isResolved | not) and (.isOutdated | not)) | select(any(.comments.nodes[]; (.author.login // "") | startswith("chatgpt-codex-connector")))] | length' <<<"$threads_json")"
+  [[ "$blocker_count" == 0 ]] \
+    || { echo "Independent review still has $blocker_count unresolved current threads" >&2; return 1; }
   [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$EXACT_SHA" ]] \
     || { echo 'Main changed while live review and CI gates were evaluated' >&2; return 1; }
 }

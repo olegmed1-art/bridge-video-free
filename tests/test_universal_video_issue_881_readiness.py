@@ -1374,8 +1374,9 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "Main changed while live review and CI gates were evaluated" in workflow
     assert workflow.count('git/ref/heads/main" --jq') >= 2
     approval_recheck = workflow.rindex('reviews?per_page=100')
+    final_thread_recheck = workflow.rindex("reviewThreads(first:100)")
     final_main_fence = workflow.rindex('git/ref/heads/main" --jq')
-    assert approval_recheck < final_main_fence
+    assert approval_recheck < final_thread_recheck < final_main_fence
     assert '[[ "$live_state" == \'closed\'' in workflow
     assert 'git/ref/heads/main" --jq \'.object.sha\'' in workflow
     assert '"$main_sha" == "$EXACT_SHA"' in workflow
@@ -1385,8 +1386,8 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "verify_live_gate(){" in workflow
     # One gate before the reviewed SSH helper and one fresh gate after staging.
     assert workflow.count("verify_live_gate") == 3
-    assert "reviewThreads(first:100)" in workflow
-    assert "unresolved current threads" in workflow
+    assert workflow.count("reviewThreads(first:100)") == 2
+    assert workflow.count("unresolved current threads") == 2
     assert "max_by([.run_number, .run_attempt])" in workflow
     assert "--action START" not in workflow
     assert "Oracle instance is STOPPED" in workflow
