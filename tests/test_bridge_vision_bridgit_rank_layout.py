@@ -1344,7 +1344,7 @@ def test_registered_pixel_replay_stops_before_next_anchor_match(monkeypatch):
         nonlocal read_count
         read_count += 1
         if read_count == 1:
-            return Raster(b"reference"), "a" * 64, "b" * 64, None
+            return Raster(b"reference"), "a" * 64, "z" * 64, None
         marker = str(read_count)
         return Raster(marker.encode()), marker * 64, chr(96 + read_count) * 64, None
 
