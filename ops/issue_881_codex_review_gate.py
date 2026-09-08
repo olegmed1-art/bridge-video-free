@@ -89,6 +89,8 @@ def _is_exact_clean_receipt(comment: dict[str, Any], exact_sha: str) -> bool:
     body = comment.get("body")
     if not isinstance(body, str):
         return False
+    if body.count(CODEX_CLEAN_PREFIX) != 1:
+        return False
     clean_line_count = sum(
         _is_codex_clean_status_line(line) for line in body.splitlines()
     )
