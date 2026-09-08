@@ -20,6 +20,7 @@ CODEX_CLEAN_SUFFIXES = frozenset(
         "",
         " :rocket:",
         " :+1:",
+        " Bravo.",
         " Can\'t wait for the next one!",
     }
 )
