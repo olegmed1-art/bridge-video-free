@@ -1319,7 +1319,10 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     runner = (
         ROOT / "ops/issue_881_external_precanary_workflow.sh"
     ).read_text(encoding="utf-8")
-    workflow = entrypoint + "\n" + runner
+    review_gate = (ROOT / "ops/issue_881_codex_review_gate.py").read_text(
+        encoding="utf-8"
+    )
+    workflow = entrypoint + "\n" + runner + "\n" + review_gate
     assert len(entrypoint) < 21_000
     assert "run: bash ops/issue_881_external_precanary_workflow.sh" in entrypoint
     assert "${{" not in runner
@@ -1345,25 +1348,29 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert '"repos/$GITHUB_REPOSITORY/commits/$gate_commit/pulls"' in workflow
     assert "Protected gate commit is not bound to one merged PR" in workflow
     assert 'git diff --quiet "$reviewed_sha" "$gate_commit"' in workflow
+    assert 'git rev-parse "${reviewed_prefix}^{commit}"' in runner
+    assert "Codex reviewed-commit prefix is not unique to the exact head" in runner
     assert "Protected gate files changed after the reviewed merge" in workflow
     assert "Root Autopilot PR #991 is not merged" in workflow
     assert 'gate_merge_sha="$(jq -r' in workflow
     assert 'git merge-base --is-ancestor "$prior_gate_merge_sha" "$gate_merge_sha"' in workflow
     assert 'git merge-base --is-ancestor "$gate_merge_sha" "$EXACT_SHA"' in workflow
     assert "chatgpt-codex-connector[bot]" in workflow
-    assert "Codex Review: Didn\\u0027t find any major issues." in workflow
-    assert 'jq --arg sha "$reviewed_sha"' in workflow
-    assert '"**Reviewed commit:** `" + $sha + "`"' in workflow
-    assert "review_prefix" not in workflow
-    assert "resolved_review_sha" not in workflow
-    assert "exact clean Codex bot receipt" in workflow
+    assert "'ops/issue_881_codex_review_gate.py'" in workflow
+    assert runner.count("issue_881_codex_review_gate.py verify") == 2
+    assert runner.count('--exact-sha "$reviewed_sha"') == 2
+    assert runner.count('--owner-login "$GITHUB_REPOSITORY_OWNER"') == 2
+    assert "issue-881-exact-head-comments.json" in workflow
+    assert "[0-9a-f]{10}|[0-9a-f]{40}" in review_gate
     assert 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' in workflow
-    assert "Reviewed head has no current independent approval at final reconciliation" in workflow
+    assert (
+        "reviewed head has no current independent approval or exact clean Codex bot receipt"
+        in review_gate
+    )
     assert "root_required_workflows=(" in workflow
     assert "Issue 881 Exact Canary Contract CI" in workflow
     assert "Issue 881 Exact Pre-Canary Evidence" in workflow
     assert "root_reviewed_sha" in workflow
-    assert "group_by(.user.login) | map(max_by(.submitted_at))" in workflow
     assert "Main changed while live review and CI gates were evaluated" in workflow
     assert workflow.count('git/ref/heads/main" --jq') >= 2
     approval_recheck = workflow.rindex('reviews?per_page=100')
@@ -1372,7 +1379,8 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert '[[ "$live_state" == \'closed\'' in workflow
     assert 'git/ref/heads/main" --jq \'.object.sha\'' in workflow
     assert '"$main_sha" == "$EXACT_SHA"' in workflow
-    assert ".commit_id ==" in workflow and "$reviewed_sha" in workflow
+    assert 'review.get("commit_id") == exact_sha' in review_gate
+    assert "$reviewed_sha" in runner
     assert "required_workflows=(" in workflow
     assert "verify_live_gate(){" in workflow
     # One gate before the reviewed SSH helper and one fresh gate after staging.

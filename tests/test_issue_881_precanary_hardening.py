@@ -27,6 +27,9 @@ def _load(name: str, relative: str):
 
 
 ONE_SHOT = _load("issue_881_precanary_one_shot", "ops/issue_881_precanary_one_shot.py")
+REVIEW_GATE = _load(
+    "issue_881_codex_review_gate", "ops/issue_881_codex_review_gate.py"
+)
 QUEUE = _load("issue_881_precanary_queue_proof", "ops/issue_881_precanary_queue_proof.py")
 OCI_EXECUTIONS = _load(
     "verify_oci_instance_command_executions",
@@ -37,6 +40,102 @@ NONCE = "b" * 64
 RECEIPT_ID = 5_600_000_001
 RUN_ID = 34_100_000_001
 NOW = 1_800_000_000.0
+
+
+def _codex_clean_comment(reviewed_token: str, *, login: str | None = None) -> dict[str, object]:
+    return {
+        "user": {"login": login or REVIEW_GATE.CODEX_BOT_LOGIN},
+        "body": (
+            "Codex Review: Didn't find any major issues. :rocket:\n\n"
+            f"**Reviewed commit:** `{reviewed_token}`\n"
+        ),
+    }
+
+
+@pytest.mark.parametrize("reviewed_token", [SHA[:10], SHA])
+def test_codex_clean_receipt_accepts_canonical_exact_head_tokens(
+    reviewed_token: str,
+) -> None:
+    result = REVIEW_GATE.validate_review_evidence(
+        [[]],
+        [[_codex_clean_comment(reviewed_token)]],
+        exact_sha=SHA,
+        owner_login="olegmed1-art",
+    )
+    assert result["codex_clean_count"] == 1
+    assert result["approval_count"] == 0
+    assert result["assurance_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "reviewed_token",
+    [SHA[:9], SHA[:11], "c" * 10, "c" * 40],
+)
+def test_codex_clean_receipt_rejects_ambiguous_or_wrong_tokens(
+    reviewed_token: str,
+) -> None:
+    with pytest.raises(REVIEW_GATE.ReviewEvidenceError, match="neither a Codex"):
+        REVIEW_GATE.validate_review_evidence(
+            [[]],
+            [[_codex_clean_comment(reviewed_token)]],
+            exact_sha=SHA,
+            owner_login="olegmed1-art",
+        )
+
+
+def test_codex_clean_receipt_requires_bot_identity_and_one_canonical_commit_line() -> None:
+    wrong_login = _codex_clean_comment(SHA[:10], login="olegmed1-art")
+    duplicate = _codex_clean_comment(SHA[:10])
+    duplicate["body"] = f"{duplicate['body']}**Reviewed commit:** `{SHA}`\n"
+    for comment in (wrong_login, duplicate):
+        with pytest.raises(REVIEW_GATE.ReviewEvidenceError, match="neither a Codex"):
+            REVIEW_GATE.validate_review_evidence(
+                [[]],
+                [[comment]],
+                exact_sha=SHA,
+                owner_login="olegmed1-art",
+            )
+
+
+def test_exact_non_owner_approval_remains_valid_after_codex_review_object() -> None:
+    reviews = [[
+        {
+            "user": {"login": REVIEW_GATE.CODEX_BOT_LOGIN},
+            "commit_id": SHA,
+            "state": "COMMENTED",
+            "submitted_at": "2026-09-08T10:00:00Z",
+        },
+        {
+            "user": {"login": "independent-reviewer"},
+            "commit_id": SHA,
+            "state": "APPROVED",
+            "submitted_at": "2026-09-08T10:01:00Z",
+        },
+    ]]
+    result = REVIEW_GATE.validate_review_evidence(
+        reviews,
+        [[]],
+        exact_sha=SHA,
+        owner_login="olegmed1-art",
+    )
+    assert result["codex_review_count"] == 1
+    assert result["approval_count"] == 1
+
+
+def test_codex_comment_without_clean_receipt_is_not_final_assurance() -> None:
+    reviews = [[{
+        "user": {"login": REVIEW_GATE.CODEX_BOT_LOGIN},
+        "commit_id": SHA,
+        "state": "COMMENTED",
+        "submitted_at": "2026-09-08T10:00:00Z",
+    }]]
+    with pytest.raises(REVIEW_GATE.ReviewEvidenceError, match="independent approval"):
+        REVIEW_GATE.validate_review_evidence(
+            reviews,
+            [[]],
+            exact_sha=SHA,
+            owner_login="olegmed1-art",
+        )
 
 
 def _comment(*, recovery: str = "") -> dict[str, object]:

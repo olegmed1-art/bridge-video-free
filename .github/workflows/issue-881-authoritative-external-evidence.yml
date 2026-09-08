@@ -84,7 +84,8 @@ jobs:
           bash -n ops/issue_881_process_video_dispatch_gate.sh
           bash -n ops/oracle_universal_video_precanary_attest.sh
           bash -n ops/oracle_universal_video_container_install.sh
-          python3 -m py_compile ops/issue_881_precanary_one_shot.py \
+          python3 -m py_compile ops/issue_881_codex_review_gate.py \
+            ops/issue_881_precanary_one_shot.py \
             ops/issue_881_precanary_queue_proof.py
           grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS' ops/oracle_universal_video_precanary_attest.sh

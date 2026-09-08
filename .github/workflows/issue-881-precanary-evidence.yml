@@ -34,7 +34,8 @@ jobs:
           bash -n ops/issue_881_external_precanary_workflow.sh
           bash -n ops/oracle_universal_video_precanary_attest.sh
           bash -n ops/oracle_universal_video_container_install.sh
-          python3 -m py_compile ops/issue_881_precanary_one_shot.py \
+          python3 -m py_compile ops/issue_881_codex_review_gate.py \
+            ops/issue_881_precanary_one_shot.py \
             ops/issue_881_precanary_queue_proof.py \
             ops/verify_oci_instance_command_executions.py
           grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
@@ -82,6 +83,8 @@ jobs:
           grep -F 'prior_gate_pr_number=1070' "$runner"
           grep -F 'protected_gate_paths=(' "$runner"
           grep -F "'ops/issue_881_external_precanary_workflow.sh'" "$runner"
+          grep -F "'ops/issue_881_codex_review_gate.py'" "$runner"
+          test "$(grep -c 'issue_881_codex_review_gate.py verify' "$runner")" -eq 2
           grep -F "'ops/oracle_known_hosts_from_scan.sh'" "$runner"
           grep -F "'.github/workflows/oracle-universal-video-admin.yml'" "$runner"
           grep -F "oracle-universal-video-admin-pr-{0}" \
@@ -96,8 +99,9 @@ jobs:
           grep -F 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' "$runner"
           grep -F 'Root Autopilot PR #991 is not merged' "$runner"
           grep -F 'git merge-base --is-ancestor "$gate_merge_sha" "$EXACT_SHA"' "$runner"
-          grep -F 'Reviewed head has no current independent approval at final reconciliation' "$runner"
-          grep -F 'exact clean Codex bot receipt' "$runner"
+          grep -F 'Codex reviewed-commit prefix is not unique to the exact head' "$runner"
+          grep -F 'reviewed head has no current independent approval or exact clean Codex bot receipt' \
+            ops/issue_881_codex_review_gate.py
           grep -F 'issue_881_precanary_queue_proof.py owner-before' "$workflow"
           grep -F 'issue_881_precanary_queue_proof.py owner-release-gate' "$runner"
           grep -F 'UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE' "$runner"

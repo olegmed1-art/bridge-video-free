@@ -107,6 +107,7 @@ protected_gate_paths=(
   'database/scripts/migrate.sh'
   'dds_training/bootstrap_linux.sh'
   'ops/issue_881_external_precanary_workflow.sh'
+  'ops/issue_881_codex_review_gate.py'
   'ops/issue_881_precanary_one_shot.py'
   'ops/issue_881_precanary_queue_proof.py'
   'ops/issue_881_process_video_dispatch_gate.sh'
@@ -195,7 +196,7 @@ root_required_workflows=(
 )
 
 verify_live_gate(){
-  local main_sha gate_commit associated_json pr_count pr_number pr_json live_head live_state reviewed_sha reviewed_ref runs_endpoint root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha gate_merge_sha review_count codex_comments_json codex_clean_count reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
+  local main_sha gate_commit associated_json pr_count pr_number pr_json live_head live_state reviewed_sha reviewed_prefix reviewed_ref runs_endpoint root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha gate_merge_sha codex_comments_json reviews_json review_json_file comment_json_file review_marker threads_json blocker_count runs_json root_runs_json workflow_name latest_state
   main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
   [[ "$main_sha" == "$EXACT_SHA" ]] \
     || { echo 'Exact SHA is not immutable current main' >&2; return 1; }
@@ -227,6 +228,9 @@ verify_live_gate(){
     "pull/$pr_number/head:$reviewed_ref" >/dev/null 2>&1
   [[ "$(git rev-parse "$reviewed_ref")" == "$reviewed_sha" ]] \
     || { echo 'Reviewed gate head cannot be fetched exactly' >&2; return 1; }
+  reviewed_prefix="${reviewed_sha:0:10}"
+  [[ "$(git rev-parse "${reviewed_prefix}^{commit}")" == "$reviewed_sha" ]] \
+    || { echo 'Codex reviewed-commit prefix is not unique to the exact head' >&2; return 1; }
   git diff --quiet "$reviewed_sha" "$gate_commit" -- "${protected_gate_paths[@]}" \
     || { echo 'Merged protected gate files differ from the reviewed head' >&2; return 1; }
   [[ "$(git log -1 --format=%H "$EXACT_SHA" -- "${protected_gate_paths[@]}")" == "$gate_commit" ]] \
@@ -252,16 +256,18 @@ verify_live_gate(){
   [[ "$root_reviewed_sha" =~ ^[0-9a-f]{40}$ ]]
 
   reviews_json="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$pr_number/reviews?per_page=100")"
-  review_count="$(jq --arg sha "$reviewed_sha" \
-    '[.[].[] | select(.commit_id == $sha and (.user.login | startswith("chatgpt-codex-connector")) and (.state == "COMMENTED" or .state == "APPROVED"))] | length' \
-    <<<"$reviews_json")"
   codex_comments_json="$(gh api --paginate --slurp \
     "repos/$GITHUB_REPOSITORY/issues/$pr_number/comments?per_page=100")"
-  codex_clean_count="$(jq --arg sha "$reviewed_sha" \
-    '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.body | contains("Codex Review: Didn\u0027t find any major issues.")) | select(.body | contains("**Reviewed commit:** `" + $sha + "`"))] | length' \
-    <<<"$codex_comments_json")"
-  (( review_count > 0 || codex_clean_count > 0 )) \
-    || { echo 'Exact head has neither a Codex review object nor an exact clean Codex bot receipt' >&2; return 1; }
+  review_json_file="$RUNNER_TEMP/issue-881-exact-head-reviews.json"
+  comment_json_file="$RUNNER_TEMP/issue-881-exact-head-comments.json"
+  (umask 077; printf '%s\n' "$reviews_json" > "$review_json_file")
+  (umask 077; printf '%s\n' "$codex_comments_json" > "$comment_json_file")
+  review_marker="$(python3 ops/issue_881_codex_review_gate.py verify \
+    --reviews-json "$review_json_file" \
+    --comments-json "$comment_json_file" \
+    --exact-sha "$reviewed_sha" \
+    --owner-login "$GITHUB_REPOSITORY_OWNER")" || return 1
+  printf '%s\n' "$review_marker"
   threads_json="$(gh api graphql \
     -f owner="${GITHUB_REPOSITORY%%/*}" \
     -f name="${GITHUB_REPOSITORY#*/}" \
@@ -291,11 +297,16 @@ verify_live_gate(){
       || { echo "Latest root exact-head workflow attempt is not green: $workflow_name ($latest_state)" >&2; return 1; }
   done
   reviews_json="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$pr_number/reviews?per_page=100")"
-  approval_count="$(jq --arg sha "$reviewed_sha" --arg owner "$GITHUB_REPOSITORY_OWNER" \
-    '[.[].[] | select(.commit_id == $sha and .user.login != $owner)] | group_by(.user.login) | map(max_by(.submitted_at)) | map(select(.state == "APPROVED")) | length' \
-    <<<"$reviews_json")"
-  (( approval_count > 0 )) \
-    || { echo 'Reviewed head has no current independent approval at final reconciliation' >&2; return 1; }
+  codex_comments_json="$(gh api --paginate --slurp \
+    "repos/$GITHUB_REPOSITORY/issues/$pr_number/comments?per_page=100")"
+  (umask 077; printf '%s\n' "$reviews_json" > "$review_json_file")
+  (umask 077; printf '%s\n' "$codex_comments_json" > "$comment_json_file")
+  review_marker="$(python3 ops/issue_881_codex_review_gate.py verify \
+    --reviews-json "$review_json_file" \
+    --comments-json "$comment_json_file" \
+    --exact-sha "$reviewed_sha" \
+    --owner-login "$GITHUB_REPOSITORY_OWNER")" || return 1
+  printf '%s\n' "$review_marker"
   [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$EXACT_SHA" ]] \
     || { echo 'Main changed while live review and CI gates were evaluated' >&2; return 1; }
 }
