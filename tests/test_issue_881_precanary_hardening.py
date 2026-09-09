@@ -993,7 +993,8 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert "inherited-generic" in attest
     assert "generically masked recovery container changed from the exact failed state" in attest
     assert "generically masked recovery container is not quiescent" in attest
-    assert "masked|masked-runtime" in attest
+    assert attest.count('runtime_mask_is_exact "$CONTAINER_SERVICE"') == 3
+    assert '"$(readlink -- "$mask_path" 2>/dev/null || true)" == /dev/null' in attest
     assert 'container_state_before="$container_postmask_state"' in attest
     assert "container_mask_origin=%s" in attest
     assert 'source_target_state" == inactive && "$source_state_before" == inactive' in attest
@@ -2085,6 +2086,7 @@ verify_prior_recovery_evidence
     (
         "source_enabled",
         "container_enabled",
+        "runtime_masked_before",
         "source_target",
         "source_live",
         "container_snapshot",
@@ -2100,6 +2102,7 @@ verify_prior_recovery_evidence
         (
             "disabled",
             "masked-runtime",
+            True,
             "inactive",
             "inactive",
             "failed",
@@ -2114,6 +2117,7 @@ verify_prior_recovery_evidence
         (
             "masked-runtime",
             "masked-runtime",
+            True,
             "inactive",
             "inactive",
             "failed",
@@ -2128,6 +2132,7 @@ verify_prior_recovery_evidence
         (
             "disabled",
             "enabled",
+            False,
             "inactive",
             "inactive",
             "failed",
@@ -2141,7 +2146,23 @@ verify_prior_recovery_evidence
         ),
         (
             "disabled",
+            "disabled",
+            False,
+            "inactive",
+            "inactive",
+            "failed",
+            "failed",
+            "failed",
+            "1",
+            True,
+            True,
+            "",
+            "container.service",
+        ),
+        (
+            "disabled",
             "masked",
+            True,
             "inactive",
             "inactive",
             "failed",
@@ -2153,20 +2174,23 @@ verify_prior_recovery_evidence
             "container.service",
             "",
         ),
-        ("disabled", "masked", "inactive", "inactive", "failed", "inactive", "inactive", "1", True, False, "", ""),
-        ("disabled", "masked", "inactive", "inactive", "failed", "failed", "failed", "0", True, False, "", ""),
-        ("disabled", "enabled", "inactive", "inactive", "failed", "failed", "failed", "0", True, False, "", ""),
-        ("disabled", "enabled", "inactive", "inactive", "inactive", "inactive", "inactive", "1", True, False, "", ""),
-        ("disabled", "enabled", "inactive", "inactive", "failed", "failed", "active", "1", True, False, "", ""),
-        ("disabled", "enabled", "inactive", "inactive", "failed", "failed", "failed", "1", False, False, "", ""),
-        ("enabled", "masked-runtime", "inactive", "inactive", "failed", "failed", "failed", "1", True, False, "", ""),
-        ("disabled", "masked-runtime", "active", "inactive", "failed", "failed", "failed", "1", True, False, "", ""),
-        ("disabled", "masked-runtime", "inactive", "active", "failed", "failed", "failed", "1", True, False, "", ""),
+        ("disabled", "masked", True, "inactive", "inactive", "failed", "inactive", "inactive", "1", True, False, "", ""),
+        ("disabled", "masked", True, "inactive", "inactive", "failed", "failed", "failed", "0", True, False, "", ""),
+        ("disabled", "masked", False, "inactive", "inactive", "failed", "failed", "failed", "1", True, False, "", ""),
+        ("disabled", "masked-runtime", False, "inactive", "inactive", "failed", "failed", "failed", "1", True, False, "", ""),
+        ("disabled", "enabled", False, "inactive", "inactive", "failed", "failed", "failed", "0", True, False, "", ""),
+        ("disabled", "enabled", False, "inactive", "inactive", "inactive", "inactive", "inactive", "1", True, False, "", ""),
+        ("disabled", "enabled", False, "inactive", "inactive", "failed", "failed", "active", "1", True, False, "", ""),
+        ("disabled", "enabled", False, "inactive", "inactive", "failed", "failed", "failed", "1", False, False, "", ""),
+        ("enabled", "masked-runtime", True, "inactive", "inactive", "failed", "failed", "failed", "1", True, False, "", ""),
+        ("disabled", "masked-runtime", True, "active", "inactive", "failed", "failed", "failed", "1", True, False, "", ""),
+        ("disabled", "masked-runtime", True, "inactive", "active", "failed", "failed", "failed", "1", True, False, "", ""),
     ],
 )
 def test_recovery_mask_capture_requires_active_target_mask_but_accepts_safe_inactive_source(
     source_enabled: str,
     container_enabled: str,
+    runtime_masked_before: bool,
     source_target: str,
     source_live: str,
     container_snapshot: str,
@@ -2181,7 +2205,7 @@ def test_recovery_mask_capture_requires_active_target_mask_but_accepts_safe_inac
     script = (
         ROOT / "ops/oracle_universal_video_precanary_attest.sh"
     ).read_text(encoding="utf-8")
-    start = script.index("capture_inherited_failure_runtime_masks(){")
+    start = script.index("runtime_mask_is_exact(){")
     end = script.index("\n\ncommand -v flock", start)
     function = textwrap.dedent(script[start:end])
     harness = f"""\
@@ -2197,9 +2221,10 @@ bounded_systemctl_query(){{
 }}
 bounded_systemctl(){{
   [[ "$1" == mask && "$2" == --runtime && "$3" == "$CONTAINER_SERVICE" ]]
-  mock_container_enabled=masked
+  mock_runtime_masked=1
   mock_container_live={json.dumps(container_postmask_live)}
 }}
+runtime_mask_is_exact(){{ [[ "$mock_runtime_masked" == 1 ]]; }}
 service_state(){{ printf '%s\\n' "$mock_container_live"; }}
 residents_are_quiescent(){{ {'return 0' if quiescent else 'return 1'}; }}
 SOURCE_SERVICE=source.service
@@ -2211,6 +2236,7 @@ source_state_before={json.dumps(source_live)}
 container_state_before={json.dumps(container_snapshot)}
 mock_container_enabled={json.dumps(container_enabled)}
 mock_container_live={json.dumps(container_live)}
+mock_runtime_masked={'1' if runtime_masked_before else '0'}
 declare -a inherited_failure_runtime_masks=()
 declare -a added_runtime_masks=()
 capture_inherited_failure_runtime_masks
@@ -2228,6 +2254,51 @@ printf 'baseline=%s\\n' "$container_state_before"
         expected_baseline = container_postmask_live if expected_added else container_live
         assert f"baseline={expected_baseline}" in completed.stdout
         assert "UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS" in completed.stdout
+
+
+def test_runtime_mask_proof_requires_exact_run_symlink(tmp_path: Path) -> None:
+    script = (
+        ROOT / "ops/oracle_universal_video_precanary_attest.sh"
+    ).read_text(encoding="utf-8")
+    start = script.index("runtime_mask_is_exact(){")
+    end = script.index("\n}\n", start) + 2
+    function = textwrap.dedent(script[start:end]).replace(
+        "runtime_dir=/run/systemd/system",
+        'runtime_dir="${TEST_RUNTIME_DIR:?}"',
+    )
+    runtime_dir = tmp_path / "systemd"
+    runtime_dir.mkdir()
+    mask = runtime_dir / "container.service"
+    mask.symlink_to("/dev/null")
+    harness = f"""\
+set -euo pipefail
+{function}
+SOURCE_SERVICE=source.service
+CONTAINER_SERVICE=container.service
+runtime_mask_is_exact container.service
+! runtime_mask_is_exact other.service
+"""
+    accepted = subprocess.run(
+        ["bash"],
+        input=harness,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        env={"TEST_RUNTIME_DIR": str(runtime_dir)},
+    )
+    assert accepted.returncode == 0, accepted.stderr
+
+    mask.unlink()
+    mask.symlink_to("/tmp")
+    rejected = subprocess.run(
+        ["bash"],
+        input=harness,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        env={"TEST_RUNTIME_DIR": str(runtime_dir)},
+    )
+    assert rejected.returncode != 0
 
 
 def test_post_fence_readiness_failure_is_runtime_masked_for_recovery(
