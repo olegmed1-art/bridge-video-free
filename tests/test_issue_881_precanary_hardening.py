@@ -990,6 +990,10 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert '"$prewindow_stalled_recovery" == 1 && "$container_state_before" == failed' in attest
     assert "failed recovery container is not quiescent before runtime remask" in attest
     assert "failed recovery container is not quiescent after runtime remask" in attest
+    assert "inherited-generic" in attest
+    assert "generically masked recovery container changed from the exact failed state" in attest
+    assert "generically masked recovery container is not quiescent" in attest
+    assert "masked|masked-runtime" in attest
     assert 'container_state_before="$container_postmask_state"' in attest
     assert "container_mask_origin=%s" in attest
     assert 'source_target_state" == inactive && "$source_state_before" == inactive' in attest
@@ -2083,6 +2087,7 @@ verify_prior_recovery_evidence
         "container_enabled",
         "source_target",
         "source_live",
+        "container_snapshot",
         "container_live",
         "container_postmask_live",
         "prewindow_recovery",
@@ -2099,6 +2104,7 @@ verify_prior_recovery_evidence
             "inactive",
             "failed",
             "failed",
+            "failed",
             "1",
             True,
             True,
@@ -2110,6 +2116,7 @@ verify_prior_recovery_evidence
             "masked-runtime",
             "inactive",
             "inactive",
+            "failed",
             "failed",
             "failed",
             "1",
@@ -2124,6 +2131,7 @@ verify_prior_recovery_evidence
             "inactive",
             "inactive",
             "failed",
+            "failed",
             "inactive",
             "1",
             True,
@@ -2131,14 +2139,29 @@ verify_prior_recovery_evidence
             "",
             "container.service",
         ),
-        ("disabled", "masked", "inactive", "inactive", "failed", "failed", "1", True, False, "", ""),
-        ("disabled", "enabled", "inactive", "inactive", "failed", "failed", "0", True, False, "", ""),
-        ("disabled", "enabled", "inactive", "inactive", "inactive", "inactive", "1", True, False, "", ""),
-        ("disabled", "enabled", "inactive", "inactive", "failed", "active", "1", True, False, "", ""),
-        ("disabled", "enabled", "inactive", "inactive", "failed", "failed", "1", False, False, "", ""),
-        ("enabled", "masked-runtime", "inactive", "inactive", "failed", "failed", "1", True, False, "", ""),
-        ("disabled", "masked-runtime", "active", "inactive", "failed", "failed", "1", True, False, "", ""),
-        ("disabled", "masked-runtime", "inactive", "active", "failed", "failed", "1", True, False, "", ""),
+        (
+            "disabled",
+            "masked",
+            "inactive",
+            "inactive",
+            "failed",
+            "failed",
+            "failed",
+            "1",
+            True,
+            True,
+            "container.service",
+            "",
+        ),
+        ("disabled", "masked", "inactive", "inactive", "failed", "inactive", "inactive", "1", True, False, "", ""),
+        ("disabled", "masked", "inactive", "inactive", "failed", "failed", "failed", "0", True, False, "", ""),
+        ("disabled", "enabled", "inactive", "inactive", "failed", "failed", "failed", "0", True, False, "", ""),
+        ("disabled", "enabled", "inactive", "inactive", "inactive", "inactive", "inactive", "1", True, False, "", ""),
+        ("disabled", "enabled", "inactive", "inactive", "failed", "failed", "active", "1", True, False, "", ""),
+        ("disabled", "enabled", "inactive", "inactive", "failed", "failed", "failed", "1", False, False, "", ""),
+        ("enabled", "masked-runtime", "inactive", "inactive", "failed", "failed", "failed", "1", True, False, "", ""),
+        ("disabled", "masked-runtime", "active", "inactive", "failed", "failed", "failed", "1", True, False, "", ""),
+        ("disabled", "masked-runtime", "inactive", "active", "failed", "failed", "failed", "1", True, False, "", ""),
     ],
 )
 def test_recovery_mask_capture_requires_active_target_mask_but_accepts_safe_inactive_source(
@@ -2146,6 +2169,7 @@ def test_recovery_mask_capture_requires_active_target_mask_but_accepts_safe_inac
     container_enabled: str,
     source_target: str,
     source_live: str,
+    container_snapshot: str,
     container_live: str,
     container_postmask_live: str,
     prewindow_recovery: str,
@@ -2173,7 +2197,7 @@ bounded_systemctl_query(){{
 }}
 bounded_systemctl(){{
   [[ "$1" == mask && "$2" == --runtime && "$3" == "$CONTAINER_SERVICE" ]]
-  mock_container_enabled=masked-runtime
+  mock_container_enabled=masked
   mock_container_live={json.dumps(container_postmask_live)}
 }}
 service_state(){{ printf '%s\\n' "$mock_container_live"; }}
@@ -2184,7 +2208,7 @@ container_recovery_requested=1
 prewindow_stalled_recovery={json.dumps(prewindow_recovery)}
 source_target_state={json.dumps(source_target)}
 source_state_before={json.dumps(source_live)}
-container_state_before={json.dumps(container_live)}
+container_state_before={json.dumps(container_snapshot)}
 mock_container_enabled={json.dumps(container_enabled)}
 mock_container_live={json.dumps(container_live)}
 declare -a inherited_failure_runtime_masks=()

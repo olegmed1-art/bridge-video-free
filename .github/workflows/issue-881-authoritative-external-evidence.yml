@@ -115,7 +115,7 @@ jobs:
             if [[ "$recovery_source_head" != "$EXACT_SHA" ]]; then
               recovery_main_advance_count="$(git rev-list --first-parent --count \
                 "$recovery_source_head..$EXACT_SHA")"
-              [[ "$recovery_main_advance_count" =~ ^[1-6]$ ]] \
+              [[ "$recovery_main_advance_count" =~ ^[1-7]$ ]] \
                 || { echo 'Cross-SHA recovery exceeds the bounded main advance' >&2; exit 1; }
               [[ "$(git rev-parse "$EXACT_SHA~$recovery_main_advance_count")" == \
                     "$recovery_source_head" ]] \
