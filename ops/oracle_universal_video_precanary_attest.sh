@@ -1514,39 +1514,58 @@ mask_service_for_window(){
 
 capture_inherited_failure_runtime_masks(){
   local container_enabled_state source_enabled_state container_mask_origin=inherited
-  local container_postmask_state
+  local container_mask_state container_postmask_state
   [[ "$container_recovery_requested" == 1 ]] || return 1
   container_enabled_state="$(bounded_systemctl_query is-enabled "$CONTAINER_SERVICE" 2>/dev/null || true)"
-  if [[ "$container_enabled_state" == masked-runtime ]]; then
-    inherited_failure_runtime_masks+=("$CONTAINER_SERVICE")
-  else
-    [[ "$prewindow_stalled_recovery" == 1 && "$container_state_before" == failed ]] \
-      || die "approved recovery is missing the prior failure runtime mask: $CONTAINER_SERVICE"
-    case "$container_enabled_state" in
-      enabled|disabled|static|indirect) ;;
-      *) die "failed recovery container enablement is unsafe: ${container_enabled_state:-unknown}" ;;
-    esac
-    [[ "$(service_state "$CONTAINER_SERVICE")" == failed ]] \
-      || die 'failed recovery container state changed before runtime remask'
-    residents_are_quiescent \
-      || die 'failed recovery container is not quiescent before runtime remask'
-    bounded_systemctl mask --runtime "$CONTAINER_SERVICE" >/dev/null
-    added_runtime_masks+=("$CONTAINER_SERVICE")
-    [[ "$(bounded_systemctl_query is-enabled "$CONTAINER_SERVICE" 2>/dev/null || true)" == masked-runtime ]] \
-      || die 'failed recovery container runtime remask was not installed'
-    container_postmask_state="$(service_state "$CONTAINER_SERVICE")"
-    case "$container_postmask_state" in
-      failed|inactive) ;;
-      *) die 'failed recovery container runtime remask did not preserve a stopped state' ;;
-    esac
-    residents_are_quiescent \
-      || die 'failed recovery container is not quiescent after runtime remask'
-    # systemd may normalize a failed, stopped unit to inactive while installing
-    # the runtime mask. Bind later live-state checks to that observed stopped
-    # postcondition instead of the pre-mask failure flag.
-    container_state_before="$container_postmask_state"
-    container_mask_origin=added
-  fi
+  case "$container_enabled_state" in
+    masked-runtime)
+      container_mask_state=masked-runtime
+      inherited_failure_runtime_masks+=("$CONTAINER_SERVICE")
+      ;;
+    masked)
+      # Some systemd releases report a /run-only mask as the generic `masked`
+      # state. Accept that representation only for the exact artifact-bound,
+      # stopped pre-window recovery; cleanup still uses `unmask --runtime`.
+      [[ "$prewindow_stalled_recovery" == 1 && "$container_state_before" == failed ]] \
+        || die "approved recovery has an ambiguous persistent container mask: $CONTAINER_SERVICE"
+      residents_are_quiescent \
+        || die 'generically masked recovery container is not quiescent'
+      container_mask_state=masked
+      container_mask_origin=inherited-generic
+      inherited_failure_runtime_masks+=("$CONTAINER_SERVICE")
+      ;;
+    *)
+      [[ "$prewindow_stalled_recovery" == 1 && "$container_state_before" == failed ]] \
+        || die "approved recovery is missing the prior failure runtime mask: $CONTAINER_SERVICE"
+      case "$container_enabled_state" in
+        enabled|disabled|static|indirect) ;;
+        *) die "failed recovery container enablement is unsafe: ${container_enabled_state:-unknown}" ;;
+      esac
+      [[ "$(service_state "$CONTAINER_SERVICE")" == failed ]] \
+        || die 'failed recovery container state changed before runtime remask'
+      residents_are_quiescent \
+        || die 'failed recovery container is not quiescent before runtime remask'
+      bounded_systemctl mask --runtime "$CONTAINER_SERVICE" >/dev/null
+      added_runtime_masks+=("$CONTAINER_SERVICE")
+      container_mask_state="$(bounded_systemctl_query is-enabled "$CONTAINER_SERVICE" 2>/dev/null || true)"
+      case "$container_mask_state" in
+        masked|masked-runtime) ;;
+        *) die 'failed recovery container runtime remask was not installed' ;;
+      esac
+      container_postmask_state="$(service_state "$CONTAINER_SERVICE")"
+      case "$container_postmask_state" in
+        failed|inactive) ;;
+        *) die 'failed recovery container runtime remask did not preserve a stopped state' ;;
+      esac
+      residents_are_quiescent \
+        || die 'failed recovery container is not quiescent after runtime remask'
+      # systemd may normalize a failed, stopped unit to inactive while installing
+      # the runtime mask. Bind later live-state checks to that observed stopped
+      # postcondition instead of the pre-mask failure flag.
+      container_state_before="$container_postmask_state"
+      container_mask_origin=added
+      ;;
+  esac
 
   source_enabled_state="$(bounded_systemctl_query is-enabled "$SOURCE_SERVICE" 2>/dev/null || true)"
   if [[ "$source_enabled_state" == masked-runtime ]]; then
@@ -1559,8 +1578,9 @@ capture_inherited_failure_runtime_masks(){
       *) die "inactive recovery source enablement is unsafe: ${source_enabled_state:-unknown}" ;;
     esac
   fi
-  printf 'UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS container=masked-runtime container_mask_origin=%s container_state=%s source=%s source_target=%s result=PASS\n' \
-    "$container_mask_origin" "$container_state_before" "$source_enabled_state" "$source_target_state"
+  printf 'UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS container=%s container_mask_origin=%s container_state=%s source=%s source_target=%s result=PASS\n' \
+    "$container_mask_state" "$container_mask_origin" "$container_state_before" \
+    "$source_enabled_state" "$source_target_state"
 }
 
 command -v flock >/dev/null || die 'flock is unavailable'

@@ -990,6 +990,9 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert '"$prewindow_stalled_recovery" == 1 && "$container_state_before" == failed' in attest
     assert "failed recovery container is not quiescent before runtime remask" in attest
     assert "failed recovery container is not quiescent after runtime remask" in attest
+    assert "inherited-generic" in attest
+    assert "generically masked recovery container is not quiescent" in attest
+    assert "masked|masked-runtime" in attest
     assert 'container_state_before="$container_postmask_state"' in attest
     assert "container_mask_origin=%s" in attest
     assert 'source_target_state" == inactive && "$source_state_before" == inactive' in attest
@@ -2131,7 +2134,20 @@ verify_prior_recovery_evidence
             "",
             "container.service",
         ),
-        ("disabled", "masked", "inactive", "inactive", "failed", "failed", "1", True, False, "", ""),
+        (
+            "disabled",
+            "masked",
+            "inactive",
+            "inactive",
+            "failed",
+            "failed",
+            "1",
+            True,
+            True,
+            "container.service",
+            "",
+        ),
+        ("disabled", "masked", "inactive", "inactive", "failed", "failed", "0", True, False, "", ""),
         ("disabled", "enabled", "inactive", "inactive", "failed", "failed", "0", True, False, "", ""),
         ("disabled", "enabled", "inactive", "inactive", "inactive", "inactive", "1", True, False, "", ""),
         ("disabled", "enabled", "inactive", "inactive", "failed", "active", "1", True, False, "", ""),
@@ -2173,7 +2189,7 @@ bounded_systemctl_query(){{
 }}
 bounded_systemctl(){{
   [[ "$1" == mask && "$2" == --runtime && "$3" == "$CONTAINER_SERVICE" ]]
-  mock_container_enabled=masked-runtime
+  mock_container_enabled=masked
   mock_container_live={json.dumps(container_postmask_live)}
 }}
 service_state(){{ printf '%s\\n' "$mock_container_live"; }}
