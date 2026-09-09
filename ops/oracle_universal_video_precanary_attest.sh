@@ -18,6 +18,7 @@ RECOVERY_EVIDENCE_FILE="${UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_FILE:-}"
 RECOVERY_EVIDENCE_SHA256="${UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256:-}"
 RESTORE_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_RESTORE_TIMEOUT_SECONDS:-45}"
 RESTORE_STABLE_SECONDS="${UNIVERSAL_VIDEO_RESTORE_STABLE_SECONDS:-5}"
+WORKLOAD_LOCK_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_PRECANARY_WORKLOAD_LOCK_TIMEOUT_SECONDS:-30}"
 QUEUE_DSN_FILE="${UNIVERSAL_VIDEO_QUEUE_DSN_FILE:-$BASE_DIR/secrets/video-queue-dsn}"
 QUEUE_PYTHON="${UNIVERSAL_VIDEO_QUEUE_PYTHON:-$BASE_DIR/.venv/bin/python}"
 QUEUE_PROOF_SCRIPT="${UNIVERSAL_VIDEO_QUEUE_PROOF_SCRIPT:-}"
@@ -99,6 +100,8 @@ validate_source_dir_scope(){
   || die 'invalid resident restore timeout'
 [[ "$RESTORE_STABLE_SECONDS" =~ ^[0-9]+$ && "$RESTORE_STABLE_SECONDS" -ge 3 && "$RESTORE_STABLE_SECONDS" -le 30 ]] \
   || die 'invalid resident stability interval'
+[[ "$WORKLOAD_LOCK_TIMEOUT_SECONDS" =~ ^([1-9]|[1-5][0-9]|60)$ ]] \
+  || die 'invalid workload lock timeout'
 [[ -z "$RECOVER_CONTAINER_FROM_RUN" || "$RECOVER_CONTAINER_FROM_RUN" =~ ^[0-9]{8,20}$ ]] \
   || die 'invalid bounded prior-run recovery reference'
 if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
@@ -188,6 +191,13 @@ bounded_systemctl_query(){
 
 bounded_docker_query(){
   timeout --foreground --signal=TERM --kill-after=2s 5s docker "$@"
+}
+
+acquire_workload_lock(){
+  if flock --exclusive --nonblock 9; then
+    return 0
+  fi
+  flock --exclusive --timeout "$WORKLOAD_LOCK_TIMEOUT_SECONDS" 9
 }
 
 bounded_filesystem(){
@@ -1468,7 +1478,8 @@ chmod 0640 "$WORKLOAD_LOCK"
 runuser -u universal-video -- test -r "$WORKLOAD_LOCK" \
   || die 'worker cannot open workload lock'
 exec 9<"$WORKLOAD_LOCK"
-flock --exclusive --nonblock 9 || die 'a worker holds the workload claim fence'
+acquire_workload_lock \
+  || die 'a worker holds the workload claim fence after bounded wait'
 lock_held=1
 
 source_state_before="$(service_state "$SOURCE_SERVICE")"
