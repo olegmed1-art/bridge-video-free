@@ -27,6 +27,14 @@ CODEX_CLEAN_SUFFIXES = frozenset(
         " Already looking forward to the next diff.",
     }
 )
+CODEX_CLEAN_COSMETIC_MAX_CHARS = 160
+CODEX_CLEAN_BLOCKING_SUFFIX_RE = re.compile(
+    r"\b(?:although|block(?:ed|er|ers|ing)?|but|cannot|concern(?:s)?|"
+    r"error(?:s)?|except|fail(?:ed|ing|ure|ures)?|fix(?:ed|es|ing)?|however|"
+    r"issue(?:s)?|need(?:ed|s)?|no|not|problem(?:s)?|reject(?:ed|s|ing)?|"
+    r"risk(?:s|y)?|unsafe|warning(?:s)?|yet)\b",
+    re.IGNORECASE,
+)
 
 REVIEWED_COMMIT_LINE_RE = re.compile(
     r"^\*\*Reviewed commit:\*\* `([0-9a-f]{10}|[0-9a-f]{40})`[ \t]*$",
@@ -84,7 +92,17 @@ def _login(item: dict[str, Any]) -> str:
 def _is_codex_clean_status_line(line: str) -> bool:
     if not line.startswith(CODEX_CLEAN_PREFIX):
         return False
-    return line[len(CODEX_CLEAN_PREFIX) :] in CODEX_CLEAN_SUFFIXES
+    suffix = line[len(CODEX_CLEAN_PREFIX) :]
+    if suffix in CODEX_CLEAN_SUFFIXES:
+        return True
+    if (
+        not suffix.startswith(" ")
+        or len(suffix) > CODEX_CLEAN_COSMETIC_MAX_CHARS
+        or suffix != suffix.rstrip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in suffix)
+    ):
+        return False
+    return CODEX_CLEAN_BLOCKING_SUFFIX_RE.search(suffix) is None
 
 
 def _is_exact_clean_receipt(comment: dict[str, Any], exact_sha: str) -> bool:
