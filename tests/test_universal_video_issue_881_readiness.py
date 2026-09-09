@@ -414,6 +414,79 @@ acquire_workload_lock
     ]
 
 
+@pytest.mark.parametrize("quiescent,expected", [("1", True), ("0", False)])
+def test_prewindow_recovery_replaces_only_a_quiescent_stale_lock_inode(
+    tmp_path: Path, quiescent: str, expected: bool
+):
+    script = (
+        ROOT / "ops/oracle_universal_video_precanary_attest.sh"
+    ).read_text(encoding="utf-8")
+    acquire_start = script.index("acquire_workload_lock(){")
+    acquire_end = script.index("\n}\n", acquire_start) + 2
+    recover_start = script.index("recover_quiescent_stale_workload_lock(){")
+    recover_end = script.index("\n}\n", recover_start) + 2
+    functions = script[acquire_start:acquire_end] + "\n" + script[recover_start:recover_end]
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    lock = spool / LOCK_FILE_NAME
+    lock.touch(mode=0o640)
+    harness = f'''\
+set -u
+{functions}
+BASE_DIR="$1"
+WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"
+RECOVER_CONTAINER_FROM_RUN=34313254551
+container_recovery_requested=1
+prewindow_stalled_recovery=1
+WORKLOAD_LOCK_TIMEOUT_SECONDS=1
+QUIESCENT="$2"
+residents_are_quiescent() {{ [[ "$QUIESCENT" == 1 ]]; }}
+runuser() {{ return 0; }}
+install() {{
+  local destination
+  for destination in "$@"; do :; done
+  : > "$destination"
+  chmod 0640 "$destination"
+}}
+stat() {{
+  if [[ "$1" == -c && "$2" == %U:%G:%a:%h ]]; then
+    printf 'root:universal-video:640:1\\n'
+  else
+    command stat "$@"
+  fi
+}}
+ready="$BASE_DIR/holder-ready"
+(exec 8<"$WORKLOAD_LOCK"; flock --shared 8; : > "$ready"; sleep 30) &
+holder=$!
+trap 'kill "$holder" >/dev/null 2>&1 || true; wait "$holder" >/dev/null 2>&1 || true; exec 9>&- 2>/dev/null || true' EXIT
+for _ in $(seq 1 50); do [[ -e "$ready" ]] && break; sleep 0.02; done
+[[ -e "$ready" ]]
+before="$(command stat -c '%d:%i' "$WORKLOAD_LOCK")"
+exec 9<"$WORKLOAD_LOCK"
+! acquire_workload_lock
+if recover_quiescent_stale_workload_lock; then rc=0; else rc=$?; fi
+after="$(command stat -c '%d:%i' "$WORKLOAD_LOCK")"
+printf 'rc=%s before=%s after=%s\\n' "$rc" "$before" "$after"
+if [[ "$QUIESCENT" == 1 ]]; then
+  [[ "$rc" == 0 && "$before" != "$after" ]]
+  ! flock --exclusive --nonblock "$WORKLOAD_LOCK"
+else
+  [[ "$rc" != 0 && "$before" == "$after" ]]
+fi
+'''
+    completed = subprocess.run(
+        ["bash", "-c", harness, "bash", str(tmp_path), quiescent],
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    if expected:
+        assert "UNIVERSAL_VIDEO_PRECANARY_STALE_LOCK_RECOVERY" in completed.stdout
+    else:
+        assert "UNIVERSAL_VIDEO_PRECANARY_STALE_LOCK_RECOVERY" not in completed.stdout
+
+
 @pytest.mark.parametrize("value", ["1", "9", "10", "59", "60"])
 def test_precanary_workload_lock_timeout_accepts_canonical_range(value: str):
     script = (
@@ -1530,7 +1603,7 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "actions/runs/$RECOVER_CONTAINER_FROM_RUN" in workflow
     assert 'git rev-list --first-parent --count' in workflow
     assert '"$EXACT_SHA~$recovery_main_advance_count"' in workflow
-    assert '"$recovery_main_advance_count" =~ ^([1-9]|1[01])$' in workflow
+    assert '"$recovery_main_advance_count" =~ ^([1-9]|1[0-2])$' in workflow
     assert 'git diff --name-only --diff-filter=ACDMRT' in workflow
     assert "Cross-SHA recovery includes an unapproved path" in workflow
     assert "ops/issue_881_codex_review_gate.py" in workflow
