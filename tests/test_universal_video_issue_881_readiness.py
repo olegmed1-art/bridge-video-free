@@ -1530,7 +1530,7 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "actions/runs/$RECOVER_CONTAINER_FROM_RUN" in workflow
     assert 'git rev-list --first-parent --count' in workflow
     assert '"$EXACT_SHA~$recovery_main_advance_count"' in workflow
-    assert '"$recovery_main_advance_count" =~ ^[1-5]$' in workflow
+    assert '"$recovery_main_advance_count" =~ ^[1-6]$' in workflow
     assert 'git diff --name-only --diff-filter=ACDMRT' in workflow
     assert "Cross-SHA recovery includes an unapproved path" in workflow
     assert "ops/issue_881_codex_review_gate.py" in workflow
