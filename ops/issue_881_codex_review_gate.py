@@ -27,6 +27,14 @@ CODEX_CLEAN_SUFFIXES = frozenset(
         " Already looking forward to the next diff.",
     }
 )
+CODEX_CLEAN_COSMETIC_MAX_CHARS = 160
+CODEX_CLEAN_BLOCKING_SUFFIX_RE = re.compile(
+    r"\b(?:although|block\w*|but|cannot|concern\w*|contradict\w*|error\w*|"
+    r"except|fail\w*|(?:un)?fix\w*|however|issue\w*|need\w*|no|not|"
+    r"problem\w*|reject\w*|risk\w*|safety|unsafe|warning\w*|yet)\b",
+    re.IGNORECASE,
+)
+CODEX_CLEAN_UNICODE_LINE_SEPARATORS = frozenset({0x2028, 0x2029})
 
 REVIEWED_COMMIT_LINE_RE = re.compile(
     r"^\*\*Reviewed commit:\*\* `([0-9a-f]{10}|[0-9a-f]{40})`[ \t]*$",
@@ -84,7 +92,17 @@ def _login(item: dict[str, Any]) -> str:
 def _is_codex_clean_status_line(line: str) -> bool:
     if not line.startswith(CODEX_CLEAN_PREFIX):
         return False
-    return line[len(CODEX_CLEAN_PREFIX) :] in CODEX_CLEAN_SUFFIXES
+    suffix = line[len(CODEX_CLEAN_PREFIX) :]
+    if suffix in CODEX_CLEAN_SUFFIXES:
+        return True
+    if (
+        not suffix.startswith(" ")
+        or len(suffix) > CODEX_CLEAN_COSMETIC_MAX_CHARS
+        or suffix != suffix.rstrip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in suffix)
+    ):
+        return False
+    return CODEX_CLEAN_BLOCKING_SUFFIX_RE.search(suffix) is None
 
 
 def _is_exact_clean_receipt(comment: dict[str, Any], exact_sha: str) -> bool:
@@ -93,10 +111,20 @@ def _is_exact_clean_receipt(comment: dict[str, Any], exact_sha: str) -> bool:
     body = comment.get("body")
     if not isinstance(body, str):
         return False
+    if any(
+        character != "\n"
+        and (
+            ord(character) < 32
+            or 127 <= ord(character) <= 159
+            or ord(character) in CODEX_CLEAN_UNICODE_LINE_SEPARATORS
+        )
+        for character in body
+    ):
+        return False
     if body.count(CODEX_CLEAN_PREFIX) != 1:
         return False
     clean_line_count = sum(
-        _is_codex_clean_status_line(line) for line in body.splitlines()
+        _is_codex_clean_status_line(line) for line in body.split("\n")
     )
     if clean_line_count != 1:
         return False

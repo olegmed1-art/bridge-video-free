@@ -113,8 +113,33 @@ jobs:
               --jq '.head_sha')"
             [[ "$recovery_source_head" =~ ^[0-9a-f]{40}$ ]]
             if [[ "$recovery_source_head" != "$EXACT_SHA" ]]; then
-              [[ "$(git rev-parse "$EXACT_SHA^")" == "$recovery_source_head" ]] \
-                || { echo 'Cross-SHA recovery source is not the direct main parent' >&2; exit 1; }
+              recovery_main_advance_count="$(git rev-list --first-parent --count \
+                "$recovery_source_head..$EXACT_SHA")"
+              [[ "$recovery_main_advance_count" =~ ^[1-3]$ ]] \
+                || { echo 'Cross-SHA recovery exceeds the bounded main advance' >&2; exit 1; }
+              [[ "$(git rev-parse "$EXACT_SHA~$recovery_main_advance_count")" == \
+                    "$recovery_source_head" ]] \
+                || { echo 'Cross-SHA recovery source is not on the bounded first-parent path' >&2; exit 1; }
+              mapfile -t recovery_changed_paths < <(
+                git diff --name-only --diff-filter=ACDMRT \
+                  "$recovery_source_head" "$EXACT_SHA"
+              )
+              [[ "${#recovery_changed_paths[@]}" -gt 0 ]]
+              for recovery_changed_path in "${recovery_changed_paths[@]}"; do
+                case "$recovery_changed_path" in
+                  .github/workflows/issue-881-authoritative-external-evidence.yml|\
+                  ops/issue_881_codex_review_gate.py|\
+                  ops/issue_881_external_precanary_workflow.sh|\
+                  ops/issue_881_precanary_one_shot.py|\
+                  ops/oracle_universal_video_precanary_attest.sh|\
+                  tests/test_issue_881_precanary_hardening.py|\
+                  tests/test_universal_video_issue_881_readiness.py) ;;
+                  *)
+                    echo "Cross-SHA recovery includes an unapproved path: $recovery_changed_path" >&2
+                    exit 1
+                    ;;
+                esac
+              done
             fi
           fi
           python3 ops/issue_881_precanary_one_shot.py verify \

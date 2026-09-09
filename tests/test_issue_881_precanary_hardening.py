@@ -104,6 +104,7 @@ def test_codex_clean_receipt_requires_bot_identity_and_one_canonical_commit_line
         ":+1:",
         "Hooray!",
         "Bravo.",
+        "What shall we delve into next?",
         "Can\'t wait for the next one!",
         "Already looking forward to the next diff.",
     ],
@@ -123,7 +124,23 @@ def test_codex_clean_receipt_accepts_current_bot_status_suffixes(
 
 
 def test_codex_clean_receipt_rejects_noncanonical_status_qualifier() -> None:
-    for suffix in (" except the production gate is unsafe", chr(9) + ":+1:"):
+    for suffix in (
+        " except the production gate is unsafe",
+        " However, this needs changes.",
+        " There is a contradiction.",
+        " This contradicts the evidence.",
+        " This fails the safety check.",
+        " This remains unfixed.",
+        " This is riskier.",
+        " " + "Celebrate!" * 20,
+        chr(9) + ":+1:",
+        " Looks clean\vThis contradicts the evidence.",
+        " Looks clean\fThis contradicts the evidence.",
+        " Looks clean\u0085This contradicts the evidence.",
+        " Looks clean\u0080",
+        " Looks clean\u2028This contradicts the evidence.",
+        " Looks clean\u2029This contradicts the evidence.",
+    ):
         comment = _codex_clean_comment(SHA[:10])
         comment["body"] = str(comment["body"]).replace(" :rocket:", suffix)
         with pytest.raises(REVIEW_GATE.ReviewEvidenceError, match="neither a Codex"):

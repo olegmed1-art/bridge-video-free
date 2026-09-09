@@ -264,8 +264,8 @@ def validate_one_shot(
         # A concrete host failure can leave the resident stopped behind the
         # fail-closed runtime masks while the code fix necessarily advances
         # main.  Permit only that initial failed run to carry the state into
-        # the new exact SHA; the shell gate separately proves it is the direct
-        # parent before accepting its immutable artifact or touching the host.
+        # the new exact SHA; the shell gate separately proves a tightly bounded
+        # gate-only first-parent advance before artifact use or host access.
         source_id = int(ordered[0][2])
         _require(
             all(recovery == str(source_id) for _, _, recovery, _ in ordered),
