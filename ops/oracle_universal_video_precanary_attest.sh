@@ -155,6 +155,7 @@ container_target_state=""
 window_started=0
 services_stop_attempted=0
 lock_held=0
+stalled_idle_resident_recovered=0
 source_had_original=0
 source_candidate_path_owned=0
 source_backup_dir=""
@@ -1216,6 +1217,18 @@ cleanup(){
         trap - HUP INT TERM
         exit 1
       fi
+      if [[ "$lock_held" != 1 ]]; then
+        if acquire_workload_lock; then
+          lock_held=1
+        else
+          record_restore_failure workload_reacquire
+          printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
+            "$(IFS=,; echo "${restore_failures[*]}")" \
+            "$(service_state "$SOURCE_SERVICE")" "$(service_state "$CONTAINER_SERVICE")" >&2
+          trap - HUP INT TERM
+          exit 1
+        fi
+      fi
     fi
     if [[ "$BUILD_IMAGE" == 1 ]]; then
       if [[ "$ENV_FILE" == "$BASE_DIR/universal-video-container-candidate.env" ]]; then
@@ -1433,6 +1446,44 @@ PY
     "${source_pid:-0}" "${container_pid:-0}"
 }
 
+assert_stalled_container_runtime_idle(){
+  local inspect_value container_id running restarting exit_code oom container_root_pid
+  local worker_pid worker_state worker_start_ticks runtime_result
+  [[ -z "$RECOVER_CONTAINER_FROM_RUN" ]] \
+    || die 'stalled resident recovery cannot be combined with prior-run recovery'
+  [[ "$source_state_before" == inactive && "$container_state_before" == active ]] \
+    || die 'bounded stalled resident recovery requires the sole container resident'
+  inspect_value="$(bounded_docker_query inspect --format \
+    '{{.Id}}|{{.State.Running}}|{{.State.Restarting}}|{{.State.ExitCode}}|{{.State.OOMKilled}}|{{.State.Pid}}' \
+    universal-video-container 2>/dev/null || true)"
+  IFS='|' read -r container_id running restarting exit_code oom container_root_pid \
+    <<<"$inspect_value"
+  [[ "$container_id" == "$container_id_before" && "$running" == true \
+        && "$restarting" == false && "$exit_code" == 0 && "$oom" == false \
+        && "$container_root_pid" =~ ^[1-9][0-9]*$ ]] \
+    || die 'stalled container resident lifecycle is unsafe or changed'
+  worker_pid="$(resident_worker_pid "$CONTAINER_SERVICE")" \
+    || die 'stalled container resident worker identity is ambiguous'
+  [[ "$worker_pid" == "$restored_container_pid" ]] \
+    || die 'stalled container resident worker identity changed'
+  worker_start_ticks="$(process_start_ticks "$worker_pid" 2>/dev/null || true)"
+  [[ "$worker_start_ticks" == "$restored_container_start_ticks" ]] \
+    || die 'stalled container resident worker start identity changed'
+  worker_state="$(process_state "$worker_pid" 2>/dev/null || true)"
+  [[ "$worker_state" == T || "$worker_state" == t ]] \
+    || die 'stalled container resident is not frozen for the idle proof'
+  pid_descends_from "$worker_pid" "$container_root_pid" \
+    || die 'stalled container resident ancestry changed'
+  runtime_result="$(bounded_docker exec -i --user="$uid:$gid" \
+    universal-video-container python -I - runtime < "$QUEUE_PROOF_SCRIPT")" \
+    || die 'stalled container resident production queue proof failed'
+  [[ "$runtime_result" == \
+    'project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0' ]] \
+    || die 'stalled container resident is not bound to the idle production queue'
+  printf 'UNIVERSAL_VIDEO_PRECANARY_STALLED_IDLE_RESIDENT resident=container worker_pid=%s worker_state=frozen container_running=true container_restarting=false container_exit=0 container_oom=false %s recovery=stop_once result=PASS\n' \
+    "$worker_pid" "$runtime_result"
+}
+
 mask_service_for_window(){
   local service="$1" enabled_state
   enabled_state="$(bounded_systemctl_query is-enabled "$service" 2>/dev/null || true)"
@@ -1477,11 +1528,6 @@ chmod 0640 "$WORKLOAD_LOCK"
   || die 'unexpected workload lock metadata'
 runuser -u universal-video -- test -r "$WORKLOAD_LOCK" \
   || die 'worker cannot open workload lock'
-exec 9<"$WORKLOAD_LOCK"
-acquire_workload_lock \
-  || die 'a worker holds the workload claim fence after bounded wait'
-lock_held=1
-
 source_state_before="$(service_state "$SOURCE_SERVICE")"
 container_state_before="$(service_state "$CONTAINER_SERVICE")"
 assert_known_state "$SOURCE_SERVICE" "$source_state_before"
@@ -1530,22 +1576,63 @@ if [[ "$container_state_before" == active ]]; then
 fi
 [[ "$container_target_state" == active ]] \
   || die 'bounded pre-canary recreation requires an active container target'
-window_started=1
-
-# Acquire the exclusive fence before source checkout, cache reclamation, image
-# build, import preflight, or metadata reads. An active job would hold the
-# shared lock and make this operation fail closed before any mutation.
-mask_service_for_window "$SOURCE_SERVICE"
-mask_service_for_window "$CONTAINER_SERVICE"
-if ! freeze_residents_for_idle_snapshot; then
-  record_restore_failure prestop_freeze
-  die 'unable to freeze exact resident workers before the idle snapshot'
+exec 9<"$WORKLOAD_LOCK"
+if acquire_workload_lock; then
+  lock_held=1
+else
+  # The owner-side database gate already prevents new queue writes. A lock
+  # holder that survives the bounded wait may be stopped exactly once only
+  # after its exact container identity, frozen process identity, empty local
+  # spool, host production queue, and resident production bind all prove idle.
+  # This releases the already-observed stalled resident without ever allowing
+  # it to claim between the final idle proofs and the stop.
+  [[ -z "$RECOVER_CONTAINER_FROM_RUN" ]] \
+    || die 'a worker holds the workload claim fence during prior-run recovery'
+  window_started=1
+  mask_service_for_window "$SOURCE_SERVICE"
+  mask_service_for_window "$CONTAINER_SERVICE"
+  if ! freeze_residents_for_idle_snapshot; then
+    record_restore_failure prestop_freeze
+    die 'unable to freeze the stalled resident worker safely'
+  fi
+  assert_pre_stop_idle
+  assert_stalled_container_runtime_idle
+  services_stop_attempted=1
+  stop_frozen_residents \
+    || die 'unable to stop the stalled idle resident safely'
+  assert_quiescent
+  acquire_workload_lock \
+    || die 'workload claim fence remains held after the sole resident stopped'
+  lock_held=1
+  stalled_idle_resident_recovered=1
 fi
-assert_pre_stop_idle
-services_stop_attempted=1
-stop_frozen_residents \
-  || die 'unable to stop exact frozen resident workers safely'
-assert_quiescent
+
+if [[ "$stalled_idle_resident_recovered" == 0 ]]; then
+  [[ "$(service_state "$SOURCE_SERVICE")" == "$source_state_before" \
+        && "$(service_state "$CONTAINER_SERVICE")" == "$container_state_before" ]] \
+    || die 'resident service state changed while acquiring the workload fence'
+  if [[ "$container_state_before" == active ]]; then
+    [[ "$(bounded_docker_query inspect --format '{{.Id}}' universal-video-container 2>/dev/null || true)" == "$container_id_before" ]] \
+      || die 'container resident identity changed while acquiring the workload fence'
+  fi
+  window_started=1
+  # Acquire the exclusive fence before source checkout, cache reclamation,
+  # image build, import preflight, or metadata reads. A normal active job holds
+  # the shared lock and is never interrupted by this path.
+  mask_service_for_window "$SOURCE_SERVICE"
+  mask_service_for_window "$CONTAINER_SERVICE"
+  if ! freeze_residents_for_idle_snapshot; then
+    record_restore_failure prestop_freeze
+    die 'unable to freeze exact resident workers before the idle snapshot'
+  fi
+  assert_pre_stop_idle
+  services_stop_attempted=1
+  stop_frozen_residents \
+    || die 'unable to stop exact frozen resident workers safely'
+  assert_quiescent
+else
+  printf 'UNIVERSAL_VIDEO_PRECANARY_STALLED_IDLE_RECOVERY workload_fence=exclusive resident_stop_count=1 result=PASS\n'
+fi
 printf 'UNIVERSAL_VIDEO_PRECANARY_WINDOW source_service_before=%s source_service_observed=%s container_service_before=%s container_service_observed=%s workload_fence=exclusive services_quiescent=true restore_on_exit=true\n' \
   "$source_target_state" "$source_state_before" "$container_target_state" "$container_state_before"
 

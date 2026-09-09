@@ -456,6 +456,41 @@ def test_precanary_workload_lock_timeout_rejects_noncanonical_or_out_of_range(
     assert completed.returncode == 97
 
 
+def test_precanary_recovers_one_proven_idle_stalled_container_before_reacquiring_fence():
+    script = (
+        ROOT / "ops/oracle_universal_video_precanary_attest.sh"
+    ).read_text(encoding="utf-8")
+    proof_start = script.index("assert_stalled_container_runtime_idle(){")
+    proof_end = script.index("\n}\n", proof_start) + 2
+    proof = script[proof_start:proof_end]
+    assert '[[ "$source_state_before" == inactive && "$container_state_before" == active ]]' in proof
+    assert '[[ "$worker_pid" == "$restored_container_pid" ]]' in proof
+    assert '[[ "$worker_state" == T || "$worker_state" == t ]]' in proof
+    assert "container_running=true container_restarting=false container_exit=0 container_oom=false" in proof
+    assert "python -I - runtime" in proof
+    assert "branch=br-wispy-lab-b1rq54of" in proof
+    assert "claimable=0 leased=0" in proof
+
+    fallback_start = script.index('if acquire_workload_lock; then', proof_end)
+    fallback_end = script.index("printf 'UNIVERSAL_VIDEO_PRECANARY_WINDOW", fallback_start)
+    fallback = script[fallback_start:fallback_end]
+    freeze = fallback.index("freeze_residents_for_idle_snapshot")
+    host_idle = fallback.index("assert_pre_stop_idle", freeze)
+    resident_idle = fallback.index("assert_stalled_container_runtime_idle", host_idle)
+    stop = fallback.index("stop_frozen_residents", resident_idle)
+    quiescent = fallback.index("assert_quiescent", stop)
+    reacquire = fallback.index("acquire_workload_lock", quiescent)
+    recovered = fallback.index("stalled_idle_resident_recovered=1", reacquire)
+    assert freeze < host_idle < resident_idle < stop < quiescent < reacquire < recovered
+    assert "systemctl restart" not in fallback
+    assert "resident_stop_count=1 result=PASS" in fallback
+
+    runner = (
+        ROOT / "ops/issue_881_external_precanary_workflow.sh"
+    ).read_text(encoding="utf-8")
+    assert runner.count("STALLED_IDLE_(RESIDENT|RECOVERY)") == 2
+
+
 def test_startup_recovery_exclusive_lock_serializes_residents(tmp_path: Path):
     spool = tmp_path / "spool"
     spool.mkdir()
