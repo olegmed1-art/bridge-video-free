@@ -1531,21 +1531,6 @@ python3 -c 'import os,signal; assert hasattr(os,"pidfd_open") and hasattr(signal
   >/dev/null 2>&1 || die 'pidfd signaling is unavailable'
 [[ -d "$BASE_DIR/spool" && ! -L "$BASE_DIR/spool" ]] || die 'unsafe or missing spool mount'
 [[ -d "$BASE_DIR/spool/running" && ! -L "$BASE_DIR/spool/running" ]] || die 'unsafe or missing running spool'
-if [[ -L "$WORKLOAD_LOCK" || ( -e "$WORKLOAD_LOCK" && ! -f "$WORKLOAD_LOCK" ) ]]; then
-  die 'unsafe workload lock'
-fi
-uid="$(id -u universal-video)"
-gid="$(id -g universal-video)"
-if [[ ! -e "$WORKLOAD_LOCK" ]]; then
-  install -o root -g universal-video -m 0640 /dev/null "$WORKLOAD_LOCK"
-fi
-[[ "$(stat -c '%h' "$WORKLOAD_LOCK")" == 1 ]] || die 'unsafe workload lock link count'
-chown root:universal-video "$WORKLOAD_LOCK"
-chmod 0640 "$WORKLOAD_LOCK"
-[[ "$(stat -c '%U:%G:%a:%h' "$WORKLOAD_LOCK")" == 'root:universal-video:640:1' ]] \
-  || die 'unexpected workload lock metadata'
-runuser -u universal-video -- test -r "$WORKLOAD_LOCK" \
-  || die 'worker cannot open workload lock'
 source_state_before="$(service_state "$SOURCE_SERVICE")"
 container_state_before="$(service_state "$CONTAINER_SERVICE")"
 assert_known_state "$SOURCE_SERVICE" "$source_state_before"
@@ -1561,14 +1546,33 @@ container_target_state="$container_state_before"
 if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
   [[ "$container_state_before" != active ]] \
     || die 'approved recovery no longer matches a stopped container resident'
-  # A prior exact external run recorded container_service_before=active and
-  # then failed only while restoring that state. This bounded one-shot input
-  # asks the next exact run to restore the recorded state after all gates.
+  # Validate the immutable recovery artifact and its exact live failed state
+  # before creating or normalizing the workload-lock file.
   verify_prior_recovery_evidence
   if [[ "$prewindow_stalled_recovery" == 1 ]]; then
     [[ "$container_state_before" == failed ]] \
       || die 'pre-window recovery requires the exact failed container state'
   fi
+fi
+if [[ -L "$WORKLOAD_LOCK" || ( -e "$WORKLOAD_LOCK" && ! -f "$WORKLOAD_LOCK" ) ]]; then
+  die 'unsafe workload lock'
+fi
+uid="$(id -u universal-video)"
+gid="$(id -g universal-video)"
+if [[ ! -e "$WORKLOAD_LOCK" ]]; then
+  install -o root -g universal-video -m 0640 /dev/null "$WORKLOAD_LOCK"
+fi
+[[ "$(stat -c '%h' "$WORKLOAD_LOCK")" == 1 ]] || die 'unsafe workload lock link count'
+chown root:universal-video "$WORKLOAD_LOCK"
+chmod 0640 "$WORKLOAD_LOCK"
+[[ "$(stat -c '%U:%G:%a:%h' "$WORKLOAD_LOCK")" == 'root:universal-video:640:1' ]] \
+  || die 'unexpected workload lock metadata'
+runuser -u universal-video -- test -r "$WORKLOAD_LOCK" \
+  || die 'worker cannot open workload lock'
+if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
+  # A prior exact external run recorded container_service_before=active and
+  # then failed only while restoring that state. This bounded one-shot input
+  # asks the next exact run to restore the recorded state after all gates.
   [[ "$source_target_state" == active ]] && source_was_active=1
   container_was_active=1
   container_target_state=active

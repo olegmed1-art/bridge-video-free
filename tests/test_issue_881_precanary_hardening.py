@@ -956,8 +956,16 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     capture_masks = attest.index(
         "\n  capture_inherited_failure_runtime_masks", recovery_evidence
     )
+    workload_lock_install = attest.index(
+        'install -o root -g universal-video -m 0640 /dev/null "$WORKLOAD_LOCK"',
+        recovery_evidence,
+    )
+    workload_lock_chown = attest.index(
+        'chown root:universal-video "$WORKLOAD_LOCK"', recovery_evidence
+    )
     recovery_window = attest.index("mask_service_for_window", capture_masks)
     assert recovery_evidence < exact_failed_state < capture_masks < recovery_window
+    assert exact_failed_state < workload_lock_install < workload_lock_chown < capture_masks
     cleanup_start = attest.index("cleanup(){")
     cleanup_full_restore = attest.index("restore_source_checkout", cleanup_start)
     inherited_unmask = attest.index(
