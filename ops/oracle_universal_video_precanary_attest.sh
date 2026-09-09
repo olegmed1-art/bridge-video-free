@@ -1512,6 +1512,16 @@ mask_service_for_window(){
   added_runtime_masks+=("$service")
 }
 
+runtime_mask_is_exact(){
+  local service="$1" runtime_dir=/run/systemd/system mask_path
+  [[ "$service" == "$SOURCE_SERVICE" || "$service" == "$CONTAINER_SERVICE" ]] \
+    || return 1
+  [[ -d "$runtime_dir" && ! -L "$runtime_dir" ]] || return 1
+  mask_path="$runtime_dir/$service"
+  [[ -L "$mask_path" ]] || return 1
+  [[ "$(readlink -- "$mask_path" 2>/dev/null || true)" == /dev/null ]]
+}
+
 capture_inherited_failure_runtime_masks(){
   local container_enabled_state source_enabled_state container_mask_origin=inherited
   local container_mask_state container_postmask_state
@@ -1549,11 +1559,9 @@ capture_inherited_failure_runtime_masks(){
         || die 'failed recovery container is not quiescent before runtime remask'
       bounded_systemctl mask --runtime "$CONTAINER_SERVICE" >/dev/null
       added_runtime_masks+=("$CONTAINER_SERVICE")
-      container_mask_state="$(bounded_systemctl_query is-enabled "$CONTAINER_SERVICE" 2>/dev/null || true)"
-      case "$container_mask_state" in
-        masked|masked-runtime) ;;
-        *) die 'failed recovery container runtime remask was not installed' ;;
-      esac
+      runtime_mask_is_exact "$CONTAINER_SERVICE" \
+        || die 'failed recovery container runtime remask was not installed'
+      container_mask_state=masked-runtime
       container_postmask_state="$(service_state "$CONTAINER_SERVICE")"
       case "$container_postmask_state" in
         failed|inactive) ;;
@@ -1587,6 +1595,7 @@ capture_inherited_failure_runtime_masks(){
 
 command -v flock >/dev/null || die 'flock is unavailable'
 command -v docker >/dev/null || die 'docker is unavailable'
+command -v readlink >/dev/null || die 'readlink is unavailable'
 command -v runuser >/dev/null || die 'runuser is unavailable'
 command -v timeout >/dev/null || die 'timeout is unavailable'
 python3 -c 'import os,signal; assert hasattr(os,"pidfd_open") and hasattr(signal,"pidfd_send_signal")' \
