@@ -414,6 +414,48 @@ acquire_workload_lock
     ]
 
 
+@pytest.mark.parametrize("value", ["1", "9", "10", "59", "60"])
+def test_precanary_workload_lock_timeout_accepts_canonical_range(value: str):
+    script = (
+        ROOT / "ops/oracle_universal_video_precanary_attest.sh"
+    ).read_text(encoding="utf-8")
+    start = script.index('[[ "$WORKLOAD_LOCK_TIMEOUT_SECONDS" =~')
+    end = script.index("invalid workload lock timeout'", start) + len(
+        "invalid workload lock timeout'"
+    )
+    validation = script[start:end]
+    completed = subprocess.run(
+        ["bash", "-c", f"die() {{ exit 97; }}\n{validation}", "bash"],
+        text=True,
+        capture_output=True,
+        timeout=5,
+        env={"WORKLOAD_LOCK_TIMEOUT_SECONDS": value},
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("value", ["", "0", "00", "01", "061", "61", "-1", "1.0"])
+def test_precanary_workload_lock_timeout_rejects_noncanonical_or_out_of_range(
+    value: str,
+):
+    script = (
+        ROOT / "ops/oracle_universal_video_precanary_attest.sh"
+    ).read_text(encoding="utf-8")
+    start = script.index('[[ "$WORKLOAD_LOCK_TIMEOUT_SECONDS" =~')
+    end = script.index("invalid workload lock timeout'", start) + len(
+        "invalid workload lock timeout'"
+    )
+    validation = script[start:end]
+    completed = subprocess.run(
+        ["bash", "-c", f"die() {{ exit 97; }}\n{validation}", "bash"],
+        text=True,
+        capture_output=True,
+        timeout=5,
+        env={"WORKLOAD_LOCK_TIMEOUT_SECONDS": value},
+    )
+    assert completed.returncode == 97
+
+
 def test_startup_recovery_exclusive_lock_serializes_residents(tmp_path: Path):
     spool = tmp_path / "spool"
     spool.mkdir()

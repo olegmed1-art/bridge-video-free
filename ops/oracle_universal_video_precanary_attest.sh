@@ -100,9 +100,7 @@ validate_source_dir_scope(){
   || die 'invalid resident restore timeout'
 [[ "$RESTORE_STABLE_SECONDS" =~ ^[0-9]+$ && "$RESTORE_STABLE_SECONDS" -ge 3 && "$RESTORE_STABLE_SECONDS" -le 30 ]] \
   || die 'invalid resident stability interval'
-[[ "$WORKLOAD_LOCK_TIMEOUT_SECONDS" =~ ^[0-9]+$ \
-  && "$WORKLOAD_LOCK_TIMEOUT_SECONDS" -ge 1 \
-  && "$WORKLOAD_LOCK_TIMEOUT_SECONDS" -le 60 ]] \
+[[ "$WORKLOAD_LOCK_TIMEOUT_SECONDS" =~ ^([1-9]|[1-5][0-9]|60)$ ]] \
   || die 'invalid workload lock timeout'
 [[ -z "$RECOVER_CONTAINER_FROM_RUN" || "$RECOVER_CONTAINER_FROM_RUN" =~ ^[0-9]{8,20}$ ]] \
   || die 'invalid bounded prior-run recovery reference'
