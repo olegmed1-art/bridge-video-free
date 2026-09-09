@@ -237,6 +237,7 @@ def _run(
     attempt: int = 1,
     run_number: int = 100,
     recovery: str = "",
+    head_sha: str = SHA,
     status: str = "in_progress",
     conclusion: str | None = None,
 ) -> dict[str, object]:
@@ -245,9 +246,9 @@ def _run(
         "run_number": run_number,
         "path": ONE_SHOT.WORKFLOW_PATH,
         "event": "workflow_dispatch",
-        "display_title": ONE_SHOT.expected_run_name(SHA, receipt_id, recovery),
+        "display_title": ONE_SHOT.expected_run_name(head_sha, receipt_id, recovery),
         "run_attempt": attempt,
-        "head_sha": SHA,
+        "head_sha": head_sha,
         "status": status,
         "conclusion": conclusion,
         "repository": {"full_name": ONE_SHOT.REPOSITORY},
@@ -393,6 +394,39 @@ def test_recovery_retains_initial_state_source_across_failed_attempts() -> None:
             comment=comment,
             runs=[{"workflow_runs": [initial, broken, current]}],
             recover_container_from_run=state_source,
+        )
+
+
+def test_recovery_accepts_only_initial_failed_cross_sha_source() -> None:
+    source_id = RUN_ID - 1
+    source_sha = "b" * 40
+    recovery = str(source_id)
+    source = _run(
+        run_id=source_id,
+        receipt_id=RECEIPT_ID - 1,
+        run_number=99,
+        head_sha=source_sha,
+        status="completed",
+        conclusion="failure",
+    )
+    current = _run(recovery=recovery)
+    comment = _comment(recovery=recovery)
+    result = _validate(
+        comment=comment,
+        runs=[{"workflow_runs": [source, current]}],
+        recover_container_from_run=recovery,
+    )
+    assert result["recovery_depth"] == 1
+
+    unsafe = copy.deepcopy(source)
+    unsafe["display_title"] = ONE_SHOT.expected_run_name(
+        source_sha, RECEIPT_ID - 1, str(source_id - 1)
+    )
+    with pytest.raises(ONE_SHOT.OneShotValidationError, match="not an initial run"):
+        _validate(
+            comment=comment,
+            runs=[{"workflow_runs": [unsafe, current]}],
+            recover_container_from_run=recovery,
         )
 
 
@@ -1932,6 +1966,51 @@ RECOVER_CONTAINER_FROM_RUN=34100000001
 source_target_state=
 verify_prior_recovery_evidence
 [[ "$source_target_state" == active ]]
+"""
+    completed = subprocess.run(
+        ["bash"], input=harness, text=True, capture_output=True, timeout=10
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_recovery_accepts_exact_prewindow_stalled_idle_failure(tmp_path: Path) -> None:
+    script = (
+        ROOT / "ops/oracle_universal_video_precanary_attest.sh"
+    ).read_text(encoding="utf-8")
+    start = script.index("verify_prior_recovery_evidence(){")
+    end = script.index("\n\nassert_pre_stop_idle(){", start)
+    function = textwrap.dedent(script[start:end])
+    evidence = tmp_path / "recovery.txt"
+    evidence.write_text(
+        "\n".join(
+            [
+                f"runtime_sha={'a' * 40}",
+                "UNIVERSAL_VIDEO_PRECANARY_STALLED_IDLE_RESIDENT resident=container "
+                "worker_pid=63508 worker_state=frozen container_running=true "
+                "container_restarting=false container_exit=0 container_oom=false "
+                "project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of "
+                "database=neondb principal=bridge_school_worker_principal schema=true "
+                "function=true claimable=0 leased=0 recovery=stop_once result=PASS",
+                "ERROR: workload claim fence remains held after the sole resident stopped",
+                "UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=workload_reacquire "
+                "source_service=inactive container_service=failed",
+                "real_media_canary_run=false",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    digest = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    harness = f"""\
+set -euo pipefail
+{function}
+die(){{ printf '%s\\n' "$*" >&2; exit 1; }}
+RECOVERY_EVIDENCE_FILE={json.dumps(str(evidence))}
+RECOVERY_EVIDENCE_SHA256={json.dumps(digest)}
+RECOVER_CONTAINER_FROM_RUN=34313254551
+source_target_state=
+verify_prior_recovery_evidence
+[[ "$source_target_state" == inactive ]]
 """
     completed = subprocess.run(
         ["bash"], input=harness, text=True, capture_output=True, timeout=10

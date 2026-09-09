@@ -1528,6 +1528,10 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "--action START" not in workflow
     assert "Oracle instance is STOPPED" in workflow
     assert "actions/runs/$RECOVER_CONTAINER_FROM_RUN" in workflow
+    assert 'git rev-parse "$EXACT_SHA^"' in workflow
+    assert "Cross-SHA recovery source is not the direct main parent" in workflow
+    assert "UNIVERSAL_VIDEO_PRECANARY_STALLED_IDLE_RESIDENT" in workflow
+    assert "workload claim fence remains held after the sole resident stopped" in workflow
     assert ".github/workflows/issue-881-authoritative-external-evidence.yml" in workflow
     assert "approval_receipt_id:" in workflow
     assert "approval_nonce:" in workflow

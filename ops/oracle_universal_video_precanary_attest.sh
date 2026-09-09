@@ -1371,7 +1371,7 @@ assert_quiescent(){
 
 verify_prior_recovery_evidence(){
   local actual_sha prior_sha prior_window
-  local -a prior_window_lines=()
+  local -a prior_window_lines=() prior_stalled_lines=()
   actual_sha="$(sha256sum "$RECOVERY_EVIDENCE_FILE" | awk '{print $1}')"
   [[ "$actual_sha" == "$RECOVERY_EVIDENCE_SHA256" ]] \
     || die 'immutable prior-run recovery evidence digest mismatch'
@@ -1384,12 +1384,28 @@ verify_prior_recovery_evidence(){
   mapfile -t prior_window_lines < <(
     grep -E '^UNIVERSAL_VIDEO_PRECANARY_WINDOW ' "$RECOVERY_EVIDENCE_FILE" || true
   )
-  [[ "${#prior_window_lines[@]}" -eq 1 ]] \
-    || die 'prior-run window evidence is missing or ambiguous'
-  prior_window="${prior_window_lines[0]}"
-  [[ "$prior_window" =~ ^UNIVERSAL_VIDEO_PRECANARY_WINDOW[[:space:]]source_service_before=(active|inactive)[[:space:]]source_service_observed=(active|inactive)[[:space:]]container_service_before=active[[:space:]]container_service_observed=(active|inactive)[[:space:]]workload_fence=exclusive[[:space:]]services_quiescent=true[[:space:]]restore_on_exit=true$ ]] \
-    || die 'prior-run evidence does not record exact resident target states'
-  source_target_state="${BASH_REMATCH[1]}"
+  if [[ "${#prior_window_lines[@]}" -eq 1 ]]; then
+    prior_window="${prior_window_lines[0]}"
+    [[ "$prior_window" =~ ^UNIVERSAL_VIDEO_PRECANARY_WINDOW[[:space:]]source_service_before=(active|inactive)[[:space:]]source_service_observed=(active|inactive)[[:space:]]container_service_before=active[[:space:]]container_service_observed=(active|inactive)[[:space:]]workload_fence=exclusive[[:space:]]services_quiescent=true[[:space:]]restore_on_exit=true$ ]] \
+      || die 'prior-run evidence does not record exact resident target states'
+    source_target_state="${BASH_REMATCH[1]}"
+  elif [[ "${#prior_window_lines[@]}" -eq 0 ]]; then
+    mapfile -t prior_stalled_lines < <(
+      grep -E '^UNIVERSAL_VIDEO_PRECANARY_STALLED_IDLE_RESIDENT resident=container worker_pid=[1-9][0-9]* worker_state=frozen container_running=true container_restarting=false container_exit=0 container_oom=false project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0 recovery=stop_once result=PASS$' \
+        "$RECOVERY_EVIDENCE_FILE" || true
+    )
+    [[ "${#prior_stalled_lines[@]}" -eq 1 ]] \
+      || die 'prior-run pre-window stalled resident evidence is missing or ambiguous'
+    grep -Fx 'ERROR: workload claim fence remains held after the sole resident stopped' \
+      "$RECOVERY_EVIDENCE_FILE" >/dev/null \
+      || die 'prior-run pre-window workload failure is missing'
+    grep -Eq '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=workload_reacquire source_service=inactive container_service=(inactive|failed)$' \
+      "$RECOVERY_EVIDENCE_FILE" \
+      || die 'prior-run pre-window restoration state is missing'
+    source_target_state=inactive
+  else
+    die 'prior-run window evidence is ambiguous'
+  fi
   grep -Eq '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED .*container_service=(inactive|failed)$' \
     "$RECOVERY_EVIDENCE_FILE" \
     || die 'prior-run evidence does not record a bounded container restoration failure'
@@ -1531,7 +1547,11 @@ runuser -u universal-video -- test -r "$WORKLOAD_LOCK" \
 source_state_before="$(service_state "$SOURCE_SERVICE")"
 container_state_before="$(service_state "$CONTAINER_SERVICE")"
 assert_known_state "$SOURCE_SERVICE" "$source_state_before"
-assert_known_state "$CONTAINER_SERVICE" "$container_state_before"
+if [[ -n "$RECOVER_CONTAINER_FROM_RUN" && "$container_state_before" == failed ]]; then
+  : # Fail-closed recovery accepts only the artifact-bound stopped container state.
+else
+  assert_known_state "$CONTAINER_SERVICE" "$container_state_before"
+fi
 [[ "$source_state_before" == active ]] && source_was_active=1
 [[ "$container_state_before" == active ]] && container_was_active=1
 source_target_state="$source_state_before"
