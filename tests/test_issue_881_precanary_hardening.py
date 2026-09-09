@@ -1011,6 +1011,11 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert cleanup_full_restore < inherited_unmask < verified_unmask < fenced_restore
     assert "enabled|disabled|static|indirect" in attest[verified_unmask:fenced_restore]
     assert "UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER" in workflow
+    assert '\"checksum_type\":\"sha256\"' in runner
+    assert (
+        '\"checksum_value\":\"15c727e42334125caca6c8e506c4ba013eb0b2ba191603f1927fae83dd9cc20b\"'
+        in runner
+    )
     assert 'ALLOW_CACHE_RECLAIM="${UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM:-1}"' in installer
 
 
