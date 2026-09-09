@@ -985,6 +985,10 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     recovery_window = attest.index("mask_service_for_window", capture_masks)
     assert recovery_evidence < exact_failed_state < capture_masks < recovery_window
     assert exact_failed_state < workload_lock_install < workload_lock_chown < capture_masks
+    assert 'inherited_failure_runtime_masks+=("$CONTAINER_SERVICE")' in attest
+    assert 'source_target_state" == inactive && "$source_state_before" == inactive' in attest
+    assert "disabled|static|indirect|masked" in attest
+    assert "UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS" in attest
     cleanup_start = attest.index("cleanup(){")
     cleanup_full_restore = attest.index("restore_source_checkout", cleanup_start)
     inherited_unmask = attest.index(
@@ -2065,6 +2069,74 @@ verify_prior_recovery_evidence
         timeout=10,
     )
     assert rejected.returncode != 0
+
+
+@pytest.mark.parametrize(
+    (
+        "source_enabled",
+        "container_enabled",
+        "source_target",
+        "source_live",
+        "expected_success",
+        "expected_inherited",
+    ),
+    [
+        ("disabled", "masked-runtime", "inactive", "inactive", True, "container.service"),
+        (
+            "masked-runtime",
+            "masked-runtime",
+            "inactive",
+            "inactive",
+            True,
+            "container.service source.service",
+        ),
+        ("disabled", "disabled", "inactive", "inactive", False, ""),
+        ("enabled", "masked-runtime", "inactive", "inactive", False, ""),
+        ("disabled", "masked-runtime", "active", "inactive", False, ""),
+        ("disabled", "masked-runtime", "inactive", "active", False, ""),
+    ],
+)
+def test_recovery_mask_capture_requires_active_target_mask_but_accepts_safe_inactive_source(
+    source_enabled: str,
+    container_enabled: str,
+    source_target: str,
+    source_live: str,
+    expected_success: bool,
+    expected_inherited: str,
+) -> None:
+    script = (
+        ROOT / "ops/oracle_universal_video_precanary_attest.sh"
+    ).read_text(encoding="utf-8")
+    start = script.index("capture_inherited_failure_runtime_masks(){")
+    end = script.index("\n\ncommand -v flock", start)
+    function = textwrap.dedent(script[start:end])
+    harness = f"""\
+set -euo pipefail
+{function}
+die(){{ printf '%s\\n' "$*" >&2; exit 1; }}
+bounded_systemctl_query(){{
+  if [[ "$2" == "$SOURCE_SERVICE" ]]; then
+    printf '%s\\n' {json.dumps(source_enabled)}
+  else
+    printf '%s\\n' {json.dumps(container_enabled)}
+  fi
+}}
+SOURCE_SERVICE=source.service
+CONTAINER_SERVICE=container.service
+container_recovery_requested=1
+source_target_state={json.dumps(source_target)}
+source_state_before={json.dumps(source_live)}
+declare -a inherited_failure_runtime_masks=()
+capture_inherited_failure_runtime_masks
+printf 'inherited=%s\\n' "${{inherited_failure_runtime_masks[*]}}"
+"""
+    completed = subprocess.run(
+        ["bash"], input=harness, text=True, capture_output=True, timeout=10
+    )
+    assert (completed.returncode == 0) is expected_success
+    if expected_success:
+        assert f"inherited={expected_inherited}" in completed.stdout
+        assert "UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS" in completed.stdout
 
 
 def test_post_fence_readiness_failure_is_runtime_masked_for_recovery(
