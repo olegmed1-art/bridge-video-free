@@ -1529,6 +1529,8 @@ capture_inherited_failure_runtime_masks(){
   container_enabled_state="$(bounded_systemctl_query is-enabled "$CONTAINER_SERVICE" 2>/dev/null || true)"
   case "$container_enabled_state" in
     masked-runtime)
+      runtime_mask_is_exact "$CONTAINER_SERVICE" \
+        || die "approved recovery container mask is not runtime-only: $CONTAINER_SERVICE"
       container_mask_state=masked-runtime
       inherited_failure_runtime_masks+=("$CONTAINER_SERVICE")
       ;;
@@ -1536,6 +1538,8 @@ capture_inherited_failure_runtime_masks(){
       # Some systemd releases report a /run-only mask as the generic `masked`
       # state. Accept that representation only for the exact artifact-bound,
       # stopped pre-window recovery; cleanup still uses `unmask --runtime`.
+      runtime_mask_is_exact "$CONTAINER_SERVICE" \
+        || die "approved recovery container mask is not runtime-only: $CONTAINER_SERVICE"
       [[ "$prewindow_stalled_recovery" == 1 && "$container_state_before" == failed ]] \
         || die "approved recovery has an ambiguous persistent container mask: $CONTAINER_SERVICE"
       [[ "$(service_state "$CONTAINER_SERVICE")" == failed ]] \
