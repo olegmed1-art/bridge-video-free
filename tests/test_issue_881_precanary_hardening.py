@@ -990,6 +990,7 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert '"$prewindow_stalled_recovery" == 1 && "$container_state_before" == failed' in attest
     assert "failed recovery container is not quiescent before runtime remask" in attest
     assert "failed recovery container is not quiescent after runtime remask" in attest
+    assert 'container_state_before="$container_postmask_state"' in attest
     assert "container_mask_origin=%s" in attest
     assert 'source_target_state" == inactive && "$source_state_before" == inactive' in attest
     assert "disabled|static|indirect|masked" in attest
@@ -2083,6 +2084,7 @@ verify_prior_recovery_evidence
         "source_target",
         "source_live",
         "container_live",
+        "container_postmask_live",
         "prewindow_recovery",
         "quiescent",
         "expected_success",
@@ -2096,6 +2098,7 @@ verify_prior_recovery_evidence
             "inactive",
             "inactive",
             "failed",
+            "failed",
             "1",
             True,
             True,
@@ -2107,6 +2110,7 @@ verify_prior_recovery_evidence
             "masked-runtime",
             "inactive",
             "inactive",
+            "failed",
             "failed",
             "1",
             True,
@@ -2120,19 +2124,21 @@ verify_prior_recovery_evidence
             "inactive",
             "inactive",
             "failed",
+            "inactive",
             "1",
             True,
             True,
             "",
             "container.service",
         ),
-        ("disabled", "masked", "inactive", "inactive", "failed", "1", True, False, "", ""),
-        ("disabled", "enabled", "inactive", "inactive", "failed", "0", True, False, "", ""),
-        ("disabled", "enabled", "inactive", "inactive", "inactive", "1", True, False, "", ""),
-        ("disabled", "enabled", "inactive", "inactive", "failed", "1", False, False, "", ""),
-        ("enabled", "masked-runtime", "inactive", "inactive", "failed", "1", True, False, "", ""),
-        ("disabled", "masked-runtime", "active", "inactive", "failed", "1", True, False, "", ""),
-        ("disabled", "masked-runtime", "inactive", "active", "failed", "1", True, False, "", ""),
+        ("disabled", "masked", "inactive", "inactive", "failed", "failed", "1", True, False, "", ""),
+        ("disabled", "enabled", "inactive", "inactive", "failed", "failed", "0", True, False, "", ""),
+        ("disabled", "enabled", "inactive", "inactive", "inactive", "inactive", "1", True, False, "", ""),
+        ("disabled", "enabled", "inactive", "inactive", "failed", "active", "1", True, False, "", ""),
+        ("disabled", "enabled", "inactive", "inactive", "failed", "failed", "1", False, False, "", ""),
+        ("enabled", "masked-runtime", "inactive", "inactive", "failed", "failed", "1", True, False, "", ""),
+        ("disabled", "masked-runtime", "active", "inactive", "failed", "failed", "1", True, False, "", ""),
+        ("disabled", "masked-runtime", "inactive", "active", "failed", "failed", "1", True, False, "", ""),
     ],
 )
 def test_recovery_mask_capture_requires_active_target_mask_but_accepts_safe_inactive_source(
@@ -2141,6 +2147,7 @@ def test_recovery_mask_capture_requires_active_target_mask_but_accepts_safe_inac
     source_target: str,
     source_live: str,
     container_live: str,
+    container_postmask_live: str,
     prewindow_recovery: str,
     quiescent: bool,
     expected_success: bool,
@@ -2167,8 +2174,9 @@ bounded_systemctl_query(){{
 bounded_systemctl(){{
   [[ "$1" == mask && "$2" == --runtime && "$3" == "$CONTAINER_SERVICE" ]]
   mock_container_enabled=masked-runtime
+  mock_container_live={json.dumps(container_postmask_live)}
 }}
-service_state(){{ printf '%s\\n' {json.dumps(container_live)}; }}
+service_state(){{ printf '%s\\n' "$mock_container_live"; }}
 residents_are_quiescent(){{ {'return 0' if quiescent else 'return 1'}; }}
 SOURCE_SERVICE=source.service
 CONTAINER_SERVICE=container.service
@@ -2178,11 +2186,13 @@ source_target_state={json.dumps(source_target)}
 source_state_before={json.dumps(source_live)}
 container_state_before={json.dumps(container_live)}
 mock_container_enabled={json.dumps(container_enabled)}
+mock_container_live={json.dumps(container_live)}
 declare -a inherited_failure_runtime_masks=()
 declare -a added_runtime_masks=()
 capture_inherited_failure_runtime_masks
 printf 'inherited=%s\\n' "${{inherited_failure_runtime_masks[*]}}"
 printf 'added=%s\\n' "${{added_runtime_masks[*]}}"
+printf 'baseline=%s\\n' "$container_state_before"
 """
     completed = subprocess.run(
         ["bash"], input=harness, text=True, capture_output=True, timeout=10
@@ -2191,6 +2201,8 @@ printf 'added=%s\\n' "${{added_runtime_masks[*]}}"
     if expected_success:
         assert f"inherited={expected_inherited}" in completed.stdout
         assert f"added={expected_added}" in completed.stdout
+        expected_baseline = container_postmask_live if expected_added else container_live
+        assert f"baseline={expected_baseline}" in completed.stdout
         assert "UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS" in completed.stdout
 
 

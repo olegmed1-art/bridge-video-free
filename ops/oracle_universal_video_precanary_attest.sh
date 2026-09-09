@@ -1514,6 +1514,7 @@ mask_service_for_window(){
 
 capture_inherited_failure_runtime_masks(){
   local container_enabled_state source_enabled_state container_mask_origin=inherited
+  local container_postmask_state
   [[ "$container_recovery_requested" == 1 ]] || return 1
   container_enabled_state="$(bounded_systemctl_query is-enabled "$CONTAINER_SERVICE" 2>/dev/null || true)"
   if [[ "$container_enabled_state" == masked-runtime ]]; then
@@ -1531,11 +1532,19 @@ capture_inherited_failure_runtime_masks(){
       || die 'failed recovery container is not quiescent before runtime remask'
     bounded_systemctl mask --runtime "$CONTAINER_SERVICE" >/dev/null
     added_runtime_masks+=("$CONTAINER_SERVICE")
-    [[ "$(bounded_systemctl_query is-enabled "$CONTAINER_SERVICE" 2>/dev/null || true)" == masked-runtime \
-          && "$(service_state "$CONTAINER_SERVICE")" == failed ]] \
-      || die 'failed recovery container runtime remask did not preserve the exact stopped state'
+    [[ "$(bounded_systemctl_query is-enabled "$CONTAINER_SERVICE" 2>/dev/null || true)" == masked-runtime ]] \
+      || die 'failed recovery container runtime remask was not installed'
+    container_postmask_state="$(service_state "$CONTAINER_SERVICE")"
+    case "$container_postmask_state" in
+      failed|inactive) ;;
+      *) die 'failed recovery container runtime remask did not preserve a stopped state' ;;
+    esac
     residents_are_quiescent \
       || die 'failed recovery container is not quiescent after runtime remask'
+    # systemd may normalize a failed, stopped unit to inactive while installing
+    # the runtime mask. Bind later live-state checks to that observed stopped
+    # postcondition instead of the pre-mask failure flag.
+    container_state_before="$container_postmask_state"
     container_mask_origin=added
   fi
 
@@ -1550,8 +1559,8 @@ capture_inherited_failure_runtime_masks(){
       *) die "inactive recovery source enablement is unsafe: ${source_enabled_state:-unknown}" ;;
     esac
   fi
-  printf 'UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS container=masked-runtime container_mask_origin=%s source=%s source_target=%s result=PASS\n' \
-    "$container_mask_origin" "$source_enabled_state" "$source_target_state"
+  printf 'UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS container=masked-runtime container_mask_origin=%s container_state=%s source=%s source_target=%s result=PASS\n' \
+    "$container_mask_origin" "$container_state_before" "$source_enabled_state" "$source_target_state"
 }
 
 command -v flock >/dev/null || die 'flock is unavailable'
