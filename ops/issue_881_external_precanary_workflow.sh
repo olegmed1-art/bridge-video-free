@@ -469,7 +469,9 @@ verify_no_active_instance_agent_commands(){
   compartment="$(oci --config-file "$config" compute instance get \
     --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)" \
     || return 1
-  [[ "$compartment" =~ ^ocid1\.compartment\. ]] \
+  # OCI returns a tenancy OCID when the instance lives in the root
+  # compartment; child compartments use the ordinary compartment OCID.
+  [[ "$compartment" =~ ^ocid1\.(tenancy|compartment)\. ]] \
     || { echo 'Oracle compartment identity is invalid' >&2; return 1; }
   executions_file="$RUNNER_TEMP/precanary-oci-instance-command-executions.json"
   # This OCI API is scoped by the exact instance ID. Do not filter by display

@@ -1672,7 +1672,7 @@ set -euo pipefail
 {function}
 oci(){{
   case "$*" in
-    *" compute instance get "*) printf '%s\\n' 'ocid1.compartment.oc1.synthetic' ;;
+    *" compute instance get "*) printf '%s\\n' "$COMPARTMENT_ID" ;;
     *" instance-agent command-execution list "*) command cat "$EXECUTIONS" ;;
     *) return 64 ;;
   esac
@@ -1683,7 +1683,10 @@ verify_no_active_instance_agent_commands
 """
 
     def run(
-        state: str, *, instance_id: str = "ocid1.instance.oc1.synthetic"
+        state: str,
+        *,
+        instance_id: str = "ocid1.instance.oc1.synthetic",
+        compartment_id: str = "ocid1.compartment.oc1.synthetic",
     ) -> subprocess.CompletedProcess[str]:
         executions.write_text(
             json.dumps(
@@ -1708,6 +1711,7 @@ verify_no_active_instance_agent_commands
             capture_output=True,
             env={
                 "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "COMPARTMENT_ID": compartment_id,
                 "EXECUTIONS": str(executions),
             },
             timeout=10,
@@ -1719,6 +1723,15 @@ verify_no_active_instance_agent_commands
         "examined_instance_executions=1 active_remote_commands=0 result=PASS"
         in terminal.stdout
     )
+    root_terminal = run(
+        "SUCCEEDED", compartment_id="ocid1.tenancy.oc1.synthetic"
+    )
+    assert root_terminal.returncode == 0, root_terminal.stderr
+    invalid_compartment = run(
+        "SUCCEEDED", compartment_id="ocid1.instance.oc1.synthetic"
+    )
+    assert invalid_compartment.returncode != 0
+    assert "Oracle compartment identity is invalid" in invalid_compartment.stderr
     active = run("IN_PROGRESS")
     assert active.returncode != 0
     assert "Run Command on target instance is not terminal: IN_PROGRESS" in active.stderr
