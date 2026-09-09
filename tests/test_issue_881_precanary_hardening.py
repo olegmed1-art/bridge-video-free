@@ -986,6 +986,11 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     assert recovery_evidence < exact_failed_state < capture_masks < recovery_window
     assert exact_failed_state < workload_lock_install < workload_lock_chown < capture_masks
     assert 'inherited_failure_runtime_masks+=("$CONTAINER_SERVICE")' in attest
+    assert 'added_runtime_masks+=("$CONTAINER_SERVICE")' in attest
+    assert '"$prewindow_stalled_recovery" == 1 && "$container_state_before" == failed' in attest
+    assert "failed recovery container is not quiescent before runtime remask" in attest
+    assert "failed recovery container is not quiescent after runtime remask" in attest
+    assert "container_mask_origin=%s" in attest
     assert 'source_target_state" == inactive && "$source_state_before" == inactive' in attest
     assert "disabled|static|indirect|masked" in attest
     assert "UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS" in attest
@@ -2077,23 +2082,57 @@ verify_prior_recovery_evidence
         "container_enabled",
         "source_target",
         "source_live",
+        "container_live",
+        "prewindow_recovery",
+        "quiescent",
         "expected_success",
         "expected_inherited",
+        "expected_added",
     ),
     [
-        ("disabled", "masked-runtime", "inactive", "inactive", True, "container.service"),
+        (
+            "disabled",
+            "masked-runtime",
+            "inactive",
+            "inactive",
+            "failed",
+            "1",
+            True,
+            True,
+            "container.service",
+            "",
+        ),
         (
             "masked-runtime",
             "masked-runtime",
             "inactive",
             "inactive",
+            "failed",
+            "1",
+            True,
             True,
             "container.service source.service",
+            "",
         ),
-        ("disabled", "disabled", "inactive", "inactive", False, ""),
-        ("enabled", "masked-runtime", "inactive", "inactive", False, ""),
-        ("disabled", "masked-runtime", "active", "inactive", False, ""),
-        ("disabled", "masked-runtime", "inactive", "active", False, ""),
+        (
+            "disabled",
+            "enabled",
+            "inactive",
+            "inactive",
+            "failed",
+            "1",
+            True,
+            True,
+            "",
+            "container.service",
+        ),
+        ("disabled", "masked", "inactive", "inactive", "failed", "1", True, False, "", ""),
+        ("disabled", "enabled", "inactive", "inactive", "failed", "0", True, False, "", ""),
+        ("disabled", "enabled", "inactive", "inactive", "inactive", "1", True, False, "", ""),
+        ("disabled", "enabled", "inactive", "inactive", "failed", "1", False, False, "", ""),
+        ("enabled", "masked-runtime", "inactive", "inactive", "failed", "1", True, False, "", ""),
+        ("disabled", "masked-runtime", "active", "inactive", "failed", "1", True, False, "", ""),
+        ("disabled", "masked-runtime", "inactive", "active", "failed", "1", True, False, "", ""),
     ],
 )
 def test_recovery_mask_capture_requires_active_target_mask_but_accepts_safe_inactive_source(
@@ -2101,8 +2140,12 @@ def test_recovery_mask_capture_requires_active_target_mask_but_accepts_safe_inac
     container_enabled: str,
     source_target: str,
     source_live: str,
+    container_live: str,
+    prewindow_recovery: str,
+    quiescent: bool,
     expected_success: bool,
     expected_inherited: str,
+    expected_added: str,
 ) -> None:
     script = (
         ROOT / "ops/oracle_universal_video_precanary_attest.sh"
@@ -2118,17 +2161,28 @@ bounded_systemctl_query(){{
   if [[ "$2" == "$SOURCE_SERVICE" ]]; then
     printf '%s\\n' {json.dumps(source_enabled)}
   else
-    printf '%s\\n' {json.dumps(container_enabled)}
+    printf '%s\\n' "$mock_container_enabled"
   fi
 }}
+bounded_systemctl(){{
+  [[ "$1" == mask && "$2" == --runtime && "$3" == "$CONTAINER_SERVICE" ]]
+  mock_container_enabled=masked-runtime
+}}
+service_state(){{ printf '%s\\n' {json.dumps(container_live)}; }}
+residents_are_quiescent(){{ {'return 0' if quiescent else 'return 1'}; }}
 SOURCE_SERVICE=source.service
 CONTAINER_SERVICE=container.service
 container_recovery_requested=1
+prewindow_stalled_recovery={json.dumps(prewindow_recovery)}
 source_target_state={json.dumps(source_target)}
 source_state_before={json.dumps(source_live)}
+container_state_before={json.dumps(container_live)}
+mock_container_enabled={json.dumps(container_enabled)}
 declare -a inherited_failure_runtime_masks=()
+declare -a added_runtime_masks=()
 capture_inherited_failure_runtime_masks
 printf 'inherited=%s\\n' "${{inherited_failure_runtime_masks[*]}}"
+printf 'added=%s\\n' "${{added_runtime_masks[*]}}"
 """
     completed = subprocess.run(
         ["bash"], input=harness, text=True, capture_output=True, timeout=10
@@ -2136,6 +2190,7 @@ printf 'inherited=%s\\n' "${{inherited_failure_runtime_masks[*]}}"
     assert (completed.returncode == 0) is expected_success
     if expected_success:
         assert f"inherited={expected_inherited}" in completed.stdout
+        assert f"added={expected_added}" in completed.stdout
         assert "UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS" in completed.stdout
 
 

@@ -1513,12 +1513,31 @@ mask_service_for_window(){
 }
 
 capture_inherited_failure_runtime_masks(){
-  local container_enabled_state source_enabled_state
+  local container_enabled_state source_enabled_state container_mask_origin=inherited
   [[ "$container_recovery_requested" == 1 ]] || return 1
   container_enabled_state="$(bounded_systemctl_query is-enabled "$CONTAINER_SERVICE" 2>/dev/null || true)"
-  [[ "$container_enabled_state" == masked-runtime ]] \
-    || die "approved recovery is missing the prior failure runtime mask: $CONTAINER_SERVICE"
-  inherited_failure_runtime_masks+=("$CONTAINER_SERVICE")
+  if [[ "$container_enabled_state" == masked-runtime ]]; then
+    inherited_failure_runtime_masks+=("$CONTAINER_SERVICE")
+  else
+    [[ "$prewindow_stalled_recovery" == 1 && "$container_state_before" == failed ]] \
+      || die "approved recovery is missing the prior failure runtime mask: $CONTAINER_SERVICE"
+    case "$container_enabled_state" in
+      enabled|disabled|static|indirect) ;;
+      *) die "failed recovery container enablement is unsafe: ${container_enabled_state:-unknown}" ;;
+    esac
+    [[ "$(service_state "$CONTAINER_SERVICE")" == failed ]] \
+      || die 'failed recovery container state changed before runtime remask'
+    residents_are_quiescent \
+      || die 'failed recovery container is not quiescent before runtime remask'
+    bounded_systemctl mask --runtime "$CONTAINER_SERVICE" >/dev/null
+    added_runtime_masks+=("$CONTAINER_SERVICE")
+    [[ "$(bounded_systemctl_query is-enabled "$CONTAINER_SERVICE" 2>/dev/null || true)" == masked-runtime \
+          && "$(service_state "$CONTAINER_SERVICE")" == failed ]] \
+      || die 'failed recovery container runtime remask did not preserve the exact stopped state'
+    residents_are_quiescent \
+      || die 'failed recovery container is not quiescent after runtime remask'
+    container_mask_origin=added
+  fi
 
   source_enabled_state="$(bounded_systemctl_query is-enabled "$SOURCE_SERVICE" 2>/dev/null || true)"
   if [[ "$source_enabled_state" == masked-runtime ]]; then
@@ -1531,8 +1550,8 @@ capture_inherited_failure_runtime_masks(){
       *) die "inactive recovery source enablement is unsafe: ${source_enabled_state:-unknown}" ;;
     esac
   fi
-  printf 'UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS container=masked-runtime source=%s source_target=%s result=PASS\n' \
-    "$source_enabled_state" "$source_target_state"
+  printf 'UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS container=masked-runtime container_mask_origin=%s source=%s source_target=%s result=PASS\n' \
+    "$container_mask_origin" "$source_enabled_state" "$source_target_state"
 }
 
 command -v flock >/dev/null || die 'flock is unavailable'
