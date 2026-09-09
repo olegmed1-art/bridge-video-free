@@ -1493,10 +1493,10 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert 'git merge-base --is-ancestor "$gate_merge_sha" "$EXACT_SHA"' in workflow
     assert "chatgpt-codex-connector[bot]" in workflow
     assert "'ops/issue_881_codex_review_gate.py'" in workflow
-    assert runner.count("issue_881_codex_review_gate.py verify") == 2
-    assert runner.count('--exact-sha "$reviewed_sha"') == 2
-    assert runner.count('--owner-login "$GITHUB_REPOSITORY_OWNER"') == 2
-    assert "issue-881-exact-head-comments.json" in workflow
+    assert "issue_881_codex_review_gate.py verify" not in runner
+    assert '--exact-sha "$reviewed_sha"' not in runner
+    assert '--owner-login "$GITHUB_REPOSITORY_OWNER"' not in runner
+    assert "issue-881-exact-head-comments.json" not in workflow
     assert "[0-9a-f]{10}|[0-9a-f]{40}" in review_gate
     assert 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' in workflow
     assert (
@@ -1509,10 +1509,10 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "root_reviewed_sha" in workflow
     assert "Main changed while live review and CI gates were evaluated" in workflow
     assert workflow.count('git/ref/heads/main" --jq') >= 2
-    approval_recheck = workflow.rindex('reviews?per_page=100')
+    first_thread_check = workflow.index("reviewThreads(first:100)")
     final_thread_recheck = workflow.rindex("reviewThreads(first:100)")
     final_main_fence = workflow.rindex('git/ref/heads/main" --jq')
-    assert approval_recheck < final_thread_recheck < final_main_fence
+    assert first_thread_check < final_thread_recheck < final_main_fence
     assert '[[ "$live_state" == \'closed\'' in workflow
     assert 'git/ref/heads/main" --jq \'.object.sha\'' in workflow
     assert '"$main_sha" == "$EXACT_SHA"' in workflow

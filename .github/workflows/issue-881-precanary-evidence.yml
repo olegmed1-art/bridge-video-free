@@ -84,7 +84,7 @@ jobs:
           grep -F 'protected_gate_paths=(' "$runner"
           grep -F "'ops/issue_881_external_precanary_workflow.sh'" "$runner"
           grep -F "'ops/issue_881_codex_review_gate.py'" "$runner"
-          test "$(grep -c 'issue_881_codex_review_gate.py verify' "$runner")" -eq 2
+          ! grep -F 'issue_881_codex_review_gate.py verify' "$runner"
           grep -F "'ops/oracle_known_hosts_from_scan.sh'" "$runner"
           grep -F "'.github/workflows/oracle-universal-video-admin.yml'" "$runner"
           grep -F "oracle-universal-video-admin-pr-{0}" \

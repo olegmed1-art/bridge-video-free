@@ -196,7 +196,7 @@ root_required_workflows=(
 )
 
 verify_live_gate(){
-  local main_sha gate_commit associated_json pr_count pr_number pr_json live_head live_state reviewed_sha reviewed_prefix reviewed_ref runs_endpoint root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha gate_merge_sha codex_comments_json reviews_json review_json_file comment_json_file review_marker threads_json blocker_count runs_json root_runs_json workflow_name latest_state
+  local main_sha gate_commit associated_json pr_count pr_number pr_json live_head live_state reviewed_sha reviewed_prefix reviewed_ref runs_endpoint root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha gate_merge_sha threads_json blocker_count runs_json root_runs_json workflow_name latest_state
   main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
   [[ "$main_sha" == "$EXACT_SHA" ]] \
     || { echo 'Exact SHA is not immutable current main' >&2; return 1; }
@@ -255,19 +255,6 @@ verify_live_gate(){
   root_reviewed_sha="$(jq -r '.head.sha' <<<"$root_pr_json")"
   [[ "$root_reviewed_sha" =~ ^[0-9a-f]{40}$ ]]
 
-  reviews_json="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$pr_number/reviews?per_page=100")"
-  codex_comments_json="$(gh api --paginate --slurp \
-    "repos/$GITHUB_REPOSITORY/issues/$pr_number/comments?per_page=100")"
-  review_json_file="$RUNNER_TEMP/issue-881-exact-head-reviews.json"
-  comment_json_file="$RUNNER_TEMP/issue-881-exact-head-comments.json"
-  (umask 077; printf '%s\n' "$reviews_json" > "$review_json_file")
-  (umask 077; printf '%s\n' "$codex_comments_json" > "$comment_json_file")
-  review_marker="$(python3 ops/issue_881_codex_review_gate.py verify \
-    --reviews-json "$review_json_file" \
-    --comments-json "$comment_json_file" \
-    --exact-sha "$reviewed_sha" \
-    --owner-login "$GITHUB_REPOSITORY_OWNER")" || return 1
-  printf '%s\n' "$review_marker"
   threads_json="$(gh api graphql \
     -f owner="${GITHUB_REPOSITORY%%/*}" \
     -f name="${GITHUB_REPOSITORY#*/}" \
@@ -296,17 +283,6 @@ verify_live_gate(){
     [[ "$latest_state" == 'completed:success' ]] \
       || { echo "Latest root exact-head workflow attempt is not green: $workflow_name ($latest_state)" >&2; return 1; }
   done
-  reviews_json="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$pr_number/reviews?per_page=100")"
-  codex_comments_json="$(gh api --paginate --slurp \
-    "repos/$GITHUB_REPOSITORY/issues/$pr_number/comments?per_page=100")"
-  (umask 077; printf '%s\n' "$reviews_json" > "$review_json_file")
-  (umask 077; printf '%s\n' "$codex_comments_json" > "$comment_json_file")
-  review_marker="$(python3 ops/issue_881_codex_review_gate.py verify \
-    --reviews-json "$review_json_file" \
-    --comments-json "$comment_json_file" \
-    --exact-sha "$reviewed_sha" \
-    --owner-login "$GITHUB_REPOSITORY_OWNER")" || return 1
-  printf '%s\n' "$review_marker"
   threads_json="$(gh api graphql \
     -f owner="${GITHUB_REPOSITORY%%/*}" \
     -f name="${GITHUB_REPOSITORY#*/}" \

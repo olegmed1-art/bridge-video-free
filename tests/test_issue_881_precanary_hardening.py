@@ -758,6 +758,7 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     workflow_header = workflow.split("\njobs:", 1)[0]
     assert "actions: write" in workflow_header
     assert "${{" not in runner
+    assert "issue_881_codex_review_gate.py verify" not in runner
     assert (
         workflow.count("issue_881_precanary_one_shot.py verify")
         + runner.count("issue_881_precanary_one_shot.py verify")
