@@ -1,0 +1,44 @@
+{
+  "schema": "bridge-school/recognizer-holdout-v1-baseline",
+  "status": "BASELINE_FROZEN_FOR_HOLDOUT_PREPARATION",
+  "algorithm_baseline_git_sha": "3d8175efffe7c693451033b6bc11ff059a8e367d",
+  "backend_version": "bridge-vision-bridgit-rank-layout-v1",
+  "mode": "SHADOW_ONLY",
+  "algorithm_files": [
+    {
+      "path": "bridge_vision/anchor_registration.py",
+      "git_blob_sha": "943552f8c6088b20005f9812820bf3773e58a764"
+    },
+    {
+      "path": "bridge_vision/bridgit_rank_layout.py",
+      "git_blob_sha": "242927cdbb088b9a0a02276ba8bd7e6e27f6ca98"
+    },
+    {
+      "path": "bridge_vision/deal_evidence.py",
+      "git_blob_sha": "d8b071816c916126d91e882b5e3ede1bdead252b"
+    },
+    {
+      "path": "bridge_contracts/video_deal.py",
+      "git_blob_sha": "7c0baf7edfdd15896f4379f61abecb555d32e9fb"
+    }
+  ],
+  "runtime_requirements": {
+    "path": "requirements-bridgit-rank-layout-shadow.txt",
+    "git_blob_sha": "7858f1d056d7708add5854ec38d12b18db43b4a8",
+    "pins": [
+      "numpy==2.3.2",
+      "opencv-python-headless==5.0.0.93"
+    ]
+  },
+  "holdout_rules": {
+    "fourth_hand_inference_allowed": false,
+    "logical_deck_completion_allowed": false,
+    "unknown_counts_as_recognized_card": false,
+    "production_registration_allowed": false,
+    "canonical_promotion_allowed": false,
+    "threshold_tuning_on_holdout_allowed": false
+  },
+  "runner_is_algorithm_change": false,
+  "current_holdout_status": "BLOCKED_CORPUS",
+  "note": "Later runner/evaluator-only commits do not change this algorithm baseline. A frozen RECOGNIZER_HOLDOUT_V1 package must additionally bind the runner-computed recognizer_artifact_sha256, profile/config hashes, independent gold and frame identities before evaluation."
+}
