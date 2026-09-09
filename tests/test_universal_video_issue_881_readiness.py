@@ -367,6 +367,53 @@ def test_attestation_exclusive_lock_blocks_worker_claim_path(tmp_path: Path):
         pass
 
 
+def test_precanary_workload_lock_retries_once_with_a_bounded_wait(tmp_path: Path):
+    script = (
+        ROOT / "ops/oracle_universal_video_precanary_attest.sh"
+    ).read_text(encoding="utf-8")
+    start = script.index("acquire_workload_lock(){")
+    end = script.index("\n}\n", start) + 2
+    function = script[start:end]
+    calls = tmp_path / "flock-calls"
+    harness = f'''\
+set -u
+{function}
+WORKLOAD_LOCK_TIMEOUT_SECONDS=30
+MODE="$1"
+CALLS="$2"
+flock() {{
+  printf '%s\\n' "$*" >> "$CALLS"
+  [[ "$*" == *"--timeout 30"* && "$MODE" == transient ]]
+}}
+acquire_workload_lock
+'''
+
+    transient = subprocess.run(
+        ["bash", "-c", harness, "bash", "transient", str(calls)],
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert transient.returncode == 0, transient.stderr
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "--exclusive --nonblock 9",
+        "--exclusive --timeout 30 9",
+    ]
+
+    calls.unlink()
+    busy = subprocess.run(
+        ["bash", "-c", harness, "bash", "busy", str(calls)],
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    assert busy.returncode != 0
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "--exclusive --nonblock 9",
+        "--exclusive --timeout 30 9",
+    ]
+
+
 def test_startup_recovery_exclusive_lock_serializes_residents(tmp_path: Path):
     spool = tmp_path / "spool"
     spool.mkdir()
@@ -386,6 +433,8 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "freeze_residents_for_idle_snapshot" in script
     assert "stop_frozen_residents" in script
     assert "flock --exclusive --nonblock 9" in script
+    assert 'flock --exclusive --timeout "$WORKLOAD_LOCK_TIMEOUT_SECONDS" 9' in script
+    assert "invalid workload lock timeout" in script
     assert 'restore_service "$SOURCE_SERVICE" "$source_target_state"' in script
     assert "start_container_under_fence" in script
     assert "validate_started_container_after_fence" in script
@@ -441,9 +490,15 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "verify_prior_recovery_evidence" in script
     assert "immutable prior-run recovery evidence digest mismatch" in script
 
-    lock_index = script.index("flock --exclusive --nonblock 9")
-    freeze_index = script.index("freeze_residents_for_idle_snapshot", lock_index)
-    prestop_index = script.index("assert_pre_stop_idle", lock_index)
+    lock_function_index = script.index("acquire_workload_lock(){")
+    lock_index = script.index("flock --exclusive --nonblock 9", lock_function_index)
+    bounded_lock_index = script.index(
+        'flock --exclusive --timeout "$WORKLOAD_LOCK_TIMEOUT_SECONDS" 9', lock_index
+    )
+    lock_open_index = script.index('exec 9<"$WORKLOAD_LOCK"', bounded_lock_index)
+    lock_call_index = script.index("acquire_workload_lock \\", lock_open_index)
+    freeze_index = script.index("freeze_residents_for_idle_snapshot", lock_call_index)
+    prestop_index = script.index("assert_pre_stop_idle", lock_call_index)
     stop_index = script.index("stop_frozen_residents", prestop_index)
     prepare_index = script.index('bash "$PREPARE_SCRIPT"', stop_index)
     capacity_index = script.index("cache_reclaim=forbidden", stop_index)
@@ -453,7 +508,11 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     )
     run_index = script.index("run_image python", installer_index)
     assert (
-        lock_index
+        lock_function_index
+        < lock_index
+        < bounded_lock_index
+        < lock_open_index
+        < lock_call_index
         < freeze_index
         < prestop_index
         < stop_index
