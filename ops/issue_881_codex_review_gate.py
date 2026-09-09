@@ -29,12 +29,12 @@ CODEX_CLEAN_SUFFIXES = frozenset(
 )
 CODEX_CLEAN_COSMETIC_MAX_CHARS = 160
 CODEX_CLEAN_BLOCKING_SUFFIX_RE = re.compile(
-    r"\b(?:although|block(?:ed|er|ers|ing)?|but|cannot|concern(?:s)?|"
-    r"error(?:s)?|except|fail(?:ed|ing|ure|ures)?|fix(?:ed|es|ing)?|however|"
-    r"issue(?:s)?|need(?:ed|s)?|no|not|problem(?:s)?|reject(?:ed|s|ing)?|"
-    r"risk(?:s|y)?|unsafe|warning(?:s)?|yet)\b",
+    r"\b(?:although|block\w*|but|cannot|concern\w*|contradict\w*|error\w*|"
+    r"except|fail\w*|(?:un)?fix\w*|however|issue\w*|need\w*|no|not|"
+    r"problem\w*|reject\w*|risk\w*|safety|unsafe|warning\w*|yet)\b",
     re.IGNORECASE,
 )
+CODEX_CLEAN_UNICODE_LINE_SEPARATORS = frozenset({0x2028, 0x2029})
 
 REVIEWED_COMMIT_LINE_RE = re.compile(
     r"^\*\*Reviewed commit:\*\* `([0-9a-f]{10}|[0-9a-f]{40})`[ \t]*$",
@@ -111,10 +111,20 @@ def _is_exact_clean_receipt(comment: dict[str, Any], exact_sha: str) -> bool:
     body = comment.get("body")
     if not isinstance(body, str):
         return False
+    if any(
+        character != "\n"
+        and (
+            ord(character) < 32
+            or 127 <= ord(character) <= 159
+            or ord(character) in CODEX_CLEAN_UNICODE_LINE_SEPARATORS
+        )
+        for character in body
+    ):
+        return False
     if body.count(CODEX_CLEAN_PREFIX) != 1:
         return False
     clean_line_count = sum(
-        _is_codex_clean_status_line(line) for line in body.splitlines()
+        _is_codex_clean_status_line(line) for line in body.split("\n")
     )
     if clean_line_count != 1:
         return False
