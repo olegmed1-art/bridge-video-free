@@ -948,10 +948,16 @@ def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
         'if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]'
     )
     assert "approved recovery no longer matches a stopped container resident" in attest
-    recovery_evidence = attest.index("verify_prior_recovery_evidence", recovery_branch)
-    capture_masks = attest.index("capture_inherited_failure_runtime_masks", recovery_evidence)
+    recovery_evidence = attest.index("\n  verify_prior_recovery_evidence", recovery_branch)
+    exact_failed_state = attest.index(
+        "pre-window recovery requires the exact failed container state",
+        recovery_evidence,
+    )
+    capture_masks = attest.index(
+        "\n  capture_inherited_failure_runtime_masks", recovery_evidence
+    )
     recovery_window = attest.index("mask_service_for_window", capture_masks)
-    assert recovery_evidence < capture_masks < recovery_window
+    assert recovery_evidence < exact_failed_state < capture_masks < recovery_window
     cleanup_start = attest.index("cleanup(){")
     cleanup_full_restore = attest.index("restore_source_checkout", cleanup_start)
     inherited_unmask = attest.index(
@@ -1972,7 +1978,6 @@ verify_prior_recovery_evidence
     )
     assert completed.returncode == 0, completed.stderr
 
-
 def test_recovery_accepts_exact_prewindow_stalled_idle_failure(tmp_path: Path) -> None:
     script = (
         ROOT / "ops/oracle_universal_video_precanary_attest.sh"
@@ -2016,6 +2021,23 @@ verify_prior_recovery_evidence
         ["bash"], input=harness, text=True, capture_output=True, timeout=10
     )
     assert completed.returncode == 0, completed.stderr
+
+    evidence.write_text(
+        evidence.read_text(encoding="utf-8").replace(
+            "source_service=inactive container_service=failed",
+            "source_service=inactive container_service=inactive",
+        ),
+        encoding="utf-8",
+    )
+    rejected_digest = hashlib.sha256(evidence.read_bytes()).hexdigest()
+    rejected = subprocess.run(
+        ["bash"],
+        input=harness.replace(digest, rejected_digest),
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert rejected.returncode != 0
 
 
 def test_post_fence_readiness_failure_is_runtime_masked_for_recovery(

@@ -603,7 +603,7 @@ PY
     [[ "$(grep -Ec '^UNIVERSAL_VIDEO_PRECANARY_STALLED_IDLE_RESIDENT resident=container worker_pid=[1-9][0-9]* worker_state=frozen container_running=true container_restarting=false container_exit=0 container_oom=false project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0 recovery=stop_once result=PASS$' "$recovery_evidence")" == 1 ]]
     grep -Fx 'ERROR: workload claim fence remains held after the sole resident stopped' \
       "$recovery_evidence" >/dev/null
-    grep -Eq '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=workload_reacquire source_service=inactive container_service=(inactive|failed)$' \
+    grep -Fx 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=workload_reacquire source_service=inactive container_service=failed' \
       "$recovery_evidence"
   else
     [[ "${#recovery_windows[@]}" -eq 1 ]]

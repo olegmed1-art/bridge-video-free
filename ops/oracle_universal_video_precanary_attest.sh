@@ -156,6 +156,7 @@ window_started=0
 services_stop_attempted=0
 lock_held=0
 stalled_idle_resident_recovered=0
+prewindow_stalled_recovery=0
 source_had_original=0
 source_candidate_path_owned=0
 source_backup_dir=""
@@ -1399,10 +1400,11 @@ verify_prior_recovery_evidence(){
     grep -Fx 'ERROR: workload claim fence remains held after the sole resident stopped' \
       "$RECOVERY_EVIDENCE_FILE" >/dev/null \
       || die 'prior-run pre-window workload failure is missing'
-    grep -Eq '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=workload_reacquire source_service=inactive container_service=(inactive|failed)$' \
-      "$RECOVERY_EVIDENCE_FILE" \
+    grep -Fx 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=workload_reacquire source_service=inactive container_service=failed' \
+      "$RECOVERY_EVIDENCE_FILE" >/dev/null \
       || die 'prior-run pre-window restoration state is missing'
     source_target_state=inactive
+    prewindow_stalled_recovery=1
   else
     die 'prior-run window evidence is ambiguous'
   fi
@@ -1563,6 +1565,10 @@ if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
   # then failed only while restoring that state. This bounded one-shot input
   # asks the next exact run to restore the recorded state after all gates.
   verify_prior_recovery_evidence
+  if [[ "$prewindow_stalled_recovery" == 1 ]]; then
+    [[ "$container_state_before" == failed ]] \
+      || die 'pre-window recovery requires the exact failed container state'
+  fi
   [[ "$source_target_state" == active ]] && source_was_active=1
   container_was_active=1
   container_target_state=active
