@@ -593,7 +593,21 @@ with zipfile.ZipFile(source) as archive:
 open(target, "xb").write(data)
 PY
   grep -Fx "runtime_sha=$prior_head" "$recovery_evidence" >/dev/null
-  grep -Eq '^UNIVERSAL_VIDEO_PRECANARY_WINDOW .*container_service_before=active .*restore_on_exit=true$' "$recovery_evidence"
+  grep -Eq "^UNIVERSAL_VIDEO_PRECANARY_ONE_SHOT .* exact_sha=$prior_head run_id=$RECOVER_CONTAINER_FROM_RUN run_attempt=1 result=PASS$" \
+    "$recovery_evidence"
+  mapfile -t recovery_windows < <(
+    grep -E '^UNIVERSAL_VIDEO_PRECANARY_WINDOW .*container_service_before=active .*restore_on_exit=true$' \
+      "$recovery_evidence" || true
+  )
+  if [[ "${#recovery_windows[@]}" -eq 0 ]]; then
+    [[ "$(grep -Ec '^UNIVERSAL_VIDEO_PRECANARY_STALLED_IDLE_RESIDENT resident=container worker_pid=[1-9][0-9]* worker_state=frozen container_running=true container_restarting=false container_exit=0 container_oom=false project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0 recovery=stop_once result=PASS$' "$recovery_evidence")" == 1 ]]
+    grep -Fx 'ERROR: workload claim fence remains held after the sole resident stopped' \
+      "$recovery_evidence" >/dev/null
+    grep -Fx 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=workload_reacquire source_service=inactive container_service=failed' \
+      "$recovery_evidence"
+  else
+    [[ "${#recovery_windows[@]}" -eq 1 ]]
+  fi
   grep -Eq '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED .*container_service=(inactive|failed)$' "$recovery_evidence"
   grep -Fx 'real_media_canary_run=false' "$recovery_evidence" >/dev/null
   recovery_sha="$(sha256sum "$recovery_evidence" | awk '{print $1}')"
@@ -915,7 +929,7 @@ grep -E '^UNIVERSAL_VIDEO_PRECANARY_FENCED_START service=universal-video-contain
 grep -E '^UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME container_id=[0-9a-f]{64} previous_container_id=([0-9a-f]{64}|absent) recreated=true worker_fenced=true project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=bridge_school_worker_principal schema=true function=true claimable=0 leased=0 result=PASS$' "$session_log"
 grep -Fx "$postrestore_owner_marker" "$session_log"
 grep -Fx 'UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE worker_fenced=true owner_snapshot=unchanged result=PASS' "$session_log"
-grep -E '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=(active|inactive) source_service_observed=(active|inactive) source_service=\1 container_service_before=(active|inactive) container_service_observed=(active|inactive) container_target=\3 container_service=\3 prior_container_recovery=[01]$' "$session_log"
+grep -E '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=(active|inactive) source_service_observed=(active|inactive) source_service=\1 container_service_before=(active|inactive) container_service_observed=(active|inactive|failed) container_target=\3 container_service=\3 prior_container_recovery=[01]$' "$session_log"
 installed_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) activated=0$/\\1/p" "$session_log")"
 attested_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$/\\1/p" "$session_log")"
 [[ "$installed_digest" =~ ^sha256:[0-9a-f]{64}$ ]]

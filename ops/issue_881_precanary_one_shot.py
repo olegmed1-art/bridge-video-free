@@ -259,8 +259,61 @@ def validate_one_shot(
         ordered[-1][1] == receipt_id and ordered[-1][2] == recover_container_from_run,
         "current recovery-chain title does not match its approval",
     )
-    _require(ordered[0][2] == "", "recovery chain has no initial run")
-    if len(ordered) > 1:
+    cross_sha_source = False
+    if ordered[0][2] != "":
+        # A concrete host failure can leave the resident stopped behind the
+        # fail-closed runtime masks while the code fix necessarily advances
+        # main.  Permit only that initial failed run to carry the state into
+        # the new exact SHA; the shell gate separately proves it is the direct
+        # parent before accepting its immutable artifact or touching the host.
+        source_id = int(ordered[0][2])
+        _require(
+            all(recovery == str(source_id) for _, _, recovery, _ in ordered),
+            "cross-SHA recovery chain changed its state-bearing source",
+        )
+        sources = [run for run in workflow_runs if run.get("id") == source_id]
+        _require(len(sources) == 1, "cross-SHA recovery source is missing or ambiguous")
+        source = sources[0]
+        source_sha = source.get("head_sha")
+        _require(
+            isinstance(source_sha, str)
+            and SHA_RE.fullmatch(source_sha) is not None
+            and source_sha != exact_sha,
+            "cross-SHA recovery source identity is invalid",
+        )
+        _, source_recovery = _parse_run_name(source.get("display_title"), source_sha)
+        _require(source_recovery == "", "cross-SHA recovery source is not an initial run")
+        source_repository = source.get("repository")
+        source_actor = source.get("actor")
+        source_triggering_actor = source.get("triggering_actor")
+        _require(
+            isinstance(source_repository, dict)
+            and source_repository.get("full_name") == REPOSITORY,
+            "cross-SHA recovery source belongs to the wrong repository",
+        )
+        _require(
+            isinstance(source_actor, dict)
+            and source_actor.get("login") == DIRECTOR_LOGIN,
+            "cross-SHA recovery source was not dispatched by the Director",
+        )
+        _require(
+            isinstance(source_triggering_actor, dict)
+            and source_triggering_actor.get("login") == DIRECTOR_LOGIN,
+            "cross-SHA recovery source triggering actor is not the Director",
+        )
+        _require(source.get("run_attempt") == 1, "cross-SHA recovery from a rerun is forbidden")
+        _require(
+            source.get("status") == "completed" and source.get("conclusion") == "failure",
+            "cross-SHA recovery source is not a completed failure",
+        )
+        _require(
+            len(ordered) + 1 <= MAX_RUNS_PER_EXACT_SHA,
+            "bounded cross-SHA recovery run limit was exceeded",
+        )
+        cross_sha_source = True
+    if not cross_sha_source:
+        _require(ordered[0][2] == "", "recovery chain has no initial run")
+    if len(ordered) > 1 and not cross_sha_source:
         # The initial failed host window is the immutable source of the
         # original resident target states. A later recovery can fail before it
         # reaches the host and therefore have no state-bearing artifact of its
@@ -289,7 +342,7 @@ def validate_one_shot(
         "receipt_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
         "run_id": current_run_id,
         "run_attempt": 1,
-        "recovery_depth": len(ordered) - 1,
+        "recovery_depth": len(ordered) if cross_sha_source else len(ordered) - 1,
     }
 
 

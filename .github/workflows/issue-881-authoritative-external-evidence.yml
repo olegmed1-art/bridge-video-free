@@ -107,6 +107,16 @@ jobs:
           gh api --paginate --slurp \
             "repos/$GITHUB_REPOSITORY/actions/runs?event=workflow_dispatch&per_page=100" \
             > "$RUNNER_TEMP/precanary-workflow-runs.json"
+          if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
+            recovery_source_head="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$RECOVER_CONTAINER_FROM_RUN" \
+              --jq '.head_sha')"
+            [[ "$recovery_source_head" =~ ^[0-9a-f]{40}$ ]]
+            if [[ "$recovery_source_head" != "$EXACT_SHA" ]]; then
+              [[ "$(git rev-parse "$EXACT_SHA^")" == "$recovery_source_head" ]] \
+                || { echo 'Cross-SHA recovery source is not the direct main parent' >&2; exit 1; }
+            fi
+          fi
           python3 ops/issue_881_precanary_one_shot.py verify \
             --comment-json "$RUNNER_TEMP/precanary-approval-comment.json" \
             --runs-json "$RUNNER_TEMP/precanary-workflow-runs.json" \
