@@ -1513,14 +1513,26 @@ mask_service_for_window(){
 }
 
 capture_inherited_failure_runtime_masks(){
-  local service enabled_state
+  local container_enabled_state source_enabled_state
   [[ "$container_recovery_requested" == 1 ]] || return 1
-  for service in "$SOURCE_SERVICE" "$CONTAINER_SERVICE"; do
-    enabled_state="$(bounded_systemctl_query is-enabled "$service" 2>/dev/null || true)"
-    [[ "$enabled_state" == masked-runtime ]] \
-      || die "approved recovery is missing the prior failure runtime mask: $service"
-    inherited_failure_runtime_masks+=("$service")
-  done
+  container_enabled_state="$(bounded_systemctl_query is-enabled "$CONTAINER_SERVICE" 2>/dev/null || true)"
+  [[ "$container_enabled_state" == masked-runtime ]] \
+    || die "approved recovery is missing the prior failure runtime mask: $CONTAINER_SERVICE"
+  inherited_failure_runtime_masks+=("$CONTAINER_SERVICE")
+
+  source_enabled_state="$(bounded_systemctl_query is-enabled "$SOURCE_SERVICE" 2>/dev/null || true)"
+  if [[ "$source_enabled_state" == masked-runtime ]]; then
+    inherited_failure_runtime_masks+=("$SOURCE_SERVICE")
+  else
+    [[ "$source_target_state" == inactive && "$source_state_before" == inactive ]] \
+      || die "approved recovery is missing the prior failure runtime mask: $SOURCE_SERVICE"
+    case "$source_enabled_state" in
+      disabled|static|indirect|masked) ;;
+      *) die "inactive recovery source enablement is unsafe: ${source_enabled_state:-unknown}" ;;
+    esac
+  fi
+  printf 'UNIVERSAL_VIDEO_PRECANARY_RECOVERY_MASKS container=masked-runtime source=%s source_target=%s result=PASS\n' \
+    "$source_enabled_state" "$source_target_state"
 }
 
 command -v flock >/dev/null || die 'flock is unavailable'
@@ -1577,11 +1589,11 @@ if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
   container_was_active=1
   container_target_state=active
   container_recovery_requested=1
-  # A failed fenced start deliberately leaves both residents stopped behind
-  # runtime masks. Accept and later remove only those exact inherited masks,
-  # and only under an immutable, separately approved recovery receipt.
+  # The failed active container must remain behind its inherited runtime mask.
+  # The already-inactive source may be persistently non-enabled; the normal
+  # window masks it below before any source or image mutation.
   capture_inherited_failure_runtime_masks
-  # Both residents are already stopped behind the inherited failure masks.
+  # Both residents are already stopped and the active target remains masked.
   # Any later abort must use the full recovery path and restore the immutable
   # source/container targets rather than preserving the observed stopped state.
   services_stop_attempted=1
