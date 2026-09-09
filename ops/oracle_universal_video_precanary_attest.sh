@@ -1528,6 +1528,8 @@ capture_inherited_failure_runtime_masks(){
       # stopped pre-window recovery; cleanup still uses `unmask --runtime`.
       [[ "$prewindow_stalled_recovery" == 1 && "$container_state_before" == failed ]] \
         || die "approved recovery has an ambiguous persistent container mask: $CONTAINER_SERVICE"
+      [[ "$(service_state "$CONTAINER_SERVICE")" == failed ]] \
+        || die 'generically masked recovery container changed from the exact failed state'
       residents_are_quiescent \
         || die 'generically masked recovery container is not quiescent'
       container_mask_state=masked
