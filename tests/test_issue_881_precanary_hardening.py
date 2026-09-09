@@ -99,7 +99,12 @@ def test_codex_clean_receipt_requires_bot_identity_and_one_canonical_commit_line
 
 @pytest.mark.parametrize(
     "clean_suffix",
-    [":+1:", "Bravo.", "Can\'t wait for the next one!"],
+    [
+        ":+1:",
+        "Bravo.",
+        "Can\'t wait for the next one!",
+        "Already looking forward to the next diff.",
+    ],
 )
 def test_codex_clean_receipt_accepts_current_bot_status_suffixes(
     clean_suffix: str,

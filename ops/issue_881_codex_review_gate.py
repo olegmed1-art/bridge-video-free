@@ -22,6 +22,7 @@ CODEX_CLEAN_SUFFIXES = frozenset(
         " :+1:",
         " Bravo.",
         " Can\'t wait for the next one!",
+        " Already looking forward to the next diff.",
     }
 )
 
