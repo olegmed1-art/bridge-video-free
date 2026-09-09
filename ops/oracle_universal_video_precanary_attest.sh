@@ -505,6 +505,71 @@ residents_are_quiescent(){
   [[ -z "$running_file" ]]
 }
 
+recover_quiescent_stale_workload_lock(){
+  local quarantine="$BASE_DIR/spool/.workload.lock.precanary-recovery"
+  local old_inode new_inode
+  [[ -n "$RECOVER_CONTAINER_FROM_RUN" \
+        && "$container_recovery_requested" == 1 \
+        && "$prewindow_stalled_recovery" == 1 ]] || return 1
+  residents_are_quiescent || return 1
+  [[ -f "$WORKLOAD_LOCK" && ! -L "$WORKLOAD_LOCK" \
+        && "$(stat -c '%h' "$WORKLOAD_LOCK")" == 1 \
+        && "$(stat -c '%U:%G:%a:%h' "$WORKLOAD_LOCK")" == \
+          'root:universal-video:640:1' ]] || return 1
+  [[ ! -e "$quarantine" && ! -L "$quarantine" ]] || return 1
+  old_inode="$(stat -c '%d:%i' "$WORKLOAD_LOCK")" || return 1
+
+  # The immutable prior-run evidence plus the live quiescence proof excludes
+  # every legitimate claimant. Replace only the orphaned lock inode; normal
+  # active-resident acquisition never reaches this recovery function.
+  exec 9>&-
+  if ! mv --no-target-directory -- "$WORKLOAD_LOCK" "$quarantine"; then
+    exec 9<"$WORKLOAD_LOCK" 2>/dev/null || true
+    return 1
+  fi
+  if ! install -o root -g universal-video -m 0640 /dev/null "$WORKLOAD_LOCK" \
+      || [[ -L "$WORKLOAD_LOCK" || ! -f "$WORKLOAD_LOCK" ]] \
+      || [[ "$(stat -c '%h' "$WORKLOAD_LOCK" 2>/dev/null || true)" != 1 ]] \
+      || [[ "$(stat -c '%U:%G:%a:%h' "$WORKLOAD_LOCK" 2>/dev/null || true)" != \
+            'root:universal-video:640:1' ]] \
+      || ! runuser -u universal-video -- test -r "$WORKLOAD_LOCK"; then
+    rm -f -- "$WORKLOAD_LOCK"
+    mv --no-target-directory -- "$quarantine" "$WORKLOAD_LOCK" || return 1
+    exec 9<"$WORKLOAD_LOCK" 2>/dev/null || true
+    return 1
+  fi
+  if ! new_inode="$(stat -c '%d:%i' "$WORKLOAD_LOCK")"; then
+    rm -f -- "$WORKLOAD_LOCK"
+    mv --no-target-directory -- "$quarantine" "$WORKLOAD_LOCK" || return 1
+    exec 9<"$WORKLOAD_LOCK" 2>/dev/null || true
+    return 1
+  fi
+  if [[ "$new_inode" == "$old_inode" ]]; then
+    rm -f -- "$WORKLOAD_LOCK"
+    mv --no-target-directory -- "$quarantine" "$WORKLOAD_LOCK" || return 1
+    exec 9<"$WORKLOAD_LOCK" 2>/dev/null || true
+    return 1
+  fi
+  exec 9<"$WORKLOAD_LOCK"
+  if ! acquire_workload_lock; then
+    exec 9>&-
+    rm -f -- "$WORKLOAD_LOCK"
+    mv --no-target-directory -- "$quarantine" "$WORKLOAD_LOCK" || return 1
+    exec 9<"$WORKLOAD_LOCK" 2>/dev/null || true
+    return 1
+  fi
+  if ! rm -f -- "$quarantine"; then
+    flock --unlock 9 >/dev/null 2>&1 || true
+    exec 9>&-
+    rm -f -- "$WORKLOAD_LOCK"
+    mv --no-target-directory -- "$quarantine" "$WORKLOAD_LOCK" || return 1
+    exec 9<"$WORKLOAD_LOCK" 2>/dev/null || true
+    return 1
+  fi
+  printf 'UNIVERSAL_VIDEO_PRECANARY_STALE_LOCK_RECOVERY old_inode=%s new_inode=%s services_quiescent=true result=PASS\n' \
+    "$old_inode" "$new_inode"
+}
+
 freeze_residents_for_idle_snapshot(){
   local service target_state process_id start_ticks index attempt state all_frozen
   for service in "$SOURCE_SERVICE" "$CONTAINER_SERVICE"; do
@@ -1691,25 +1756,29 @@ else
   # spool, host production queue, and resident production bind all prove idle.
   # This releases the already-observed stalled resident without ever allowing
   # it to claim between the final idle proofs and the stop.
-  [[ -z "$RECOVER_CONTAINER_FROM_RUN" ]] \
-    || die 'a worker holds the workload claim fence during prior-run recovery'
-  window_started=1
-  mask_service_for_window "$SOURCE_SERVICE"
-  mask_service_for_window "$CONTAINER_SERVICE"
-  if ! freeze_residents_for_idle_snapshot; then
-    record_restore_failure prestop_freeze
-    die 'unable to freeze the stalled resident worker safely'
+  if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
+    recover_quiescent_stale_workload_lock \
+      || die 'workload claim fence is not safely recoverable after prior-run quiescence'
+    lock_held=1
+  else
+    window_started=1
+    mask_service_for_window "$SOURCE_SERVICE"
+    mask_service_for_window "$CONTAINER_SERVICE"
+    if ! freeze_residents_for_idle_snapshot; then
+      record_restore_failure prestop_freeze
+      die 'unable to freeze the stalled resident worker safely'
+    fi
+    assert_pre_stop_idle
+    assert_stalled_container_runtime_idle
+    services_stop_attempted=1
+    stop_frozen_residents \
+      || die 'unable to stop the stalled idle resident safely'
+    assert_quiescent
+    acquire_workload_lock \
+      || die 'workload claim fence remains held after the sole resident stopped'
+    lock_held=1
+    stalled_idle_resident_recovered=1
   fi
-  assert_pre_stop_idle
-  assert_stalled_container_runtime_idle
-  services_stop_attempted=1
-  stop_frozen_residents \
-    || die 'unable to stop the stalled idle resident safely'
-  assert_quiescent
-  acquire_workload_lock \
-    || die 'workload claim fence remains held after the sole resident stopped'
-  lock_held=1
-  stalled_idle_resident_recovered=1
 fi
 
 if [[ "$stalled_idle_resident_recovered" == 0 ]]; then
