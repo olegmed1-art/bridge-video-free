@@ -19,7 +19,9 @@ CODEX_CLEAN_SUFFIXES = frozenset(
     {
         "",
         " :rocket:",
+        " :tada:",
         " :+1:",
+        " Hooray!",
         " Bravo.",
         " Can\'t wait for the next one!",
         " Already looking forward to the next diff.",

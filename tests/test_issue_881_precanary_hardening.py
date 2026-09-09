@@ -100,7 +100,9 @@ def test_codex_clean_receipt_requires_bot_identity_and_one_canonical_commit_line
 @pytest.mark.parametrize(
     "clean_suffix",
     [
+        ":tada:",
         ":+1:",
+        "Hooray!",
         "Bravo.",
         "Can\'t wait for the next one!",
         "Already looking forward to the next diff.",
