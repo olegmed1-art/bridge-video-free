@@ -78,8 +78,8 @@
         "gold_card_seat_pairs",
         "expected_completeness_state",
         "full_layout_forbidden",
-        "gold_author_channel_id",
-        "gold_reviewer_channel_id",
+        "gold_label_origin",
+        "gold_verifier_channel_id",
         "gold_sha256"
       ],
       "properties": {
@@ -147,12 +147,14 @@
           ]
         },
         "full_layout_forbidden": { "type": "boolean" },
-        "gold_author_channel_id": {
+        "gold_label_origin": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 128
+          "enum": [
+            "HUMAN_DIRECT",
+            "SOURCE_TRUTH_WITH_HUMAN_VERIFICATION"
+          ]
         },
-        "gold_reviewer_channel_id": {
+        "gold_verifier_channel_id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 128

@@ -2,6 +2,8 @@
 
 Date: 2026-09-07
 
+Single-verifier amendment: 2026-09-10
+
 Change ID: `bridgit-rank-layout-frozen-unseen-holdout-v1`
 
 Governance mode: `ASSURED` validation planning
@@ -40,7 +42,7 @@ A case may enter this class only when all of the following are true before recog
 
 1. Its source/session has not been used to tune recognizer code, templates, thresholds, anchors, or the evaluated profile.
 2. Source/frame bytes and decoded-pixel identities are hash-bound.
-3. Gold labels are frozen independently of recognizer output.
+3. Gold labels are frozen before and independently of recognizer output, then checked by one human verifier.
 4. The case manifest is complete before scoring.
 5. The recognizer head and profile digest are frozen before scoring.
 6. No code/profile/threshold change is made after viewing the case while keeping the case in the unseen set.
@@ -98,7 +100,8 @@ Each case must record, before recognizer execution:
 - exact visible `card + seat` pairs;
 - expected completeness state;
 - whether a full-layout result is forbidden;
-- independent gold author/reviewer channel identifiers;
+- gold-label origin (`HUMAN_DIRECT` or `SOURCE_TRUTH_WITH_HUMAN_VERIFICATION`);
+- one pseudonymous human verifier channel identifier;
 - frozen gold digest.
 
 Participant names, faces, private source paths, Drive IDs, credentials, or other personal/private identifiers must not be stored in the repository evidence record.
@@ -110,15 +113,16 @@ For every corpus version:
 1. Select source sessions without consulting recognizer output.
 2. Assign pseudonymous session/case IDs.
 3. Freeze source/frame identity hashes and metadata.
-4. Produce gold labels independently of recognizer output.
-5. Freeze and hash the gold bundle.
-6. Freeze recognizer head and profile digest.
-7. Verify required strata are present.
-8. Run the recognizer once without tuning.
-9. Store raw recognizer outputs separately from gold.
-10. Score mechanically against frozen gold.
-11. Run independent I2 verification on the frozen gold/output bundle.
-12. Only after the complete scored report is sealed may failures be inspected for tuning; any such tuned cases then leave the unseen class for all future accuracy claims.
+4. Produce gold labels without consulting recognizer output. Labels may be transcribed directly by the verifier or derived from independently available source truth.
+5. Have one human verifier confirm or correct the labels while recognizer output remains hidden.
+6. Freeze and hash the gold bundle.
+7. Freeze recognizer head and profile digest.
+8. Verify required strata are present.
+9. Run the recognizer once without tuning.
+10. Store raw recognizer outputs separately from gold.
+11. Score mechanically against frozen gold.
+12. Run independent I2 verification on the frozen gold/output bundle.
+13. Only after the complete scored report is sealed may failures be inspected for tuning; any such tuned cases then leave the unseen class for all future accuracy claims.
 
 ## Metric definitions
 
@@ -222,7 +226,7 @@ final_status
 - [x] Metrics and zero-error conditions defined.
 - [x] I2 recomputation protocol defined.
 - [ ] 24-case manifest frozen and hash-bound.
-- [ ] Independent gold frozen before recognizer execution.
+- [ ] Gold checked by one human verifier and frozen before recognizer execution.
 - [ ] Required strata proven present in manifest.
 - [ ] V1 recognizer run completed without tuning.
 - [ ] Mechanical global and stratified score report sealed.

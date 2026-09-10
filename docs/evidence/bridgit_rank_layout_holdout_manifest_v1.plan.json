@@ -1,7 +1,7 @@
 {
   "plan_type": "BRIDGIT_RANK_LAYOUT_HOLDOUT_MANIFEST_PLAN_V1",
   "status": "UNFROZEN_PLANNING_ONLY",
-  "note": "This file allocates the required 24 unseen holdout case slots. It is not the frozen manifest and intentionally contains no invented frame hashes, decoded-pixel hashes, timestamps, gold labels, or source identities. Replace planning placeholders only with independently collected and frozen evidence before recognition.",
+  "note": "This file allocates the required 24 unseen holdout case slots. It is not the frozen manifest and intentionally contains no invented frame hashes, decoded-pixel hashes, timestamps, gold labels, or source identities. Replace planning placeholders only with evidence collected without consulting recognizer output, checked by one human verifier, and frozen before recognition.",
   "target_schema": "docs/evidence/bridgit_rank_layout_holdout_manifest_v1.schema.json",
   "recognizer_baseline_sha256": "336553ab14fe9cf797da432e6eff61f31c1d255d",
   "minimum_source_sessions": 4,
@@ -59,7 +59,7 @@
     "Assign each src-* slot to a genuinely unseen independent source/session.",
     "Replace resolution_group and layout_theme_slot planning labels with observed source-native metadata.",
     "Populate all frame byte SHA-256, decoded-pixel SHA-256 and timestamps.",
-    "Freeze independent gold visible card+seat labels and completeness state before recognizer execution.",
+    "Record gold_label_origin, have one human verifier check visible card+seat labels and completeness state without seeing recognizer output, and freeze the gold before recognizer execution.",
     "Compute gold digest and bind the evaluated recognizer head/profile digest.",
     "Verify no development-source overlap and no case previously used for tuning.",
     "Mechanically verify at least 24 cases, at least 4 source sessions and all required strata.",

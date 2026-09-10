@@ -2,6 +2,8 @@
 
 Date: 2026-09-07
 
+Single-verifier amendment: 2026-09-10
+
 Change ID: `bridgit-rank-layout-holdout-preflight-v1`
 
 Governance mode: `ASSURED` validation planning
@@ -18,7 +20,7 @@ The preflight consumes only metadata/evidence records:
 2. a concrete manifest conforming to that schema;
 3. the frozen development-source exclusion list;
 4. the frozen recognizer head SHA and profile SHA;
-5. independent gold bundle digest(s);
+5. single-human-verified gold bundle digest(s);
 6. only after the manifest and gold are sealed, the recognizer output bundle for scoring.
 
 No raw video, server access, Drive/Neon mutation, SCHOOL CANON/WORLD write, or production credential is required by this preflight.
@@ -41,7 +43,9 @@ The manifest must fail closed unless all checks pass:
 - `gold_visible_card_count == len(gold_card_seat_pairs)`;
 - a gold `COMPLETE` case has exactly 52 unique cards, 13 per seat, and `full_layout_forbidden=false`;
 - every non-complete/transition/ambiguous/unknown gold case has `full_layout_forbidden=true`;
-- `gold_author_channel_id` and `gold_reviewer_channel_id` are both present and must be different identifiers;
+- `gold_label_origin` records whether labels were transcribed directly or derived from independent source truth;
+- one non-empty `gold_verifier_channel_id` is present; a second human channel is not required;
+- the verifier checks or corrects gold while recognizer output remains hidden;
 - `gold_sha256` is frozen before recognizer output exists.
 
 Any failure gives `PREFLIGHT_REJECTED`; the holdout must not be scored or used for readiness claims.
