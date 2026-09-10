@@ -1,8 +1,9 @@
 """Resident Oracle dispatcher for School Autopilot Lite.
 
-The first implementation is intentionally shadow-only. It does not execute a
-shell command, call a model, mutate GitHub, access Drive, or change production.
-It proves the durable queue mechanics that remove the one-hour chat gap:
+The resident remains deterministic and never calls a model.  In addition to
+the original shadow/read-only work it may publish one bounded public draft-PR
+wake envelope through the isolated GitHub App broker; the credential never
+reaches this process.  Durable queue mechanics remove the one-hour chat gap:
 
 * direct Neon LISTEN/NOTIFY wake-up;
 * bounded recovery polling;
@@ -46,6 +47,7 @@ RUNTIME_MODE = "SHADOW"
 LOGGER = logging.getLogger("oracle_autopilot")
 GITHUB_API_HOST = "api.github.com"
 GITHUB_REPOSITORY = "olegmed1-art/bridge-video-free"
+ROLE_DISPATCH_BOT_LOGIN = "bridge-school-oracle-autopilot[bot]"
 GITHUB_RESPONSE_LIMIT_BYTES = 1_048_576
 GITHUB_CHECK_RUN_LIMIT = 100
 GITHUB_FAILED_CHECK_LIMIT = 5
@@ -81,6 +83,7 @@ GITHUB_HARD_FAILURES = frozenset(
 TOKEN_BROKER_RESPONSE_LIMIT_BYTES = 32_768
 TOKEN_BROKER_REQUEST_LIMIT_BYTES = 65_536
 TOKEN_BROKER_PATH = "/v1/github/draft-repair"
+ROLE_DISPATCH_BROKER_PATH = "/v1/github/role-dispatch"
 TOKEN_BROKER_HEALTH_PATH = "/healthz"
 TOKEN_BROKER_HOST_PATTERN = re.compile(
     r"bridge-school-autopilot-[a-z0-9]+-olegmed1-4368s-projects\.vercel\.app"
@@ -130,19 +133,39 @@ def _require_env(name: str) -> str:
 
 
 def load_token_broker_config() -> TokenBrokerConfig:
-    raw_url = _require_env("AUTOPILOT_TOKEN_BROKER_URL")
+    return _load_token_broker_config(
+        "AUTOPILOT_TOKEN_BROKER_URL", TOKEN_BROKER_PATH
+    )
+
+
+def load_role_dispatch_broker_config() -> TokenBrokerConfig:
+    base = _load_token_broker_config("AUTOPILOT_TOKEN_BROKER_URL", TOKEN_BROKER_PATH)
+    return TokenBrokerConfig(
+        url=f"https://{base.host}{ROLE_DISPATCH_BROKER_PATH}",
+        host=base.host,
+        secret=base.secret,
+        vercel_bypass_secret=base.vercel_bypass_secret,
+        expected_source_sha=base.expected_source_sha,
+        expected_artifact_sha256=base.expected_artifact_sha256,
+        expected_policy_sha256=base.expected_policy_sha256,
+        expected_provenance_sha256=base.expected_provenance_sha256,
+    )
+
+
+def _load_token_broker_config(url_env: str, expected_path: str) -> TokenBrokerConfig:
+    raw_url = _require_env(url_env)
     parsed = urllib.parse.urlsplit(raw_url)
     host = (parsed.hostname or "").lower()
     if (
         parsed.scheme != "https"
         or TOKEN_BROKER_HOST_PATTERN.fullmatch(host) is None
-        or parsed.path != TOKEN_BROKER_PATH
+        or parsed.path != expected_path
         or parsed.username is not None
         or parsed.password is not None
         or parsed.port is not None
         or parsed.query
         or parsed.fragment
-        or raw_url != f"https://{host}{TOKEN_BROKER_PATH}"
+        or raw_url != f"https://{host}{expected_path}"
     ):
         raise AutopilotContractError("TOKEN_BROKER_ORIGIN_INVALID")
 
@@ -165,7 +188,7 @@ def load_token_broker_config() -> TokenBrokerConfig:
     statement = {
         "artifact_sha256": expected_artifact,
         "policy_sha256": expected_policy,
-        "policy_version": "physical-no-merge-v1",
+        "policy_version": "physical-no-merge-v2",
         "source_sha": expected_source,
     }
     calculated_provenance = hashlib.sha256(
@@ -664,7 +687,7 @@ def _validate_token_broker_result(
         or payload.get("merge_allowed") is not False
         or payload.get("production_mutation") is not False
         or payload.get("operation_count") != expected_operation_count
-        or payload.get("broker_policy_version") != "physical-no-merge-v1"
+        or payload.get("broker_policy_version") != "physical-no-merge-v2"
         or payload.get("broker_source_sha") != config.expected_source_sha
         or payload.get("broker_artifact_sha256") != config.expected_artifact_sha256
         or payload.get("broker_policy_sha256") != config.expected_policy_sha256
@@ -725,13 +748,14 @@ def _require_approved_broker_release(
         "artifact_sha256": config.expected_artifact_sha256,
         "policy_sha256": config.expected_policy_sha256,
         "provenance_sha256": config.expected_provenance_sha256,
-        "broker_policy_version": "physical-no-merge-v1",
+        "broker_policy_version": "physical-no-merge-v2",
         "source_attested": True,
         "artifact_attested": True,
         "preview_only": True,
         "production_mutations_enabled": False,
         "github_token_broker_enabled": True,
         "bounded_draft_executor_enabled": True,
+        "bounded_role_dispatch_enabled": True,
         "raw_installation_token_exposed": False,
         "merge_endpoint_enabled": False,
         "ref_update_delete_enabled": False,
@@ -792,6 +816,120 @@ def execute_bounded_draft_repair(goal_json: dict[str, Any]) -> dict[str, Any]:
         broker_host=config.host,
         config=config,
     )
+
+
+def _publish_role_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
+    """Publish one outbox envelope through the pinned, token-hiding broker."""
+
+    request_payload = {
+        "dispatch_id": str(payload["dispatch_id"]),
+        "dispatch_epoch": int(payload["dispatch_epoch"]),
+        "role": str(payload["role"]),
+        "task_fingerprint": str(payload["task_fingerprint"]),
+        "target_pr": int(payload["target_pr"]),
+        "mode": "READ_ONLY",
+        "prepared_at_epoch": int(payload["prepared_at_epoch"]),
+    }
+    public_envelope = {
+        key: value for key, value in request_payload.items() if key != "prepared_at_epoch"
+    }
+    config = load_role_dispatch_broker_config()
+    encoded = json.dumps(
+        request_payload, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    if len(encoded) > 1_024:
+        raise AutopilotContractError("ROLE_DISPATCH_REQUEST_TOO_LARGE")
+    request = urllib.request.Request(
+        config.url,
+        data=encoded,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {config.secret}",
+            "Content-Type": "application/json",
+            "User-Agent": "bridge-school-autopilot-oracle/1.6",
+            "X-Vercel-Protection-Bypass": config.vercel_bypass_secret,
+        },
+    )
+    opener = urllib.request.build_opener(_RejectBrokerRedirects())
+    _require_approved_broker_release(config=config, opener=opener)
+    try:
+        with opener.open(request, timeout=30) as response:
+            if response.status != 200 or response.geturl() != config.url:
+                raise AutopilotContractError("ROLE_DISPATCH_RESPONSE_INVALID")
+            raw = response.read(TOKEN_BROKER_RESPONSE_LIMIT_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        if exc.code in {408, 425, 429} or 500 <= exc.code <= 599:
+            raise AutopilotRetryableError("ROLE_DISPATCH_TRANSIENT_ERROR") from exc
+        if exc.code == 409:
+            raise AutopilotContractError("ROLE_DISPATCH_IDEMPOTENCY_CONFLICT") from exc
+        raise AutopilotContractError("ROLE_DISPATCH_HTTP_ERROR") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise AutopilotRetryableError("ROLE_DISPATCH_TRANSIENT_ERROR") from exc
+    if len(raw) > TOKEN_BROKER_RESPONSE_LIMIT_BYTES:
+        raise AutopilotContractError("ROLE_DISPATCH_RESPONSE_TOO_LARGE")
+    try:
+        result = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AutopilotContractError("ROLE_DISPATCH_RESPONSE_INVALID") from exc
+    expected_keys = {
+        *public_envelope,
+        "status",
+        "repository",
+        "mailbox_pull_request",
+        "dispatch_branch",
+        "dispatch_commit_sha",
+        "dispatch_file",
+        "dispatch_pull_request",
+        "dispatch_pull_request_url",
+        "dispatch_author_login",
+        "dispatch_author_type",
+        "draft",
+        "replayed",
+        "token_exposed",
+        "production_mutation",
+        "broker_policy_version",
+        "broker_source_sha",
+        "broker_artifact_sha256",
+        "broker_policy_sha256",
+        "broker_provenance_sha256",
+    }
+    pull_number = (
+        result.get("dispatch_pull_request") if isinstance(result, dict) else None
+    )
+    author_login = (
+        result.get("dispatch_author_login") if isinstance(result, dict) else None
+    )
+    dispatch_id = public_envelope["dispatch_id"]
+    if (
+        not isinstance(result, dict)
+        or set(result) != expected_keys
+        or any(result.get(key) != value for key, value in public_envelope.items())
+        or result.get("repository") != GITHUB_REPOSITORY
+        or result.get("mailbox_pull_request") != 1150
+        or result.get("status") not in {"created", "existing"}
+        or type(result.get("replayed")) is not bool
+        or type(pull_number) is not int
+        or not 1 <= pull_number <= 1_000_000
+        or result.get("dispatch_pull_request_url")
+        != f"https://github.com/{GITHUB_REPOSITORY}/pull/{pull_number}"
+        or result.get("dispatch_author_type") != "Bot"
+        or author_login != ROLE_DISPATCH_BOT_LOGIN
+        or result.get("dispatch_branch") != f"autopilot/dispatch/{dispatch_id}"
+        or result.get("dispatch_file")
+        != f"docs/evidence/autopilot/role-dispatch-{dispatch_id}.md"
+        or not isinstance(result.get("dispatch_commit_sha"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", result["dispatch_commit_sha"]) is None
+        or result.get("draft") is not True
+        or result.get("token_exposed") is not False
+        or result.get("production_mutation") is not False
+        or result.get("broker_policy_version") != "physical-no-merge-v2"
+        or result.get("broker_source_sha") != config.expected_source_sha
+        or result.get("broker_artifact_sha256") != config.expected_artifact_sha256
+        or result.get("broker_policy_sha256") != config.expected_policy_sha256
+        or result.get("broker_provenance_sha256") != config.expected_provenance_sha256
+    ):
+        raise AutopilotContractError("ROLE_DISPATCH_RESPONSE_INVALID")
+    return result
 
 
 def _complete(
@@ -887,6 +1025,16 @@ def execute_task(config: WorkerConfig, task: ClaimedTask) -> None:
             evidence_class="GITHUB_DRAFT_REPAIR_EVIDENCE",
             summary=summary,
         )
+        return
+
+    if task.goal_type == "CHATGPT_ROLE_DISPATCH_V1":
+        row = _rpc_one(
+            config,
+            "SELECT * FROM autopilot.prepare_role_dispatch(%s::uuid, %s, %s)",
+            (task.task_id, config.worker_id, task.lease_epoch),
+        )
+        if not row:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_PREPARE_FENCED")
         return
 
     if task.step_cursor == 0:
@@ -994,6 +1142,103 @@ def drain_ready(config: WorkerConfig) -> int:
     return processed
 
 
+def _dispatch_body(payload: dict[str, Any]) -> str:
+    return "\n".join(
+        (
+            "AUTOPILOT_DISPATCH_V1",
+            f"dispatch_id={payload['dispatch_id']}",
+            f"dispatch_epoch={payload['dispatch_epoch']}",
+            f"role={payload['role']}",
+            f"task_fingerprint={payload['task_fingerprint']}",
+            f"target_pr={payload['target_pr']}",
+            "mode=READ_ONLY",
+        )
+    )
+
+
+def process_role_dispatch_outbox(config: WorkerConfig) -> bool:
+    # The broker performs a bounded recovery scan before posting.  Keep this
+    # lease above its complete worst-case HTTP budget so another worker cannot
+    # acquire the same dispatch while the first publisher is still active.
+    role_dispatch_lease_seconds = 300
+    row = _rpc_one(
+        config,
+        "SELECT * FROM autopilot.claim_role_dispatch_outbox(%s, %s)",
+        (config.worker_id, role_dispatch_lease_seconds),
+    )
+    if not row:
+        return False
+    dispatch_id = str(row["dispatch_id"])
+    claim_epoch = int(row["claim_epoch"])
+    try:
+        result = _publish_role_dispatch(row)
+        body_sha256 = hashlib.sha256(_dispatch_body(row).encode("utf-8")).hexdigest()
+        marked = _rpc_one(
+            config,
+            "SELECT autopilot.mark_role_dispatch_sent(%s::uuid, %s, %s, %s, %s) AS marked",
+            (
+                dispatch_id,
+                config.worker_id,
+                claim_epoch,
+                # Migration 0322 named this generic delivery-resource slot
+                # after the original comment transport.  Preserve the SQL
+                # contract by storing the replacement draft PR number here.
+                result["dispatch_pull_request"],
+                body_sha256,
+            ),
+        )
+        if not marked or not marked["marked"]:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_SENT_FENCED")
+        LOGGER.info(
+            "role_dispatch_sent dispatch_id=%s role=%s pull_request=%s",
+            dispatch_id,
+            row["role"],
+            result["dispatch_pull_request"],
+        )
+    except AutopilotRetryableError as exc:
+        _rpc_one(
+            config,
+            "SELECT autopilot.fail_role_dispatch_outbox(%s::uuid, %s, %s, %s, %s) AS state",
+            (dispatch_id, config.worker_id, claim_epoch, str(exc), 60),
+        )
+        LOGGER.warning("role_dispatch_retry dispatch_id=%s code=%s", dispatch_id, exc)
+    except AutopilotContractError as exc:
+        # A permanent broker or release-contract failure consumes the bounded
+        # outbox attempts quickly without trying to fail a released task lease.
+        _rpc_one(
+            config,
+            "SELECT autopilot.fail_role_dispatch_outbox(%s::uuid, %s, %s, %s, %s) AS state",
+            (dispatch_id, config.worker_id, claim_epoch, str(exc), 5),
+        )
+        LOGGER.warning("role_dispatch_failure dispatch_id=%s code=%s", dispatch_id, exc)
+    except (KeyError, TypeError, ValueError):
+        _rpc_one(
+            config,
+            "SELECT autopilot.fail_role_dispatch_outbox(%s::uuid, %s, %s, %s, %s) AS state",
+            (
+                dispatch_id,
+                config.worker_id,
+                claim_epoch,
+                "ROLE_DISPATCH_ROW_INVALID",
+                5,
+            ),
+        )
+        LOGGER.exception("role_dispatch_row_invalid dispatch_id=%s", dispatch_id)
+    return True
+
+
+def drain_role_dispatch_outbox(config: WorkerConfig) -> int:
+    expired = _rpc_one(
+        config,
+        "SELECT autopilot.reconcile_role_dispatch_callbacks() AS reconciled",
+        (),
+    )
+    processed = 0
+    while process_role_dispatch_outbox(config):
+        processed += 1
+    return processed + int(expired["reconciled"] if expired else 0)
+
+
 def run_forever(config: WorkerConfig) -> None:
     LOGGER.info(
         "worker_started worker_id=%s mode=%s recovery_poll_seconds=%s",
@@ -1008,7 +1253,7 @@ def run_forever(config: WorkerConfig) -> None:
                 while True:
                     # Drain every ready transition without sleeping. The polling
                     # timeout is reached only when no runnable task exists.
-                    if drain_ready(config):
+                    if drain_ready(config) or drain_role_dispatch_outbox(config):
                         continue
                     wait_for_wakeup(listener, config.recovery_poll_seconds)
         except KeyboardInterrupt:
