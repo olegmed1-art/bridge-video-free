@@ -23,6 +23,8 @@ jobs:
       OCI_FINGERPRINT: ${{ secrets.OCI_READONLY_CLI_FINGERPRINT }}
       OCI_KEY: ${{ secrets.OCI_READONLY_CLI_KEY_CONTENT }}
       OCI_REGION: ${{ secrets.OCI_READONLY_CLI_REGION }}
+      OCI_FULL_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
+      OCI_FULL_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
       SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
@@ -92,8 +94,41 @@ jobs:
           print('COMPARTMENT_ID='+x['compartment-id'])
           PY
           source "$RUNNER_TEMP/target.env"
-          vnic_id="$(oci compute vnic-attachment list --compartment-id "$COMPARTMENT_ID" --instance-id "$INSTANCE_ID" --all --query 'data[0]."vnic-id"' --raw-output)"
-          public_ip="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output)"
+          [[ -n "${OCI_FULL_CONFIG:-}" && -n "${OCI_FULL_KEY:-}" ]]
+          if [[ "$OCI_FULL_KEY" == base64:* ]]; then
+            printf '%s' "${OCI_FULL_KEY#base64:}" | base64 --decode > "$HOME/.oci/full-key.pem"
+          else
+            printf '%s\n' "$OCI_FULL_KEY" > "$HOME/.oci/full-key.pem"
+          fi
+          chmod 0600 "$HOME/.oci/full-key.pem"
+          printf '%s\n' "$OCI_FULL_CONFIG" > "$HOME/.oci/config"
+          openssl pkey -in "$HOME/.oci/full-key.pem" -traditional -out "$HOME/.oci/full-key-pkcs1.pem"
+          mv "$HOME/.oci/full-key-pkcs1.pem" "$HOME/.oci/full-key.pem"
+          actual_fingerprint="$(openssl pkey -in "$HOME/.oci/full-key.pem" -pubout -outform DER | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
+          export OCI_DERIVED_FINGERPRINT="$actual_fingerprint"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path.home()/'.oci/config'
+          lines=[]; key=False; region=False; fingerprint=False
+          for line in p.read_text().splitlines():
+              s=line.strip()
+              if s.startswith('key_file='):
+                  lines.append(f'key_file={Path.home()}/.oci/full-key.pem'); key=True
+              elif s.startswith('region='):
+                  lines.append('region=eu-frankfurt-1'); region=True
+              elif s.startswith('fingerprint='):
+                  lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}'); fingerprint=True
+              else:
+                  lines.append(line)
+          if not key: lines.append(f'key_file={Path.home()}/.oci/full-key.pem')
+          if not region: lines.append('region=eu-frankfurt-1')
+          if not fingerprint: lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}')
+          p.write_text(chr(10).join(lines)+chr(10))
+          PY
+          oci iam region list --output json >/dev/null
+          echo 'OCI_FULL_CONTROL=PASS'
+          public_ip="$(oci compute instance list-vnics --instance-id "$INSTANCE_ID" --all --query 'data[0]."public-ip"' --raw-output)"
           if [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo 'LIGHT_PUBLIC_IP_PRESENT=YES'
           else
