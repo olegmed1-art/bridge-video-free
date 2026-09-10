@@ -71,6 +71,9 @@ import sys
 output_limit = int(sys.argv[1])
 resource.setrlimit(resource.RLIMIT_FSIZE, (output_limit, output_limit))
 
+import site
+site.main()
+
 import importlib
 import importlib.metadata
 import json
@@ -136,6 +139,9 @@ import time
 output_limit = int(sys.argv[1])
 resource.setrlimit(resource.RLIMIT_FSIZE, (output_limit, output_limit))
 cpu_start = time.process_time()
+
+import site
+site.main()
 
 import importlib
 import importlib.metadata
@@ -343,6 +349,7 @@ def _isolated_runtime_probe() -> dict[str, Any]:
                     [
                         sys.executable,
                         "-I",
+                        "-S",
                         "-c",
                         _ISOLATED_RUNTIME_PROBE,
                         str(MAX_RUNTIME_PROBE_BYTES),
@@ -476,6 +483,7 @@ def _execute_case_isolated(
                 [
                     sys.executable,
                     "-I",
+                    "-S",
                     "-c",
                     _ISOLATED_CASE_EXECUTOR,
                     str(MAX_CASE_RECEIPT_BYTES),

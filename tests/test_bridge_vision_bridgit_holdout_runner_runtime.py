@@ -221,6 +221,7 @@ def test_isolated_probe_uses_file_limited_outputs(tmp_path, monkeypatch):
     }
 
     def fake_run(_argv, **kwargs):
+        assert _argv[:4] == [runner.sys.executable, "-I", "-S", "-c"]
         assert "capture_output" not in kwargs
         assert kwargs["stdout"].name.endswith("stdout")
         assert kwargs["stderr"].name.endswith("stderr")
@@ -241,11 +242,11 @@ def test_case_execution_uses_clean_isolated_process(tmp_path, monkeypatch):
     runtime_probe = {"numpy": {}, "opencv-python-headless": {}}
 
     def fake_run(argv, **kwargs):
-        assert argv[:3] == [runner.sys.executable, "-I", "-c"]
+        assert argv[:4] == [runner.sys.executable, "-I", "-S", "-c"]
         assert kwargs["stdout"] is runner.subprocess.DEVNULL
         assert kwargs["stderr"] is runner.subprocess.DEVNULL
         assert "preexec_fn" not in kwargs
-        assert argv[4] == str(runner.MAX_CASE_RECEIPT_BYTES)
+        assert argv[5] == str(runner.MAX_CASE_RECEIPT_BYTES)
         assert not any(
             kwargs["env"].get(key) for key in runner.LOADER_INJECTION_ENV_VARS
         )
@@ -281,6 +282,7 @@ def test_case_execution_uses_clean_isolated_process(tmp_path, monkeypatch):
 
 def test_case_child_preloads_runtime_and_attests_after_recognition():
     script = runner._ISOLATED_CASE_EXECUTOR
+    assert script.index("resource.setrlimit") < script.index("site.main()")
     assert script.index("module = importlib.import_module(module_name)") < script.index(
         "sys.path.insert(0, str(repository_root))"
     )
