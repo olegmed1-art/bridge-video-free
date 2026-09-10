@@ -1,0 +1,91 @@
+name: RDC Heavy Oracle autostart repair
+
+on:
+  push:
+    branches: [ops/rdc-heavy-autostart-20260910]
+    paths: ['.github/workflows/rdc-heavy-autostart-20260910.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: database-production
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Select pinned SSH identity
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Install and start durable RDC service
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}'             -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=yes             -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}'             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          test "$(hostname)" = bridge-school-dds3-frankfurt
+          test -s /home/ubuntu/.desktop-commander-device/device.json
+          test "$(stat -c '%U:%G:%a' /home/ubuntu/.desktop-commander-device/device.json)" = ubuntu:ubuntu:600
+          test -x /home/ubuntu/.nvm/versions/node/v22.23.2/bin/desktop-commander
+          cat > /etc/systemd/system/remote-desktop-commander.service <<'UNIT'
+          [Unit]
+          Description=Remote Desktop Commander
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=ubuntu
+          Environment=HOME=/home/ubuntu
+          Environment=PATH=/home/ubuntu/.nvm/versions/node/v22.23.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+          WorkingDirectory=/home/ubuntu
+          ExecStart=/home/ubuntu/.nvm/versions/node/v22.23.2/bin/desktop-commander remote
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          chown root:root /etc/systemd/system/remote-desktop-commander.service
+          chmod 0644 /etc/systemd/system/remote-desktop-commander.service
+          systemctl daemon-reload
+          systemctl enable --now remote-desktop-commander.service
+          sleep 12
+          test "$(systemctl is-active remote-desktop-commander.service)" = active
+          test "$(systemctl is-enabled remote-desktop-commander.service)" = enabled
+          systemctl show remote-desktop-commander.service -p ActiveState -p UnitFileState -p NRestarts --no-pager
+          REMOTE
