@@ -1,0 +1,82 @@
+name: P0 Autopilot live state once 20260910
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/p0-autopilot-live-state-once-20260910.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Inspect only facts that change next action
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/id_oracle"
+          known="$RUNNER_TEMP/known_hosts"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n python3 -' <<'PY'
+          from pathlib import Path
+          import shlex, urllib.parse, subprocess
+          root=Path('/opt/bridge-school/school-autopilot')
+          service='school-autopilot-shadow.service'
+          envf=root/'autopilot-shadow.env'
+          brokerf=root/'autopilot-broker.env'
+          print('SOURCE_REVISION=' + ((root/'current/SOURCE_REVISION').read_text().strip() if (root/'current/SOURCE_REVISION').exists() else 'MISSING'))
+          print('SERVICE_ACTIVE=' + subprocess.run(['systemctl','is-active',service],capture_output=True,text=True).stdout.strip())
+          print('SERVICE_ENABLED=' + subprocess.run(['systemctl','is-enabled',service],capture_output=True,text=True).stdout.strip())
+          print('SERVICE_NRESTARTS=' + subprocess.run(['systemctl','show','-p','NRestarts','--value',service],capture_output=True,text=True).stdout.strip())
+          def parse_env(path):
+              out={}
+              if not path.exists(): return out
+              for raw in path.read_text().splitlines():
+                  s=raw.strip()
+                  if not s or s.startswith('#') or '=' not in s: continue
+                  k,v=s.split('=',1)
+                  try:
+                      vals=shlex.split(v,posix=True)
+                      out[k]=vals[0] if len(vals)==1 else v
+                  except Exception:
+                      out[k]=v
+              return out
+          env=parse_env(envf)
+          dsn=env.get('AUTOPILOT_DATABASE_URL','')
+          if dsn:
+              u=urllib.parse.urlsplit(dsn)
+              print('RUNTIME_DB_HOST=' + str(u.hostname))
+              print('RUNTIME_DB_USER=' + str(u.username))
+              print('RUNTIME_DB_NAME=' + u.path.lstrip('/'))
+          else:
+              print('RUNTIME_DB_HOST=MISSING')
+          print('BROKER_ENV_PRESENT=' + ('YES' if brokerf.exists() else 'NO'))
+          if brokerf.exists():
+              st=brokerf.stat()
+              print('BROKER_ENV_MODE=' + oct(st.st_mode & 0o777)[2:])
+              benv=parse_env(brokerf)
+              burl=benv.get('AUTOPILOT_TOKEN_BROKER_URL','')
+              if burl:
+                  u=urllib.parse.urlsplit(burl)
+                  print('BROKER_HOST=' + str(u.hostname))
+                  print('BROKER_PATH=' + str(u.path))
+              print('BROKER_SECRET_PRESENT=' + ('YES' if bool(benv.get('AUTOPILOT_TOKEN_BROKER_SECRET')) else 'NO'))
+              print('BYPASS_SECRET_PRESENT=' + ('YES' if bool(benv.get('AUTOPILOT_VERCEL_BYPASS_SECRET')) else 'NO'))
+          PY
