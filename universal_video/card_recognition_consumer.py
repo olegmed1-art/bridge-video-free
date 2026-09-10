@@ -302,6 +302,7 @@ def validate_recognition_result(
     information must already be represented as UNKNOWN by the producer.
     Known cards additionally require a caller-supplied approved immutable
     recognizer/profile tuple and a stable deal identity.
+    Any explicitly supplied identity is validated even for UNKNOWN-only input.
     """
 
     envelope = _mapping(payload, "recognition result")
