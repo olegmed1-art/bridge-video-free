@@ -1,0 +1,166 @@
+name: Oracle instance role inventory read-only
+
+on:
+  push:
+    branches:
+      - book/oracle-role-inventory-27-20260910
+    paths:
+      - '.github/workflows/oracle-instance-role-inventory-readonly.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-book-role-inventory-readonly
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      OCI_USER: ${{ secrets.OCI_READONLY_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_READONLY_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_READONLY_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_READONLY_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_READONLY_CLI_REGION }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Configure dedicated read-only OCI client
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY OCI_REGION; do
+            [[ -n "${!value:-}" ]] || { echo "$value is not configured" >&2; exit 21; }
+          done
+          [[ "$OCI_REGION" == eu-frankfurt-1 ]] || { echo 'unexpected OCI region' >&2; exit 22; }
+          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
+          install -d -m 0700 "$HOME/.oci"
+          printf '%s' "$OCI_KEY" | python -c 'import sys; raw=sys.stdin.read().replace("\\r", "").replace("\\n", "\n"); open(sys.argv[1], "w", encoding="utf-8").write(raw if raw.endswith("\n") else raw+"\n")' "$HOME/.oci/key.pem"
+          chmod 0600 "$HOME/.oci/key.pem"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          def scalar(env_name, config_key):
+              lines = [line.strip() for line in os.environ[env_name].replace('\r', '').splitlines() if line.strip()]
+              matches = [line.split('=', 1)[1].strip() for line in lines if line.startswith(config_key + '=')]
+              if len(matches) == 1 and matches[0]:
+                  return matches[0]
+              if not matches and len(lines) == 1 and '=' not in lines[0]:
+                  return lines[0]
+              raise SystemExit(f'ambiguous {env_name}')
+
+          config = {
+              'user': scalar('OCI_USER', 'user'),
+              'fingerprint': scalar('OCI_FINGERPRINT', 'fingerprint'),
+              'tenancy': scalar('OCI_TENANCY', 'tenancy'),
+              'region': scalar('OCI_REGION', 'region'),
+          }
+          path = Path.home() / '.oci' / 'config'
+          path.write_text(
+              '[DEFAULT]\n'
+              + ''.join(f'{key}={value}\n' for key, value in config.items())
+              + f'key_file={Path.home() / ".oci" / "key.pem"}\n',
+              encoding='utf-8',
+          )
+          PY
+          chmod 0600 "$HOME/.oci/config"
+          timeout --signal=KILL 30s oci iam region list --output json >/dev/null
+
+      - name: Enumerate live instances without mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          roots="$RUNNER_TEMP/compartments.json"
+          timeout --signal=KILL 30s oci iam compartment list \
+            --include-root --compartment-id-in-subtree true \
+            --access-level ACCESSIBLE --all --output json > "$roots"
+          readarray -t compartments < <(python - "$roots" <<'PY'
+          import json, sys
+          rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          assert isinstance(rows, list) and all(isinstance(row, dict) for row in rows)
+          ids = [row.get('id') for row in rows
+                 if row.get('lifecycle-state') == 'ACTIVE'
+                 and isinstance(row.get('id'), str)
+                 and row['id'].startswith(('ocid1.tenancy.', 'ocid1.compartment.'))]
+          assert ids and len(ids) == len(set(ids))
+          for value in ids:
+              print(value)
+          PY
+          )
+          [[ ${#compartments[@]} -ge 1 ]]
+          printf '{"data":[]}' > "$RUNNER_TEMP/instances.json"
+          index=0
+          for compartment in "${compartments[@]}"; do
+            index=$((index + 1))
+            page="$RUNNER_TEMP/instances-$index.json"
+            timeout --signal=KILL 30s oci compute instance list \
+              --compartment-id "$compartment" --all --output json > "$page"
+            python - "$RUNNER_TEMP/instances.json" "$page" <<'PY'
+          import json, sys
+          combined = json.load(open(sys.argv[1], encoding='utf-8'))
+          page = json.load(open(sys.argv[2], encoding='utf-8'))
+          assert isinstance(combined.get('data'), list)
+          assert isinstance(page.get('data'), list)
+          combined['data'].extend(page['data'])
+          json.dump(combined, open(sys.argv[1], 'w', encoding='utf-8'))
+          PY
+          done
+          python - "$RUNNER_TEMP/instances.json" <<'PY' | tee "$RUNNER_TEMP/sanitized-inventory.txt"
+          import hashlib, json, sys
+
+          rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          assert isinstance(rows, list) and all(isinstance(row, dict) for row in rows)
+          active = [row for row in rows if row.get('lifecycle-state') not in {'TERMINATED', 'TERMINATING'}]
+          allowed_states = {'PROVISIONING', 'STARTING', 'RUNNING', 'STOPPING', 'STOPPED', 'MOVING', 'CREATING_IMAGE'}
+          assert all(row.get('lifecycle-state') in allowed_states for row in active)
+          assert len(active) == len({row.get('id') for row in active})
+          print('ORACLE_INSTANCE_ROLE_INVENTORY_V1')
+          print('live_instance_count=' + str(len(active)))
+          heavy = []
+          for row in sorted(active, key=lambda item: str(item.get('display-name') or '')):
+              config = row.get('shape-config') or {}
+              ocpus = config.get('ocpus')
+              memory = config.get('memory-in-gbs')
+              assert isinstance(row.get('id'), str) and row['id'].startswith('ocid1.instance.')
+              assert isinstance(row.get('display-name'), str) and row['display-name']
+              assert isinstance(row.get('shape'), str) and row['shape']
+              assert type(ocpus) in (int, float) and 0 < ocpus <= 1024
+              assert type(memory) in (int, float) and 0 < memory <= 65536
+              item = {
+                  'display_name': row['display-name'],
+                  'lifecycle': row['lifecycle-state'],
+                  'shape': row['shape'],
+                  'ocpus': ocpus,
+                  'memory_gb': memory,
+                  'availability_domain': row.get('availability-domain'),
+                  'instance_id_sha256': hashlib.sha256(row['id'].encode()).hexdigest(),
+              }
+              print('instance=' + json.dumps(item, sort_keys=True, separators=(',', ':')))
+              if (row['display-name'] != 'bridge-school-dds3-frankfurt'
+                      and row['lifecycle-state'] in {'RUNNING', 'STOPPED'}
+                      and ocpus >= 4 and memory >= 12):
+                  heavy.append(row['display-name'])
+          print('heavy_candidate_count=' + str(len(heavy)))
+          print('heavy_candidates=' + json.dumps(sorted(heavy), separators=(',', ':')))
+          print('classification_note=bridge-school-dds3-frankfurt excluded because current #881 path is P0 Autopilot-controlled')
+          PY
+          {
+            echo '### Oracle instance role inventory (read-only)'
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/sanitized-inventory.txt"
+            echo '```'
+            echo
+            echo '- API surface: OCI list/get only'
+            echo '- lifecycle, host, storage, network, IAM and billing mutations: absent'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove transient OCI credential files
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.oci/config" "$HOME/.oci/key.pem"
