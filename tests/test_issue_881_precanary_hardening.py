@@ -1693,7 +1693,7 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
             indirect[reference] = payload
             pending.update(repository_shell_references(payload) - set(indirect))
         referenced_payloads.update(indirect)
-    assert len(shared_workflows) == 65
+    assert len(shared_workflows) == 66
     assert len(referenced_payloads) == 55
     assert "ops/universal_video_spool_repair.sh" in referenced_payloads
     assert "ops/universal_video_evidence_export_entrypoint.sh" in referenced_payloads
