@@ -60,7 +60,8 @@ jobs:
               'region': scalar('OCI_REGION','region'),
           }
           path=Path.home()/'.oci'/'config'
-          path.write_text('[DEFAULT]\\n'+''.join(f'{k}={v}\\n' for k,v in values.items())+f'key_file={Path.home()/".oci"/"key.pem"}\\n')
+          nl=chr(10)
+          path.write_text('[DEFAULT]'+nl+''.join(f'{k}={v}'+nl for k,v in values.items())+f'key_file={Path.home()/".oci"/"key.pem"}'+nl)
           PY
           chmod 0600 "$HOME/.oci/config"
           echo 'OCI_CONFIG=PASS'
