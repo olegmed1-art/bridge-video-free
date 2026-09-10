@@ -197,6 +197,41 @@ def test_visual_anchor_requires_and_enforces_approved_profile_gates() -> None:
     assert consumed["deal_identity"] == envelope["result"]["deal_identity"]
 
 
+def test_unknown_only_validates_and_preserves_supplied_identity() -> None:
+    envelope = _envelope()
+    envelope["result"]["deal_identity"]["value"] = "   "
+    _rehash(envelope)
+    with pytest.raises(CardRecognitionContractError, match="explicit deal_identity"):
+        validate_recognition_result(envelope)
+
+    envelope["result"]["deal_identity"] = {
+        "kind": "EXPLICIT_BOARD",
+        "scope": " fixture-video ",
+        "value": " board-7 ",
+    }
+    _rehash(envelope)
+    consumed = validate_recognition_result(envelope)
+    assert consumed["deal_identity"] == {
+        "kind": "EXPLICIT_BOARD",
+        "scope": "fixture-video",
+        "value": "board-7",
+    }
+
+
+def test_unknown_only_visual_anchor_still_requires_approved_gates() -> None:
+    envelope = _envelope()
+    envelope["result"]["deal_identity"] = {
+        "kind": "VISUAL_ANCHOR",
+        "anchor_frame_sha256": "c" * 64,
+        "inliers": 8,
+        "inlier_ratio": 0.75,
+    }
+    _rehash(envelope)
+
+    with pytest.raises(CardRecognitionContractError, match="tuple is not approved"):
+        validate_recognition_result(envelope)
+
+
 def test_keeps_single_frame_visual_evidence_pending() -> None:
     envelope = _envelope()
     record = envelope["result"]["card_records"][0]

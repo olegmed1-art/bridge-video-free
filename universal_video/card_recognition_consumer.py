@@ -362,13 +362,25 @@ def validate_recognition_result(
         known_cards.add(card)
     deal_identity = None
     profile_verification_sha256 = None
+    visual_anchor_gates = None
     if known_cards:
         _, _, profile_verification_sha256, visual_anchor_gates = _trusted_tuple(
             result, approved_recognizers
         )
+    if "deal_identity" in result:
+        raw_identity = _mapping(result["deal_identity"], "deal_identity")
+        if str(raw_identity.get("kind") or "").upper() == "VISUAL_ANCHOR" and not known_cards:
+            (
+                _,
+                _,
+                profile_verification_sha256,
+                visual_anchor_gates,
+            ) = _trusted_tuple(result, approved_recognizers)
         deal_identity = _deal_identity(
-            result.get("deal_identity"), visual_anchor_gates=visual_anchor_gates
+            raw_identity, visual_anchor_gates=visual_anchor_gates
         )
+    elif known_cards:
+        raise CardRecognitionContractError("deal_identity is required for known cards")
     if result["status"] == "COMPLETE_VISUAL" and len(known_cards) != 52:
         raise CardRecognitionContractError(
             "COMPLETE_VISUAL requires 52 recognized cards and no UNKNOWN slots"
@@ -392,8 +404,9 @@ def validate_recognition_result(
         "logical_inference_performed": False,
         "canonical_promotion_allowed": False,
     }
-    if known_cards:
+    if profile_verification_sha256 is not None:
         normalized["profile_verification_sha256"] = profile_verification_sha256
+    if deal_identity is not None:
         normalized["deal_identity"] = deal_identity
     normalized["consumer_sha256"] = canonical_sha256(normalized)
     return normalized
