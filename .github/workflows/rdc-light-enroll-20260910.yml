@@ -1,0 +1,184 @@
+name: RDC Light Oracle enrollment
+
+on:
+  push:
+    branches: [ops/rdc-light-enroll-20260910]
+    paths: ['.github/workflows/rdc-light-enroll-20260910.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-light-rdc-enrollment
+  cancel-in-progress: false
+
+jobs:
+  enroll:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    environment: database-production
+    env:
+      OCI_USER: ${{ secrets.OCI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_KEY }}
+      OCI_REGION: ${{ secrets.OCI_REGION }}
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Resolve exact existing Light Oracle and SSH identity
+        id: target
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
+          install -d -m 0700 "$HOME/.oci"
+          printf '%s' "$OCI_KEY" | python -c 'import sys; raw=sys.stdin.read().replace("\\r","").replace("\\n","\n"); open(sys.argv[1],"w").write(raw if raw.endswith("\n") else raw+"\n")' "$HOME/.oci/key.pem"
+          chmod 0600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 0600 "$HOME/.oci/config"
+          oci iam compartment list --include-root --compartment-id-in-subtree true --access-level ACCESSIBLE --all > "$RUNNER_TEMP/compartments.json"
+          python - "$RUNNER_TEMP/compartments.json" > "$RUNNER_TEMP/compartment-ids" <<'PY'
+          import json,sys
+          for row in json.load(open(sys.argv[1]))['data']:
+              if row.get('lifecycle-state') == 'ACTIVE':
+                  print(row['id'])
+          PY
+          : > "$RUNNER_TEMP/instances.jsonl"
+          while IFS= read -r compartment; do
+            oci compute instance list --compartment-id "$compartment" --all |
+              python -c 'import json,sys; [print(json.dumps(x,separators=(",",":"))) for x in json.load(sys.stdin)["data"]]' >> "$RUNNER_TEMP/instances.jsonl"
+          done < "$RUNNER_TEMP/compartment-ids"
+          python - "$RUNNER_TEMP/instances.jsonl" > "$RUNNER_TEMP/target.env" <<'PY'
+          import json,sys
+          rows=[json.loads(x) for x in open(sys.argv[1]) if x.strip()]
+          rows=[x for x in rows if x.get('display-name')=='bridge-school-autopilot-lite' and x.get('lifecycle-state') not in {'TERMINATED','TERMINATING'}]
+          assert len(rows)==1, f'exact Light Oracle count={len(rows)}'
+          x=rows[0]
+          assert x['lifecycle-state']=='RUNNING'
+          print('INSTANCE_ID='+x['id'])
+          print('COMPARTMENT_ID='+x['compartment-id'])
+          PY
+          source "$RUNNER_TEMP/target.env"
+          vnic_id="$(oci compute vnic-attachment list --compartment-id "$COMPARTMENT_ID" --instance-id "$INSTANCE_ID" --all --query 'data[0]."vnic-id"' --raw-output)"
+          public_ip="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output)"
+          [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          known="$RUNNER_TEMP/known_hosts"
+          ssh-keyscan -T 15 -t ed25519,rsa "$public_ip" 2>/dev/null > "$known"
+          [[ -s "$known" ]]
+          chmod 0600 "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            [[ -n "${!name:-}" ]] || continue
+            candidate="$RUNNER_TEMP/key-$name"
+            printf '%s\n' "${!name}" | tr -d '\r' > "$candidate"
+            chmod 0600 "$candidate"
+            ssh-keygen -y -f "$candidate" >/dev/null 2>&1 || continue
+            remote_id="$(ssh -i "$candidate" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=12 "ubuntu@$public_ip" 'curl -fsS -H "Authorization: Bearer Oracle" http://169.254.169.254/opc/v2/instance/id' 2>/dev/null || true)"
+            if [[ "$remote_id" == "$INSTANCE_ID" ]]; then selected="$candidate"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'LIGHT_ORACLE_SSH_KEY_UNAVAILABLE' >&2; exit 41; }
+          echo "host=$public_ip" >> "$GITHUB_OUTPUT"
+          echo "key=$selected" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo 'LIGHT_ORACLE_IDENTITY=PASS'
+
+      - name: Install RDC and request device authorization
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i '${{ steps.target.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.target.outputs.known }}' -o ConnectTimeout=15 "ubuntu@${{ steps.target.outputs.host }}" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          test "$(hostname)" = bridge-school-autopilot-lite
+          export NVM_DIR="$HOME/.nvm"
+          if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
+            curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+          fi
+          source "$NVM_DIR/nvm.sh"
+          nvm install 22 >/dev/null
+          nvm use 22 >/dev/null
+          npm install -g @wonderwhy-er/desktop-commander@0.2.50 >/dev/null
+          rm -f "$HOME/rdc-registration.log"
+          nohup "$NVM_BIN/desktop-commander" remote >"$HOME/rdc-registration.log" 2>&1 </dev/null &
+          for _ in $(seq 1 45); do
+            grep -q 'Device code received' "$HOME/rdc-registration.log" && exit 0
+            sleep 2
+          done
+          echo 'RDC_DEVICE_CODE_TIMEOUT' >&2
+          exit 42
+          REMOTE
+          scp -q -i '${{ steps.target.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.target.outputs.known }}' "ubuntu@${{ steps.target.outputs.host }}:rdc-registration.log" "$RUNNER_TEMP/rdc-registration.txt"
+          grep -q 'Device code received' "$RUNNER_TEMP/rdc-registration.txt"
+          echo 'RDC_AUTHORIZATION_REQUEST_READY=YES'
+
+      - name: Retain private authorization request
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rdc-light-authorization
+          path: ${{ runner.temp }}/rdc-registration.txt
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Wait for authorization and install durable service
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for _ in $(seq 1 150); do
+            if ssh -i '${{ steps.target.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.target.outputs.known }}' -o ConnectTimeout=15 "ubuntu@${{ steps.target.outputs.host }}" 'test -s ~/.desktop-commander-device/device.json'; then
+              authorized=1
+              break
+            fi
+            sleep 5
+          done
+          [[ "${authorized:-0}" == 1 ]] || { echo 'RDC_AUTHORIZATION_TIMEOUT' >&2; exit 43; }
+          ssh -i '${{ steps.target.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.target.outputs.known }}' -o ConnectTimeout=15 "ubuntu@${{ steps.target.outputs.host }}" 'sudo -n bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          test "$(hostname)" = bridge-school-autopilot-lite
+          test -s /home/ubuntu/.desktop-commander-device/device.json
+          chmod 0600 /home/ubuntu/.desktop-commander-device/device.json
+          node_bin="$(readlink -f /home/ubuntu/.nvm/alias/default)/bin"
+          [[ -x "$node_bin/desktop-commander" ]]
+          cat > /etc/systemd/system/remote-desktop-commander.service <<UNIT
+          [Unit]
+          Description=Remote Desktop Commander
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=ubuntu
+          Environment=HOME=/home/ubuntu
+          Environment=PATH=$node_bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+          WorkingDirectory=/home/ubuntu
+          ExecStart=$node_bin/desktop-commander remote
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          chown root:root /etc/systemd/system/remote-desktop-commander.service
+          chmod 0644 /etc/systemd/system/remote-desktop-commander.service
+          pkill -u ubuntu -f 'desktop-commander.*remote' || true
+          systemctl daemon-reload
+          systemctl enable --now remote-desktop-commander.service
+          sleep 12
+          test "$(systemctl is-active remote-desktop-commander.service)" = active
+          test "$(systemctl is-enabled remote-desktop-commander.service)" = enabled
+          systemctl show remote-desktop-commander.service -p ActiveState -p UnitFileState -p NRestarts --no-pager
+          REMOTE
