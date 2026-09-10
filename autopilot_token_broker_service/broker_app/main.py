@@ -26,6 +26,7 @@ from broker_app.github import (
     load_config,
 )
 from broker_app.policy import DraftRepairRequest, RoleDispatchRequest
+from broker_app.release import SOURCE_REVISION as BUNDLED_SOURCE_REVISION
 
 
 NO_STORE_HEADERS = {
@@ -95,9 +96,9 @@ def _broker_enabled() -> bool:
 
 
 def _source_revision() -> str:
-    """Return Vercel's immutable deployment revision, never a user attestation."""
+    """Return the source revision embedded in the hashed deployment bundle."""
 
-    value = os.getenv("VERCEL_GIT_COMMIT_SHA", "").strip()
+    value = BUNDLED_SOURCE_REVISION.strip()
     if len(value) == 40 and all(character in "0123456789abcdef" for character in value):
         return value
     return "UNATTESTED"
