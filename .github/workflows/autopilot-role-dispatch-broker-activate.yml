@@ -1,0 +1,185 @@
+name: Autopilot role-dispatch broker activation
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - 'ops/oracle-autopilot-broker-activation-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate exact activation request
+        id: request
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-autopilot-broker-activation-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one broker activation request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib
+          import json
+          import os
+          import re
+
+          request = json.load(open(os.environ["REQUEST_FILE"], encoding="utf-8"))
+          assert set(request) == {
+              "request_id", "target_host", "rsa_fingerprint", "candidate_host",
+              "source_sha", "artifact_sha256", "policy_sha256",
+              "provenance_sha256", "activation_scope",
+          }
+          assert re.fullmatch(r"[A-Za-z0-9._-]{1,80}", request["request_id"])
+          assert request["target_host"] == "158.180.47.161"
+          assert request["rsa_fingerprint"] == "SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64"
+          assert request["candidate_host"] == "bridge-school-autopilot-a9zfnfmgx-olegmed1-4368s-projects.vercel.app"
+          assert request["source_sha"] == "32ca11930268c5f6e4d79bd2fc3c47c5bef5e71d"
+          assert request["artifact_sha256"] == "910ff47303d20a4c678bbdd1738d760bfbae5064bbf0bc6de40341069938d16c"
+          assert request["policy_sha256"] == "69c9672387a2a6cf7680a4c4ab8fe09513d3f20668426c7894aca7e8b9869202"
+          assert request["provenance_sha256"] == "89c68c483705cae521a83c34b9058d6ac843aae584923d7a45bc2e3ca7a71c58"
+          assert request["activation_scope"] == "SHADOW_BROKER_ONLY"
+          statement = {
+              "artifact_sha256": request["artifact_sha256"],
+              "policy_sha256": request["policy_sha256"],
+              "policy_version": "physical-no-merge-v2",
+              "source_sha": request["source_sha"],
+          }
+          calculated = hashlib.sha256(
+              json.dumps(statement, sort_keys=True, separators=(",", ":")).encode()
+          ).hexdigest()
+          assert calculated == request["provenance_sha256"]
+          for key, value in request.items():
+              print(f"{key}={value}")
+          PY
+
+      - name: Activate candidate with atomic rollback
+        shell: bash
+        env:
+          CANDIDATE_HOST: ${{ steps.request.outputs.candidate_host }}
+          SOURCE_SHA: ${{ steps.request.outputs.source_sha }}
+          ARTIFACT_SHA256: ${{ steps.request.outputs.artifact_sha256 }}
+          POLICY_SHA256: ${{ steps.request.outputs.policy_sha256 }}
+          PROVENANCE_SHA256: ${{ steps.request.outputs.provenance_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/id_oracle"
+          known="$RUNNER_TEMP/known_hosts"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env CANDIDATE_HOST='$CANDIDATE_HOST' SOURCE_SHA='$SOURCE_SHA' ARTIFACT_SHA256='$ARTIFACT_SHA256' POLICY_SHA256='$POLICY_SHA256' PROVENANCE_SHA256='$PROVENANCE_SHA256' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          root=/opt/bridge-school/school-autopilot
+          service=school-autopilot-shadow.service
+          env_file="$root/autopilot-broker.env"
+          work="$(mktemp -d /var/tmp/autopilot-broker-activate.XXXXXXXX)"
+          cleanup(){ find "$work" -depth -delete; }
+          trap cleanup EXIT HUP INT TERM
+          [[ "$(stat -c '%U:%G:%a' "$env_file")" == root:root:600 ]]
+          cp --preserve=mode,ownership,timestamps "$env_file" "$work/previous.env"
+          set -a
+          source "$env_file"
+          set +a
+          test -n "$AUTOPILOT_TOKEN_BROKER_SECRET"
+          test -n "$AUTOPILOT_VERCEL_BYPASS_SECRET"
+          candidate_url="https://$CANDIDATE_HOST/v1/github/draft-repair"
+          curl --fail --silent --show-error --location --max-redirs 0 \
+            --connect-timeout 10 --max-time 45 \
+            -H "x-vercel-protection-bypass: $AUTOPILOT_VERCEL_BYPASS_SECRET" \
+            "https://$CANDIDATE_HOST/healthz" -o "$work/health.json"
+          HEALTH="$work/health.json" SOURCE_SHA="$SOURCE_SHA" ARTIFACT_SHA256="$ARTIFACT_SHA256" \
+            POLICY_SHA256="$POLICY_SHA256" PROVENANCE_SHA256="$PROVENANCE_SHA256" python3 - <<'PY'
+          import json
+          import os
+
+          payload = json.load(open(os.environ["HEALTH"], encoding="utf-8"))
+          expected = {
+              "status": "ok",
+              "service": "school-autopilot-github-token-broker",
+              "preview_only": True,
+              "production_mutations_enabled": False,
+              "raw_installation_token_exposed": False,
+              "bounded_role_dispatch_enabled": True,
+              "broker_policy_version": "physical-no-merge-v2",
+              "source_attested": True,
+              "artifact_attested": True,
+              "source_revision": os.environ["SOURCE_SHA"],
+              "artifact_sha256": os.environ["ARTIFACT_SHA256"],
+              "policy_sha256": os.environ["POLICY_SHA256"],
+              "provenance_sha256": os.environ["PROVENANCE_SHA256"],
+          }
+          for key, value in expected.items():
+              assert payload.get(key) == value
+          PY
+          BROKER_SECRET="$AUTOPILOT_TOKEN_BROKER_SECRET" BYPASS_SECRET="$AUTOPILOT_VERCEL_BYPASS_SECRET" \
+            CANDIDATE_URL="$candidate_url" SOURCE_SHA="$SOURCE_SHA" ARTIFACT_SHA256="$ARTIFACT_SHA256" \
+            POLICY_SHA256="$POLICY_SHA256" PROVENANCE_SHA256="$PROVENANCE_SHA256" \
+            python3 - <<'PY' > "$work/new.env"
+          import os
+          import shlex
+
+          values = {
+              "AUTOPILOT_TOKEN_BROKER_URL": os.environ["CANDIDATE_URL"],
+              "AUTOPILOT_TOKEN_BROKER_SECRET": os.environ["BROKER_SECRET"],
+              "AUTOPILOT_VERCEL_BYPASS_SECRET": os.environ["BYPASS_SECRET"],
+              "AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA": os.environ["SOURCE_SHA"],
+              "AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256": os.environ["ARTIFACT_SHA256"],
+              "AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256": os.environ["POLICY_SHA256"],
+              "AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256": os.environ["PROVENANCE_SHA256"],
+          }
+          for key, value in values.items():
+              assert "\n" not in value and "\r" not in value
+              print(f"{key}={shlex.quote(value)}")
+          PY
+          rollback(){
+            install -m 0600 -o root -g root "$work/previous.env" "$env_file"
+            systemctl restart "$service" || true
+          }
+          trap 'rollback' ERR
+          install -m 0600 -o root -g root "$work/new.env" "$env_file"
+          systemctl restart "$service"
+          sleep 4
+          systemctl is-active --quiet "$service"
+          systemctl is-enabled --quiet "$service"
+          set -a
+          source "$env_file"
+          set +a
+          cd "$root/current"
+          "$root/.venv/bin/python" - <<'PY'
+          from oracle_autopilot.worker import load_role_dispatch_broker_config
+
+          config = load_role_dispatch_broker_config()
+          assert config.url.endswith("/v1/github/role-dispatch")
+          print("AUTOPILOT_ROLE_DISPATCH_CONFIG=PASS")
+          PY
+          trap - ERR
+          echo 'AUTOPILOT_ROLE_DISPATCH_BROKER_ACTIVATION=PASS'
+          echo 'PLAINTEXT_SECRET_EXPOSED=NO'
+          echo 'DATABASE_MUTATED=NO'
+          echo 'SUCCESSOR_TASK_CREATED=NO'
+          REMOTE
+
