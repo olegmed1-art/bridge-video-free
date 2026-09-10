@@ -1,0 +1,115 @@
+name: Oracle Heavy idle SSH read-only
+
+on:
+  push:
+    branches:
+      - book/oracle-role-inventory-27-20260910
+    paths:
+      - '.github/workflows/oracle-heavy-idle-ssh-readonly.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  idle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Resolve pinned SSH transport
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/oracle-heavy-idle"; mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          selected_name=''
+          index=0
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            raw="${!name:-}"
+            [[ -n "$raw" ]] || continue
+            index=$((index + 1))
+            base="$work/key-$index"
+            printf '%s\n' "$raw" > "$base.raw"
+            tr -d '\r' < "$base.raw" > "$base.crlf"
+            printf '%s' "$raw" | python -c '
+          import sys
+          raw = sys.stdin.read()
+          if "\\n" in raw and "\n" not in raw:
+              raw = raw.replace("\\r", "").replace("\\n", "\n")
+          with open(sys.argv[1], "w", newline="\n") as handle:
+              handle.write(raw)
+              if not raw.endswith("\n"):
+                  handle.write("\n")
+          ' "$base.escaped"
+            for key in "$base.raw" "$base.crlf" "$base.escaped"; do
+              chmod 0600 "$key"
+              ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
+              if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+                   -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+                   -o ConnectTimeout=10 "$ORACLE_USER@$ORACLE_HOST" true >/dev/null 2>&1; then
+                selected="$key"; selected_name="$name"; break 2
+              fi
+            done
+          done
+          [[ -n "$selected" ]] || { echo 'no authorized pinned SSH credential' >&2; exit 21; }
+          cp "$selected" "$work/id_oracle"; chmod 0600 "$work/id_oracle"
+          echo "key=$work/id_oracle" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "selected_name=$selected_name" >> "$GITHUB_OUTPUT"
+
+      - name: Read exact Heavy Oracle idle state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'set -Eeuo pipefail
+             [[ "$(hostname)" == bridge-school-dds3-frankfurt ]]
+             printf "hostname=%s\n" "$(hostname)"
+             printf "cpu_count=%s\n" "$(nproc)"
+             awk '\''/^MemTotal:/ {printf "mem_total_kib=%s\\n", $2}'\'' /proc/meminfo
+             df -Pk / | awk '\''NR==2 {printf "root_total_kib=%s\\nroot_used_kib=%s\\nroot_free_kib=%s\\n", $2, $3, $4}'\''
+             printf "autopilot_shadow=%s\n" "$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"
+             printf "universal_video=%s\n" "$(systemctl is-active universal-video.service 2>/dev/null || true)"
+             sudo -n /usr/local/sbin/oracle-idle-state' \
+            > "$RUNNER_TEMP/heavy-idle.txt"
+          cat "$RUNNER_TEMP/heavy-idle.txt"
+          grep -Fx 'hostname=bridge-school-dds3-frankfurt' "$RUNNER_TEMP/heavy-idle.txt" >/dev/null
+          grep -Fx 'autopilot_shadow=inactive' "$RUNNER_TEMP/heavy-idle.txt" >/dev/null
+          grep -Fx 'universal_video=inactive' "$RUNNER_TEMP/heavy-idle.txt" >/dev/null
+          grep -Fx 'ORACLE_IDLE_STATE=IDLE' "$RUNNER_TEMP/heavy-idle.txt" >/dev/null
+          if grep -Ev '^(hostname=bridge-school-dds3-frankfurt|cpu_count=[0-9]+|mem_total_kib=[0-9]+|root_(total|used|free)_kib=[0-9]+|autopilot_shadow=(active|inactive|failed|activating|deactivating|unknown)?|universal_video=(active|inactive|failed|activating|deactivating|unknown)?|ORACLE_IDLE_CONTRACT_VERSION=[0-9]+|ORACLE_IDLE_(STARTED|OBSERVED)_AT_EPOCH=[0-9]+|ORACLE_IDLE_REASON=[A-Za-z0-9_,.=+-]+|ORACLE_IDLE_STATE=(BUSY|IDLE|UNKNOWN))$' "$RUNNER_TEMP/heavy-idle.txt" | grep -q .; then
+            echo 'non-contract output from Heavy Oracle' >&2
+            exit 22
+          fi
+          {
+            echo '### Heavy Oracle idle gate (SSH read-only)'
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/heavy-idle.txt"
+            echo '```'
+            echo
+            echo "- selected credential alias: ${{ steps.ssh.outputs.selected_name }}"
+            echo '- host/service/file mutation: absent'
+          } >> "$GITHUB_STEP_SUMMARY"
