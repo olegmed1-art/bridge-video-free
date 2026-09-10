@@ -1,0 +1,6 @@
+{
+  "request_id": "autopilot-source-refresh-role-dispatch-v2-20260910T1730Z",
+  "target_host": "158.180.47.161",
+  "rsa_fingerprint": "SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64",
+  "refresh_scope": "SHADOW_ONLY_SOURCE_RESTART"
+}
