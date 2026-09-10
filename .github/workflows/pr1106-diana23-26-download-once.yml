@@ -18,7 +18,7 @@ jobs:
     if: >-
       github.repository == 'olegmed1-art/bridge-video-free' &&
       github.actor == 'olegmed1-art' &&
-      github.event.before == 'ec4fa8bdeb9cf28a31786d60d599813b0cd9fa58'
+      github.event.before == '90df05ec500736cf7148ab9948213ef5d84ef30b'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -226,7 +226,7 @@ jobs:
                final='$remote_final'
                if [[ -e \"\$final\" ]]; then
                  [[ -f \"\$final\" && ! -L \"\$final\" ]]
-                 printf 'EXISTS %s %s\\n' \"\$(stat -c %s \"\$final\")\" \"\$(sha256sum \"\$final\" | awk '{print \\$1}')\"
+                 printf 'EXISTS %s %s\\n' \"\$(stat -c %s \"\$final\")\" \"\$(sha256sum \"\$final\" | cut -c1-64)\"
                else
                  printf 'ABSENT\\n'
                fi")"
@@ -243,7 +243,7 @@ jobs:
               ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" "$ORACLE_USER@$ORACLE_HOST" "set -Eeuo pipefail
                  [[ -f '$remote_part' && ! -L '$remote_part' ]]
                  [[ \"\$(stat -c %s '$remote_part')\" == '$SOURCE_BYTES' ]]
-                 [[ \"\$(sha256sum '$remote_part' | awk '{print \\$1}')\" == '$SOURCE_SHA256' ]]
+                 [[ \"\$(sha256sum '$remote_part' | cut -c1-64)\" == '$SOURCE_SHA256' ]]
                  chmod 0600 '$remote_part'
                  mv '$remote_part' '$remote_final'
                  [[ \"\$(stat -c '%U:%G:%a' '$remote_final')\" == 'ubuntu:ubuntu:600' ]]"
