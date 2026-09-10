@@ -21,9 +21,9 @@ class _RecordEntry:
 
 
 class _Distribution:
-    def __init__(self, root, entry):
+    def __init__(self, root, *entries):
         self.root = root
-        self.files = [entry]
+        self.files = list(entries)
 
     def locate_file(self, entry):
         return self.root / str(entry)
@@ -39,9 +39,21 @@ def test_imported_pixel_modules_are_bound_to_distribution_record(tmp_path, monke
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(payload)
         entry = _RecordEntry(relative, payload)
+        native_relative = (
+            "numpy/_core/_multiarray_umath.test.so"
+            if distribution_name == "numpy"
+            else "cv2/cv2.test.so"
+        )
+        native_payload = f"{distribution_name}-native-baseline".encode()
+        native_path = tmp_path / native_relative
+        native_path.parent.mkdir(parents=True, exist_ok=True)
+        native_path.write_bytes(native_payload)
+        native_entry = _RecordEntry(native_relative, native_payload)
         roots[distribution_name] = path
         modules[module_name] = SimpleNamespace(__file__=str(path))
-        distributions[distribution_name] = _Distribution(tmp_path, entry)
+        distributions[distribution_name] = _Distribution(
+            tmp_path, entry, native_entry
+        )
 
     monkeypatch.setattr(
         runner.metadata, "distribution", lambda name: distributions[name]
@@ -49,7 +61,14 @@ def test_imported_pixel_modules_are_bound_to_distribution_record(tmp_path, monke
     monkeypatch.setattr(runner.importlib, "import_module", lambda name: modules[name])
 
     assert runner._verify_imported_runtime_modules() == {
-        name: relative
+        name: {
+            "entry_module": relative,
+            "native_files": [
+                "numpy/_core/_multiarray_umath.test.so"
+                if name == "numpy"
+                else "cv2/cv2.test.so"
+            ],
+        }
         for name, (_, relative) in runner.PINNED_RUNTIME_MODULES.items()
     }
 
@@ -58,11 +77,54 @@ def test_imported_pixel_modules_are_bound_to_distribution_record(tmp_path, monke
         runner._verify_imported_runtime_modules()
 
 
+def test_native_runtime_files_are_bound_to_distribution_record(tmp_path, monkeypatch):
+    modules = {}
+    distributions = {}
+    native_paths = {}
+    for distribution_name, (module_name, relative) in runner.PINNED_RUNTIME_MODULES.items():
+        wrapper_payload = f"{distribution_name}-wrapper".encode()
+        wrapper_path = tmp_path / relative
+        wrapper_path.parent.mkdir(parents=True, exist_ok=True)
+        wrapper_path.write_bytes(wrapper_payload)
+        wrapper_entry = _RecordEntry(relative, wrapper_payload)
+
+        native_relative = f"{module_name}/{module_name}.abi3.so"
+        native_payload = f"{distribution_name}-native".encode()
+        native_path = tmp_path / native_relative
+        native_path.parent.mkdir(parents=True, exist_ok=True)
+        native_path.write_bytes(native_payload)
+        native_entry = _RecordEntry(native_relative, native_payload)
+
+        modules[module_name] = SimpleNamespace(__file__=str(wrapper_path))
+        distributions[distribution_name] = _Distribution(
+            tmp_path, wrapper_entry, native_entry
+        )
+        native_paths[distribution_name] = native_path
+
+    monkeypatch.setattr(
+        runner.metadata, "distribution", lambda name: distributions[name]
+    )
+    monkeypatch.setattr(runner.importlib, "import_module", lambda name: modules[name])
+
+    runner._verify_imported_runtime_modules()
+    native_paths["opencv-python-headless"].write_bytes(b"replaced-native-module")
+    with pytest.raises(runner.HoldoutRunnerError, match="native file does not match RECORD"):
+        runner._verify_imported_runtime_modules()
+
+
 def test_frozen_artifact_identity_binds_runtime_module_paths(monkeypatch):
     baseline = runner.frozen_recognizer_artifact_sha256()
     changed = dict(runner.PINNED_RUNTIME_MODULES)
     changed["numpy"] = ("numpy", "shadow/numpy/__init__.py")
     monkeypatch.setattr(runner, "PINNED_RUNTIME_MODULES", changed)
+    assert runner.frozen_recognizer_artifact_sha256() != baseline
+
+
+def test_frozen_artifact_identity_binds_native_record_policy(monkeypatch):
+    baseline = runner.frozen_recognizer_artifact_sha256()
+    monkeypatch.setattr(
+        runner, "RUNTIME_NATIVE_RECORD_POLICY", "entry-modules-only-legacy"
+    )
     assert runner.frozen_recognizer_artifact_sha256() != baseline
 
 

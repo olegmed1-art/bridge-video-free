@@ -55,6 +55,7 @@ PINNED_RUNTIME_MODULES = {
     "numpy": ("numpy", "numpy/__init__.py"),
     "opencv-python-headless": ("cv2", "cv2/__init__.py"),
 }
+RUNTIME_NATIVE_RECORD_POLICY = "all-distribution-native-records-v1"
 
 
 class HoldoutRunnerError(ValueError):
@@ -111,9 +112,32 @@ def _record_sha256(record_hash: Any) -> str:
         raise HoldoutRunnerError("pixel runtime RECORD hash is invalid") from exc
 
 
-def _verify_imported_runtime_modules() -> dict[str, str]:
-    """Prove imported numpy/cv2 entry modules belong to the pinned distributions."""
-    identities: dict[str, str] = {}
+def _is_native_runtime_path(relative: str) -> bool:
+    name = Path(relative).name.lower()
+    return any(marker in name for marker in (".so", ".pyd", ".dll", ".dylib"))
+
+
+def _verified_record_file(distribution: Any, entry: Any, *, native: bool) -> Path:
+    try:
+        unresolved = Path(distribution.locate_file(entry))
+        if unresolved.is_symlink():
+            raise HoldoutRunnerError("pixel runtime RECORD file must not be a symlink")
+        path = unresolved.resolve(strict=True)
+    except HoldoutRunnerError:
+        raise
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HoldoutRunnerError("pixel runtime RECORD file is unavailable") from exc
+    if not path.is_file():
+        raise HoldoutRunnerError("pixel runtime RECORD file is not a regular file")
+    if _sha256_file(path) != _record_sha256(getattr(entry, "hash", None)):
+        kind = "native file" if native else "module file"
+        raise HoldoutRunnerError(f"pixel runtime {kind} does not match RECORD")
+    return path
+
+
+def _verify_imported_runtime_modules() -> dict[str, dict[str, Any]]:
+    """Verify entry modules and every native file shipped by the pinned wheels."""
+    identities: dict[str, dict[str, Any]] = {}
     for distribution_name, (module_name, expected_relative) in PINNED_RUNTIME_MODULES.items():
         try:
             distribution = metadata.distribution(distribution_name)
@@ -140,14 +164,17 @@ def _verify_imported_runtime_modules() -> dict[str, str]:
         if files is None:
             raise HoldoutRunnerError("pixel runtime distribution has no file manifest")
         matched = None
+        native_entries = []
         for entry in files:
+            relative = str(entry).replace("\\", "/")
+            if _is_native_runtime_path(relative):
+                native_entries.append((relative, entry))
             try:
                 located = Path(distribution.locate_file(entry)).resolve(strict=True)
             except (OSError, ValueError, RuntimeError):
                 continue
             if located == module_path:
                 matched = entry
-                break
         if matched is None:
             raise HoldoutRunnerError(
                 "imported pixel runtime module is not owned by frozen distribution"
@@ -155,9 +182,17 @@ def _verify_imported_runtime_modules() -> dict[str, str]:
         relative = str(matched).replace("\\", "/")
         if relative != expected_relative:
             raise HoldoutRunnerError("pixel runtime module origin does not match baseline")
-        if _sha256_file(module_path) != _record_sha256(getattr(matched, "hash", None)):
-            raise HoldoutRunnerError("pixel runtime module file does not match RECORD")
-        identities[distribution_name] = relative
+        _verified_record_file(distribution, matched, native=False)
+        if not native_entries:
+            raise HoldoutRunnerError("pixel runtime distribution has no native files")
+        verified_native_paths = []
+        for native_relative, native_entry in sorted(native_entries):
+            _verified_record_file(distribution, native_entry, native=True)
+            verified_native_paths.append(native_relative)
+        identities[distribution_name] = {
+            "entry_module": relative,
+            "native_files": verified_native_paths,
+        }
     return identities
 
 
@@ -192,6 +227,7 @@ def frozen_recognizer_artifact_sha256() -> str:
             name: relative
             for name, (_, relative) in PINNED_RUNTIME_MODULES.items()
         },
+        "runtime_native_record_policy": RUNTIME_NATIVE_RECORD_POLICY,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
