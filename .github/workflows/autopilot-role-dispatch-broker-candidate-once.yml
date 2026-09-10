@@ -1,0 +1,88 @@
+name: Autopilot role-dispatch broker candidate once
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - '.github/workflows/autopilot-role-dispatch-broker-candidate-once.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      CANDIDATE_HOST: bridge-school-autopilot-39h380d3y-olegmed1-4368s-projects.vercel.app
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Verify candidate through existing root-only bypass
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/id_oracle"
+          known="$RUNNER_TEMP/known_hosts"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env CANDIDATE_HOST='$CANDIDATE_HOST' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          root=/opt/bridge-school/school-autopilot
+          env_file="$root/autopilot-broker.env"
+          [[ "$(stat -c '%U:%G:%a' "$env_file")" == root:root:600 ]]
+          set -a
+          source "$env_file"
+          set +a
+          [[ "$CANDIDATE_HOST" =~ ^bridge-school-autopilot-[a-z0-9]+-olegmed1-4368s-projects\.vercel\.app$ ]]
+          test -n "$AUTOPILOT_VERCEL_BYPASS_SECRET"
+          work="$(mktemp -d /var/tmp/autopilot-broker-candidate.XXXXXXXX)"
+          trap 'find "$work" -depth -delete' EXIT HUP INT TERM
+          curl --fail --silent --show-error --location --max-redirs 0 \
+            --connect-timeout 10 --max-time 45 \
+            -H "x-vercel-protection-bypass: $AUTOPILOT_VERCEL_BYPASS_SECRET" \
+            "https://$CANDIDATE_HOST/healthz" -o "$work/health.json"
+          HEALTH="$work/health.json" python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          payload = json.load(open(os.environ["HEALTH"], encoding="utf-8"))
+          assert payload.get("status") == "ok"
+          assert payload.get("service") == "school-autopilot-github-token-broker"
+          assert payload.get("preview_only") is True
+          assert payload.get("production_mutations_enabled") is False
+          assert payload.get("raw_installation_token_exposed") is False
+          assert payload.get("bounded_role_dispatch_enabled") is True
+          assert payload.get("broker_policy_version") == "physical-no-merge-v2"
+          assert payload.get("source_attested") is True
+          assert payload.get("artifact_attested") is True
+          assert re.fullmatch(r"[0-9a-f]{40}", payload["source_revision"])
+          for key in ("artifact_sha256", "policy_sha256", "provenance_sha256"):
+              assert re.fullmatch(r"[0-9a-f]{64}", payload[key])
+          print("AUTOPILOT_ROLE_DISPATCH_BROKER_CANDIDATE=PASS")
+          print(f"BROKER_SOURCE_SHA={payload['source_revision']}")
+          print(f"BROKER_ARTIFACT_SHA256={payload['artifact_sha256']}")
+          print(f"BROKER_POLICY_SHA256={payload['policy_sha256']}")
+          print(f"BROKER_PROVENANCE_SHA256={payload['provenance_sha256']}")
+          PY
+          echo 'PLAINTEXT_SECRET_EXPOSED=NO'
+          echo 'SERVER_ENV_MUTATED=NO'
+          echo 'AUTOPILOT_SERVICE_RESTARTED=NO'
+          REMOTE
