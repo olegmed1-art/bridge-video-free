@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,8 @@ ACTOR_ID = 315_099_490
 APP_SLUG = "chatgpt-codex-connector"
 APP_ID = 1_144_995
 ROLES = frozenset({"RECOGNIZER", "VIDEO", "BOOKS", "KNOWLEDGE"})
+DISPATCH_NOT_SENT = "AUTOPILOT_CALLBACK_DISPATCH_NOT_SENT"
+DISPATCH_NOT_SENT_RETRY_DELAYS_SECONDS = (1, 2, 4, 8)
 FIELDS = (
     "dispatch_id",
     "dispatch_epoch",
@@ -222,10 +225,33 @@ def ingest_callback(dsn: str, callback: RoleCallback) -> tuple[bool, str]:
     return bool(row[0]), str(row[1])
 
 
+def ingest_callback_with_retry(
+    dsn: str,
+    callback: RoleCallback,
+    *,
+    sleeper: Any = time.sleep,
+) -> tuple[bool, str]:
+    """Retry only the bounded outbox publish/mark race.
+
+    Every other database or contract failure remains immediate and fail-closed.
+    Duplicate delivery after an uncertain response is safe because the RPC is
+    idempotent on the provider event identifier and payload fingerprint.
+    """
+
+    for attempt, delay in enumerate((*DISPATCH_NOT_SENT_RETRY_DELAYS_SECONDS, None)):
+        try:
+            return ingest_callback(dsn, callback)
+        except psycopg.Error as exc:
+            if DISPATCH_NOT_SENT not in str(exc) or delay is None:
+                raise
+            sleeper(delay)
+    raise AssertionError("unreachable")
+
+
 def main() -> None:
     event_path = Path(os.environ["GITHUB_EVENT_PATH"])
     callback = parse_issue_comment_event(json.loads(event_path.read_text(encoding="utf-8")))
-    accepted, state = ingest_callback(
+    accepted, state = ingest_callback_with_retry(
         os.environ["AUTOPILOT_CALLBACK_DATABASE_URL"], callback
     )
     print(json.dumps({"accepted": accepted, "resulting_state": state}, sort_keys=True))
