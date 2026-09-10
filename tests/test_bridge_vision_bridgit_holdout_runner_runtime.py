@@ -205,6 +205,34 @@ def test_loaded_native_file_must_belong_to_frozen_distribution(
         runner._verify_imported_runtime_modules()
 
 
+def test_isolated_probe_rejects_loader_injection(monkeypatch):
+    monkeypatch.setenv("LD_PRELOAD", "/tmp/shadow.so")
+    with pytest.raises(runner.HoldoutRunnerError, match="loader injection"):
+        runner._isolated_runtime_probe()
+
+
+def test_isolated_probe_uses_file_limited_outputs(tmp_path, monkeypatch):
+    expected = {
+        name: {
+            "entry_module": f"/runtime/{module_name}/__init__.py",
+            "loaded_native_files": [f"/runtime/{module_name}/native.so"],
+        }
+        for name, (module_name, _) in runner.PINNED_RUNTIME_MODULES.items()
+    }
+
+    def fake_run(_argv, **kwargs):
+        assert "capture_output" not in kwargs
+        assert kwargs["stdout"].name.endswith("stdout")
+        assert kwargs["stderr"].name.endswith("stderr")
+        assert kwargs["preexec_fn"] is not None
+        kwargs["stdout"].write(json.dumps(expected).encode())
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner.tempfile, "gettempdir", lambda: str(tmp_path))
+    assert runner._isolated_runtime_probe() == expected
+
+
 def test_cli_keeps_output_parent_pinned_across_symlink_retarget(tmp_path, monkeypatch):
     if not hasattr(os, "symlink"):
         pytest.skip("symlink support required")

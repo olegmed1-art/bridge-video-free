@@ -60,6 +60,9 @@ PINNED_RUNTIME_MODULES = {
 RUNTIME_NATIVE_RECORD_POLICY = "all-distribution-native-records-v1"
 RUNTIME_PROBE_TIMEOUT_SECONDS = 30
 MAX_RUNTIME_PROBE_BYTES = 1024 * 1024
+LOADER_INJECTION_ENV_VARS = frozenset(
+    {"LD_AUDIT", "LD_LIBRARY_PATH", "LD_PRELOAD"}
+)
 
 _ISOLATED_RUNTIME_PROBE = r'''
 import importlib
@@ -199,26 +202,56 @@ def _verified_record_file(distribution: Any, entry: Any, *, native: bool) -> Pat
 
 
 def _isolated_runtime_probe() -> dict[str, Any]:
+    if any(os.environ.get(key) for key in LOADER_INJECTION_ENV_VARS):
+        raise HoldoutRunnerError("pixel runtime loader injection is not allowed")
     environment = {
         key: value
         for key, value in os.environ.items()
-        if key not in {"PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP"}
+        if key
+        not in {
+            "PYTHONHOME",
+            "PYTHONPATH",
+            "PYTHONSTARTUP",
+            *LOADER_INJECTION_ENV_VARS,
+        }
     }
+    with tempfile.TemporaryDirectory(prefix="bridgit-runtime-probe-") as temporary:
+        stdout_path = Path(temporary) / "stdout"
+        stderr_path = Path(temporary) / "stderr"
+
+        def limit_probe_files() -> None:
+            resource.setrlimit(
+                resource.RLIMIT_FSIZE,
+                (MAX_RUNTIME_PROBE_BYTES, MAX_RUNTIME_PROBE_BYTES),
+            )
+
+        try:
+            with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+                completed = subprocess.run(
+                    [sys.executable, "-I", "-c", _ISOLATED_RUNTIME_PROBE],
+                    check=False,
+                    stdout=stdout,
+                    stderr=stderr,
+                    cwd=temporary,
+                    env=environment,
+                    timeout=RUNTIME_PROBE_TIMEOUT_SECONDS,
+                    preexec_fn=limit_probe_files,
+                )
+            if (
+                completed.returncode != 0
+                or stdout_path.stat().st_size > MAX_RUNTIME_PROBE_BYTES
+                or stderr_path.stat().st_size > MAX_RUNTIME_PROBE_BYTES
+            ):
+                raise HoldoutRunnerError("isolated pixel runtime probe failed")
+            payload = _read_bounded_regular_file(
+                stdout_path, MAX_RUNTIME_PROBE_BYTES, "runtime probe output"
+            )
+        except HoldoutRunnerError:
+            raise
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise HoldoutRunnerError("isolated pixel runtime probe failed") from exc
     try:
-        completed = subprocess.run(
-            [sys.executable, "-I", "-c", _ISOLATED_RUNTIME_PROBE],
-            check=False,
-            capture_output=True,
-            cwd=tempfile.gettempdir(),
-            env=environment,
-            timeout=RUNTIME_PROBE_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HoldoutRunnerError("isolated pixel runtime probe failed") from exc
-    if completed.returncode != 0 or len(completed.stdout) > MAX_RUNTIME_PROBE_BYTES:
-        raise HoldoutRunnerError("isolated pixel runtime probe failed")
-    try:
-        result = json.loads(completed.stdout)
+        result = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HoldoutRunnerError("isolated pixel runtime probe is invalid") from exc
     if not isinstance(result, Mapping):
