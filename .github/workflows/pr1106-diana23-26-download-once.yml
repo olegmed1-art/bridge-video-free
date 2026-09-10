@@ -18,7 +18,7 @@ jobs:
     if: >-
       github.repository == 'olegmed1-art/bridge-video-free' &&
       github.actor == 'olegmed1-art' &&
-      github.event.before == '95ba3ab9b743bf8d78570bff88ee48d1351906eb'
+      github.event.before == 'ec4fa8bdeb9cf28a31786d60d599813b0cd9fa58'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -79,7 +79,7 @@ jobs:
               [[ ! -L "$parent" && ! -L "$root" ]]
               install -d -m 0700 "$parent" "$root"
               [[ "$(stat -c "%U:%G:%a" "$root")" == ubuntu:ubuntu:700 ]]
-              df -PB1 --output=avail /home/ubuntu | tail -n1')"
+              df -B1 --output=avail /home/ubuntu | tail -n1')"
           [[ "$remote_capacity" =~ ^[0-9]+$ ]]
           required=$((EXPECTED_TOTAL_BYTES + MIN_FREE_AFTER_BYTES))
           (( remote_capacity >= required ))
