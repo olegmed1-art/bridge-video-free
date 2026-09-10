@@ -89,10 +89,17 @@ jobs:
           source "$RUNNER_TEMP/target.env"
           vnic_id="$(oci compute vnic-attachment list --compartment-id "$COMPARTMENT_ID" --instance-id "$INSTANCE_ID" --all --query 'data[0]."vnic-id"' --raw-output)"
           public_ip="$(oci network vnic get --vnic-id "$vnic_id" --query 'data."public-ip"' --raw-output)"
-          [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'LIGHT_PUBLIC_IP_PRESENT=YES'
+          else
+            echo 'LIGHT_PUBLIC_IP_PRESENT=NO' >&2
+            exit 40
+          fi
           known="$RUNNER_TEMP/known_hosts"
-          ssh-keyscan -T 15 -t ed25519,rsa "$public_ip" 2>/dev/null > "$known"
-          [[ -s "$known" ]]
+          ssh-keyscan -T 15 -t ed25519,rsa "$public_ip" 2>/dev/null > "$known" || true
+          key_count="$(wc -l < "$known")"
+          echo "LIGHT_SSH_HOST_KEYS=$key_count"
+          [[ "$key_count" -ge 1 ]] || exit 44
           chmod 0600 "$known"
           selected=''
           for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
