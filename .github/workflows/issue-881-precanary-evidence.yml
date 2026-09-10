@@ -2,22 +2,6 @@ name: Issue 881 Exact Pre-Canary Evidence
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/issue-881-precanary-evidence.yml'
-      - '.github/workflows/issue-881-authoritative-external-evidence.yml'
-      - '.github/workflows/oracle-universal-video-container-evidence.yml'
-      - 'deploy/oracle-universal-video/Dockerfile'
-      - 'ops/oracle_universal_video_container_install.sh'
-      - 'ops/oracle_universal_video_precanary_attest.sh'
-      - 'ops/oracle_universal_video_run_command.sh'
-      - 'ops/validate_video_queue_dsn.py'
-      - 'universal_video/**'
-      - 'bridge_vision/**'
-      - 'bridge_contracts/**'
-      - 'database/**'
-      - 'bridge_*.py'
-      - 'route_drive_job_outputs.py'
-      - 'requirements-worker.txt'
 
 permissions:
   contents: read
@@ -47,12 +31,23 @@ jobs:
           [[ "$EXACT_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXACT_SHA"
           grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
+          bash -n ops/issue_881_external_precanary_workflow.sh
           bash -n ops/oracle_universal_video_precanary_attest.sh
           bash -n ops/oracle_universal_video_container_install.sh
+          python3 -m py_compile ops/issue_881_codex_review_gate.py \
+            ops/issue_881_precanary_one_shot.py \
+            ops/issue_881_precanary_queue_proof.py \
+            ops/verify_oci_instance_command_executions.py
           grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'bash "$PREPARE_SCRIPT"' ops/oracle_universal_video_precanary_attest.sh
-          grep -F 'restore_service "$SOURCE_SERVICE" "$source_state_before"' ops/oracle_universal_video_precanary_attest.sh
-          grep -F 'restore_service "$CONTAINER_SERVICE" "$container_target_state"' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'restore_service "$SOURCE_SERVICE" "$source_target_state"' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'start_container_under_fence' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'validate_started_container_after_fence' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'verify_postrestore_runtime_queue' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'verify_postrestore_owner_release' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'UNIVERSAL_VIDEO_QUEUE_PROOF_SHA256' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM=0' ops/oracle_universal_video_precanary_attest.sh
+          ! grep -F 'find "$root_cache"' ops/oracle_universal_video_precanary_attest.sh
           grep -F '"$image_id" "$@"' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'UNIVERSAL_VIDEO_IMAGE=$image_id' ops/oracle_universal_video_container_install.sh
           grep -F '"$image_id" true' ops/oracle_universal_video_container_install.sh
@@ -64,19 +59,53 @@ jobs:
         run: |
           set -euo pipefail
           workflow=.github/workflows/issue-881-authoritative-external-evidence.yml
+          runner=ops/issue_881_external_precanary_workflow.sh
           grep -F 'director_go:' "$workflow"
+          grep -F 'approval_receipt_id:' "$workflow"
+          grep -F 'approval_nonce:' "$workflow"
           grep -F 'github.actor == github.repository_owner' "$workflow"
           grep -F "github.repository == 'olegmed1-art/bridge-video-free'" "$workflow"
-          grep -F 'verify_live_gate(){' "$workflow"
-          test "$(grep -c '^[[:space:]]*verify_live_gate$' "$workflow")" -eq 2
-          grep -F 'root_pr_number=991' "$workflow"
-          grep -F 'prior_gate_pr_number=1070' "$workflow"
-          grep -F 'pr_number=1071' "$workflow"
-          grep -F 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' "$workflow"
-          grep -F 'Root Autopilot PR #991 is not merged' "$workflow"
-          grep -F 'git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA"' "$workflow"
-          grep -F 'Reviewed head has no current independent approval at final reconciliation' "$workflow"
-          grep -F 'exact clean Codex bot receipt' "$workflow"
+          grep -F 'run: bash ops/issue_881_external_precanary_workflow.sh' "$workflow"
+          ! grep -F '$''{{' "$runner"
+          grep -F 'verify_live_gate(){' "$runner"
+          test "$(grep -c '^[[:space:]]*verify_live_gate$' "$runner")" -eq 2
+          grep -F 'verify_one_shot_gate(){' "$runner"
+          test "$(grep -c '^[[:space:]]*verify_one_shot_gate$' "$runner")" -eq 2
+          test "$(( $(grep -c 'issue_881_precanary_one_shot.py verify' "$workflow") + $(grep -c 'issue_881_precanary_one_shot.py verify' "$runner") ))" -eq 2
+          grep -F 'verify_no_competing_infrastructure_runs(){' "$runner"
+          grep -F 'UNIVERSAL_VIDEO_PRECANARY_INFRASTRUCTURE_EXCLUSIVE' "$runner"
+          grep -F 'verify_no_active_instance_agent_commands(){' "$runner"
+          grep -F 'instance-agent command-execution list' "$runner"
+          grep -F -- '--instance-id "$INSTANCE_ID"' "$runner"
+          grep -F 'UNIVERSAL_VIDEO_PRECANARY_OCI_INSTANCE_COMMAND_EXCLUSIVE' "$runner"
+          grep -F 'ops/verify_oci_instance_command_executions.py' "$runner"
+          grep -F 'root_pr_number=991' "$runner"
+          grep -F 'prior_gate_pr_number=1070' "$runner"
+          grep -F 'protected_gate_paths=(' "$runner"
+          grep -F "'ops/issue_881_external_precanary_workflow.sh'" "$runner"
+          grep -F "'ops/issue_881_codex_review_gate.py'" "$runner"
+          ! grep -F 'issue_881_codex_review_gate.py verify' "$runner"
+          grep -F "'ops/oracle_known_hosts_from_scan.sh'" "$runner"
+          grep -F "'.github/workflows/oracle-universal-video-admin.yml'" "$runner"
+          grep -F "oracle-universal-video-admin-pr-{0}" \
+            .github/workflows/oracle-universal-video-admin.yml
+          grep -F "'oracle-instance-workload-mutation'" \
+            .github/workflows/oracle-universal-video-admin.yml
+          grep -F "'.github/workflows/oracle-universal-video-container-promote.yml'" "$runner"
+          grep -F "'ops/oracle_universal_video_container_promote.sh'" "$runner"
+          grep -F 'commits/$gate_commit/pulls' "$runner"
+          grep -F 'git diff --quiet "$reviewed_sha" "$gate_commit"' "$runner"
+          grep -F 'Protected gate files changed after the reviewed merge' "$runner"
+          grep -F 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' "$runner"
+          grep -F 'Root Autopilot PR #991 is not merged' "$runner"
+          grep -F 'git merge-base --is-ancestor "$gate_merge_sha" "$EXACT_SHA"' "$runner"
+          grep -F 'Codex reviewed-commit prefix is not unique to the exact head' "$runner"
+          grep -F 'reviewed head has no current independent approval or exact clean Codex bot receipt' \
+            ops/issue_881_codex_review_gate.py
+          grep -F 'issue_881_precanary_queue_proof.py owner-before' "$workflow"
+          grep -F 'issue_881_precanary_queue_proof.py owner-release-gate' "$runner"
+          grep -F 'UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE' "$runner"
+          grep -F 'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_RUNTIME' "$runner"
           retired=.github/workflows/oracle-universal-video-container-evidence.yml
           grep -F 'UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true' "$retired"
           ! grep -E 'workflow[_]dispatch:' "$retired"

@@ -1,3 +1,6 @@
+import os
+import subprocess
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +98,60 @@ def test_workflow_accepts_only_two_operations_and_one_instance():
     assert "--timeout-in-seconds 3600" in WORKFLOW
     assert "UNIVERSAL_VIDEO_OCI_ADMIN_REMOTE_PASS" in WORKFLOW
     assert "UNIVERSAL_VIDEO_OCI_ADMIN_EXTERNAL_DDS3_PASS" in WORKFLOW
+    assert "Reconcile exact OCI command termination" in WORKFLOW
+    assert "instance-agent command cancel --command-id" in WORKFLOW
+    assert "UNIVERSAL_VIDEO_OCI_ADMIN_RECONCILE" in WORKFLOW
+
+
+def test_workflow_reconciliation_cancels_and_proves_exact_command_terminal(
+    tmp_path: Path,
+):
+    step_start = WORKFLOW.index("      - name: Reconcile exact OCI command termination")
+    script_start = WORKFLOW.index("        run: |\n", step_start) + len("        run: |\n")
+    script_end = WORKFLOW.index("\n\n      - name:", script_start)
+    script = textwrap.dedent(WORKFLOW[script_start:script_end])
+    command_id = "ocid1.instanceagentcommand.oc1.synthetic"
+    command_file = tmp_path / "uv-admin-command-id"
+    command_file.write_text(f"{command_id}\n", encoding="utf-8")
+    command_file.chmod(0o600)
+    cancel_file = tmp_path / "cancelled"
+    harness = f"""\
+oci(){{
+  case "$*" in
+    *"command-execution get"*)
+      if [[ -e "$CANCEL_FILE" ]]; then
+        printf '%s\\n' '{{"data":{{"lifecycle-state":"CANCELED"}}}}'
+      else
+        printf '%s\\n' '{{"data":{{"lifecycle-state":"IN_PROGRESS"}}}}'
+      fi
+      ;;
+    *"command cancel"*) : > "$CANCEL_FILE" ;;
+    *) return 64 ;;
+  esac
+}}
+sleep(){{ :; }}
+{script}
+"""
+    completed = subprocess.run(
+        ["bash"],
+        input=harness,
+        text=True,
+        capture_output=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "RUNNER_TEMP": str(tmp_path),
+            "INSTANCE_ID": "ocid1.instance.oc1.synthetic",
+            "OUTPUT_COMMAND_ID": command_id,
+            "CANCEL_FILE": str(cancel_file),
+        },
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert cancel_file.exists()
+    assert (
+        "UNIVERSAL_VIDEO_OCI_ADMIN_RECONCILE command_created=true "
+        "lifecycle=CANCELED result=PASS"
+    ) in completed.stdout
 
 
 def test_workflow_reuses_the_proven_bounded_oci_config_contract():

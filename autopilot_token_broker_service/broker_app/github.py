@@ -1,8 +1,7 @@
-"""Fail-closed GitHub App client and bounded draft-repair executor.
+"""Fail-closed GitHub App client for bounded Autopilot operations.
 
-The installation credential never leaves this process. The only credentialed
-operation is the exact server-side sequence required to create Git objects, one
-new namespaced branch, and one draft pull request.
+The installation credential never leaves this process. Each endpoint mints a
+separately scoped token and can execute only its finite server-side graph.
 """
 
 from __future__ import annotations
@@ -22,7 +21,11 @@ from typing import Any, Mapping
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from broker_app.policy import ALLOWED_PATH_PATTERNS, DraftRepairRequest
+from broker_app.policy import (
+    ALLOWED_PATH_PATTERNS,
+    DraftRepairRequest,
+    RoleDispatchRequest,
+)
 
 
 GITHUB_API_URL = "https://api.github.com"
@@ -35,13 +38,21 @@ TOKEN_PERMISSIONS = {
     "contents": "write",
     "pull_requests": "write",
 }
+ROLE_DISPATCH_TOKEN_PERMISSIONS = {
+    "contents": "write",
+    "pull_requests": "write",
+}
 TOKEN_RESPONSE_LIMIT_BYTES = 32_768
 API_RESPONSE_LIMIT_BYTES = 65_536
 HTTP_TIMEOUT_SECONDS = 15
-BROKER_POLICY_VERSION = "physical-no-merge-v1"
+BROKER_POLICY_VERSION = "physical-no-merge-v2"
+ROLE_DISPATCH_MAILBOX_PR = 1150
+ROLE_DISPATCH_BOT_LOGIN = "bridge-school-oracle-autopilot[bot]"
 
 _SHA = r"[0-9a-f]{40}"
 _REPAIR_BRANCH = r"autopilot/repair/[0-9a-f]{16}"
+_UUID4 = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+_ROLE_DISPATCH_BRANCH = rf"autopilot/dispatch/{_UUID4}"
 _ALLOWED_EXACT_OPERATIONS = (
     ("GET", "/repos/olegmed1-art/bridge-video-free/git/ref/heads/main"),
     ("POST", "/repos/olegmed1-art/bridge-video-free/git/blobs"),
@@ -76,6 +87,13 @@ def broker_policy_sha256() -> str:
         "repository": REPOSITORY_FULL_NAME,
         "sha_pattern": _SHA,
         "token_permissions": TOKEN_PERMISSIONS,
+        "role_dispatch_token_permissions": ROLE_DISPATCH_TOKEN_PERMISSIONS,
+        "role_dispatch_mailbox_pr": ROLE_DISPATCH_MAILBOX_PR,
+        "role_dispatch_bot_login": ROLE_DISPATCH_BOT_LOGIN,
+        "role_dispatch_branch_pattern": _ROLE_DISPATCH_BRANCH,
+        "role_dispatch_file_pattern": (
+            rf"docs/evidence/autopilot/role-dispatch-{_UUID4}\.md"
+        ),
     }
     return hashlib.sha256(_canonical_json(policy)).hexdigest()
 
@@ -193,7 +211,10 @@ def build_app_jwt(config: BrokerConfig, *, now_epoch: int) -> str:
 
 
 def _validate_token_response(
-    payload: Any, *, now_epoch: int
+    payload: Any,
+    *,
+    now_epoch: int,
+    expected_permissions: Mapping[str, str] = TOKEN_PERMISSIONS,
 ) -> InstallationCredential:
     if not isinstance(payload, dict):
         raise BrokerContractError("GITHUB_TOKEN_RESPONSE_INVALID")
@@ -215,10 +236,10 @@ def _validate_token_response(
     ):
         raise BrokerContractError("GITHUB_TOKEN_RESPONSE_INVALID")
 
-    for permission, access in TOKEN_PERMISSIONS.items():
+    for permission, access in expected_permissions.items():
         if permissions.get(permission) != access:
             raise BrokerContractError("GITHUB_TOKEN_PERMISSIONS_INVALID")
-    unexpected_permissions = set(permissions) - set(TOKEN_PERMISSIONS) - {"metadata"}
+    unexpected_permissions = set(permissions) - set(expected_permissions) - {"metadata"}
     if unexpected_permissions or permissions.get("metadata") not in {None, "read"}:
         raise BrokerContractError("GITHUB_TOKEN_PERMISSIONS_INVALID")
 
@@ -275,8 +296,12 @@ def issue_installation_token(
     *,
     now_epoch: int,
     opener: Any | None = None,
+    permissions: Mapping[str, str] = TOKEN_PERMISSIONS,
 ) -> InstallationCredential:
     """Mint one repository- and permission-scoped internal credential."""
+
+    if dict(permissions) not in (TOKEN_PERMISSIONS, ROLE_DISPATCH_TOKEN_PERMISSIONS):
+        raise BrokerConfigurationError("GITHUB_TOKEN_PERMISSIONS_INVALID")
 
     app_jwt = build_app_jwt(config, now_epoch=now_epoch)
     path = f"/app/installations/{config.installation_id}/access_tokens"
@@ -284,7 +309,7 @@ def issue_installation_token(
         f"{GITHUB_API_URL}{path}",
         data=_canonical_json(
             {
-                "permissions": TOKEN_PERMISSIONS,
+                "permissions": dict(permissions),
                 "repositories": [REPOSITORY_NAME],
             }
         ),
@@ -303,7 +328,9 @@ def issue_installation_token(
         response_limit=TOKEN_RESPONSE_LIMIT_BYTES,
         opener=opener,
     )
-    return _validate_token_response(payload, now_epoch=now_epoch)
+    return _validate_token_response(
+        payload, now_epoch=now_epoch, expected_permissions=permissions
+    )
 
 
 def _authorize_github_operation(*, method: str, path: str) -> None:
@@ -334,11 +361,13 @@ def _authorize_github_operation(*, method: str, path: str) -> None:
         raise BrokerContractError("GITHUB_OPERATION_NOT_ALLOWED")
     if (method, clean_path) in _ALLOWED_EXACT_OPERATIONS and not parsed.query:
         return
-    if method == "GET" and re.fullmatch(
-        rf"{re.escape(REPOSITORY_API_PATH)}/git/ref/heads/{_REPAIR_BRANCH}",
-        clean_path,
-    ) and not parsed.query:
-        return
+    if method == "GET" and not parsed.query:
+        for branch_pattern in (_REPAIR_BRANCH, _ROLE_DISPATCH_BRANCH):
+            if re.fullmatch(
+                rf"{re.escape(REPOSITORY_API_PATH)}/git/ref/heads/{branch_pattern}",
+                clean_path,
+            ):
+                return
     if method == "GET" and re.fullmatch(
         rf"{re.escape(REPOSITORY_API_PATH)}/git/commits/{_SHA}", clean_path
     ) and not parsed.query:
@@ -361,9 +390,12 @@ def _authorize_github_operation(*, method: str, path: str) -> None:
             and query["base"] == ["main"]
             and query["per_page"] == ["2"]
             and query["state"] == ["all"]
-            and re.fullmatch(
-                rf"{re.escape(REPOSITORY_OWNER)}:{_REPAIR_BRANCH}",
-                query.get("head", [""])[0],
+            and any(
+                re.fullmatch(
+                    rf"{re.escape(REPOSITORY_OWNER)}:{branch_pattern}",
+                    query.get("head", [""])[0],
+                )
+                for branch_pattern in (_REPAIR_BRANCH, _ROLE_DISPATCH_BRANCH)
             )
         ):
             return
@@ -791,4 +823,374 @@ def execute_bounded_draft_repair(
         "merge_allowed": False,
         "production_mutation": False,
         "operation_count": 8 + 2 * len(request.changes),
+    }
+
+
+def role_dispatch_comment_body(request: RoleDispatchRequest) -> str:
+    """Render the complete public dispatch envelope deterministically."""
+
+    return "\n".join(
+        (
+            "AUTOPILOT_DISPATCH_V1",
+            f"dispatch_id={request.dispatch_id}",
+            f"dispatch_epoch={request.dispatch_epoch}",
+            f"role={request.role}",
+            f"task_fingerprint={request.task_fingerprint}",
+            f"target_pr={request.target_pr}",
+            f"mode={request.mode}",
+        )
+    )
+
+
+def role_dispatch_branch_name(request: RoleDispatchRequest) -> str:
+    return f"autopilot/dispatch/{request.dispatch_id}"
+
+
+def role_dispatch_file_path(request: RoleDispatchRequest) -> str:
+    return f"docs/evidence/autopilot/role-dispatch-{request.dispatch_id}.md"
+
+
+def _role_dispatch_title(request: RoleDispatchRequest) -> str:
+    return f"[Autopilot dispatch] {request.role} {request.dispatch_id}"
+
+
+def _role_dispatch_ref(request: RoleDispatchRequest) -> str:
+    return f"refs/heads/{role_dispatch_branch_name(request)}"
+
+
+def _role_dispatch_ref_sha(payload: object, request: RoleDispatchRequest) -> str:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("ref") != _role_dispatch_ref(request)
+        or not isinstance(payload.get("object"), dict)
+    ):
+        raise DraftRepairConflictError("GITHUB_ROLE_DISPATCH_BRANCH_CHANGED")
+    return _sha(
+        payload["object"].get("sha"),
+        error="GITHUB_ROLE_DISPATCH_BRANCH_INVALID",
+    )
+
+
+def _role_dispatch_parent_sha(payload: object, *, expected_sha: str) -> str:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("sha") != expected_sha
+        or not isinstance(payload.get("parents"), list)
+        or len(payload["parents"]) != 1
+        or not isinstance(payload["parents"][0], dict)
+    ):
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_COMMIT_INVALID")
+    return _sha(
+        payload["parents"][0].get("sha"),
+        error="GITHUB_ROLE_DISPATCH_COMMIT_INVALID",
+    )
+
+
+def _build_role_dispatch_commit(
+    credential: InstallationCredential,
+    request: RoleDispatchRequest,
+    *,
+    base_sha: str,
+    opener: Any | None,
+) -> str:
+    """Create the deterministic one-file commit used as the PR wake event."""
+
+    base_commit = _api_json(
+        credential,
+        method="GET",
+        path=f"{REPOSITORY_API_PATH}/git/commits/{base_sha}",
+        expected_status=200,
+        opener=opener,
+    )
+    base_tree_sha, base_date = _base_commit_contract(
+        base_commit, expected_sha=base_sha
+    )
+    envelope = role_dispatch_comment_body(request)
+    blob_payload = _api_json(
+        credential,
+        method="POST",
+        path=f"{REPOSITORY_API_PATH}/git/blobs",
+        expected_status=201,
+        body={"content": envelope, "encoding": "utf-8"},
+        opener=opener,
+    )
+    if not isinstance(blob_payload, dict):
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_BLOB_INVALID")
+    blob_sha = _sha(
+        blob_payload.get("sha"), error="GITHUB_ROLE_DISPATCH_BLOB_INVALID"
+    )
+    tree_payload = _api_json(
+        credential,
+        method="POST",
+        path=f"{REPOSITORY_API_PATH}/git/trees",
+        expected_status=201,
+        body={
+            "base_tree": base_tree_sha,
+            "tree": [
+                {
+                    "path": role_dispatch_file_path(request),
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": blob_sha,
+                }
+            ],
+        },
+        opener=opener,
+    )
+    if not isinstance(tree_payload, dict):
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_TREE_INVALID")
+    tree_sha = _sha(
+        tree_payload.get("sha"), error="GITHUB_ROLE_DISPATCH_TREE_INVALID"
+    )
+    identity = {
+        "name": "Bridge School Autopilot",
+        "email": "noreply@github.com",
+        "date": base_date,
+    }
+    commit_payload = _api_json(
+        credential,
+        method="POST",
+        path=f"{REPOSITORY_API_PATH}/git/commits",
+        expected_status=201,
+        body={
+            "message": f"autopilot: role dispatch {request.dispatch_id}",
+            "parents": [base_sha],
+            "tree": tree_sha,
+            "author": identity,
+            "committer": identity,
+        },
+        opener=opener,
+    )
+    if not isinstance(commit_payload, dict):
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_COMMIT_INVALID")
+    return _sha(
+        commit_payload.get("sha"), error="GITHUB_ROLE_DISPATCH_COMMIT_INVALID"
+    )
+
+
+def _validate_role_dispatch_pull(
+    payload: object,
+    request: RoleDispatchRequest,
+    *,
+    expected_commit_sha: str,
+) -> tuple[int, str, str]:
+    if not isinstance(payload, dict):
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_PULL_INVALID")
+    number = payload.get("number")
+    html_url = payload.get("html_url")
+    head = payload.get("head")
+    base = payload.get("base")
+    user = payload.get("user")
+    if (
+        type(number) is not int
+        or not 1 <= number <= 1_000_000
+        or html_url != f"https://github.com/{REPOSITORY_FULL_NAME}/pull/{number}"
+        or payload.get("state") != "open"
+        or payload.get("draft") is not True
+        or payload.get("title") != _role_dispatch_title(request)
+        or payload.get("body") != role_dispatch_comment_body(request)
+        or not isinstance(head, dict)
+        or head.get("ref") != role_dispatch_branch_name(request)
+        or head.get("sha") != expected_commit_sha
+        or not isinstance(base, dict)
+        or base.get("ref") != "main"
+        or not isinstance(user, dict)
+        or user.get("type") != "Bot"
+        or user.get("login") != ROLE_DISPATCH_BOT_LOGIN
+    ):
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_PULL_INVALID")
+    return number, html_url, user["login"]
+
+
+def _find_existing_role_dispatch_pull(
+    credential: InstallationCredential,
+    request: RoleDispatchRequest,
+    *,
+    expected_commit_sha: str,
+    opener: Any | None,
+) -> tuple[int, str, str] | None:
+    query = urllib.parse.urlencode(
+        {
+            "base": "main",
+            "head": f"{REPOSITORY_OWNER}:{role_dispatch_branch_name(request)}",
+            "per_page": 2,
+            "state": "all",
+        }
+    )
+    payload = _api_json(
+        credential,
+        method="GET",
+        path=f"{REPOSITORY_API_PATH}/pulls?{query}",
+        expected_status=200,
+        opener=opener,
+        allow_list=True,
+    )
+    if not isinstance(payload, list):
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_PULL_LOOKUP_INVALID")
+    if not payload:
+        return None
+    if len(payload) != 1:
+        raise DraftRepairConflictError("GITHUB_ROLE_DISPATCH_PULL_AMBIGUOUS")
+    return _validate_role_dispatch_pull(
+        payload[0], request, expected_commit_sha=expected_commit_sha
+    )
+
+
+def _create_role_dispatch_pull(
+    credential: InstallationCredential,
+    request: RoleDispatchRequest,
+    *,
+    expected_commit_sha: str,
+    opener: Any | None,
+) -> tuple[int, str, str]:
+    try:
+        payload = _api_json(
+            credential,
+            method="POST",
+            path=f"{REPOSITORY_API_PATH}/pulls",
+            expected_status=201,
+            body={
+                "base": "main",
+                "body": role_dispatch_comment_body(request),
+                "draft": True,
+                "head": role_dispatch_branch_name(request),
+                "title": _role_dispatch_title(request),
+            },
+            opener=opener,
+        )
+    except DraftRepairConflictError:
+        existing = _find_existing_role_dispatch_pull(
+            credential,
+            request,
+            expected_commit_sha=expected_commit_sha,
+            opener=opener,
+        )
+        if existing is None:
+            raise
+        return existing
+    return _validate_role_dispatch_pull(
+        payload, request, expected_commit_sha=expected_commit_sha
+    )
+
+
+def execute_bounded_role_dispatch(
+    config: BrokerConfig,
+    request: RoleDispatchRequest,
+    *,
+    now_epoch: int,
+    opener: Any | None = None,
+) -> dict[str, object]:
+    """Create or adopt one exact public draft PR as the Work wake event."""
+
+    if request.prepared_at_epoch > now_epoch + 60:
+        raise BrokerContractError("ROLE_DISPATCH_PREPARED_AT_INVALID")
+    credential = issue_installation_token(
+        config,
+        now_epoch=now_epoch,
+        opener=opener,
+        permissions=ROLE_DISPATCH_TOKEN_PERMISSIONS,
+    )
+    branch_path = (
+        f"{REPOSITORY_API_PATH}/git/ref/heads/"
+        f"{role_dispatch_branch_name(request)}"
+    )
+    branch_payload = _api_json(
+        credential,
+        method="GET",
+        path=branch_path,
+        expected_status=200,
+        opener=opener,
+        not_found_ok=True,
+    )
+    replayed = branch_payload is not None
+    if branch_payload is None:
+        base_sha = _read_base_sha(credential, opener=opener)
+        expected_commit_sha = _build_role_dispatch_commit(
+            credential,
+            request,
+            base_sha=base_sha,
+            opener=opener,
+        )
+        if _read_base_sha(credential, opener=opener) != base_sha:
+            raise DraftRepairConflictError("GITHUB_BASE_SHA_CHANGED")
+        try:
+            branch_payload = _api_json(
+                credential,
+                method="POST",
+                path=f"{REPOSITORY_API_PATH}/git/refs",
+                expected_status=201,
+                body={"ref": _role_dispatch_ref(request), "sha": expected_commit_sha},
+                opener=opener,
+            )
+        except DraftRepairConflictError:
+            branch_payload = _api_json(
+                credential,
+                method="GET",
+                path=branch_path,
+                expected_status=200,
+                opener=opener,
+            )
+            replayed = True
+        branch_sha = _role_dispatch_ref_sha(branch_payload, request)
+        if branch_sha != expected_commit_sha:
+            raise DraftRepairConflictError("GITHUB_ROLE_DISPATCH_BRANCH_CHANGED")
+    else:
+        branch_sha = _role_dispatch_ref_sha(branch_payload, request)
+        commit_payload = _api_json(
+            credential,
+            method="GET",
+            path=f"{REPOSITORY_API_PATH}/git/commits/{branch_sha}",
+            expected_status=200,
+            opener=opener,
+        )
+        base_sha = _role_dispatch_parent_sha(
+            commit_payload, expected_sha=branch_sha
+        )
+        expected_commit_sha = _build_role_dispatch_commit(
+            credential,
+            request,
+            base_sha=base_sha,
+            opener=opener,
+        )
+        if branch_sha != expected_commit_sha:
+            raise DraftRepairConflictError("GITHUB_ROLE_DISPATCH_BRANCH_CHANGED")
+
+    existing = _find_existing_role_dispatch_pull(
+        credential,
+        request,
+        expected_commit_sha=expected_commit_sha,
+        opener=opener,
+    )
+    if existing is None:
+        pull_number, pull_url, author_login = _create_role_dispatch_pull(
+            credential,
+            request,
+            expected_commit_sha=expected_commit_sha,
+            opener=opener,
+        )
+        state = "created"
+    else:
+        pull_number, pull_url, author_login = existing
+        state = "existing"
+    return {
+        "status": state,
+        "repository": REPOSITORY_FULL_NAME,
+        "mailbox_pull_request": ROLE_DISPATCH_MAILBOX_PR,
+        "dispatch_id": request.dispatch_id,
+        "dispatch_epoch": request.dispatch_epoch,
+        "role": request.role,
+        "task_fingerprint": request.task_fingerprint,
+        "target_pr": request.target_pr,
+        "mode": request.mode,
+        "dispatch_branch": role_dispatch_branch_name(request),
+        "dispatch_commit_sha": expected_commit_sha,
+        "dispatch_file": role_dispatch_file_path(request),
+        "dispatch_pull_request": pull_number,
+        "dispatch_pull_request_url": pull_url,
+        "dispatch_author_login": author_login,
+        "dispatch_author_type": "Bot",
+        "draft": True,
+        "replayed": replayed,
+        "token_exposed": False,
+        "production_mutation": False,
     }

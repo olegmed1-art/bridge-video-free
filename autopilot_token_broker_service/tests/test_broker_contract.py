@@ -36,6 +36,7 @@ from broker_app.github import (
     load_config,
 )
 from broker_app.main import (
+    BUNDLED_SOURCE_REVISION,
     _require_broker_authorization,
     _require_preview_runtime,
     _require_source_attestation,
@@ -471,36 +472,29 @@ class BrokerContractTests(unittest.TestCase):
         self.assertFalse(payload["production_mutations_enabled"])
         self.assertFalse(payload["github_token_broker_enabled"])
         self.assertFalse(payload["raw_installation_token_exposed"])
-        self.assertEqual(payload["broker_policy_version"], "physical-no-merge-v1")
-        self.assertEqual(payload["source_revision"], "UNATTESTED")
-        self.assertFalse(payload["source_attested"])
+        self.assertEqual(payload["broker_policy_version"], "physical-no-merge-v2")
+        self.assertEqual(payload["source_revision"], BUNDLED_SOURCE_REVISION)
+        self.assertTrue(payload["source_attested"])
         self.assertRegex(payload["artifact_sha256"], r"^[0-9a-f]{64}$")
-        self.assertFalse(payload["artifact_attested"])
+        self.assertTrue(payload["artifact_attested"])
         self.assertRegex(payload["policy_sha256"], r"^[0-9a-f]{64}$")
         self.assertFalse(payload["merge_endpoint_enabled"])
         self.assertFalse(payload["ref_update_delete_enabled"])
 
     def test_source_attestation_is_exact_and_fail_closed(self):
         for value in ("", "main", "A" * 40, "a" * 39, "a" * 41):
-            with self.subTest(value=value), patch.dict(
-                os.environ, {"VERCEL_GIT_COMMIT_SHA": value}, clear=True
+            with self.subTest(value=value), patch(
+                "broker_app.main.BUNDLED_SOURCE_REVISION", value
             ), self.assertRaises(HTTPException) as context:
                 _require_source_attestation()
             self.assertEqual(context.exception.detail, "TOKEN_BROKER_SOURCE_UNATTESTED")
-        with patch.dict(
-            os.environ,
-            {
-                "VERCEL_GIT_COMMIT_SHA": "a" * 40,
-            },
-            clear=True,
-        ):
-            _require_source_attestation()
+        _require_source_attestation()
 
     def test_user_supplied_well_shaped_attestation_is_ignored(self):
         with patch.dict(os.environ, {
             "AUTOPILOT_BROKER_SOURCE_SHA": "a" * 40,
             "AUTOPILOT_BROKER_ARTIFACT_SHA256": "b" * 64,
-        }, clear=True), self.assertRaises(HTTPException):
+        }, clear=True):
             _require_source_attestation()
 
     def test_policy_digest_is_stable_and_bound_to_policy(self):
@@ -728,8 +722,8 @@ class BrokerContractTests(unittest.TestCase):
         self.assertEqual(response.headers["cache-control"], "no-store, max-age=0")
         self.assertEqual(response.headers["x-content-type-options"], "nosniff")
         self.assertIn('"token_exposed":false', body)
-        self.assertIn('"broker_policy_version":"physical-no-merge-v1"', body)
-        self.assertIn(f'"broker_source_sha":"{"a" * 40}"', body)
+        self.assertIn('"broker_policy_version":"physical-no-merge-v2"', body)
+        self.assertIn(f'"broker_source_sha":"{BUNDLED_SOURCE_REVISION}"', body)
         self.assertRegex(body, r'"broker_artifact_sha256":"[0-9a-f]{64}"')
         self.assertIn(f'"broker_policy_sha256":"{broker_policy_sha256()}"', body)
         self.assertRegex(body, r'"broker_provenance_sha256":"[0-9a-f]{64}"')

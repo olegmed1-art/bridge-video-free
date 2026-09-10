@@ -11,7 +11,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-assistant-lab-oci-diagnostic
+  group: oracle-instance-workload-mutation
   cancel-in-progress: false
 
 jobs:

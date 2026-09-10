@@ -17,12 +17,15 @@ from oracle_autopilot.contract import (
     validate_task_contract,
 )
 from oracle_autopilot.worker import (
+    _publish_role_dispatch,
     WorkerConfig,
     drain_ready,
+    drain_role_dispatch_outbox,
     execute_bounded_draft_repair,
     fetch_github_ci_snapshot,
     fetch_github_pr_snapshot,
     load_config,
+    load_role_dispatch_broker_config,
     load_token_broker_config,
     validate_neon_direct_dsn,
 )
@@ -47,7 +50,7 @@ BROKER_PROVENANCE_SHA256 = hashlib.sha256(
         {
             "artifact_sha256": BROKER_ARTIFACT_SHA256,
             "policy_sha256": BROKER_POLICY_SHA256,
-            "policy_version": "physical-no-merge-v1",
+            "policy_version": "physical-no-merge-v2",
             "source_sha": BROKER_SOURCE_SHA,
         },
         sort_keys=True,
@@ -75,13 +78,14 @@ def _approved_health_payload() -> dict[str, object]:
         "artifact_sha256": BROKER_ARTIFACT_SHA256,
         "policy_sha256": BROKER_POLICY_SHA256,
         "provenance_sha256": BROKER_PROVENANCE_SHA256,
-        "broker_policy_version": "physical-no-merge-v1",
+        "broker_policy_version": "physical-no-merge-v2",
         "source_attested": True,
         "artifact_attested": True,
         "preview_only": True,
         "production_mutations_enabled": False,
         "github_token_broker_enabled": True,
         "bounded_draft_executor_enabled": True,
+        "bounded_role_dispatch_enabled": True,
         "raw_installation_token_exposed": False,
         "merge_endpoint_enabled": False,
         "ref_update_delete_enabled": False,
@@ -279,6 +283,195 @@ def test_github_ci_task_is_exactly_bounded():
         )
 
 
+def test_chatgpt_role_dispatch_task_is_public_and_exactly_bounded():
+    valid_goal = {
+        "repository": "olegmed1-art/bridge-video-free",
+        "mailbox_pr": 1150,
+        "role": "VIDEO",
+        "target_pr": 1125,
+        "expected_head_sha": "a" * 40,
+        "dispatch_epoch": 1,
+        "successor_task_key": None,
+        "successor_role": None,
+        "successor_target_pr": None,
+        "successor_expected_head_sha": None,
+    }
+    validate_task_contract(
+        _task(
+            goal_type="CHATGPT_ROLE_DISPATCH_V1",
+            goal_json=valid_goal,
+            current_step_key="github.chatgpt.role.dispatch",
+        )
+    )
+
+    for bad_goal in (
+        {**valid_goal, "mailbox_pr": 881},
+        {**valid_goal, "role": "ARBITRARY"},
+        {**valid_goal, "private_prompt": "must never reach public GitHub"},
+        {**valid_goal, "successor_task_key": "next", "successor_role": None},
+    ):
+        with pytest.raises(AutopilotContractError):
+            validate_task_contract(
+                _task(
+                    goal_type="CHATGPT_ROLE_DISPATCH_V1",
+                    goal_json=bad_goal,
+                    current_step_key="github.chatgpt.role.dispatch",
+                )
+            )
+
+
+def test_role_dispatch_broker_config_pins_exact_endpoint():
+    draft_url = (
+        "https://bridge-school-autopilot-cslfiz83g-"
+        "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+    )
+    with patch.dict(
+        os.environ,
+        {
+            "AUTOPILOT_TOKEN_BROKER_URL": draft_url,
+            "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+            "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
+        },
+        clear=True,
+    ):
+        assert load_role_dispatch_broker_config().url == draft_url.replace(
+            "/draft-repair", "/role-dispatch"
+        )
+
+
+def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch):
+    dispatch_id = "462b8120-9039-4395-bbfb-2b4fbabdc486"
+    request_payload = {
+        "dispatch_id": dispatch_id,
+        "repository": "olegmed1-art/bridge-video-free",
+        "role": "VIDEO",
+        "target_pr": 1125,
+        "expected_head_sha": "a" * 40,
+        "dispatch_epoch": 1,
+        "task_fingerprint": "b" * 64,
+        "prepared_at_epoch": 1_789_150_000,
+    }
+    response_payload = {
+        "status": "created",
+        "repository": "olegmed1-art/bridge-video-free",
+        "mailbox_pull_request": 1150,
+        "dispatch_id": dispatch_id,
+        "dispatch_epoch": 1,
+        "role": "VIDEO",
+        "task_fingerprint": "b" * 64,
+        "target_pr": 1125,
+        "mode": "READ_ONLY",
+        "dispatch_branch": f"autopilot/dispatch/{dispatch_id}",
+        "dispatch_commit_sha": "c" * 40,
+        "dispatch_file": (
+            f"docs/evidence/autopilot/role-dispatch-{dispatch_id}.md"
+        ),
+        "dispatch_pull_request": 1152,
+        "dispatch_pull_request_url": (
+            "https://github.com/olegmed1-art/bridge-video-free/pull/1152"
+        ),
+        "dispatch_author_login": "bridge-school-oracle-autopilot[bot]",
+        "dispatch_author_type": "Bot",
+        "draft": True,
+        "replayed": False,
+        "token_exposed": False,
+        "production_mutation": False,
+        "broker_policy_version": "physical-no-merge-v2",
+        "broker_source_sha": BROKER_SOURCE_SHA,
+        "broker_artifact_sha256": BROKER_ARTIFACT_SHA256,
+        "broker_policy_sha256": BROKER_POLICY_SHA256,
+        "broker_provenance_sha256": BROKER_PROVENANCE_SHA256,
+    }
+    draft_url = (
+        "https://bridge-school-autopilot-cslfiz83g-"
+        "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+    )
+    role_url = draft_url.replace("/draft-repair", "/role-dispatch")
+
+    class Response:
+        status = 200
+
+        def __init__(self, url, payload):
+            self.url = url
+            self.payload = payload
+
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def geturl(self): return self.url
+        def read(self, _limit): return json.dumps(self.payload).encode()
+
+    class Opener:
+        @staticmethod
+        def open(request, **_kwargs):
+            if request.get_method() == "GET":
+                return Response(
+                    draft_url.replace("/v1/github/draft-repair", "/healthz"),
+                    _approved_health_payload(),
+                )
+            return Response(role_url, response_payload)
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+    with patch.dict(
+        os.environ,
+        {
+            "AUTOPILOT_TOKEN_BROKER_URL": draft_url,
+            "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+            "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
+        },
+        clear=True,
+    ):
+        result = _publish_role_dispatch(request_payload)
+        assert result["dispatch_pull_request"] == 1152
+        response_payload["dispatch_author_login"] = "different-valid-app[bot]"
+        with pytest.raises(AutopilotContractError, match="RESPONSE_INVALID"):
+            _publish_role_dispatch(request_payload)
+
+
+def test_role_dispatch_outbox_marks_exact_broker_draft_pr_sent(monkeypatch):
+    claimed = {
+        "dispatch_id": "462b8120-9039-4395-bbfb-2b4fbabdc486",
+        "repository": "olegmed1-art/bridge-video-free",
+        "mailbox_pr": 1150,
+        "role": "VIDEO",
+        "target_pr": 1125,
+        "expected_head_sha": "a" * 40,
+        "dispatch_epoch": 1,
+        "task_fingerprint": "b" * 64,
+        "prepared_at_epoch": 1789150000,
+        "claim_epoch": 2,
+        "attempt_no": 1,
+    }
+    calls = []
+    pending = [claimed]
+
+    def fake_rpc(_config, sql, params):
+        calls.append((sql, params))
+        if "claim_role_dispatch_outbox" in sql:
+            return pending.pop(0) if pending else None
+        if "mark_role_dispatch_sent" in sql:
+            return {"marked": True}
+        return None
+
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker._publish_role_dispatch",
+        lambda _payload: {"dispatch_pull_request": 1152},
+    )
+    config = WorkerConfig(dsn=DIRECT_DSN, worker_id="oracle-test")
+    assert drain_role_dispatch_outbox(config) == 1
+    claimed_params = next(params for sql, params in calls if "claim_role_dispatch_outbox" in sql)
+    assert claimed_params == ("oracle-test", 300)
+    sent = next(params for sql, params in calls if "mark_role_dispatch_sent" in sql)
+    assert sent[:4] == (
+        claimed["dispatch_id"],
+        "oracle-test",
+        2,
+        1152,
+    )
+    assert len(sent[4]) == 64
+
 def test_github_draft_repair_task_is_exactly_bounded():
     goal = _draft_goal()
     task = _task(
@@ -353,7 +546,7 @@ def test_bounded_draft_repair_posts_only_to_pinned_broker(monkeypatch):
     provenance = {
         "artifact_sha256": "c" * 64,
         "policy_sha256": "d" * 64,
-        "policy_version": "physical-no-merge-v1",
+        "policy_version": "physical-no-merge-v2",
         "source_sha": "e" * 40,
     }
     response_payload.update({
@@ -463,7 +656,7 @@ def test_bounded_draft_repair_rejects_forged_evidence(monkeypatch):
     response_payload.update({
         "broker_artifact_sha256": "c" * 64,
         "broker_policy_sha256": "d" * 64,
-        "broker_policy_version": "physical-no-merge-v1",
+        "broker_policy_version": "physical-no-merge-v2",
         "broker_source_sha": "e" * 40,
         "broker_provenance_sha256": "f" * 64,
     })

@@ -9,6 +9,7 @@ on:
     paths:
       - '.github/workflows/oracle-universal-video-container-evidence.yml'
       - '.github/workflows/issue-881-authoritative-external-evidence.yml'
+      - 'ops/issue_881_external_precanary_workflow.sh'
       - 'tests/test_oracle_container_evidence_workflow_contract.py'
       - 'tests/test_universal_video_container_promotion_contract.py'
 
@@ -32,10 +33,13 @@ jobs:
         run: |
           set -euo pipefail
           workflow=.github/workflows/issue-881-authoritative-external-evidence.yml
+          runner=ops/issue_881_external_precanary_workflow.sh
           test "$(grep -Fxc '      director_go:' "$workflow")" -eq 1
           gate_prefix='    if: $'
           gate_suffix="{{ inputs.director_go && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}"
           test "$(grep -Fxc "$gate_prefix$gate_suffix" "$workflow")" -eq 1
-          grep -F 'verify_live_gate(){' "$workflow"
-          test "$(grep -c '^[[:space:]]*verify_live_gate$' "$workflow")" -eq 2
+          bash -n "$runner"
+          grep -F 'run: bash ops/issue_881_external_precanary_workflow.sh' "$workflow"
+          grep -F 'verify_live_gate(){' "$runner"
+          test "$(grep -c '^[[:space:]]*verify_live_gate$' "$runner")" -eq 2
           echo UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true
