@@ -224,7 +224,8 @@ def test_isolated_probe_uses_file_limited_outputs(tmp_path, monkeypatch):
         assert "capture_output" not in kwargs
         assert kwargs["stdout"].name.endswith("stdout")
         assert kwargs["stderr"].name.endswith("stderr")
-        assert kwargs["preexec_fn"] is not None
+        assert "preexec_fn" not in kwargs
+        assert _argv[-1] == str(runner.MAX_RUNTIME_PROBE_BYTES)
         kwargs["stdout"].write(json.dumps(expected).encode())
         return SimpleNamespace(returncode=0)
 
@@ -242,7 +243,8 @@ def test_case_execution_uses_clean_isolated_process(tmp_path, monkeypatch):
         assert argv[:3] == [runner.sys.executable, "-I", "-c"]
         assert kwargs["stdout"] is runner.subprocess.DEVNULL
         assert kwargs["stderr"] is runner.subprocess.DEVNULL
-        assert kwargs["preexec_fn"] is not None
+        assert "preexec_fn" not in kwargs
+        assert argv[4] == str(runner.MAX_CASE_RECEIPT_BYTES)
         assert not any(
             kwargs["env"].get(key) for key in runner.LOADER_INJECTION_ENV_VARS
         )

@@ -65,11 +65,16 @@ LOADER_INJECTION_ENV_VARS = frozenset(
 )
 
 _ISOLATED_RUNTIME_PROBE = r'''
+import resource
+import sys
+
+output_limit = int(sys.argv[1])
+resource.setrlimit(resource.RLIMIT_FSIZE, (output_limit, output_limit))
+
 import importlib
 import importlib.metadata
 import json
 import pathlib
-import sys
 
 targets = {
     "numpy": "numpy",
@@ -124,13 +129,18 @@ print(json.dumps(result, sort_keys=True, separators=(",", ":")))
 '''
 
 _ISOLATED_CASE_EXECUTOR = r'''
-import json
-import pathlib
+import resource
 import sys
 
-repository_root = pathlib.Path(sys.argv[1]).resolve(strict=True)
-job_path = pathlib.Path(sys.argv[2]).resolve(strict=True)
-output_path = pathlib.Path(sys.argv[3])
+output_limit = int(sys.argv[1])
+resource.setrlimit(resource.RLIMIT_FSIZE, (output_limit, output_limit))
+
+import json
+import pathlib
+
+repository_root = pathlib.Path(sys.argv[2]).resolve(strict=True)
+job_path = pathlib.Path(sys.argv[3]).resolve(strict=True)
+output_path = pathlib.Path(sys.argv[4])
 sys.path.insert(0, str(repository_root))
 from bridge_vision.bridgit_rank_layout import execute_shadow_job
 
@@ -248,23 +258,22 @@ def _isolated_runtime_probe() -> dict[str, Any]:
         stdout_path = Path(temporary) / "stdout"
         stderr_path = Path(temporary) / "stderr"
 
-        def limit_probe_files() -> None:
-            resource.setrlimit(
-                resource.RLIMIT_FSIZE,
-                (MAX_RUNTIME_PROBE_BYTES, MAX_RUNTIME_PROBE_BYTES),
-            )
-
         try:
             with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
                 completed = subprocess.run(
-                    [sys.executable, "-I", "-c", _ISOLATED_RUNTIME_PROBE],
+                    [
+                        sys.executable,
+                        "-I",
+                        "-c",
+                        _ISOLATED_RUNTIME_PROBE,
+                        str(MAX_RUNTIME_PROBE_BYTES),
+                    ],
                     check=False,
                     stdout=stdout,
                     stderr=stderr,
                     cwd=temporary,
                     env=environment,
                     timeout=RUNTIME_PROBE_TIMEOUT_SECONDS,
-                    preexec_fn=limit_probe_files,
                 )
             if (
                 completed.returncode != 0
@@ -370,12 +379,6 @@ def _execute_case_isolated(job: Mapping[str, Any]) -> dict[str, Any]:
     environment = _clean_runtime_environment()
     repository_root = Path(__file__).resolve().parent.parent
 
-    def limit_case_files() -> None:
-        resource.setrlimit(
-            resource.RLIMIT_FSIZE,
-            (MAX_CASE_RECEIPT_BYTES, MAX_CASE_RECEIPT_BYTES),
-        )
-
     with tempfile.TemporaryDirectory(prefix="bridgit-holdout-case-") as temporary:
         root = Path(temporary)
         job_path = root / "job.json"
@@ -391,6 +394,7 @@ def _execute_case_isolated(job: Mapping[str, Any]) -> dict[str, Any]:
                     "-I",
                     "-c",
                     _ISOLATED_CASE_EXECUTOR,
+                    str(MAX_CASE_RECEIPT_BYTES),
                     str(repository_root),
                     str(job_path),
                     str(output_path),
@@ -401,7 +405,6 @@ def _execute_case_isolated(job: Mapping[str, Any]) -> dict[str, Any]:
                 cwd=temporary,
                 env=environment,
                 timeout=CASE_EXECUTION_TIMEOUT_SECONDS,
-                preexec_fn=limit_case_files,
             )
             if completed.returncode != 0:
                 raise HoldoutRunnerError("isolated recognizer case failed")
