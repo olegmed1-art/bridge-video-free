@@ -55,7 +55,7 @@ PINNED_RUNTIME_MODULES = {
     "numpy": ("numpy", "numpy/__init__.py"),
     "opencv-python-headless": ("cv2", "cv2/__init__.py"),
 }
-RUNTIME_NATIVE_RECORD_POLICY = "all-distribution-native-records-v1"
+RUNTIME_NATIVE_RECORD_POLICY = "all-distribution-records-v2"
 RUNTIME_PROBE_TIMEOUT_SECONDS = 30
 MAX_RUNTIME_PROBE_BYTES = 1024 * 1024
 CASE_EXECUTION_TIMEOUT_SECONDS = 300
@@ -71,13 +71,14 @@ import sys
 output_limit = int(sys.argv[1])
 resource.setrlimit(resource.RLIMIT_FSIZE, (output_limit, output_limit))
 
-import site
-site.main()
+import json
+import pathlib
+for site_path in json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")):
+    if site_path not in sys.path:
+        sys.path.append(site_path)
 
 import importlib
 import importlib.metadata
-import json
-import pathlib
 
 targets = {
     "numpy": "numpy",
@@ -94,22 +95,29 @@ for distribution_name, module_name in targets.items():
         numpy = importlib.import_module("numpy")
         module.cvtColor(numpy.zeros((2, 2, 3), dtype=numpy.uint8), module.COLOR_BGR2GRAY)
     entry_module = pathlib.Path(module.__file__).resolve(strict=True)
+    distribution_records = {}
     native_records = {}
     for entry in distribution.files or ():
         relative = str(entry).replace("\\\\", "/")
+        if getattr(entry, "hash", None) is None:
+            continue
+        resolved_entry = str(pathlib.Path(distribution.locate_file(entry)).resolve(strict=True))
+        distribution_records[resolved_entry] = relative
         name = pathlib.PurePosixPath(relative).name.lower()
         if any(marker in name for marker in (".so", ".pyd", ".dll", ".dylib")):
-            native_records[str(pathlib.Path(distribution.locate_file(entry)).resolve(strict=True))] = relative
+            native_records[resolved_entry] = relative
+    loaded_runtime = set()
     loaded = set()
     for loaded_name, loaded_module in tuple(sys.modules.items()):
         if loaded_name == module_name or loaded_name.startswith(module_name + "."):
             raw_path = getattr(loaded_module, "__file__", None)
             if isinstance(raw_path, str):
                 resolved = pathlib.Path(raw_path).resolve(strict=True)
+                if str(resolved) not in distribution_records:
+                    raise RuntimeError("unowned runtime module loaded for " + module_name)
+                loaded_runtime.add(str(resolved))
                 if str(resolved) in native_records:
                     loaded.add(str(resolved))
-                elif any(marker in resolved.name.lower() for marker in (".so", ".pyd", ".dll", ".dylib")):
-                    raise RuntimeError("unowned native extension loaded for " + module_name)
     maps = pathlib.Path("/proc/self/maps")
     if not maps.is_file():
         raise RuntimeError("Linux loaded-library map is unavailable")
@@ -124,8 +132,11 @@ for distribution_name, module_name in targets.items():
                 loaded.add(resolved)
     if not loaded:
         raise RuntimeError("no owned native runtime file was observed for " + module_name)
+    if not loaded_runtime:
+        raise RuntimeError("no owned runtime module was observed for " + module_name)
     result[distribution_name] = {
         "entry_module": str(entry_module),
+        "loaded_runtime_files": sorted(loaded_runtime),
         "loaded_native_files": sorted(loaded),
     }
 print(json.dumps(result, sort_keys=True, separators=(",", ":")))
@@ -140,13 +151,14 @@ output_limit = int(sys.argv[1])
 resource.setrlimit(resource.RLIMIT_FSIZE, (output_limit, output_limit))
 cpu_start = time.process_time()
 
-import site
-site.main()
+import json
+import pathlib
+for site_path in json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")):
+    if site_path not in sys.path:
+        sys.path.append(site_path)
 
 import importlib
 import importlib.metadata
-import json
-import pathlib
 
 targets = {
     "numpy": "numpy",
@@ -163,21 +175,27 @@ for distribution_name, module_name in targets.items():
         numpy = importlib.import_module("numpy")
         module.cvtColor(numpy.zeros((2, 2, 3), dtype=numpy.uint8), module.COLOR_BGR2GRAY)
     entry_module = pathlib.Path(module.__file__).resolve(strict=True)
+    distribution_records = {}
     native_records = {}
     for entry in distribution.files or ():
         relative = str(entry).replace("\\\\", "/")
+        if getattr(entry, "hash", None) is None:
+            continue
+        resolved_entry = str(pathlib.Path(distribution.locate_file(entry)).resolve(strict=True))
+        distribution_records[resolved_entry] = relative
         name = pathlib.PurePosixPath(relative).name.lower()
         if any(marker in name for marker in (".so", ".pyd", ".dll", ".dylib")):
-            native_records[str(pathlib.Path(distribution.locate_file(entry)).resolve(strict=True))] = relative
+            native_records[resolved_entry] = relative
     prepared_runtime[distribution_name] = {
         "module_name": module_name,
         "entry_module": str(entry_module),
+        "distribution_records": distribution_records,
         "native_records": native_records,
     }
 
-repository_root = pathlib.Path(sys.argv[2]).resolve(strict=True)
-job_path = pathlib.Path(sys.argv[3]).resolve(strict=True)
-output_path = pathlib.Path(sys.argv[4])
+repository_root = pathlib.Path(sys.argv[3]).resolve(strict=True)
+job_path = pathlib.Path(sys.argv[4]).resolve(strict=True)
+output_path = pathlib.Path(sys.argv[5])
 sys.path.insert(0, str(repository_root))
 from bridge_vision.bridgit_rank_layout import execute_shadow_job
 
@@ -187,17 +205,20 @@ receipt = execute_shadow_job(job)
 runtime_probe = {}
 for distribution_name, prepared in prepared_runtime.items():
     module_name = prepared["module_name"]
+    distribution_records = prepared["distribution_records"]
     native_records = prepared["native_records"]
+    loaded_runtime = set()
     loaded = set()
     for loaded_name, loaded_module in tuple(sys.modules.items()):
         if loaded_name == module_name or loaded_name.startswith(module_name + "."):
             raw_path = getattr(loaded_module, "__file__", None)
             if isinstance(raw_path, str):
                 resolved = pathlib.Path(raw_path).resolve(strict=True)
+                if str(resolved) not in distribution_records:
+                    raise RuntimeError("unowned runtime module loaded for " + module_name)
+                loaded_runtime.add(str(resolved))
                 if str(resolved) in native_records:
                     loaded.add(str(resolved))
-                elif any(marker in resolved.name.lower() for marker in (".so", ".pyd", ".dll", ".dylib")):
-                    raise RuntimeError("unowned native extension loaded for " + module_name)
     maps = pathlib.Path("/proc/self/maps")
     if not maps.is_file():
         raise RuntimeError("Linux loaded-library map is unavailable")
@@ -212,8 +233,11 @@ for distribution_name, prepared in prepared_runtime.items():
                 loaded.add(resolved)
     if not loaded:
         raise RuntimeError("no owned native runtime file was observed for " + module_name)
+    if not loaded_runtime:
+        raise RuntimeError("no owned runtime module was observed for " + module_name)
     runtime_probe[distribution_name] = {
         "entry_module": prepared["entry_module"],
+        "loaded_runtime_files": sorted(loaded_runtime),
         "loaded_native_files": sorted(loaded),
     }
 usage = resource.getrusage(resource.RUSAGE_SELF)
@@ -337,11 +361,37 @@ def _clean_runtime_environment() -> dict[str, str]:
     }
 
 
+def _runtime_import_roots() -> list[str]:
+    roots = set()
+    for distribution_name, (_, expected_relative) in PINNED_RUNTIME_MODULES.items():
+        try:
+            distribution = metadata.distribution(distribution_name)
+            entry_path = Path(distribution.locate_file(expected_relative)).resolve(
+                strict=True
+            )
+        except (metadata.PackageNotFoundError, OSError, ValueError, RuntimeError) as exc:
+            raise HoldoutRunnerError(
+                f"required pixel runtime is not installed: {distribution_name}"
+            ) from exc
+        root = entry_path
+        for _ in Path(expected_relative).parts:
+            root = root.parent
+        if not root.is_dir():
+            raise HoldoutRunnerError("pixel runtime import root is unavailable")
+        roots.add(str(root))
+    return sorted(roots)
+
+
 def _isolated_runtime_probe() -> dict[str, Any]:
     environment = _clean_runtime_environment()
+    import_roots = _runtime_import_roots()
     with tempfile.TemporaryDirectory(prefix="bridgit-runtime-probe-") as temporary:
         stdout_path = Path(temporary) / "stdout"
         stderr_path = Path(temporary) / "stderr"
+        pycache_path = Path(temporary) / "pycache"
+        import_roots_path = Path(temporary) / "runtime-import-roots.json"
+        pycache_path.mkdir()
+        import_roots_path.write_text(json.dumps(import_roots), encoding="utf-8")
 
         try:
             with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
@@ -350,9 +400,13 @@ def _isolated_runtime_probe() -> dict[str, Any]:
                         sys.executable,
                         "-I",
                         "-S",
+                        "-B",
+                        "-X",
+                        f"pycache_prefix={pycache_path}",
                         "-c",
                         _ISOLATED_RUNTIME_PROBE,
                         str(MAX_RUNTIME_PROBE_BYTES),
+                        str(import_roots_path),
                     ],
                     check=False,
                     stdout=stdout,
@@ -386,7 +440,7 @@ def _isolated_runtime_probe() -> dict[str, Any]:
 def _verify_imported_runtime_modules(
     isolated: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Verify isolated entry modules and every native file in the pinned wheels."""
+    """Verify loaded modules and every hashed file in the pinned wheels."""
     if isolated is None:
         isolated = _isolated_runtime_probe()
     if set(isolated) != set(PINNED_RUNTIME_MODULES):
@@ -403,9 +457,18 @@ def _verify_imported_runtime_modules(
         if files is None:
             raise HoldoutRunnerError("pixel runtime distribution has no file manifest")
         matched = None
+        runtime_entries = []
         native_entries = []
         for entry in files:
             relative = str(entry).replace("\\", "/")
+            record_hash = getattr(entry, "hash", None)
+            if record_hash is None:
+                if relative.endswith(".dist-info/RECORD") or relative.endswith(".pyc"):
+                    continue
+                raise HoldoutRunnerError(
+                    "pixel runtime distribution file has no trusted RECORD hash"
+                )
+            runtime_entries.append((relative, entry))
             if _is_native_runtime_path(relative):
                 native_entries.append((relative, entry))
             if relative == expected_relative:
@@ -417,20 +480,43 @@ def _verify_imported_runtime_modules(
         relative = str(matched).replace("\\", "/")
         if relative != expected_relative:
             raise HoldoutRunnerError("pixel runtime module origin does not match baseline")
-        module_path = _verified_record_file(distribution, matched, native=False)
+        verified_runtime_files = []
+        runtime_by_resolved_path = {}
+        for runtime_relative, runtime_entry in sorted(runtime_entries):
+            runtime_path = _verified_record_file(
+                distribution,
+                runtime_entry,
+                native=_is_native_runtime_path(runtime_relative),
+            )
+            runtime_by_resolved_path[str(runtime_path)] = runtime_relative
+            verified_runtime_files.append(
+                {
+                    "path": runtime_relative,
+                    "sha256": _record_sha256(getattr(runtime_entry, "hash", None)),
+                }
+            )
+        try:
+            module_path = next(
+                Path(path)
+                for path, runtime_relative in runtime_by_resolved_path.items()
+                if runtime_relative == expected_relative
+            )
+        except StopIteration as exc:
+            raise HoldoutRunnerError(
+                "imported pixel runtime module is not owned by frozen distribution"
+            ) from exc
         if not native_entries:
             raise HoldoutRunnerError("pixel runtime distribution has no native files")
-        verified_native_files = []
-        native_by_resolved_path = {}
-        for native_relative, native_entry in sorted(native_entries):
-            native_path = _verified_record_file(
-                distribution, native_entry, native=True
-            )
-            native_sha256 = _record_sha256(getattr(native_entry, "hash", None))
-            native_by_resolved_path[str(native_path)] = native_relative
-            verified_native_files.append(
-                {"path": native_relative, "sha256": native_sha256}
-            )
+        native_by_resolved_path = {
+            path: runtime_relative
+            for path, runtime_relative in runtime_by_resolved_path.items()
+            if _is_native_runtime_path(runtime_relative)
+        }
+        verified_native_files = [
+            item
+            for item in verified_runtime_files
+            if _is_native_runtime_path(str(item["path"]))
+        ]
         probe = isolated.get(distribution_name)
         if not isinstance(probe, Mapping):
             raise HoldoutRunnerError("isolated pixel runtime probe is invalid")
@@ -442,6 +528,20 @@ def _verify_imported_runtime_modules(
             raise HoldoutRunnerError(
                 "isolated pixel runtime module does not match imported module"
             )
+        loaded_runtime_raw = probe.get("loaded_runtime_files")
+        if (
+            not isinstance(loaded_runtime_raw, Sequence)
+            or isinstance(loaded_runtime_raw, (str, bytes))
+            or not loaded_runtime_raw
+        ):
+            raise HoldoutRunnerError("isolated pixel runtime probe has no runtime files")
+        loaded_runtime_relative = []
+        for raw_path in loaded_runtime_raw:
+            if not isinstance(raw_path, str) or raw_path not in runtime_by_resolved_path:
+                raise HoldoutRunnerError(
+                    "loaded pixel runtime file is not owned by frozen distribution"
+                )
+            loaded_runtime_relative.append(runtime_by_resolved_path[raw_path])
         loaded_raw = probe.get("loaded_native_files")
         if (
             not isinstance(loaded_raw, Sequence)
@@ -458,7 +558,9 @@ def _verify_imported_runtime_modules(
             loaded_relative.append(native_by_resolved_path[raw_path])
         identities[distribution_name] = {
             "entry_module": relative,
+            "runtime_files": verified_runtime_files,
             "native_files": verified_native_files,
+            "loaded_runtime_files": sorted(set(loaded_runtime_relative)),
             "loaded_native_files": sorted(set(loaded_relative)),
         }
     return identities
@@ -468,12 +570,17 @@ def _execute_case_isolated(
     job: Mapping[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     environment = _clean_runtime_environment()
+    import_roots = _runtime_import_roots()
     repository_root = Path(__file__).resolve().parent.parent
 
     with tempfile.TemporaryDirectory(prefix="bridgit-holdout-case-") as temporary:
         root = Path(temporary)
         job_path = root / "job.json"
         output_path = root / "receipt.json"
+        pycache_path = root / "pycache"
+        import_roots_path = root / "runtime-import-roots.json"
+        pycache_path.mkdir()
+        import_roots_path.write_text(json.dumps(import_roots), encoding="utf-8")
         try:
             job_path.write_text(
                 json.dumps(job, sort_keys=True, separators=(",", ":")),
@@ -484,9 +591,13 @@ def _execute_case_isolated(
                     sys.executable,
                     "-I",
                     "-S",
+                    "-B",
+                    "-X",
+                    f"pycache_prefix={pycache_path}",
                     "-c",
                     _ISOLATED_CASE_EXECUTOR,
                     str(MAX_CASE_RECEIPT_BYTES),
+                    str(import_roots_path),
                     str(repository_root),
                     str(job_path),
                     str(output_path),
@@ -562,7 +673,7 @@ def runtime_native_manifest_sha256(
     runtime_modules: Mapping[str, Mapping[str, Any]],
 ) -> str:
     manifest = {
-        distribution: list(identity.get("native_files", []))
+        distribution: list(identity.get("runtime_files", []))
         for distribution, identity in sorted(runtime_modules.items())
     }
     return hashlib.sha256(

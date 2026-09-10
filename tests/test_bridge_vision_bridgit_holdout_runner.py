@@ -9,11 +9,15 @@ import bridge_vision.bridgit_holdout_runner as runner
 
 _TEST_RUNTIME_MODULES = {
     "numpy": {
+        "runtime_files": [{"path": "numpy/core.test.so", "sha256": "a" * 64}],
         "native_files": [{"path": "numpy/core.test.so", "sha256": "a" * 64}],
+        "loaded_runtime_files": ["numpy/core.test.so"],
         "loaded_native_files": ["numpy/core.test.so"],
     },
     "opencv-python-headless": {
+        "runtime_files": [{"path": "cv2/cv2.test.so", "sha256": "b" * 64}],
         "native_files": [{"path": "cv2/cv2.test.so", "sha256": "b" * 64}],
+        "loaded_runtime_files": ["cv2/cv2.test.so"],
         "loaded_native_files": ["cv2/cv2.test.so"],
     },
 }

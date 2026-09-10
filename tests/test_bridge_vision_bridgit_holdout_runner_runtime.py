@@ -34,6 +34,10 @@ def _probe(distributions, modules):
     return {
         distribution_name: {
             "entry_module": modules[module_name].__file__,
+            "loaded_runtime_files": [
+                str(distributions[distribution_name].locate_file(entry).resolve())
+                for entry in distributions[distribution_name].files
+            ],
             "loaded_native_files": [
                 str(
                     distributions[distribution_name].locate_file(
@@ -86,6 +90,24 @@ def test_imported_pixel_modules_are_bound_to_distribution_record(tmp_path, monke
     assert runner._verify_imported_runtime_modules() == {
         name: {
             "entry_module": relative,
+            "runtime_files": [
+                {
+                    "path": relative,
+                    "sha256": hashlib.sha256(
+                        f"{name}-baseline".encode()
+                    ).hexdigest(),
+                },
+                {
+                    "path": (
+                        "numpy/_core/_multiarray_umath.test.so"
+                        if name == "numpy"
+                        else "cv2/cv2.test.so"
+                    ),
+                    "sha256": hashlib.sha256(
+                        f"{name}-native-baseline".encode()
+                    ).hexdigest(),
+                },
+            ],
             "native_files": [
                 {
                     "path": (
@@ -97,6 +119,12 @@ def test_imported_pixel_modules_are_bound_to_distribution_record(tmp_path, monke
                         f"{name}-native-baseline".encode()
                     ).hexdigest(),
                 }
+            ],
+            "loaded_runtime_files": [
+                relative,
+                "numpy/_core/_multiarray_umath.test.so"
+                if name == "numpy"
+                else "cv2/cv2.test.so",
             ],
             "loaded_native_files": [
                 "numpy/_core/_multiarray_umath.test.so"
@@ -112,10 +140,12 @@ def test_imported_pixel_modules_are_bound_to_distribution_record(tmp_path, monke
         runner._verify_imported_runtime_modules()
 
 
-def test_native_runtime_files_are_bound_to_distribution_record(tmp_path, monkeypatch):
+def test_runtime_files_are_bound_to_distribution_record(tmp_path, monkeypatch):
     modules = {}
     distributions = {}
     native_paths = {}
+    pure_paths = {}
+    pure_payloads = {}
     for distribution_name, (module_name, relative) in runner.PINNED_RUNTIME_MODULES.items():
         wrapper_payload = f"{distribution_name}-wrapper".encode()
         wrapper_path = tmp_path / relative
@@ -130,11 +160,19 @@ def test_native_runtime_files_are_bound_to_distribution_record(tmp_path, monkeyp
         native_path.write_bytes(native_payload)
         native_entry = _RecordEntry(native_relative, native_payload)
 
+        pure_relative = f"{module_name}/implementation.py"
+        pure_payload = f"{distribution_name}-pure-python".encode()
+        pure_path = tmp_path / pure_relative
+        pure_path.write_bytes(pure_payload)
+        pure_entry = _RecordEntry(pure_relative, pure_payload)
+
         modules[module_name] = SimpleNamespace(__file__=str(wrapper_path))
         distributions[distribution_name] = _Distribution(
-            tmp_path, wrapper_entry, native_entry
+            tmp_path, wrapper_entry, native_entry, pure_entry
         )
         native_paths[distribution_name] = native_path
+        pure_paths[distribution_name] = pure_path
+        pure_payloads[distribution_name] = pure_payload
 
     monkeypatch.setattr(
         runner.metadata, "distribution", lambda name: distributions[name]
@@ -144,6 +182,10 @@ def test_native_runtime_files_are_bound_to_distribution_record(tmp_path, monkeyp
     )
 
     runner._verify_imported_runtime_modules()
+    pure_paths["numpy"].write_bytes(b"replaced-pure-python-module")
+    with pytest.raises(runner.HoldoutRunnerError, match="module file does not match RECORD"):
+        runner._verify_imported_runtime_modules()
+    pure_paths["numpy"].write_bytes(pure_payloads["numpy"])
     native_paths["opencv-python-headless"].write_bytes(b"replaced-native-module")
     with pytest.raises(runner.HoldoutRunnerError, match="native file does not match RECORD"):
         runner._verify_imported_runtime_modules()
@@ -215,22 +257,25 @@ def test_isolated_probe_uses_file_limited_outputs(tmp_path, monkeypatch):
     expected = {
         name: {
             "entry_module": f"/runtime/{module_name}/__init__.py",
+            "loaded_runtime_files": [f"/runtime/{module_name}/__init__.py"],
             "loaded_native_files": [f"/runtime/{module_name}/native.so"],
         }
         for name, (module_name, _) in runner.PINNED_RUNTIME_MODULES.items()
     }
 
     def fake_run(_argv, **kwargs):
-        assert _argv[:4] == [runner.sys.executable, "-I", "-S", "-c"]
+        assert _argv[:5] == [runner.sys.executable, "-I", "-S", "-B", "-X"]
+        command_index = _argv.index("-c")
+        assert _argv[command_index + 2] == str(runner.MAX_RUNTIME_PROBE_BYTES)
         assert "capture_output" not in kwargs
         assert kwargs["stdout"].name.endswith("stdout")
         assert kwargs["stderr"].name.endswith("stderr")
         assert "preexec_fn" not in kwargs
-        assert _argv[-1] == str(runner.MAX_RUNTIME_PROBE_BYTES)
         kwargs["stdout"].write(json.dumps(expected).encode())
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner, "_runtime_import_roots", lambda: ["/runtime"])
     monkeypatch.setattr(runner.tempfile, "gettempdir", lambda: str(tmp_path))
     assert runner._isolated_runtime_probe() == expected
 
@@ -242,11 +287,12 @@ def test_case_execution_uses_clean_isolated_process(tmp_path, monkeypatch):
     runtime_probe = {"numpy": {}, "opencv-python-headless": {}}
 
     def fake_run(argv, **kwargs):
-        assert argv[:4] == [runner.sys.executable, "-I", "-S", "-c"]
+        assert argv[:5] == [runner.sys.executable, "-I", "-S", "-B", "-X"]
+        command_index = argv.index("-c")
+        assert argv[command_index + 2] == str(runner.MAX_CASE_RECEIPT_BYTES)
         assert kwargs["stdout"] is runner.subprocess.DEVNULL
         assert kwargs["stderr"] is runner.subprocess.DEVNULL
         assert "preexec_fn" not in kwargs
-        assert argv[5] == str(runner.MAX_CASE_RECEIPT_BYTES)
         assert not any(
             kwargs["env"].get(key) for key in runner.LOADER_INJECTION_ENV_VARS
         )
@@ -267,6 +313,7 @@ def test_case_execution_uses_clean_isolated_process(tmp_path, monkeypatch):
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner, "_runtime_import_roots", lambda: ["/runtime"])
     verified = []
     monkeypatch.setattr(
         runner,
@@ -282,7 +329,8 @@ def test_case_execution_uses_clean_isolated_process(tmp_path, monkeypatch):
 
 def test_case_child_preloads_runtime_and_attests_after_recognition():
     script = runner._ISOLATED_CASE_EXECUTOR
-    assert script.index("resource.setrlimit") < script.index("site.main()")
+    assert "site.main()" not in script
+    assert script.index("resource.setrlimit") < script.index("sys.path.append(site_path)")
     assert script.index("module = importlib.import_module(module_name)") < script.index(
         "sys.path.insert(0, str(repository_root))"
     )
