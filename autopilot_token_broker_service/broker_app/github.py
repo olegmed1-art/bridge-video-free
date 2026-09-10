@@ -1,8 +1,7 @@
-"""Fail-closed GitHub App client and bounded draft-repair executor.
+"""Fail-closed GitHub App client for bounded Autopilot operations.
 
-The installation credential never leaves this process. The only credentialed
-operation is the exact server-side sequence required to create Git objects, one
-new namespaced branch, and one draft pull request.
+The installation credential never leaves this process. Each endpoint mints a
+separately scoped token and can execute only its finite server-side graph.
 """
 
 from __future__ import annotations
@@ -22,7 +21,11 @@ from typing import Any, Mapping
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from broker_app.policy import ALLOWED_PATH_PATTERNS, DraftRepairRequest
+from broker_app.policy import (
+    ALLOWED_PATH_PATTERNS,
+    DraftRepairRequest,
+    RoleDispatchRequest,
+)
 
 
 GITHUB_API_URL = "https://api.github.com"
@@ -35,10 +38,15 @@ TOKEN_PERMISSIONS = {
     "contents": "write",
     "pull_requests": "write",
 }
+ROLE_DISPATCH_TOKEN_PERMISSIONS = {"pull_requests": "write"}
 TOKEN_RESPONSE_LIMIT_BYTES = 32_768
 API_RESPONSE_LIMIT_BYTES = 65_536
 HTTP_TIMEOUT_SECONDS = 15
-BROKER_POLICY_VERSION = "physical-no-merge-v1"
+BROKER_POLICY_VERSION = "physical-no-merge-v2"
+ROLE_DISPATCH_MAILBOX_PR = 1150
+ROLE_DISPATCH_LOOKUP_PAGES = 5
+ROLE_DISPATCH_COMMENTS_PER_PAGE = 100
+ROLE_DISPATCH_CLOCK_SKEW_SECONDS = 300
 
 _SHA = r"[0-9a-f]{40}"
 _REPAIR_BRANCH = r"autopilot/repair/[0-9a-f]{16}"
@@ -49,6 +57,7 @@ _ALLOWED_EXACT_OPERATIONS = (
     ("POST", "/repos/olegmed1-art/bridge-video-free/git/commits"),
     ("POST", "/repos/olegmed1-art/bridge-video-free/git/refs"),
     ("POST", "/repos/olegmed1-art/bridge-video-free/pulls"),
+    ("POST", "/repos/olegmed1-art/bridge-video-free/issues/1150/comments"),
 )
 _FORBIDDEN_ENDPOINT_PARTS = (
     "/merge",
@@ -76,6 +85,10 @@ def broker_policy_sha256() -> str:
         "repository": REPOSITORY_FULL_NAME,
         "sha_pattern": _SHA,
         "token_permissions": TOKEN_PERMISSIONS,
+        "role_dispatch_token_permissions": ROLE_DISPATCH_TOKEN_PERMISSIONS,
+        "role_dispatch_mailbox_pr": ROLE_DISPATCH_MAILBOX_PR,
+        "role_dispatch_lookup_pages": ROLE_DISPATCH_LOOKUP_PAGES,
+        "role_dispatch_clock_skew_seconds": ROLE_DISPATCH_CLOCK_SKEW_SECONDS,
     }
     return hashlib.sha256(_canonical_json(policy)).hexdigest()
 
@@ -193,7 +206,10 @@ def build_app_jwt(config: BrokerConfig, *, now_epoch: int) -> str:
 
 
 def _validate_token_response(
-    payload: Any, *, now_epoch: int
+    payload: Any,
+    *,
+    now_epoch: int,
+    expected_permissions: Mapping[str, str] = TOKEN_PERMISSIONS,
 ) -> InstallationCredential:
     if not isinstance(payload, dict):
         raise BrokerContractError("GITHUB_TOKEN_RESPONSE_INVALID")
@@ -215,10 +231,10 @@ def _validate_token_response(
     ):
         raise BrokerContractError("GITHUB_TOKEN_RESPONSE_INVALID")
 
-    for permission, access in TOKEN_PERMISSIONS.items():
+    for permission, access in expected_permissions.items():
         if permissions.get(permission) != access:
             raise BrokerContractError("GITHUB_TOKEN_PERMISSIONS_INVALID")
-    unexpected_permissions = set(permissions) - set(TOKEN_PERMISSIONS) - {"metadata"}
+    unexpected_permissions = set(permissions) - set(expected_permissions) - {"metadata"}
     if unexpected_permissions or permissions.get("metadata") not in {None, "read"}:
         raise BrokerContractError("GITHUB_TOKEN_PERMISSIONS_INVALID")
 
@@ -275,8 +291,12 @@ def issue_installation_token(
     *,
     now_epoch: int,
     opener: Any | None = None,
+    permissions: Mapping[str, str] = TOKEN_PERMISSIONS,
 ) -> InstallationCredential:
     """Mint one repository- and permission-scoped internal credential."""
+
+    if dict(permissions) not in (TOKEN_PERMISSIONS, ROLE_DISPATCH_TOKEN_PERMISSIONS):
+        raise BrokerConfigurationError("GITHUB_TOKEN_PERMISSIONS_INVALID")
 
     app_jwt = build_app_jwt(config, now_epoch=now_epoch)
     path = f"/app/installations/{config.installation_id}/access_tokens"
@@ -284,7 +304,7 @@ def issue_installation_token(
         f"{GITHUB_API_URL}{path}",
         data=_canonical_json(
             {
-                "permissions": TOKEN_PERMISSIONS,
+                "permissions": dict(permissions),
                 "repositories": [REPOSITORY_NAME],
             }
         ),
@@ -303,7 +323,9 @@ def issue_installation_token(
         response_limit=TOKEN_RESPONSE_LIMIT_BYTES,
         opener=opener,
     )
-    return _validate_token_response(payload, now_epoch=now_epoch)
+    return _validate_token_response(
+        payload, now_epoch=now_epoch, expected_permissions=permissions
+    )
 
 
 def _authorize_github_operation(*, method: str, path: str) -> None:
@@ -367,6 +389,29 @@ def _authorize_github_operation(*, method: str, path: str) -> None:
             )
         ):
             return
+    if method == "GET" and clean_path == (
+        f"{REPOSITORY_API_PATH}/issues/{ROLE_DISPATCH_MAILBOX_PR}/comments"
+    ):
+        query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
+        since = query.get("since", [""])[0]
+        if (
+            set(query) == {"page", "per_page", "since"}
+            and all(len(values) == 1 for values in query.values())
+            and query["per_page"] == [str(ROLE_DISPATCH_COMMENTS_PER_PAGE)]
+            and query["page"][0].isascii()
+            and query["page"][0].isdecimal()
+            and 1 <= int(query["page"][0]) <= ROLE_DISPATCH_LOOKUP_PAGES
+            and re.fullmatch(
+                r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+                since,
+            )
+        ):
+            try:
+                datetime.fromisoformat(since.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+            else:
+                return
     raise BrokerContractError("GITHUB_OPERATION_NOT_ALLOWED")
 
 
@@ -791,4 +836,172 @@ def execute_bounded_draft_repair(
         "merge_allowed": False,
         "production_mutation": False,
         "operation_count": 8 + 2 * len(request.changes),
+    }
+
+
+def role_dispatch_comment_body(request: RoleDispatchRequest) -> str:
+    """Render the complete public mailbox envelope deterministically."""
+
+    return "\n".join(
+        (
+            "AUTOPILOT_DISPATCH_V1",
+            f"dispatch_id={request.dispatch_id}",
+            f"dispatch_epoch={request.dispatch_epoch}",
+            f"role={request.role}",
+            f"task_fingerprint={request.task_fingerprint}",
+            f"target_pr={request.target_pr}",
+            f"mode={request.mode}",
+        )
+    )
+
+
+def _comment_timestamp(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_COMMENT_INVALID")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_COMMENT_INVALID") from exc
+    if parsed.tzinfo is None:
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_COMMENT_INVALID")
+    return parsed.astimezone(timezone.utc)
+
+
+def _validate_role_dispatch_comment(
+    payload: object, *, expected_body: str
+) -> tuple[int, str]:
+    if not isinstance(payload, dict):
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_COMMENT_INVALID")
+    comment_id = payload.get("id")
+    user = payload.get("user")
+    issue_url = f"{GITHUB_API_URL}{REPOSITORY_API_PATH}/issues/{ROLE_DISPATCH_MAILBOX_PR}"
+    if (
+        type(comment_id) is not int
+        or not 1 <= comment_id <= 2**63 - 1
+        or payload.get("body") != expected_body
+        or payload.get("issue_url") != issue_url
+        or payload.get("html_url")
+        != (
+            f"https://github.com/{REPOSITORY_FULL_NAME}/pull/"
+            f"{ROLE_DISPATCH_MAILBOX_PR}#issuecomment-{comment_id}"
+        )
+        or not isinstance(user, dict)
+        or user.get("type") != "Bot"
+        or not isinstance(user.get("login"), str)
+        or re.fullmatch(r"[A-Za-z0-9-]{1,100}\[bot\]", user["login"]) is None
+    ):
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_COMMENT_INVALID")
+    created_at = _comment_timestamp(payload.get("created_at"))
+    updated_at = _comment_timestamp(payload.get("updated_at"))
+    if updated_at < created_at:
+        raise BrokerContractError("GITHUB_ROLE_DISPATCH_COMMENT_INVALID")
+    return comment_id, payload["html_url"]
+
+
+def _find_existing_role_dispatch(
+    credential: InstallationCredential,
+    request: RoleDispatchRequest,
+    *,
+    opener: Any | None,
+) -> tuple[int, str] | None:
+    expected_body = role_dispatch_comment_body(request)
+    try:
+        since = datetime.fromtimestamp(
+            request.prepared_at_epoch - ROLE_DISPATCH_CLOCK_SKEW_SECONDS,
+            tz=timezone.utc,
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    except (OverflowError, OSError, ValueError) as exc:
+        raise BrokerContractError("ROLE_DISPATCH_EPOCH_INVALID") from exc
+    matches: list[tuple[int, str]] = []
+    for page in range(1, ROLE_DISPATCH_LOOKUP_PAGES + 1):
+        query = urllib.parse.urlencode(
+            {
+                "page": page,
+                "per_page": ROLE_DISPATCH_COMMENTS_PER_PAGE,
+                "since": since,
+            }
+        )
+        payload = _api_json(
+            credential,
+            method="GET",
+            path=(
+                f"{REPOSITORY_API_PATH}/issues/{ROLE_DISPATCH_MAILBOX_PR}/comments"
+                f"?{query}"
+            ),
+            expected_status=200,
+            opener=opener,
+            allow_list=True,
+        )
+        if not isinstance(payload, list):
+            raise BrokerContractError("GITHUB_ROLE_DISPATCH_LOOKUP_INVALID")
+        for comment in payload:
+            if isinstance(comment, dict) and comment.get("body") == expected_body:
+                matches.append(
+                    _validate_role_dispatch_comment(
+                        comment, expected_body=expected_body
+                    )
+                )
+        if len(payload) < ROLE_DISPATCH_COMMENTS_PER_PAGE:
+            break
+    if len(matches) > 1:
+        raise DraftRepairConflictError("GITHUB_ROLE_DISPATCH_DUPLICATE")
+    return matches[0] if matches else None
+
+
+def execute_bounded_role_dispatch(
+    config: BrokerConfig,
+    request: RoleDispatchRequest,
+    *,
+    now_epoch: int,
+    opener: Any | None = None,
+) -> dict[str, object]:
+    """Create or adopt exactly one comment in the fixed public mailbox PR."""
+
+    if request.prepared_at_epoch > now_epoch + 60:
+        raise BrokerContractError("ROLE_DISPATCH_PREPARED_AT_INVALID")
+    credential = issue_installation_token(
+        config,
+        now_epoch=now_epoch,
+        opener=opener,
+        permissions=ROLE_DISPATCH_TOKEN_PERMISSIONS,
+    )
+    existing = _find_existing_role_dispatch(
+        credential, request, opener=opener
+    )
+    if existing is None:
+        body = role_dispatch_comment_body(request)
+        payload = _api_json(
+            credential,
+            method="POST",
+            path=(
+                f"{REPOSITORY_API_PATH}/issues/{ROLE_DISPATCH_MAILBOX_PR}/comments"
+            ),
+            expected_status=201,
+            body={"body": body},
+            opener=opener,
+        )
+        comment_id, comment_url = _validate_role_dispatch_comment(
+            payload, expected_body=body
+        )
+        state = "created"
+        replayed = False
+    else:
+        comment_id, comment_url = existing
+        state = "existing"
+        replayed = True
+    return {
+        "status": state,
+        "repository": REPOSITORY_FULL_NAME,
+        "mailbox_pull_request": ROLE_DISPATCH_MAILBOX_PR,
+        "dispatch_id": request.dispatch_id,
+        "dispatch_epoch": request.dispatch_epoch,
+        "role": request.role,
+        "task_fingerprint": request.task_fingerprint,
+        "target_pr": request.target_pr,
+        "mode": request.mode,
+        "comment_id": comment_id,
+        "comment_url": comment_url,
+        "replayed": replayed,
+        "token_exposed": False,
+        "production_mutation": False,
     }

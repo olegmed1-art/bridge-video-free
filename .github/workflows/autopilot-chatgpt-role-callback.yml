@@ -1,0 +1,46 @@
+name: Autopilot ChatGPT role callback
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-chatgpt-role-callback-${{ github.event.comment.id }}
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    if: >-
+      github.event.issue.number == 1150 &&
+      github.event.repository.id == 1330085090 &&
+      github.event.comment.user.id == 315099490 &&
+      github.event.comment.author_association == 'OWNER' &&
+      github.event.comment.performed_via_github_app.id == 1144995 &&
+      startsWith(github.event.comment.body, 'AUTOPILOT_RESULT_V1')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout immutable default-branch receiver
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned callback dependency
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+
+      - name: Validate provider identity and ingest bound callback
+        env:
+          AUTOPILOT_CALLBACK_DATABASE_URL: ${{ secrets.AUTOPILOT_CALLBACK_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${AUTOPILOT_CALLBACK_DATABASE_URL:-}"
+          python -m oracle_autopilot.github_role_callback

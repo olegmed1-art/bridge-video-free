@@ -22,6 +22,7 @@ on:
       - 'database/migrations/0319_autopilot_broker_provenance_digest_guard.sql'
       - 'database/migrations/0320_autopilot_broker_schema_checksum_gate.sql'
       - 'database/migrations/0321_autopilot_broker_schema_versioned_gate.sql'
+      - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/tests/300_autopilot_oracle_shadow.sql'
       - 'database/tests/301_autopilot_github_pr_read_only.sql'
       - 'database/tests/302_autopilot_github_ci_read_only.sql'
@@ -30,7 +31,11 @@ on:
       - 'database/tests/305_autopilot_bounded_task_ingress.sql'
       - 'database/tests/306_autopilot_ibf_completion.sql'
       - 'database/tests/307_autopilot_ibf_structured_artifact.sql'
+      - 'database/tests/322_autopilot_chatgpt_role_dispatch.sql'
+      - '.github/workflows/autopilot-readonly-github-schema-once.yml'
       - '.github/workflows/oracle-autopilot-shadow-ci.yml'
+      - '.github/workflows/autopilot-chatgpt-role-callback.yml'
+      - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
       - 'docs/architecture/SCHOOL_AUTOPILOT_CONTROLLER_V1.md'
       - 'ops/autopilot/project-state.json'
   push:
@@ -55,6 +60,7 @@ on:
       - 'database/migrations/0319_autopilot_broker_provenance_digest_guard.sql'
       - 'database/migrations/0320_autopilot_broker_schema_checksum_gate.sql'
       - 'database/migrations/0321_autopilot_broker_schema_versioned_gate.sql'
+      - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/tests/300_autopilot_oracle_shadow.sql'
       - 'database/tests/301_autopilot_github_pr_read_only.sql'
       - 'database/tests/302_autopilot_github_ci_read_only.sql'
@@ -63,7 +69,11 @@ on:
       - 'database/tests/305_autopilot_bounded_task_ingress.sql'
       - 'database/tests/306_autopilot_ibf_completion.sql'
       - 'database/tests/307_autopilot_ibf_structured_artifact.sql'
+      - 'database/tests/322_autopilot_chatgpt_role_dispatch.sql'
+      - '.github/workflows/autopilot-readonly-github-schema-once.yml'
       - '.github/workflows/oracle-autopilot-shadow-ci.yml'
+      - '.github/workflows/autopilot-chatgpt-role-callback.yml'
+      - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
 
 permissions:
   contents: read

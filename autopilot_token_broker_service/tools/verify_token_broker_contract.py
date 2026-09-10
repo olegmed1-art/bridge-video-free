@@ -52,7 +52,11 @@ def verify() -> dict[str, object]:
         raise SystemExit("BROKER_REPOSITORY_INVALID")
     if assignments.get("TOKEN_PERMISSIONS") != expected_permissions:
         raise SystemExit("BROKER_PERMISSIONS_INVALID")
-    if assignments.get("BROKER_POLICY_VERSION") != "physical-no-merge-v1":
+    if assignments.get("ROLE_DISPATCH_TOKEN_PERMISSIONS") != {"pull_requests": "write"}:
+        raise SystemExit("BROKER_ROLE_DISPATCH_PERMISSIONS_INVALID")
+    if assignments.get("ROLE_DISPATCH_MAILBOX_PR") != 1150:
+        raise SystemExit("BROKER_ROLE_DISPATCH_MAILBOX_INVALID")
+    if assignments.get("BROKER_POLICY_VERSION") != "physical-no-merge-v2":
         raise SystemExit("BROKER_POLICY_VERSION_INVALID")
     expected_exact_operations = {
         ("GET", "/repos/olegmed1-art/bridge-video-free/git/ref/heads/main"),
@@ -61,6 +65,7 @@ def verify() -> dict[str, object]:
         ("POST", "/repos/olegmed1-art/bridge-video-free/git/commits"),
         ("POST", "/repos/olegmed1-art/bridge-video-free/git/refs"),
         ("POST", "/repos/olegmed1-art/bridge-video-free/pulls"),
+        ("POST", "/repos/olegmed1-art/bridge-video-free/issues/1150/comments"),
     }
     if set(assignments.get("_ALLOWED_EXACT_OPERATIONS", ())) != expected_exact_operations:
         raise SystemExit("BROKER_TYPED_OPERATION_SET_INVALID")
@@ -101,6 +106,8 @@ def verify() -> dict[str, object]:
         raise SystemExit("BROKER_MAIN_RAW_HTTP_PRIMITIVE")
     if "execute_bounded_draft_repair" not in main_text:
         raise SystemExit("BROKER_BOUNDED_EXECUTOR_MISSING")
+    if "execute_bounded_role_dispatch" not in main_text:
+        raise SystemExit("BROKER_ROLE_DISPATCH_EXECUTOR_MISSING")
     if "issue_installation_token" in main_text:
         raise SystemExit("BROKER_RAW_TOKEN_ROUTE_PRESENT")
 
@@ -125,6 +132,7 @@ def verify() -> dict[str, object]:
     if routes != {
         ("GET", "/healthz"),
         ("POST", "/v1/github/draft-repair"),
+        ("POST", "/v1/github/role-dispatch"),
     }:
         raise SystemExit("BROKER_ROUTE_SURFACE_INVALID")
     if '"production_mutations_enabled": False' not in main_text:
@@ -181,13 +189,13 @@ def verify() -> dict[str, object]:
         "delete_routes": 0,
         "github_origin": "api.github.com",
         "merge_routes": 0,
-        "policy_version": "physical-no-merge-v1",
+        "policy_version": "physical-no-merge-v2",
         "permissions": expected_permissions,
         "production_mutations": 0,
         "raw_token_responses": 0,
         "repository": "olegmed1-art/bridge-video-free",
         "result": "PASS",
-        "write_route_count": 1,
+        "write_route_count": 2,
     }
 
 
