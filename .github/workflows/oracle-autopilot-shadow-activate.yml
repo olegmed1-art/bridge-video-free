@@ -1,0 +1,158 @@
+name: Oracle Autopilot shadow activation
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - 'ops/oracle-autopilot-activation-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate activation request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-autopilot-activation-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one activation request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          request = json.load(open(os.environ["REQUEST_FILE"], encoding="utf-8"))
+          assert set(request) == {
+              "request_id", "target_host", "rsa_fingerprint",
+              "expected_source_revision", "activation_scope",
+          }
+          assert re.fullmatch(r"[A-Za-z0-9._-]{1,80}", request["request_id"])
+          assert request["target_host"] == "158.180.47.161"
+          assert request["rsa_fingerprint"] == "SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64"
+          assert re.fullmatch(r"[0-9a-f]{40}", request["expected_source_revision"])
+          assert request["activation_scope"] == "SHADOW_ONLY"
+          print(f"request_id={request['request_id']}")
+          print(f"expected_source_revision={request['expected_source_revision']}")
+          PY
+
+      - name: Verify pinned Oracle identity and SSH access
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/oracle-autopilot-known-hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/oracle-autopilot-known-hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          rsa_line="$(awk '$2 == "ssh-rsa" {print; exit}' "$known")"
+          test -n "$rsa_line"
+          printf '%s\n' "$rsa_line" | awk '{print $2, $3}' > "$RUNNER_TEMP/oracle-rsa.pub"
+          [[ "$(ssh-keygen -lf "$RUNNER_TEMP/oracle-rsa.pub" | awk '{print $2}')" == \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64' ]]
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Activate staged shadow service
+        id: activate
+        shell: bash
+        env:
+          EXPECTED_SOURCE_REVISION: ${{ steps.request.outputs.expected_source_revision }}
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env EXPECTED_SOURCE_REVISION='$EXPECTED_SOURCE_REVISION' bash -s" \
+            <<'REMOTE' | tee "$RUNNER_TEMP/oracle-autopilot-activation-safe.log"
+          set -Eeuo pipefail
+          service=school-autopilot-shadow.service
+          root=/opt/bridge-school/school-autopilot
+          unit=/etc/systemd/system/$service
+          env_file="$root/autopilot-shadow.env"
+          current="$root/current"
+          [[ "$EXPECTED_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ -L "$current" ]]
+          [[ "$(cat "$current/SOURCE_REVISION")" == "$EXPECTED_SOURCE_REVISION" ]]
+          [[ "$(stat -c '%U:%G:%a' "$env_file")" == root:root:600 ]]
+          grep -Fx 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' "$unit" >/dev/null
+          grep -Fx 'ExecStart=/opt/bridge-school/school-autopilot/.venv/bin/python -m oracle_autopilot.worker' "$unit" >/dev/null
+          ! grep -F 'worker_v17' "$unit" >/dev/null
+          systemctl daemon-reload
+          systemd-analyze verify "$unit" >/dev/null
+          systemctl enable --now "$service"
+          sleep 3
+          if ! systemctl is-active --quiet "$service"; then
+            journalctl -u "$service" -n 40 --no-pager >&2 || true
+            exit 1
+          fi
+          systemctl is-enabled --quiet "$service"
+          echo 'AUTOPILOT_SHADOW_ACTIVATION_PASS'
+          echo 'AUTOPILOT_SERVICE_ACTIVE=YES'
+          echo 'AUTOPILOT_SERVICE_ENABLED=YES'
+          echo "AUTOPILOT_SOURCE_REVISION=$EXPECTED_SOURCE_REVISION"
+          echo 'AUTOPILOT_PRODUCTION_MUTATIONS=0'
+          REMOTE
+          grep -Fx 'AUTOPILOT_SHADOW_ACTIVATION_PASS' "$RUNNER_TEMP/oracle-autopilot-activation-safe.log" >/dev/null
+          grep -Fx 'AUTOPILOT_SERVICE_ACTIVE=YES' "$RUNNER_TEMP/oracle-autopilot-activation-safe.log" >/dev/null
+          grep -Fx 'AUTOPILOT_SERVICE_ENABLED=YES' "$RUNNER_TEMP/oracle-autopilot-activation-safe.log" >/dev/null
+          grep -Fx 'AUTOPILOT_PRODUCTION_MUTATIONS=0' "$RUNNER_TEMP/oracle-autopilot-activation-safe.log" >/dev/null
+
+      - name: Publish safe activation summary
+        if: always()
+        shell: bash
+        env:
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          ACTIVATION_OUTCOME: ${{ steps.activate.outcome }}
+        run: |
+          {
+            echo '### Oracle Autopilot shadow activation'
+            echo "- request: ${REQUEST_ID:-unresolved}"
+            echo "- activation: ${ACTIVATION_OUTCOME:-not-run}"
+            echo '- plaintext secret in repository/logs: `NO`'
+            echo '- target: exact pinned Frankfurt Oracle VM'
+            echo '- scope: `SHADOW_ONLY`'
+          } >> "$GITHUB_STEP_SUMMARY"
