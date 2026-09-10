@@ -37,6 +37,7 @@ def _probe(distributions, modules):
             "loaded_runtime_files": [
                 str(distributions[distribution_name].locate_file(entry).resolve())
                 for entry in distributions[distribution_name].files
+                if runner._is_bound_runtime_path(distribution_name, str(entry))
             ],
             "loaded_native_files": [
                 str(
@@ -197,6 +198,40 @@ def test_frozen_artifact_identity_binds_runtime_module_paths(monkeypatch):
     changed["numpy"] = ("numpy", "shadow/numpy/__init__.py")
     monkeypatch.setattr(runner, "PINNED_RUNTIME_MODULES", changed)
     assert runner.frozen_recognizer_artifact_sha256("a" * 64) != baseline
+
+
+def test_install_specific_distribution_files_are_excluded(tmp_path, monkeypatch):
+    modules = {}
+    distributions = {}
+    for distribution_name, (module_name, relative) in runner.PINNED_RUNTIME_MODULES.items():
+        wrapper_payload = f"{distribution_name}-wrapper".encode()
+        wrapper_path = tmp_path / relative
+        wrapper_path.parent.mkdir(parents=True, exist_ok=True)
+        wrapper_path.write_bytes(wrapper_payload)
+        native_relative = f"{module_name}/{module_name}.abi3.so"
+        native_path = tmp_path / native_relative
+        native_path.write_bytes(b"owned-native")
+        console_relative = "../../../bin/" + module_name
+        modules[module_name] = SimpleNamespace(__file__=str(wrapper_path))
+        distributions[distribution_name] = _Distribution(
+            tmp_path,
+            _RecordEntry(relative, wrapper_payload),
+            _RecordEntry(native_relative, b"owned-native"),
+            _RecordEntry(console_relative, b"#!install-specific-python"),
+        )
+    monkeypatch.setattr(
+        runner.metadata, "distribution", lambda name: distributions[name]
+    )
+    monkeypatch.setattr(
+        runner, "_isolated_runtime_probe", lambda: _probe(distributions, modules)
+    )
+
+    identities = runner._verify_imported_runtime_modules()
+    assert all(
+        not item["path"].startswith("../")
+        for identity in identities.values()
+        for item in identity["runtime_files"]
+    )
 
 
 def test_frozen_artifact_identity_binds_native_record_policy(monkeypatch):

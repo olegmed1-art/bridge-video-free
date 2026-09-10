@@ -55,7 +55,11 @@ PINNED_RUNTIME_MODULES = {
     "numpy": ("numpy", "numpy/__init__.py"),
     "opencv-python-headless": ("cv2", "cv2/__init__.py"),
 }
-RUNTIME_NATIVE_RECORD_POLICY = "all-distribution-records-v2"
+PINNED_RUNTIME_PATH_PREFIXES = {
+    "numpy": ("numpy/", "numpy.libs/"),
+    "opencv-python-headless": ("cv2/", "opencv_python_headless.libs/"),
+}
+RUNTIME_NATIVE_RECORD_POLICY = "import-runtime-records-v3"
 RUNTIME_PROBE_TIMEOUT_SECONDS = 30
 MAX_RUNTIME_PROBE_BYTES = 1024 * 1024
 CASE_EXECUTION_TIMEOUT_SECONDS = 300
@@ -84,6 +88,10 @@ targets = {
     "numpy": "numpy",
     "opencv-python-headless": "cv2",
 }
+runtime_prefixes = {
+    "numpy": ("numpy/", "numpy.libs/"),
+    "opencv-python-headless": ("cv2/", "opencv_python_headless.libs/"),
+}
 result = {}
 for distribution_name, module_name in targets.items():
     distribution = importlib.metadata.distribution(distribution_name)
@@ -99,6 +107,8 @@ for distribution_name, module_name in targets.items():
     native_records = {}
     for entry in distribution.files or ():
         relative = str(entry).replace("\\\\", "/")
+        if not relative.startswith(runtime_prefixes[distribution_name]):
+            continue
         if getattr(entry, "hash", None) is None:
             continue
         resolved_entry = str(pathlib.Path(distribution.locate_file(entry)).resolve(strict=True))
@@ -164,6 +174,10 @@ targets = {
     "numpy": "numpy",
     "opencv-python-headless": "cv2",
 }
+runtime_prefixes = {
+    "numpy": ("numpy/", "numpy.libs/"),
+    "opencv-python-headless": ("cv2/", "opencv_python_headless.libs/"),
+}
 prepared_runtime = {}
 for distribution_name, module_name in targets.items():
     distribution = importlib.metadata.distribution(distribution_name)
@@ -179,6 +193,8 @@ for distribution_name, module_name in targets.items():
     native_records = {}
     for entry in distribution.files or ():
         relative = str(entry).replace("\\\\", "/")
+        if not relative.startswith(runtime_prefixes[distribution_name]):
+            continue
         if getattr(entry, "hash", None) is None:
             continue
         resolved_entry = str(pathlib.Path(distribution.locate_file(entry)).resolve(strict=True))
@@ -321,6 +337,15 @@ def _is_native_runtime_path(relative: str) -> bool:
     return any(marker in name for marker in (".so", ".pyd", ".dll", ".dylib"))
 
 
+def _is_bound_runtime_path(distribution_name: str, relative: str) -> bool:
+    path = Path(relative)
+    return (
+        not path.is_absolute()
+        and ".." not in path.parts
+        and relative.startswith(PINNED_RUNTIME_PATH_PREFIXES[distribution_name])
+    )
+
+
 def _verified_record_file(distribution: Any, entry: Any, *, native: bool) -> Path:
     try:
         unresolved = Path(distribution.locate_file(entry))
@@ -461,6 +486,8 @@ def _verify_imported_runtime_modules(
         native_entries = []
         for entry in files:
             relative = str(entry).replace("\\", "/")
+            if not _is_bound_runtime_path(distribution_name, relative):
+                continue
             record_hash = getattr(entry, "hash", None)
             if record_hash is None:
                 if relative.endswith(".dist-info/RECORD") or relative.endswith(".pyc"):
@@ -694,6 +721,7 @@ def frozen_recognizer_artifact_sha256(native_manifest_sha256: str) -> str:
             name: relative
             for name, (_, relative) in PINNED_RUNTIME_MODULES.items()
         },
+        "runtime_path_prefixes": PINNED_RUNTIME_PATH_PREFIXES,
         "runtime_native_record_policy": RUNTIME_NATIVE_RECORD_POLICY,
         "runtime_native_manifest_sha256": native_manifest_sha256,
     }
