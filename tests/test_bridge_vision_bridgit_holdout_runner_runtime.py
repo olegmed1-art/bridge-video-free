@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -78,7 +79,6 @@ def test_imported_pixel_modules_are_bound_to_distribution_record(tmp_path, monke
     monkeypatch.setattr(
         runner.metadata, "distribution", lambda name: distributions[name]
     )
-    monkeypatch.setattr(runner.importlib, "import_module", lambda name: modules[name])
     monkeypatch.setattr(
         runner, "_isolated_runtime_probe", lambda: _probe(distributions, modules)
     )
@@ -139,7 +139,6 @@ def test_native_runtime_files_are_bound_to_distribution_record(tmp_path, monkeyp
     monkeypatch.setattr(
         runner.metadata, "distribution", lambda name: distributions[name]
     )
-    monkeypatch.setattr(runner.importlib, "import_module", lambda name: modules[name])
     monkeypatch.setattr(
         runner, "_isolated_runtime_probe", lambda: _probe(distributions, modules)
     )
@@ -199,7 +198,6 @@ def test_loaded_native_file_must_belong_to_frozen_distribution(
     monkeypatch.setattr(
         runner.metadata, "distribution", lambda name: distributions[name]
     )
-    monkeypatch.setattr(runner.importlib, "import_module", lambda name: modules[name])
     monkeypatch.setattr(runner, "_isolated_runtime_probe", lambda: probe)
     with pytest.raises(runner.HoldoutRunnerError, match="not owned"):
         runner._verify_imported_runtime_modules()
@@ -233,6 +231,27 @@ def test_isolated_probe_uses_file_limited_outputs(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
     monkeypatch.setattr(runner.tempfile, "gettempdir", lambda: str(tmp_path))
     assert runner._isolated_runtime_probe() == expected
+
+
+def test_case_execution_uses_clean_isolated_process(tmp_path, monkeypatch):
+    for key in runner.LOADER_INJECTION_ENV_VARS:
+        monkeypatch.delenv(key, raising=False)
+    receipt = {"result": {"status": "PENDING_TEMPORAL_CONSENSUS"}}
+
+    def fake_run(argv, **kwargs):
+        assert argv[:3] == [runner.sys.executable, "-I", "-c"]
+        assert kwargs["stdout"] is runner.subprocess.DEVNULL
+        assert kwargs["stderr"] is runner.subprocess.DEVNULL
+        assert kwargs["preexec_fn"] is not None
+        assert not any(
+            kwargs["env"].get(key) for key in runner.LOADER_INJECTION_ENV_VARS
+        )
+        output_path = Path(argv[-1])
+        output_path.write_text(json.dumps(receipt), encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    assert runner._execute_case_isolated({"job_type": "test"}) == receipt
 
 
 def test_cli_keeps_output_parent_pinned_across_symlink_retarget(tmp_path, monkeypatch):

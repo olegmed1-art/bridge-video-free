@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
-import importlib
 import json
 import os
 import re
@@ -31,7 +30,6 @@ from bridge_vision.bridgit_rank_layout import (
     JOB_TYPE,
     BridgitRankLayoutError,
     canonical_hash,
-    execute_shadow_job,
 )
 
 RUNNER_INPUT_SCHEMA = "bridge-vision-bridgit-holdout-v1"
@@ -60,6 +58,8 @@ PINNED_RUNTIME_MODULES = {
 RUNTIME_NATIVE_RECORD_POLICY = "all-distribution-native-records-v1"
 RUNTIME_PROBE_TIMEOUT_SECONDS = 30
 MAX_RUNTIME_PROBE_BYTES = 1024 * 1024
+CASE_EXECUTION_TIMEOUT_SECONDS = 300
+MAX_CASE_RECEIPT_BYTES = 16 * 1024 * 1024
 LOADER_INJECTION_ENV_VARS = frozenset(
     {"LD_AUDIT", "LD_LIBRARY_PATH", "LD_PRELOAD"}
 )
@@ -121,6 +121,25 @@ for distribution_name, module_name in targets.items():
         "loaded_native_files": sorted(loaded),
     }
 print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+'''
+
+_ISOLATED_CASE_EXECUTOR = r'''
+import json
+import pathlib
+import sys
+
+repository_root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+job_path = pathlib.Path(sys.argv[2]).resolve(strict=True)
+output_path = pathlib.Path(sys.argv[3])
+sys.path.insert(0, str(repository_root))
+from bridge_vision.bridgit_rank_layout import execute_shadow_job
+
+job = json.loads(job_path.read_text(encoding="utf-8"))
+receipt = execute_shadow_job(job)
+output_path.write_text(
+    json.dumps(receipt, sort_keys=True, separators=(",", ":")),
+    encoding="utf-8",
+)
 '''
 
 
@@ -201,10 +220,16 @@ def _verified_record_file(distribution: Any, entry: Any, *, native: bool) -> Pat
     return path
 
 
-def _isolated_runtime_probe() -> dict[str, Any]:
+def _clean_runtime_environment() -> dict[str, str]:
     if any(os.environ.get(key) for key in LOADER_INJECTION_ENV_VARS):
         raise HoldoutRunnerError("pixel runtime loader injection is not allowed")
-    environment = {
+    preload = Path("/etc/ld.so.preload")
+    try:
+        if preload.is_file() and preload.stat().st_size:
+            raise HoldoutRunnerError("system loader preload is not allowed")
+    except OSError as exc:
+        raise HoldoutRunnerError("system loader preload cannot be verified") from exc
+    return {
         key: value
         for key, value in os.environ.items()
         if key
@@ -215,6 +240,10 @@ def _isolated_runtime_probe() -> dict[str, Any]:
             *LOADER_INJECTION_ENV_VARS,
         }
     }
+
+
+def _isolated_runtime_probe() -> dict[str, Any]:
+    environment = _clean_runtime_environment()
     with tempfile.TemporaryDirectory(prefix="bridgit-runtime-probe-") as temporary:
         stdout_path = Path(temporary) / "stdout"
         stderr_path = Path(temporary) / "stderr"
@@ -260,7 +289,7 @@ def _isolated_runtime_probe() -> dict[str, Any]:
 
 
 def _verify_imported_runtime_modules() -> dict[str, dict[str, Any]]:
-    """Verify entry modules and every native file shipped by the pinned wheels."""
+    """Verify isolated entry modules and every native file in the pinned wheels."""
     isolated = _isolated_runtime_probe()
     if set(isolated) != set(PINNED_RUNTIME_MODULES):
         raise HoldoutRunnerError("isolated pixel runtime probe is incomplete")
@@ -272,21 +301,6 @@ def _verify_imported_runtime_modules() -> dict[str, dict[str, Any]]:
             raise HoldoutRunnerError(
                 f"required pixel runtime is not installed: {distribution_name}"
             ) from exc
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError as exc:
-            raise HoldoutRunnerError(
-                f"required pixel runtime module is unavailable: {module_name}"
-            ) from exc
-        raw_module_path = getattr(module, "__file__", None)
-        if not isinstance(raw_module_path, str) or not raw_module_path:
-            raise HoldoutRunnerError("pixel runtime module origin is unavailable")
-        try:
-            module_path = Path(raw_module_path).resolve(strict=True)
-        except (OSError, ValueError, RuntimeError) as exc:
-            raise HoldoutRunnerError("pixel runtime module origin is unavailable") from exc
-        if not module_path.is_file():
-            raise HoldoutRunnerError("pixel runtime module origin is not a file")
         files = distribution.files
         if files is None:
             raise HoldoutRunnerError("pixel runtime distribution has no file manifest")
@@ -296,11 +310,7 @@ def _verify_imported_runtime_modules() -> dict[str, dict[str, Any]]:
             relative = str(entry).replace("\\", "/")
             if _is_native_runtime_path(relative):
                 native_entries.append((relative, entry))
-            try:
-                located = Path(distribution.locate_file(entry)).resolve(strict=True)
-            except (OSError, ValueError, RuntimeError):
-                continue
-            if located == module_path:
+            if relative == expected_relative:
                 matched = entry
         if matched is None:
             raise HoldoutRunnerError(
@@ -309,7 +319,7 @@ def _verify_imported_runtime_modules() -> dict[str, dict[str, Any]]:
         relative = str(matched).replace("\\", "/")
         if relative != expected_relative:
             raise HoldoutRunnerError("pixel runtime module origin does not match baseline")
-        _verified_record_file(distribution, matched, native=False)
+        module_path = _verified_record_file(distribution, matched, native=False)
         if not native_entries:
             raise HoldoutRunnerError("pixel runtime distribution has no native files")
         verified_native_files = []
@@ -354,6 +364,61 @@ def _verify_imported_runtime_modules() -> dict[str, dict[str, Any]]:
             "loaded_native_files": sorted(set(loaded_relative)),
         }
     return identities
+
+
+def _execute_case_isolated(job: Mapping[str, Any]) -> dict[str, Any]:
+    environment = _clean_runtime_environment()
+    repository_root = Path(__file__).resolve().parent.parent
+
+    def limit_case_files() -> None:
+        resource.setrlimit(
+            resource.RLIMIT_FSIZE,
+            (MAX_CASE_RECEIPT_BYTES, MAX_CASE_RECEIPT_BYTES),
+        )
+
+    with tempfile.TemporaryDirectory(prefix="bridgit-holdout-case-") as temporary:
+        root = Path(temporary)
+        job_path = root / "job.json"
+        output_path = root / "receipt.json"
+        try:
+            job_path.write_text(
+                json.dumps(job, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    _ISOLATED_CASE_EXECUTOR,
+                    str(repository_root),
+                    str(job_path),
+                    str(output_path),
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=temporary,
+                env=environment,
+                timeout=CASE_EXECUTION_TIMEOUT_SECONDS,
+                preexec_fn=limit_case_files,
+            )
+            if completed.returncode != 0:
+                raise HoldoutRunnerError("isolated recognizer case failed")
+            payload = _read_bounded_regular_file(
+                output_path, MAX_CASE_RECEIPT_BYTES, "isolated case receipt"
+            )
+        except HoldoutRunnerError:
+            raise
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise HoldoutRunnerError("isolated recognizer case failed") from exc
+    try:
+        receipt = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HoldoutRunnerError("isolated case receipt is invalid") from exc
+    if not isinstance(receipt, Mapping):
+        raise HoldoutRunnerError("isolated case receipt is invalid")
+    return dict(receipt)
 
 
 def _installed_runtime_versions() -> dict[str, str]:
@@ -700,7 +765,7 @@ def run_package(package_path: Path) -> dict[str, Any]:
             raise HoldoutRunnerError("duplicate case_id")
         seen_case_ids.add(case_id)
         receipt, runtime_metrics = _measure(
-            lambda job=job: execute_shadow_job(job)
+            lambda job=job: _execute_case_isolated(job)
         )
         result = receipt.get("result")
         if not isinstance(result, Mapping):
