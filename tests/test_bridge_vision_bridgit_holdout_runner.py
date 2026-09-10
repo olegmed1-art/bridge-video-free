@@ -7,6 +7,20 @@ import pytest
 
 import bridge_vision.bridgit_holdout_runner as runner
 
+_TEST_RUNTIME_MODULES = {
+    "numpy": {
+        "native_files": [{"path": "numpy/core.test.so", "sha256": "a" * 64}],
+        "loaded_native_files": ["numpy/core.test.so"],
+    },
+    "opencv-python-headless": {
+        "native_files": [{"path": "cv2/cv2.test.so", "sha256": "b" * 64}],
+        "loaded_native_files": ["cv2/cv2.test.so"],
+    },
+}
+_TEST_NATIVE_MANIFEST_SHA256 = runner.runtime_native_manifest_sha256(
+    _TEST_RUNTIME_MODULES
+)
+
 
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -15,8 +29,11 @@ def _sha(path: Path) -> str:
 def _stub_runtime(monkeypatch) -> None:
     monkeypatch.setattr(
         runner,
-        "_installed_runtime_versions",
-        lambda: dict(runner.PINNED_RUNTIME_VERSIONS),
+        "_verified_runtime_identity",
+        lambda: (
+            dict(runner.PINNED_RUNTIME_VERSIONS),
+            _TEST_RUNTIME_MODULES,
+        ),
     )
 
 
@@ -54,7 +71,10 @@ def _make_package(root: Path, *, case_count: int = 1) -> Path:
         "runner_version": runner.RUNNER_VERSION,
         "recognizer_head_git_sha": runner.ALGORITHM_BASELINE_GIT_SHA,
         "recognizer_version": runner.BACKEND_VERSION,
-        "recognizer_artifact_sha256": runner.frozen_recognizer_artifact_sha256(),
+        "runtime_native_manifest_sha256": _TEST_NATIVE_MANIFEST_SHA256,
+        "recognizer_artifact_sha256": runner.frozen_recognizer_artifact_sha256(
+            _TEST_NATIVE_MANIFEST_SHA256
+        ),
         "cases": cases,
     }
     path = root / "RECOGNIZER_HOLDOUT_V1.json"
@@ -182,8 +202,12 @@ def test_runner_rejects_nonbaseline_head_and_runtime_version_mismatch(
     package_path = _make_package(tmp_path / "runtime")
     monkeypatch.setattr(
         runner,
-        "_installed_runtime_versions",
-        lambda: {"numpy": "2.3.1", "opencv-python-headless": "5.0.0.93"},
+        "_verified_runtime_identity",
+        lambda: (_ for _ in ()).throw(
+            runner.HoldoutRunnerError(
+                "pixel runtime versions do not match frozen baseline"
+            )
+        ),
     )
     with pytest.raises(runner.HoldoutRunnerError, match="runtime versions"):
         runner.run_package(package_path)

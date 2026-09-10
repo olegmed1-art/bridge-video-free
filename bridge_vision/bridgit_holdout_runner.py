@@ -16,6 +16,8 @@ import os
 import re
 import resource
 import stat
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -56,6 +58,67 @@ PINNED_RUNTIME_MODULES = {
     "opencv-python-headless": ("cv2", "cv2/__init__.py"),
 }
 RUNTIME_NATIVE_RECORD_POLICY = "all-distribution-native-records-v1"
+RUNTIME_PROBE_TIMEOUT_SECONDS = 30
+MAX_RUNTIME_PROBE_BYTES = 1024 * 1024
+
+_ISOLATED_RUNTIME_PROBE = r'''
+import importlib
+import importlib.metadata
+import json
+import pathlib
+import sys
+
+targets = {
+    "numpy": "numpy",
+    "opencv-python-headless": "cv2",
+}
+result = {}
+for distribution_name, module_name in targets.items():
+    distribution = importlib.metadata.distribution(distribution_name)
+    module = importlib.import_module(module_name)
+    if module_name == "numpy":
+        importlib.import_module("numpy.linalg")
+        module.linalg.norm(module.asarray([1.0, 2.0]))
+    else:
+        numpy = importlib.import_module("numpy")
+        module.cvtColor(numpy.zeros((2, 2, 3), dtype=numpy.uint8), module.COLOR_BGR2GRAY)
+    entry_module = pathlib.Path(module.__file__).resolve(strict=True)
+    native_records = {}
+    for entry in distribution.files or ():
+        relative = str(entry).replace("\\\\", "/")
+        name = pathlib.PurePosixPath(relative).name.lower()
+        if any(marker in name for marker in (".so", ".pyd", ".dll", ".dylib")):
+            native_records[str(pathlib.Path(distribution.locate_file(entry)).resolve(strict=True))] = relative
+    loaded = set()
+    for loaded_name, loaded_module in tuple(sys.modules.items()):
+        if loaded_name == module_name or loaded_name.startswith(module_name + "."):
+            raw_path = getattr(loaded_module, "__file__", None)
+            if isinstance(raw_path, str):
+                resolved = pathlib.Path(raw_path).resolve(strict=True)
+                if str(resolved) in native_records:
+                    loaded.add(str(resolved))
+                elif any(marker in resolved.name.lower() for marker in (".so", ".pyd", ".dll", ".dylib")):
+                    raise RuntimeError("unowned native extension loaded for " + module_name)
+    maps = pathlib.Path("/proc/self/maps")
+    if not maps.is_file():
+        raise RuntimeError("Linux loaded-library map is unavailable")
+    for line in maps.read_text(encoding="utf-8", errors="strict").splitlines():
+        raw_path = line.rsplit(None, 1)[-1]
+        if raw_path.startswith("/"):
+            try:
+                resolved = str(pathlib.Path(raw_path).resolve(strict=True))
+            except OSError:
+                continue
+            if resolved in native_records:
+                loaded.add(resolved)
+    if not loaded:
+        raise RuntimeError("no owned native runtime file was observed for " + module_name)
+    result[distribution_name] = {
+        "entry_module": str(entry_module),
+        "loaded_native_files": sorted(loaded),
+    }
+print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+'''
 
 
 class HoldoutRunnerError(ValueError):
@@ -135,8 +198,39 @@ def _verified_record_file(distribution: Any, entry: Any, *, native: bool) -> Pat
     return path
 
 
+def _isolated_runtime_probe() -> dict[str, Any]:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP"}
+    }
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", _ISOLATED_RUNTIME_PROBE],
+            check=False,
+            capture_output=True,
+            cwd=tempfile.gettempdir(),
+            env=environment,
+            timeout=RUNTIME_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HoldoutRunnerError("isolated pixel runtime probe failed") from exc
+    if completed.returncode != 0 or len(completed.stdout) > MAX_RUNTIME_PROBE_BYTES:
+        raise HoldoutRunnerError("isolated pixel runtime probe failed")
+    try:
+        result = json.loads(completed.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HoldoutRunnerError("isolated pixel runtime probe is invalid") from exc
+    if not isinstance(result, Mapping):
+        raise HoldoutRunnerError("isolated pixel runtime probe is invalid")
+    return dict(result)
+
+
 def _verify_imported_runtime_modules() -> dict[str, dict[str, Any]]:
     """Verify entry modules and every native file shipped by the pinned wheels."""
+    isolated = _isolated_runtime_probe()
+    if set(isolated) != set(PINNED_RUNTIME_MODULES):
+        raise HoldoutRunnerError("isolated pixel runtime probe is incomplete")
     identities: dict[str, dict[str, Any]] = {}
     for distribution_name, (module_name, expected_relative) in PINNED_RUNTIME_MODULES.items():
         try:
@@ -185,13 +279,46 @@ def _verify_imported_runtime_modules() -> dict[str, dict[str, Any]]:
         _verified_record_file(distribution, matched, native=False)
         if not native_entries:
             raise HoldoutRunnerError("pixel runtime distribution has no native files")
-        verified_native_paths = []
+        verified_native_files = []
+        native_by_resolved_path = {}
         for native_relative, native_entry in sorted(native_entries):
-            _verified_record_file(distribution, native_entry, native=True)
-            verified_native_paths.append(native_relative)
+            native_path = _verified_record_file(
+                distribution, native_entry, native=True
+            )
+            native_sha256 = _record_sha256(getattr(native_entry, "hash", None))
+            native_by_resolved_path[str(native_path)] = native_relative
+            verified_native_files.append(
+                {"path": native_relative, "sha256": native_sha256}
+            )
+        probe = isolated.get(distribution_name)
+        if not isinstance(probe, Mapping):
+            raise HoldoutRunnerError("isolated pixel runtime probe is invalid")
+        try:
+            probe_entry = str(Path(str(probe.get("entry_module"))).resolve(strict=True))
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise HoldoutRunnerError("isolated pixel runtime probe is invalid") from exc
+        if probe_entry != str(module_path):
+            raise HoldoutRunnerError(
+                "isolated pixel runtime module does not match imported module"
+            )
+        loaded_raw = probe.get("loaded_native_files")
+        if (
+            not isinstance(loaded_raw, Sequence)
+            or isinstance(loaded_raw, (str, bytes))
+            or not loaded_raw
+        ):
+            raise HoldoutRunnerError("isolated pixel runtime probe has no native files")
+        loaded_relative = []
+        for raw_path in loaded_raw:
+            if not isinstance(raw_path, str) or raw_path not in native_by_resolved_path:
+                raise HoldoutRunnerError(
+                    "loaded pixel runtime native file is not owned by frozen distribution"
+                )
+            loaded_relative.append(native_by_resolved_path[raw_path])
         identities[distribution_name] = {
             "entry_module": relative,
-            "native_files": verified_native_paths,
+            "native_files": verified_native_files,
+            "loaded_native_files": sorted(set(loaded_relative)),
         }
     return identities
 
@@ -205,19 +332,32 @@ def _installed_runtime_versions() -> dict[str, str]:
             raise HoldoutRunnerError(
                 f"required pixel runtime is not installed: {distribution}"
             ) from exc
-    _verify_imported_runtime_modules()
     return versions
 
 
-def _verified_runtime_versions() -> dict[str, str]:
+def _verified_runtime_identity() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     versions = _installed_runtime_versions()
     if versions != PINNED_RUNTIME_VERSIONS:
         raise HoldoutRunnerError("pixel runtime versions do not match frozen baseline")
-    return versions
+    return versions, _verify_imported_runtime_modules()
 
 
-def frozen_recognizer_artifact_sha256() -> str:
+def runtime_native_manifest_sha256(
+    runtime_modules: Mapping[str, Mapping[str, Any]],
+) -> str:
+    manifest = {
+        distribution: list(identity.get("native_files", []))
+        for distribution, identity in sorted(runtime_modules.items())
+    }
+    return hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def frozen_recognizer_artifact_sha256(native_manifest_sha256: str) -> str:
     """Return the trusted artifact identity encoded by the frozen baseline."""
+    if _HEX64.fullmatch(native_manifest_sha256) is None:
+        raise HoldoutRunnerError("pixel runtime native manifest hash is invalid")
     payload = {
         "algorithm_baseline_git_sha": ALGORITHM_BASELINE_GIT_SHA,
         "backend_version": BACKEND_VERSION,
@@ -228,17 +368,27 @@ def frozen_recognizer_artifact_sha256() -> str:
             for name, (_, relative) in PINNED_RUNTIME_MODULES.items()
         },
         "runtime_native_record_policy": RUNTIME_NATIVE_RECORD_POLICY,
+        "runtime_native_manifest_sha256": native_manifest_sha256,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
 
+def recognizer_artifact_identity() -> tuple[str, str]:
+    """Verify source/runtime and return artifact plus native-manifest identities."""
+    _verify_algorithm_baseline()
+    _, runtime_modules = _verified_runtime_identity()
+    native_manifest_sha = runtime_native_manifest_sha256(runtime_modules)
+    return (
+        frozen_recognizer_artifact_sha256(native_manifest_sha),
+        native_manifest_sha,
+    )
+
+
 def recognizer_artifact_sha256() -> str:
     """Verify local source/runtime and return the trusted portable artifact identity."""
-    _verify_algorithm_baseline()
-    _verified_runtime_versions()
-    return frozen_recognizer_artifact_sha256()
+    return recognizer_artifact_identity()[0]
 
 
 def _read_bounded_regular_file(path: Path, max_bytes: int, kind: str) -> bytes:
@@ -496,7 +646,9 @@ def run_package(package_path: Path) -> dict[str, Any]:
         )
     if package.get("recognizer_version") != BACKEND_VERSION:
         raise HoldoutRunnerError("recognizer version does not match frozen package")
-    artifact_sha = recognizer_artifact_sha256()
+    artifact_sha, native_manifest_sha = recognizer_artifact_identity()
+    if package.get("runtime_native_manifest_sha256") != native_manifest_sha:
+        raise HoldoutRunnerError("pixel runtime native manifest does not match package")
     if package.get("recognizer_artifact_sha256") != artifact_sha:
         raise HoldoutRunnerError("recognizer artifact does not match frozen package")
     cases = package.get("cases")
@@ -561,6 +713,7 @@ def run_package(package_path: Path) -> dict[str, Any]:
     deterministic_receipt = {
         "recognizer_head_git_sha": head,
         "recognizer_artifact_sha256": artifact_sha,
+        "runtime_native_manifest_sha256": native_manifest_sha,
         "recognizer_version": BACKEND_VERSION,
         "runner_version": RUNNER_VERSION,
         "portable_input_sha256": portable_input_sha,
