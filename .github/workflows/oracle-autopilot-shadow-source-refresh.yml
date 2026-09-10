@@ -1,0 +1,183 @@
+name: Oracle Autopilot shadow source refresh
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - 'ops/oracle-autopilot-source-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate source refresh request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-autopilot-source-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one source refresh request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          request = json.load(open(os.environ["REQUEST_FILE"], encoding="utf-8"))
+          assert set(request) == {"request_id", "target_host", "rsa_fingerprint", "refresh_scope"}
+          assert re.fullmatch(r"[A-Za-z0-9._-]{1,80}", request["request_id"])
+          assert request["target_host"] == "158.180.47.161"
+          assert request["rsa_fingerprint"] == "SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64"
+          assert request["refresh_scope"] == "SHADOW_ONLY_SOURCE_RESTART"
+          print(f"request_id={request['request_id']}")
+          PY
+
+      - name: Verify pinned Oracle identity and SSH access
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/oracle-autopilot-known-hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/oracle-autopilot-known-hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          rsa_line="$(awk '$2 == "ssh-rsa" {print; exit}' "$known")"
+          test -n "$rsa_line"
+          printf '%s\n' "$rsa_line" | awk '{print $2, $3}' > "$RUNNER_TEMP/oracle-rsa.pub"
+          [[ "$(ssh-keygen -lf "$RUNNER_TEMP/oracle-rsa.pub" | awk '{print $2}')" == \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64' ]]
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Package source refresh
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/oracle-autopilot-source-refresh.tgz"
+          printf '%s\n' "$GITHUB_SHA" > AUTOPILOT_SOURCE_REVISION
+          tar -czf "$bundle" \
+            AUTOPILOT_SOURCE_REVISION \
+            oracle_autopilot \
+            autopilot_phase3b \
+            deploy/oracle-autopilot/school-autopilot-shadow.service
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+
+      - name: Install source and restart active service
+        id: refresh
+        shell: bash
+        run: |
+          set -euo pipefail
+          scp -q -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 '${{ steps.package.outputs.bundle }}' \
+            "$ORACLE_USER@$ORACLE_HOST:/tmp/oracle-autopilot-source-refresh-${GITHUB_RUN_ID}.tgz"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env REMOTE_BUNDLE='/tmp/oracle-autopilot-source-refresh-${GITHUB_RUN_ID}.tgz' bash -s" \
+            <<'REMOTE' | tee "$RUNNER_TEMP/oracle-autopilot-source-refresh-safe.log"
+          set -Eeuo pipefail
+          service=school-autopilot-shadow.service
+          root=/opt/bridge-school/school-autopilot
+          releases="$root/releases"
+          work="$(mktemp -d /var/tmp/oracle-autopilot-source-refresh.XXXXXXXX)"
+          cleanup(){ rm -rf -- "$work"; rm -f -- "$REMOTE_BUNDLE"; }
+          trap cleanup EXIT
+          [[ "$REMOTE_BUNDLE" =~ ^/tmp/oracle-autopilot-source-refresh-[0-9]+\.tgz$ ]]
+          tar -xzf "$REMOTE_BUNDLE" -C "$work"
+          revision="$(cat "$work/AUTOPILOT_SOURCE_REVISION")"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          test -f "$work/oracle_autopilot/worker.py"
+          test -f "$work/oracle_autopilot/worker_chain_smoke.py"
+          test -f "$work/autopilot_phase3b/policy.py"
+          grep -Fx 'ExecStart=/opt/bridge-school/school-autopilot/.venv/bin/python -m oracle_autopilot.worker_chain_smoke' \
+            "$work/deploy/oracle-autopilot/school-autopilot-shadow.service" >/dev/null
+          ! grep -F 'worker_v17' "$work/deploy/oracle-autopilot/school-autopilot-shadow.service" >/dev/null
+          [[ "$(stat -c '%U:%G:%a' "$root/autopilot-shadow.env")" == root:root:600 ]]
+          was_active="$(systemctl is-active "$service" 2>/dev/null || true)"
+          was_enabled="$(systemctl is-enabled "$service" 2>/dev/null || true)"
+          install -d -m 0755 -o root -g root "$releases/$revision"
+          install -d -m 0755 -o root -g root "$releases/$revision/oracle_autopilot"
+          install -m 0644 -o root -g root "$work"/oracle_autopilot/*.py "$releases/$revision/oracle_autopilot/"
+          install -d -m 0755 -o root -g root "$releases/$revision/autopilot_phase3b"
+          install -m 0644 -o root -g root "$work"/autopilot_phase3b/*.py "$releases/$revision/autopilot_phase3b/"
+          printf '%s\n' "$revision" > "$releases/$revision/SOURCE_REVISION"
+          chmod 0444 "$releases/$revision/SOURCE_REVISION"
+          ln -sfn "$releases/$revision" "$root/current.next"
+          mv -Tf "$root/current.next" "$root/current"
+          install -m 0644 -o root -g root "$work/deploy/oracle-autopilot/school-autopilot-shadow.service" "/etc/systemd/system/$service"
+          systemctl daemon-reload
+          systemd-analyze verify "/etc/systemd/system/$service" >/dev/null
+          if [[ "$was_active" == active || "$was_enabled" == enabled ]]; then
+            systemctl restart "$service"
+            sleep 3
+            systemctl is-active --quiet "$service"
+            systemctl is-enabled --quiet "$service"
+          fi
+          echo 'AUTOPILOT_SOURCE_REFRESH_PASS'
+          echo "AUTOPILOT_SOURCE_REVISION=$revision"
+          echo "AUTOPILOT_SERVICE_ACTIVE=$(systemctl is-active "$service" 2>/dev/null || true)"
+          echo "AUTOPILOT_SERVICE_ENABLED=$(systemctl is-enabled "$service" 2>/dev/null || true)"
+          echo 'AUTOPILOT_PRODUCTION_MUTATIONS=0'
+          REMOTE
+          grep -Fx 'AUTOPILOT_SOURCE_REFRESH_PASS' "$RUNNER_TEMP/oracle-autopilot-source-refresh-safe.log" >/dev/null
+          grep -Fx 'AUTOPILOT_PRODUCTION_MUTATIONS=0' "$RUNNER_TEMP/oracle-autopilot-source-refresh-safe.log" >/dev/null
+
+      - name: Publish safe source refresh summary
+        if: always()
+        shell: bash
+        env:
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          REFRESH_OUTCOME: ${{ steps.refresh.outcome }}
+        run: |
+          {
+            echo '### Oracle Autopilot shadow source refresh'
+            echo "- request: ${REQUEST_ID:-unresolved}"
+            echo "- refresh: ${REFRESH_OUTCOME:-not-run}"
+            echo '- plaintext secret in repository/logs: `NO`'
+            echo '- target: exact pinned Frankfurt Oracle VM'
+            echo '- scope: `SHADOW_ONLY_SOURCE_RESTART`'
+          } >> "$GITHUB_STEP_SUMMARY"
