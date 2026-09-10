@@ -62,7 +62,9 @@ jobs:
           path.write_text('[DEFAULT]\\n'+''.join(f'{k}={v}\\n' for k,v in values.items())+f'key_file={Path.home()/".oci"/"key.pem"}\\n')
           PY
           chmod 0600 "$HOME/.oci/config"
-          oci iam compartment list --include-root --compartment-id-in-subtree true --access-level ACCESSIBLE --all > "$RUNNER_TEMP/compartments.json"
+          tenancy_id="$(awk -F= '$1=="tenancy"{print $2}' "$HOME/.oci/config")"
+          [[ "$tenancy_id" == ocid1.tenancy.* ]]
+          oci iam compartment list --compartment-id "$tenancy_id" --include-root --compartment-id-in-subtree true --access-level ACCESSIBLE --all > "$RUNNER_TEMP/compartments.json"
           python - "$RUNNER_TEMP/compartments.json" > "$RUNNER_TEMP/compartment-ids" <<'PY'
           import json,sys
           for row in json.load(open(sys.argv[1]))['data']:
