@@ -64,7 +64,7 @@ jobs:
           PY
           chmod 0600 "$HOME/.oci/config"
           echo 'OCI_CONFIG=PASS'
-          tenancy_id="$(awk -F= '$1=="tenancy"{print $2}' "$HOME/.oci/config")"
+          tenancy_id="$(python -c 'import configparser,pathlib; p=configparser.ConfigParser(); p.read(pathlib.Path.home()/".oci"/"config"); print(p["DEFAULT"]["tenancy"])')"
           [[ -n "$tenancy_id" ]]
           echo 'OCI_TENANCY_PARSE=PASS'
           oci iam compartment list --compartment-id "$tenancy_id" --include-root --compartment-id-in-subtree true --access-level ACCESSIBLE --all > "$RUNNER_TEMP/compartments.json"
