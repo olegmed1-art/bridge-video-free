@@ -32,6 +32,7 @@ ALLOWED_STATUSES = frozenset(
 MAX_RESULT_BYTES = 1024 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{2,127}$")
+_IDENTITY_TEXT = re.compile(r"^[^\x00-\x1f\x7f]{1,128}$")
 
 
 class CardRecognitionContractError(ValueError):
@@ -73,6 +74,88 @@ def _sha(value: Any, field: str) -> str:
     if not _SHA256.fullmatch(text):
         raise CardRecognitionContractError(f"invalid {field}")
     return text
+
+
+def _deal_identity(value: Any) -> dict[str, Any]:
+    identity = _mapping(value, "deal_identity")
+    kind = str(identity.get("kind") or "").upper()
+    if kind == "EXPLICIT_BOARD":
+        if set(identity) != {"kind", "scope", "value"}:
+            raise CardRecognitionContractError("invalid explicit deal_identity fields")
+        scope = identity.get("scope")
+        board = identity.get("value")
+        if (
+            not isinstance(scope, str)
+            or not isinstance(board, str)
+            or not _IDENTITY_TEXT.fullmatch(scope)
+            or not _IDENTITY_TEXT.fullmatch(board)
+        ):
+            raise CardRecognitionContractError("invalid explicit deal_identity")
+        return {"kind": kind, "scope": scope, "value": board}
+    if kind == "VISUAL_ANCHOR":
+        if set(identity) != {
+            "kind",
+            "anchor_frame_sha256",
+            "inliers",
+            "inlier_ratio",
+        }:
+            raise CardRecognitionContractError("invalid visual deal_identity fields")
+        inliers = identity.get("inliers")
+        if isinstance(inliers, bool) or not isinstance(inliers, int) or inliers <= 0:
+            raise CardRecognitionContractError("invalid visual deal_identity inliers")
+        return {
+            "kind": kind,
+            "anchor_frame_sha256": _sha(
+                identity.get("anchor_frame_sha256"),
+                "deal_identity.anchor_frame_sha256",
+            ),
+            "inliers": inliers,
+            "inlier_ratio": _confidence(
+                identity.get("inlier_ratio"), "deal_identity.inlier_ratio"
+            ),
+        }
+    raise CardRecognitionContractError("unsupported deal_identity")
+
+
+def _trusted_tuple(
+    result: Mapping[str, Any], approved_recognizers: Sequence[Mapping[str, Any]]
+) -> tuple[str, str, str]:
+    version = result["recognizer_version"]
+    profile_id = result["recognition_profile_id"]
+    verification_sha = _sha(
+        result.get("profile_verification_sha256"), "profile_verification_sha256"
+    )
+    candidate = (version, profile_id, verification_sha)
+    approved: set[tuple[str, str, str]] = set()
+    for index, raw in enumerate(approved_recognizers):
+        item = _mapping(raw, f"approved_recognizers[{index}]")
+        if set(item) != {
+            "recognizer_version",
+            "recognition_profile_id",
+            "profile_verification_sha256",
+        }:
+            raise CardRecognitionContractError("invalid approved recognizer tuple")
+        approved_version = item["recognizer_version"]
+        approved_profile = item["recognition_profile_id"]
+        if not isinstance(approved_version, str) or not _VERSION.fullmatch(
+            approved_version
+        ):
+            raise CardRecognitionContractError("invalid approved recognizer version")
+        if not isinstance(approved_profile, str) or approved_profile not in CONFIDENCE_GATES:
+            raise CardRecognitionContractError("invalid approved recognizer profile")
+        approved.add(
+            (
+                approved_version,
+                approved_profile,
+                _sha(
+                    item["profile_verification_sha256"],
+                    f"approved_recognizers[{index}].profile_verification_sha256",
+                ),
+            )
+        )
+    if candidate not in approved:
+        raise CardRecognitionContractError("recognizer/profile tuple is not approved")
+    return candidate
 
 
 def _unknown(seat: str, slot: int, version: str) -> dict[str, Any]:
@@ -166,11 +249,17 @@ def _validate_record(
     return normalized
 
 
-def validate_recognition_result(payload: Any) -> dict[str, Any]:
+def validate_recognition_result(
+    payload: Any,
+    *,
+    approved_recognizers: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
     """Validate and normalize a hash-bound recognizer result.
 
-    The returned object contains exactly thirteen slots per seat.  Missing
+    The returned object contains exactly thirteen slots per seat. Missing
     information must already be represented as UNKNOWN by the producer.
+    Known cards additionally require a caller-supplied approved immutable
+    recognizer/profile tuple and a stable deal identity.
     """
 
     envelope = _mapping(payload, "recognition result")
@@ -229,6 +318,13 @@ def validate_recognition_result(payload: Any) -> dict[str, Any]:
         if card in known_cards:
             raise CardRecognitionContractError("duplicate recognized card")
         known_cards.add(card)
+    deal_identity = None
+    profile_verification_sha256 = None
+    if known_cards:
+        _, _, profile_verification_sha256 = _trusted_tuple(
+            result, approved_recognizers
+        )
+        deal_identity = _deal_identity(result.get("deal_identity"))
     if result["status"] == "COMPLETE_VISUAL" and len(known_cards) != 52:
         raise CardRecognitionContractError(
             "COMPLETE_VISUAL requires 52 recognized cards and no UNKNOWN slots"
@@ -252,6 +348,9 @@ def validate_recognition_result(payload: Any) -> dict[str, Any]:
         "logical_inference_performed": False,
         "canonical_promotion_allowed": False,
     }
+    if known_cards:
+        normalized["profile_verification_sha256"] = profile_verification_sha256
+        normalized["deal_identity"] = deal_identity
     normalized["consumer_sha256"] = canonical_sha256(normalized)
     return normalized
 

@@ -28,12 +28,25 @@ def _unknown(seat: str, slot: int) -> dict:
     }
 
 
+APPROVED_RECOGNIZER = {
+    "recognizer_version": "recognizer-v1",
+    "recognition_profile_id": "video31-card-consumer-v1",
+    "profile_verification_sha256": "f" * 64,
+}
+
+
 def _envelope() -> dict:
     result = {
         "schema": "bridge-video-deal-evidence/v1",
         "status": "PARTIAL_VISUAL",
         "recognizer_version": "recognizer-v1",
         "recognition_profile_id": "video31-card-consumer-v1",
+        "profile_verification_sha256": "f" * 64,
+        "deal_identity": {
+            "kind": "EXPLICIT_BOARD",
+            "scope": "fixture-video",
+            "value": "board-7",
+        },
         "suit_order": ["H", "C", "D", "S"],
         "card_records": [_unknown(seat, slot) for seat in "NESW" for slot in range(1, 14)],
         "logical_inference": {"requested": False, "performed": False},
@@ -66,12 +79,57 @@ def test_accepts_hash_bound_partial_result_and_preserves_unknowns() -> None:
     record.pop("unknown_slot")
     _rehash(envelope)
 
-    consumed = validate_recognition_result(envelope)
+    consumed = validate_recognition_result(
+        envelope, approved_recognizers=[APPROVED_RECOGNIZER]
+    )
 
     assert consumed["known_card_count"] == 1
     assert consumed["unknown_slot_count"] == 51
     assert consumed["complete"] is False
     assert consumed["logical_inference_performed"] is False
+    assert consumed["deal_identity"] == envelope["result"]["deal_identity"]
+    assert consumed["profile_verification_sha256"] == "f" * 64
+
+
+def test_rejects_known_card_without_approved_recognizer_tuple() -> None:
+    envelope = _envelope()
+    record = envelope["result"]["card_records"][0]
+    record.update(
+        suit="S",
+        rank="A",
+        source="TEMPORAL_CONSENSUS",
+        frame_sha256="a" * 64,
+        frame_sha256s=["a" * 64, "b" * 64],
+        support_count=2,
+        confidence=0.97,
+    )
+    record.pop("unknown_slot")
+    _rehash(envelope)
+
+    with pytest.raises(CardRecognitionContractError, match="tuple is not approved"):
+        validate_recognition_result(envelope)
+
+
+def test_rejects_temporal_evidence_without_stable_deal_identity() -> None:
+    envelope = _envelope()
+    envelope["result"].pop("deal_identity")
+    record = envelope["result"]["card_records"][0]
+    record.update(
+        suit="S",
+        rank="A",
+        source="TEMPORAL_CONSENSUS",
+        frame_sha256="a" * 64,
+        frame_sha256s=["a" * 64, "b" * 64],
+        support_count=2,
+        confidence=0.97,
+    )
+    record.pop("unknown_slot")
+    _rehash(envelope)
+
+    with pytest.raises(CardRecognitionContractError, match="deal_identity"):
+        validate_recognition_result(
+            envelope, approved_recognizers=[APPROVED_RECOGNIZER]
+        )
 
 
 def test_keeps_single_frame_visual_evidence_pending() -> None:
@@ -224,7 +282,9 @@ def test_rejects_duplicate_card_across_seats() -> None:
         record.pop("unknown_slot")
     _rehash(envelope)
     with pytest.raises(CardRecognitionContractError, match="duplicate recognized card"):
-        validate_recognition_result(envelope)
+        validate_recognition_result(
+            envelope, approved_recognizers=[APPROVED_RECOGNIZER]
+        )
 
 
 def test_rejects_more_than_thirteen_slots_for_one_seat() -> None:
