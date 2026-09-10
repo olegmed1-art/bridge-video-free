@@ -1,0 +1,11 @@
+{
+  "request_id": "role-dispatch-broker-v2-20260910T1740Z",
+  "target_host": "158.180.47.161",
+  "rsa_fingerprint": "SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64",
+  "candidate_host": "bridge-school-autopilot-a9zfnfmgx-olegmed1-4368s-projects.vercel.app",
+  "source_sha": "32ca11930268c5f6e4d79bd2fc3c47c5bef5e71d",
+  "artifact_sha256": "910ff47303d20a4c678bbdd1738d760bfbae5064bbf0bc6de40341069938d16c",
+  "policy_sha256": "69c9672387a2a6cf7680a4c4ab8fe09513d3f20668426c7894aca7e8b9869202",
+  "provenance_sha256": "89c68c483705cae521a83c34b9058d6ac843aae584923d7a45bc2e3ca7a71c58",
+  "activation_scope": "SHADOW_BROKER_ONLY"
+}
