@@ -109,7 +109,9 @@ jobs:
             fi
             sleep 5
           done
-          text="$(printf '%s' "$execution" | python -c 'import json,sys; x=json.load(sys.stdin).get("data",{}).get("content",{}).get("text",""); print(x if isinstance(x,str) else "")')"
-          exit_code="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("content",{}).get("exit-code",""))')"
+          text="$(printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); c=d.get("content") or {}; x=c.get("text",""); print(x if isinstance(x,str) else "")')"
+          exit_code="$(printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); c=d.get("content") or {}; v=c.get("exit-code",""); print(v if v is not None else "")')"
+          echo "LIGHT_RUN_COMMAND_LIFECYCLE=${lifecycle:-UNKNOWN}"
+          echo "LIGHT_RUN_COMMAND_EXIT=${exit_code:-UNKNOWN}"
           [[ "$lifecycle" == SUCCEEDED && "$exit_code" == 0 && "$text" == *LIGHT_RUN_COMMAND_ROOT=PASS* ]]
           echo 'LIGHT_RUN_COMMAND_ROOT=PASS'
