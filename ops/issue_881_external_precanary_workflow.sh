@@ -47,6 +47,7 @@ protected_gate_paths=(
   '.github/workflows/autopilot-oracle-secret-key-inventory-once.yml'
   '.github/workflows/autopilot-owner-auth-preflight-once.yml'
   '.github/workflows/autopilot-production-canary-cleanup-once.yml'
+  '.github/workflows/autopilot-readonly-github-schema-once.yml'
   '.github/workflows/autopilot-temp-neon-owner-credential-probe.yml'
   '.github/workflows/autopilot-uv-runtime-exact-image-gate.yml'
   '.github/workflows/autopilot-vercel-capability-probe-once.yml'
