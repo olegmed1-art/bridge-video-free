@@ -1,0 +1,7 @@
+{
+  "request_id": "chat-dispatch-post-activation-20260910-02",
+  "action": "inspect_shadow_failure",
+  "target_host": "158.180.47.161",
+  "source_revision": "9064044d4c5b85803c6778060dff4843111ab888",
+  "no_instance_stop": true
+}
