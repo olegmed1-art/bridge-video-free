@@ -1,0 +1,187 @@
+name: Oracle host role observe read-only
+
+on:
+  push:
+    branches:
+      - book/oracle-role-inventory-27-20260910
+    paths:
+      - '.github/workflows/oracle-host-role-observe-readonly.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Configure bounded OCI control client
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY OCI_REGION; do
+            [[ -n "${!value:-}" ]] || { echo "$value is not configured" >&2; exit 21; }
+          done
+          [[ "$OCI_REGION" == eu-frankfurt-1 ]] || { echo 'unexpected OCI region' >&2; exit 22; }
+          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
+          install -d -m 0700 "$HOME/.oci"
+          printf '%s' "$OCI_KEY" | python -c 'import sys; raw=sys.stdin.read().replace("\\r", "").replace("\\n", "\n"); open(sys.argv[1], "w", encoding="utf-8").write(raw if raw.endswith("\n") else raw+"\n")' "$HOME/.oci/key.pem"
+          chmod 0600 "$HOME/.oci/key.pem"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          def scalar(env_name, config_key):
+              lines = [line.strip() for line in os.environ[env_name].replace('\r', '').splitlines() if line.strip()]
+              matches = [line.split('=', 1)[1].strip() for line in lines if line.startswith(config_key + '=')]
+              if len(matches) == 1 and matches[0]:
+                  return matches[0]
+              if not matches and len(lines) == 1 and '=' not in lines[0]:
+                  return lines[0]
+              raise SystemExit(f'ambiguous {env_name}')
+
+          values = {
+              'user': scalar('OCI_USER', 'user'),
+              'fingerprint': scalar('OCI_FINGERPRINT', 'fingerprint'),
+              'tenancy': scalar('OCI_TENANCY', 'tenancy'),
+              'region': scalar('OCI_REGION', 'region'),
+          }
+          path = Path.home() / '.oci' / 'config'
+          path.write_text(
+              '[DEFAULT]\n'
+              + ''.join(f'{key}={value}\n' for key, value in values.items())
+              + f'key_file={Path.home() / ".oci" / "key.pem"}\n',
+              encoding='utf-8',
+          )
+          PY
+          chmod 0600 "$HOME/.oci/config"
+          timeout --signal=KILL 30s oci iam region list --output json >/dev/null
+
+      - name: Observe both exact hosts without service mutation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          roots="$RUNNER_TEMP/compartments.json"
+          timeout --signal=KILL 30s oci iam compartment list \
+            --include-root --compartment-id-in-subtree true \
+            --access-level ACCESSIBLE --all --output json > "$roots"
+          readarray -t compartments < <(python - "$roots" <<'PY'
+          import json, sys
+          rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          assert isinstance(rows, list)
+          ids = [row.get('id') for row in rows if isinstance(row, dict)
+                 and row.get('lifecycle-state') == 'ACTIVE'
+                 and isinstance(row.get('id'), str)
+                 and row['id'].startswith(('ocid1.tenancy.', 'ocid1.compartment.'))]
+          assert ids and len(ids) == len(set(ids))
+          print('\n'.join(ids))
+          PY
+          )
+          printf '{"data":[]}' > "$RUNNER_TEMP/instances.json"
+          index=0
+          for compartment in "${compartments[@]}"; do
+            index=$((index + 1))
+            page="$RUNNER_TEMP/instances-$index.json"
+            timeout --signal=KILL 30s oci compute instance list \
+              --compartment-id "$compartment" --all --output json > "$page"
+            python - "$RUNNER_TEMP/instances.json" "$page" <<'PY'
+          import json, sys
+          combined = json.load(open(sys.argv[1], encoding='utf-8'))
+          page = json.load(open(sys.argv[2], encoding='utf-8'))
+          assert isinstance(combined.get('data'), list) and isinstance(page.get('data'), list)
+          combined['data'].extend(page['data'])
+          json.dump(combined, open(sys.argv[1], 'w', encoding='utf-8'))
+          PY
+          done
+
+          python - "$RUNNER_TEMP/instances.json" <<'PY' > "$RUNNER_TEMP/targets.tsv"
+          import json, sys
+          rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          names = {'bridge-school-autopilot-lite', 'bridge-school-dds3-frankfurt'}
+          selected = [row for row in rows if isinstance(row, dict)
+                      and row.get('display-name') in names
+                      and row.get('lifecycle-state') not in {'TERMINATED', 'TERMINATING'}]
+          assert len(selected) == 2 and {row['display-name'] for row in selected} == names
+          assert all(row.get('lifecycle-state') == 'RUNNING' for row in selected)
+          for row in sorted(selected, key=lambda item: item['display-name']):
+              assert isinstance(row.get('id'), str) and row['id'].startswith('ocid1.instance.')
+              assert isinstance(row.get('compartment-id'), str) and row['compartment-id']
+              print(row['display-name'] + '\t' + row['id'] + '\t' + row['compartment-id'])
+          PY
+
+          : > "$RUNNER_TEMP/host-observation.txt"
+          while IFS=$'\t' read -r display_name instance_id compartment_id; do
+            remote=$(cat <<'REMOTE'
+          set -u
+          printf 'hostname=%s\n' "$(hostname)"
+          printf 'cpu_count=%s\n' "$(nproc)"
+          awk '/^MemTotal:/ {printf "mem_total_kib=%s\n", $2}' /proc/meminfo
+          df -Pk / | awk 'NR==2 {printf "root_total_kib=%s\nroot_used_kib=%s\nroot_free_kib=%s\n", $2, $3, $4}'
+          for service in school-autopilot-shadow.service school-autopilot.service assistant-lab.service universal-video.service; do
+            printf 'service_%s=%s\n' "$service" "$(systemctl is-active "$service" 2>/dev/null || true)"
+          done
+          printf 'dds3_ready=%s\n' "$(curl -fsS --max-time 3 http://127.0.0.1:8080/readyz >/dev/null 2>&1 && echo yes || echo no)"
+          if [[ -x /usr/local/sbin/oracle-idle-state ]] && sudo -n true 2>/dev/null; then
+            sudo -n /usr/local/sbin/oracle-idle-state 2>/dev/null || true
+          else
+            echo ORACLE_IDLE_STATE=UNAVAILABLE
+          fi
+          REMOTE
+          )
+            content="$(SCRIPT_TEXT="$remote" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":"set -Eeuo pipefail\n"+os.environ["SCRIPT_TEXT"]+"\n"},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
+            target="$(INSTANCE_ID="$instance_id" python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
+            command_id="$(timeout --signal=KILL 30s oci instance-agent command create \
+              --compartment-id "$compartment_id" --content "$content" --target "$target" \
+              --timeout-in-seconds 120 --display-name "book-role-observe-${GITHUB_RUN_ID}" \
+              --query data.id --raw-output)"
+            [[ "$command_id" =~ ^ocid1\.instanceagentcommand\.[A-Za-z0-9._-]+$ ]]
+            execution=''
+            lifecycle=''
+            for _ in $(seq 1 48); do
+              execution="$(oci instance-agent command-execution get \
+                --command-id "$command_id" --instance-id "$instance_id" --output json 2>/dev/null || true)"
+              if [[ -n "$execution" ]]; then
+                lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
+                case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break ;; esac
+              fi
+              sleep 5
+            done
+            [[ "$lifecycle" == SUCCEEDED ]] || { echo "$display_name observation failed: $lifecycle" >&2; exit 31; }
+            printf '%s' "$execution" | python -c 'import json,sys; value=json.load(sys.stdin).get("data",{}).get("content",{}).get("text",""); sys.stdout.write(value if isinstance(value,str) else "")' > "$RUNNER_TEMP/raw.txt"
+            if grep -Ev '^(hostname=[A-Za-z0-9._-]+|cpu_count=[0-9]+|mem_total_kib=[0-9]+|root_(total|used|free)_kib=[0-9]+|service_[A-Za-z0-9_.@-]+=(active|inactive|failed|activating|deactivating|unknown)?|dds3_ready=(yes|no)|ORACLE_IDLE_CONTRACT_VERSION=[0-9]+|ORACLE_IDLE_(STARTED|OBSERVED)_AT_EPOCH=[0-9]+|ORACLE_IDLE_REASON=[A-Za-z0-9_,.=+-]+|ORACLE_IDLE_STATE=(BUSY|IDLE|UNKNOWN|UNAVAILABLE))$' "$RUNNER_TEMP/raw.txt" | grep -q .; then
+              echo "$display_name produced non-contract output" >&2
+              exit 32
+            fi
+            echo "HOST=$display_name" >> "$RUNNER_TEMP/host-observation.txt"
+            cat "$RUNNER_TEMP/raw.txt" >> "$RUNNER_TEMP/host-observation.txt"
+          done < "$RUNNER_TEMP/targets.tsv"
+          cat "$RUNNER_TEMP/host-observation.txt"
+          {
+            echo '### Oracle host role observation (read-only)'
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/host-observation.txt"
+            echo '```'
+            echo
+            echo '- Remote operations: process/resource/service-state reads only'
+            echo '- Service restart/stop/start, file writes and workload execution: absent'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove transient OCI credential files
+        if: ${{ always() }}
+        shell: bash
+        run: rm -f "$HOME/.oci/config" "$HOME/.oci/key.pem"
