@@ -1,0 +1,11 @@
+{
+  "request_id": "autopilot-runtime-login-unpooled-20260910T0633Z",
+  "target_host": "158.180.47.161",
+  "rsa_fingerprint": "SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64",
+  "activate": 0,
+  "expected_db_user": "autopilot_runtime_login",
+  "plaintext_length": 154,
+  "ciphertext_b64": "Y2wLD/eyG2eH6i4WvZFljYynN1iBxLi1dirLK8S5KrWYFxmwLdSjzCY321QiW+rzmNsu0ojhoCeHuLr8ekrmcsqsFqsGOJikPTuf/p0zk0vAkBLe7y+QpLWezuNKsyEiHsELM+tmtERn588y7n9oBlYDVr0cQvoL3t5nn9LZGywbJ5iVdCo8cfhqz0/qsPxneE3JOlPsoIj7ehaC7xFX9mIFPWKOqToyaCHv44Eok2ThSt+EanQpm8xIY8LnB+ofEihdHJkGDsRFdUAkwIs93xHBNiwgZn3gEGYp8CCFzu1D+rR7dE4jC64JW8/bd6e08YeBnFtjATk0bFRiGYL+Ew+kGah/sEC12XW2I4BeKTgKDDsrkzYnaNcu3BzgDvfpSnpYQVVg2Mg179HuIXZAmuHidmqVfQGDVV7qHaXhcV8/9D8OavzPhqtsRABMW9EQKjxen4zQhm8v8vSKeiovCLJSpjl8+cdn0TUXfrK0pm5DRLUHdUa415oWq84aD/IM",
+  "ciphertext_sha256": "4a72d6200ae204846631418ff4dbb7893833c2262aa8e78cea9adafa2a9912e6",
+  "replace_active_service": true
+}
