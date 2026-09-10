@@ -48,7 +48,7 @@ jobs:
 
           result = json.loads(sys.argv[1])
           assert result["result"] == "PASS"
-          assert result["policy_version"] == "physical-no-merge-v1"
+          assert result["policy_version"] == "physical-no-merge-v2"
           assert result["merge_routes"] == 0
           assert result["delete_routes"] == 0
           assert result["raw_token_responses"] == 0

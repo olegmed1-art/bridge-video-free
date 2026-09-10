@@ -23,6 +23,7 @@ TaskKind = Literal[
     "GITHUB_CI_READ_ONLY_V1",
     "GITHUB_DRAFT_REPAIR_V1",
     "IBF_READ_ONLY_ANALYSIS",
+    "CHATGPT_ROLE_DISPATCH_V1",
 ]
 
 ALLOWED_TASK_KINDS = frozenset(
@@ -34,6 +35,7 @@ ALLOWED_TASK_KINDS = frozenset(
         "GITHUB_CI_READ_ONLY_V1",
         "GITHUB_DRAFT_REPAIR_V1",
         "IBF_READ_ONLY_ANALYSIS",
+        "CHATGPT_ROLE_DISPATCH_V1",
     }
 )
 
@@ -60,6 +62,23 @@ IBF_GOAL_KEYS = frozenset(
     {"approval_ref", "ibf_player_id", "source_authority"}
 )
 IBF_SOURCE_AUTHORITY = "ISRAEL_BRIDGE_FEDERATION_OFFICIAL_RESULTS"
+ROLE_DISPATCH_GOAL_KEYS = frozenset(
+    {
+        "dispatch_epoch",
+        "expected_head_sha",
+        "mailbox_pr",
+        "repository",
+        "role",
+        "successor_expected_head_sha",
+        "successor_role",
+        "successor_target_pr",
+        "successor_task_key",
+        "target_pr",
+    }
+)
+ROLE_DISPATCH_ROLES = frozenset({"RECOGNIZER", "VIDEO", "BOOKS", "KNOWLEDGE"})
+ROLE_DISPATCH_REPOSITORY = "olegmed1-art/bridge-video-free"
+ROLE_DISPATCH_MAILBOX_PR = 1150
 
 
 class AutopilotContractError(RuntimeError):
@@ -261,6 +280,51 @@ def validate_task_contract(task: ClaimedTask) -> None:
             raise AutopilotContractError("AUTOPILOT_IBF_STATE_INVALID")
         if task.cost_cap_microusd != 0 or task.cost_reserved_microusd != 0:
             raise AutopilotContractError("AUTOPILOT_IBF_COST_INVALID")
+        return
+
+    if task.goal_type == "CHATGPT_ROLE_DISPATCH_V1":
+        goal = task.goal_json
+        if set(goal) != ROLE_DISPATCH_GOAL_KEYS:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_FIELDS_INVALID")
+        if goal.get("repository") != ROLE_DISPATCH_REPOSITORY:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_REPOSITORY_INVALID")
+        if goal.get("mailbox_pr") != ROLE_DISPATCH_MAILBOX_PR:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_MAILBOX_INVALID")
+        if goal.get("role") not in ROLE_DISPATCH_ROLES:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_ROLE_INVALID")
+        for key in ("target_pr", "dispatch_epoch"):
+            value = goal.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1_000_000:
+                raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_NUMBER_INVALID")
+        expected_head = goal.get("expected_head_sha")
+        if not isinstance(expected_head, str) or re.fullmatch(r"[0-9a-f]{40}", expected_head) is None:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_HEAD_INVALID")
+        successor_values = tuple(
+            goal.get(key)
+            for key in (
+                "successor_task_key",
+                "successor_role",
+                "successor_target_pr",
+                "successor_expected_head_sha",
+            )
+        )
+        if any(value is not None for value in successor_values):
+            task_key, role, target_pr, head_sha = successor_values
+            if (
+                not isinstance(task_key, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", task_key) is None
+                or role not in ROLE_DISPATCH_ROLES
+                or isinstance(target_pr, bool)
+                or not isinstance(target_pr, int)
+                or not 1 <= target_pr <= 1_000_000
+                or not isinstance(head_sha, str)
+                or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None
+            ):
+                raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_SUCCESSOR_INVALID")
+        if task.current_step_key != "github.chatgpt.role.dispatch" or task.step_cursor != 0:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_STATE_INVALID")
+        if task.cost_cap_microusd != 0 or task.cost_reserved_microusd != 0:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_COST_INVALID")
         return
 
     correlation_id = task.goal_json.get("correlation_id")

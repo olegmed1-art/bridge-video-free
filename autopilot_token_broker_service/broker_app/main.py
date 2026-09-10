@@ -1,4 +1,4 @@
-"""Preview-only ingress for bounded GitHub draft repairs."""
+"""Preview-only ingress for bounded GitHub Autopilot operations."""
 
 from __future__ import annotations
 
@@ -22,9 +22,10 @@ from broker_app.github import (
     REPOSITORY_FULL_NAME,
     broker_policy_sha256,
     execute_bounded_draft_repair,
+    execute_bounded_role_dispatch,
     load_config,
 )
-from broker_app.policy import DraftRepairRequest
+from broker_app.policy import DraftRepairRequest, RoleDispatchRequest
 
 
 NO_STORE_HEADERS = {
@@ -158,6 +159,7 @@ async def healthz() -> dict[str, object]:
         "github_token_broker_enabled": _broker_enabled(),
         "raw_installation_token_exposed": False,
         "bounded_draft_executor_enabled": _broker_enabled(),
+        "bounded_role_dispatch_enabled": _broker_enabled(),
         "broker_policy_version": BROKER_POLICY_VERSION,
         "source_revision": _source_revision(),
         "source_attested": _source_revision() != "UNATTESTED",
@@ -228,3 +230,58 @@ async def draft_repair(
         result,
         headers=NO_STORE_HEADERS,
     )
+
+
+@app.post("/v1/github/role-dispatch")
+async def role_dispatch(
+    request: RoleDispatchRequest,
+    authorization: str | None = Header(default=None),
+) -> JSONResponse:
+    _require_preview_runtime()
+    _require_source_attestation()
+    _require_broker_authorization(authorization)
+    try:
+        config = load_config()
+        result = await asyncio.to_thread(
+            execute_bounded_role_dispatch,
+            config,
+            request,
+            now_epoch=int(time.time()),
+        )
+    except BrokerConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="TOKEN_BROKER_NOT_CONFIGURED",
+            headers=NO_STORE_HEADERS,
+        ) from exc
+    except BrokerRetryableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="GITHUB_TOKEN_TRANSIENT_ERROR",
+            headers=NO_STORE_HEADERS,
+        ) from exc
+    except DraftRepairConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="ROLE_DISPATCH_PRECONDITION_FAILED",
+            headers=NO_STORE_HEADERS,
+        ) from exc
+    except BrokerContractError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="GITHUB_TOKEN_CONTRACT_ERROR",
+            headers=NO_STORE_HEADERS,
+        ) from exc
+
+    provenance = _deployment_provenance()
+    if provenance is None:
+        raise HTTPException(status_code=503, detail="TOKEN_BROKER_SOURCE_UNATTESTED")
+    result = {
+        **result,
+        "broker_policy_version": BROKER_POLICY_VERSION,
+        "broker_source_sha": provenance["source_sha"],
+        "broker_artifact_sha256": provenance["artifact_sha256"],
+        "broker_policy_sha256": provenance["policy_sha256"],
+        "broker_provenance_sha256": provenance["provenance_sha256"],
+    }
+    return JSONResponse(result, headers=NO_STORE_HEADERS)
