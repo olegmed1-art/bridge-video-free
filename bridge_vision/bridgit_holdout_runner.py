@@ -8,7 +8,9 @@ runtime measurements separate from the deterministic recognition payload.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -49,6 +51,10 @@ PINNED_RUNTIME_VERSIONS = {
     "numpy": "2.3.2",
     "opencv-python-headless": "5.0.0.93",
 }
+PINNED_RUNTIME_MODULES = {
+    "numpy": ("numpy", "numpy/__init__.py"),
+    "opencv-python-headless": ("cv2", "cv2/__init__.py"),
+}
 
 
 class HoldoutRunnerError(ValueError):
@@ -68,6 +74,17 @@ def _git_blob_sha(path: Path) -> str:
         raise HoldoutRunnerError("recognizer baseline artifact is unavailable") from exc
 
 
+def _sha256_file(path: Path) -> str:
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError as exc:
+        raise HoldoutRunnerError("pixel runtime module is unavailable") from exc
+
+
 def _current_baseline_blob_shas() -> dict[str, str]:
     repository_root = Path(__file__).resolve().parent.parent
     return {
@@ -83,6 +100,67 @@ def _verify_algorithm_baseline() -> None:
         )
 
 
+def _record_sha256(record_hash: Any) -> str:
+    if record_hash is None or getattr(record_hash, "mode", None) != "sha256":
+        raise HoldoutRunnerError("pixel runtime module has no trusted RECORD hash")
+    value = str(getattr(record_hash, "value", ""))
+    try:
+        padding = "=" * (-len(value) % 4)
+        return base64.urlsafe_b64decode(value + padding).hex()
+    except (ValueError, TypeError) as exc:
+        raise HoldoutRunnerError("pixel runtime RECORD hash is invalid") from exc
+
+
+def _verify_imported_runtime_modules() -> dict[str, str]:
+    """Prove imported numpy/cv2 entry modules belong to the pinned distributions."""
+    identities: dict[str, str] = {}
+    for distribution_name, (module_name, expected_relative) in PINNED_RUNTIME_MODULES.items():
+        try:
+            distribution = metadata.distribution(distribution_name)
+        except metadata.PackageNotFoundError as exc:
+            raise HoldoutRunnerError(
+                f"required pixel runtime is not installed: {distribution_name}"
+            ) from exc
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as exc:
+            raise HoldoutRunnerError(
+                f"required pixel runtime module is unavailable: {module_name}"
+            ) from exc
+        raw_module_path = getattr(module, "__file__", None)
+        if not isinstance(raw_module_path, str) or not raw_module_path:
+            raise HoldoutRunnerError("pixel runtime module origin is unavailable")
+        try:
+            module_path = Path(raw_module_path).resolve(strict=True)
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise HoldoutRunnerError("pixel runtime module origin is unavailable") from exc
+        if not module_path.is_file():
+            raise HoldoutRunnerError("pixel runtime module origin is not a file")
+        files = distribution.files
+        if files is None:
+            raise HoldoutRunnerError("pixel runtime distribution has no file manifest")
+        matched = None
+        for entry in files:
+            try:
+                located = Path(distribution.locate_file(entry)).resolve(strict=True)
+            except (OSError, ValueError, RuntimeError):
+                continue
+            if located == module_path:
+                matched = entry
+                break
+        if matched is None:
+            raise HoldoutRunnerError(
+                "imported pixel runtime module is not owned by frozen distribution"
+            )
+        relative = str(matched).replace("\\", "/")
+        if relative != expected_relative:
+            raise HoldoutRunnerError("pixel runtime module origin does not match baseline")
+        if _sha256_file(module_path) != _record_sha256(getattr(matched, "hash", None)):
+            raise HoldoutRunnerError("pixel runtime module file does not match RECORD")
+        identities[distribution_name] = relative
+    return identities
+
+
 def _installed_runtime_versions() -> dict[str, str]:
     versions: dict[str, str] = {}
     for distribution in PINNED_RUNTIME_VERSIONS:
@@ -92,6 +170,7 @@ def _installed_runtime_versions() -> dict[str, str]:
             raise HoldoutRunnerError(
                 f"required pixel runtime is not installed: {distribution}"
             ) from exc
+    _verify_imported_runtime_modules()
     return versions
 
 
@@ -109,6 +188,10 @@ def frozen_recognizer_artifact_sha256() -> str:
         "backend_version": BACKEND_VERSION,
         "git_blob_shas": _BASELINE_BLOB_SHAS,
         "runtime_versions": PINNED_RUNTIME_VERSIONS,
+        "runtime_module_paths": {
+            name: relative
+            for name, (_, relative) in PINNED_RUNTIME_MODULES.items()
+        },
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -526,27 +609,68 @@ def _validate_output_target(package_path: Path, output_path: Path) -> None:
         raise HoldoutRunnerError("output path cannot be validated") from exc
 
 
-def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
-    payload = (
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+def _pin_output_directory(path: Path) -> int:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         parent = path.parent.resolve(strict=True)
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.", dir=parent
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
         )
-        temporary = Path(temporary_name)
-        try:
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(payload)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        descriptor = os.open(parent, flags)
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            raise HoldoutRunnerError("output parent must be a directory")
+        return descriptor
+    except HoldoutRunnerError:
+        raise
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HoldoutRunnerError("output directory is unavailable") from exc
+
+
+def _atomic_write_json(
+    path: Path,
+    value: Mapping[str, Any],
+    *,
+    directory_descriptor: int | None = None,
+) -> None:
+    payload = (
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    owns_descriptor = directory_descriptor is None
+    if directory_descriptor is None:
+        directory_descriptor = _pin_output_directory(path)
+    temporary_name: str | None = None
+    try:
+        pinned_parent = Path(f"/proc/self/fd/{directory_descriptor}")
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=f".{path.name}.", dir=pinned_parent
+        )
+        temporary_name = Path(temporary_path).name
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(
+            temporary_name,
+            path.name,
+            src_dir_fd=directory_descriptor,
+            dst_dir_fd=directory_descriptor,
+        )
+        temporary_name = None
+        os.fsync(directory_descriptor)
     except OSError as exc:
         raise HoldoutRunnerError("output write failed") from exc
+    finally:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=directory_descriptor)
+            except OSError:
+                pass
+        if owns_descriptor:
+            os.close(directory_descriptor)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -556,11 +680,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--package", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
+    output_directory_descriptor: int | None = None
     try:
         _validate_output_target(args.package, args.output)
+        output_directory_descriptor = _pin_output_directory(args.output)
+        pinned_output = (
+            Path(f"/proc/self/fd/{output_directory_descriptor}") / args.output.name
+        )
+        _validate_output_target(args.package, pinned_output)
         output = run_package(args.package)
-        _validate_output_target(args.package, args.output)
-        _atomic_write_json(args.output, output)
+        _validate_output_target(args.package, pinned_output)
+        _atomic_write_json(
+            args.output,
+            output,
+            directory_descriptor=output_directory_descriptor,
+        )
     except (
         HoldoutRunnerError,
         BridgitRankLayoutError,
@@ -570,6 +704,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ) as exc:
         print(f"RECOGNIZER_HOLDOUT_V1_REJECTED: {exc}", file=os.sys.stderr)
         return 2
+    finally:
+        if output_directory_descriptor is not None:
+            os.close(output_directory_descriptor)
     return 0
 
 
