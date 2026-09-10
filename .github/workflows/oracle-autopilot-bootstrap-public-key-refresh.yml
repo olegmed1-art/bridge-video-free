@@ -1,0 +1,50 @@
+name: P0 Oracle bootstrap recipient public key refresh
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/oracle-autopilot-bootstrap-public-key-refresh.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  public-key:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Read verified root-only bootstrap recipient public key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$RUNNER_TEMP/id_oracle"
+          known="$RUNNER_TEMP/known_hosts"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          private=/opt/bridge-school/school-autopilot/bootstrap/oracle-bootstrap-rsa.pem
+          public=/opt/bridge-school/school-autopilot/bootstrap/oracle-bootstrap-rsa.pub.pem
+          test -s "$private"
+          test "$(stat -c '%U:%G:%a' "$private")" = 'root:root:600'
+          openssl pkey -in "$private" -pubout -out "$public"
+          chown root:root "$public"
+          chmod 0644 "$public"
+          openssl pkey -pubin -in "$public" -outform DER | sha256sum | awk '{print "AUTOPILOT_BOOTSTRAP_PUBLIC_KEY_SHA256=" $1}'
+          printf 'AUTOPILOT_BOOTSTRAP_PUBLIC_KEY_B64='
+          base64 -w0 "$public"
+          printf '\n'
+          REMOTE
