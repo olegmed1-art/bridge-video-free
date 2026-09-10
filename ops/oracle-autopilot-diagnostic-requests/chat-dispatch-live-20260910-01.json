@@ -1,0 +1,7 @@
+{
+  "request_id": "chat-dispatch-live-20260910-01",
+  "action": "inspect_shadow_failure",
+  "target_host": "158.180.47.161",
+  "source_revision": "3560f87d82e7e52978e98abff8426fcd82cef008",
+  "no_instance_stop": true
+}
