@@ -212,6 +212,8 @@ def test_isolated_probe_rejects_loader_injection(monkeypatch):
 
 
 def test_isolated_probe_uses_file_limited_outputs(tmp_path, monkeypatch):
+    for key in runner.LOADER_INJECTION_ENV_VARS:
+        monkeypatch.delenv(key, raising=False)
     expected = {
         name: {
             "entry_module": f"/runtime/{module_name}/__init__.py",
