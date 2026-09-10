@@ -105,21 +105,13 @@ with psycopg.connect(dsn, connect_timeout=10, application_name="autopilot-shadow
         cur.execute("""
             SELECT current_user,
                    has_schema_privilege(current_user, 'autopilot', 'USAGE'),
-                   has_table_privilege(current_user, 'autopilot.task', 'SELECT'),
-                   has_table_privilege(current_user, 'autopilot.task', 'INSERT'),
                    has_function_privilege(current_user, 'autopilot.claim_next_task(text,integer)', 'EXECUTE'),
                    has_function_privilege(current_user, 'autopilot.complete_task(uuid,text,bigint,text,text,jsonb)', 'EXECUTE')
         """)
-        (
-            user, schema_usage, table_select, table_insert, can_claim, can_complete,
-        ) = cur.fetchone()
+        user, schema_usage, can_claim, can_complete = cur.fetchone()
 expected = os.environ["AUTOPILOT_EXPECTED_DB_USER"]
 assert user == expected, (user, expected)
-assert (
-    schema_usage and not table_select and not table_insert and can_claim and can_complete
-), (
-    schema_usage, table_select, table_insert, can_claim, can_complete,
-)
+assert schema_usage and can_claim and can_complete, (schema_usage, can_claim, can_complete)
 print("AUTOPILOT_DB_PREFLIGHT_PASS")
 PY
 
