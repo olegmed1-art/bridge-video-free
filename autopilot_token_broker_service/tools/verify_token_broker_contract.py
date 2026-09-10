@@ -52,10 +52,18 @@ def verify() -> dict[str, object]:
         raise SystemExit("BROKER_REPOSITORY_INVALID")
     if assignments.get("TOKEN_PERMISSIONS") != expected_permissions:
         raise SystemExit("BROKER_PERMISSIONS_INVALID")
-    if assignments.get("ROLE_DISPATCH_TOKEN_PERMISSIONS") != {"pull_requests": "write"}:
+    if assignments.get("ROLE_DISPATCH_TOKEN_PERMISSIONS") != {
+        "contents": "write",
+        "pull_requests": "write",
+    }:
         raise SystemExit("BROKER_ROLE_DISPATCH_PERMISSIONS_INVALID")
     if assignments.get("ROLE_DISPATCH_MAILBOX_PR") != 1150:
         raise SystemExit("BROKER_ROLE_DISPATCH_MAILBOX_INVALID")
+    if (
+        assignments.get("ROLE_DISPATCH_BOT_LOGIN")
+        != "bridge-school-oracle-autopilot[bot]"
+    ):
+        raise SystemExit("BROKER_ROLE_DISPATCH_BOT_INVALID")
     if assignments.get("BROKER_POLICY_VERSION") != "physical-no-merge-v2":
         raise SystemExit("BROKER_POLICY_VERSION_INVALID")
     expected_exact_operations = {
@@ -65,7 +73,6 @@ def verify() -> dict[str, object]:
         ("POST", "/repos/olegmed1-art/bridge-video-free/git/commits"),
         ("POST", "/repos/olegmed1-art/bridge-video-free/git/refs"),
         ("POST", "/repos/olegmed1-art/bridge-video-free/pulls"),
-        ("POST", "/repos/olegmed1-art/bridge-video-free/issues/1150/comments"),
     }
     if set(assignments.get("_ALLOWED_EXACT_OPERATIONS", ())) != expected_exact_operations:
         raise SystemExit("BROKER_TYPED_OPERATION_SET_INVALID")
