@@ -132,6 +132,71 @@ def test_rejects_temporal_evidence_without_stable_deal_identity() -> None:
         )
 
 
+@pytest.mark.parametrize("field", ["scope", "value"])
+def test_rejects_whitespace_only_explicit_board_identity(field: str) -> None:
+    envelope = _envelope()
+    envelope["result"]["deal_identity"][field] = "   "
+    record = envelope["result"]["card_records"][0]
+    record.update(
+        suit="S",
+        rank="A",
+        source="TEMPORAL_CONSENSUS",
+        frame_sha256="a" * 64,
+        frame_sha256s=["a" * 64, "b" * 64],
+        support_count=2,
+        confidence=0.97,
+    )
+    record.pop("unknown_slot")
+    _rehash(envelope)
+
+    with pytest.raises(CardRecognitionContractError, match="explicit deal_identity"):
+        validate_recognition_result(
+            envelope, approved_recognizers=[APPROVED_RECOGNIZER]
+        )
+
+
+def test_visual_anchor_requires_and_enforces_approved_profile_gates() -> None:
+    envelope = _envelope()
+    envelope["result"]["deal_identity"] = {
+        "kind": "VISUAL_ANCHOR",
+        "anchor_frame_sha256": "c" * 64,
+        "inliers": 1,
+        "inlier_ratio": 0.0,
+    }
+    record = envelope["result"]["card_records"][0]
+    record.update(
+        suit="S",
+        rank="A",
+        source="TEMPORAL_CONSENSUS",
+        frame_sha256="a" * 64,
+        frame_sha256s=["a" * 64, "b" * 64],
+        support_count=2,
+        confidence=0.97,
+    )
+    record.pop("unknown_slot")
+    _rehash(envelope)
+
+    with pytest.raises(CardRecognitionContractError, match="profile-bound gates"):
+        validate_recognition_result(
+            envelope, approved_recognizers=[APPROVED_RECOGNIZER]
+        )
+
+    approved = {
+        **APPROVED_RECOGNIZER,
+        "min_deal_match_inliers": 8,
+        "min_deal_match_inlier_ratio": 0.75,
+    }
+    with pytest.raises(CardRecognitionContractError, match="below approved gates"):
+        validate_recognition_result(envelope, approved_recognizers=[approved])
+
+    envelope["result"]["deal_identity"].update(inliers=8, inlier_ratio=0.75)
+    _rehash(envelope)
+    consumed = validate_recognition_result(
+        envelope, approved_recognizers=[approved]
+    )
+    assert consumed["deal_identity"] == envelope["result"]["deal_identity"]
+
+
 def test_keeps_single_frame_visual_evidence_pending() -> None:
     envelope = _envelope()
     record = envelope["result"]["card_records"][0]
