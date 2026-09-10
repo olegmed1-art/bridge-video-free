@@ -21,7 +21,7 @@ jobs:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
-      CANDIDATE_HOST: bridge-school-autopilot-4k5mirp1c-olegmed1-4368s-projects.vercel.app
+      CANDIDATE_HOST: bridge-school-autopilot-a9zfnfmgx-olegmed1-4368s-projects.vercel.app
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
