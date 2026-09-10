@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import unittest
+import urllib.error
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -22,7 +23,9 @@ from broker_app.github import (
     ROLE_DISPATCH_TOKEN_PERMISSIONS,
     _authorize_github_operation,
     execute_bounded_role_dispatch,
+    role_dispatch_branch_name,
     role_dispatch_comment_body,
+    role_dispatch_file_path,
 )
 from broker_app.main import role_dispatch
 from broker_app.policy import RoleDispatchRequest
@@ -32,6 +35,11 @@ NOW = 1_788_153_600
 DISPATCH_ID = "550e8400-e29b-41d4-a716-446655440000"
 FINGERPRINT = "a" * 64
 BROKER_SECRET = "s" * 43
+BASE_SHA = "b" * 40
+BASE_TREE_SHA = "c" * 40
+BLOB_SHA = "d" * 40
+DISPATCH_TREE_SHA = "e" * 40
+DISPATCH_COMMIT_SHA = "f" * 40
 
 
 def _request(**overrides: object) -> RoleDispatchRequest:
@@ -72,7 +80,8 @@ class _DispatchOpener:
         self.dispatch_request = request
         self.lose_post_response = lose_post_response
         self.requests = []
-        self.comment: dict[str, object] | None = None
+        self.branch_exists = False
+        self.pull: dict[str, object] | None = None
 
     def _token(self) -> dict[str, object]:
         expires_at = datetime.fromtimestamp(
@@ -85,23 +94,30 @@ class _DispatchOpener:
             "permissions": {**ROLE_DISPATCH_TOKEN_PERMISSIONS, "metadata": "read"},
         }
 
-    def _new_comment(self, body: str) -> dict[str, object]:
-        comment_id = 9_876_543_210
-        stamp = "2026-09-01T00:00:01Z"
+    def _branch(self) -> dict[str, object]:
         return {
-            "id": comment_id,
-            "body": body,
-            "issue_url": (
-                f"https://api.github.com{REPOSITORY_API_PATH}/issues/"
-                f"{ROLE_DISPATCH_MAILBOX_PR}"
-            ),
-            "html_url": (
-                f"https://github.com/{REPOSITORY_FULL_NAME}/pull/"
-                f"{ROLE_DISPATCH_MAILBOX_PR}#issuecomment-{comment_id}"
-            ),
-            "created_at": stamp,
-            "updated_at": stamp,
-            "user": {"login": "bridge-autopilot[bot]", "type": "Bot"},
+            "ref": f"refs/heads/{role_dispatch_branch_name(self.dispatch_request)}",
+            "object": {"sha": DISPATCH_COMMIT_SHA},
+        }
+
+    def _new_pull(self, body: dict[str, object]) -> dict[str, object]:
+        number = 1_234
+        return {
+            "number": number,
+            "html_url": f"https://github.com/{REPOSITORY_FULL_NAME}/pull/{number}",
+            "state": "open",
+            "draft": body["draft"],
+            "title": body["title"],
+            "body": body["body"],
+            "head": {
+                "ref": role_dispatch_branch_name(self.dispatch_request),
+                "sha": DISPATCH_COMMIT_SHA,
+            },
+            "base": {"ref": "main"},
+            "user": {
+                "login": "bridge-school-oracle-autopilot[bot]",
+                "type": "Bot",
+            },
         }
 
     def open(self, request, *, timeout):
@@ -109,16 +125,51 @@ class _DispatchOpener:
         url = request.full_url
         if url.endswith("/access_tokens"):
             return _Response(self._token(), url=url, status=201)
-        if request.get_method() == "GET" and "/issues/1150/comments?" in url:
-            payload = [] if self.comment is None else [self.comment]
-            return _Response(payload, url=url, status=200)
-        if request.get_method() == "POST" and url.endswith("/issues/1150/comments"):
-            body = json.loads(request.data)["body"]
-            self.comment = self._new_comment(body)
+        method = request.get_method()
+        if method == "GET" and "/git/ref/heads/autopilot/dispatch/" in url:
+            if not self.branch_exists:
+                raise urllib.error.HTTPError(url, 404, "not found", {}, None)
+            return _Response(self._branch(), url=url, status=200)
+        if method == "GET" and url.endswith("/git/ref/heads/main"):
+            return _Response(
+                {"ref": "refs/heads/main", "object": {"sha": BASE_SHA}},
+                url=url,
+                status=200,
+            )
+        if method == "GET" and url.endswith(f"/git/commits/{BASE_SHA}"):
+            return _Response(
+                {
+                    "sha": BASE_SHA,
+                    "tree": {"sha": BASE_TREE_SHA},
+                    "committer": {"date": "2026-09-01T00:00:00Z"},
+                },
+                url=url,
+                status=200,
+            )
+        if method == "GET" and url.endswith(f"/git/commits/{DISPATCH_COMMIT_SHA}"):
+            return _Response(
+                {"sha": DISPATCH_COMMIT_SHA, "parents": [{"sha": BASE_SHA}]},
+                url=url,
+                status=200,
+            )
+        if method == "POST" and url.endswith("/git/blobs"):
+            return _Response({"sha": BLOB_SHA}, url=url, status=201)
+        if method == "POST" and url.endswith("/git/trees"):
+            return _Response({"sha": DISPATCH_TREE_SHA}, url=url, status=201)
+        if method == "POST" and url.endswith("/git/commits"):
+            return _Response({"sha": DISPATCH_COMMIT_SHA}, url=url, status=201)
+        if method == "POST" and url.endswith("/git/refs"):
+            self.branch_exists = True
+            return _Response(self._branch(), url=url, status=201)
+        if method == "GET" and "/pulls?" in url:
+            return _Response([] if self.pull is None else [self.pull], url=url, status=200)
+        if method == "POST" and url.endswith("/pulls"):
+            body = json.loads(request.data)
+            self.pull = self._new_pull(body)
             if self.lose_post_response:
                 self.lose_post_response = False
                 raise TimeoutError
-            return _Response(self.comment, url=url, status=201)
+            return _Response(self.pull, url=url, status=201)
         raise AssertionError(f"unexpected request: {request.get_method()} {url}")
 
 
@@ -156,7 +207,7 @@ class RoleDispatchContractTests(unittest.TestCase):
             with self.subTest(overrides=overrides), self.assertRaises(ValidationError):
                 _request(**overrides)
 
-    def test_body_matches_live_automation_contract_exactly(self):
+    def test_public_envelope_matches_live_automation_contract_exactly(self):
         body = role_dispatch_comment_body(_request())
         self.assertEqual(
             body,
@@ -175,8 +226,12 @@ class RoleDispatchContractTests(unittest.TestCase):
         self.assertNotIn("ghs_", body)
         self.assertNotIn("Bearer", body)
         self.assertNotIn("prepared_at", body)
+        self.assertEqual(
+            role_dispatch_file_path(_request()),
+            f"docs/evidence/autopilot/role-dispatch-{DISPATCH_ID}.md",
+        )
 
-    def test_create_uses_separate_least_permission_token_and_exact_routes(self):
+    def test_create_uses_separate_token_and_opens_exact_draft_pr(self):
         request = _request()
         opener = _DispatchOpener(request)
         result = execute_bounded_role_dispatch(
@@ -188,12 +243,31 @@ class RoleDispatchContractTests(unittest.TestCase):
         token_request = opener.requests[0]
         self.assertEqual(
             json.loads(token_request.data)["permissions"],
-            {"pull_requests": "write"},
+            {"contents": "write", "pull_requests": "write"},
         )
         repository_requests = [r for r in opener.requests if "/repos/" in r.full_url]
-        self.assertEqual([r.get_method() for r in repository_requests], ["GET", "POST"])
-        self.assertTrue(repository_requests[-1].full_url.endswith("/issues/1150/comments"))
-        self.assertIn("since=2026-08-31T05%3A15%3A00Z", repository_requests[0].full_url)
+        self.assertEqual(
+            [r.get_method() for r in repository_requests],
+            ["GET", "GET", "GET", "POST", "POST", "POST", "GET", "POST", "GET", "POST"],
+        )
+        self.assertTrue(repository_requests[-1].full_url.endswith("/pulls"))
+        blob = next(r for r in repository_requests if r.full_url.endswith("/git/blobs"))
+        self.assertEqual(
+            json.loads(blob.data),
+            {"content": role_dispatch_comment_body(request), "encoding": "utf-8"},
+        )
+        pull = json.loads(repository_requests[-1].data)
+        self.assertTrue(pull["draft"])
+        self.assertEqual(pull["body"], role_dispatch_comment_body(request))
+        self.assertEqual(pull["head"], role_dispatch_branch_name(request))
+        self.assertEqual(result["dispatch_pull_request"], 1_234)
+        self.assertEqual(result["dispatch_commit_sha"], DISPATCH_COMMIT_SHA)
+        self.assertEqual(
+            result["dispatch_author_login"],
+            "bridge-school-oracle-autopilot[bot]",
+        )
+        self.assertEqual(result["dispatch_author_type"], "Bot")
+        self.assertFalse(result["production_mutation"])
         self.assertNotIn("ghs_", json.dumps(result))
         self.assertNotIn("prepared_at", json.dumps(result))
 
@@ -206,7 +280,7 @@ class RoleDispatchContractTests(unittest.TestCase):
             )
         self.assertEqual(opener.requests, [])
 
-    def test_response_loss_is_adopted_on_retry_without_duplicate_post(self):
+    def test_response_loss_is_adopted_on_retry_without_duplicate_pr(self):
         request = _request()
         opener = _DispatchOpener(request, lose_post_response=True)
         with self.assertRaises(BrokerRetryableError):
@@ -220,25 +294,35 @@ class RoleDispatchContractTests(unittest.TestCase):
         self.assertTrue(result["replayed"])
         repository_posts = [
             r for r in opener.requests
-            if r.get_method() == "POST" and "/repos/" in r.full_url
+            if r.get_method() == "POST" and r.full_url.endswith("/pulls")
         ]
         self.assertEqual(len(repository_posts), 1)
 
-    def test_comment_response_is_strict(self):
+    def test_existing_pull_response_is_strict(self):
         request = _request()
         opener = _DispatchOpener(request)
-        opener.comment = opener._new_comment(role_dispatch_comment_body(request))
-        opener.comment["user"] = {"login": "human", "type": "User"}
-        with self.assertRaisesRegex(BrokerContractError, "COMMENT_INVALID"):
+        opener.branch_exists = True
+        opener.pull = opener._new_pull(
+            {
+                "body": role_dispatch_comment_body(request),
+                "draft": True,
+                "title": f"[Autopilot dispatch] {request.role} {request.dispatch_id}",
+            }
+        )
+        opener.pull["user"] = {"login": "different-valid-app[bot]", "type": "Bot"}
+        with self.assertRaisesRegex(BrokerContractError, "PULL_INVALID"):
             execute_bounded_role_dispatch(
                 self.config, request, now_epoch=NOW, opener=opener
             )
 
     def test_operation_allowlist_has_no_generic_issue_proxy(self):
-        allowed = f"{REPOSITORY_API_PATH}/issues/1150/comments"
-        _authorize_github_operation(method="POST", path=allowed)
+        allowed = (
+            f"{REPOSITORY_API_PATH}/git/ref/heads/"
+            f"{role_dispatch_branch_name(_request())}"
+        )
+        _authorize_github_operation(method="GET", path=allowed)
         for method, path in (
-            ("POST", f"{REPOSITORY_API_PATH}/issues/1149/comments"),
+            ("POST", f"{REPOSITORY_API_PATH}/issues/1150/comments"),
             ("GET", f"{REPOSITORY_API_PATH}/issues/1150"),
             ("PATCH", allowed),
             ("DELETE", allowed),
@@ -260,8 +344,14 @@ class RoleDispatchContractTests(unittest.TestCase):
             "task_fingerprint": request.task_fingerprint,
             "target_pr": request.target_pr,
             "mode": request.mode,
-            "comment_id": 123,
-            "comment_url": "https://github.com/example",
+            "dispatch_branch": role_dispatch_branch_name(request),
+            "dispatch_commit_sha": DISPATCH_COMMIT_SHA,
+            "dispatch_file": role_dispatch_file_path(request),
+            "dispatch_pull_request": 123,
+            "dispatch_pull_request_url": "https://github.com/example",
+            "dispatch_author_login": "bridge-school-oracle-autopilot[bot]",
+            "dispatch_author_type": "Bot",
+            "draft": True,
             "replayed": False,
             "token_exposed": False,
             "production_mutation": False,

@@ -1,9 +1,9 @@
 """Resident Oracle dispatcher for School Autopilot Lite.
 
 The resident remains deterministic and never calls a model.  In addition to
-the original shadow/read-only work it may publish one bounded public wake
-envelope through the isolated GitHub App broker; the credential never reaches
-this process.  Durable queue mechanics remove the one-hour chat gap:
+the original shadow/read-only work it may publish one bounded public draft-PR
+wake envelope through the isolated GitHub App broker; the credential never
+reaches this process.  Durable queue mechanics remove the one-hour chat gap:
 
 * direct Neon LISTEN/NOTIFY wake-up;
 * bounded recovery polling;
@@ -47,6 +47,7 @@ RUNTIME_MODE = "SHADOW"
 LOGGER = logging.getLogger("oracle_autopilot")
 GITHUB_API_HOST = "api.github.com"
 GITHUB_REPOSITORY = "olegmed1-art/bridge-video-free"
+ROLE_DISPATCH_BOT_LOGIN = "bridge-school-oracle-autopilot[bot]"
 GITHUB_RESPONSE_LIMIT_BYTES = 1_048_576
 GITHUB_CHECK_RUN_LIMIT = 100
 GITHUB_FAILED_CHECK_LIMIT = 5
@@ -845,7 +846,7 @@ def _publish_role_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         headers={
             "Authorization": f"Bearer {config.secret}",
             "Content-Type": "application/json",
-            "User-Agent": "bridge-school-autopilot-oracle/1.5",
+            "User-Agent": "bridge-school-autopilot-oracle/1.6",
             "X-Vercel-Protection-Bypass": config.vercel_bypass_secret,
         },
     )
@@ -875,8 +876,14 @@ def _publish_role_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         "status",
         "repository",
         "mailbox_pull_request",
-        "comment_id",
-        "comment_url",
+        "dispatch_branch",
+        "dispatch_commit_sha",
+        "dispatch_file",
+        "dispatch_pull_request",
+        "dispatch_pull_request_url",
+        "dispatch_author_login",
+        "dispatch_author_type",
+        "draft",
         "replayed",
         "token_exposed",
         "production_mutation",
@@ -886,7 +893,13 @@ def _publish_role_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         "broker_policy_sha256",
         "broker_provenance_sha256",
     }
-    comment_id = result.get("comment_id") if isinstance(result, dict) else None
+    pull_number = (
+        result.get("dispatch_pull_request") if isinstance(result, dict) else None
+    )
+    author_login = (
+        result.get("dispatch_author_login") if isinstance(result, dict) else None
+    )
+    dispatch_id = public_envelope["dispatch_id"]
     if (
         not isinstance(result, dict)
         or set(result) != expected_keys
@@ -895,10 +908,18 @@ def _publish_role_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         or result.get("mailbox_pull_request") != 1150
         or result.get("status") not in {"created", "existing"}
         or type(result.get("replayed")) is not bool
-        or type(comment_id) is not int
-        or not 1 <= comment_id <= 2**63 - 1
-        or result.get("comment_url")
-        != f"https://github.com/{GITHUB_REPOSITORY}/pull/1150#issuecomment-{comment_id}"
+        or type(pull_number) is not int
+        or not 1 <= pull_number <= 1_000_000
+        or result.get("dispatch_pull_request_url")
+        != f"https://github.com/{GITHUB_REPOSITORY}/pull/{pull_number}"
+        or result.get("dispatch_author_type") != "Bot"
+        or author_login != ROLE_DISPATCH_BOT_LOGIN
+        or result.get("dispatch_branch") != f"autopilot/dispatch/{dispatch_id}"
+        or result.get("dispatch_file")
+        != f"docs/evidence/autopilot/role-dispatch-{dispatch_id}.md"
+        or not isinstance(result.get("dispatch_commit_sha"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", result["dispatch_commit_sha"]) is None
+        or result.get("draft") is not True
         or result.get("token_exposed") is not False
         or result.get("production_mutation") is not False
         or result.get("broker_policy_version") != "physical-no-merge-v2"
@@ -1159,17 +1180,20 @@ def process_role_dispatch_outbox(config: WorkerConfig) -> bool:
                 dispatch_id,
                 config.worker_id,
                 claim_epoch,
-                result["comment_id"],
+                # Migration 0322 named this generic delivery-resource slot
+                # after the original comment transport.  Preserve the SQL
+                # contract by storing the replacement draft PR number here.
+                result["dispatch_pull_request"],
                 body_sha256,
             ),
         )
         if not marked or not marked["marked"]:
             raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_SENT_FENCED")
         LOGGER.info(
-            "role_dispatch_sent dispatch_id=%s role=%s comment_id=%s",
+            "role_dispatch_sent dispatch_id=%s role=%s pull_request=%s",
             dispatch_id,
             row["role"],
-            result["comment_id"],
+            result["dispatch_pull_request"],
         )
     except AutopilotRetryableError as exc:
         _rpc_one(

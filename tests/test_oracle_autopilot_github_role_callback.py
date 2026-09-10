@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import copy
 
+import psycopg
 import pytest
 
 from oracle_autopilot.github_role_callback import (
     CallbackContractError,
+    ingest_callback_with_retry,
     parse_issue_comment_event,
     validate_callback_dsn,
 )
@@ -123,3 +125,57 @@ def test_callback_dsn_requires_dedicated_direct_neon_login():
     ):
         with pytest.raises(CallbackContractError, match="CALLBACK_DSN_INVALID"):
             validate_callback_dsn(invalid)
+
+
+def test_callback_retries_only_until_dispatch_is_marked_sent(monkeypatch):
+    callback = parse_issue_comment_event(_event())
+    outcomes = [
+        psycopg.OperationalError("AUTOPILOT_CALLBACK_DISPATCH_NOT_SENT"),
+        psycopg.OperationalError("AUTOPILOT_CALLBACK_DISPATCH_NOT_SENT"),
+        (True, "DONE"),
+    ]
+    sleeps: list[int] = []
+
+    def fake_ingest(_dsn, _callback):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(
+        "oracle_autopilot.github_role_callback.ingest_callback", fake_ingest
+    )
+    assert ingest_callback_with_retry(
+        "unused", callback, sleeper=sleeps.append
+    ) == (True, "DONE")
+    assert sleeps == [1, 2]
+
+
+def test_callback_does_not_retry_other_database_failures(monkeypatch):
+    callback = parse_issue_comment_event(_event())
+    sleeps: list[int] = []
+
+    def fail_closed(_dsn, _callback):
+        raise psycopg.OperationalError("AUTOPILOT_CALLBACK_BINDING_INVALID")
+
+    monkeypatch.setattr(
+        "oracle_autopilot.github_role_callback.ingest_callback", fail_closed
+    )
+    with pytest.raises(psycopg.OperationalError, match="BINDING_INVALID"):
+        ingest_callback_with_retry("unused", callback, sleeper=sleeps.append)
+    assert sleeps == []
+
+
+def test_callback_retry_budget_is_bounded(monkeypatch):
+    callback = parse_issue_comment_event(_event())
+    sleeps: list[int] = []
+
+    def never_sent(_dsn, _callback):
+        raise psycopg.OperationalError("AUTOPILOT_CALLBACK_DISPATCH_NOT_SENT")
+
+    monkeypatch.setattr(
+        "oracle_autopilot.github_role_callback.ingest_callback", never_sent
+    )
+    with pytest.raises(psycopg.OperationalError, match="DISPATCH_NOT_SENT"):
+        ingest_callback_with_retry("unused", callback, sleeper=sleeps.append)
+    assert sleeps == [1, 2, 4, 8]
