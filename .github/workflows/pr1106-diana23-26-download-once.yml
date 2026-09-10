@@ -18,7 +18,7 @@ jobs:
     if: >-
       github.repository == 'olegmed1-art/bridge-video-free' &&
       github.actor == 'olegmed1-art' &&
-      github.event.before == '788780a825a54217cf73f57a546ab6aadb50ffc7'
+      github.event.before == '77eb78b5f09b6b5dd7bd0f323c598985c1d15531'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -72,7 +72,7 @@ jobs:
           echo "known=$known" >> "$GITHUB_OUTPUT"
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
-          remote_capacity="$(ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes +            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 +            "$ORACLE_USER@$ORACLE_HOST" 'set -Eeuo pipefail
+          remote_capacity="$(ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'set -Eeuo pipefail
               [[ "$(hostname)" == bridge-school-dds3-frankfurt ]]
               root=/home/ubuntu/bridge-school-private-media/diana-23-26
               parent=/home/ubuntu/bridge-school-private-media
@@ -98,7 +98,7 @@ jobs:
           receipt="$work/receipt.tsv"
           : > "$receipt"
           cleanup() {
-            rm -f "$work/diana-23.mp4" "$work/diana-24.mp4" +              "$work/diana-25-2021-09-13.mp4" "$work/diana-26.mp4"
+            rm -f "$work/diana-23.mp4" "$work/diana-24.mp4" "$work/diana-25-2021-09-13.mp4" "$work/diana-26.mp4"
           }
           trap cleanup EXIT
 
@@ -222,7 +222,7 @@ jobs:
 
             remote_final="$REMOTE_ROOT/$TARGET_NAME"
             remote_part="$REMOTE_ROOT/.$TARGET_NAME.part"
-            remote_state="$(ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes +              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" +              "$ORACLE_USER@$ORACLE_HOST" +              "set -Eeuo pipefail
+            remote_state="$(ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" "$ORACLE_USER@$ORACLE_HOST" "set -Eeuo pipefail
                final='$remote_final'
                if [[ -e \"\$final\" ]]; then
                  [[ -f \"\$final\" && ! -L \"\$final\" ]]
@@ -235,12 +235,12 @@ jobs:
               echo "TRANSFER_REUSED name=$TARGET_NAME bytes=$SOURCE_BYTES"
             else
               [[ "$remote_state" == ABSENT ]]
-              ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes +                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" +                "$ORACLE_USER@$ORACLE_HOST" "rm -f '$remote_part'"
-              if ! scp -q -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes +                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" +                "$LOCAL_PATH" "$ORACLE_USER@$ORACLE_HOST:$remote_part"; then
-                ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes +                  -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" +                  "$ORACLE_USER@$ORACLE_HOST" "rm -f '$remote_part'" || true
+              ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" "$ORACLE_USER@$ORACLE_HOST" "rm -f '$remote_part'"
+              if ! scp -q -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" "$LOCAL_PATH" "$ORACLE_USER@$ORACLE_HOST:$remote_part"; then
+                ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" "$ORACLE_USER@$ORACLE_HOST" "rm -f '$remote_part'" || true
                 exit 41
               fi
-              ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes +                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" +                "$ORACLE_USER@$ORACLE_HOST" +                "set -Eeuo pipefail
+              ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" "$ORACLE_USER@$ORACLE_HOST" "set -Eeuo pipefail
                  [[ -f '$remote_part' && ! -L '$remote_part' ]]
                  [[ \"\$(stat -c %s '$remote_part')\" == '$SOURCE_BYTES' ]]
                  [[ \"\$(sha256sum '$remote_part' | awk '{print \\$1}')\" == '$SOURCE_SHA256' ]]
@@ -281,8 +281,8 @@ jobs:
           }, ensure_ascii=False, indent=2, sort_keys=True))
           PY
           python -m json.tool "$work/manifest.json" >/dev/null
-          scp -q -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes +            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" +            "$work/manifest.json" "$ORACLE_USER@$ORACLE_HOST:$REMOTE_ROOT/.manifest.json.part"
-          ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes +            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" +            "$ORACLE_USER@$ORACLE_HOST" +            "set -Eeuo pipefail
+          scp -q -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" "$work/manifest.json" "$ORACLE_USER@$ORACLE_HOST:$REMOTE_ROOT/.manifest.json.part"
+          ssh -i "$SSH_KEY" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" "$ORACLE_USER@$ORACLE_HOST" "set -Eeuo pipefail
              python3 -m json.tool '$REMOTE_ROOT/.manifest.json.part' >/dev/null
              chmod 0600 '$REMOTE_ROOT/.manifest.json.part'
              mv '$REMOTE_ROOT/.manifest.json.part' '$REMOTE_ROOT/manifest.json'
