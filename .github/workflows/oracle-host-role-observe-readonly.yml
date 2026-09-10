@@ -71,7 +71,7 @@ jobs:
           chmod 0600 "$HOME/.oci/config"
           timeout --signal=KILL 30s oci iam region list --output json >/dev/null
 
-      - name: Observe both exact hosts without service mutation
+      - name: Observe exact Heavy Oracle host without service mutation
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -111,11 +111,11 @@ jobs:
           python - "$RUNNER_TEMP/instances.json" <<'PY' > "$RUNNER_TEMP/targets.tsv"
           import json, sys
           rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
-          names = {'bridge-school-autopilot-lite', 'bridge-school-dds3-frankfurt'}
+          names = {'bridge-school-dds3-frankfurt'}
           selected = [row for row in rows if isinstance(row, dict)
                       and row.get('display-name') in names
                       and row.get('lifecycle-state') not in {'TERMINATED', 'TERMINATING'}]
-          assert len(selected) == 2 and {row['display-name'] for row in selected} == names
+          assert len(selected) == 1 and {row['display-name'] for row in selected} == names
           assert all(row.get('lifecycle-state') == 'RUNNING' for row in selected)
           for row in sorted(selected, key=lambda item: item['display-name']):
               assert isinstance(row.get('id'), str) and row['id'].startswith('ocid1.instance.')
