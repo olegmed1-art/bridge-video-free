@@ -1,0 +1,11 @@
+{
+  "request_id": "autopilot-runtime-login-20260910T0621Z",
+  "target_host": "158.180.47.161",
+  "rsa_fingerprint": "SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64",
+  "activate": 0,
+  "expected_db_user": "autopilot_runtime_login",
+  "plaintext_length": 161,
+  "ciphertext_b64": "ILF5El9NfXZ/EgVPcO/ocoOfd01fFvk/OKwMaCJsk9smSkPoJlCoeLj0akFSMBPDyXqGX0kWaJc7bpL1HgdYAmseKg5VdSz8VIdJVCQ0+2denF6QwmSOQXgWRVqaGlpHfu72I7wSkpmbjQtI1SXGjlEUeZeVVQrI+XlOIPcxw4MD9haKv245AAD9WzalLuE/mm6qQrgJQCPRePbeHPBfcz+QMqil/+Wyidp+mdjknAeYnmCoZCZIurCM7d1EcTNhG1a10K2qtBJRO/dVUnkYb33PRYL2FirLSkt7c66kGR5Qvl0ODYHOJjdh7gHegnn2gaa3IfaS+jsioNo1b8kjd4XbPklpLhCdINFQx59qPsZR4FS7ezECBFwL1Q1KU7uHjoXrV3TLCx8CImZby1U9I0cohgYyJYxMRlHGQQzCvZlE1YDiIX9iRS1sRZGU8wEFC/U+X/nQ0KiwbR3b8I4OThZ+PQF8lTNXjT06vKERwcj/HP/5KGTfFElRq5fvHt+w",
+  "ciphertext_sha256": "df59d46ea6876ab7c1a0bf04d97597b7b7301a39ec1fd9f39b2121d88ed21385",
+  "replace_active_service": true
+}
