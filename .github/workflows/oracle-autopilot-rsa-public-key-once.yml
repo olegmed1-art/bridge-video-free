@@ -1,0 +1,26 @@
+name: P0 Oracle RSA public key one-shot
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/oracle-autopilot-rsa-public-key-once.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  public-key:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Read and verify public SSH host RSA key
+        shell: bash
+        run: |
+          set -euo pipefail
+          line="$(ssh-keyscan -T 15 -t rsa 158.180.47.161 2>/dev/null | head -n1)"
+          test -n "$line"
+          printf '%s\n' "$line" | awk '{print $2, $3}' > "$RUNNER_TEMP/oracle-rsa.pub"
+          fingerprint="$(ssh-keygen -lf "$RUNNER_TEMP/oracle-rsa.pub" | awk '{print $2}')"
+          test "$fingerprint" = 'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'
+          printf 'ORACLE_RSA_PUBLIC_KEY='; base64 -w0 "$RUNNER_TEMP/oracle-rsa.pub"; printf '\n'
+          echo 'ORACLE_RSA_PUBLIC_KEY_FINGERPRINT=SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'
