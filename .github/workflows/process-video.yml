@@ -17,10 +17,31 @@ on:
           - medium
 
 permissions:
+  actions: read
   contents: read
 
+# A shared Actions concurrency group is intentionally not used here: GitHub
+# retains only one pending member and would discard an older distinct video
+# request. The first job forms a two-sided active-run fence with pre-canary,
+# while every workflow dispatch remains independently recoverable.
 jobs:
+  precanary-fence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Preserve request and wait out the one-shot pre-canary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash ops/process_video_precanary_fence.sh
+
   process:
+    needs: precanary-fence
     runs-on: ubuntu-latest
     timeout-minutes: 330
     env:
