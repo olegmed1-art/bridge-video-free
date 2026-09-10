@@ -39,7 +39,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
+          python -m pip install --disable-pip-version-check 'oci-cli==3.90.3'
+          echo 'OCI_CLI_INSTALL=PASS'
           install -d -m 0700 "$HOME/.oci"
           printf '%s' "$OCI_KEY" | python -c 'import sys; raw=sys.stdin.read().replace("\\r","").replace("\\n","\n"); open(sys.argv[1],"w").write(raw if raw.endswith("\n") else raw+"\n")' "$HOME/.oci/key.pem"
           chmod 0600 "$HOME/.oci/key.pem"
@@ -62,9 +63,12 @@ jobs:
           path.write_text('[DEFAULT]\\n'+''.join(f'{k}={v}\\n' for k,v in values.items())+f'key_file={Path.home()/".oci"/"key.pem"}\\n')
           PY
           chmod 0600 "$HOME/.oci/config"
+          echo 'OCI_CONFIG=PASS'
           tenancy_id="$(awk -F= '$1=="tenancy"{print $2}' "$HOME/.oci/config")"
           [[ "$tenancy_id" == ocid1.tenancy.* ]]
+          echo 'OCI_TENANCY_PARSE=PASS'
           oci iam compartment list --compartment-id "$tenancy_id" --include-root --compartment-id-in-subtree true --access-level ACCESSIBLE --all > "$RUNNER_TEMP/compartments.json"
+          echo 'OCI_COMPARTMENTS=PASS'
           python - "$RUNNER_TEMP/compartments.json" > "$RUNNER_TEMP/compartment-ids" <<'PY'
           import json,sys
           for row in json.load(open(sys.argv[1]))['data']:
