@@ -1,0 +1,7 @@
+{
+  "request_id": "autopilot-shadow-activate-20260910T1008IL",
+  "target_host": "158.180.47.161",
+  "rsa_fingerprint": "SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64",
+  "expected_source_revision": "d6668c106eda255558829e5ca7fccd34279fb313",
+  "activation_scope": "SHADOW_ONLY"
+}
