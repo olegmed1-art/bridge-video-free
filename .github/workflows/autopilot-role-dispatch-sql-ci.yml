@@ -1,0 +1,142 @@
+name: Autopilot role dispatch SQL CI
+
+on:
+  pull_request:
+    paths:
+      - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/tests/322_autopilot_chatgpt_role_dispatch.sql'
+      - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/tests/322_autopilot_chatgpt_role_dispatch.sql'
+      - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  live-0302-fails-closed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: autopilot_role_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d autopilot_role_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/autopilot_role_ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Prove exact live baseline rejects out-of-order bridge
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE TABLE public.schema_migration (
+            migration_key text PRIMARY KEY,
+            applied_at timestamptz NOT NULL DEFAULT now(),
+            checksum text
+          );
+          SQL
+          for migration in \
+            database/migrations/0300_autopilot_oracle_shadow.sql \
+            database/migrations/0301_autopilot_github_pr_read_only.sql \
+            database/migrations/0302_autopilot_github_ci_read_only.sql; do
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$migration"
+          done
+          if psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+              -f database/migrations/0322_autopilot_chatgpt_role_dispatch.sql \
+              >"$RUNNER_TEMP/0322.out" 2>&1; then
+            echo '0322 unexpectedly accepted the incomplete 0302 baseline' >&2
+            exit 1
+          fi
+          grep -F 'AUTOPILOT_ROLE_DISPATCH_REQUIRES_0321' "$RUNNER_TEMP/0322.out"
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT to_regclass('autopilot.role_dispatch_outbox') IS NULL;")" = t
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM schema_migration WHERE migration_key='0322_autopilot_chatgpt_role_dispatch';")" = 0
+
+  current-main-baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: autopilot_main_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d autopilot_main_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/autopilot_main_ci
+      DATABASE_URL: postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/autopilot_main_ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Bootstrap managed-owner-compatible database
+        run: |
+          set -euo pipefail
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE EXTENSION IF NOT EXISTS btree_gist;
+          CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+          CREATE ROLE bridge_ci_owner LOGIN PASSWORD 'bridge_ci_owner' CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION;
+          ALTER DATABASE autopilot_main_ci OWNER TO bridge_ci_owner;
+          ALTER SCHEMA public OWNER TO bridge_ci_owner;
+          SQL
+
+      - name: Apply current main migration chain, role test, and clean rollback
+        run: |
+          set -euo pipefail
+          chmod +x database/scripts/migrate.sh
+          database/scripts/migrate.sh
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT to_regclass('autopilot.role_dispatch_outbox') IS NULL;")" = t
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM schema_migration WHERE migration_key='0322_autopilot_chatgpt_role_dispatch';")" = 0
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0322_autopilot_chatgpt_role_dispatch.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/322_autopilot_chatgpt_role_dispatch.sql

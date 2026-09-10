@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import re
+import uuid
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
@@ -169,3 +170,27 @@ def hmac_compare(left: str, right: str) -> bool:
     """Compare public fingerprints without accidental early-exit differences."""
 
     return hmac.compare_digest(left, right)
+
+
+class RoleDispatchRequest(BaseModel):
+    """Public, non-secret envelope for the fixed GitHub role mailbox."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    dispatch_id: str = Field(min_length=36, max_length=36)
+    dispatch_epoch: int = Field(ge=1, le=2**63 - 1)
+    prepared_at_epoch: int = Field(ge=1_700_000_000, le=4_102_444_800)
+    role: Literal["RECOGNIZER", "VIDEO", "BOOKS", "KNOWLEDGE"]
+    task_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    target_pr: int = Field(ge=1, le=1_000_000)
+    mode: Literal["READ_ONLY"]
+
+    @model_validator(mode="after")
+    def validate_dispatch_id(self) -> "RoleDispatchRequest":
+        try:
+            parsed = uuid.UUID(self.dispatch_id)
+        except (ValueError, AttributeError) as exc:
+            raise ValueError("ROLE_DISPATCH_ID_INVALID") from exc
+        if parsed.version != 4 or str(parsed) != self.dispatch_id:
+            raise ValueError("ROLE_DISPATCH_ID_INVALID")
+        return self
