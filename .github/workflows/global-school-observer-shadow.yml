@@ -1,0 +1,95 @@
+name: Global School Observer 24h shadow
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/global-school-observer-shadow.yml"
+  schedule:
+    - cron: "23 * * * *"
+
+permissions:
+  actions: read
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: global-school-observer-24h-shadow
+  cancel-in-progress: false
+
+jobs:
+  shadow-observation:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Collect one read-only shadow observation
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: autopilot_service
+          OBSERVER_CANARY_OUTPUT: observer-shadow.json
+        run: python autopilot_service/tools/run_observer_canary.py
+
+      - name: Mark receipt as shadow-only
+        env:
+          SHADOW_RUN_ID: ${{ github.run_id }}
+          SHADOW_RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("observer-shadow.json")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          assert receipt["mode"] == "READ_ONLY_CANARY"
+          assert receipt["external_mutation_allowed"] is False
+          receipt["schema"] = "GLOBAL_SCHOOL_OBSERVER_SHADOW_V1"
+          receipt["mode"] = "SHADOW"
+          receipt["notifications_enabled"] = False
+          receipt["shadow_run_id"] = os.environ["SHADOW_RUN_ID"]
+          receipt["shadow_run_number"] = int(os.environ["SHADOW_RUN_NUMBER"])
+          path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Verify shadow receipt contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(Path("observer-shadow.json").read_text(encoding="utf-8"))
+          assert receipt["schema"] == "GLOBAL_SCHOOL_OBSERVER_SHADOW_V1"
+          assert receipt["mode"] == "SHADOW"
+          assert receipt["external_mutation_allowed"] is False
+          assert receipt["notifications_enabled"] is False
+          assert receipt["source_state"]["autopilot_installed_receipt"]
+          assert receipt["source_state"]["pr_1158_merged_at"]
+          assert receipt["finding_count"] == len(receipt["findings"])
+          for finding in receipt["findings"]:
+              assert finding["evidence_refs"]
+              assert finding["dedupe_key"]
+              assert finding["status"] == "OPEN"
+          print("OBSERVER_24H_SHADOW_OBSERVATION_PASS")
+          PY
+
+      - name: Publish shadow receipt to job log only
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(Path("observer-shadow.json").read_text(encoding="utf-8"))
+          print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+          PY
