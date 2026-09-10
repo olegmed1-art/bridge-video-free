@@ -238,6 +238,7 @@ def test_case_execution_uses_clean_isolated_process(tmp_path, monkeypatch):
     for key in runner.LOADER_INJECTION_ENV_VARS:
         monkeypatch.delenv(key, raising=False)
     receipt = {"result": {"status": "PENDING_TEMPORAL_CONSENSUS"}}
+    runtime_probe = {"numpy": {}, "opencv-python-headless": {}}
 
     def fake_run(argv, **kwargs):
         assert argv[:3] == [runner.sys.executable, "-I", "-c"]
@@ -249,11 +250,43 @@ def test_case_execution_uses_clean_isolated_process(tmp_path, monkeypatch):
             kwargs["env"].get(key) for key in runner.LOADER_INJECTION_ENV_VARS
         )
         output_path = Path(argv[-1])
-        output_path.write_text(json.dumps(receipt), encoding="utf-8")
+        output_path.write_text(
+            json.dumps(
+                {
+                    "receipt": receipt,
+                    "runtime_probe": runtime_probe,
+                    "runtime_metrics": {
+                        "cpu_seconds": 0.125,
+                        "peak_rss_bytes": 4096,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
-    assert runner._execute_case_isolated({"job_type": "test"}) == receipt
+    verified = []
+    monkeypatch.setattr(
+        runner,
+        "_verify_imported_runtime_modules",
+        lambda value: verified.append(value) or value,
+    )
+    assert runner._execute_case_isolated({"job_type": "test"}) == (
+        receipt,
+        {"cpu_seconds": 0.125, "peak_rss_bytes": 4096},
+    )
+    assert verified == [runtime_probe]
+
+
+def test_case_child_preloads_runtime_and_attests_after_recognition():
+    script = runner._ISOLATED_CASE_EXECUTOR
+    assert script.index("module = importlib.import_module(module_name)") < script.index(
+        "sys.path.insert(0, str(repository_root))"
+    )
+    assert script.index("receipt = execute_shadow_job(job)") < script.index(
+        "runtime_probe = {}"
+    )
 
 
 def test_cli_keeps_output_parent_pinned_across_symlink_retarget(tmp_path, monkeypatch):

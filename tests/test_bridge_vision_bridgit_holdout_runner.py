@@ -116,6 +116,10 @@ def _fake_receipt(_job):
     }
 
 
+def _fake_isolated(job):
+    return _fake_receipt(job), {"cpu_seconds": 0.001, "peak_rss_bytes": 1024}
+
+
 def test_relative_package_is_portable_and_algorithm_output_hash_is_stable(
     tmp_path, monkeypatch
 ):
@@ -124,7 +128,7 @@ def test_relative_package_is_portable_and_algorithm_output_hash_is_stable(
 
     def execute(job):
         jobs.append(job)
-        return _fake_receipt(job)
+        return _fake_isolated(job)
 
     monkeypatch.setattr(runner, "_execute_case_isolated", execute)
     first = runner.run_package(_make_package(tmp_path / "oracle"))
@@ -144,7 +148,7 @@ def test_relative_package_is_portable_and_algorithm_output_hash_is_stable(
 
 def test_output_records_match_contract_and_ram_is_run_level(tmp_path, monkeypatch):
     _stub_runtime(monkeypatch)
-    monkeypatch.setattr(runner, "_execute_case_isolated", _fake_receipt)
+    monkeypatch.setattr(runner, "_execute_case_isolated", _fake_isolated)
     report = runner.run_package(_make_package(tmp_path / "run"))
     case = report["cases"][0]
 
@@ -165,7 +169,7 @@ def test_output_records_match_contract_and_ram_is_run_level(tmp_path, monkeypatc
     assert case["card_records"][1]["suit"] is None
     assert case["runtime_metrics"]["wall_seconds"] >= 0
     assert case["runtime_metrics"]["cpu_seconds"] >= 0
-    assert "peak_rss_bytes" not in case["runtime_metrics"]
+    assert case["runtime_metrics"]["peak_rss_bytes"] == 1024
     assert case["runtime_metrics"]["peak_temp_disk_bytes"] >= 0
     assert report["runtime_metrics"]["peak_rss_bytes"] > 0
 
@@ -183,7 +187,7 @@ def test_package_path_escape_and_artifact_mismatch_fail_closed(tmp_path, monkeyp
     package = json.loads(package_path.read_text(encoding="utf-8"))
     package["recognizer_artifact_sha256"] = "0" * 64
     package_path.write_text(json.dumps(package), encoding="utf-8")
-    monkeypatch.setattr(runner, "_execute_case_isolated", _fake_receipt)
+    monkeypatch.setattr(runner, "_execute_case_isolated", _fake_isolated)
     with pytest.raises(runner.HoldoutRunnerError, match="artifact does not match"):
         runner.run_package(package_path)
 
@@ -240,7 +244,7 @@ def test_package_reader_rejects_fifo_and_oversized_file(tmp_path):
 
 def test_cli_rejects_output_aliases_before_execution(tmp_path, monkeypatch):
     _stub_runtime(monkeypatch)
-    monkeypatch.setattr(runner, "_execute_case_isolated", _fake_receipt)
+    monkeypatch.setattr(runner, "_execute_case_isolated", _fake_isolated)
 
     package_path = _make_package(tmp_path / "package-alias")
     original = package_path.read_bytes()
@@ -260,7 +264,7 @@ def test_cli_writes_output_atomically_without_changing_deterministic_hash(
     tmp_path, monkeypatch
 ):
     _stub_runtime(monkeypatch)
-    monkeypatch.setattr(runner, "_execute_case_isolated", _fake_receipt)
+    monkeypatch.setattr(runner, "_execute_case_isolated", _fake_isolated)
     package_path = _make_package(tmp_path / "ok")
     output = tmp_path / "result" / "run.json"
     assert runner.main(["--package", str(package_path), "--output", str(output)]) == 0

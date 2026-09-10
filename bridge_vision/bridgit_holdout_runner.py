@@ -11,9 +11,9 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import os
 import re
-import resource
 import stat
 import subprocess
 import sys
@@ -131,12 +131,43 @@ print(json.dumps(result, sort_keys=True, separators=(",", ":")))
 _ISOLATED_CASE_EXECUTOR = r'''
 import resource
 import sys
+import time
 
 output_limit = int(sys.argv[1])
 resource.setrlimit(resource.RLIMIT_FSIZE, (output_limit, output_limit))
+cpu_start = time.process_time()
 
+import importlib
+import importlib.metadata
 import json
 import pathlib
+
+targets = {
+    "numpy": "numpy",
+    "opencv-python-headless": "cv2",
+}
+prepared_runtime = {}
+for distribution_name, module_name in targets.items():
+    distribution = importlib.metadata.distribution(distribution_name)
+    module = importlib.import_module(module_name)
+    if module_name == "numpy":
+        importlib.import_module("numpy.linalg")
+        module.linalg.norm(module.asarray([1.0, 2.0]))
+    else:
+        numpy = importlib.import_module("numpy")
+        module.cvtColor(numpy.zeros((2, 2, 3), dtype=numpy.uint8), module.COLOR_BGR2GRAY)
+    entry_module = pathlib.Path(module.__file__).resolve(strict=True)
+    native_records = {}
+    for entry in distribution.files or ():
+        relative = str(entry).replace("\\\\", "/")
+        name = pathlib.PurePosixPath(relative).name.lower()
+        if any(marker in name for marker in (".so", ".pyd", ".dll", ".dylib")):
+            native_records[str(pathlib.Path(distribution.locate_file(entry)).resolve(strict=True))] = relative
+    prepared_runtime[distribution_name] = {
+        "module_name": module_name,
+        "entry_module": str(entry_module),
+        "native_records": native_records,
+    }
 
 repository_root = pathlib.Path(sys.argv[2]).resolve(strict=True)
 job_path = pathlib.Path(sys.argv[3]).resolve(strict=True)
@@ -146,8 +177,56 @@ from bridge_vision.bridgit_rank_layout import execute_shadow_job
 
 job = json.loads(job_path.read_text(encoding="utf-8"))
 receipt = execute_shadow_job(job)
+
+runtime_probe = {}
+for distribution_name, prepared in prepared_runtime.items():
+    module_name = prepared["module_name"]
+    native_records = prepared["native_records"]
+    loaded = set()
+    for loaded_name, loaded_module in tuple(sys.modules.items()):
+        if loaded_name == module_name or loaded_name.startswith(module_name + "."):
+            raw_path = getattr(loaded_module, "__file__", None)
+            if isinstance(raw_path, str):
+                resolved = pathlib.Path(raw_path).resolve(strict=True)
+                if str(resolved) in native_records:
+                    loaded.add(str(resolved))
+                elif any(marker in resolved.name.lower() for marker in (".so", ".pyd", ".dll", ".dylib")):
+                    raise RuntimeError("unowned native extension loaded for " + module_name)
+    maps = pathlib.Path("/proc/self/maps")
+    if not maps.is_file():
+        raise RuntimeError("Linux loaded-library map is unavailable")
+    for line in maps.read_text(encoding="utf-8", errors="strict").splitlines():
+        raw_path = line.rsplit(None, 1)[-1]
+        if raw_path.startswith("/"):
+            try:
+                resolved = str(pathlib.Path(raw_path).resolve(strict=True))
+            except OSError:
+                continue
+            if resolved in native_records:
+                loaded.add(resolved)
+    if not loaded:
+        raise RuntimeError("no owned native runtime file was observed for " + module_name)
+    runtime_probe[distribution_name] = {
+        "entry_module": prepared["entry_module"],
+        "loaded_native_files": sorted(loaded),
+    }
+usage = resource.getrusage(resource.RUSAGE_SELF)
+peak_rss_bytes = int(usage.ru_maxrss)
+if sys.platform != "darwin":
+    peak_rss_bytes *= 1024
 output_path.write_text(
-    json.dumps(receipt, sort_keys=True, separators=(",", ":")),
+    json.dumps(
+        {
+            "receipt": receipt,
+            "runtime_probe": runtime_probe,
+            "runtime_metrics": {
+                "cpu_seconds": round(time.process_time() - cpu_start, 6),
+                "peak_rss_bytes": peak_rss_bytes,
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ),
     encoding="utf-8",
 )
 '''
@@ -297,9 +376,12 @@ def _isolated_runtime_probe() -> dict[str, Any]:
     return dict(result)
 
 
-def _verify_imported_runtime_modules() -> dict[str, dict[str, Any]]:
+def _verify_imported_runtime_modules(
+    isolated: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
     """Verify isolated entry modules and every native file in the pinned wheels."""
-    isolated = _isolated_runtime_probe()
+    if isolated is None:
+        isolated = _isolated_runtime_probe()
     if set(isolated) != set(PINNED_RUNTIME_MODULES):
         raise HoldoutRunnerError("isolated pixel runtime probe is incomplete")
     identities: dict[str, dict[str, Any]] = {}
@@ -375,7 +457,9 @@ def _verify_imported_runtime_modules() -> dict[str, dict[str, Any]]:
     return identities
 
 
-def _execute_case_isolated(job: Mapping[str, Any]) -> dict[str, Any]:
+def _execute_case_isolated(
+    job: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     environment = _clean_runtime_environment()
     repository_root = Path(__file__).resolve().parent.parent
 
@@ -416,12 +500,35 @@ def _execute_case_isolated(job: Mapping[str, Any]) -> dict[str, Any]:
         except (OSError, subprocess.SubprocessError) as exc:
             raise HoldoutRunnerError("isolated recognizer case failed") from exc
     try:
-        receipt = json.loads(payload)
+        wrapper = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HoldoutRunnerError("isolated case receipt is invalid") from exc
-    if not isinstance(receipt, Mapping):
+    if not isinstance(wrapper, Mapping):
         raise HoldoutRunnerError("isolated case receipt is invalid")
-    return dict(receipt)
+    receipt = wrapper.get("receipt")
+    runtime_probe = wrapper.get("runtime_probe")
+    runtime_metrics = wrapper.get("runtime_metrics")
+    if not isinstance(receipt, Mapping) or not isinstance(runtime_probe, Mapping):
+        raise HoldoutRunnerError("isolated case receipt is invalid")
+    _verify_imported_runtime_modules(runtime_probe)
+    if not isinstance(runtime_metrics, Mapping):
+        raise HoldoutRunnerError("isolated case runtime metrics are invalid")
+    cpu_seconds = runtime_metrics.get("cpu_seconds")
+    peak_rss_bytes = runtime_metrics.get("peak_rss_bytes")
+    if (
+        isinstance(cpu_seconds, bool)
+        or not isinstance(cpu_seconds, (int, float))
+        or not math.isfinite(cpu_seconds)
+        or cpu_seconds < 0
+        or isinstance(peak_rss_bytes, bool)
+        or not isinstance(peak_rss_bytes, int)
+        or peak_rss_bytes <= 0
+    ):
+        raise HoldoutRunnerError("isolated case runtime metrics are invalid")
+    return dict(receipt), {
+        "cpu_seconds": round(float(cpu_seconds), 6),
+        "peak_rss_bytes": peak_rss_bytes,
+    }
 
 
 def _installed_runtime_versions() -> dict[str, str]:
@@ -643,12 +750,7 @@ def _directory_bytes(root: Path) -> int:
     return total
 
 
-def _peak_rss_bytes() -> int:
-    value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-    return value if os.uname().sysname == "Darwin" else value * 1024
-
-
-def _measure(call: Callable[[], dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _measure(call: Callable[[], Any]) -> tuple[Any, dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="bridgit-holdout-") as temporary:
         temp_root = Path(temporary)
         stop = threading.Event()
@@ -767,9 +869,16 @@ def run_package(package_path: Path) -> dict[str, Any]:
         if case_id in seen_case_ids:
             raise HoldoutRunnerError("duplicate case_id")
         seen_case_ids.add(case_id)
-        receipt, runtime_metrics = _measure(
+        (receipt, child_metrics), runtime_metrics = _measure(
             lambda job=job: _execute_case_isolated(job)
         )
+        runtime_metrics["cpu_seconds"] = child_metrics["cpu_seconds"]
+        runtime_metrics["cpu_utilization_ratio"] = (
+            round(child_metrics["cpu_seconds"] / runtime_metrics["wall_seconds"], 6)
+            if runtime_metrics["wall_seconds"]
+            else 0.0
+        )
+        runtime_metrics["peak_rss_bytes"] = child_metrics["peak_rss_bytes"]
         result = receipt.get("result")
         if not isinstance(result, Mapping):
             raise HoldoutRunnerError("recognizer receipt has no result")
@@ -805,7 +914,9 @@ def run_package(package_path: Path) -> dict[str, Any]:
         "cpu_seconds": round(
             sum(item["runtime_metrics"]["cpu_seconds"] for item in case_outputs), 6
         ),
-        "peak_rss_bytes": _peak_rss_bytes(),
+        "peak_rss_bytes": max(
+            item["runtime_metrics"]["peak_rss_bytes"] for item in case_outputs
+        ),
         "peak_temp_disk_bytes": max(
             item["runtime_metrics"]["peak_temp_disk_bytes"] for item in case_outputs
         ),
