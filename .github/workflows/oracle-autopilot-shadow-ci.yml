@@ -30,6 +30,7 @@ on:
       - 'database/tests/305_autopilot_bounded_task_ingress.sql'
       - 'database/tests/306_autopilot_ibf_completion.sql'
       - 'database/tests/307_autopilot_ibf_structured_artifact.sql'
+      - '.github/workflows/autopilot-readonly-github-schema-once.yml'
       - '.github/workflows/oracle-autopilot-shadow-ci.yml'
       - 'docs/architecture/SCHOOL_AUTOPILOT_CONTROLLER_V1.md'
       - 'ops/autopilot/project-state.json'
@@ -63,6 +64,7 @@ on:
       - 'database/tests/305_autopilot_bounded_task_ingress.sql'
       - 'database/tests/306_autopilot_ibf_completion.sql'
       - 'database/tests/307_autopilot_ibf_structured_artifact.sql'
+      - '.github/workflows/autopilot-readonly-github-schema-once.yml'
       - '.github/workflows/oracle-autopilot-shadow-ci.yml'
 
 permissions:
