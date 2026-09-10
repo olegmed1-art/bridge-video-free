@@ -1,0 +1,189 @@
+name: P0 Autopilot runtime production repair once
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - '.github/workflows/oracle-autopilot-runtime-production-repair-once.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-autopilot-runtime-production-repair-once
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      EXPECTED_SOURCE_REVISION: 9064044d4c5b85803c6778060dff4843111ab888
+      SOURCE_DB_HOST: ep-floral-field-b1pjs2of.c-5.eu-central-1.aws.neon.tech
+      TARGET_DB_HOST: ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech
+      TARGET_BRANCH_ID: br-wispy-lab-b1rq54of
+      PROBE_TASK_KEY: chat-dispatch-live-probe-20260910-01
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify pinned Oracle identity
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_KEY_ORACLE"
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Retarget existing runtime DSN and start worker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env EXPECTED_SOURCE_REVISION='$EXPECTED_SOURCE_REVISION' SOURCE_DB_HOST='$SOURCE_DB_HOST' TARGET_DB_HOST='$TARGET_DB_HOST' TARGET_BRANCH_ID='$TARGET_BRANCH_ID' PROBE_TASK_KEY='$PROBE_TASK_KEY' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          root=/opt/bridge-school/school-autopilot
+          service=school-autopilot-shadow.service
+          env_file="$root/autopilot-shadow.env"
+          backup="$root/autopilot-shadow.env.before-production-20260910"
+          python="$root/.venv/bin/python"
+
+          test "$(cat "$root/current/SOURCE_REVISION")" = "$EXPECTED_SOURCE_REVISION"
+          test "$(readlink -f "$root/current")" = "$root/releases/$EXPECTED_SOURCE_REVISION"
+          test "$(stat -c '%U:%G:%a' "$env_file")" = 'root:root:600'
+          test "$(systemctl is-active "$service" 2>/dev/null || true)" = 'inactive'
+          test "$(systemctl is-enabled "$service" 2>/dev/null || true)" = 'disabled'
+          test -x "$python"
+
+          "$python" - <<'PY'
+          from __future__ import annotations
+          import os
+          from pathlib import Path
+          import shlex
+          import shutil
+          import tempfile
+          import urllib.parse
+          import psycopg
+
+          path = Path('/opt/bridge-school/school-autopilot/autopilot-shadow.env')
+          backup = Path('/opt/bridge-school/school-autopilot/autopilot-shadow.env.before-production-20260910')
+          source = os.environ['SOURCE_DB_HOST']
+          target = os.environ['TARGET_DB_HOST']
+          target_branch = os.environ['TARGET_BRANCH_ID']
+          task_key = os.environ['PROBE_TASK_KEY']
+          raw = path.read_text(encoding='utf-8', errors='strict')
+          lines = raw.splitlines()
+          matches = [line for line in lines if line.strip().startswith('AUTOPILOT_DATABASE_URL=')]
+          assert len(matches) == 1, 'runtime DSN line mismatch'
+          rhs = matches[0].strip().split('=', 1)[1].strip()
+          if len(rhs) >= 2 and rhs[0] == rhs[-1] and rhs[0] in {'"', "'"}:
+              parts = shlex.split(rhs, posix=True)
+              assert len(parts) == 1, 'runtime DSN quoting invalid'
+              dsn = parts[0]
+          else:
+              dsn = rhs
+          parsed = urllib.parse.urlsplit(dsn)
+          assert parsed.scheme in {'postgresql', 'postgres'}
+          assert parsed.username == 'autopilot_runtime_login'
+          assert parsed.password
+          assert parsed.hostname == source
+          assert parsed.path == '/neondb'
+          assert parsed.port in (None, 5432)
+          assert not parsed.fragment
+          query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+          assert query.get('sslmode', [''])[0] in {'require', 'verify-full'}
+          assert query.get('channel_binding') == ['require']
+          assert raw.count(source) == 1
+          assert target not in raw
+
+          authority = parsed.netloc.rsplit('@', 1)[0] + '@' + target
+          if parsed.port:
+              authority += f':{parsed.port}'
+          candidate = urllib.parse.urlunsplit((parsed.scheme, authority, parsed.path, parsed.query, ''))
+          with psycopg.connect(candidate, connect_timeout=10, application_name='autopilot-runtime-production-repair') as conn:
+              with conn.cursor() as cur:
+                  cur.execute("SELECT current_user,current_database(),current_setting('neon.branch_id', true)")
+                  user, database, branch = cur.fetchone()
+                  assert user == 'autopilot_runtime_login'
+                  assert database == 'neondb'
+                  assert branch == target_branch
+                  cur.execute('SELECT count(*) FROM autopilot.task WHERE task_key=%s', (task_key,))
+                  assert cur.fetchone()[0] == 1, 'production probe task not visible'
+          print('AUTOPILOT_RUNTIME_PRODUCTION_DSN_PROBE=PASS')
+          print(f'AUTOPILOT_RUNTIME_TARGET_BRANCH={target_branch}')
+          print('AUTOPILOT_RUNTIME_PROBE_TASK_VISIBLE=YES')
+
+          if not backup.exists():
+              shutil.copy2(path, backup)
+              os.chown(backup, 0, 0)
+              os.chmod(backup, 0o600)
+          new_raw = raw.replace(source, target)
+          fd, tmp_name = tempfile.mkstemp(prefix='.autopilot-shadow.env.', dir=str(path.parent))
+          try:
+              with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                  handle.write(new_raw)
+                  handle.flush()
+                  os.fsync(handle.fileno())
+              os.chown(tmp_name, 0, 0)
+              os.chmod(tmp_name, 0o600)
+              os.replace(tmp_name, path)
+          finally:
+              try:
+                  os.unlink(tmp_name)
+              except FileNotFoundError:
+                  pass
+          print('AUTOPILOT_RUNTIME_DSN_RETARGETED=YES')
+          PY
+
+          rollback() {
+            systemctl disable --now "$service" >/dev/null 2>&1 || true
+            if [[ -f "$backup" ]]; then
+              cp -p "$backup" "$env_file"
+              chown root:root "$env_file"
+              chmod 0600 "$env_file"
+            fi
+          }
+          trap 'rc=$?; if [[ $rc -ne 0 ]]; then rollback; fi; exit $rc' EXIT
+
+          since="$(date --iso-8601=seconds)"
+          systemctl enable --now "$service"
+          sleep 10
+          test "$(systemctl is-active "$service")" = 'active'
+          test "$(systemctl is-enabled "$service")" = 'enabled'
+          test "$(systemctl show -p NRestarts --value "$service")" = '0'
+          journal="$(journalctl -u "$service" --since "$since" --no-pager -n 200 2>/dev/null || true)"
+          worker_started="$(grep -Ec 'worker_started' <<<"$journal" || true)"
+          listener_reconnect="$(grep -Ec 'listener_reconnect' <<<"$journal" || true)"
+          database_errors="$(grep -Ec 'OperationalError|authentication failed|connection refused|could not connect' <<<"$journal" || true)"
+          tracebacks="$(grep -Ec 'Traceback|RuntimeError' <<<"$journal" || true)"
+          echo "AUTOPILOT_RUNTIME_WORKER_STARTED_COUNT=$worker_started"
+          echo "AUTOPILOT_RUNTIME_LISTENER_RECONNECT_COUNT=$listener_reconnect"
+          echo "AUTOPILOT_RUNTIME_DATABASE_ERROR_COUNT=$database_errors"
+          echo "AUTOPILOT_RUNTIME_TRACEBACK_COUNT=$tracebacks"
+          test "$worker_started" -ge 1
+          test "$listener_reconnect" -eq 0
+          test "$database_errors" -eq 0
+          test "$tracebacks" -eq 0
+          echo 'AUTOPILOT_RUNTIME_SERVICE=ACTIVE_ENABLED'
+          echo 'AUTOPILOT_RUNTIME_PRODUCTION_RETARGET=PASS'
+          trap - EXIT
+          REMOTE
