@@ -64,6 +64,14 @@ jobs:
           import re
 
           payload = json.load(open(os.environ["HEALTH"], encoding="utf-8"))
+          for key in (
+              "github_token_broker_enabled",
+              "bounded_role_dispatch_enabled",
+              "source_attested",
+              "artifact_attested",
+              "broker_policy_version",
+          ):
+              print(f"{key.upper()}={payload.get(key)}")
           assert payload.get("status") == "ok"
           assert payload.get("service") == "school-autopilot-github-token-broker"
           assert payload.get("preview_only") is True
