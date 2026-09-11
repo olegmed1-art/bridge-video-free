@@ -88,4 +88,27 @@ jobs:
           uptime | sed 's/.*load average: /AUTONOMOUS_LOAD_AVERAGE=/'
           REMOTE
 
-# status probe 3
+          diagnostic="$RUNNER_TEMP/diana-autonomous-diagnostic"
+          mkdir -p "$diagnostic"
+          remote_root=/home/ubuntu/bridge-school-private-media/diana-23-26
+          scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            "$ORACLE_USER@$ORACLE_HOST:$remote_root/autonomous-results-7afc3f1a/diana-23.json" \
+            "$diagnostic/diana-23.json"
+          for name in diana24 diana25 diana26; do
+            scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+              "$ORACLE_USER@$ORACLE_HOST:$remote_root/recognition-${name}-canary-v1/profile.json" \
+              "$diagnostic/${name}-profile.json"
+          done
+          chmod 0600 "$diagnostic"/*
+          echo "DIAGNOSTIC_PATH=$diagnostic" >> "$GITHUB_ENV"
+
+# status probe 4
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: diana-autonomous-diagnostic-${{ github.sha }}
+          path: ${{ env.DIAGNOSTIC_PATH }}
+          if-no-files-found: error
+          retention-days: 7
