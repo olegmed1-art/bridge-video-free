@@ -88,6 +88,73 @@ jobs:
           uptime | sed 's/.*load average: /AUTONOMOUS_LOAD_AVERAGE=/'
           REMOTE
 
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          root=/home/ubuntu/bridge-school-private-media/diana-23-26
+          code="$root/autonomous-code-7afc3f1a"
+          venv="$root/recognition-diana23/pixel-venv"
+          results="$root/autonomous-results-7afc3f1a"
+          ROOT="$root" PYTHONPATH="$code" "$venv/bin/python" - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          import cv2
+
+          from bridge_vision.bridgit_played_card_observer import build_suit_bank, observe_played_cards
+          from bridge_vision.bridgit_visible_hand_observer import build_rank_bank, decode_frame, observe_frame, parse_profile
+          from tools.bridge_vision_autonomous_video import _json
+
+          root = Path(os.environ['ROOT'])
+          profile_file = root / 'recognition-diana23/visible-hand-profile-v1.runtime.json'
+          profile = parse_profile(_json(profile_file))
+          references = {}
+          for reference_id, (raw_path, expected_sha) in profile.references.items():
+              payload = (profile_file.parent / raw_path).read_bytes()
+              assert hashlib.sha256(payload).hexdigest() == expected_sha
+              references[reference_id] = decode_frame(payload, profile)
+          rank_bank = build_rank_bank(profile, references)
+          suit_bank = build_suit_bank(profile, references)
+          source = root / 'diana-23.mp4'
+          capture = cv2.VideoCapture(str(source))
+          assert capture.isOpened()
+          fps = float(capture.get(cv2.CAP_PROP_FPS))
+          frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+          duration_ms = round(frames * 1000 / fps)
+          observations = []
+          for timestamp_ms in range(15_000, duration_ms, 5_000):
+              capture.set(cv2.CAP_PROP_POS_MSEC, timestamp_ms)
+              ok, image = capture.read()
+              if not ok:
+                  continue
+              hands = observe_frame(image, rank_bank, profile)
+              played = observe_played_cards(image, rank_bank, suit_bank, profile)
+              if played['cards'] or played['status'] == 'CONFLICT':
+                  observations.append({
+                      'timestamp_ms': timestamp_ms,
+                      'hand_status': hands['status'],
+                      'hand_cards': [{'card': x['card'], 'seat': x['seat']} for x in hands['cards']],
+                      'played_status': played['status'],
+                      'played_cards': played['cards'],
+                      'played_conflicts': played['conflicts'],
+                  })
+          capture.release()
+          payload = {
+              'schema': 'diana-autonomous-numeric-probe/v1',
+              'sample_ms': 5000,
+              'observations': observations,
+          }
+          target = root / 'autonomous-results-7afc3f1a/diana-23-numeric-probe.json'
+          encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode() + b'\n'
+          target.write_bytes(encoded)
+          os.chmod(target, 0o600)
+          print(f'AUTONOMOUS_NUMERIC_PROBE_PASS observations={len(observations)}')
+          PY
+          REMOTE
+
           diagnostic="$RUNNER_TEMP/diana-autonomous-diagnostic"
           mkdir -p "$diagnostic"
           remote_root=/home/ubuntu/bridge-school-private-media/diana-23-26
@@ -102,9 +169,14 @@ jobs:
               "$diagnostic/${name}-profile.json"
           done
           chmod 0600 "$diagnostic"/*
+          scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            "$ORACLE_USER@$ORACLE_HOST:$remote_root/autonomous-results-7afc3f1a/diana-23-numeric-probe.json" \
+            "$diagnostic/diana-23-numeric-probe.json"
+          chmod 0600 "$diagnostic/diana-23-numeric-probe.json"
           echo "DIAGNOSTIC_PATH=$diagnostic" >> "$GITHUB_ENV"
 
-# status probe 4
+# status probe 5
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
