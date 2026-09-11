@@ -34,9 +34,11 @@ AUTONOMOUS_DEALS_SCHEMA = "bridgit-autonomous-deals/v1"
 AUTONOMOUS_DEALS_VERSION = "bridgit-autonomous-deals-v1"
 EXACT_COMPLEMENT_VERSION = "bridgit-autonomous-exact-complement-v1"
 MAX_FRAMES = 100_000
-MIN_HAND_RESET_CARDS = 16
+MIN_HAND_RESET_CARDS = 10
 MIN_HAND_RESET_CHANGED_CARDS = 8
 MIN_HAND_RESET_FRAMES = 2
+MIN_HAND_REAPPEARED_CARDS = 4
+MIN_HAND_REAPPEARED_ABSENCE_FRAMES = 3
 _SOURCES = frozenset({"HAND", "PLAYED"})
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SUITS = "SHDC"
@@ -235,6 +237,28 @@ def _same_reset_candidate(
     return bool(union) and len(left & right) / union >= 0.75
 
 
+def _is_visible_hand_replenishment(
+    signature: frozenset[tuple[str, str]],
+    absence_streaks: Mapping[tuple[str, str], int],
+) -> bool:
+    """Detect a replay/redeal even when the visible hands are unchanged.
+
+    A card removed from a visible hand cannot reappear during the same play.
+    Bridgit lessons can restart the same N/S cards while redealing the hidden
+    defenders, so an identity-only reset test is insufficient.  Requiring
+    several cards to have been absent for several independently sampled frames
+    keeps transient observer dropouts from creating a new segment.
+    """
+
+    if len(signature) < MIN_HAND_RESET_CARDS:
+        return False
+    reappeared = sum(
+        absence_streaks.get(item, 0) >= MIN_HAND_REAPPEARED_ABSENCE_FRAMES
+        for item in signature
+    )
+    return reappeared >= MIN_HAND_REAPPEARED_CARDS
+
+
 def _segment_frames(
     frames: list[dict[str, Any]], min_confidence: float
 ) -> list[dict[str, Any]]:
@@ -264,30 +288,35 @@ def _segment_frames(
     for group_marker, group_frames in groups:
         current: list[dict[str, Any]] = []
         baseline: frozenset[tuple[str, str]] = frozenset()
+        absence_streaks: dict[tuple[str, str], int] = {}
         pending: list[dict[str, Any]] = []
         pending_signature: frozenset[tuple[str, str]] = frozenset()
         for frame in group_frames:
             signature = _visible_hand_signature(frame, min_confidence)
-            if current and _is_visible_hand_reset(baseline, signature):
-                if not pending:
-                    pending = [frame]
-                    pending_signature = signature
-                    continue
-                if _same_reset_candidate(pending_signature, signature):
-                    pending.append(frame)
-                    pending_signature = frozenset(pending_signature | signature)
-                    if len(pending) >= MIN_HAND_RESET_FRAMES:
-                        raw_segments.append((group_marker, current))
-                        current = pending
-                        baseline = frozenset().union(
-                            *(
-                                _visible_hand_signature(item, min_confidence)
-                                for item in pending
-                            )
+            replenished = _is_visible_hand_replenishment(
+                signature, absence_streaks
+            )
+            for item in frozenset(baseline | frozenset(absence_streaks)):
+                absence_streaks[item] = (
+                    0 if item in signature else absence_streaks.get(item, 0) + 1
+                )
+
+            if pending and _same_reset_candidate(pending_signature, signature):
+                pending.append(frame)
+                pending_signature = frozenset(pending_signature | signature)
+                if len(pending) >= MIN_HAND_RESET_FRAMES:
+                    raw_segments.append((group_marker, current))
+                    current = pending
+                    baseline = frozenset().union(
+                        *(
+                            _visible_hand_signature(item, min_confidence)
+                            for item in pending
                         )
-                        pending = []
-                        pending_signature = frozenset()
-                    continue
+                    )
+                    absence_streaks = {item: 0 for item in baseline}
+                    pending = []
+                    pending_signature = frozenset()
+                continue
             if pending:
                 current.extend(pending)
                 baseline = frozenset(
@@ -300,8 +329,17 @@ def _segment_frames(
                 )
                 pending = []
                 pending_signature = frozenset()
+
+            if current and (
+                _is_visible_hand_reset(baseline, signature) or replenished
+            ):
+                pending = [frame]
+                pending_signature = signature
+                continue
             current.append(frame)
             baseline = frozenset(baseline | signature)
+            for item in signature:
+                absence_streaks[item] = 0
         current.extend(pending)
         if current:
             raw_segments.append((group_marker, current))
