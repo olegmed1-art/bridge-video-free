@@ -280,7 +280,23 @@ jobs:
           print('AUTOPILOT_NEW_BROKER_HEALTH=PASS')
           PY
 
-          database_url="$(sed -n 's/^AUTOPILOT_DATABASE_URL=//p' "$root/autopilot-shadow.env")"
+          database_url="$(RUNTIME_ENV="$root/autopilot-shadow.env" python3 - <<'PY'
+          import os, re, shlex
+
+          values = {}
+          for raw in open(os.environ['RUNTIME_ENV'], encoding='utf-8'):
+              line = raw.strip()
+              if not line or line.startswith('#'):
+                  continue
+              key, separator, encoded = line.partition('=')
+              assert separator and re.fullmatch(r'[A-Z][A-Z0-9_]*', key)
+              decoded = shlex.split(encoded, comments=False, posix=True)
+              assert len(decoded) == 1 and key not in values
+              values[key] = decoded[0]
+          assert values.get('AUTOPILOT_EXPECTED_DB_USER') == 'autopilot_runtime_worker_login'
+          print(str(values['AUTOPILOT_DATABASE_URL']))
+          PY
+          )"
           [[ "$database_url" == postgresql://* ]]
           active_count="$(AUTOPILOT_DATABASE_URL="$database_url" "$root/.venv/bin/python" - <<'PY'
           import os, psycopg
@@ -324,9 +340,13 @@ jobs:
                   SELECT current_user,
                          has_function_privilege(current_user, 'autopilot.claim_next_task(text,integer)', 'EXECUTE'),
                          has_function_privilege(current_user, 'autopilot.complete_task(uuid,text,bigint,text,text,jsonb)', 'EXECUTE'),
-                         has_function_privilege(current_user, 'autopilot.claim_role_dispatch_outbox(text,integer)', 'EXECUTE')
+                         has_function_privilege(current_user, 'autopilot.claim_role_dispatch_outbox_v2(text,integer)', 'EXECUTE'),
+                         has_function_privilege(current_user, 'autopilot.claim_project_work_probe(text,integer)', 'EXECUTE'),
+                         has_table_privilege(current_user, 'autopilot.project_work_item', 'SELECT')
               """).fetchone()
-          assert row == ('autopilot_runtime_login', True, True, True), row
+          assert row == (
+              'autopilot_runtime_worker_login', True, True, True, True, False,
+          ), row
           print('AUTOPILOT_RUNTIME_RPC_PREFLIGHT=PASS')
           PY
           if [[ -d "$release" ]]; then

@@ -74,3 +74,12 @@ def test_rollout_never_exposes_or_replaces_protected_credentials() -> None:
     assert "print(values" not in workflow
     assert "echo $AUTOPILOT" not in workflow
     assert "production migration: not performed by this command" in workflow
+
+
+def test_rollout_requires_isolated_runtime_login_and_project_planner_rpcs() -> None:
+    workflow = WORKFLOW.read_text()
+    assert "autopilot_runtime_worker_login" in workflow
+    assert "AUTOPILOT_EXPECTED_DB_USER" in workflow
+    assert "autopilot.claim_role_dispatch_outbox_v2(text,integer)" in workflow
+    assert "autopilot.claim_project_work_probe(text,integer)" in workflow
+    assert "has_table_privilege(current_user, 'autopilot.project_work_item', 'SELECT')" in workflow
