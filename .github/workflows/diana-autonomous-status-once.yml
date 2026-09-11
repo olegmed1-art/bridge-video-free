@@ -84,3 +84,5 @@ jobs:
           echo "AUTONOMOUS_STATUS active=$active current=$current completed=$completed elapsed_seconds=$elapsed_seconds cpu_percent=$cpu_percent input_percent=$input_percent"
           uptime | sed 's/.*load average: /AUTONOMOUS_LOAD_AVERAGE=/'
           REMOTE
+
+# status probe 2
