@@ -20,7 +20,7 @@ SUITS = tuple("HCDS")
 SEATS = tuple("NESW")
 ACTIVE_SEAT_TTL_MS = 30_000
 OPEN_CLAIM_TTL_MS = 15_000
-_WORD_RE = re.compile(r"[a-zа-я0-9]+", re.IGNORECASE)
+_WORD_RE = re.compile(r"[a-zа-я0-9]+(?:['’][a-zа-я0-9]+)*", re.IGNORECASE)
 
 _SEAT_WORDS = {
     "n": "N", "north": "N", "север": "N", "севера": "N", "северу": "N", "севером": "N",
@@ -54,7 +54,7 @@ _SUIT_WORDS = {
     "пиковый": "S", "пиковую": "S", "пиковой": "S", "пиках": "S",
 }
 _CORRECTION_MARKERS = (
-    "нет", "точнее", "вернее", "исправляю", "поправка", "correct", "correction"
+    "точнее", "вернее", "исправляю", "поправка", "correct", "correction"
 )
 
 
@@ -108,6 +108,10 @@ def _normalize_text(value: Any) -> str:
 
 
 def _correction_tail(text: str) -> tuple[str, bool]:
+    if text == "нет":
+        return "", True
+    if text.startswith("нет "):
+        return text[len("нет "):], True
     best_index = -1
     best_marker = ""
     for marker in _CORRECTION_MARKERS:
@@ -140,9 +144,20 @@ def _dedupe_overlapping(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             previous = result[index]
             if event["start_ms"] - previous["end_ms"] > 1_500:
                 break
+            event_tokens = tuple(_WORD_RE.findall(event["text"]))
+            previous_tokens = tuple(_WORD_RE.findall(previous["text"]))
+            shorter, longer = sorted(
+                (event_tokens, previous_tokens), key=lambda item: len(item)
+            )
+            contained = bool(
+                shorter
+                and any(
+                    longer[offset : offset + len(shorter)] == shorter
+                    for offset in range(len(longer) - len(shorter) + 1)
+                )
+            )
             if (
-                event["text"]
-                and event["text"] == previous["text"]
+                contained
                 and abs(event["start_ms"] - previous["start_ms"]) <= 1_200
                 and abs(event["end_ms"] - previous["end_ms"]) <= 1_200
             ):
@@ -150,7 +165,15 @@ def _dedupe_overlapping(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 break
         if duplicate is None:
             result.append(event)
-        elif event["asr_confidence"] > result[duplicate]["asr_confidence"]:
+        elif (
+            len(_WORD_RE.findall(event["text"])),
+            event["asr_confidence"],
+            event["end_ms"],
+        ) > (
+            len(_WORD_RE.findall(result[duplicate]["text"])),
+            result[duplicate]["asr_confidence"],
+            result[duplicate]["end_ms"],
+        ):
             result[duplicate] = event
     return result
 
@@ -180,6 +203,7 @@ def accumulate_teacher_speech(
         text = _normalize_text(raw.get("text", ""))
         parse_text, detected_correction = _correction_tail(text)
         tokens = _WORD_RE.findall(parse_text)
+        is_negated = "нет" in _WORD_RE.findall(text) and not detected_correction
         seat = (
             _seat(raw["seat_hint"], f"{event_id}.seat_hint")
             if raw.get("seat_hint") is not None
@@ -206,6 +230,7 @@ def accumulate_teacher_speech(
                 "rank": rank,
                 "suit": suit,
                 "is_correction": bool(raw.get("is_correction", False) or detected_correction),
+                "is_negated": is_negated,
             }
         )
 
@@ -247,6 +272,8 @@ def accumulate_teacher_speech(
 
         rank = event["rank"]
         suit = event["suit"]
+        if event["is_negated"]:
+            continue
         if rank is None and suit is None:
             continue
 
@@ -264,6 +291,8 @@ def accumulate_teacher_speech(
             "specificity": specificity,
             "context_binding_confidence": binding if seat is not None else 0.0,
             "effective_confidence": effective,
+            "rank": rank,
+            "suit": suit,
         }
 
         current = latest_claim(seat, event["start_ms"])
@@ -303,9 +332,34 @@ def accumulate_teacher_speech(
             else None
         )
         claim["complete"] = bool(claim["seat"] is not None and claim["card"] is not None)
-        claim["speech_confidence"] = round(
-            _combine([item["effective_confidence"] for item in claim["supports"]]), 6
-        )
+        if claim["card"] is None:
+            confidence = _combine(
+                [item["effective_confidence"] for item in claim["supports"]]
+            )
+        else:
+            full_support = [
+                item["effective_confidence"]
+                for item in claim["supports"]
+                if item["rank"] == claim["rank"] and item["suit"] == claim["suit"]
+            ]
+            rank_only = [
+                item["effective_confidence"]
+                for item in claim["supports"]
+                if item["rank"] == claim["rank"] and item["suit"] is None
+            ]
+            suit_only = [
+                item["effective_confidence"]
+                for item in claim["supports"]
+                if item["rank"] is None and item["suit"] == claim["suit"]
+            ]
+            repeated_full = _combine(full_support) if full_support else 0.0
+            complementary = (
+                min(max(rank_only), max(suit_only))
+                if rank_only and suit_only
+                else 0.0
+            )
+            confidence = max(repeated_full, complementary)
+        claim["speech_confidence"] = round(confidence, 6)
         claim["context_binding_confidence"] = round(
             max((item["context_binding_confidence"] for item in claim["supports"]), default=0.0),
             6,
