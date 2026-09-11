@@ -11,7 +11,6 @@ from tools.bridge_vision_visible_timeline import run
 
 
 def request() -> dict:
-    cards = [{"card": "AS", "seat": "N", "source": "HAND", "confidence": 0.99}]
     identity = {"kind": "EXPLICIT_BOARD", "scope": "session-a", "value": "board-1"}
     return {
         "observations": [
@@ -20,7 +19,15 @@ def request() -> dict:
                 "decoded_pixel_sha256": f"{index + 100:064x}",
                 "timestamp_ms": index * 1000,
                 "deal_identity": identity,
-                "cards": cards,
+                "cards": [
+                    {
+                        "card": "AS",
+                        "seat": "N",
+                        "source": "HAND",
+                        "confidence": 0.99,
+                        "evidence_pixel_sha256": f"{index + 1000:064x}",
+                    }
+                ],
             }
             for index in (1, 2)
         ]

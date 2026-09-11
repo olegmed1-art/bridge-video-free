@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 
 import pytest
 
@@ -14,12 +15,20 @@ IDENTITY = {"kind": "EXPLICIT_BOARD", "scope": "session-a", "value": "board-7"}
 
 
 def frame(index: int, cards: list[dict], *, pixel: int | None = None) -> dict:
+    frame_cards = copy.deepcopy(cards)
+    for card in frame_cards:
+        card.setdefault(
+            "evidence_pixel_sha256",
+            hashlib.sha256(
+                f"{index}|{card.get('card')}|{card.get('seat')}".encode()
+            ).hexdigest(),
+        )
     return {
         "frame_sha256": f"{index:064x}",
         "decoded_pixel_sha256": f"{pixel if pixel is not None else index + 100:064x}",
         "timestamp_ms": index * 1000,
         "deal_identity": dict(IDENTITY),
-        "cards": cards,
+        "cards": frame_cards,
     }
 
 
@@ -75,6 +84,33 @@ def test_reencoded_duplicate_pixels_do_not_increase_support() -> None:
         "DUPLICATE_DECODED_PIXELS",
         "PENDING_TEMPORAL_SUPPORT",
     }
+
+
+def test_duplicate_card_pixels_do_not_increase_support() -> None:
+    first = frame(1, [seen("AS", "N")])
+    replay = frame(2, [seen("AS", "N")])
+    replay["cards"][0]["evidence_pixel_sha256"] = first["cards"][0][
+        "evidence_pixel_sha256"
+    ]
+
+    result = fuse_visible_timeline([first, replay])
+
+    assert result["status"] == "PENDING_TEMPORAL_EVIDENCE"
+    assert result["observed_card_count"] == 0
+    assert {item["reason"] for item in result["rejected"]} == {
+        "DUPLICATE_CARD_PIXELS",
+        "PENDING_TEMPORAL_SUPPORT",
+    }
+
+
+def test_card_pixel_hash_cannot_support_different_claims() -> None:
+    first = frame(1, [seen("AS", "N")])
+    second = frame(2, [seen("KH", "S")])
+    second["cards"][0]["evidence_pixel_sha256"] = first["cards"][0][
+        "evidence_pixel_sha256"
+    ]
+    with pytest.raises(VisibleTimelineError, match="reused across different claims"):
+        fuse_visible_timeline([first, second])
 
 
 def test_cross_seat_card_conflict_fails_closed() -> None:
@@ -143,7 +179,7 @@ def test_result_is_deterministic_under_card_order() -> None:
 def test_same_frame_hash_cannot_change_its_observations() -> None:
     original = frame(1, [seen("AS", "N")])
     changed = copy.deepcopy(original)
-    changed["cards"] = [seen("KH", "S")]
+    changed["cards"] = frame(1, [seen("KH", "S")])["cards"]
     with pytest.raises(VisibleTimelineError, match="inconsistent observation records"):
         fuse_visible_timeline([original, changed])
 

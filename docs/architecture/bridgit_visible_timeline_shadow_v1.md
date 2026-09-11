@@ -1,4 +1,4 @@
-# Bridgit visible-card temporal shadow V1
+# Bridgit visible-card temporal shadow V2
 
 Date: 2026-09-11
 
@@ -10,12 +10,13 @@ Status: implemented as an opt-in shadow fusion boundary; no production route or 
 
 Recorded Bridgit lessons commonly expose the north and south hands while the east and west hands remain face down. During play, individual cards from every seat become visible on the table. The complete-layout backend must not be used on those frames because it requires four simultaneously visible hands.
 
-`bridge_vision.bridgit_visible_timeline` accepts only card observations already obtained from visible pixels. An observation identifies an exact logical seat, canonical card, source kind (`HAND` or `PLAYED`), confidence, timestamp, encoded-frame SHA-256, decoded-pixel SHA-256 and explicit deal identity.
+`bridge_vision.bridgit_visible_timeline` accepts only card observations already obtained from visible pixels. An observation identifies an exact logical seat, canonical card, source kind (`HAND` or `PLAYED`), confidence, timestamp, encoded-frame SHA-256, decoded-frame SHA-256, card-evidence-region SHA-256 and explicit deal identity.
 
 ## Acceptance boundary
 
-- A `card + seat` pair requires at least two byte-distinct and decoded-pixel-distinct frames.
+- A `card + seat` pair requires at least two byte-distinct frames, decoded-frame-distinct pixels and card-evidence-region-distinct pixels.
 - A losslessly re-encoded copy of the same pixels does not add support.
+- A frame whose unrelated pixels changed but whose card evidence region is identical does not add support.
 - Deal identity is explicit (`EXPLICIT_BOARD` or a separately gated `VISUAL_ANCHOR`); time proximity never joins deals.
 - `HAND` and `PLAYED` describe visible pixel locations. Played-card ownership must come from verified geometry, not inferred turn order.
 - A card observed at two seats, a hand above 13 cards, malformed hashes, duplicate cards within one frame, low confidence or cross-deal input fails closed.

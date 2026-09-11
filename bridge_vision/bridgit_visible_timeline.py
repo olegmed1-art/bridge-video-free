@@ -17,8 +17,8 @@ from typing import Any, Mapping, Sequence
 
 from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
 
-SCHEMA = "bridgit-visible-card-timeline/v1"
-VERSION = "bridgit-visible-card-timeline-v1"
+SCHEMA = "bridgit-visible-card-timeline/v2"
+VERSION = "bridgit-visible-card-timeline-v2"
 RESULT_SCOPE = "SHADOW_ONLY"
 MAX_OBSERVATIONS = 20_000
 MAX_CARDS_PER_OBSERVATION = 52
@@ -147,6 +147,7 @@ def fuse_visible_timeline(
     pixel_frames: dict[str, str] = {}
     frame_records: dict[str, str] = {}
     votes: dict[tuple[str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    evidence_claims: dict[str, tuple[str, str]] = {}
     raw_owners: dict[str, set[str]] = defaultdict(set)
     rejected: list[dict[str, Any]] = []
 
@@ -206,6 +207,10 @@ def fuse_visible_timeline(
             confidence = _confidence(
                 raw.get("confidence"), f"cards[{card_index}].confidence"
             )
+            evidence_pixel_sha = _required_sha(
+                raw.get("evidence_pixel_sha256"),
+                f"cards[{card_index}].evidence_pixel_sha256",
+            )
             previous_seat = frame_cards.get(card)
             if previous_seat is not None:
                 raise VisibleTimelineError("one frame repeats or conflicts on a card")
@@ -216,6 +221,7 @@ def fuse_visible_timeline(
                     "seat": seat,
                     "source": source,
                     "confidence": confidence,
+                    "evidence_pixel_sha256": evidence_pixel_sha,
                 }
             )
             if confidence < minimum:
@@ -229,10 +235,31 @@ def fuse_visible_timeline(
                     }
                 )
                 continue
+            claim = (card, seat)
+            previous_claim = evidence_claims.get(evidence_pixel_sha)
+            if previous_claim is not None and previous_claim != claim:
+                raise VisibleTimelineError(
+                    "one card-pixel hash is reused across different claims"
+                )
+            evidence_claims[evidence_pixel_sha] = claim
             raw_owners[card].add(seat)
-            votes[(card, seat)][frame_sha] = {
+            previous_vote = votes[(card, seat)].get(evidence_pixel_sha)
+            if previous_vote is not None:
+                rejected.append(
+                    {
+                        "frame_sha256": frame_sha,
+                        "card": card,
+                        "seat": seat,
+                        "reason": "DUPLICATE_CARD_PIXELS",
+                        "duplicates_frame_sha256": previous_vote["frame_sha256"],
+                        "evidence_pixel_sha256": evidence_pixel_sha,
+                    }
+                )
+                continue
+            votes[(card, seat)][evidence_pixel_sha] = {
                 "frame_sha256": frame_sha,
                 "decoded_pixel_sha256": pixel_sha,
+                "evidence_pixel_sha256": evidence_pixel_sha,
                 "timestamp_ms": timestamp_ms,
                 "source": source,
                 "confidence": confidence,
