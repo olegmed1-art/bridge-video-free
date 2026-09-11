@@ -103,3 +103,19 @@ The fusion layer is shadow-only and sets/retains:
 - `canonical_promotion_allowed=false`.
 
 It does not change School Canon, production routing, Neon, or Autopilot resources.
+
+## Validation
+
+Exact-head contract tests cover:
+
+- hand context and partial teacher mentions;
+- repeated mentions and explicit corrections;
+- overlapping ASR deduplication;
+- reliable Universal Video timestamp adaptation;
+- suit-colour corroboration;
+- weak visual tie resolution without speech-only creation;
+- strong-visual protection against teacher misspeaks;
+- played-card ownership when the teacher names the card after playing it;
+- temporal look-back/look-ahead boundaries;
+- cursor exclusion;
+- duplicate card-region pixels not multiplying evidence.
