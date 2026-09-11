@@ -1,0 +1,109 @@
+name: Diana responsive recognizer status da646515
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize]
+    paths: ['.github/workflows/diana-responsive-status-da646515-once.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Read bounded recognition status
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/diana-status"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          root=/home/ubuntu/bridge-school-private-media/diana-23-26
+          results="$root/autonomous-results-da646515"
+          active=0 current=none elapsed_seconds=0 cpu_percent=0 input_percent=unknown
+          while IFS= read -r pid; do
+            [[ -n "$pid" ]] || continue
+            active=$((active + 1))
+            current=none
+            input_percent=unknown
+            command="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
+            read -r elapsed_seconds cpu_percent < <(ps -o etimes=,pcpu= -p "$pid")
+            for name in diana-23 diana-24 diana-25 diana-26; do
+              if [[ "$command" == *"$name"* ]]; then current="$name"; fi
+            done
+            for descriptor in "/proc/$pid/fd"/*; do
+              target="$(readlink "$descriptor" 2>/dev/null || true)"
+              if [[ "$target" == *.mp4 && -f "$target" ]]; then
+                position="$(awk '$1 == "pos:" {print $2}' "/proc/$pid/fdinfo/${descriptor##*/}")"
+                size="$(stat -c %s "$target")"
+                input_percent="$((100 * position / size))"
+              fi
+            done
+            echo "AUTONOMOUS_PROCESS current=$current elapsed_seconds=$elapsed_seconds cpu_percent=$cpu_percent input_percent=$input_percent"
+          done < <(pgrep -f 'tools/bridge_vision_autonomous_video.py' || true)
+          completed=0
+          for name in diana-23 diana-24 diana-25 diana-26; do
+            if [[ -s "$results/$name.json" ]]; then
+              completed=$((completed + 1))
+              echo "AUTONOMOUS_RECEIPT_READY=$name"
+            fi
+            if [[ -s "$results/$name.log" ]]; then
+              tail -n 1 "$results/$name.log" | sed -E 's#/home/ubuntu/[^ ]+#PRIVATE_PATH#g' | sed "s/^/AUTONOMOUS_LOG_${name}=/"
+            fi
+          done
+          for receipt_path in "$results"/diana-*.json; do
+            [[ -s "$receipt_path" ]] || continue
+            python3 - "$receipt_path" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          data = json.load(open(path, encoding="utf-8"))
+          for index, deal in enumerate(data["reconstruction"]["deals"], 1):
+              conflicts = deal.get("conflicts") or []
+              if conflicts:
+                  reasons = ",".join(sorted({str(item.get("reason", "UNKNOWN")) for item in conflicts}))
+                  print(
+                      f"AUTONOMOUS_CONFLICT video={path.stem} segment={index} "
+                      f"first_ms={deal['first_timestamp_ms']} last_ms={deal['last_timestamp_ms']} "
+                      f"observed={deal['observed_card_count']} reasons={reasons} count={len(conflicts)}"
+                  )
+          PY
+          done
+          echo "AUTONOMOUS_STATUS active=$active current=$current completed=$completed elapsed_seconds=$elapsed_seconds cpu_percent=$cpu_percent input_percent=$input_percent"
+          uptime | sed 's/.*load average: /AUTONOMOUS_LOAD_AVERAGE=/'
+          REMOTE
+
+# probe 14
