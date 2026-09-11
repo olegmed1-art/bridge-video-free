@@ -35,7 +35,8 @@ MIN_FUSED_SCORE = 0.45
 MIN_FUSED_MARGIN = 0.05
 MIN_SPEECH_FLIP_CONFIDENCE = 0.78
 MIN_COLOR_FLIP_CONFIDENCE = 0.85
-SPEECH_BIND_WINDOW_MS = 60_000
+SPEECH_BIND_LOOKBACK_MS = 12_000
+SPEECH_BIND_LOOKAHEAD_MS = 5_000
 
 
 class CardEvidenceFusionError(ValueError):
@@ -217,7 +218,9 @@ def _bind_speech(
         for slot in slots:
             if slot["seat"] != claim["seat"]:
                 continue
-            if abs(slot["timestamp_ms"] - claim["last_ms"]) > SPEECH_BIND_WINDOW_MS:
+            if slot["timestamp_ms"] < claim["first_ms"] - SPEECH_BIND_LOOKBACK_MS:
+                continue
+            if slot["timestamp_ms"] > claim["last_ms"] + SPEECH_BIND_LOOKAHEAD_MS:
                 continue
             compatible = False
             for candidate in slot["candidates"]:
