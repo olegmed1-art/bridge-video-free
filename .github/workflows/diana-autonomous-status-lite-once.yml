@@ -50,7 +50,7 @@ jobs:
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
           set -Eeuo pipefail
           root=/home/ubuntu/bridge-school-private-media/diana-23-26
-          results="$root/autonomous-results-8375477d"
+          results="$root/autonomous-results-6e871d9b"
           active=0 current=none elapsed_seconds=0 cpu_percent=0 input_percent=unknown
           while IFS= read -r pid; do
             [[ -n "$pid" ]] || continue
@@ -105,4 +105,4 @@ jobs:
           uptime | sed 's/.*load average: /AUTONOMOUS_LOAD_AVERAGE=/'
           REMOTE
 
-# probe 13
+# probe 14
