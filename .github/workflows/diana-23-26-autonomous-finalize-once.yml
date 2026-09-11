@@ -21,7 +21,7 @@ jobs:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
-      ALGORITHM_SHA: 6e871d9bd38817a334f685749836ef417c1600c4
+      ALGORITHM_SHA: 934dd2d0d51c5c182b232638a3963b93e8580c98
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
       SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
@@ -69,6 +69,7 @@ jobs:
           "${ssh_base[@]}" "ALGORITHM_SHA='$ALGORITHM_SHA' bash -s" <<'REMOTE'
           set -Eeuo pipefail
           umask 077
+          export ALGORITHM_SHA
           root=/home/ubuntu/bridge-school-private-media/diana-23-26
           source_repo="$root/recognition-diana23/pr1106-527fe65"
           short="${ALGORITHM_SHA:0:8}"
@@ -111,7 +112,11 @@ jobs:
           from pathlib import Path
 
           from tools.bridge_vision_autonomous_video import _json
-          from bridge_vision.bridgit_played_card_observer import build_suit_bank
+          from bridge_vision.bridgit_played_card_observer import (
+              build_card_scale_policy,
+              build_suit_bank,
+              build_table_geometry_bank,
+          )
           from bridge_vision.bridgit_visible_hand_observer import build_rank_bank, decode_frame, parse_profile
 
           root = Path(os.environ['ROOT'])
@@ -130,8 +135,11 @@ jobs:
                   references[reference_id] = decode_frame(payload, profile)
               rank_bank = build_rank_bank(profile, references)
               suit_bank = build_suit_bank(profile, references)
-              assert rank_bank and suit_bank
-              print(f'AUTONOMOUS_PROFILE_PREFLIGHT_PASS profile={profile_file.name} ranks={len(rank_bank)} suits={len(suit_bank)}')
+              geometry_bank = build_table_geometry_bank(profile, references)
+              scale_policy = build_card_scale_policy(profile, geometry_bank)
+              assert rank_bank and suit_bank and geometry_bank['samples']['VERTICAL_STACK']
+              assert scale_policy['policy_sha256']
+              print(f'AUTONOMOUS_PROFILE_PREFLIGHT_PASS profile={profile_file.name} ranks={len(rank_bank)} suits={len(suit_bank)} geometry={geometry_bank["bank_sha256"][:12]}')
           PY
 
           ROOT="$root" CODE="$code" VENV="$venv" PYTHONPATH="$code" "$venv/bin/python" - <<'PY'
@@ -140,7 +148,11 @@ jobs:
           from pathlib import Path
 
           from tools.bridge_vision_autonomous_video import _json
-          from bridge_vision.bridgit_played_card_observer import build_suit_bank, observe_played_cards
+          from bridge_vision.bridgit_played_card_observer import (
+              build_suit_bank,
+              build_table_geometry_bank,
+              observe_played_cards,
+          )
           from bridge_vision.bridgit_visible_hand_observer import build_rank_bank, decode_frame, observe_frame, parse_profile
 
           root = Path(os.environ['ROOT'])
@@ -153,6 +165,7 @@ jobs:
               references[reference_id] = decode_frame(payload, profile)
           rank_bank = build_rank_bank(profile, references)
           suit_bank = build_suit_bank(profile, references)
+          geometry_bank = build_table_geometry_bank(profile, references)
           frames = sorted((root / 'recognition-diana23/oleg-template-review/canary-frames').glob('*.png'))
           assert len(frames) >= 6, len(frames)
           seen = set()
@@ -161,7 +174,14 @@ jobs:
           for path in frames:
               image = decode_frame(path.read_bytes(), profile)
               hands = observe_frame(image, rank_bank, profile)
-              played = observe_played_cards(image, rank_bank, suit_bank, profile)
+              played = observe_played_cards(
+                  image,
+                  rank_bank,
+                  suit_bank,
+                  profile,
+                  geometry_bank=geometry_bank,
+                  visible_hand_cards=hands['cards'],
+              )
               assert hands['status'] != 'CONFLICT'
               assert played['status'] != 'CONFLICT'
               hand_counts.append(len(hands['cards']))
@@ -235,6 +255,9 @@ jobs:
               material.pop('receipt_sha256')
               actual = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
               assert actual == claimed
+              assert receipt['profile']['card_pixel_scale_source'] == 'EXACT_VERIFIED_PROFILE_PLUS_LIVE_REVIEWED_CARDBACK_WIDTH'
+              assert receipt['played_layout']['uses_fixed_screen_center'] is False
+              assert receipt['played_layout']['responsive_policy'] == 'RECOMPUTE_LIVE_SEAT_AXES_EVERY_FRAME'
               assert receipt['uses_language_model'] is False
               assert receipt['requires_screenshot_review'] is False
               assert receipt['canonical_promotion_allowed'] is False
@@ -306,4 +329,3 @@ jobs:
           path: ${{ env.artifact_path }}
           if-no-files-found: error
           retention-days: 7
-
