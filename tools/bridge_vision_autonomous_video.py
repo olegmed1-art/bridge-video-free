@@ -10,10 +10,18 @@ import os
 import re
 import stat
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from bridge_school_api.dds3.model import BridgeDeal
+from bridge_vision.anchor_registration import (
+    AnchorRegistrationError,
+    register_from_upper_right_anchor,
+    validate_anchor_reference_detail,
+    validate_anchor_spec,
+)
+from bridge_vision.autonomous_frame_registration import apply_registered_game_window
 from bridge_vision.bridgit_autonomous_deals import reconstruct_autonomous_deals
 from bridge_vision.bridgit_deal_marker import (
     assign_stable_deal_markers,
@@ -208,6 +216,30 @@ def _pixel_runtime():
     return cv2
 
 
+def _registration_profile(
+    raw_profile: Mapping[str, Any], reference_ids: set[str]
+) -> dict[str, Any] | None:
+    raw = raw_profile.get("registration")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping) or set(raw) != {
+        "mode",
+        "reference_id",
+        "interface_anchor",
+    }:
+        raise AutonomousVideoError("registration profile is invalid")
+    if raw.get("mode") != "UPPER_RIGHT_ANCHOR":
+        raise AutonomousVideoError("registration mode is unsupported")
+    reference_id = str(raw.get("reference_id") or "")
+    if reference_id not in reference_ids:
+        raise AutonomousVideoError("registration reference is unknown")
+    try:
+        anchor = validate_anchor_spec(raw.get("interface_anchor"))
+    except AnchorRegistrationError as exc:
+        raise AutonomousVideoError(f"registration profile is invalid: {exc}") from exc
+    return {"reference_id": reference_id, "interface_anchor": anchor}
+
+
 def run(
     job_root: Path,
     profile_path: Path,
@@ -230,7 +262,8 @@ def run(
     if not 2 <= max_sampled_frames <= 100_000:
         raise AutonomousVideoError("max_sampled_frames is outside 2..100000")
 
-    profile = parse_profile(_json(profile_file))
+    raw_profile = _json(profile_file)
+    profile = parse_profile(raw_profile)
     references = {}
     for reference_id, (raw_path, expected_sha) in profile.references.items():
         source = _inside(root, profile_file.parent / raw_path, "reference")
@@ -240,6 +273,20 @@ def run(
         references[reference_id] = decode_frame(payload, profile)
     rank_bank = build_rank_bank(profile, references)
     suit_bank = build_suit_bank(profile, references)
+    registration_profile = _registration_profile(raw_profile, set(profile.references))
+    registration_reference = None
+    if registration_profile is not None:
+        registration_reference = references[registration_profile["reference_id"]]
+        try:
+            validate_anchor_reference_detail(
+                registration_reference,
+                [],
+                registration_profile["interface_anchor"],
+            )
+        except AnchorRegistrationError as exc:
+            raise AutonomousVideoError(
+                f"registration reference is invalid: {exc}"
+            ) from exc
 
     video_info = _regular_file(video_file, MAX_VIDEO_BYTES, "video")
     video_sha = _hash_file(video_file, video_info)
@@ -258,6 +305,12 @@ def run(
     sampled = 0
     visual_frames = []
     frame_rejections = []
+    registration_lock = None
+    registration_searches = 0
+    registration_locked_frames = 0
+    registration_rejections = 0
+    registration_transforms: dict[str, dict[str, Any]] = {}
+    registration_input_sizes: set[tuple[int, int]] = set()
     try:
         while True:
             ok, image = capture.read()
@@ -271,11 +324,63 @@ def run(
             sampled += 1
             if sampled > max_sampled_frames:
                 raise AutonomousVideoError("sampled frame count exceeds the bound")
-            if tuple(image.shape[:2]) != (profile.height, profile.width):
-                raise AutonomousVideoError("video dimensions do not match profile")
+            input_decoded_sha = hashlib.sha256(image.tobytes()).hexdigest()
+            registration_evidence = None
+            if registration_profile is not None:
+                assert registration_reference is not None
+                registration_input_sizes.add((image.shape[1], image.shape[0]))
+                if registration_lock is not None:
+                    try:
+                        image, registration_evidence = apply_registered_game_window(
+                            registration_reference,
+                            image,
+                            registration_profile["interface_anchor"],
+                            registration_lock,
+                        )
+                        registration_locked_frames += 1
+                    except AnchorRegistrationError:
+                        registration_lock = None
+                if registration_lock is None:
+                    registration_searches += 1
+                    try:
+                        image, registration_evidence = register_from_upper_right_anchor(
+                            registration_reference,
+                            image,
+                            registration_profile["interface_anchor"],
+                        )
+                        registration_lock = dict(registration_evidence)
+                    except AnchorRegistrationError as exc:
+                        registration_rejections += 1
+                        frame_rejections.append(
+                            {
+                                "frame_sha256": hashlib.sha256(
+                                    f"{video_sha}:{decoded_index - 1}:{timestamp_ms}:{input_decoded_sha}".encode()
+                                ).hexdigest(),
+                                "timestamp_ms": timestamp_ms,
+                                "reason": "INTERFACE_REGISTRATION_REJECTED",
+                                "detail": str(exc),
+                            }
+                        )
+                        continue
+                transform = {
+                    "scale": registration_evidence["scale"],
+                    "input_size": registration_evidence["input_size"],
+                    "game_window": registration_evidence["game_window"],
+                    "anchor_region": registration_evidence["anchor_region"],
+                }
+                transform_sha = hashlib.sha256(
+                    json.dumps(
+                        transform, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                ).hexdigest()
+                registration_transforms.setdefault(transform_sha, transform)
+            elif tuple(image.shape[:2]) != (profile.height, profile.width):
+                raise AutonomousVideoError(
+                    "video dimensions do not match profile and no anchor registration is configured"
+                )
             decoded_sha = hashlib.sha256(image.tobytes()).hexdigest()
             frame_sha = hashlib.sha256(
-                f"{video_sha}:{decoded_index - 1}:{timestamp_ms}:{decoded_sha}".encode()
+                f"{video_sha}:{decoded_index - 1}:{timestamp_ms}:{input_decoded_sha}".encode()
             ).hexdigest()
             hands = observe_frame(image, rank_bank, profile)
             played = observe_played_cards(image, rank_bank, suit_bank, profile)
@@ -350,6 +455,24 @@ def run(
             "profile_sha256": profile.profile_sha256,
             "verification_sha256": profile.verification_sha256,
             "review_sheet_sha256": profile.review_sheet_sha256,
+        },
+        "registration": {
+            "mode": (
+                "UPPER_RIGHT_ANCHOR"
+                if registration_profile is not None
+                else "EXACT_PROFILE_DIMENSIONS"
+            ),
+            "search_count": registration_searches,
+            "locked_frame_count": registration_locked_frames,
+            "rejected_frame_count": registration_rejections,
+            "input_sizes": [
+                {"width": width, "height": height}
+                for width, height in sorted(registration_input_sizes)
+            ],
+            "transforms": [
+                {"transform_sha256": digest, **registration_transforms[digest]}
+                for digest in sorted(registration_transforms)
+            ],
         },
         "sampling": {
             "sample_ms": sample_ms,
