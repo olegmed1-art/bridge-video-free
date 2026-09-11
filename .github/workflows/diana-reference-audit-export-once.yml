@@ -1,0 +1,119 @@
+name: Diana visible-card reference audit export one-shot
+
+on:
+  push:
+    branches: [codex/diana-autonomous-finalize-20260911]
+    paths: ['.github/workflows/diana-reference-audit-export-once.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Select verified Oracle credential
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/diana-reference-ssh"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" true
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Export sealed profile references only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key='${{ steps.ssh.outputs.key }}'
+          known='${{ steps.ssh.outputs.known }}'
+          remote_root=/home/ubuntu/bridge-school-private-media/diana-23-26
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          root=/home/ubuntu/bridge-school-private-media/diana-23-26
+          src="$root/recognition-diana23/oleg-template-review"
+          profile="$src/visible-hand-profile-v1.json"
+          test -f "$profile"
+          PROFILE="$profile" SRC="$src" ROOT="$root" python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import tarfile
+          from pathlib import Path
+
+          profile = Path(os.environ["PROFILE"])
+          src = Path(os.environ["SRC"]).resolve()
+          root = Path(os.environ["ROOT"])
+          raw = json.loads(profile.read_text(encoding="utf-8"))
+          members = [profile]
+          refs = raw.get("references")
+          assert isinstance(refs, dict) and 1 <= len(refs) <= 8
+          for key, item in sorted(refs.items()):
+              rel = str(item["path"])
+              assert re.fullmatch(r"references/[A-Za-z0-9._-]+\.(?:png|jpg|jpeg)", rel)
+              path = (profile.parent / rel).resolve()
+              path.relative_to(src)
+              payload = path.read_bytes()
+              assert len(payload) <= 32 * 1024 * 1024
+              assert hashlib.sha256(payload).hexdigest() == item["sha256"]
+              members.append(path)
+          target = root / "diana-reference-audit-v1.tar.gz"
+          with tarfile.open(target, "w:gz") as archive:
+              for path in members:
+                  archive.add(path, arcname=path.relative_to(src))
+          os.chmod(target, 0o600)
+          print("REFERENCE_EXPORT_PASS", len(members) - 1)
+          PY
+          REMOTE
+
+          out="$RUNNER_TEMP/diana-reference-output"
+          mkdir -p "$out"
+          scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            "$ORACLE_USER@$ORACLE_HOST:$remote_root/diana-reference-audit-v1.tar.gz" \
+            "$out/diana-reference-audit-v1.tar.gz"
+          tar -tzf "$out/diana-reference-audit-v1.tar.gz"
+          echo "artifact_path=$out" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: diana-visible-card-reference-audit-v1
+          path: ${{ env.artifact_path }}
+          if-no-files-found: error
+          retention-days: 1
