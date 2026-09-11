@@ -1,0 +1,104 @@
+name: Diana 23 segment 33 conflict diagnostic one-shot
+
+on:
+  push:
+    branches: [codex/diana-autonomous-finalize-20260911]
+    paths: ['.github/workflows/diana23-conflict33-diagnostic-once.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Diagnose exact residual conflict
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/d23-conflict33"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=120 \
+            "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          root=/home/ubuntu/bridge-school-private-media/diana-23-26
+          code="$root/autonomous-code-c4b68d45"
+          venv="$root/recognition-diana23/pixel-venv"
+          scratch="$root/.d23-conflict33-diagnostic"
+          rm -rf "$scratch"
+          mkdir -m 0700 "$scratch"
+          trap 'rm -rf "$scratch"' EXIT
+          cp -a "$code" "$scratch/code"
+          python3 - "$scratch/code/bridge_vision/bridgit_autonomous_deals.py" <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          source = path.read_text(encoding="utf-8")
+          old = '"accepted": [],\n            "rejected": rejected,'
+          new = '"accepted": accepted,\n            "rejected": rejected,'
+          assert source.count(old) == 1
+          path.write_text(source.replace(old, new), encoding="utf-8")
+          PY
+          ffmpeg -hide_banner -loglevel error -ss 4260 -i "$root/diana-23.mp4" -t 132 \
+            -map 0:v:0 -c copy -an -y "$scratch/segment33.mp4"
+          PYTHONPATH="$scratch/code" "$venv/bin/python" "$scratch/code/tools/bridge_vision_autonomous_video.py" \
+            --job-root "$root" \
+            --profile recognition-diana23/visible-hand-profile-v1.runtime.json \
+            --video .d23-conflict33-diagnostic/segment33.mp4 \
+            --output .d23-conflict33-diagnostic/receipt.json \
+            --sample-ms 200 --max-sampled-frames 5000 >/dev/null
+          RECEIPT="$scratch/receipt.json" "$venv/bin/python" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          receipt = json.loads(Path(os.environ["RECEIPT"]).read_text(encoding="utf-8"))
+          for index, deal in enumerate(receipt["reconstruction"]["deals"], 1):
+              if deal["status"] != "CONFLICT":
+                  continue
+              print(
+                  "D23_CONFLICT_DETAIL "
+                  f"segment={index} first_ms={deal['first_timestamp_ms']} "
+                  f"last_ms={deal['last_timestamp_ms']} conflicts={deal['conflicts']}"
+              )
+              for item in deal["accepted"]:
+                  print(
+                      "D23_CONFLICT_CANDIDATE "
+                      f"card={item['card']} seat={item['seat']} "
+                      f"sources={','.join(item['sources'])} support={item['support']} "
+                      f"confidence={item['minimum_confidence']:.6f} "
+                      f"first_ms={item['first_timestamp_ms']} last_ms={item['last_timestamp_ms']}"
+                  )
+          PY
+          REMOTE
+
+# one-shot
