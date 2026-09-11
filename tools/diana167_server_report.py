@@ -279,20 +279,15 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
         for seat in rank_layout.SEATS:
             x0, y0, _, _ = windows[(seat, suit)]
             aggregate = np_runtime.maximum.reduce([score_maps[card][seat] for card in suit_cards])
-            local_maximum = cv2.dilate(aggregate, np_runtime.ones((11, 11), dtype=np_runtime.uint8))
-            candidate_points = np_runtime.argwhere((aggregate >= 0.40) & (aggregate >= local_maximum - 1e-7))
-            strengths = aggregate[candidate_points[:, 0], candidate_points[:, 1]] if len(candidate_points) else np_runtime.asarray([])
-            order = np_runtime.argsort(strengths)[::-1]
-            selected: list[tuple[int, int]] = []
-            for candidate_index in order:
-                y, x = candidate_points[int(candidate_index)]
-                strength = float(aggregate[y, x])
-                if any(abs(x - old_x) < 12 and abs(y - old_y) < 12 for old_x, old_y in selected):
-                    continue
-                selected.append((int(x), int(y)))
-                slots.append({"seat": seat, "suit": suit, "x": x0 + int(x), "y": y0 + int(y), "local_x": int(x), "local_y": int(y), "strength": strength})
-                if len(selected) >= 20:
+            remaining = aggregate.copy()
+            for _ in range(20):
+                _, strength, _, (x, y) = cv2.minMaxLoc(remaining)
+                if float(strength) < 0.40:
                     break
+                slots.append({"seat": seat, "suit": suit, "x": x0 + int(x), "y": y0 + int(y), "local_x": int(x), "local_y": int(y), "strength": strength})
+                xa, xb = max(0, int(x) - 11), min(remaining.shape[1], int(x) + 12)
+                ya, yb = max(0, int(y) - 11), min(remaining.shape[0], int(y) + 12)
+                remaining[ya:yb, xa:xb] = -2.0
     if any(sum(1 for slot in slots if slot["suit"] == suit) < 13 for suit in rank_layout.SUITS):
         return None, "candidate_slot_gate"
 
