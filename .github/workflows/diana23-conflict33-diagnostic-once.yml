@@ -71,7 +71,7 @@ jobs:
           PY
           ffmpeg -hide_banner -loglevel error -ss 4260 -i "$root/diana-23.mp4" -t 132 \
             -map 0:v:0 -c copy -an -y "$scratch/segment33.mp4"
-          PYTHONPATH="$scratch/code" "$venv/bin/python" "$scratch/code/tools/bridge_vision_autonomous_video.py" \
+          PYTHONPATH="$scratch/code:$code" "$venv/bin/python" "$scratch/code/tools/bridge_vision_autonomous_video.py" \
             --job-root "$root" \
             --profile recognition-diana23/visible-hand-profile-v1.runtime.json \
             --video .d23-conflict33-diagnostic/segment33.mp4 \
@@ -101,4 +101,4 @@ jobs:
           PY
           REMOTE
 
-# one-shot
+# retry 1
