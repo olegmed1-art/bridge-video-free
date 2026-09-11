@@ -59,15 +59,11 @@ def frame(number, marker, hands, *, source="HAND", evidence_round=None):
                     "card_scale_policy_sha256": CARD_SCALE_POLICY_SHA,
                     "card_scale_measurement_sha256": canonical_sha(measurement),
                     "card_scale_policy_version": measurement["version"],
-                    "played_card_width_pixels": measurement[
-                        "played_card_width_pixels"
-                    ],
+                    "played_card_width_pixels": measurement["played_card_width_pixels"],
                     "live_cardback_width_pixels": measurement[
                         "live_cardback_width_pixels"
                     ],
-                    "played_card_width_ratio": measurement[
-                        "played_card_width_ratio"
-                    ],
+                    "played_card_width_ratio": measurement["played_card_width_ratio"],
                 }
             )
     return {
@@ -99,6 +95,44 @@ def test_played_scale_evidence_is_required_and_retained() -> None:
         "minimum": 0.95,
         "maximum": 0.95,
     }
+
+
+def test_played_cards_create_append_only_memory_and_events() -> None:
+    frames = [
+        frame(1, "board-memory", {"E": ["AH"]}),
+        frame(2, "board-memory", {"E": ["AH"]}),
+        frame(3, "board-memory", {"E": ["AH"]}, source="PLAYED"),
+        frame(4, "board-memory", {"E": ["AH"]}, source="PLAYED"),
+        frame(5, "board-memory", {"E": ["AH"], "S": ["KD"]}, source="PLAYED"),
+        frame(6, "board-memory", {"E": ["AH"], "S": ["KD"]}, source="PLAYED"),
+    ]
+
+    result = reconstruct_autonomous_deals(
+        frames,
+        source_scope="video",
+        expected_card_scale_policy_sha256=CARD_SCALE_POLICY_SHA,
+    )
+
+    deal = result["deals"][0]
+    memory = deal["recognized_card_memory"]
+    assert memory["recognized_card_count"] == 2
+    assert [(item["card"], item["seat"]) for item in memory["cards"]] == [
+        ("AH", "E"),
+        ("KD", "S"),
+    ]
+    assert memory["forgets_disappeared_cards"] is False
+    assert memory["cross_deal_reuse_allowed"] is False
+    assert memory["hidden_card_inference_used"] is False
+
+    events = deal["played_card_events"]
+    assert [(event["card"], event["seat"]) for event in events] == [
+        ("AH", "E"),
+        ("KD", "S"),
+    ]
+    assert all(event["snapshot_required"] is True for event in events)
+    assert all("bridge_logic" not in event for event in events)
+    assert all("weighted_confidence" not in event for event in events)
+    assert "bridge_logic_policy" not in result
 
 
 def test_unsupported_played_scale_never_reaches_temporal_evidence() -> None:

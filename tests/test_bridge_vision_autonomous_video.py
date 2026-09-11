@@ -11,6 +11,8 @@ from tests import test_bridge_vision_bridgit_played_card_observer as pixels
 from tools.bridge_vision_autonomous_video import (
     AutonomousVideoError,
     _merge_direct_cards,
+    _new_server_play_events,
+    _played_region_state,
     _registration_profile,
     _validate_pbn,
     run,
@@ -42,6 +44,39 @@ def test_direct_merge_keeps_strongest_same_owner_and_rejects_two_owners() -> Non
 
     with pytest.raises(AutonomousVideoError, match="two seats"):
         _merge_direct_cards([seen("AS", "N", 0.99)], [seen("AS", "E", 0.99)])
+
+
+def test_server_play_event_preserves_unknown_card_and_does_not_duplicate_refinement() -> (
+    None
+):
+    unknown = _played_region_state({"played_regions": [{"seat": "N"}], "cards": []})
+    assert unknown == {"N": None}
+    events = _new_server_play_events(
+        {},
+        unknown,
+        timestamp_ms=100,
+        source_frame_index=1,
+        frame_sha256="a" * 64,
+        input_decoded_pixel_sha256="b" * 64,
+        observer_status="REVIEW",
+        first_event_number=1,
+    )
+    assert [
+        (event["seat"], event["card"], event["recognition_status"]) for event in events
+    ] == [("N", None, "UNKNOWN_CARD")]
+    assert (
+        _new_server_play_events(
+            unknown,
+            {"N": "AH"},
+            timestamp_ms=200,
+            source_frame_index=2,
+            frame_sha256="c" * 64,
+            input_decoded_pixel_sha256="d" * 64,
+            observer_status="SHADOW_PLAYED_CARDS",
+            first_event_number=2,
+        )
+        == []
+    )
 
 
 def test_complete_pbn_passes_independent_bridge_deal_model() -> None:
@@ -139,6 +174,18 @@ def test_raw_video_pipeline_is_autonomous_and_writes_private_receipt(
         assert claim["card_scale_policy_sha256s"]
         assert claim["card_scale_measurement_sha256s"]
         assert claim["played_card_width_ratio_range"] is not None
+        assert deal["recognized_card_memory"]["forgets_disappeared_cards"] is False
+        assert deal["played_card_events"][0]["snapshot_required"] is True
+    snapshot_manifest = receipt["played_event_snapshots"]
+    assert snapshot_manifest["status"] == "COMPLETE"
+    assert snapshot_manifest["event_count"] == len(receipt["server_play_events"])
+    assert all(event["snapshot_required"] for event in receipt["server_play_events"])
+    assert snapshot_manifest["all_events_have_snapshot"] is True
+    evidence_dir = tmp_path / snapshot_manifest["directory"]
+    assert evidence_dir.is_dir()
+    assert (evidence_dir / "manifest.json").is_file()
+    for snapshot in snapshot_manifest["snapshots"]:
+        assert (evidence_dir / snapshot["path"]).is_file()
     assert os.stat(output).st_mode & 0o777 == 0o600
     assert json.loads(output.read_text())["receipt_sha256"] == receipt["receipt_sha256"]
 

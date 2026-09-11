@@ -120,9 +120,7 @@ def paint_seat_landmarks(image) -> None:
     paint_cardback_texture(image, 15, 210)
     paint_cardback_texture(image, 685, 210)
     for y, cards in ((100, "KQJT"), (500, "2356")):
-        for x, rank, suit in zip(
-            (210, 320, 430, 540), cards, ("H", "C", "D", "S")
-        ):
+        for x, rank, suit in zip((210, 320, 430, 540), cards, ("H", "C", "D", "S")):
             image[y : y + 80, x : x + 100] = 255
             paint_glyph(image, x + 8, y, rank_patterns()[rank], (0, 0, 0))
             color = (0, 0, 220) if suit in "HD" else (0, 0, 0)
@@ -136,9 +134,7 @@ def paint_reflowed_seat_landmarks(image) -> None:
     paint_cardback_texture(image, 75, 225)
     paint_cardback_texture(image, 625, 225)
     for y, cards in ((100, "KQJT"), (500, "2356")):
-        for x, rank, suit in zip(
-            (160, 270, 380, 490), cards, ("H", "C", "D", "S")
-        ):
+        for x, rank, suit in zip((160, 270, 380, 490), cards, ("H", "C", "D", "S")):
             image[y : y + 80, x : x + 100] = 255
             paint_glyph(image, x + 8, y, rank_patterns()[rank], (0, 0, 0))
             color = (0, 0, 220) if suit in "HD" else (0, 0, 0)
@@ -670,6 +666,9 @@ def test_non_card_white_region_does_not_emit_played_card() -> None:
 
     assert result["status"] == "REVIEW"
     assert result["cards"] == []
+    assert [(item["seat"], item["region"]) for item in result["played_regions"]] == [
+        ("N", {"x": 348, "y": 190, "width": 54, "height": 72})
+    ]
     assert result["rejected"][0]["reason"] == "RANK_AMBIGUOUS"
 
 

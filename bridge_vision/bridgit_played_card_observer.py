@@ -263,11 +263,7 @@ def build_table_geometry_bank(
             dark_fraction = float((hsv[:, :, 2] < 110).mean())
             edges = cv2.Canny(cv2.cvtColor(face, cv2.COLOR_BGR2GRAY), 50, 150)
             edge_fraction = float((edges > 0).mean())
-            if (
-                light_fraction < 0.02
-                or dark_fraction < 0.01
-                or edge_fraction < 0.02
-            ):
+            if light_fraction < 0.02 or dark_fraction < 0.01 or edge_fraction < 0.02:
                 continue
             digest = hashlib.sha256(normalized.tobytes()).hexdigest()
             if all(
@@ -826,12 +822,14 @@ def observe_played_cards(
         return {
             "status": "REVIEW",
             "cards": [],
+            "played_regions": [],
             "rejected": [{"reason": "SEAT_LAYOUT_UNPROVEN", "detail": str(exc)}],
             "conflicts": [],
             "layout_geometry": None,
             "observer_version": PLAYED_OBSERVER_VERSION,
         }
     candidates = []
+    played_regions = []
     rejected = []
     for rectangle in _white_card_rectangles(image, profile):
         card_scale = _card_scale(rectangle, geometry)
@@ -840,16 +838,6 @@ def observe_played_cards(
                 {"region": rectangle[:4], "reason": "CARD_SCALE_UNVERIFIED"}
             )
             continue
-        rank = _rank(image, rectangle, rank_bank, profile)
-        if rank is None:
-            rejected.append({"region": rectangle[:4], "reason": "RANK_AMBIGUOUS"})
-            continue
-        rank_value, rank_x, rank_y, rank_score, rank_margin = rank
-        suit = _suit(image, rank_x, rank_y, suit_bank, profile)
-        if suit is None:
-            rejected.append({"region": rectangle[:4], "reason": "SUIT_AMBIGUOUS"})
-            continue
-        suit_value, suit_score, suit_margin = suit
         ownership = _seat(rectangle, geometry)
         if ownership is None:
             rejected.append(
@@ -862,6 +850,25 @@ def observe_played_cards(
             continue
         x, y, width, height, fill = rectangle
         evidence = image[y : y + height, x : x + width]
+        region_evidence_sha = hashlib.sha256(evidence.tobytes()).hexdigest()
+        played_regions.append(
+            {
+                "seat": seat,
+                "region": {"x": x, "y": y, "width": width, "height": height},
+                "evidence_pixel_sha256": region_evidence_sha,
+                "card_scale_measurement_sha256": card_scale["measurement_sha256"],
+            }
+        )
+        rank = _rank(image, rectangle, rank_bank, profile)
+        if rank is None:
+            rejected.append({"region": rectangle[:4], "reason": "RANK_AMBIGUOUS"})
+            continue
+        rank_value, rank_x, rank_y, rank_score, rank_margin = rank
+        suit = _suit(image, rank_x, rank_y, suit_bank, profile)
+        if suit is None:
+            rejected.append({"region": rectangle[:4], "reason": "SUIT_AMBIGUOUS"})
+            continue
+        suit_value, suit_score, suit_margin = suit
         candidates.append(
             {
                 "card": rank_value + suit_value,
@@ -880,21 +887,13 @@ def observe_played_cards(
                 },
                 "layout_geometry_sha256": geometry["geometry_sha256"],
                 "layout_transform_sha256": geometry["transform_sha256"],
-                "card_scale_policy_sha256": card_scale[
-                    "card_scale_policy_sha256"
-                ],
-                "card_scale_measurement_sha256": card_scale[
-                    "measurement_sha256"
-                ],
+                "card_scale_policy_sha256": card_scale["card_scale_policy_sha256"],
+                "card_scale_measurement_sha256": card_scale["measurement_sha256"],
                 "played_card_width_ratio": card_scale["played_card_width_ratio"],
-                "played_card_width_pixels": card_scale[
-                    "played_card_width_pixels"
-                ],
-                "live_cardback_width_pixels": card_scale[
-                    "live_cardback_width_pixels"
-                ],
+                "played_card_width_pixels": card_scale["played_card_width_pixels"],
+                "live_cardback_width_pixels": card_scale["live_cardback_width_pixels"],
                 "card_scale_policy_version": card_scale["version"],
-                "evidence_pixel_sha256": hashlib.sha256(evidence.tobytes()).hexdigest(),
+                "evidence_pixel_sha256": region_evidence_sha,
                 "region": {"x": x, "y": y, "width": width, "height": height},
             }
         )
@@ -907,6 +906,7 @@ def observe_played_cards(
         return {
             "status": "CONFLICT",
             "cards": [],
+            "played_regions": played_regions,
             "rejected": rejected,
             "conflicts": [
                 {"seat": seat, "reason": "MULTIPLE_CURRENT_TRICK_CARDS"}
@@ -924,6 +924,7 @@ def observe_played_cards(
         return {
             "status": "CONFLICT",
             "cards": [],
+            "played_regions": played_regions,
             "rejected": rejected,
             "conflicts": [
                 {"card": card, "reason": "CROSS_SEAT_CARD_CONFLICT"}
@@ -936,6 +937,10 @@ def observe_played_cards(
     return {
         "status": "SHADOW_PLAYED_CARDS" if candidates else "REVIEW",
         "cards": sorted(candidates, key=lambda item: item["seat"]),
+        "played_regions": sorted(
+            played_regions,
+            key=lambda item: (item["seat"], item["region"]["x"], item["region"]["y"]),
+        ),
         "rejected": rejected,
         "conflicts": [],
         "layout_geometry": {

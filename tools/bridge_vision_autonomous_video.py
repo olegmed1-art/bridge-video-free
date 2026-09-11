@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import tempfile
 from collections.abc import Mapping
@@ -43,12 +44,14 @@ from bridge_vision.bridgit_visible_hand_observer import (
     parse_profile,
 )
 
-JOB_VERSION = "bridgit-autonomous-video-v1"
-RECEIPT_SCHEMA = "bridgit-autonomous-video-receipt/v1"
+JOB_VERSION = "bridgit-autonomous-video-v2"
+RECEIPT_SCHEMA = "bridgit-autonomous-video-receipt/v2"
 MAX_PROFILE_BYTES = 1024 * 1024
 MAX_REFERENCE_BYTES = 32 * 1024 * 1024
 MAX_VIDEO_BYTES = 8 * 1024 * 1024 * 1024
 MAX_OUTPUT_BYTES = 256 * 1024 * 1024
+MAX_PLAYED_EVENT_SNAPSHOTS = 4_096
+MAX_PLAYED_EVENT_SNAPSHOT_BYTES = 256 * 1024 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -178,6 +181,218 @@ def _write_atomic(path: Path, payload: bytes) -> None:
                 pass
 
 
+def _write_played_event_snapshots(
+    video_path: Path,
+    output_path: Path,
+    events: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    if not events:
+        return {
+            "status": "NO_ACCEPTED_PLAYED_CARD_EVENTS",
+            "event_count": 0,
+            "snapshot_count": 0,
+            "all_events_have_snapshot": True,
+            "directory": None,
+            "snapshots": [],
+        }
+    if len(events) > MAX_PLAYED_EVENT_SNAPSHOTS:
+        raise AutonomousVideoError("played-card event snapshot count exceeds the bound")
+
+    requested: dict[int, dict[str, Any]] = {}
+    for event in events:
+        frame_index = event.get("source_frame_index")
+        input_sha = event.get("input_decoded_pixel_sha256")
+        if (
+            isinstance(frame_index, bool)
+            or not isinstance(frame_index, int)
+            or frame_index < 0
+        ):
+            raise AutonomousVideoError("played-card event lacks a source frame index")
+        if not _SHA256.fullmatch(str(input_sha or "")):
+            raise AutonomousVideoError("played-card event lacks input pixel identity")
+        entry = requested.setdefault(
+            frame_index,
+            {"input_decoded_pixel_sha256": input_sha, "event_refs": []},
+        )
+        if entry["input_decoded_pixel_sha256"] != input_sha:
+            raise AutonomousVideoError(
+                "one source frame has conflicting pixel identities"
+            )
+        entry["event_refs"].append(
+            {
+                "event_id": event["event_id"],
+                "card": event.get("card"),
+                "seat": event["seat"],
+                "timestamp_ms": event["timestamp_ms"],
+                "recognition_status": event["recognition_status"],
+            }
+        )
+
+    final_directory = output_path.parent / f"{output_path.stem}.played-card-evidence"
+    if final_directory.exists() or final_directory.is_symlink():
+        raise AutonomousVideoError("played-card evidence output already exists")
+    temporary = Path(
+        tempfile.mkdtemp(
+            dir=output_path.parent,
+            prefix=f".{output_path.stem}.played-card-evidence.",
+        )
+    )
+    snapshots: list[dict[str, Any]] = []
+    total_bytes = 0
+    cv2 = _pixel_runtime()
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        shutil.rmtree(temporary)
+        raise AutonomousVideoError(
+            "video decoder could not reopen source for snapshots"
+        )
+    try:
+        wanted = sorted(requested)
+        wanted_set = set(wanted)
+        final_index = wanted[-1]
+        index = 0
+        while index <= final_index:
+            ok, image = capture.read()
+            if not ok:
+                break
+            if index in wanted_set:
+                entry = requested[index]
+                pixel_sha = hashlib.sha256(image.tobytes()).hexdigest()
+                if pixel_sha != entry["input_decoded_pixel_sha256"]:
+                    raise AutonomousVideoError(
+                        "snapshot decode does not match recognized source pixels"
+                    )
+                encoded_ok, encoded = cv2.imencode(
+                    ".png", image, [cv2.IMWRITE_PNG_COMPRESSION, 3]
+                )
+                if not encoded_ok:
+                    raise AutonomousVideoError("played-card snapshot encoding failed")
+                payload = encoded.tobytes()
+                total_bytes += len(payload)
+                if total_bytes > MAX_PLAYED_EVENT_SNAPSHOT_BYTES:
+                    raise AutonomousVideoError(
+                        "played-card event snapshots exceed the byte bound"
+                    )
+                filename = f"frame-{index:08d}.png"
+                path = temporary / filename
+                _write_atomic(path, payload)
+                snapshots.append(
+                    {
+                        "path": filename,
+                        "source_frame_index": index,
+                        "input_decoded_pixel_sha256": pixel_sha,
+                        "png_sha256": hashlib.sha256(payload).hexdigest(),
+                        "size_bytes": len(payload),
+                        "event_refs": entry["event_refs"],
+                    }
+                )
+            index += 1
+        if len(snapshots) != len(requested):
+            raise AutonomousVideoError(
+                "not all played-card event snapshots were decoded"
+            )
+        manifest = {
+            "schema": "bridgit-played-card-event-snapshots/v1",
+            "event_count": len(events),
+            "snapshot_count": len(snapshots),
+            "all_events_have_snapshot": sum(
+                len(item["event_refs"]) for item in snapshots
+            )
+            == len(events),
+            "total_bytes": total_bytes,
+            "snapshots": snapshots,
+        }
+        manifest["manifest_sha256"] = hashlib.sha256(
+            json.dumps(
+                manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        _write_atomic(
+            temporary / "manifest.json",
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True).encode()
+            + b"\n",
+        )
+        if not manifest["all_events_have_snapshot"]:
+            raise AutonomousVideoError("a played-card event lacks a snapshot")
+        os.rename(temporary, final_directory)
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    finally:
+        capture.release()
+    return {
+        "status": "COMPLETE",
+        "directory": final_directory.name,
+        **manifest,
+    }
+
+
+def _played_region_state(played: Mapping[str, Any]) -> dict[str, str | None]:
+    """Return visually occupied trick seats, preserving unreadable cards as UNKNOWN."""
+
+    region_counts: dict[str, int] = {}
+    for region in played.get("played_regions", []):
+        seat = str(region.get("seat") or "")
+        if seat in {"N", "E", "S", "W"}:
+            region_counts[seat] = region_counts.get(seat, 0) + 1
+    recognized: dict[str, str] = {}
+    for item in played.get("cards", []):
+        seat = str(item.get("seat") or "")
+        card = str(item.get("card") or "")
+        if seat in region_counts and re.fullmatch(r"[AKQJT98765432][SHDC]", card):
+            recognized[seat] = card
+    return {
+        seat: recognized.get(seat) if count == 1 else None
+        for seat, count in sorted(region_counts.items())
+    }
+
+
+def _new_server_play_events(
+    previous: Mapping[str, str | None],
+    current: Mapping[str, str | None],
+    *,
+    timestamp_ms: int,
+    source_frame_index: int,
+    frame_sha256: str,
+    input_decoded_pixel_sha256: str,
+    observer_status: str,
+    first_event_number: int,
+) -> list[dict[str, Any]]:
+    """Emit append-only events only for newly occupied trick positions."""
+
+    if not current:
+        return []
+    new_trick = bool(previous) and len(current) < len(previous)
+    new_seats = (
+        set(current) if not previous or new_trick else set(current) - set(previous)
+    )
+    for seat in set(current) & set(previous):
+        old_card = previous[seat]
+        new_card = current[seat]
+        if old_card is not None and new_card is not None and old_card != new_card:
+            new_seats.add(seat)
+    events = []
+    for offset, seat in enumerate(sorted(new_seats)):
+        card = current[seat]
+        events.append(
+            {
+                "event_id": f"server-played-{first_event_number + offset:06d}",
+                "card": card,
+                "seat": seat,
+                "recognition_status": (
+                    "VISUAL_CARD_CANDIDATE" if card is not None else "UNKNOWN_CARD"
+                ),
+                "timestamp_ms": timestamp_ms,
+                "source_frame_index": source_frame_index,
+                "frame_sha256": frame_sha256,
+                "input_decoded_pixel_sha256": input_decoded_pixel_sha256,
+                "observer_status": observer_status,
+                "snapshot_required": True,
+            }
+        )
+    return events
+
+
 def _merge_direct_cards(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     claims: dict[str, dict[str, Any]] = {}
     for item in (item for group in groups for item in group):
@@ -250,7 +465,7 @@ def run(
     video_path: Path,
     output_path: Path,
     *,
-    sample_ms: int = 500,
+    sample_ms: int = 100,
     max_sampled_frames: int = 50_000,
 ) -> dict[str, Any]:
     root = job_root.resolve()
@@ -321,6 +536,8 @@ def run(
     played_layout_rejected_frames = 0
     played_layout_geometry_shas: set[str] = set()
     played_layout_transform_shas: set[str] = set()
+    server_play_events: list[dict[str, Any]] = []
+    previous_played_state: dict[str, str | None] = {}
     try:
         while True:
             ok, image = capture.read()
@@ -401,6 +618,23 @@ def run(
                 geometry_bank=geometry_bank,
                 visible_hand_cards=hands["cards"],
             )
+            current_played_state = _played_region_state(played)
+            new_play_events = _new_server_play_events(
+                previous_played_state,
+                current_played_state,
+                timestamp_ms=timestamp_ms,
+                source_frame_index=decoded_index - 1,
+                frame_sha256=frame_sha,
+                input_decoded_pixel_sha256=input_decoded_sha,
+                observer_status=str(played["status"]),
+                first_event_number=len(server_play_events) + 1,
+            )
+            server_play_events.extend(new_play_events)
+            if len(server_play_events) > MAX_PLAYED_EVENT_SNAPSHOTS:
+                raise AutonomousVideoError(
+                    "played-card server event count exceeds the bound"
+                )
+            previous_played_state = current_played_state
             layout_geometry = played.get("layout_geometry")
             if layout_geometry is None:
                 played_layout_rejected_frames += 1
@@ -437,6 +671,8 @@ def run(
                     "frame_sha256": frame_sha,
                     "decoded_pixel_sha256": decoded_sha,
                     "timestamp_ms": timestamp_ms,
+                    "source_frame_index": decoded_index - 1,
+                    "input_decoded_pixel_sha256": input_decoded_sha,
                     "deal_marker_fingerprint": marker_fingerprint(image, profile),
                     "cards": cards,
                 }
@@ -453,6 +689,11 @@ def run(
         markers["accepted_frames"],
         source_scope=f"sha256:{video_sha}",
         expected_card_scale_policy_sha256=card_scale_policy["policy_sha256"],
+    )
+    played_event_snapshots = _write_played_event_snapshots(
+        video_file,
+        target,
+        server_play_events,
     )
     pbn_validation = []
     for deal in reconstruction["deals"]:
@@ -507,6 +748,7 @@ def run(
             "sample_ms": sample_ms,
             "sampled_frame_count": sampled,
             "direct_visual_frame_count": len(visual_frames),
+            "policy": "10_HZ_EVENT_CAPTURE_WITH_UNKNOWN_PLAYED_REGION_FALLBACK",
         },
         "played_layout": {
             "version": TABLE_GEOMETRY_VERSION,
@@ -528,7 +770,9 @@ def run(
             "rejected_frames": markers["rejected_frames"],
         },
         "frame_rejections": frame_rejections,
+        "server_play_events": server_play_events,
         "reconstruction": reconstruction,
+        "played_event_snapshots": played_event_snapshots,
         "pbn_validation": pbn_validation,
         "uses_language_model": False,
         "requires_screenshot_review": False,
@@ -555,7 +799,7 @@ def main() -> int:
     parser.add_argument("--profile", required=True, type=Path)
     parser.add_argument("--video", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--sample-ms", type=int, default=500)
+    parser.add_argument("--sample-ms", type=int, default=100)
     parser.add_argument("--max-sampled-frames", type=int, default=50_000)
     args = parser.parse_args()
     try:

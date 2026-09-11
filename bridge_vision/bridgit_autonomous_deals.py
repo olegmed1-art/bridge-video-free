@@ -35,9 +35,10 @@ from bridge_vision.bridgit_played_card_observer import (
 )
 from bridge_vision.multiframe import validate_full_deal
 
-AUTONOMOUS_DEALS_SCHEMA = "bridgit-autonomous-deals/v1"
-AUTONOMOUS_DEALS_VERSION = "bridgit-autonomous-deals-v1"
+AUTONOMOUS_DEALS_SCHEMA = "bridgit-autonomous-deals/v2"
+AUTONOMOUS_DEALS_VERSION = "bridgit-autonomous-deals-v2"
 EXACT_COMPLEMENT_VERSION = "bridgit-autonomous-exact-complement-v1"
+PLAY_MEMORY_VERSION = "bridgit-recognized-card-memory-v1"
 MAX_FRAMES = 100_000
 MIN_HAND_RESET_CARDS = 8
 MIN_HAND_RESET_CHANGED_CARDS = 8
@@ -169,6 +170,23 @@ def _normalize_frame(
         ) from exc
     if timestamp_ms < 0:
         raise AutonomousDealsError("timestamp_ms must be a non-negative integer")
+    source_frame_index_raw = raw.get("source_frame_index", index)
+    if isinstance(source_frame_index_raw, bool):
+        raise AutonomousDealsError("source_frame_index must be a non-negative integer")
+    try:
+        source_frame_index = int(source_frame_index_raw)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise AutonomousDealsError(
+            "source_frame_index must be a non-negative integer"
+        ) from exc
+    if source_frame_index < 0 or source_frame_index != source_frame_index_raw:
+        raise AutonomousDealsError("source_frame_index must be a non-negative integer")
+    input_pixel_sha_raw = raw.get("input_decoded_pixel_sha256")
+    input_pixel_sha = (
+        _sha(input_pixel_sha_raw, "input_decoded_pixel_sha256")
+        if input_pixel_sha_raw is not None
+        else None
+    )
 
     raw_cards = raw.get("cards") or []
     if not isinstance(raw_cards, list) or len(raw_cards) > 52:
@@ -274,18 +292,14 @@ def _normalize_frame(
                 raise AutonomousDealsError(
                     "played card width ratio does not match its measurement"
                 )
-            card_scale_policy_version = str(
-                item.get("card_scale_policy_version") or ""
-            )
+            card_scale_policy_version = str(item.get("card_scale_policy_version") or "")
             if card_scale_policy_version != CARD_SCALE_POLICY_VERSION:
                 raise AutonomousDealsError("card scale policy version is unsupported")
             measurement_material = {
                 "version": card_scale_policy_version,
                 "card_scale_policy_sha256": card_scale_policy_sha,
                 "played_card_width_pixels": played_card_width_pixels,
-                "live_cardback_width_pixels": round(
-                    live_cardback_width_pixels, 6
-                ),
+                "live_cardback_width_pixels": round(live_cardback_width_pixels, 6),
                 "played_card_width_ratio": played_card_width_ratio,
             }
             if _canonical_hash(measurement_material) != card_scale_measurement_sha:
@@ -320,6 +334,8 @@ def _normalize_frame(
         "decoded_pixel_sha256": pixel_sha,
         "deal_marker_sha256": marker,
         "timestamp_ms": timestamp_ms,
+        "source_frame_index": source_frame_index,
+        "input_decoded_pixel_sha256": input_pixel_sha,
         "cards": cards,
     }
 
@@ -332,6 +348,147 @@ def _visible_hand_signature(
         for item in frame["cards"]
         if item["source"] == "HAND" and item["confidence"] >= min_confidence
     )
+
+
+def _played_claims(
+    frame: Mapping[str, Any],
+    min_confidence: float,
+    accepted: frozenset[tuple[str, str]],
+) -> frozenset[tuple[str, str]]:
+    return frozenset(
+        (str(item["card"]), str(item["seat"]))
+        for item in frame["cards"]
+        if item["source"] == "PLAYED"
+        and item["confidence"] >= min_confidence
+        and (str(item["card"]), str(item["seat"])) in accepted
+    )
+
+
+def _recognized_card_memory(
+    accepted: list[dict[str, Any]],
+) -> dict[str, Any]:
+    cards = [
+        {
+            "card": item["card"],
+            "seat": item["seat"],
+            "sources": list(item["sources"]),
+            "first_timestamp_ms": item["first_timestamp_ms"],
+            "last_timestamp_ms": item["last_timestamp_ms"],
+            "minimum_visual_confidence": item["minimum_confidence"],
+        }
+        for item in sorted(accepted, key=lambda value: (value["card"], value["seat"]))
+    ]
+    return {
+        "version": PLAY_MEMORY_VERSION,
+        "policy": "APPEND_ONLY_WITHIN_STABLE_DEAL_IDENTITY",
+        "recognized_card_count": len(cards),
+        "cards": cards,
+        "forgets_disappeared_cards": False,
+        "cross_deal_reuse_allowed": False,
+        "hidden_card_inference_used": False,
+    }
+
+
+def _build_play_events(
+    frames: list[dict[str, Any]],
+    accepted: list[dict[str, Any]],
+    min_confidence: float,
+) -> list[dict[str, Any]]:
+    accepted_played = frozenset(
+        (str(item["card"]), str(item["seat"]))
+        for item in accepted
+        if "PLAYED" in item["sources"]
+    )
+    if not accepted_played:
+        return []
+    accepted_by_claim = {
+        (str(item["card"]), str(item["seat"])): item for item in accepted
+    }
+    events: list[dict[str, Any]] = []
+    emitted: set[tuple[str, str]] = set()
+    previous: frozenset[tuple[str, str]] = frozenset()
+    trick_number = 1
+    order_in_trick = 0
+    for frame in frames:
+        current = _played_claims(frame, min_confidence, accepted_played)
+        if not current:
+            if previous and emitted:
+                trick_number += 1
+                order_in_trick = 0
+            previous = current
+            continue
+        new_claims = current - previous - emitted
+        transition_ambiguous = False
+        if new_claims and previous and not (current & previous):
+            if len(previous) >= 4:
+                trick_number += 1
+                order_in_trick = 0
+            else:
+                transition_ambiguous = True
+        for card, seat in sorted(new_claims, key=lambda item: (item[1], item[0])):
+            order_in_trick += 1
+            sequence_status = (
+                "AMBIGUOUS_SHARED_FRAME_OR_GAP"
+                if transition_ambiguous or len(new_claims) > 1
+                else "OBSERVED_TRANSITION"
+            )
+            visual_confidence = float(
+                accepted_by_claim[(card, seat)]["minimum_confidence"]
+            )
+            events.append(
+                {
+                    "event_id": f"played-{len(events) + 1:04d}",
+                    "card": card,
+                    "seat": seat,
+                    "timestamp_ms": frame["timestamp_ms"],
+                    "evidence_frame_sha256": frame["frame_sha256"],
+                    "decoded_pixel_sha256": frame["decoded_pixel_sha256"],
+                    "source_frame_index": frame["source_frame_index"],
+                    "input_decoded_pixel_sha256": frame["input_decoded_pixel_sha256"],
+                    "trick_number": trick_number,
+                    "order_in_trick": (
+                        None
+                        if sequence_status.startswith("AMBIGUOUS")
+                        else order_in_trick
+                    ),
+                    "sequence_status": sequence_status,
+                    "independent_frame_support": accepted_by_claim[(card, seat)][
+                        "support"
+                    ],
+                    "visual_confidence": visual_confidence,
+                    "snapshot_required": True,
+                }
+            )
+            emitted.add((card, seat))
+        previous = current
+
+    for card, seat in sorted(accepted_played - emitted):
+        supporting = next(
+            frame
+            for frame in frames
+            if (card, seat) in _played_claims(frame, min_confidence, accepted_played)
+        )
+        item = accepted_by_claim[(card, seat)]
+        visual_confidence = float(item["minimum_confidence"])
+        events.append(
+            {
+                "event_id": f"played-{len(events) + 1:04d}",
+                "card": card,
+                "seat": seat,
+                "timestamp_ms": supporting["timestamp_ms"],
+                "evidence_frame_sha256": supporting["frame_sha256"],
+                "decoded_pixel_sha256": supporting["decoded_pixel_sha256"],
+                "source_frame_index": supporting["source_frame_index"],
+                "input_decoded_pixel_sha256": supporting["input_decoded_pixel_sha256"],
+                "trick_number": None,
+                "order_in_trick": None,
+                "sequence_status": "ORDER_UNKNOWN",
+                "independent_frame_support": item["support"],
+                "visual_confidence": visual_confidence,
+                "snapshot_required": True,
+            }
+        )
+    return sorted(events, key=lambda item: (item["timestamp_ms"], item["event_id"]))
 
 
 def _is_visible_hand_reset(
@@ -577,23 +734,19 @@ def _reconstruct_segment(
                 "frame_sha256": frame["frame_sha256"],
                 "decoded_pixel_sha256": frame["decoded_pixel_sha256"],
                 "timestamp_ms": frame["timestamp_ms"],
+                "source_frame_index": frame["source_frame_index"],
+                "input_decoded_pixel_sha256": frame["input_decoded_pixel_sha256"],
                 "source": item["source"],
                 "confidence": item["confidence"],
                 "evidence_pixel_sha256": evidence_sha,
                 "layout_geometry_sha256": item["layout_geometry_sha256"],
                 "layout_transform_sha256": item["layout_transform_sha256"],
                 "card_scale_policy_sha256": item["card_scale_policy_sha256"],
-                "card_scale_measurement_sha256": item[
-                    "card_scale_measurement_sha256"
-                ],
+                "card_scale_measurement_sha256": item["card_scale_measurement_sha256"],
                 "played_card_width_ratio": item["played_card_width_ratio"],
                 "played_card_width_pixels": item["played_card_width_pixels"],
-                "live_cardback_width_pixels": item[
-                    "live_cardback_width_pixels"
-                ],
-                "card_scale_policy_version": item[
-                    "card_scale_policy_version"
-                ],
+                "live_cardback_width_pixels": item["live_cardback_width_pixels"],
+                "card_scale_policy_version": item["card_scale_policy_version"],
             }
 
     accepted: list[dict[str, Any]] = []
@@ -670,9 +823,7 @@ def _reconstruct_segment(
                 "card_scale_measurements": sorted(
                     (
                         {
-                            "measurement_sha256": item[
-                                "card_scale_measurement_sha256"
-                            ],
+                            "measurement_sha256": item["card_scale_measurement_sha256"],
                             "version": item["card_scale_policy_version"],
                             "played_card_width_pixels": item[
                                 "played_card_width_pixels"
@@ -680,9 +831,7 @@ def _reconstruct_segment(
                             "live_cardback_width_pixels": item[
                                 "live_cardback_width_pixels"
                             ],
-                            "played_card_width_ratio": item[
-                                "played_card_width_ratio"
-                            ],
+                            "played_card_width_ratio": item["played_card_width_ratio"],
                         }
                         for item in items
                         if item["card_scale_measurement_sha256"] is not None
@@ -743,6 +892,8 @@ def _reconstruct_segment(
             "pbn": None,
             "evidence_sha256": evidence_sha,
             "accepted": [],
+            "recognized_card_memory": _recognized_card_memory([]),
+            "played_card_events": [],
             "rejected": rejected,
             "conflicts": conflicts,
         }
@@ -770,6 +921,8 @@ def _reconstruct_segment(
     pbn = _to_pbn(deal) if validation["full_board"] else None
     if status.startswith("COMPLETE") and not validation["full_board"]:
         raise AutonomousDealsError("complete result failed the independent deck check")
+    recognized_memory = _recognized_card_memory(accepted)
+    played_events = _build_play_events(frames, accepted, min_confidence)
     return {
         "status": status,
         "completion": completion,
@@ -783,6 +936,8 @@ def _reconstruct_segment(
         "validation": validation,
         "evidence_sha256": evidence_sha,
         "accepted": accepted,
+        "recognized_card_memory": recognized_memory,
+        "played_card_events": played_events,
         "rejected": rejected,
         "conflicts": [],
     }
@@ -818,9 +973,7 @@ def reconstruct_autonomous_deals(
     for index, raw in enumerate(raw_frames):
         if index >= MAX_FRAMES:
             raise AutonomousDealsError("frame count exceeds the bound")
-        frames.append(
-            _normalize_frame(raw, index, expected_card_scale_policy_sha256)
-        )
+        frames.append(_normalize_frame(raw, index, expected_card_scale_policy_sha256))
     if not frames:
         raise AutonomousDealsError("at least one frame is required")
     frames.sort(key=lambda item: (item["timestamp_ms"], item["frame_sha256"]))
@@ -869,6 +1022,7 @@ def reconstruct_autonomous_deals(
         "uses_language_model": False,
         "requires_screenshot_review": False,
         "exact_complement_enabled": bool(allow_exact_complement),
+        "recognized_card_memory_version": PLAY_MEMORY_VERSION,
         "canonical_promotion_allowed": False,
     }
     receipt["receipt_sha256"] = _canonical_hash(receipt)
@@ -879,6 +1033,7 @@ __all__ = [
     "AUTONOMOUS_DEALS_SCHEMA",
     "AUTONOMOUS_DEALS_VERSION",
     "EXACT_COMPLEMENT_VERSION",
+    "PLAY_MEMORY_VERSION",
     "MAX_FRAMES",
     "MIN_HAND_RESET_CARDS",
     "MIN_HAND_RESET_CHANGED_CARDS",
