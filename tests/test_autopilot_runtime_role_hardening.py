@@ -48,6 +48,7 @@ def test_hardening_uses_pinned_encrypted_cutover_and_rollback() -> None:
     assert "rsa_padding_mode:oaep" in source
     assert "rsa_oaep_md:sha256" in source
     assert "/etc/ssh/ssh_host_rsa_key" in source
+    assert "ssh-keygen -p -m PEM -N '' -P ''" in source
     assert "AUTOPILOT_EXPECTED_DB_USER" in source
     assert "os.replace(temporary, path)" in source
     assert "AUTOPILOT_RUNTIME_LOGIN_CUTOVER_ROLLBACK=PASS" in source

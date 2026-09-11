@@ -311,7 +311,10 @@ jobs:
           [[ "$(stat -c '%U:%G:%a' "$root/autopilot-shadow.env")" == root:root:600 ]]
           [[ "$(systemctl is-active "$service" 2>/dev/null || true)" == active ]]
           install -m 0600 -o root -g root "$root/autopilot-shadow.env" "$work/autopilot-shadow.env"
-          openssl pkeyutl -decrypt -inkey /etc/ssh/ssh_host_rsa_key \
+          install -m 0600 -o root -g root \
+            /etc/ssh/ssh_host_rsa_key "$work/oracle-rsa-private"
+          ssh-keygen -p -m PEM -N '' -P '' -f "$work/oracle-rsa-private" >/dev/null
+          openssl pkeyutl -decrypt -inkey "$work/oracle-rsa-private" \
             -pkeyopt rsa_padding_mode:oaep \
             -pkeyopt rsa_oaep_md:sha256 \
             -pkeyopt rsa_mgf1_md:sha256 \
