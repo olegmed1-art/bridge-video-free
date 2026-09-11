@@ -1,10 +1,10 @@
-name: Diana 23-26 responsive recognizer validation 934dd2d0
+name: Diana 23-26 responsive recognizer validation da646515
 
 on:
   pull_request:
     branches: [main]
     types: [opened, synchronize]
-    paths: ['.github/workflows/diana-responsive-validation-934dd2d0-once.yml']
+    paths: ['.github/workflows/diana-responsive-validation-da646515-once.yml']
 
 permissions:
   contents: read
@@ -22,7 +22,7 @@ jobs:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
-      ALGORITHM_SHA: 934dd2d0d51c5c182b232638a3963b93e8580c98
+      ALGORITHM_SHA: da646515201191ff8ace13dcc0eb9108d9ee2fad
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
       SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
