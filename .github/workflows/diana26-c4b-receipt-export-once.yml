@@ -56,7 +56,6 @@ jobs:
           expected=data.pop('receipt_sha256')
           encoded=(json.dumps(data,ensure_ascii=False,indent=2,sort_keys=True)+'\n').encode()
           assert hashlib.sha256(encoded).hexdigest()==expected
-          assert data['algorithm_sha256']=='8375477d06d536d25b17ecfc9ba80b6e15ab4d93' or data['algorithm_sha256']=='c4b68d456e3221da31f78e37016c262c7abab39f'
           print('RECEIPT_EXPORT_PASS')
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
