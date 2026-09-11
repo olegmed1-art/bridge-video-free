@@ -21,7 +21,7 @@ jobs:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
-      ALGORITHM_SHA: 43ed0765ae90444f3011c9d4f62c11ca87252356
+      ALGORITHM_SHA: 9a0e10d96b3320d3386e9c44a132baf7dd0f5ef0
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
       SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
@@ -104,6 +104,35 @@ jobs:
           runtime="$root/recognition-diana23/visible-hand-profile-v1.runtime.json"
           install -m 0600 "$original" "$runtime"
           test "$(sha256sum "$original" | cut -d' ' -f1)" = "$(sha256sum "$runtime" | cut -d' ' -f1)"
+
+          ROOT="$root" PYTHONPATH="$code" "$venv/bin/python" - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          from tools.bridge_vision_autonomous_video import _json
+          from bridge_vision.bridgit_played_card_observer import build_suit_bank
+          from bridge_vision.bridgit_visible_hand_observer import build_rank_bank, decode_frame, parse_profile
+
+          root = Path(os.environ['ROOT'])
+          profile_files = (
+              root / 'recognition-diana23/visible-hand-profile-v1.runtime.json',
+              root / 'recognition-diana24-canary-v1/profile.json',
+              root / 'recognition-diana25-canary-v1/profile.json',
+              root / 'recognition-diana26-canary-v1/profile.json',
+          )
+          for profile_file in profile_files:
+              profile = parse_profile(_json(profile_file))
+              references = {}
+              for reference_id, (raw_path, expected_sha) in profile.references.items():
+                  payload = (profile_file.parent / raw_path).read_bytes()
+                  assert hashlib.sha256(payload).hexdigest() == expected_sha
+                  references[reference_id] = decode_frame(payload, profile)
+              rank_bank = build_rank_bank(profile, references)
+              suit_bank = build_suit_bank(profile, references)
+              assert rank_bank and suit_bank
+              print(f'AUTONOMOUS_PROFILE_PREFLIGHT_PASS profile={profile_file.name} ranks={len(rank_bank)} suits={len(suit_bank)}')
+          PY
 
           ROOT="$root" CODE="$code" VENV="$venv" PYTHONPATH="$code" "$venv/bin/python" - <<'PY'
           import hashlib
@@ -238,7 +267,7 @@ jobs:
           assert len(videos) == 4, len(videos)
           summary = {
               'schema': 'diana-23-26-autonomous-summary/v1',
-              'algorithm_sha': os.environ.get('ALGORITHM_SHA', '43ed0765ae90444f3011c9d4f62c11ca87252356'),
+              'algorithm_sha': os.environ.get('ALGORITHM_SHA', '9a0e10d96b3320d3386e9c44a132baf7dd0f5ef0'),
               'result_scope': 'SHADOW_ONLY',
               'uses_language_model': False,
               'requires_screenshot_review': False,
