@@ -69,7 +69,7 @@ jobs:
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST:$remote" "$out/diana-25.json"
           RECEIPT="$out/diana-25.json" python3 - <<'PY'
           import hashlib
-          import json          import json
+          import json
           import os
           from pathlib import Path
 
