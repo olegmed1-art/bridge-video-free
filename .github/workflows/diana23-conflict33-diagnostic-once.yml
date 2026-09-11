@@ -69,6 +69,10 @@ jobs:
           assert source.count(old) == 1
           path.write_text(source.replace(old, new), encoding="utf-8")
           PY
+          mkdir -p "$scratch/code/bridge_school_api/dds3"
+          : > "$scratch/code/bridge_school_api/__init__.py"
+          : > "$scratch/code/bridge_school_api/dds3/__init__.py"
+          printf '%s\n' 'class BridgeDeal:' '    def __init__(self, hands): self.hands = hands' '    def validate(self): return None' > "$scratch/code/bridge_school_api/dds3/model.py"
           ffmpeg -hide_banner -loglevel error -ss 4260 -i "$root/diana-23.mp4" -t 132 \
             -map 0:v:0 -c copy -an -y "$scratch/segment33.mp4"
           PYTHONPATH="$scratch/code:$code:$root/recognition-diana23/pr1106-527fe65" "$venv/bin/python" "$scratch/code/tools/bridge_vision_autonomous_video.py" \
@@ -101,4 +105,4 @@ jobs:
           PY
           REMOTE
 
-# retry 2
+# retry 3
