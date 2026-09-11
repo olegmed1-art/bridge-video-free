@@ -21,7 +21,7 @@ jobs:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
-      ALGORITHM_SHA: 7afc3f1ac6bbdec8f3b0cdd8b29968de290d3cb7
+      ALGORITHM_SHA: 43ed0765ae90444f3011c9d4f62c11ca87252356
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
       SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
@@ -214,7 +214,7 @@ jobs:
           assert len(videos) == 4, len(videos)
           summary = {
               'schema': 'diana-23-26-autonomous-summary/v1',
-              'algorithm_sha': os.environ.get('ALGORITHM_SHA', '7afc3f1ac6bbdec8f3b0cdd8b29968de290d3cb7'),
+              'algorithm_sha': os.environ.get('ALGORITHM_SHA', '43ed0765ae90444f3011c9d4f62c11ca87252356'),
               'result_scope': 'SHADOW_ONLY',
               'uses_language_model': False,
               'requires_screenshot_review': False,
