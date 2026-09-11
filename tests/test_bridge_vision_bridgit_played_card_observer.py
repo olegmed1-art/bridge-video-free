@@ -341,6 +341,36 @@ def test_responsive_reflow_never_turns_north_card_into_east_claim() -> None:
     assert result["status"] in {"REVIEW", "SHADOW_PLAYED_CARDS"}
 
 
+@pytest.mark.parametrize(
+    ("x", "expected_seat"),
+    [
+        (70, "W"),
+        (625, "E"),
+    ],
+)
+def test_bridgit_side_trick_cards_near_live_trays_are_retained(
+    x: int, expected_seat: str
+) -> None:
+    reference, coordinates = reference_image()
+    profile = parse_profile(raw_profile(coordinates))
+    rank_bank = build_rank_bank(profile, {"ref": reference})
+    suit_bank = build_suit_bank(profile, {"ref": reference})
+
+    result = observe_played_cards(
+        played_frame("A", "H", x=x, y=290),
+        rank_bank,
+        suit_bank,
+        profile,
+        geometry_bank=geometry_bank(profile, reference),
+        visible_hand_cards=verified_open_hands(),
+    )
+
+    assert [(item["card"], item["seat"]) for item in result["cards"]] == [
+        ("AH", expected_seat)
+    ]
+    assert abs(result["cards"][0]["seat_coordinates"]["horizontal"]) > 0.78
+
+
 def test_live_geometry_is_recomputed_after_same_resolution_table_reflow() -> None:
     reference, coordinates = reference_image()
     profile = parse_profile(raw_profile(coordinates))

@@ -33,6 +33,11 @@ _MIN_LAYOUT_COMPONENT_FILL = 0.35
 _MIN_LAYOUT_AXIS_SPAN = 0.25
 _MIN_SEAT_GEOMETRY_MARGIN = 0.20
 _MIN_CARDBACK_REFERENCE_SCORE = 0.70
+_MIN_TRICK_RADIUS = 0.02
+# Bridgit places the West/East trick cards close to the closed-hand trays.
+# Production Diana frames measure about 0.83 of the authenticated W/E half-axis;
+# 0.90 admits that layout while keeping player trays outside the trick zone.
+_MAX_TRICK_RADIUS = 0.90
 MIN_PLAYED_CARD_WIDTH_RATIO = 0.895
 MAX_PLAYED_CARD_WIDTH_RATIO = 0.990
 
@@ -764,7 +769,7 @@ def _seat(rectangle: tuple[int, int, int, int, float], geometry: Mapping[str, An
         horizontal_x * delta_y - horizontal_y * delta_x
     ) / determinant
     radius = math.hypot(horizontal_coordinate, vertical_coordinate)
-    if not 0.02 <= radius <= 0.78:
+    if not _MIN_TRICK_RADIUS <= radius <= _MAX_TRICK_RADIUS:
         return None
     if abs(horizontal_coordinate) > abs(vertical_coordinate):
         seat = "E" if horizontal_coordinate > 0 else "W"
