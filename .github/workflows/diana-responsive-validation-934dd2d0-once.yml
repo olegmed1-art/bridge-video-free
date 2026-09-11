@@ -3,7 +3,7 @@ name: Diana 23-26 responsive recognizer validation 934dd2d0
 on:
   pull_request:
     branches: [main]
-    types: [opened]
+    types: [opened, synchronize]
     paths: ['.github/workflows/diana-responsive-validation-934dd2d0-once.yml']
 
 permissions:
@@ -145,6 +145,7 @@ jobs:
 
           ROOT="$root" CODE="$code" VENV="$venv" PYTHONPATH="$code" "$venv/bin/python" - <<'PY'
           import hashlib
+          import json
           import os
           from pathlib import Path
 
@@ -172,7 +173,7 @@ jobs:
           seen = set()
           confidences = []
           hand_counts = []
-          for path in frames:
+          for frame_index, path in enumerate(frames):
               image = decode_frame(path.read_bytes(), profile)
               hands = observe_frame(image, rank_bank, profile)
               played = observe_played_cards(
@@ -186,6 +187,14 @@ jobs:
               assert hands['status'] != 'CONFLICT'
               assert played['status'] != 'CONFLICT'
               hand_counts.append(len(hands['cards']))
+              print(json.dumps({
+                  'canary_frame_index': frame_index,
+                  'hand_count': len(hands['cards']),
+                  'played_status': played['status'],
+                  'played_cards': sorted((card['card'], card['seat']) for card in played['cards']),
+                  'rejection_reasons': sorted({item['reason'] for item in played.get('rejected', [])}),
+                  'played_geometry_proven': played.get('layout_geometry') is not None,
+              }, sort_keys=True))
               for card in played['cards']:
                   seen.add((card['card'], card['seat']))
                   confidences.append(float(card['confidence']))
