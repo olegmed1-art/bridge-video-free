@@ -9,6 +9,12 @@ from unittest.mock import patch
 import psycopg
 import pytest
 
+from autopilot_phase3b.policy import (
+    FileChange,
+    RepairRequest,
+    expected_branch_name,
+    repair_fingerprint,
+)
 from oracle_autopilot.contract import (
     AutopilotContractError,
     AutopilotRetryableError,
@@ -18,26 +24,21 @@ from oracle_autopilot.contract import (
     validate_task_contract,
 )
 from oracle_autopilot.worker import (
+    WorkerConfig,
     _dispatch_body,
     _publish_role_dispatch,
-    WorkerConfig,
+    drain_project_work,
     drain_ready,
     drain_role_dispatch_outbox,
     execute_bounded_draft_repair,
     fetch_github_ci_snapshot,
     fetch_github_pr_snapshot,
+    fetch_github_project_head,
     load_config,
     load_role_dispatch_broker_config,
     load_token_broker_config,
     validate_neon_direct_dsn,
 )
-from autopilot_phase3b.policy import (
-    FileChange,
-    RepairRequest,
-    expected_branch_name,
-    repair_fingerprint,
-)
-
 
 DIRECT_DSN = (
     "postgresql://autopilot_runtime_login:secret@"
@@ -1309,6 +1310,117 @@ def test_ready_queue_is_drained_without_a_poll_gap(monkeypatch):
     config = WorkerConfig(dsn=DIRECT_DSN, worker_id="test-worker")
     assert drain_ready(config) == 3
     assert calls == ["test-worker"] * 4
+
+
+def test_project_head_probe_is_public_bounded_and_accepts_closed_target(monkeypatch):
+    requested = []
+
+    def fake_get(url, *, not_found_code):
+        requested.append((url, not_found_code))
+        return {
+            "number": 1106,
+            "html_url": "https://github.com/olegmed1-art/bridge-video-free/pull/1106",
+            "state": "closed",
+            "head": {"sha": "a" * 40},
+        }
+
+    monkeypatch.setattr("oracle_autopilot.worker._github_get_json", fake_get)
+    assert fetch_github_project_head(
+        "olegmed1-art/bridge-video-free", 1106
+    ) == {"head_sha": "a" * 40, "open": False}
+    assert requested == [
+        (
+            "https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/1106",
+            "PROJECT_WORK_TARGET_NOT_FOUND",
+        )
+    ]
+
+
+def test_project_planner_materializes_one_exact_head_task(monkeypatch):
+    probe = {
+        "work_item_id": "00000000-0000-0000-0000-000000000007",
+        "work_key": "recognizer-readiness",
+        "repository": "olegmed1-art/bridge-video-free",
+        "target_pr": 1106,
+        "lease_epoch": 4,
+    }
+    calls = []
+    pending = [probe]
+
+    def fake_rpc(_config, sql, params):
+        calls.append((sql, params))
+        if "claim_project_work_probe" in sql:
+            return pending.pop(0) if pending else None
+        if "materialize_project_work_probe" in sql:
+            return {
+                "task_id": "00000000-0000-0000-0000-000000000008",
+                "resulting_state": "ACTIVE",
+                "created": True,
+            }
+        return None
+
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker.fetch_github_project_head",
+        lambda _repository, _target_pr: {"head_sha": "b" * 40, "open": True},
+    )
+    config = WorkerConfig(dsn=DIRECT_DSN, worker_id="project-worker")
+    assert drain_project_work(config) == 1
+    materialize = next(
+        params for sql, params in calls if "materialize_project_work_probe" in sql
+    )
+    assert materialize == (
+        probe["work_item_id"],
+        "project-worker",
+        4,
+        True,
+        "b" * 40,
+    )
+
+
+def test_project_planner_retries_transient_probe_and_rolls_forward(monkeypatch):
+    probe = {
+        "work_item_id": "00000000-0000-0000-0000-000000000009",
+        "work_key": "video-readiness",
+        "repository": "olegmed1-art/bridge-video-free",
+        "target_pr": 1125,
+        "lease_epoch": 2,
+    }
+    calls = []
+
+    def fake_rpc(_config, sql, params):
+        calls.append((sql, params))
+        if "claim_project_work_probe" in sql:
+            if len([call for call, _ in calls if "claim_project_work_probe" in call]) == 1:
+                return probe
+            return None
+        if "fail_project_work_probe" in sql:
+            return {"state": "BLOCKED"}
+        return None
+
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker.fetch_github_project_head",
+        lambda _repository, _target_pr: (_ for _ in ()).throw(
+            AutopilotRetryableError("GITHUB_API_TRANSIENT_ERROR")
+        ),
+    )
+    config = WorkerConfig(dsn=DIRECT_DSN, worker_id="project-worker")
+    assert drain_project_work(config) == 1
+    failed = next(params for sql, params in calls if "fail_project_work_probe" in sql)
+    assert failed == (
+        probe["work_item_id"],
+        "project-worker",
+        2,
+        "GITHUB_API_TRANSIENT_ERROR",
+    )
+
+    def missing_rpc(_config, sql, _params):
+        if "claim_project_work_probe" in sql:
+            raise psycopg.errors.UndefinedFunction("0324 not installed")
+
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", missing_rpc)
+    assert drain_project_work(config) == 0
 
 
 def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():

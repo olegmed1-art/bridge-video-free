@@ -25,9 +25,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
@@ -40,7 +41,6 @@ from .contract import (
     claimed_task_from_row,
     validate_task_contract,
 )
-
 
 CHANNEL = "autopilot_ready"
 RUNTIME_MODE = "SHADOW"
@@ -453,6 +453,33 @@ def fetch_github_pr_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
         "model_calls": 0,
         "cost_actual_microusd": 0,
     }
+
+
+def fetch_github_project_head(repository: str, pr_number: int) -> dict[str, Any]:
+    """Resolve the current public head for one registered project-work item."""
+
+    if repository != GITHUB_REPOSITORY or type(pr_number) is not int:
+        raise AutopilotContractError("PROJECT_WORK_TARGET_INVALID")
+    if not 1 <= pr_number <= 1_000_000:
+        raise AutopilotContractError("PROJECT_WORK_TARGET_INVALID")
+    url = f"https://{GITHUB_API_HOST}/repos/{repository}/pulls/{pr_number}"
+    payload = _github_get_json(url, not_found_code="PROJECT_WORK_TARGET_NOT_FOUND")
+    if not isinstance(payload, dict):
+        raise AutopilotContractError("GITHUB_API_JSON_INVALID")
+
+    head = payload.get("head")
+    head_sha = head.get("sha") if isinstance(head, dict) else None
+    state = payload.get("state")
+    expected_html_url = f"https://github.com/{repository}/pull/{pr_number}"
+    if (
+        payload.get("number") != pr_number
+        or payload.get("html_url") != expected_html_url
+        or state not in {"open", "closed"}
+        or not isinstance(head_sha, str)
+        or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None
+    ):
+        raise AutopilotContractError("PROJECT_WORK_TARGET_RESPONSE_INVALID")
+    return {"head_sha": head_sha, "open": state == "open"}
 
 
 def fetch_github_ci_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
@@ -1155,6 +1182,89 @@ def drain_ready(config: WorkerConfig) -> int:
     return processed
 
 
+def process_project_work(config: WorkerConfig) -> bool:
+    """Advance one durable project lane without making a GitHub mutation."""
+
+    try:
+        probe = _rpc_one(
+            config,
+            "SELECT * FROM autopilot.claim_project_work_probe(%s, %s)",
+            (config.worker_id, config.lease_seconds),
+        )
+    except psycopg.errors.UndefinedFunction:
+        # Rolling deployment: the worker may safely precede migration 0324.
+        return False
+    if not probe:
+        return False
+
+    work_item_id = str(probe["work_item_id"])
+    lease_epoch = int(probe["lease_epoch"])
+    try:
+        snapshot = fetch_github_project_head(
+            str(probe["repository"]), int(probe["target_pr"])
+        )
+        materialized = _rpc_one(
+            config,
+            "SELECT * FROM autopilot.materialize_project_work_probe("
+            "%s::uuid, %s, %s, %s, %s)",
+            (
+                work_item_id,
+                config.worker_id,
+                lease_epoch,
+                snapshot["open"],
+                snapshot["head_sha"],
+            ),
+        )
+        LOGGER.info(
+            "project_work_advanced work_item_id=%s work_key=%s state=%s created=%s",
+            work_item_id,
+            probe["work_key"],
+            materialized["resulting_state"] if materialized else "FENCED",
+            bool(materialized and materialized["created"]),
+        )
+    except AutopilotRetryableError as exc:
+        _rpc_one(
+            config,
+            "SELECT autopilot.fail_project_work_probe("
+            "%s::uuid, %s, %s, %s, true) AS state",
+            (work_item_id, config.worker_id, lease_epoch, str(exc)),
+        )
+        LOGGER.warning(
+            "project_work_probe_retry work_item_id=%s code=%s", work_item_id, exc
+        )
+    except AutopilotContractError as exc:
+        _rpc_one(
+            config,
+            "SELECT autopilot.fail_project_work_probe("
+            "%s::uuid, %s, %s, %s, false) AS state",
+            (work_item_id, config.worker_id, lease_epoch, str(exc)),
+        )
+        LOGGER.warning(
+            "project_work_probe_failed work_item_id=%s code=%s", work_item_id, exc
+        )
+    except (KeyError, TypeError, ValueError):
+        _rpc_one(
+            config,
+            "SELECT autopilot.fail_project_work_probe("
+            "%s::uuid, %s, %s, %s, false) AS state",
+            (
+                work_item_id,
+                config.worker_id,
+                lease_epoch,
+                "PROJECT_WORK_PROBE_ROW_INVALID",
+            ),
+        )
+        LOGGER.exception("project_work_probe_row_invalid work_item_id=%s", work_item_id)
+    return True
+
+
+def drain_project_work(config: WorkerConfig) -> int:
+    processed = 0
+    while process_project_work(config):
+        processed += 1
+    return processed
+
+
 def _dispatch_body(payload: dict[str, Any]) -> str:
     lines = [
         "AUTOPILOT_DISPATCH_V1",
@@ -1300,7 +1410,11 @@ def run_forever(config: WorkerConfig) -> None:
                 while True:
                     # Drain every ready transition without sleeping. The polling
                     # timeout is reached only when no runnable task exists.
-                    if drain_ready(config) or drain_role_dispatch_outbox(config):
+                    if (
+                        drain_ready(config)
+                        or drain_role_dispatch_outbox(config)
+                        or drain_project_work(config)
+                    ):
                         continue
                     wait_for_wakeup(listener, config.recovery_poll_seconds)
         except KeyboardInterrupt:

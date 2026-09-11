@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/autopilot-runtime-role-hardening.yml'
       - 'tests/test_autopilot_runtime_role_hardening.py'
+      - 'database/migrations/0324_autopilot_project_planner.sql'
   issue_comment:
     types: [created]
 
@@ -103,6 +104,15 @@ jobs:
                   ) AND has_function_privilege(
                       'autopilot_runtime_principal',
                       'autopilot.reconcile_role_dispatch_callbacks()', 'EXECUTE'
+                  ) AND has_function_privilege(
+                      'autopilot_runtime_principal',
+                      'autopilot.claim_project_work_probe(text,integer)', 'EXECUTE'
+                  ) AND has_function_privilege(
+                      'autopilot_runtime_principal',
+                      'autopilot.materialize_project_work_probe(uuid,text,bigint,boolean,text)', 'EXECUTE'
+                  ) AND has_function_privilege(
+                      'autopilot_runtime_principal',
+                      'autopilot.fail_project_work_probe(uuid,text,bigint,text,boolean)', 'EXECUTE'
                   )
               ) THEN
                   RAISE EXCEPTION 'AUTOPILOT_RUNTIME_PRINCIPAL_RPC_INCOMPLETE';
@@ -142,12 +152,18 @@ jobs:
                  ) OR has_table_privilege(
                      'autopilot_runtime_login',
                      'autopilot.role_dispatch_followup', 'SELECT'
+                 ) OR has_table_privilege(
+                     'autopilot_runtime_login',
+                     'autopilot.project_work_item', 'SELECT'
                  ) OR NOT has_function_privilege(
                      'autopilot_runtime_login',
                      'autopilot.claim_next_task(text,integer)', 'EXECUTE'
                  ) OR NOT has_function_privilege(
                      'autopilot_runtime_login',
                      'autopilot.claim_role_dispatch_outbox_v2(text,integer)', 'EXECUTE'
+                 ) OR NOT has_function_privilege(
+                     'autopilot_runtime_login',
+                     'autopilot.claim_project_work_probe(text,integer)', 'EXECUTE'
                  ) THEN
                   RAISE EXCEPTION 'AUTOPILOT_RUNTIME_LOGIN_LEAST_PRIVILEGE_FAILED';
               END IF;
