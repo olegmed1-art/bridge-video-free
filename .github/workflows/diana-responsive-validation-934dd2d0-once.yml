@@ -192,7 +192,23 @@ jobs:
                   'hand_count': len(hands['cards']),
                   'played_status': played['status'],
                   'played_cards': sorted((card['card'], card['seat']) for card in played['cards']),
-                  'rejection_reasons': sorted({item['reason'] for item in played.get('rejected', [])}),
+                  'rejections': [
+                      {'reason': item['reason'], 'region': item.get('region')}
+                      for item in played.get('rejected', [])
+                  ],
+                  'layout': ({
+                      'center': played['layout_geometry']['center'],
+                      'horizontal_half_axis': played['layout_geometry']['horizontal_half_axis'],
+                      'vertical_half_axis': played['layout_geometry']['vertical_half_axis'],
+                      'anchors': {
+                          seat: {
+                              'x': item['x'],
+                              'y': item['y'],
+                              'region': item['region'],
+                          }
+                          for seat, item in played['layout_geometry']['anchors'].items()
+                      },
+                  } if played.get('layout_geometry') is not None else None),
                   'played_geometry_proven': played.get('layout_geometry') is not None,
               }, sort_keys=True))
               for card in played['cards']:
