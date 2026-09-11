@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import zipfile
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -257,6 +258,8 @@ def _gate_offset(image: Any, templates: dict[str, list[Any]], offsets: list[int]
 
 
 def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset: int) -> tuple[dict[str, Any] | None, str]:
+    started = time.perf_counter()
+    print(json.dumps({"full_layout_phase": "start", "y_offset": y_offset}), flush=True)
     cv2, np_runtime = _runtime()
     import numpy as np  # type: ignore
     from scipy.optimize import linear_sum_assignment  # type: ignore
@@ -272,6 +275,7 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
             region = image[y0:y1, x0:x1]
             variant_maps = [cv2.matchTemplate(region, template, cv2.TM_CCOEFF_NORMED) for template in templates[card]]
             score_maps[card][seat] = np_runtime.maximum(variant_maps[0], variant_maps[1])
+    print(json.dumps({"full_layout_phase": "score_maps", "seconds": round(time.perf_counter() - started, 3)}), flush=True)
 
     seat_slots = [seat for seat in rank_layout.SEATS for _ in range(13)]
     quick_scores = {
@@ -281,6 +285,7 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
     quick_costs = np.asarray([[-quick_scores[card][seat] for seat in seat_slots] for card in cards], dtype=np.float64)
     quick_rows, quick_columns = linear_sum_assignment(quick_costs)
     quick_assigned = [-float(quick_costs[row, column]) for row, column in zip(quick_rows, quick_columns)]
+    print(json.dumps({"full_layout_phase": "quick_assignment", "seconds": round(time.perf_counter() - started, 3), "minimum": round(min(quick_assigned), 4), "median": round(float(median(quick_assigned)), 4)}), flush=True)
     if min(quick_assigned) < 0.55 or float(median(quick_assigned)) < 0.68:
         return None, f"template_weight_gate_min{int(min(quick_assigned) * 20):02d}_med{int(float(median(quick_assigned)) * 20):02d}"
 
@@ -301,6 +306,7 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
                 remaining[ya:yb, xa:xb] = -2.0
     if any(sum(1 for slot in slots if slot["suit"] == suit) < 13 for suit in rank_layout.SUITS):
         return None, "candidate_slot_gate"
+    print(json.dumps({"full_layout_phase": "slots", "seconds": round(time.perf_counter() - started, 3), "slots": len(slots)}), flush=True)
 
     costs = np.full((52, len(slots)), 4.0, dtype=np.float64)
     for row, card in enumerate(cards):
