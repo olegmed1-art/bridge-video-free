@@ -233,7 +233,7 @@ def run(
     profile = parse_profile(_json(profile_file))
     references = {}
     for reference_id, (raw_path, expected_sha) in profile.references.items():
-        source = _inside(root, raw_path, "reference")
+        source = _inside(root, profile_file.parent / raw_path, "reference")
         payload = _read(source, MAX_REFERENCE_BYTES, "reference")
         if hashlib.sha256(payload).hexdigest() != expected_sha:
             raise AutonomousVideoError("reference frame hash mismatch")

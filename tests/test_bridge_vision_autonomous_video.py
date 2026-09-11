@@ -47,10 +47,12 @@ def test_complete_pbn_passes_independent_bridge_deal_model() -> None:
 def test_raw_video_pipeline_is_autonomous_and_writes_private_receipt(
     tmp_path: Path,
 ) -> None:
+    profile_dir = tmp_path / "profiles"
+    profile_dir.mkdir()
     reference, coordinates = pixels.reference_image()
     ok, encoded_reference = cv2.imencode(".png", reference)
     assert ok
-    reference_path = tmp_path / "reference.png"
+    reference_path = profile_dir / "reference.png"
     reference_path.write_bytes(encoded_reference.tobytes())
     profile = pixels.raw_profile(coordinates)
     profile["references"]["ref"] = {
@@ -59,7 +61,7 @@ def test_raw_video_pipeline_is_autonomous_and_writes_private_receipt(
     }
     profile.pop("profile_sha256")
     profile["profile_sha256"] = pixels.canonical_hash(profile)
-    profile_path = tmp_path / "profile.json"
+    profile_path = profile_dir / "profile.json"
     profile_path.write_text(json.dumps(profile), encoding="utf-8")
 
     video_path = tmp_path / "input.avi"
