@@ -50,7 +50,6 @@ jobs:
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             "D23_DIAG_OUT='$remote' bash -s" <<'REMOTE'
           set -Eeuo pipefail
-          trap 'rm -f "$D23_DIAG_OUT"' EXIT
           root=/home/ubuntu/bridge-school-private-media/diana-23-26
           code="$root/autonomous-code-8375477d"
           venv="$root/recognition-diana23/pixel-venv"
@@ -84,9 +83,13 @@ jobs:
           cap.release()
           out.write_text(json.dumps({'rows':rows},ensure_ascii=False,sort_keys=True,separators=(',',':')),encoding='utf-8')
           PY
+          REMOTE
           scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST:$remote" "$work/out/reset.json"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \\
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \\
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" "rm -f '$remote'"
           python3 -m json.tool "$work/out/reset.json" >/dev/null
           echo RESET_DIAGNOSTIC_PASS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
