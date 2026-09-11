@@ -273,6 +273,17 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
             variant_maps = [cv2.matchTemplate(region, template, cv2.TM_CCOEFF_NORMED) for template in templates[card]]
             score_maps[card][seat] = np_runtime.maximum(variant_maps[0], variant_maps[1])
 
+    seat_slots = [seat for seat in rank_layout.SEATS for _ in range(13)]
+    quick_scores = {
+        card: {seat: float(cv2.minMaxLoc(score_maps[card][seat])[1]) for seat in rank_layout.SEATS}
+        for card in cards
+    }
+    quick_costs = np.asarray([[-quick_scores[card][seat] for seat in seat_slots] for card in cards], dtype=np.float64)
+    quick_rows, quick_columns = linear_sum_assignment(quick_costs)
+    quick_assigned = [-float(quick_costs[row, column]) for row, column in zip(quick_rows, quick_columns)]
+    if min(quick_assigned) < 0.55 or float(median(quick_assigned)) < 0.68:
+        return None, f"template_weight_gate_min{int(min(quick_assigned) * 20):02d}_med{int(float(median(quick_assigned)) * 20):02d}"
+
     slots: list[dict[str, Any]] = []
     for suit in rank_layout.SUITS:
         suit_cards = [card for card in cards if card[1] == suit]
