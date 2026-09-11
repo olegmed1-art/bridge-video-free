@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   recognize:
-    if: github.repository == 'olegmed1-art/bridge-video-free'
+    if: false # Retired after the already-running da646515 exact-algorithm validation
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
