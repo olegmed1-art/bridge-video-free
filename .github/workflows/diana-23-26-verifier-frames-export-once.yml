@@ -6,6 +6,7 @@ on:
     paths: ['.github/workflows/diana-23-26-verifier-frames-export-once.yml']
 
 permissions:
+  actions: write
   contents: read
 
 jobs:
@@ -29,12 +30,25 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Delete accidental credential-bearing artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          code="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/10273483711")"
+          [[ "$code" == 204 || "$code" == 404 ]]
+
       - name: Select verified Oracle credential
         id: ssh
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$RUNNER_TEMP/diana-verifier-frames"
+          work="$RUNNER_TEMP/diana-verifier-ssh"
           mkdir -p "$work"
           known="$work/known_hosts"
           ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
@@ -165,7 +179,7 @@ jobs:
           tar -C "$review" -czf "$root/review-frames-da646515-v1.tar.gz" .
           echo VERIFIER_FRAMES_PASS
           REMOTE
-          out="$RUNNER_TEMP/diana-verifier-frames"
+          out="$RUNNER_TEMP/diana-verifier-output"
           mkdir -p "$out"
           scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
