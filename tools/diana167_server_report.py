@@ -380,7 +380,7 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
             sampled = 0
             while timestamp_ms < duration_ms and len(recognized) < max_deals * 8:
                 sampled += 1
-                if sampled % 60 == 0:
+                if sampled % 10 == 0:
                     print(json.dumps({"progress_timestamp": format_timestamp(timestamp_ms), "recognized_candidates": len(recognized), "registration_offsets": dict(registration_offsets), "top_rejections": rejections.most_common(6)}, ensure_ascii=False), flush=True)
                 first_original = _frame_at(capture, timestamp_ms)
                 if first_original is None:
