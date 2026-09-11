@@ -1,0 +1,182 @@
+name: Diana 23-26 verifier frames export one-shot
+
+on:
+  push:
+    branches: [codex/diana-autonomous-finalize-20260911]
+    paths: ['.github/workflows/diana-23-26-verifier-frames-export-once.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Select verified Oracle credential
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/diana-verifier-frames"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" true
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Extract bounded verifier frames
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key='${{ steps.ssh.outputs.key }}'
+          known='${{ steps.ssh.outputs.known }}'
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=60 \
+            "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          root=/home/ubuntu/bridge-school-private-media/diana-23-26
+          review="$root/review-frames-da646515-v1"
+          install -d -m 0700 "$review"
+          test "$(stat -c %s "$root/diana-23.mp4")" = 652603861
+          test "$(stat -c %s "$root/diana-24.mp4")" = 388557680
+          test "$(stat -c %s "$root/diana-25-2021-09-13.mp4")" = 643234068
+          test "$(stat -c %s "$root/diana-26.mp4")" = 792572437
+          if pgrep -af 'bridge_vision_autonomous_video.py|ffmpeg' | grep -v "$$" >/dev/null; then
+            echo VERIFIER_FRAMES_COMPETING_PROCESS
+            exit 31
+          fi
+          printf 'case_id\tvideo\tslot\ttimestamp_ms\tfilename\tsha256\tbytes\n' > "$review/manifest.tsv"
+          while IFS=$'\t' read -r case_id video slot ms; do
+            target="$review/$case_id-$slot.jpg"
+            seconds="$(awk -v ms="$ms" 'BEGIN { printf "%.3f", ms / 1000 }')"
+            ffmpeg -hide_banner -loglevel error -nostdin -ss "$seconds" -i "$root/$video" \
+              -frames:v 1 -q:v 3 -y "$target"
+            test -s "$target"
+            sha="$(sha256sum "$target" | cut -d' ' -f1)"
+            bytes="$(stat -c %s "$target")"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "$case_id" "$video" "$slot" "$ms" "${target##*/}" "$sha" "$bytes" >> "$review/manifest.tsv"
+          done <<'FRAMES'
+D23-01	diana-23.mp4	1	13900
+D23-01	diana-23.mp4	2	381000
+D23-01	diana-23.mp4	3	497500
+D23-02	diana-23.mp4	1	1028100
+D23-02	diana-23.mp4	2	1465200
+D23-02	diana-23.mp4	3	1678300
+D23-03	diana-23.mp4	1	3380500
+D23-03	diana-23.mp4	2	3387400
+D23-03	diana-23.mp4	3	3535300
+D23-04	diana-23.mp4	1	3640700
+D23-04	diana-23.mp4	2	3766400
+D23-04	diana-23.mp4	3	3874300
+D23-05	diana-23.mp4	1	4512500
+D23-05	diana-23.mp4	2	4750700
+D23-05	diana-23.mp4	3	4988900
+D23-06	diana-23.mp4	1	5960900
+D23-06	diana-23.mp4	2	5972600
+D23-06	diana-23.mp4	3	6054300
+D24-01	diana-24.mp4	1	500
+D24-01	diana-24.mp4	2	125200
+D24-01	diana-24.mp4	3	228500
+D24-02	diana-24.mp4	1	837900
+D24-02	diana-24.mp4	2	847000
+D24-02	diana-24.mp4	3	905700
+D24-03	diana-24.mp4	1	1378700
+D24-03	diana-24.mp4	2	1493800
+D24-03	diana-24.mp4	3	1625100
+D24-04	diana-24.mp4	1	1832700
+D24-04	diana-24.mp4	2	1969000
+D24-04	diana-24.mp4	3	2054300
+D24-05	diana-24.mp4	1	2571700
+D24-05	diana-24.mp4	2	2677600
+D24-05	diana-24.mp4	3	2806700
+D24-06	diana-24.mp4	1	3126700
+D24-06	diana-24.mp4	2	3193200
+D24-06	diana-24.mp4	3	3450300
+D25-01	diana-25-2021-09-13.mp4	1	866900
+D25-01	diana-25-2021-09-13.mp4	2	987000
+D25-01	diana-25-2021-09-13.mp4	3	1085300
+D25-02	diana-25-2021-09-13.mp4	1	1297900
+D25-02	diana-25-2021-09-13.mp4	2	1442600
+D25-02	diana-25-2021-09-13.mp4	3	1587300
+D25-03	diana-25-2021-09-13.mp4	1	2027100
+D25-03	diana-25-2021-09-13.mp4	2	2088800
+D25-03	diana-25-2021-09-13.mp4	3	2179300
+D25-04	diana-25-2021-09-13.mp4	1	2596900
+D25-04	diana-25-2021-09-13.mp4	2	2726400
+D25-04	diana-25-2021-09-13.mp4	3	2887500
+D25-05	diana-25-2021-09-13.mp4	1	2979700
+D25-05	diana-25-2021-09-13.mp4	2	3084000
+D25-05	diana-25-2021-09-13.mp4	3	3188300
+D25-06	diana-25-2021-09-13.mp4	1	4950500
+D25-06	diana-25-2021-09-13.mp4	2	5006200
+D25-06	diana-25-2021-09-13.mp4	3	5061900
+D26-01	diana-26.mp4	1	340500
+D26-01	diana-26.mp4	2	350400
+D26-01	diana-26.mp4	3	471300
+D26-02	diana-26.mp4	1	2058700
+D26-02	diana-26.mp4	2	2083100
+D26-02	diana-26.mp4	3	2107500
+D26-03	diana-26.mp4	1	2449300
+D26-03	diana-26.mp4	2	2466800
+D26-03	diana-26.mp4	3	2872100
+D26-04	diana-26.mp4	1	2873300
+D26-04	diana-26.mp4	2	3300200
+D26-04	diana-26.mp4	3	3727100
+D26-05	diana-26.mp4	1	4100500
+D26-05	diana-26.mp4	2	4247800
+D26-05	diana-26.mp4	3	4395100
+D26-06	diana-26.mp4	1	6714700
+D26-06	diana-26.mp4	2	6811400
+D26-06	diana-26.mp4	3	6908100
+FRAMES
+          test "$(find "$review" -maxdepth 1 -type f -name '*.jpg' | wc -l)" = 72
+          tar -C "$review" -czf "$root/review-frames-da646515-v1.tar.gz" .
+          echo VERIFIER_FRAMES_PASS
+          REMOTE
+          out="$RUNNER_TEMP/diana-verifier-frames"
+          mkdir -p "$out"
+          scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST:/home/ubuntu/bridge-school-private-media/diana-23-26/review-frames-da646515-v1.tar.gz" \
+            "$out/review-frames-da646515-v1.tar.gz"
+          tar -tzf "$out/review-frames-da646515-v1.tar.gz" >/dev/null
+          echo "artifact_path=$out" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: diana-23-26-verifier-frames-da646515
+          path: ${{ env.artifact_path }}
+          if-no-files-found: error
+          retention-days: 7
