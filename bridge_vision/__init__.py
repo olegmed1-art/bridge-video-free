@@ -8,6 +8,12 @@ native/default engine.
 from .engine import BridgeVisionEngine, VisionCandidate, VisionResult
 from .evidence_fusion import CardEvidenceFusionError, fuse_card_evidence
 from .bridgit_visible_timeline import VisibleTimelineError, fuse_visible_timeline
+from .bridgit_visible_hand_observer import (
+    ObserverProfile,
+    VisibleHandObserverError,
+    observe_frame as observe_visible_hands,
+    parse_profile as parse_visible_hand_profile,
+)
 from .multiframe import reconstruct_deals, validate_full_deal
 from .profiled_challenger import InterfaceProfile, ProfiledCardChallenger, load_profile
 
@@ -15,13 +21,17 @@ __all__ = [
     "BridgeVisionEngine",
     "CardEvidenceFusionError",
     "InterfaceProfile",
+    "ObserverProfile",
     "ProfiledCardChallenger",
     "VisionCandidate",
     "VisionResult",
     "VisibleTimelineError",
+    "VisibleHandObserverError",
     "fuse_card_evidence",
     "fuse_visible_timeline",
     "load_profile",
+    "observe_visible_hands",
+    "parse_visible_hand_profile",
     "reconstruct_deals",
     "validate_full_deal",
 ]
