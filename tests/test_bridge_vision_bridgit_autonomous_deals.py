@@ -158,7 +158,6 @@ def test_stable_marker_splits_when_one_visible_hand_is_redealt():
     assert [item["observed_card_count"] for item in result["deals"]] == [13, 13]
 
 
-
 def test_stable_marker_splits_midplay_eight_card_redeal():
     first = {"S": SUIT_HANDS["S"]}
     second = {"S": SUIT_HANDS["W"][:8]}
