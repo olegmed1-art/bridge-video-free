@@ -305,6 +305,17 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
                 xa, xb = max(0, int(x) - 11), min(remaining.shape[1], int(x) + 12)
                 ya, yb = max(0, int(y) - 11), min(remaining.shape[0], int(y) + 12)
                 remaining[ya:yb, xa:xb] = -2.0
+    unique_slots: list[dict[str, Any]] = []
+    for slot in sorted(slots, key=lambda item: item["strength"], reverse=True):
+        if any(
+            existing["seat"] == slot["seat"]
+            and abs(existing["x"] - slot["x"]) < 8
+            and abs(existing["y"] - slot["y"]) < 8
+            for existing in unique_slots
+        ):
+            continue
+        unique_slots.append(slot)
+    slots = unique_slots
     if any(sum(1 for slot in slots if slot["suit"] == suit) < 13 for suit in rank_layout.SUITS):
         return None, "candidate_slot_gate"
     print(json.dumps({"full_layout_phase": "slots", "seconds": round(time.perf_counter() - started, 3), "slots": len(slots)}), flush=True)
