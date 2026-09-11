@@ -257,20 +257,61 @@ def _gate_offset(image: Any, templates: dict[str, list[Any]], offsets: list[int]
 
 
 def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset: int) -> tuple[dict[str, Any] | None, str]:
+    cv2, np_runtime = _runtime()
     import numpy as np  # type: ignore
     from scipy.optimize import linear_sum_assignment  # type: ignore
 
     cards = sorted(templates, key=lambda card: (rank_layout.SUITS.index(card[1]), rank_layout.RANKS.index(card[0])))
-    candidates = {card: _match_card_by_seat(image, card, templates[card], y_offset) for card in cards}
-    seat_slots = [seat for seat in rank_layout.SEATS for _ in range(13)]
-    costs = np.asarray([[-candidates[card][seat]["score"] for seat in seat_slots] for card in cards], dtype=np.float64)
+    score_maps: dict[str, dict[str, Any]] = defaultdict(dict)
+    windows: dict[tuple[str, str], tuple[int, int, int, int]] = {}
+    for suit in rank_layout.SUITS:
+        for seat, window in _card_windows(suit, y_offset).items():
+            windows[(seat, suit)] = window
+    for card in cards:
+        for seat, (x0, y0, x1, y1) in _card_windows(card[1], y_offset).items():
+            region = image[y0:y1, x0:x1]
+            variant_maps = [cv2.matchTemplate(region, template, cv2.TM_CCOEFF_NORMED) for template in templates[card]]
+            score_maps[card][seat] = np_runtime.maximum(variant_maps[0], variant_maps[1])
+
+    slots: list[dict[str, Any]] = []
+    for suit in rank_layout.SUITS:
+        suit_cards = [card for card in cards if card[1] == suit]
+        for seat in rank_layout.SEATS:
+            x0, y0, _, _ = windows[(seat, suit)]
+            aggregate = np_runtime.maximum.reduce([score_maps[card][seat] for card in suit_cards])
+            order = np_runtime.argsort(aggregate, axis=None)[::-1]
+            selected: list[tuple[int, int]] = []
+            for flat in order:
+                y, x = np_runtime.unravel_index(int(flat), aggregate.shape)
+                strength = float(aggregate[y, x])
+                if strength < 0.40:
+                    break
+                if any(abs(x - old_x) < 12 and abs(y - old_y) < 12 for old_x, old_y in selected):
+                    continue
+                selected.append((int(x), int(y)))
+                slots.append({"seat": seat, "suit": suit, "x": x0 + int(x), "y": y0 + int(y), "local_x": int(x), "local_y": int(y), "strength": strength})
+                if len(selected) >= 20:
+                    break
+    if any(sum(1 for slot in slots if slot["suit"] == suit) < 13 for suit in rank_layout.SUITS):
+        return None, "candidate_slot_gate"
+
+    costs = np.full((52, len(slots)), 4.0, dtype=np.float64)
+    for row, card in enumerate(cards):
+        for column, slot in enumerate(slots):
+            if slot["suit"] != card[1]:
+                continue
+            score = float(score_maps[card][slot["seat"]][slot["local_y"], slot["local_x"]])
+            costs[row, column] = -score
     rows, columns = linear_sum_assignment(costs)
     if list(rows) != list(range(52)):
         return None, "global_assignment_gate"
-    matches = {cards[row]: candidates[cards[row]][seat_slots[column]] for row, column in zip(rows, columns)}
+    matches = {}
+    for row, column in zip(rows, columns):
+        card, slot = cards[row], slots[column]
+        matches[card] = {"score": float(-costs[row, column]), "seat": slot["seat"], "x": slot["x"], "y": slot["y"]}
     scores = [item["score"] for item in matches.values()]
     if min(scores) < 0.55 or float(median(scores)) < 0.68:
-        return None, "template_weight_gate"
+        return None, f"template_weight_gate_min{int(min(scores) * 20):02d}_med{int(float(median(scores)) * 20):02d}"
     counts = Counter(item["seat"] for item in matches.values())
     if counts != Counter({seat: 13 for seat in rank_layout.SEATS}):
         return None, "seat_count_gate"
@@ -657,6 +698,8 @@ def main() -> None:
     data = scan_video(args.video, args.gold_zip, args.output_dir, args.scan_ms, args.max_deals)
     analysis = args.output_dir / "master_analysis.json"
     analysis.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not data["deals"]:
+        raise RuntimeError("no complete deal passed the fail-closed server gates")
     pdf = args.output_dir / "Диана 167 — карты и веса — server v2.pdf"
     build_pdf(data, args.output_dir, pdf)
     validation = validate_pdf(pdf, len(data["deals"]), args.output_dir)
