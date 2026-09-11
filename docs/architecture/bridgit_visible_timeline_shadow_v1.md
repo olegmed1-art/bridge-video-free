@@ -34,6 +34,28 @@ python tools/bridge_vision_visible_timeline.py \
 
 The command reads and writes only below the explicit non-root job directory. Input size, observation count and cards per frame are bounded. The output is written atomically with mode `0600` and contains a self-hash.
 
-## Remaining field gate
+## Autonomous video observer
 
-This module is the temporal evidence layer, not a pixel classifier. A Diana-video run still requires a source-bound frame observer that emits the validated input records. Its template/label profile must be checked by the single human verifier (Oleg) before the first real recognition output is scored. No hidden hand may be reconstructed unless its cards are individually observed during play.
+`tools/bridge_vision_autonomous_video.py` now provides the source-bound pixel
+observer in front of this temporal layer. It samples the raw local video,
+recognizes visible north/south hand cards and played trick cards, segments deals,
+then emits a private self-hashed receipt. It does not use a language model,
+screenshots selected by ChatGPT, or a human in the per-video loop.
+
+Profiles with exact reference dimensions retain the strict exact-size gate. For
+cross-resolution recordings, the same self-hashed profile may include a
+`registration` object containing a reviewed reference ID and the normalized
+upper-right interface-anchor contract. The worker performs one bounded global
+anchor search to acquire the translated/scaled game window, resamples that
+window to the reviewed coordinate system, and verifies the locked anchor again
+on every sampled frame. A changed input size, moved/resized window, missing or
+weak anchor, disallowed scale, or malformed transform discards the lock and
+requires a fresh unambiguous search; stale card coordinates are never reused.
+The receipt records input sizes, transform hashes, search count, locked-frame
+count and registration rejections.
+
+The template/label profile is checked once by the single human verifier (Oleg)
+before its first real scored use. Normal operation after that is server-only.
+No hidden hand is reconstructed unless its cards are individually observed
+during play, except for the exact deck complement when three complete,
+conflict-free 13-card hands have been directly established.
