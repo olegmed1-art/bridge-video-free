@@ -348,7 +348,7 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
         return None, "global_assignment_card_count_gate"
     scores = [item["score"] for item in matches.values()]
     print(json.dumps({"full_layout_phase": "constrained_assignment", "seconds": round(time.perf_counter() - started, 3), "minimum": round(min(scores), 4), "median": round(float(median(scores)), 4)}), flush=True)
-    if min(scores) < 0.55 or float(median(scores)) < 0.68:
+    if min(scores) < 0.12 or float(median(scores)) < 0.95:
         return None, f"template_weight_gate_min{int(min(scores) * 20):02d}_med{int(float(median(scores)) * 20):02d}"
     counts = Counter(item["seat"] for item in matches.values())
     if counts != Counter({seat: 13 for seat in rank_layout.SEATS}):
