@@ -42,7 +42,9 @@ def test_hardening_provisions_isolated_login_and_rotates_credential_safely() -> 
 
 def test_hardening_uses_pinned_encrypted_cutover_and_rollback() -> None:
     source = WORKFLOW.read_text()
-    assert "EXPECTED_RSA_FINGERPRINT: SHA256:" in source
+    assert "EXPECTED_FINGERPRINT: SHA256:" in source
+    assert "sudo -n cat /etc/ssh/ssh_host_rsa_key.pub" in source
+    assert "StrictHostKeyChecking=yes" in source
     assert "rsa_padding_mode:oaep" in source
     assert "rsa_oaep_md:sha256" in source
     assert "/etc/ssh/ssh_host_rsa_key" in source
