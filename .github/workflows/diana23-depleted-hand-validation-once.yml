@@ -1,0 +1,122 @@
+name: Diana 23 depleted-hand exact-head validation one-shot
+
+on:
+  push:
+    branches: [codex/diana-autonomous-finalize-20260911]
+    paths: ['.github/workflows/diana23-depleted-hand-validation-once.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diana23-depleted-hand-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      ALGORITHM_SHA: 6e871d9bd38817a334f685749836ef417c1600c4
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Select verified Oracle credential
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/d23-depleted-hand"
+          mkdir -p "$work/out"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+      - name: Run independent exact-head Diana 23 validation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key='${{ steps.ssh.outputs.key }}'
+          known='${{ steps.ssh.outputs.known }}'
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 \
+            "$ORACLE_USER@$ORACLE_HOST" "ALGORITHM_SHA='$ALGORITHM_SHA' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          root=/home/ubuntu/bridge-school-private-media/diana-23-26
+          source_repo="$root/recognition-diana23/pr1106-527fe65"
+          short="${ALGORITHM_SHA:0:8}"
+          code="$root/autonomous-code-$short"
+          results="$root/autonomous-results-$short-d23-validation"
+          test "$(stat -c %s "$root/diana-23.mp4")" = 652603861
+          available_kb="$(df -Pk "$root" | awk 'NR==2 {print $4}')"
+          test "$available_kb" -ge 10485760
+          if [[ -e "$code" ]]; then
+            test "$(git -C "$code" rev-parse HEAD)" = "$ALGORITHM_SHA"
+            test -z "$(git -C "$code" status --porcelain)"
+          else
+            git -C "$source_repo" fetch --no-tags origin "$ALGORITHM_SHA"
+            git -C "$source_repo" worktree add --detach "$code" "$ALGORITHM_SHA"
+          fi
+          venv="$root/recognition-diana23/pixel-venv"
+          mkdir -p "$results"
+          chmod 0700 "$results"
+          original="$root/recognition-diana23/oleg-template-review/visible-hand-profile-v1.json"
+          runtime="$root/recognition-diana23/visible-hand-profile-v1.runtime.json"
+          install -m 0600 "$original" "$runtime"
+          output="$results/diana-23.json"
+          log="$results/diana-23.log"
+          PYTHONPATH="$code" "$venv/bin/python" "$code/tools/bridge_vision_autonomous_video.py" \
+            --job-root "$root" \
+            --profile "recognition-diana23/visible-hand-profile-v1.runtime.json" \
+            --video "diana-23.mp4" \
+            --output "${output#$root/}" \
+            --sample-ms 200 \
+            --max-sampled-frames 100000 >"$log" 2>&1
+          chmod 0600 "$output" "$log"
+          RECEIPT="$output" "$venv/bin/python" - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          receipt=json.loads(Path(os.environ['RECEIPT']).read_text())
+          claimed=receipt['receipt_sha256']; material=dict(receipt); material.pop('receipt_sha256')
+          actual=hashlib.sha256(json.dumps(material,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          assert actual==claimed
+          assert receipt['uses_language_model'] is False
+          assert receipt['requires_screenshot_review'] is False
+          assert receipt['canonical_promotion_allowed'] is False
+          counts=receipt['reconstruction']['status_counts']
+          print(f"D23_PATCH_VALIDATION deals={receipt['reconstruction']['deal_count']} partial={counts['PARTIAL']} conflicts={counts['CONFLICT']}")
+          PY
+          REMOTE
+          remote="/home/ubuntu/bridge-school-private-media/diana-23-26/autonomous-results-${ALGORITHM_SHA:0:8}-d23-validation/diana-23.json"
+          scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST:$remote" "$RUNNER_TEMP/d23-depleted-hand/out/diana-23.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: diana23-depleted-hand-6e871d9b
+          path: ${{ runner.temp }}/d23-depleted-hand/out/diana-23.json
+          retention-days: 2
+          if-no-files-found: error
