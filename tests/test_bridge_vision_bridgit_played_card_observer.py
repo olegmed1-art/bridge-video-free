@@ -183,6 +183,8 @@ def test_recognizes_played_card_rank_suit_and_owner(rank: str, suit: str) -> Non
         (rank + suit, "N")
     ]
     assert result["cards"][0]["source"] == "PLAYED"
+    assert result["cards"][0]["confidence"] >= 0.99
+    assert result["cards"][0]["card_fill"] >= 0.95
     assert len(result["cards"][0]["evidence_pixel_sha256"]) == 64
 
 
