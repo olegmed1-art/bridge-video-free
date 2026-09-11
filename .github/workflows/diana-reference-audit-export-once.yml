@@ -86,7 +86,9 @@ jobs:
           assert isinstance(refs, dict) and 1 <= len(refs) <= 8
           for key, item in sorted(refs.items()):
               rel = str(item["path"])
-              assert re.fullmatch(r"references/[A-Za-z0-9._-]+\.(?:png|jpg|jpeg)", rel)
+              assert not Path(rel).is_absolute()
+              assert ".." not in Path(rel).parts
+              assert Path(rel).suffix.lower() in {".png", ".jpg", ".jpeg"}
               path = (profile.parent / rel).resolve()
               path.relative_to(src)
               payload = path.read_bytes()
