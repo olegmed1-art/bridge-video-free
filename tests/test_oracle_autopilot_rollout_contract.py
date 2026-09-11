@@ -21,6 +21,9 @@ def test_rollout_is_owner_bounded_and_rollback_safe() -> None:
     assert "cancel-in-progress: false" in workflow
     assert "AUTOPILOT_ROLLOUT_QUEUE_BUSY" in workflow
     assert "AUTOPILOT_ROLLOUT_ROLLBACK=PASS" in workflow
+    assert "AUTOPILOT_NEW_WORKER_NOT_STABLE" in workflow
+    assert "AUTOPILOT_NEW_WORKER_RESTARTED" in workflow
+    assert "postgresql://REDACTED" in workflow
     assert "systemctl disable --now \"$service\"" in workflow
     assert "systemctl enable --now \"$service\"" in workflow
     assert "ORACLE_INSTANCE_STOP_REQUESTED=NO" in workflow
