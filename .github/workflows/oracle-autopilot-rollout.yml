@@ -1,0 +1,399 @@
+name: Oracle Autopilot bounded rollout
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-autopilot-rollout.yml'
+      - 'ops/autopilot/broker-release.json'
+      - 'ops/oracle_autopilot_shadow_install.sh'
+      - 'ops/oracle_known_hosts_from_scan.sh'
+      - 'deploy/oracle-autopilot/school-autopilot-shadow.service'
+      - 'tests/test_oracle_autopilot_rollout_contract.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: >-
+    ${{ github.event_name == 'issue_comment' &&
+        github.event.comment.user.login == github.repository_owner &&
+        github.event.comment.body == '/autopilot rollout-failure-continuation-v1' &&
+        'oracle-instance-workload-mutation' ||
+        format('oracle-autopilot-rollout-noop-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate bounded rollout contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet 'pytest==8.4.2'
+          python -m pytest -q tests/test_oracle_autopilot_rollout_contract.py
+
+  rollout:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      github.event.issue.number == 1131 &&
+      github.event.comment.body == '/autopilot rollout-failure-continuation-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Validate exact broker release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib
+          import json
+          import re
+          from pathlib import Path
+
+          release = json.loads(Path('ops/autopilot/broker-release.json').read_text())
+          assert set(release) == {
+              'schema_version', 'broker_url', 'broker_source_sha',
+              'broker_artifact_sha256', 'broker_policy_sha256',
+              'broker_policy_version', 'broker_provenance_sha256',
+          }
+          assert release['schema_version'] == 1
+          assert re.fullmatch(
+              r'https://bridge-school-autopilot-[a-z0-9]+-olegmed1-4368s-projects'
+              r'\.vercel\.app/v1/github/draft-repair', release['broker_url']
+          )
+          assert re.fullmatch(r'[0-9a-f]{40}', release['broker_source_sha'])
+          assert release['broker_policy_version'] == 'physical-no-merge-v2'
+          for key in (
+              'broker_artifact_sha256', 'broker_policy_sha256',
+              'broker_provenance_sha256',
+          ):
+              assert re.fullmatch(r'[0-9a-f]{64}', release[key])
+          source = Path('autopilot_token_broker_service/broker_app/release.py').read_text()
+          assert f'SOURCE_REVISION = "{release["broker_source_sha"]}"' in source
+          statement = {
+              'artifact_sha256': release['broker_artifact_sha256'],
+              'policy_sha256': release['broker_policy_sha256'],
+              'policy_version': release['broker_policy_version'],
+              'source_sha': release['broker_source_sha'],
+          }
+          expected = hashlib.sha256(json.dumps(
+              statement, sort_keys=True, separators=(',', ':'),
+          ).encode()).hexdigest()
+          assert release['broker_provenance_sha256'] == expected
+          for key, value in release.items():
+              if key != 'schema_version':
+                  print(f'{key}={value}')
+          PY
+
+      - name: Verify Oracle identity and SSH access
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/oracle-autopilot-rollout"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          index=0
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            raw="${!name:-}"
+            [[ -n "$raw" ]] || continue
+            index=$((index + 1))
+            key="$work/key-$index"
+            printf '%s\n' "$raw" | tr -d '\r' > "$key"
+            chmod 0600 "$key"
+            ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
+            if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+              -o ConnectTimeout=10 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true' \
+              >/dev/null 2>&1; then
+              selected="$key"
+              break
+            fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          echo "key=$selected" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Package exact default-branch worker
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(git rev-parse HEAD)"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          printf '%s\n' "$revision" > AUTOPILOT_SOURCE_REVISION
+          bundle="$RUNNER_TEMP/oracle-autopilot-$revision.tgz"
+          tar -czf "$bundle" \
+            AUTOPILOT_SOURCE_REVISION \
+            oracle_autopilot \
+            autopilot_phase3b \
+            deploy/oracle-autopilot/school-autopilot-shadow.service \
+            ops/oracle_autopilot_shadow_install.sh
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+
+      - name: Roll out worker with rollback
+        id: rollout
+        env:
+          SOURCE_REVISION: ${{ steps.package.outputs.revision }}
+          SOURCE_BUNDLE: ${{ steps.package.outputs.bundle }}
+          BROKER_URL: ${{ steps.release.outputs.broker_url }}
+          BROKER_SOURCE_SHA: ${{ steps.release.outputs.broker_source_sha }}
+          BROKER_ARTIFACT_SHA256: ${{ steps.release.outputs.broker_artifact_sha256 }}
+          BROKER_POLICY_SHA256: ${{ steps.release.outputs.broker_policy_sha256 }}
+          BROKER_POLICY_VERSION: ${{ steps.release.outputs.broker_policy_version }}
+          BROKER_PROVENANCE_SHA256: ${{ steps.release.outputs.broker_provenance_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          key='${{ steps.ssh.outputs.key }}'
+          known='${{ steps.ssh.outputs.known }}'
+          remote_bundle="/tmp/oracle-autopilot-${GITHUB_RUN_ID}.tgz"
+          scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$SOURCE_BUNDLE" "$ORACLE_USER@$ORACLE_HOST:$remote_bundle"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env SOURCE_REVISION='$SOURCE_REVISION' REMOTE_BUNDLE='$remote_bundle' BROKER_URL='$BROKER_URL' BROKER_SOURCE_SHA='$BROKER_SOURCE_SHA' BROKER_ARTIFACT_SHA256='$BROKER_ARTIFACT_SHA256' BROKER_POLICY_SHA256='$BROKER_POLICY_SHA256' BROKER_POLICY_VERSION='$BROKER_POLICY_VERSION' BROKER_PROVENANCE_SHA256='$BROKER_PROVENANCE_SHA256' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          root=/opt/bridge-school/school-autopilot
+          service=school-autopilot-shadow.service
+          work="$(mktemp -d /var/tmp/autopilot-rollout.XXXXXXXX)"
+          previous_current="$(readlink -f "$root/current")"
+          stopped=0
+          cleanup() {
+            rm -f -- "$REMOTE_BUNDLE"
+            [[ "$work" == /var/tmp/autopilot-rollout.* && -d "$work" ]] && find "$work" -depth -delete
+          }
+          rollback() {
+            rc=$?
+            trap - EXIT
+            if [[ $rc -ne 0 && "$stopped" == 1 ]]; then
+              systemctl disable --now "$service" >/dev/null 2>&1 || true
+              ln -sfn "$previous_current" "$root/current.rollback"
+              mv -Tf "$root/current.rollback" "$root/current"
+              install -m 0600 -o root -g root "$work/autopilot-shadow.env" "$root/autopilot-shadow.env"
+              install -m 0600 -o root -g root "$work/autopilot-broker.env" "$root/autopilot-broker.env"
+              install -m 0644 -o root -g root "$work/service.unit" "/etc/systemd/system/$service"
+              systemctl daemon-reload
+              systemctl enable --now "$service"
+              systemctl is-active --quiet "$service"
+              echo 'AUTOPILOT_ROLLOUT_ROLLBACK=PASS' >&2
+            fi
+            cleanup
+            exit "$rc"
+          }
+          trap rollback EXIT
+
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$REMOTE_BUNDLE" =~ ^/tmp/oracle-autopilot-[0-9]+\.tgz$ ]]
+          [[ -d "$previous_current" ]]
+          [[ "$(systemctl is-active "$service" 2>/dev/null || true)" == active ]]
+          [[ "$(systemctl is-enabled "$service" 2>/dev/null || true)" == enabled ]]
+          [[ "$(stat -c '%U:%G:%a' "$root/autopilot-shadow.env")" == root:root:600 ]]
+          [[ "$(stat -c '%U:%G:%a' "$root/autopilot-broker.env")" == root:root:600 ]]
+          install -m 0600 -o root -g root "$root/autopilot-shadow.env" "$work/autopilot-shadow.env"
+          install -m 0600 -o root -g root "$root/autopilot-broker.env" "$work/autopilot-broker.env"
+          install -m 0644 -o root -g root "/etc/systemd/system/$service" "$work/service.unit"
+          mkdir "$work/source"
+          tar -xzf "$REMOTE_BUNDLE" -C "$work/source"
+          [[ "$(cat "$work/source/AUTOPILOT_SOURCE_REVISION")" == "$SOURCE_REVISION" ]]
+          test -f "$work/source/oracle_autopilot/worker.py"
+          test -f "$work/source/oracle_autopilot/worker_v17.py"
+
+          BROKER_ENV="$root/autopilot-broker.env" python3 - <<'PY'
+          import json, os, re, shlex, urllib.request
+
+          def parse(path):
+              values = {}
+              for raw in open(path, encoding='utf-8'):
+                  line = raw.strip()
+                  if not line or line.startswith('#'):
+                      continue
+                  key, separator, encoded = line.partition('=')
+                  assert separator and re.fullmatch(r'[A-Z][A-Z0-9_]*', key)
+                  decoded = shlex.split(encoded, comments=False, posix=True)
+                  assert len(decoded) == 1 and key not in values
+                  values[key] = decoded[0]
+              return values
+
+          values = parse(os.environ['BROKER_ENV'])
+          required = {
+              'AUTOPILOT_TOKEN_BROKER_SECRET', 'AUTOPILOT_VERCEL_BYPASS_SECRET',
+          }
+          assert required <= values.keys()
+          health_url = os.environ['BROKER_URL'].replace('/v1/github/draft-repair', '/healthz')
+          request = urllib.request.Request(health_url, headers={
+              'X-Vercel-Protection-Bypass': values['AUTOPILOT_VERCEL_BYPASS_SECRET'],
+          })
+          with urllib.request.urlopen(request, timeout=30) as response:
+              assert response.status == 200 and response.geturl() == health_url
+              raw = response.read(32_769)
+          assert len(raw) <= 32_768
+          payload = json.loads(raw)
+          expected = {
+              'status': 'ok',
+              'preview_only': True,
+              'production_mutations_enabled': False,
+              'github_token_broker_enabled': True,
+              'bounded_role_dispatch_enabled': True,
+              'merge_endpoint_enabled': False,
+              'source_revision': os.environ['BROKER_SOURCE_SHA'],
+              'artifact_sha256': os.environ['BROKER_ARTIFACT_SHA256'],
+              'policy_sha256': os.environ['BROKER_POLICY_SHA256'],
+              'broker_policy_version': os.environ['BROKER_POLICY_VERSION'],
+              'provenance_sha256': os.environ['BROKER_PROVENANCE_SHA256'],
+          }
+          assert all(payload.get(key) == value for key, value in expected.items()), payload
+          print('AUTOPILOT_NEW_BROKER_HEALTH=PASS')
+          PY
+
+          database_url="$(sed -n 's/^AUTOPILOT_DATABASE_URL=//p' "$root/autopilot-shadow.env")"
+          [[ "$database_url" == postgresql://* ]]
+          active_count="$(AUTOPILOT_DATABASE_URL="$database_url" "$root/.venv/bin/python" - <<'PY'
+          import os, psycopg
+          with psycopg.connect(
+              os.environ['AUTOPILOT_DATABASE_URL'], autocommit=True,
+              connect_timeout=10,
+              options='-c statement_timeout=5000 -c default_transaction_read_only=on',
+          ) as connection:
+              row = connection.execute("""
+                  SELECT count(*)::integer FROM autopilot.task_status
+                  WHERE status IN ('READY', 'RUNNING', 'WAITING_EXTERNAL')
+              """).fetchone()
+          print(int(row[0]))
+          PY
+          )"
+          [[ "$active_count" == 0 ]] || { echo "AUTOPILOT_ROLLOUT_QUEUE_BUSY=$active_count" >&2; exit 1; }
+
+          stopped=1
+          systemctl disable --now "$service"
+          [[ "$(systemctl is-active "$service" 2>/dev/null || true)" == inactive ]]
+          AUTOPILOT_DATABASE_URL="$database_url" \
+          AUTOPILOT_EXPECTED_DB_USER=autopilot_runtime_login \
+          AUTOPILOT_SOURCE_REVISION="$SOURCE_REVISION" \
+          AUTOPILOT_REPO_DIR="$work/source" \
+          AUTOPILOT_ACTIVATE=0 \
+            bash "$work/source/ops/oracle_autopilot_shadow_install.sh"
+
+          BROKER_ENV="$root/autopilot-broker.env" python3 - <<'PY'
+          import os, re, shlex, tempfile
+
+          path = os.environ['BROKER_ENV']
+          values = {}
+          for raw in open(path, encoding='utf-8'):
+              line = raw.strip()
+              if not line or line.startswith('#'):
+                  continue
+              key, separator, encoded = line.partition('=')
+              assert separator and re.fullmatch(r'[A-Z][A-Z0-9_]*', key)
+              decoded = shlex.split(encoded, comments=False, posix=True)
+              assert len(decoded) == 1 and key not in values
+              values[key] = decoded[0]
+          assert {
+              'AUTOPILOT_TOKEN_BROKER_SECRET', 'AUTOPILOT_VERCEL_BYPASS_SECRET',
+          } <= values.keys()
+          values.update({
+              'AUTOPILOT_TOKEN_BROKER_URL': os.environ['BROKER_URL'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA': os.environ['BROKER_SOURCE_SHA'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256': os.environ['BROKER_ARTIFACT_SHA256'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256': os.environ['BROKER_POLICY_SHA256'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256': os.environ['BROKER_PROVENANCE_SHA256'],
+          })
+          directory = os.path.dirname(path)
+          descriptor, temporary = tempfile.mkstemp(prefix='.broker-env-', dir=directory, text=True)
+          try:
+              with os.fdopen(descriptor, 'w', encoding='utf-8') as output:
+                  for key in sorted(values):
+                      output.write(f'{key}={shlex.quote(values[key])}\n')
+                  output.flush()
+                  os.fsync(output.fileno())
+              os.chmod(temporary, 0o600)
+              os.chown(temporary, 0, 0)
+              os.replace(temporary, path)
+          finally:
+              if os.path.exists(temporary):
+                  os.unlink(temporary)
+          PY
+
+          systemctl enable --now "$service"
+          sleep 4
+          systemctl is-active --quiet "$service"
+          systemctl is-enabled --quiet "$service"
+          [[ "$(readlink -f "$root/current")" == "$root/releases/$SOURCE_REVISION" ]]
+          pid="$(systemctl show -p MainPID --value "$service")"
+          [[ "$pid" =~ ^[1-9][0-9]*$ ]]
+          PROCESS_ENVIRON="/proc/$pid/environ" python3 - <<'PY'
+          import os
+          effective = {}
+          for item in open(os.environ['PROCESS_ENVIRON'], 'rb').read().split(b'\0'):
+              if b'=' in item:
+                  key, value = item.split(b'=', 1)
+                  effective[key.decode()] = value.decode()
+          expected = {
+              'AUTOPILOT_TOKEN_BROKER_URL': os.environ['BROKER_URL'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA': os.environ['BROKER_SOURCE_SHA'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256': os.environ['BROKER_ARTIFACT_SHA256'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256': os.environ['BROKER_POLICY_SHA256'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256': os.environ['BROKER_PROVENANCE_SHA256'],
+          }
+          assert all(effective.get(key) == value for key, value in expected.items())
+          PY
+          active_since="$(systemctl show -p ActiveEnterTimestamp --value "$service")"
+          test -n "$active_since"
+          journal="$(journalctl -u "$service" --since "$active_since" --no-pager -n 100)"
+          grep -F 'worker_started' <<<"$journal" >/dev/null
+          ! grep -Eq 'Traceback|AUTOPILOT_UNCLASSIFIED_FAILURE' <<<"$journal"
+          stopped=0
+          trap - EXIT
+          cleanup
+          echo "AUTOPILOT_ROLLOUT_PASS revision=$SOURCE_REVISION"
+          echo 'AUTOPILOT_BROKER_PINS_UPDATED=YES'
+          echo 'AUTOPILOT_QUEUE_ACTIVE_AT_SWITCH=0'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          REMOTE
+
+      - name: Publish rollout result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ROLLOUT_OUTCOME: ${{ steps.rollout.outcome }}
+          SOURCE_REVISION: ${{ steps.package.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="Autopilot failure-continuation rollout: **${ROLLOUT_OUTCOME:-not-run}**; worker revision: \`${SOURCE_REVISION:-unresolved}\`; production migration: not performed by this command." >/dev/null
