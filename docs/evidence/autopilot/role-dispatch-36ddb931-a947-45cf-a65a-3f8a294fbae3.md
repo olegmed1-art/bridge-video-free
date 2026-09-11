@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=36ddb931-a947-45cf-a65a-3f8a294fbae3
+dispatch_epoch=6
+role=RECOGNIZER
+task_fingerprint=4529f211d4a1c7d2aa94a4d8c19098f50a7ad2a9186b15f9067822173c1bee9f
+target_pr=1106
+mode=REPAIR
+repair_attempt=1
+origin_task_id=1e39d307-2d3e-4861-8605-f01d6af15c46
+prior_task_id=1e39d307-2d3e-4861-8605-f01d6af15c46
+blocked_result_code=UNRESOLVED_RECOGNIZER_EVIDENCE
+blocked_summary=Exact-head CI is green, but 11 review threads and frozen unseen independent multi-source holdout/I2 evidence remain unresolved.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
