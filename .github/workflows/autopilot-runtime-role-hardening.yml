@@ -52,7 +52,7 @@ jobs:
     env:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
-      EXPECTED_RSA_FINGERPRINT: SHA256:eRCJ8ukXNW/P63eUDBW0sHnT6o/0trVQnHTDxwVIt4M
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
       SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
@@ -216,7 +216,7 @@ jobs:
           mkdir -p "$work"
           known="$work/known_hosts"
           ops/oracle_known_hosts_from_scan.sh \
-            "$ORACLE_HOST" "$EXPECTED_RSA_FINGERPRINT" "$known"
+            "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
           selected=''
           index=0
           for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
@@ -247,18 +247,24 @@ jobs:
         run: |
           set -euo pipefail
           known='${{ steps.ssh.outputs.known }}'
+          key='${{ steps.ssh.outputs.key }}'
           host_key="$RUNNER_TEMP/oracle-rsa-host-key"
           public_key="$RUNNER_TEMP/oracle-rsa-public.pem"
           ciphertext="$RUNNER_TEMP/autopilot-runtime-dsn.enc"
-          awk '$2 == "ssh-rsa" {print; exit}' "$known" > "$host_key"
-          [[ "$(ssh-keygen -lf "$host_key" | awk '{print $2}')" == "$EXPECTED_RSA_FINGERPRINT" ]]
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'sudo -n cat /etc/ssh/ssh_host_rsa_key.pub' > "$host_key"
+          [[ "$(awk 'NR == 1 {print $1}' "$host_key")" == ssh-rsa ]]
+          rsa_bits="$(ssh-keygen -lf "$host_key" | awk 'NR == 1 {print $1}')"
+          [[ "$rsa_bits" =~ ^[0-9]+$ ]] && (( rsa_bits >= 3072 ))
           ssh-keygen -f "$host_key" -e -m PKCS8 > "$public_key"
           openssl pkeyutl -encrypt -pubin -inkey "$public_key" \
             -pkeyopt rsa_padding_mode:oaep \
             -pkeyopt rsa_oaep_md:sha256 \
             -pkeyopt rsa_mgf1_md:sha256 \
             -in "$DSN_FILE" -out "$ciphertext"
-          [[ "$(stat -c %s "$ciphertext")" == 384 ]]
+          [[ "$(stat -c %s "$ciphertext")" == "$((rsa_bits / 8))" ]]
           echo "ciphertext=$ciphertext" >> "$GITHUB_OUTPUT"
 
       - name: Cut over Oracle worker with rollback
