@@ -142,6 +142,63 @@ def test_one_frame_visible_hand_outlier_does_not_create_segment():
     assert result["deals"][0]["observed_card_count"] == 26
 
 
+def test_stable_marker_splits_when_one_visible_hand_is_redealt():
+    first = {"S": SUIT_HANDS["S"]}
+    second = {"S": SUIT_HANDS["W"]}
+    frames = [
+        frame(1, "unchanged-marker", first),
+        frame(2, "unchanged-marker", first),
+        frame(3, "unchanged-marker", second),
+        frame(4, "unchanged-marker", second),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 2
+    assert [item["observed_card_count"] for item in result["deals"]] == [13, 13]
+
+
+def test_same_visible_hand_reappearance_splits_replay_episode():
+    full = {"N": SUIT_HANDS["N"], "S": SUIT_HANDS["S"]}
+    depleted = {
+        "N": SUIT_HANDS["N"][6:],
+        "S": SUIT_HANDS["S"][6:],
+    }
+    frames = [
+        frame(1, "unchanged-marker", full),
+        frame(2, "unchanged-marker", full),
+        frame(3, "unchanged-marker", depleted),
+        frame(4, "unchanged-marker", depleted),
+        frame(5, "unchanged-marker", depleted),
+        frame(6, "unchanged-marker", full),
+        frame(7, "unchanged-marker", full),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 2
+    assert [item["observed_card_count"] for item in result["deals"]] == [26, 26]
+
+
+def test_short_visible_hand_dropout_does_not_split_replay_episode():
+    full = {"N": SUIT_HANDS["N"], "S": SUIT_HANDS["S"]}
+    depleted = {
+        "N": SUIT_HANDS["N"][6:],
+        "S": SUIT_HANDS["S"][6:],
+    }
+    frames = [
+        frame(1, "unchanged-marker", full),
+        frame(2, "unchanged-marker", full),
+        frame(3, "unchanged-marker", depleted),
+        frame(4, "unchanged-marker", full),
+        frame(5, "unchanged-marker", full),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 1
+
+
 def test_cross_seat_card_conflict_fails_closed():
     first = {"N": ["AS"]}
     second = {"E": ["AS"]}
