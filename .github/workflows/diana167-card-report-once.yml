@@ -84,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           video="server-input/$EXPECTED_SOURCE_NAME"
-          python tools/diana167_server_report.py \
+          PYTHONPATH="$PWD" python tools/diana167_server_report.py \
             --video "$video" \
             --gold-zip server-input/bridgit_gold_v2.zip \
             --output-dir server-output \
