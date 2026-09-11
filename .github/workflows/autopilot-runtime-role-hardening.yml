@@ -47,9 +47,24 @@ jobs:
       github.event.issue.number == 1131 &&
       github.event.comment.body == '/autopilot harden-runtime-role-v1'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     environment: database-production
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_RSA_FINGERPRINT: SHA256:eRCJ8ukXNW/P63eUDBW0sHnT6o/0trVQnHTDxwVIt4M
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
       - name: Install PostgreSQL client
         shell: bash
         run: |
@@ -57,132 +72,327 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y postgresql-client >/dev/null
 
-      - name: Harden exact runtime login atomically
-        id: harden
+      - name: Provision isolated runtime login
+        id: database
         env:
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         shell: bash
         run: |
           set -euo pipefail
           test -n "${DATABASE_URL:-}"
-          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          runtime_password="$(openssl rand -base64 36 | tr '+/' '-_' | tr -d '=\n')"
+          echo "::add-mask::$runtime_password"
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -v runtime_password="$runtime_password" <<'SQL'
           BEGIN;
           DO $$
+          DECLARE
+              memberships text[];
           BEGIN
-              IF NOT pg_has_role(current_user, 'neon_superuser', 'SET') THEN
-                  RAISE EXCEPTION 'AUTOPILOT_ROLE_HARDENING_OWNER_INVALID';
-              END IF;
               IF NOT EXISTS (
-                  SELECT 1 FROM pg_roles WHERE rolname='autopilot_runtime_login'
-              ) OR NOT pg_has_role(
-                  'autopilot_runtime_login', 'autopilot_runtime_principal', 'MEMBER'
-              ) THEN
-                  RAISE EXCEPTION 'AUTOPILOT_RUNTIME_LOGIN_CONTRACT_MISSING';
-              END IF;
-              IF NOT (
+                  SELECT 1 FROM pg_roles WHERE rolname='autopilot_runtime_principal'
+              ) OR NOT (
                   has_function_privilege(
                       'autopilot_runtime_principal',
                       'autopilot.claim_next_task(text,integer)', 'EXECUTE'
                   ) AND has_function_privilege(
                       'autopilot_runtime_principal',
-                      'autopilot.complete_task(uuid,text,bigint,text,text,jsonb)', 'EXECUTE'
-                  ) AND has_function_privilege(
-                      'autopilot_runtime_principal',
-                      'autopilot.heartbeat_task(uuid,text,bigint,integer)', 'EXECUTE'
-                  ) AND has_function_privilege(
-                      'autopilot_runtime_principal',
-                      'autopilot.reconcile_stale_tasks()', 'EXECUTE'
-                  ) AND has_function_privilege(
-                      'autopilot_runtime_principal',
                       'autopilot.claim_role_dispatch_outbox_v2(text,integer)', 'EXECUTE'
-                  ) AND has_function_privilege(
-                      'autopilot_runtime_principal',
-                      'autopilot.mark_role_dispatch_sent(uuid,text,bigint,bigint,text)', 'EXECUTE'
-                  ) AND has_function_privilege(
-                      'autopilot_runtime_principal',
-                      'autopilot.fail_role_dispatch_outbox(uuid,text,bigint,text,integer)', 'EXECUTE'
-                  ) AND has_function_privilege(
-                      'autopilot_runtime_principal',
-                      'autopilot.reconcile_role_dispatch_callbacks()', 'EXECUTE'
                   ) AND has_function_privilege(
                       'autopilot_runtime_principal',
                       'autopilot.claim_project_work_probe(text,integer)', 'EXECUTE'
                   ) AND has_function_privilege(
                       'autopilot_runtime_principal',
-                      'autopilot.materialize_project_work_probe(uuid,text,bigint,boolean,text)', 'EXECUTE'
+                      'autopilot.materialize_project_work_probe(uuid,text,bigint,boolean,text)',
+                      'EXECUTE'
                   ) AND has_function_privilege(
                       'autopilot_runtime_principal',
-                      'autopilot.fail_project_work_probe(uuid,text,bigint,text,boolean)', 'EXECUTE'
+                      'autopilot.fail_project_work_probe(uuid,text,bigint,text,boolean)',
+                      'EXECUTE'
                   )
               ) THEN
                   RAISE EXCEPTION 'AUTOPILOT_RUNTIME_PRINCIPAL_RPC_INCOMPLETE';
               END IF;
+              IF EXISTS (
+                  SELECT 1 FROM pg_roles
+                   WHERE rolname='autopilot_runtime_worker_login'
+              ) THEN
+                  SELECT array_agg(parent.rolname ORDER BY parent.rolname)
+                    INTO memberships
+                    FROM pg_auth_members member_link
+                    JOIN pg_roles member ON member.oid=member_link.member
+                    JOIN pg_roles parent ON parent.oid=member_link.roleid
+                   WHERE member.rolname='autopilot_runtime_worker_login';
+                  IF memberships IS NOT NULL AND memberships IS DISTINCT FROM
+                     ARRAY['autopilot_runtime_principal']::text[] THEN
+                      RAISE EXCEPTION
+                          'AUTOPILOT_SUCCESSOR_LOGIN_MEMBERSHIP_UNSAFE: %', memberships;
+                  END IF;
+              END IF;
           END $$;
-
-          SET LOCAL ROLE neon_superuser;
-          REVOKE neon_superuser FROM autopilot_runtime_login;
-          ALTER ROLE autopilot_runtime_login
-              NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-          RESET ROLE;
-
+          SELECT format(
+              'CREATE ROLE autopilot_runtime_worker_login LOGIN INHERIT '
+              'NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS '
+              'CONNECTION LIMIT 4 PASSWORD %L', :'runtime_password'
+          ) WHERE NOT EXISTS (
+              SELECT 1 FROM pg_roles WHERE rolname='autopilot_runtime_worker_login'
+          ) \gexec
+          COMMIT;
+          BEGIN;
+          SELECT format(
+              'ALTER ROLE autopilot_runtime_worker_login PASSWORD %L',
+              :'runtime_password'
+          ) \gexec
+          GRANT autopilot_runtime_principal TO autopilot_runtime_worker_login;
           DO $$
           DECLARE
-              attrs record;
               memberships text[];
+              attrs record;
           BEGIN
-              SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
-                INTO attrs FROM pg_roles WHERE rolname='autopilot_runtime_login';
-              IF attrs.rolsuper OR attrs.rolcreatedb OR attrs.rolcreaterole
-                 OR attrs.rolreplication OR attrs.rolbypassrls THEN
-                  RAISE EXCEPTION 'AUTOPILOT_RUNTIME_LOGIN_ATTRIBUTES_UNSAFE';
-              END IF;
+              SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication,
+                     rolbypassrls, rolcanlogin, rolconnlimit
+                INTO attrs FROM pg_roles
+               WHERE rolname='autopilot_runtime_worker_login';
               SELECT array_agg(parent.rolname ORDER BY parent.rolname)
                 INTO memberships
                 FROM pg_auth_members member_link
                 JOIN pg_roles member ON member.oid=member_link.member
                 JOIN pg_roles parent ON parent.oid=member_link.roleid
-               WHERE member.rolname='autopilot_runtime_login';
-              IF memberships IS DISTINCT FROM ARRAY['autopilot_runtime_principal']::text[] THEN
-                  RAISE EXCEPTION 'AUTOPILOT_RUNTIME_LOGIN_MEMBERSHIP_UNSAFE: %', memberships;
-              END IF;
-              IF has_table_privilege(
-                     'autopilot_runtime_login', 'autopilot.task', 'SELECT'
+               WHERE member.rolname='autopilot_runtime_worker_login';
+              IF attrs.rolsuper OR attrs.rolcreatedb OR attrs.rolcreaterole
+                 OR attrs.rolreplication OR attrs.rolbypassrls
+                 OR NOT attrs.rolcanlogin OR attrs.rolconnlimit <> 4
+                 OR memberships IS DISTINCT FROM
+                    ARRAY['autopilot_runtime_principal']::text[]
+                 OR has_table_privilege(
+                    'autopilot_runtime_worker_login', 'autopilot.task', 'SELECT'
                  ) OR has_table_privilege(
-                     'autopilot_runtime_login', 'autopilot.task', 'INSERT'
-                 ) OR has_table_privilege(
-                     'autopilot_runtime_login',
-                     'autopilot.role_dispatch_followup', 'SELECT'
-                 ) OR has_table_privilege(
-                     'autopilot_runtime_login',
-                     'autopilot.project_work_item', 'SELECT'
+                    'autopilot_runtime_worker_login',
+                    'autopilot.project_work_item', 'SELECT'
                  ) OR NOT has_function_privilege(
-                     'autopilot_runtime_login',
-                     'autopilot.claim_next_task(text,integer)', 'EXECUTE'
+                    'autopilot_runtime_worker_login',
+                    'autopilot.claim_next_task(text,integer)', 'EXECUTE'
                  ) OR NOT has_function_privilege(
-                     'autopilot_runtime_login',
-                     'autopilot.claim_role_dispatch_outbox_v2(text,integer)', 'EXECUTE'
-                 ) OR NOT has_function_privilege(
-                     'autopilot_runtime_login',
-                     'autopilot.claim_project_work_probe(text,integer)', 'EXECUTE'
+                    'autopilot_runtime_worker_login',
+                    'autopilot.claim_project_work_probe(text,integer)', 'EXECUTE'
                  ) THEN
-                  RAISE EXCEPTION 'AUTOPILOT_RUNTIME_LOGIN_LEAST_PRIVILEGE_FAILED';
+                  RAISE EXCEPTION 'AUTOPILOT_SUCCESSOR_LOGIN_LEAST_PRIVILEGE_FAILED';
               END IF;
           END $$;
           COMMIT;
           SQL
-          result="$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
-            "SELECT concat_ws('|',r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolreplication,r.rolbypassrls,has_table_privilege(r.rolname,'autopilot.task','SELECT'),has_function_privilege(r.rolname,'autopilot.claim_role_dispatch_outbox_v2(text,integer)','EXECUTE')) FROM pg_roles r WHERE r.rolname='autopilot_runtime_login'")"
-          test "$result" = 'f|f|f|f|f|f|t'
-          echo 'AUTOPILOT_RUNTIME_ROLE_HARDENING=PASS'
+          runtime_dsn="$(DATABASE_URL="$DATABASE_URL" RUNTIME_PASSWORD="$runtime_password" python - <<'PY'
+          import os
+          from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+
+          owner = urlsplit(os.environ['DATABASE_URL'])
+          assert owner.scheme in {'postgres', 'postgresql'} and owner.hostname
+          host = owner.hostname.replace('-pooler.', '.', 1)
+          port = f':{owner.port}' if owner.port else ''
+          user = quote('autopilot_runtime_worker_login', safe='')
+          password = quote(os.environ['RUNTIME_PASSWORD'], safe='')
+          query = dict(parse_qsl(owner.query, keep_blank_values=True))
+          query.update({'sslmode': 'require', 'channel_binding': 'require'})
+          print(urlunsplit((
+              'postgresql', f'{user}:{password}@{host}{port}', owner.path,
+              urlencode(query), '',
+          )))
+          PY
+          )"
+          [[ "$runtime_dsn" == postgresql://autopilot_runtime_worker_login:* ]]
+          (( ${#runtime_dsn} <= 318 ))
+          echo "::add-mask::$runtime_dsn"
+          printf '%s' "$runtime_dsn" > "$RUNNER_TEMP/autopilot-runtime-dsn"
+          chmod 0600 "$RUNNER_TEMP/autopilot-runtime-dsn"
+          echo "dsn_file=$RUNNER_TEMP/autopilot-runtime-dsn" >> "$GITHUB_OUTPUT"
+          echo 'AUTOPILOT_SUCCESSOR_LOGIN_PROVISIONED=PASS'
+
+      - name: Verify Oracle identity and select SSH credential
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/autopilot-runtime-cutover"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh \
+            "$ORACLE_HOST" "$EXPECTED_RSA_FINGERPRINT" "$known"
+          selected=''
+          index=0
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            raw="${!name:-}"
+            [[ -n "$raw" ]] || continue
+            index=$((index + 1))
+            key="$work/key-$index"
+            printf '%s\n' "$raw" | tr -d '\r' > "$key"
+            chmod 0600 "$key"
+            ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
+            if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+              -o ConnectTimeout=10 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true' \
+              >/dev/null 2>&1; then
+              selected="$key"
+              break
+            fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          echo "key=$selected" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Encrypt runtime DSN for the pinned Oracle host
+        id: encrypt
+        env:
+          DSN_FILE: ${{ steps.database.outputs.dsn_file }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          known='${{ steps.ssh.outputs.known }}'
+          host_key="$RUNNER_TEMP/oracle-rsa-host-key"
+          public_key="$RUNNER_TEMP/oracle-rsa-public.pem"
+          ciphertext="$RUNNER_TEMP/autopilot-runtime-dsn.enc"
+          awk '$2 == "ssh-rsa" {print; exit}' "$known" > "$host_key"
+          [[ "$(ssh-keygen -lf "$host_key" | awk '{print $2}')" == "$EXPECTED_RSA_FINGERPRINT" ]]
+          ssh-keygen -f "$host_key" -e -m PKCS8 > "$public_key"
+          openssl pkeyutl -encrypt -pubin -inkey "$public_key" \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256 \
+            -pkeyopt rsa_mgf1_md:sha256 \
+            -in "$DSN_FILE" -out "$ciphertext"
+          [[ "$(stat -c %s "$ciphertext")" == 384 ]]
+          echo "ciphertext=$ciphertext" >> "$GITHUB_OUTPUT"
+
+      - name: Cut over Oracle worker with rollback
+        id: cutover
+        env:
+          CIPHERTEXT: ${{ steps.encrypt.outputs.ciphertext }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          key='${{ steps.ssh.outputs.key }}'
+          known='${{ steps.ssh.outputs.known }}'
+          remote_ciphertext="/tmp/autopilot-runtime-dsn-${GITHUB_RUN_ID}.enc"
+          scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$CIPHERTEXT" \
+            "$ORACLE_USER@$ORACLE_HOST:$remote_ciphertext"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env REMOTE_CIPHERTEXT='$remote_ciphertext' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          root=/opt/bridge-school/school-autopilot
+          service=school-autopilot-shadow.service
+          work="$(mktemp -d /var/tmp/autopilot-login-cutover.XXXXXXXX)"
+          changed=0
+          cleanup() {
+            rm -f -- "$REMOTE_CIPHERTEXT"
+            [[ "$work" == /var/tmp/autopilot-login-cutover.* && -d "$work" ]] && find "$work" -depth -delete
+          }
+          rollback() {
+            rc=$?
+            trap - EXIT
+            if [[ $rc -ne 0 && "$changed" == 1 ]]; then
+              install -m 0600 -o root -g root "$work/autopilot-shadow.env" "$root/autopilot-shadow.env"
+              systemctl restart "$service" || true
+              echo 'AUTOPILOT_RUNTIME_LOGIN_CUTOVER_ROLLBACK=PASS' >&2
+            fi
+            cleanup
+            exit "$rc"
+          }
+          trap rollback EXIT
+          [[ "$REMOTE_CIPHERTEXT" =~ ^/tmp/autopilot-runtime-dsn-[0-9]+\.enc$ ]]
+          [[ "$(stat -c '%U:%G:%a' "$root/autopilot-shadow.env")" == root:root:600 ]]
+          [[ "$(systemctl is-active "$service" 2>/dev/null || true)" == active ]]
+          install -m 0600 -o root -g root "$root/autopilot-shadow.env" "$work/autopilot-shadow.env"
+          openssl pkeyutl -decrypt -inkey /etc/ssh/ssh_host_rsa_key \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256 \
+            -pkeyopt rsa_mgf1_md:sha256 \
+            -in "$REMOTE_CIPHERTEXT" -out "$work/runtime-dsn"
+          RUNTIME_DSN_FILE="$work/runtime-dsn" ENV_FILE="$root/autopilot-shadow.env" python3 - <<'PY'
+          import os, re, shlex, tempfile
+
+          path = os.environ['ENV_FILE']
+          values = {}
+          for raw in open(path, encoding='utf-8'):
+              line = raw.strip()
+              if not line or line.startswith('#'):
+                  continue
+              key, separator, encoded = line.partition('=')
+              assert separator and re.fullmatch(r'[A-Z][A-Z0-9_]*', key)
+              decoded = shlex.split(encoded, comments=False, posix=True)
+              assert len(decoded) == 1 and key not in values
+              values[key] = decoded[0]
+          dsn = open(os.environ['RUNTIME_DSN_FILE'], encoding='utf-8').read()
+          assert dsn.startswith('postgresql://autopilot_runtime_worker_login:')
+          values['AUTOPILOT_DATABASE_URL'] = dsn
+          values['AUTOPILOT_EXPECTED_DB_USER'] = 'autopilot_runtime_worker_login'
+          directory = os.path.dirname(path)
+          fd, temporary = tempfile.mkstemp(prefix='.autopilot-shadow.', dir=directory, text=True)
+          try:
+              with os.fdopen(fd, 'w', encoding='utf-8') as output:
+                  for key in sorted(values):
+                      output.write(f'{key}={shlex.quote(values[key])}\n')
+                  output.flush()
+                  os.fsync(output.fileno())
+              os.chown(temporary, 0, 0)
+              os.chmod(temporary, 0o600)
+              os.replace(temporary, path)
+          finally:
+              if os.path.exists(temporary):
+                  os.unlink(temporary)
+          PY
+          changed=1
+          systemctl restart "$service"
+          sleep 12
+          systemctl is-active --quiet "$service"
+          systemctl is-enabled --quiet "$service"
+          RUNTIME_ENV="$root/autopilot-shadow.env" "$root/.venv/bin/python" - <<'PY'
+          import os, re, shlex
+          import psycopg
+
+          values = {}
+          for raw in open(os.environ['RUNTIME_ENV'], encoding='utf-8'):
+              line = raw.strip()
+              if not line or line.startswith('#'):
+                  continue
+              key, separator, encoded = line.partition('=')
+              assert separator and re.fullmatch(r'[A-Z][A-Z0-9_]*', key)
+              decoded = shlex.split(encoded, comments=False, posix=True)
+              assert len(decoded) == 1 and key not in values
+              values[key] = decoded[0]
+          with psycopg.connect(
+              values['AUTOPILOT_DATABASE_URL'], connect_timeout=10,
+              options='-c statement_timeout=5000 -c default_transaction_read_only=on',
+          ) as connection:
+              row = connection.execute("""
+                  SELECT current_user,
+                         has_table_privilege(current_user, 'autopilot.task', 'SELECT'),
+                         has_table_privilege(current_user, 'autopilot.project_work_item', 'SELECT'),
+                         has_function_privilege(current_user, 'autopilot.claim_next_task(text,integer)', 'EXECUTE'),
+                         has_function_privilege(current_user, 'autopilot.claim_project_work_probe(text,integer)', 'EXECUTE')
+              """).fetchone()
+          assert row == ('autopilot_runtime_worker_login', False, False, True, True), row
+          print('AUTOPILOT_SUCCESSOR_LOGIN_LIVE=PASS')
+          PY
+          journal="$(journalctl -u "$service" --since '-2 minutes' --no-pager -o cat)"
+          grep -F 'worker_started' <<<"$journal" >/dev/null
+          ! grep -E 'Traceback|permission denied|RuntimeError' <<<"$journal" >/dev/null
+          changed=0
+          cleanup
+          trap - EXIT
+          echo 'AUTOPILOT_RUNTIME_LOGIN_CUTOVER=PASS'
+          REMOTE
 
       - name: Publish hardening result
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-          HARDEN_OUTCOME: ${{ steps.harden.outcome }}
+          CUTOVER_OUTCOME: ${{ steps.cutover.outcome }}
         shell: bash
         run: |
           set -euo pipefail
           gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="Autopilot runtime least-privilege hardening: **${HARDEN_OUTCOME:-not-run}**. No credential value was read or printed." >/dev/null
+            -f body="Autopilot isolated runtime-login cutover: **${CUTOVER_OUTCOME:-not-run}**. Credentials were rotated without being printed; Oracle service rollback was armed." >/dev/null
