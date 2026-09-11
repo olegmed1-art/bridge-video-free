@@ -218,6 +218,11 @@ def test_player_tray_card_is_outside_played_table_geometry() -> None:
 
 def test_suit_bank_accepts_transferred_row_offset_within_rank_height() -> None:
     reference, coordinates = reference_image()
+    # Reproduce transferred fan geometry where the live row has moved below
+    # the immutable reviewed rank glyphs.  The reviewed row still contains
+    # the complete rank and suit glyphs, but the shorter card background no
+    # longer meets the white-run threshold when scanned ten pixels lower.
+    reference[120:152, 50:230] = (20, 120, 20)
     raw = raw_profile(coordinates)
     raw["pixel"]["rank_height"] = 12
     raw["rows"]["N"]["y"] = 110
