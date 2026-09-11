@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize]
-    paths: ['.github/workflows/diana-responsive-validation-da646515-once.yml']
+    paths: ['.github/workflows/diana-responsive-validation-934dd2d0-once.yml']
 
 permissions:
   contents: read
