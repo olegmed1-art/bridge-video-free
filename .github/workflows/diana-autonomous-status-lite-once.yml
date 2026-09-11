@@ -81,22 +81,22 @@ jobs:
           done
           if [[ -s "$results/diana-23.json" ]]; then
             python3 - "$results/diana-23.json" <<'PY'
-import json
-import sys
-data = json.load(open(sys.argv[1], encoding="utf-8"))
-for index, deal in enumerate(data["reconstruction"]["deals"], 1):
-    conflicts = deal.get("conflicts") or []
-    if conflicts:
-        reasons = ",".join(sorted({str(item.get("reason", "UNKNOWN")) for item in conflicts}))
-        print(
-            f"AUTONOMOUS_D23_CONFLICT segment={index} "
-            f"first_ms={deal['first_timestamp_ms']} last_ms={deal['last_timestamp_ms']} "
-            f"observed={deal['observed_card_count']} reasons={reasons} count={len(conflicts)}"
-        )
-PY
+          import json
+          import sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          for index, deal in enumerate(data["reconstruction"]["deals"], 1):
+              conflicts = deal.get("conflicts") or []
+              if conflicts:
+                  reasons = ",".join(sorted({str(item.get("reason", "UNKNOWN")) for item in conflicts}))
+                  print(
+                      f"AUTONOMOUS_D23_CONFLICT segment={index} "
+                      f"first_ms={deal['first_timestamp_ms']} last_ms={deal['last_timestamp_ms']} "
+                      f"observed={deal['observed_card_count']} reasons={reasons} count={len(conflicts)}"
+                  )
+          PY
           fi
           echo "AUTONOMOUS_STATUS active=$active current=$current completed=$completed elapsed_seconds=$elapsed_seconds cpu_percent=$cpu_percent input_percent=$input_percent"
           uptime | sed 's/.*load average: /AUTONOMOUS_LOAD_AVERAGE=/'
           REMOTE
 
-# probe 30
+# probe 31
