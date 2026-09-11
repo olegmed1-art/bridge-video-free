@@ -158,6 +158,23 @@ def test_stable_marker_splits_when_one_visible_hand_is_redealt():
     assert [item["observed_card_count"] for item in result["deals"]] == [13, 13]
 
 
+
+def test_stable_marker_splits_midplay_eight_card_redeal():
+    first = {"S": SUIT_HANDS["S"]}
+    second = {"S": SUIT_HANDS["W"][:8]}
+    frames = [
+        frame(1, "unchanged-marker", first),
+        frame(2, "unchanged-marker", first),
+        frame(3, "unchanged-marker", second),
+        frame(4, "unchanged-marker", second),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 2
+    assert [item["observed_card_count"] for item in result["deals"]] == [13, 8]
+
+
 def test_same_visible_hand_reappearance_splits_replay_episode():
     full = {"N": SUIT_HANDS["N"], "S": SUIT_HANDS["S"]}
     depleted = {
