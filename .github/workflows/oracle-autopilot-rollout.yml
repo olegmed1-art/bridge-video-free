@@ -6,6 +6,7 @@ on:
       - '.github/workflows/oracle-autopilot-rollout.yml'
       - 'ops/autopilot/broker-release.json'
       - 'ops/oracle_known_hosts_from_scan.sh'
+      - 'deploy/oracle-autopilot/school-autopilot-shadow.service'
       - 'tests/test_oracle_autopilot_rollout_contract.py'
   issue_comment:
     types: [created]
@@ -154,7 +155,8 @@ jobs:
           tar -czf "$bundle" \
             AUTOPILOT_SOURCE_REVISION \
             oracle_autopilot \
-            autopilot_phase3b
+            autopilot_phase3b \
+            deploy/oracle-autopilot/school-autopilot-shadow.service
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
 
@@ -228,6 +230,8 @@ jobs:
           [[ "$(cat "$work/source/AUTOPILOT_SOURCE_REVISION")" == "$SOURCE_REVISION" ]]
           test -f "$work/source/oracle_autopilot/worker.py"
           test -f "$work/source/oracle_autopilot/worker_v17.py"
+          grep -Fx 'ExecStart=/opt/bridge-school/school-autopilot/.venv/bin/python -m oracle_autopilot.worker_v17' \
+            "$work/source/deploy/oracle-autopilot/school-autopilot-shadow.service" >/dev/null
 
           BROKER_ENV="$root/autopilot-broker.env" python3 - <<'PY'
           import json, os, re, shlex, urllib.request
@@ -332,6 +336,11 @@ jobs:
           fi
           ln -sfn "$release" "$root/current.next"
           mv -Tf "$root/current.next" "$root/current"
+          install -m 0644 -o root -g root \
+            "$work/source/deploy/oracle-autopilot/school-autopilot-shadow.service" \
+            "/etc/systemd/system/$service"
+          systemctl daemon-reload
+          systemd-analyze verify "/etc/systemd/system/$service" >/dev/null
 
           BROKER_ENV="$root/autopilot-broker.env" python3 - <<'PY'
           import os, re, shlex, tempfile
