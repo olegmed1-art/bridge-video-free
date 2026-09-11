@@ -309,7 +309,7 @@ def test_chatgpt_role_dispatch_task_is_public_and_exactly_bounded():
 
     for bad_goal in (
         {**valid_goal, "mailbox_pr": 881},
-        {**valid_goal, "role": "ARBITRARY"},
+        {**valid_goal, "role": "bad-role"},
         {**valid_goal, "private_prompt": "must never reach public GitHub"},
         {**valid_goal, "successor_task_key": "next", "successor_role": None},
     ):
