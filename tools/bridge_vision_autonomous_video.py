@@ -28,7 +28,11 @@ from bridge_vision.bridgit_deal_marker import (
     marker_fingerprint,
 )
 from bridge_vision.bridgit_played_card_observer import (
+    CARD_SCALE_POLICY_VERSION,
+    TABLE_GEOMETRY_VERSION,
+    build_card_scale_policy,
     build_suit_bank,
+    build_table_geometry_bank,
     observe_played_cards,
 )
 from bridge_vision.bridgit_visible_hand_observer import (
@@ -273,6 +277,8 @@ def run(
         references[reference_id] = decode_frame(payload, profile)
     rank_bank = build_rank_bank(profile, references)
     suit_bank = build_suit_bank(profile, references)
+    geometry_bank = build_table_geometry_bank(profile, references)
+    card_scale_policy = build_card_scale_policy(profile, geometry_bank)
     registration_profile = _registration_profile(raw_profile, set(profile.references))
     registration_reference = None
     if registration_profile is not None:
@@ -311,6 +317,10 @@ def run(
     registration_rejections = 0
     registration_transforms: dict[str, dict[str, Any]] = {}
     registration_input_sizes: set[tuple[int, int]] = set()
+    played_layout_proven_frames = 0
+    played_layout_rejected_frames = 0
+    played_layout_geometry_shas: set[str] = set()
+    played_layout_transform_shas: set[str] = set()
     try:
         while True:
             ok, image = capture.read()
@@ -383,7 +393,21 @@ def run(
                 f"{video_sha}:{decoded_index - 1}:{timestamp_ms}:{input_decoded_sha}".encode()
             ).hexdigest()
             hands = observe_frame(image, rank_bank, profile)
-            played = observe_played_cards(image, rank_bank, suit_bank, profile)
+            played = observe_played_cards(
+                image,
+                rank_bank,
+                suit_bank,
+                profile,
+                geometry_bank=geometry_bank,
+                visible_hand_cards=hands["cards"],
+            )
+            layout_geometry = played.get("layout_geometry")
+            if layout_geometry is None:
+                played_layout_rejected_frames += 1
+            else:
+                played_layout_proven_frames += 1
+                played_layout_geometry_shas.add(layout_geometry["geometry_sha256"])
+                played_layout_transform_shas.add(layout_geometry["transform_sha256"])
             if hands["status"] == "CONFLICT" or played["status"] == "CONFLICT":
                 frame_rejections.append(
                     {
@@ -428,6 +452,7 @@ def run(
     reconstruction = reconstruct_autonomous_deals(
         markers["accepted_frames"],
         source_scope=f"sha256:{video_sha}",
+        expected_card_scale_policy_sha256=card_scale_policy["policy_sha256"],
     )
     pbn_validation = []
     for deal in reconstruction["deals"]:
@@ -455,6 +480,10 @@ def run(
             "profile_sha256": profile.profile_sha256,
             "verification_sha256": profile.verification_sha256,
             "review_sheet_sha256": profile.review_sheet_sha256,
+            "frame_size": {"width": profile.width, "height": profile.height},
+            "card_pixel_scale_source": (
+                "EXACT_VERIFIED_PROFILE_PLUS_LIVE_REVIEWED_CARDBACK_WIDTH"
+            ),
         },
         "registration": {
             "mode": (
@@ -478,6 +507,20 @@ def run(
             "sample_ms": sample_ms,
             "sampled_frame_count": sampled,
             "direct_visual_frame_count": len(visual_frames),
+        },
+        "played_layout": {
+            "version": TABLE_GEOMETRY_VERSION,
+            "coordinate_source": "LIVE_TABLE_SEAT_LANDMARKS",
+            "proven_frame_count": played_layout_proven_frames,
+            "rejected_frame_count": played_layout_rejected_frames,
+            "geometry_sha256_count": len(played_layout_geometry_shas),
+            "transform_sha256_count": len(played_layout_transform_shas),
+            "uses_fixed_screen_center": False,
+            "geometry_bank_sha256": geometry_bank["bank_sha256"],
+            "card_scale_policy_version": CARD_SCALE_POLICY_VERSION,
+            "card_scale_policy_sha256": card_scale_policy["policy_sha256"],
+            "responsive_policy": "RECOMPUTE_LIVE_SEAT_AXES_EVERY_FRAME",
+            "unproven_geometry_action": "REVIEW_NO_PLAYED_CLAIM",
         },
         "marker": {
             "version": markers["version"],

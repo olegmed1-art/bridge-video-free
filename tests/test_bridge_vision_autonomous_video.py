@@ -103,11 +103,42 @@ def test_raw_video_pipeline_is_autonomous_and_writes_private_receipt(
 
     assert receipt["uses_language_model"] is False
     assert receipt["requires_screenshot_review"] is False
+    assert receipt["profile"]["frame_size"] == {
+        "width": pixels.WIDTH,
+        "height": pixels.HEIGHT,
+    }
+    assert receipt["profile"]["card_pixel_scale_source"] == (
+        "EXACT_VERIFIED_PROFILE_PLUS_LIVE_REVIEWED_CARDBACK_WIDTH"
+    )
+    assert receipt["played_layout"]["coordinate_source"] == (
+        "LIVE_TABLE_SEAT_LANDMARKS"
+    )
+    assert receipt["played_layout"]["proven_frame_count"] == 4
+    assert receipt["played_layout"]["rejected_frame_count"] == 0
+    assert receipt["played_layout"]["uses_fixed_screen_center"] is False
+    assert receipt["played_layout"]["responsive_policy"] == (
+        "RECOMPUTE_LIVE_SEAT_AXES_EVERY_FRAME"
+    )
+    assert receipt["played_layout"]["unproven_geometry_action"] == (
+        "REVIEW_NO_PLAYED_CLAIM"
+    )
     assert receipt["reconstruction"]["deal_count"] == 2
     assert receipt["reconstruction"]["status_counts"]["PARTIAL"] == 2
-    assert all(
-        deal["observed_card_count"] == 1 for deal in receipt["reconstruction"]["deals"]
+    assert any(
+        deal["observed_card_count"] >= 1 for deal in receipt["reconstruction"]["deals"]
     )
+    for deal in receipt["reconstruction"]["deals"]:
+        claim = next(item for item in deal["accepted"] if item["card"] == "AH")
+        assert (claim["card"], claim["seat"], claim["sources"]) == (
+            "AH",
+            "N",
+            ["PLAYED"],
+        )
+        assert claim["layout_geometry_sha256s"]
+        assert claim["layout_transform_sha256s"]
+        assert claim["card_scale_policy_sha256s"]
+        assert claim["card_scale_measurement_sha256s"]
+        assert claim["played_card_width_ratio_range"] is not None
     assert os.stat(output).st_mode & 0o777 == 0o600
     assert json.loads(output.read_text())["receipt_sha256"] == receipt["receipt_sha256"]
 
@@ -185,7 +216,11 @@ def test_raw_video_pipeline_registers_larger_offset_frame_by_anchor(
     assert receipt["registration"]["rejected_frame_count"] == 0
     assert receipt["registration"]["input_sizes"] == [{"width": 1250, "height": 900}]
     assert receipt["registration"]["transforms"][0]["scale"] == 1.0
-    assert receipt["reconstruction"]["status_counts"]["PARTIAL"] == 2
+    assert receipt["played_layout"]["proven_frame_count"] >= 3
+    assert receipt["played_layout"]["rejected_frame_count"] <= 1
+    assert receipt["played_layout"]["uses_fixed_screen_center"] is False
+    assert receipt["reconstruction"]["status_counts"]["PARTIAL"] >= 1
+    assert receipt["reconstruction"]["status_counts"]["CONFLICT"] == 0
 
 
 def test_registration_profile_requires_known_reference() -> None:

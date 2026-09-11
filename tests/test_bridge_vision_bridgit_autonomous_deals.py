@@ -1,4 +1,5 @@
 import hashlib
+import json
 
 import pytest
 
@@ -20,6 +21,15 @@ def sha(value):
     return hashlib.sha256(str(value).encode()).hexdigest()
 
 
+def canonical_sha(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+CARD_SCALE_POLICY_SHA = sha("scale-policy")
+
+
 def frame(number, marker, hands, *, source="HAND", evidence_round=None):
     evidence_round = number if evidence_round is None else evidence_round
     cards = [
@@ -33,6 +43,33 @@ def frame(number, marker, hands, *, source="HAND", evidence_round=None):
         for seat, seat_cards in hands.items()
         for card in seat_cards
     ]
+    if source == "PLAYED":
+        for item in cards:
+            measurement = {
+                "version": "bridgit-live-cardback-width-scale-v1",
+                "card_scale_policy_sha256": CARD_SCALE_POLICY_SHA,
+                "played_card_width_pixels": 57,
+                "live_cardback_width_pixels": 60.0,
+                "played_card_width_ratio": 0.95,
+            }
+            item.update(
+                {
+                    "layout_geometry_sha256": sha(f"geometry:{number}"),
+                    "layout_transform_sha256": sha(f"transform:{number}"),
+                    "card_scale_policy_sha256": CARD_SCALE_POLICY_SHA,
+                    "card_scale_measurement_sha256": canonical_sha(measurement),
+                    "card_scale_policy_version": measurement["version"],
+                    "played_card_width_pixels": measurement[
+                        "played_card_width_pixels"
+                    ],
+                    "live_cardback_width_pixels": measurement[
+                        "live_cardback_width_pixels"
+                    ],
+                    "played_card_width_ratio": measurement[
+                        "played_card_width_ratio"
+                    ],
+                }
+            )
     return {
         "frame_sha256": sha(f"frame:{number}"),
         "decoded_pixel_sha256": sha(f"pixels:{number}"),
@@ -40,6 +77,77 @@ def frame(number, marker, hands, *, source="HAND", evidence_round=None):
         "timestamp_ms": number * 1000,
         "cards": cards,
     }
+
+
+def test_played_scale_evidence_is_required_and_retained() -> None:
+    frames = [
+        frame(1, "board-scale", {"N": ["AH"]}, source="PLAYED"),
+        frame(2, "board-scale", {"N": ["AH"]}, source="PLAYED"),
+    ]
+
+    result = reconstruct_autonomous_deals(
+        frames,
+        source_scope="video",
+        expected_card_scale_policy_sha256=CARD_SCALE_POLICY_SHA,
+    )
+
+    claim = result["deals"][0]["accepted"][0]
+    assert claim["sources"] == ["PLAYED"]
+    assert claim["card_scale_policy_sha256s"] == [CARD_SCALE_POLICY_SHA]
+    assert len(claim["card_scale_measurement_sha256s"]) == 1
+    assert claim["played_card_width_ratio_range"] == {
+        "minimum": 0.95,
+        "maximum": 0.95,
+    }
+
+
+def test_unsupported_played_scale_never_reaches_temporal_evidence() -> None:
+    candidate = frame(1, "board-scale", {"N": ["AH"]}, source="PLAYED")
+    candidate["cards"][0]["played_card_width_ratio"] = 1.10
+
+    with pytest.raises(AutonomousDealsError, match="outside the verified policy"):
+        reconstruct_autonomous_deals(
+            [candidate],
+            source_scope="video",
+            expected_card_scale_policy_sha256=CARD_SCALE_POLICY_SHA,
+        )
+
+
+def test_stale_played_scale_measurement_hash_is_rejected() -> None:
+    candidate = frame(1, "board-scale", {"N": ["AH"]}, source="PLAYED")
+    candidate["cards"][0]["played_card_width_ratio"] = 0.98
+
+    with pytest.raises(AutonomousDealsError, match="does not match its measurement"):
+        reconstruct_autonomous_deals(
+            [candidate],
+            source_scope="video",
+            expected_card_scale_policy_sha256=CARD_SCALE_POLICY_SHA,
+        )
+
+
+def test_stale_played_scale_width_hash_is_rejected() -> None:
+    candidate = frame(1, "board-scale", {"N": ["AH"]}, source="PLAYED")
+    candidate["cards"][0]["played_card_width_pixels"] = 58
+    candidate["cards"][0]["played_card_width_ratio"] = round(58 / 60, 6)
+
+    with pytest.raises(AutonomousDealsError, match="SHA-256 does not match"):
+        reconstruct_autonomous_deals(
+            [candidate],
+            source_scope="video",
+            expected_card_scale_policy_sha256=CARD_SCALE_POLICY_SHA,
+        )
+
+
+def test_wrong_played_scale_policy_is_rejected() -> None:
+    candidate = frame(1, "board-scale", {"N": ["AH"]}, source="PLAYED")
+    candidate["cards"][0]["card_scale_policy_sha256"] = sha("other-policy")
+
+    with pytest.raises(AutonomousDealsError, match="expected policy"):
+        reconstruct_autonomous_deals(
+            [candidate],
+            source_scope="video",
+            expected_card_scale_policy_sha256=CARD_SCALE_POLICY_SHA,
+        )
 
 
 def test_all_observed_cards_produce_complete_valid_pbn_without_review():

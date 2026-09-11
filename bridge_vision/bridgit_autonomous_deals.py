@@ -28,6 +28,11 @@ from bridge_contracts.video_deal import (
     CanonicalVideoDeal,
     canonicalize_video_deal,
 )
+from bridge_vision.bridgit_played_card_observer import (
+    CARD_SCALE_POLICY_VERSION,
+    MAX_PLAYED_CARD_WIDTH_RATIO,
+    MIN_PLAYED_CARD_WIDTH_RATIO,
+)
 from bridge_vision.multiframe import validate_full_deal
 
 AUTONOMOUS_DEALS_SCHEMA = "bridgit-autonomous-deals/v1"
@@ -143,7 +148,11 @@ def _complete_exact_complement(
     return CanonicalVideoDeal(hands=completed, derivations=(derivation,))
 
 
-def _normalize_frame(raw: Mapping[str, Any], index: int) -> dict[str, Any]:
+def _normalize_frame(
+    raw: Mapping[str, Any],
+    index: int,
+    expected_card_scale_policy_sha256: str | None,
+) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise AutonomousDealsError("frame observation must be an object")
     frame_sha = _sha(raw.get("frame_sha256"), "frame_sha256")
@@ -183,6 +192,106 @@ def _normalize_frame(raw: Mapping[str, Any], index: int) -> dict[str, Any]:
         if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
             raise AutonomousDealsError("card confidence is outside [0,1]")
         evidence_sha = _sha(item.get("evidence_pixel_sha256"), "evidence_pixel_sha256")
+        layout_geometry_sha = None
+        layout_transform_sha = None
+        card_scale_policy_sha = None
+        card_scale_measurement_sha = None
+        played_card_width_ratio = None
+        played_card_width_pixels = None
+        live_cardback_width_pixels = None
+        card_scale_policy_version = None
+        if source == "PLAYED":
+            layout_geometry_sha = _sha(
+                item.get("layout_geometry_sha256"), "layout_geometry_sha256"
+            )
+            layout_transform_sha = _sha(
+                item.get("layout_transform_sha256"), "layout_transform_sha256"
+            )
+            card_scale_policy_sha = _sha(
+                item.get("card_scale_policy_sha256"), "card_scale_policy_sha256"
+            )
+            if expected_card_scale_policy_sha256 is None:
+                raise AutonomousDealsError(
+                    "expected card scale policy is required for PLAYED evidence"
+                )
+            if card_scale_policy_sha != expected_card_scale_policy_sha256:
+                raise AutonomousDealsError(
+                    "card scale policy does not match the expected policy"
+                )
+            card_scale_measurement_sha = _sha(
+                item.get("card_scale_measurement_sha256"),
+                "card_scale_measurement_sha256",
+            )
+            try:
+                played_card_width_ratio = float(item.get("played_card_width_ratio"))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise AutonomousDealsError(
+                    "played_card_width_ratio must be numeric"
+                ) from exc
+            if (
+                not math.isfinite(played_card_width_ratio)
+                or not MIN_PLAYED_CARD_WIDTH_RATIO
+                <= played_card_width_ratio
+                <= MAX_PLAYED_CARD_WIDTH_RATIO
+            ):
+                raise AutonomousDealsError(
+                    "played_card_width_ratio is outside the verified policy"
+                )
+            raw_width = item.get("played_card_width_pixels")
+            if isinstance(raw_width, bool):
+                raise AutonomousDealsError(
+                    "played_card_width_pixels must be a positive integer"
+                )
+            try:
+                played_card_width_pixels = int(raw_width)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise AutonomousDealsError(
+                    "played_card_width_pixels must be a positive integer"
+                ) from exc
+            if played_card_width_pixels <= 0 or played_card_width_pixels != raw_width:
+                raise AutonomousDealsError(
+                    "played_card_width_pixels must be a positive integer"
+                )
+            try:
+                live_cardback_width_pixels = float(
+                    item.get("live_cardback_width_pixels")
+                )
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise AutonomousDealsError(
+                    "live_cardback_width_pixels must be positive"
+                ) from exc
+            if (
+                not math.isfinite(live_cardback_width_pixels)
+                or live_cardback_width_pixels <= 0
+            ):
+                raise AutonomousDealsError(
+                    "live_cardback_width_pixels must be positive"
+                )
+            computed_ratio = round(
+                played_card_width_pixels / live_cardback_width_pixels, 6
+            )
+            if computed_ratio != played_card_width_ratio:
+                raise AutonomousDealsError(
+                    "played card width ratio does not match its measurement"
+                )
+            card_scale_policy_version = str(
+                item.get("card_scale_policy_version") or ""
+            )
+            if card_scale_policy_version != CARD_SCALE_POLICY_VERSION:
+                raise AutonomousDealsError("card scale policy version is unsupported")
+            measurement_material = {
+                "version": card_scale_policy_version,
+                "card_scale_policy_sha256": card_scale_policy_sha,
+                "played_card_width_pixels": played_card_width_pixels,
+                "live_cardback_width_pixels": round(
+                    live_cardback_width_pixels, 6
+                ),
+                "played_card_width_ratio": played_card_width_ratio,
+            }
+            if _canonical_hash(measurement_material) != card_scale_measurement_sha:
+                raise AutonomousDealsError(
+                    "card scale measurement SHA-256 does not match its material"
+                )
         if card in frame_seen:
             raise AutonomousDealsError("one frame repeats or conflicts on a card")
         frame_seen.add(card)
@@ -193,6 +302,14 @@ def _normalize_frame(raw: Mapping[str, Any], index: int) -> dict[str, Any]:
                 "source": source,
                 "confidence": confidence,
                 "evidence_pixel_sha256": evidence_sha,
+                "layout_geometry_sha256": layout_geometry_sha,
+                "layout_transform_sha256": layout_transform_sha,
+                "card_scale_policy_sha256": card_scale_policy_sha,
+                "card_scale_measurement_sha256": card_scale_measurement_sha,
+                "played_card_width_ratio": played_card_width_ratio,
+                "played_card_width_pixels": played_card_width_pixels,
+                "live_cardback_width_pixels": live_cardback_width_pixels,
+                "card_scale_policy_version": card_scale_policy_version,
                 "position": position,
             }
         )
@@ -332,9 +449,7 @@ def _segment_frames(
         pending_signature: frozenset[tuple[str, str]] = frozenset()
         for frame in group_frames:
             signature = _visible_hand_signature(frame, min_confidence)
-            replenished = _is_visible_hand_replenishment(
-                signature, absence_streaks
-            )
+            replenished = _is_visible_hand_replenishment(signature, absence_streaks)
             for item in frozenset(baseline | frozenset(absence_streaks)):
                 absence_streaks[item] = (
                     0 if item in signature else absence_streaks.get(item, 0) + 1
@@ -465,6 +580,20 @@ def _reconstruct_segment(
                 "source": item["source"],
                 "confidence": item["confidence"],
                 "evidence_pixel_sha256": evidence_sha,
+                "layout_geometry_sha256": item["layout_geometry_sha256"],
+                "layout_transform_sha256": item["layout_transform_sha256"],
+                "card_scale_policy_sha256": item["card_scale_policy_sha256"],
+                "card_scale_measurement_sha256": item[
+                    "card_scale_measurement_sha256"
+                ],
+                "played_card_width_ratio": item["played_card_width_ratio"],
+                "played_card_width_pixels": item["played_card_width_pixels"],
+                "live_cardback_width_pixels": item[
+                    "live_cardback_width_pixels"
+                ],
+                "card_scale_policy_version": item[
+                    "card_scale_policy_version"
+                ],
             }
 
     accepted: list[dict[str, Any]] = []
@@ -491,6 +620,74 @@ def _reconstruct_segment(
                 "minimum_confidence": min(item["confidence"] for item in items),
                 "evidence_pixel_sha256s": sorted(
                     {item["evidence_pixel_sha256"] for item in items}
+                ),
+                "layout_geometry_sha256s": sorted(
+                    {
+                        item["layout_geometry_sha256"]
+                        for item in items
+                        if item["layout_geometry_sha256"] is not None
+                    }
+                ),
+                "layout_transform_sha256s": sorted(
+                    {
+                        item["layout_transform_sha256"]
+                        for item in items
+                        if item["layout_transform_sha256"] is not None
+                    }
+                ),
+                "card_scale_policy_sha256s": sorted(
+                    {
+                        item["card_scale_policy_sha256"]
+                        for item in items
+                        if item["card_scale_policy_sha256"] is not None
+                    }
+                ),
+                "card_scale_measurement_sha256s": sorted(
+                    {
+                        item["card_scale_measurement_sha256"]
+                        for item in items
+                        if item["card_scale_measurement_sha256"] is not None
+                    }
+                ),
+                "played_card_width_ratio_range": (
+                    {
+                        "minimum": min(
+                            item["played_card_width_ratio"]
+                            for item in items
+                            if item["played_card_width_ratio"] is not None
+                        ),
+                        "maximum": max(
+                            item["played_card_width_ratio"]
+                            for item in items
+                            if item["played_card_width_ratio"] is not None
+                        ),
+                    }
+                    if any(
+                        item["played_card_width_ratio"] is not None for item in items
+                    )
+                    else None
+                ),
+                "card_scale_measurements": sorted(
+                    (
+                        {
+                            "measurement_sha256": item[
+                                "card_scale_measurement_sha256"
+                            ],
+                            "version": item["card_scale_policy_version"],
+                            "played_card_width_pixels": item[
+                                "played_card_width_pixels"
+                            ],
+                            "live_cardback_width_pixels": item[
+                                "live_cardback_width_pixels"
+                            ],
+                            "played_card_width_ratio": item[
+                                "played_card_width_ratio"
+                            ],
+                        }
+                        for item in items
+                        if item["card_scale_measurement_sha256"] is not None
+                    ),
+                    key=lambda item: item["measurement_sha256"],
                 ),
             }
         )
@@ -598,6 +795,7 @@ def reconstruct_autonomous_deals(
     min_confidence: float = 0.95,
     min_temporal_support: int = 2,
     allow_exact_complement: bool = True,
+    expected_card_scale_policy_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Reconstruct source-ordered deals without human-supplied frame grouping."""
 
@@ -610,12 +808,19 @@ def reconstruct_autonomous_deals(
         raise AutonomousDealsError("min_temporal_support is outside 2..32")
     if not isinstance(allow_exact_complement, bool):
         raise AutonomousDealsError("allow_exact_complement must be boolean")
+    if expected_card_scale_policy_sha256 is not None:
+        expected_card_scale_policy_sha256 = _sha(
+            expected_card_scale_policy_sha256,
+            "expected_card_scale_policy_sha256",
+        )
 
     frames = []
     for index, raw in enumerate(raw_frames):
         if index >= MAX_FRAMES:
             raise AutonomousDealsError("frame count exceeds the bound")
-        frames.append(_normalize_frame(raw, index))
+        frames.append(
+            _normalize_frame(raw, index, expected_card_scale_policy_sha256)
+        )
     if not frames:
         raise AutonomousDealsError("at least one frame is required")
     frames.sort(key=lambda item: (item["timestamp_ms"], item["frame_sha256"]))
@@ -652,6 +857,7 @@ def reconstruct_autonomous_deals(
         "schema": AUTONOMOUS_DEALS_SCHEMA,
         "version": AUTONOMOUS_DEALS_VERSION,
         "source_scope": scope,
+        "expected_card_scale_policy_sha256": expected_card_scale_policy_sha256,
         "status": (
             "COMPLETE"
             if deals and counts["PARTIAL"] == 0 and counts["CONFLICT"] == 0
