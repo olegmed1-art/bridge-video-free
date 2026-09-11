@@ -177,7 +177,6 @@ def _registered_game_frame(image: Any, bank: Any, profile: Any, preferred_y: int
     for value in (preferred_y, extra, 0):
         if value is not None and value not in offsets:
             offsets.append(value)
-    offsets.extend(value for value in range(extra + 1) if value not in offsets)
     last_reason = "viewport_not_found"
     for y0 in offsets:
         cropped = image[y0 : y0 + profile.height, : profile.width]
@@ -257,7 +256,11 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
             rejections[f"frame_size_{width}x{height}"] += 1
         else:
             timestamp_ms = 0
+            sampled = 0
             while timestamp_ms < duration_ms and len(recognized) < max_deals * 8:
+                sampled += 1
+                if sampled % 60 == 0:
+                    print(json.dumps({"progress_timestamp": format_timestamp(timestamp_ms), "recognized_candidates": len(recognized), "registration_offsets": dict(registration_offsets)}, ensure_ascii=False), flush=True)
                 first_original = _frame_at(capture, timestamp_ms)
                 if first_original is None:
                     rejections["decode"] += 1
