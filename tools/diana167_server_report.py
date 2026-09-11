@@ -378,7 +378,7 @@ def _fuse_template_layouts(first: dict[str, Any], second: dict[str, Any]) -> tup
     rows = []
     for card in sorted(first["matches"], key=lambda value: (rank_layout.SUITS.index(value[1]), rank_layout.RANKS.index(value[0]))):
         a, b = first["matches"][card], second["matches"][card]
-        if a["seat"] != b["seat"] or abs(a["x"] - b["x"]) > 5 or abs(a["y"] - b["y"]) > 5:
+        if a["seat"] != b["seat"] or abs(a["x"] - b["x"]) > 18 or abs(a["y"] - b["y"]) > 18:
             return None, "temporal_position_gate"
         values = [float(a["score"]), float(b["score"])]
         rows.append({
