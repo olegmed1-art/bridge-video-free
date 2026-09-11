@@ -57,6 +57,7 @@ protected_gate_paths=(
   '.github/workflows/oracle-autopilot-online-observer.yml'
   '.github/workflows/oracle-autopilot-online-resume.yml'
   '.github/workflows/oracle-autopilot-production-canary.yml'
+  '.github/workflows/oracle-autopilot-rollout.yml'
   '.github/workflows/oracle-autopilot-shadow-activation.yml'
   '.github/workflows/oracle-autopilot-staging-finalize.yml'
   '.github/workflows/oracle-autopilot-staging.yml'
