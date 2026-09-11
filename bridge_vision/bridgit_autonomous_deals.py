@@ -37,6 +37,9 @@ MAX_FRAMES = 100_000
 MIN_HAND_RESET_CARDS = 8
 MIN_HAND_RESET_CHANGED_CARDS = 8
 MIN_HAND_RESET_FRAMES = 2
+MIN_HAND_REPLACEMENT_BASELINE_CARDS = 4
+MIN_HAND_REPLACEMENT_FULL_CARDS = 13
+MIN_HAND_REPLACEMENT_DISAPPEARED_CARDS = 1
 MIN_HAND_REAPPEARED_CARDS = 4
 MIN_HAND_REAPPEARED_ABSENCE_FRAMES = 3
 _SOURCES = frozenset({"HAND", "PLAYED"})
@@ -237,6 +240,42 @@ def _same_reset_candidate(
     return bool(union) and len(left & right) / union >= 0.75
 
 
+def _is_visible_seat_replacement(
+    baseline: frozenset[tuple[str, str]], candidate: frozenset[tuple[str, str]]
+) -> bool:
+    """Detect a stable full-hand replacement after the old hand was depleted.
+
+    A lesson can redeal while only a few cards from the preceding hand remain.
+    Requiring eight cards to disappear therefore misses a replacement that has
+    substantial overlap with that depleted hand.  A full 13-card candidate is
+    safe to treat separately when the same seat was already visible, at least
+    eight cards are new, and at least one prior card disappears.  A newly
+    exposed dummy has no same-seat baseline and cannot trigger this rule.
+    """
+
+    for seat in SEATS:
+        previous = {card for owner, card in baseline if owner == seat}
+        current = {card for owner, card in candidate if owner == seat}
+        if not (
+            MIN_HAND_REPLACEMENT_BASELINE_CARDS
+            <= len(previous)
+            < MIN_HAND_REPLACEMENT_FULL_CARDS
+            and len(current) == MIN_HAND_REPLACEMENT_FULL_CARDS
+        ):
+            continue
+        novel = len(current - previous)
+        disappeared = len(previous - current)
+        union = len(previous | current)
+        similarity = len(previous & current) / union if union else 1.0
+        if (
+            novel >= MIN_HAND_RESET_CHANGED_CARDS
+            and disappeared >= MIN_HAND_REPLACEMENT_DISAPPEARED_CARDS
+            and similarity < 0.50
+        ):
+            return True
+    return False
+
+
 def _is_visible_hand_replenishment(
     signature: frozenset[tuple[str, str]],
     absence_streaks: Mapping[tuple[str, str], int],
@@ -331,7 +370,9 @@ def _segment_frames(
                 pending_signature = frozenset()
 
             if current and (
-                _is_visible_hand_reset(baseline, signature) or replenished
+                _is_visible_hand_reset(baseline, signature)
+                or _is_visible_seat_replacement(baseline, signature)
+                or replenished
             ):
                 pending = [frame]
                 pending_signature = signature
