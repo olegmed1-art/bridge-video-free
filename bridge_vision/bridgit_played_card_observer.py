@@ -69,8 +69,14 @@ def build_suit_bank(
                 raise VisibleHandObserverError(
                     "rank template is not bound to a reviewed hand row"
                 )
-            runs = _white_runs(image, row_y, x_min, x_max, profile)
-            colors = [_run_color(image, row_y, run, profile) for run in runs]
+            # Rank templates are bound to the reviewed glyph's own top-left.
+            # A transferred profile may recalibrate the live hand scan row a
+            # few pixels lower (for example after a video-height change), but
+            # using that live row here can change the fan-overlap geometry and
+            # make the reviewed template appear outside its white run.  Derive
+            # the suit at the immutable reviewed template row instead.
+            runs = _white_runs(image, y, x_min, x_max, profile)
+            colors = [_run_color(image, y, run, profile) for run in runs]
             suit_indices = _suit_indices(colors)
             matches = [
                 index
