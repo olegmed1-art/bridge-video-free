@@ -392,6 +392,22 @@ def _fuse_template_layouts(first: dict[str, Any], second: dict[str, Any]) -> tup
     return {"hands": first["hands"], "weights": sorted(rows, key=lambda item: (rank_layout.SEATS.index(item["seat"]), rank_layout.SUITS.index(item["card"][1]), rank_layout.RANKS.index(item["card"][0]))), "minimum": min(item["weight_min"] for item in rows), "median": float(median(item["weight_median"] for item in rows))}, "full"
 
 
+def _single_template_layout(layout: dict[str, Any]) -> dict[str, Any]:
+    rows = []
+    for card, item in layout["matches"].items():
+        score = round(float(item["score"]), 6)
+        rows.append({
+            "seat": item["seat"],
+            "card": card,
+            "weight_median": score,
+            "weight_min": score,
+            "observations": 1,
+            "confidence_kind": "TEMPLATE_SIMILARITY_UNCALIBRATED",
+        })
+    rows.sort(key=lambda item: (rank_layout.SEATS.index(item["seat"]), rank_layout.SUITS.index(item["card"][1]), rank_layout.RANKS.index(item["card"][0])))
+    return {"hands": layout["hands"], "weights": rows, "minimum": min(item["weight_min"] for item in rows), "median": float(median(item["weight_median"] for item in rows))}
+
+
 def _hands_key(hands: dict[str, Any]) -> str:
     return canonical_hash({seat: {suit: "".join(hands[seat][suit]) for suit in rank_layout.SUITS} for seat in rank_layout.SEATS})
 
@@ -476,32 +492,12 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
                 if timestamp_ms - last_attempt_ms < 15000:
                     timestamp_ms += scan_ms
                     continue
-                second_ms = min(timestamp_ms + 700, max(timestamp_ms + 1, duration_ms - 1))
-                second_original = _frame_at(capture, second_ms)
-                if second_original is None:
-                    rejections["second_decode"] += 1
-                    timestamp_ms += scan_ms
-                    continue
                 first_layout, first_reason = _full_template_layout(first_original, templates, viewport_y)
                 if first_layout is None:
                     rejections[first_reason] += 1
                     timestamp_ms += scan_ms
                     continue
-                second_viewport_y, second_gate = _gate_offset(second_original, templates, [viewport_y])
-                if second_viewport_y != viewport_y:
-                    rejections[f"second_gold_gate_{second_gate['gate_cards_passed']}"] += 1
-                    timestamp_ms += scan_ms
-                    continue
-                second_layout, second_reason = _full_template_layout(second_original, templates, viewport_y)
-                if second_layout is None:
-                    rejections[f"second_{second_reason}"] += 1
-                    timestamp_ms += scan_ms
-                    continue
-                fused, fused_reason = _fuse_template_layouts(first_layout, second_layout)
-                if fused is None:
-                    rejections[fused_reason] += 1
-                    timestamp_ms += scan_ms
-                    continue
+                fused = _single_template_layout(first_layout)
                 last_attempt_ms = timestamp_ms
                 key = _hands_key(fused["hands"])
                 screenshot = screenshots / f"deal_{len(recognized) + 1:03d}_{timestamp_ms:010d}.png"
@@ -517,9 +513,9 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
                     "game_viewport": {"x": 0, "y": viewport_y, "width": profile_width, "height": profile_height},
                     "hands": fused["hands"],
                     "integrity": {"cards": 52, "unique": 52, "seat_counts": {seat: 13 for seat in rank_layout.SEATS}},
-                    "evidence": {"minimum_assigned_score": round(fused["minimum"], 6), "median_assigned_score": round(fused["median"], 6), "independent_frames": 2, "confidence_kind": "TEMPLATE_SIMILARITY_UNCALIBRATED"},
+                    "evidence": {"minimum_assigned_score": round(fused["minimum"], 6), "median_assigned_score": round(fused["median"], 6), "independent_frames": 1, "confidence_kind": "TEMPLATE_SIMILARITY_UNCALIBRATED"},
                     "weights": fused["weights"],
-                    "receipt": {"method": "104_HUMAN_VERIFIED_CARD_CORNERS_PLUS_TWO_FRAME_SEAT_CONSENSUS", "bridge_logic_weighting": False},
+                    "receipt": {"method": "104_HUMAN_VERIFIED_CARD_CORNERS_SINGLE_FULL_SERVER_FRAME", "bridge_logic_weighting": False},
                 })
                 timestamp_ms += scan_ms
     finally:
@@ -557,7 +553,7 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
             "gold_drive_file_id": GOLD_FILE_ID,
             "gold_template_set_sha256": raw_profile["gold"]["template_set_sha256"],
         },
-        "sampling": {"scan_interval_ms": scan_ms, "policy": "PIXEL_REGISTERED_FULL_LAYOUT_GATE_THEN_TWO_FRAME_SEAT_CONSENSUS", "registration_y_offsets": dict(sorted(registration_offsets.items()))},
+        "sampling": {"scan_interval_ms": scan_ms, "policy": "PIXEL_REGISTERED_SINGLE_FULL_LAYOUT_FRAME", "registration_y_offsets": dict(sorted(registration_offsets.items()))},
         "summary": {"deals": len(deals), "recognized_candidates": len(recognized), "rejections": dict(sorted(rejections.items()))},
         "deals": deals,
     }
@@ -627,7 +623,7 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path) -> None:
     story.append(table)
     story.append(Spacer(1, 5 * mm))
     story.append(Paragraph("Как читать веса", h2))
-    story.append(Paragraph("Вес — это сходство пиксельного глифа с проверенным эталоном, а не вероятность правильности. Для каждой карты приведены медиана и минимум по двум независимым серверным кадрам. Торговля, известные руки и стратегическая бриджевая логика вес не повышают и не понижают.", body))
+    story.append(Paragraph("Вес — это сходство пиксельного глифа с проверенным эталоном, а не вероятность правильности. Для каждой карты приведён вес полной серверной фиксации сдачи; медиана и минимум совпадают при одном наблюдении. Торговля, известные руки и стратегическая бриджевая логика вес не повышают и не понижают.", body))
     story.append(Spacer(1, 3 * mm))
     story.append(Paragraph("N/E/S/W в отчёте означают экранные позиции: верх / право / низ / лево. Поворот реальных мест за столом не используется как скрытая подсказка распознавателю.", body))
     story.append(PageBreak())
