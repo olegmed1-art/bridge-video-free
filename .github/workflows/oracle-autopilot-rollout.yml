@@ -374,9 +374,23 @@ jobs:
           PY
 
           systemctl enable --now "$service"
-          sleep 4
-          systemctl is-active --quiet "$service"
-          systemctl is-enabled --quiet "$service"
+          sleep 12
+          if ! systemctl is-active --quiet "$service" \
+            || ! systemctl is-enabled --quiet "$service"; then
+            echo 'AUTOPILOT_NEW_WORKER_NOT_STABLE' >&2
+            systemctl status "$service" --no-pager -n 30 2>&1 \
+              | sed -E 's#postgres(ql)?://[^[:space:]]+#postgresql://REDACTED#g' >&2 || true
+            journalctl -u "$service" --since '-2 minutes' --no-pager -n 80 2>&1 \
+              | sed -E 's#postgres(ql)?://[^[:space:]]+#postgresql://REDACTED#g' >&2 || true
+            exit 1
+          fi
+          restart_count="$(systemctl show -p NRestarts --value "$service")"
+          [[ "$restart_count" == 0 ]] || {
+            echo "AUTOPILOT_NEW_WORKER_RESTARTED count=$restart_count" >&2
+            journalctl -u "$service" --since '-2 minutes' --no-pager -n 80 2>&1 \
+              | sed -E 's#postgres(ql)?://[^[:space:]]+#postgresql://REDACTED#g' >&2 || true
+            exit 1
+          }
           [[ "$(readlink -f "$root/current")" == "$root/releases/$SOURCE_REVISION" ]]
           pid="$(systemctl show -p MainPID --value "$service")"
           [[ "$pid" =~ ^[1-9][0-9]*$ ]]
