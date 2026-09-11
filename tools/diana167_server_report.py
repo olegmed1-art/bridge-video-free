@@ -262,7 +262,8 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
     print(json.dumps({"full_layout_phase": "start", "y_offset": y_offset}), flush=True)
     cv2, np_runtime = _runtime()
     import numpy as np  # type: ignore
-    from scipy.optimize import linear_sum_assignment  # type: ignore
+    from scipy.optimize import Bounds, LinearConstraint, linear_sum_assignment, milp  # type: ignore
+    from scipy.sparse import lil_matrix  # type: ignore
 
     cards = sorted(templates, key=lambda card: (rank_layout.SUITS.index(card[1]), rank_layout.RANKS.index(card[0])))
     score_maps: dict[str, dict[str, Any]] = defaultdict(dict)
@@ -308,20 +309,43 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
         return None, "candidate_slot_gate"
     print(json.dumps({"full_layout_phase": "slots", "seconds": round(time.perf_counter() - started, 3), "slots": len(slots)}), flush=True)
 
-    costs = np.full((52, len(slots)), 4.0, dtype=np.float64)
+    edges: list[tuple[int, int, float]] = []
     for row, card in enumerate(cards):
         for column, slot in enumerate(slots):
             if slot["suit"] != card[1]:
                 continue
             score = float(score_maps[card][slot["seat"]][slot["local_y"], slot["local_x"]])
-            costs[row, column] = -score
-    rows, columns = linear_sum_assignment(costs)
-    if list(rows) != list(range(52)):
+            edges.append((row, column, score))
+    constraint_rows = 52 + len(slots) + len(rank_layout.SEATS)
+    matrix = lil_matrix((constraint_rows, len(edges)), dtype=np.float64)
+    lower = np.full(constraint_rows, -np.inf, dtype=np.float64)
+    upper = np.full(constraint_rows, np.inf, dtype=np.float64)
+    for edge_index, (row, column, _) in enumerate(edges):
+        matrix[row, edge_index] = 1.0
+        matrix[52 + column, edge_index] = 1.0
+        seat_index = rank_layout.SEATS.index(slots[column]["seat"])
+        matrix[52 + len(slots) + seat_index, edge_index] = 1.0
+    lower[:52] = upper[:52] = 1.0
+    upper[52 : 52 + len(slots)] = 1.0
+    lower[52 + len(slots) :] = upper[52 + len(slots) :] = 13.0
+    solution = milp(
+        c=np.asarray([-score for _, _, score in edges], dtype=np.float64),
+        integrality=np.ones(len(edges), dtype=np.int32),
+        bounds=Bounds(np.zeros(len(edges)), np.ones(len(edges))),
+        constraints=LinearConstraint(matrix.tocsr(), lower, upper),
+        options={"time_limit": 30.0},
+    )
+    if not solution.success or solution.x is None:
         return None, "global_assignment_gate"
     matches = {}
-    for row, column in zip(rows, columns):
+    for edge_index, selected in enumerate(solution.x):
+        if selected < 0.5:
+            continue
+        row, column, score = edges[edge_index]
         card, slot = cards[row], slots[column]
-        matches[card] = {"score": float(-costs[row, column]), "seat": slot["seat"], "x": slot["x"], "y": slot["y"]}
+        matches[card] = {"score": float(score), "seat": slot["seat"], "x": slot["x"], "y": slot["y"]}
+    if len(matches) != 52:
+        return None, "global_assignment_card_count_gate"
     scores = [item["score"] for item in matches.values()]
     if min(scores) < 0.55 or float(median(scores)) < 0.68:
         return None, f"template_weight_gate_min{int(min(scores) * 20):02d}_med{int(float(median(scores)) * 20):02d}"
