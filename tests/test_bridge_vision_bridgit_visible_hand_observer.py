@@ -6,8 +6,6 @@ import json
 import os
 from pathlib import Path
 
-import cv2
-import numpy as np
 import pytest
 
 from bridge_vision.bridgit_visible_hand_observer import (
@@ -19,6 +17,9 @@ from bridge_vision.bridgit_visible_hand_observer import (
     parse_profile,
 )
 from tools.bridge_vision_visible_hand_observer import JOB_SCHEMA, run
+
+cv2 = pytest.importorskip("cv2")
+np = pytest.importorskip("numpy")
 
 
 WIDTH = 1000
