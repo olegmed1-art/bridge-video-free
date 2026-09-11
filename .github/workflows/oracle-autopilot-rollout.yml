@@ -5,9 +5,7 @@ on:
     paths:
       - '.github/workflows/oracle-autopilot-rollout.yml'
       - 'ops/autopilot/broker-release.json'
-      - 'ops/oracle_autopilot_shadow_install.sh'
       - 'ops/oracle_known_hosts_from_scan.sh'
-      - 'deploy/oracle-autopilot/school-autopilot-shadow.service'
       - 'tests/test_oracle_autopilot_rollout_contract.py'
   issue_comment:
     types: [created]
@@ -156,9 +154,7 @@ jobs:
           tar -czf "$bundle" \
             AUTOPILOT_SOURCE_REVISION \
             oracle_autopilot \
-            autopilot_phase3b \
-            deploy/oracle-autopilot/school-autopilot-shadow.service \
-            ops/oracle_autopilot_shadow_install.sh
+            autopilot_phase3b
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
 
@@ -301,12 +297,41 @@ jobs:
           stopped=1
           systemctl disable --now "$service"
           [[ "$(systemctl is-active "$service" 2>/dev/null || true)" == inactive ]]
-          AUTOPILOT_DATABASE_URL="$database_url" \
-          AUTOPILOT_EXPECTED_DB_USER=autopilot_runtime_login \
-          AUTOPILOT_SOURCE_REVISION="$SOURCE_REVISION" \
-          AUTOPILOT_REPO_DIR="$work/source" \
-          AUTOPILOT_ACTIVATE=0 \
-            bash "$work/source/ops/oracle_autopilot_shadow_install.sh"
+          release="$root/releases/$SOURCE_REVISION"
+          release_stage="$work/release"
+          install -d -m 0755 -o root -g root "$release_stage/oracle_autopilot"
+          install -m 0644 -o root -g root \
+            "$work/source"/oracle_autopilot/*.py "$release_stage/oracle_autopilot/"
+          install -d -m 0755 -o root -g root "$release_stage/autopilot_phase3b"
+          install -m 0644 -o root -g root \
+            "$work/source"/autopilot_phase3b/*.py "$release_stage/autopilot_phase3b/"
+          printf '%s\n' "$SOURCE_REVISION" > "$release_stage/SOURCE_REVISION"
+          chmod 0444 "$release_stage/SOURCE_REVISION"
+          PYTHONPATH="$release_stage" "$root/.venv/bin/python" -m py_compile \
+            "$release_stage"/oracle_autopilot/*.py \
+            "$release_stage"/autopilot_phase3b/*.py
+          AUTOPILOT_DATABASE_URL="$database_url" "$root/.venv/bin/python" - <<'PY'
+          import os, psycopg
+          with psycopg.connect(
+              os.environ['AUTOPILOT_DATABASE_URL'], connect_timeout=10,
+              options='-c statement_timeout=5000 -c default_transaction_read_only=on',
+          ) as connection:
+              row = connection.execute("""
+                  SELECT current_user,
+                         has_function_privilege(current_user, 'autopilot.claim_next_task(text,integer)', 'EXECUTE'),
+                         has_function_privilege(current_user, 'autopilot.complete_task(uuid,text,bigint,text,text,jsonb)', 'EXECUTE'),
+                         has_function_privilege(current_user, 'autopilot.claim_role_dispatch_outbox(text,integer)', 'EXECUTE')
+              """).fetchone()
+          assert row == ('autopilot_runtime_login', True, True, True), row
+          print('AUTOPILOT_RUNTIME_RPC_PREFLIGHT=PASS')
+          PY
+          if [[ -d "$release" ]]; then
+            diff -qr "$release_stage" "$release" >/dev/null
+          else
+            mv "$release_stage" "$release"
+          fi
+          ln -sfn "$release" "$root/current.next"
+          mv -Tf "$root/current.next" "$root/current"
 
           BROKER_ENV="$root/autopilot-broker.env" python3 - <<'PY'
           import os, re, shlex, tempfile
