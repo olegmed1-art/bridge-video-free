@@ -223,17 +223,23 @@ def _load_card_templates(package: Path, manifest: dict[str, Any]) -> dict[str, l
     return dict(result)
 
 
-def _match_card(image: Any, card: str, variants: list[Any], y_offset: int) -> dict[str, Any]:
+def _match_card_by_seat(image: Any, card: str, variants: list[Any], y_offset: int) -> dict[str, dict[str, Any]]:
     cv2, _ = _runtime()
-    best = {"score": -2.0, "seat": "", "x": -1, "y": -1}
+    result: dict[str, dict[str, Any]] = {}
     for seat, (x0, y0, x1, y1) in _card_windows(card[1], y_offset).items():
         region = image[y0:y1, x0:x1]
+        best = {"score": -2.0, "seat": seat, "x": -1, "y": -1}
         for template in variants:
             response = cv2.matchTemplate(region, template, cv2.TM_CCOEFF_NORMED)
             _, score, _, location = cv2.minMaxLoc(response)
             if float(score) > best["score"]:
                 best = {"score": float(score), "seat": seat, "x": x0 + int(location[0]), "y": y0 + int(location[1])}
-    return best
+        result[seat] = best
+    return result
+
+
+def _match_card(image: Any, card: str, variants: list[Any], y_offset: int) -> dict[str, Any]:
+    return max(_match_card_by_seat(image, card, variants, y_offset).values(), key=lambda item: item["score"])
 
 
 def _gate_offset(image: Any, templates: dict[str, list[Any]], offsets: list[int]) -> tuple[int | None, dict[str, Any]]:
@@ -251,7 +257,17 @@ def _gate_offset(image: Any, templates: dict[str, list[Any]], offsets: list[int]
 
 
 def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset: int) -> tuple[dict[str, Any] | None, str]:
-    matches = {card: _match_card(image, card, variants, y_offset) for card, variants in templates.items()}
+    import numpy as np  # type: ignore
+    from scipy.optimize import linear_sum_assignment  # type: ignore
+
+    cards = sorted(templates, key=lambda card: (rank_layout.SUITS.index(card[1]), rank_layout.RANKS.index(card[0])))
+    candidates = {card: _match_card_by_seat(image, card, templates[card], y_offset) for card in cards}
+    seat_slots = [seat for seat in rank_layout.SEATS for _ in range(13)]
+    costs = np.asarray([[-candidates[card][seat]["score"] for seat in seat_slots] for card in cards], dtype=np.float64)
+    rows, columns = linear_sum_assignment(costs)
+    if list(rows) != list(range(52)):
+        return None, "global_assignment_gate"
+    matches = {cards[row]: candidates[cards[row]][seat_slots[column]] for row, column in zip(rows, columns)}
     scores = [item["score"] for item in matches.values()]
     if min(scores) < 0.55 or float(median(scores)) < 0.68:
         return None, "template_weight_gate"
