@@ -66,8 +66,8 @@ jobs:
           set -Eeuo pipefail
           umask 077
           root=/home/ubuntu/bridge-school-private-media/diana-23-26
-          src="$root/recognition-diana23/oleg-template-review"
-          profile="$src/visible-hand-profile-v1.json"
+          src="$root/recognition-diana23"
+          profile="$src/visible-hand-profile-v1.runtime.json"
           test -f "$profile"
           PROFILE="$profile" SRC="$src" ROOT="$root" python3 - <<'PY'
           import hashlib
