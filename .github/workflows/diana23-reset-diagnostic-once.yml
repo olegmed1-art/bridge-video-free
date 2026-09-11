@@ -87,8 +87,8 @@ jobs:
           scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST:$remote" "$work/out/reset.json"
-          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \\
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \\
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" "rm -f '$remote'"
           python3 -m json.tool "$work/out/reset.json" >/dev/null
           echo RESET_DIAGNOSTIC_PASS
