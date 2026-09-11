@@ -74,6 +74,12 @@ repair.
 See `docs/architecture/AUTOPILOT_FAILURE_CONTINUATION_V1.md` for the complete
 contract and rolling-deployment order.
 
+After migration `0324`, project-wide continuation is defined in
+`docs/architecture/AUTOPILOT_PROJECT_PLANNER_V1.md`. A terminal role result no
+longer implies a stopped project: inspect `autopilot.project_planner_state` and
+the registered `project_work_item` lanes. An unchanged blocked head is retained
+without redispatch while the planner advances independent eligible work.
+
 ## Verification order
 
 1. Apply migration `0300` to a temporary Neon branch derived from the current branch.

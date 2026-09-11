@@ -28,6 +28,10 @@ def test_hardening_removes_privilege_without_touching_credentials() -> None:
     assert "AUTOPILOT_RUNTIME_LOGIN_LEAST_PRIVILEGE_FAILED" in source
     assert "has_table_privilege" in source
     assert "has_function_privilege" in source
+    assert "autopilot.claim_project_work_probe(text,integer)" in source
+    assert "autopilot.materialize_project_work_probe(uuid,text,bigint,boolean,text)" in source
+    assert "autopilot.fail_project_work_probe(uuid,text,bigint,text,boolean)" in source
+    assert "autopilot.project_work_item" in source
     assert "ALTER ROLE autopilot_runtime_login PASSWORD" not in source
     assert "AUTOPILOT_CALLBACK_DATABASE_URL" not in source
     assert "No credential value was read or printed" in source
