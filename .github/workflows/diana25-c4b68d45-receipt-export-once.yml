@@ -1,0 +1,99 @@
+name: Diana 25 c4b68d45 receipt export one-shot
+
+on:
+  push:
+    branches: [codex/diana-autonomous-finalize-20260911]
+    paths: ['.github/workflows/diana25-c4b68d45-receipt-export-once.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diana25-c4b68d45-receipt-export
+  cancel-in-progress: false
+
+jobs:
+  export:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Select verified Oracle credential
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/diana25-receipt-export"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" true
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Retrieve and verify immutable receipt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote=/home/ubuntu/bridge-school-private-media/diana-23-26/autonomous-results-c4b68d45/diana-25.json
+          out="$RUNNER_TEMP/diana25-c4b68d45-receipt"
+          mkdir -p "$out"
+          scp -q -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST:$remote" "$out/diana-25.json"
+          RECEIPT="$out/diana-25.json" python3 - <<'PY'
+          import hashlib
+          import json          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RECEIPT"])
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          claimed = receipt["receipt_sha256"]
+          material = dict(receipt)
+          material.pop("receipt_sha256")
+          actual = hashlib.sha256(
+              json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+          ).hexdigest()
+          assert actual == claimed
+          assert receipt["source"]["filename"] == "diana-25-2021-09-13.mp4"
+          assert receipt["uses_language_model"] is False
+          assert receipt["requires_screenshot_review"] is False
+          print("RECEIPT_SELF_HASH_PASS")
+          PY
+          chmod 0600 "$out/diana-25.json"
+          sha256sum "$out/diana-25.json"
+          echo "artifact_path=$out/diana-25.json" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: diana25-c4b68d45-receipt-${{ github.run_id }}
+          path: ${{ env.artifact_path }}
+          if-no-files-found: error
+          retention-days: 3
