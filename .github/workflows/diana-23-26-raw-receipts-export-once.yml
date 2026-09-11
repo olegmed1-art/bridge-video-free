@@ -64,15 +64,20 @@ jobs:
           mkdir -p "$out"
           names=(diana-23 diana-24 diana-25 diana-26)
           for name in "${names[@]}"; do
+            size="$(ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+              -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+              "test -f '$remote/$name.json' && test ! -L '$remote/$name.json' && stat -c %s '$remote/$name.json'")"
+            test "$size" -le 536870912
+            echo "RECEIPT_SOURCE_BYTES name=$name bytes=$size"
             ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
               -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
               -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-              "test -f '$remote/$name.json' && test ! -L '$remote/$name.json' && test \$(stat -c %s '$remote/$name.json') -le 67108864"
-            scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
-              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
-              -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST:$remote/$name.json" "$out/$name.json"
+              "gzip -c -- '$remote/$name.json'" > "$out/$name.json.gz"
+            gzip -t "$out/$name.json.gz"
           done
           OUT="$out" python3 - <<'PY'
+          import gzip
           import hashlib
           import json
           import os
@@ -86,8 +91,9 @@ jobs:
               "diana-26": "diana-26.mp4",
           }
           for name, source in expected.items():
-              path = root / f"{name}.json"
-              receipt = json.loads(path.read_text(encoding="utf-8"))
+              path = root / f"{name}.json.gz"
+              with gzip.open(path, "rt", encoding="utf-8") as stream:
+                  receipt = json.load(stream)
               claimed = receipt["receipt_sha256"]
               material = dict(receipt)
               material.pop("receipt_sha256")
