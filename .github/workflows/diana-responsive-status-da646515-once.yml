@@ -12,7 +12,7 @@ permissions:
 jobs:
   status:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 60
     env:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
@@ -106,4 +106,72 @@ jobs:
           uptime | sed 's/.*load average: /AUTONOMOUS_LOAD_AVERAGE=/'
           REMOTE
 
-# probe 14
+          out="$RUNNER_TEMP/diana23-responsive-result"
+          mkdir -p "$out"
+          receipt="$out/diana-23.json"
+          remote_receipt="/home/ubuntu/bridge-school-private-media/diana-23-26/autonomous-results-da646515/diana-23.json"
+          for attempt in $(seq 1 100); do
+            if scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+              -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST:$remote_receipt" "$receipt.tmp"; then
+              mv "$receipt.tmp" "$receipt"
+              break
+            fi
+            sleep 30
+          done
+          test -s "$receipt"
+          RECEIPT="$receipt" python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ['RECEIPT'])
+          receipt = json.loads(path.read_text(encoding='utf-8'))
+          claimed = receipt['receipt_sha256']
+          material = dict(receipt)
+          material.pop('receipt_sha256')
+          actual = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+          assert actual == claimed
+          assert receipt['source']['filename'] == 'diana-23.mp4'
+          assert receipt['source']['sha256'] == '9b75fffe7da6b9ebf8092286a7864655df032f84712ad5fb2f4bff8a03604e4a'
+          assert receipt['uses_language_model'] is False
+          assert receipt['requires_screenshot_review'] is False
+          assert receipt['canonical_promotion_allowed'] is False
+          assert receipt['profile']['card_pixel_scale_source'] == 'EXACT_VERIFIED_PROFILE_PLUS_LIVE_REVIEWED_CARDBACK_WIDTH'
+          assert receipt['played_layout']['uses_fixed_screen_center'] is False
+          assert receipt['played_layout']['responsive_policy'] == 'RECOMPUTE_LIVE_SEAT_AXES_EVERY_FRAME'
+          deals = receipt['reconstruction']['deals']
+          summary = {
+              'schema': 'diana23-responsive-result-summary/v1',
+              'algorithm_sha': 'da646515201191ff8ace13dcc0eb9108d9ee2fad',
+              'receipt_sha256': claimed,
+              'video_sha256': receipt['source']['sha256'],
+              'sampled_frame_count': receipt['sampling']['sampled_frame_count'],
+              'direct_visual_frame_count': receipt['sampling']['direct_visual_frame_count'],
+              'deal_count': len(deals),
+              'status_counts': receipt['reconstruction']['status_counts'],
+              'segment_assignment_count': sum(item['observed_card_count'] for item in deals),
+              'maximum_observed_cards_in_one_segment': max(item['observed_card_count'] for item in deals),
+              'complete_deal_count': sum(item['status'] == 'COMPLETE' for item in deals),
+              'played_layout': receipt['played_layout'],
+              'uses_language_model': False,
+              'requires_screenshot_review': False,
+              'canonical_promotion_allowed': False,
+          }
+          (path.parent / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          print('DIANA23_RESPONSIVE_RECEIPT_PASS ' + json.dumps({
+              key: summary[key]
+              for key in ('deal_count', 'segment_assignment_count', 'maximum_observed_cards_in_one_segment', 'complete_deal_count')
+          }, sort_keys=True))
+          PY
+          echo "artifact_path=$out" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: diana23-responsive-da646515
+          path: ${{ env.artifact_path }}
+          if-no-files-found: error
+          retention-days: 7
+
+# probe 15
