@@ -24,6 +24,7 @@ TaskKind = Literal[
     "GITHUB_DRAFT_REPAIR_V1",
     "IBF_READ_ONLY_ANALYSIS",
     "CHATGPT_ROLE_DISPATCH_V1",
+    "CHATGPT_ROLE_FOLLOWUP_V1",
 ]
 
 ALLOWED_TASK_KINDS = frozenset(
@@ -36,6 +37,7 @@ ALLOWED_TASK_KINDS = frozenset(
         "GITHUB_DRAFT_REPAIR_V1",
         "IBF_READ_ONLY_ANALYSIS",
         "CHATGPT_ROLE_DISPATCH_V1",
+        "CHATGPT_ROLE_FOLLOWUP_V1",
     }
 )
 
@@ -76,7 +78,24 @@ ROLE_DISPATCH_GOAL_KEYS = frozenset(
         "target_pr",
     }
 )
+ROLE_FOLLOWUP_GOAL_KEYS = frozenset(
+    {
+        "blocked_result_code",
+        "blocked_summary",
+        "dispatch_epoch",
+        "expected_head_sha",
+        "mailbox_pr",
+        "mode",
+        "origin_task_id",
+        "prior_task_id",
+        "repair_attempt",
+        "repository",
+        "role",
+        "target_pr",
+    }
+)
 ROLE_DISPATCH_ROLES = frozenset({"RECOGNIZER", "VIDEO", "BOOKS", "KNOWLEDGE"})
+ROLE_FOLLOWUP_MODES = frozenset({"REPAIR", "VERIFY"})
 ROLE_DISPATCH_REPOSITORY = "olegmed1-art/bridge-video-free"
 ROLE_DISPATCH_MAILBOX_PR = 1150
 
@@ -321,6 +340,48 @@ def validate_task_contract(task: ClaimedTask) -> None:
                 or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None
             ):
                 raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_SUCCESSOR_INVALID")
+        if task.current_step_key != "github.chatgpt.role.dispatch" or task.step_cursor != 0:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_STATE_INVALID")
+        if task.cost_cap_microusd != 0 or task.cost_reserved_microusd != 0:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_COST_INVALID")
+        return
+
+    if task.goal_type == "CHATGPT_ROLE_FOLLOWUP_V1":
+        goal = task.goal_json
+        if set(goal) != ROLE_FOLLOWUP_GOAL_KEYS:
+            raise AutopilotContractError("AUTOPILOT_ROLE_FOLLOWUP_FIELDS_INVALID")
+        if goal.get("repository") != ROLE_DISPATCH_REPOSITORY:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_REPOSITORY_INVALID")
+        if goal.get("mailbox_pr") != ROLE_DISPATCH_MAILBOX_PR:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_MAILBOX_INVALID")
+        if goal.get("role") not in ROLE_DISPATCH_ROLES:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_ROLE_INVALID")
+        for key in ("target_pr", "dispatch_epoch"):
+            value = goal.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1_000_000:
+                raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_NUMBER_INVALID")
+        expected_head = goal.get("expected_head_sha")
+        if not isinstance(expected_head, str) or re.fullmatch(r"[0-9a-f]{40}", expected_head) is None:
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_HEAD_INVALID")
+        if goal.get("mode") not in ROLE_FOLLOWUP_MODES or goal.get("repair_attempt") != 1:
+            raise AutopilotContractError("AUTOPILOT_ROLE_FOLLOWUP_MODE_INVALID")
+        for key in ("origin_task_id", "prior_task_id"):
+            value = goal.get(key)
+            if not isinstance(value, str) or re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+                value,
+            ) is None:
+                raise AutopilotContractError("AUTOPILOT_ROLE_FOLLOWUP_TASK_ID_INVALID")
+        result_code = goal.get("blocked_result_code")
+        summary = goal.get("blocked_summary")
+        if (
+            not isinstance(result_code, str)
+            or re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", result_code) is None
+            or not isinstance(summary, str)
+            or not 1 <= len(summary) <= 160
+            or any(ord(character) < 32 or ord(character) == 127 for character in summary)
+        ):
+            raise AutopilotContractError("AUTOPILOT_ROLE_FOLLOWUP_CONTEXT_INVALID")
         if task.current_step_key != "github.chatgpt.role.dispatch" or task.step_cursor != 0:
             raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_STATE_INVALID")
         if task.cost_cap_microusd != 0 or task.cost_reserved_microusd != 0:

@@ -6,6 +6,7 @@ import os
 import urllib.error
 from unittest.mock import patch
 
+import psycopg
 import pytest
 
 from oracle_autopilot.contract import (
@@ -17,6 +18,7 @@ from oracle_autopilot.contract import (
     validate_task_contract,
 )
 from oracle_autopilot.worker import (
+    _dispatch_body,
     _publish_role_dispatch,
     WorkerConfig,
     drain_ready,
@@ -320,6 +322,52 @@ def test_chatgpt_role_dispatch_task_is_public_and_exactly_bounded():
             )
 
 
+def test_chatgpt_role_followup_is_one_bounded_repair_or_verification():
+    base_goal = {
+        "repository": "olegmed1-art/bridge-video-free",
+        "mailbox_pr": 1150,
+        "role": "RECOGNIZER",
+        "target_pr": 1106,
+        "expected_head_sha": "a" * 40,
+        "dispatch_epoch": 2,
+        "mode": "REPAIR",
+        "repair_attempt": 1,
+        "origin_task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "prior_task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "blocked_result_code": "RECOGNIZER_READINESS_GAP",
+        "blocked_summary": "Independent holdout evidence is missing.",
+    }
+    validate_task_contract(
+        _task(
+            goal_type="CHATGPT_ROLE_FOLLOWUP_V1",
+            goal_json=base_goal,
+            current_step_key="github.chatgpt.role.dispatch",
+        )
+    )
+    validate_task_contract(
+        _task(
+            goal_type="CHATGPT_ROLE_FOLLOWUP_V1",
+            goal_json={**base_goal, "mode": "VERIFY"},
+            current_step_key="github.chatgpt.role.dispatch",
+        )
+    )
+
+    for bad_goal in (
+        {**base_goal, "repair_attempt": 2},
+        {**base_goal, "mode": "READ_ONLY"},
+        {**base_goal, "blocked_result_code": "owner input"},
+        {**base_goal, "private_prompt": "unbounded"},
+    ):
+        with pytest.raises(AutopilotContractError):
+            validate_task_contract(
+                _task(
+                    goal_type="CHATGPT_ROLE_FOLLOWUP_V1",
+                    goal_json=bad_goal,
+                    current_step_key="github.chatgpt.role.dispatch",
+                )
+            )
+
+
 def test_role_dispatch_broker_config_pins_exact_endpoint():
     draft_url = (
         "https://bridge-school-autopilot-cslfiz83g-"
@@ -340,6 +388,27 @@ def test_role_dispatch_broker_config_pins_exact_endpoint():
         )
 
 
+def test_repair_dispatch_body_carries_bounded_failure_context():
+    payload = {
+        "dispatch_id": "462b8120-9039-4395-bbfb-2b4fbabdc486",
+        "dispatch_epoch": 2,
+        "role": "RECOGNIZER",
+        "task_fingerprint": "b" * 64,
+        "target_pr": 1106,
+        "mode": "REPAIR",
+        "repair_attempt": 1,
+        "origin_task_id": "550e8400-e29b-41d4-a716-446655440001",
+        "prior_task_id": "550e8400-e29b-41d4-a716-446655440001",
+        "blocked_result_code": "RECOGNIZER_READINESS_GAP",
+        "blocked_summary": "Independent holdout evidence is missing.",
+    }
+    body = _dispatch_body(payload)
+    assert "mode=REPAIR" in body
+    assert "repair_attempt=1" in body
+    assert "instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE" in body
+    assert "secret" not in body.lower()
+
+
 def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch):
     dispatch_id = "462b8120-9039-4395-bbfb-2b4fbabdc486"
     request_payload = {
@@ -350,6 +419,7 @@ def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch)
         "expected_head_sha": "a" * 40,
         "dispatch_epoch": 1,
         "task_fingerprint": "b" * 64,
+        "mode": "READ_ONLY",
         "prepared_at_epoch": 1_789_150_000,
     }
     response_payload = {
@@ -442,6 +512,12 @@ def test_role_dispatch_outbox_marks_exact_broker_draft_pr_sent(monkeypatch):
         "prepared_at_epoch": 1789150000,
         "claim_epoch": 2,
         "attempt_no": 1,
+        "mode": "READ_ONLY",
+        "repair_attempt": 0,
+        "origin_task_id": None,
+        "prior_task_id": None,
+        "blocked_result_code": None,
+        "blocked_summary": None,
     }
     calls = []
     pending = [claimed]
@@ -471,6 +547,48 @@ def test_role_dispatch_outbox_marks_exact_broker_draft_pr_sent(monkeypatch):
         1152,
     )
     assert len(sent[4]) == 64
+
+
+def test_role_dispatch_outbox_rolls_forward_safely_before_migration_0323(monkeypatch):
+    legacy_claim = {
+        "dispatch_id": "462b8120-9039-4395-bbfb-2b4fbabdc486",
+        "repository": "olegmed1-art/bridge-video-free",
+        "mailbox_pr": 1150,
+        "role": "KNOWLEDGE",
+        "target_pr": 1129,
+        "expected_head_sha": "a" * 40,
+        "dispatch_epoch": 1,
+        "task_fingerprint": "b" * 64,
+        "prepared_at_epoch": 1789150000,
+        "claim_epoch": 2,
+        "attempt_no": 1,
+    }
+    calls: list[str] = []
+    legacy_pending = [legacy_claim]
+    published: list[dict] = []
+
+    def fake_rpc(_config, sql, _params):
+        calls.append(sql)
+        if "claim_role_dispatch_outbox_v2" in sql:
+            raise psycopg.errors.UndefinedFunction("v2 not installed")
+        if "claim_role_dispatch_outbox(" in sql:
+            return legacy_pending.pop(0) if legacy_pending else None
+        if "mark_role_dispatch_sent" in sql:
+            return {"marked": True}
+        return None
+
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker._publish_role_dispatch",
+        lambda payload: published.append(payload) or {"dispatch_pull_request": 1152},
+    )
+    config = WorkerConfig(dsn=DIRECT_DSN, worker_id="oracle-test")
+    assert drain_role_dispatch_outbox(config) == 1
+    assert any("claim_role_dispatch_outbox_v2" in sql for sql in calls)
+    assert any("claim_role_dispatch_outbox(" in sql for sql in calls)
+    assert published[0]["mode"] == "READ_ONLY"
+    assert published[0]["repair_attempt"] == 0
+
 
 def test_github_draft_repair_task_is_exactly_bounded():
     goal = _draft_goal()
