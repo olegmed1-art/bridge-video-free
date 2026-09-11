@@ -79,24 +79,27 @@ jobs:
               tail -n 1 "$results/$name.log" | sed -E 's#/home/ubuntu/[^ ]+#PRIVATE_PATH#g' | sed "s/^/AUTONOMOUS_LOG_${name}=/"
             fi
           done
-          if [[ -s "$results/diana-23.json" ]]; then
-            python3 - "$results/diana-23.json" <<'PY'
+          for receipt_path in "$results"/diana-*.json; do
+            [[ -s "$receipt_path" ]] || continue
+            python3 - "$receipt_path" <<'PY'
           import json
           import sys
-          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          data = json.load(open(path, encoding="utf-8"))
           for index, deal in enumerate(data["reconstruction"]["deals"], 1):
               conflicts = deal.get("conflicts") or []
               if conflicts:
                   reasons = ",".join(sorted({str(item.get("reason", "UNKNOWN")) for item in conflicts}))
                   print(
-                      f"AUTONOMOUS_D23_CONFLICT segment={index} "
+                      f"AUTONOMOUS_CONFLICT video={path.stem} segment={index} "
                       f"first_ms={deal['first_timestamp_ms']} last_ms={deal['last_timestamp_ms']} "
                       f"observed={deal['observed_card_count']} reasons={reasons} count={len(conflicts)}"
                   )
           PY
-          fi
+          done
           echo "AUTONOMOUS_STATUS active=$active current=$current completed=$completed elapsed_seconds=$elapsed_seconds cpu_percent=$cpu_percent input_percent=$input_percent"
           uptime | sed 's/.*load average: /AUTONOMOUS_LOAD_AVERAGE=/'
           REMOTE
 
-# probe 35
+# probe 36
