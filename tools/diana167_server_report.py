@@ -194,6 +194,108 @@ def _frame_at(capture: Any, timestamp_ms: int) -> Any | None:
     return frame if ok else None
 
 
+def _card_windows(suit: str, y_offset: int) -> dict[str, tuple[int, int, int, int]]:
+    top_x = {"H": (300, 520), "C": (450, 720), "D": (660, 900), "S": (850, 1060)}[suit]
+    side_y = {"H": (285, 350), "C": (330, 395), "D": (375, 440), "S": (420, 490)}[suit]
+    return {
+        "N": (top_x[0], 5 + y_offset, top_x[1], 100 + y_offset),
+        "E": (1160, side_y[0] + y_offset, 1360, side_y[1] + y_offset),
+        "S": (top_x[0], 775 + y_offset, top_x[1], 900 + y_offset),
+        "W": (0, side_y[0] + y_offset, 175, side_y[1] + y_offset),
+    }
+
+
+def _load_card_templates(package: Path, manifest: dict[str, Any]) -> dict[str, list[Any]]:
+    cv2, np = _runtime()
+    result: dict[str, list[Any]] = defaultdict(list)
+    for item in manifest["templates"]:
+        path = package / item["path"]
+        if sha256_file(path) != item["sha256"]:
+            raise RuntimeError("gold card template hash mismatch")
+        image = cv2.imdecode(np.frombuffer(path.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None or image.shape[:2] != (40, 19):
+            raise RuntimeError("gold card template size mismatch")
+        result[item["card"]].append(image)
+    if set(result) != {rank + suit for rank in rank_layout.RANKS for suit in rank_layout.SUITS}:
+        raise RuntimeError("gold card template deck is incomplete")
+    if any(len(values) != 2 for values in result.values()):
+        raise RuntimeError("gold card template variants are incomplete")
+    return dict(result)
+
+
+def _match_card(image: Any, card: str, variants: list[Any], y_offset: int) -> dict[str, Any]:
+    cv2, _ = _runtime()
+    best = {"score": -2.0, "seat": "", "x": -1, "y": -1}
+    for seat, (x0, y0, x1, y1) in _card_windows(card[1], y_offset).items():
+        region = image[y0:y1, x0:x1]
+        for template in variants:
+            response = cv2.matchTemplate(region, template, cv2.TM_CCOEFF_NORMED)
+            _, score, _, location = cv2.minMaxLoc(response)
+            if float(score) > best["score"]:
+                best = {"score": float(score), "seat": seat, "x": x0 + int(location[0]), "y": y0 + int(location[1])}
+    return best
+
+
+def _gate_offset(image: Any, templates: dict[str, list[Any]], offsets: list[int]) -> tuple[int | None, dict[str, Any]]:
+    gate_cards = ("AH", "AC", "AD", "AS", "KH", "KC", "KD", "KS")
+    candidates = []
+    for offset in offsets:
+        matches = {card: _match_card(image, card, templates[card], offset) for card in gate_cards}
+        passed = sum(item["score"] >= 0.58 for item in matches.values())
+        score = float(median(item["score"] for item in matches.values()))
+        candidates.append((passed, score, -offset, offset, matches))
+    passed, score, _, offset, matches = max(candidates)
+    if passed < 7 or score < 0.62:
+        return None, {"gate_cards_passed": passed, "gate_median": round(score, 6)}
+    return offset, matches
+
+
+def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset: int) -> tuple[dict[str, Any] | None, str]:
+    matches = {card: _match_card(image, card, variants, y_offset) for card, variants in templates.items()}
+    scores = [item["score"] for item in matches.values()]
+    if min(scores) < 0.55 or float(median(scores)) < 0.68:
+        return None, "template_weight_gate"
+    counts = Counter(item["seat"] for item in matches.values())
+    if counts != Counter({seat: 13 for seat in rank_layout.SEATS}):
+        return None, "seat_count_gate"
+    points = [(card, item["x"], item["y"]) for card, item in matches.items()]
+    for index, (first_card, first_x, first_y) in enumerate(points):
+        for second_card, second_x, second_y in points[index + 1 :]:
+            if abs(first_x - second_x) < 8 and abs(first_y - second_y) < 8:
+                return None, "duplicate_location_gate"
+    for seat in rank_layout.SEATS:
+        for suit in rank_layout.SUITS:
+            cards = [(card, matches[card]["x"]) for card in matches if card[1] == suit and matches[card]["seat"] == seat]
+            ordered = [rank_layout.RANKS.index(card[0]) for card, _ in sorted(cards, key=lambda value: value[1])]
+            if ordered != sorted(ordered):
+                return None, "screen_rank_order_gate"
+    hands = {seat: {suit: [] for suit in rank_layout.SUITS} for seat in rank_layout.SEATS}
+    for card, item in matches.items():
+        hands[item["seat"]][card[1]].append(card[0])
+    for seat in rank_layout.SEATS:
+        for suit in rank_layout.SUITS:
+            hands[seat][suit].sort(key=rank_layout.RANKS.index)
+    return {"matches": matches, "hands": hands, "minimum": min(scores), "median": float(median(scores))}, "full"
+
+
+def _fuse_template_layouts(first: dict[str, Any], second: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    rows = []
+    for card in sorted(first["matches"], key=lambda value: (rank_layout.SUITS.index(value[1]), rank_layout.RANKS.index(value[0]))):
+        a, b = first["matches"][card], second["matches"][card]
+        if a["seat"] != b["seat"] or abs(a["x"] - b["x"]) > 5 or abs(a["y"] - b["y"]) > 5:
+            return None, "temporal_position_gate"
+        values = [float(a["score"]), float(b["score"])]
+        rows.append({
+            "seat": a["seat"],
+            "card": card,
+            "weight_median": round(float(median(values)), 6),
+            "weight_min": round(float(min(values)), 6),
+            "observations": 2,
+            "confidence_kind": "TEMPLATE_SIMILARITY_UNCALIBRATED",
+        })
+    return {"hands": first["hands"], "weights": sorted(rows, key=lambda item: (rank_layout.SEATS.index(item["seat"]), rank_layout.SUITS.index(item["card"][1]), rank_layout.RANKS.index(item["card"][0]))), "minimum": min(item["weight_min"] for item in rows), "median": float(median(item["weight_median"] for item in rows))}, "full"
+
+
 def _hands_key(hands: dict[str, Any]) -> str:
     return canonical_hash({seat: {suit: "".join(hands[seat][suit]) for suit in rank_layout.SUITS} for seat in rank_layout.SEATS})
 
@@ -221,10 +323,10 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
     work.mkdir(parents=True, exist_ok=True)
     screenshots = output / "screenshots"
     screenshots.mkdir(parents=True, exist_ok=True)
-    reference_path, profile_path, raw_profile = build_gold_profile(gold_zip, work)
-    profile = rank_layout.load_profile(profile_path)
-    reference, _, _, _ = rank_layout._read_frame(reference_path, profile)
-    bank = rank_layout._template_bank(reference, profile)
+    _, _, raw_profile = build_gold_profile(gold_zip, work)
+    package = work / "gold" / "bridgit_gold_v2"
+    manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
+    templates = _load_card_templates(package, manifest)
 
     capture = cv2.VideoCapture(str(video))
     if not capture.isOpened():
@@ -252,23 +354,26 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
     last_attempt_ms = -10**9
     registration_offsets: Counter[int] = Counter()
     try:
-        if width != profile.width or height < profile.height or height > profile.height + 120:
+        profile_width = int(raw_profile["frame_size"]["width"])
+        profile_height = int(raw_profile["frame_size"]["height"])
+        if width != profile_width or height < profile_height or height > profile_height + 120:
             rejections[f"frame_size_{width}x{height}"] += 1
         else:
+            offsets = list(dict.fromkeys((height - profile_height, 0)))
             timestamp_ms = 0
             sampled = 0
             while timestamp_ms < duration_ms and len(recognized) < max_deals * 8:
                 sampled += 1
                 if sampled % 60 == 0:
-                    print(json.dumps({"progress_timestamp": format_timestamp(timestamp_ms), "recognized_candidates": len(recognized), "registration_offsets": dict(registration_offsets)}, ensure_ascii=False), flush=True)
+                    print(json.dumps({"progress_timestamp": format_timestamp(timestamp_ms), "recognized_candidates": len(recognized), "registration_offsets": dict(registration_offsets), "top_rejections": rejections.most_common(6)}, ensure_ascii=False), flush=True)
                 first_original = _frame_at(capture, timestamp_ms)
                 if first_original is None:
                     rejections["decode"] += 1
                     timestamp_ms += scan_ms
                     continue
-                first, viewport_y, reason = _registered_game_frame(first_original, bank, profile)
-                if first is None or viewport_y is None:
-                    rejections[reason] += 1
+                viewport_y, gate = _gate_offset(first_original, templates, offsets)
+                if viewport_y is None:
+                    rejections[f"gold_gate_{gate['gate_cards_passed']}"] += 1
                     timestamp_ms += scan_ms
                     continue
                 registration_offsets[viewport_y] += 1
@@ -281,57 +386,44 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
                     rejections["second_decode"] += 1
                     timestamp_ms += scan_ms
                     continue
-                second, second_viewport_y, reason_second = _registered_game_frame(second_original, bank, profile, preferred_y=viewport_y)
-                if second is None or second_viewport_y != viewport_y:
-                    rejections[f"second_{reason_second}"] += 1
+                first_layout, first_reason = _full_template_layout(first_original, templates, viewport_y)
+                if first_layout is None:
+                    rejections[first_reason] += 1
+                    timestamp_ms += scan_ms
+                    continue
+                second_viewport_y, second_gate = _gate_offset(second_original, templates, [viewport_y])
+                if second_viewport_y != viewport_y:
+                    rejections[f"second_gold_gate_{second_gate['gate_cards_passed']}"] += 1
+                    timestamp_ms += scan_ms
+                    continue
+                second_layout, second_reason = _full_template_layout(second_original, templates, viewport_y)
+                if second_layout is None:
+                    rejections[f"second_{second_reason}"] += 1
+                    timestamp_ms += scan_ms
+                    continue
+                fused, fused_reason = _fuse_template_layouts(first_layout, second_layout)
+                if fused is None:
+                    rejections[fused_reason] += 1
                     timestamp_ms += scan_ms
                     continue
                 last_attempt_ms = timestamp_ms
-                frame_dir = work / f"candidate_{timestamp_ms:010d}"
-                frame_dir.mkdir(parents=True, exist_ok=True)
-                paths = [frame_dir / "frame_1.png", frame_dir / "frame_2.png"]
-                if not cv2.imwrite(str(paths[0]), first) or not cv2.imwrite(str(paths[1]), second):
-                    raise RuntimeError("candidate frame write failed")
-                hashes = [sha256_file(path) for path in paths]
-                try:
-                    result = rank_layout._recognize_frames(
-                        reference_path,
-                        paths,
-                        profile,
-                        expected_frame_sha256s=hashes,
-                        observation_timestamps_ms=[timestamp_ms, second_ms],
-                    )
-                except Exception as exc:  # retained only as a bounded reason class
-                    rejections[f"recognizer_exception_{type(exc).__name__}"] += 1
-                    timestamp_ms += scan_ms
-                    continue
-                status = str(result.get("status") or "UNKNOWN")
-                if status not in {"SHADOW_FULL_LAYOUT_CANDIDATE", "PENDING_TEMPORAL_CONSENSUS"}:
-                    rejections[status] += 1
-                    timestamp_ms += scan_ms
-                    continue
-                weights = _card_weights(result)
-                if len(weights) != 52:
-                    rejections["weights_not_52"] += 1
-                    timestamp_ms += scan_ms
-                    continue
-                key = _hands_key(result["hands"])
+                key = _hands_key(fused["hands"])
                 screenshot = screenshots / f"deal_{len(recognized) + 1:03d}_{timestamp_ms:010d}.png"
                 if not cv2.imwrite(str(screenshot), first_original):
                     raise RuntimeError("deal screenshot write failed")
                 recognized.append({
                     "timestamp_ms": timestamp_ms,
                     "timestamp": format_timestamp(timestamp_ms),
-                    "status": status,
+                    "status": "SHADOW_FULL_LAYOUT_CANDIDATE",
                     "layout_sha256": key,
                     "screenshot": str(screenshot.relative_to(output)),
                     "screenshot_sha256": sha256_file(screenshot),
-                    "game_viewport": {"x": 0, "y": viewport_y, "width": profile.width, "height": profile.height},
-                    "hands": result["hands"],
-                    "integrity": result.get("integrity"),
-                    "evidence": result.get("evidence"),
-                    "weights": weights,
-                    "receipt": {k: v for k, v in result.items() if k != "_visual_observations"},
+                    "game_viewport": {"x": 0, "y": viewport_y, "width": profile_width, "height": profile_height},
+                    "hands": fused["hands"],
+                    "integrity": {"cards": 52, "unique": 52, "seat_counts": {seat: 13 for seat in rank_layout.SEATS}},
+                    "evidence": {"minimum_assigned_score": round(fused["minimum"], 6), "median_assigned_score": round(fused["median"], 6), "independent_frames": 2, "confidence_kind": "TEMPLATE_SIMILARITY_UNCALIBRATED"},
+                    "weights": fused["weights"],
+                    "receipt": {"method": "104_HUMAN_VERIFIED_CARD_CORNERS_PLUS_TEMPORAL_POSITION_CONSENSUS", "bridge_logic_weighting": False},
                 })
                 timestamp_ms += scan_ms
     finally:
