@@ -1,0 +1,97 @@
+name: Diana 23 reset diagnostic exact-head one-shot
+
+on:
+  push:
+    branches: [codex/diana-autonomous-finalize-20260911]
+    paths: ['.github/workflows/diana23-reset-diagnostic-once.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Diagnose bounded reset window
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/d23-reset"
+          mkdir -p "$work/out"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          remote="/tmp/d23-reset-${GITHUB_RUN_ID}.json"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "D23_DIAG_OUT='$remote' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          trap 'rm -f "$D23_DIAG_OUT"' EXIT
+          root=/home/ubuntu/bridge-school-private-media/diana-23-26
+          code="$root/autonomous-code-8375477d"
+          venv="$root/recognition-diana23/pixel-venv"
+          PYTHONPATH="$code" "$venv/bin/python" - "$root" "$D23_DIAG_OUT" <<'PY'
+          import hashlib, json, sys
+          from pathlib import Path
+          import cv2
+          from tools.bridge_vision_autonomous_video import _json, _inside, _read, decode_frame, parse_profile
+          from bridge_vision.bridgit_visible_hand_observer import build_rank_bank, observe_frame
+          root=Path(sys.argv[1]).resolve(); out=Path(sys.argv[2])
+          profile_path=root/'recognition-diana23/visible-hand-profile-v1.runtime.json'
+          raw=_json(profile_path); profile=parse_profile(raw)
+          refs={}
+          for ref_id,(raw_path,expected) in profile.references.items():
+              p=_inside(root, profile_path.parent/raw_path, 'reference')
+              b=_read(p, 20_000_000, 'reference')
+              assert hashlib.sha256(b).hexdigest()==expected
+              refs[ref_id]=decode_frame(b, profile)
+          bank=build_rank_bank(profile,refs)
+          cap=cv2.VideoCapture(str(root/'diana-23.mp4')); assert cap.isOpened()
+          rows=[]; baseline=set()
+          for ts in range(4367000,4375201,200):
+              cap.set(cv2.CAP_PROP_POS_MSEC, ts)
+              ok,img=cap.read()
+              if not ok: continue
+              result=observe_frame(img,bank,profile)
+              sig=sorted({(x['seat'],x['card']) for x in result.get('cards',[]) if x.get('confidence',0)>=0.95})
+              current=set(sig)
+              rows.append({'timestamp_ms':ts,'signature':sig,'count':len(sig),'novel':len(current-baseline),'disappeared':len(baseline-current),'similarity':(len(current&baseline)/len(current|baseline) if current|baseline else 1.0)})
+              baseline |= current
+          cap.release()
+          out.write_text(json.dumps({'rows':rows},ensure_ascii=False,sort_keys=True,separators=(',',':')),encoding='utf-8')
+          PY
+          scp -q -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST:$remote" "$work/out/reset.json"
+          python3 -m json.tool "$work/out/reset.json" >/dev/null
+          echo RESET_DIAGNOSTIC_PASS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: diana23-reset-diagnostic
+          path: ${{ runner.temp }}/d23-reset/out/reset.json
+          retention-days: 1
+          if-no-files-found: error
