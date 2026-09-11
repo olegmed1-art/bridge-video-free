@@ -167,6 +167,27 @@ def _full_geometry(image: Any, bank: Any, profile: Any) -> tuple[bool, str]:
     return True, "full"
 
 
+def _registered_game_frame(image: Any, bank: Any, profile: Any, preferred_y: int | None = None) -> tuple[Any | None, int | None, str]:
+    """Find the 1920x1010 game viewport inside a taller recording, from pixels."""
+    height, width = image.shape[:2]
+    if width != profile.width or height < profile.height or height > profile.height + 120:
+        return None, None, f"frame_size_{width}x{height}"
+    extra = height - profile.height
+    offsets = []
+    for value in (preferred_y, extra, 0):
+        if value is not None and value not in offsets:
+            offsets.append(value)
+    offsets.extend(value for value in range(extra + 1) if value not in offsets)
+    last_reason = "viewport_not_found"
+    for y0 in offsets:
+        cropped = image[y0 : y0 + profile.height, : profile.width]
+        full, reason = _full_geometry(cropped, bank, profile)
+        if full:
+            return cropped, y0, "full"
+        last_reason = reason
+    return None, None, last_reason
+
+
 def _frame_at(capture: Any, timestamp_ms: int) -> Any | None:
     cv2, _ = _runtime()
     capture.set(cv2.CAP_PROP_POS_MSEC, float(timestamp_ms))
@@ -230,33 +251,35 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
     rejections: Counter[str] = Counter()
     recognized: list[dict[str, Any]] = []
     last_attempt_ms = -10**9
+    registration_offsets: Counter[int] = Counter()
     try:
-        if (width, height) != (profile.width, profile.height):
+        if width != profile.width or height < profile.height or height > profile.height + 120:
             rejections[f"frame_size_{width}x{height}"] += 1
         else:
             timestamp_ms = 0
             while timestamp_ms < duration_ms and len(recognized) < max_deals * 8:
-                first = _frame_at(capture, timestamp_ms)
-                if first is None:
+                first_original = _frame_at(capture, timestamp_ms)
+                if first_original is None:
                     rejections["decode"] += 1
                     timestamp_ms += scan_ms
                     continue
-                full, reason = _full_geometry(first, bank, profile)
-                if not full:
+                first, viewport_y, reason = _registered_game_frame(first_original, bank, profile)
+                if first is None or viewport_y is None:
                     rejections[reason] += 1
                     timestamp_ms += scan_ms
                     continue
+                registration_offsets[viewport_y] += 1
                 if timestamp_ms - last_attempt_ms < 15000:
                     timestamp_ms += scan_ms
                     continue
                 second_ms = min(timestamp_ms + 700, max(timestamp_ms + 1, duration_ms - 1))
-                second = _frame_at(capture, second_ms)
-                if second is None:
+                second_original = _frame_at(capture, second_ms)
+                if second_original is None:
                     rejections["second_decode"] += 1
                     timestamp_ms += scan_ms
                     continue
-                full_second, reason_second = _full_geometry(second, bank, profile)
-                if not full_second:
+                second, second_viewport_y, reason_second = _registered_game_frame(second_original, bank, profile, preferred_y=viewport_y)
+                if second is None or second_viewport_y != viewport_y:
                     rejections[f"second_{reason_second}"] += 1
                     timestamp_ms += scan_ms
                     continue
@@ -291,7 +314,8 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
                     continue
                 key = _hands_key(result["hands"])
                 screenshot = screenshots / f"deal_{len(recognized) + 1:03d}_{timestamp_ms:010d}.png"
-                shutil.copy2(paths[0], screenshot)
+                if not cv2.imwrite(str(screenshot), first_original):
+                    raise RuntimeError("deal screenshot write failed")
                 recognized.append({
                     "timestamp_ms": timestamp_ms,
                     "timestamp": format_timestamp(timestamp_ms),
@@ -299,6 +323,7 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
                     "layout_sha256": key,
                     "screenshot": str(screenshot.relative_to(output)),
                     "screenshot_sha256": sha256_file(screenshot),
+                    "game_viewport": {"x": 0, "y": viewport_y, "width": profile.width, "height": profile.height},
                     "hands": result["hands"],
                     "integrity": result.get("integrity"),
                     "evidence": result.get("evidence"),
@@ -341,7 +366,7 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
             "gold_drive_file_id": GOLD_FILE_ID,
             "gold_template_set_sha256": raw_profile["gold"]["template_set_sha256"],
         },
-        "sampling": {"scan_interval_ms": scan_ms, "policy": "FULL_LAYOUT_GATE_THEN_TWO_FRAME_PIXEL_CONSENSUS"},
+        "sampling": {"scan_interval_ms": scan_ms, "policy": "PIXEL_REGISTERED_FULL_LAYOUT_GATE_THEN_TWO_FRAME_CONSENSUS", "registration_y_offsets": dict(sorted(registration_offsets.items()))},
         "summary": {"deals": len(deals), "recognized_candidates": len(recognized), "rejections": dict(sorted(rejections.items()))},
         "deals": deals,
     }
