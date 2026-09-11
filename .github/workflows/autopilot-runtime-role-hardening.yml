@@ -1,0 +1,172 @@
+name: Autopilot runtime role hardening
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/autopilot-runtime-role-hardening.yml'
+      - 'tests/test_autopilot_runtime_role_hardening.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: >-
+    ${{ github.event_name == 'issue_comment' &&
+        github.event.comment.user.login == github.repository_owner &&
+        github.event.comment.body == '/autopilot harden-runtime-role-v1' &&
+        'oracle-instance-workload-mutation' ||
+        format('autopilot-runtime-role-hardening-noop-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate role-hardening contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet \
+            'pytest==8.4.2' 'PyYAML==6.0.3'
+          python -m pytest -q tests/test_autopilot_runtime_role_hardening.py
+
+  harden:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      github.event.issue.number == 1131 &&
+      github.event.comment.body == '/autopilot harden-runtime-role-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: database-production
+    steps:
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Harden exact runtime login atomically
+        id: harden
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}"
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          BEGIN;
+          DO $$
+          BEGIN
+              IF NOT pg_has_role(current_user, 'neon_superuser', 'SET') THEN
+                  RAISE EXCEPTION 'AUTOPILOT_ROLE_HARDENING_OWNER_INVALID';
+              END IF;
+              IF NOT EXISTS (
+                  SELECT 1 FROM pg_roles WHERE rolname='autopilot_runtime_login'
+              ) OR NOT pg_has_role(
+                  'autopilot_runtime_login', 'autopilot_runtime_principal', 'MEMBER'
+              ) THEN
+                  RAISE EXCEPTION 'AUTOPILOT_RUNTIME_LOGIN_CONTRACT_MISSING';
+              END IF;
+              IF NOT (
+                  has_function_privilege(
+                      'autopilot_runtime_principal',
+                      'autopilot.claim_next_task(text,integer)', 'EXECUTE'
+                  ) AND has_function_privilege(
+                      'autopilot_runtime_principal',
+                      'autopilot.complete_task(uuid,text,bigint,text,text,jsonb)', 'EXECUTE'
+                  ) AND has_function_privilege(
+                      'autopilot_runtime_principal',
+                      'autopilot.heartbeat_task(uuid,text,bigint,integer)', 'EXECUTE'
+                  ) AND has_function_privilege(
+                      'autopilot_runtime_principal',
+                      'autopilot.reconcile_stale_tasks()', 'EXECUTE'
+                  ) AND has_function_privilege(
+                      'autopilot_runtime_principal',
+                      'autopilot.claim_role_dispatch_outbox_v2(text,integer)', 'EXECUTE'
+                  ) AND has_function_privilege(
+                      'autopilot_runtime_principal',
+                      'autopilot.mark_role_dispatch_sent(uuid,text,bigint,bigint,text)', 'EXECUTE'
+                  ) AND has_function_privilege(
+                      'autopilot_runtime_principal',
+                      'autopilot.fail_role_dispatch_outbox(uuid,text,bigint,text,integer)', 'EXECUTE'
+                  ) AND has_function_privilege(
+                      'autopilot_runtime_principal',
+                      'autopilot.reconcile_role_dispatch_callbacks()', 'EXECUTE'
+                  )
+              ) THEN
+                  RAISE EXCEPTION 'AUTOPILOT_RUNTIME_PRINCIPAL_RPC_INCOMPLETE';
+              END IF;
+          END $$;
+
+          SET LOCAL ROLE neon_superuser;
+          REVOKE neon_superuser FROM autopilot_runtime_login;
+          ALTER ROLE autopilot_runtime_login
+              NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+          RESET ROLE;
+
+          DO $$
+          DECLARE
+              attrs record;
+              memberships text[];
+          BEGIN
+              SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
+                INTO attrs FROM pg_roles WHERE rolname='autopilot_runtime_login';
+              IF attrs.rolsuper OR attrs.rolcreatedb OR attrs.rolcreaterole
+                 OR attrs.rolreplication OR attrs.rolbypassrls THEN
+                  RAISE EXCEPTION 'AUTOPILOT_RUNTIME_LOGIN_ATTRIBUTES_UNSAFE';
+              END IF;
+              SELECT array_agg(parent.rolname ORDER BY parent.rolname)
+                INTO memberships
+                FROM pg_auth_members member_link
+                JOIN pg_roles member ON member.oid=member_link.member
+                JOIN pg_roles parent ON parent.oid=member_link.roleid
+               WHERE member.rolname='autopilot_runtime_login';
+              IF memberships IS DISTINCT FROM ARRAY['autopilot_runtime_principal']::text[] THEN
+                  RAISE EXCEPTION 'AUTOPILOT_RUNTIME_LOGIN_MEMBERSHIP_UNSAFE: %', memberships;
+              END IF;
+              IF has_table_privilege(
+                     'autopilot_runtime_login', 'autopilot.task', 'SELECT'
+                 ) OR has_table_privilege(
+                     'autopilot_runtime_login', 'autopilot.task', 'INSERT'
+                 ) OR has_table_privilege(
+                     'autopilot_runtime_login',
+                     'autopilot.role_dispatch_followup', 'SELECT'
+                 ) OR NOT has_function_privilege(
+                     'autopilot_runtime_login',
+                     'autopilot.claim_next_task(text,integer)', 'EXECUTE'
+                 ) OR NOT has_function_privilege(
+                     'autopilot_runtime_login',
+                     'autopilot.claim_role_dispatch_outbox_v2(text,integer)', 'EXECUTE'
+                 ) THEN
+                  RAISE EXCEPTION 'AUTOPILOT_RUNTIME_LOGIN_LEAST_PRIVILEGE_FAILED';
+              END IF;
+          END $$;
+          COMMIT;
+          SQL
+          result="$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
+            "SELECT concat_ws('|',r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolreplication,r.rolbypassrls,has_table_privilege(r.rolname,'autopilot.task','SELECT'),has_function_privilege(r.rolname,'autopilot.claim_role_dispatch_outbox_v2(text,integer)','EXECUTE')) FROM pg_roles r WHERE r.rolname='autopilot_runtime_login'")"
+          test "$result" = 'f|f|f|f|f|f|t'
+          echo 'AUTOPILOT_RUNTIME_ROLE_HARDENING=PASS'
+
+      - name: Publish hardening result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          HARDEN_OUTCOME: ${{ steps.harden.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="Autopilot runtime least-privilege hardening: **${HARDEN_OUTCOME:-not-run}**. No credential value was read or printed." >/dev/null
