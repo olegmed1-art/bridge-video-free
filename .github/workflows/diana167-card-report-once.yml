@@ -92,7 +92,7 @@ jobs:
             --video "$video" \
             --gold-zip server-input/bridgit_gold_v2.zip \
             --output-dir server-output \
-            --scan-ms 10000 \
+            --scan-ms 30000 \
             --max-deals 40
 
       - name: Upload final PDF to the allowed Drive folder
