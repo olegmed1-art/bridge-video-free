@@ -35,8 +35,9 @@ _MIN_SEAT_GEOMETRY_MARGIN = 0.20
 _MIN_CARDBACK_REFERENCE_SCORE = 0.70
 _MIN_TRICK_RADIUS = 0.02
 # Bridgit places the West/East trick cards close to the closed-hand trays.
-# Production Diana frames measure about 0.83 of the authenticated W/E half-axis;
-# 0.90 admits that layout while keeping player trays outside the trick zone.
+# Verified Bridgit frames place side trick cards at about 0.83 of the
+# authenticated W/E half-axis; 0.90 admits that layout while keeping player
+# trays outside the trick zone.
 _MAX_TRICK_RADIUS = 0.90
 MIN_PLAYED_CARD_WIDTH_RATIO = 0.895
 MAX_PLAYED_CARD_WIDTH_RATIO = 0.990
