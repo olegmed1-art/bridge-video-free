@@ -1,0 +1,156 @@
+name: Diana 167 card report once
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/diana167-card-report-once.yml'
+      - 'tools/diana167_server_report.py'
+      - 'bridge_vision/**'
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'codex/bridgit-rank-layout-shadow-609' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      SOURCE_FILE_ID: 1XT8eYAunywdHAiNKNHhr-dO3kx7_Gyzf
+      SOURCE_PARENT_ID: 1Fr-H2NgBKEpp3q_H4FzNmQwCV6bj2x6b
+      FORBIDDEN_PARENT_ID: 16TVeL_595YU05H0VaRYzxo0IDJkfPAhg
+      GOLD_FILE_ID: 1MGaz14wswn2XOgi4AqqvzT2sNFLdOink
+      GOLD_SHA256: 2e7aeff84cfeb142fd310f4c4350207706d687748ee20d06f10895fd123c75e9
+      EXPECTED_SOURCE_NAME: 'Диана 167. 08.01. 2025. Необычные БК и Кьбид Майколса..mp4'
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Install pinned pixel and PDF runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q \
+            'numpy==2.2.6' 'scipy==1.15.3' 'opencv-python-headless==4.12.0.88' \
+            'reportlab==4.4.4' 'pypdf==6.1.1' 'google-auth==2.40.3' 'requests==2.32.5'
+          command -v pdftoppm >/dev/null
+
+      - name: Download exact allowed source and reviewed gold set
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p server-input server-output
+          python - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          from universal_video.drive_adapter import access_token, download_file, file_metadata
+
+          token=access_token()
+          source=file_metadata(os.environ['SOURCE_FILE_ID'], token)
+          assert source['id']==os.environ['SOURCE_FILE_ID']
+          assert source['name']==os.environ['EXPECTED_SOURCE_NAME']
+          parents=set(source.get('parents') or [])
+          assert os.environ['SOURCE_PARENT_ID'] in parents
+          assert os.environ['FORBIDDEN_PARENT_ID'] not in parents
+          assert source.get('mimeType')=='video/mp4'
+          video=Path('server-input')/source['name']
+          downloaded=download_file(source['id'], video, token, max_bytes=300_000_000, metadata=source)
+
+          gold=file_metadata(os.environ['GOLD_FILE_ID'], token)
+          assert gold['id']==os.environ['GOLD_FILE_ID']
+          assert gold['name']=='bridgit_gold_v2.zip'
+          gold_parents=set(gold.get('parents') or [])
+          assert os.environ['SOURCE_PARENT_ID'] in gold_parents
+          assert os.environ['FORBIDDEN_PARENT_ID'] not in gold_parents
+          archive=Path('server-input/bridgit_gold_v2.zip')
+          gold_downloaded=download_file(gold['id'], archive, token, max_bytes=2_000_000, metadata=gold)
+          assert gold_downloaded['_download_sha256']==os.environ['GOLD_SHA256']
+          print('SOURCE_IDENTITY_PASS')
+          print('FORBIDDEN_FOLDER_UNUSED_PASS')
+          print('SOURCE_BYTES='+str(video.stat().st_size))
+          print('SOURCE_SHA256='+downloaded['_download_sha256'])
+          print('GOLD_SHA256='+gold_downloaded['_download_sha256'])
+          PY
+
+      - name: Run server-only card recognizer and create PDF
+        shell: bash
+        run: |
+          set -euo pipefail
+          video="server-input/$EXPECTED_SOURCE_NAME"
+          python tools/diana167_server_report.py \
+            --video "$video" \
+            --gold-zip server-input/bridgit_gold_v2.zip \
+            --output-dir server-output \
+            --scan-ms 5000 \
+            --max-deals 40
+
+      - name: Upload final PDF to the allowed Drive folder
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          from pathlib import Path
+          import requests
+          from universal_video.drive_adapter import access_token
+
+          path=Path('server-output/Диана 167 — карты и веса — server v2.pdf')
+          metadata={'name': path.name, 'parents': [os.environ['SOURCE_PARENT_ID']]}
+          token=access_token()
+          response=requests.post(
+              'https://www.googleapis.com/upload/drive/v3/files',
+              headers={'Authorization': f'Bearer {token}'},
+              params={'uploadType': 'multipart', 'fields': 'id,name,parents,size,md5Checksum'},
+              files={
+                  'metadata': ('metadata', json.dumps(metadata, ensure_ascii=False), 'application/json; charset=UTF-8'),
+                  'file': (path.name, path.open('rb'), 'application/pdf'),
+              },
+              timeout=300,
+          )
+          response.raise_for_status()
+          item=response.json()
+          assert os.environ['SOURCE_PARENT_ID'] in set(item.get('parents') or [])
+          assert os.environ['FORBIDDEN_PARENT_ID'] not in set(item.get('parents') or [])
+          print('drive_pdf_id='+item['id'])
+          print('drive_pdf_name='+item['name'])
+          PY
+          echo 'PDF_DRIVE_UPLOAD_PASS'
+
+      - name: Publish retained report artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diana167-card-report-${{ github.run_id }}
+          path: |
+            server-output/Диана 167 — карты и веса — server v2.pdf
+            server-output/master_analysis.json
+            server-output/validation.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Summary
+        shell: bash
+        env:
+          PDF_ID: ${{ steps.publish.outputs.drive_pdf_id }}
+          PDF_NAME: ${{ steps.publish.outputs.drive_pdf_name }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          from pathlib import Path
+          data=json.loads(Path('server-output/master_analysis.json').read_text(encoding='utf-8'))
+          validation=json.loads(Path('server-output/validation.json').read_text(encoding='utf-8'))
+          print('# Diana 167 server card report')
+          print()
+          print(f"- deals: `{data['summary']['deals']}`")
+          print(f"- source_file_id: `{data['source']['drive_file_id']}`")
+          print(f"- forbidden_parent_used: `{str(data['source']['forbidden_parent_used']).lower()}`")
+          print(f"- bridge_logic_weighting: `{str(data['bridge_logic_weighting']).lower()}`")
+          print(f"- pdf_pages: `{validation['pages']}`")
+          print(f"- pdf_sha256: `{validation['sha256']}`")
+          print(f"- drive_pdf_id: `{os.environ['PDF_ID']}`")
+          print(f"- drive_pdf_name: `{os.environ['PDF_NAME']}`")
+          PY
