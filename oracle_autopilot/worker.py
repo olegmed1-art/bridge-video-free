@@ -827,9 +827,19 @@ def _publish_role_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         "role": str(payload["role"]),
         "task_fingerprint": str(payload["task_fingerprint"]),
         "target_pr": int(payload["target_pr"]),
-        "mode": "READ_ONLY",
+        "mode": str(payload["mode"]),
         "prepared_at_epoch": int(payload["prepared_at_epoch"]),
     }
+    if request_payload["mode"] != "READ_ONLY":
+        request_payload.update(
+            {
+                "repair_attempt": int(payload["repair_attempt"]),
+                "origin_task_id": str(payload["origin_task_id"]),
+                "prior_task_id": str(payload["prior_task_id"]),
+                "blocked_result_code": str(payload["blocked_result_code"]),
+                "blocked_summary": str(payload["blocked_summary"]),
+            }
+        )
     public_envelope = {
         key: value for key, value in request_payload.items() if key != "prepared_at_epoch"
     }
@@ -1027,7 +1037,10 @@ def execute_task(config: WorkerConfig, task: ClaimedTask) -> None:
         )
         return
 
-    if task.goal_type == "CHATGPT_ROLE_DISPATCH_V1":
+    if task.goal_type in {
+        "CHATGPT_ROLE_DISPATCH_V1",
+        "CHATGPT_ROLE_FOLLOWUP_V1",
+    }:
         row = _rpc_one(
             config,
             "SELECT * FROM autopilot.prepare_role_dispatch(%s::uuid, %s, %s)",
@@ -1143,17 +1156,32 @@ def drain_ready(config: WorkerConfig) -> int:
 
 
 def _dispatch_body(payload: dict[str, Any]) -> str:
-    return "\n".join(
-        (
-            "AUTOPILOT_DISPATCH_V1",
-            f"dispatch_id={payload['dispatch_id']}",
-            f"dispatch_epoch={payload['dispatch_epoch']}",
-            f"role={payload['role']}",
-            f"task_fingerprint={payload['task_fingerprint']}",
-            f"target_pr={payload['target_pr']}",
-            "mode=READ_ONLY",
+    lines = [
+        "AUTOPILOT_DISPATCH_V1",
+        f"dispatch_id={payload['dispatch_id']}",
+        f"dispatch_epoch={payload['dispatch_epoch']}",
+        f"role={payload['role']}",
+        f"task_fingerprint={payload['task_fingerprint']}",
+        f"target_pr={payload['target_pr']}",
+        f"mode={payload['mode']}",
+    ]
+    if payload["mode"] != "READ_ONLY":
+        lines.extend(
+            (
+                f"repair_attempt={payload['repair_attempt']}",
+                f"origin_task_id={payload['origin_task_id']}",
+                f"prior_task_id={payload['prior_task_id']}",
+                f"blocked_result_code={payload['blocked_result_code']}",
+                f"blocked_summary={payload['blocked_summary']}",
+                "instruction="
+                + (
+                    "DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE"
+                    if payload["mode"] == "REPAIR"
+                    else "READ_ONLY_VERIFY_REPAIR_NO_MUTATION"
+                ),
+            )
         )
-    )
+    return "\n".join(lines)
 
 
 def process_role_dispatch_outbox(config: WorkerConfig) -> bool:
@@ -1161,11 +1189,30 @@ def process_role_dispatch_outbox(config: WorkerConfig) -> bool:
     # lease above its complete worst-case HTTP budget so another worker cannot
     # acquire the same dispatch while the first publisher is still active.
     role_dispatch_lease_seconds = 300
-    row = _rpc_one(
-        config,
-        "SELECT * FROM autopilot.claim_role_dispatch_outbox(%s, %s)",
-        (config.worker_id, role_dispatch_lease_seconds),
-    )
+    try:
+        row = _rpc_one(
+            config,
+            "SELECT * FROM autopilot.claim_role_dispatch_outbox_v2(%s, %s)",
+            (config.worker_id, role_dispatch_lease_seconds),
+        )
+    except psycopg.errors.UndefinedFunction:
+        # Rolling deployment: the new worker can safely precede migration 0323.
+        # The legacy function can only return READ_ONLY dispatches.
+        row = _rpc_one(
+            config,
+            "SELECT * FROM autopilot.claim_role_dispatch_outbox(%s, %s)",
+            (config.worker_id, role_dispatch_lease_seconds),
+        )
+        if row:
+            row = {
+                **row,
+                "mode": "READ_ONLY",
+                "repair_attempt": 0,
+                "origin_task_id": None,
+                "prior_task_id": None,
+                "blocked_result_code": None,
+                "blocked_summary": None,
+            }
     if not row:
         return False
     dispatch_id = str(row["dispatch_id"])

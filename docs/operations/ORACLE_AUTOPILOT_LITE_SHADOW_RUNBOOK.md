@@ -61,6 +61,19 @@ An accepted external event is deduplicated by provider/event ID, correlated to
 one active wait, and returns the task to `READY`. It never transitions directly
 from `WAITING_EXTERNAL` to `DONE`.
 
+### Role failure continuation
+
+After migration `0323`, a terminal role result stops only its own lane; all
+other existing `READY` tasks remain claimable.  An accepted technical
+`BLOCKED` result creates one bounded `REPAIR`.  A successful repair creates one
+read-only `VERIFY`, and only successful verification releases the original
+dependent successor.  A failed verification cannot recurse.  Owner-only
+blockers remain an explicit owner boundary and never receive a fabricated
+repair.
+
+See `docs/architecture/AUTOPILOT_FAILURE_CONTINUATION_V1.md` for the complete
+contract and rolling-deployment order.
+
 ## Verification order
 
 1. Apply migration `0300` to a temporary Neon branch derived from the current branch.

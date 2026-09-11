@@ -6,6 +6,9 @@ on:
       - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/tests/322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/migrations/0323_autopilot_failure_continuation.sql'
+      - 'database/rollbacks/0323_autopilot_failure_continuation.sql'
+      - 'database/tests/323_autopilot_failure_continuation.sql'
       - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
   push:
     branches: [main]
@@ -13,6 +16,9 @@ on:
       - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/tests/322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/migrations/0323_autopilot_failure_continuation.sql'
+      - 'database/rollbacks/0323_autopilot_failure_continuation.sql'
+      - 'database/tests/323_autopilot_failure_continuation.sql'
       - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
 
 permissions:
@@ -131,12 +137,22 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/323_autopilot_failure_continuation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0323_autopilot_failure_continuation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql
           test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
             "SELECT to_regclass('autopilot.role_dispatch_outbox') IS NULL;")" = t
           test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM schema_migration WHERE migration_key='0322_autopilot_chatgpt_role_dispatch';")" = 0
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM schema_migration WHERE migration_key='0323_autopilot_failure_continuation';")" = 0
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/migrations/0322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0323_autopilot_failure_continuation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/323_autopilot_failure_continuation.sql

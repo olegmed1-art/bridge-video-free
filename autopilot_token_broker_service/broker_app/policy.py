@@ -183,7 +183,14 @@ class RoleDispatchRequest(BaseModel):
     role: Literal["RECOGNIZER", "VIDEO", "BOOKS", "KNOWLEDGE"]
     task_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     target_pr: int = Field(ge=1, le=1_000_000)
-    mode: Literal["READ_ONLY"]
+    mode: Literal["READ_ONLY", "REPAIR", "VERIFY"]
+    repair_attempt: Literal[0, 1] = 0
+    origin_task_id: str | None = None
+    prior_task_id: str | None = None
+    blocked_result_code: str | None = Field(
+        default=None, pattern=r"^[A-Z][A-Z0-9_]{0,63}$"
+    )
+    blocked_summary: str | None = Field(default=None, min_length=1, max_length=160)
 
     @model_validator(mode="after")
     def validate_dispatch_id(self) -> "RoleDispatchRequest":
@@ -193,4 +200,32 @@ class RoleDispatchRequest(BaseModel):
             raise ValueError("ROLE_DISPATCH_ID_INVALID") from exc
         if parsed.version != 4 or str(parsed) != self.dispatch_id:
             raise ValueError("ROLE_DISPATCH_ID_INVALID")
+        context = (
+            self.origin_task_id,
+            self.prior_task_id,
+            self.blocked_result_code,
+            self.blocked_summary,
+        )
+        if self.mode == "READ_ONLY":
+            if self.repair_attempt != 0 or any(value is not None for value in context):
+                raise ValueError("ROLE_DISPATCH_READ_ONLY_CONTEXT_INVALID")
+            return self
+        if self.repair_attempt != 1 or any(value is None for value in context):
+            raise ValueError("ROLE_DISPATCH_FOLLOWUP_CONTEXT_INVALID")
+        for value in (self.origin_task_id, self.prior_task_id):
+            try:
+                task_id = uuid.UUID(value or "")
+            except (ValueError, AttributeError) as exc:
+                raise ValueError("ROLE_DISPATCH_TASK_ID_INVALID") from exc
+            if task_id.version not in {1, 2, 3, 4, 5} or str(task_id) != value:
+                raise ValueError("ROLE_DISPATCH_TASK_ID_INVALID")
+        assert self.blocked_summary is not None
+        if (
+            any(ord(character) < 32 or ord(character) == 127 for character in self.blocked_summary)
+            or re.search(
+                r"(?i)(https?://|www\.|password|secret|token|api[_ -]?key|credential|private[_ -]?key)",
+                self.blocked_summary,
+            )
+        ):
+            raise ValueError("ROLE_DISPATCH_SUMMARY_INVALID")
         return self
