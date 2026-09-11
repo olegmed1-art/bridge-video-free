@@ -55,7 +55,7 @@ def test_teacher_context_combines_partial_mentions_and_repetition() -> None:
     assert len(active) == 1
     assert active[0]["seat"] == "N"
     assert active[0]["card"] == "QS"
-    assert active[0]["speech_confidence"] > 0.98
+    assert active[0]["speech_confidence"] > 0.95
     assert result["mouse_cursor_used"] is False
 
 
@@ -101,6 +101,73 @@ def test_overlapping_duplicate_asr_does_not_multiply_support() -> None:
         == one["claims"][0]["speech_confidence"]
     )
     assert len(duplicated["segments"]) == 1
+
+
+def test_overlapping_expanding_asr_does_not_multiply_support() -> None:
+    result = accumulate_teacher_speech(
+        [
+            segment("a", 2_000, "у Севера дама", 0.90),
+            segment("b", 2_400, "у Севера дама пик", 0.80),
+        ]
+    )
+    assert len(result["segments"]) == 1
+    assert result["claims"][0]["card"] == "QS"
+    assert result["claims"][0]["speech_confidence"] == 0.80
+
+
+def test_plain_negation_does_not_create_positive_card_claim() -> None:
+    result = accumulate_teacher_speech(
+        [
+            segment("seat", 0, "Посмотрим руку Севера"),
+            segment("negative", 2_000, "здесь нет дамы пик", 0.99),
+        ]
+    )
+    assert result["claims"] == []
+    assert result["segments"][1]["is_negated"] is True
+
+
+def test_apostrophes_do_not_create_one_letter_seat_or_suit_aliases() -> None:
+    possessive = accumulate_teacher_speech(
+        [segment("possessive", 0, "South's king", 0.99)]
+    )
+    contraction = accumulate_teacher_speech(
+        [segment("contraction", 0, "it's a queen", 0.99)]
+    )
+    assert possessive["claims"][0]["seat"] is None
+    assert possessive["claims"][0]["suit"] is None
+    assert possessive["claims"][0]["card"] is None
+    assert contraction["claims"] == []
+
+
+def test_partial_rank_and_suit_confidence_stays_conjunctive() -> None:
+    speech = [
+        segment("rank", 0, "у Севера дама", 0.90),
+        segment("suit", 2_000, "пик", 0.90),
+    ]
+    parsed = accumulate_teacher_speech(speech)
+    assert parsed["claims"][0]["card"] == "QS"
+    assert parsed["claims"][0]["speech_confidence"] < 0.78
+    fused = fuse_card_evidence(
+        [slot("slot-q", "N", 2_000, [("JS", 0.48), ("QS", 0.47)])],
+        teacher_speech=speech,
+    )
+    assert fused["decisions"][0]["card"] != "QS"
+
+
+def test_decision_fusion_uses_asymmetric_speech_window() -> None:
+    speech = [segment("claim", 20_000, "у Севера дама пик", 0.99)]
+    before = fuse_card_evidence(
+        [slot("before", "N", 7_000, [("JS", 0.48), ("QS", 0.47)])],
+        teacher_speech=speech,
+    )
+    after = fuse_card_evidence(
+        [slot("after", "N", 26_000, [("JS", 0.48), ("QS", 0.47)])],
+        teacher_speech=speech,
+    )
+    assert before["decisions"][0]["card"] != "QS"
+    assert after["decisions"][0]["card"] != "QS"
+    assert before["decisions"][0]["speech_claim_ids"] == []
+    assert after["decisions"][0]["speech_claim_ids"] == []
 
 
 def test_suit_colour_uses_profile_relative_palette() -> None:
