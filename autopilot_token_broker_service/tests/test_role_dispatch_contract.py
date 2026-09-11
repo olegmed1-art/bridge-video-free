@@ -56,6 +56,19 @@ def _request(**overrides: object) -> RoleDispatchRequest:
     return RoleDispatchRequest(**values)
 
 
+def _repair_request(**overrides: object) -> RoleDispatchRequest:
+    values: dict[str, object] = {
+        "mode": "REPAIR",
+        "repair_attempt": 1,
+        "origin_task_id": "550e8400-e29b-41d4-a716-446655440001",
+        "prior_task_id": "550e8400-e29b-41d4-a716-446655440001",
+        "blocked_result_code": "RECOGNIZER_READINESS_GAP",
+        "blocked_summary": "Independent holdout evidence is missing.",
+    }
+    values.update(overrides)
+    return _request(**values)
+
+
 class _Response:
     def __init__(self, payload: object, *, url: str, status: int):
         self._payload = payload
@@ -229,6 +242,39 @@ class RoleDispatchContractTests(unittest.TestCase):
         self.assertEqual(
             role_dispatch_file_path(_request()),
             f"docs/evidence/autopilot/role-dispatch-{DISPATCH_ID}.md",
+        )
+
+    def test_repair_envelope_is_bounded_and_carries_only_safe_context(self):
+        request = _repair_request()
+        body = role_dispatch_comment_body(request)
+        self.assertIn("mode=REPAIR", body)
+        self.assertIn("repair_attempt=1", body)
+        self.assertIn("blocked_result_code=RECOGNIZER_READINESS_GAP", body)
+        self.assertIn("instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE", body)
+        self.assertNotIn("Bearer", body)
+        for overrides in (
+            {"repair_attempt": 0},
+            {"repair_attempt": 2},
+            {"origin_task_id": None},
+            {"prior_task_id": "not-a-uuid"},
+            {"blocked_result_code": "not safe"},
+            {"blocked_summary": "secret token must not be public"},
+        ):
+            with self.subTest(overrides=overrides), self.assertRaises(ValidationError):
+                _repair_request(**overrides)
+
+    def test_repair_dispatch_preserves_context_in_attested_result(self):
+        request = _repair_request()
+        opener = _DispatchOpener(request)
+        result = execute_bounded_role_dispatch(
+            self.config, request, now_epoch=NOW, opener=opener
+        )
+        self.assertEqual(result["mode"], "REPAIR")
+        self.assertEqual(result["repair_attempt"], 1)
+        self.assertEqual(result["origin_task_id"], request.origin_task_id)
+        self.assertEqual(result["prior_task_id"], request.prior_task_id)
+        self.assertEqual(
+            result["blocked_result_code"], request.blocked_result_code
         )
 
     def test_create_uses_separate_token_and_opens_exact_draft_pr(self):

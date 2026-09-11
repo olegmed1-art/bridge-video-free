@@ -115,6 +115,15 @@ def verify() -> dict[str, object]:
         raise SystemExit("BROKER_BOUNDED_EXECUTOR_MISSING")
     if "execute_bounded_role_dispatch" not in main_text:
         raise SystemExit("BROKER_ROLE_DISPATCH_EXECUTOR_MISSING")
+    for required in (
+        'mode: Literal["READ_ONLY", "REPAIR", "VERIFY"]',
+        "repair_attempt: Literal[0, 1] = 0",
+        "DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE",
+        "READ_ONLY_VERIFY_REPAIR_NO_MUTATION",
+        '"role_dispatch_repair_attempt_cap": 1',
+    ):
+        if required not in policy_text + github_text:
+            raise SystemExit("BROKER_ROLE_FOLLOWUP_BOUNDARY_MISSING")
     if "issue_installation_token" in main_text:
         raise SystemExit("BROKER_RAW_TOKEN_ROUTE_PRESENT")
 

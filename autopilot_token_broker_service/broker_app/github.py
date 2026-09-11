@@ -94,6 +94,8 @@ def broker_policy_sha256() -> str:
         "role_dispatch_file_pattern": (
             rf"docs/evidence/autopilot/role-dispatch-{_UUID4}\.md"
         ),
+        "role_dispatch_modes": ["READ_ONLY", "REPAIR", "VERIFY"],
+        "role_dispatch_repair_attempt_cap": 1,
     }
     return hashlib.sha256(_canonical_json(policy)).hexdigest()
 
@@ -829,17 +831,32 @@ def execute_bounded_draft_repair(
 def role_dispatch_comment_body(request: RoleDispatchRequest) -> str:
     """Render the complete public dispatch envelope deterministically."""
 
-    return "\n".join(
-        (
-            "AUTOPILOT_DISPATCH_V1",
-            f"dispatch_id={request.dispatch_id}",
-            f"dispatch_epoch={request.dispatch_epoch}",
-            f"role={request.role}",
-            f"task_fingerprint={request.task_fingerprint}",
-            f"target_pr={request.target_pr}",
-            f"mode={request.mode}",
+    lines = [
+        "AUTOPILOT_DISPATCH_V1",
+        f"dispatch_id={request.dispatch_id}",
+        f"dispatch_epoch={request.dispatch_epoch}",
+        f"role={request.role}",
+        f"task_fingerprint={request.task_fingerprint}",
+        f"target_pr={request.target_pr}",
+        f"mode={request.mode}",
+    ]
+    if request.mode != "READ_ONLY":
+        lines.extend(
+            (
+                f"repair_attempt={request.repair_attempt}",
+                f"origin_task_id={request.origin_task_id}",
+                f"prior_task_id={request.prior_task_id}",
+                f"blocked_result_code={request.blocked_result_code}",
+                f"blocked_summary={request.blocked_summary}",
+                "instruction="
+                + (
+                    "DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE"
+                    if request.mode == "REPAIR"
+                    else "READ_ONLY_VERIFY_REPAIR_NO_MUTATION"
+                ),
+            )
         )
-    )
+    return "\n".join(lines)
 
 
 def role_dispatch_branch_name(request: RoleDispatchRequest) -> str:
@@ -1172,7 +1189,7 @@ def execute_bounded_role_dispatch(
     else:
         pull_number, pull_url, author_login = existing
         state = "existing"
-    return {
+    result: dict[str, object] = {
         "status": state,
         "repository": REPOSITORY_FULL_NAME,
         "mailbox_pull_request": ROLE_DISPATCH_MAILBOX_PR,
@@ -1194,3 +1211,14 @@ def execute_bounded_role_dispatch(
         "token_exposed": False,
         "production_mutation": False,
     }
+    if request.mode != "READ_ONLY":
+        result.update(
+            {
+                "repair_attempt": request.repair_attempt,
+                "origin_task_id": request.origin_task_id,
+                "prior_task_id": request.prior_task_id,
+                "blocked_result_code": request.blocked_result_code,
+                "blocked_summary": request.blocked_summary,
+            }
+        )
+    return result

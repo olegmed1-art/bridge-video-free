@@ -288,9 +288,23 @@ BEGIN
         'chatgpt-codex-connector', 1144995, callback_body);
     IF callback_result.resulting_state <> 'FAILED_CLOSED'
        OR (SELECT status FROM autopilot.task WHERE task_id = blocked_task_id) <> 'FAILED_CLOSED'
-       OR EXISTS (SELECT 1 FROM autopilot.task WHERE task_key = 'sql-role-blocked-successor-1')
        OR NOT EXISTS (SELECT 1 FROM autopilot.evidence WHERE task_id = blocked_task_id AND retained) THEN
         RAISE EXCEPTION 'AUTOPILOT_ROLE_BLOCKED_TERMINAL_INVALID';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM autopilot.task
+         WHERE task_key = 'sql-role-blocked-successor-1'
+    ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_ROLE_BLOCKED_SUCCESSOR_INVALID';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key = '0323_autopilot_failure_continuation'
+    ) AND EXISTS (
+        SELECT 1 FROM autopilot.role_dispatch_followup
+         WHERE parent_task_id = blocked_task_id AND followup_kind = 'REPAIR'
+    ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_OWNER_BLOCKER_REPAIR_INVALID';
     END IF;
 
     -- Final publisher failure closes the wait and its step rather than orphaning it.

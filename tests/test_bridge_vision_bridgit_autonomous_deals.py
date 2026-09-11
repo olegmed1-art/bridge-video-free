@@ -45,7 +45,7 @@ def frame(number, marker, hands, *, source="HAND", evidence_round=None):
 def test_all_observed_cards_produce_complete_valid_pbn_without_review():
     result = reconstruct_autonomous_deals(
         [frame(1, "board-1", SUIT_HANDS), frame(2, "board-1", SUIT_HANDS)],
-        source_scope="diana-23.mp4:sha256",
+        source_scope="fixture.mp4:sha256",
     )
 
     assert result["status"] == "COMPLETE"
@@ -65,7 +65,7 @@ def test_three_observed_hands_complete_only_missing_seat_by_exact_subtraction():
     visible = {seat: cards for seat, cards in SUIT_HANDS.items() if seat != "W"}
     result = reconstruct_autonomous_deals(
         [frame(1, "board-40", visible), frame(2, "board-40", visible)],
-        source_scope="diana-23.mp4:sha256",
+        source_scope="fixture.mp4:sha256",
     )
 
     deal = result["deals"][0]
@@ -81,7 +81,7 @@ def test_two_incomplete_hands_remain_partial_and_never_emit_pbn():
     visible = {"N": SUIT_HANDS["N"], "S": SUIT_HANDS["S"]}
     result = reconstruct_autonomous_deals(
         [frame(1, "board-2", visible), frame(2, "board-2", visible)],
-        source_scope="diana-23.mp4:sha256",
+        source_scope="fixture.mp4:sha256",
     )
 
     deal = result["deals"][0]
