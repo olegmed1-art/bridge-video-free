@@ -55,6 +55,8 @@ jobs:
           while IFS= read -r pid; do
             [[ -n "$pid" ]] || continue
             active=$((active + 1))
+            current=none
+            input_percent=unknown
             command="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
             read -r elapsed_seconds cpu_percent < <(ps -o etimes=,pcpu= -p "$pid")
             for name in diana-23 diana-24 diana-25 diana-26; do
@@ -68,6 +70,7 @@ jobs:
                 input_percent="$((100 * position / size))"
               fi
             done
+            echo "AUTONOMOUS_PROCESS current=$current elapsed_seconds=$elapsed_seconds cpu_percent=$cpu_percent input_percent=$input_percent"
           done < <(pgrep -f 'tools/bridge_vision_autonomous_video.py' || true)
           completed=0
           for name in diana-23 diana-24 diana-25 diana-26; do
@@ -102,4 +105,4 @@ jobs:
           uptime | sed 's/.*load average: /AUTONOMOUS_LOAD_AVERAGE=/'
           REMOTE
 
-# probe 8
+# probe 9
