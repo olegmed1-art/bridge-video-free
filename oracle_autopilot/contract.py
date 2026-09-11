@@ -94,7 +94,7 @@ ROLE_FOLLOWUP_GOAL_KEYS = frozenset(
         "target_pr",
     }
 )
-ROLE_DISPATCH_ROLES = frozenset({"RECOGNIZER", "VIDEO", "BOOKS", "KNOWLEDGE"})
+ROLE_DISPATCH_ROLE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 ROLE_FOLLOWUP_MODES = frozenset({"REPAIR", "VERIFY"})
 ROLE_DISPATCH_REPOSITORY = "olegmed1-art/bridge-video-free"
 ROLE_DISPATCH_MAILBOX_PR = 1150
@@ -309,7 +309,7 @@ def validate_task_contract(task: ClaimedTask) -> None:
             raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_REPOSITORY_INVALID")
         if goal.get("mailbox_pr") != ROLE_DISPATCH_MAILBOX_PR:
             raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_MAILBOX_INVALID")
-        if goal.get("role") not in ROLE_DISPATCH_ROLES:
+        if not isinstance(goal.get("role"), str) or ROLE_DISPATCH_ROLE_PATTERN.fullmatch(goal["role"]) is None:
             raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_ROLE_INVALID")
         for key in ("target_pr", "dispatch_epoch"):
             value = goal.get(key)
@@ -332,7 +332,8 @@ def validate_task_contract(task: ClaimedTask) -> None:
             if (
                 not isinstance(task_key, str)
                 or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", task_key) is None
-                or role not in ROLE_DISPATCH_ROLES
+                or not isinstance(role, str)
+                or ROLE_DISPATCH_ROLE_PATTERN.fullmatch(role) is None
                 or isinstance(target_pr, bool)
                 or not isinstance(target_pr, int)
                 or not 1 <= target_pr <= 1_000_000
@@ -354,7 +355,7 @@ def validate_task_contract(task: ClaimedTask) -> None:
             raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_REPOSITORY_INVALID")
         if goal.get("mailbox_pr") != ROLE_DISPATCH_MAILBOX_PR:
             raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_MAILBOX_INVALID")
-        if goal.get("role") not in ROLE_DISPATCH_ROLES:
+        if not isinstance(goal.get("role"), str) or ROLE_DISPATCH_ROLE_PATTERN.fullmatch(goal["role"]) is None:
             raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_ROLE_INVALID")
         for key in ("target_pr", "dispatch_epoch"):
             value = goal.get(key)
