@@ -1,0 +1,84 @@
+name: Oracle SSH key rotation stage one-shot
+
+on:
+  push:
+    branches: [codex/diana-autonomous-finalize-20260911]
+    paths: ['.github/workflows/oracle-key-rotation-stage-once.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  stage:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      CURRENT_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      NEW_PUBLIC_KEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOC1rAHg7LUobNRNOJXyozTn6F77ENhGlVhgjrry9EEA github-actions-oracle-20260911
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Stage new public key without removing current key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/oracle-key-rotation"
+          mkdir -p "$work"
+          chmod 0700 "$work"
+          key="$work/id_oracle"
+          known="$work/known_hosts"
+          printf '%s\n' "$CURRENT_PRIVATE_KEY" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" > "$work/current.pub"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          old_b64="$(base64 -w0 < "$work/current.pub")"
+          new_b64="$(printf '%s\n' "$NEW_PUBLIC_KEY" | base64 -w0)"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "OLD_PUB_B64='$old_b64' NEW_PUB_B64='$new_b64' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          chmod 0700 "$HOME/.ssh"
+          AUTH="$HOME/.ssh/authorized_keys" OLD_MARKER="$HOME/.ssh/.codex-compromised-old.pub" python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          auth = Path(os.environ["AUTH"])
+          marker = Path(os.environ["OLD_MARKER"])
+          old_pub = base64.b64decode(os.environ["OLD_PUB_B64"]).decode().strip()
+          new_pub = base64.b64decode(os.environ["NEW_PUB_B64"]).decode().strip()
+          old_type, old_body = old_pub.split()[:2]
+          new_type, new_body = new_pub.split()[:2]
+          lines = auth.read_text(encoding="utf-8").splitlines() if auth.exists() else []
+
+          def contains_key(line, key_type, key_body):
+              parts = line.split()
+              return any(
+                  parts[i] == key_type and parts[i + 1] == key_body
+                  for i in range(max(0, len(parts) - 1))
+              )
+
+          old_matches = [line for line in lines if contains_key(line, old_type, old_body)]
+          if len(old_matches) != 1:
+              raise SystemExit(f"expected exactly one current key, found {len(old_matches)}")
+          if not any(contains_key(line, new_type, new_body) for line in lines):
+              lines.append(new_pub)
+          tmp = auth.with_suffix(".rotation-new")
+          tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          os.chmod(tmp, 0o600)
+          os.replace(tmp, auth)
+          marker.write_text(old_pub + "\n", encoding="utf-8")
+          os.chmod(marker, 0o600)
+          PY
+          echo ORACLE_NEW_PUBLIC_KEY_STAGED
+          REMOTE
