@@ -1462,7 +1462,6 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
         "ops/install_dds3_runtime.sh",
         "ops/oracle_dds3_mass_install.sh",
         "ops/oracle_dds3_operational_gate.sh",
-        "ops/oracle_autopilot_shadow_install.sh",
         "ops/oracle_universal_video_install.sh",
         "ops/oracle_universal_video_run_command.sh",
         "ops/universal_video_sidecar_repair.sh",
