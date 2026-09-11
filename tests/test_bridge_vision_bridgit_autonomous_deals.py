@@ -174,6 +174,51 @@ def test_stable_marker_splits_midplay_eight_card_redeal():
     assert [item["observed_card_count"] for item in result["deals"]] == [13, 8]
 
 
+def test_stable_marker_splits_full_hand_replacement_after_old_hand_depleted():
+    first_cards = ["2S", "5H", "8S", "KH", "QD", "TH"]
+    second_cards = [
+        "2S",
+        "3D",
+        "5H",
+        "7S",
+        "8D",
+        "8S",
+        "AS",
+        "JC",
+        "KH",
+        "KS",
+        "QC",
+        "TC",
+        "TH",
+    ]
+    frames = [
+        frame(1, "unchanged-marker", {"S": first_cards}),
+        frame(2, "unchanged-marker", {"S": first_cards}),
+        frame(3, "unchanged-marker", {"S": second_cards}),
+        frame(4, "unchanged-marker", {"S": second_cards}),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 2
+    assert [item["observed_card_count"] for item in result["deals"]] == [6, 13]
+
+
+def test_newly_exposed_dummy_is_not_treated_as_a_redeal():
+    south = SUIT_HANDS["S"]
+    frames = [
+        frame(1, "unchanged-marker", {"S": south}),
+        frame(2, "unchanged-marker", {"S": south}),
+        frame(3, "unchanged-marker", {"N": SUIT_HANDS["N"], "S": south}),
+        frame(4, "unchanged-marker", {"N": SUIT_HANDS["N"], "S": south}),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 1
+    assert result["deals"][0]["observed_card_count"] == 26
+
+
 def test_same_visible_hand_reappearance_splits_replay_episode():
     full = {"N": SUIT_HANDS["N"], "S": SUIT_HANDS["S"]}
     depleted = {
