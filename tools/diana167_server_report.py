@@ -316,16 +316,26 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
             continue
         unique_slots.append(slot)
     slots = unique_slots
-    if any(sum(1 for slot in slots if slot["suit"] == suit) < 13 for suit in rank_layout.SUITS):
+    def eligible(card: str, slot: dict[str, Any]) -> tuple[int, int] | None:
+        x0, y0, _, _ = windows[(slot["seat"], card[1])]
+        local_x, local_y = int(slot["x"] - x0), int(slot["y"] - y0)
+        shape = score_maps[card][slot["seat"]].shape
+        if 0 <= local_x < shape[1] and 0 <= local_y < shape[0]:
+            return local_x, local_y
+        return None
+
+    if any(sum(1 for slot in slots if eligible("A" + suit, slot) is not None) < 13 for suit in rank_layout.SUITS):
         return None, "candidate_slot_gate"
     print(json.dumps({"full_layout_phase": "slots", "seconds": round(time.perf_counter() - started, 3), "slots": len(slots)}), flush=True)
 
     edges: list[tuple[int, int, float]] = []
     for row, card in enumerate(cards):
         for column, slot in enumerate(slots):
-            if slot["suit"] != card[1]:
+            local = eligible(card, slot)
+            if local is None:
                 continue
-            score = float(score_maps[card][slot["seat"]][slot["local_y"], slot["local_x"]])
+            local_x, local_y = local
+            score = float(score_maps[card][slot["seat"]][local_y, local_x])
             edges.append((row, column, score))
     constraint_rows = 52 + len(slots) + len(rank_layout.SEATS)
     matrix = lil_matrix((constraint_rows, len(edges)), dtype=np.float64)
