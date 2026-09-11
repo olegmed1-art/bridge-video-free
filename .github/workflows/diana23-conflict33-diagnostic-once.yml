@@ -73,7 +73,7 @@ jobs:
           : > "$scratch/code/bridge_school_api/__init__.py"
           : > "$scratch/code/bridge_school_api/dds3/__init__.py"
           printf '%s\n' 'class BridgeDeal:' '    def __init__(self, hands): self.hands = hands' '    def validate(self): return None' > "$scratch/code/bridge_school_api/dds3/model.py"
-          ffmpeg -hide_banner -loglevel error -ss 4260 -i "$root/diana-23.mp4" -t 132 \
+          ffmpeg -nostdin -hide_banner -loglevel error -ss 4260 -i "$root/diana-23.mp4" -t 132 \
             -map 0:v:0 -c copy -an -y "$scratch/segment33.mp4"
           cd "$scratch/code"
           PYTHONPATH="." "$venv/bin/python" tools/bridge_vision_autonomous_video.py \
@@ -106,4 +106,4 @@ jobs:
           PY
           REMOTE
 
-# retry 6
+# retry 7
