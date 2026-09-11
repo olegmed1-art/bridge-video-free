@@ -60,7 +60,12 @@ def build_suit_bank(
                 )
             seat = min(profile.rows, key=lambda key: abs(profile.rows[key][0] - y))
             row_y, x_min, x_max = profile.rows[seat]
-            if abs(row_y - y) > 8:
+            # Transferred profiles can retain the reviewed glyph's top-left
+            # while the white-run row is calibrated a few pixels lower.  The
+            # glyph still belongs to that row when both y coordinates overlap
+            # within one complete rank-height; N/S are hundreds of pixels
+            # apart, so this does not make the owning hand ambiguous.
+            if abs(row_y - y) > max(8, profile.rank_height):
                 raise VisibleHandObserverError(
                     "rank template is not bound to a reviewed hand row"
                 )
@@ -100,8 +105,13 @@ def _white_card_rectangles(image: Any, profile: ObserverProfile):
     cv2, np = _pixel_runtime()
     top = min(profile.rows["N"][0] + 2 * profile.rank_height, profile.height - 1)
     bottom = max(profile.rows["S"][0] - profile.rank_height, top + 1)
+    # Bridgit keeps a white player-tray card at the extreme lower-left.  Its
+    # dimensions match a played card, but its left edge is outside the green
+    # table.  Crop that fixed UI gutter before connected-component detection;
+    # the real West trick card remains inside this boundary.
+    left = max(profile.rank_width * 5, round(profile.width * 0.055))
     right = min(profile.width, round(profile.width * 0.75))
-    table = image[top:bottom, :right]
+    table = image[top:bottom, left:right]
     hsv = cv2.cvtColor(table, cv2.COLOR_BGR2HSV)
     white = cv2.inRange(
         hsv,
@@ -115,6 +125,7 @@ def _white_card_rectangles(image: Any, profile: ObserverProfile):
     maximum_height = min(320, profile.rank_height * 9)
     rectangles = []
     for x, relative_y, width, height, area in stats[1:count]:
+        x = int(x) + left
         y = int(relative_y) + top
         fill = float(area) / float(width * height)
         ratio = float(height) / float(width)

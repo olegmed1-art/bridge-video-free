@@ -34,6 +34,9 @@ AUTONOMOUS_DEALS_SCHEMA = "bridgit-autonomous-deals/v1"
 AUTONOMOUS_DEALS_VERSION = "bridgit-autonomous-deals-v1"
 EXACT_COMPLEMENT_VERSION = "bridgit-autonomous-exact-complement-v1"
 MAX_FRAMES = 100_000
+MIN_HAND_RESET_CARDS = 16
+MIN_HAND_RESET_CHANGED_CARDS = 8
+MIN_HAND_RESET_FRAMES = 2
 _SOURCES = frozenset({"HAND", "PLAYED"})
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SUITS = "SHDC"
@@ -199,20 +202,114 @@ def _normalize_frame(raw: Mapping[str, Any], index: int) -> dict[str, Any]:
     }
 
 
-def _segment_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Split on stable marker changes without relying on time proximity."""
+def _visible_hand_signature(
+    frame: Mapping[str, Any], min_confidence: float
+) -> frozenset[tuple[str, str]]:
+    return frozenset(
+        (str(item["seat"]), str(item["card"]))
+        for item in frame["cards"]
+        if item["source"] == "HAND" and item["confidence"] >= min_confidence
+    )
 
-    segments: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    occurrence = 0
+
+def _is_visible_hand_reset(
+    baseline: frozenset[tuple[str, str]], candidate: frozenset[tuple[str, str]]
+) -> bool:
+    if min(len(baseline), len(candidate)) < MIN_HAND_RESET_CARDS:
+        return False
+    novel = len(candidate - baseline)
+    disappeared = len(baseline - candidate)
+    union = len(baseline | candidate)
+    similarity = len(baseline & candidate) / union if union else 1.0
+    return (
+        novel >= MIN_HAND_RESET_CHANGED_CARDS
+        and disappeared >= MIN_HAND_RESET_CHANGED_CARDS
+        and similarity < 0.50
+    )
+
+
+def _same_reset_candidate(
+    left: frozenset[tuple[str, str]], right: frozenset[tuple[str, str]]
+) -> bool:
+    union = len(left | right)
+    return bool(union) and len(left & right) / union >= 0.75
+
+
+def _segment_frames(
+    frames: list[dict[str, Any]], min_confidence: float
+) -> list[dict[str, Any]]:
+    """Split on marker changes and confirmed visible-hand resets.
+
+    A played card can only disappear from an original hand.  A large burst of
+    new HAND cards together with a large disappearance therefore identifies a
+    redeal even when the board-number pixels remain unchanged.  Two mutually
+    consistent frames are required so a single recognition outlier cannot
+    create a segment.
+    """
+
+    groups: list[tuple[str, list[dict[str, Any]]]] = []
+    marker_group: list[dict[str, Any]] = []
+    marker: str | None = None
     for frame in frames:
-        marker = frame["deal_marker_sha256"]
-        if current is None or current["marker"] != marker:
-            occurrence += 1
-            current = {"marker": marker, "occurrence": occurrence, "frames": []}
-            segments.append(current)
-        current["frames"].append(frame)
-    return segments
+        current_marker = frame["deal_marker_sha256"]
+        if marker_group and current_marker != marker:
+            groups.append((str(marker), marker_group))
+            marker_group = []
+        marker = current_marker
+        marker_group.append(frame)
+    if marker_group:
+        groups.append((str(marker), marker_group))
+
+    raw_segments: list[tuple[str, list[dict[str, Any]]]] = []
+    for group_marker, group_frames in groups:
+        current: list[dict[str, Any]] = []
+        baseline: frozenset[tuple[str, str]] = frozenset()
+        pending: list[dict[str, Any]] = []
+        pending_signature: frozenset[tuple[str, str]] = frozenset()
+        for frame in group_frames:
+            signature = _visible_hand_signature(frame, min_confidence)
+            if current and _is_visible_hand_reset(baseline, signature):
+                if not pending:
+                    pending = [frame]
+                    pending_signature = signature
+                    continue
+                if _same_reset_candidate(pending_signature, signature):
+                    pending.append(frame)
+                    pending_signature = frozenset(pending_signature | signature)
+                    if len(pending) >= MIN_HAND_RESET_FRAMES:
+                        raw_segments.append((group_marker, current))
+                        current = pending
+                        baseline = frozenset().union(
+                            *(
+                                _visible_hand_signature(item, min_confidence)
+                                for item in pending
+                            )
+                        )
+                        pending = []
+                        pending_signature = frozenset()
+                    continue
+            if pending:
+                current.extend(pending)
+                baseline = frozenset(
+                    baseline.union(
+                        *(
+                            _visible_hand_signature(item, min_confidence)
+                            for item in pending
+                        )
+                    )
+                )
+                pending = []
+                pending_signature = frozenset()
+            current.append(frame)
+            baseline = frozenset(baseline | signature)
+        current.extend(pending)
+        if current:
+            raw_segments.append((group_marker, current))
+
+    return [
+        {"marker": marker, "occurrence": occurrence, "frames": segment_frames}
+        for occurrence, (marker, segment_frames) in enumerate(raw_segments, 1)
+    ]
 
 
 def _reconstruct_segment(
@@ -461,7 +558,7 @@ def reconstruct_autonomous_deals(
             min_temporal_support=min_temporal_support,
             allow_exact_complement=allow_exact_complement,
         )
-        for segment in _segment_frames(frames)
+        for segment in _segment_frames(frames, min_confidence)
     ]
     counts = {
         status: sum(deal["status"] == status for deal in deals)
@@ -498,6 +595,9 @@ __all__ = [
     "AUTONOMOUS_DEALS_VERSION",
     "EXACT_COMPLEMENT_VERSION",
     "MAX_FRAMES",
+    "MIN_HAND_RESET_CARDS",
+    "MIN_HAND_RESET_CHANGED_CARDS",
+    "MIN_HAND_RESET_FRAMES",
     "AutonomousDealsError",
     "reconstruct_autonomous_deals",
 ]

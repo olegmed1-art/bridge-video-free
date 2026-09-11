@@ -155,9 +155,8 @@ def raw_profile(coordinates: dict[str, int]) -> dict:
     return raw
 
 
-def played_frame(rank: str, suit: str):
+def played_frame(rank: str, suit: str, *, x: int = 348, y: int = 190):
     image = np.full((HEIGHT, WIDTH, 3), (20, 120, 20), dtype=np.uint8)
-    x, y = 348, 190
     image[y : y + 72, x : x + 54] = 255
     paint_glyph(image, x + 2, y + 2, rank_patterns()[rank], (0, 0, 0))
     color = (0, 0, 220) if suit in "HD" else (0, 0, 0)
@@ -201,3 +200,32 @@ def test_non_card_white_region_does_not_emit_played_card() -> None:
     assert result["status"] == "REVIEW"
     assert result["cards"] == []
     assert result["rejected"][0]["reason"] == "RANK_AMBIGUOUS"
+
+
+def test_player_tray_card_is_outside_played_table_geometry() -> None:
+    reference, coordinates = reference_image()
+    profile = parse_profile(raw_profile(coordinates))
+    rank_bank = build_rank_bank(profile, {"ref": reference})
+    suit_bank = build_suit_bank(profile, {"ref": reference})
+
+    result = observe_played_cards(
+        played_frame("A", "H", x=5, y=500), rank_bank, suit_bank, profile
+    )
+
+    assert result["status"] == "REVIEW"
+    assert result["cards"] == []
+
+
+def test_suit_bank_accepts_transferred_row_offset_within_rank_height() -> None:
+    reference, coordinates = reference_image()
+    raw = raw_profile(coordinates)
+    raw["pixel"]["rank_height"] = 12
+    raw["rows"]["N"]["y"] = 110
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    profile = parse_profile(raw)
+
+    bank = build_suit_bank(profile, {"ref": reference})
+
+    assert set(bank) == set(SUITS)

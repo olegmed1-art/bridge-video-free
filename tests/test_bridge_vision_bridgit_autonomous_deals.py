@@ -109,6 +109,39 @@ def test_visual_marker_changes_create_separate_autonomous_deals():
     ]
 
 
+def test_stable_marker_splits_only_after_confirmed_visible_hand_reset():
+    first = {"N": SUIT_HANDS["N"], "S": SUIT_HANDS["S"]}
+    second = {"N": SUIT_HANDS["E"], "S": SUIT_HANDS["W"]}
+    frames = [
+        frame(1, "unchanged-marker", first),
+        frame(2, "unchanged-marker", first),
+        frame(3, "unchanged-marker", second),
+        frame(4, "unchanged-marker", second),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 2
+    assert [item["observed_card_count"] for item in result["deals"]] == [26, 26]
+
+
+def test_one_frame_visible_hand_outlier_does_not_create_segment():
+    stable = {"N": SUIT_HANDS["N"], "S": SUIT_HANDS["S"]}
+    outlier = {"N": SUIT_HANDS["E"], "S": SUIT_HANDS["W"]}
+    frames = [
+        frame(1, "unchanged-marker", stable),
+        frame(2, "unchanged-marker", stable),
+        frame(3, "unchanged-marker", outlier),
+        frame(4, "unchanged-marker", stable),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 1
+    assert result["deals"][0]["status"] == "PARTIAL"
+    assert result["deals"][0]["observed_card_count"] == 26
+
+
 def test_cross_seat_card_conflict_fails_closed():
     first = {"N": ["AS"]}
     second = {"E": ["AS"]}
