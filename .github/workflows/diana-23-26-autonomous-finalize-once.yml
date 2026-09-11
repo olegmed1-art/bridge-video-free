@@ -158,6 +158,27 @@ jobs:
           for index in 0 1 2 3; do
             output="$results/${names[$index]}.json"
             log="$results/${names[$index]}.log"
+            if [[ -s "$output" ]]; then
+              RECEIPT="$output" EXPECTED_VIDEO="${videos[$index]}" "$venv/bin/python" - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = json.loads(Path(os.environ['RECEIPT']).read_text(encoding='utf-8'))
+          claimed = receipt['receipt_sha256']
+          material = dict(receipt)
+          material.pop('receipt_sha256')
+          actual = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+          assert actual == claimed
+          assert receipt['source']['filename'] == os.environ['EXPECTED_VIDEO']
+          assert receipt['uses_language_model'] is False
+          assert receipt['requires_screenshot_review'] is False
+          assert receipt['canonical_promotion_allowed'] is False
+          PY
+              echo "AUTONOMOUS_RESUME_RECEIPT=${names[$index]}"
+              continue
+            fi
             PYTHONPATH="$code" "$venv/bin/python" "$code/tools/bridge_vision_autonomous_video.py" \
               --job-root "$root" \
               --profile "${profiles[$index]}" \
@@ -194,7 +215,10 @@ jobs:
                       'deal_identity': deal['deal_identity'],
                       'status': deal['status'],
                       'observed_card_count': deal['observed_card_count'],
-                      'derived_card_count': deal['derived_card_count'],
+                      'derived_card_count': sum(
+                          len(item.get('derived_cards', []))
+                          for item in (deal.get('deal') or {}).get('card_provenance', {}).values()
+                      ),
                       'pbn': deal['pbn'],
                   }
                   deals.append(item)
