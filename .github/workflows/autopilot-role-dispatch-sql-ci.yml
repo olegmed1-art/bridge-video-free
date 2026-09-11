@@ -9,6 +9,11 @@ on:
       - 'database/migrations/0323_autopilot_failure_continuation.sql'
       - 'database/rollbacks/0323_autopilot_failure_continuation.sql'
       - 'database/tests/323_autopilot_failure_continuation.sql'
+      - 'database/migrations/0324_autopilot_project_planner.sql'
+      - 'database/rollbacks/0324_autopilot_project_planner.sql'
+      - 'database/tests/324_autopilot_project_planner.sql'
+      - 'oracle_autopilot/worker.py'
+      - 'tests/test_oracle_autopilot_shadow.py'
       - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
   push:
     branches: [main]
@@ -19,6 +24,11 @@ on:
       - 'database/migrations/0323_autopilot_failure_continuation.sql'
       - 'database/rollbacks/0323_autopilot_failure_continuation.sql'
       - 'database/tests/323_autopilot_failure_continuation.sql'
+      - 'database/migrations/0324_autopilot_project_planner.sql'
+      - 'database/rollbacks/0324_autopilot_project_planner.sql'
+      - 'database/tests/324_autopilot_project_planner.sql'
+      - 'oracle_autopilot/worker.py'
+      - 'tests/test_oracle_autopilot_shadow.py'
       - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
 
 permissions:
@@ -139,6 +149,10 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/323_autopilot_failure_continuation.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/324_autopilot_project_planner.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0324_autopilot_project_planner.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0323_autopilot_failure_continuation.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql
@@ -148,11 +162,17 @@ jobs:
             "SELECT count(*) FROM schema_migration WHERE migration_key='0322_autopilot_chatgpt_role_dispatch';")" = 0
           test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM schema_migration WHERE migration_key='0323_autopilot_failure_continuation';")" = 0
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM schema_migration WHERE migration_key='0324_autopilot_project_planner';")" = 0
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/migrations/0322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/migrations/0323_autopilot_failure_continuation.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0324_autopilot_project_planner.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/323_autopilot_failure_continuation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/324_autopilot_project_planner.sql
