@@ -347,6 +347,7 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
     if len(matches) != 52:
         return None, "global_assignment_card_count_gate"
     scores = [item["score"] for item in matches.values()]
+    print(json.dumps({"full_layout_phase": "constrained_assignment", "seconds": round(time.perf_counter() - started, 3), "minimum": round(min(scores), 4), "median": round(float(median(scores)), 4)}), flush=True)
     if min(scores) < 0.55 or float(median(scores)) < 0.68:
         return None, f"template_weight_gate_min{int(min(scores) * 20):02d}_med{int(float(median(scores)) * 20):02d}"
     counts = Counter(item["seat"] for item in matches.values())
@@ -362,7 +363,8 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
             cards = [(card, matches[card]["x"]) for card in matches if card[1] == suit and matches[card]["seat"] == seat]
             ordered = [rank_layout.RANKS.index(card[0]) for card, _ in sorted(cards, key=lambda value: value[1])]
             if ordered != sorted(ordered):
-                return None, "screen_rank_order_gate"
+                print(json.dumps({"full_layout_phase": "rank_order_reject", "seat": seat, "suit": suit, "observed": ordered}), flush=True)
+                return None, f"screen_rank_order_gate_{seat}_{suit}"
     hands = {seat: {suit: [] for suit in rank_layout.SUITS} for seat in rank_layout.SEATS}
     for card, item in matches.items():
         hands[item["seat"]][card[1]].append(card[0])
