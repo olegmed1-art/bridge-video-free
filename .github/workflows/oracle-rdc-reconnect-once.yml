@@ -54,9 +54,14 @@ jobs:
             -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
             "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
+          pkill -u "$(id -u)" -f '[d]esktop-commander.*remote' 2>/dev/null || true
+          for _ in $(seq 1 10); do
+            if ! pgrep -u "$(id -u)" -f '[d]esktop-commander.*remote' >/dev/null; then break; fi
+            sleep 1
+          done
           if pgrep -u "$(id -u)" -f '[d]esktop-commander.*remote' >/dev/null; then
-            printf 'RDC_RECONNECT_PASS mode=already_running\n'
-            exit 0
+            printf 'RDC_RECONNECT_REFUSED reason=stale_client_would_not_stop\n'
+            exit 4
           fi
           umask 077
           mkdir -p "$HOME/.cache"
