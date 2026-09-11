@@ -24,6 +24,8 @@ def test_rollout_is_owner_bounded_and_rollback_safe() -> None:
     assert "AUTOPILOT_NEW_WORKER_NOT_STABLE" in workflow
     assert "AUTOPILOT_NEW_WORKER_RESTARTED" in workflow
     assert "postgresql://REDACTED" in workflow
+    assert "oracle_autopilot.worker_v17" in workflow
+    assert "systemd-analyze verify" in workflow
     assert "systemctl disable --now \"$service\"" in workflow
     assert "systemctl enable --now \"$service\"" in workflow
     assert "ORACLE_INSTANCE_STOP_REQUESTED=NO" in workflow
