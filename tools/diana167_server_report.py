@@ -279,13 +279,14 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
         for seat in rank_layout.SEATS:
             x0, y0, _, _ = windows[(seat, suit)]
             aggregate = np_runtime.maximum.reduce([score_maps[card][seat] for card in suit_cards])
-            order = np_runtime.argsort(aggregate, axis=None)[::-1]
+            local_maximum = cv2.dilate(aggregate, np_runtime.ones((11, 11), dtype=np_runtime.uint8))
+            candidate_points = np_runtime.argwhere((aggregate >= 0.40) & (aggregate >= local_maximum - 1e-7))
+            strengths = aggregate[candidate_points[:, 0], candidate_points[:, 1]] if len(candidate_points) else np_runtime.asarray([])
+            order = np_runtime.argsort(strengths)[::-1]
             selected: list[tuple[int, int]] = []
-            for flat in order:
-                y, x = np_runtime.unravel_index(int(flat), aggregate.shape)
+            for candidate_index in order:
+                y, x = candidate_points[int(candidate_index)]
                 strength = float(aggregate[y, x])
-                if strength < 0.40:
-                    break
                 if any(abs(x - old_x) < 12 and abs(y - old_y) < 12 for old_x, old_y in selected):
                     continue
                 selected.append((int(x), int(y)))
