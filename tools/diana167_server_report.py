@@ -526,7 +526,15 @@ def main() -> None:
     validation = validate_pdf(pdf, len(data["deals"]), args.output_dir)
     validation_path = args.output_dir / "validation.json"
     validation_path.write_text(json.dumps(validation, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"status": "PASS", "deals": len(data["deals"]), "pdf": str(pdf), "validation": validation}, ensure_ascii=False))
+    print(json.dumps({
+        "status": "PASS",
+        "deals": len(data["deals"]),
+        "source_frame_size": [data["source"]["width"], data["source"]["height"]],
+        "source_duration_ms": data["source"]["duration_ms"],
+        "rejections": data["summary"]["rejections"],
+        "pdf": str(pdf),
+        "validation": validation,
+    }, ensure_ascii=False))
 
 
 if __name__ == "__main__":
