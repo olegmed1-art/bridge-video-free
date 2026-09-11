@@ -73,6 +73,20 @@ jobs:
           elif [[ -x "$HOME/.local/bin/desktop-commander" ]]; then
             nohup "$HOME/.local/bin/desktop-commander" remote </dev/null >"$log" 2>&1 &
             mode=local_binary
+          elif command -v node >/dev/null 2>&1; then
+            pkg="$(find "$HOME/.npm/_npx" -path '*/node_modules/@wonderwhy-er/desktop-commander/package.json' -type f -print -quit 2>/dev/null || true)"
+            if [[ -n "$pkg" ]]; then
+              entry="$(node -e 'const p=require(process.argv[1]); const b=p.bin; process.stdout.write(typeof b==="string"?b:Object.values(b||{})[0]||"")' "$pkg")"
+            else
+              entry=''
+            fi
+            if [[ -n "$entry" && -f "$(dirname "$pkg")/$entry" ]]; then
+              nohup node "$(dirname "$pkg")/$entry" remote </dev/null >"$log" 2>&1 &
+              mode=cached_node_entry
+            else
+              printf 'RDC_RECONNECT_REFUSED reason=no_cached_node_entry\n'
+              exit 2
+            fi
           elif command -v npx >/dev/null 2>&1; then
             nohup npx --offline --yes @wonderwhy-er/desktop-commander@latest remote </dev/null >"$log" 2>&1 &
             mode=cached_npx
