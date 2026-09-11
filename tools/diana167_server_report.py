@@ -378,8 +378,8 @@ def _fuse_template_layouts(first: dict[str, Any], second: dict[str, Any]) -> tup
     rows = []
     for card in sorted(first["matches"], key=lambda value: (rank_layout.SUITS.index(value[1]), rank_layout.RANKS.index(value[0]))):
         a, b = first["matches"][card], second["matches"][card]
-        if a["seat"] != b["seat"] or abs(a["x"] - b["x"]) > 18 or abs(a["y"] - b["y"]) > 18:
-            return None, "temporal_position_gate"
+        if a["seat"] != b["seat"]:
+            return None, "temporal_seat_gate"
         values = [float(a["score"]), float(b["score"])]
         rows.append({
             "seat": a["seat"],
@@ -519,7 +519,7 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
                     "integrity": {"cards": 52, "unique": 52, "seat_counts": {seat: 13 for seat in rank_layout.SEATS}},
                     "evidence": {"minimum_assigned_score": round(fused["minimum"], 6), "median_assigned_score": round(fused["median"], 6), "independent_frames": 2, "confidence_kind": "TEMPLATE_SIMILARITY_UNCALIBRATED"},
                     "weights": fused["weights"],
-                    "receipt": {"method": "104_HUMAN_VERIFIED_CARD_CORNERS_PLUS_TEMPORAL_POSITION_CONSENSUS", "bridge_logic_weighting": False},
+                    "receipt": {"method": "104_HUMAN_VERIFIED_CARD_CORNERS_PLUS_TWO_FRAME_SEAT_CONSENSUS", "bridge_logic_weighting": False},
                 })
                 timestamp_ms += scan_ms
     finally:
@@ -557,7 +557,7 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
             "gold_drive_file_id": GOLD_FILE_ID,
             "gold_template_set_sha256": raw_profile["gold"]["template_set_sha256"],
         },
-        "sampling": {"scan_interval_ms": scan_ms, "policy": "PIXEL_REGISTERED_FULL_LAYOUT_GATE_THEN_TWO_FRAME_CONSENSUS", "registration_y_offsets": dict(sorted(registration_offsets.items()))},
+        "sampling": {"scan_interval_ms": scan_ms, "policy": "PIXEL_REGISTERED_FULL_LAYOUT_GATE_THEN_TWO_FRAME_SEAT_CONSENSUS", "registration_y_offsets": dict(sorted(registration_offsets.items()))},
         "summary": {"deals": len(deals), "recognized_candidates": len(recognized), "rejections": dict(sorted(rejections.items()))},
         "deals": deals,
     }
