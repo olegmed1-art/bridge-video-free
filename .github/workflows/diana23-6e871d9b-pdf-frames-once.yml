@@ -72,7 +72,6 @@ jobs:
           video="$root/diana-23.mp4"
           bundle="$root/pdf-evidence-$short-$$"
           mkdir -p "$bundle/frames"
-          trap 'rm -rf "$bundle"' EXIT
           test "$(stat -c %s "$video")" = 652603861
           RECEIPT="$receipt" VIDEO="$video" BUNDLE="$bundle" ALGORITHM_SHA="$ALGORITHM_SHA" python3 - <<'PY'
           import hashlib, json, os, subprocess
