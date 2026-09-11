@@ -75,15 +75,15 @@ jobs:
           printf '%s\n' 'class BridgeDeal:' '    def __init__(self, hands): self.hands = hands' '    def validate(self): return None' > "$scratch/code/bridge_school_api/dds3/model.py"
           ffmpeg -hide_banner -loglevel error -ss 4260 -i "$root/diana-23.mp4" -t 132 \
             -map 0:v:0 -c copy -an -y "$scratch/segment33.mp4"
-          (
-            cd "$scratch/code"
-            PYTHONPATH="." "$venv/bin/python" tools/bridge_vision_autonomous_video.py \
-              --job-root "$root" \
-              --profile recognition-diana23/visible-hand-profile-v1.runtime.json \
-              --video .d23-conflict33-diagnostic/segment33.mp4 \
-              --output .d23-conflict33-diagnostic/receipt.json \
-              --sample-ms 200 --max-sampled-frames 5000 >/dev/null
-          )
+          previous_dir="$PWD"
+          cd "$scratch/code"
+          PYTHONPATH="." "$venv/bin/python" tools/bridge_vision_autonomous_video.py \
+            --job-root "$root" \
+            --profile recognition-diana23/visible-hand-profile-v1.runtime.json \
+            --video .d23-conflict33-diagnostic/segment33.mp4 \
+            --output .d23-conflict33-diagnostic/receipt.json \
+            --sample-ms 200 --max-sampled-frames 5000 >/dev/null
+          cd "$previous_dir"
           RECEIPT="$scratch/receipt.json" "$venv/bin/python" - <<'PY'
           import json
           import os
@@ -108,4 +108,4 @@ jobs:
           PY
           REMOTE
 
-# retry 4
+# retry 5
