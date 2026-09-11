@@ -80,9 +80,12 @@ jobs:
               completed=$((completed + 1))
               echo "AUTONOMOUS_RECEIPT_READY=$name"
             fi
+            if [[ -s "$results/$name.log" ]]; then
+              tail -n 4 "$results/$name.log" | sed -E 's#/home/ubuntu/[^ ]+#PRIVATE_PATH#g' | sed "s/^/AUTONOMOUS_LOG_${name}=/"
+            fi
           done
           echo "AUTONOMOUS_STATUS active=$active current=$current completed=$completed elapsed_seconds=$elapsed_seconds cpu_percent=$cpu_percent input_percent=$input_percent"
           uptime | sed 's/.*load average: /AUTONOMOUS_LOAD_AVERAGE=/'
           REMOTE
 
-# status probe 2
+# status probe 3
