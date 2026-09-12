@@ -791,6 +791,193 @@ def analyze_teacher_mentions(video: Path, data: dict[str, Any], output: Path) ->
     }
 
 
+def _positive_only_fused_weight(visual_weight: float, bonuses: list[float]) -> float:
+    """Combine corroborating evidence without ever lowering visual evidence."""
+    residual = 1.0 - max(0.0, min(1.0, visual_weight))
+    for bonus in bonuses:
+        residual *= 1.0 - max(0.0, min(0.95, bonus))
+    return round(1.0 - residual, 6)
+
+
+def _deal_evidence_events(data: dict[str, Any], key: str, deal_number: int) -> list[dict[str, Any]]:
+    events = data.get(key) or []
+    return [
+        item
+        for item in events
+        if isinstance(item, dict)
+        and (
+            item.get("deal") == deal_number
+            or deal_number in (item.get("candidate_deals") or [])
+        )
+    ]
+
+
+def complete_unrecognized_cards(data: dict[str, Any]) -> dict[str, Any]:
+    """Classify the already solved 52-card assignment by evidence origin.
+
+    The pixel stage first locates physical card slots and maximizes template
+    similarity.  This post-visual stage is explicitly allowed to complete the
+    deck, but it must never relabel a constrained completion as a direct visual
+    read.  Raw pixel weights remain unchanged and visible to reviewers.
+    """
+    from bridge_vision.multiframe import validate_full_deal
+
+    total_visual = 0
+    total_completed = 0
+    per_deal = []
+    all_conflicts: list[dict[str, Any]] = []
+    full_deck = {rank + suit for rank in rank_layout.RANKS for suit in rank_layout.SUITS}
+    for deal_number, deal in enumerate(data.get("deals") or [], 1):
+        rows = deal.get("weights") or []
+        cards = {row["card"] for row in rows}
+        counts = Counter(row["seat"] for row in rows)
+        if cards != full_deck or counts != Counter({seat: 13 for seat in rank_layout.SEATS}):
+            raise RuntimeError("post-visual completion received an invalid deck assignment")
+        independent_validation = validate_full_deal({
+            "hands": {
+                seat: {
+                    "cards": sorted(
+                        (row["card"] for row in rows if row["seat"] == seat),
+                        key=lambda card: (rank_layout.SUITS.index(card[1]), rank_layout.RANKS.index(card[0])),
+                    )
+                }
+                for seat in rank_layout.SEATS
+            },
+            "derivations": [{"kind": "POST_VISUAL_52_BY_13_COMPLETION"}],
+        })
+        if independent_validation.get("status") != "PASS":
+            raise RuntimeError("post-visual completion failed independent full-deal validation")
+        visual = 0
+        completed = 0
+        pointer_events = _deal_evidence_events(data, "teacher_pointer_events", deal_number)
+        play_events = _deal_evidence_events(data, "played_card_memory", deal_number)
+        for row in rows:
+            score = float(row["weight_median"])
+            row["visual_weight"] = round(score, 6)
+            row["visual_recognized"] = score >= LOW_WEIGHT_THRESHOLD
+            if row["visual_recognized"]:
+                row["visual_template_source"] = (
+                    "CROSS_DEAL_CHALLENGER_VISUAL"
+                    if float(row.get("weight_challenger_v3", -2.0)) > float(row.get("weight_gold_v2", score))
+                    else "GOLD_V2_VISUAL"
+                )
+                row["identification_source"] = "VISUAL"
+                row["ownership_source"] = "GEOMETRY"
+                row["provenance"] = ["VISUAL", "GEOMETRY"]
+                visual += 1
+            else:
+                row["visual_template_source"] = "BELOW_VISUAL_THRESHOLD"
+                row["identification_source"] = "DECK_COMPLETION"
+                row["ownership_source"] = "GEOMETRY_PLUS_DECK_COMPLETION"
+                row["provenance"] = ["GEOMETRY", "DECK_COMPLETION"]
+                completed += 1
+            row["completed_assignment"] = True
+            bonuses: list[float] = []
+            corroboration: list[str] = []
+            row_conflicts: list[dict[str, Any]] = []
+            for event in pointer_events:
+                claimed_card = str(event.get("claimed_card") or event.get("card") or "").upper().replace("10", "T")
+                claimed_seat = str(event.get("claimed_seat") or event.get("seat") or "").upper()
+                if claimed_card != row["card"]:
+                    continue
+                if event.get("spatial_overlap") is not True or event.get("teacher_role_verified") is not True:
+                    continue
+                if claimed_seat == row["seat"]:
+                    bonus = min(0.90, max(0.0, float(event.get("confidence", 0.0))))
+                    if bonus:
+                        bonuses.append(bonus)
+                        corroboration.append("TEACHER_POINTER")
+                elif claimed_seat and claimed_seat != row["seat"]:
+                    conflict = {
+                        "kind": "CURSOR_CONFLICT",
+                        "deal": deal_number,
+                        "card": row["card"],
+                        "visual_or_completed_seat": row["seat"],
+                        "claimed_seat": claimed_seat,
+                    }
+                    row_conflicts.append(conflict)
+                    all_conflicts.append(conflict)
+            for event in play_events:
+                remembered_card = str(event.get("card") or "").upper().replace("10", "T")
+                remembered_seat = str(event.get("seat") or "").upper()
+                if remembered_card != row["card"]:
+                    continue
+                if not (
+                    event.get("evidence_verified") is True
+                    or event.get("recognition_status") == "VISUAL_CARD_CANDIDATE"
+                ):
+                    continue
+                if remembered_seat == row["seat"]:
+                    bonus = min(0.80, max(0.0, float(event.get("confidence", event.get("minimum_visual_confidence", 0.0)))))
+                    if bonus:
+                        bonuses.append(bonus)
+                        corroboration.append("PLAY_MEMORY")
+                elif remembered_seat:
+                    conflict = {
+                        "kind": "PLAY_MEMORY_CONFLICT",
+                        "deal": deal_number,
+                        "card": row["card"],
+                        "visual_or_completed_seat": row["seat"],
+                        "remembered_seat": remembered_seat,
+                    }
+                    row_conflicts.append(conflict)
+                    all_conflicts.append(conflict)
+            row["cursor_bonus"] = round(max((bonuses[index] for index, source in enumerate(corroboration) if source == "TEACHER_POINTER"), default=0.0), 6)
+            row["positive_evidence_sources"] = sorted(set(corroboration))
+            row["provenance"] = sorted(set(row["provenance"] + corroboration))
+            row["fused_weight"] = _positive_only_fused_weight(score, bonuses)
+            row["conflicts"] = row_conflicts
+        suit_states = {
+            seat: {
+                suit: {
+                    "status": "VOID_CONFIRMED" if not deal["hands"][seat][suit] else "PRESENT",
+                    "card_count": len(deal["hands"][seat][suit]),
+                    "source": "POST_COMPLETION_52_BY_13",
+                }
+                for suit in rank_layout.SUITS
+            }
+            for seat in rank_layout.SEATS
+        }
+        total_visual += visual
+        total_completed += completed
+        completion = {
+            "deal": deal_number,
+            "visual_recognized_cards": visual,
+            "deck_constrained_completed_cards": completed,
+            "final_cards": 52,
+            "hand_counts": {seat: counts[seat] for seat in rank_layout.SEATS},
+            "status": "COMPLETE_52_BY_13",
+            "independent_validation": independent_validation,
+        }
+        deal["completion"] = completion
+        deal["suit_states"] = suit_states
+        deal["status"] = "COMPLETE_52_BY_13_WITH_PROVENANCE"
+        per_deal.append(completion)
+    return {
+        "stage": "POST_VISUAL_UNRECOGNIZED_CARD_COMPLETION_V1",
+        "visual_threshold": LOW_WEIGHT_THRESHOLD,
+        "objective": "MAXIMIZE_TEMPLATE_SIMILARITY_SUBJECT_TO_GEOMETRIC_SUIT_ORDER_AND_DECK_BIJECTION",
+        "constraints": [
+            "52_UNIQUE_CARDS",
+            "13_CARDS_PER_HAND",
+            "13_CARDS_PER_SUIT_ACROSS_HANDS",
+            "FIXED_H_C_D_S_INTERFACE_ORDER",
+            "DESCENDING_RANK_ORDER_INSIDE_SUIT_GROUP",
+            "EMPTY_SUIT_GROUP_ALLOWED",
+        ],
+        "bridge_strategy_or_auction_logic_used": False,
+        "raw_visual_weights_preserved": True,
+        "cursor_bonus_policy": "POSITIVE_ONLY;_ZERO_UNLESS_VERIFIED_TEACHER_CARD_NAME_AND_SPATIAL_OVERLAP",
+        "positive_fusion_formula": "1-(1-visual_weight)*PRODUCT(1-positive_bonus)",
+        "teacher_speech_without_verified_pointer_changes_owner": False,
+        "conflicts_do_not_reduce_weight": True,
+        "conflicts": all_conflicts,
+        "total_visual_recognized_cards": total_visual,
+        "total_deck_constrained_completed_cards": total_completed,
+        "deals": per_deal,
+    }
+
+
 def _card_weights(result: dict[str, Any]) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str], list[float]] = defaultdict(list)
     for item in result.get("_visual_observations", []):
@@ -1013,6 +1200,8 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path) -> None:
         ["Найдено уникальных сдач", str(summary["deals"])],
         ["Интервал сканирования", f"{data['sampling']['scan_interval_ms'] / 1000:g} сек."],
         ["Новых проверенных challenger-вариантов", str(data["profile"]["challenger"]["validated_variant_count"])],
+        ["Визуально прочитано карт", str(data.get("reconstruction", {}).get("total_visual_recognized_cards", 0))],
+        ["Достроено ограничениями", str(data.get("reconstruction", {}).get("total_deck_constrained_completed_cards", 0))],
         ["Режим", "серверный, shadow-only; без записи в канон"],
     ]
     table = Table([[Paragraph(f"<b>{a}</b>", body), Paragraph(str(b), body)] for a, b in cover], colWidths=[55 * mm, 190 * mm])
@@ -1020,7 +1209,7 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path) -> None:
     story.append(table)
     story.append(Spacer(1, 5 * mm))
     story.append(Paragraph("Как читать веса", h2))
-    story.append(Paragraph("Вес — это сходство пиксельного глифа с проверенным эталоном, а не вероятность правильности. Для каждой карты приведён вес полной серверной фиксации сдачи; медиана и минимум совпадают при одном наблюдении. Торговля, известные руки и стратегическая бриджевая логика вес не повышают и не понижают.", body))
+    story.append(Paragraph("Вес — это сходство пиксельного глифа с проверенным эталоном, а не вероятность правильности. Карты с весом не ниже порога отмечены как визуально прочитанные. Остальные назначены отдельным поствизуальным этапом по геометрическому месту и ограничениям: 52 уникальные карты, по 13 в каждой руке. Исходный визуальный вес при этом не изменяется. Торговля и стратегическая бриджевая логика отключены.", body))
     story.append(Spacer(1, 3 * mm))
     story.append(Paragraph("N/E/S/W в отчёте означают экранные позиции: верх / право / низ / лево. Поворот реальных мест за столом не используется как скрытая подсказка распознавателю.", body))
     story.append(PageBreak())
@@ -1035,6 +1224,11 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path) -> None:
         story.append(Paragraph(f"Сдача {number} · {deal['timestamp']}", title))
         evidence = deal.get("evidence") or {}
         story.append(Paragraph(f"Статус: {deal['status']} · подтверждений: {deal['server_confirmations']} · минимальный вес: {evidence.get('minimum_assigned_score', '—')} · медианный вес: {evidence.get('median_assigned_score', '—')}", body))
+        completion = deal.get("completion") or {}
+        story.append(Paragraph(
+            f"Визуально прочитано: {completion.get('visual_recognized_cards', 0)} · достроено по геометрии и ограничениям: {completion.get('deck_constrained_completed_cards', 0)} · итог: {completion.get('final_cards', 0)} карт, по 13 в каждой руке.",
+            body,
+        ))
         story.append(Spacer(1, 2 * mm))
         image_path = output_root / deal["screenshot"]
         picture = Image(str(image_path))
@@ -1064,18 +1258,23 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path) -> None:
         halves = [weights[:26], weights[26:]]
         blocks = []
         for half in halves:
-            rows = [[Paragraph("Поз.", small), Paragraph("Карта", small), Paragraph("Gold v2", small), Paragraph("После v3", small)]]
+            rows = [[Paragraph("Поз.", small), Paragraph("Карта", small), Paragraph("Gold v2", small), Paragraph("После v3", small), Paragraph("Источник", small)]]
             for item in half:
                 before = float(item.get("weight_gold_v2", item["weight_median"]))
-                rows.append([Paragraph(item["seat"], small), Paragraph(card_text(item["card"]), card_style), Paragraph(f"{before:.4f}", small), Paragraph(f"{item['weight_median']:.4f}", small)])
-            block = Table(rows, colWidths=[14 * mm, 20 * mm, 25 * mm, 25 * mm], repeatRows=1)
-            block.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D6DEE7")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEF3F8")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("TOPPADDING", (0, 0), (-1, -1), 1.6), ("BOTTOMPADDING", (0, 0), (-1, -1), 1.6)]))
+                source = "визуально" if item.get("visual_recognized") else "достроено"
+                rows.append([Paragraph(item["seat"], small), Paragraph(card_text(item["card"]), card_style), Paragraph(f"{before:.4f}", small), Paragraph(f"{item['weight_median']:.4f}", small), Paragraph(source, small)])
+            block = Table(rows, colWidths=[12 * mm, 18 * mm, 20 * mm, 20 * mm, 24 * mm], repeatRows=1)
+            style_commands = [("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D6DEE7")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEF3F8")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("TOPPADDING", (0, 0), (-1, -1), 1.6), ("BOTTOMPADDING", (0, 0), (-1, -1), 1.6)]
+            for row_number, item in enumerate(half, 1):
+                if not item.get("visual_recognized"):
+                    style_commands.append(("BACKGROUND", (0, row_number), (-1, row_number), colors.HexColor("#FFF1D6")))
+            block.setStyle(TableStyle(style_commands))
             blocks.append(block)
         paired = Table([[blocks[0], blocks[1]]], colWidths=[90 * mm, 90 * mm], hAlign="LEFT")
         paired.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 6)]))
         story.append(paired)
         story.append(Spacer(1, 2 * mm))
-        story.append(Paragraph("Тип веса: сходство с Gold v2 либо с challenger-вариантом, проверенным на другой группе раскладов; это не вероятность. Собственный кадр/кластер исключён из проверки. Логика торговли и розыгрыша в весах отключена.", small))
+        story.append(Paragraph("Оранжевые строки — карты ниже визуального порога: их принадлежность руке достроена по экранной геометрии и ограничениям полной колоды. Пустая масть допустима и после завершения помечается VOID_CONFIRMED. Тип веса: сходство с Gold v2 либо с challenger-вариантом; это не вероятность. Логика торговли и розыгрыша отключена.", small))
         if number != len(data["deals"]):
             story.append(PageBreak())
 
@@ -1178,6 +1377,7 @@ def main() -> None:
         data["speech"] = analyze_teacher_mentions(args.video, data, args.output_dir)
     else:
         data["speech"] = {"status": "SKIPPED", "teacher_mention_count": 0, "teacher_mentions": [], "teacher_counts_by_card_and_hand": []}
+    data["reconstruction"] = complete_unrecognized_cards(data)
     analysis = args.output_dir / "master_analysis.json"
     analysis.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     if not data["deals"]:
@@ -1198,5 +1398,3 @@ def main() -> None:
     }, ensure_ascii=False))
 
 
-if __name__ == "__main__":
-    main()
