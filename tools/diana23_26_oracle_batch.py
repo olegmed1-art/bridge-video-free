@@ -65,7 +65,42 @@ def checked_metadata(
     return item
 
 
-def upload(path: Path, token: str) -> dict[str, Any]:
+def existing_upload(path: Path) -> dict[str, Any] | None:
+    """Reuse an exact post-gold artifact so a resumed batch creates no duplicates."""
+    token = access_token()
+    escaped_name = path.name.replace("\\", "\\\\").replace("'", "\\'")
+    response = requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers={"Authorization": f"Bearer {token}"},
+        params={
+            "q": (
+                f"'{SOURCE_PARENT_ID}' in parents and name = '{escaped_name}' "
+                f"and createdTime > '{POST_GOLD_BOUNDARY}' and trashed = false"
+            ),
+            "fields": "files(id,name,parents,size,createdTime)",
+            "pageSize": 100,
+        },
+        timeout=120,
+    )
+    response.raise_for_status()
+    expected_size = path.stat().st_size
+    candidates = [
+        item for item in response.json().get("files", [])
+        if item.get("name") == path.name
+        and SOURCE_PARENT_ID in set(item.get("parents") or [])
+        and int(item.get("size") or -1) == expected_size
+    ]
+    if not candidates:
+        return None
+    item = max(candidates, key=lambda value: str(value.get("createdTime") or ""))
+    print(json.dumps({"upload": "REUSE", "file": item}, ensure_ascii=False), flush=True)
+    return item
+
+
+def upload(path: Path, token: str | None = None) -> dict[str, Any]:
+    # Long video analysis can outlive a one-hour access token. Refresh immediately
+    # before each network write instead of reusing the batch-start token.
+    token = access_token()
     mime = "application/pdf" if path.suffix.lower() == ".pdf" else "application/zip"
     metadata = {"name": path.name, "parents": [SOURCE_PARENT_ID]}
     with path.open("rb") as handle:
@@ -218,7 +253,7 @@ def main() -> None:
             ]
             subprocess.run(command, check=True)
             pdf = next(output.glob("*server v6.pdf"))
-        uploaded = upload(pdf, token)
+        uploaded = existing_upload(pdf) or upload(pdf)
         per_video.append({
             "video": number,
             "source_id": file_id,
@@ -247,8 +282,8 @@ def main() -> None:
             if not path.is_file() or "screenshots" in path.parts or path.suffix.lower() == ".pdf":
                 continue
             bundle.write(path, path.relative_to(root))
-    combined_item = upload(combined, token)
-    archive_item = upload(archive, token)
+    combined_item = existing_upload(combined) or upload(combined)
+    archive_item = existing_upload(archive) or upload(archive)
     result = {
         "status": "PASS",
         "host": os.uname().nodename,
