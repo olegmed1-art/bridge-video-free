@@ -36,8 +36,9 @@ GOLD_FILE_ID = "1MGaz14wswn2XOgi4AqqvzT2sNFLdOink"
 PROFILE_ID = "bridgit.desktop.1920x1010.gold-v2"
 CHALLENGER_PROFILE_ID = "bridgit.desktop.1920x1010.gold-v2-cross-deal-challenger-v3"
 LOW_WEIGHT_THRESHOLD = 0.80
-CLUSTER_OWNER_DISTANCE = 6
 MENTION_DEAL_MAX_DISTANCE_MS = 10 * 60 * 1000
+EVENT_SETTLE_MS = 750
+EVENT_WATCHDOG_MS = 60_000
 
 
 def sha256_file(path: Path) -> str:
@@ -258,7 +259,7 @@ def _gate_offset(image: Any, templates: dict[str, list[Any]], offsets: list[int]
         score = float(median(item["score"] for item in matches.values()))
         candidates.append((passed, score, -offset, offset, matches))
     passed, score, _, offset, matches = max(candidates)
-    if passed < 7 or score < 0.62:
+    if passed < 4 or score < 0.45:
         return None, {"gate_cards_passed": passed, "gate_median": round(score, 6)}
     return offset, matches
 
@@ -293,7 +294,7 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
     quick_rows, quick_columns = linear_sum_assignment(quick_costs)
     quick_assigned = [-float(quick_costs[row, column]) for row, column in zip(quick_rows, quick_columns)]
     print(json.dumps({"full_layout_phase": "quick_assignment", "seconds": round(time.perf_counter() - started, 3), "minimum": round(min(quick_assigned), 4), "median": round(float(median(quick_assigned)), 4)}), flush=True)
-    if min(quick_assigned) < 0.55 or float(median(quick_assigned)) < 0.68:
+    if min(quick_assigned) < 0.20 or float(median(quick_assigned)) < 0.50:
         return None, f"template_weight_gate_min{int(min(quick_assigned) * 20):02d}_med{int(float(median(quick_assigned)) * 20):02d}"
 
     slots: list[dict[str, Any]] = []
@@ -305,7 +306,7 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
             remaining = aggregate.copy()
             for _ in range(20):
                 _, strength, _, (x, y) = cv2.minMaxLoc(remaining)
-                if float(strength) < 0.40:
+                if float(strength) < 0.25:
                     break
                 slots.append({"seat": seat, "suit": suit, "x": x0 + int(x), "y": y0 + int(y), "local_x": int(x), "local_y": int(y), "strength": strength})
                 xa, xb = max(0, int(x) - 11), min(remaining.shape[1], int(x) + 12)
@@ -396,7 +397,10 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
                 }
     scores = [item["score"] for item in matches.values()]
     print(json.dumps({"full_layout_phase": "constrained_assignment", "seconds": round(time.perf_counter() - started, 3), "minimum": round(min(scores), 4), "median": round(float(median(scores)), 4)}), flush=True)
-    if min(scores) < 0.12 or float(median(scores)) < 0.95:
+    # Admission no longer requires 52 confident card identities.  This stage
+    # only needs a credible 52-slot geometry and enough aggregate pixel
+    # support; weak identities are intentionally left for post-visual solving.
+    if min(scores) < -0.25 or float(median(scores)) < 0.50:
         return None, f"template_weight_gate_min{int(min(scores) * 20):02d}_med{int(float(median(scores)) * 20):02d}"
     counts = Counter(item["seat"] for item in matches.values())
     if counts != Counter({seat: 13 for seat in rank_layout.SEATS}):
@@ -408,18 +412,55 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
                 return None, "duplicate_location_gate"
     for seat in rank_layout.SEATS:
         for suit in rank_layout.SUITS:
-            cards = [(card, matches[card]["x"]) for card in matches if card[1] == suit and matches[card]["seat"] == seat]
-            ordered = [rank_layout.RANKS.index(card[0]) for card, _ in sorted(cards, key=lambda value: value[1])]
+            group_positions = [(card, matches[card]["x"]) for card in matches if card[1] == suit and matches[card]["seat"] == seat]
+            ordered = [rank_layout.RANKS.index(card[0]) for card, _ in sorted(group_positions, key=lambda value: value[1])]
             if ordered != sorted(ordered):
                 print(json.dumps({"full_layout_phase": "rank_order_reject", "seat": seat, "suit": suit, "observed": ordered}), flush=True)
                 return None, f"screen_rank_order_gate_{seat}_{suit}"
+    # Retain the complete pixel candidate graph for the separate post-visual
+    # reconstruction stage.  The preliminary MILP result supplies physical
+    # locations only; weak locations are not frozen to its provisional card.
+    physical = sorted(
+        ({"seat": item["seat"], "x": item["x"], "y": item["y"]} for item in matches.values()),
+        key=lambda item: (rank_layout.SEATS.index(item["seat"]), item["y"], item["x"]),
+    )
+    completion_slots = []
+    provisional_by_position = {
+        (item["seat"], item["x"], item["y"]): card for card, item in matches.items()
+    }
+    for slot_index, physical_slot in enumerate(physical):
+        candidates = []
+        geometry_suits = set()
+        for card in cards:
+            local = eligible(card, physical_slot)
+            if local is None:
+                continue
+            local_x, local_y = local
+            candidates.append({
+                "card": card,
+                "score": round(float(score_maps[card][physical_slot["seat"]][local_y, local_x]), 6),
+            })
+            geometry_suits.add(card[1])
+        completion_slots.append({
+            "slot_id": f"{physical_slot['seat']}-{slot_index:02d}-{physical_slot['x']}-{physical_slot['y']}",
+            **physical_slot,
+            "geometry_suits": sorted(geometry_suits, key=rank_layout.SUITS.index),
+            "candidates": candidates,
+            "provisional_card": provisional_by_position[(physical_slot["seat"], physical_slot["x"], physical_slot["y"])],
+        })
     hands = {seat: {suit: [] for suit in rank_layout.SUITS} for seat in rank_layout.SEATS}
     for card, item in matches.items():
         hands[item["seat"]][card[1]].append(card[0])
     for seat in rank_layout.SEATS:
         for suit in rank_layout.SUITS:
             hands[seat][suit].sort(key=rank_layout.RANKS.index)
-    return {"matches": matches, "hands": hands, "minimum": min(scores), "median": float(median(scores))}, "full"
+    return {
+        "matches": matches,
+        "hands": hands,
+        "completion_slots": completion_slots,
+        "minimum": min(scores),
+        "median": float(median(scores)),
+    }, "full"
 
 
 def _fuse_template_layouts(first: dict[str, Any], second: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
@@ -459,6 +500,7 @@ def _single_template_layout(layout: dict[str, Any]) -> dict[str, Any]:
         "minimum": min(item["weight_min"] for item in rows),
         "median": float(median(item["weight_median"] for item in rows)),
         "matches": layout["matches"],
+        "completion_slots": layout["completion_slots"],
     }
 
 
@@ -481,25 +523,14 @@ def _owner_distance(first: dict[str, Any], second: dict[str, Any]) -> int:
 
 
 def _cluster_recognized(recognized: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Merge small assignment jitter without merging genuinely different deals."""
+    """Merge watchdog repeats only; retain every real stable-change event."""
     clusters: list[list[dict[str, Any]]] = []
     for item in sorted(recognized, key=lambda value: value["timestamp_ms"]):
-        eligible = [
-            cluster
-            for cluster in clusters
-            if min(_owner_distance(item["hands"], member["hands"]) for member in cluster)
-            <= CLUSTER_OWNER_DISTANCE
-        ]
-        if not eligible:
+        reason = (item.get("event_detection") or {}).get("reason")
+        if clusters and reason == "WATCHDOG_STABLE_STATE" and clusters[-1][-1]["layout_sha256"] == item["layout_sha256"]:
+            clusters[-1].append(item)
+        else:
             clusters.append([item])
-            continue
-        best = min(
-            eligible,
-            key=lambda cluster: min(
-                _owner_distance(item["hands"], member["hands"]) for member in cluster
-            ),
-        )
-        best.append(item)
     return clusters
 
 
@@ -532,7 +563,12 @@ def _apply_cross_deal_challenger(
         image = cv2.imread(str(output / deal["screenshot"]), cv2.IMREAD_COLOR)
         if image is None:
             raise RuntimeError("challenger screenshot decode failed")
-        representatives.append({"cluster": cluster_index, "deal": deal, "image": image})
+        representatives.append({
+            "cluster": cluster_index,
+            "layout_sha256": deal["layout_sha256"],
+            "deal": deal,
+            "image": image,
+        })
 
     low_cards = sorted(
         {
@@ -551,7 +587,7 @@ def _apply_cross_deal_challenger(
                 continue
             validations = []
             for target in representatives:
-                if target["cluster"] == source["cluster"]:
+                if target["cluster"] == source["cluster"] or target["layout_sha256"] == source["layout_sha256"]:
                     continue
                 target_crop = _card_crop(target["image"], target["deal"]["_matches"][card])
                 same = _same_size_score(source_crop, target_crop)
@@ -570,6 +606,7 @@ def _apply_cross_deal_challenger(
             variants[card].append({
                 "image": source_crop,
                 "source_cluster": source["cluster"],
+                "source_layout_sha256": source["layout_sha256"],
                 "source_timestamp_ms": source["deal"]["timestamp_ms"],
                 "source_screenshot_sha256": source["deal"]["screenshot_sha256"],
                 "validation_score": round(max(value[0] for value in passing), 6),
@@ -585,7 +622,11 @@ def _apply_cross_deal_challenger(
         rows = {row["card"]: row for row in target["deal"]["weights"]}
         for card, candidates in variants.items():
             target_crop = _card_crop(target["image"], target["deal"]["_matches"][card])
-            eligible = [item for item in candidates if item["source_cluster"] != cluster_index]
+            eligible = [
+                item for item in candidates
+                if item["source_cluster"] != cluster_index
+                and item["source_layout_sha256"] != target["layout_sha256"]
+            ]
             if not eligible or target_crop is None:
                 continue
             challenger_score = max(_same_size_score(target_crop, item["image"]) for item in eligible)
@@ -618,7 +659,7 @@ def _apply_cross_deal_challenger(
     return {
         "profile_id": CHALLENGER_PROFILE_ID,
         "promotion_status": "SHADOW_NOT_CANONICAL",
-        "leakage_control": "SOURCE_CLUSTER_EXCLUDED_FROM_SCORING",
+        "leakage_control": "SOURCE_EVENT_AND_IDENTICAL_LAYOUT_HASH_EXCLUDED_FROM_SCORING",
         "low_weight_threshold": LOW_WEIGHT_THRESHOLD,
         "target_cards": low_cards,
         "validated_variant_cards": sorted(serializable),
@@ -741,14 +782,14 @@ def analyze_teacher_mentions(video: Path, data: dict[str, Any], output: Path) ->
     for index, segment in enumerate(diarized):
         if segment.get("unreliable"):
             continue
-        cards = _segment_card_mentions(str(segment.get("text") or ""))
-        if not cards:
-            continue
         is_teacher = (
             role_supported
             and str(segment.get("speaker_role_candidate") or "").lower() == "teacher"
             and float(segment.get("speaker_role_confidence") or 0.0) >= 0.60
         )
+        cards = _segment_card_mentions(str(segment.get("text") or ""))
+        if not cards:
+            continue
         target = events if is_teacher else unverified_events
         for occurrence, card in enumerate(cards, 1):
             timestamp_ms = round(float(segment["start"]) * 1000)
@@ -774,6 +815,36 @@ def analyze_teacher_mentions(video: Path, data: dict[str, Any], output: Path) ->
             key=lambda item: (-item[1], rank_layout.SUITS.index(item[0][0][1]), rank_layout.RANKS.index(item[0][0][0]), item[0][1]),
         )
     ]
+    from bridge_vision.bridgit_teacher_asr_adapter import adapt_universal_video_teacher_segments
+    from bridge_vision.bridgit_teacher_speech import accumulate_teacher_speech
+
+    adapted_teacher_asr = (
+        adapt_universal_video_teacher_segments(
+            diarized,
+            minimum_speaker_confidence=0.60,
+            minimum_role_confidence=0.60,
+        )
+        if role_supported
+        else {"segments": [], "rejected": [], "per_segment_asr_probability_claimed": False}
+    )
+    accumulated_speech = accumulate_teacher_speech(adapted_teacher_asr["segments"])
+    speech_claims = []
+    for claim in accumulated_speech["claims"]:
+        if not claim.get("complete") or claim.get("retracted"):
+            continue
+        _, _, candidate_deals = _seat_for_mention(claim["card"], int(claim["last_ms"]), data["deals"])
+        speech_claims.append({
+            "event_id": claim["claim_id"],
+            "timestamp_ms": int(claim["last_ms"]),
+            "timestamp": format_timestamp(int(claim["last_ms"])),
+            "card": claim["card"],
+            "explicit_seat": claim["seat"],
+            "confidence": float(claim["speech_confidence"]),
+            "teacher_role_verified": True,
+            "candidate_deals": candidate_deals,
+            "support_event_ids": [item["event_id"] for item in claim["supports"]],
+            "binding_source": "EXPLICIT_OR_ACTIVE_ASR_SEAT_CONTEXT",
+        })
     return {
         "status": "TEACHER_ROLE_VERIFIED" if role_supported else "TEACHER_ROLE_UNVERIFIED",
         "language": language,
@@ -783,10 +854,13 @@ def analyze_teacher_mentions(video: Path, data: dict[str, Any], output: Path) ->
         "speaker_report": speaker_report,
         "teacher_mention_count": len(events),
         "teacher_mentions": events,
+        "teacher_speech_claims": speech_claims,
+        "teacher_speech_claim_count": len(speech_claims),
+        "teacher_asr_adapter": adapted_teacher_asr,
         "teacher_counts_by_card_and_hand": aggregates,
         "unverified_speaker_mention_count": len(unverified_events),
         "unverified_speaker_mentions": unverified_events,
-        "binding_policy": "WITHIN_10_MIN_OF_NEAREST_VISUAL_DEAL;_AMBIGUOUS_IS_UNKNOWN",
+        "binding_policy": "EXPLICIT_ASR_SEAT_OR_30_SECOND_ACTIVE_ASR_SEAT_CONTEXT;_DEAL_BY_TIME_ONLY",
         "auction_or_bridge_logic_used_for_card_weights": False,
     }
 
@@ -812,7 +886,7 @@ def _deal_evidence_events(data: dict[str, Any], key: str, deal_number: int) -> l
     ]
 
 
-def complete_unrecognized_cards(data: dict[str, Any]) -> dict[str, Any]:
+def _legacy_complete_unrecognized_cards(data: dict[str, Any]) -> dict[str, Any]:
     """Classify the already solved 52-card assignment by evidence origin.
 
     The pixel stage first locates physical card slots and maximizes template
@@ -952,6 +1026,7 @@ def complete_unrecognized_cards(data: dict[str, Any]) -> dict[str, Any]:
         deal["completion"] = completion
         deal["suit_states"] = suit_states
         deal["status"] = "COMPLETE_52_BY_13_WITH_PROVENANCE"
+        deal.pop("_completion_slots", None)
         per_deal.append(completion)
     return {
         "stage": "POST_VISUAL_UNRECOGNIZED_CARD_COMPLETION_V1",
@@ -978,6 +1053,165 @@ def complete_unrecognized_cards(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def complete_unrecognized_cards(data: dict[str, Any]) -> dict[str, Any]:
+    """Re-solve weak physical slots after visual recognition has finished."""
+    from bridge_vision.bridgit_unrecognized_card_completion import reconstruct_unknown_cards
+    from bridge_vision.multiframe import validate_full_deal
+
+    total_visual = 0
+    total_completed = 0
+    total_changed = 0
+    per_deal = []
+    all_conflicts: list[dict[str, Any]] = []
+    for deal_number, deal in enumerate(data.get("deals") or [], 1):
+        slots = deal.get("_completion_slots") or []
+        if len(slots) != 52:
+            raise RuntimeError("post-visual reconstruction requires 52 retained physical slots")
+        provisional_rows = {row["card"]: row for row in deal.get("weights") or []}
+        expected_deck = {rank + suit for suit in rank_layout.SUITS for rank in rank_layout.RANKS}
+        if len(deal.get("weights") or []) != 52 or set(provisional_rows) != expected_deck:
+            raise RuntimeError("post-visual reconstruction received an invalid deck assignment")
+        for slot in slots:
+            provisional = slot["provisional_card"]
+            improved = float(provisional_rows[provisional]["weight_median"])
+            for candidate in slot["candidates"]:
+                if candidate["card"] == provisional:
+                    candidate["score"] = max(float(candidate["score"]), improved)
+
+        pointer_events = _deal_evidence_events(data, "teacher_pointer_events", deal_number)
+        play_events = _deal_evidence_events(data, "played_card_memory", deal_number)
+        speech_events = []
+        for event in _deal_evidence_events(data.get("speech") or {}, "teacher_speech_claims", deal_number):
+            # These seats come only from words spoken by the verified teacher,
+            # never from the provisional visual owner.
+            if event.get("explicit_seat") or event.get("slot_id"):
+                speech_events.append(event)
+
+        solved = reconstruct_unknown_cards(
+            slots,
+            visual_threshold=LOW_WEIGHT_THRESHOLD,
+            teacher_pointer_events=pointer_events,
+            teacher_speech_events=speech_events,
+            played_card_memory=play_events,
+        )
+        slot_by_id = {slot["slot_id"]: slot for slot in slots}
+        final_rows = []
+        changed = 0
+        for assignment in solved["assignments"]:
+            provisional = slot_by_id[assignment["slot_id"]]["provisional_card"]
+            changed_here = assignment["card"] != provisional
+            changed += int(changed_here)
+            old = provisional_rows.get(assignment["card"], {}) if not changed_here else {}
+            final_rows.append({
+                **old,
+                **assignment,
+                "weight_median": assignment["fused_weight"],
+                "weight_min": assignment["visual_weight"],
+                "identification_source": "VISUAL" if assignment["visual_recognized"] else "DECK_COMPLETION",
+                "ownership_source": "GEOMETRY" if assignment["visual_recognized"] else "POST_VISUAL_GLOBAL_SOLVER",
+                "completed_assignment": True,
+                "provisional_card": provisional,
+                "changed_from_provisional": changed_here,
+                "confidence_kind": "POSITIVE_ONLY_FUSED_WITH_RAW_VISUAL_PRESERVED",
+            })
+        final_rows.sort(key=lambda row: (
+            rank_layout.SEATS.index(row["seat"]),
+            rank_layout.SUITS.index(row["card"][1]),
+            rank_layout.RANKS.index(row["card"][0]),
+        ))
+        hands = {seat: {suit: [] for suit in rank_layout.SUITS} for seat in rank_layout.SEATS}
+        for row in final_rows:
+            hands[row["seat"]][row["card"][1]].append(row["card"][0])
+        for seat in rank_layout.SEATS:
+            for suit in rank_layout.SUITS:
+                hands[seat][suit].sort(key=rank_layout.RANKS.index)
+        deal["hands"] = hands
+        deal["weights"] = final_rows
+        counts = Counter(row["seat"] for row in final_rows)
+        independent_validation = validate_full_deal({
+            "hands": {seat: {"cards": [row["card"] for row in final_rows if row["seat"] == seat]} for seat in rank_layout.SEATS},
+            "derivations": [{"kind": "POST_VISUAL_52_BY_13_COMPLETION"}],
+        })
+        if independent_validation.get("status") != "PASS":
+            raise RuntimeError("post-visual completion failed independent full-deal validation")
+        visual = solved["visual_anchor_count"]
+        completed = solved["completed_count"]
+        deal_conflicts = [{**item, "deal": deal_number} for item in solved["conflicts"]]
+        all_conflicts.extend(deal_conflicts)
+        suit_states = {
+            seat: {
+                suit: {
+                    "status": "VOID_CONFIRMED" if not hands[seat][suit] else "PRESENT",
+                    "card_count": len(hands[seat][suit]),
+                    "source": "POST_COMPLETION_52_BY_13",
+                }
+                for suit in rank_layout.SUITS
+            }
+            for seat in rank_layout.SEATS
+        }
+        completion = {
+            "deal": deal_number,
+            "visual_recognized_cards": visual,
+            "deck_constrained_completed_cards": completed,
+            "changed_from_provisional": changed,
+            "rank_hint_count": solved["rank_hint_count"],
+            "final_cards": 52,
+            "hand_counts": {seat: counts[seat] for seat in rank_layout.SEATS},
+            "status": "COMPLETE_52_BY_13",
+            "diagnostics": solved["diagnostics"],
+            "conflicts": deal_conflicts,
+            "independent_validation": independent_validation,
+        }
+        deal["completion"] = completion
+        deal["suit_states"] = suit_states
+        deal["status"] = "COMPLETE_52_BY_13_WITH_PROVENANCE"
+        deal.pop("_completion_slots", None)
+        total_visual += visual
+        total_completed += completed
+        total_changed += changed
+        per_deal.append(completion)
+    speech_report = data.get("speech") or {}
+    for event in speech_report.get("teacher_mentions") or []:
+        seat, binding, candidate_deals = _seat_for_mention(event["card"], int(event["timestamp_ms"]), data.get("deals") or [])
+        event["seat"] = seat
+        event["seat_binding"] = binding
+        event["candidate_deals"] = candidate_deals
+    refreshed_counts = Counter(
+        (event["card"], event["seat"])
+        for event in speech_report.get("teacher_mentions") or []
+    )
+    speech_report["teacher_counts_by_card_and_hand"] = [
+        {"card": card, "seat": seat, "count": count}
+        for (card, seat), count in sorted(
+            refreshed_counts.items(),
+            key=lambda item: (-item[1], rank_layout.SUITS.index(item[0][0][1]), rank_layout.RANKS.index(item[0][0][0]), item[0][1]),
+        )
+    ]
+    return {
+        "stage": "POST_VISUAL_UNRECOGNIZED_CARD_COMPLETION_V2",
+        "version": "bridgit-post-visual-card-completion-v2",
+        "visual_threshold": LOW_WEIGHT_THRESHOLD,
+        "objective": "MAXIMIZE_VISUAL_SUPPORT_PLUS_POSITIVE_EVIDENCE_SUBJECT_TO_DECK_BIJECTION",
+        "constraints": [
+            "52_UNIQUE_CARDS", "13_CARDS_PER_HAND", "VISUAL_ANCHORS_FROZEN",
+            "GEOMETRIC_SUIT_GROUPS", "DESCENDING_RANK_INTERVALS",
+            "RANK_ONLY_HINTS", "CALIBRATED_RED_BLACK_IF_AVAILABLE", "EMPTY_SUIT_GROUP_ALLOWED",
+        ],
+        "bridge_strategy_or_auction_logic_used": False,
+        "raw_visual_weights_preserved": True,
+        "teacher_speech_with_independent_explicit_slot_or_seat_is_positive_evidence": True,
+        "cursor_without_teacher_named_card_has_effect": False,
+        "cursor_bonus_policy": "POSITIVE_ONLY;_ZERO_UNLESS_VERIFIED_TEACHER_CARD_NAME_AND_SPATIAL_OVERLAP",
+        "positive_fusion_formula": "1-(1-visual_weight)*PRODUCT(1-positive_bonus)",
+        "conflicts_do_not_reduce_weight": True,
+        "conflicts": all_conflicts,
+        "total_visual_recognized_cards": total_visual,
+        "total_deck_constrained_completed_cards": total_completed,
+        "total_assignments_changed_from_provisional": total_changed,
+        "deals": per_deal,
+    }
+
+
 def _card_weights(result: dict[str, Any]) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str], list[float]] = defaultdict(list)
     for item in result.get("_visual_observations", []):
@@ -995,12 +1229,28 @@ def _card_weights(result: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deals: int) -> dict[str, Any]:
+def scan_video(
+    video: Path,
+    gold_zip: Path,
+    output: Path,
+    event_probe_ms: int,
+    max_deals: int,
+    *,
+    source_file_id: str = SOURCE_FILE_ID,
+    source_parent_id: str = SOURCE_PARENT_ID,
+) -> dict[str, Any]:
     cv2, _ = _runtime()
+    from bridge_vision.bridgit_event_frame_selector import (
+        EventFrameSelector,
+        bridge_layout_regions,
+        frame_signature,
+    )
     work = output / "work"
     work.mkdir(parents=True, exist_ok=True)
     screenshots = output / "screenshots"
     screenshots.mkdir(parents=True, exist_ok=True)
+    event_screenshots = output / "event-screenshots"
+    event_screenshots.mkdir(parents=True, exist_ok=True)
     _, _, raw_profile = build_gold_profile(gold_zip, work)
     package = work / "gold" / "bridgit_gold_v2"
     manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
@@ -1015,8 +1265,8 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     duration_ms = round(frame_count * 1000 / fps) if fps > 0 else 0
     source = {
-        "drive_file_id": SOURCE_FILE_ID,
-        "drive_parent_id": SOURCE_PARENT_ID,
+        "drive_file_id": source_file_id,
+        "drive_parent_id": source_parent_id,
         "forbidden_parent_used": False,
         "filename": video.name,
         "size_bytes": video.stat().st_size,
@@ -1029,8 +1279,10 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
     }
     rejections: Counter[str] = Counter()
     recognized: list[dict[str, Any]] = []
-    last_attempt_ms = -10**9
+    event_frames: list[dict[str, Any]] = []
     registration_offsets: Counter[int] = Counter()
+    emitted_events: Counter[str] = Counter()
+    lightweight_probes = 0
     try:
         profile_width = int(raw_profile["frame_size"]["width"])
         profile_height = int(raw_profile["frame_size"]["height"])
@@ -1038,41 +1290,90 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
             rejections[f"frame_size_{width}x{height}"] += 1
         else:
             offsets = list(dict.fromkeys((height - profile_height, 0)))
+            event_regions = []
+            for offset in offsets:
+                for region in bridge_layout_regions(offset):
+                    if region not in event_regions:
+                        event_regions.append(region)
+            selector = EventFrameSelector(
+                settle_ms=EVENT_SETTLE_MS,
+                watchdog_ms=EVENT_WATCHDOG_MS,
+            )
+            retry_budget = 0
             timestamp_ms = 0
-            sampled = 0
-            while timestamp_ms < duration_ms and len(recognized) < max_deals * 8:
-                sampled += 1
-                if sampled % 10 == 0:
-                    print(json.dumps({"progress_timestamp": format_timestamp(timestamp_ms), "recognized_candidates": len(recognized), "registration_offsets": dict(registration_offsets), "top_rejections": rejections.most_common(6)}, ensure_ascii=False), flush=True)
+            while timestamp_ms < duration_ms and len(recognized) < max_deals * 16:
                 first_original = _frame_at(capture, timestamp_ms)
                 if first_original is None:
                     rejections["decode"] += 1
-                    timestamp_ms += scan_ms
+                    timestamp_ms += event_probe_ms
                     continue
+                lightweight_probes += 1
+                event = selector.observe(frame_signature(first_original, event_regions), timestamp_ms)
+                if lightweight_probes % 240 == 0:
+                    print(json.dumps({
+                        "progress_timestamp": format_timestamp(timestamp_ms),
+                        "lightweight_probes": lightweight_probes,
+                        "stable_events": sum(emitted_events.values()),
+                        "recognized_candidates": len(recognized),
+                        "event_reasons": dict(emitted_events),
+                        "top_rejections": rejections.most_common(6),
+                    }, ensure_ascii=False), flush=True)
+                timestamp_ms += event_probe_ms
+                if event is None:
+                    continue
+                emitted_events[event.reason] += 1
+                if event.reason != "WATCHDOG_STABLE_STATE":
+                    retry_budget = 2
                 viewport_y, gate = _gate_offset(first_original, templates, offsets)
                 if viewport_y is None:
                     rejections[f"gold_gate_{gate['gate_cards_passed']}"] += 1
-                    timestamp_ms += scan_ms
+                    if retry_budget:
+                        selector.schedule_retry(event.timestamp_ms)
+                        retry_budget -= 1
                     continue
                 registration_offsets[viewport_y] += 1
-                if timestamp_ms - last_attempt_ms < 15000:
-                    timestamp_ms += scan_ms
-                    continue
+                event_path = event_screenshots / f"event_{len(event_frames) + 1:04d}_{event.timestamp_ms:010d}.png"
+                if not cv2.imwrite(str(event_path), first_original):
+                    raise RuntimeError("event screenshot write failed")
+                event_record = {
+                    "event": len(event_frames) + 1,
+                    "timestamp_ms": event.timestamp_ms,
+                    "timestamp": format_timestamp(event.timestamp_ms),
+                    "reason": event.reason,
+                    "change_score": event.change_score,
+                    "stable_ms": event.stable_ms,
+                    "screenshot": str(event_path.relative_to(output)),
+                    "screenshot_sha256": sha256_file(event_path),
+                    "game_viewport": {"x": 0, "y": viewport_y, "width": profile_width, "height": profile_height},
+                    "layout_status": "PENDING",
+                }
+                event_frames.append(event_record)
                 first_layout, first_reason = _full_template_layout(first_original, templates, viewport_y)
                 if first_layout is None:
+                    event_record["layout_status"] = "LAYOUT_UNRESOLVED"
+                    event_record["layout_reason"] = first_reason
                     rejections[first_reason] += 1
-                    timestamp_ms += scan_ms
+                    if retry_budget:
+                        selector.schedule_retry(event.timestamp_ms)
+                        retry_budget -= 1
                     continue
                 fused = _single_template_layout(first_layout)
-                last_attempt_ms = timestamp_ms
                 key = _hands_key(fused["hands"])
-                screenshot = screenshots / f"deal_{len(recognized) + 1:03d}_{timestamp_ms:010d}.png"
+                event_record["layout_status"] = "FULL_LAYOUT_RECONSTRUCTED"
+                event_record["layout_sha256"] = key
+                event_timestamp_ms = event.timestamp_ms
+                screenshot = screenshots / f"deal_{len(recognized) + 1:03d}_{event_timestamp_ms:010d}.png"
                 if not cv2.imwrite(str(screenshot), first_original):
                     raise RuntimeError("deal screenshot write failed")
                 recognized.append({
-                    "timestamp_ms": timestamp_ms,
-                    "timestamp": format_timestamp(timestamp_ms),
-                    "status": "SHADOW_FULL_LAYOUT_CANDIDATE",
+                    "timestamp_ms": event_timestamp_ms,
+                    "timestamp": format_timestamp(event_timestamp_ms),
+                    "status": "SHADOW_EVENT_DRIVEN_LAYOUT_CANDIDATE",
+                    "event_detection": {
+                        "reason": event.reason,
+                        "change_score": event.change_score,
+                        "stable_ms": event.stable_ms,
+                    },
                     "layout_sha256": key,
                     "screenshot": str(screenshot.relative_to(output)),
                     "screenshot_sha256": sha256_file(screenshot),
@@ -1082,9 +1383,9 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
                     "evidence": {"minimum_assigned_score": round(fused["minimum"], 6), "median_assigned_score": round(fused["median"], 6), "independent_frames": 1, "confidence_kind": "TEMPLATE_SIMILARITY_UNCALIBRATED"},
                     "weights": fused["weights"],
                     "_matches": fused["matches"],
+                    "_completion_slots": fused["completion_slots"],
                     "receipt": {"method": "104_HUMAN_VERIFIED_CARD_CORNERS_SINGLE_FULL_SERVER_FRAME", "bridge_logic_weighting": False},
                 })
-                timestamp_ms += scan_ms
     finally:
         capture.release()
 
@@ -1113,7 +1414,7 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
         deal.pop("_matches", None)
 
     return {
-        "schema": "diana167-card-report/v3",
+        "schema": "diana-card-report/v6",
         "job_id": os.environ.get("GITHUB_RUN_ID") or hashlib.sha256((source["sha256"] + raw_profile["profile_sha256"]).encode()).hexdigest()[:16],
         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "runtime_commit": os.environ.get("GITHUB_SHA", "unknown"),
@@ -1129,14 +1430,26 @@ def scan_video(video: Path, gold_zip: Path, output: Path, scan_ms: int, max_deal
             "gold_template_set_sha256": raw_profile["gold"]["template_set_sha256"],
             "challenger": challenger,
         },
-        "sampling": {"scan_interval_ms": scan_ms, "policy": "PIXEL_REGISTERED_FULL_LAYOUT_WITH_OWNER_DISTANCE_CLUSTERING", "registration_y_offsets": dict(sorted(registration_offsets.items()))},
+        "sampling": {
+            "event_probe_ms": event_probe_ms,
+            "event_settle_ms": EVENT_SETTLE_MS,
+            "watchdog_ms": EVENT_WATCHDOG_MS,
+            "policy": "EVENT_DRIVEN_STABLE_VISUAL_CHANGE_WITH_WATCHDOG_REPEAT_DEDUPLICATION",
+            "lightweight_probes": lightweight_probes,
+            "emitted_events_by_reason": dict(sorted(emitted_events.items())),
+            "registration_y_offsets": dict(sorted(registration_offsets.items())),
+        },
         "summary": {
             "deals": len(deals),
             "recognized_candidates": len(recognized),
             "exact_layout_hashes": len({item["layout_sha256"] for item in recognized}),
-            "owner_distance_clusters": len(clusters),
+            "exact_state_clusters": len(clusters),
+            "owner_distance_clustering_used": False,
+            "game_event_frames": len(event_frames),
+            "unresolved_game_event_frames": sum(item["layout_status"] == "LAYOUT_UNRESOLVED" for item in event_frames),
             "rejections": dict(sorted(rejections.items())),
         },
+        "events": event_frames,
         "deals": deals,
     }
 
@@ -1155,7 +1468,7 @@ def card_text(card: str) -> str:
     return rank + suit_text(card[1])
 
 
-def build_pdf(data: dict[str, Any], output_root: Path, target: Path) -> None:
+def build_pdf(data: dict[str, Any], output_root: Path, target: Path, report_name: str) -> None:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from reportlab.lib.pagesizes import A4, landscape
@@ -1170,10 +1483,10 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path) -> None:
     pdfmetrics.registerFont(TTFont("DejaVu", regular))
     pdfmetrics.registerFont(TTFont("DejaVu-Bold", bold))
     styles = getSampleStyleSheet()
-    title = ParagraphStyle("TitleRu", parent=styles["Title"], fontName="DejaVu-Bold", fontSize=19, leading=23, textColor=colors.HexColor("#17324D"), alignment=TA_LEFT)
-    h2 = ParagraphStyle("H2Ru", parent=styles["Heading2"], fontName="DejaVu-Bold", fontSize=13, leading=16, textColor=colors.HexColor("#17324D"))
-    body = ParagraphStyle("BodyRu", parent=styles["BodyText"], fontName="DejaVu", fontSize=8.5, leading=11)
-    small = ParagraphStyle("SmallRu", parent=body, fontSize=7, leading=9)
+    title = ParagraphStyle("TitleRu", parent=styles["Title"], fontName="DejaVu-Bold", fontSize=16, leading=19, textColor=colors.HexColor("#17324D"), alignment=TA_LEFT)
+    h2 = ParagraphStyle("H2Ru", parent=styles["Heading2"], fontName="DejaVu-Bold", fontSize=11, leading=13, textColor=colors.HexColor("#17324D"))
+    body = ParagraphStyle("BodyRu", parent=styles["BodyText"], fontName="DejaVu", fontSize=8, leading=10)
+    small = ParagraphStyle("SmallRu", parent=body, fontSize=6.4, leading=7.5)
     card_style = ParagraphStyle("Card", parent=small, fontName="DejaVu-Bold", alignment=TA_CENTER)
     page = landscape(A4)
 
@@ -1181,12 +1494,12 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path) -> None:
         canvas.saveState()
         canvas.setFont("DejaVu", 7)
         canvas.setFillColor(colors.HexColor("#667788"))
-        canvas.drawString(12 * mm, 7 * mm, "Диана 167 · серверный shadow-отчёт · стратегическая бриджевая логика в весах отключена")
+        canvas.drawString(12 * mm, 7 * mm, f"{report_name} · серверный shadow-отчёт · бриджевая логика в весах отключена")
         canvas.drawRightString(page[0] - 12 * mm, 7 * mm, f"Страница {doc.page}")
         canvas.restoreState()
 
     story: list[Any] = []
-    story.append(Paragraph("Диана 167: сдачи, веса карт и упоминания преподавателя", title))
+    story.append(Paragraph(f"{report_name}: событийный прогон, расклады и веса", title))
     story.append(Spacer(1, 4 * mm))
     src = data["source"]
     summary = data["summary"]
@@ -1198,10 +1511,13 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path) -> None:
         ["SHA-256 видео", src["sha256"]],
         ["Длительность", format_timestamp(src["duration_ms"])],
         ["Найдено уникальных сдач", str(summary["deals"])],
-        ["Интервал сканирования", f"{data['sampling']['scan_interval_ms'] / 1000:g} сек."],
+        ["Устойчивых игровых событий", str(summary.get("game_event_frames", 0))],
+        ["Событий с пока не собранным раскладом", str(summary.get("unresolved_game_event_frames", 0))],
+        ["Отбор кадров", f"событийный; лёгкая проверка каждые {data['sampling']['event_probe_ms'] / 1000:g} сек."],
         ["Новых проверенных challenger-вариантов", str(data["profile"]["challenger"]["validated_variant_count"])],
         ["Визуально прочитано карт", str(data.get("reconstruction", {}).get("total_visual_recognized_cards", 0))],
         ["Достроено ограничениями", str(data.get("reconstruction", {}).get("total_deck_constrained_completed_cards", 0))],
+        ["Изменено относительно предварительного расклада", str(data.get("reconstruction", {}).get("total_assignments_changed_from_provisional", 0))],
         ["Режим", "серверный, shadow-only; без записи в канон"],
     ]
     table = Table([[Paragraph(f"<b>{a}</b>", body), Paragraph(str(b), body)] for a, b in cover], colWidths=[55 * mm, 190 * mm])
@@ -1223,60 +1539,108 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path) -> None:
     for number, deal in enumerate(data["deals"], 1):
         story.append(Paragraph(f"Сдача {number} · {deal['timestamp']}", title))
         evidence = deal.get("evidence") or {}
-        story.append(Paragraph(f"Статус: {deal['status']} · подтверждений: {deal['server_confirmations']} · минимальный вес: {evidence.get('minimum_assigned_score', '—')} · медианный вес: {evidence.get('median_assigned_score', '—')}", body))
+        story.append(Paragraph(f"Статус: {deal['status']} · событийных подтверждений: {deal['server_confirmations']} · минимальный визуальный вес: {evidence.get('minimum_assigned_score', '—')} · медиана: {evidence.get('median_assigned_score', '—')}", body))
         completion = deal.get("completion") or {}
-        story.append(Paragraph(
-            f"Визуально прочитано: {completion.get('visual_recognized_cards', 0)} · достроено по геометрии и ограничениям: {completion.get('deck_constrained_completed_cards', 0)} · итог: {completion.get('final_cards', 0)} карт, по 13 в каждой руке.",
-            body,
-        ))
+        story.append(Paragraph(f"Уверенно распознано: {completion.get('visual_recognized_cards', 0)} · осталось ниже порога: {completion.get('deck_constrained_completed_cards', 0)} · полный расклад достроен до 52×13.", body))
         story.append(Spacer(1, 2 * mm))
         image_path = output_root / deal["screenshot"]
         picture = Image(str(image_path))
-        max_w, max_h = 260 * mm, 142 * mm
+        max_w, max_h = 190 * mm, 92 * mm
         scale = min(max_w / picture.imageWidth, max_h / picture.imageHeight)
         picture.drawWidth = picture.imageWidth * scale
         picture.drawHeight = picture.imageHeight * scale
         story.append(picture)
         story.append(Spacer(1, 2 * mm))
         story.append(Paragraph(f"Скрин SHA-256: {deal['screenshot_sha256']}", small))
-        story.append(PageBreak())
+        story.append(Spacer(1, 2 * mm))
 
-        story.append(Paragraph(f"Сдача {number}: расклад и веса", title))
-        hands_rows = []
+        confident = [item for item in deal["weights"] if item.get("visual_recognized")]
+        confident_hands = {seat: {suit: [] for suit in rank_layout.SUITS} for seat in rank_layout.SEATS}
+        for item in confident:
+            confident_hands[item["seat"]][item["card"][1]].append(item["card"][0])
         for seat in rank_layout.SEATS:
-            cells = [Paragraph(f"<b>{seat}</b>", body)]
             for suit in rank_layout.SUITS:
-                ranks = "".join(deal["hands"][seat][suit]).replace("T", "10") or "—"
-                cells.append(Paragraph(f"{suit_text(suit)} {ranks}", body))
-            hands_rows.append(cells)
-        hands_table = Table([[Paragraph("Позиция", body)] + [Paragraph(suit_text(s), card_style) for s in rank_layout.SUITS]] + hands_rows, colWidths=[24 * mm] + [52 * mm] * 4)
-        hands_table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CCD5DF")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#17324D")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
-        story.append(hands_table)
-        story.append(Spacer(1, 4 * mm))
+                confident_hands[seat][suit].sort(key=rank_layout.RANKS.index)
 
-        weights = deal["weights"]
-        halves = [weights[:26], weights[26:]]
+        def hand_box(seat: str) -> Table:
+            rows = [[Paragraph(f"<b>{seat}</b> · только уверенные", small)]]
+            for suit in rank_layout.SUITS:
+                ranks = " ".join(confident_hands[seat][suit]).replace("T", "10") or "—"
+                rows.append([Paragraph(f"{suit_text(suit)}  {ranks}", body)])
+            box = Table(rows, colWidths=[74 * mm])
+            box.setStyle(TableStyle([
+                ("BOX", (0, 0), (-1, -1), 0.45, colors.HexColor("#9BAEBD")),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EAF1F7")),
+                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 1.2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 1.2),
+            ]))
+            return box
+
+        compass = Table([
+            ["", hand_box("N"), ""],
+            [hand_box("W"), Paragraph("<b>РАСКЛАД</b><br/>N / W—E / S", card_style), hand_box("E")],
+            ["", hand_box("S"), ""],
+        ], colWidths=[78 * mm, 82 * mm, 78 * mm], rowHeights=[None, None, None], hAlign="CENTER")
+        compass.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 1),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 1),
+            ("TOPPADDING", (0, 0), (-1, -1), 1),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+        ]))
+        story.append(compass)
+        story.append(Spacer(1, 2 * mm))
+        story.append(Paragraph("Неопределённые визуально позиции и финальные веса", h2))
+        weak = [item for item in deal["weights"] if not item.get("visual_recognized")]
+        halves = [weak[::2], weak[1::2]]
         blocks = []
         for half in halves:
-            rows = [[Paragraph("Поз.", small), Paragraph("Карта", small), Paragraph("Gold v2", small), Paragraph("После v3", small), Paragraph("Источник", small)]]
+            rows = [[Paragraph("Рука", small), Paragraph("Итоговая карта", small), Paragraph("Визуал", small), Paragraph("Финал", small), Paragraph("Вывод", small)]]
             for item in half:
-                before = float(item.get("weight_gold_v2", item["weight_median"]))
-                source = "визуально" if item.get("visual_recognized") else "достроено"
+                before = float(item["visual_weight"])
+                source = "достроено"
+                if item.get("changed_from_provisional"):
+                    source += f"; было {card_text(item['provisional_card'])}"
                 rows.append([Paragraph(item["seat"], small), Paragraph(card_text(item["card"]), card_style), Paragraph(f"{before:.4f}", small), Paragraph(f"{item['weight_median']:.4f}", small), Paragraph(source, small)])
-            block = Table(rows, colWidths=[12 * mm, 18 * mm, 20 * mm, 20 * mm, 24 * mm], repeatRows=1)
+            if len(rows) == 1:
+                rows.append([Paragraph("—", small), Paragraph("—", small), Paragraph("—", small), Paragraph("—", small), Paragraph("нет", small)])
+            block = Table(rows, colWidths=[12 * mm, 24 * mm, 18 * mm, 18 * mm, 38 * mm], repeatRows=1)
             style_commands = [("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D6DEE7")), ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEF3F8")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("ALIGN", (0, 0), (-1, -1), "CENTER"), ("TOPPADDING", (0, 0), (-1, -1), 1.6), ("BOTTOMPADDING", (0, 0), (-1, -1), 1.6)]
-            for row_number, item in enumerate(half, 1):
-                if not item.get("visual_recognized"):
-                    style_commands.append(("BACKGROUND", (0, row_number), (-1, row_number), colors.HexColor("#FFF1D6")))
+            for row_number, _item in enumerate(half, 1):
+                style_commands.append(("BACKGROUND", (0, row_number), (-1, row_number), colors.HexColor("#FFF1D6")))
             block.setStyle(TableStyle(style_commands))
             blocks.append(block)
-        paired = Table([[blocks[0], blocks[1]]], colWidths=[90 * mm, 90 * mm], hAlign="LEFT")
+        paired = Table([[blocks[0], blocks[1]]], colWidths=[116 * mm, 116 * mm], hAlign="CENTER")
         paired.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 6)]))
         story.append(paired)
         story.append(Spacer(1, 2 * mm))
-        story.append(Paragraph("Оранжевые строки — карты ниже визуального порога: их принадлежность руке достроена по экранной геометрии и ограничениям полной колоды. Пустая масть допустима и после завершения помечается VOID_CONFIRMED. Тип веса: сходство с Gold v2 либо с challenger-вариантом; это не вероятность. Логика торговли и розыгрыша отключена.", small))
+        story.append(Paragraph("Здесь перечислены только позиции ниже визуального порога. «Визуал» — исходное сходство пикселей; «Финал» может только увеличиться от подтверждённой речи, точной связки речи с курсором или памяти сыгранных карт. Распределение достраивается до 52 уникальных карт и 13 карт в каждой руке. Логика торговли отключена.", small))
         if number != len(data["deals"]):
             story.append(PageBreak())
+
+    unresolved_events = [
+        item for item in data.get("events") or []
+        if item.get("layout_status") == "LAYOUT_UNRESOLVED"
+    ]
+    for event in unresolved_events:
+        story.append(PageBreak())
+        story.append(Paragraph(f"Игровое событие {event['event']} · {event['timestamp']}", title))
+        story.append(Paragraph(
+            f"Устойчивое изменение обнаружено событийно. Полный расклад на этом кадре пока не собран: {event.get('layout_reason', 'UNKNOWN')}. Кадр сохранён, а не отброшен.",
+            body,
+        ))
+        story.append(Spacer(1, 3 * mm))
+        event_picture = Image(str(output_root / event["screenshot"]))
+        event_scale = min((260 * mm) / event_picture.imageWidth, (160 * mm) / event_picture.imageHeight)
+        event_picture.drawWidth = event_picture.imageWidth * event_scale
+        event_picture.drawHeight = event_picture.imageHeight * event_scale
+        story.append(event_picture)
+        story.append(Spacer(1, 2 * mm))
+        story.append(Paragraph(f"Скрин SHA-256: {event['screenshot_sha256']}", small))
 
     speech = data.get("speech") or {}
     story.append(PageBreak())
@@ -1323,7 +1687,7 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path) -> None:
         story.append(event_table)
 
     tmp = target.with_suffix(".base.pdf")
-    doc = SimpleDocTemplate(str(tmp), pagesize=page, leftMargin=12 * mm, rightMargin=12 * mm, topMargin=10 * mm, bottomMargin=12 * mm, title="Диана 167 — карты и веса", author="Bridge Video server recognizer")
+    doc = SimpleDocTemplate(str(tmp), pagesize=page, leftMargin=12 * mm, rightMargin=12 * mm, topMargin=8 * mm, bottomMargin=12 * mm, title=f"{report_name} — карты и веса", author="Bridge Video server recognizer")
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     analysis_json = output_root / "master_analysis.json"
     from pypdf import PdfReader, PdfWriter
@@ -1337,18 +1701,18 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path) -> None:
     tmp.unlink()
 
 
-def validate_pdf(path: Path, expected_deals: int, root: Path) -> dict[str, Any]:
+def validate_pdf(path: Path, expected_deals: int, root: Path, report_name: str) -> dict[str, Any]:
     from pypdf import PdfReader
 
     reader = PdfReader(str(path))
     pages = len(reader.pages)
-    expected_minimum = 2 if expected_deals == 0 else 1 + expected_deals * 2
+    expected_minimum = 2 if expected_deals == 0 else 1 + expected_deals
     if pages < expected_minimum:
         raise RuntimeError(f"PDF has too few pages: {pages} < {expected_minimum}")
     if "master_analysis.json" not in list(reader.attachments):
         raise RuntimeError("PDF is missing embedded master_analysis.json")
     text = "\n".join((page.extract_text() or "") for page in reader.pages)
-    for needle in ("Диана 167", "стратегическая бриджевая логика", "Drive ID"):
+    for needle in (report_name, "бриджевая логика", "Drive ID"):
         if needle not in text:
             raise RuntimeError(f"PDF text validation failed: {needle}")
     render = root / "render-check"
@@ -1365,26 +1729,45 @@ def main() -> None:
     parser.add_argument("--video", required=True, type=Path)
     parser.add_argument("--gold-zip", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--scan-ms", type=int, default=5000)
-    parser.add_argument("--max-deals", type=int, default=40)
+    parser.add_argument("--event-probe-ms", type=int, default=500)
+    parser.add_argument("--max-deals", type=int, default=500)
     parser.add_argument("--skip-asr", action="store_true")
+    parser.add_argument("--source-file-id", default=SOURCE_FILE_ID)
+    parser.add_argument("--source-parent-id", default=SOURCE_PARENT_ID)
+    parser.add_argument("--report-name")
     args = parser.parse_args()
-    if not 2000 <= args.scan_ms <= 30000:
-        raise SystemExit("scan-ms must be in 2000..30000")
+    if not 100 <= args.event_probe_ms <= 2000:
+        raise SystemExit("event-probe-ms must be in 100..2000")
+    if not 1 <= args.max_deals <= 2000:
+        raise SystemExit("max-deals must be in 1..2000")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    data = scan_video(args.video, args.gold_zip, args.output_dir, args.scan_ms, args.max_deals)
+    report_name = args.report_name or args.video.stem
+    data = scan_video(
+        args.video,
+        args.gold_zip,
+        args.output_dir,
+        args.event_probe_ms,
+        args.max_deals,
+        source_file_id=args.source_file_id,
+        source_parent_id=args.source_parent_id,
+    )
     if not args.skip_asr:
         data["speech"] = analyze_teacher_mentions(args.video, data, args.output_dir)
     else:
-        data["speech"] = {"status": "SKIPPED", "teacher_mention_count": 0, "teacher_mentions": [], "teacher_counts_by_card_and_hand": []}
+        data["speech"] = {
+            "status": "SKIPPED", "teacher_mention_count": 0, "teacher_mentions": [],
+            "teacher_speech_claim_count": 0, "teacher_speech_claims": [],
+            "teacher_counts_by_card_and_hand": [],
+        }
     data["reconstruction"] = complete_unrecognized_cards(data)
     analysis = args.output_dir / "master_analysis.json"
     analysis.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     if not data["deals"]:
         raise RuntimeError("no complete deal passed the fail-closed server gates")
-    pdf = args.output_dir / "Диана 167 — карты, веса и упоминания — server v3.pdf"
-    build_pdf(data, args.output_dir, pdf)
-    validation = validate_pdf(pdf, len(data["deals"]), args.output_dir)
+    safe_report_name = re.sub(r"[\\/:*?\"<>|]+", "_", report_name).strip() or "Диана"
+    pdf = args.output_dir / f"{safe_report_name} — событийный расклад и веса — server v6.pdf"
+    build_pdf(data, args.output_dir, pdf, report_name)
+    validation = validate_pdf(pdf, len(data["deals"]), args.output_dir, report_name)
     validation_path = args.output_dir / "validation.json"
     validation_path.write_text(json.dumps(validation, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({
@@ -1396,7 +1779,6 @@ def main() -> None:
         "pdf": str(pdf),
         "validation": validation,
     }, ensure_ascii=False))
-
 
 
 if __name__ == "__main__":
