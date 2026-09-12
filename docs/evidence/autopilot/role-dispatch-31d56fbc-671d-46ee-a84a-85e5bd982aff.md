@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=31d56fbc-671d-46ee-a84a-85e5bd982aff
+dispatch_epoch=3
+role=DATA
+task_fingerprint=df284189f88a1a6f58ef1bb359c10d340d67af7d9064f99c5f213fd9be8b2321
+target_pr=860
+mode=VERIFY
+repair_attempt=1
+origin_task_id=dedffc7f-b62e-48a5-8ee9-a33c35feed73
+prior_task_id=669387ab-75dc-4e33-8dde-6b3084130114
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=READ_ONLY outbox conflicts with a REPOSITORY_REPAIR assignment that requires repository mutation; rejected fail-closed.
+instruction=READ_ONLY_VERIFY_REPAIR_NO_MUTATION
