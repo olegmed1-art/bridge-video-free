@@ -1,11 +1,7 @@
 name: Diana 167 v4 completion once
 
 on:
-  push:
-    branches:
-      - codex/diana167-v3-rerun
-    paths:
-      - '.github/workflows/diana167-v4-completion-once.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
