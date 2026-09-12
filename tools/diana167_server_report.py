@@ -1530,6 +1530,28 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path, report_name
     story.append(Paragraph("N/E/S/W в отчёте означают экранные позиции: верх / право / низ / лево. Поворот реальных мест за столом не используется как скрытая подсказка распознавателю.", body))
     story.append(PageBreak())
 
+    pdf_images = output_root / "work" / "pdf-images"
+    pdf_images.mkdir(parents=True, exist_ok=True)
+
+    def compact_screenshot(source: Path, stem: str) -> Path:
+        """Create a bounded JPEG preview; never embed full-resolution PNG evidence."""
+        cv2, _ = _runtime()
+        image = cv2.imread(str(source), cv2.IMREAD_COLOR)
+        if image is None:
+            raise RuntimeError(f"PDF screenshot decode failed: {source}")
+        height, width = image.shape[:2]
+        scale = min(1.0, 1600.0 / width, 900.0 / height)
+        if scale < 1.0:
+            image = cv2.resize(
+                image,
+                (max(1, round(width * scale)), max(1, round(height * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+        destination = pdf_images / f"{stem}.jpg"
+        if not cv2.imwrite(str(destination), image, [int(cv2.IMWRITE_JPEG_QUALITY), 82]):
+            raise RuntimeError("PDF preview write failed")
+        return destination
+
     if not data["deals"]:
         story.append(Paragraph("Сдачи не подтверждены", h2))
         story.append(Paragraph("Профиль сработал fail-closed: ни один набор кадров не прошёл все геометрические и пиксельные проверки. Ни карты, ни веса не были придуманы.", body))
@@ -1543,7 +1565,7 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path, report_name
         completion = deal.get("completion") or {}
         story.append(Paragraph(f"Уверенно распознано: {completion.get('visual_recognized_cards', 0)} · осталось ниже порога: {completion.get('deck_constrained_completed_cards', 0)} · полный расклад достроен до 52×13.", body))
         story.append(Spacer(1, 2 * mm))
-        image_path = output_root / deal["screenshot"]
+        image_path = compact_screenshot(output_root / deal["screenshot"], f"deal-{number:03d}")
         picture = Image(str(image_path))
         max_w, max_h = 190 * mm, 92 * mm
         scale = min(max_w / picture.imageWidth, max_h / picture.imageHeight)
@@ -1621,26 +1643,6 @@ def build_pdf(data: dict[str, Any], output_root: Path, target: Path, report_name
         story.append(Paragraph("Здесь перечислены только позиции ниже визуального порога. «Визуал» — исходное сходство пикселей; «Финал» может только увеличиться от подтверждённой речи, точной связки речи с курсором или памяти сыгранных карт. Распределение достраивается до 52 уникальных карт и 13 карт в каждой руке. Логика торговли отключена.", small))
         if number != len(data["deals"]):
             story.append(PageBreak())
-
-    unresolved_events = [
-        item for item in data.get("events") or []
-        if item.get("layout_status") == "LAYOUT_UNRESOLVED"
-    ]
-    for event in unresolved_events:
-        story.append(PageBreak())
-        story.append(Paragraph(f"Игровое событие {event['event']} · {event['timestamp']}", title))
-        story.append(Paragraph(
-            f"Устойчивое изменение обнаружено событийно. Полный расклад на этом кадре пока не собран: {event.get('layout_reason', 'UNKNOWN')}. Кадр сохранён, а не отброшен.",
-            body,
-        ))
-        story.append(Spacer(1, 3 * mm))
-        event_picture = Image(str(output_root / event["screenshot"]))
-        event_scale = min((260 * mm) / event_picture.imageWidth, (160 * mm) / event_picture.imageHeight)
-        event_picture.drawWidth = event_picture.imageWidth * event_scale
-        event_picture.drawHeight = event_picture.imageHeight * event_scale
-        story.append(event_picture)
-        story.append(Spacer(1, 2 * mm))
-        story.append(Paragraph(f"Скрин SHA-256: {event['screenshot_sha256']}", small))
 
     speech = data.get("speech") or {}
     story.append(PageBreak())
