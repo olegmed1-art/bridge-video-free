@@ -1854,6 +1854,7 @@ def test_every_live_instance_command_creator_uses_the_common_actions_fence() -> 
         ".github/workflows/oracle-diana11-002-delivery.yml",
         ".github/workflows/oracle-diana11-002-job.yml",
         ".github/workflows/oracle-diana11-delivery.yml",
+        ".github/workflows/oracle-fleet-status.yml",
         ".github/workflows/oracle-instance-power.yml",
         ".github/workflows/oracle-universal-video-admin.yml",
         ".github/workflows/oracle-universal-video-evidence-export.yml",
@@ -1865,6 +1866,8 @@ def test_every_live_instance_command_creator_uses_the_common_actions_fence() -> 
             "oracle-diana11-002-pr-{0}",
         ".github/workflows/oracle-diana11-delivery.yml":
             "oracle-diana11-delivery-pr-{0}",
+        ".github/workflows/oracle-fleet-status.yml":
+            "oracle-fleet-status-pr-{0}",
         ".github/workflows/oracle-universal-video-evidence-export.yml":
             "oracle-universal-video-evidence-export-pr-{0}",
         ".github/workflows/oracle-universal-video-admin.yml":
