@@ -23,6 +23,7 @@ FORBIDDEN_PARENT_ID = "16TVeL_595YU05H0VaRYzxo0IDJkfPAhg"
 GOLD_FILE_ID = "1MGaz14wswn2XOgi4AqqvzT2sNFLdOink"
 GOLD_SHA256 = "2e7aeff84cfeb142fd310f4c4350207706d687748ee20d06f10895fd123c75e9"
 OLD_REPORT_FILE_ID = "1_0iNx29e1Vbm8AzRehXGTQ2Uc7XMttb2"
+OLD_REPORT_PARENT_ID = "1BvGDOQkoq7o6sopZ9m988LMkhaRHLuF8"
 POST_GOLD_BOUNDARY = "2026-09-11T21:49:40Z"
 VIDEOS = (
     ("23", "1G9wvJAOBbjYqC6bKkMGf1DkX-2SNzeLa", "Диана 23.mp4"),
@@ -45,14 +46,20 @@ def write_status(root: Path, stage: str, **extra: Any) -> None:
     print(json.dumps(payload, ensure_ascii=False), flush=True)
 
 
-def checked_metadata(file_id: str, expected_name: str | None, token: str) -> dict[str, Any]:
+def checked_metadata(
+    file_id: str,
+    expected_name: str | None,
+    token: str,
+    *,
+    required_parent: str = SOURCE_PARENT_ID,
+) -> dict[str, Any]:
     item = file_metadata(file_id, token)
     if item.get("id") != file_id:
         raise RuntimeError("Drive identity mismatch")
     if expected_name is not None and item.get("name") != expected_name:
         raise RuntimeError(f"Drive name mismatch: {item.get('name')!r} != {expected_name!r}")
     parents = set(item.get("parents") or [])
-    if SOURCE_PARENT_ID not in parents or FORBIDDEN_PARENT_ID in parents:
+    if required_parent not in parents or FORBIDDEN_PARENT_ID in parents:
         raise RuntimeError("source is outside the explicitly allowed Drive folder")
     return item
 
@@ -144,7 +151,12 @@ def main() -> None:
     gold_receipt = download_file(GOLD_FILE_ID, gold, token, max_bytes=5_000_000, metadata=gold_meta)
     if gold_receipt["_download_sha256"] != GOLD_SHA256:
         raise RuntimeError("gold v2 SHA-256 mismatch")
-    old_meta = checked_metadata(OLD_REPORT_FILE_ID, "Diana_23-26_recognition_review.pdf", token)
+    old_meta = checked_metadata(
+        OLD_REPORT_FILE_ID,
+        "Diana_23-26_recognition_review.pdf",
+        token,
+        required_parent=OLD_REPORT_PARENT_ID,
+    )
     old_pdf = inputs / "old-review.pdf"
     download_file(OLD_REPORT_FILE_ID, old_pdf, token, max_bytes=100_000_000, metadata=old_meta)
     history_count = extract_history(history, token)
