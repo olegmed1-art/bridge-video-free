@@ -113,19 +113,33 @@ systemctl daemon-reload
 systemctl enable "$SERVICE_NAME" >/dev/null
 systemctl restart "$SERVICE_NAME"
 
-for _ in $(seq 1 12); do
+rdc_state=STARTING
+for _ in $(seq 1 18); do
   if systemctl is-active --quiet "$SERVICE_NAME"; then
     main_pid=$(systemctl show -p MainPID --value "$SERVICE_NAME")
     if [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] && [[ $(ps -o user= -p "$main_pid" | xargs) == "$SERVICE_USER" ]]; then
-      printf 'RDC_AUTOSTART_INSTALL=PASS\n'
-      printf 'RDC_SERVICE_ACTIVE=YES\n'
-      printf 'RDC_SERVICE_ENABLED=%s\n' "$(systemctl is-enabled "$SERVICE_NAME")"
-      printf 'RDC_SERVICE_USER=%s\n' "$SERVICE_USER"
-      printf 'RDC_DEVICE_ID_MATCH=YES\n'
-      exit 0
+      invocation_id=$(systemctl show -p InvocationID --value "$SERVICE_NAME")
+      service_log=$(journalctl --no-pager -o cat "_SYSTEMD_INVOCATION_ID=$invocation_id" 2>/dev/null || true)
+      if grep -Fq 'Device ready:' <<<"$service_log"; then
+        printf 'RDC_AUTOSTART_INSTALL=PASS\n'
+        printf 'RDC_AGENT_READY=YES\n'
+        printf 'RDC_SERVICE_ACTIVE=YES\n'
+        printf 'RDC_SERVICE_ENABLED=%s\n' "$(systemctl is-enabled "$SERVICE_NAME")"
+        printf 'RDC_SERVICE_USER=%s\n' "$SERVICE_USER"
+        printf 'RDC_DEVICE_ID_MATCH=YES\n'
+        exit 0
+      fi
+      if grep -Fq 'Persisted session invalid:' <<<"$service_log"; then
+        rdc_state=PERSISTED_SESSION_INVALID
+      elif grep -Fq 'Waiting for authorization' <<<"$service_log"; then
+        rdc_state=AUTHORIZATION_REQUIRED
+      elif grep -Fq 'Device startup failed:' <<<"$service_log"; then
+        rdc_state=STARTUP_FAILED
+      fi
     fi
   fi
   sleep 5
 done
 
-fail service_not_active
+printf 'RDC_AGENT_STATE=%s\n' "$rdc_state" >&2
+fail service_not_ready
