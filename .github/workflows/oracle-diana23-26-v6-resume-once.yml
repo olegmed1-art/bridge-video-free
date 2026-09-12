@@ -153,3 +153,5 @@ jobs:
           done
           printf 'Control timeout reached; Heavy Oracle background process was left intact.\n'
           exit 2
+
+# Retry trigger: refresh Drive token per upload and reuse exact artifacts.
