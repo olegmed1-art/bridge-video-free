@@ -1,4 +1,4 @@
-name: Light Oracle direct SSH proof
+name: Light Oracle console preflight
 
 on:
   push:
@@ -13,9 +13,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  probe:
+  preflight:
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 10
     env:
       OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
@@ -64,10 +64,14 @@ jobs:
           PY
           printf '%s\n' "$ORACLE_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/oracle_ssh_key"
           chmod 600 "$RUNNER_TEMP/oracle_ssh_key"
+          ssh-keygen -y -f "$RUNNER_TEMP/oracle_ssh_key" > "$RUNNER_TEMP/oracle_ssh_key.pub"
+          key_type="$(awk '{print $1}' "$RUNNER_TEMP/oracle_ssh_key.pub")"
+          echo "CONSOLE_KEY_TYPE=$key_type"
+          [[ "$key_type" == ssh-rsa ]]
           oci iam region list --output json >/dev/null
           echo 'CONTROL_PRINCIPALS=PASS'
 
-      - name: Resolve exact running A1 and public interface
+      - name: Resolve exact Light and create console connection
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -95,41 +99,46 @@ jobs:
           print('COMPARTMENT_ID='+x['compartment-id'])
           PY
           source "$RUNNER_TEMP/target.env"
-          oci compute vnic-attachment list --compartment-id "$COMPARTMENT_ID" --instance-id "$INSTANCE_ID" --all > "$RUNNER_TEMP/vnics.json"
-          vnic_id="$(python - "$RUNNER_TEMP/vnics.json" <<'PY'
+          existing="$(oci compute instance-console-connection list --compartment-id "$COMPARTMENT_ID" --instance-id "$INSTANCE_ID" --all --output json)"
+          active_count="$(printf '%s' "$existing" | python -c 'import json,sys; print(sum(1 for x in json.load(sys.stdin).get("data",[]) if x.get("lifecycle-state") in {"ACTIVE","CREATING"}))')"
+          echo "EXISTING_ACTIVE_CONSOLE_COUNT=$active_count"
+          [[ "$active_count" == 0 ]]
+          oci compute instance-console-connection create --instance-id "$INSTANCE_ID" --ssh-public-key-file "$RUNNER_TEMP/oracle_ssh_key.pub" --wait-for-state ACTIVE --wait-interval-seconds 5 --max-wait-seconds 180 > "$RUNNER_TEMP/console.json"
+          connection_id="$(python - "$RUNNER_TEMP/console.json" <<'PY'
           import json,sys
-          xs=[x for x in json.load(open(sys.argv[1]))['data'] if x.get('lifecycle-state')=='ATTACHED']
-          assert xs
-          print(xs[0]['vnic-id'])
+          d=json.load(open(sys.argv[1]))['data']
+          assert d['lifecycle-state']=='ACTIVE'
+          print(d['id'])
           PY
           )"
-          oci network vnic get --vnic-id "$vnic_id" > "$RUNNER_TEMP/vnic.json"
-          public_ip="$(python - "$RUNNER_TEMP/vnic.json" <<'PY'
-          import json,sys
-          ip=json.load(open(sys.argv[1]))['data'].get('public-ip')
-          assert ip
-          print(ip)
-          PY
-          )"
-          echo "PUBLIC_IP=$public_ip" >> "$GITHUB_ENV"
-          echo 'LIGHT_TARGET_EXACT=PASS'
-          echo 'LIGHT_STATE=RUNNING'
-          echo 'LIGHT_PUBLIC_INTERFACE=PASS'
+          echo "CONNECTION_ID=$connection_id" >> "$GITHUB_ENV"
+          echo "INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
+          echo 'LIGHT_CONSOLE_CONNECTION=ACTIVE'
 
-      - name: Read-only SSH proof after reboot
+      - name: Read-only serial console connection proof
         shell: bash
         run: |
           set -Eeuo pipefail
-          ssh-keyscan -T 10 -H "$PUBLIC_IP" > "$RUNNER_TEMP/known_hosts" 2>/dev/null
-          test -s "$RUNNER_TEMP/known_hosts"
+          oci compute instance-console-connection get --instance-console-connection-id "$CONNECTION_ID" > "$RUNNER_TEMP/console-get.json"
+          conn="$(python - "$RUNNER_TEMP/console-get.json" <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1]))['data']
+          assert d['lifecycle-state']=='ACTIVE'
+          print(d['connection-string'])
+          PY
+          )"
+          key="$RUNNER_TEMP/oracle_ssh_key"
+          conn="${conn//<privateKey>/$key}"
+          conn="${conn//ssh /ssh -i $key -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=\/dev\/null }"
           set +e
-          result="$(ssh -i "$RUNNER_TEMP/oracle_ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" -o ConnectTimeout=10 ubuntu@"$PUBLIC_IP" 'hostname; uptime -p' 2>&1)"
+          { sleep 4; printf '\r'; sleep 5; printf '\r~.\r'; } | timeout 25 bash -lc "$conn" > "$RUNNER_TEMP/serial.txt" 2>&1
           rc=$?
           set -e
-          if [[ $rc -ne 0 ]]; then
-            echo 'LIGHT_SSH=DENIED'
-            exit 41
+          tr -cd '\11\12\15\40-\176' < "$RUNNER_TEMP/serial.txt" | tail -n 80 > "$RUNNER_TEMP/serial-safe.txt"
+          if grep -Eqi 'IMPORTANT: Use a console connection|login:|Ubuntu|GRUB|Connected' "$RUNNER_TEMP/serial-safe.txt"; then
+            echo 'LIGHT_SERIAL_CONSOLE=PASS'
+          else
+            echo "LIGHT_SERIAL_CONSOLE=UNPROVEN rc=$rc"
+            sed -E 's/ocid1\.[A-Za-z0-9._-]+/OCID_REDACTED/g' "$RUNNER_TEMP/serial-safe.txt"
+            exit 62
           fi
-          [[ "$result" == bridge-school-autopilot-lite$'\n'* ]]
-          printf '%s\n' "$result"
-          echo 'LIGHT_SSH=PASS'
