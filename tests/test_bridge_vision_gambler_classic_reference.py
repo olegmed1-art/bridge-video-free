@@ -8,8 +8,11 @@ import pytest
 
 from bridge_vision.gambler_classic_reference import (
     GamblerClassicReferenceError,
+    RANKS,
     VARIANT_CARD_SIZE,
     VARIANT_SPRITE_SIZE,
+    bank_provenance,
+    build_rank_template_bank,
     card_box,
     png_dimensions,
     select_variant_for_card_size,
@@ -82,3 +85,48 @@ def test_scale_selects_variant_5_for_verified_native_size() -> None:
 def test_scale_rejects_unmatched_card_size() -> None:
     with pytest.raises(GamblerClassicReferenceError, match="no classic variant"):
         select_variant_for_card_size(75, 160)
+
+
+def test_original_asset_rank_bank_is_complete_and_deterministic() -> None:
+    pytest.importorskip("cv2")
+    pytest.importorskip("numpy")
+    payload = _png(1417, 588)
+    sprite = validate_sprite_bytes(
+        payload,
+        expected_sha256=hashlib.sha256(payload).hexdigest(),
+        expected_variant=5,
+    )
+    first = build_rank_template_bank(
+        sprite,
+        glyph_width=19,
+        glyph_height=16,
+        binary_threshold=180,
+        local_registration_px=2,
+    )
+    second = build_rank_template_bank(
+        sprite,
+        glyph_width=19,
+        glyph_height=16,
+        binary_threshold=180,
+        local_registration_px=2,
+    )
+    assert set(first) == set(RANKS)
+    assert all(first[rank].shape == (100, 19 * 16) for rank in RANKS)
+    assert all((first[rank] == second[rank]).all() for rank in RANKS)
+
+
+def test_original_asset_bank_provenance_is_source_bound() -> None:
+    payload = _png(1417, 588)
+    sha = hashlib.sha256(payload).hexdigest()
+    sprite = validate_sprite_bytes(payload, expected_sha256=sha, expected_variant=5)
+    evidence = bank_provenance(sprite)
+    assert evidence == {
+        "kind": "GAMBLER_CLASSIC_ORIGINAL_ASSET",
+        "variant": 5,
+        "sprite_sha256": sha,
+        "card_width": 109,
+        "card_height": 147,
+        "rank_order": list(RANKS),
+        "suit_row_order": list("CDHS"),
+        "network_access_used": False,
+    }
