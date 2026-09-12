@@ -173,14 +173,17 @@ def hmac_compare(left: str, right: str) -> bool:
 
 
 class RoleDispatchRequest(BaseModel):
-    """Public, non-secret envelope for the fixed GitHub role mailbox."""
+    """Public, non-secret envelope for the registry-gated GitHub role mailbox."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     dispatch_id: str = Field(min_length=36, max_length=36)
     dispatch_epoch: int = Field(ge=1, le=2**63 - 1)
     prepared_at_epoch: int = Field(ge=1_700_000_000, le=4_102_444_800)
-    role: Literal["RECOGNIZER", "VIDEO", "BOOKS", "KNOWLEDGE"]
+    # The broker validates only the public identifier shape.  The authoritative
+    # enabled-role and repair-capability decision is made by the bound Neon
+    # task/role_registry contract before this envelope can enter the outbox.
+    role: str = Field(pattern=r"^[A-Z][A-Z0-9_]{0,63}$")
     task_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     target_pr: int = Field(ge=1, le=1_000_000)
     mode: Literal["READ_ONLY", "REPAIR", "VERIFY"]
