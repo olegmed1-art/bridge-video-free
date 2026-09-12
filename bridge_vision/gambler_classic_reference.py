@@ -11,6 +11,7 @@ production/canonical writes.
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import stat
@@ -41,6 +42,11 @@ VARIANT_SPRITE_SIZE = {
     for variant, (card_width, card_height) in VARIANT_CARD_SIZE.items()
 }
 
+# Variant 5 is the measured native reference for these proportional rank-crop
+# offsets.  Other variants use the same artwork scaled by the client.
+_RANK_CROP_X_FRACTION = 4 / 109
+_RANK_CROP_Y_FRACTION = 5 / 147
+
 
 class GamblerClassicReferenceError(ValueError):
     """The supplied original-deck reference failed a closed validation gate."""
@@ -69,10 +75,22 @@ def _read_regular_bounded(path: Path) -> bytes:
             raise GamblerClassicReferenceError("sprite must be a regular file")
         if meta.st_size <= 0 or meta.st_size > MAX_SPRITE_BYTES:
             raise GamblerClassicReferenceError("sprite size is outside the allowed bound")
-        payload = os.read(fd, MAX_SPRITE_BYTES + 1)
+        chunks: list[bytes] = []
+        remaining = MAX_SPRITE_BYTES + 1
+        while remaining:
+            chunk = os.read(fd, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+    except GamblerClassicReferenceError:
+        raise
+    except OSError as exc:
+        raise GamblerClassicReferenceError("sprite is unavailable") from exc
     finally:
         os.close(fd)
-    if len(payload) > MAX_SPRITE_BYTES:
+    if not payload or len(payload) > MAX_SPRITE_BYTES:
         raise GamblerClassicReferenceError("sprite exceeds the byte bound")
     return payload
 
@@ -157,7 +175,13 @@ def select_variant_for_card_size(
         height = float(card_height)
     except (TypeError, ValueError, OverflowError) as exc:
         raise GamblerClassicReferenceError("card scale must be numeric") from exc
-    if width <= 0 or height <= 0 or not 0 < maximum_relative_error < 0.5:
+    if (
+        not math.isfinite(width)
+        or not math.isfinite(height)
+        or width <= 0
+        or height <= 0
+        or not 0 < maximum_relative_error < 0.5
+    ):
         raise GamblerClassicReferenceError("invalid card-scale selection input")
     scored = []
     for variant, (native_width, native_height) in VARIANT_CARD_SIZE.items():
@@ -193,6 +217,101 @@ def decode_card_cells(sprite: GamblerClassicSprite) -> dict[str, Any]:
     if len(result) != 52 or any(cell.shape[:2] != (sprite.card_height, sprite.card_width) for cell in result.values()):
         raise GamblerClassicReferenceError("sprite did not produce exactly 52 native card cells")
     return result
+
+
+def _shift_without_wrap(sample: Any, dx: int, dy: int):
+    try:
+        import numpy as np  # type: ignore
+    except ImportError as exc:  # pragma: no cover - depends on worker image
+        raise RuntimeError("numpy is required") from exc
+    shifted = np.full_like(sample, 255)
+    src_x0, src_x1 = max(0, -dx), sample.shape[1] - max(0, dx)
+    src_y0, src_y1 = max(0, -dy), sample.shape[0] - max(0, dy)
+    dst_x0, dst_x1 = max(0, dx), sample.shape[1] - max(0, -dx)
+    dst_y0, dst_y1 = max(0, dy), sample.shape[0] - max(0, -dy)
+    if src_x0 < src_x1 and src_y0 < src_y1:
+        shifted[dst_y0:dst_y1, dst_x0:dst_x1] = sample[src_y0:src_y1, src_x0:src_x1]
+    return shifted
+
+
+def build_rank_template_bank(
+    sprite: GamblerClassicSprite,
+    *,
+    glyph_width: int,
+    glyph_height: int,
+    binary_threshold: int,
+    local_registration_px: int,
+) -> dict[str, Any]:
+    """Build the recognizer's normalized rank bank from original client artwork.
+
+    The crop origin is proportional to the native card dimensions, not to the
+    video resolution.  Four suit-specific source cards contribute to every rank.
+    """
+    if not 4 <= int(glyph_width) <= 128 or not 4 <= int(glyph_height) <= 128:
+        raise GamblerClassicReferenceError("glyph dimensions are outside the allowed range")
+    if not 1 <= int(binary_threshold) <= 254:
+        raise GamblerClassicReferenceError("binary threshold is outside the allowed range")
+    if not 0 <= int(local_registration_px) <= 8:
+        raise GamblerClassicReferenceError("local registration radius is outside the allowed range")
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except ImportError as exc:  # pragma: no cover - depends on worker image
+        raise RuntimeError("opencv-python-headless and numpy are required") from exc
+
+    cells = decode_card_cells(sprite)
+    crop_x = max(1, round(sprite.card_width * _RANK_CROP_X_FRACTION))
+    crop_y = max(1, round(sprite.card_height * _RANK_CROP_Y_FRACTION))
+    if crop_x + glyph_width > sprite.card_width or crop_y + glyph_height > sprite.card_height:
+        raise GamblerClassicReferenceError("rank glyph crop leaves native card cell")
+
+    by_rank: dict[str, list[Any]] = {rank: [] for rank in RANKS}
+    for rank in RANKS:
+        for suit in SUITS:
+            cell = cells[rank + suit]
+            if cell.ndim == 3 and cell.shape[2] == 4:
+                gray = cv2.cvtColor(cell, cv2.COLOR_BGRA2GRAY)
+            elif cell.ndim == 3 and cell.shape[2] == 3:
+                gray = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = cell
+            crop = gray[crop_y : crop_y + glyph_height, crop_x : crop_x + glyph_width]
+            if tuple(crop.shape[:2]) != (glyph_height, glyph_width):
+                raise GamblerClassicReferenceError("rank glyph crop is incomplete")
+            binary = cv2.threshold(crop, binary_threshold, 255, cv2.THRESH_BINARY)[1]
+            by_rank[rank].append(binary)
+
+    radius = int(local_registration_px)
+    result: dict[str, Any] = {}
+    for rank, samples in by_rank.items():
+        variants = np.stack(
+            [
+                _shift_without_wrap(sample, dx, dy)
+                for sample in samples
+                for dy in range(-radius, radius + 1)
+                for dx in range(-radius, radius + 1)
+            ]
+        ).astype(np.float32)
+        variants = variants.reshape(len(variants), -1)
+        variants -= variants.mean(axis=1, keepdims=True)
+        variants /= np.maximum(np.linalg.norm(variants, axis=1, keepdims=True), 1e-6)
+        result[rank] = variants
+    if set(result) != set(RANKS):
+        raise GamblerClassicReferenceError("rank bank is incomplete")
+    return result
+
+
+def bank_provenance(sprite: GamblerClassicSprite) -> dict[str, Any]:
+    return {
+        "kind": "GAMBLER_CLASSIC_ORIGINAL_ASSET",
+        "variant": sprite.variant,
+        "sprite_sha256": sprite.sprite_sha256,
+        "card_width": sprite.card_width,
+        "card_height": sprite.card_height,
+        "rank_order": list(RANKS),
+        "suit_row_order": list(SUITS),
+        "network_access_used": False,
+    }
 
 
 def provenance(sprite: GamblerClassicSprite, card: str) -> dict[str, Any]:
