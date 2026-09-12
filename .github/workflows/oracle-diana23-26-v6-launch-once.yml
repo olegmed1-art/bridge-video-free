@@ -1,0 +1,177 @@
+name: Heavy Oracle Diana 23-26 v6 launch once
+
+on:
+  push:
+    branches:
+      - codex/diana23-26-v6-rerun
+    paths:
+      - .github/workflows/oracle-diana23-26-v6-launch-once.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: heavy-oracle-diana23-26-v6
+  cancel-in-progress: false
+
+jobs:
+  control-heavy-oracle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_HOSTNAME: bridge-school-dds3-frankfurt
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Resolve trusted SSH transport
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare code and protected Drive credential
+        id: payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$GOOGLE_DRIVE_OAUTH_JSON" ]]
+          payload="$RUNNER_TEMP/diana-oracle-payload.tgz"
+          credential="$RUNNER_TEMP/google-drive-oauth.json"
+          tar --exclude=.git --exclude='__pycache__' --exclude='.pytest_cache' -czf "$payload" .
+          printf '%s' "$GOOGLE_DRIVE_OAUTH_JSON" > "$credential"
+          chmod 0600 "$credential"
+          remote_root="/home/ubuntu/bridge-video-jobs/diana23-26-v6-${GITHUB_SHA:0:12}"
+          echo "payload=$payload" >> "$GITHUB_OUTPUT"
+          echo "credential=$credential" >> "$GITHUB_OUTPUT"
+          echo "remote_root=$remote_root" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect Heavy Oracle and reject competing heavy jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          test "$(hostname)" = bridge-school-dds3-frankfurt
+          available_kb="$(df -Pk /home/ubuntu | awk 'NR==2 {print $4}')"
+          test "$available_kb" -ge 12582912
+          if pgrep -af 'diana167_server_report.py|diana23_26_oracle_batch.py|faster-whisper|ffmpeg.*(Диана|Diana)' >/tmp/diana-heavy-existing.txt; then
+            cat /tmp/diana-heavy-existing.txt
+            exit 17
+          fi
+          printf 'HEAVY_ORACLE_READY host=%s available_kb=%s cpus=%s\n' "$(hostname)" "$available_kb" "$(nproc)"
+          REMOTE
+
+      - name: Transfer control payload to Heavy Oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          root='${{ steps.payload.outputs.remote_root }}'
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            "$ORACLE_USER@$ORACLE_HOST" "umask 077; mkdir -p '$root/source' '$root/secrets'"
+          scp -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            '${{ steps.payload.outputs.payload }}' "$ORACLE_USER@$ORACLE_HOST:$root/source/payload.tgz"
+          scp -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            '${{ steps.payload.outputs.credential }}' "$ORACLE_USER@$ORACLE_HOST:$root/secrets/google-drive-oauth.json"
+
+      - name: Launch batch on Heavy Oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          root='${{ steps.payload.outputs.remote_root }}'
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            "$ORACLE_USER@$ORACLE_HOST" "JOB_ROOT='$root' RUNTIME_COMMIT='$GITHUB_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          test "$(hostname)" = bridge-school-dds3-frankfurt
+          cd "$JOB_ROOT/source"
+          tar -xzf payload.tgz
+          rm payload.tgz
+          chmod 0600 "$JOB_ROOT/secrets/google-drive-oauth.json"
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            python3-venv ffmpeg poppler-utils fonts-dejavu-core zip
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --disable-pip-version-check -q \
+            'numpy==2.2.6' 'scipy==1.15.3' 'opencv-python-headless==4.12.0.88' \
+            'reportlab==4.4.4' 'pypdf==6.1.1' 'google-auth==2.56.3' 'requests==2.34.2' \
+            'faster-whisper==1.2.1' 'sherpa-onnx==1.13.4' 'sherpa-onnx-bin==1.13.4'
+          export GOOGLE_DRIVE_OAUTH_JSON_FILE="$JOB_ROOT/secrets/google-drive-oauth.json"
+          export UNIVERSAL_VIDEO_WHISPER_MODEL=small
+          export UNIVERSAL_VIDEO_ASR_THREADS=4
+          export PYTHONPATH="$JOB_ROOT/source"
+          nohup .venv/bin/python tools/diana23_26_oracle_batch.py \
+            --job-root="$JOB_ROOT" --runtime-commit="$RUNTIME_COMMIT" \
+            </dev/null >"$JOB_ROOT/run.log" 2>&1 &
+          pid=$!
+          printf '%s\n' "$pid" > "$JOB_ROOT/pid"
+          sleep 5
+          kill -0 "$pid"
+          printf 'HEAVY_ORACLE_BATCH_STARTED pid=%s root=%s\n' "$pid" "$JOB_ROOT"
+          REMOTE
+
+      - name: Monitor Heavy Oracle batch
+        shell: bash
+        run: |
+          set -euo pipefail
+          root='${{ steps.payload.outputs.remote_root }}'
+          for attempt in $(seq 1 330); do
+            state="$(ssh -i '${{ steps.ssh.outputs.key }}' \
+              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+              "$ORACLE_USER@$ORACLE_HOST" "python3 -c \"import json,pathlib; p=pathlib.Path('$root/status.json'); print(json.loads(p.read_text()).get('stage','MISSING') if p.exists() else 'STARTING')\"")"
+            if (( attempt % 5 == 1 )); then
+              printf 'HEAVY_ORACLE_STATUS attempt=%s stage=%s\n' "$attempt" "$state"
+            fi
+            if [[ "$state" == COMPLETE ]]; then
+              ssh -i '${{ steps.ssh.outputs.key }}' \
+                -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+                "$ORACLE_USER@$ORACLE_HOST" "cat '$root/result.json'"
+              exit 0
+            fi
+            if [[ "$state" == FAILED ]]; then
+              ssh -i '${{ steps.ssh.outputs.key }}' \
+                -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+                "$ORACLE_USER@$ORACLE_HOST" "tail -120 '$root/run.log'"
+              exit 1
+            fi
+            sleep 60
+          done
+          printf 'Control timeout reached; Heavy Oracle background process was left intact.\n'
+          exit 2
