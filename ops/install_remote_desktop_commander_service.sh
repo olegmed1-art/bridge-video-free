@@ -49,6 +49,8 @@ sudo -u "$SERVICE_USER" -H timeout 180 "$npx_path" --yes --prefer-offline \
 install -d -m 0755 -o root -g root "$(dirname "$RUNNER_PATH")"
 runner_tmp=$(mktemp "${RUNNER_PATH}.tmp.XXXXXXXX")
 unit_tmp=$(mktemp "${UNIT_PATH}.tmp.XXXXXXXX")
+# Invoked indirectly by the EXIT/signal trap below.
+# shellcheck disable=SC2317
 cleanup() {
   rm -f -- "$runner_tmp" "$unit_tmp"
 }
