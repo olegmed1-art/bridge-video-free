@@ -1,4 +1,4 @@
-name: Light Oracle post-second-reset read-only proof
+name: Light Oracle restore normal boot from GRUB
 
 on:
   push:
@@ -142,7 +142,7 @@ jobs:
           echo "PUBLIC_IP=$public_ip" >> "$GITHUB_ENV"
           echo 'LIGHT_CONSOLE_CONNECTION=ACTIVE'
 
-      - name: Read-only current serial and SSH state
+      - name: Restore standard Ubuntu boot from current GRUB prompt
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -154,27 +154,39 @@ jobs:
           argv=shlex.split(conn)
           child=pexpect.spawn(argv[0],argv[1:],encoding='utf-8',codec_errors='ignore',timeout=0.5,dimensions=(45,180))
           screen=pyte.Screen(180,45); stream=pyte.Stream(screen)
-          deadline=time.time()+18
-          while time.time()<deadline and child.isalive():
-              child.send('\r')
-              until=time.time()+1
-              while time.time()<until and child.isalive():
-                  child.expect([pexpect.TIMEOUT,pexpect.EOF],timeout=0.4)
+          def drain(seconds):
+              deadline=time.time()+seconds
+              while time.time()<deadline and child.isalive():
+                  child.expect([pexpect.TIMEOUT,pexpect.EOF],timeout=min(0.5,max(0.05,deadline-time.time())))
                   if child.before: stream.feed(child.before)
                   child.before=''
-          visible='\n'.join(screen.display)
-          safe=re.sub(r'ocid1\.[A-Za-z0-9._-]+','OCID_REDACTED',visible)
-          if 'autopilot-lite-vnic login:' in safe:
-              print('LIGHT_NORMAL_BOOT_LOGIN=PASS')
-          elif 'GNU GRUB' in safe:
-              print('LIGHT_STILL_AT_GRUB=TRUE')
-              raise RuntimeError('instance remains at GRUB')
+          drain(8); child.send('\r'); drain(3)
+          v='\n'.join(screen.display)
+          if 'grub>' not in v:
+              raise RuntimeError('expected current grub prompt not present')
+          print('LIGHT_GRUB_PROMPT_CONFIRMED=PASS',flush=True)
+          child.sendline('normal'); drain(6)
+          v='\n'.join(screen.display)
+          if 'GNU GRUB' in v or 'Ubuntu' in v:
+              child.send('\r')
           else:
-              print('LIGHT_SERIAL_STATE=UNPROVEN')
-              print('\n'.join(x.rstrip() for x in safe.splitlines()[-20:] if x.strip()))
-              raise RuntimeError('normal boot login not observed')
-          child.close(force=True)
+              child.sendline('normal'); drain(4); child.send('\r')
+          deadline=time.time()+150
+          while time.time()<deadline and child.isalive():
+              drain(2)
+              if 'autopilot-lite-vnic login:' in '\n'.join(screen.display):
+                  print('LIGHT_NORMAL_BOOT_LOGIN=PASS',flush=True)
+                  child.close(force=True)
+                  sys.exit(0)
+              child.send('\r')
+          safe=re.sub(r'ocid1\.[A-Za-z0-9._-]+','OCID_REDACTED','\n'.join(screen.display))
+          print('\n'.join(x.rstrip() for x in safe.splitlines()[-25:] if x.strip()))
+          raise RuntimeError('normal Ubuntu login did not return')
           PY
+
+      - name: Verify current SSH status
+        shell: bash
+        run: |
           set +e
           out="$(ssh -i "$RUNNER_TEMP/oracle_ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@$PUBLIC_IP" 'hostname' 2>&1)"
           rc=$?
