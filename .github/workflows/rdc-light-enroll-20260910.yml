@@ -1,4 +1,4 @@
-name: Light Oracle authorized console recovery
+name: Light Oracle post-recovery read-only probe
 
 on:
   push:
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   preflight:
     runs-on: ubuntu-24.04
-    timeout-minutes: 18
+    timeout-minutes: 10
     env:
       OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
@@ -142,144 +142,52 @@ jobs:
           echo "PUBLIC_IP=$public_ip" >> "$GITHUB_ENV"
           echo 'LIGHT_CONSOLE_CONNECTION=ACTIVE'
 
-      - name: Recover approved SSH key through Ubuntu GRUB
+      - name: Read-only current serial state
         shell: bash
         run: |
           set -Eeuo pipefail
-          python - "$INSTANCE_ID" "$RUNNER_TEMP/connection-string" "$RUNNER_TEMP/console_key" "$RUNNER_TEMP/oracle_ssh_key.pub" <<'PY'
-          import os,pexpect,pyte,shlex,subprocess,sys,time
-
-          instance_id, conn_file, console_key, pub_file = sys.argv[1:]
-          conn=open(conn_file).read().strip().replace('<privateKey>', console_key)
+          python - "$RUNNER_TEMP/connection-string" "$RUNNER_TEMP/console_key" <<'PY'
+          import pexpect,pyte,shlex,sys,time,re
+          conn=open(sys.argv[1]).read().strip().replace('<privateKey>',sys.argv[2])
           argv=shlex.split(conn)
-          child=pexpect.spawn(argv[0], argv[1:], encoding='utf-8', codec_errors='ignore',
-                              timeout=0.5, dimensions=(45,180))
-          screen=pyte.Screen(180,45)
-          stream=pyte.Stream(screen)
-          transcript=[]
-
+          child=pexpect.spawn(argv[0],argv[1:],encoding='utf-8',codec_errors='ignore',timeout=0.5,dimensions=(45,180))
+          screen=pyte.Screen(180,45); stream=pyte.Stream(screen)
           def drain(seconds):
               deadline=time.time()+seconds
-              while time.time()<deadline:
-                  try:
-                      child.expect([pexpect.TIMEOUT,pexpect.EOF], timeout=min(0.5,max(0.05,deadline-time.time())))
-                  except pexpect.ExceptionPexpect:
-                      pass
-                  data=child.before or ''
-                  if data:
-                      transcript.append(data)
-                      stream.feed(data)
+              while time.time()<deadline and child.isalive():
+                  child.expect([pexpect.TIMEOUT,pexpect.EOF],timeout=min(0.5,max(0.05,deadline-time.time())))
+                  if child.before: stream.feed(child.before)
                   child.before=''
-                  if not child.isalive():
-                      break
-
-          def view():
-              return '\n'.join(screen.display)
-
-          drain(8)
-          if not child.isalive():
-              raise RuntimeError('serial console exited before recovery')
-          child.send('\r')
-          drain(3)
-          print('LIGHT_SERIAL_ATTACH=PASS', flush=True)
-
-          subprocess.run([
-              'oci','compute','instance','action','--instance-id',instance_id,
-              '--action','SOFTRESET'
-          ], check=True, stdout=subprocess.DEVNULL)
-          print('LIGHT_CONSOLE_SOFTRESET=ISSUED', flush=True)
-
-          menu=False
-          deadline=time.time()+55
-          while time.time()<deadline:
-              child.send('\x1b')
-              drain(0.35)
-              v=view()
-              if 'GNU GRUB' in v and ('Ubuntu' in v or 'Advanced options' in v):
-                  menu=True
-                  break
-          if not menu:
-              raise RuntimeError('GRUB menu not captured; no guest changes made')
-
-          child.send('e')
-          drain(3)
-          linux_row=None
-          for i,line in enumerate(screen.display):
-              s=line.lstrip()
-              if (s.startswith('linux ') or s.startswith('linuxefi ')) and ('vmlinuz' in s):
-                  linux_row=i
-                  break
-          if linux_row is None:
-              raise RuntimeError('GRUB linux command line not found; no guest changes made')
-
-          delta=linux_row-screen.cursor.y
-          child.send(('\x1b[B'*delta) if delta>0 else ('\x1b[A'*(-delta)))
-          child.send('\x05')
-          child.send(' rw init=/bin/bash')
-          child.send('\x18')
-          drain(35)
-          v=view()
-          if 'initramfs' in v.lower():
-              raise RuntimeError('unexpected initramfs prompt')
-          child.send('\r')
-          drain(2)
-
-          key=open(pub_file).read().strip()
-          q=shlex.quote(key)
-          commands=[
-              "mount -o remount,rw / && echo LIGHT_ROOT_RW_PASS",
-              "install -d -m 700 -o ubuntu -g ubuntu /home/ubuntu/.ssh",
-              "touch /home/ubuntu/.ssh/authorized_keys",
-              f"grep -qxF -- {q} /home/ubuntu/.ssh/authorized_keys || printf '%s\\n' {q} >> /home/ubuntu/.ssh/authorized_keys",
-              "chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys",
-              f"grep -qxF -- {q} /home/ubuntu/.ssh/authorized_keys && echo LIGHT_KEY_INSTALLED_PASS",
-              "sync"
-          ]
-          for cmd in commands:
-              child.sendline(cmd)
-              drain(1.5)
-          if 'LIGHT_KEY_INSTALLED_PASS' not in ''.join(transcript):
-              raise RuntimeError('authorized_keys verification failed')
-          print('LIGHT_KEY_INSTALLED=PASS', flush=True)
-          child.sendline('exec /sbin/reboot -f')
-          drain(8)
-          print('LIGHT_GUEST_REBOOT=ISSUED', flush=True)
+          drain(8); child.send('\r'); drain(8)
+          visible='\n'.join(x.rstrip() for x in screen.display if x.strip())
+          safe=re.sub(r'ocid1\.[A-Za-z0-9._-]+','OCID_REDACTED',visible)
+          print('SERIAL_SCREEN_BEGIN')
+          print('\n'.join(safe.splitlines()[-30:]))
+          print('SERIAL_SCREEN_END')
+          if any(x.lower() in safe.lower() for x in ['login:','ubuntu','important: use a console connection']):
+              print('LIGHT_SERIAL_CURRENT_BOOT=PASS')
+          else:
+              raise RuntimeError('current serial boot state unproven')
           child.close(force=True)
           PY
 
-      - name: Verify recovered SSH and read-only host state
+      - name: Read-only SSH status
         shell: bash
         run: |
-          set -Eeuo pipefail
-          ssh_ok=0
-          for attempt in $(seq 1 30); do
-            if ssh -i "$RUNNER_TEMP/oracle_ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 "ubuntu@$PUBLIC_IP" 'true' >/dev/null 2>&1; then
-              ssh_ok=1
-              break
-            fi
-            sleep 10
-          done
-          [[ "$ssh_ok" == 1 ]]
-          echo 'LIGHT_SSH=PASS'
-          ssh -i "$RUNNER_TEMP/oracle_ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "ubuntu@$PUBLIC_IP" '
-            set -u
-            echo "HOSTNAME=$(hostname)"
-            echo "UPTIME_SECONDS=$(cut -d. -f1 /proc/uptime)"
-            echo "FAILED_UNITS_BEGIN"
-            systemctl --failed --no-pager --no-legend 2>/dev/null || true
-            echo "FAILED_UNITS_END"
-            echo "AUTOPILOT_UNITS_BEGIN"
-            systemctl list-units --type=service --all --no-pager --no-legend 2>/dev/null | grep -Ei "autopilot|bridge|worker|queue" || true
-            echo "AUTOPILOT_UNITS_END"
-            echo "CONTAINERS_BEGIN"
-            if command -v docker >/dev/null 2>&1; then sudo -n docker ps --format "{{.Names}}|{{.Status}}|{{.Image}}" 2>/dev/null || true; fi
-            if command -v podman >/dev/null 2>&1; then podman ps --format "{{.Names}}|{{.Status}}|{{.Image}}" 2>/dev/null || true; fi
-            echo "CONTAINERS_END"
-            echo "RDC_PROCESSES_BEGIN"
-            pgrep -af "desktop-commander.*remote" || true
-            echo "RDC_PROCESSES_END"
-          '
-          echo 'LIGHT_READONLY_HOST_PROBE=PASS'
+          set +e
+          output="$(ssh -vv -i "$RUNNER_TEMP/oracle_ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@$PUBLIC_IP" 'hostname' 2>&1)"
+          rc=$?
+          set -e
+          if [[ "$rc" == 0 ]]; then
+            echo 'LIGHT_SSH=PASS'
+            printf '%s\n' "$output" | tail -n 1
+          elif printf '%s' "$output" | grep -qi 'Permission denied'; then
+            echo 'LIGHT_SSH=DENIED'
+          elif printf '%s' "$output" | grep -qiE 'timed out|No route|Connection refused'; then
+            echo 'LIGHT_SSH=UNREACHABLE'
+          else
+            echo "LIGHT_SSH=FAILED rc=$rc"
+          fi
 
       - name: Remove temporary console connection
         if: always()
