@@ -1,4 +1,4 @@
-name: RDC Light Oracle run-command probe
+name: Light Oracle recover control
 
 on:
   push:
@@ -13,22 +13,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  probe:
+  recover:
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 25
     env:
       OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      ORACLE_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
     steps:
       - name: Install OCI CLI
         run: python -m pip install --disable-pip-version-check --quiet 'oci-cli==3.90.3'
 
-      - name: Configure existing OCI lifecycle principal
+      - name: Configure existing OCI and SSH principals
         shell: bash
         run: |
           set -Eeuo pipefail
           test -n "${OCI_CLI_CONFIG:-}"
           test -n "${OCI_CLI_KEY_CONTENT:-}"
+          test -n "${ORACLE_SSH_PRIVATE_KEY:-}"
           umask 077
           mkdir -p "$HOME/.oci"
           if [[ "$OCI_CLI_KEY_CONTENT" == base64:* ]]; then
@@ -61,10 +63,13 @@ jobs:
           if not fp: lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}')
           p.write_text(chr(10).join(lines)+chr(10))
           PY
+          printf '%s\n' "$ORACLE_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/oracle_ssh_key"
+          chmod 600 "$RUNNER_TEMP/oracle_ssh_key"
+          ssh-keygen -y -f "$RUNNER_TEMP/oracle_ssh_key" > "$RUNNER_TEMP/oracle_ssh_key.pub"
           oci iam region list --output json >/dev/null
-          echo 'OCI_CONTROL_AUTH=PASS'
+          echo 'CONTROL_PRINCIPALS=PASS'
 
-      - name: Resolve Light and prove Run Command root
+      - name: Resolve exact Light A1
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -73,8 +78,8 @@ jobs:
           python - "$RUNNER_TEMP/compartments.json" > "$RUNNER_TEMP/compartments" <<'PY'
           import json,sys
           for x in json.load(open(sys.argv[1]))['data']:
-              i=x.get('id')
-              if x.get('lifecycle-state')=='ACTIVE' and isinstance(i,str): print(i)
+              if x.get('lifecycle-state')=='ACTIVE' and isinstance(x.get('id'),str):
+                  print(x['id'])
           PY
           : > "$RUNNER_TEMP/instances.jsonl"
           while IFS= read -r compartment; do
@@ -85,33 +90,99 @@ jobs:
           import json,sys
           rows=[json.loads(x) for x in open(sys.argv[1]) if x.strip()]
           rows=[x for x in rows if x.get('display-name')=='bridge-school-autopilot-lite' and x.get('lifecycle-state') not in {'TERMINATED','TERMINATING'}]
-          assert len(rows)==1
+          assert len(rows)==1, f'exact target count={len(rows)}'
           x=rows[0]
-          assert x['lifecycle-state']=='RUNNING'
+          assert x['lifecycle-state']=='RUNNING', x['lifecycle-state']
+          assert x['shape']=='VM.Standard.A1.Flex', x['shape']
           print('INSTANCE_ID='+x['id'])
           print('COMPARTMENT_ID='+x['compartment-id'])
           PY
-          source "$RUNNER_TEMP/target.env"
-          plugins="$(oci instance-agent plugin list --compartment-id "$COMPARTMENT_ID" --instanceagent-id "$INSTANCE_ID" --all --output json)"
-          status="$(printf '%s' "$plugins" | python -c 'import json,sys; xs=json.load(sys.stdin)["data"]; print(next((x.get("status","") for x in xs if "Run Command" in str(x.get("name",""))),""))')"
-          [[ "$status" == RUNNING ]] || { echo "LIGHT_RUN_COMMAND=$status" >&2; exit 51; }
-          script_text='sudo -n true && test "$(hostname)" = bridge-school-autopilot-lite && echo LIGHT_RUN_COMMAND_ROOT=PASS'
-          content_json="$(SCRIPT_TEXT="$script_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
-          target_json="$(INSTANCE_ID="$INSTANCE_ID" python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
-          command_id="$(oci instance-agent command create --compartment-id "$COMPARTMENT_ID" --content "$content_json" --target "$target_json" --timeout-in-seconds 120 --display-name "rdc-light-root-probe-$GITHUB_RUN_ID" --query data.id --raw-output)"
-          execution=''
-          lifecycle=''
-          for _ in $(seq 1 36); do
+          cat "$RUNNER_TEMP/target.env" >> "$GITHUB_ENV"
+          echo 'LIGHT_TARGET_EXACT=PASS'
+          echo 'LIGHT_PRE_STATE=RUNNING'
+          echo 'LIGHT_SHAPE=VM.Standard.A1.Flex'
+
+      - name: Authorized graceful reboot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          oci compute instance action --instance-id "$INSTANCE_ID" --action SOFTRESET --wait-for-state RUNNING --wait-interval-seconds 15 --max-wait-seconds 1200 >/dev/null
+          echo 'LIGHT_SOFTRESET=PASS'
+          echo 'LIGHT_POST_STATE=RUNNING'
+
+      - name: Recover existing SSH access through Run Command
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for _ in $(seq 1 30); do
+            plugins="$(oci instance-agent plugin list --compartment-id "$COMPARTMENT_ID" --instanceagent-id "$INSTANCE_ID" --all --output json || true)"
+            status="$(printf '%s' "$plugins" | python -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); print(next((x.get("status","") for x in xs if "Run Command" in str(x.get("name",""))),""))' 2>/dev/null || true)"
+            [[ "$status" == RUNNING ]] && break
+            sleep 10
+          done
+          [[ "$status" == RUNNING ]] || { echo "LIGHT_RUN_COMMAND_PLUGIN=${status:-UNKNOWN}"; exit 51; }
+          pubkey="$(cat "$RUNNER_TEMP/oracle_ssh_key.pub")"
+          script_text="$(PUBKEY="$pubkey" python - <<'PY'
+          import os
+          key=os.environ['PUBKEY']
+          print("""set -Eeuo pipefail
+          test "$(hostname)" = bridge-school-autopilot-lite
+          id ubuntu >/dev/null
+          install -d -m 700 -o ubuntu -g ubuntu /home/ubuntu/.ssh
+          touch /home/ubuntu/.ssh/authorized_keys
+          chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
+          chmod 600 /home/ubuntu/.ssh/authorized_keys
+          grep -qxF -- %s /home/ubuntu/.ssh/authorized_keys || printf '%%s\\n' %s >> /home/ubuntu/.ssh/authorized_keys
+          chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
+          echo LIGHT_SSH_KEY=PASS
+          """ % (__import__('shlex').quote(key), __import__('shlex').quote(key)))
+          PY
+          )"
+          content_json="$(SCRIPT_TEXT="$script_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))'"
+          target_json="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))'"
+          command_id="$(oci instance-agent command create --compartment-id "$COMPARTMENT_ID" --content "$content_json" --target "$target_json" --timeout-in-seconds 180 --display-name "light-control-recovery-$GITHUB_RUN_ID" --query data.id --raw-output)"
+          execution=''; lifecycle=''
+          for _ in $(seq 1 60); do
             execution="$(oci instance-agent command-execution get --command-id "$command_id" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
             if [[ -n "$execution" ]]; then
               lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
               case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break;; esac
             fi
-            sleep 5
+            sleep 10
           done
-          text="$(printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); c=d.get("content") or {}; x=c.get("text",""); print(x if isinstance(x,str) else "")')"
-          exit_code="$(printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); c=d.get("content") or {}; v=c.get("exit-code",""); print(v if v is not None else "")')"
+          text="$(printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text",""))')"
+          exit_code="$(printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("exit-code",""))')"
           echo "LIGHT_RUN_COMMAND_LIFECYCLE=${lifecycle:-UNKNOWN}"
           echo "LIGHT_RUN_COMMAND_EXIT=${exit_code:-UNKNOWN}"
-          [[ "$lifecycle" == SUCCEEDED && "$exit_code" == 0 && "$text" == *LIGHT_RUN_COMMAND_ROOT=PASS* ]]
-          echo 'LIGHT_RUN_COMMAND_ROOT=PASS'
+          [[ "$lifecycle" == SUCCEEDED && "$exit_code" == 0 && "$text" == *LIGHT_SSH_KEY=PASS* ]]
+          echo 'LIGHT_SSH_KEY=PASS'
+
+      - name: Prove SSH to exact Light host
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          oci compute vnic-attachment list --compartment-id "$COMPARTMENT_ID" --instance-id "$INSTANCE_ID" --all > "$RUNNER_TEMP/vnics.json"
+          vnic_id="$(python - "$RUNNER_TEMP/vnics.json" <<'PY'
+          import json,sys
+          xs=[x for x in json.load(open(sys.argv[1]))['data'] if x.get('lifecycle-state')=='ATTACHED']
+          assert xs
+          print(xs[0]['vnic-id'])
+          PY
+          )"
+          oci network vnic get --vnic-id "$vnic_id" > "$RUNNER_TEMP/vnic.json"
+          public_ip="$(python - "$RUNNER_TEMP/vnic.json" <<'PY'
+          import json,sys
+          ip=json.load(open(sys.argv[1]))['data'].get('public-ip')
+          assert ip
+          print(ip)
+          PY
+          )"
+          for _ in $(seq 1 30); do
+            ssh-keyscan -T 5 -H "$public_ip" > "$RUNNER_TEMP/known_hosts" 2>/dev/null && break
+            sleep 10
+          done
+          test -s "$RUNNER_TEMP/known_hosts"
+          result="$(ssh -i "$RUNNER_TEMP/oracle_ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" -o ConnectTimeout=10 ubuntu@"$public_ip" 'hostname; uptime -p')"
+          [[ "$result" == bridge-school-autopilot-lite$'\n'* ]]
+          printf '%s\n' "$result"
+          echo 'LIGHT_SSH=PASS'
