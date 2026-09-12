@@ -37,6 +37,7 @@ jobs:
           persist-credentials: false
       - run: |
           set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet 'pytest==8.4.2'
           python -m pytest -q tests/test_oracle_fleet_status.py
           python -m py_compile ops/oracle_fleet_status.py
 
