@@ -1,0 +1,294 @@
+name: Diana 23-26 v6 event rerun once
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/diana23-26-v6-rerun
+    paths:
+      - .github/workflows/diana23-26-v6-event-rerun-once.yml
+      - tools/diana167_server_report.py
+      - tools/diana_recognition_compare.py
+      - bridge_vision/bridgit_event_frame_selector.py
+      - bridge_vision/bridgit_unrecognized_card_completion.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diana23-26-v6-event-rerun-once
+  cancel-in-progress: true
+
+env:
+  SOURCE_PARENT_ID: 1Fr-H2NgBKEpp3q_H4FzNmQwCV6bj2x6b
+  FORBIDDEN_PARENT_ID: 16TVeL_595YU05H0VaRYzxo0IDJkfPAhg
+  GOLD_FILE_ID: 1MGaz14wswn2XOgi4AqqvzT2sNFLdOink
+  GOLD_SHA256: 2e7aeff84cfeb142fd310f4c4350207706d687748ee20d06f10895fd123c75e9
+  OLD_REPORT_FILE_ID: 1_0iNx29e1Vbm8AzRehXGTQ2Uc7XMttb2
+
+jobs:
+  recognize:
+    name: Diana ${{ matrix.number }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - number: '23'
+            source_id: 1G9wvJAOBbjYqC6bKkMGf1DkX-2SNzeLa
+            source_name: Диана 23.mp4
+          - number: '24'
+            source_id: 1EzMCIGz1fRRAKDhz0j5_cwsK9FFHQ-oe
+            source_name: Диана 24.mp4
+          - number: '25'
+            source_id: 1_p-r-FOYB9hZooScHrzGV-0gQeggLdAz
+            source_name: Диана 25. 13.09.21.mp4
+          - number: '26'
+            source_id: 1XqTfXNJ2eNdxnmFQtwkpvvt4XjMzvhFv
+            source_name: Диана 26.mp4
+    env:
+      SOURCE_FILE_ID: ${{ matrix.source_id }}
+      EXPECTED_SOURCE_NAME: ${{ matrix.source_name }}
+      REPORT_NAME: Диана ${{ matrix.number }}
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+      UNIVERSAL_VIDEO_WHISPER_MODEL: small
+      UNIVERSAL_VIDEO_ASR_THREADS: '4'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Install pinned visual, ASR and PDF runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q \
+            'numpy==2.2.6' 'scipy==1.15.3' 'opencv-python-headless==4.12.0.88' \
+            'reportlab==4.4.4' 'pypdf==6.1.1' 'google-auth==2.56.3' 'requests==2.34.2' \
+            'faster-whisper==1.2.1' 'sherpa-onnx==1.13.4' 'sherpa-onnx-bin==1.13.4'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg poppler-utils
+
+      - name: Download exact allowed source and reviewed gold set
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p server-input server-output
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from universal_video.drive_adapter import access_token, download_file, file_metadata
+
+          token=access_token()
+          source=file_metadata(os.environ['SOURCE_FILE_ID'], token)
+          assert source['id']==os.environ['SOURCE_FILE_ID']
+          assert source['name']==os.environ['EXPECTED_SOURCE_NAME']
+          parents=set(source.get('parents') or [])
+          assert os.environ['SOURCE_PARENT_ID'] in parents
+          assert os.environ['FORBIDDEN_PARENT_ID'] not in parents
+          video=Path('server-input')/source['name']
+          download_file(source['id'], video, token, max_bytes=900_000_000, metadata=source)
+
+          gold=file_metadata(os.environ['GOLD_FILE_ID'], token)
+          assert gold['id']==os.environ['GOLD_FILE_ID']
+          gold_parents=set(gold.get('parents') or [])
+          assert os.environ['SOURCE_PARENT_ID'] in gold_parents
+          assert os.environ['FORBIDDEN_PARENT_ID'] not in gold_parents
+          archive=Path('server-input/bridgit_gold_v2.zip')
+          downloaded=download_file(gold['id'], archive, token, max_bytes=2_000_000, metadata=gold)
+          assert downloaded['_download_sha256']==os.environ['GOLD_SHA256']
+          print('SOURCE_IDENTITY_PASS')
+          print('FORBIDDEN_FOLDER_UNUSED_PASS')
+          PY
+
+      - name: Run event-driven recognition, ASR and unknown-card completion
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD" python tools/diana167_server_report.py \
+            --video "server-input/$EXPECTED_SOURCE_NAME" \
+            --gold-zip server-input/bridgit_gold_v2.zip \
+            --output-dir server-output \
+            --source-file-id "$SOURCE_FILE_ID" \
+            --source-parent-id "$SOURCE_PARENT_ID" \
+            --report-name "$REPORT_NAME" \
+            --event-probe-ms 500 \
+            --max-deals 500
+
+      - name: Upload detailed PDF to allowed Drive folder
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import requests
+          from universal_video.drive_adapter import access_token
+
+          path=next(Path('server-output').glob('*server v6.pdf'))
+          metadata={'name': path.name, 'parents': [os.environ['SOURCE_PARENT_ID']]}
+          response=requests.post(
+              'https://www.googleapis.com/upload/drive/v3/files',
+              headers={'Authorization': f"Bearer {access_token()}"},
+              params={'uploadType': 'multipart', 'fields': 'id,name,parents,size'},
+              files={'metadata': ('metadata', json.dumps(metadata, ensure_ascii=False), 'application/json; charset=UTF-8'), 'file': (path.name, path.open('rb'), 'application/pdf')},
+              timeout=600,
+          )
+          response.raise_for_status()
+          item=response.json()
+          assert os.environ['SOURCE_PARENT_ID'] in set(item.get('parents') or [])
+          assert os.environ['FORBIDDEN_PARENT_ID'] not in set(item.get('parents') or [])
+          print(json.dumps(item, ensure_ascii=False))
+          PY
+
+      - name: Preserve per-video data artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diana-${{ matrix.number }}-v6-${{ github.run_id }}
+          path: |
+            server-output/*server v6.pdf
+            server-output/master_analysis.json
+            server-output/validation.json
+            server-output/transcript.jsonl
+            server-output/transcript_qc.json
+            server-output/speaker_diarization.json
+            server-output/screenshots/
+            server-output/event-screenshots/
+          if-no-files-found: error
+          retention-days: 30
+
+  compare:
+    name: Compare old and new runs
+    needs: recognize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: diana-*-v6-${{ github.run_id }}
+          path: collected
+
+      - name: Install comparison runtime
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q 'reportlab==4.4.4' 'pypdf==6.1.1' 'google-auth==2.56.3' 'requests==2.34.2'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq poppler-utils zip
+
+      - name: Download old baseline and post-gold report history
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p comparison-input/history comparison-output
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import requests
+          from pypdf import PdfReader
+          from universal_video.drive_adapter import access_token, download_file, file_metadata
+
+          token=access_token()
+          old=file_metadata(os.environ['OLD_REPORT_FILE_ID'], token)
+          old_path=Path('comparison-input/old-review.pdf')
+          download_file(old['id'], old_path, token, max_bytes=50_000_000, metadata=old)
+
+          response=requests.get(
+              'https://www.googleapis.com/drive/v3/files',
+              headers={'Authorization': f'Bearer {token}'},
+              params={
+                  'q': f"'{os.environ['SOURCE_PARENT_ID']}' in parents and createdTime > '2026-09-11T21:49:40Z' and mimeType = 'application/pdf' and trashed = false",
+                  'fields': 'files(id,name,size,createdTime)',
+                  'pageSize': 1000,
+              },
+              timeout=120,
+          )
+          response.raise_for_status()
+          for item in response.json().get('files', []):
+              if 'server' not in item['name'].lower():
+                  continue
+              path=Path('comparison-input/history')/(item['id']+'.pdf')
+              try:
+                  download_file(item['id'], path, token, max_bytes=80_000_000, metadata=file_metadata(item['id'], token))
+                  reader=PdfReader(str(path))
+                  for name, payloads in reader.attachments.items():
+                      values=payloads if isinstance(payloads, list) else [payloads]
+                      for index, payload in enumerate(values):
+                          if isinstance(payload, bytes) and name.endswith('.json'):
+                              (path.parent/f"{item['id']}-{index}-{Path(name).name}").write_bytes(payload)
+              except Exception as exc:
+                  print(json.dumps({'history_pdf': item['id'], 'status': 'SKIP', 'error': str(exc)}, ensure_ascii=False))
+              finally:
+                  path.unlink(missing_ok=True)
+          PY
+
+      - name: Build comparison and merged PDF
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/diana_recognition_compare.py \
+            --new-root collected \
+            --old-pdf comparison-input/old-review.pdf \
+            --history-root comparison-input/history \
+            --output-dir comparison-output
+          pdftotext 'comparison-output/Диана 23–26 — новый прогон и сравнение — server v6.pdf' comparison-output/rendered.txt
+          test -s comparison-output/rendered.txt
+          pdftoppm -f 1 -l 3 -png -r 110 'comparison-output/Диана 23–26 — новый прогон и сравнение — server v6.pdf' comparison-output/page >/dev/null 2>&1
+          test "$(find comparison-output -name 'page-*.png' -size +10k | wc -l)" -eq 3
+
+      - name: Package retained machine-readable data
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip -q -r 'comparison-output/Диана 23–26 — данные нового прогона — server v6.zip' \
+            comparison-output/recognition_comparison.json collected \
+            -x 'collected/*/event-screenshots/*' 'collected/*/screenshots/*' 'collected/*/*.pdf'
+
+      - name: Upload combined report and data to allowed Drive folder
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import requests
+          from universal_video.drive_adapter import access_token
+
+          token=access_token()
+          for path, mime in [
+              (Path('comparison-output/Диана 23–26 — новый прогон и сравнение — server v6.pdf'), 'application/pdf'),
+              (Path('comparison-output/Диана 23–26 — данные нового прогона — server v6.zip'), 'application/zip'),
+          ]:
+              metadata={'name': path.name, 'parents': [os.environ['SOURCE_PARENT_ID']]}
+              response=requests.post(
+                  'https://www.googleapis.com/upload/drive/v3/files',
+                  headers={'Authorization': f'Bearer {token}'},
+                  params={'uploadType': 'multipart', 'fields': 'id,name,parents,size'},
+                  files={'metadata': ('metadata', json.dumps(metadata, ensure_ascii=False), 'application/json; charset=UTF-8'), 'file': (path.name, path.open('rb'), mime)},
+                  timeout=900,
+              )
+              response.raise_for_status()
+              item=response.json()
+              assert os.environ['SOURCE_PARENT_ID'] in set(item.get('parents') or [])
+              assert os.environ['FORBIDDEN_PARENT_ID'] not in set(item.get('parents') or [])
+              print(json.dumps(item, ensure_ascii=False))
+          PY
+
+      - name: Publish final comparison artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diana-23-26-v6-comparison-${{ github.run_id }}
+          path: |
+            comparison-output/Диана 23–26 — новый прогон и сравнение — server v6.pdf
+            comparison-output/Диана 23–26 — данные нового прогона — server v6.zip
+            comparison-output/recognition_comparison.json
+          if-no-files-found: error
+          retention-days: 30
