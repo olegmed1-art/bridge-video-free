@@ -23,7 +23,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: oracle-fleet-status-${{ github.run_id }}
+  group: ${{ github.event_name == 'pull_request' && format('oracle-fleet-status-pr-{0}', github.event.pull_request.number) || 'oracle-instance-workload-mutation' }}
   cancel-in-progress: false
 
 jobs:
