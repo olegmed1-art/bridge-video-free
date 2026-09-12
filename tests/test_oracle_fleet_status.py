@@ -112,5 +112,7 @@ def test_workflow_is_owner_only_read_only_and_covers_both_servers():
     assert "systemctl restart" not in text
     assert "systemctl start" not in text
     assert "systemctl stop" not in text
-    assert "oracle-instance-workload-mutation" not in text
+    header = text.split("\njobs:", 1)[0]
+    assert "oracle-fleet-status-pr-{0}" in header
+    assert "|| 'oracle-instance-workload-mutation' }}" in header
     assert "No server lifecycle, service, queue, file, database, or workload state was changed." in text
