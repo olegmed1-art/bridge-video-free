@@ -1,0 +1,93 @@
+name: Oracle RDC reconnect for Diana processing once
+
+on:
+  push:
+    branches:
+      - codex/diana23-26-v6-rerun
+    paths:
+      - .github/workflows/oracle-rdc-reconnect-diana-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  reconnect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Resolve trusted SSH transport
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Reconnect cached RDC client on Heavy Oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          test "$(hostname)" = bridge-school-dds3-frankfurt
+          pkill -u "$(id -u)" -f '[d]esktop-commander.*remote' 2>/dev/null || true
+          for _ in $(seq 1 10); do
+            if ! pgrep -u "$(id -u)" -f '[d]esktop-commander.*remote' >/dev/null; then break; fi
+            sleep 1
+          done
+          umask 077
+          mkdir -p "$HOME/.cache"
+          log="$HOME/.cache/rdc-remote.log"
+          : > "$log"
+          if command -v desktop-commander >/dev/null 2>&1; then
+            nohup desktop-commander remote </dev/null >"$log" 2>&1 &
+          elif [[ -x "$HOME/.local/bin/desktop-commander" ]]; then
+            nohup "$HOME/.local/bin/desktop-commander" remote </dev/null >"$log" 2>&1 &
+          else
+            nodebin="$(command -v node 2>/dev/null || true)"
+            if [[ -z "$nodebin" ]]; then
+              nodebin="$(find "$HOME" /opt -maxdepth 8 -type f -name node -perm -u+x -print -quit 2>/dev/null || true)"
+            fi
+            pkg="$(find "$HOME" /opt -maxdepth 12 -path '*/node_modules/@wonderwhy-er/desktop-commander/package.json' -type f -print -quit 2>/dev/null || true)"
+            [[ -n "$nodebin" && -n "$pkg" ]]
+            entry="$("$nodebin" -e 'const p=require(process.argv[1]); const b=p.bin; process.stdout.write(typeof b==="string"?b:Object.values(b||{})[0]||"")' "$pkg")"
+            [[ -n "$entry" && -f "$(dirname "$pkg")/$entry" ]]
+            nohup "$nodebin" "$(dirname "$pkg")/$entry" remote </dev/null >"$log" 2>&1 &
+          fi
+          disown || true
+          for _ in $(seq 1 30); do
+            if pgrep -u "$(id -u)" -f '[d]esktop-commander.*remote' >/dev/null; then
+              printf 'RDC_RECONNECT_PASS host=%s\n' "$(hostname)"
+              exit 0
+            fi
+            sleep 1
+          done
+          tail -40 "$log" || true
+          exit 3
+          REMOTE
