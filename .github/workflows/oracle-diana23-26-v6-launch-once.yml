@@ -87,15 +87,6 @@ jobs:
             exit 17
           fi
           printf 'HEAVY_ORACLE_READY host=%s available_kb=%s cpus=%s\n' "$(hostname)" "$available_kb" "$(nproc)"
-          previous='/home/ubuntu/bridge-video-jobs/diana23-26-v6-5b2f4928e38b'
-          if [[ -f "$previous/status.json" ]]; then
-            printf 'PREVIOUS_ATTEMPT_STATUS\n'
-            cat "$previous/status.json"
-          fi
-          if [[ -f "$previous/run.log" ]]; then
-            printf 'PREVIOUS_ATTEMPT_LOG\n'
-            tail -80 "$previous/run.log"
-          fi
           REMOTE
 
       - name: Transfer control payload to Heavy Oracle
