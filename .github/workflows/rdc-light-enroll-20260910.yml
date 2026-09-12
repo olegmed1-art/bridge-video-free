@@ -185,7 +185,7 @@ jobs:
 
           subprocess.run([
               'oci','compute','instance','action','--instance-id',instance_id,
-              '--action','SOFTRESET','--force'
+              '--action','SOFTRESET'
           ], check=True, stdout=subprocess.DEVNULL)
           print('LIGHT_CONSOLE_SOFTRESET=ISSUED', flush=True)
 
