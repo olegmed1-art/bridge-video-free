@@ -35,15 +35,27 @@ assert isinstance(session.get("access_token"), str) and session["access_token"]
 assert isinstance(session.get("refresh_token"), str) and session["refresh_token"]
 PY
 chmod 0600 "$DEVICE_CONFIG"
+printf 'RDC_PERSISTED_SESSION_PREFLIGHT=PASS\n'
 
-npx_path=$(sudo -u "$SERVICE_USER" -H bash -lc 'command -v npx')
+npx_path=$(sudo -u "$SERVICE_USER" -H bash -lc 'command -v npx' 2>/dev/null || true)
+if [[ -z "$npx_path" && -d /home/ubuntu/.nvm/versions/node ]]; then
+  npx_path=$(find /home/ubuntu/.nvm/versions/node -mindepth 3 -maxdepth 3 \
+    -path '*/bin/npx' -print | sort -V | tail -n 1)
+fi
 [[ -n "$npx_path" && -x "$npx_path" ]] || fail npx_missing
-node_path=$(sudo -u "$SERVICE_USER" -H bash -lc 'command -v node')
+node_path="$(dirname "$npx_path")/node"
+if [[ ! -x "$node_path" ]]; then
+  node_path=$(sudo -u "$SERVICE_USER" -H bash -lc 'command -v node' 2>/dev/null || true)
+fi
 [[ -n "$node_path" && -x "$node_path" ]] || fail node_missing
 node_major=$(sudo -u "$SERVICE_USER" -H "$node_path" -p 'Number(process.versions.node.split(".")[0])')
 [[ "$node_major" =~ ^[0-9]+$ && "$node_major" -ge 18 ]] || fail node_too_old
+npx_dir=$(dirname "$npx_path")
+runtime_path="$npx_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+printf 'RDC_NODE_PREFLIGHT=PASS\n'
 
-sudo -u "$SERVICE_USER" -H timeout 180 "$npx_path" --yes --prefer-offline \
+sudo -u "$SERVICE_USER" -H env PATH="$runtime_path" timeout 180 \
+  "$npx_path" --yes --prefer-offline \
   "$PACKAGE_SPEC" remote --help >/dev/null
 
 install -d -m 0755 -o root -g root "$(dirname "$RUNNER_PATH")"
@@ -62,6 +74,7 @@ set -Eeuo pipefail
 export HOME=/home/${SERVICE_USER}
 export USER=${SERVICE_USER}
 export LOGNAME=${SERVICE_USER}
+export PATH='$runtime_path'
 exec '$npx_path' --yes --prefer-offline '$PACKAGE_SPEC' remote --disable-no-sleep
 EOF
 install -m 0755 -o root -g root "$runner_tmp" "$RUNNER_PATH"
