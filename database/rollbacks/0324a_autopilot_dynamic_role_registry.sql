@@ -604,5 +604,3 @@ DROP FUNCTION IF EXISTS autopilot.role_is_enabled(text);
 DROP TABLE IF EXISTS autopilot.role_registry;
 DELETE FROM public.schema_migration WHERE migration_key='0324a_autopilot_dynamic_role_registry';
 COMMIT;
-
-
