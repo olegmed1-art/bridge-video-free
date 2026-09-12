@@ -1,12 +1,7 @@
 name: Diana 167 v3 rerun once
 
 on:
-  push:
-    branches:
-      - codex/diana167-v3-rerun
-    paths:
-      - '.github/workflows/diana167-v3-rerun-once.yml'
-      - 'tools/diana167_server_report.py'
+  workflow_dispatch:
 
 permissions:
   contents: read
