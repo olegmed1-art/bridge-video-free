@@ -29,6 +29,7 @@ ALLOWED_PATH_PATTERNS = (
     re.compile(r"docs/evidence/autopilot/[A-Za-z0-9_.-]+\.md"),
 )
 FORBIDDEN_PATH_PREFIXES = (".github/", "database/", "deploy/", "ops/")
+ROLE_PATTERN = r"^[A-Z][A-Z0-9_]{0,63}$"
 
 
 class RepairFileChange(BaseModel):
@@ -183,7 +184,7 @@ class RoleDispatchRequest(BaseModel):
     # The broker validates only the public identifier shape.  The authoritative
     # enabled-role and repair-capability decision is made by the bound Neon
     # task/role_registry contract before this envelope can enter the outbox.
-    role: str = Field(pattern=r"^[A-Z][A-Z0-9_]{0,63}$")
+    role: str = Field(pattern=ROLE_PATTERN)
     task_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     target_pr: int = Field(ge=1, le=1_000_000)
     mode: Literal["READ_ONLY", "REPAIR", "VERIFY"]
