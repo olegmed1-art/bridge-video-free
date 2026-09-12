@@ -1,0 +1,123 @@
+name: Oracle RDC encrypted pairing receipt (one-shot)
+
+on:
+  push:
+    branches: [codex/oracle-rdc-autostart]
+    paths:
+      - '.github/workflows/oracle-rdc-pairing-receipt-once.yml'
+      - 'ops/remote_desktop_commander_pairing_recipient.pem'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  receipt:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      EXPECTED_RECIPIENT_SHA256: e33c3b9bfa5a0470904b658989e2e39a3c7f3ab22dfcd77cf18edd5485271ffa
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Verify recipient and pinned SSH boundary
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          actual_recipient=$(openssl pkey -pubin \
+            -in ops/remote_desktop_commander_pairing_recipient.pem \
+            -outform DER | sha256sum | awk '{print $1}')
+          [[ "$actual_recipient" == "$EXPECTED_RECIPIENT_SHA256" ]]
+          work="$RUNNER_TEMP/oracle-rdc-pairing"
+          mkdir -p "$work"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'test "$(hostname)" = bridge-school-dds3-frankfurt && sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Return encrypted pairing receipt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work="$RUNNER_TEMP/oracle-rdc-pairing"
+          plain="$work/pairing.json"
+          cipher="$work/pairing.oaep"
+          cleanup() { rm -f -- "$plain" "$cipher"; }
+          trap cleanup EXIT HUP INT TERM
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' >"$plain" <<'REMOTE'
+          set -Eeuo pipefail
+          systemctl restart remote-desktop-commander.service
+          sleep 8
+          invocation_id=$(systemctl show -p InvocationID --value remote-desktop-commander.service)
+          journalctl _SYSTEMD_INVOCATION_ID="$invocation_id" --no-pager -o cat \
+            | python3 -c '
+          import json, re, sys, urllib.parse
+          lines = [line.strip() for line in sys.stdin]
+          uri = next((line for line in lines if line.startswith("https://")), None)
+          if not uri:
+              raise SystemExit("verification_uri_missing")
+          parsed = urllib.parse.urlsplit(uri)
+          if parsed.scheme != "https" or parsed.hostname != "mcp.desktopcommander.app":
+              raise SystemExit("unexpected_verification_uri")
+          code = None
+          for index, line in enumerate(lines):
+              if "Enter code" not in line:
+                  continue
+              for candidate in lines[index + 1:index + 5]:
+                  if re.fullmatch(r"[A-Z0-9]{3,12}(?:-[A-Z0-9]{3,12})?", candidate):
+                      code = candidate
+                      break
+              if code:
+                  break
+          if not code:
+              raise SystemExit("pairing_code_missing")
+          print(json.dumps({"verification_uri": uri, "user_code": code}, separators=(",", ":")))
+          '
+          REMOTE
+          python3 - <<'PY' "$plain"
+          import json, pathlib, sys
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert set(payload) == {"verification_uri", "user_code"}
+          assert len(payload["user_code"]) <= 32
+          PY
+          openssl pkeyutl -encrypt -pubin \
+            -inkey ops/remote_desktop_commander_pairing_recipient.pem \
+            -in "$plain" -out "$cipher" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+            -pkeyopt rsa_mgf1_md:sha256
+          [[ $(wc -c < "$cipher") == 384 ]]
+          printf 'RDC_PAIRING_CIPHERTEXT_SHA256=%s\n' "$(sha256sum "$cipher" | awk '{print $1}')"
+          printf 'RDC_PAIRING_CIPHERTEXT_B64=%s\n' "$(base64 -w 0 "$cipher")"
+          printf 'RDC_PAIRING_PLAINTEXT_EXPOSED=NO\n'
