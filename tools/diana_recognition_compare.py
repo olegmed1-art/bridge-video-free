@@ -171,6 +171,37 @@ def build_summary_pdf(comparison: dict[str, Any], target: Path) -> None:
     coverage = comparison["old_baseline"]
     story.append(Paragraph(f"Извлечение прежних данных: {coverage['method']}; строк карт: {coverage.get('matched_card_rows', 0)}; вложения: {', '.join(coverage.get('attachments', [])) or 'нет'}. Если старый PDF не содержит машиночитаемых весов, старые нули означают отсутствие извлекаемых данных, а не отсутствие ошибки.", small))
     story.append(PageBreak())
+    story.append(Paragraph("Сколько раз распознана каждая карта", title))
+    story.append(Paragraph("Сортировка: от наименьшего количества уверенных визуальных распознаваний к наибольшему. При равенстве выше показана карта с большей долей ошибок.", body))
+    ranking_rows = [["Карта", "Распознана", "Не распознана", "Всего появлений", "Доля распознавания"]]
+    ranking = comparison["recognition_ranking_low_to_high"]
+    for item in ranking:
+        ranking_rows.append([
+            card_text(item["card"]),
+            str(item["recognized"]),
+            str(item["unrecognized"]),
+            str(item["total"]),
+            item["rate"],
+        ])
+    ranking_table = Table(
+        [[Paragraph(f"<b>{x}</b>", small) if r == 0 else Paragraph(str(x), small) for x in row] for r, row in enumerate(ranking_rows)],
+        colWidths=[32 * mm, 38 * mm, 42 * mm, 42 * mm, 48 * mm],
+        repeatRows=1,
+    )
+    ranking_style = [
+        ("GRID", (0, 0), (-1, -1), 0.22, colors.HexColor("#D2DAE2")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#17324D")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING", (0, 0), (-1, -1), 1.4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1.4),
+    ]
+    for row_number, item in enumerate(ranking, 1):
+        if item["unrecognized"]:
+            ranking_style.append(("BACKGROUND", (0, row_number), (-1, row_number), colors.HexColor("#FFF1D6")))
+    ranking_table.setStyle(TableStyle(ranking_style))
+    story.append(ranking_table)
+    story.append(PageBreak())
     story.append(Paragraph("Статистика по каждой карте", title))
     story.append(Paragraph("«Да» — карта визуально прошла порог; «нет» — осталась ниже порога. Поствизуальное достраивание не превращает слабую карту в визуально распознанную.", body))
     card_rows = [["Карта", "Старый: да", "Старый: нет", "Новый: да", "Новый: нет", "Изменение доли"]]
@@ -238,12 +269,33 @@ def main() -> None:
             identities.add(analysis_identity(item))
     history_stats, history_videos = stats_for_analyses(history_analyses)
 
+    recognition_ranking = []
+    for card in DECK:
+        recognized = new_stats[card]["recognized"]
+        unrecognized = new_stats[card]["unrecognized"]
+        total = recognized + unrecognized
+        recognition_ranking.append({
+            "card": card,
+            "recognized": recognized,
+            "unrecognized": unrecognized,
+            "total": total,
+            "rate": f"{100 * recognized / total:.1f}%" if total else "—",
+        })
+    recognition_ranking.sort(
+        key=lambda item: (
+            item["recognized"],
+            -item["unrecognized"],
+            DECK.index(item["card"]),
+        )
+    )
+
     comparison = {
         "schema": "diana-recognition-comparison/v1",
         "old_baseline": {**old_meta, "pdf_sha256": sha256(args.old_pdf)},
         "new_run_count": len(new_analyses),
         "new_videos": new_videos,
         "new_totals": totals(new_stats, len(new_videos), sum(item["deals"] for item in new_videos.values())),
+        "recognition_ranking_low_to_high": recognition_ranking,
         "old_totals": totals(old_stats, old_video_count, old_deals),
         "new_cards": {card: dict(new_stats[card]) | {"recognized": new_stats[card]["recognized"], "unrecognized": new_stats[card]["unrecognized"]} for card in DECK},
         "old_cards": {card: dict(old_stats[card]) | {"recognized": old_stats[card]["recognized"], "unrecognized": old_stats[card]["unrecognized"]} for card in DECK},
