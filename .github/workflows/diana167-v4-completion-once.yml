@@ -1,0 +1,110 @@
+name: Diana 167 v4 completion once
+
+on:
+  push:
+    branches:
+      - codex/diana167-v3-rerun
+    paths:
+      - '.github/workflows/diana167-v4-completion-once.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  completion:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_PARENT_ID: 1Fr-H2NgBKEpp3q_H4FzNmQwCV6bj2x6b
+      FORBIDDEN_PARENT_ID: 16TVeL_595YU05H0VaRYzxo0IDJkfPAhg
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Install pinned PDF runtime
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q \
+            'reportlab==4.4.4' 'pypdf==6.1.1' 'google-auth==2.56.3' 'requests==2.34.2'
+
+      - name: Download immutable successful server baseline
+        run: |
+          set -euo pipefail
+          mkdir -p baseline server-v4
+          gh run download 34673439601 \
+            --repo olegmed1-art/bridge-video-free \
+            --name diana167-v3-report-34673439601 \
+            --dir baseline
+          sha256sum --check <<'EOF'
+          41334e84d76902ae78532ac988dca86f4efc9f299b1c4ebdb2abdb643de80096  baseline/Диана 167 — карты, веса и упоминания — server v3.pdf
+          EOF
+
+      - name: Test and build post-visual completion PDF
+        run: |
+          set -euo pipefail
+          python -m unittest tests.test_diana167_completion -v
+          PYTHONPATH="$PWD" python tools/diana167_completion_appendix.py \
+            --baseline-dir baseline \
+            --output-dir server-v4
+
+      - name: Upload final PDF to allowed Drive folder
+        id: publish
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          from pathlib import Path
+          import requests
+          from universal_video.drive_adapter import access_token
+
+          path=Path('server-v4/Диана 167 — полный расклад 52x13 и веса — server v4.pdf')
+          metadata={'name': path.name, 'parents': [os.environ['SOURCE_PARENT_ID']]}
+          token=access_token()
+          response=requests.post(
+              'https://www.googleapis.com/upload/drive/v3/files',
+              headers={'Authorization': f'Bearer {token}'},
+              params={'uploadType': 'multipart', 'fields': 'id,name,parents,size,md5Checksum'},
+              files={
+                  'metadata': ('metadata', json.dumps(metadata, ensure_ascii=False), 'application/json; charset=UTF-8'),
+                  'file': (path.name, path.open('rb'), 'application/pdf'),
+              },
+              timeout=300,
+          )
+          response.raise_for_status()
+          item=response.json()
+          assert os.environ['SOURCE_PARENT_ID'] in set(item.get('parents') or [])
+          assert os.environ['FORBIDDEN_PARENT_ID'] not in set(item.get('parents') or [])
+          print('drive_pdf_id='+item['id'])
+          print('drive_pdf_name='+item['name'])
+          PY
+
+      - name: Publish retained completion artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diana167-v4-completion-${{ github.run_id }}
+          path: |
+            server-v4/Диана 167 — полный расклад 52x13 и веса — server v4.pdf
+            server-v4/master_analysis_completion.json
+            server-v4/completion_validation.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Summary
+        env:
+          PDF_ID: ${{ steps.publish.outputs.drive_pdf_id }}
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          from pathlib import Path
+          result=json.loads(Path('server-v4/completion_validation.json').read_text())
+          print('# Diana 167 v4 post-visual completion')
+          for key in ('status','deals','visual_cards','completed_cards','pages','sha256'):
+              print(f'- {key}: `{result[key]}`')
+          print(f'- drive_pdf_id: `{os.environ["PDF_ID"]}`')
+          print('- forbidden_folder_used: `false`')
+          PY
