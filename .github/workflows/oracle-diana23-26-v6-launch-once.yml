@@ -87,6 +87,15 @@ jobs:
             exit 17
           fi
           printf 'HEAVY_ORACLE_READY host=%s available_kb=%s cpus=%s\n' "$(hostname)" "$available_kb" "$(nproc)"
+          previous='/home/ubuntu/bridge-video-jobs/diana23-26-v6-5b2f4928e38b'
+          if [[ -f "$previous/status.json" ]]; then
+            printf 'PREVIOUS_ATTEMPT_STATUS\n'
+            cat "$previous/status.json"
+          fi
+          if [[ -f "$previous/run.log" ]]; then
+            printf 'PREVIOUS_ATTEMPT_LOG\n'
+            tail -80 "$previous/run.log"
+          fi
           REMOTE
 
       - name: Transfer control payload to Heavy Oracle
@@ -140,7 +149,10 @@ jobs:
           pid=$!
           printf '%s\n' "$pid" > "$JOB_ROOT/pid"
           sleep 5
-          kill -0 "$pid"
+          if ! kill -0 "$pid" 2>/dev/null; then
+            tail -120 "$JOB_ROOT/run.log" || true
+            exit 1
+          fi
           printf 'HEAVY_ORACLE_BATCH_STARTED pid=%s root=%s\n' "$pid" "$JOB_ROOT"
           REMOTE
 
