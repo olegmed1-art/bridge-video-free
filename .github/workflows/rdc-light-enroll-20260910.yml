@@ -64,10 +64,11 @@ jobs:
           PY
           printf '%s\n' "$ORACLE_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/oracle_ssh_key"
           chmod 600 "$RUNNER_TEMP/oracle_ssh_key"
-          ssh-keygen -y -f "$RUNNER_TEMP/oracle_ssh_key" > "$RUNNER_TEMP/oracle_ssh_key.pub"
-          key_type="$(awk '{print $1}' "$RUNNER_TEMP/oracle_ssh_key.pub")"
-          echo "CONSOLE_KEY_TYPE=$key_type"
-          [[ "$key_type" == ssh-rsa ]]
+          ssh-keygen -y -f "$RUNNER_TEMP/oracle_ssh_key" > "$RUNNER_TEMP/console_key.pub"
+          permanent_key_type="$(awk '{print $1}' "$RUNNER_TEMP/console_key.pub")"
+          echo "PERMANENT_KEY_TYPE=$permanent_key_type"
+          ssh-keygen -q -t rsa -b 2048 -N '' -f "$RUNNER_TEMP/console_key"
+          echo 'CONSOLE_KEY_TYPE=ssh-rsa'
           oci iam region list --output json >/dev/null
           echo 'CONTROL_PRINCIPALS=PASS'
 
@@ -103,7 +104,7 @@ jobs:
           active_count="$(printf '%s' "$existing" | python -c 'import json,sys; print(sum(1 for x in json.load(sys.stdin).get("data",[]) if x.get("lifecycle-state") in {"ACTIVE","CREATING"}))')"
           echo "EXISTING_ACTIVE_CONSOLE_COUNT=$active_count"
           [[ "$active_count" == 0 ]]
-          oci compute instance-console-connection create --instance-id "$INSTANCE_ID" --ssh-public-key-file "$RUNNER_TEMP/oracle_ssh_key.pub" --wait-for-state ACTIVE --wait-interval-seconds 5 --max-wait-seconds 180 > "$RUNNER_TEMP/console.json"
+          oci compute instance-console-connection create --instance-id "$INSTANCE_ID" --ssh-public-key-file "$RUNNER_TEMP/console_key.pub" --wait-for-state ACTIVE --wait-interval-seconds 5 --max-wait-seconds 180 > "$RUNNER_TEMP/console.json"
           connection_id="$(python - "$RUNNER_TEMP/console.json" <<'PY'
           import json,sys
           d=json.load(open(sys.argv[1]))['data']
@@ -127,7 +128,7 @@ jobs:
           print(d['connection-string'])
           PY
           )"
-          key="$RUNNER_TEMP/oracle_ssh_key"
+          key="$RUNNER_TEMP/console_key"
           conn="${conn//<privateKey>/$key}"
           conn="${conn//ssh /ssh -i $key -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=\/dev\/null }"
           set +e
@@ -141,4 +142,14 @@ jobs:
             echo "LIGHT_SERIAL_CONSOLE=UNPROVEN rc=$rc"
             sed -E 's/ocid1\.[A-Za-z0-9._-]+/OCID_REDACTED/g' "$RUNNER_TEMP/serial-safe.txt"
             exit 62
+          fi
+
+      - name: Remove temporary console connection
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${CONNECTION_ID:-}" ]]; then
+            oci compute instance-console-connection delete --instance-console-connection-id "$CONNECTION_ID" --force
+            echo 'TEMP_CONSOLE_CONNECTION_REMOVED=PASS'
           fi
