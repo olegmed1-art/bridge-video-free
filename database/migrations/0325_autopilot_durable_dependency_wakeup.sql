@@ -9,7 +9,7 @@ DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
-         WHERE migration_key = '0324_autopilot_project_planner'
+         WHERE migration_key = '0324a_autopilot_dynamic_role_registry'
     ) OR to_regclass('autopilot.role_registry') IS NULL
        OR to_regprocedure(
            'autopilot.register_universal_work_item(text,text,text,text,integer,integer,jsonb,text,text,text)'
