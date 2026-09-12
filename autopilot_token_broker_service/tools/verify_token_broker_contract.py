@@ -87,6 +87,8 @@ def verify() -> dict[str, object]:
         raise SystemExit("BROKER_POLICY_BASE_INVALID")
     if policy_assignments.get("BRANCH_PREFIX") != "autopilot/repair/":
         raise SystemExit("BROKER_POLICY_BRANCH_INVALID")
+    if policy_assignments.get("ROLE_PATTERN") != r"^[A-Z][A-Z0-9_]{0,63}$":
+        raise SystemExit("BROKER_ROLE_PATTERN_INVALID")
     if (
         policy_assignments.get("MAX_FILES") != 3
         or policy_assignments.get("MAX_FILE_BYTES") != 16_384
