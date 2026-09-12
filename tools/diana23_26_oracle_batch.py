@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -129,6 +130,29 @@ def extract_history(root: Path, token: str) -> int:
     return count
 
 
+def rebuild_compact_report(output: Path, report_name: str) -> Path:
+    """Rebuild an existing analysis without embedding unresolved event frames."""
+    from tools.diana167_server_report import build_pdf, validate_pdf
+
+    analysis_path = output / "master_analysis.json"
+    data = json.loads(analysis_path.read_text(encoding="utf-8"))
+    safe_name = re.sub(r'[\\/:*?"<>|]+', "_", report_name).strip() or "Диана"
+    canonical = output / f"{safe_name} — событийный расклад и веса — server v6.pdf"
+    candidate = output / f"{safe_name} — событийный расклад и веса — server v6 compact.pdf"
+    candidate.unlink(missing_ok=True)
+    build_pdf(data, output, candidate, report_name)
+    validation = validate_pdf(candidate, len(data.get("deals") or []), output, report_name)
+    if validation["bytes"] > 100_000_000:
+        raise RuntimeError(f"compact PDF unexpectedly exceeds 100 MB: {validation['bytes']}")
+    os.replace(candidate, canonical)
+    validation["pdf"] = canonical.name
+    (output / "validation.json").write_text(
+        json.dumps(validation, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return canonical
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--job-root", required=True, type=Path)
@@ -163,32 +187,42 @@ def main() -> None:
 
     per_video: list[dict[str, Any]] = []
     for index, (number, file_id, expected_name) in enumerate(VIDEOS, 1):
-        write_status(root, "DOWNLOADING_VIDEO", video=number, completed=index - 1, total=len(VIDEOS))
-        meta = checked_metadata(file_id, expected_name, token)
-        video = inputs / expected_name
-        receipt = download_file(file_id, video, token, max_bytes=900_000_000, metadata=meta)
         output = new_root / f"diana-{number}"
         output.mkdir(parents=True, exist_ok=True)
-        write_status(root, "PROCESSING_VIDEO", video=number, completed=index - 1, total=len(VIDEOS))
-        command = [
-            sys.executable,
-            "tools/diana167_server_report.py",
-            "--video", str(video),
-            "--gold-zip", str(gold),
-            "--output-dir", str(output),
-            "--source-file-id", file_id,
-            "--source-parent-id", SOURCE_PARENT_ID,
-            "--report-name", f"Диана {number}",
-            "--event-probe-ms", "500",
-            "--max-deals", "500",
-        ]
-        subprocess.run(command, check=True)
-        pdf = next(output.glob("*server v6.pdf"))
+        analysis_path = output / "master_analysis.json"
+        video = inputs / expected_name
+        if analysis_path.exists():
+            write_status(root, "REBUILDING_COMPACT_PDF", video=number, completed=index - 1, total=len(VIDEOS))
+            data = json.loads(analysis_path.read_text(encoding="utf-8"))
+            source_sha256 = str((data.get("source") or {}).get("sha256") or "")
+            if not source_sha256:
+                raise RuntimeError(f"existing Diana {number} analysis has no source SHA-256")
+            pdf = rebuild_compact_report(output, f"Диана {number}")
+        else:
+            write_status(root, "DOWNLOADING_VIDEO", video=number, completed=index - 1, total=len(VIDEOS))
+            meta = checked_metadata(file_id, expected_name, token)
+            receipt = download_file(file_id, video, token, max_bytes=900_000_000, metadata=meta)
+            source_sha256 = receipt["_download_sha256"]
+            write_status(root, "PROCESSING_VIDEO", video=number, completed=index - 1, total=len(VIDEOS))
+            command = [
+                sys.executable,
+                "tools/diana167_server_report.py",
+                "--video", str(video),
+                "--gold-zip", str(gold),
+                "--output-dir", str(output),
+                "--source-file-id", file_id,
+                "--source-parent-id", SOURCE_PARENT_ID,
+                "--report-name", f"Диана {number}",
+                "--event-probe-ms", "500",
+                "--max-deals", "500",
+            ]
+            subprocess.run(command, check=True)
+            pdf = next(output.glob("*server v6.pdf"))
         uploaded = upload(pdf, token)
         per_video.append({
             "video": number,
             "source_id": file_id,
-            "source_sha256": receipt["_download_sha256"],
+            "source_sha256": source_sha256,
             "pdf": uploaded,
         })
         video.unlink(missing_ok=True)
