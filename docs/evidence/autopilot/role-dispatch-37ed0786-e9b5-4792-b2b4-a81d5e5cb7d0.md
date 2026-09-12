@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=37ed0786-e9b5-4792-b2b4-a81d5e5cb7d0
+dispatch_epoch=5
+role=DATA
+task_fingerprint=c4cf24c4ec3278228ef653836c8283c54c93deb6a48e8b5c2ff76c13bd8206cf
+target_pr=860
+mode=REPAIR
+repair_attempt=1
+origin_task_id=571522ae-066c-4a50-95f0-b1e0de4dac6d
+prior_task_id=571522ae-066c-4a50-95f0-b1e0de4dac6d
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=READ_ONLY outbox targets ea62e23, but assignment requires completed HCP REPAIR on stale 6b22cf9; binding rejected fail-closed.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
