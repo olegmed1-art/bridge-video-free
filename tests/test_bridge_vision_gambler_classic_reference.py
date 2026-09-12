@@ -20,8 +20,15 @@ from bridge_vision.gambler_classic_reference import (
 def _png(width: int, height: int) -> bytes:
     # Minimal deterministic RGBA PNG; sufficient for header/identity validation.
     sig = b"\x89PNG\r\n\x1a\n"
+
     def chunk(kind: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
     raw = b"".join(b"\x00" + b"\xff\xff\xff\xff" * width for _ in range(height))
     return sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
@@ -67,7 +74,7 @@ def test_card_grid_order_matches_original_client() -> None:
     assert card_box(5, "2S") == (1308, 441, 1417, 588)
 
 
-def test_scale_selects_variant_5_for_diana_native_size() -> None:
+def test_scale_selects_variant_5_for_verified_native_size() -> None:
     assert select_variant_for_card_size(109, 147) == 5
     assert select_variant_for_card_size(110, 146) == 5
 
