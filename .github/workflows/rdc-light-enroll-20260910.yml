@@ -64,8 +64,8 @@ jobs:
           PY
           printf '%s\n' "$ORACLE_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/oracle_ssh_key"
           chmod 600 "$RUNNER_TEMP/oracle_ssh_key"
-          ssh-keygen -y -f "$RUNNER_TEMP/oracle_ssh_key" > "$RUNNER_TEMP/console_key.pub"
-          permanent_key_type="$(awk '{print $1}' "$RUNNER_TEMP/console_key.pub")"
+          ssh-keygen -y -f "$RUNNER_TEMP/oracle_ssh_key" > "$RUNNER_TEMP/oracle_ssh_key.pub"
+          permanent_key_type="$(awk '{print $1}' "$RUNNER_TEMP/oracle_ssh_key.pub")"
           echo "PERMANENT_KEY_TYPE=$permanent_key_type"
           ssh-keygen -q -t rsa -b 2048 -N '' -f "$RUNNER_TEMP/console_key"
           echo 'CONSOLE_KEY_TYPE=ssh-rsa'
