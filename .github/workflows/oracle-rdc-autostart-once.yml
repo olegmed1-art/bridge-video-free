@@ -1,0 +1,93 @@
+name: Oracle RDC autostart install (one-shot)
+
+on:
+  push:
+    branches: [codex/oracle-rdc-autostart]
+    paths:
+      - '.github/workflows/oracle-rdc-autostart-once.yml'
+      - 'ops/install_remote_desktop_commander_service.sh'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate bounded installer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n ops/install_remote_desktop_commander_service.sh
+          shellcheck ops/install_remote_desktop_commander_service.sh
+          grep -F 'NoNewPrivileges=true' ops/install_remote_desktop_commander_service.sh >/dev/null
+          grep -F 'User=${SERVICE_USER}' ops/install_remote_desktop_commander_service.sh >/dev/null
+          grep -F '@wonderwhy-er/desktop-commander@0.2.50' ops/install_remote_desktop_commander_service.sh >/dev/null
+
+  install:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      EXPECTED_DEVICE_ID: a0535e86-dc82-4287-88b5-7bbd855c37d7
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Verify pinned SSH boundary
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/oracle-rdc-autostart"
+          mkdir -p "$work"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'test "$(hostname)" = bridge-school-dds3-frankfurt && sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo 'ORACLE_SSH_PREFLIGHT=PASS'
+
+      - name: Install and start RDC service
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote="/tmp/rdc-autostart-${GITHUB_RUN_ID}.sh"
+          scp -q -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 ops/install_remote_desktop_commander_service.sh \
+            "$ORACLE_USER@$ORACLE_HOST:$remote"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env EXPECTED_DEVICE_ID='$EXPECTED_DEVICE_ID' bash '$remote'; status=\$?; rm -f -- '$remote'; exit \$status"
