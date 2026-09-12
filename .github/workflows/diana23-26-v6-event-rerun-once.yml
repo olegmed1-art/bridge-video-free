@@ -2,15 +2,6 @@ name: Diana 23-26 v6 event rerun once
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - codex/diana23-26-v6-rerun
-    paths:
-      - .github/workflows/diana23-26-v6-event-rerun-once.yml
-      - tools/diana167_server_report.py
-      - tools/diana_recognition_compare.py
-      - bridge_vision/bridgit_event_frame_selector.py
-      - bridge_vision/bridgit_unrecognized_card_completion.py
 
 permissions:
   contents: read
@@ -267,28 +258,3 @@ jobs:
               (Path('comparison-output/Диана 23–26 — новый прогон и сравнение — server v6.pdf'), 'application/pdf'),
               (Path('comparison-output/Диана 23–26 — данные нового прогона — server v6.zip'), 'application/zip'),
           ]:
-              metadata={'name': path.name, 'parents': [os.environ['SOURCE_PARENT_ID']]}
-              response=requests.post(
-                  'https://www.googleapis.com/upload/drive/v3/files',
-                  headers={'Authorization': f'Bearer {token}'},
-                  params={'uploadType': 'multipart', 'fields': 'id,name,parents,size'},
-                  files={'metadata': ('metadata', json.dumps(metadata, ensure_ascii=False), 'application/json; charset=UTF-8'), 'file': (path.name, path.open('rb'), mime)},
-                  timeout=900,
-              )
-              response.raise_for_status()
-              item=response.json()
-              assert os.environ['SOURCE_PARENT_ID'] in set(item.get('parents') or [])
-              assert os.environ['FORBIDDEN_PARENT_ID'] not in set(item.get('parents') or [])
-              print(json.dumps(item, ensure_ascii=False))
-          PY
-
-      - name: Publish final comparison artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: diana-23-26-v6-comparison-${{ github.run_id }}
-          path: |
-            comparison-output/Диана 23–26 — новый прогон и сравнение — server v6.pdf
-            comparison-output/Диана 23–26 — данные нового прогона — server v6.zip
-            comparison-output/recognition_comparison.json
-          if-no-files-found: error
-          retention-days: 30
