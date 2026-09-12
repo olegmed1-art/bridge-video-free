@@ -93,7 +93,7 @@ jobs:
               raise SystemExit("unexpected_verification_uri")
           code = None
           for index, line in enumerate(lines):
-              if "Enter code" not in line:
+              if "code when prompted" not in line:
                   continue
               for candidate in lines[index + 1:index + 5]:
                   if 4 <= len(candidate) <= 64 and all(32 <= ord(ch) < 127 for ch in candidate):
