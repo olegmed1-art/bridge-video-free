@@ -205,13 +205,17 @@ class RoleDispatchContractTests(unittest.TestCase):
         request = _request()
         self.assertEqual(request.mode, "READ_ONLY")
         self.assertNotIn("secret", request.model_dump_json())
+        self.assertEqual(_request(role="AUTOPILOT").role, "AUTOPILOT")
+        self.assertEqual(_request(role="QA").role, "QA")
         for overrides in (
             {"dispatch_id": "550E8400-E29B-41D4-A716-446655440000"},
             {"dispatch_id": "00000000-0000-1000-8000-000000000000"},
             {"dispatch_epoch": 0},
             {"prepared_at_epoch": 1_699_999_999},
             {"prepared_at_epoch": 4_102_444_801},
-            {"role": "OWNER"},
+            {"role": "owner"},
+            {"role": "ROLE-WITH-DASH"},
+            {"role": "A" * 65},
             {"task_fingerprint": "A" * 64},
             {"target_pr": 0},
             {"mode": "WRITE"},
