@@ -100,8 +100,18 @@ jobs:
           print('COMPARTMENT_ID='+x['compartment-id'])
           PY
           source "$RUNNER_TEMP/target.env"
-          existing="$(oci compute instance-console-connection list --compartment-id "$COMPARTMENT_ID" --instance-id "$INSTANCE_ID" --all --output json)"
-          active_count="$(printf '%s' "$existing" | python -c 'import json,sys; print(sum(1 for x in json.load(sys.stdin).get("data",[]) if x.get("lifecycle-state") in {"ACTIVE","CREATING"}))')"
+          active_count="$(python - "$INSTANCE_ID" <<'PY'
+          import oci,sys
+          cfg=oci.config.from_file()
+          client=oci.core.ComputeClient(cfg)
+          rows=oci.pagination.list_call_get_all_results(
+              client.list_instance_console_connections,
+              compartment_id=cfg['tenancy'],
+              instance_id=sys.argv[1],
+          ).data
+          print(sum(1 for x in rows if x.lifecycle_state in {'ACTIVE','CREATING'}))
+          PY
+          )"
           echo "EXISTING_ACTIVE_CONSOLE_COUNT=$active_count"
           [[ "$active_count" == 0 ]]
           oci compute instance-console-connection create --instance-id "$INSTANCE_ID" --ssh-public-key-file "$RUNNER_TEMP/console_key.pub" --wait-for-state ACTIVE --wait-interval-seconds 5 --max-wait-seconds 180 > "$RUNNER_TEMP/console.json"
