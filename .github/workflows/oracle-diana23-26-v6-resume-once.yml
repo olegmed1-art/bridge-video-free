@@ -1,0 +1,155 @@
+name: Heavy Oracle Diana 23-26 v6 resume once
+
+on:
+  push:
+    branches:
+      - codex/diana23-26-v6-rerun
+    paths:
+      - .github/workflows/oracle-diana23-26-v6-resume-once.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: heavy-oracle-diana23-26-v6
+  cancel-in-progress: false
+
+jobs:
+  resume-heavy-oracle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      JOB_ROOT: /home/ubuntu/bridge-video-jobs/diana23-26-v6-ca03333541c4
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Resolve trusted SSH transport
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Check stopped batch and server capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=45 \
+            "$ORACLE_USER@$ORACLE_HOST" "JOB_ROOT='$JOB_ROOT' bash -s" <<'REMOTE'
+          set -euo pipefail
+          test "$(hostname)" = bridge-school-dds3-frankfurt
+          test -f "$JOB_ROOT/new/diana-23/master_analysis.json"
+          test -x "$JOB_ROOT/source/.venv/bin/python"
+          test -s "$JOB_ROOT/secrets/google-drive-oauth.json"
+          if pgrep -af 'diana167_server_report.py|diana23_26_oracle_batch.py' >/tmp/diana-resume-existing.txt; then
+            cat /tmp/diana-resume-existing.txt
+            exit 17
+          fi
+          available_kb="$(df -Pk /home/ubuntu | awk 'NR==2 {print $4}')"
+          test "$available_kb" -ge 20971520
+          printf 'RESUME_READY host=%s available_kb=%s\n' "$(hostname)" "$available_kb"
+          REMOTE
+      - name: Transfer corrected report code
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$RUNNER_TEMP/diana-resume-code.tgz"
+          tar --exclude=.git --exclude='__pycache__' --exclude='.pytest_cache' -czf "$payload" .
+          scp -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            "$payload" "$ORACLE_USER@$ORACLE_HOST:$JOB_ROOT/source/resume-code.tgz"
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            "$ORACLE_USER@$ORACLE_HOST" "cd '$JOB_ROOT/source' && tar -xzf resume-code.tgz && rm resume-code.tgz"
+      - name: Resume on Heavy Oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            "$ORACLE_USER@$ORACLE_HOST" "JOB_ROOT='$JOB_ROOT' RUNTIME_COMMIT='$GITHUB_SHA' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$JOB_ROOT/source"
+          export GOOGLE_DRIVE_OAUTH_JSON_FILE="$JOB_ROOT/secrets/google-drive-oauth.json"
+          export UNIVERSAL_VIDEO_WHISPER_MODEL=small
+          export UNIVERSAL_VIDEO_ASR_THREADS=4
+          export PYTHONPATH="$JOB_ROOT/source"
+          nohup .venv/bin/python tools/diana23_26_oracle_batch.py \
+            --job-root="$JOB_ROOT" --runtime-commit="$RUNTIME_COMMIT" \
+            </dev/null >"$JOB_ROOT/resume.log" 2>&1 &
+          pid=$!
+          printf '%s\n' "$pid" > "$JOB_ROOT/pid"
+          sleep 8
+          if ! kill -0 "$pid" 2>/dev/null; then
+            tail -160 "$JOB_ROOT/resume.log" || true
+            exit 1
+          fi
+          printf 'RESUME_STARTED pid=%s\n' "$pid"
+          REMOTE
+      - name: Monitor resiliently
+        shell: bash
+        run: |
+          set -euo pipefail
+          unavailable=0
+          for attempt in $(seq 1 330); do
+            state="$(ssh -i '${{ steps.ssh.outputs.key }}' \
+              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=45 \
+              "$ORACLE_USER@$ORACLE_HOST" "python3 -c \"import json,pathlib; p=pathlib.Path('$JOB_ROOT/status.json'); print(json.loads(p.read_text()).get('stage','MISSING') if p.exists() else 'STARTING')\"" 2>/dev/null || true)"
+            if [[ -z "$state" ]]; then
+              unavailable=$((unavailable + 1))
+              state=SSH_TEMPORARILY_UNAVAILABLE
+            else
+              unavailable=0
+            fi
+            if (( attempt % 5 == 1 )); then
+              printf 'HEAVY_ORACLE_STATUS attempt=%s stage=%s\n' "$attempt" "$state"
+            fi
+            if [[ "$state" == COMPLETE ]]; then
+              ssh -i '${{ steps.ssh.outputs.key }}' \
+                -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+                "$ORACLE_USER@$ORACLE_HOST" "cat '$JOB_ROOT/result.json'"
+              exit 0
+            fi
+            if [[ "$state" == FAILED ]]; then
+              ssh -i '${{ steps.ssh.outputs.key }}' \
+                -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+                "$ORACLE_USER@$ORACLE_HOST" "tail -180 '$JOB_ROOT/resume.log'"
+              exit 1
+            fi
+            if (( unavailable >= 8 )); then
+              printf 'SSH unavailable eight times; Heavy Oracle background process was left intact.\n'
+              exit 2
+            fi
+            sleep 60
+          done
+          printf 'Control timeout reached; Heavy Oracle background process was left intact.\n'
+          exit 2
