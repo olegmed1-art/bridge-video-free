@@ -1,4 +1,4 @@
-name: Light Oracle authorized console recovery v3
+name: Light Oracle post-reset Run Command probe
 
 on:
   push:
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   preflight:
     runs-on: ubuntu-24.04
-    timeout-minutes: 18
+    timeout-minutes: 10
     env:
       OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
@@ -100,35 +100,6 @@ jobs:
           print('COMPARTMENT_ID='+x['compartment-id'])
           PY
           source "$RUNNER_TEMP/target.env"
-          active_count="$(python - "$INSTANCE_ID" <<'PY'
-          import oci,sys
-          cfg=oci.config.from_file()
-          client=oci.core.ComputeClient(cfg)
-          rows=oci.pagination.list_call_get_all_results(
-              client.list_instance_console_connections,
-              compartment_id=cfg['tenancy'],
-              instance_id=sys.argv[1],
-          ).data
-          print(sum(1 for x in rows if x.lifecycle_state in {'ACTIVE','CREATING'}))
-          PY
-          )"
-          echo "EXISTING_ACTIVE_CONSOLE_COUNT=$active_count"
-          [[ "$active_count" == 0 ]]
-          oci compute instance-console-connection create --instance-id "$INSTANCE_ID" --ssh-public-key-file "$RUNNER_TEMP/console_key.pub" --wait-for-state ACTIVE --wait-interval-seconds 5 --max-wait-seconds 180 > "$RUNNER_TEMP/console.json"
-          connection_id="$(python - "$RUNNER_TEMP/console.json" <<'PY'
-          import json,sys
-          d=json.load(open(sys.argv[1]))['data']
-          assert d['lifecycle-state']=='ACTIVE'
-          print(d['id'])
-          PY
-          )"
-          oci compute instance-console-connection get --instance-console-connection-id "$connection_id" > "$RUNNER_TEMP/console-get.json"
-          python - "$RUNNER_TEMP/console-get.json" > "$RUNNER_TEMP/connection-string" <<'PY'
-          import json,sys
-          d=json.load(open(sys.argv[1]))['data']
-          assert d['lifecycle-state']=='ACTIVE'
-          print(d['connection-string'])
-          PY
           oci compute instance list-vnics --instance-id "$INSTANCE_ID" --all > "$RUNNER_TEMP/vnics.json"
           public_ip="$(python - "$RUNNER_TEMP/vnics.json" <<'PY'
           import json,sys
@@ -137,185 +108,54 @@ jobs:
           print(rows[0]['public-ip'])
           PY
           )"
-          echo "CONNECTION_ID=$connection_id" >> "$GITHUB_ENV"
           echo "INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
+          echo "COMPARTMENT_ID=$COMPARTMENT_ID" >> "$GITHUB_ENV"
           echo "PUBLIC_IP=$public_ip" >> "$GITHUB_ENV"
-          echo 'LIGHT_CONSOLE_CONNECTION=ACTIVE'
+          echo 'LIGHT_EXACT_TARGET=PASS'
 
-      - name: Recover approved SSH key with validated GRUB editor
+      - name: Read-only OCI Run Command execution probe
         shell: bash
         run: |
           set -Eeuo pipefail
-          python - "$INSTANCE_ID" "$RUNNER_TEMP/connection-string" "$RUNNER_TEMP/console_key" "$RUNNER_TEMP/oracle_ssh_key.pub" <<'PY'
-          import pexpect,pyte,shlex,subprocess,sys,time,re
-
-          instance_id,conn_file,console_key,pub_file=sys.argv[1:]
-          keyarg=shlex.quote(console_key)
-          conn=open(conn_file).read().strip().replace('<privateKey>',console_key)
-          opts=f"-i {keyarg} -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-          conn=conn.replace('ssh ',f'ssh {opts} ')
-          argv=shlex.split(conn)
-          child=pexpect.spawn(argv[0],argv[1:],encoding='utf-8',codec_errors='ignore',
-                              timeout=0.5,dimensions=(40,100))
-          screen=pyte.Screen(100,40); stream=pyte.Stream(screen)
-          transcript=[]
-          phase='attach'
-
-          def drain(seconds):
-              deadline=time.time()+seconds
-              while time.time()<deadline and child.isalive():
-                  child.expect([pexpect.TIMEOUT,pexpect.EOF],timeout=min(0.5,max(0.05,deadline-time.time())))
-                  data=child.before or ''
-                  if data:
-                      transcript.append(data); stream.feed(data)
-                  child.before=''
-
-          def view():
-              return '\n'.join(screen.display)
-
-          def fresh():
-              screen.reset(); transcript.clear()
-
-          def safe_tail():
-              s=re.sub(r'ocid1\.[A-Za-z0-9._-]+','OCID_REDACTED',view())
-              return '\n'.join(x.rstrip() for x in s.splitlines()[-25:] if x.strip())
-
-          try:
-              drain(8); child.send('\r'); drain(5)
-              if not child.isalive() or 'autopilot-lite-vnic login:' not in view():
-                  raise RuntimeError('verified serial login prompt not present; reset not issued')
-              print('LIGHT_SERIAL_VERIFIED_BEFORE_RESET=PASS',flush=True)
-
-              fresh()
-              subprocess.run([
-                  'oci','compute','instance','action','--instance-id',instance_id,
-                  '--action','SOFTRESET'
-              ],check=True,stdout=subprocess.DEVNULL)
-              phase='booting'
-              print('LIGHT_THIRD_SOFTRESET=ISSUED',flush=True)
-
-              menu=False
-              deadline=time.time()+90
-              while time.time()<deadline and child.isalive():
-                  drain(1.5)
-                  v=view()
-                  if 'GNU GRUB' in v and ('Ubuntu' in v or 'Advanced options' in v) and 'grub>' not in v.lower():
-                      menu=True; break
-                  child.send('\x1b')
-                  drain(1.5)
-                  v=view()
-                  if 'GNU GRUB' in v and ('Ubuntu' in v or 'Advanced options' in v) and 'grub>' not in v.lower():
-                      menu=True; break
-              if not menu:
-                  raise RuntimeError('fresh GRUB menu not captured')
-              phase='menu'
-              print('LIGHT_FRESH_GRUB_MENU=PASS',flush=True)
-
-              fresh()
-              child.send('e'); drain(6)
-              editor=view()
-              if 'setparams' not in editor and 'linux' not in editor:
-                  raise RuntimeError('validated GRUB editor screen not present')
-              phase='editor'
-              print('LIGHT_GRUB_EDITOR=PASS',flush=True)
-
-              linux_row=None
-              for i,line in enumerate(screen.display):
-                  s=line.lstrip()
-                  if (s.startswith('linux ') or s.startswith('linuxefi ')) and 'vmlinuz' in s:
-                      linux_row=i; break
-              if linux_row is None:
-                  raise RuntimeError('linux kernel row not visible in editor')
-
-              delta=linux_row-screen.cursor.y
-              child.send(('\x1b[B'*delta) if delta>0 else ('\x1b[A'*(-delta)))
-              child.send('\x05')
-              child.send(' rw init=/bin/bash')
-              drain(2)
-              if 'init=/bin/bash' not in view():
-                  raise RuntimeError('kernel recovery argument not visible; refusing boot')
-              print('LIGHT_GRUB_ARGUMENT_VALIDATED=PASS',flush=True)
-
-              child.send('\x18')
-              phase='recovery-boot'
-              drain(50)
-              child.sendline("printf '\\122\\104\\103\\122\\105\\101\\104\\131\\n'")
-              drain(4)
-              if 'RDCREADY' not in ''.join(transcript):
-                  raise RuntimeError('recovery root shell not proven')
-              print('LIGHT_RECOVERY_ROOT_SHELL=PASS',flush=True)
-
-              pub=open(pub_file).read().strip()
-              q=shlex.quote(pub)
-              commands=[
-                  "mount -o remount,rw /",
-                  "install -d -m 700 -o ubuntu -g ubuntu /home/ubuntu/.ssh",
-                  "touch /home/ubuntu/.ssh/authorized_keys",
-                  f"grep -qxF -- {q} /home/ubuntu/.ssh/authorized_keys || printf '%s\\n' {q} >> /home/ubuntu/.ssh/authorized_keys",
-                  "chown -R ubuntu:ubuntu /home/ubuntu/.ssh",
-                  "chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys",
-                  f"grep -qxF -- {q} /home/ubuntu/.ssh/authorized_keys && printf '\\113\\105\\131\\117\\113\\n'",
-                  "sync"
-              ]
-              for cmd in commands:
-                  child.sendline(cmd); drain(1.5)
-              if 'KEYOK' not in ''.join(transcript):
-                  raise RuntimeError('authorized_keys verification failed')
-              print('LIGHT_AUTHORIZED_KEY=PASS',flush=True)
-              child.sendline('exec /sbin/reboot -f')
-              phase='normal-reboot'
-              drain(8)
-              print('LIGHT_NORMAL_REBOOT=ISSUED',flush=True)
-          except Exception:
-              if child.isalive():
-                  if phase=='editor':
-                      child.send('\x1b'); drain(2); child.send('\r'); drain(2)
-                  elif phase=='menu':
-                      child.send('\r'); drain(2)
-                  elif phase=='booting' and 'grub>' in view().lower():
-                      child.sendline('normal'); drain(4); child.send('\r'); drain(2)
-              print('SERIAL_FAILURE_SCREEN_BEGIN')
-              print(safe_tail())
-              print('SERIAL_FAILURE_SCREEN_END')
-              raise
-          finally:
-              if child.isalive(): child.close(force=True)
-          PY
-
-      - name: Verify recovered SSH and read-only Light state
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          ssh_ok=0
-          for attempt in $(seq 1 30); do
-            if ssh -i "$RUNNER_TEMP/oracle_ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 "ubuntu@$PUBLIC_IP" 'true' >/dev/null 2>&1; then
-              ssh_ok=1
-              break
+          plugins="$(oci instance-agent plugin list --compartment-id "$COMPARTMENT_ID" --instanceagent-id "$INSTANCE_ID" --all --output json || true)"
+          status="$(printf '%s' "$plugins" | python -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); print(next((x.get("status","") for x in xs if "Run Command" in str(x.get("name",""))),""))' 2>/dev/null || true)"
+          echo "LIGHT_RUN_COMMAND_PLUGIN=${status:-UNKNOWN}"
+          [[ "$status" == RUNNING ]]
+          content_json='{"source":{"sourceType":"TEXT","text":"printf RUNCOMMAND_ALIVE"},"output":{"outputType":"TEXT"}}'
+          target_json="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
+          command_id="$(oci instance-agent command create --compartment-id "$COMPARTMENT_ID" --content "$content_json" --target "$target_json" --timeout-in-seconds 60 --display-name "light-readonly-probe-$GITHUB_RUN_ID" --query data.id --raw-output)"
+          execution=''; lifecycle=''
+          for _ in $(seq 1 24); do
+            execution="$(oci instance-agent command-execution get --command-id "$command_id" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
+            if [[ -n "$execution" ]]; then
+              lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
+              case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break;; esac
             fi
-            sleep 10
+            sleep 5
           done
-          [[ "$ssh_ok" == 1 ]]
-          echo 'LIGHT_SSH=PASS'
-          ssh -i "$RUNNER_TEMP/oracle_ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "ubuntu@$PUBLIC_IP" '
-            set -u
-            echo "HOSTNAME=$(hostname)"
-            echo "UPTIME_SECONDS=$(cut -d. -f1 /proc/uptime)"
-            echo "FAILED_UNIT_COUNT=$(systemctl --failed --no-legend 2>/dev/null | sed "/^[[:space:]]*$/d" | wc -l)"
-            echo "AUTOPILOT_UNITS_BEGIN"
-            systemctl list-units --type=service --all --no-pager --no-legend 2>/dev/null | grep -Ei "autopilot|bridge|worker|queue" || true
-            echo "AUTOPILOT_UNITS_END"
-            echo "CONTAINERS_BEGIN"
-            if command -v docker >/dev/null 2>&1; then sudo -n docker ps --format "{{.Names}}|{{.Status}}|{{.Image}}" 2>/dev/null || true; fi
-            if command -v podman >/dev/null 2>&1; then podman ps --format "{{.Names}}|{{.Status}}|{{.Image}}" 2>/dev/null || true; fi
-            echo "CONTAINERS_END"
-            echo "AUTOPILOT_PROCESSES_BEGIN"
-            pgrep -af "autopilot|bridge.*worker|queue.*worker" || true
-            echo "AUTOPILOT_PROCESSES_END"
-            echo "RDC_PROCESSES_BEGIN"
-            pgrep -af "desktop-commander.*remote" || true
-            echo "RDC_PROCESSES_END"
-          '
-          echo 'LIGHT_READONLY_HOST_PROBE=PASS'
+          text="$(printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text",""))')"
+          exit_code="$(printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("exit-code",""))')"
+          echo "LIGHT_RUN_COMMAND_LIFECYCLE=${lifecycle:-UNKNOWN}"
+          echo "LIGHT_RUN_COMMAND_EXIT=${exit_code:-UNKNOWN}"
+          [[ "$lifecycle" == SUCCEEDED && "$exit_code" == 0 && "$text" == *RUNCOMMAND_ALIVE* ]]
+          echo 'LIGHT_RUN_COMMAND_EXECUTION=PASS'
+
+      - name: Read-only SSH status
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          out="$(ssh -i "$RUNNER_TEMP/oracle_ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@$PUBLIC_IP" 'hostname' 2>&1)"
+          rc=$?
+          set -e
+          if [[ "$rc" == 0 ]]; then
+            echo 'LIGHT_SSH=PASS'
+            printf '%s\n' "$out" | tail -n 1
+          elif printf '%s' "$out" | grep -qi 'Permission denied'; then
+            echo 'LIGHT_SSH=DENIED'
+          else
+            echo "LIGHT_SSH=FAILED rc=$rc"
+          fi
 
       - name: Remove temporary console connection
         if: always()
