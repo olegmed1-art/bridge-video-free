@@ -27,7 +27,7 @@ ACTOR_LOGIN = "olegmed1-art"
 ACTOR_ID = 315_099_490
 APP_SLUG = "chatgpt-codex-connector"
 APP_ID = 1_144_995
-ROLES = frozenset({"RECOGNIZER", "VIDEO", "BOOKS", "KNOWLEDGE"})
+ROLE_PATTERN = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
 DISPATCH_NOT_SENT = "AUTOPILOT_CALLBACK_DISPATCH_NOT_SENT"
 DISPATCH_NOT_SENT_RETRY_DELAYS_SECONDS = (1, 2, 4, 8)
 FIELDS = (
@@ -138,7 +138,10 @@ def parse_issue_comment_event(event: object) -> RoleCallback:
         raise CallbackContractError("CALLBACK_DISPATCH_ID_INVALID")
     if re.fullmatch(r"[1-9][0-9]{0,6}", values["dispatch_epoch"]) is None:
         raise CallbackContractError("CALLBACK_EPOCH_INVALID")
-    if values["role"] not in ROLES:
+    # The database RPC binds the role to the dispatch and requires it to be an
+    # enabled role_registry entry. Keep only the public identifier-shape gate
+    # here so newly registered school roles reach that authoritative check.
+    if ROLE_PATTERN.fullmatch(values["role"]) is None:
         raise CallbackContractError("CALLBACK_ROLE_INVALID")
     if re.fullmatch(r"[0-9a-f]{64}", values["task_fingerprint"]) is None:
         raise CallbackContractError("CALLBACK_TASK_FINGERPRINT_INVALID")

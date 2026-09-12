@@ -81,6 +81,7 @@ protected_gate_paths=(
   '.github/workflows/oracle-diana11-shadow-preflight-bootstrap.yml'
   '.github/workflows/oracle-idle-guard-exact-install.yml'
   '.github/workflows/oracle-idle-proof-bootstrap.yml'
+  '.github/workflows/oracle-fleet-status.yml'
   '.github/workflows/oracle-instance-power.yml'
   '.github/workflows/oracle-operational-safety-gate.yml'
   '.github/workflows/oracle-operator-commands.yml'

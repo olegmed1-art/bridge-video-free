@@ -40,14 +40,20 @@ continues with the next dependency-eligible item.
    and select the next independent `READY` item.
 7. Never redispatch an unchanged blocked head. A changed head reactivates that
    lane automatically.
-8. A dependent item becomes eligible only after its prerequisite is `DONE`.
+8. A dependent item is durably stored as `WAITING_DEPENDENCY`; after its
+   prerequisite reaches `DONE`, a database trigger atomically promotes it to
+   `READY` and emits a best-effort wake notification. Recovery polling reads
+   the durable state, so a missed notification cannot lose the wake-up.
 
 ## Explicit idle outcomes
 
 - `WAITING_FOR_ACTIVE_ROLE_TASK`: a role lane is still running.
 - `IDLE_NO_REGISTERED_WORK`: the backlog has not been populated.
-- `IDLE_NO_ELIGIBLE_TASK`: work exists but is blocked, delayed, or waiting on a
-  dependency.
+- `WAITING_FOR_DEPENDENCY`: registered work is waiting on a prerequisite.
+- `WAITING_FOR_RETRY_WINDOW`: blocked work is in its bounded cooldown.
+- `WAITING_FOR_PROBE_LEASE`: another fenced probe still owns the candidate.
+- `IDLE_NO_ELIGIBLE_TASK`: reserved for an otherwise unclassified invariant
+  gap; ordinary dependency and cooldown waits no longer collapse into it.
 - `PROJECT_DONE`: every registered item is `DONE` or intentionally `PAUSED`.
 
 No idle outcome disables the resident service or its webhook executor.

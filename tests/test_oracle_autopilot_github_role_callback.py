@@ -61,6 +61,21 @@ def test_parses_live_shaped_provider_authenticated_callback():
     assert len(callback.payload_fingerprint) == 64
 
 
+def test_accepts_registry_shaped_role_before_database_binding():
+    event = _event()
+    event["comment"]["body"] = BODY.replace("role=VIDEO", "role=AUTOPILOT")
+    callback = parse_issue_comment_event(event)
+    assert callback.role == "AUTOPILOT"
+
+
+@pytest.mark.parametrize("role", ["video", "9VIDEO", "VIDEO-DISPATCH", "A" * 65])
+def test_rejects_role_outside_registry_identifier_shape(role):
+    event = _event()
+    event["comment"]["body"] = BODY.replace("role=VIDEO", f"role={role}")
+    with pytest.raises(CallbackContractError, match="CALLBACK_ROLE_INVALID"):
+        parse_issue_comment_event(event)
+
+
 @pytest.mark.parametrize(
     ("path", "value", "code"),
     [

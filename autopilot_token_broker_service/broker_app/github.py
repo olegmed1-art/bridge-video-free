@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from broker_app.policy import (
     ALLOWED_PATH_PATTERNS,
     DraftRepairRequest,
+    ROLE_PATTERN,
     RoleDispatchRequest,
 )
 
@@ -95,6 +96,7 @@ def broker_policy_sha256() -> str:
             rf"docs/evidence/autopilot/role-dispatch-{_UUID4}\.md"
         ),
         "role_dispatch_modes": ["READ_ONLY", "REPAIR", "VERIFY"],
+        "role_dispatch_role_pattern": ROLE_PATTERN,
         "role_dispatch_repair_attempt_cap": 1,
     }
     return hashlib.sha256(_canonical_json(policy)).hexdigest()
