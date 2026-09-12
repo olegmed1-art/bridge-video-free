@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=d0f0fc3e-118b-4706-a49d-6003ec35e47e
+dispatch_epoch=6
+role=KNOWLEDGE
+task_fingerprint=407d19115b580cdbe8d170e1480665b662eb4cffe828ad9b1ba7919ed78b2940
+target_pr=860
+mode=VERIFY
+repair_attempt=1
+origin_task_id=70312799-8e22-4568-bf3e-85ab273c7176
+prior_task_id=a6ab2d6a-51a1-49c4-973e-f9b024335ffa
+blocked_result_code=AUTHORITY_ISOLATION_FAILED
+blocked_summary=Authority isolation fails: bridge_school_app can read all bidding.rule rows, and WORLD fallback accepts unverified provenance.
+instruction=READ_ONLY_VERIFY_REPAIR_NO_MUTATION
