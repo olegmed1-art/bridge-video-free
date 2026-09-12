@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=3e10f94a-cba4-4dae-be31-017115de6254
+dispatch_epoch=11
+role=DATA
+task_fingerprint=7db24a3d3e35d6b1772e217d667a3b4f79ed4ef27e10f63d41d6836fd61f7032
+target_pr=860
+mode=REPAIR
+repair_attempt=1
+origin_task_id=bb6524b2-9608-47b6-8cd2-d170e6a9652e
+prior_task_id=bb6524b2-9608-47b6-8cd2-d170e6a9652e
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=Outbox requires READ_ONLY at 634cbe3, but assignment requires completed HCP REPAIR at stale 6b22cf9; binding rejected fail closed.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
