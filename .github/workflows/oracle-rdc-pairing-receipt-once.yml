@@ -96,7 +96,7 @@ jobs:
               if "Enter code" not in line:
                   continue
               for candidate in lines[index + 1:index + 5]:
-                  if 4 <= len(candidate) <= 32 and re.fullmatch(r"[A-Za-z0-9 _-]+", candidate):
+                  if 4 <= len(candidate) <= 64 and all(32 <= ord(ch) < 127 for ch in candidate):
                       code = candidate
                       break
               if code:
@@ -110,7 +110,7 @@ jobs:
           import json, pathlib, sys
           payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
           assert set(payload) == {"verification_uri", "user_code"}
-          assert len(payload["user_code"]) <= 32
+          assert 4 <= len(payload["user_code"]) <= 64
           PY
           openssl pkeyutl -encrypt -pubin \
             -inkey ops/remote_desktop_commander_pairing_recipient.pem \
