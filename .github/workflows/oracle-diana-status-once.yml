@@ -1,0 +1,77 @@
+name: Heavy Oracle Diana status once
+
+on:
+  push:
+    branches:
+      - codex/diana23-26-v6-rerun
+    paths:
+      - .github/workflows/oracle-diana-status-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Resolve trusted SSH transport
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Read Diana batch state from Heavy Oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if ssh -i '${{ steps.ssh.outputs.key }}' \
+              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=45 \
+              "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          root='/home/ubuntu/bridge-video-jobs/diana23-26-v6-ca03333541c4'
+          test "$(hostname)" = bridge-school-dds3-frankfurt
+          printf 'SERVER_TIME='; date --iso-8601=seconds
+          printf 'STATUS_JSON\n'; cat "$root/status.json"
+          printf '\nPROCESS\n'
+          if [[ -f "$root/pid" ]] && kill -0 "$(cat "$root/pid")" 2>/dev/null; then
+            ps -o pid,etime,%cpu,%mem,stat,cmd -p "$(cat "$root/pid")"
+          else
+            printf 'BATCH_PROCESS_NOT_RUNNING\n'
+          fi
+          printf 'RECENT_LOG\n'; tail -80 "$root/run.log"
+          printf 'OUTPUT_FILES\n'
+          find "$root" -maxdepth 4 -type f \( -name 'validation.json' -o -name 'master_analysis.json' -o -name '*server v6.pdf' -o -name 'result.json' \) -printf '%TY-%Tm-%TdT%TH:%TM:%TS %s %p\n' | sort
+          printf 'DISK\n'; df -h /home/ubuntu
+          REMOTE
+            then exit 0; fi
+            sleep 15
+          done
+          exit 1
