@@ -143,12 +143,16 @@ jobs:
           echo 'LIGHT_CONSOLE_CONNECTION=ACTIVE'
 
       - name: Read-only current serial state
+        continue-on-error: true
         shell: bash
         run: |
           set -Eeuo pipefail
           python - "$RUNNER_TEMP/connection-string" "$RUNNER_TEMP/console_key" <<'PY'
           import pexpect,pyte,shlex,sys,time,re
+          key=shlex.quote(sys.argv[2])
           conn=open(sys.argv[1]).read().strip().replace('<privateKey>',sys.argv[2])
+          opts=f"-i {key} -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          conn=conn.replace('ssh ',f'ssh {opts} ')
           argv=shlex.split(conn)
           child=pexpect.spawn(argv[0],argv[1:],encoding='utf-8',codec_errors='ignore',timeout=0.5,dimensions=(45,180))
           screen=pyte.Screen(180,45); stream=pyte.Stream(screen)
