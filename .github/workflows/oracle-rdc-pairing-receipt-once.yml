@@ -96,7 +96,7 @@ jobs:
               if "Enter code" not in line:
                   continue
               for candidate in lines[index + 1:index + 5]:
-                  if re.fullmatch(r"[A-Z0-9]{3,12}(?:-[A-Z0-9]{3,12})?", candidate):
+                  if 4 <= len(candidate) <= 32 and re.fullmatch(r"[A-Za-z0-9 _-]+", candidate):
                       code = candidate
                       break
               if code:
