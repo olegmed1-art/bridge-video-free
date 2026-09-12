@@ -364,9 +364,30 @@ def _full_template_layout(image: Any, templates: dict[str, list[Any]], y_offset:
             continue
         row, column, score = edges[edge_index]
         card, slot = cards[row], slots[column]
-        matches[card] = {"score": float(score), "seat": slot["seat"], "x": slot["x"], "y": slot["y"]}
+        matches[card] = {"score": float(score), "seat": slot["seat"], "x": slot["x"], "y": slot["y"], "slot_column": column}
     if len(matches) != 52:
         return None, "global_assignment_card_count_gate"
+    for seat in rank_layout.SEATS:
+        for suit in rank_layout.SUITS:
+            group_cards = sorted(
+                [card for card in cards if card[1] == suit and matches[card]["seat"] == seat],
+                key=lambda card: rank_layout.RANKS.index(card[0]),
+            )
+            group_slots = sorted(
+                [slots[matches[card]["slot_column"]] for card in group_cards],
+                key=lambda slot: slot["x"],
+            )
+            for card, slot in zip(group_cards, group_slots):
+                local = eligible(card, slot)
+                if local is None:
+                    return None, "ordered_slot_eligibility_gate"
+                local_x, local_y = local
+                matches[card] = {
+                    "score": float(score_maps[card][seat][local_y, local_x]),
+                    "seat": seat,
+                    "x": slot["x"],
+                    "y": slot["y"],
+                }
     scores = [item["score"] for item in matches.values()]
     print(json.dumps({"full_layout_phase": "constrained_assignment", "seconds": round(time.perf_counter() - started, 3), "minimum": round(min(scores), 4), "median": round(float(median(scores)), 4)}), flush=True)
     if min(scores) < 0.12 or float(median(scores)) < 0.95:
