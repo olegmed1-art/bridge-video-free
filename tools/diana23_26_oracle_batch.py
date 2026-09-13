@@ -278,8 +278,14 @@ def main() -> None:
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
         bundle.write(comparison / "recognition_comparison.json", "recognition_comparison.json")
         bundle.write(root / "status.json", "status-at-packaging.json")
+        machine_suffixes = {".json", ".csv", ".tsv", ".txt", ".md", ".pbn"}
+        excluded_parts = {"screenshots", "work", "frames", "crops", "debug", "rendered"}
         for path in sorted(new_root.rglob("*")):
-            if not path.is_file() or "screenshots" in path.parts or path.suffix.lower() == ".pdf":
+            if not path.is_file():
+                continue
+            if excluded_parts.intersection(path.parts):
+                continue
+            if path.suffix.lower() not in machine_suffixes:
                 continue
             bundle.write(path, path.relative_to(root))
     combined_item = existing_upload(combined) or upload(combined)
