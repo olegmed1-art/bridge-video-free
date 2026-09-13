@@ -1,4 +1,4 @@
-name: Light Oracle existing multi-key SSH recovery probe
+name: Light Oracle SSH metadata identity audit
 
 on:
   push:
@@ -118,54 +118,59 @@ jobs:
           echo "PUBLIC_IP=$public_ip" >> "$GITHUB_ENV"
           echo 'LIGHT_EXACT_TARGET=PASS'
 
-      - name: Probe all existing Oracle SSH credentials read-only
-        id: multikey
+      - name: Compare existing key identities with Light launch metadata
         shell: bash
         run: |
           set -Eeuo pipefail
-          selected=''
+          oci compute instance get --instance-id "$INSTANCE_ID" --output json > "$RUNNER_TEMP/light-instance.json"
+          python - "$RUNNER_TEMP/light-instance.json" "$RUNNER_TEMP/light-metadata-keys" <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1]))['data']
+          raw=(d.get('metadata') or {}).get('ssh_authorized_keys','')
+          lines=[x.strip() for x in raw.splitlines() if x.strip() and not x.lstrip().startswith('#')]
+          open(sys.argv[2],'w').write('\n'.join(lines)+('\n' if lines else ''))
+          print(f'LIGHT_METADATA_KEY_COUNT={len(lines)}')
+          PY
+          : > "$RUNNER_TEMP/light-metadata-blobs"
+          if [[ -s "$RUNNER_TEMP/light-metadata-keys" ]]; then
+            awk '{for(i=1;i<=NF;i++) if($i ~ /^(AAAA|AAAAC3|AAAAB3)/){print $i; break}}' "$RUNNER_TEMP/light-metadata-keys" | sort -u > "$RUNNER_TEMP/light-metadata-blobs"
+          fi
+          present=0
+          matched=0
           for name in ORACLE_SSH_PRIVATE_KEY OCI_SSH_PRIVATE_KEY ORACLE_VM_SSH_PRIVATE_KEY BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY ORACLE_SSH_KEY OCI_SSH_KEY; do
             value="${!name:-}"
             [[ -n "$value" ]] || continue
-            key="$RUNNER_TEMP/key-$name"
+            present=$((present+1))
+            key="$RUNNER_TEMP/audit-$name"
             printf '%s\n' "$value" | tr -d '\r' > "$key"
             chmod 600 "$key"
-            ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
-            if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=10 "ubuntu@$PUBLIC_IP" 'true' >/dev/null 2>&1; then
-              selected="$name"
-              cp "$key" "$RUNNER_TEMP/light-selected-key"
-              chmod 600 "$RUNNER_TEMP/light-selected-key"
-              break
+            pub="$(ssh-keygen -y -f "$key" 2>/dev/null || true)"
+            blob="$(printf '%s' "$pub" | awk '{print $2}')"
+            if [[ -n "$blob" ]] && grep -qxF "$blob" "$RUNNER_TEMP/light-metadata-blobs"; then
+              echo "LIGHT_METADATA_MATCH_$name=YES"
+              matched=$((matched+1))
+            else
+              echo "LIGHT_METADATA_MATCH_$name=NO"
             fi
           done
-          echo "LIGHT_EXISTING_KEY_MATCH=${selected:-NONE}"
-          [[ -n "$selected" ]]
-          echo 'LIGHT_SSH=PASS'
+          echo "EXISTING_SECRET_KEY_COUNT=$present"
+          echo "LIGHT_METADATA_MATCH_COUNT=$matched"
+          echo 'LIGHT_METADATA_IDENTITY_AUDIT=PASS'
 
-      - name: Read-only Light host/service inventory
+      - name: Confirm current SSH result
         shell: bash
         run: |
-          set -Eeuo pipefail
-          ssh -i "$RUNNER_TEMP/light-selected-key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" "ubuntu@$PUBLIC_IP" '
-            set -u
-            echo "HOSTNAME=$(hostname)"
-            echo "UPTIME_SECONDS=$(cut -d. -f1 /proc/uptime)"
-            echo "FAILED_UNIT_COUNT=$(systemctl --failed --no-legend 2>/dev/null | sed "/^[[:space:]]*$/d" | wc -l)"
-            echo "AUTOPILOT_UNITS_BEGIN"
-            systemctl list-units --type=service --all --no-pager --no-legend 2>/dev/null | grep -Ei "autopilot|bridge|worker|queue" || true
-            echo "AUTOPILOT_UNITS_END"
-            echo "CONTAINERS_BEGIN"
-            if command -v docker >/dev/null 2>&1; then sudo -n docker ps --format "{{.Names}}|{{.Status}}|{{.Image}}" 2>/dev/null || true; fi
-            if command -v podman >/dev/null 2>&1; then podman ps --format "{{.Names}}|{{.Status}}|{{.Image}}" 2>/dev/null || true; fi
-            echo "CONTAINERS_END"
-            echo "AUTOPILOT_PROCESSES_BEGIN"
-            pgrep -af "autopilot|bridge.*worker|queue.*worker" || true
-            echo "AUTOPILOT_PROCESSES_END"
-            echo "RDC_PROCESSES_BEGIN"
-            pgrep -af "desktop-commander.*remote" || true
-            echo "RDC_PROCESSES_END"
-          '
-          echo 'LIGHT_READONLY_HOST_PROBE=PASS'
+          set +e
+          out="$(ssh -i "$RUNNER_TEMP/oracle_ssh_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=10 "ubuntu@$PUBLIC_IP" 'hostname' 2>&1)"
+          rc=$?
+          set -e
+          if [[ "$rc" == 0 ]]; then
+            echo 'LIGHT_SSH=PASS'
+          elif printf '%s' "$out" | grep -qi 'Permission denied'; then
+            echo 'LIGHT_SSH=DENIED'
+          else
+            echo "LIGHT_SSH=FAILED rc=$rc"
+          fi
 
       - name: Remove temporary console connection
         if: always()
