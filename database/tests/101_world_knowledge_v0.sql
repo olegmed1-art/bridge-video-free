@@ -103,9 +103,10 @@ BEGIN
  VALUES(s,'ci-world-trace-activation-scope','bidding_rule','CI trace activation scope','active')
  RETURNING knowledge_item_id INTO canon_item;
  INSERT INTO public.knowledge_version(knowledge_item_id,version_no,content,authority_class,review_status,
-  bidding_system_key,level_scope,effective_from,method_version,provenance,status)
+  bidding_system_key,level_scope,effective_from,effective_to,method_version,provenance,status)
  VALUES(canon_item,1,'{}','school_canon','reviewed','natural','{"level":"L1"}',
-  canon_effective_at-interval '1 day','v1','{"class":"DIRECT"}','candidate')
+  canon_effective_at-interval '1 day',canon_effective_at+interval '1 hour','catalog-metadata-v9',
+  '{"class":"DIRECT"}','candidate')
  RETURNING knowledge_version_id INTO canon_version;
  INSERT INTO public.knowledge_version_source(knowledge_version_id,source_id,relation_type,source_locator)
  VALUES(canon_version,canon_source,'derived_from','{"fixture":"trace-activation-scope"}');
@@ -137,10 +138,38 @@ BEGIN
  INSERT INTO bidding.runtime_activation(school_id,rule_id,authority_lane,canon_activation_id,scope_key,valid_from,status)
  VALUES(s,canon_rule,'school_canon',canon_activation,'trace-scope-a',canon_effective_at-interval '1 hour','active');
 
+ -- Selection and trace validation must use the rule method version, while
+ -- both enforce the same knowledge-version effective interval.
+ IF NOT EXISTS (
+   SELECT 1 FROM bidding.get_school_runtime_rule_catalog_at(s,'trace-scope-a',canon_effective_at) c
+   JOIN public.knowledge_version kv USING(knowledge_version_id)
+   WHERE c.rule_id=canon_rule AND c.method_version='v1'
+     AND kv.method_version='catalog-metadata-v9'
+ ) THEN RAISE EXCEPTION 'WORLD_SMOKE_ALIGNED_CANON_RULE_NOT_SELECTED'; END IF;
+ IF EXISTS (
+   SELECT 1 FROM bidding.get_school_runtime_rule_catalog_at(
+     s,'trace-scope-a',canon_effective_at+interval '2 hours') c
+   WHERE c.rule_id=canon_rule
+ ) THEN RAISE EXCEPTION 'WORLD_SMOKE_OUT_OF_KNOWLEDGE_WINDOW_RULE_SELECTED'; END IF;
+
  INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
   effective_at,auction_context_id,activation_scope,canon_outcome,canon_rule_ids,trace,resolver_version)
  VALUES(s,'canon-scope-valid','natural','v1','L1',canon_effective_at,'auction-1','trace-scope-a',
   'CANON_MATCH',ARRAY[canon_rule],'{}','world-v0');
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
+   effective_at,auction_context_id,activation_scope,canon_outcome,canon_rule_ids,trace,resolver_version)
+  VALUES(s,'canon-method-mismatch','natural','catalog-metadata-v9','L1',canon_effective_at,
+   'auction-1','trace-scope-a','CANON_MATCH',ARRAY[canon_rule],'{}','world-v0');
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_RULE_METHOD_MISMATCH_ACCEPTED'; END IF;
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
+   effective_at,auction_context_id,activation_scope,canon_outcome,canon_rule_ids,trace,resolver_version)
+  VALUES(s,'canon-knowledge-window-mismatch','natural','v1','L1',canon_effective_at+interval '2 hours',
+   'auction-1','trace-scope-a','CANON_MATCH',ARRAY[canon_rule],'{}','world-v0');
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_KNOWLEDGE_WINDOW_MISMATCH_ACCEPTED'; END IF;
  failed:=false; BEGIN
   INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
    effective_at,auction_context_id,activation_scope,canon_outcome,canon_rule_ids,trace,resolver_version)

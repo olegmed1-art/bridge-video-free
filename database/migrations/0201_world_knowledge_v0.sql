@@ -152,6 +152,8 @@ WHERE p_effective_at IS NOT NULL
   AND (ra.valid_to IS NULL OR ra.valid_to>p_effective_at)
   AND r.lifecycle_status='validated'
   AND kv.authority_class='school_canon'
+  AND p_effective_at>=COALESCE(kv.effective_from,'-infinity')
+  AND p_effective_at<COALESCE(kv.effective_to,'infinity')
   AND ca.status='active'
   AND ca.knowledge_version_id=r.knowledge_version_id
   AND ca.scope_key=ra.scope_key
@@ -324,7 +326,7 @@ BEGIN
    SELECT 1 FROM unnest(NEW.canon_rule_ids||NEW.world_rule_ids) x(rule_id)
    JOIN bidding.rule br ON br.rule_id=x.rule_id JOIN public.knowledge_version kv ON kv.knowledge_version_id=br.knowledge_version_id
    WHERE br.school_id IS DISTINCT FROM NEW.school_id OR kv.bidding_system_key IS DISTINCT FROM NEW.system_profile_key
-      OR kv.method_version IS DISTINCT FROM NEW.system_version OR kv.level_scope->>'level' IS DISTINCT FROM NEW.learner_level
+      OR br.method_version IS DISTINCT FROM NEW.system_version OR kv.level_scope->>'level' IS DISTINCT FROM NEW.learner_level
       OR NEW.effective_at<COALESCE(kv.effective_from,'-infinity') OR NEW.effective_at>=COALESCE(kv.effective_to,'infinity')
       OR br.auction_pattern->>'context_id' IS DISTINCT FROM NEW.auction_context_id
  ) THEN RAISE EXCEPTION 'BID_WORLD_TRACE_PROFILE_MISMATCH' USING ERRCODE='23514'; END IF;
