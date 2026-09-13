@@ -193,6 +193,13 @@ def _gap_fingerprint(request_fingerprint: str, profile: ResolutionProfile) -> st
     return hashlib.sha256(f"{request_fingerprint}:{_profile_fingerprint(profile)}".encode()).hexdigest()
 
 
+def _row_value(row: Any, name: str, index: int) -> Any:
+    """Read production dict_row values while retaining tuple test compatibility."""
+    if isinstance(row, Mapping):
+        return row[name]
+    return row[index]
+
+
 class PostgresCanonRuleStore:
     """Sealed adapter: Canon candidates can only originate in the active Canon catalog."""
     def __init_subclass__(cls, **kwargs):
@@ -211,19 +218,25 @@ class PostgresCanonRuleStore:
         profile: ResolutionProfile,
     ) -> tuple[ResolutionProfile, tuple[KnowledgeRule, ...]]:
         """Bind authoritative DB time and fetch the matching trusted catalog."""
-        connection = self._connection_factory()
-        with connection:
+        with self._connection_factory() as connection:
             with connection.cursor() as cur:
-                cur.execute("SELECT clock_timestamp()")
+                cur.execute("SELECT clock_timestamp() AS effective_at")
                 row = cur.fetchone()
-                if row is None or not isinstance(row[0], datetime) or row[0].tzinfo is None:
+                effective_at = None if row is None else _row_value(row, "effective_at", 0)
+                if not isinstance(effective_at, datetime) or effective_at.tzinfo is None:
                     raise RuntimeError("authoritative Canon resolution time is unavailable")
-                bound_profile = replace(profile, effective_at=row[0])
+                bound_profile = replace(profile, effective_at=effective_at)
                 cur.execute(
-                    """SELECT c.rule_id,c.action::text,kv.bidding_system_key,c.method_version,
-                              kv.level_scope->>'level',c.auction_pattern->>'context_id',
-                              c.valid_from,c.valid_to,c.priority,c.specificity,
-                              c.auction_pattern,c.hand_constraints,c.public_context_constraints
+                    """SELECT c.rule_id AS rule_id,c.action::text AS action,
+                              kv.bidding_system_key AS bidding_system_key,
+                              c.method_version AS method_version,
+                              kv.level_scope->>'level' AS learner_level,
+                              c.auction_pattern->>'context_id' AS auction_context_id,
+                              c.valid_from AS valid_from,c.valid_to AS valid_to,
+                              c.priority AS priority,c.specificity AS specificity,
+                              c.auction_pattern AS auction_pattern,
+                              c.hand_constraints AS hand_constraints,
+                              c.public_context_constraints AS public_context_constraints
                          FROM bidding.get_school_runtime_rule_catalog_at(%s,%s,%s) c
                          JOIN public.knowledge_version kv USING(knowledge_version_id)
                         WHERE kv.bidding_system_key=%s AND c.method_version=%s
@@ -236,11 +249,22 @@ class PostgresCanonRuleStore:
                 )
                 rows = cur.fetchall()
         rules = tuple(KnowledgeRule(
-            str(r[0]), "school_canon", r[1], r[2], r[3], r[4], r[5],
-            r[6], r[7], r[8], r[9], "verified",
-            auction_pattern=dict(r[10] or {}),
-            hand_constraints=dict(r[11] or {}),
-            public_context_constraints=dict(r[12] or {}),
+            str(_row_value(r, "rule_id", 0)), "school_canon",
+            _row_value(r, "action", 1),
+            _row_value(r, "bidding_system_key", 2),
+            _row_value(r, "method_version", 3),
+            _row_value(r, "learner_level", 4),
+            _row_value(r, "auction_context_id", 5),
+            _row_value(r, "valid_from", 6),
+            _row_value(r, "valid_to", 7),
+            _row_value(r, "priority", 8),
+            _row_value(r, "specificity", 9),
+            "verified",
+            auction_pattern=dict(_row_value(r, "auction_pattern", 10) or {}),
+            hand_constraints=dict(_row_value(r, "hand_constraints", 11) or {}),
+            public_context_constraints=dict(
+                _row_value(r, "public_context_constraints", 12) or {}
+            ),
         ) for r in rows)
         return bound_profile, rules
 
@@ -256,8 +280,7 @@ class PostgresCanonGapStore:
     def persist_and_verify(self, school_id: str, request_fingerprint: str,
                            profile: ResolutionProfile) -> CanonGapReceipt:
         fingerprint = _profile_fingerprint(profile)
-        writer = self._connection_factory()
-        with writer:
+        with self._connection_factory() as writer:
             with writer.cursor() as cur:
                 cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
                             (f"{school_id}:{request_fingerprint}",))
@@ -269,17 +292,17 @@ class PostgresCanonGapStore:
                 )
                 existing = cur.fetchone()
                 if existing is not None:
-                    gap_id = str(existing[0])
-                    if existing[1] != fingerprint:
+                    gap_id = str(_row_value(existing, "knowledge_gap_id", 0))
+                    if _row_value(existing, "profile_fingerprint", 1) != fingerprint:
                         raise RuntimeError("request fingerprint is already bound to a different resolution profile")
-                    effective_at = existing[2]
+                    effective_at = _row_value(existing, "effective_at", 2)
                 else:
                     cur.execute(
                         """INSERT INTO public.knowledge_gap(school_id,question,context_scope,status)
                            VALUES (%s,'CANON_GAP',%s::jsonb,'open') RETURNING knowledge_gap_id""",
                         (school_id, json.dumps({"request_fingerprint": request_fingerprint})),
                     )
-                    gap_id = str(cur.fetchone()[0])
+                    gap_id = str(_row_value(cur.fetchone(), "knowledge_gap_id", 0))
                     cur.execute(
                         """INSERT INTO bidding.world_canon_gap_binding(
                              knowledge_gap_id,school_id,request_fingerprint,system_profile_key,
@@ -292,10 +315,9 @@ class PostgresCanonGapStore:
                     effective_at = profile.effective_at
             writer.commit()
 
-        reader = self._connection_factory()
-        if reader is writer:
-            raise RuntimeError("post-commit gap verification requires a fresh connection")
-        with reader:
+        with self._connection_factory() as reader:
+            if reader is writer:
+                raise RuntimeError("post-commit gap verification requires a fresh connection")
             with reader.cursor() as cur:
                 cur.execute(
                     """SELECT knowledge_gap_id,school_id,request_fingerprint,profile_fingerprint,effective_at,created_at
@@ -307,9 +329,19 @@ class PostgresCanonGapStore:
                 row = cur.fetchone()
         if row is None:
             raise RuntimeError("committed CANON_GAP binding was not visible on an independent connection")
-        if row[4] != effective_at or not isinstance(row[4], datetime) or row[4].tzinfo is None:
+        stored_effective_at = _row_value(row, "effective_at", 4)
+        if (stored_effective_at != effective_at
+                or not isinstance(stored_effective_at, datetime)
+                or stored_effective_at.tzinfo is None):
             raise RuntimeError("committed CANON_GAP effective time is unavailable")
-        return CanonGapReceipt(str(row[0]), str(row[1]), row[2], row[3], row[4], row[5])
+        return CanonGapReceipt(
+            str(_row_value(row, "knowledge_gap_id", 0)),
+            str(_row_value(row, "school_id", 1)),
+            _row_value(row, "request_fingerprint", 2),
+            _row_value(row, "profile_fingerprint", 3),
+            stored_effective_at,
+            _row_value(row, "created_at", 5),
+        )
 
 
 def resolve_two_lane(*, school_id: str, acting_seat: str, acting_hand: dict[str, Any],

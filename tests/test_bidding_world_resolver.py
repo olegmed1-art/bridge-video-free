@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import pytest
@@ -116,10 +117,21 @@ def test_postgres_gap_store_commits_then_verifies_on_fresh_connection():
 
     profile_hash = verified("gap-1", "school-1", "request-1", PROFILE).profile_fingerprint
     connections = iter((
-        Connection("writer", [None, ("gap-1",)]),
-        Connection("reader", [("gap-1", "school-1", "request-1", profile_hash, NOW, NOW)]),
+        Connection("writer", [None, {"knowledge_gap_id": "gap-1"}]),
+        Connection("reader", [{
+            "knowledge_gap_id": "gap-1",
+            "school_id": "school-1",
+            "request_fingerprint": "request-1",
+            "profile_fingerprint": profile_hash,
+            "effective_at": NOW,
+            "created_at": NOW,
+        }]),
     ))
-    receipt = PostgresCanonGapStore(lambda: next(connections)).persist_and_verify(
+    @contextmanager
+    def repository_connect():
+        yield next(connections)
+
+    receipt = PostgresCanonGapStore(repository_connect).persist_and_verify(
         "school-1", "request-1", PROFILE)
     assert receipt.gap_id == "gap-1"
     assert events[-2:] == ["writer_commit", "reader_select"]
@@ -160,22 +172,38 @@ def test_canon_store_binds_database_time_and_returns_visible_predicates():
         def __enter__(self): return self
         def __exit__(self, *_args): return False
         def execute(self, sql, params=None): executed.append((sql, params))
-        def fetchone(self): return (NOW,)
+        def fetchone(self): return {"effective_at": NOW}
         def fetchall(self):
-            return [("rule-1", "1S", "natural", "v1", "L1", "auction-1",
-                     NOW, None, 10, 5, {"context_id": "auction-1", "calls": ["1H"]},
-                     {"HCP": {"min": 10}}, {"dealer": "N"})]
+            return [{
+                "rule_id": "rule-1",
+                "action": "1S",
+                "bidding_system_key": "natural",
+                "method_version": "v1",
+                "learner_level": "L1",
+                "auction_context_id": "auction-1",
+                "valid_from": NOW,
+                "valid_to": None,
+                "priority": 10,
+                "specificity": 5,
+                "auction_pattern": {"context_id": "auction-1", "calls": ["1H"]},
+                "hand_constraints": {"HCP": {"min": 10}},
+                "public_context_constraints": {"dealer": "N"},
+            }]
 
     class Connection:
         def __enter__(self): return self
         def __exit__(self, *_args): return False
         def cursor(self): return Cursor()
 
-    bound, rules = PostgresCanonRuleStore(Connection).fetch_current("school-1", PROFILE)
+    @contextmanager
+    def repository_connect():
+        yield Connection()
+
+    bound, rules = PostgresCanonRuleStore(repository_connect).fetch_current("school-1", PROFILE)
     assert bound.effective_at == NOW
     assert rules[0].hand_constraints == {"HCP": {"min": 10}}
-    assert executed[0][0] == "SELECT clock_timestamp()"
-    assert "c.auction_pattern,c.hand_constraints,c.public_context_constraints" in executed[1][0]
+    assert executed[0][0] == "SELECT clock_timestamp() AS effective_at"
+    assert "c.auction_pattern AS auction_pattern" in executed[1][0]
     assert executed[1][1][:3] == ("school-1", "default", NOW)
 
 
