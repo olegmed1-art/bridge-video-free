@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'oracle-instance-workload-mutation' || format('oracle-dds3-tls-renewal-noop-{0}', github.run_id) }}
+  group: oracle-dds3-tls-renewal
   cancel-in-progress: false
 
 jobs:

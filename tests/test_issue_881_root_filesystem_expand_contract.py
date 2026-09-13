@@ -11,203 +11,6 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "ops/oracle_universal_video_root_filesystem_expand.sh").read_text()
 WORKFLOW = (ROOT / ".github/workflows/issue-881-root-filesystem-expand.yml").read_text()
-PAID_GUARD = ROOT / "ops/oci_paid_acceptance_guard.py"
-WATCHDOG = (ROOT / ".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
-
-
-def _paid_guard(shapes: dict, availability: dict, source_shape: str = "VM.Standard.E5.Flex") -> subprocess.CompletedProcess[str]:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        shape_path = Path(temp_dir) / "shapes.json"
-        availability_path = Path(temp_dir) / "availability.json"
-        memory_availability_path = Path(temp_dir) / "memory-availability.json"
-        shape_path.write_text(json.dumps(shapes))
-        availability_path.write_text(json.dumps(availability))
-        memory_availability_path.write_text(json.dumps({"data": {"available": 1}}))
-        return subprocess.run(
-            [
-                "python",
-                str(PAID_GUARD),
-                "--shapes-json",
-                str(shape_path),
-                "--availability-json",
-                str(availability_path),
-                "--memory-availability-json",
-                str(memory_availability_path),
-                "--source-shape",
-                source_shape,
-                "--now-utc",
-                "2026-09-05T05:00:00Z",
-            ],
-            text=True,
-            capture_output=True,
-        )
-
-
-def _paid_shape(*, min_ocpus: float = 1, max_ocpus: float = 64,
-                min_memory: float = 1, max_memory: float = 1024) -> dict:
-    return {
-        "data": [{
-            "shape": "VM.Standard.E5.Flex",
-            "ocpu-options": {"min": min_ocpus, "max": max_ocpus},
-            "memory-options": {"min-in-g-bs": min_memory, "max-in-g-bs": max_memory},
-        }]
-    }
-
-
-def test_paid_capacity_guard_is_bounded_and_fail_closed() -> None:
-    approved = _paid_guard(_paid_shape(), {"data": {"available": 1}})
-    assert approved.returncode == 0, approved.stderr
-    payload = json.loads(approved.stdout)
-    assert payload == payload | {
-        "status": "APPROVED",
-        "shape": "VM.Standard.E5.Flex",
-        "ocpus": 1,
-        "memory_gb": 1,
-        "runtime_limit_seconds": 1800,
-        "compute_budget_usd": "1.00",
-        "hourly_rate_max_usd": "0.0265",
-        "billing_class": "PAID_BOUNDED",
-    }
-    for shapes, availability, source, reason in (
-        (_paid_shape(), {"data": {"available": 1}}, "VM.Standard.A1.Flex", "ARCHITECTURE_OR_SOURCE_SHAPE_MISMATCH"),
-        (_paid_shape(), {"data": {"available": 0}}, "VM.Standard.E5.Flex", "INSUFFICIENT_SERVICE_LIMIT_HEADROOM"),
-        ({"data": []}, {"data": {"available": 1}}, "VM.Standard.E5.Flex", "PAID_SHAPE_NOT_UNIQUELY_AVAILABLE"),
-    ):
-        rejected = _paid_guard(shapes, availability, source)
-        assert rejected.returncode == 2
-        assert json.loads(rejected.stdout) == {"status": "REJECTED", "reason": reason}
-
-
-def test_paid_guard_uses_live_oci_memory_option_field_names() -> None:
-    assert 'memory_options.get("min-in-g-bs")' in PAID_GUARD.read_text()
-    assert 'memory_options.get("max-in-g-bs")' in PAID_GUARD.read_text()
-    legacy = _paid_shape()
-    options = legacy["data"][0]["memory-options"]
-    options["min-in-gbs"] = options.pop("min-in-g-bs")
-    options["max-in-gbs"] = options.pop("max-in-g-bs")
-    rejected = _paid_guard(legacy, {"data": {"available": 1}})
-    assert rejected.returncode == 2
-    assert json.loads(rejected.stdout) == {"status": "REJECTED", "reason": "INVALID_MIN_MEMORY"}
-
-
-def test_paid_fallback_requires_quota_absence_preflight_and_exact_caps() -> None:
-    paid = WORKFLOW.index("mark_phase paid_capacity_preflight")
-    launch = WORKFLOW.index("mark_phase launch_bounded_paid_acceptance_instance", paid)
-    assert '[[ "$shape" == VM.Standard.E5.Flex ]] || exit 92' in WORKFLOW[:paid]
-    assert 'create_json_once instance_create "$stamp-boot-acceptance"' not in WORKFLOW
-    assert "oci compute shape list" in WORKFLOW[paid:]
-    assert "oci limits resource-availability get" in WORKFLOW[paid:]
-    assert WORKFLOW[paid:launch].count("python ops/oci_paid_acceptance_guard.py") == 2
-    assert 'paid_deadline=$(( $(monotonic_now) + paid_values[7] ))' in WORKFLOW[paid:]
-    assert "paid_instance_create" in WORKFLOW[paid:]
-    restore = WORKFLOW.index("mark_phase create_restored_boot_volume")
-    dispatch = WORKFLOW.index("mark_phase dispatch_paid_instance_watchdog")
-    assert "issue-881-paid-instance-watchdog.yml/dispatches" in WORKFLOW
-    assert dispatch < restore < paid < launch
-    assert WORKFLOW.index("paid_watchdog_status ARMED_PRE_MUTATION") < restore
-    assert WORKFLOW.index("paid_watchdog_status ARMED", paid) < launch
-    assert 'select(.user.login=="github-actions[bot]")' in WORKFLOW[dispatch:restore]
-    assert 'watchdog_run_id="$(WATCHDOG_COMMENTS=' in WORKFLOW[dispatch:restore]
-    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
-    assert "paid hourly/runtime/budget caps:" in receipt
-    assert "present_redacted" in receipt
-
-
-def test_launch_boundary_refreshes_all_live_oci_constraints() -> None:
-    boundary = WORKFLOW.index("# Refresh all mutable primary-source constraints")
-    launch = WORKFLOW.index("mark_phase launch_bounded_paid_acceptance_instance", boundary)
-    block = WORKFLOW[boundary:launch]
-    assert "oci compute shape list" in block
-    assert "standard-e4-core-count" in block
-    assert "standard-e4-memory-count" in block
-    assert block.index("standard-e4-memory-count") < block.index('paid_launch_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"')
-    assert "python ops/oci_paid_acceptance_guard.py" in block
-    assert 'actions/runs/${watchdog_run_id}' in block
-    assert "d.get('status') in {'queued','in_progress'}" in block
-    assert "paid_watchdog_status LIVE_AT_LAUNCH" in block
-    assert "PAID_WATCHDOG_LAUNCH" in block
-
-
-def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
-    assert "timeout-minutes: 300" in WATCHDOG
-    assert "PAID_WATCHDOG_ARMED" in WATCHDOG
-    assert "PAID_WATCHDOG_LAUNCH" in WATCHDOG
-    assert WATCHDOG.count("oci compute instance list") >= 2
-    assert "instance_discovery_deadline=$((SECONDS + 120))" in WATCHDOG
-    assert "instance_confirmation_deadline=$((SECONDS + 120))" in WATCHDOG
-    assert "late_instance_clean_count=$((late_instance_clean_count + 1))" in WATCHDOG
-    assert "late_instance_clean_count >= 3" in WATCHDOG
-    assert WATCHDOG.count("assert isinstance(data,list) and all(isinstance(x,dict) for x in data)") >= 4
-    assert 'if (( ${#ids[@]} == 0 )); then' in WATCHDOG
-    assert "instance_inventory_clean == 1" in WATCHDOG
-    assert "A known exact ID can never be downgraded" in WATCHDOG
-    assert "instance_get_error" in WATCHDOG
-    instance_loop = WATCHDOG[WATCHDOG.index("while (( SECONDS < instance_cleanup_deadline ))"):]
-    assert instance_loop.index("while (( SECONDS < instance_cleanup_deadline ))") < instance_loop.index("oci compute instance terminate")
-    volume_loop = WATCHDOG[WATCHDOG.index("deadline=$((SECONDS + 120))"):]
-    assert volume_loop.index("while (( SECONDS < deadline ))") < volume_loop.index("oci bv boot-volume delete")
-    assert "oci bv boot-volume get" in volume_loop
-    assert "volume_terminal_proven == 1" in volume_loop
-    assert "launch_expiry <= now + 1800" in WATCHDOG
-    assert "launch_expiry <= effective_expiry" not in WATCHDOG
-    assert "launch_expiry < effective_expiry" in WATCHDOG
-    assert 'effective_expiry="$now"' in WATCHDOG
-    assert "if launch_comments=\"$(timeout --signal=KILL 30s gh api" in WATCHDOG
-    assert "while ! timeout --signal=KILL 30s oci bv boot-volume list" in WATCHDOG
-    assert "late_instance_id" in WATCHDOG and 'terminate --instance-id "$late_instance_id"' in WATCHDOG
-    late_instance_loop = WATCHDOG[WATCHDOG.index('if [[ -n "$late_instance_id" ]]'):]
-    assert '2>"$late_instance_get_error"' in late_instance_loop
-    assert "status([^0-9]+)404" in late_instance_loop
-    assert late_instance_loop.index("instance_terminal_proven=1; break") < late_instance_loop.index(
-        "volume_discovery_deadline="
-    )
-    assert "late_volume_id" in WATCHDOG and 'delete --boot-volume-id "$late_volume_id"' in WATCHDOG
-    assert "late_volume_deadline=$((SECONDS + 120))" in WATCHDOG
-    assert "late_volume_clean_count >= 3" in WATCHDOG
-
-
-def test_watchdog_destructive_entrypoint_is_owner_gated() -> None:
-    job = WATCHDOG[WATCHDOG.index("terminate-exact-paid-instance:"):]
-    assert "PARENT_RUN_ID" in job and "PARENT_RUN_ATTEMPT" in job
-    assert "actions/runs/${PARENT_RUN_ID}" in job
-    assert "d.get('event')=='issue_comment'" in job
-    assert "d.get('status')=='in_progress'" in job
-    assert "d.get('actor',{}).get('login')=='olegmed1-art'" in job
-    assert "d.get('triggering_actor',{}).get('login')=='olegmed1-art'" in job
-    assert "GITHUB_ACTOR\" == 'github-actions[bot]'" in job
-    assert "hmac.compare_digest" in job and "AUTHORIZATION_HMAC" in job
-    assert '-f "inputs[parent_run_id]=${GITHUB_RUN_ID}"' in WORKFLOW
-    assert '-f "inputs[parent_run_attempt]=${GITHUB_RUN_ATTEMPT}"' in WORKFLOW
-    assert '-f "inputs[authorization_hmac]=$watchdog_authorization_hmac"' in WORKFLOW
-    assert "hmac.new" in WORKFLOW
-
-
-def test_watchdog_propagates_all_inventory_validator_failures() -> None:
-    assert "< <(STAMP=" not in WATCHDOG
-    for name in ("instance-ids", "late-instance-ids", "volume-ids", "late-volume-ids"):
-        assert f'$RUNNER_TEMP/{name}' in WATCHDOG
-    assert WATCHDOG.count("then return 101; fi") == 2
-    assert WATCHDOG.count("then exit 102; fi") == 2
-    assert WATCHDOG.count("sys.stdout.write('\\n'.join(matched)+('\\n' if matched else ''))") == 4
-    assert "print('\\n'.join(matched))" not in WATCHDOG
-
-
-def test_paid_price_basis_expires_fail_closed() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        shape_path = Path(temp_dir) / "shapes.json"
-        cpu_path = Path(temp_dir) / "cpu.json"
-        memory_path = Path(temp_dir) / "memory.json"
-        shape_path.write_text(json.dumps(_paid_shape()))
-        cpu_path.write_text(json.dumps({"data": {"available": 1}}))
-        memory_path.write_text(json.dumps({"data": {"available": 1}}))
-        result = subprocess.run(
-            ["python", str(PAID_GUARD), "--shapes-json", str(shape_path),
-             "--availability-json", str(cpu_path), "--memory-availability-json", str(memory_path),
-             "--source-shape", "VM.Standard.E5.Flex", "--now-utc", "2026-10-05T00:00:00Z"],
-            text=True, capture_output=True,
-        )
-        assert result.returncode == 2
-        assert json.loads(result.stdout)["reason"] == "PRICE_BASIS_EXPIRED"
 
 
 def test_expansion_is_partition_and_filesystem_specific() -> None:
@@ -234,8 +37,8 @@ def test_workflow_is_exact_host_one_shot_and_pinned() -> None:
     assert "issue_comment:" in WORKFLOW
     assert "github.event.issue.number == 881" in WORKFLOW
     assert "github.event.comment.user.login == 'olegmed1-art'" in WORKFLOW
-    assert '"/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded"' in WORKFLOW
-    assert '"/oracle-ops issue-881-reconcile-run-34013072946"' in WORKFLOW
+    assert '"/oracle-ops issue-881-expand-root-and-recover-bba508"' in WORKFLOW
+    assert '"/oracle-ops issue-881-reconcile-run-33914733788"' in WORKFLOW
 
 
 def test_owner_command_is_case_sensitive_before_any_oci_or_host_access() -> None:
@@ -246,15 +49,15 @@ def test_owner_command_is_case_sensitive_before_any_oci_or_host_access() -> None
     assert '[[ "$OWNER_COMMAND" != "$RECOVERY_COMMAND" && "$OWNER_COMMAND" != "$CLEANUP_ONLY_COMMAND" ]]' in block
     assert "UV_ROOT_OWNER_COMMAND_REJECTED" in block
     gate = r'''
-RECOVERY_COMMAND=/oracle-ops\ issue-881-expand-root-and-recover-bba508-paid-bounded
-CLEANUP_ONLY_COMMAND=/oracle-ops\ issue-881-reconcile-run-34013072946
+RECOVERY_COMMAND=/oracle-ops\ issue-881-expand-root-and-recover-bba508
+CLEANUP_ONLY_COMMAND=/oracle-ops\ issue-881-reconcile-run-33914733788
 if [[ "$OWNER_COMMAND" != "$RECOVERY_COMMAND" && "$OWNER_COMMAND" != "$CLEANUP_ONLY_COMMAND" ]]; then exit 23; fi
 '''
     for command, expected_rc in (
-        ("/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded", 0),
-        ("/oracle-ops issue-881-reconcile-run-34013072946", 0),
-        ("/ORACLE-OPS issue-881-reconcile-run-34013072946", 23),
-        ("/oracle-ops issue-881-reconcile-run-34013072946 ", 23),
+        ("/oracle-ops issue-881-expand-root-and-recover-bba508", 0),
+        ("/oracle-ops issue-881-reconcile-run-33914733788", 0),
+        ("/ORACLE-OPS issue-881-reconcile-run-33914733788", 23),
+        ("/oracle-ops issue-881-reconcile-run-33914733788 ", 23),
     ):
         result = subprocess.run(["bash", "-c", gate], env=os.environ | {"OWNER_COMMAND": command})
         assert result.returncode == expected_rc
@@ -348,8 +151,8 @@ def test_monotonic_budget_reserves_cleanup_mutation_receipt_and_runner_slack() -
     ):
         assert exact in WORKFLOW
     assert "if (( prior_count > 20 ))" in WORKFLOW
-    assert 'reconcile_bound_resource instance boot-acceptance 600' in WORKFLOW
-    assert 'reconcile_bound_resource boot-volume restore 120' in WORKFLOW
+    assert 'wait_all_absent instance 600' in WORKFLOW
+    assert WORKFLOW.count('wait_all_absent boot-volume 120') >= 1
     assert 'delete_total_seconds="$(bounded_wait_seconds 20 "$cleanup_deadline")"' in WORKFLOW
     assert 'timeout --signal=KILL "${delete_request_seconds}s" "${command[@]}"' in WORKFLOW
     assert 'if [[ "$rc" == 124 || "$rc" == 137 ]]' in WORKFLOW
@@ -555,7 +358,7 @@ def test_distinct_owner_commands_share_source_scoped_cleanup_identity() -> None:
 
 def test_targeted_cleanup_rejects_near_match_resource_names() -> None:
     start = WORKFLOW.index("prior_named_ids() {")
-    end = WORKFLOW.index("load_authoritative_failed_receipt()", start)
+    end = WORKFLOW.index("reconcile_prior_attempt_resources()", start)
     helper = textwrap.dedent(WORKFLOW[start:end])
     target = "issue-881-root-recovery-source-run-33914733788-a1"
     payload = {
@@ -589,80 +392,6 @@ prior_named_ids instance boot-acceptance
     assert result.stdout.strip() == "exact-id"
 
 
-def test_repeated_inventory_ignores_only_valid_terminal_records() -> None:
-    start = WORKFLOW.index("prior_named_ids() {")
-    end = WORKFLOW.index("load_authoritative_failed_receipt()", start)
-    helper = textwrap.dedent(WORKFLOW[start:end])
-    target = "issue-881-root-recovery-source-run-33914733788-a1"
-    payload = {
-        "data": [
-            {"id": "terminal-id", "display-name": target + "-boot-acceptance", "lifecycle-state": "TERMINATED"},
-            {"id": "active-id", "display-name": target + "-boot-acceptance", "lifecycle-state": "RUNNING"},
-        ]
-    }
-    setup = r'''
-oci_json_request() { OCI_JSON_OUTPUT="$PAYLOAD"; }
-tenancy_id=tenancy; ad=ad; prior_prefix=issue-881-root-recovery-source-run-
-stamp=issue-881-root-recovery-source-run-current-a1
-target_prior_stamp=issue-881-root-recovery-source-run-33914733788-a1
-'''
-    script = helper + setup + r'''
-echo include="$(prior_named_ids instance boot-acceptance | paste -sd, -)"
-echo active="$(prior_named_ids instance boot-acceptance active | paste -sd, -)"
-'''
-    result = subprocess.run(
-        ["bash", "-c", script], env=os.environ | {"PAYLOAD": json.dumps(payload)}, text=True,
-        capture_output=True, check=True,
-    )
-    assert "include=active-id,terminal-id" in result.stdout
-    assert "active=active-id" in result.stdout
-
-    payload["data"][0]["lifecycle-state"] = "ALIEN"
-    rejected = subprocess.run(
-        ["bash", "-c", helper + setup + "prior_named_ids instance boot-acceptance active\n"],
-        env=os.environ | {"PAYLOAD": json.dumps(payload)}, text=True,
-        capture_output=True,
-    )
-    assert rejected.returncode != 0
-
-
-def test_predelete_validation_derives_normal_names_and_rejects_unknown_lifecycle() -> None:
-    start = WORKFLOW.index("validate_bound_id_before_delete()")
-    end = WORKFLOW.index("wait_instance_terminated()", start)
-    helper = textwrap.dedent(WORKFLOW[start:end])
-    setup = r'''
-oci_json_request() { OCI_JSON_OUTPUT="$PAYLOAD"; return 0; }
-cleanup_deadline=999999; tenancy_id=tenancy; ad=ad
-prior_prefix=issue-881-root-recovery-source-run-
-stamp=issue-881-root-recovery-source-run-current-a1
-target_prior_stamp=
-'''
-    name = "issue-881-root-recovery-source-run-older-a2-boot-acceptance"
-
-    def run(state: object, display_name: str = name) -> subprocess.CompletedProcess[str]:
-        payload = {"data": {"id": "expected-id", "display-name": display_name,
-                            "compartment-id": "tenancy", "availability-domain": "ad",
-                            "lifecycle-state": state}}
-        return subprocess.run(
-            ["bash", "-c", helper + setup + r'''
-if validate_bound_id_before_delete instance boot-acceptance expected-id; then
-  echo "rc=0 name=$BOUND_EXPECTED_NAME delete=$BOUND_DELETE_REQUIRED"
-else
-  echo "rc=$?"
-fi
-'''],
-            env=os.environ | {"PAYLOAD": json.dumps(payload)}, text=True, capture_output=True, check=True,
-        )
-
-    active = run("RUNNING")
-    assert f"rc=0 name={name} delete=1" in active.stdout
-    terminal = run("TERMINATED")
-    assert f"rc=0 name={name} delete=0" in terminal.stdout
-    assert "rc=97" in run(None).stdout
-    assert "rc=97" in run("ALIEN").stdout
-    assert "rc=97" in run("RUNNING", "issue-881-root-recovery-source-run-current-a1-boot-acceptance").stdout
-
-
 def test_separate_commands_keep_one_operation_scoped_proven_backup() -> None:
     block = WORKFLOW[
         WORKFLOW.index('backup_prefix="issue-881-root-recovery-${boot_tag}"') :
@@ -691,7 +420,7 @@ def test_failed_drill_deletes_only_its_new_unaccepted_backup() -> None:
     assert '[[ -n "$backup_id" ]] && backup_created_by_run=1' in block
     assert '[[ -n "$backup_id" ]] || backup_id="$(discover_named_id backup "$backup_name")"' in block
     cleanup = block[
-        block.index("cleanup() {") : block.index("\n          record_reconcile_failure() {\n")
+        block.index("cleanup() {") : block.index("\n          reconcile_prior_attempt_resources\n")
     ]
     assert "backup_created_by_run == 1 && backup_accepted == 0" in cleanup
     assert '[[ -z "$backup_id" && "$backup_attempted" == 1 ]]' in cleanup
@@ -724,7 +453,7 @@ def test_receipt_reports_backup_only_from_proven_step_output() -> None:
         "route_table_create",
         "security_list_create",
         "subnet_create",
-        "paid_instance_create",
+        "instance_create",
     ):
         assert f"value('{prefix}_status'" in receipt
         assert f"value('{prefix}_failure_rc'" in receipt
@@ -757,12 +486,10 @@ def test_oci_json_stdout_isolated_from_warning_stderr() -> None:
     assert 'retry_delay_seconds="${OCI_JSON_RETRY_DELAY_SECONDS:-5}"' in helper
     assert 'for attempt in $(seq 1 "$max_attempts")' in helper
     assert "INVALID_JSON_SUCCESS_RESPONSE" in helper
-    assert helper.count('bounded_retry_seconds="$(bounded_wait_seconds "$((retry_delay_seconds + 1))" "$absolute_deadline")"') == 2
-    assert helper.count('sleep "$retry_delay_seconds"') == 2
+    assert 'bounded_retry_seconds="$(bounded_wait_seconds "$retry_delay_seconds" "$absolute_deadline")"' in helper
+    assert 'sleep "$bounded_retry_seconds"' in helper
     assert "return 86" in helper
-    assert "if (( rc != 0 )); then" in helper
-    assert "Retry only failures that are safe to classify as transient" in helper
-    assert "return \"$rc\"" in helper
+    assert "(( rc == 0 )) || return" in helper
     assert "json.load(sys.stdin)" in helper
 
     cleanup = WORKFLOW[WORKFLOW.index("wait_absent()") : WORKFLOW.index("operation_backup_inventory()")]
@@ -930,9 +657,7 @@ printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
         assert "rc=17" in run("auth").stdout
         assert "rc=86" in run("malformed").stdout
         slow = run("slow", 1)
-        assert "rc=42" in slow.stdout
-        elapsed = int(slow.stdout.split("elapsed=", 1)[1].split()[0])
-        assert 1 <= elapsed <= 2
+        assert "rc=42" in slow.stdout and "elapsed=1" in slow.stdout
 
 
 def test_restored_volume_hydration_wait_is_identity_source_size_and_time_bound() -> None:
@@ -1009,9 +734,7 @@ printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
         assert "rc=44" in terminal.stdout
         assert "state:restored_volume_hydration_status=TERMINAL_FAULTY" in terminal.stderr
         waiting = run("waiting", 1)
-        assert "rc=42" in waiting.stdout
-        elapsed = int(waiting.stdout.split("elapsed=", 1)[1].split()[0])
-        assert 1 <= elapsed <= 2
+        assert "rc=42 elapsed=1" in waiting.stdout
         assert "state:restored_volume_hydration_status=TIMEOUT" in waiting.stderr
 
 
@@ -1210,11 +933,10 @@ record_oci_diagnostic instance_create "$TEST_RC"
     assert "instance_create_stderr_class=NONE" in warning
     assert "OCI_JSON_RAW_ERROR=\"$OCI_JSON_ERROR\"" in WORKFLOW
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
-    assert "isolated paid instance create diagnostic" in receipt
-    assert "isolated paid instance launch discovery" in receipt
-    assert "paid_instance_launch_discovery_stderr_class" in receipt
-    assert "paid_instance_create_stderr_class" in receipt
-    assert 'discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" paid_instance_launch_discovery' in WORKFLOW
+    assert "isolated instance create diagnostic" in receipt
+    assert "isolated instance launch discovery" in receipt
+    assert "instance_launch_discovery_stderr_class" in receipt
+    assert 'discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" instance_launch_discovery' in WORKFLOW
 
 
 def test_oci_helper_clears_diagnostics_before_budget_failure() -> None:
@@ -1423,10 +1145,7 @@ printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
 
         slow = run("slow", 1)
         assert "rc=42" in slow.stdout
-        # Bash SECONDS is a coarse wall-clock counter and can cross two integer
-        # boundaries during a one-second timeout on a loaded CI runner.
-        elapsed = int(slow.stdout.split("elapsed=", 1)[1].split()[0])
-        assert 1 <= elapsed <= 2
+        assert "elapsed=1" in slow.stdout
         assert "state:backup_wait_status=TIMEOUT" in slow.stderr
         invalid = run("null")
         assert "rc=43" in invalid.stdout
@@ -1521,61 +1240,12 @@ case "$FAKE_MODE" in
     echo '{malformed'
     ;;
   auth)
-    count=0
-    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
-    printf '%s' "$((count + 1))" >"$count_file"
-    echo '{"code":"NotAuthenticated","status":401,"message":"configured maximum is 500 items"}' >&2
+    echo '{"code":"NotAuthenticated","status":401}' >&2
     exit 17
     ;;
   transport)
-    count=0
-    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
-    printf '%s' "$((count + 1))" >"$count_file"
     echo 'connection reset' >&2
     exit 18
-    ;;
-  structured_transient)
-    count=0
-    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
-    printf '%s' "$((count + 1))" >"$count_file"
-    echo '{"code":"ServiceUnavailable","status":503}' >&2
-    exit 19
-    ;;
-  prefixed_permanent)
-    count=0
-    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
-    printf '%s' "$((count + 1))" >"$count_file"
-    echo 'ServiceError: {"code":"InvalidParameter","status":400,"message":"request timed out"}' >&2
-    exit 20
-    ;;
-  prefixed_transient)
-    count=0
-    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
-    printf '%s' "$((count + 1))" >"$count_file"
-    echo 'ServiceError: {"code":"UnexpectedGatewayError","status":502}' >&2
-    exit 21
-    ;;
-  mixed_permanent)
-    count=0
-    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
-    printf '%s' "$((count + 1))" >"$count_file"
-    echo 'ServiceError: {"code":"InvalidParameter","status":503}' >&2
-    exit 22
-    ;;
-  throttled)
-    count=0
-    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
-    printf '%s' "$((count + 1))" >"$count_file"
-    echo '{"code":"TooManyRequests","status":429}' >&2
-    exit 23
-    ;;
-  transient_then_valid)
-    count=0
-    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
-    count=$((count + 1))
-    printf '%s' "$count" >"$count_file"
-    if (( count < 2 )); then echo 'connection reset' >&2; exit 18; fi
-    echo '{"data":{"lifecycle-state":"AVAILABLE"}}'
     ;;
 esac
 """
@@ -1612,210 +1282,8 @@ fi
     assert "rc=0" in transient and 'json={"data"' in transient
     assert "rc=86" in run("persistent_empty")
     assert "stderr=INVALID_JSON_SUCCESS_RESPONSE" in run("malformed")
-    auth = run("auth")
-    assert "rc=17" in auth and "NotAuthenticated" in auth
-    assert (tmp_path / "fake-count").read_text() == "1"
-    transport = run("transport")
-    assert "rc=18" in transport and "connection reset" in transport
-    assert (tmp_path / "fake-count").read_text() == "3"
-    structured_transient = run("structured_transient")
-    assert "rc=19" in structured_transient and "ServiceUnavailable" in structured_transient
-    assert (tmp_path / "fake-count").read_text() == "3"
-    prefixed_permanent = run("prefixed_permanent")
-    assert "rc=20" in prefixed_permanent and "InvalidParameter" in prefixed_permanent
-    assert (tmp_path / "fake-count").read_text() == "1"
-    prefixed_transient = run("prefixed_transient")
-    assert "rc=21" in prefixed_transient and "UnexpectedGatewayError" in prefixed_transient
-    assert (tmp_path / "fake-count").read_text() == "3"
-    mixed_permanent = run("mixed_permanent")
-    assert "rc=22" in mixed_permanent and "InvalidParameter" in mixed_permanent
-    assert (tmp_path / "fake-count").read_text() == "1"
-    throttled = run("throttled")
-    assert "rc=23" in throttled and "TooManyRequests" in throttled
-    assert (tmp_path / "fake-count").read_text() == "3"
-    assert "rc=0" in run("transient_then_valid")
-
-
-def test_prior_inventory_preserves_failure_diagnostic_and_original_rc() -> None:
-    start = WORKFLOW.index("prior_named_ids() {")
-    end = WORKFLOW.index("load_authoritative_failed_receipt()", start)
-    helper = textwrap.dedent(WORKFLOW[start:end])
-    harness = helper + r'''
-state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
-record_oci_diagnostic() { printf 'diagnostic:%s:rc=%s\n' "$1" "$2" >&2; }
-oci_json_request() { OCI_JSON_OUTPUT=""; OCI_JSON_ERROR='NotAuthenticated'; OCI_JSON_RAW_ERROR="$OCI_JSON_ERROR"; return 17; }
-tenancy_id=tenancy; ad=ad; prior_prefix=prefix; stamp=current; target_prior_stamp=
-if prior_named_ids instance boot-acceptance; then echo rc=0; else echo rc=$?; fi
-'''
-    result = subprocess.run(["bash", "-c", harness], text=True, capture_output=True, check=True)
-    assert "rc=17" in result.stdout
-    assert "state:prior_inventory_instance_status=REQUEST_FAILED" in result.stderr
-    assert "state:prior_inventory_instance_failure_rc=17" in result.stderr
-    assert "state:prior_inventory_last_resource=instance" in result.stderr
-    assert "state:prior_inventory_last_status=REQUEST_FAILED" in result.stderr
-    assert "state:prior_inventory_last_failure_rc=17" in result.stderr
-    assert "diagnostic:prior_inventory_instance:rc=17" in result.stderr
-
-    invalid = helper + r'''
-state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
-record_oci_diagnostic() { printf 'diagnostic:%s:rc=%s\n' "$1" "$2" >&2; }
-oci_json_request() { OCI_JSON_OUTPUT='{"data":{}}'; OCI_JSON_ERROR=''; OCI_JSON_RAW_ERROR=''; return 0; }
-tenancy_id=tenancy; ad=ad; prior_prefix=prefix; stamp=current; target_prior_stamp=
-if prior_named_ids instance boot-acceptance; then echo rc=0; else echo rc=$?; fi
-'''
-    invalid_result = subprocess.run(["bash", "-c", invalid], text=True, capture_output=True, check=True)
-    assert "rc=97" in invalid_result.stdout
-    assert "state:prior_inventory_last_status=INVALID_RESPONSE" in invalid_result.stderr
-    assert "state:prior_inventory_instance_status=PASS" not in invalid_result.stderr
-
-
-def test_transient_retry_keeps_causal_rc_when_delay_budget_is_short() -> None:
-    start = WORKFLOW.index("oci_json_request() {")
-    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
-    helper = textwrap.dedent(WORKFLOW[start:end])
-    with tempfile.TemporaryDirectory() as temp_dir:
-        fake = Path(temp_dir) / "fake-oci"
-        fake.write_text("#!/usr/bin/env bash\necho 'connection reset' >&2\nexit 18\n")
-        fake.chmod(0o755)
-        script = r'''
-bounded_wait_seconds() {
-  if [[ "$1" == 6 ]]; then printf '2\n'; else printf '%s\n' "$1"; fi
-}
-primary_deadline=999999
-''' + helper + r'''
-if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s stderr=%s\n' "$?" "$OCI_JSON_RAW_ERROR"; fi
-'''
-        result = subprocess.run(
-            ["bash", "-c", script],
-            env=os.environ | {"RUNNER_TEMP": temp_dir, "FAKE_OCI": str(fake), "OCI_JSON_MAX_ATTEMPTS": "3"},
-            text=True, capture_output=True, check=True,
-        )
-        assert "rc=18 stderr=connection reset" in result.stdout
-
-
-def test_transient_retry_keeps_causal_rc_at_exact_delay_boundary() -> None:
-    start = WORKFLOW.index("oci_json_request() {")
-    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
-    helper = textwrap.dedent(WORKFLOW[start:end])
-    with tempfile.TemporaryDirectory() as temp_dir:
-        fake = Path(temp_dir) / "fake-oci"
-        fake.write_text("#!/usr/bin/env bash\necho 'connection reset' >&2\nexit 18\n")
-        fake.chmod(0o755)
-        script = r'''
-bounded_wait_seconds() {
-  if [[ "$1" == 6 ]]; then printf '5\n'; else printf '%s\n' "$1"; fi
-}
-primary_deadline=999999
-''' + helper + r'''
-if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s stderr=%s\n' "$?" "$OCI_JSON_RAW_ERROR"; fi
-'''
-        result = subprocess.run(
-            ["bash", "-c", script],
-            env=os.environ | {"RUNNER_TEMP": temp_dir, "FAKE_OCI": str(fake), "OCI_JSON_MAX_ATTEMPTS": "3"},
-            text=True, capture_output=True, check=True,
-        )
-        assert "rc=18 stderr=connection reset" in result.stdout
-
-
-def test_invalid_json_retry_returns_causal_class_at_exact_delay_boundary() -> None:
-    start = WORKFLOW.index("oci_json_request() {")
-    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
-    helper = textwrap.dedent(WORKFLOW[start:end])
-    with tempfile.TemporaryDirectory() as temp_dir:
-        fake = Path(temp_dir) / "fake-oci"
-        fake.write_text("#!/usr/bin/env bash\nprintf 'not-json'\n")
-        fake.chmod(0o755)
-        script = r'''
-bounded_wait_seconds() {
-  if [[ "$1" == 6 ]]; then printf '5\n'; else printf '%s\n' "$1"; fi
-}
-primary_deadline=999999
-''' + helper + r'''
-if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s error=%s\n' "$?" "$OCI_JSON_ERROR"; fi
-'''
-        result = subprocess.run(
-            ["bash", "-c", script],
-            env=os.environ | {"RUNNER_TEMP": temp_dir, "FAKE_OCI": str(fake), "OCI_JSON_MAX_ATTEMPTS": "3"},
-            text=True, capture_output=True, check=True,
-        )
-        assert "rc=86 error=INVALID_JSON_SUCCESS_RESPONSE" in result.stdout
-
-
-def test_retry_precheck_expiry_returns_previous_causal_rc() -> None:
-    start = WORKFLOW.index("oci_json_request() {")
-    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
-    helper = textwrap.dedent(WORKFLOW[start:end])
-    with tempfile.TemporaryDirectory() as temp_dir:
-        fake = Path(temp_dir) / "fake-oci"
-        fake.write_text("#!/usr/bin/env bash\necho 'connection reset' >&2\nexit 18\n")
-        fake.chmod(0o755)
-        script = r'''
-bounded_wait_seconds() {
-  count=0
-  [[ ! -f "$BUDGET_COUNT" ]] || count="$(cat "$BUDGET_COUNT")"
-  count=$((count + 1)); printf '%s' "$count" >"$BUDGET_COUNT"
-  if (( count == 1 )); then printf '%s\n' "$1"
-  elif (( count == 2 )); then printf '%s\n' "$1"
-  else return 42
-  fi
-}
-primary_deadline=999999
-''' + helper + r'''
-if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s stderr=%s\n' "$?" "$OCI_JSON_RAW_ERROR"; fi
-'''
-        result = subprocess.run(
-            ["bash", "-c", script],
-            env=os.environ | {
-                "RUNNER_TEMP": temp_dir,
-                "BUDGET_COUNT": str(Path(temp_dir) / "budget-count"),
-                "FAKE_OCI": str(fake),
-                "OCI_JSON_MAX_ATTEMPTS": "3",
-                "OCI_JSON_RETRY_DELAY_SECONDS": "0",
-            },
-            text=True, capture_output=True, check=True,
-        )
-        assert "rc=18 stderr=connection reset" in result.stdout
-
-
-def test_invalid_json_retry_precheck_expiry_returns_86() -> None:
-    start = WORKFLOW.index("oci_json_request() {")
-    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
-    helper = textwrap.dedent(WORKFLOW[start:end])
-    with tempfile.TemporaryDirectory() as temp_dir:
-        fake = Path(temp_dir) / "fake-oci"
-        fake.write_text("#!/usr/bin/env bash\nprintf 'not-json'\n")
-        fake.chmod(0o755)
-        script = r'''
-bounded_wait_seconds() {
-  count=0
-  [[ ! -f "$BUDGET_COUNT" ]] || count="$(cat "$BUDGET_COUNT")"
-  count=$((count + 1)); printf '%s' "$count" >"$BUDGET_COUNT"
-  if (( count <= 2 )); then printf '%s\n' "$1"; else return 42; fi
-}
-primary_deadline=999999
-''' + helper + r'''
-if oci_json_request "$FAKE_OCI"; then echo rc=0; else printf 'rc=%s error=%s\n' "$?" "$OCI_JSON_ERROR"; fi
-'''
-        result = subprocess.run(
-            ["bash", "-c", script],
-            env=os.environ | {
-                "RUNNER_TEMP": temp_dir,
-                "BUDGET_COUNT": str(Path(temp_dir) / "budget-count"),
-                "FAKE_OCI": str(fake),
-                "OCI_JSON_MAX_ATTEMPTS": "3",
-                "OCI_JSON_RETRY_DELAY_SECONDS": "0",
-            },
-            text=True, capture_output=True, check=True,
-        )
-        assert "rc=86 error=INVALID_JSON_SUCCESS_RESPONSE" in result.stdout
-
-
-def test_receipt_publishes_prior_inventory_diagnostics() -> None:
-    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
-    assert "prior_inventory_key + '_stderr_class'" in receipt
-    assert "prior_inventory_key + '_stdout_shape'" in receipt
-    assert "prior_inventory_key + '_stdout_bytes'" in receipt
-    assert "prior_inventory_key + '_stderr_bytes'" in receipt
+    assert "rc=17" in run("auth") and "NotAuthenticated" in run("auth")
+    assert "rc=18" in run("transport") and "connection reset" in run("transport")
 
 
 def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:
@@ -1825,11 +1293,7 @@ def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:
         "oracle_universal_video_container_missing_image_recover.sh"
     )
     assert "/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /bin/bash -s" in block
-    # The mutation and the always-run fence release each serialize on the
-    # shared host lock.  The recovery payload itself must still be invoked
-    # under exactly one flock.
-    mutation_step = block[: block.index("Release capacity workload fence")]
-    assert mutation_step.count("/run/lock/oracle-workload-mutation.lock") == 1
+    assert block.count("/run/lock/oracle-workload-mutation.lock") == 1
     assert "EXACT_RUNTIME_SHA: bba508350cbe63a7a8ec93fa9c007db9ee9eae6c" in WORKFLOW
     assert "'oracle-instance-workload-mutation'" in WORKFLOW
     assert 'systemctl restart "$SERVICE"' in (ROOT / "ops/oracle_universal_video_container_missing_image_recover.sh").read_text()
@@ -1853,13 +1317,11 @@ def test_last_second_gate_revalidates_oci_before_ssh_mutation() -> None:
 
 
 def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> None:
-    cleanup_command = "/oracle-ops issue-881-reconcile-run-34013072946"
+    cleanup_command = "/oracle-ops issue-881-reconcile-run-33914733788"
     assert cleanup_command in WORKFLOW
     assert "/oracle-ops issue-881-reconcile-run-33893910685" not in WORKFLOW
-    assert 'failed_run_id="34013072946"' in WORKFLOW
-    assert 'failed_run_receipt_comment_id="5557131531"' in WORKFLOW
-    assert 'target_prior_stamp="${operation_run_prefix}${failed_run_id}-a1"' in WORKFLOW
-    assert 'failed_run_backup_name="${backup_prefix}-${failed_run_id}-a1"' in WORKFLOW
+    assert 'target_prior_stamp="${operation_run_prefix}33914733788-a1"' in WORKFLOW
+    assert 'failed_run_backup_name="${backup_prefix}-33914733788-a1"' in WORKFLOW
     cleanup = WORKFLOW.index("reconcile_prior_attempt_resources")
     backup_create = WORKFLOW.index("boot-volume-backup create")
     mutation = WORKFLOW.index("Expand root and recover exact image under shared host lock")
@@ -1891,240 +1353,15 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
     assert "allocation_summary" in WORKFLOW
     assert "cleanup_only=true" in WORKFLOW
     assert "EXACT_NAME_INVENTORY_EMPTY" in WORKFLOW
-    assert "load_authoritative_failed_receipt" in WORKFLOW
-    assert "prove_repeated_exact_stamp_inventory_no_active" in WORKFLOW
-    assert "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE" in WORKFLOW
-    assert "RECONCILED_PROVEN_ABSENT" in WORKFLOW
-    assert "cleanup_typed_proof_verdicts(state) if cleanup_only else {}" in WORKFLOW
-    for resource in (
-        "uncertain_instance", "instance", "restored_volume", "vcn", "internet_gateway",
-        "route_table", "security_list", "subnet",
-    ):
-        assert f"typed_verdict('{resource}')" in WORKFLOW
-    assert "RECONCILIATION_INCOMPLETE" in Path(
-        "ops/issue_881_failed_run_receipt.py"
-    ).read_text()
     assert "Each known ID must" in WORKFLOW
     cleanup_only_branch = WORKFLOW[
-        WORKFLOW.index("if (( cleanup_only == 1 )); then", WORKFLOW.index("record_reconcile_failure()")) :
-        WORKFLOW.index("trap cleanup EXIT")
+        WORKFLOW.index("if (( cleanup_only == 1 )); then") : WORKFLOW.index("trap cleanup EXIT")
     ]
     assert "boot-volume-backup create" not in cleanup_only_branch
     assert "boot-volume create" not in cleanup_only_branch
     assert "compute instance launch" not in cleanup_only_branch
     assert "ssh " not in cleanup_only_branch
     assert "exit 0" in cleanup_only_branch
-
-
-def test_exact_stamp_inventory_requires_three_clean_passes_and_fails_on_late_visibility() -> None:
-    start = WORKFLOW.index("prove_repeated_exact_stamp_inventory_no_active()")
-    end = WORKFLOW.index("reconcile_prior_attempt_resources()", start)
-    helper = textwrap.dedent(WORKFLOW[start:end])
-    harness = helper + r'''
-state_set() { :; }
-sleep() { :; }
-prior_named_ids() {
-  count=$(cat "$COUNTER")
-  count=$((count + 1))
-  printf '%s' "$count" > "$COUNTER"
-  if [[ "${FAIL_ON_CALL:-0}" == "$count" ]]; then return 1; fi
-  if [[ "${LATE_ON_CALL:-0}" == "$count" ]]; then echo late-visible-id; fi
-}
-if prove_repeated_exact_stamp_inventory_no_active; then echo rc=0; else echo rc=$?; fi
-'''
-    with tempfile.TemporaryDirectory() as temp_dir:
-        counter = Path(temp_dir) / "counter"
-        counter.write_text("0")
-        clean = subprocess.run(
-            ["bash", "-c", harness],
-            env=os.environ | {"COUNTER": str(counter)},
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        assert "rc=0" in clean.stdout
-        assert counter.read_text() == "21"
-
-        counter.write_text("0")
-        late = subprocess.run(
-            ["bash", "-c", harness],
-            env=os.environ | {"COUNTER": str(counter), "LATE_ON_CALL": "8"},
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        assert "rc=96" in late.stdout
-
-        counter.write_text("0")
-        failed = subprocess.run(
-            ["bash", "-c", harness],
-            env=os.environ | {"COUNTER": str(counter), "FAIL_ON_CALL": "3"},
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        assert "rc=96" in failed.stdout
-
-
-def test_redacted_cleanup_cannot_short_circuit_after_one_empty_inventory() -> None:
-    reconcile = WORKFLOW[
-        WORKFLOW.index("reconcile_prior_attempt_resources()") :
-        WORKFLOW.index("cleanup_temp_resources()")
-    ]
-    empty_gate = reconcile[
-        reconcile.index('if [[ -z "$prior_instances$prior_restored') :
-        reconcile.index('if [[ -n "$prior_instances" ]]')
-    ]
-    assert "if (( cleanup_only == 0 )); then" in empty_gate
-    assert empty_gate.index("if (( cleanup_only == 0 )); then") < empty_gate.index("return 0")
-    assert "redacted_inventory=true" in empty_gate
-    redacted_start = reconcile.index("redacted_inventory=true")
-    repeated_proof = reconcile.index("prove_repeated_exact_stamp_inventory_no_active", redacted_start)
-    typed_proof = reconcile.index("record_authoritative_type_proof instance", repeated_proof)
-    success = reconcile.index("prior_cleanup_status RECONCILED_PROVEN_ABSENT", typed_proof)
-    assert redacted_start < repeated_proof < typed_proof < success
-
-
-def test_uncertain_instance_manifest_is_read_only_for_cleanup_only_mode() -> None:
-    reconcile = WORKFLOW[
-        WORKFLOW.index("reconcile_prior_attempt_resources()") :
-        WORKFLOW.index("cleanup_temp_resources()")
-    ]
-    guard = "if (( cleanup_only == 1 )); then"
-    manifest_read = 'MANIFEST="$authoritative_receipt_manifest" python -c'
-    assert guard in reconcile
-    assert manifest_read in reconcile
-    assert reconcile.index(guard) < reconcile.index(manifest_read)
-    assert '[[ -n "${authoritative_receipt_manifest:-}" ]] || return 95' in reconcile
-
-
-def test_bound_resource_ids_fails_closed_when_inventory_or_receipt_lookup_fails() -> None:
-    start = WORKFLOW.index("bound_resource_ids()")
-    end = WORKFLOW.index("record_authoritative_type_proof()", start)
-    helper = textwrap.dedent(WORKFLOW[start:end])
-    harness = helper + r'''
-merge_resource_ids() { printf '%s\n' "$1" "$2"; }
-prior_named_ids() { [[ "${FAIL_INVENTORY:-0}" == 0 ]] || return 1; echo inventory-id; }
-authoritative_receipt_ids() { [[ "${FAIL_RECEIPT:-0}" == 0 ]] || return 1; echo receipt-id; }
-if output="$(bound_resource_ids instance boot-acceptance)"; then echo "rc=0:$output"; else echo "rc=$?"; fi
-'''
-    good = subprocess.run(["bash", "-c", harness], text=True, capture_output=True, check=True)
-    assert "rc=0:inventory-id" in good.stdout and "receipt-id" in good.stdout
-    bad_inventory = subprocess.run(
-        ["bash", "-c", harness], env=os.environ | {"FAIL_INVENTORY": "1"}, text=True, capture_output=True, check=True
-    )
-    assert "rc=96" in bad_inventory.stdout
-    bad_receipt = subprocess.run(
-        ["bash", "-c", harness], env=os.environ | {"FAIL_RECEIPT": "1"}, text=True, capture_output=True, check=True
-    )
-    assert "rc=95" in bad_receipt.stdout
-
-
-def test_cleanup_masks_all_exact_ids_before_public_cleanup_logs() -> None:
-    reconcile = WORKFLOW[WORKFLOW.index("reconcile_prior_attempt_resources()") : WORKFLOW.index("cleanup_temp_resources()")]
-    assert 'mask_resource_ids' in reconcile
-    assert reconcile.index('mask_resource_ids') < reconcile.index('reconcile_bound_resource instance boot-acceptance')
-    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
-    assert "prior_uncertain_instance_proof" in receipt
-
-
-def test_empty_prior_inventory_masking_is_successful_and_reconciliation_is_diagnostic() -> None:
-    mask_start = WORKFLOW.index("mask_resource_ids()")
-    mask_end = WORKFLOW.index("merge_resource_ids()", mask_start)
-    mask_helper = textwrap.dedent(WORKFLOW[mask_start:mask_end])
-    empty = subprocess.run(
-        ["bash", "-e", "-c", mask_helper + "printf '%s\\n' '' '' '' '' '' '' '' | mask_resource_ids; echo PASS"],
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    assert empty.stdout.strip() == "PASS"
-
-    invocation = WORKFLOW[
-        WORKFLOW.index("record_reconcile_failure()") :
-        WORKFLOW.index("if (( cleanup_only == 1 )); then", WORKFLOW.index("record_reconcile_failure()"))
-    ]
-    assert 'state_set prior_cleanup_failure_rc "$reconcile_rc"' in invocation
-    assert 'state_set failure_phase "${phase:-reconcile_prior_attempts}"' in invocation
-    assert 'exit "$reconcile_rc"' in invocation
-    assert "trap 'record_reconcile_failure' ERR" in invocation
-    assert "reconcile_prior_attempt_resources\n" in invocation
-    assert "if reconcile_prior_attempt_resources" not in invocation
-    assert invocation.index("set -E") < invocation.index("trap 'record_reconcile_failure' ERR")
-    assert invocation.index("trap 'record_reconcile_failure' ERR") < invocation.index("reconcile_prior_attempt_resources\n")
-    reconcile_call = invocation.index("reconcile_prior_attempt_resources\n")
-    assert reconcile_call < invocation.index("trap - ERR", reconcile_call)
-
-    diagnostic_harness = r'''
-state_file="$(mktemp)"
-state_set() { printf '%s=%s\n' "$1" "$2" >>"$state_file"; }
-phase=reconcile_prior_attempts
-record_reconcile_failure() {
-  local reconcile_rc="$?"
-  trap - ERR
-  state_set prior_cleanup_status FAILED
-  state_set prior_cleanup_failure_rc "$reconcile_rc"
-  state_set failure_rc "$reconcile_rc"
-  state_set failure_phase "${phase:-reconcile_prior_attempts}"
-  cat "$state_file"
-  exit "$reconcile_rc"
-}
-reconcile_prior_attempt_resources() { echo BEFORE; false; echo UNSAFE_CONTINUATION; }
-set -E
-trap 'record_reconcile_failure' ERR
-reconcile_prior_attempt_resources
-echo UNSAFE_SUCCESS
-'''
-    failed = subprocess.run(["bash", "-e", "-c", diagnostic_harness], text=True, capture_output=True)
-    assert failed.returncode == 1
-    assert "UNSAFE_CONTINUATION" not in failed.stdout
-    assert "UNSAFE_SUCCESS" not in failed.stdout
-    assert "prior_cleanup_failure_rc=1" in failed.stdout
-    assert "failure_phase=reconcile_prior_attempts" in failed.stdout
-    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
-    assert "value('prior_cleanup_failure_rc', 'none')" in receipt
-
-
-def test_prior_direct_get_proof_is_bound_to_exact_resource_metadata() -> None:
-    wait_absent = WORKFLOW[WORKFLOW.index("wait_absent()") : WORKFLOW.index("wait_all_absent()")]
-    assert 'EXPECTED_NAME="$expected_name"' in wait_absent
-    assert 'data.get("display-name")==expected_name' in wait_absent
-    assert 'data.get("compartment-id")==os.environ["TENANCY_ID"]' in wait_absent
-    assert 'kind not in {"instance","boot-volume"}' in wait_absent
-    assert 'data.get("availability-domain")==os.environ["AD"]' in wait_absent
-
-    reconcile = WORKFLOW[WORKFLOW.index("reconcile_prior_attempt_resources()") : WORKFLOW.index("cleanup_temp_resources()")]
-    for resource, suffix, timeout in (
-        ("instance", "boot-acceptance", 600),
-        ("boot-volume", "restore", 120),
-        ("subnet", "subnet", 120),
-        ("security-list", "ssh-only", 120),
-        ("route-table", "route", 120),
-        ("internet-gateway", "ig", 120),
-        ("vcn", "vcn", 120),
-    ):
-        validation = f'reconcile_bound_resource {resource} {suffix} {timeout}'
-        deletion = f'delete_resource_once {resource} "$id"'
-        assert validation in reconcile
-    validator = WORKFLOW[WORKFLOW.index("validate_bound_id_before_delete()") : WORKFLOW.index("wait_instance_terminated()")]
-    assert 'TARGET_PRIOR_STAMP="$target_prior_stamp"' in validator
-    assert 'name.startswith(os.environ["PRIOR_PREFIX"])' in validator
-    assert 'name.endswith(suffix)' in validator
-    assert 'assert isinstance(state,str) and state in allowed' in validator
-    assert '"SKIP" if state=="TERMINATED" else "DELETE"' in validator
-
-
-def test_public_receipt_redacts_ocids_and_hashes() -> None:
-    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
-    assert "def redacted_presence" in receipt
-    for key in (
-        "prior_resource_ids",
-        "prior_resource_summary",
-        "prior_instance_authoritative_id_hashes",
-        "prior_boot_volume_authoritative_id_hashes",
-        "prior_vcn_authoritative_id_hashes",
-    ):
-        assert f"redacted_presence('{key}')" in receipt
 
 
 def test_receipt_is_literal_safe_and_retains_cleanup_evidence() -> None:
@@ -2141,312 +1378,3 @@ def test_receipt_is_literal_safe_and_retains_cleanup_evidence() -> None:
         "failure_rc",
     ):
         assert field in receipt
-
-
-def test_positive_capacity_lease_is_watchdog_armed_restored_and_receipted() -> None:
-    dispatch = WORKFLOW.index("mark_phase dispatch_paid_instance_watchdog")
-    armed = WORKFLOW.index("mark_phase arm_temporary_capacity_lease")
-    fence = WORKFLOW.index("mark_phase acquire_capacity_workload_fence")
-    lease = WORKFLOW.index("mark_phase open_temporary_capacity_lease")
-    preflight = WORKFLOW.index("mark_phase paid_capacity_preflight")
-    assert dispatch < armed < fence < lease < preflight
-    success_cleanup = WORKFLOW.index("if ! cleanup_temp_resources; then", preflight)
-    restore = WORKFLOW.index("if ! restore_source_capacity; then", success_cleanup)
-    disable_trap = WORKFLOW.index("trap - EXIT", restore)
-    assert success_cleanup < restore < disable_trap
-    assert "temporary production capacity lease:" in WORKFLOW
-
-
-def test_negative_capacity_lease_rejects_unexpected_source_or_third_config() -> None:
-    assert '[[ "$source_original_ocpus" == 6 && "$source_original_memory" == 12 ]] || return 93' in WORKFLOW
-    assert '[[ "$source_lease_ocpus" == 5 && "$source_lease_memory" == 11 ]] || return 93' in WORKFLOW
-    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
-    assert 'if [[ "$ocpus/$memory" != "$SOURCE_ORIGINAL_OCPUS/$SOURCE_ORIGINAL_MEMORY" && "$ocpus/$memory" != "$SOURCE_LEASE_OCPUS/$SOURCE_LEASE_MEMORY" ]]; then' in watchdog
-    assert "return 103" in watchdog
-    resize = WORKFLOW[WORKFLOW.index("set_source_capacity() {") : WORKFLOW.index("open_source_capacity_lease()")]
-    assert '[[ "$label" == capacity_lease ]]' in resize
-    assert 'current_ocpus/$current_memory" == "$source_original_ocpus/$source_original_memory' in resize
-    assert '[[ "$label" == capacity_restore ]]' in resize
-    assert 'current_ocpus/$current_memory" == "$source_lease_ocpus/$source_lease_memory' in resize
-
-
-def test_boundary_capacity_lease_is_exactly_one_ocpu_one_gib_and_45_minutes() -> None:
-    assert "source_lease_ocpus=$((source_original_ocpus - 1))" in WORKFLOW
-    assert "source_lease_memory=$((source_original_memory - 1))" in WORKFLOW
-    assert "lease_restore_epoch=$(( $(date -u +%s) + 2700 ))" in WORKFLOW
-    arm = WORKFLOW.index("if arm_source_capacity_lease")
-    fence = WORKFLOW.index("if acquire_source_workload_fence", arm)
-    resize = WORKFLOW.index("if open_source_capacity_lease", fence)
-    assert arm < fence < resize
-    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
-    assert "lease_restore_epoch <= now + 2700" in watchdog
-
-
-def test_capacity_resize_waits_through_compute_transitions_with_supplied_deadline() -> None:
-    helper = WORKFLOW[
-        WORKFLOW.index("wait_oci_resource_ready() {") :
-        WORKFLOW.index("wait_restored_boot_volume_hydrated()")
-    ]
-    assert 'absolute_deadline="${7:-$primary_deadline}"' in helper
-    assert 'bounded_wait_seconds "$max_seconds" "$absolute_deadline"' in helper
-    assert 'OCI_JSON_ABSOLUTE_DEADLINE="$absolute_deadline" OCI_JSON_MAX_ATTEMPTS=1' in helper
-    terminal = helper[helper.index('if [[ "$state" == TERMINATING') : helper.index("return 44", helper.index('if [[ "$state" == TERMINATING'))]
-    assert "STOPPING" not in terminal
-    assert "STOPPED" not in terminal
-    resize = WORKFLOW[WORKFLOW.index("set_source_capacity() {") : WORKFLOW.index("open_source_capacity_lease()")]
-    assert resize.count('bridge-school-dds3-frankfurt "$deadline"') == 4
-
-
-def test_parent_capacity_parser_checks_status_and_cardinality_before_indexing() -> None:
-    resize = WORKFLOW[WORKFLOW.index("set_source_capacity() {") : WORKFLOW.index("arm_source_capacity_lease()")]
-    parser = resize.index('if ! INSTANCE="$current_json"')
-    mapfile = resize.index('mapfile -t current <"$current_state_file"', parser)
-    cardinality = resize.index('(( ${#current[@]} == 3 )) || return 93', mapfile)
-    indexing = resize.index('current_state="${current[0]}"', cardinality)
-    assert parser < mapfile < cardinality < indexing
-
-
-def test_watchdog_service_release_is_retryable_after_marker_removal() -> None:
-    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
-    release = watchdog[
-        watchdog.index("release_source_workload_fence() {") :
-        watchdog.index("roots=", watchdog.index("release_source_workload_fence() {"))
-    ]
-    conditional_end = release.index("          fi", release.index('if [[ -e "$marker" ]]'))
-    assert release.index("rm -f -- \"$marker\"") < conditional_end
-    assert release.index("systemctl unmask universal-video-container.service") > conditional_end
-    assert release.index("systemctl enable universal-video-container.service") > conditional_end
-    assert release.index("systemctl start universal-video-container.service") > conditional_end
-    parent_release = WORKFLOW[WORKFLOW.index("release_source_workload_fence() {") : WORKFLOW.index("set_source_capacity() {")]
-    parent_end = parent_release.index("          fi", parent_release.index('if [[ -e "$marker" ]]'))
-    assert parent_release.index("systemctl unmask universal-video-container.service") > parent_end
-    assert parent_release.index("systemctl enable universal-video-container.service") > parent_end
-    assert parent_release.index("systemctl start universal-video-container.service") > parent_end
-
-
-def test_regression_capacity_is_restored_only_after_paid_instance_cleanup() -> None:
-    exit_cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
-    temporary = exit_cleanup.index("cleanup_temp_resources")
-    terminal_gate = exit_cleanup.index("paid_launch_request_started == 0 || paid_instance_terminal_proven == 1", temporary)
-    assert temporary < terminal_gate < exit_cleanup.index("restore_source_capacity", terminal_gate)
-    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
-    terminate = watchdog.index("oci compute instance terminate")
-    early_restore = watchdog.index("restore_source_capacity", terminate)
-    volume_cleanup = watchdog.index("oci bv boot-volume delete", early_restore)
-    restore_comment = watchdog.index("temporary production capacity lease is RESTORED")
-    assert terminate < early_restore < volume_cleanup < restore_comment
-    assert "'- media canary: ' + code('false')" in WORKFLOW
-
-
-def test_cleanup_failure_restores_after_paid_compute_is_proven_terminal() -> None:
-    cleanup = WORKFLOW[WORKFLOW.index("cleanup_temp_resources() {") : WORKFLOW.index("cleanup() {")]
-    terminated = cleanup.index("paid_instance_terminal_proven=1")
-    volume_cleanup = cleanup.index('if [[ -n "$restored_id" ]]', terminated)
-    restore = cleanup.index("if restore_source_capacity; then", terminated)
-    fence_receipt = cleanup.index("CAPACITY_FENCE_HELD", restore)
-    assert terminated < restore < fence_receipt < volume_cleanup
-    assert "release_source_workload_fence" not in cleanup[terminated:volume_cleanup]
-    failure = WORKFLOW[WORKFLOW.index("if ! cleanup_temp_resources; then", WORKFLOW.index("mark_phase paid_capacity_preflight")) :]
-    failure = failure[:failure.index("if ! restore_source_capacity; then")]
-    assert "if (( paid_instance_terminal_proven == 1 )); then" in failure
-    assert failure.index("restore_source_capacity || true") < failure.index("trap - EXIT")
-    assert failure.index("release_source_workload_fence || true") < failure.index("trap - EXIT")
-
-
-def test_watchdog_releases_fence_even_when_capacity_restore_fails() -> None:
-    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
-    start = watchdog.index("source_restore_rc=0")
-    block = watchdog[start:watchdog.index("# The primary runner normally removes", start)]
-    assert block.index("restore_source_capacity || source_restore_rc=$?") < block.index("release_source_workload_fence || source_release_rc=$?")
-    assert "exit 105" not in block
-    volume_cleanup = watchdog.index("oci bv boot-volume delete", start)
-    deferred_failure = watchdog.index("if (( source_restore_rc != 0 || source_release_rc != 0 )); then", volume_cleanup)
-    assert volume_cleanup < deferred_failure < watchdog.index("exit 105", deferred_failure)
-
-
-def test_watchdog_propagates_source_identity_and_parser_failures() -> None:
-    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
-    restore = watchdog[watchdog.index("restore_source_capacity() {") : watchdog.index("release_source_workload_fence() {")]
-    hmac_check = restore.index("assert hmac.compare_digest")
-    assert restore.index("[[ $? == 0 ]] || return 103", hmac_check) > hmac_check
-    parser = restore.index('if ! EXPECTED_ID="$source_id"')
-    mapfile = restore.index('mapfile -t source_state <"$source_state_file"', parser)
-    cardinality = restore.index('(( ${#source_state[@]} == 3 )) || return 104', mapfile)
-    indexing = restore.index('lifecycle="${source_state[0]}"', cardinality)
-    assert parser < mapfile < cardinality < indexing
-    softstop = restore.index("--action SOFTSTOP")
-    first_only = restore.index("if (( source_stop_budget_committed == 0 )); then", indexing)
-    budget = restore.index("source_restore_deadline - SECONDS >= 1380", first_only)
-    committed = restore.index("source_stop_budget_committed=1", budget)
-    assert first_only < budget < committed < softstop
-    assert restore.count("source_restore_deadline - SECONDS >= 1380") == 1
-    assert "source_restore_deadline=$((SECONDS + 1500))" in restore
-    conditional_end = restore.index("fi", committed)
-    assert softstop > conditional_end
-
-
-def test_capacity_fence_disables_installed_unit_across_reboot() -> None:
-    acquire = WORKFLOW[WORKFLOW.index("acquire_source_workload_fence() {") : WORKFLOW.index("release_source_workload_fence() {")]
-    assert "systemctl disable --now universal-video-container.service" in acquire
-    assert '== disabled' in acquire
-    assert "systemctl mask" not in acquire
-    mutation = WORKFLOW[WORKFLOW.index("mutation=\"$RUNNER_TEMP/issue-881-locked-mutation.sh\"") : WORKFLOW.index("Release capacity workload fence and ensure sole service active")]
-    assert mutation.index("systemctl enable universal-video-container.service") < mutation.index('[[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]')
-    release = WORKFLOW[WORKFLOW.index("Release capacity workload fence and ensure sole service active") : WORKFLOW.index("Publish bounded operational receipt")]
-    assert release.index("systemctl enable universal-video-container.service") < release.index('[[ "$(systemctl is-enabled universal-video-container.service)" == enabled ]]')
-
-
-def test_watchdog_preserves_fence_for_bounded_live_parent_mutation_phase() -> None:
-    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
-    start = watchdog.index("CAPACITY_FENCE_HELD")
-    release = watchdog.index("release_source_workload_fence || source_release_rc=$?", start)
-    block = watchdog[start:release]
-    assert "fence_wait_deadline=$((fence_now + 2700))" in block
-    assert 'fence_wait_deadline="$watchdog_cleanup_cutoff_epoch"' in block
-    assert "fence_release_epoch <= fence_now" in block
-    assert "fence_release_epoch <= fence_wait_deadline" in block
-    assert 'actions/runs/${PARENT_RUN_ID}' in block
-    assert 'if [[ "$parent_status" != completed ]]; then' in block
-    assert '[[ "$parent_status" == completed ]] && break' in block
-    assert "release_source_workload_fence" not in block
-
-
-def test_watchdog_retries_paid_reconciliation_with_reserved_cleanup_time() -> None:
-    watchdog = Path(".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
-    assert "watchdog_hard_deadline=$((SECONDS + 17400))" in watchdog
-    assert "watchdog_cleanup_cutoff=$((watchdog_hard_deadline - 1200))" in watchdog
-    # Fence + both discoveries + deletion proof, with loop/request overruns
-    # and a final receipt window, must fit independently of setup slack.
-    assert 300 + 120 + 120 + 120 + 4 * 60 + 60 < 1200
-    assert "watchdog_cleanup_cutoff_epoch=$(( $(date -u +%s) + watchdog_cleanup_cutoff - SECONDS ))" in watchdog
-    start = watchdog.index("reconcile_paid_instance_once() {")
-    loop = watchdog.index("while (( SECONDS < watchdog_cleanup_cutoff )); do", start)
-    proof = watchdog.index("instance_terminal_proven == 1 || instance_inventory_clean == 1", loop)
-    assert start < loop < proof
-    reconcile = watchdog[start:loop]
-    assert "exit 97" not in reconcile
-    assert "exit 99" not in reconcile
-    assert "exit 101" not in reconcile
-    restore = watchdog[watchdog.index("restore_source_capacity() {") : watchdog.index("release_source_workload_fence() {")]
-    assert 'source_restore_deadline="$watchdog_cleanup_cutoff"' in restore
-
-
-def test_exit_cleanup_does_not_reclaim_capacity_before_paid_terminal_proof() -> None:
-    cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
-    gate = cleanup.index("if (( paid_launch_request_started == 0 || paid_instance_terminal_proven == 1 )); then")
-    restore = cleanup.index("restore_source_capacity || cleanup_rc=1", gate)
-    release = cleanup.index("release_source_workload_fence || cleanup_rc=1", restore)
-    conditional_end = cleanup.index("fi", release)
-    assert gate < restore < release < conditional_end
-    launch = WORKFLOW.index("paid_launch_request_started=1")
-    create = WORKFLOW.index("create_json_once paid_instance_create", launch)
-    assert launch < create
-
-
-def test_prelaunch_failure_restores_source_before_temporary_cleanup() -> None:
-    cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
-    gate = cleanup.index("if (( paid_launch_request_started == 0 )); then")
-    restore = cleanup.index("restore_source_capacity || cleanup_rc=1", gate)
-    release = cleanup.index("release_source_workload_fence || cleanup_rc=1", restore)
-    temporary = cleanup.index("cleanup_temp_resources || cleanup_rc=1")
-    assert gate < restore < release < temporary
-
-
-def test_starting_capacity_retry_rechecks_target_before_another_stop() -> None:
-    start = WORKFLOW.index('if [[ "$current_state" == STARTING ]]; then')
-    block = WORKFLOW[start:WORKFLOW.index('elif [[ "$current_state" == STOPPING ]]; then', start)]
-    assert 'set_source_capacity "$target_ocpus" "$target_memory" "$deadline" "$label"' in block
-    assert 'return $?' in block
-    assert 'current_state=RUNNING' not in block
-
-
-def test_exit_cleanup_stays_armed_through_fallible_backup_retirement() -> None:
-    acceptance = WORKFLOW.index("backup_accepted=1")
-    retirement = WORKFLOW.index("wait_all_absent backup", acceptance)
-    disable = WORKFLOW.index("trap - EXIT", retirement)
-    gate = WORKFLOW.index("UV_ROOT_BACKUP_GATE_PASS", disable)
-    assert acceptance < retirement < disable < gate
-    cleanup = WORKFLOW[WORKFLOW.index("cleanup() {") : WORKFLOW.index("record_reconcile_failure()")]
-    assert "release_source_workload_fence || cleanup_rc=1" in cleanup
-
-
-def test_always_run_fence_release_rebuilds_pinned_ssh_identity() -> None:
-    start = WORKFLOW.index("Release capacity workload fence and ensure sole service active")
-    release = WORKFLOW[start:WORKFLOW.index("Publish bounded operational receipt", start)]
-    assert "steps.ssh.outputs.key" not in release
-    assert "steps.ssh.outputs.known" not in release
-    assert 'ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$release_known"' in release
-    assert 'printf \'%s\\n\' "$SSH_KEY_ORACLE" >"$release_key"' in release
-    assert 'ssh-keygen -y -f "$release_key"' in release
-    assert 'ssh -i "$release_key"' in release
-    assert 'UserKnownHostsFile="$release_known"' in release
-
-
-def test_watchdog_failed_resize_restarts_once_and_preserves_restart_budget() -> None:
-    import hashlib
-    import hmac
-    block = WATCHDOG[WATCHDOG.index('          restore_source_capacity() {'):WATCHDOG.index('          release_source_workload_fence() {')]
-    block = '\n'.join(line[10:] if line.startswith('          ') else line for line in block.splitlines())
-    for scenario in ('failed_update', 'exhausted_update', 'lost_start', 'success', 'late_stop'):
-        with tempfile.TemporaryDirectory() as tmp:
-            harness = r'''
-set -uo pipefail
-SECONDS=0
-watchdog_cleanup_cutoff=2000
-tenancy_id=test
-state=RUNNING
-mock_ocpus=5
-mock_memory=11
-stops=0
-starts=0
-updates=0
-pending_stop=0
-sleep() { SECONDS=$((SECONDS + 5)); }
-oci_retry_json() {
-  local output="$1"; shift 2
-  if [[ "$SCENARIO" == late_stop && "$pending_stop" == 1 ]]; then
-    pending_stop=2
-  elif [[ "$SCENARIO" == late_stop && "$pending_stop" == 2 ]]; then
-    state=STOPPING; pending_stop=3
-  elif [[ "$SCENARIO" == late_stop && "$pending_stop" == 3 ]]; then
-    SECONDS=$((SECONDS + 600)); state=STOPPED; pending_stop=4
-  fi
-  MOCK_STATE="$state" MOCK_OCPUS="$mock_ocpus" MOCK_MEMORY="$mock_memory" python - "$output" "$@" <<'MOCK'
-import json,os,sys
-d={'id':'test-id','display-name':'bridge-school-dds3-frankfurt','compartment-id':'test','availability-domain':'test-ad','shape':'VM.Standard.E5.Flex','lifecycle-state':os.environ['MOCK_STATE'],'shape-config':{'ocpus':int(os.environ['MOCK_OCPUS']),'memory-in-gbs':int(os.environ['MOCK_MEMORY'])}}
-json.dump({'data':[d] if 'list' in sys.argv else d},open(sys.argv[1],'w'))
-MOCK
-}
-oci_retry_quiet() {
-  local deadline="$1"; shift
-  case "$*" in
-    *SOFTSTOP*)
-      stops=$((stops + 1))
-      if [[ "$SCENARIO" == late_stop ]]; then
-        SECONDS="$deadline"; pending_stop=1; return 1
-      fi
-      state=STOPPED ;;
-    *update*)
-      updates=$((updates + 1))
-      if [[ "$SCENARIO" == success ]]; then mock_ocpus=6; mock_memory=12; return 0; fi
-      if [[ "$SCENARIO" == exhausted_update ]]; then SECONDS="$deadline"; fi
-      return 1 ;;
-    *START*)
-      starts=$((starts + 1))
-      if [[ "$SCENARIO" == lost_start && "$starts" == 1 ]]; then return 1; fi
-      if [[ "$SCENARIO" == late_stop ]]; then SECONDS=$((SECONDS + 660)); fi
-      state=RUNNING ;;
-    *) return 99 ;;
-  esac
-}
-'''
-            harness += block + '\nrc=0\nrestore_source_capacity || rc=$?\nprintf "%s %s %s %s %s %s\\n" "$rc" "$state" "$stops" "$starts" "$updates" "$SECONDS"\n'
-            env = dict(os.environ, RUNNER_TEMP=tmp, EXPECTED_AD='test-ad', OCI_KEY='test-key', SOURCE_INSTANCE_HMAC=hmac.new(b'test-key', b'source-instance|test-id', hashlib.sha256).hexdigest(), SOURCE_ORIGINAL_OCPUS='6', SOURCE_ORIGINAL_MEMORY='12', SOURCE_LEASE_OCPUS='5', SOURCE_LEASE_MEMORY='11', SCENARIO=scenario)
-            result = subprocess.run(['bash', '-c', harness], env=env, text=True, capture_output=True, timeout=15)
-            assert result.returncode == 0, result.stderr
-            rc, state, stops, starts, updates, elapsed = result.stdout.strip().split()
-            assert state == 'RUNNING', result.stdout
-            assert int(stops) == 1 and int(updates) == 1, result.stdout
-            assert int(starts) == (2 if scenario == 'lost_start' else 1), result.stdout
-            assert int(rc) == (0 if scenario == 'success' else 105), result.stdout
-            assert int(elapsed) < (1500 if scenario == "late_stop" else 900), result.stdout

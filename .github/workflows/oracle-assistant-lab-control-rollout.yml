@@ -17,9 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  # PR validation is inert; the main-branch rollout shares the Oracle workload
-  # fence and cannot overlap pre-canary host attestation.
-  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'oracle-instance-workload-mutation' || format('oracle-assistant-lab-control-rollout-noop-{0}', github.run_id) }}
+  group: oracle-assistant-lab-control-rollout
   cancel-in-progress: false
 
 jobs:
@@ -41,7 +39,7 @@ jobs:
           grep -F 'SELECT * FROM assistant_lab.claim_control_command' assistant_lab/control_bridge.py >/dev/null
 
   rollout:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'push' }}
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 20
