@@ -188,7 +188,10 @@ jobs:
               return '\n'.join(x.rstrip() for x in s.splitlines()[-25:] if x.strip())
 
           try:
-              drain(8); child.send('\r'); drain(5)
+              drain(8)
+              if 'Password:' in view():
+                  child.send('\x03'); drain(2)
+              child.send('\r'); drain(5)
               if not child.isalive() or 'autopilot-lite-vnic login:' not in view():
                   raise RuntimeError('verified serial login prompt not present; reset not issued')
               print('LIGHT_SERIAL_VERIFIED_BEFORE_RESET=PASS',flush=True)
