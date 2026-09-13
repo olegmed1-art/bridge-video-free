@@ -1,13 +1,18 @@
 """Successor shadow adapter that replaces screenshot rank templates with Gambler assets.
 
 The existing Bridgit rank-layout recognizer remains unchanged and available as
-its historical baseline.  This opt-in successor derives a temporary reference
+its historical baseline. This opt-in successor derives a temporary reference
 frame from the already verified UI reference, replacing only the 52 rank-glyph
-crops with source-bound original Gambler classic artwork.  The base recognizer
+crops with source-bound original Gambler classic artwork. The base recognizer
 then builds its ordinary rank bank from those original-client glyphs.
 
-No Gambler asset bytes are committed.  The caller supplies a local sprite plus
-its SHA-256 and a verified registered card scale.  No network access, cursor
+The original Gambler card artwork is an externally human-approved reference.
+Runtime checks prove only that the selected bytes are exactly the approved
+original asset and structurally usable; they do not re-validate the correctness
+or completeness of the card artwork itself.
+
+No Gambler asset bytes are committed. The caller supplies a local sprite plus
+its SHA-256 and a verified registered card scale. No network access, cursor
 input, hidden-hand completion, Canon write, or production activation occurs.
 """
 from __future__ import annotations
@@ -26,6 +31,11 @@ from bridge_vision.gambler_classic_reference import (
     decode_card_cells,
     load_sprite,
     select_variant_for_card_size,
+)
+from bridge_vision.gambler_reference_authority import (
+    GamblerReferenceAuthorityError,
+    assert_approved_sprite_binding,
+    authority_provenance,
 )
 
 SUCCESSOR_VERSION = "bridge-vision-bridgit-rank-layout-gambler-classic-v1"
@@ -118,21 +128,26 @@ def recognize_frames_with_original_gambler_deck(
     expected_frame_sha256s: Sequence[str] | None = None,
     observation_timestamps_ms: Sequence[int] | None = None,
 ) -> dict[str, Any]:
-    """Run the existing shadow recognizer with original Gambler rank templates.
+    """Run the shadow recognizer against the approved original Gambler templates.
 
     The native sprite variant is selected from the verified *registered card
-    scale*, never from source-video resolution or window position.
+    scale*, never from source-video resolution or window position. The supplied
+    SHA must identify the already human-approved original Gambler asset for that
+    native variant; no card-content re-validation is performed here.
     """
     try:
         expected_variant = select_variant_for_card_size(
             verified_card_width_px, verified_card_height_px
         )
+        approved_sha = assert_approved_sprite_binding(
+            expected_variant, gambler_sprite_sha256
+        )
         sprite = load_sprite(
             Path(gambler_sprite_path),
-            expected_sha256=gambler_sprite_sha256,
+            expected_sha256=approved_sha,
             expected_variant=expected_variant,
         )
-    except GamblerClassicReferenceError as exc:
+    except (GamblerClassicReferenceError, GamblerReferenceAuthorityError) as exc:
         raise BridgitGamblerRankLayoutError(f"invalid Gambler classic reference: {exc}") from exc
 
     # Use the base decoder so the same byte/raster safety boundary and profile
@@ -168,12 +183,14 @@ def recognize_frames_with_original_gambler_deck(
     result["successor_version"] = SUCCESSOR_VERSION
     result["template_source"] = {
         **bank_provenance(sprite),
+        **authority_provenance(sprite.variant),
         "selection_basis": "VERIFIED_REGISTERED_CARD_SCALE",
         "verified_card_width_px": float(verified_card_width_px),
         "verified_card_height_px": float(verified_card_height_px),
         "legacy_reference_frame_sha256": profile.reference_frame_sha256,
         "derived_reference_frame_sha256": derived_sha,
         "replacement_scope": "RANK_TEMPLATE_CROPS_ONLY",
+        "runtime_validation_scope": "IDENTITY_AND_STRUCTURAL_INTEGRITY_ONLY",
     }
     result["mouse_cursor_used"] = False
     result["hidden_hand_reconstruction_performed"] = False
