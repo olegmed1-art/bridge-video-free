@@ -14,7 +14,17 @@ from .bridgit_deal_marker import (
     assign_stable_deal_markers,
     marker_fingerprint,
 )
+from .bridgit_gambler_recovery_pipeline import (
+    GamblerRecoveryPipelineError,
+    recover_with_original_gambler_deck,
+)
 from .bridgit_played_card_observer import build_suit_bank, observe_played_cards
+from .bridgit_unresolved_card_recovery import (
+    UnresolvedRecoveryError,
+    recover_unresolved_deal,
+    scan_unresolved_in_registered_frame,
+    unresolved_cards,
+)
 from .bridgit_visible_hand_observer import (
     ObserverProfile,
     VisibleHandObserverError,
@@ -36,9 +46,11 @@ __all__ = [
     "BridgeVisionEngine",
     "CardEvidenceFusionError",
     "DealMarkerError",
+    "GamblerRecoveryPipelineError",
     "InterfaceProfile",
     "ObserverProfile",
     "ProfiledCardChallenger",
+    "UnresolvedRecoveryError",
     "VisibleHandObserverError",
     "VisibleTimelineError",
     "VisionCandidate",
@@ -52,7 +64,11 @@ __all__ = [
     "observe_played_cards",
     "observe_visible_hands",
     "parse_visible_hand_profile",
+    "recover_unresolved_deal",
+    "recover_with_original_gambler_deck",
     "reconstruct_autonomous_deals",
     "reconstruct_deals",
+    "scan_unresolved_in_registered_frame",
+    "unresolved_cards",
     "validate_full_deal",
 ]
