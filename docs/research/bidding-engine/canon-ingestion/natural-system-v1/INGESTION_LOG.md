@@ -281,3 +281,183 @@ Each entry records:
 **Database effect:** None. No rule was created or activated in production.  
 **Unresolved:** PR is intentionally draft and not merge-ready while transcription and review continue.  
 **Next:** Persist the independently validated infrastructure migration and transcribe the next auction block.
+
+
+## 2026-08-28 / LOG-0025 - Infrastructure PR #630 status corrected
+
+**Role:** Observatory / Coordinator  
+**Action:** Rechecked the GitHub state of PR #630 instead of carrying forward the stale draft status recorded in LOG-0005.  
+**Finding:** PR #630, `Bidding knowledge v0: authority-separated runtime gates and traces`, is merged at commit `0f80f102b640d9b4f69749ccb3afb12f8293461a`.  
+**Verification:** Read-only GitHub PR and commit inspection.  
+**Database effect:** None. A merged code change is not evidence that its schema is present in production.  
+**Correction:** References in earlier log entries to PR #630 being an open draft are historical observations and no longer describe the current GitHub state.  
+**Next:** Reconcile the mainline migration and production migration registry independently.
+
+## 2026-08-28 / LOG-0026 - Mainline bidding migration status reconciled
+
+**Role:** Observatory / Technical owner  
+**Action:** Rechecked PR #668, its head checks, and the active database migration path.  
+**Finding:** PR #668, `Bidding knowledge v0: mainline schema, checksums and DB contract`, is merged at commit `7da87bb2e58a517d961624dc8d539dfbac3d84d2`. Its head commit `d651bbe578b34d1a44bea3d72c4c219d29097244` had successful Database CI, Secret gate, META Evidence Gate, and Migration Namespace Guard checks. The mainline migration key is `0200_bidding_knowledge_v0`.  
+**Verification:** Read-only GitHub PR, file, commit-status and workflow inspection.  
+**Database effect:** None. Production registration and objects were checked separately.  
+**Correction:** Earlier entries that refer to a local `0105_bidding_knowledge_v0.sql` describe an intermediate validation draft, not the current mainline migration identity.  
+**Next:** Prove `0200_bidding_knowledge_v0` from a fresh production-derived branch before any promotion decision.
+
+## 2026-08-28 / LOG-0027 - Canon ingestion PR #662 status corrected
+
+**Role:** Observatory / Curator  
+**Action:** Rechecked PR #662.  
+**Finding:** PR #662, `SCHOOL CANON ingestion: approved natural bidding system v1`, is merged at commit `24d47df1535b693afcfa073aa8db0ce88cca841c`. The approved source remains Google Drive file `1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf`, SHA-256 `dc9678da5ab19a897c3f1fbd785cc6f7b0ddd9d70d90d895743db615a2fdd3d6`.  
+**Verification:** Read-only GitHub inspection and comparison with `SOURCE_MANIFEST.json`.  
+**Database effect:** None. The 34-block inventory, two exact transcriptions, 33 candidate records and related plans remain Git artifacts; no rule is activated by the merge.  
+**Correction:** LOG-0024 is preserved as the state at PR creation; it is no longer the current PR status.  
+**Next:** Continue source work only under the fail-closed eligibility rules.
+
+## 2026-08-28 / LOG-0028 - Production Neon state reconciled
+
+**Role:** Observatory / Database custodian  
+**Action:** Queried the protected production branch read-only for the migration registry and bidding objects.  
+**Finding:** Production contains 62 registered migrations. Migrations `0020` through `0037` are already registered; `0200_bidding_knowledge_v0` is not registered. Production has no `bidding` schema, no `bidding.rule` table and no active bidding Canon runtime rules.  
+**Verification:** Read-only Neon metadata and SQL queries against production project `misty-poetry-18012774`, branch `br-wispy-lab-b1rq54of`, database `neondb`.  
+**Database effect:** None.  
+**Correction:** The earlier project handoff statement that only migrations `0001–0019` were present is superseded by this live observation.  
+**Next:** Keep production unchanged and create clean, disposable preflight evidence.
+
+## 2026-08-28 / LOG-0029 - Existing validation branch rejected as promotion evidence
+
+**Role:** Red Team / Observatory  
+**Action:** Re-inspected the earlier validation branch `br-muddy-resonance-b1pf1tze`.  
+**Finding:** The branch contains bidding objects, two rules, two active activations, one decision trace and one ingestion run, while `0200_bidding_knowledge_v0` is not registered.  
+**Verification:** Read-only Neon SQL on the isolated branch.  
+**Database effect:** Production none; no cleanup or mutation was performed.  
+**Assessment:** This branch is useful historical evidence but is not a clean preflight baseline and must not support production promotion.  
+**Next:** Use a fresh branch from current production and require zero residual fixture rows.
+
+## 2026-08-28 / LOG-0030 - Automated migration helper failed closed
+
+**Role:** Technical owner / Observatory  
+**Action:** Submitted the exact mainline composite migration to the Neon migration-preparation helper. The computed composite SHA-256 was `024b348c0bf01dc7666caef5bcb7e0613463d4f223ee0bc3e9171baa1af091fd`.  
+**Result:** The helper returned `INVALID_ARGUMENT` and produced no migration identifier or validated migration branch.  
+**Verification:** The failure response was checked; production still has no `0200_bidding_knowledge_v0` registry row or bidding schema.  
+**Database effect:** None.  
+**Assessment:** The failed helper flow is closed and will not be represented as successful evidence.  
+**Next:** Execute the repository's exact `database/scripts/migrate.sh` on a fresh disposable production-derived branch; require registry checksum match, smoke-test rollback, zero residual rows and an idempotent rerun before I2 review.
+
+
+## 2026-08-28 / LOG-0031 - Fresh production-derived preflight baseline created
+
+**Role:** Database custodian / Observatory  
+**Action:** Created disposable Neon branch `bidding-0200-clean-preflight-20260828`, branch ID `br-fragrant-dream-b1e2xses`, directly from protected production branch `br-wispy-lab-b1rq54of`.  
+**Baseline:** 62 registered migrations; no `bidding` schema; no `0200_bidding_knowledge_v0` registry row.  
+**Verification:** Read-only baseline query on the new branch before any migration SQL.  
+**Database effect:** Production none; disposable branch only.  
+**Next:** Apply the exact composite migration fail-closed.
+
+## 2026-08-28 / LOG-0032 - Direct migrate.sh transport blocked before SQL
+
+**Role:** Technical owner / Red Team  
+**Action:** Reconstructed the current repository migration tree and installed an isolated PostgreSQL client, then attempted the exact `database/scripts/migrate.sh` against the disposable branch.  
+**Result:** The local execution environment could not resolve the Neon endpoint hostname and `psql` stopped before executing any SQL.  
+**Verification:** Error was `could not translate host name ... Temporary failure in name resolution`; the fresh branch baseline was rechecked before the connector fallback.  
+**Database effect:** None from this attempt. Production none.  
+**Assessment:** This is a transport restriction of the local runner, not migration success or failure. It must not be hidden or represented as a completed native-script run.  
+**Next:** Use the official Neon connector on the same disposable branch, preserving the exact composite bytes, transaction boundary and repository checksum algorithm.
+
+## 2026-08-28 / LOG-0033 - Clean 0200 connector preflight passed
+
+**Role:** Technical owner / Observatory / Red Team  
+**Action:** Applied the eight exact mainline components of `0200_bidding_knowledge_v0` as 120 parsed SQL statements in one transaction through the official Neon connector on branch `br-fragrant-dream-b1e2xses`. Persisted the checksum produced by the repository `migrate.sh` composite algorithm.  
+**Checksum:** `024b348c0bf01dc7666caef5bcb7e0613463d4f223ee0bc3e9171baa1af091fd`.  
+**Structure:** 9 base tables, 3 views, 20 functions and 16 non-internal triggers; migration count advanced from 62 to 63 on the disposable branch.  
+**Smoke verification:** Executed the exact `database/tests/100_bidding_knowledge_v0.sql` DO block and then deliberately raised `BID_SMOKE_ROLLBACK_SENTINEL` in the same transaction. The sentinel was reached, proving all prior assertions passed; the transaction rolled back.  
+**Residual verification:** All nine bidding tables contained zero rows; the CI fixture school, sources and knowledge items were absent.  
+**Idempotence verification:** A second-pass registry gate required the exact migration key and checksum and completed without schema or data mutation.  
+**Production verification:** Protected production remained at 62 migrations with no `bidding` schema and no `0200_bidding_knowledge_v0` registry row.  
+**Database effect:** Disposable branch only. No Canon rule or candidate was inserted or activated.  
+**Limitation:** This proves connector-based migration and smoke behavior from a clean production-derived baseline. Native `migrate.sh` transport to this Neon branch remains unproved because the local runner cannot reach the Neon hostname directly.  
+**Next:** Conduct independent I2 fail-closed review before any production promotion decision.
+
+
+## 2026-08-28 / LOG-0034 - Pre-I2 red-team found material fail-closed gaps
+
+**Role:** Red Team / Security review  
+**Action:** Performed a separate adversarial review after the clean connector preflight rather than treating the passing smoke test as sufficient assurance.  
+**Findings:** (1) trigger-only activation overlap prevention was not concurrency-safe; (2) a future-dated active activation did not lock its rule against mutation before `valid_from`; (3) forbidden hidden-hand keys could use case or separator aliases such as `partnerHand`; (4) updating only `rule_conflict.evidence_ids` bypassed the cross-school evidence trigger.  
+**Assessment:** Material blockers. The original `0200` checksum from LOG-0033 is valid evidence for that exact version but is superseded as a promotion candidate.  
+**Database effect:** None. Production none.  
+**Next:** Harden the unpromoted migration and add regressions before independent I2 review.
+
+## 2026-08-28 / LOG-0035 - Fail-closed hardening opened in draft PR #798
+
+**Role:** Technical owner / Red Team  
+**Action:** Opened draft PR #798, `fix(bidding): harden activation and hidden-information gates`.  
+**Changes:** Added a GiST exclusion constraint for active interval overlap; extended immutability to future-dated active activations; normalized forbidden hidden-key names; revalidated conflict `evidence_ids` on update; added smoke regressions and a two-connection concurrency test.  
+**Verification:** Migration remains unregistered in production, so correcting the unpromoted composite does not rewrite production history.  
+**Database effect:** Production none.  
+**Next:** Run fresh production-derived preflight and all required CI gates.
+
+## 2026-08-28 / LOG-0036 - Hardened 0200 preflight and CI passed
+
+**Role:** Technical owner / Observatory  
+**Action:** Created fresh production-derived Neon branch `br-mute-term-b1ncudmz`, applied 122 exact hardening statements in one transaction, persisted the new composite checksum, and ran the updated rollback-safe smoke contract.  
+**Checksum:** `5f24d552eb4f322c55fdcb03dbc943d2dc2d04f07753f5a910e29a5c3640e474`.  
+**Smoke result:** The exact updated DO block reached `BID_SMOKE_ROLLBACK_SENTINEL`; alias rejection, scheduled-rule immutability, conflict-evidence update scope and exclusion-constraint presence all passed before rollback.  
+**GitHub evidence:** At head `a6d4a2e85dc90ce393155c2c503507c46767ba14`, Database CI run `33158443379`, Migration Namespace Guard `33158443367`, Secret gate `33158443369` and META Evidence Gate `33158443406` all passed.  
+**Concurrency evidence:** Database CI used two independent PostgreSQL connections. The second overlapping activation waited on the first uncommitted exclusion key and then failed with SQLSTATE `23P01`; exactly one activation committed.  
+**Database effect:** Disposable branch only. Production remains without `0200` or the `bidding` schema.  
+**Next:** Independent I2 fail-closed review.
+
+## 2026-08-28 / LOG-0037 - Independent I2 review requested and pending
+
+**Role:** Coordinator  
+**Action:** Requested an independent fail-closed review in draft PR #798, with explicit focus on concurrency, authority separation, hidden information, cross-school provenance, append-only audit behavior and ACLs.  
+**Cost boundary:** The paid Vercel Agent review path was not invoked.  
+**Status:** Pending; no merge or production promotion is permitted on internal red-team and CI evidence alone.  
+**Database effect:** None.  
+**Next:** Resolve every material independent finding or obtain a clean I2 disposition before continuing Canon ingestion.
+
+
+## 2026-08-28 / LOG-0038 - Disposable preflight branches removed
+
+**Role:** Database custodian  
+**Action:** Deleted the two disposable branches created during this reconciliation: `br-fragrant-dream-b1e2xses` and `br-mute-term-b1ncudmz`, after their checksums, smoke results and CI evidence were persisted in GitHub.  
+**Database effect:** Test-only branch schemas and fixtures were removed. Protected production `br-wispy-lab-b1rq54of` and the older historical validation branch `br-muddy-resonance-b1pf1tze` were not changed.  
+**Recovery:** The deleted branches are not the evidence source; the reproducible migration commit, checksums, workflow runs and append-only log are retained. A fresh branch must be created for any later preflight.  
+**Next:** Await independent I2 disposition on draft PR #798.
+
+
+## 2026-08-30 / LOG-0039 - PR #798 exact-head CI and independent I2 passed
+
+**Role:** Technical owner / Red Team / Independent reviewer  
+**Action:** Completed iterative fail-closed hardening of the unpromoted `0200_bidding_knowledge_v0` migration in draft PR #798 and requested a fresh independent review after every material correction.  
+**Exact head:** `c3c668caec81fc53d4b556d2a0b8c03a21ccf4b2`.  
+**Current protections:** concurrency-safe activation and mutation locking; server-controlled evidence insertion time; cross-school authority and provenance scope; append-only audit paths; bounded fail-closed hidden-information traversal; normalized owner/seat aliases including Unicode whitespace; bounded compound card-field grammar; SCHOOL_CANON/WORLD isolation.  
+**GitHub evidence:** Bridge School Database CI `33305908016`, Migration Namespace Guard `33305908117`, Secret gate `33305908113` and META Evidence Gate `33305908037` all passed on the exact head. Independent Codex I2 review reported no major issues on the same commit in PR comment `5468100640`.  
+**Database effect:** None. No production migration, Canon rule creation or activation occurred. The earlier disposable-branch preflights in LOG-0033 and LOG-0036 prove only their exact historical checksums and are superseded as promotion evidence by later hardening.  
+**Residual gate:** The final exact head has CI and I2 evidence but has not yet received a fresh production-derived Neon preflight with its final composite checksum, rollback smoke, zero-residual verification and idempotent rerun.  
+**Status:** Infrastructure code candidate is I2-clean; production promotion remains `NO-GO` until the fresh preflight, rollback evidence and a separate irreversible production decision. PR #798 remains draft.  
+**Next:** Reconcile this append-only log, then prepare the final migration preflight without changing protected production.
+
+
+## 2026-08-30 / LOG-0040 - Final exact-head Neon preflight passed
+
+**Role:** Database custodian / Technical owner / Red Team  
+**Candidate:** Draft PR #798 exact head `c3c668caec81fc53d4b556d2a0b8c03a21ccf4b2`.  
+**Action:** Reconfirmed protected production read-only, computed the repository composite checksum, then created disposable production-derived Neon branch `br-spring-poetry-b1jjyq44` and applied the exact eight `0200_bidding_knowledge_v0` components as 126 SQL statements in one connector transaction.  
+**Final checksum:** `1737eedba6110440220b814c2d104c06e5ced1050f558fd9fcdab256bde70557`.  
+**Structure:** 9 base tables, 3 views, 22 functions and 18 non-internal triggers.  
+**Smoke verification:** The exact `database/tests/100_bidding_knowledge_v0.sql` DO block completed and the following deliberate `BID_SMOKE_ROLLBACK_SENTINEL` aborted the transaction as intended. Post-rollback verification found zero rows across all nine bidding runtime tables and no isolated smoke school.  
+**Idempotence verification:** A second registry/checksum and zero-residual gate completed successfully without schema or data mutation.  
+**Production verification:** Before and after the disposable preflight, protected production contained 62 registered migrations, no `0200_bidding_knowledge_v0` row and no `bidding` schema.  
+**Database effect:** Disposable branch only. No real SCHOOL CANON or WORLD knowledge, rule or activation was inserted. Protected production was read-only and unchanged.  
+**Status:** Exact-head migration, rollback, integrity and independent I2 evidence are complete. Production promotion remains a separate irreversible decision and has not occurred.  
+**Next:** Persist cleanup of the disposable branch, rerun exact-head documentation checks/I2, then issue the final GO/NO-GO recommendation without changing production.
+
+
+## 2026-08-30 / LOG-0041 - Final disposable preflight branch removed
+
+**Role:** Database custodian  
+**Action:** Deleted disposable Neon branch `br-spring-poetry-b1jjyq44` after LOG-0040 evidence was committed.  
+**Database effect:** Test-only schema and zero-row fixtures were removed with the branch. Protected production was not changed.  
+**Recovery:** The branch itself is not the durable evidence source; the exact Git commit, checksum, CI runs, smoke sentinel result, zero-residual query and this append-only log are retained. Any later validation must create a fresh production-derived branch.  
+**Next:** Complete exact-head documentation CI and independent I2, then publish the production readiness recommendation.
