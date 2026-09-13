@@ -161,6 +161,33 @@ def test_request_fingerprint_is_derived_from_visible_request_fields():
     assert _request_fingerprint(**REQUEST) != _request_fingerprint(**changed)
 
 
+@pytest.mark.parametrize("field,payload", [
+    ("public_context", {"opponent_hand": {"cards": ["AS"]}}),
+    ("public_context", {"private_material": ["AS"]}),
+    ("public_auction", {"calls": [], "notes": {"partner_hand": "AKQ.JT9.876.5432"}}),
+])
+def test_hidden_cards_in_public_inputs_fail_before_canon_or_world(field, payload):
+    request = {**REQUEST, field: payload}
+    with patch.object(
+        PostgresCanonRuleStore,
+        "fetch_current",
+        side_effect=AssertionError("Canon queried"),
+    ), patch.object(
+        PostgresCanonGapStore,
+        "persist_and_verify",
+        side_effect=AssertionError("gap persisted"),
+    ):
+        with pytest.raises(ValueError, match="public inputs contain hidden card material"):
+            resolve_two_lane(
+                school_id="school-1",
+                **request,
+                profile=PROFILE,
+                canon_store=CANON_STORE,
+                gap_store=STORE,
+                world_supplier=lambda *_: (_ for _ in ()).throw(AssertionError("WORLD queried")),
+            )
+
+
 def test_gap_fingerprint_includes_resolution_profile():
     changed = ResolutionProfile("natural", "v1", "L2", "auction-1", NOW)
     assert _gap_fingerprint(REQUEST_HASH, PROFILE) != _gap_fingerprint(REQUEST_HASH, changed)

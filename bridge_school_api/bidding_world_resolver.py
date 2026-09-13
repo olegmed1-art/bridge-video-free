@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 from typing import Any, Callable, Iterable, Mapping
 
 CANON_GAP = "CANON_GAP"
@@ -12,6 +13,14 @@ CANON_CONFLICT = "CANON_CONFLICT"
 WORLD_FALLBACK = "WORLD_FALLBACK"
 WORLD_CONFLICT = "WORLD_CONFLICT"
 UNRESOLVED_GAP = "UNRESOLVED_GAP"
+
+_HIDDEN_CARD_KEYS = {
+    "card", "cards", "deal", "fulldeal", "hand", "hands", "hiddencards",
+    "hiddenhand", "holding", "holdings", "opponentcards", "opponenthand",
+    "partnercards", "partnerhand", "privatecards", "privatematerial",
+}
+_CARD_TOKEN = re.compile(r"(?:10|[2-9TJQKA])[CDHS]", re.IGNORECASE)
+_PBN_HAND = re.compile(r"^(?:[2-9TJQKA]{0,13}\.){3}[2-9TJQKA]{0,13}$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -143,6 +152,28 @@ def _predicate_matches(expected: Any, actual: Any) -> bool:
     if isinstance(expected, list):
         return isinstance(actual, list) and expected == actual
     return expected == actual
+
+
+def _contains_hidden_card_material(value: Any) -> bool:
+    """Reject hidden-card fields or card-valued aliases in nominally public input."""
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if normalized in _HIDDEN_CARD_KEYS or _contains_hidden_card_material(child):
+                return True
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(_contains_hidden_card_material(child) for child in value)
+    if isinstance(value, str):
+        return bool(_CARD_TOKEN.fullmatch(value) or _PBN_HAND.fullmatch(value))
+    return False
+
+
+def _validate_public_inputs(*, public_auction: Mapping[str, Any],
+                            public_context: Mapping[str, Any]) -> None:
+    if (_contains_hidden_card_material(public_auction)
+            or _contains_hidden_card_material(public_context)):
+        raise ValueError("public inputs contain hidden card material")
 
 
 def _rank(
@@ -365,6 +396,10 @@ def resolve_two_lane(*, school_id: str, acting_seat: str, acting_hand: dict[str,
                      gap_store: PostgresCanonGapStore,
                      world_supplier: Callable[[CanonGapReceipt, ResolutionProfile], Iterable[KnowledgeRule]]) -> Resolution:
     """Resolve Canon first; commit its gap before invoking a lazy WORLD supplier."""
+    _validate_public_inputs(
+        public_auction=public_auction,
+        public_context=public_context,
+    )
     visible_request_fingerprint = _request_fingerprint(
         acting_seat=acting_seat, acting_hand=acting_hand,
         public_auction=public_auction, public_context=public_context,
