@@ -78,5 +78,5 @@ $$;
 REVOKE ALL ON FUNCTION autopilot.get_dispatch_assignment(uuid)
 FROM PUBLIC,autopilot_runtime,autopilot_runtime_principal,autopilot_callback;
 
-DELETE FROM public.schema_migration WHERE migration_key='0326_autopilot_delivery_proof';
+DELETE FROM public.schema_migration WHERE migration_key='0327_autopilot_delivery_proof';
 COMMIT;

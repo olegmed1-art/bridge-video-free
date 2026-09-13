@@ -307,5 +307,5 @@ GRANT EXECUTE ON FUNCTION autopilot.accept_role_dispatch_delivery_proof(text,tex
 REVOKE ALL ON FUNCTION autopilot.accept_role_dispatch_terminal_v2(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb) FROM PUBLIC,autopilot_runtime,autopilot_runtime_principal;
 GRANT EXECUTE ON FUNCTION autopilot.accept_role_dispatch_terminal_v2(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb) TO autopilot_callback;
 
-INSERT INTO public.schema_migration(migration_key) VALUES ('0326_autopilot_delivery_proof');
+INSERT INTO public.schema_migration(migration_key) VALUES ('0327_autopilot_delivery_proof');
 COMMIT;

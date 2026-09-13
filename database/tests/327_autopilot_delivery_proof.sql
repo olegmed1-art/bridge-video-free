@@ -17,7 +17,7 @@ DECLARE
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
-         WHERE migration_key='0326_autopilot_delivery_proof'
+         WHERE migration_key='0327_autopilot_delivery_proof'
     ) THEN RAISE EXCEPTION 'AUTOPILOT_DELIVERY_PROOF_MIGRATION_MISSING'; END IF;
 
     SELECT work_item_id INTO root_item FROM autopilot.register_universal_work_item(

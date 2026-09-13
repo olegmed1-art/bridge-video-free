@@ -16,7 +16,7 @@ def test_worker_records_github_as_published_not_sent() -> None:
 
 
 def test_migration_requires_three_part_delivery_proof() -> None:
-    sql = _read("database/migrations/0326_autopilot_delivery_proof.sql")
+    sql = _read("database/migrations/0327_autopilot_delivery_proof.sql")
     for marker in (
         "'PUBLISHED'",
         "'DELIVERY_FAILED'",
@@ -46,7 +46,7 @@ def test_callback_workflow_accepts_only_proof_or_terminal_protocols() -> None:
 
 
 def test_sql_e2e_covers_required_negative_and_next_task_cases() -> None:
-    sql = _read("database/tests/326_autopilot_delivery_proof.sql")
+    sql = _read("database/tests/327_autopilot_delivery_proof.sql")
     for code in (
         "AUTOPILOT_FALSE_GITHUB_SENT_ACCEPTED",
         "AUTOPILOT_TERMINAL_WITHOUT_UI_PROOF_ACCEPTED",
