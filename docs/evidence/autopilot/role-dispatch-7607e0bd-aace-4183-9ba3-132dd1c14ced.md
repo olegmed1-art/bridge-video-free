@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=7607e0bd-aace-4183-9ba3-132dd1c14ced
+dispatch_epoch=5
+role=KNOWLEDGE
+task_fingerprint=0bf2166035ca7e1c0917f12599d51887003a34706af44456b463b2b4fa1917ac
+target_pr=860
+mode=REPAIR
+repair_attempt=1
+origin_task_id=e6241a71-91c0-433e-8b7b-594f45603b82
+prior_task_id=e6241a71-91c0-433e-8b7b-594f45603b82
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=Outbox requires READ_ONLY on ea62e23, but assignment requires completed Canon decoding REPAIR on stale 8877927; binding rejected fail-closed.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
