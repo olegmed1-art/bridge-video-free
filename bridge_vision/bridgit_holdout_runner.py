@@ -1,0 +1,1262 @@
+"""Portable Oracle/IBM runner for the frozen Bridgit recognizer holdout.
+
+The external package uses only relative paths. This runner materializes the
+existing SHADOW_ONLY job locally, invokes the unchanged recognizer, and keeps
+runtime measurements separate from the deterministic recognition payload.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import json
+import math
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from collections.abc import Mapping, Sequence
+from importlib import metadata
+from pathlib import Path
+from typing import Any, Callable
+
+from bridge_vision.bridgit_rank_layout import (
+    BACKEND_VERSION,
+    JOB_TYPE,
+    BridgitRankLayoutError,
+    canonical_hash,
+)
+
+RUNNER_INPUT_SCHEMA = "bridge-vision-bridgit-holdout-v1"
+RUNNER_OUTPUT_SCHEMA = "bridge-vision-bridgit-holdout-run/v1"
+RUNNER_VERSION = "bridgit-holdout-runner-v1"
+ALGORITHM_BASELINE_GIT_SHA = "3d8175efffe7c693451033b6bc11ff059a8e367d"
+MAX_PACKAGE_BYTES = 4 * 1024 * 1024
+MAX_CASES = 128
+
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_BASELINE_BLOB_SHAS = {
+    "bridge_vision/anchor_registration.py": "943552f8c6088b20005f9812820bf3773e58a764",
+    "bridge_vision/bridgit_rank_layout.py": "242927cdbb088b9a0a02276ba8bd7e6e27f6ca98",
+    "bridge_vision/deal_evidence.py": "d8b071816c916126d91e882b5e3ede1bdead252b",
+    "bridge_contracts/video_deal.py": "7c0baf7edfdd15896f4379f61abecb555d32e9fb",
+    "requirements-bridgit-rank-layout-shadow.txt": "7858f1d056d7708add5854ec38d12b18db43b4a8",
+}
+PINNED_RUNTIME_VERSIONS = {
+    "numpy": "2.3.2",
+    "opencv-python-headless": "5.0.0.93",
+}
+PINNED_RUNTIME_MODULES = {
+    "numpy": ("numpy", "numpy/__init__.py"),
+    "opencv-python-headless": ("cv2", "cv2/__init__.py"),
+}
+PINNED_RUNTIME_PATH_PREFIXES = {
+    "numpy": ("numpy/", "numpy.libs/"),
+    "opencv-python-headless": ("cv2/", "opencv_python_headless.libs/"),
+}
+RUNTIME_NATIVE_RECORD_POLICY = "import-runtime-records-v3"
+RUNTIME_PROBE_TIMEOUT_SECONDS = 30
+MAX_RUNTIME_PROBE_BYTES = 1024 * 1024
+CASE_EXECUTION_TIMEOUT_SECONDS = 300
+MAX_CASE_RECEIPT_BYTES = 16 * 1024 * 1024
+LOADER_INJECTION_ENV_VARS = frozenset(
+    {"LD_AUDIT", "LD_LIBRARY_PATH", "LD_PRELOAD"}
+)
+
+_ISOLATED_RUNTIME_PROBE = r'''
+import resource
+import sys
+
+output_limit = int(sys.argv[1])
+resource.setrlimit(resource.RLIMIT_FSIZE, (output_limit, output_limit))
+
+import json
+import pathlib
+for site_path in json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")):
+    if site_path not in sys.path:
+        sys.path.append(site_path)
+
+import importlib
+import importlib.metadata
+
+targets = {
+    "numpy": "numpy",
+    "opencv-python-headless": "cv2",
+}
+runtime_prefixes = {
+    "numpy": ("numpy/", "numpy.libs/"),
+    "opencv-python-headless": ("cv2/", "opencv_python_headless.libs/"),
+}
+result = {}
+for distribution_name, module_name in targets.items():
+    distribution = importlib.metadata.distribution(distribution_name)
+    module = importlib.import_module(module_name)
+    if module_name == "numpy":
+        importlib.import_module("numpy.linalg")
+        module.linalg.norm(module.asarray([1.0, 2.0]))
+    else:
+        numpy = importlib.import_module("numpy")
+        module.cvtColor(numpy.zeros((2, 2, 3), dtype=numpy.uint8), module.COLOR_BGR2GRAY)
+    entry_module = pathlib.Path(module.__file__).resolve(strict=True)
+    distribution_records = {}
+    native_records = {}
+    for entry in distribution.files or ():
+        relative = str(entry).replace("\\\\", "/")
+        if not relative.startswith(runtime_prefixes[distribution_name]):
+            continue
+        if getattr(entry, "hash", None) is None:
+            continue
+        resolved_entry = str(pathlib.Path(distribution.locate_file(entry)).resolve(strict=True))
+        distribution_records[resolved_entry] = relative
+        name = pathlib.PurePosixPath(relative).name.lower()
+        if any(marker in name for marker in (".so", ".pyd", ".dll", ".dylib")):
+            native_records[resolved_entry] = relative
+    loaded_runtime = set()
+    loaded = set()
+    for loaded_name, loaded_module in tuple(sys.modules.items()):
+        if loaded_name == module_name or loaded_name.startswith(module_name + "."):
+            raw_path = getattr(loaded_module, "__file__", None)
+            if isinstance(raw_path, str):
+                resolved = pathlib.Path(raw_path).resolve(strict=True)
+                if str(resolved) not in distribution_records:
+                    raise RuntimeError("unowned runtime module loaded for " + module_name)
+                loaded_runtime.add(str(resolved))
+                if str(resolved) in native_records:
+                    loaded.add(str(resolved))
+    maps = pathlib.Path("/proc/self/maps")
+    if not maps.is_file():
+        raise RuntimeError("Linux loaded-library map is unavailable")
+    for line in maps.read_text(encoding="utf-8", errors="strict").splitlines():
+        raw_path = line.rsplit(None, 1)[-1]
+        if raw_path.startswith("/"):
+            try:
+                resolved = str(pathlib.Path(raw_path).resolve(strict=True))
+            except OSError:
+                continue
+            if resolved in native_records:
+                loaded.add(resolved)
+    if not loaded:
+        raise RuntimeError("no owned native runtime file was observed for " + module_name)
+    if not loaded_runtime:
+        raise RuntimeError("no owned runtime module was observed for " + module_name)
+    result[distribution_name] = {
+        "entry_module": str(entry_module),
+        "loaded_runtime_files": sorted(loaded_runtime),
+        "loaded_native_files": sorted(loaded),
+    }
+print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+'''
+
+_ISOLATED_CASE_EXECUTOR = r'''
+import resource
+import sys
+import time
+
+output_limit = int(sys.argv[1])
+resource.setrlimit(resource.RLIMIT_FSIZE, (output_limit, output_limit))
+cpu_start = time.process_time()
+
+import json
+import pathlib
+for site_path in json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")):
+    if site_path not in sys.path:
+        sys.path.append(site_path)
+
+import importlib
+import importlib.metadata
+
+targets = {
+    "numpy": "numpy",
+    "opencv-python-headless": "cv2",
+}
+runtime_prefixes = {
+    "numpy": ("numpy/", "numpy.libs/"),
+    "opencv-python-headless": ("cv2/", "opencv_python_headless.libs/"),
+}
+prepared_runtime = {}
+for distribution_name, module_name in targets.items():
+    distribution = importlib.metadata.distribution(distribution_name)
+    module = importlib.import_module(module_name)
+    if module_name == "numpy":
+        importlib.import_module("numpy.linalg")
+        module.linalg.norm(module.asarray([1.0, 2.0]))
+    else:
+        numpy = importlib.import_module("numpy")
+        module.cvtColor(numpy.zeros((2, 2, 3), dtype=numpy.uint8), module.COLOR_BGR2GRAY)
+    entry_module = pathlib.Path(module.__file__).resolve(strict=True)
+    distribution_records = {}
+    native_records = {}
+    for entry in distribution.files or ():
+        relative = str(entry).replace("\\\\", "/")
+        if not relative.startswith(runtime_prefixes[distribution_name]):
+            continue
+        if getattr(entry, "hash", None) is None:
+            continue
+        resolved_entry = str(pathlib.Path(distribution.locate_file(entry)).resolve(strict=True))
+        distribution_records[resolved_entry] = relative
+        name = pathlib.PurePosixPath(relative).name.lower()
+        if any(marker in name for marker in (".so", ".pyd", ".dll", ".dylib")):
+            native_records[resolved_entry] = relative
+    prepared_runtime[distribution_name] = {
+        "module_name": module_name,
+        "entry_module": str(entry_module),
+        "distribution_records": distribution_records,
+        "native_records": native_records,
+    }
+
+repository_root = pathlib.Path(sys.argv[3]).resolve(strict=True)
+job_path = pathlib.Path(sys.argv[4]).resolve(strict=True)
+output_path = pathlib.Path(sys.argv[5])
+sys.path.insert(0, str(repository_root))
+from bridge_vision.bridgit_rank_layout import execute_shadow_job
+
+job = json.loads(job_path.read_text(encoding="utf-8"))
+receipt = execute_shadow_job(job)
+
+runtime_probe = {}
+for distribution_name, prepared in prepared_runtime.items():
+    module_name = prepared["module_name"]
+    distribution_records = prepared["distribution_records"]
+    native_records = prepared["native_records"]
+    loaded_runtime = set()
+    loaded = set()
+    for loaded_name, loaded_module in tuple(sys.modules.items()):
+        if loaded_name == module_name or loaded_name.startswith(module_name + "."):
+            raw_path = getattr(loaded_module, "__file__", None)
+            if isinstance(raw_path, str):
+                resolved = pathlib.Path(raw_path).resolve(strict=True)
+                if str(resolved) not in distribution_records:
+                    raise RuntimeError("unowned runtime module loaded for " + module_name)
+                loaded_runtime.add(str(resolved))
+                if str(resolved) in native_records:
+                    loaded.add(str(resolved))
+    maps = pathlib.Path("/proc/self/maps")
+    if not maps.is_file():
+        raise RuntimeError("Linux loaded-library map is unavailable")
+    for line in maps.read_text(encoding="utf-8", errors="strict").splitlines():
+        raw_path = line.rsplit(None, 1)[-1]
+        if raw_path.startswith("/"):
+            try:
+                resolved = str(pathlib.Path(raw_path).resolve(strict=True))
+            except OSError:
+                continue
+            if resolved in native_records:
+                loaded.add(resolved)
+    if not loaded:
+        raise RuntimeError("no owned native runtime file was observed for " + module_name)
+    if not loaded_runtime:
+        raise RuntimeError("no owned runtime module was observed for " + module_name)
+    runtime_probe[distribution_name] = {
+        "entry_module": prepared["entry_module"],
+        "loaded_runtime_files": sorted(loaded_runtime),
+        "loaded_native_files": sorted(loaded),
+    }
+usage = resource.getrusage(resource.RUSAGE_SELF)
+peak_rss_bytes = int(usage.ru_maxrss)
+if sys.platform != "darwin":
+    peak_rss_bytes *= 1024
+output_path.write_text(
+    json.dumps(
+        {
+            "receipt": receipt,
+            "runtime_probe": runtime_probe,
+            "runtime_metrics": {
+                "cpu_seconds": round(time.process_time() - cpu_start, 6),
+                "peak_rss_bytes": peak_rss_bytes,
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ),
+    encoding="utf-8",
+)
+'''
+
+
+class HoldoutRunnerError(ValueError):
+    """The portable holdout package is malformed or not baseline-bound."""
+
+
+def _git_blob_sha(path: Path) -> str:
+    try:
+        size = path.stat().st_size
+        digest = hashlib.sha1()
+        digest.update(f"blob {size}\0".encode("ascii"))
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError as exc:
+        raise HoldoutRunnerError("recognizer baseline artifact is unavailable") from exc
+
+
+def _sha256_file(path: Path) -> str:
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError as exc:
+        raise HoldoutRunnerError("pixel runtime module is unavailable") from exc
+
+
+def _current_baseline_blob_shas() -> dict[str, str]:
+    repository_root = Path(__file__).resolve().parent.parent
+    return {
+        relative: _git_blob_sha(repository_root / relative)
+        for relative in _BASELINE_BLOB_SHAS
+    }
+
+
+def _verify_algorithm_baseline() -> None:
+    if _current_baseline_blob_shas() != _BASELINE_BLOB_SHAS:
+        raise HoldoutRunnerError(
+            "recognizer source does not match frozen algorithm baseline"
+        )
+
+
+def _record_sha256(record_hash: Any) -> str:
+    if record_hash is None or getattr(record_hash, "mode", None) != "sha256":
+        raise HoldoutRunnerError("pixel runtime module has no trusted RECORD hash")
+    value = str(getattr(record_hash, "value", ""))
+    try:
+        padding = "=" * (-len(value) % 4)
+        return base64.urlsafe_b64decode(value + padding).hex()
+    except (ValueError, TypeError) as exc:
+        raise HoldoutRunnerError("pixel runtime RECORD hash is invalid") from exc
+
+
+def _is_native_runtime_path(relative: str) -> bool:
+    name = Path(relative).name.lower()
+    return any(marker in name for marker in (".so", ".pyd", ".dll", ".dylib"))
+
+
+def _is_bound_runtime_path(distribution_name: str, relative: str) -> bool:
+    path = Path(relative)
+    return (
+        not path.is_absolute()
+        and ".." not in path.parts
+        and relative.startswith(PINNED_RUNTIME_PATH_PREFIXES[distribution_name])
+    )
+
+
+def _verified_record_file(distribution: Any, entry: Any, *, native: bool) -> Path:
+    try:
+        unresolved = Path(distribution.locate_file(entry))
+        if unresolved.is_symlink():
+            raise HoldoutRunnerError("pixel runtime RECORD file must not be a symlink")
+        path = unresolved.resolve(strict=True)
+    except HoldoutRunnerError:
+        raise
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HoldoutRunnerError("pixel runtime RECORD file is unavailable") from exc
+    if not path.is_file():
+        raise HoldoutRunnerError("pixel runtime RECORD file is not a regular file")
+    if _sha256_file(path) != _record_sha256(getattr(entry, "hash", None)):
+        kind = "native file" if native else "module file"
+        raise HoldoutRunnerError(f"pixel runtime {kind} does not match RECORD")
+    return path
+
+
+def _clean_runtime_environment() -> dict[str, str]:
+    if any(os.environ.get(key) for key in LOADER_INJECTION_ENV_VARS):
+        raise HoldoutRunnerError("pixel runtime loader injection is not allowed")
+    preload = Path("/etc/ld.so.preload")
+    try:
+        if preload.is_file() and preload.stat().st_size:
+            raise HoldoutRunnerError("system loader preload is not allowed")
+    except OSError as exc:
+        raise HoldoutRunnerError("system loader preload cannot be verified") from exc
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in {
+            "PYTHONHOME",
+            "PYTHONPATH",
+            "PYTHONSTARTUP",
+            *LOADER_INJECTION_ENV_VARS,
+        }
+    }
+
+
+def _runtime_import_roots() -> list[str]:
+    roots = set()
+    for distribution_name, (_, expected_relative) in PINNED_RUNTIME_MODULES.items():
+        try:
+            distribution = metadata.distribution(distribution_name)
+            entry_path = Path(distribution.locate_file(expected_relative)).resolve(
+                strict=True
+            )
+        except (metadata.PackageNotFoundError, OSError, ValueError, RuntimeError) as exc:
+            raise HoldoutRunnerError(
+                f"required pixel runtime is not installed: {distribution_name}"
+            ) from exc
+        root = entry_path
+        for _ in Path(expected_relative).parts:
+            root = root.parent
+        if not root.is_dir():
+            raise HoldoutRunnerError("pixel runtime import root is unavailable")
+        roots.add(str(root))
+    return sorted(roots)
+
+
+def _isolated_runtime_probe() -> dict[str, Any]:
+    environment = _clean_runtime_environment()
+    import_roots = _runtime_import_roots()
+    with tempfile.TemporaryDirectory(prefix="bridgit-runtime-probe-") as temporary:
+        stdout_path = Path(temporary) / "stdout"
+        stderr_path = Path(temporary) / "stderr"
+        pycache_path = Path(temporary) / "pycache"
+        import_roots_path = Path(temporary) / "runtime-import-roots.json"
+        pycache_path.mkdir()
+        import_roots_path.write_text(json.dumps(import_roots), encoding="utf-8")
+
+        try:
+            with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-I",
+                        "-S",
+                        "-B",
+                        "-X",
+                        f"pycache_prefix={pycache_path}",
+                        "-c",
+                        _ISOLATED_RUNTIME_PROBE,
+                        str(MAX_RUNTIME_PROBE_BYTES),
+                        str(import_roots_path),
+                    ],
+                    check=False,
+                    stdout=stdout,
+                    stderr=stderr,
+                    cwd=temporary,
+                    env=environment,
+                    timeout=RUNTIME_PROBE_TIMEOUT_SECONDS,
+                )
+            if (
+                completed.returncode != 0
+                or stdout_path.stat().st_size > MAX_RUNTIME_PROBE_BYTES
+                or stderr_path.stat().st_size > MAX_RUNTIME_PROBE_BYTES
+            ):
+                raise HoldoutRunnerError("isolated pixel runtime probe failed")
+            payload = _read_bounded_regular_file(
+                stdout_path, MAX_RUNTIME_PROBE_BYTES, "runtime probe output"
+            )
+        except HoldoutRunnerError:
+            raise
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise HoldoutRunnerError("isolated pixel runtime probe failed") from exc
+    try:
+        result = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HoldoutRunnerError("isolated pixel runtime probe is invalid") from exc
+    if not isinstance(result, Mapping):
+        raise HoldoutRunnerError("isolated pixel runtime probe is invalid")
+    return dict(result)
+
+
+def _verify_imported_runtime_modules(
+    isolated: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Verify loaded modules and every hashed file in the pinned wheels."""
+    if isolated is None:
+        isolated = _isolated_runtime_probe()
+    if set(isolated) != set(PINNED_RUNTIME_MODULES):
+        raise HoldoutRunnerError("isolated pixel runtime probe is incomplete")
+    identities: dict[str, dict[str, Any]] = {}
+    for distribution_name, (module_name, expected_relative) in PINNED_RUNTIME_MODULES.items():
+        try:
+            distribution = metadata.distribution(distribution_name)
+        except metadata.PackageNotFoundError as exc:
+            raise HoldoutRunnerError(
+                f"required pixel runtime is not installed: {distribution_name}"
+            ) from exc
+        files = distribution.files
+        if files is None:
+            raise HoldoutRunnerError("pixel runtime distribution has no file manifest")
+        matched = None
+        runtime_entries = []
+        native_entries = []
+        for entry in files:
+            relative = str(entry).replace("\\", "/")
+            if not _is_bound_runtime_path(distribution_name, relative):
+                continue
+            record_hash = getattr(entry, "hash", None)
+            if record_hash is None:
+                if relative.endswith(".dist-info/RECORD") or relative.endswith(".pyc"):
+                    continue
+                raise HoldoutRunnerError(
+                    "pixel runtime distribution file has no trusted RECORD hash"
+                )
+            runtime_entries.append((relative, entry))
+            if _is_native_runtime_path(relative):
+                native_entries.append((relative, entry))
+            if relative == expected_relative:
+                matched = entry
+        if matched is None:
+            raise HoldoutRunnerError(
+                "imported pixel runtime module is not owned by frozen distribution"
+            )
+        relative = str(matched).replace("\\", "/")
+        if relative != expected_relative:
+            raise HoldoutRunnerError("pixel runtime module origin does not match baseline")
+        verified_runtime_files = []
+        runtime_by_resolved_path = {}
+        for runtime_relative, runtime_entry in sorted(runtime_entries):
+            runtime_path = _verified_record_file(
+                distribution,
+                runtime_entry,
+                native=_is_native_runtime_path(runtime_relative),
+            )
+            runtime_by_resolved_path[str(runtime_path)] = runtime_relative
+            verified_runtime_files.append(
+                {
+                    "path": runtime_relative,
+                    "sha256": _record_sha256(getattr(runtime_entry, "hash", None)),
+                }
+            )
+        try:
+            module_path = next(
+                Path(path)
+                for path, runtime_relative in runtime_by_resolved_path.items()
+                if runtime_relative == expected_relative
+            )
+        except StopIteration as exc:
+            raise HoldoutRunnerError(
+                "imported pixel runtime module is not owned by frozen distribution"
+            ) from exc
+        if not native_entries:
+            raise HoldoutRunnerError("pixel runtime distribution has no native files")
+        native_by_resolved_path = {
+            path: runtime_relative
+            for path, runtime_relative in runtime_by_resolved_path.items()
+            if _is_native_runtime_path(runtime_relative)
+        }
+        verified_native_files = [
+            item
+            for item in verified_runtime_files
+            if _is_native_runtime_path(str(item["path"]))
+        ]
+        probe = isolated.get(distribution_name)
+        if not isinstance(probe, Mapping):
+            raise HoldoutRunnerError("isolated pixel runtime probe is invalid")
+        try:
+            probe_entry = str(Path(str(probe.get("entry_module"))).resolve(strict=True))
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise HoldoutRunnerError("isolated pixel runtime probe is invalid") from exc
+        if probe_entry != str(module_path):
+            raise HoldoutRunnerError(
+                "isolated pixel runtime module does not match imported module"
+            )
+        loaded_runtime_raw = probe.get("loaded_runtime_files")
+        if (
+            not isinstance(loaded_runtime_raw, Sequence)
+            or isinstance(loaded_runtime_raw, (str, bytes))
+            or not loaded_runtime_raw
+        ):
+            raise HoldoutRunnerError("isolated pixel runtime probe has no runtime files")
+        loaded_runtime_relative = []
+        for raw_path in loaded_runtime_raw:
+            if not isinstance(raw_path, str) or raw_path not in runtime_by_resolved_path:
+                raise HoldoutRunnerError(
+                    "loaded pixel runtime file is not owned by frozen distribution"
+                )
+            loaded_runtime_relative.append(runtime_by_resolved_path[raw_path])
+        loaded_raw = probe.get("loaded_native_files")
+        if (
+            not isinstance(loaded_raw, Sequence)
+            or isinstance(loaded_raw, (str, bytes))
+            or not loaded_raw
+        ):
+            raise HoldoutRunnerError("isolated pixel runtime probe has no native files")
+        loaded_relative = []
+        for raw_path in loaded_raw:
+            if not isinstance(raw_path, str) or raw_path not in native_by_resolved_path:
+                raise HoldoutRunnerError(
+                    "loaded pixel runtime native file is not owned by frozen distribution"
+                )
+            loaded_relative.append(native_by_resolved_path[raw_path])
+        identities[distribution_name] = {
+            "entry_module": relative,
+            "runtime_files": verified_runtime_files,
+            "native_files": verified_native_files,
+            "loaded_runtime_files": sorted(set(loaded_runtime_relative)),
+            "loaded_native_files": sorted(set(loaded_relative)),
+        }
+    return identities
+
+
+def _execute_case_isolated(
+    job: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    environment = _clean_runtime_environment()
+    import_roots = _runtime_import_roots()
+    repository_root = Path(__file__).resolve().parent.parent
+
+    with tempfile.TemporaryDirectory(prefix="bridgit-holdout-case-") as temporary:
+        root = Path(temporary)
+        job_path = root / "job.json"
+        output_path = root / "receipt.json"
+        pycache_path = root / "pycache"
+        import_roots_path = root / "runtime-import-roots.json"
+        pycache_path.mkdir()
+        import_roots_path.write_text(json.dumps(import_roots), encoding="utf-8")
+        try:
+            job_path.write_text(
+                json.dumps(job, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "-B",
+                    "-X",
+                    f"pycache_prefix={pycache_path}",
+                    "-c",
+                    _ISOLATED_CASE_EXECUTOR,
+                    str(MAX_CASE_RECEIPT_BYTES),
+                    str(import_roots_path),
+                    str(repository_root),
+                    str(job_path),
+                    str(output_path),
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=temporary,
+                env=environment,
+                timeout=CASE_EXECUTION_TIMEOUT_SECONDS,
+            )
+            if completed.returncode != 0:
+                raise HoldoutRunnerError("isolated recognizer case failed")
+            payload = _read_bounded_regular_file(
+                output_path, MAX_CASE_RECEIPT_BYTES, "isolated case receipt"
+            )
+        except HoldoutRunnerError:
+            raise
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise HoldoutRunnerError("isolated recognizer case failed") from exc
+    try:
+        wrapper = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HoldoutRunnerError("isolated case receipt is invalid") from exc
+    if not isinstance(wrapper, Mapping):
+        raise HoldoutRunnerError("isolated case receipt is invalid")
+    receipt = wrapper.get("receipt")
+    runtime_probe = wrapper.get("runtime_probe")
+    runtime_metrics = wrapper.get("runtime_metrics")
+    if not isinstance(receipt, Mapping) or not isinstance(runtime_probe, Mapping):
+        raise HoldoutRunnerError("isolated case receipt is invalid")
+    _verify_imported_runtime_modules(runtime_probe)
+    if not isinstance(runtime_metrics, Mapping):
+        raise HoldoutRunnerError("isolated case runtime metrics are invalid")
+    cpu_seconds = runtime_metrics.get("cpu_seconds")
+    peak_rss_bytes = runtime_metrics.get("peak_rss_bytes")
+    if (
+        isinstance(cpu_seconds, bool)
+        or not isinstance(cpu_seconds, (int, float))
+        or not math.isfinite(cpu_seconds)
+        or cpu_seconds < 0
+        or isinstance(peak_rss_bytes, bool)
+        or not isinstance(peak_rss_bytes, int)
+        or peak_rss_bytes <= 0
+    ):
+        raise HoldoutRunnerError("isolated case runtime metrics are invalid")
+    return dict(receipt), {
+        "cpu_seconds": round(float(cpu_seconds), 6),
+        "peak_rss_bytes": peak_rss_bytes,
+    }
+
+
+def _installed_runtime_versions() -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for distribution in PINNED_RUNTIME_VERSIONS:
+        try:
+            versions[distribution] = metadata.version(distribution)
+        except metadata.PackageNotFoundError as exc:
+            raise HoldoutRunnerError(
+                f"required pixel runtime is not installed: {distribution}"
+            ) from exc
+    return versions
+
+
+def _verified_runtime_identity() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    versions = _installed_runtime_versions()
+    if versions != PINNED_RUNTIME_VERSIONS:
+        raise HoldoutRunnerError("pixel runtime versions do not match frozen baseline")
+    return versions, _verify_imported_runtime_modules()
+
+
+def runtime_native_manifest_sha256(
+    runtime_modules: Mapping[str, Mapping[str, Any]],
+) -> str:
+    manifest = {
+        distribution: list(identity.get("runtime_files", []))
+        for distribution, identity in sorted(runtime_modules.items())
+    }
+    return hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def frozen_recognizer_artifact_sha256(native_manifest_sha256: str) -> str:
+    """Return the trusted artifact identity encoded by the frozen baseline."""
+    if _HEX64.fullmatch(native_manifest_sha256) is None:
+        raise HoldoutRunnerError("pixel runtime native manifest hash is invalid")
+    payload = {
+        "algorithm_baseline_git_sha": ALGORITHM_BASELINE_GIT_SHA,
+        "backend_version": BACKEND_VERSION,
+        "git_blob_shas": _BASELINE_BLOB_SHAS,
+        "runtime_versions": PINNED_RUNTIME_VERSIONS,
+        "runtime_module_paths": {
+            name: relative
+            for name, (_, relative) in PINNED_RUNTIME_MODULES.items()
+        },
+        "runtime_path_prefixes": PINNED_RUNTIME_PATH_PREFIXES,
+        "runtime_native_record_policy": RUNTIME_NATIVE_RECORD_POLICY,
+        "runtime_native_manifest_sha256": native_manifest_sha256,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def recognizer_artifact_identity() -> tuple[str, str]:
+    """Verify source/runtime and return artifact plus native-manifest identities."""
+    _verify_algorithm_baseline()
+    _, runtime_modules = _verified_runtime_identity()
+    native_manifest_sha = runtime_native_manifest_sha256(runtime_modules)
+    return (
+        frozen_recognizer_artifact_sha256(native_manifest_sha),
+        native_manifest_sha,
+    )
+
+
+def recognizer_artifact_sha256() -> str:
+    """Verify local source/runtime and return the trusted portable artifact identity."""
+    return recognizer_artifact_identity()[0]
+
+
+def _read_bounded_regular_file(path: Path, max_bytes: int, kind: str) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise HoldoutRunnerError(f"{kind} is unavailable") from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise HoldoutRunnerError(f"{kind} must be a regular file")
+        if info.st_size > max_bytes:
+            raise HoldoutRunnerError(f"{kind} exceeds size limit")
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except HoldoutRunnerError:
+        raise
+    except OSError as exc:
+        raise HoldoutRunnerError(f"{kind} is unavailable") from exc
+    finally:
+        os.close(descriptor)
+    payload = b"".join(chunks)
+    if len(payload) > max_bytes:
+        raise HoldoutRunnerError(f"{kind} exceeds size limit")
+    return payload
+
+
+def _load_package(path: Path) -> dict[str, Any]:
+    payload = _read_bounded_regular_file(path, MAX_PACKAGE_BYTES, "holdout package")
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HoldoutRunnerError("holdout package is not valid JSON") from exc
+    if not isinstance(value, Mapping):
+        raise HoldoutRunnerError("holdout package must be an object")
+    return dict(value)
+
+
+def _string(raw: Any, field: str) -> str:
+    if not isinstance(raw, str) or not raw:
+        raise HoldoutRunnerError(f"invalid {field}")
+    return raw
+
+
+def _resolve_portable_path(raw: Any, field: str, package_root: Path) -> Path:
+    declared = Path(_string(raw, field))
+    if declared.is_absolute():
+        raise HoldoutRunnerError(f"{field} must be relative")
+    try:
+        resolved = (package_root / declared).resolve(strict=True)
+        resolved.relative_to(package_root)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HoldoutRunnerError(f"{field} escapes package root") from exc
+    if not resolved.is_file():
+        raise HoldoutRunnerError(f"{field} must identify a file")
+    return resolved
+
+
+def _portable_ref(
+    raw: Any,
+    field: str,
+    package_root: Path,
+    *,
+    timestamp_required: bool = False,
+) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raise HoldoutRunnerError(f"{field} must be an object")
+    resolved = _resolve_portable_path(raw.get("path"), f"{field}.path", package_root)
+    sha = raw.get("sha256")
+    if not isinstance(sha, str) or _HEX64.fullmatch(sha) is None:
+        raise HoldoutRunnerError(f"invalid {field}.sha256")
+    result: dict[str, Any] = {"path": str(resolved), "sha256": sha}
+    if timestamp_required:
+        timestamp = raw.get("timestamp_ms")
+        if (
+            isinstance(timestamp, bool)
+            or not isinstance(timestamp, int)
+            or timestamp < 0
+        ):
+            raise HoldoutRunnerError(f"invalid {field}.timestamp_ms")
+        result["timestamp_ms"] = timestamp
+    return result
+
+
+def _materialize_job(raw_case: Any, package_root: Path) -> tuple[str, dict[str, Any]]:
+    if not isinstance(raw_case, Mapping):
+        raise HoldoutRunnerError("case must be an object")
+    case_id = _string(raw_case.get("case_id"), "case_id")
+    profile_id = _string(raw_case.get("profile_id"), f"{case_id}.profile_id")
+    frame_refs = raw_case.get("frame_refs")
+    if (
+        not isinstance(frame_refs, Sequence)
+        or isinstance(frame_refs, (str, bytes))
+        or not 1 <= len(frame_refs) <= 16
+    ):
+        raise HoldoutRunnerError(f"{case_id}.frame_refs count outside allowed range")
+    pointer_events = raw_case.get("teacher_pointer_events", [])
+    if not isinstance(pointer_events, Sequence) or isinstance(
+        pointer_events, (str, bytes)
+    ):
+        raise HoldoutRunnerError(
+            f"{case_id}.teacher_pointer_events must be an array"
+        )
+    job = {
+        "job_type": JOB_TYPE,
+        "production_write": False,
+        "allow_hidden_information": False,
+        "input_root": str(package_root),
+        "profile_id": profile_id,
+        "profile_ref": _portable_ref(
+            raw_case.get("profile_ref"), f"{case_id}.profile_ref", package_root
+        ),
+        "reference_frame_ref": _portable_ref(
+            raw_case.get("reference_frame_ref"),
+            f"{case_id}.reference_frame_ref",
+            package_root,
+        ),
+        "frame_refs": [
+            _portable_ref(
+                item,
+                f"{case_id}.frame_refs[{index}]",
+                package_root,
+                timestamp_required=True,
+            )
+            for index, item in enumerate(frame_refs)
+        ],
+        "teacher_pointer_events": list(pointer_events),
+    }
+    return case_id, job
+
+
+def _directory_bytes(root: Path) -> int:
+    total = 0
+    try:
+        for path in root.rglob("*"):
+            try:
+                if path.is_file():
+                    total += path.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        return total
+    return total
+
+
+def _measure(call: Callable[[], Any]) -> tuple[Any, dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="bridgit-holdout-") as temporary:
+        temp_root = Path(temporary)
+        stop = threading.Event()
+        peak_temp = [0]
+
+        def sample() -> None:
+            while not stop.wait(0.01):
+                peak_temp[0] = max(peak_temp[0], _directory_bytes(temp_root))
+
+        monitor = threading.Thread(
+            target=sample, name="bridgit-holdout-temp-meter", daemon=True
+        )
+        old_tmpdir = os.environ.get("TMPDIR")
+        old_tempdir = tempfile.tempdir
+        os.environ["TMPDIR"] = str(temp_root)
+        tempfile.tempdir = str(temp_root)
+        wall_start = time.perf_counter()
+        cpu_start = time.process_time()
+        monitor.start()
+        try:
+            result = call()
+        finally:
+            wall_seconds = time.perf_counter() - wall_start
+            cpu_seconds = time.process_time() - cpu_start
+            stop.set()
+            monitor.join(timeout=1.0)
+            peak_temp[0] = max(peak_temp[0], _directory_bytes(temp_root))
+            tempfile.tempdir = old_tempdir
+            if old_tmpdir is None:
+                os.environ.pop("TMPDIR", None)
+            else:
+                os.environ["TMPDIR"] = old_tmpdir
+        metrics = {
+            "wall_seconds": round(wall_seconds, 6),
+            "cpu_seconds": round(cpu_seconds, 6),
+            "cpu_utilization_ratio": (
+                round(cpu_seconds / wall_seconds, 6) if wall_seconds else 0.0
+            ),
+            "peak_temp_disk_bytes": peak_temp[0],
+        }
+        return result, metrics
+
+
+def _portable_card_records(
+    result: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], int, int]:
+    report = result.get("deal_evidence_report")
+    if not isinstance(report, Mapping):
+        raise HoldoutRunnerError("recognizer result has no deal_evidence_report")
+    records = report.get("card_records")
+    if not isinstance(records, Sequence) or isinstance(records, (str, bytes)):
+        raise HoldoutRunnerError("deal_evidence_report.card_records is invalid")
+    portable = []
+    known_cards = []
+    for raw in records:
+        if not isinstance(raw, Mapping):
+            raise HoldoutRunnerError("card record is invalid")
+        provenance = str(raw.get("source") or "")
+        unknown = provenance == "UNKNOWN"
+        suit = raw.get("suit")
+        rank = raw.get("rank")
+        if not unknown and isinstance(suit, str) and isinstance(rank, str):
+            known_cards.append(rank + suit)
+        portable.append(
+            {
+                "seat": raw.get("seat"),
+                "suit": suit,
+                "rank": rank,
+                "confidence": raw.get("confidence"),
+                "provenance": provenance,
+                "frame_sha256": raw.get("frame_sha256"),
+                "recognizer_version": raw.get("recognizer_version"),
+                "UNKNOWN": unknown,
+            }
+        )
+    unknown_count = sum(bool(item["UNKNOWN"]) for item in portable)
+    duplicate_card_count = len(known_cards) - len(set(known_cards))
+    return portable, unknown_count, duplicate_card_count
+
+
+def run_package(package_path: Path) -> dict[str, Any]:
+    package = _load_package(package_path)
+    try:
+        package_path = package_path.resolve(strict=True)
+        package_root = package_path.parent.resolve(strict=True)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HoldoutRunnerError("holdout package is unavailable") from exc
+    if package.get("schema") != RUNNER_INPUT_SCHEMA:
+        raise HoldoutRunnerError("unsupported holdout package schema")
+    if package.get("runner_version") != RUNNER_VERSION:
+        raise HoldoutRunnerError("runner version does not match frozen package")
+    head = package.get("recognizer_head_git_sha")
+    if head != ALGORITHM_BASELINE_GIT_SHA:
+        raise HoldoutRunnerError(
+            "recognizer head does not match frozen algorithm baseline"
+        )
+    if package.get("recognizer_version") != BACKEND_VERSION:
+        raise HoldoutRunnerError("recognizer version does not match frozen package")
+    artifact_sha, native_manifest_sha = recognizer_artifact_identity()
+    if package.get("runtime_native_manifest_sha256") != native_manifest_sha:
+        raise HoldoutRunnerError("pixel runtime native manifest does not match package")
+    if package.get("recognizer_artifact_sha256") != artifact_sha:
+        raise HoldoutRunnerError("recognizer artifact does not match frozen package")
+    cases = package.get("cases")
+    if (
+        not isinstance(cases, Sequence)
+        or isinstance(cases, (str, bytes))
+        or not 1 <= len(cases) <= MAX_CASES
+    ):
+        raise HoldoutRunnerError("cases count outside allowed range")
+    seen_case_ids: set[str] = set()
+    case_outputs = []
+    deterministic_case_hashes = []
+    for raw_case in cases:
+        case_id, job = _materialize_job(raw_case, package_root)
+        if case_id in seen_case_ids:
+            raise HoldoutRunnerError("duplicate case_id")
+        seen_case_ids.add(case_id)
+        (receipt, child_metrics), runtime_metrics = _measure(
+            lambda job=job: _execute_case_isolated(job)
+        )
+        runtime_metrics["cpu_seconds"] = child_metrics["cpu_seconds"]
+        runtime_metrics["cpu_utilization_ratio"] = (
+            round(child_metrics["cpu_seconds"] / runtime_metrics["wall_seconds"], 6)
+            if runtime_metrics["wall_seconds"]
+            else 0.0
+        )
+        runtime_metrics["peak_rss_bytes"] = child_metrics["peak_rss_bytes"]
+        result = receipt.get("result")
+        if not isinstance(result, Mapping):
+            raise HoldoutRunnerError("recognizer receipt has no result")
+        records, unknown_count, duplicate_card_count = _portable_card_records(result)
+        evidence_report = result.get("deal_evidence_report")
+        stable = {
+            "case_id": case_id,
+            "recognizer_status": result.get("status"),
+            "evidence_status": (
+                evidence_report.get("status")
+                if isinstance(evidence_report, Mapping)
+                else None
+            ),
+            "recognizer_version": BACKEND_VERSION,
+            "card_records": records,
+            "UNKNOWN_count": unknown_count,
+            "duplicate_card_count": duplicate_card_count,
+            "recognizer_result_sha256": canonical_hash(result),
+        }
+        stable["portable_case_output_sha256"] = canonical_hash(stable)
+        deterministic_case_hashes.append(stable["portable_case_output_sha256"])
+        case_outputs.append(
+            {
+                **stable,
+                "recognizer_result": dict(result),
+                "runtime_metrics": runtime_metrics,
+            }
+        )
+    aggregate = {
+        "wall_seconds": round(
+            sum(item["runtime_metrics"]["wall_seconds"] for item in case_outputs), 6
+        ),
+        "cpu_seconds": round(
+            sum(item["runtime_metrics"]["cpu_seconds"] for item in case_outputs), 6
+        ),
+        "peak_rss_bytes": max(
+            item["runtime_metrics"]["peak_rss_bytes"] for item in case_outputs
+        ),
+        "peak_temp_disk_bytes": max(
+            item["runtime_metrics"]["peak_temp_disk_bytes"] for item in case_outputs
+        ),
+    }
+    portable_input_sha = canonical_hash(package)
+    deterministic_receipt = {
+        "recognizer_head_git_sha": head,
+        "recognizer_artifact_sha256": artifact_sha,
+        "runtime_native_manifest_sha256": native_manifest_sha,
+        "recognizer_version": BACKEND_VERSION,
+        "runner_version": RUNNER_VERSION,
+        "portable_input_sha256": portable_input_sha,
+        "case_output_sha256s": deterministic_case_hashes,
+    }
+    return {
+        "schema": RUNNER_OUTPUT_SCHEMA,
+        **deterministic_receipt,
+        "deterministic_run_sha256": canonical_hash(deterministic_receipt),
+        "cases": case_outputs,
+        "runtime_metrics": aggregate,
+    }
+
+
+def _sealed_input_paths(package_path: Path, package: Mapping[str, Any]) -> list[Path]:
+    try:
+        resolved_package = package_path.resolve(strict=True)
+        package_root = resolved_package.parent.resolve(strict=True)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HoldoutRunnerError("holdout package is unavailable") from exc
+    candidates = [resolved_package]
+    cases = package.get("cases")
+    if not isinstance(cases, Sequence) or isinstance(cases, (str, bytes)):
+        raise HoldoutRunnerError("cases must be an array")
+    for case_index, raw_case in enumerate(cases):
+        if not isinstance(raw_case, Mapping):
+            raise HoldoutRunnerError(f"cases[{case_index}] must be an object")
+        for field in ("profile_ref", "reference_frame_ref"):
+            raw_ref = raw_case.get(field)
+            if not isinstance(raw_ref, Mapping):
+                raise HoldoutRunnerError(
+                    f"cases[{case_index}].{field} must be an object"
+                )
+            candidates.append(
+                _resolve_portable_path(
+                    raw_ref.get("path"),
+                    f"cases[{case_index}].{field}.path",
+                    package_root,
+                )
+            )
+        frame_refs = raw_case.get("frame_refs")
+        if not isinstance(frame_refs, Sequence) or isinstance(
+            frame_refs, (str, bytes)
+        ):
+            raise HoldoutRunnerError(
+                f"cases[{case_index}].frame_refs must be an array"
+            )
+        for frame_index, raw_ref in enumerate(frame_refs):
+            if not isinstance(raw_ref, Mapping):
+                raise HoldoutRunnerError(
+                    f"cases[{case_index}].frame_refs[{frame_index}] must be an object"
+                )
+            candidates.append(
+                _resolve_portable_path(
+                    raw_ref.get("path"),
+                    f"cases[{case_index}].frame_refs[{frame_index}].path",
+                    package_root,
+                )
+            )
+    return candidates
+
+
+def _validate_output_target(package_path: Path, output_path: Path) -> None:
+    package = _load_package(package_path)
+    candidates = _sealed_input_paths(package_path, package)
+    try:
+        resolved_output = output_path.resolve(strict=False)
+        if resolved_output.is_dir():
+            raise HoldoutRunnerError("output target must not be a directory")
+        for candidate in candidates:
+            if resolved_output == candidate:
+                raise HoldoutRunnerError("output path aliases sealed holdout input")
+            if (
+                output_path.exists()
+                and candidate.exists()
+                and os.path.samefile(output_path, candidate)
+            ):
+                raise HoldoutRunnerError("output path aliases sealed holdout input")
+    except HoldoutRunnerError:
+        raise
+    except OSError as exc:
+        raise HoldoutRunnerError("output path cannot be validated") from exc
+
+
+def _pin_output_directory(path: Path) -> int:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        parent = path.parent.resolve(strict=True)
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(parent, flags)
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            raise HoldoutRunnerError("output parent must be a directory")
+        return descriptor
+    except HoldoutRunnerError:
+        raise
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HoldoutRunnerError("output directory is unavailable") from exc
+
+
+def _atomic_write_json(
+    path: Path,
+    value: Mapping[str, Any],
+    *,
+    directory_descriptor: int | None = None,
+) -> None:
+    payload = (
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    owns_descriptor = directory_descriptor is None
+    if directory_descriptor is None:
+        directory_descriptor = _pin_output_directory(path)
+    temporary_name: str | None = None
+    try:
+        pinned_parent = Path(f"/proc/self/fd/{directory_descriptor}")
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=f".{path.name}.", dir=pinned_parent
+        )
+        temporary_name = Path(temporary_path).name
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(
+            temporary_name,
+            path.name,
+            src_dir_fd=directory_descriptor,
+            dst_dir_fd=directory_descriptor,
+        )
+        temporary_name = None
+        os.fsync(directory_descriptor)
+    except OSError as exc:
+        raise HoldoutRunnerError("output write failed") from exc
+    finally:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=directory_descriptor)
+            except OSError:
+                pass
+        if owns_descriptor:
+            os.close(directory_descriptor)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run frozen Bridgit holdout cases portably"
+    )
+    parser.add_argument("--package", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    args = parser.parse_args(argv)
+    output_directory_descriptor: int | None = None
+    try:
+        _validate_output_target(args.package, args.output)
+        output_directory_descriptor = _pin_output_directory(args.output)
+        pinned_output = (
+            Path(f"/proc/self/fd/{output_directory_descriptor}") / args.output.name
+        )
+        _validate_output_target(args.package, pinned_output)
+        output = run_package(args.package)
+        _validate_output_target(args.package, pinned_output)
+        _atomic_write_json(
+            args.output,
+            output,
+            directory_descriptor=output_directory_descriptor,
+        )
+    except (
+        HoldoutRunnerError,
+        BridgitRankLayoutError,
+        OSError,
+        KeyError,
+        MemoryError,
+    ) as exc:
+        print(f"RECOGNIZER_HOLDOUT_V1_REJECTED: {exc}", file=os.sys.stderr)
+        return 2
+    finally:
+        if output_directory_descriptor is not None:
+            os.close(output_directory_descriptor)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

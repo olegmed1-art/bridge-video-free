@@ -1,0 +1,473 @@
+import hashlib
+import json
+
+import pytest
+
+from bridge_vision.bridgit_autonomous_deals import (
+    AutonomousDealsError,
+    reconstruct_autonomous_deals,
+)
+
+RANKS = "AKQJT98765432"
+SUIT_HANDS = {
+    "N": [rank + "S" for rank in RANKS],
+    "E": [rank + "H" for rank in RANKS],
+    "S": [rank + "D" for rank in RANKS],
+    "W": [rank + "C" for rank in RANKS],
+}
+
+
+def sha(value):
+    return hashlib.sha256(str(value).encode()).hexdigest()
+
+
+def canonical_sha(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+CARD_SCALE_POLICY_SHA = sha("scale-policy")
+
+
+def frame(number, marker, hands, *, source="HAND", evidence_round=None):
+    evidence_round = number if evidence_round is None else evidence_round
+    cards = [
+        {
+            "card": card,
+            "seat": seat,
+            "source": source,
+            "confidence": 0.999,
+            "evidence_pixel_sha256": sha(f"evidence:{evidence_round}:{seat}:{card}"),
+        }
+        for seat, seat_cards in hands.items()
+        for card in seat_cards
+    ]
+    if source == "PLAYED":
+        for item in cards:
+            measurement = {
+                "version": "bridgit-live-cardback-width-scale-v1",
+                "card_scale_policy_sha256": CARD_SCALE_POLICY_SHA,
+                "played_card_width_pixels": 57,
+                "live_cardback_width_pixels": 60.0,
+                "played_card_width_ratio": 0.95,
+            }
+            item.update(
+                {
+                    "layout_geometry_sha256": sha(f"geometry:{number}"),
+                    "layout_transform_sha256": sha(f"transform:{number}"),
+                    "card_scale_policy_sha256": CARD_SCALE_POLICY_SHA,
+                    "card_scale_measurement_sha256": canonical_sha(measurement),
+                    "card_scale_policy_version": measurement["version"],
+                    "played_card_width_pixels": measurement["played_card_width_pixels"],
+                    "live_cardback_width_pixels": measurement[
+                        "live_cardback_width_pixels"
+                    ],
+                    "played_card_width_ratio": measurement["played_card_width_ratio"],
+                }
+            )
+    return {
+        "frame_sha256": sha(f"frame:{number}"),
+        "decoded_pixel_sha256": sha(f"pixels:{number}"),
+        "deal_marker_sha256": sha(marker),
+        "timestamp_ms": number * 1000,
+        "cards": cards,
+    }
+
+
+def test_played_scale_evidence_is_required_and_retained() -> None:
+    frames = [
+        frame(1, "board-scale", {"N": ["AH"]}, source="PLAYED"),
+        frame(2, "board-scale", {"N": ["AH"]}, source="PLAYED"),
+    ]
+
+    result = reconstruct_autonomous_deals(
+        frames,
+        source_scope="video",
+        expected_card_scale_policy_sha256=CARD_SCALE_POLICY_SHA,
+    )
+
+    claim = result["deals"][0]["accepted"][0]
+    assert claim["sources"] == ["PLAYED"]
+    assert claim["card_scale_policy_sha256s"] == [CARD_SCALE_POLICY_SHA]
+    assert len(claim["card_scale_measurement_sha256s"]) == 1
+    assert claim["played_card_width_ratio_range"] == {
+        "minimum": 0.95,
+        "maximum": 0.95,
+    }
+
+
+def test_played_cards_create_append_only_memory_and_events() -> None:
+    frames = [
+        frame(1, "board-memory", {"E": ["AH"]}),
+        frame(2, "board-memory", {"E": ["AH"]}),
+        frame(3, "board-memory", {"E": ["AH"]}, source="PLAYED"),
+        frame(4, "board-memory", {"E": ["AH"]}, source="PLAYED"),
+        frame(5, "board-memory", {"E": ["AH"], "S": ["KD"]}, source="PLAYED"),
+        frame(6, "board-memory", {"E": ["AH"], "S": ["KD"]}, source="PLAYED"),
+    ]
+
+    result = reconstruct_autonomous_deals(
+        frames,
+        source_scope="video",
+        expected_card_scale_policy_sha256=CARD_SCALE_POLICY_SHA,
+    )
+
+    deal = result["deals"][0]
+    memory = deal["recognized_card_memory"]
+    assert memory["recognized_card_count"] == 2
+    assert [(item["card"], item["seat"]) for item in memory["cards"]] == [
+        ("AH", "E"),
+        ("KD", "S"),
+    ]
+    assert memory["forgets_disappeared_cards"] is False
+    assert memory["cross_deal_reuse_allowed"] is False
+    assert memory["hidden_card_inference_used"] is False
+
+    events = deal["played_card_events"]
+    assert [(event["card"], event["seat"]) for event in events] == [
+        ("AH", "E"),
+        ("KD", "S"),
+    ]
+    assert all(event["snapshot_required"] is True for event in events)
+    assert all("bridge_logic" not in event for event in events)
+    assert all("weighted_confidence" not in event for event in events)
+    assert "bridge_logic_policy" not in result
+
+
+def test_unsupported_played_scale_never_reaches_temporal_evidence() -> None:
+    candidate = frame(1, "board-scale", {"N": ["AH"]}, source="PLAYED")
+    candidate["cards"][0]["played_card_width_ratio"] = 1.10
+
+    with pytest.raises(AutonomousDealsError, match="outside the verified policy"):
+        reconstruct_autonomous_deals(
+            [candidate],
+            source_scope="video",
+            expected_card_scale_policy_sha256=CARD_SCALE_POLICY_SHA,
+        )
+
+
+def test_stale_played_scale_measurement_hash_is_rejected() -> None:
+    candidate = frame(1, "board-scale", {"N": ["AH"]}, source="PLAYED")
+    candidate["cards"][0]["played_card_width_ratio"] = 0.98
+
+    with pytest.raises(AutonomousDealsError, match="does not match its measurement"):
+        reconstruct_autonomous_deals(
+            [candidate],
+            source_scope="video",
+            expected_card_scale_policy_sha256=CARD_SCALE_POLICY_SHA,
+        )
+
+
+def test_stale_played_scale_width_hash_is_rejected() -> None:
+    candidate = frame(1, "board-scale", {"N": ["AH"]}, source="PLAYED")
+    candidate["cards"][0]["played_card_width_pixels"] = 58
+    candidate["cards"][0]["played_card_width_ratio"] = round(58 / 60, 6)
+
+    with pytest.raises(AutonomousDealsError, match="SHA-256 does not match"):
+        reconstruct_autonomous_deals(
+            [candidate],
+            source_scope="video",
+            expected_card_scale_policy_sha256=CARD_SCALE_POLICY_SHA,
+        )
+
+
+def test_wrong_played_scale_policy_is_rejected() -> None:
+    candidate = frame(1, "board-scale", {"N": ["AH"]}, source="PLAYED")
+    candidate["cards"][0]["card_scale_policy_sha256"] = sha("other-policy")
+
+    with pytest.raises(AutonomousDealsError, match="expected policy"):
+        reconstruct_autonomous_deals(
+            [candidate],
+            source_scope="video",
+            expected_card_scale_policy_sha256=CARD_SCALE_POLICY_SHA,
+        )
+
+
+def test_all_observed_cards_produce_complete_valid_pbn_without_review():
+    result = reconstruct_autonomous_deals(
+        [frame(1, "board-1", SUIT_HANDS), frame(2, "board-1", SUIT_HANDS)],
+        source_scope="fixture.mp4:sha256",
+    )
+
+    assert result["status"] == "COMPLETE"
+    assert result["status_counts"]["COMPLETE_OBSERVED"] == 1
+    deal = result["deals"][0]
+    assert deal["status"] == "COMPLETE_OBSERVED"
+    assert deal["validation"]["status"] == "PASS"
+    assert deal["validation"]["total_cards"] == 52
+    assert deal["pbn"] == (
+        "N:AKQJT98765432... .AKQJT98765432.. ..AKQJT98765432. ...AKQJT98765432"
+    )
+    assert result["uses_language_model"] is False
+    assert result["requires_screenshot_review"] is False
+
+
+def test_three_observed_hands_complete_only_missing_seat_by_exact_subtraction():
+    visible = {seat: cards for seat, cards in SUIT_HANDS.items() if seat != "W"}
+    result = reconstruct_autonomous_deals(
+        [frame(1, "board-40", visible), frame(2, "board-40", visible)],
+        source_scope="fixture.mp4:sha256",
+    )
+
+    deal = result["deals"][0]
+    assert deal["status"] == "COMPLETE_DERIVED_EXACT"
+    assert deal["completion"] == "ONE_SEAT_EXACT_DECK_COMPLEMENT"
+    assert deal["deal"]["card_provenance"]["W"]["observed_cards"] == []
+    assert deal["deal"]["card_provenance"]["W"]["derived_cards"] == SUIT_HANDS["W"]
+    assert deal["validation"]["full_board"] is True
+    assert deal["pbn"].endswith("...AKQJT98765432")
+
+
+def test_two_incomplete_hands_remain_partial_and_never_emit_pbn():
+    visible = {"N": SUIT_HANDS["N"], "S": SUIT_HANDS["S"]}
+    result = reconstruct_autonomous_deals(
+        [frame(1, "board-2", visible), frame(2, "board-2", visible)],
+        source_scope="fixture.mp4:sha256",
+    )
+
+    deal = result["deals"][0]
+    assert result["status"] == "REVIEW"
+    assert deal["status"] == "PARTIAL"
+    assert deal["pbn"] is None
+    assert deal["deal"]["derivations"] == []
+    assert deal["validation"]["full_board"] is False
+
+
+def test_visual_marker_changes_create_separate_autonomous_deals():
+    frames = [
+        frame(1, "board-a", SUIT_HANDS),
+        frame(2, "board-a", SUIT_HANDS),
+        frame(3, "board-b", SUIT_HANDS),
+        frame(4, "board-b", SUIT_HANDS),
+    ]
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 2
+    assert result["status_counts"]["COMPLETE_OBSERVED"] == 2
+    assert [item["deal_identity"]["value"][:4] for item in result["deals"]] == [
+        "0001",
+        "0002",
+    ]
+
+
+def test_stable_marker_splits_only_after_confirmed_visible_hand_reset():
+    first = {"N": SUIT_HANDS["N"], "S": SUIT_HANDS["S"]}
+    second = {"N": SUIT_HANDS["E"], "S": SUIT_HANDS["W"]}
+    frames = [
+        frame(1, "unchanged-marker", first),
+        frame(2, "unchanged-marker", first),
+        frame(3, "unchanged-marker", second),
+        frame(4, "unchanged-marker", second),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 2
+    assert [item["observed_card_count"] for item in result["deals"]] == [26, 26]
+
+
+def test_one_frame_visible_hand_outlier_does_not_create_segment():
+    stable = {"N": SUIT_HANDS["N"], "S": SUIT_HANDS["S"]}
+    outlier = {"N": SUIT_HANDS["E"], "S": SUIT_HANDS["W"]}
+    frames = [
+        frame(1, "unchanged-marker", stable),
+        frame(2, "unchanged-marker", stable),
+        frame(3, "unchanged-marker", outlier),
+        frame(4, "unchanged-marker", stable),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 1
+    assert result["deals"][0]["status"] == "PARTIAL"
+    assert result["deals"][0]["observed_card_count"] == 26
+
+
+def test_stable_marker_splits_when_one_visible_hand_is_redealt():
+    first = {"S": SUIT_HANDS["S"]}
+    second = {"S": SUIT_HANDS["W"]}
+    frames = [
+        frame(1, "unchanged-marker", first),
+        frame(2, "unchanged-marker", first),
+        frame(3, "unchanged-marker", second),
+        frame(4, "unchanged-marker", second),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 2
+    assert [item["observed_card_count"] for item in result["deals"]] == [13, 13]
+
+
+def test_stable_marker_splits_midplay_eight_card_redeal():
+    first = {"S": SUIT_HANDS["S"]}
+    second = {"S": SUIT_HANDS["W"][:8]}
+    frames = [
+        frame(1, "unchanged-marker", first),
+        frame(2, "unchanged-marker", first),
+        frame(3, "unchanged-marker", second),
+        frame(4, "unchanged-marker", second),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 2
+    assert [item["observed_card_count"] for item in result["deals"]] == [13, 8]
+
+
+def test_stable_marker_splits_full_hand_replacement_after_old_hand_depleted():
+    first_cards = ["2S", "5H", "8S", "KH", "QD", "TH"]
+    second_cards = [
+        "2S",
+        "3D",
+        "5H",
+        "7S",
+        "8D",
+        "8S",
+        "AS",
+        "JC",
+        "KH",
+        "KS",
+        "QC",
+        "TC",
+        "TH",
+    ]
+    frames = [
+        frame(1, "unchanged-marker", {"S": first_cards}),
+        frame(2, "unchanged-marker", {"S": first_cards}),
+        frame(3, "unchanged-marker", {"S": second_cards}),
+        frame(4, "unchanged-marker", {"S": second_cards}),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 2
+    assert [item["observed_card_count"] for item in result["deals"]] == [6, 13]
+
+
+def test_newly_exposed_dummy_is_not_treated_as_a_redeal():
+    south = SUIT_HANDS["S"]
+    frames = [
+        frame(1, "unchanged-marker", {"S": south}),
+        frame(2, "unchanged-marker", {"S": south}),
+        frame(3, "unchanged-marker", {"N": SUIT_HANDS["N"], "S": south}),
+        frame(4, "unchanged-marker", {"N": SUIT_HANDS["N"], "S": south}),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 1
+    assert result["deals"][0]["observed_card_count"] == 26
+
+
+def test_same_visible_hand_reappearance_splits_replay_episode():
+    full = {"N": SUIT_HANDS["N"], "S": SUIT_HANDS["S"]}
+    depleted = {
+        "N": SUIT_HANDS["N"][6:],
+        "S": SUIT_HANDS["S"][6:],
+    }
+    frames = [
+        frame(1, "unchanged-marker", full),
+        frame(2, "unchanged-marker", full),
+        frame(3, "unchanged-marker", depleted),
+        frame(4, "unchanged-marker", depleted),
+        frame(5, "unchanged-marker", depleted),
+        frame(6, "unchanged-marker", full),
+        frame(7, "unchanged-marker", full),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 2
+    assert [item["observed_card_count"] for item in result["deals"]] == [26, 26]
+
+
+def test_short_visible_hand_dropout_does_not_split_replay_episode():
+    full = {"N": SUIT_HANDS["N"], "S": SUIT_HANDS["S"]}
+    depleted = {
+        "N": SUIT_HANDS["N"][6:],
+        "S": SUIT_HANDS["S"][6:],
+    }
+    frames = [
+        frame(1, "unchanged-marker", full),
+        frame(2, "unchanged-marker", full),
+        frame(3, "unchanged-marker", depleted),
+        frame(4, "unchanged-marker", full),
+        frame(5, "unchanged-marker", full),
+    ]
+
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    assert result["deal_count"] == 1
+
+
+def test_cross_seat_card_conflict_fails_closed():
+    first = {"N": ["AS"]}
+    second = {"E": ["AS"]}
+    frames = [
+        frame(1, "board-x", first),
+        frame(2, "board-x", first),
+        frame(3, "board-x", second),
+        frame(4, "board-x", second),
+    ]
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    deal = result["deals"][0]
+    assert deal["status"] == "CONFLICT"
+    assert deal["deal"] is None
+    assert deal["pbn"] is None
+    assert deal["conflicts"] == [
+        {"card": "AS", "seats": ["E", "N"], "reason": "CROSS_SEAT_CONFLICT"}
+    ]
+
+
+def test_unsupported_cross_seat_claims_still_fail_closed() -> None:
+    result = reconstruct_autonomous_deals(
+        [
+            frame(1, "board-x", {"N": ["AS"]}),
+            frame(2, "board-x", {"E": ["AS"]}),
+        ],
+        source_scope="video",
+    )
+
+    assert result["deals"][0]["status"] == "CONFLICT"
+    assert result["deals"][0]["deal"] is None
+
+
+def test_same_card_pixels_do_not_count_as_independent_support():
+    frames = [
+        frame(1, "board-x", {"N": ["AS"]}, evidence_round="same"),
+        frame(2, "board-x", {"N": ["AS"]}, evidence_round="same"),
+    ]
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    deal = result["deals"][0]
+    assert deal["observed_card_count"] == 0
+    assert any(item["reason"] == "DUPLICATE_CARD_PIXELS" for item in deal["rejected"])
+    assert any(
+        item["reason"] == "PENDING_TEMPORAL_SUPPORT" for item in deal["rejected"]
+    )
+
+
+def test_reencoded_duplicate_pixels_do_not_count_as_a_second_frame():
+    frames = [
+        frame(1, "board-x", {"N": ["AS"]}),
+        frame(2, "board-x", {"N": ["AS"]}),
+    ]
+    frames[1]["decoded_pixel_sha256"] = frames[0]["decoded_pixel_sha256"]
+    result = reconstruct_autonomous_deals(frames, source_scope="video")
+
+    deal = result["deals"][0]
+    assert deal["observed_card_count"] == 0
+    assert any(
+        item["reason"] == "DUPLICATE_DECODED_PIXELS" for item in deal["rejected"]
+    )
+
+
+def test_duplicate_source_timestamp_is_rejected_before_segmentation():
+    frames = [frame(1, "board-x", {}), frame(2, "board-x", {})]
+    frames[1]["timestamp_ms"] = frames[0]["timestamp_ms"]
+
+    with pytest.raises(AutonomousDealsError, match="duplicate source timestamp"):
+        reconstruct_autonomous_deals(frames, source_scope="video")
