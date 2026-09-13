@@ -178,6 +178,13 @@ class NativeFourSeatCardDetector:
             min_card_confidence=self.min_card_confidence,
             seat_dead_zone=self.seat_dead_zone,
         )
+        # Preserve independent low-level channel evidence for review.  It is
+        # never used to assign a seat or to reconstruct an unknown card.
+        channel_evidence = payload.get("channel_evidence") if isinstance(payload, Mapping) else None
+        if channel_evidence is not None:
+            if not isinstance(channel_evidence, Mapping):
+                raise NativeCardDetectorError("channel_evidence must be an object")
+            evidence["channel_evidence"] = dict(channel_evidence)
         accepted = evidence["accepted"]
         confidence = min((float(item["confidence"]) for item in accepted), default=0.0)
         return {"hands": hands, "confidence": confidence, "evidence": evidence}
