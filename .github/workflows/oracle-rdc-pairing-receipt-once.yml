@@ -1,4 +1,5 @@
 name: Oracle RDC encrypted pairing receipt (one-shot)
+# pairing-refresh: 2026-09-13
 
 on:
   push:
