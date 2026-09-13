@@ -3,7 +3,9 @@ BEGIN;
 DO $$
 DECLARE
  s uuid; oi uuid; ov uuid; wr uuid; oi2 uuid; ov2 uuid; wr2 uuid; gap uuid; old_gap uuid; role_gap uuid; robot uuid; config uuid; decision uuid;
+ canon_source uuid; canon_item uuid; canon_version uuid; canon_rule uuid; canon_activation uuid; canon_test uuid;
  failed boolean; raw jsonb := '{"bid":"1S"}'::jsonb; bad_raw jsonb; trace jsonb; bad_trace jsonb; v_constraint text; request_hash text;
+ canon_effective_at timestamptz := clock_timestamp();
 BEGIN
  SELECT school_id INTO s FROM public.school WHERE stable_name='Школа спортивного бриджа';
  INSERT INTO public.knowledge_gap(school_id,question,context_scope,status)
@@ -38,13 +40,13 @@ BEGIN
  VALUES(s,ov,'ci.world.0201','bid','{"context_id":"auction-1"}','{"call":"1S"}','validated','v1') RETURNING rule_id INTO wr;
 
  INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
-   effective_at,auction_context_id,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
- VALUES(s,'valid-fallback','natural','v1','L1',now(),'auction-1','CANON_GAP','WORLD_FALLBACK',ARRAY[wr],wr,gap,'{}','world-v0');
+   effective_at,auction_context_id,activation_scope,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
+ VALUES(s,'valid-fallback','natural','v1','L1',now(),'auction-1','default','CANON_GAP','WORLD_FALLBACK',ARRAY[wr],wr,gap,'{}','world-v0');
 
  failed:=false; BEGIN
   INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
-   effective_at,auction_context_id,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
-  VALUES(s,'new-request','natural','v1','L1',now(),'auction-1','CANON_GAP','WORLD_FALLBACK',ARRAY[wr],wr,old_gap,'{}','world-v0');
+   effective_at,auction_context_id,activation_scope,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
+  VALUES(s,'new-request','natural','v1','L1',now(),'auction-1','default','CANON_GAP','WORLD_FALLBACK',ARRAY[wr],wr,old_gap,'{}','world-v0');
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_UNRELATED_GAP_ACCEPTED'; END IF;
 
@@ -53,8 +55,8 @@ BEGIN
  VALUES(gap,s,'fallback-without-selection','natural','v1','L1','auction-1',now(),repeat('f',64));
  failed:=false; BEGIN
   INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
-   effective_at,auction_context_id,canon_outcome,world_outcome,world_rule_ids,knowledge_gap_id,trace,resolver_version)
-  VALUES(s,'fallback-without-selection','natural','v1','L1',now(),'auction-1','CANON_GAP','WORLD_FALLBACK',ARRAY[wr],gap,'{}','world-v0');
+   effective_at,auction_context_id,activation_scope,canon_outcome,world_outcome,world_rule_ids,knowledge_gap_id,trace,resolver_version)
+  VALUES(s,'fallback-without-selection','natural','v1','L1',now(),'auction-1','default','CANON_GAP','WORLD_FALLBACK',ARRAY[wr],gap,'{}','world-v0');
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_FALLBACK_WITHOUT_SELECTION_ACCEPTED'; END IF;
 
@@ -63,8 +65,8 @@ BEGIN
  VALUES(gap,s,'conflict-with-selection','natural','v1','L1','auction-1',now(),repeat('a',64));
  failed:=false; BEGIN
   INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
-   effective_at,auction_context_id,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
-  VALUES(s,'conflict-with-selection','natural','v1','L1',now(),'auction-1','CANON_GAP','WORLD_CONFLICT',ARRAY[wr],wr,gap,'{}','world-v0');
+   effective_at,auction_context_id,activation_scope,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
+  VALUES(s,'conflict-with-selection','natural','v1','L1',now(),'auction-1','default','CANON_GAP','WORLD_CONFLICT',ARRAY[wr],wr,gap,'{}','world-v0');
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_CONFLICT_WITH_SELECTION_ACCEPTED'; END IF;
 
@@ -73,8 +75,8 @@ BEGIN
  VALUES(gap,s,'profile-mix','sayc','v1','L1','auction-1',now(),repeat('b',64));
  failed:=false; BEGIN
   INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
-   effective_at,auction_context_id,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
-  VALUES(s,'profile-mix','sayc','v1','L1',now(),'auction-1','CANON_GAP','WORLD_FALLBACK',ARRAY[wr],wr,gap,'{}','world-v0');
+   effective_at,auction_context_id,activation_scope,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
+  VALUES(s,'profile-mix','sayc','v1','L1',now(),'auction-1','default','CANON_GAP','WORLD_FALLBACK',ARRAY[wr],wr,gap,'{}','world-v0');
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_PROFILE_MISMATCH_ACCEPTED'; END IF;
 
@@ -89,10 +91,63 @@ BEGIN
  VALUES(gap,s,'null-profile','natural','v1','L1','auction-1',now(),repeat('c',64));
  failed:=false; BEGIN
   INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
-   effective_at,auction_context_id,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
-  VALUES(s,'null-profile','natural','v1','L1',now(),'auction-1','CANON_GAP','WORLD_FALLBACK',ARRAY[wr2],wr2,gap,'{}','world-v0');
+   effective_at,auction_context_id,activation_scope,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
+  VALUES(s,'null-profile','natural','v1','L1',now(),'auction-1','default','CANON_GAP','WORLD_FALLBACK',ARRAY[wr2],wr2,gap,'{}','world-v0');
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NULL_PROFILE_ACCEPTED'; END IF;
+
+ INSERT INTO public.source(school_id,source_type,title,canonical_locator,trust_class,status)
+ VALUES(s,'document','CI trace activation scope source','ci://world-trace-activation-scope','director_approved','active')
+ RETURNING source_id INTO canon_source;
+ INSERT INTO public.knowledge_item(school_id,stable_key,knowledge_type,title,status)
+ VALUES(s,'ci-world-trace-activation-scope','bidding_rule','CI trace activation scope','active')
+ RETURNING knowledge_item_id INTO canon_item;
+ INSERT INTO public.knowledge_version(knowledge_item_id,version_no,content,authority_class,review_status,
+  bidding_system_key,level_scope,effective_from,method_version,provenance,status)
+ VALUES(canon_item,1,'{}','school_canon','reviewed','natural','{"level":"L1"}',
+  canon_effective_at-interval '1 day','v1','{"class":"DIRECT"}','candidate')
+ RETURNING knowledge_version_id INTO canon_version;
+ INSERT INTO public.knowledge_version_source(knowledge_version_id,source_id,relation_type,source_locator)
+ VALUES(canon_version,canon_source,'derived_from','{"fixture":"trace-activation-scope"}');
+ INSERT INTO bidding.rule(school_id,knowledge_version_id,rule_key,rule_kind,auction_pattern,action,
+  lifecycle_status,method_version)
+ VALUES(s,canon_version,'ci.world.trace.activation.scope','bid','{"context_id":"auction-1"}',
+  '{"call":"1H"}','validated','v1') RETURNING rule_id INTO canon_rule;
+
+ INSERT INTO bidding.rule_test(school_id,rule_id,test_key,test_type,fixture,expected,method_version)
+ VALUES(s,canon_rule,'scope-positive','positive','{}','{"applicable":true}','v1') RETURNING rule_test_id INTO canon_test;
+ INSERT INTO bidding.rule_test_run(school_id,rule_test_id,result,method_version)
+ VALUES(s,canon_test,'pass','v1');
+ INSERT INTO bidding.rule_test(school_id,rule_id,test_key,test_type,fixture,expected,method_version)
+ VALUES(s,canon_rule,'scope-negative','negative','{}','{"applicable":false}','v1') RETURNING rule_test_id INTO canon_test;
+ INSERT INTO bidding.rule_test_run(school_id,rule_test_id,result,method_version)
+ VALUES(s,canon_test,'pass','v1');
+ INSERT INTO bidding.rule_test(school_id,rule_id,test_key,test_type,fixture,expected,method_version)
+ VALUES(s,canon_rule,'scope-boundary','boundary','{}','{"applicable":true}','v1') RETURNING rule_test_id INTO canon_test;
+ INSERT INTO bidding.rule_test_run(school_id,rule_test_id,result,method_version)
+ VALUES(s,canon_test,'pass','v1');
+ INSERT INTO bidding.rule_test(school_id,rule_id,test_key,test_type,fixture,expected,method_version)
+ VALUES(s,canon_rule,'scope-hidden','hidden_information','{"partner_hand":{"cards":["AS"]}}',
+  '{"rejected":true}','v1') RETURNING rule_test_id INTO canon_test;
+ INSERT INTO bidding.rule_test_run(school_id,rule_test_id,result,method_version)
+ VALUES(s,canon_test,'pass','v1');
+ INSERT INTO public.canon_activation(knowledge_version_id,scope_key,valid_from,approval_provenance,status)
+ VALUES(canon_version,'trace-scope-a',canon_effective_at-interval '1 hour','{"decision":"ci"}','active')
+ RETURNING canon_activation_id INTO canon_activation;
+ INSERT INTO bidding.runtime_activation(school_id,rule_id,authority_lane,canon_activation_id,scope_key,valid_from,status)
+ VALUES(s,canon_rule,'school_canon',canon_activation,'trace-scope-a',canon_effective_at-interval '1 hour','active');
+
+ INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
+  effective_at,auction_context_id,activation_scope,canon_outcome,canon_rule_ids,trace,resolver_version)
+ VALUES(s,'canon-scope-valid','natural','v1','L1',canon_effective_at,'auction-1','trace-scope-a',
+  'CANON_MATCH',ARRAY[canon_rule],'{}','world-v0');
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
+   effective_at,auction_context_id,activation_scope,canon_outcome,canon_rule_ids,trace,resolver_version)
+  VALUES(s,'canon-scope-cross','natural','v1','L1',canon_effective_at,'auction-1','trace-scope-b',
+   'CANON_MATCH',ARRAY[canon_rule],'{}','world-v0');
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_CROSS_SCOPE_CANON_TRACE_ACCEPTED'; END IF;
 
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot(robot_key,display_name,engine_version,model_hash,license_boundary)

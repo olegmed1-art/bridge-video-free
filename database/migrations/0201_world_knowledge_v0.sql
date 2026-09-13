@@ -293,6 +293,7 @@ CREATE TABLE bidding.world_resolution_trace (
  request_fingerprint text NOT NULL CHECK(btrim(request_fingerprint)<>''), system_profile_key text NOT NULL CHECK(btrim(system_profile_key)<>''),
  system_version text NOT NULL CHECK(btrim(system_version)<>''), learner_level text NOT NULL CHECK(btrim(learner_level)<>''),
  effective_at timestamptz NOT NULL, auction_context_id text NOT NULL CHECK(btrim(auction_context_id)<>''),
+ activation_scope text NOT NULL CHECK(btrim(activation_scope)<>''),
  canon_outcome text NOT NULL CHECK(canon_outcome IN ('CANON_MATCH','CANON_CONFLICT','CANON_GAP')),
  world_outcome text CHECK(world_outcome IS NULL OR world_outcome IN ('WORLD_FALLBACK','WORLD_CONFLICT','UNRESOLVED_GAP')),
  canon_rule_ids uuid[] NOT NULL DEFAULT '{}', world_rule_ids uuid[] NOT NULL DEFAULT '{}',
@@ -327,6 +328,16 @@ BEGIN
       OR NEW.effective_at<COALESCE(kv.effective_from,'-infinity') OR NEW.effective_at>=COALESCE(kv.effective_to,'infinity')
       OR br.auction_pattern->>'context_id' IS DISTINCT FROM NEW.auction_context_id
  ) THEN RAISE EXCEPTION 'BID_WORLD_TRACE_PROFILE_MISMATCH' USING ERRCODE='23514'; END IF;
+ IF EXISTS (
+   SELECT 1 FROM unnest(NEW.canon_rule_ids) x(rule_id)
+   WHERE NOT EXISTS (
+     SELECT 1 FROM bidding.runtime_activation ra
+     WHERE ra.rule_id=x.rule_id AND ra.school_id=NEW.school_id
+       AND ra.authority_lane='school_canon' AND ra.scope_key=NEW.activation_scope
+       AND ra.status='active' AND ra.valid_from<=NEW.effective_at
+       AND (ra.valid_to IS NULL OR ra.valid_to>NEW.effective_at)
+   )
+ ) THEN RAISE EXCEPTION 'BID_WORLD_TRACE_CANON_SCOPE_MISMATCH' USING ERRCODE='23514'; END IF;
  IF EXISTS(SELECT 1 FROM unnest(NEW.canon_rule_ids) x(rule_id) LEFT JOIN bidding.rule br ON br.rule_id=x.rule_id
    LEFT JOIN public.knowledge_version kv ON kv.knowledge_version_id=br.knowledge_version_id
    WHERE br.school_id IS NULL OR kv.authority_class<>'school_canon')
