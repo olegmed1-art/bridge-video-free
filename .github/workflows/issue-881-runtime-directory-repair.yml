@@ -1,0 +1,68 @@
+name: Issue 881 runtime directory repair
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/issue-881-runtime-directory-repair.yml'
+      - 'ops/issue_881_runtime_directory_repair.sh'
+      - 'tests/test_issue_881_runtime_directory_rule.py'
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('runtime-dir-pr-{0}', github.run_id) || (github.event.issue.number == 881 && github.event.comment.user.login == 'olegmed1-art' && github.event.comment.body == '/oracle-ops issue-881-repair-runtime-directory') && 'oracle-instance-workload-mutation' || format('runtime-dir-noop-{0}', github.run_id) }}
+  cancel-in-progress: false
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
+      - run: |
+          set -euo pipefail
+          bash -n ops/issue_881_runtime_directory_repair.sh
+          python tests/test_issue_881_runtime_directory_rule.py
+  repair:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 881 &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      github.event.comment.body == '/oracle-ops issue-881-repair-runtime-directory'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
+      - name: Resolve pinned SSH identity
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Restore only the missing runtime directory and verify service
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 150s ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n timeout --signal=TERM --kill-after=10s 120s /bin/bash -s' \
+            < ops/issue_881_runtime_directory_repair.sh

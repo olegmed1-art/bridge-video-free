@@ -21,6 +21,7 @@ def test_legacy_evidence_workflow_is_pr_only_and_static() -> None:
     assert "head.repo.full_name" not in text
     assert "UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true" in text
     assert ".github/workflows/issue-881-authoritative-external-evidence.yml" in text
+    assert "ops/issue_881_external_precanary_workflow.sh" in text
 
 
 def test_bounded_parser_canonicalizes_runtime_json_without_leaking_raw_log() -> None:

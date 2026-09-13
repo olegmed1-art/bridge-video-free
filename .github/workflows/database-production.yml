@@ -12,7 +12,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: bridge-school-database-production
+  # Only the exact production promotion request may occupy the shared mutation
+  # slot. Rejected dispatches stay isolated and cannot replace a pending run.
+  group: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/database-production' && inputs.confirmation == 'MIGRATE' && 'oracle-instance-workload-mutation' || format('database-production-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:

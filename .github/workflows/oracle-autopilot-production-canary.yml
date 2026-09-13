@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: oracle-instance-workload-mutation
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/oracle-autopilot-lite-shadow' && 'oracle-instance-workload-mutation' || format('oracle-autopilot-production-canary-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -55,7 +55,7 @@ jobs:
           PY
 
   canary:
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/oracle-autopilot-lite-shadow' }}
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 15

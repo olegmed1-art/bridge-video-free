@@ -13,6 +13,7 @@ OLD_SERVICE="${UNIVERSAL_VIDEO_SERVICE_NAME:-universal-video.service}"
 ACTIVATE="${UNIVERSAL_VIDEO_CONTAINER_ACTIVATE:-0}"
 BUILD_IMAGE="${UNIVERSAL_VIDEO_CONTAINER_BUILD:-1}"
 MIN_FREE_KB="${UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-8388608}"
+ALLOW_CACHE_RECLAIM="${UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM:-1}"
 BUILD_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_CONTAINER_BUILD_TIMEOUT_SECONDS:-1200}"
 IMAGE_REPO="${UNIVERSAL_VIDEO_IMAGE_REPO:-bridge-school/universal-video}"
 STATUS_DIR="${UNIVERSAL_VIDEO_STATUS_DIR:-/run/bridge-school}"
@@ -58,6 +59,7 @@ service_status(){
 [[ "$ACTIVATE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_CONTAINER_ACTIVATE must be 0 or 1'
 [[ "$BUILD_IMAGE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_CONTAINER_BUILD must be 0 or 1'
 [[ "$MIN_FREE_KB" =~ ^[0-9]+$ && "$MIN_FREE_KB" -gt 0 ]] || die 'UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB must be a positive integer'
+[[ "$ALLOW_CACHE_RECLAIM" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_CONTAINER_ALLOW_CACHE_RECLAIM must be 0 or 1'
 [[ "$BUILD_TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$BUILD_TIMEOUT_SECONDS" -ge 60 ]] || die 'UNIVERSAL_VIDEO_CONTAINER_BUILD_TIMEOUT_SECONDS must be at least 60'
 [[ -z "$PRESERVE_IMAGE_ID" || "$PRESERVE_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] \
   || die 'UNIVERSAL_VIDEO_CONTAINER_PRESERVE_IMAGE_ID must be an exact image ID'
@@ -87,6 +89,12 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
   disk_available_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
   [[ "$disk_available_kb" =~ ^[0-9]+$ ]] || die 'container disk capacity unavailable'
   if (( disk_available_kb < MIN_FREE_KB )); then
+    if [[ "$ALLOW_CACHE_RECLAIM" != 1 ]]; then
+      printf 'UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=%s disk_required_kb=%s cache_reclaim=forbidden\n' \
+        "$disk_available_kb" "$MIN_FREE_KB"
+      printf '{"error_code":"UV_CONTAINER_DISK_INSUFFICIENT","status":"FAILED"}\n' >&2
+      exit 78
+    fi
     log 'Reclaim unused Universal Video build cache before image build'
     docker builder prune --all --force >/dev/null 2>&1 || true
     mapfile -t old_image_ids < <(docker image ls --no-trunc --filter "reference=$IMAGE_REPO:*" --format '{{.ID}}' | sort -u)

@@ -15,6 +15,8 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "actions/artifacts/$artifact_id/zip" in WORKFLOW
     assert '--expected-artifact-digest "$artifact_digest"' in WORKFLOW
     assert '--expected-image-digest "$image_digest"' in WORKFLOW
+    assert '--expected-run-id "$evidence_run_id"' in WORKFLOW
+    assert '--expected-receipt-id "$receipt_id"' in WORKFLOW
     assert "group: oracle-instance-workload-mutation" in WORKFLOW
     assert "ORACLE_INSTANCE_RUNNING_PASS" in WORKFLOW
     assert "compute instance action --instance-id \"$INSTANCE_ID\" --action START" in WORKFLOW
@@ -49,6 +51,75 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "UV_CONTAINER_PROMOTION_ENTRYPOINT_MISSING" in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_BLOB_MISMATCH" in WORKFLOW
     assert " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" in WORKFLOW
+
+
+def test_promotion_accepts_only_one_fresh_request_commit_after_evidence() -> None:
+    assert "fetch-depth: 0" in WORKFLOW
+    assert 'git merge-base --is-ancestor "$expected_commit" "$GITHUB_SHA"' in WORKFLOW
+    assert 'git rev-list --count "$expected_commit..$GITHUB_SHA"' in WORKFLOW
+    assert 'git cat-file -e "$expected_commit:$request_file"' in WORKFLOW
+    assert 'git diff --name-only "$expected_commit" "$GITHUB_SHA"' in WORKFLOW
+    assert '"${changed_since_evidence[0]}" == "$request_file"' in WORKFLOW
+    assert "UNIVERSAL_VIDEO_PROMOTION_FRESH_REQUEST" in WORKFLOW
+    assert WORKFLOW.count('git/ref/heads/main" --jq') >= 3
+    freshness = WORKFLOW.index("UNIVERSAL_VIDEO_PROMOTION_FRESH_REQUEST")
+    oracle_mutation = WORKFLOW.index("compute instance action", freshness)
+    host_mutation = WORKFLOW.index("Promote attested image with rollback", oracle_mutation)
+    final_main = WORKFLOW.index('git/ref/heads/main" --jq', host_mutation)
+    remote_preflight = WORKFLOW.index("ssh_base=(ssh", final_main)
+    assert freshness < oracle_mutation < final_main < remote_preflight
+
+
+def test_promotion_rechecks_live_main_at_each_host_mutation_boundary() -> None:
+    promote_step = WORKFLOW.index("- name: Promote attested image with rollback")
+    initial_check = WORKFLOW.index(
+        "verify_promotion_current_main host-preflight", promote_step
+    )
+    source_condition = WORKFLOW.index(
+        "systemctl is-active --quiet universal-video-container.service", initial_check
+    )
+    source_oci_check = WORKFLOW.index(
+        "verify_no_active_instance_agent_commands source-prepare", source_condition
+    )
+    source_check = WORKFLOW.index(
+        "verify_promotion_current_main source-prepare", source_oci_check
+    )
+    source_mutation = WORKFLOW.index(
+        "UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT'", source_check
+    )
+    entrypoint_pass = WORKFLOW.index("UV_CONTAINER_PROMOTION_ENTRYPOINT_PASS", source_mutation)
+    promotion_oci_check = WORKFLOW.index(
+        "verify_no_active_instance_agent_commands image-promotion", entrypoint_pass
+    )
+    promotion_check = WORKFLOW.index(
+        "verify_promotion_current_main image-promotion", promotion_oci_check
+    )
+    promotion_mutation = WORKFLOW.index(
+        " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh",
+        promotion_check,
+    )
+
+    assert initial_check < source_condition < source_oci_check < source_check < source_mutation
+    assert (
+        source_mutation
+        < entrypoint_pass
+        < promotion_oci_check
+        < promotion_check
+        < promotion_mutation
+    )
+
+
+def test_promotion_reconciles_exact_instance_commands_before_all_mutations() -> None:
+    ensure = WORKFLOW.index("- name: Ensure Oracle instance is running")
+    lifecycle_reconcile = WORKFLOW.index(
+        "boundary=instance-lifecycle", ensure
+    )
+    instance_start = WORKFLOW.index("compute instance action", lifecycle_reconcile)
+    promote = WORKFLOW.index("- name: Promote attested image with rollback")
+    helper = WORKFLOW.index("verify_no_active_instance_agent_commands(){", promote)
+    assert lifecycle_reconcile < instance_start < promote < helper
+    assert WORKFLOW.count("instance-agent command-execution list") >= 2
+    assert WORKFLOW.count("ops/verify_oci_instance_command_executions.py") >= 2
 
 
 def test_promotion_hands_off_exclusive_fence_after_old_resident_stops() -> None:

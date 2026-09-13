@@ -1,0 +1,157 @@
+name: Autopilot read-only GitHub schema once
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type APPLY_0301_0302'
+        required: true
+        type: string
+      expected_main_sha:
+        description: 'Exact main commit authorized for this schema apply'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  apply-readonly-github-schema:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: database-production
+    steps:
+      - name: Require exact authorized main
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          ACTUAL_SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = "APPLY_0301_0302"
+          test "$REF_NAME" = "main"
+          test "$EXPECTED_MAIN_SHA" = "$ACTUAL_SHA"
+          test "$EXPECTED_MAIN_SHA" = "${EXPECTED_MAIN_SHA,,}"
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Checkout exact main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Apply only migrations 0301 and 0302
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}"
+
+          psql_cmd=(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1)
+          baseline="$("${psql_cmd[@]}" -c "
+            SELECT
+              to_regclass('autopilot.task') IS NOT NULL,
+              EXISTS (
+                SELECT 1 FROM public.schema_migration
+                 WHERE migration_key='0300_autopilot_oracle_shadow'
+              ),
+              EXISTS (
+                SELECT 1 FROM public.schema_migration
+                 WHERE migration_key ~ '^(030[3-9]|031[0-9]|032[0-9])_autopilot'
+              );
+          ")"
+          test "$baseline" = "t|t|f" || {
+            echo "AUTOPILOT_SCHEMA_BASELINE_UNEXPECTED=$baseline" >&2
+            exit 1
+          }
+
+          task_count_before="$("${psql_cmd[@]}" -c 'SELECT count(*) FROM autopilot.task;')"
+
+          apply_one() {
+            local key="$1"
+            local file="$2"
+            local checksum
+            checksum="$(sha256sum "$file" | awk '{print $1}')"
+
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+              -v migration_key="$key" \
+              -v migration_file="$file" \
+              -v migration_checksum="$checksum" <<'PSQL'
+          SELECT pg_advisory_lock(
+              hashtext(current_database()),
+              hashtext('bridge_school_schema_migrations')
+          );
+          SELECT EXISTS (
+              SELECT 1 FROM public.schema_migration
+               WHERE migration_key = :'migration_key'
+          ) AS already_applied \gset
+          \if :already_applied
+            SELECT checksum = :'migration_checksum' AS checksum_matches
+              FROM public.schema_migration
+             WHERE migration_key = :'migration_key' \gset
+            \if :checksum_matches
+              \echo 'Verified already-applied migration' :migration_key
+            \else
+              \echo 'Migration checksum mismatch:' :migration_key
+              \quit 1
+            \endif
+          \else
+            \i :migration_file
+            UPDATE public.schema_migration
+               SET checksum = :'migration_checksum'
+             WHERE migration_key = :'migration_key'
+               AND checksum IS NULL;
+          \endif
+          SELECT pg_advisory_unlock(
+              hashtext(current_database()),
+              hashtext('bridge_school_schema_migrations')
+          );
+          PSQL
+
+            stored="$("${psql_cmd[@]}" -v key="$key" -c \
+              "SELECT checksum FROM public.schema_migration WHERE migration_key=:'key';")"
+            test "$stored" = "$checksum"
+          }
+
+          apply_one \
+            0301_autopilot_github_pr_read_only \
+            database/migrations/0301_autopilot_github_pr_read_only.sql
+          apply_one \
+            0302_autopilot_github_ci_read_only \
+            database/migrations/0302_autopilot_github_ci_read_only.sql
+
+          task_count_after="$("${psql_cmd[@]}" -c 'SELECT count(*) FROM autopilot.task;')"
+          test "$task_count_after" = "$task_count_before"
+
+          constraint="$("${psql_cmd[@]}" -c "
+            SELECT pg_get_constraintdef(oid)
+              FROM pg_constraint
+             WHERE conrelid='autopilot.task'::regclass
+               AND conname='task_goal_type_check';
+          ")"
+          for goal_type in \
+            AUTOPILOT_SMOKE_V1 \
+            EXTERNAL_WAIT_SHADOW_V1 \
+            OWNER_BOUNDARY_V1 \
+            GITHUB_PR_READ_ONLY_V1 \
+            GITHUB_CI_READ_ONLY_V1; do
+            [[ "$constraint" == *"$goal_type"* ]]
+          done
+          [[ "$constraint" != *"GITHUB_DRAFT_REPAIR_V1"* ]]
+          [[ "$constraint" != *"IBF_READ_ONLY_ANALYSIS"* ]]
+
+          echo "AUTOPILOT_READONLY_GITHUB_SCHEMA_APPLIED"
+          echo "TASK_ROWS_UNCHANGED=$task_count_after"

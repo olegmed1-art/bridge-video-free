@@ -8,17 +8,19 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 SHARED_FENCE = "oracle-instance-workload-mutation"
 
 POWER_GROUP = (
-    "${{ (github.event_name == 'workflow_dispatch' && inputs.action == 'status') && "
-    "format('oracle-instance-status-{0}', github.run_id) || (github.event_name == "
-    "'issue_comment' && github.actor == github.repository_owner && "
-    "github.event.comment.body == '/oracle-instance status') && "
-    "format('oracle-instance-status-{0}', github.run_id) || "
-    "((github.event_name == 'workflow_dispatch' && "
-    "contains(fromJSON('[\"start\",\"stop\"]'), inputs.action)) || "
+    "${{ ((github.event_name == 'workflow_dispatch' && "
+    "contains(fromJSON('[\"status\",\"start\",\"stop\"]'), inputs.action)) || "
     "(github.event_name == 'issue_comment' && github.actor == github.repository_owner && "
-    "contains(fromJSON('[\"/oracle-instance start\",\"/oracle-instance stop\"]'), "
-    "github.event.comment.body))) && 'oracle-instance-workload-mutation' || "
+    "contains(fromJSON('[\"/oracle-instance status\",\"/oracle-instance start\","
+    "\"/oracle-instance stop\"]'), github.event.comment.body))) && "
+    "'oracle-instance-workload-mutation' || "
     "format('oracle-instance-power-noop-{0}', github.run_id) }}"
+)
+
+ADMIN_GROUP = (
+    "${{ github.event_name == 'pull_request' && "
+    "format('oracle-universal-video-admin-pr-{0}', github.event.pull_request.number) || "
+    "'oracle-instance-workload-mutation' }}"
 )
 
 MASS_LAUNCH_GROUP = (
@@ -139,6 +141,14 @@ def test_stop_consumer_has_exact_non_cancelling_event_to_fence_mapping() -> None
         "oracle-instance-power.yml",
         {"workflow_dispatch", "issue_comment"},
         POWER_GROUP,
+    )
+
+
+def test_universal_video_bounded_admin_mutation_shares_stop_fence() -> None:
+    _assert_workflow_mapping(
+        "oracle-universal-video-admin.yml",
+        {"pull_request", "push"},
+        ADMIN_GROUP,
     )
 
 

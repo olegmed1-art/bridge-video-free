@@ -297,7 +297,17 @@ def claim_job(
     from psycopg import connect
     from psycopg.rows import dict_row
 
-    with connect(database_url, row_factory=dict_row) as connection, connection.cursor() as cursor:
+    # The resident holds the shared workload fence while it checks for work.
+    # Bound both connection establishment and the claim statement so a broken
+    # database transport cannot pin that fence indefinitely and prevent a
+    # metadata-only pre-canary from quiescing an otherwise idle resident.
+    with connect(
+        database_url,
+        row_factory=dict_row,
+        connect_timeout=8,
+        options="-c statement_timeout=10000 -c lock_timeout=2000",
+        application_name="universal-video-worker-claim",
+    ) as connection, connection.cursor() as cursor:
         cursor.execute(
             "SELECT * FROM video_queue.claim_job(%s,%s,%s,%s)",
             (worker_key, lease_seconds, processing_profile, algorithm_revision),

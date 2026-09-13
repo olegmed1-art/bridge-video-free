@@ -1,0 +1,376 @@
+name: Oracle fleet status
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Oracle server to inspect
+        required: true
+        type: choice
+        options: [all, light, heavy]
+        default: all
+  issue_comment:
+    types: [created]
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-fleet-status.yml'
+      - 'ops/oracle_fleet_status.py'
+      - 'tests/test_oracle_fleet_status.py'
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('oracle-fleet-status-pr-{0}', github.event.pull_request.number) || 'oracle-instance-workload-mutation' }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet 'pytest==8.4.2'
+          python -m pytest -q tests/test_oracle_fleet_status.py
+          python -m py_compile ops/oracle_fleet_status.py
+
+  inspect:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.actor == github.repository_owner &&
+       contains(fromJSON('["/oracle-status","/oracle-status all","/oracle-status light","/oracle-status heavy"]'), github.event.comment.body))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DISPATCH_TARGET: ${{ inputs.target }}
+      COMMENT_COMMAND: ${{ github.event.comment.body }}
+      OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+    steps:
+      - name: Checkout bounded status code
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Resolve exact read-only target
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            target="$DISPATCH_TARGET"
+          else
+            case "$COMMENT_COMMAND" in
+              /oracle-status) target=all ;;
+              '/oracle-status all') target=all ;;
+              '/oracle-status light') target=light ;;
+              '/oracle-status heavy') target=heavy ;;
+              *) exit 2 ;;
+            esac
+          fi
+          case "$target" in all|light|heavy) ;; *) exit 2 ;; esac
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+
+      - name: Configure bounded OCI client
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${OCI_CLI_CONFIG:-}"
+          test -n "${OCI_CLI_KEY_CONTENT:-}"
+          python -m pip install --disable-pip-version-check --quiet 'oci-cli==3.90.3'
+          umask 077
+          mkdir -p "$HOME/.oci"
+          if [[ "$OCI_CLI_KEY_CONTENT" == base64:* ]]; then
+            printf '%s' "${OCI_CLI_KEY_CONTENT#base64:}" | base64 --decode > "$HOME/.oci/oci_api_key.pem"
+          else
+            printf '%s\n' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/oci_api_key.pem"
+          fi
+          printf '%s\n' "$OCI_CLI_CONFIG" > "$HOME/.oci/config"
+          openssl pkey -in "$HOME/.oci/oci_api_key.pem" -traditional \
+            -out "$HOME/.oci/key.pkcs1.pem"
+          mv "$HOME/.oci/key.pkcs1.pem" "$HOME/.oci/oci_api_key.pem"
+          actual_fingerprint="$(openssl pkey -in "$HOME/.oci/oci_api_key.pem" -pubout -outform DER \
+            | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
+          export OCI_DERIVED_FINGERPRINT="$actual_fingerprint"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path.home() / '.oci' / 'config'
+          lines = []
+          found = {'key_file': False, 'region': False, 'fingerprint': False}
+          replacements = {
+              'key_file': f'{Path.home()}/.oci/oci_api_key.pem',
+              'region': 'eu-frankfurt-1',
+              'fingerprint': os.environ['OCI_DERIVED_FINGERPRINT'],
+          }
+          for line in path.read_text(encoding='utf-8').splitlines():
+              key = line.partition('=')[0].strip()
+              if key in replacements:
+                  lines.append(f'{key}={replacements[key]}')
+                  found[key] = True
+              else:
+                  lines.append(line)
+          for key, value in replacements.items():
+              if not found[key]:
+                  lines.append(f'{key}={value}')
+          path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
+          chmod 0600 "$HOME/.oci/config" "$HOME/.oci/oci_api_key.pem"
+          oci iam region list --output json >/dev/null
+
+      - name: Inventory the two named Oracle instances
+        id: inventory
+        env:
+          TARGET: ${{ steps.request.outputs.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/oracle-fleet-status"
+          mkdir -p "$work"
+          tenancy_id="$(python - <<'PY'
+          import oci
+          value = oci.config.from_file().get('tenancy', '')
+          assert isinstance(value, str) and value.startswith('ocid1.tenancy.')
+          print(value)
+          PY
+          )"
+          compartments="$work/compartments.txt"
+          roots="$work/compartments.json"
+          oci iam compartment list --compartment-id "$tenancy_id" --compartment-id-in-subtree true \
+            --access-level ACCESSIBLE --include-root --all --output json > "$roots"
+          python - "$roots" "$compartments" <<'PY'
+          import json, sys
+          from pathlib import Path
+
+          rows = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          assert isinstance(rows, list) and len(rows) <= 100
+          ids = []
+          for row in rows:
+              assert isinstance(row, dict)
+              value = row.get('id')
+              assert isinstance(value, str)
+              assert value.startswith(('ocid1.tenancy.', 'ocid1.compartment.'))
+              ids.append(value)
+          assert len(set(ids)) == len(ids) and sys.argv[2]
+          Path(sys.argv[2]).write_text('\n'.join(sorted(ids)) + '\n', encoding='ascii')
+          PY
+          sort -u -o "$compartments" "$compartments"
+          test "$(wc -l < "$compartments")" -le 100
+          printf '{"data":[' > "$work/instances.json"
+          separator=''
+          while IFS= read -r compartment_id; do
+            [[ "$compartment_id" == ocid1.tenancy.* || "$compartment_id" == ocid1.compartment.* ]] || exit 2
+            page="$work/instances-page.json"
+            oci compute instance list --compartment-id "$compartment_id" --all --output json > "$page"
+            python - "$page" <<'PY' > "$work/rows.jsonl"
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding='utf-8')).get('data')
+          assert isinstance(data, list) and len(data) <= 500
+          for row in data:
+              assert isinstance(row, dict)
+              print(json.dumps(row, separators=(',', ':')))
+          PY
+            while IFS= read -r row; do
+              printf '%s%s' "$separator" "$row" >> "$work/instances.json"
+              separator=,
+            done < "$work/rows.jsonl"
+          done < "$compartments"
+          printf ']}\n' >> "$work/instances.json"
+          python ops/oracle_fleet_status.py inventory \
+            --input "$work/instances.json" --output "$work/targets.json" --target "$TARGET"
+          echo "work=$work" >> "$GITHUB_OUTPUT"
+
+      - name: Collect bounded read-only host telemetry
+        id: telemetry
+        env:
+          WORK: ${{ steps.inventory.outputs.work }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > "$WORK/host-results.jsonl"
+          python - "$WORK/targets.json" <<'PY' > "$WORK/targets.tsv"
+          import json, sys
+          for item in json.load(open(sys.argv[1], encoding='utf-8')):
+              print('\t'.join((item['role'], item['instance_id'], item['compartment_id'], item['lifecycle'])))
+          PY
+          while IFS=$'\t' read -r role instance_id compartment_id lifecycle; do
+            if [[ "$lifecycle" != RUNNING ]]; then
+              printf '{"role":"%s","telemetry":"NOT_RUNNING"}\n' "$role" >> "$WORK/host-results.jsonl"
+              continue
+            fi
+            script="$WORK/probe-$role.sh"
+            ROLE="$role" python - <<'PY' > "$script"
+          import os
+          role = os.environ['ROLE']
+          assert role in {'light', 'heavy'}
+          print("""set -eu
+          ROLE='ROLE_VALUE' python3 - <<'HOSTPY'
+          import json, os, socket, subprocess, time
+          from pathlib import Path
+
+          def meminfo():
+              result = {}
+              for line in Path('/proc/meminfo').read_text(encoding='ascii').splitlines():
+                  key, value = line.split(':', 1)
+                  result[key] = int(value.strip().split()[0])
+              return result
+
+          def state(unit):
+              result = subprocess.run(
+                  ['systemctl', 'is-active', unit],
+                  text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                  timeout=5, check=False,
+              ).stdout.strip()
+              return result if result in {'active','activating','deactivating','failed','inactive'} else 'not-found' if not result else 'unknown'
+
+          def process_count(needle):
+              count = 0
+              for path in Path('/proc').glob('[0-9]*/cmdline'):
+                  try:
+                      raw = path.read_bytes()[:8192]
+                  except (OSError, PermissionError):
+                      continue
+                  count += int(needle in raw)
+              return count
+
+          memory = meminfo()
+          disk = os.statvfs('/')
+          load = [float(value) for value in Path('/proc/loadavg').read_text(encoding='ascii').split()[:3]]
+          payload = {
+              'schema': 'oracle-fleet-host-status/v1',
+              'role': os.environ['ROLE'],
+              'hostname': socket.gethostname().lower(),
+              'observed_at_epoch': int(time.time()),
+              'uptime_seconds': int(float(Path('/proc/uptime').read_text(encoding='ascii').split()[0])),
+              'cpu_logical': os.cpu_count() or 0,
+              'load': load,
+              'memory_total_kib': memory['MemTotal'],
+              'memory_available_kib': memory['MemAvailable'],
+              'root_total_kib': disk.f_blocks * disk.f_frsize // 1024,
+              'root_available_kib': disk.f_bavail * disk.f_frsize // 1024,
+              'services': {
+                  'assistant_lab': state('assistant-lab.service'),
+                  'autopilot': state('school-autopilot-shadow.service'),
+                  'dds3': state('bridge-dds3.service'),
+                  'universal_video': state('universal-video.service'),
+                  'universal_video_container': state('universal-video-container.service'),
+              },
+              'processes': {
+                  'autonomous_video': process_count(b'bridge_vision_autonomous_video.py'),
+                  'book_material': process_count(b'book_material'),
+                  'ffmpeg': process_count(b'ffmpeg'),
+                  'tesseract': process_count(b'tesseract'),
+              },
+          }
+          print(json.dumps(payload, sort_keys=True, separators=(',', ':')))
+          HOSTPY""".replace('ROLE_VALUE', role))
+          PY
+            content="$(SCRIPT="$script" python - <<'PY'
+          import json, os
+          text = open(os.environ['SCRIPT'], encoding='utf-8').read()
+          print(json.dumps({'source': {'sourceType': 'TEXT', 'text': text}, 'output': {'outputType': 'TEXT'}}, separators=(',', ':')))
+          PY
+            )"
+            target="$(INSTANCE_ID="$instance_id" python - <<'PY'
+          import json, os
+          print(json.dumps({'instanceId': os.environ['INSTANCE_ID']}, separators=(',', ':')))
+          PY
+            )"
+            command_id="$(oci instance-agent command create --compartment-id "$compartment_id" \
+              --content "$content" --target "$target" --timeout-in-seconds 120 \
+              --display-name "bridge-school-fleet-status-${GITHUB_RUN_ID}-${role}" \
+              --query data.id --raw-output)"
+            [[ "$command_id" == ocid1.instanceagentcommand.* ]]
+            execution="$WORK/execution-$role.json"
+            state=''
+            for _ in $(seq 1 30); do
+              oci instance-agent command-execution get --command-id "$command_id" \
+                --instance-id "$instance_id" --output json > "$execution" || true
+              state="$(python - "$execution" <<'PY'
+          import json, sys
+          try: print(json.load(open(sys.argv[1], encoding='utf-8')).get('data', {}).get('lifecycle-state', ''))
+          except Exception: print('')
+          PY
+              )"
+              case "$state" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break ;; esac
+              sleep 4
+            done
+            if python ops/oracle_fleet_status.py host --input "$execution" \
+              --output "$WORK/host-$role.json" --role "$role"; then
+              cat "$WORK/host-$role.json" >> "$WORK/host-results.jsonl"
+            else
+              printf '{"role":"%s","telemetry":"UNAVAILABLE"}\n' "$role" >> "$WORK/host-results.jsonl"
+            fi
+          done < "$WORK/targets.tsv"
+
+      - name: Build sanitized status report
+        id: report
+        env:
+          WORK: ${{ steps.inventory.outputs.work }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "$WORK/targets.json" "$WORK/host-results.jsonl" > "$WORK/report.md" <<'PY'
+          import json, sys
+          targets = json.load(open(sys.argv[1], encoding='utf-8'))
+          hosts = {}
+          for line in open(sys.argv[2], encoding='utf-8'):
+              item = json.loads(line)
+              hosts[item['role']] = item
+
+          def gib(kib):
+              return f'{kib / 1024 / 1024:.1f}'
+
+          print('### Oracle fleet status — read only')
+          print('')
+          print('| Role | Instance | Lifecycle | Capacity | Host telemetry | Services | Heavy processes |')
+          print('|---|---|---|---|---|---|---|')
+          for item in targets:
+              host = hosts.get(item['role'], {'telemetry': 'UNAVAILABLE'})
+              capacity = f"{item['ocpus']:g} OCPU / {item['memory_gb']:g} GiB"
+              if 'hostname' not in host:
+                  telemetry = host.get('telemetry', 'UNAVAILABLE')
+                  services = 'unavailable'
+                  processes = 'unavailable'
+              else:
+                  telemetry = (
+                      f"{host['hostname']}; up {host['uptime_seconds'] // 3600}h; "
+                      f"load {host['load'][0]:.2f}; RAM free {gib(host['memory_available_kib'])} GiB; "
+                      f"root free {gib(host['root_available_kib'])} GiB"
+                  )
+                  services = ', '.join(f"{key}={value}" for key, value in host['services'].items())
+                  processes = ', '.join(f"{key}={value}" for key, value in host['processes'].items())
+              print(
+                  f"| {item['role']} | {item['name']} | {item['lifecycle']} | {capacity} | "
+                  f"{telemetry} | {services} | {processes} |"
+              )
+          print('')
+          print('No server lifecycle, service, queue, file, database, or workload state was changed.')
+          PY
+          cat "$WORK/report.md" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo 'body<<EOF'
+            cat "$WORK/report.md"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish status to the requesting thread
+        if: ${{ github.event_name == 'issue_comment' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          BODY: ${{ steps.report.outputs.body }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="$BODY" >/dev/null
