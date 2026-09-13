@@ -311,10 +311,22 @@ BEGIN
             completed_at=CASE WHEN terminal THEN now() ELSE NULL END, updated_at=now()
          WHERE dispatch_id=row.dispatch_id;
         IF terminal THEN
-            UPDATE autopilot.step_attempt SET status='FAILED_CLOSED',error_code='ROLE_DISPATCH_DELIVERY_EXHAUSTED',completed_at=now()
+            UPDATE autopilot.step_attempt SET status='FAILED_CLOSED',
+                error_code=CASE WHEN row.status='SENT'
+                    THEN 'ROLE_CALLBACK_DEADLINE_EXCEEDED'
+                    ELSE 'ROLE_DISPATCH_DELIVERY_EXHAUSTED' END,
+                completed_at=now()
              WHERE step_attempt_id=row.step_attempt_id AND status='WAITING_EXTERNAL';
-            UPDATE autopilot.task SET status='FAILED_CLOSED',terminal_reason_code='ROLE_DISPATCH_DELIVERY_EXHAUSTED',
-                safe_summary_json=jsonb_build_object('dispatch_id',row.dispatch_id,'result_code','ROLE_DISPATCH_DELIVERY_EXHAUSTED'),completed_at=now()
+            UPDATE autopilot.task SET status='FAILED_CLOSED',
+                terminal_reason_code=CASE WHEN row.status='SENT'
+                    THEN 'ROLE_CALLBACK_DEADLINE_EXCEEDED'
+                    ELSE 'ROLE_DISPATCH_DELIVERY_EXHAUSTED' END,
+                safe_summary_json=jsonb_build_object(
+                    'dispatch_id',row.dispatch_id,
+                    'result_code',CASE WHEN row.status='SENT'
+                        THEN 'ROLE_CALLBACK_DEADLINE_EXCEEDED'
+                        ELSE 'ROLE_DISPATCH_DELIVERY_EXHAUSTED' END
+                ),completed_at=now()
              WHERE task_id=row.task_id AND status='WAITING_EXTERNAL';
         ELSE
             PERFORM pg_notify('autopilot_ready','chatgpt-delivery-retry');
