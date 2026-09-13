@@ -7,6 +7,7 @@ import pytest
 
 from oracle_autopilot.github_role_callback import (
     CallbackContractError,
+    DeliveryProof,
     ingest_callback_with_retry,
     parse_issue_comment_event,
     validate_callback_dsn,
@@ -22,7 +23,25 @@ target_pr=1125
 status=BLOCKED
 result_code=EXACT_HEAD_FAIL_CLOSED_GAP
 target_head_sha=0c60d122ef93070f5566723ad8ca9123717dbcae
-summary=Exact-head read-only assessment remains blocked on one public contract gap."""
+summary=Exact-head read-only assessment remains blocked on one public contract gap.
+target_chat_id=6aa023a6-e2e8-83ed-83d1-8179f9161332
+message_id=11111111-1111-1111-1111-111111111111
+run_id=22222222-2222-2222-2222-222222222222
+executor_id=chat:6aa023a6-e2e8-83ed-83d1-8179f9161332"""
+
+PROOF_BODY = """AUTOPILOT_DELIVERY_PROOF_V1
+dispatch_id=462b8120-9039-4395-bbfb-2b4fbabdc486
+dispatch_epoch=1
+role=VIDEO
+task_fingerprint=03cba6f982ba8f63c13bc37d4e9b443f7e83b92eae311cdba6be76568dd23676
+target_pr=1125
+target_chat_id=6aa023a6-e2e8-83ed-83d1-8179f9161332
+target_chat_name=KNOWLEDGE / CANON
+message_id=11111111-1111-1111-1111-111111111111
+run_id=22222222-2222-2222-2222-222222222222
+executor_id=chat:6aa023a6-e2e8-83ed-83d1-8179f9161332
+ui_visible=true
+run_state=RUNNING"""
 
 
 def _event() -> dict[str, object]:
@@ -59,6 +78,37 @@ def test_parses_live_shaped_provider_authenticated_callback():
     assert callback.role == "VIDEO"
     assert callback.status == "BLOCKED"
     assert len(callback.payload_fingerprint) == 64
+
+
+def test_parses_correlated_ui_visible_running_delivery_proof():
+    event = _event()
+    event["comment"]["body"] = PROOF_BODY
+    proof = parse_issue_comment_event(event)
+    assert isinstance(proof, DeliveryProof)
+    assert proof.target_chat_name == "KNOWLEDGE / CANON"
+    assert proof.executor_id == "chat:6aa023a6-e2e8-83ed-83d1-8179f9161332"
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("ui_visible=true", "ui_visible=false"),
+        ("run_state=RUNNING", "run_state=QUEUED"),
+        ("target_chat_id=6aa023a6-e2e8-83ed-83d1-8179f9161332", "target_chat_id=wrong"),
+    ],
+)
+def test_rejects_incomplete_or_unbound_delivery_proof(old, new):
+    event = _event()
+    event["comment"]["body"] = PROOF_BODY.replace(old, new)
+    with pytest.raises(CallbackContractError, match="UI_PROOF_INVALID"):
+        parse_issue_comment_event(event)
+
+
+def test_rejects_legacy_terminal_without_chat_run_binding():
+    event = _event()
+    event["comment"]["body"] = BODY.rsplit("\n", 4)[0]
+    with pytest.raises(CallbackContractError, match="BODY_INVALID"):
+        parse_issue_comment_event(event)
 
 
 def test_accepts_registry_shaped_role_before_database_binding():
@@ -160,9 +210,10 @@ def test_callback_retries_only_until_dispatch_is_marked_sent(monkeypatch):
     monkeypatch.setattr(
         "oracle_autopilot.github_role_callback.ingest_callback", fake_ingest
     )
-    assert ingest_callback_with_retry(
-        "unused", callback, sleeper=sleeps.append
-    ) == (True, "DONE")
+    assert ingest_callback_with_retry("unused", callback, sleeper=sleeps.append) == (
+        True,
+        "DONE",
+    )
     assert sleeps == [1, 2]
 
 

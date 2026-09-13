@@ -12,6 +12,11 @@ on:
       - 'database/migrations/0324_autopilot_project_planner.sql'
       - 'database/rollbacks/0324_autopilot_project_planner.sql'
       - 'database/tests/324_autopilot_project_planner.sql'
+      - 'database/migrations/0324a_autopilot_dynamic_role_registry.sql'
+      - 'database/migrations/0325_autopilot_durable_dependency_wakeup.sql'
+      - 'database/migrations/0326_autopilot_delivery_proof.sql'
+      - 'database/rollbacks/0326_autopilot_delivery_proof.sql'
+      - 'database/tests/326_autopilot_delivery_proof.sql'
       - 'oracle_autopilot/worker.py'
       - 'tests/test_oracle_autopilot_shadow.py'
       - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
@@ -27,6 +32,11 @@ on:
       - 'database/migrations/0324_autopilot_project_planner.sql'
       - 'database/rollbacks/0324_autopilot_project_planner.sql'
       - 'database/tests/324_autopilot_project_planner.sql'
+      - 'database/migrations/0324a_autopilot_dynamic_role_registry.sql'
+      - 'database/migrations/0325_autopilot_durable_dependency_wakeup.sql'
+      - 'database/migrations/0326_autopilot_delivery_proof.sql'
+      - 'database/rollbacks/0326_autopilot_delivery_proof.sql'
+      - 'database/tests/326_autopilot_delivery_proof.sql'
       - 'oracle_autopilot/worker.py'
       - 'tests/test_oracle_autopilot_shadow.py'
       - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
@@ -151,6 +161,18 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/324_autopilot_project_planner.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/324a_autopilot_dynamic_role_registry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/325_autopilot_durable_dependency_wakeup.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/326_autopilot_delivery_proof.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0326_autopilot_delivery_proof.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0325_autopilot_durable_dependency_wakeup.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0324a_autopilot_dynamic_role_registry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0324_autopilot_project_planner.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0323_autopilot_failure_continuation.sql
@@ -171,8 +193,20 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/migrations/0324_autopilot_project_planner.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0324a_autopilot_dynamic_role_registry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0325_autopilot_durable_dependency_wakeup.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0326_autopilot_delivery_proof.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/323_autopilot_failure_continuation.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/324_autopilot_project_planner.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/324a_autopilot_dynamic_role_registry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/325_autopilot_durable_dependency_wakeup.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/326_autopilot_delivery_proof.sql

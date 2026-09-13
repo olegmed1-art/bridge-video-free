@@ -1332,22 +1332,22 @@ def process_role_dispatch_outbox(config: WorkerConfig) -> bool:
         body_sha256 = hashlib.sha256(_dispatch_body(row).encode("utf-8")).hexdigest()
         marked = _rpc_one(
             config,
-            "SELECT autopilot.mark_role_dispatch_sent(%s::uuid, %s, %s, %s, %s) AS marked",
+            "SELECT autopilot.mark_role_dispatch_published(%s::uuid, %s, %s, %s, %s) AS marked",
             (
                 dispatch_id,
                 config.worker_id,
                 claim_epoch,
-                # Migration 0322 named this generic delivery-resource slot
-                # after the original comment transport.  Preserve the SQL
-                # contract by storing the replacement draft PR number here.
+                # This is only the GitHub discovery resource.  Migration 0326
+                # keeps it PUBLISHED until the existing ChatGPT target proves
+                # both UI visibility and a RUNNING acknowledgement.
                 result["dispatch_pull_request"],
                 body_sha256,
             ),
         )
         if not marked or not marked["marked"]:
-            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_SENT_FENCED")
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_PUBLISHED_FENCED")
         LOGGER.info(
-            "role_dispatch_sent dispatch_id=%s role=%s pull_request=%s",
+            "role_dispatch_published dispatch_id=%s role=%s pull_request=%s",
             dispatch_id,
             row["role"],
             result["dispatch_pull_request"],

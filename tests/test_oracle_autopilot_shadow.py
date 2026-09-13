@@ -500,7 +500,7 @@ def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch)
             _publish_role_dispatch(request_payload)
 
 
-def test_role_dispatch_outbox_marks_exact_broker_draft_pr_sent(monkeypatch):
+def test_github_publish_never_marks_chatgpt_dispatch_sent(monkeypatch):
     claimed = {
         "dispatch_id": "462b8120-9039-4395-bbfb-2b4fbabdc486",
         "repository": "olegmed1-art/bridge-video-free",
@@ -527,7 +527,7 @@ def test_role_dispatch_outbox_marks_exact_broker_draft_pr_sent(monkeypatch):
         calls.append((sql, params))
         if "claim_role_dispatch_outbox" in sql:
             return pending.pop(0) if pending else None
-        if "mark_role_dispatch_sent" in sql:
+        if "mark_role_dispatch_published" in sql:
             return {"marked": True}
         return None
 
@@ -540,14 +540,17 @@ def test_role_dispatch_outbox_marks_exact_broker_draft_pr_sent(monkeypatch):
     assert drain_role_dispatch_outbox(config) == 1
     claimed_params = next(params for sql, params in calls if "claim_role_dispatch_outbox" in sql)
     assert claimed_params == ("oracle-test", 300)
-    sent = next(params for sql, params in calls if "mark_role_dispatch_sent" in sql)
-    assert sent[:4] == (
+    published = next(
+        params for sql, params in calls if "mark_role_dispatch_published" in sql
+    )
+    assert published[:4] == (
         claimed["dispatch_id"],
         "oracle-test",
         2,
         1152,
     )
-    assert len(sent[4]) == 64
+    assert len(published[4]) == 64
+    assert not any("mark_role_dispatch_sent" in sql for sql, _params in calls)
 
 
 def test_role_dispatch_outbox_rolls_forward_safely_before_migration_0323(monkeypatch):
@@ -574,7 +577,7 @@ def test_role_dispatch_outbox_rolls_forward_safely_before_migration_0323(monkeyp
             raise psycopg.errors.UndefinedFunction("v2 not installed")
         if "claim_role_dispatch_outbox(" in sql:
             return legacy_pending.pop(0) if legacy_pending else None
-        if "mark_role_dispatch_sent" in sql:
+        if "mark_role_dispatch_published" in sql:
             return {"marked": True}
         return None
 
