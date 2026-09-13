@@ -1,0 +1,9 @@
+{
+  "request_id": "uv-profiled-card-activate-20260829-01",
+  "mode": "activate",
+  "git_ref": "3f04753506649826fee31484cdc5b544925e9c63",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}

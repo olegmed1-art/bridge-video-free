@@ -1,0 +1,97 @@
+meta_school_version: 0.2
+registry_status: IMPLEMENTED
+status_model: [DESIGNED, IMPLEMENTED, TESTED, OPERATIONAL]
+operational_requires:
+  - reproducible_end_to_end_evidence
+  - run_or_artifact_identity
+  - regression_or_repeat_confirmation
+platform_layers:
+  - online_school
+  - learning_engine
+  - meta_school
+  - school_core
+components:
+  - id: online_school
+    name: Online School
+    status: DESIGNED
+    operational: false
+    depends_on: [identity_provenance, learning_engine, school_knowledge]
+  - id: learning_engine
+    name: Learning Engine
+    status: DESIGNED
+    operational: false
+    depends_on: [identity_provenance, evidence_gate, school_knowledge]
+  - id: ai_bridge_coach
+    name: AI Bridge Coach
+    status: DESIGNED
+    operational: false
+    depends_on: [online_school, learning_engine, school_knowledge, evidence_gate]
+  - id: identity_provenance
+    name: Identity and Provenance
+    status: DESIGNED
+    operational: false
+  - id: evidence_gate
+    name: Evidence Gate
+    status: IMPLEMENTED
+    operational: false
+    evidence_hint: meta_school/evidence.schema.json
+  - id: truth_layer
+    name: Truth Layer Registry and Provenance
+    status: TESTED
+    operational: false
+    depends_on: [neon_persistence, evidence_gate]
+    evidence_hint: docs/architecture/truth_layer_checkpoint_2026-08-17.md
+    note: clean PostgreSQL 18 semantic CI and isolated production-snapshot migration evidence exist; final migration identity is 0045 and remains unpromoted to production
+  - id: reliability_foundation
+    name: META Reliability Foundation
+    status: TESTED
+    operational: false
+    depends_on: [truth_layer, evidence_gate, neon_persistence]
+    evidence_hint: docs/architecture/stage1_foundation_checkpoint_2026-08-17.md
+    note: checkpoint/resume, correction-regression gate, protected methodology authority, rights/ACL observations, recovery evidence, actual restore test and Source-to-Deal-to-Run-to-Artifact E2E gate passed; migrations 0046-0048 remain unpromoted to production
+  - id: school_knowledge
+    name: Approved School Knowledge
+    status: DESIGNED
+    operational: false
+  - id: video_analysis
+    name: Video Analysis
+    evidence_hint: VIDEO_ANALYSIS_3_1_FREE.md
+    status: IMPLEMENTED
+    operational: false
+    note: production route was deliberately rolled back to confirmed 3.1-free-r25.6 after evidence that r25.10/r25.11 inherited an ASR hallucination-to-NO_SPEECH failure; newer AlgorithmVersion identity does not imply promotion
+  - id: neon_persistence
+    name: Neon Persistence
+    evidence_hint: bridge_neon_persistence.py
+    status: IMPLEMENTED
+    operational: false
+  - id: runtime_hardening
+    name: Runtime Hardening
+    evidence_hint: bridge_runtime_hardening_r25_3.py
+    status: IMPLEMENTED
+    operational: false
+  - id: dds_core
+    name: DDS Core
+    status: TESTED
+    operational: false
+    evidence_hint: docs/architecture/stage2_dds_checkpoint_2026-08-17.md
+    note: live Stage-2 DealID replay through one modern SolverContext passed; same TT object, identical semantic FutureTricks and repeated node reduction 168200->109 reproduced in two fresh processes; existing golden smoke also passed; corpus-scale production orchestration remains separate
+  - id: tournament_analysis
+    name: Tournament Analysis
+    status: IMPLEMENTED
+    operational: false
+  - id: deal_analysis
+    name: Deal Analysis
+    status: IMPLEMENTED
+    operational: false
+rules:
+  no_self_promotion_without_evidence: true
+  teacher_methodology_protected: true
+  unknown_over_invention: true
+  preserve_failed_experiments: true
+  regression_on_material_failure: true
+  new_sql_auto_production: false
+  folder_name_is_identity: false
+  learning_join_requires_resolved_identity: true
+  coach_requires_approved_school_knowledge: true
+  pedagogical_hypothesis_requires_teacher_approval: true
+  online_school_and_learning_engine_are_meta_clients: true

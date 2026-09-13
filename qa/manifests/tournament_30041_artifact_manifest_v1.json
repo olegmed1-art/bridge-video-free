@@ -1,0 +1,37 @@
+{
+  "entries": [
+    {
+      "immutable_source": true,
+      "locator": "drive:1RQ__9B-vyQ8qUb7Q959PE7PFsHJSgudH",
+      "metadata": {
+        "event": "30041",
+        "round": "2",
+        "source_kind": "school_derived_tournament_report"
+      },
+      "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "name": "Разбор_турнира_30041_для_Дианы_Векслер_v1.2 (1).pptx",
+      "role": "source_report",
+      "sha256": "9285e27c56906bdc18f729045927c9bbbcc45146127d99420bdd4e1834264e9f",
+      "size_bytes": 307707
+    },
+    {
+      "immutable_source": false,
+      "local_path": "qa/evidence/tournament_30041_round2_pptx_qa.json",
+      "mime_type": "application/json",
+      "name": "tournament_30041_round2_pptx_qa.json",
+      "role": "qa_report",
+      "sha256": "d90360f278cb7bdb74740c85db137a57952e05f1645318afd12dc34acf604640",
+      "size_bytes": 2452
+    }
+  ],
+  "generated_at": "2026-08-21T10:50:00Z",
+  "manifest_id": "fa9813e945c36a29f4f9ee70f0e33834abe52091861e7ad215feadb742629a5a",
+  "metadata": {
+    "event": "30041",
+    "normative_algorithm": "1.4",
+    "qa_schema": "bridge-pptx-artifact-qa-v1",
+    "round": "2",
+    "visual_template": "1.2"
+  },
+  "schema": "bridge-artifact-manifest-v1"
+}

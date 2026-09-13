@@ -1,0 +1,18 @@
+name: bridge-video-auto-discovery-disabled
+
+# 3.1 FREE r25.6 policy: periodic/mass discovery is disabled.
+# Video processing may start only from an explicit opaque job request.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy-guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Confirm auto-discovery is disabled
+        run: |
+          echo 'AUTO_DISCOVERY_DISABLED: 3.1 FREE r25.6 requires explicit user-requested jobs.'

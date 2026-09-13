@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "META School Cost Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cost_event_id", "category", "amount_usd", "timestamp", "provenance"],
+  "properties": {
+    "cost_event_id": {"type": "string", "minLength": 1},
+    "student_id": {"type": ["string", "null"]},
+    "run_id": {"type": ["string", "null"]},
+    "component_id": {"type": ["string", "null"]},
+    "experiment_id": {"type": ["string", "null"]},
+    "lesson_id": {"type": ["string", "null"]},
+    "tournament_id": {"type": ["string", "null"]},
+    "recording_id": {"type": ["string", "null"]},
+    "category": {"enum": ["AI_INPUT", "AI_OUTPUT", "COMPUTE", "DATABASE", "STORAGE", "CI", "VIDEO", "OTHER"]},
+    "provider": {"type": ["string", "null"]},
+    "model_or_service": {"type": ["string", "null"]},
+    "quantity": {"type": ["number", "null"], "minimum": 0},
+    "unit": {"type": ["string", "null"]},
+    "amount_usd": {"type": "number", "minimum": 0},
+    "cache_hit": {"type": ["boolean", "null"]},
+    "routing_level": {"enum": ["L0", "L1", "L2", "L3", "L4", "L5", "NA"]},
+    "purpose": {"type": ["string", "null"]},
+    "provenance": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "string", "format": "date-time"}
+  }
+}

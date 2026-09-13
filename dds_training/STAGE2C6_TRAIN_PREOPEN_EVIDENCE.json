@@ -1,0 +1,108 @@
+{
+  "authority": "EVIDENCE_ONLY",
+  "automatic_promotion": false,
+  "candidate_fit_families": 553,
+  "candidate_fit_rows": 2000,
+  "candidate_fit_scope": "Stage 2B/2C.2 TRAIN-only",
+  "candidate_policy": "defense_suit_learned__defense_nt_baseline__declarer_baseline",
+  "curriculum": {
+    "candidate_by_actor": {
+      "declarer": 1997,
+      "defense": 1253
+    },
+    "candidate_continuations": 3250,
+    "requested_per_actor": 1000,
+    "selected_by_actor": {
+      "declarer": 1000,
+      "defense": 1000
+    },
+    "selected_total": 2000
+  },
+  "dds_called": false,
+  "fresh_shadow_overlap_with_fit_or_prior_shadow": 0,
+  "fresh_shadow_scope": "previously unused TRAIN families",
+  "historical_database_mutated": false,
+  "learning_mutated": false,
+  "locked_prediction_sha256": "84c3c6e78fd0a4d1a4699c34fc6cb92c5dd97b99496edffc91bc9bf4cc28a92e",
+  "next_action": "evaluate locked predictions with DDS on fresh TRAIN shadow only",
+  "policy_basis": {
+    "deployment_enabled": {
+      "nt": false,
+      "suit": true
+    },
+    "sealed_used": false,
+    "source": "Stage 2C.5 TRAIN-only shadow artifact",
+    "stage2c5_locked_prediction_sha256": "a7afde6d2409e302464ad93ea4acd4b7ed96f8621015ec81cc62312fb73c1583",
+    "train_only_slice_evidence": {
+      "nt": {
+        "all_three_train_conditions": false,
+        "learned": {
+          "mean_regret": 0.6216216216216216,
+          "n": 185,
+          "optimal": 122,
+          "optimal_rate": 0.6594594594594595,
+          "regret_2plus": 28
+        },
+        "old": {
+          "mean_regret": 0.6918918918918919,
+          "n": 185,
+          "optimal": 127,
+          "optimal_rate": 0.6864864864864865,
+          "regret_2plus": 27
+        }
+      },
+      "suit": {
+        "all_three_train_conditions": true,
+        "learned": {
+          "mean_regret": 0.3852760736196319,
+          "n": 815,
+          "optimal": 560,
+          "optimal_rate": 0.6871165644171779,
+          "regret_2plus": 52
+        },
+        "old": {
+          "mean_regret": 0.4392638036809816,
+          "n": 815,
+          "optimal": 540,
+          "optimal_rate": 0.6625766871165644,
+          "regret_2plus": 72
+        }
+      }
+    },
+    "validation_used": false
+  },
+  "policy_tuning_scope": "Stage 2C.5 TRAIN shadow only",
+  "predeclared_train_gate": {
+    "declarer_policy_identical_to_old": true,
+    "defense_nt_policy_identical_to_old": true,
+    "defense_policy_mean_regret_lt_old": true,
+    "defense_policy_optimal_rate_ge_old": true,
+    "defense_policy_regret_2plus_lt_old": true
+  },
+  "predictions_locked_before_dds": true,
+  "prior_shadow_families": 646,
+  "schema": "dds-stage2c6-train-shadow-v1-preopen",
+  "sealed_accessed": false,
+  "source_selection": {
+    "excluded_families": 1199,
+    "line_cards": 16,
+    "pairwise_family_overlap": {
+      "train_sealed": 0,
+      "train_validation": 0,
+      "validation_sealed": 0
+    },
+    "sealed_families_preserved": 3000,
+    "selected_source_families": 650,
+    "source_total": 650,
+    "split_counts": {
+      "sealed_test": 6000,
+      "train": 28000,
+      "validation": 6000
+    },
+    "train_families_available": 14000,
+    "validation_families_preserved": 3000
+  },
+  "stage": "2C.6",
+  "status": "train_shadow_predictions_locked",
+  "validation_accessed": false
+}

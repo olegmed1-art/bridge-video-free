@@ -1,0 +1,126 @@
+{
+  "authority": "EVIDENCE_ONLY",
+  "automatic_promotion": false,
+  "by_actor": {
+    "declarer": {
+      "learned": {
+        "mean_regret": 0.36,
+        "n": 1000,
+        "optimal": 734,
+        "optimal_rate": 0.734,
+        "regret_2plus": 65
+      },
+      "old": {
+        "mean_regret": 0.336,
+        "n": 1000,
+        "optimal": 756,
+        "optimal_rate": 0.756,
+        "regret_2plus": 69
+      },
+      "policy": {
+        "mean_regret": 0.336,
+        "n": 1000,
+        "optimal": 756,
+        "optimal_rate": 0.756,
+        "regret_2plus": 69
+      },
+      "policy_switches": 0
+    },
+    "defense": {
+      "learned": {
+        "mean_regret": 0.494,
+        "n": 1000,
+        "optimal": 651,
+        "optimal_rate": 0.651,
+        "regret_2plus": 89
+      },
+      "old": {
+        "mean_regret": 0.52,
+        "n": 1000,
+        "optimal": 634,
+        "optimal_rate": 0.634,
+        "regret_2plus": 97
+      },
+      "policy": {
+        "mean_regret": 0.496,
+        "n": 1000,
+        "optimal": 644,
+        "optimal_rate": 0.644,
+        "regret_2plus": 83
+      },
+      "policy_switches": 782
+    }
+  },
+  "candidate_policy": "defense_suit_learned__defense_nt_baseline__declarer_baseline",
+  "defense_by_strain_class": {
+    "nt": {
+      "learned": {
+        "mean_regret": 0.7889908256880734,
+        "n": 218,
+        "optimal": 137,
+        "optimal_rate": 0.6284403669724771,
+        "regret_2plus": 46
+      },
+      "old": {
+        "mean_regret": 0.7981651376146789,
+        "n": 218,
+        "optimal": 130,
+        "optimal_rate": 0.5963302752293578,
+        "regret_2plus": 40
+      },
+      "policy": {
+        "mean_regret": 0.7981651376146789,
+        "n": 218,
+        "optimal": 130,
+        "optimal_rate": 0.5963302752293578,
+        "regret_2plus": 40
+      },
+      "policy_switches": 0
+    },
+    "suit": {
+      "learned": {
+        "mean_regret": 0.4117647058823529,
+        "n": 782,
+        "optimal": 514,
+        "optimal_rate": 0.6572890025575447,
+        "regret_2plus": 43
+      },
+      "old": {
+        "mean_regret": 0.4424552429667519,
+        "n": 782,
+        "optimal": 504,
+        "optimal_rate": 0.6445012787723785,
+        "regret_2plus": 57
+      },
+      "policy": {
+        "mean_regret": 0.4117647058823529,
+        "n": 782,
+        "optimal": 514,
+        "optimal_rate": 0.6572890025575447,
+        "regret_2plus": 43
+      },
+      "policy_switches": 782
+    }
+  },
+  "families": 644,
+  "historical_database_mutated": false,
+  "learning_mutated": false,
+  "locked_prediction_sha256": "84c3c6e78fd0a4d1a4699c34fc6cb92c5dd97b99496edffc91bc9bf4cc28a92e",
+  "methodology_checks": {
+    "blind_predictions_locked_before_dds": true,
+    "declarer_policy_identical_to_old": true,
+    "defense_nt_policy_identical_to_old": true,
+    "fit_prior_shadow_and_fresh_shadow_family_disjoint": true,
+    "validation_and_sealed_excluded": true
+  },
+  "methodology_gate_pass": true,
+  "next_gate": "owner_decision_on_validation",
+  "positions": 2000,
+  "predictions_locked_before_dds": true,
+  "schema": "dds-stage2c6-train-shadow-v1-result",
+  "sealed_accessed": false,
+  "stage": "2C.6",
+  "status": "train_shadow_complete",
+  "train_gate_pass": true,
+  "validation_accessed": false
+}

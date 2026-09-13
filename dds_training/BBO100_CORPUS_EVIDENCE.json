@@ -1,0 +1,46 @@
+{
+  "accepted_unique": 105,
+  "durable_drive_file_id": "1JM4VzdXJnFwkTKkPJ4XK_5NtDM9jYq8j",
+  "durable_drive_folder_id": "1xfM2Ee3wJ3h8GH7h6gkAuHOlouiPU4I9",
+  "durable_drive_size": 114577,
+  "evidence_version": "bbo100-corpus-evidence-v1",
+  "file_digests": {
+    "HOLDOUT_20_DO_NOT_DDS.json": {
+      "bytes": 19878,
+      "sha256": "1d6e02dffab607011090a4de1908af520aa5d359cfab04619119de5ca10e87f7"
+    },
+    "holdout_20_manifest_no_raw.jsonl": {
+      "bytes": 21168,
+      "sha256": "0c500c0d323a855f55664e08bb3af4159d792e7e307a1bef0012e2bd5021b8cc"
+    },
+    "manifest.json": {
+      "bytes": 1934,
+      "sha256": "ad01ddd8a1f4a97ed30f0d30b7aaf86ae0cbccfd512aa5410df8dfca0589cfdb"
+    },
+    "selected_100_manifest.jsonl": {
+      "bytes": 105793,
+      "sha256": "266f3782b515df57b87a28ab6494a4f4421a26fa49d79f40b751dc0c51e6783a"
+    },
+    "training_80_seeds.json": {
+      "bytes": 73343,
+      "sha256": "805d1d98dd328be4ef5964fbb41dd83136c4d2236bfa26928e06542bb73bd912"
+    }
+  },
+  "holdout_20": 20,
+  "holdout_policy": "No DDS and no hidden-hand inspection until blind assistant decisions are recorded.",
+  "holdout_raw_committed_to_repo": false,
+  "http_429_count": 0,
+  "ordered_corpus_id_sha256": "e0e7647dee05e0961de5f025f0907009f70a5ec7e9bd0657a6bbfb3e7c31b3c8",
+  "ordered_holdout_id_sha256": "4d0e38f51fb15b77dda061eac4bc86e06f7e61a56a7dbb54b510cf1060a63802",
+  "ordered_train_id_sha256": "4f3007ed67f27040b5182e81f8b379420474add64da8ecba1adfc1075e150dfb",
+  "probe_artifact_id": 9368199494,
+  "probe_artifact_sha256": "18bcbc66e4aa79bb44907dd598046a5d755c3791e70e2497e82e3fae89d000dc",
+  "probe_head_sha": "f1e864c0921764fee923c0bbc9a9f4524ab35464",
+  "probe_run_id": 32259436953,
+  "rejected_no_meaningful_play": 24,
+  "selected_100": 100,
+  "selection_rule": "sort by sha256(split_seed + deal_sha256), take first 100; first 80 TRAIN, last 20 HOLDOUT",
+  "split_seed": "BBO100-fresh-public-MBT-2026-08-19-v2",
+  "status": "CORPUS_LOCKED",
+  "training_80": 80
+}

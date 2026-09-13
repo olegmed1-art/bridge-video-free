@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bridge-school.local/schemas/oracle-universal-video-request-v1.json",
+  "title": "Oracle Universal Video bounded activation request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_id", "mode", "git_ref", "host", "user", "issue"],
+  "properties": {
+    "request_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$"},
+    "mode": {"enum": ["probe", "activate", "smoke"]},
+    "git_ref": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "expected_host_fingerprint": {"type": "string", "pattern": "^(|SHA256:[A-Za-z0-9+/]{43})$"},
+    "host": {"const": "158.180.47.161"},
+    "user": {"const": "ubuntu"},
+    "issue": {"const": 318}
+  }
+}

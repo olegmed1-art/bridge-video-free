@@ -1,0 +1,181 @@
+name: OCI FinOps read-only audit
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oci-finops-readonly-audit.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oci-finops-audit-requests/*.json'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oci-finops-readonly-audit
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Enforce read-only OCI surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=.github/workflows/oci-finops-readonly-audit.yml
+          ! grep -nE 'oci .* (create|update|delete|terminate|action|assign|remove|attach|detach) ' "$f"
+          grep -q 'oci compute instance get' "$f"
+          grep -q 'oci bv boot-volume get' "$f"
+          grep -q 'oci budgets budget budget list' "$f"
+          grep -q 'oci budgets budget alert-rule list' "$f"
+
+  audit:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ISSUE_NUMBER: '265'
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate one exact audit request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oci-finops-audit-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one OCI FinOps audit request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(x)=={'request_id','instance_id'}
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert x['instance_id']==os.environ['INSTANCE_ID']
+          print('request_id='+x['request_id'])
+          PY
+
+      - name: Configure OCI CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q oci-cli
+          mkdir -p "$HOME/.oci"
+          printf '%s\n' "$OCI_KEY" > "$HOME/.oci/key.pem"
+          chmod 600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          oci iam region list --output json >/dev/null
+
+      - name: Collect sanitized capacity and guard evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          instance="$(oci compute instance get --instance-id "$INSTANCE_ID" --output json)"
+          INSTANCE_JSON="$instance" python - <<'PY' > "$RUNNER_TEMP/capacity.txt"
+          import json, os
+          d=json.loads(os.environ['INSTANCE_JSON'])['data']
+          cfg=d.get('shape-config') or {}
+          print('shape='+str(d.get('shape') or 'unknown'))
+          print('ocpus='+str(cfg.get('ocpus') or 'unknown'))
+          print('memory_gb='+str(cfg.get('memory-in-gbs') or cfg.get('memoryInGBs') or 'unknown'))
+          print('lifecycle_state='+str(d.get('lifecycle-state') or 'unknown'))
+          print('availability_domain='+str(d.get('availability-domain') or 'unknown'))
+          PY
+          ad="$(grep '^availability_domain=' "$RUNNER_TEMP/capacity.txt" | cut -d= -f2-)"
+          compartment="$(printf '%s' "$instance" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["compartment-id"])')"
+          attachment="$(oci compute boot-volume-attachment list -c "$compartment" --availability-domain "$ad" --instance-id "$INSTANCE_ID" --all --output json)"
+          boot_id="$(printf '%s' "$attachment" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin).get("data",[]) if x.get("lifecycle-state") in {"ATTACHED","ATTACHING"}]; print(xs[0].get("boot-volume-id","") if len(xs)==1 else "")')"
+          [[ -n "$boot_id" ]]
+          boot="$(oci bv boot-volume get --boot-volume-id "$boot_id" --output json)"
+          printf 'boot_volume_gb=%s\n' "$(printf '%s' "$boot" | python -c 'import json,sys; print(json.load(sys.stdin)["data"].get("size-in-gbs","unknown"))')" >> "$RUNNER_TEMP/capacity.txt"
+          assignment="$(oci bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id "$boot_id" --output json || true)"
+          ASSIGNMENT_JSON="$assignment" python - <<'PY' >> "$RUNNER_TEMP/capacity.txt"
+          import json, os
+          try:
+              d=json.loads(os.environ.get('ASSIGNMENT_JSON') or '{}').get('data') or []
+          except Exception:
+              d=[]
+          print('backup_policy_assigned='+('yes' if d else 'no'))
+          PY
+          backups="$(oci bv boot-volume-backup list -c "$compartment" --boot-volume-id "$boot_id" --all --output json)"
+          BACKUPS_JSON="$backups" python - <<'PY' >> "$RUNNER_TEMP/capacity.txt"
+          import json, os
+          xs=json.loads(os.environ['BACKUPS_JSON']).get('data') or []
+          available=[x for x in xs if x.get('lifecycle-state')=='AVAILABLE']
+          print('available_boot_backups='+str(len(available)))
+          PY
+          budgets="$(oci budgets budget budget list -c "$OCI_TENANCY" --display-name bridge-school-dds3-trial-guard --all --output json || true)"
+          BUDGETS_JSON="$budgets" python - <<'PY' >> "$RUNNER_TEMP/capacity.txt"
+          import json, os
+          try:
+              xs=json.loads(os.environ.get('BUDGETS_JSON') or '{}').get('data') or []
+          except Exception:
+              xs=[]
+          active=[x for x in xs if x.get('lifecycle-state')=='ACTIVE']
+          print('budget_guard_active='+('yes' if active else 'no'))
+          if active:
+              x=active[0]
+              print('budget_amount_usd='+str(x.get('amount','unknown')))
+              print('budget_reset_period='+str(x.get('reset-period','unknown')))
+          PY
+          budget_id="$(printf '%s' "$budgets" | python -c 'import json,sys; xs=json.load(sys.stdin).get("data") or []; active=[x for x in xs if x.get("lifecycle-state")=="ACTIVE"]; print(active[0].get("id","") if active else "")' 2>/dev/null || true)"
+          if [[ -n "$budget_id" ]]; then
+            alerts="$(oci budgets budget alert-rule list --budget-id "$budget_id" --all --output json || true)"
+            ALERTS_JSON="$alerts" python - <<'PY' >> "$RUNNER_TEMP/capacity.txt"
+          import json, os
+          try:
+              xs=json.loads(os.environ.get('ALERTS_JSON') or '{}').get('data') or []
+          except Exception:
+              xs=[]
+          active=[x for x in xs if x.get('lifecycle-state')=='ACTIVE']
+          thresholds=sorted({str(x.get('threshold')) for x in active if x.get('threshold') is not None})
+          print('budget_alert_thresholds='+(','.join(thresholds) if thresholds else 'none'))
+          PY
+          else
+            echo 'budget_alert_thresholds=none' >> "$RUNNER_TEMP/capacity.txt"
+          fi
+          cat "$RUNNER_TEMP/capacity.txt"
+
+      - name: Publish sanitized audit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo 'OCI FinOps read-only audit: **PASS**'
+            echo "Request: \`$REQUEST_ID\`."
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/capacity.txt"
+            echo '```'
+            echo
+            echo "Read-only audit only; no OCI resource was created, updated, deleted or rebooted. Run: $RUN_URL"
+          } > "$RUNNER_TEMP/body.md"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"

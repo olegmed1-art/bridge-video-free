@@ -1,0 +1,126 @@
+{
+  "schema": "dds-stage2c4-validation-evidence-v1",
+  "recorded_at": "2026-08-20",
+  "stage": "2C.4",
+  "status": "validation_complete",
+  "owner_validation_authorized": true,
+  "validation": {
+    "opened": true,
+    "completed": true,
+    "positions": 2000,
+    "families_in_selected_wave": 643,
+    "selected_by_actor": {
+      "declarer": 1000,
+      "defense": 1000
+    },
+    "source_selection": {
+      "policy": "deterministic SHA-256 order, one validation contract source per family before balanced continuation selection, no DDS outcome used for selection",
+      "contract_source_families_selected_before_continuation_balance": 650,
+      "validation_families_available": 3000,
+      "family_overlap_with_train": 0,
+      "line_cards": 16
+    },
+    "predictions_locked_before_dds": true,
+    "locked_prediction_sha256": "2be61c3b70fb43aeb91f41240ff31fb252cb20170e2b2e3580305e0de7368a0d",
+    "candidate_training_scope": "TRAIN-only",
+    "candidate_training_rows": 2000,
+    "gate_training_scope": "5-fold family-disjoint OOF TRAIN evidence",
+    "gate_margin": 0.08,
+    "learning_allowed": false,
+    "learning_mutated": false,
+    "historical_database_mutated": false
+  },
+  "sealed": {
+    "opened": false,
+    "evaluated": 0,
+    "task_count_preserved": 6000,
+    "task_id_digest": "dd98b5e146d5b78fe93a21249ce26452a0d8cbbf0b0add4108cc7e2c1a091dcb"
+  },
+  "results": {
+    "declarer": {
+      "old": {
+        "n": 1000,
+        "optimal": 745,
+        "optimal_rate": 0.745,
+        "mean_regret": 0.349,
+        "regret_2plus": 72
+      },
+      "candidate": {
+        "n": 1000,
+        "optimal": 746,
+        "optimal_rate": 0.746,
+        "mean_regret": 0.344,
+        "regret_2plus": 73
+      },
+      "hybrid": {
+        "n": 1000,
+        "optimal": 747,
+        "optimal_rate": 0.747,
+        "mean_regret": 0.344,
+        "regret_2plus": 68
+      },
+      "hybrid_switches": 140
+    },
+    "defense": {
+      "old": {
+        "n": 1000,
+        "optimal": 619,
+        "optimal_rate": 0.619,
+        "mean_regret": 0.541,
+        "regret_2plus": 99
+      },
+      "candidate": {
+        "n": 1000,
+        "optimal": 656,
+        "optimal_rate": 0.656,
+        "mean_regret": 0.48,
+        "regret_2plus": 91
+      },
+      "hybrid": {
+        "n": 1000,
+        "optimal": 647,
+        "optimal_rate": 0.647,
+        "mean_regret": 0.492,
+        "regret_2plus": 96
+      },
+      "hybrid_switches": 800
+    }
+  },
+  "predeclared_validation_gate": {
+    "defense_hybrid_mean_regret_lt_old": true,
+    "defense_hybrid_regret_2plus_lt_old": true,
+    "declarer_hybrid_mean_regret_le_old_plus": 0.01
+  },
+  "validation_gate_pass": true,
+  "automatic_promotion": false,
+  "next_gate": "owner_decision_on_sealed",
+  "execution_provenance": {
+    "execution_pr": 216,
+    "execution_branch": "dds-stage2c4-validation-20260820",
+    "execution_head_sha": "17bb1d3ba9ce233bb015d984970432a21ae670c5",
+    "workflow_run_id": 32416711449,
+    "workflow_name": "DDS Stage 2C.4 — validation",
+    "workflow_job_id": 96579395221,
+    "artifact_id": 9424202210,
+    "artifact_name": "dds-stage2c4-validation-32416711449",
+    "artifact_size_bytes": 799719,
+    "artifact_digest": "sha256:52c6d91eb9336a69cd1475ef72d82fd40d0a6c3a1ee028a8e7c63937bca106e1",
+    "inner_archive_sha256": "d122c58ed3aec773d6ef2812cb2acb7c36e8a129da2cc6f2db1d3c2aef2482fb",
+    "substantive_validation_steps": "success",
+    "validation_evidence_verification_step": "success",
+    "artifact_upload_step": "success",
+    "workflow_conclusion": "failure",
+    "workflow_failure_scope": "post-validation generic repository-cleanliness guard",
+    "tracked_source_diff_observed": false,
+    "failure_effect_on_validation_result": "none; DDS evaluation, result verification, sealed-boundary verification, packaging and artifact upload completed before the hygiene failure"
+  },
+  "source_evidence": {
+    "stage2b_artifact_id": 9318545935,
+    "stage2b_artifact_digest": "sha256:efdd62ab9a2643f231d3faea5c9475fe519cbd5b2e94dc9a764ca6087c043604",
+    "stage2c2_artifact_id": 9352988318,
+    "stage2c2_artifact_digest": "sha256:1fd61be6816df747824467266167dc22e6a88ae4a62794643f14fd176e566da2",
+    "stage2c4_artifact_id": 9410795030,
+    "stage2c4_artifact_digest": "sha256:a2bc363fe9309232f1a8377961a4e19eabc72b911c94497b3c896a9d1f4d4bbd",
+    "main_train_logical_zip_sha256": "c46cda2fb127371cbc1ab836c74580b25f0a0bb8ab358dfaab97cf591dd8a246"
+  }
+}

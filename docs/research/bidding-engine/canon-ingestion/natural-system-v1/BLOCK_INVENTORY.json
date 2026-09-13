@@ -1,0 +1,55 @@
+{
+  "inventory_version": "1.0",
+  "source_key": "school-canon-bidding-natural-system-v1",
+  "block_count": 34,
+  "inventory_status": "complete_at_heading_level",
+  "notes": [
+    "Grid locations refer to the visually rendered PDF, which is authoritative for layout.",
+    "No rule meaning has been silently normalized at this stage.",
+    "Each block requires verified line transcription before candidate rules are generated."
+  ],
+  "blocks": [
+    {"block_id":"NSV1-P1-R1-C1","page":1,"grid":"row1-col1","kind":"opening_definitions","auction":[],"actor_role":"opener","heading":"Открытия","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R1-C2","page":1,"grid":"row1-col2","kind":"first_responses","auction":["1C"],"actor_role":"responder","heading":"Открытие 1♣. Первые ответы","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R1-C3","page":1,"grid":"row1-col3","kind":"opener_rebid","auction":["1C","1D"],"actor_role":"opener","heading":"1♣ - 1♦","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R1-C4","page":1,"grid":"row1-col4","kind":"responder_rebid","auction":["1C","1D","1H"],"actor_role":"responder","heading":"1♣ - 1♦ - 1♥","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+
+    {"block_id":"NSV1-P1-R2-C1","page":1,"grid":"row2-col1","kind":"responder_rebid","auction":["1C","1D","1S"],"actor_role":"responder","heading":"1♣ - 1♦ - 1♠","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R2-C2","page":1,"grid":"row2-col2","kind":"responder_rebid","auction":["1C","1D","1NT"],"actor_role":"responder","heading":"1♣ - 1♦ - 1NT","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R2-C3","page":1,"grid":"row2-col3","kind":"opener_rebid","auction":["1C","1H"],"actor_role":"opener","heading":"1♣ - 1♥","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R2-C4","page":1,"grid":"row2-col4","kind":"responder_rebid","auction":["1C","1H","1S"],"actor_role":"responder","heading":"1♣ - 1♥ - 1♠","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+
+    {"block_id":"NSV1-P1-R3-C1","page":1,"grid":"row3-col1","kind":"responder_rebid","auction":["1C","1H","1NT"],"actor_role":"responder","heading":"1♣ - 1♥ - 1NT","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R3-C2","page":1,"grid":"row3-col2","kind":"opener_rebid","auction":["1C","1S"],"actor_role":"opener","heading":"1♣ - 1♠","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R3-C3","page":1,"grid":"row3-col3","kind":"responder_rebid","auction":["1C","1S","1NT"],"actor_role":"responder","heading":"1♣ - 1♠ - 1NT","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R3-C4","page":1,"grid":"row3-col4","kind":"opener_rebid","auction":["1C","1NT"],"actor_role":"opener","heading":"1♣ - 1NT","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+
+    {"block_id":"NSV1-P1-R4-C1","page":1,"grid":"row4-col1","kind":"first_responses","auction":["1D"],"actor_role":"responder","heading":"Открытие 1♦. Первые ответы","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R4-C2","page":1,"grid":"row4-col2","kind":"opener_rebid","auction":["1D","1H"],"actor_role":"opener","heading":"1♦ - 1♥","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R4-C3","page":1,"grid":"row4-col3","kind":"responder_rebid","auction":["1D","1H","1S"],"actor_role":"responder","heading":"1♦ - 1♥ - 1♠","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R4-C4","page":1,"grid":"row4-col4","kind":"responder_rebid","auction":["1D","1H","1NT"],"actor_role":"responder","heading":"1♦ - 1♥ - 1NT","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+
+    {"block_id":"NSV1-P2-R1-C1","page":2,"grid":"row1-col1","kind":"opener_rebid","auction":["1D","1S"],"actor_role":"opener","heading":"1♦ - 1♠","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R1-C2","page":2,"grid":"row1-col2","kind":"opener_rebid","auction":["1D","1NT"],"actor_role":"opener","heading":"1♦ - 1NT","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R1-C3","page":2,"grid":"row1-col3","kind":"first_responses","auction":["1H"],"actor_role":"responder","heading":"Открытие 1♥. Первые ответы","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R1-C4","page":2,"grid":"row1-col4","kind":"opener_rebid","auction":["1H","1S"],"actor_role":"opener","heading":"1♥ - 1♠","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+
+    {"block_id":"NSV1-P2-R2-C1","page":2,"grid":"row2-col1","kind":"responder_rebid","auction":["1H","1S","1NT"],"actor_role":"responder","heading":"1♥ - 1♠ - 1NT","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R2-C2","page":2,"grid":"row2-col2","kind":"opener_rebid","auction":["1H","1NT"],"actor_role":"opener","heading":"1♥ - 1NT","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R2-C3","page":2,"grid":"row2-col3","kind":"first_responses","auction":["1S"],"actor_role":"responder","heading":"Открытие 1♠. Первые ответы","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R2-C4","page":2,"grid":"row2-col4","kind":"opener_rebid","auction":["1S","1NT"],"actor_role":"opener","heading":"1♠ - 1NT","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+
+    {"block_id":"NSV1-P2-R3-C1","page":2,"grid":"row3-col1","kind":"first_responses","auction":["1NT"],"actor_role":"responder","heading":"Открытие 1NT. Первые ответы","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R3-C2","page":2,"grid":"row3-col2","kind":"opener_rebid_and_continuations","auction":["1NT","2C"],"actor_role":"opener","heading":"1NT - 2♣","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R3-C3","page":2,"grid":"row3-col3","kind":"responder_rebid","auction":["1NT","2D","2H"],"actor_role":"responder","heading":"1NT - 2♦ - 2♥","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R3-C4","page":2,"grid":"row3-col4","kind":"responder_rebid","auction":["1NT","2H","2S"],"actor_role":"responder","heading":"1NT - 2♥ - 2♠","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+
+    {"block_id":"NSV1-P2-R4-C1","page":2,"grid":"row4-col1","kind":"first_responses","auction":["2C"],"actor_role":"responder","heading":"Открытие 2♣. Первые ответы","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R4-C2","page":2,"grid":"row4-col2","kind":"first_responses","auction":["2D"],"actor_role":"responder","heading":"Открытие 2♦. Первые ответы","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R4-C3","page":2,"grid":"row4-col3","kind":"first_responses","auction":["2H"],"actor_role":"responder","heading":"Открытие 2♥. Первые ответы","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R4-C4","page":2,"grid":"row4-col4","kind":"first_responses","auction":["2S"],"actor_role":"responder","heading":"Открытие 2♠. Первые ответы","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+
+    {"block_id":"NSV1-P2-R5-WIDE","page":2,"grid":"row5-wide-left","kind":"first_responses_and_continuations","auction":["2NT"],"actor_role":"responder","heading":"Открытие 2NT. Первые ответы","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P2-R5-C4","page":2,"grid":"row5-right","kind":"opener_rebid","auction":["2NT","3C"],"actor_role":"opener","heading":"2NT - 3♣","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"}
+  ]
+}

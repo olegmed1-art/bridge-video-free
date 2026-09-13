@@ -1,0 +1,201 @@
+name: Autopilot Universal Video exact runtime image preflight
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-uv-runtime-image-preflight.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-uv-runtime-image-preflight-545ef013
+  cancel-in-progress: false
+
+jobs:
+  exact-image:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      EXACT_RUNTIME_SHA: 545ef0135e3cfe436b918c3ec26f5e2b77500977
+      IMAGE_TAG: universal-video-preflight:545ef0135e3c
+      MEDIA_EXECUTION: DISABLED
+    steps:
+      - name: Initialize fail-closed receipt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          cat > "$RUNNER_TEMP/uv-runtime-state.env" <<'EOF'
+          RESOURCE_GATE=UNKNOWN
+          BUILD_GATE=NOT_RUN
+          IMPORT_GATE=NOT_RUN
+          IMAGE_ID=UNAVAILABLE
+          EOF
+
+      - name: Checkout exact runtime head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: 545ef0135e3cfe436b918c3ec26f5e2b77500977
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Bind evidence to the exact source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXACT_RUNTIME_SHA" ]]
+          [[ -z "$(git status --porcelain)" ]]
+          [[ "$(git hash-object deploy/oracle-universal-video/Dockerfile)" == '52db61c75a88f3ff89d22641f432f4ee7b9e7a6f' ]]
+          echo 'UV_RUNTIME_EXACT_SOURCE=PASS'
+
+      - name: Resource availability gate
+        id: resources
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          disk_kb="$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}')"
+          mem_kb="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)"
+          cpus="$(nproc)"
+          load1="$(awk '{print $1}' /proc/loadavg)"
+          [[ "$disk_kb" =~ ^[0-9]+$ && "$mem_kb" =~ ^[0-9]+$ && "$cpus" =~ ^[0-9]+$ ]]
+          printf 'disk_available_kb=%s\nmem_available_kb=%s\ncpus=%s\nload1=%s\n' \
+            "$disk_kb" "$mem_kb" "$cpus" "$load1" > "$RUNNER_TEMP/uv-runtime-resources.env"
+          (( disk_kb >= 12582912 )) || { echo 'UV_RUNTIME_RESOURCE_DISK_INSUFFICIENT'; exit 78; }
+          (( mem_kb >= 4194304 )) || { echo 'UV_RUNTIME_RESOURCE_MEMORY_INSUFFICIENT'; exit 78; }
+          (( cpus >= 2 )) || { echo 'UV_RUNTIME_RESOURCE_CPU_INSUFFICIENT'; exit 78; }
+          awk -v load_avg="$load1" -v cpus="$cpus" 'BEGIN { exit !(load_avg <= cpus * 2.0) }' \
+            || { echo 'UV_RUNTIME_RESOURCE_LOAD_TOO_HIGH'; exit 78; }
+          sed -i 's/^RESOURCE_GATE=.*/RESOURCE_GATE=PASS/' "$RUNNER_TEMP/uv-runtime-state.env"
+          echo 'UV_RUNTIME_RESOURCE_GATE=PASS'
+
+      - name: Build exact image without activation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$MEDIA_EXECUTION" == 'DISABLED' ]]
+          docker build \
+            --file deploy/oracle-universal-video/Dockerfile \
+            --label "org.opencontainers.image.revision=$EXACT_RUNTIME_SHA" \
+            --iidfile "$RUNNER_TEMP/uv-runtime-image-id" \
+            --tag "$IMAGE_TAG" \
+            .
+          image_id="$(cat "$RUNNER_TEMP/uv-runtime-image-id")"
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          sed -i 's/^BUILD_GATE=.*/BUILD_GATE=PASS/' "$RUNNER_TEMP/uv-runtime-state.env"
+          sed -i "s/^IMAGE_ID=.*/IMAGE_ID=$image_id/" "$RUNNER_TEMP/uv-runtime-state.env"
+          echo "UV_RUNTIME_IMAGE_ID=$image_id"
+          echo 'UV_RUNTIME_BUILD_GATE=PASS'
+
+      - name: Exact-image import and filesystem preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/uv-runtime-mounts"
+          install -d -m 0777 \
+            "$root/spool" "$root/media" "$root/model-cache/speaker" "$root/results"
+          docker run --rm \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=536870912 \
+            --mount "type=bind,src=$root/spool,dst=/var/lib/universal-video/spool" \
+            --mount "type=bind,src=$root/media,dst=/var/lib/universal-video/media" \
+            --mount "type=bind,src=$root/model-cache,dst=/var/lib/universal-video/model-cache" \
+            --mount "type=bind,src=$root/results,dst=/var/lib/universal-video/results" \
+            --env UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker \
+            --env BRIDGE_PERSIST_DATABASE=false \
+            --entrypoint /usr/local/bin/python \
+            "$IMAGE_TAG" - <<'PY'
+          import importlib
+          import json
+          import os
+          from pathlib import Path
+
+          modules = (
+              'universal_video.neon_worker',
+              'universal_video.container_runtime',
+              'bridge_worker_3_1_free',
+              'bridge_runtime_hardening_r25_16',
+              'route_drive_job_outputs',
+              'bridge_vision',
+              'bridge_vision.runtime',
+              'bridge_contracts',
+              'bridge_contracts.video_deal',
+              'database',
+          )
+          for module in modules:
+              importlib.import_module(module)
+          cache = Path(os.environ['UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE'])
+          cache.mkdir(parents=True, exist_ok=True)
+          probe = cache / '.write-probe'
+          probe.write_text('ok\n', encoding='utf-8')
+          probe.unlink()
+          fonts = (
+              Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'),
+              Path('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'),
+          )
+          if not all(path.is_file() and path.stat().st_size > 0 for path in fonts):
+              raise SystemExit('UV_RUNTIME_FONT_PREFLIGHT_FAILED')
+          from reportlab.pdfbase import pdfmetrics
+          from reportlab.pdfbase.ttfonts import TTFont
+          pdfmetrics.registerFont(TTFont('UVDejaVu', str(fonts[0])))
+          print(json.dumps({
+              'gate': 'UV_RUNTIME_EXACT_IMAGE_IMPORT',
+              'status': 'PASS',
+              'module_count': len(modules),
+              'speaker_cache_writable': True,
+              'fonts_available': True,
+              'media_execution': 'DISABLED',
+              'network': 'NONE',
+          }, sort_keys=True))
+          PY
+          sed -i 's/^IMPORT_GATE=.*/IMPORT_GATE=PASS/' "$RUNNER_TEMP/uv-runtime-state.env"
+          echo 'UV_RUNTIME_IMPORT_GATE=PASS'
+
+      - name: Build retained secret-free receipt
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source "$RUNNER_TEMP/uv-runtime-state.env"
+          disk_kb='UNKNOWN'; mem_kb='UNKNOWN'; cpus='UNKNOWN'; load1='UNKNOWN'
+          if [[ -f "$RUNNER_TEMP/uv-runtime-resources.env" ]]; then
+            source "$RUNNER_TEMP/uv-runtime-resources.env"
+          fi
+          result='FAIL'
+          [[ "$RESOURCE_GATE" == PASS && "$BUILD_GATE" == PASS && "$IMPORT_GATE" == PASS ]] && result='PASS'
+          jq -n \
+            --arg gate 'UV_RUNTIME_EXACT_IMAGE_PREFLIGHT' \
+            --arg result "$result" \
+            --arg runtime_sha "$EXACT_RUNTIME_SHA" \
+            --arg workflow_sha "$GITHUB_SHA" \
+            --arg image_id "$IMAGE_ID" \
+            --arg resource_gate "$RESOURCE_GATE" \
+            --arg build_gate "$BUILD_GATE" \
+            --arg import_gate "$IMPORT_GATE" \
+            --arg disk_available_kb "$disk_kb" \
+            --arg mem_available_kb "$mem_kb" \
+            --arg cpus "$cpus" \
+            --arg load1 "$load1" \
+            '{gate:$gate,result:$result,runtime_sha:$runtime_sha,workflow_sha:$workflow_sha,image_id:$image_id,resource_gate:$resource_gate,build_gate:$build_gate,import_gate:$import_gate,resources:{disk_available_kb:$disk_available_kb,mem_available_kb:$mem_available_kb,cpus:$cpus,load1:$load1},media_execution:"DISABLED",real_video:false,drive_write:false,oracle_contact:false,production_mutation:false,network_during_import:"NONE"}' \
+            > uv-runtime-image-preflight-receipt.json
+          cat uv-runtime-image-preflight-receipt.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload retained receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: uv-runtime-image-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: uv-runtime-image-preflight-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce terminal preflight gate
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          jq -e '.result == "PASS" and .runtime_sha == "545ef0135e3cfe436b918c3ec26f5e2b77500977" and .media_execution == "DISABLED" and .production_mutation == false' \
+            uv-runtime-image-preflight-receipt.json >/dev/null
+          echo 'UV_RUNTIME_EXACT_IMAGE_PREFLIGHT=PASS'

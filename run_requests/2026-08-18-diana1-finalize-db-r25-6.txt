@@ -1,0 +1,13 @@
+JOB_ID=e853e695e34e01e941a481cd513530ce
+SOURCE_DRIVE_ID=1_fqEYx5lx47qC6ISIyNkW06NJ4gSdx1B
+ORIGINAL_SOURCE_DRIVE_ID=1oBayTDG0hl4ulUtFK6BXj--DA1yCY04Y
+ALGORITHM_REQUESTED=3.1-free-r25.6
+MODE=diana-longitudinal-finalize
+MASTER_READ_ONLY=true
+OUTPUT_FOLDER_ID=1YIctvI0Nq42n8PzU5FbQL9DEiXlkU9C7
+WORK_FOLDER_ID=1Ti5JaNXfLnu4Rw8fVia6teBzdAcz_JQ-
+LESSON_NUMBER=1
+LESSON_DATE_CANDIDATE=2021-02-22
+LESSON_DATE_SOURCE=original Drive createdTime and modifiedTime fall on 2021-02-22; independent lesson-date confirmation remains open
+PERSIST_DATABASE=true
+COST_POLICY=zero-paid-ai-small-idempotent-neon-write

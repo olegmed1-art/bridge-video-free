@@ -1,0 +1,103 @@
+name: Tournament Analyzer v3 Event Review Release
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_teacher_review_release_gate_v3.py"
+      - "tests/test_tournament_teacher_review_release_gate_v3.py"
+      - ".github/workflows/tournament-analyzer-v3-event-review-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  real-event-review-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests and compile
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          python -m py_compile bridge_school_api/tournament_teacher_review_release_gate_v3.py
+          python -m pytest -q tests/test_tournament_teacher_review_release_gate_v3.py
+      - name: Restore exact portfolio and source review batches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/portfolio evidence/historical evidence/opening
+          for spec in \
+            "9569845552:/tmp/portfolio.zip:evidence/portfolio" \
+            "9558677983:/tmp/historical.zip:evidence/historical" \
+            "9569379785:/tmp/opening.zip:evidence/opening"; do
+            IFS=: read -r aid zip dest <<< "$spec"
+            curl -fsSL --retry 3 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${aid}/zip" \
+              -o "$zip"
+            unzip -q "$zip" -d "$dest"
+          done
+          PORTFOLIO="$(find evidence/portfolio -type f -name 'tournament-teacher-review-portfolio.json' -print -quit)"
+          HISTORICAL="$(find evidence/historical -type f -name 'tournament-teacher-review-bundle.json' -print -quit)"
+          OPENING="$(find evidence/opening -type f -name 'tournament-30041-opening-lead-review-handoff.json' -print -quit)"
+          test -n "$PORTFOLIO" && test -n "$HISTORICAL" && test -n "$OPENING"
+          echo "PORTFOLIO=$PORTFOLIO" >> "$GITHUB_ENV"
+          echo "HISTORICAL=$HISTORICAL" >> "$GITHUB_ENV"
+          echo "OPENING=$OPENING" >> "$GITHUB_ENV"
+      - name: Rebuild exact opening-lead portable bundle
+        run: |
+          PYTHONPATH="$PWD" python - <<'PY'
+          import json, os
+          from bridge_school_api.tournament_teacher_review_bundle_v3 import build_teacher_review_bundle, verify_teacher_review_bundle
+          h=json.load(open(os.environ['OPENING'], encoding='utf-8'))
+          b=build_teacher_review_bundle(h['queue'], h['decision_ledger'], h['dossier'])
+          verify_teacher_review_bundle(b)
+          json.dump(b, open('opening-lead-portable-bundle.json','w',encoding='utf-8'), ensure_ascii=False, indent=2)
+          PY
+      - name: Prove every event review batch reaches the release boundary
+        run: |
+          PYTHONPATH="$PWD" python - <<'PY'
+          import json, os
+          from bridge_school_api.tournament_teacher_review_portfolio_intake_v3 import (
+              build_portfolio_teacher_decision_template,
+              apply_portfolio_teacher_decision_intake,
+          )
+          from bridge_school_api.tournament_teacher_review_release_gate_v3 import (
+              build_event_teacher_review_release_gate,
+          )
+          p=json.load(open(os.environ['PORTFOLIO'], encoding='utf-8'))
+          h=json.load(open(os.environ['HISTORICAL'], encoding='utf-8'))
+          o=json.load(open('opening-lead-portable-bundle.json', encoding='utf-8'))
+          bundles=[h,o]
+          template=build_portfolio_teacher_decision_template(p,bundles)
+          decision_result=apply_portfolio_teacher_decision_intake(p,bundles,template)
+          outputs={}
+          for event_id, expected_count in sorted(p['event_counts'].items()):
+              g=build_event_teacher_review_release_gate(p,bundles,decision_result,event_id=event_id)
+              assert g['review_item_count']==int(expected_count)
+              assert g['unresolved_review_count']==int(expected_count)
+              assert g['confirmed_technical_count']==0
+              assert g['dismissed_count']==0
+              assert g['teacher_review_release_ready'] is False
+              assert g['release_blockers']==['TEACHER_REVIEW_PORTFOLIO_UNRESOLVED']
+              assert g['cross_category_causal_collapse_allowed'] is False
+              assert g['automatic_episode_scoring_allowed'] is False
+              outputs[event_id]=g
+              print('event',event_id,'review_items',g['review_item_count'],'unresolved',g['unresolved_review_count'])
+          assert sum(g['review_item_count'] for g in outputs.values())==p['item_count']==21
+          json.dump(outputs,open('event-teacher-review-release-gates.json','w',encoding='utf-8'),ensure_ascii=False,indent=2)
+          print('TOURNAMENT_EVENT_REVIEW_RELEASE_REAL_PASS')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tournament-analyzer-v3-event-review-release-gates
+          path: event-teacher-review-release-gates.json
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,79 @@
+name: Autopilot Vercel OIDC readiness (one-shot)
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-vercel-oidc-readiness-once.yml']
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: autopilot-vercel-oidc-readiness-once
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      DEPLOYMENTS: >-
+        bridge-school-autopilot-qd6hpze0y-olegmed1-4368s-projects.vercel.app
+        bridge-school-autopilot-oshqvoyxy-olegmed1-4368s-projects.vercel.app
+        bridge-school-autopilot-opp6km3a3-olegmed1-4368s-projects.vercel.app
+        bridge-school-autopilot-dbx22nt73-olegmed1-4368s-projects.vercel.app
+        bridge-school-autopilot-cslfiz83g-olegmed1-4368s-projects.vercel.app
+    steps:
+      - name: Obtain short-lived GitHub OIDC token
+        id: oidc
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          response="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}")"
+          token="$(jq -er '.value | select(type == "string" and length > 100)' <<<"$response")"
+          echo "::add-mask::$token"
+          printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
+          echo 'GITHUB_OIDC_TOKEN_ACQUIRED=YES'
+
+      - name: Probe protected Preview health contracts
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          successes=0
+          for host in $DEPLOYMENTS; do
+            body="$RUNNER_TEMP/${host}.json"
+            code="$(curl --silent --show-error --location \
+              --max-redirs 0 --connect-timeout 10 --max-time 20 \
+              -H "x-vercel-trusted-oidc-idp-token: $OIDC_TOKEN" \
+              -H 'accept: application/json' \
+              -o "$body" -w '%{http_code}' \
+              "https://${host}/healthz" || true)"
+            if [[ "$code" == 200 ]]; then
+              jq -e '
+                .status == "ok" and
+                .service == "school-autopilot-github-token-broker" and
+                .preview_only == true and
+                .production_mutations_enabled == false and
+                .raw_installation_token_exposed == false
+              ' "$body" >/dev/null
+              printf 'BROKER_PREVIEW_HEALTH=PASS host=%s version=%s enabled=%s bounded=%s\n' \
+                "$host" \
+                "$(jq -r '.service_version // "unknown"' "$body")" \
+                "$(jq -r '.github_token_broker_enabled' "$body")" \
+                "$(jq -r '.bounded_draft_executor_enabled' "$body")"
+              successes=$((successes + 1))
+            else
+              printf 'BROKER_PREVIEW_HEALTH=BLOCKED host=%s http=%s\n' "$host" "$code"
+            fi
+          done
+          printf 'BROKER_PREVIEW_OIDC_SUCCESS_COUNT=%s\n' "$successes"
+          (( successes >= 1 ))
+          echo 'PRODUCTION_REQUESTED=NO'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          echo 'AUTOPILOT_SERVICE_RESTARTED=NO'

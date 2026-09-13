@@ -1,0 +1,123 @@
+name: Diana Speaker v2 Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        required: true
+        type: string
+      source_drive_id:
+        required: true
+        type: string
+      master_pdf_drive_id:
+        required: true
+        type: string
+      output_folder_id:
+        required: true
+        type: string
+      work_folder_id:
+        required: true
+        type: string
+      lesson_number:
+        required: false
+        type: string
+      lesson_date_candidate:
+        required: false
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - 'probe_requests/diana-speaker-v2-*.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diana-speaker-v2-probe
+  cancel-in-progress: false
+
+jobs:
+  diarization-only-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      BRIDGE_PAID_CLOUD: "false"
+      BRIDGE_BILLING_FALLBACK: "false"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.14"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Resolve probe request
+        shell: bash
+        env:
+          INPUT_JOB_ID: ${{ inputs.job_id }}
+          INPUT_SOURCE_DRIVE_ID: ${{ inputs.source_drive_id }}
+          INPUT_MASTER_PDF_DRIVE_ID: ${{ inputs.master_pdf_drive_id }}
+          INPUT_OUTPUT_FOLDER_ID: ${{ inputs.output_folder_id }}
+          INPUT_WORK_FOLDER_ID: ${{ inputs.work_folder_id }}
+          INPUT_LESSON_NUMBER: ${{ inputs.lesson_number }}
+          INPUT_LESSON_DATE_CANDIDATE: ${{ inputs.lesson_date_candidate }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            JOB_ID="$INPUT_JOB_ID"
+            SOURCE_DRIVE_ID="$INPUT_SOURCE_DRIVE_ID"
+            MASTER_PDF_DRIVE_ID="$INPUT_MASTER_PDF_DRIVE_ID"
+            OUTPUT_FOLDER_ID="$INPUT_OUTPUT_FOLDER_ID"
+            WORK_FOLDER_ID="$INPUT_WORK_FOLDER_ID"
+            LESSON_NUMBER="$INPUT_LESSON_NUMBER"
+            LESSON_DATE_CANDIDATE="$INPUT_LESSON_DATE_CANDIDATE"
+          else
+            REQUEST_FILE="$(git show --pretty='' --name-only "$GITHUB_SHA" | grep -E '^probe_requests/diana-speaker-v2-.*\.txt$' | head -n 1 || true)"
+            test -n "$REQUEST_FILE" || { echo "No Diana speaker v2 request file in triggering commit" >&2; exit 2; }
+            JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            SOURCE_DRIVE_ID="$(sed -n 's/^SOURCE_DRIVE_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            MASTER_PDF_DRIVE_ID="$(sed -n 's/^MASTER_PDF_DRIVE_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            OUTPUT_FOLDER_ID="$(sed -n 's/^OUTPUT_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            WORK_FOLDER_ID="$(sed -n 's/^WORK_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            LESSON_NUMBER="$(sed -n 's/^LESSON_NUMBER=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            LESSON_DATE_CANDIDATE="$(sed -n 's/^LESSON_DATE_CANDIDATE=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+          fi
+          test -n "$JOB_ID"
+          test "${#JOB_ID}" -eq 32
+          for ID_VALUE in "$SOURCE_DRIVE_ID" "$MASTER_PDF_DRIVE_ID" "$OUTPUT_FOLDER_ID" "$WORK_FOLDER_ID"; do
+            test -n "$ID_VALUE"
+            case "$ID_VALUE" in *[!0-9A-Za-z_-]*) echo "invalid Drive id" >&2; exit 2 ;; esac
+          done
+          {
+            echo "BRIDGE_JOB_ID=$JOB_ID"
+            echo "BRIDGE_SOURCE_DRIVE_ID=$SOURCE_DRIVE_ID"
+            echo "BRIDGE_MASTER_PDF_DRIVE_ID=$MASTER_PDF_DRIVE_ID"
+            echo "BRIDGE_OUTPUT_FOLDER_ID=$OUTPUT_FOLDER_ID"
+            echo "BRIDGE_WORK_FOLDER_ID=$WORK_FOLDER_ID"
+            echo "BRIDGE_LESSON_NUMBER=$LESSON_NUMBER"
+            echo "BRIDGE_LESSON_DATE_CANDIDATE=$LESSON_DATE_CANDIDATE"
+          } >> "$GITHUB_ENV"
+
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install focused local runtime
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python -m pip install --disable-pip-version-check \
+            'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2' \
+            'numpy==2.2.6' 'sherpa-onnx==1.13.4' 'sherpa-onnx-bin==1.13.4'
+
+      - name: Run speaker diarization v2 only
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: python speaker_diarization_v2_probe.py
+
+      # This workflow never runs ASR, visual extraction, DDS, or authoritative DB writes.
+      # It downloads the source read-only, reuses the existing embedded transcript, and
+      # writes only derived speaker/quality JSON back to separate Drive folders.

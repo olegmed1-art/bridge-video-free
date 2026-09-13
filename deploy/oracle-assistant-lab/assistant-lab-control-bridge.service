@@ -1,0 +1,40 @@
+[Unit]
+Description=Bridge School Assistant Lab Neon Control Bridge
+After=network-online.target assistant-lab-control.service assistant-lab-observer.service
+Wants=network-online.target
+Requires=assistant-lab-control.service assistant-lab-observer.service
+
+[Service]
+Type=simple
+User=assistant-lab-observer
+Group=assistant-lab-observer
+WorkingDirectory=/opt/bridge-school/bridge-video-free
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=ASSISTANT_LAB_CONTROL_URL=http://127.0.0.1:8765
+Environment=ASSISTANT_LAB_CONTROL_BRIDGE_ID=oracle-assistant-lab-control-bridge-1
+Environment=ASSISTANT_LAB_CONTROL_POLL_SECONDS=1
+Environment=ASSISTANT_LAB_CONTROL_STALE_SECONDS=900
+EnvironmentFile=/opt/bridge-school/assistant-lab-observer/control.env
+EnvironmentFile=/opt/bridge-school/assistant-lab/assistant-lab.env
+ExecStart=/opt/bridge-school/assistant-lab-observer/.venv/bin/python -m assistant_lab.control_bridge
+Restart=always
+RestartSec=2
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+ReadOnlyPaths=/opt/bridge-school/assistant-lab/assistant-lab.env
+ReadWritePaths=/opt/bridge-school/assistant-lab-observer
+
+[Install]
+WantedBy=multi-user.target

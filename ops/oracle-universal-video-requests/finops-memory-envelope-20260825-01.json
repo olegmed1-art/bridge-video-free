@@ -1,0 +1,9 @@
+{
+  "request_id": "finops-memory-envelope-20260825-01",
+  "mode": "smoke",
+  "git_ref": "3021d2c0cf57d3496c9c732ab2b44a251903cc97",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}

@@ -1,0 +1,30 @@
+name: Oracle Universal Video Multi-Key CI
+
+on:
+  pull_request:
+    paths:
+      - 'ops/cloud_shell_universal_video_multikey_bootstrap.sh'
+      - '.github/workflows/oracle-universal-video-multikey-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate trusted multi-key patch without Oracle access
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/cloud_shell_universal_video_multikey_bootstrap.sh
+          ! grep -F 'StrictHostKeyChecking=no' ops/cloud_shell_universal_video_multikey_bootstrap.sh
+          UNIVERSAL_VIDEO_MULTIKEY_PATCH_ONLY=1 \
+            bash ops/cloud_shell_universal_video_multikey_bootstrap.sh probe \
+            | tee /tmp/multikey-contract.log
+          grep -Fx ORACLE_UNIVERSAL_VIDEO_MULTIKEY_PATCH_CONTRACT_PASS /tmp/multikey-contract.log

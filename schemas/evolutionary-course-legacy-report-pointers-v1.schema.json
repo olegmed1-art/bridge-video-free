@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Legacy report annotation pointers v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "report", "source_video_candidate", "pointers"],
+  "properties": {
+    "schema": {"const": "evolutionary-course-legacy-report-pointers-v1"},
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["drive_file_id", "title", "sha256", "content_extraction_status"],
+      "properties": {
+        "drive_file_id": {"type": "string", "minLength": 10},
+        "title": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "content_extraction_status": {"enum": ["TEXT_EXTRACTED", "OCR_EXTRACTED"]}
+      }
+    },
+    "source_video_candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["video_file_id", "source_name", "identity_status"],
+      "properties": {
+        "video_file_id": {"type": "string", "minLength": 1},
+        "source_name": {"type": "string", "minLength": 1},
+        "identity_status": {"enum": ["CANDIDATE", "REPORT_STATED"]}
+      }
+    },
+    "pointers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pointer_id", "report_section", "topic_label", "approx_start_seconds", "approx_end_seconds"],
+        "properties": {
+          "pointer_id": {"type": "string", "minLength": 1},
+          "report_section": {"type": "string", "minLength": 1},
+          "topic_label": {"type": "string", "minLength": 1},
+          "approx_start_seconds": {"type": ["number", "null"], "minimum": 0},
+          "approx_end_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0}
+        }
+      }
+    }
+  }
+}

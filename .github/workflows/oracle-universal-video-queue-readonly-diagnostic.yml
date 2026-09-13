@@ -1,0 +1,92 @@
+name: Oracle Universal Video Queue Read-Only Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      exact_sha:
+        description: Exact current main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-universal-video-readonly-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: ${{ github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      EXACT_SHA: ${{ inputs.exact_sha }}
+      GH_TOKEN: ${{ github.token }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.EXACT_SHA }}
+          persist-credentials: false
+      - name: Verify exact main and pinned SSH identity
+        id: ssh
+        run: |
+          set -euo pipefail
+          [[ "$EXACT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_SHA"
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Query bounded queue snapshot without mutation
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n -u universal-video /opt/bridge-school/universal-video/.venv/bin/python - /opt/bridge-school/universal-video/secrets/video-queue-dsn' <<'PY'
+          from pathlib import Path
+          import sys
+          import psycopg
+
+          try:
+              dsn = Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+              if not dsn:
+                  raise RuntimeError("empty")
+              with psycopg.connect(
+                  dsn,
+                  connect_timeout=8,
+                  application_name="uv-readonly-queue-diagnostic",
+              ) as conn:
+                  conn.read_only = True
+                  with conn.cursor() as cur:
+                      cur.execute("SELECT current_user, current_database(), to_regprocedure('video_queue.precanary_idle_snapshot()') IS NOT NULL")
+                      user, database, function_exists = cur.fetchone()
+                      cur.execute("SELECT * FROM video_queue.precanary_idle_snapshot()")
+                      row = cur.fetchone()
+              if not row or len(row) != 2:
+                  raise RuntimeError("invalid_snapshot")
+              print(f"UV_QUEUE_READONLY_DIAGNOSTIC user={user} database={database} function_exists={str(function_exists).lower()} claimable={int(row[0])} leased={int(row[1])} data_mutated=false")
+          except Exception as exc:
+              sqlstate = getattr(exc, "sqlstate", None) or "none"
+              print(f"UV_QUEUE_READONLY_DIAGNOSTIC_ERROR class={type(exc).__name__} sqlstate={sqlstate} data_mutated=false")
+              raise SystemExit(1)
+          PY

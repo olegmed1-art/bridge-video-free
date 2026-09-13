@@ -1,0 +1,67 @@
+name: Tournament Analyzer v3 Input Manifest
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_input_manifest_v3.py"
+      - "tools/tournament_input_manifest_v3.py"
+      - "tests/test_tournament_input_manifest_v3.py"
+      - "data/tournaments/tournament_30041_round2_diana_facts_v1.json"
+      - ".github/workflows/tournament-analyzer-v3-input-manifest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-30041-input-manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Compile manifest modules
+        run: |
+          python -m py_compile bridge_school_api/tournament_input_manifest_v3.py
+          python -m py_compile tools/tournament_input_manifest_v3.py
+      - name: Run manifest contracts
+        run: python -m pytest -q tests/test_tournament_input_manifest_v3.py
+      - name: Build real 30041 input manifest
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD" python tools/tournament_input_manifest_v3.py \
+            --facts data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --received-at 2026-08-21T11:05:01Z \
+            --commit 0158e506c022fd20051898a3161ab8b576d51f9b \
+            --algorithm-revision 'AIroW35dhYwaAOQ1dDxMCkYjVKitrJKTII3Zx0IS7RNHuQDBE8iXBw-l2Ux9qF42DTU1gUWmWDu3kn9XVb1ne2cTls8HTLvblELsTAZRRuY' \
+            --out tournament-30041-input-manifest.json
+      - name: Enforce v1.4 manifest boundary
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('tournament-30041-input-manifest.json', encoding='utf-8'))
+          assert p['schema']=='tournament-input-manifest-v1'
+          assert p['normative_boundary']['algorithm_version']=='1.4'
+          assert p['normative_boundary']['template_version']=='1.2'
+          assert p['tournament']['provider_native_key']=='bridge.co.il:event:30041:round:2'
+          assert p['tournament']['scoring_method']=='MP'
+          assert p['tournament']['board_count']==24
+          assert p['coverage_complete'] is True
+          assert p['immediate_field_locators_complete'] is True
+          assert p['source_conflict_gate_pass'] is True
+          assert p['upstream_official_field_provenance_complete'] is False
+          assert 'OFFICIAL_FIELD_LEVEL_LOCATORS_NOT_PRESERVED_IN_CURRENT_FACTS' in p['provenance_limitations']
+          assert len([x for x in p['records'] if x['status']=='played'])==21
+          assert all(x['auction_status']=='absent' for x in p['records'])
+          assert all(x['play_status']=='partial' for x in p['records'] if x['status']=='played')
+          print('TOURNAMENT_30041_INPUT_MANIFEST_V14_GATE_PASS')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tournament-analyzer-v3-30041-input-manifest
+          path: tournament-30041-input-manifest.json
+          if-no-files-found: error
+          retention-days: 30

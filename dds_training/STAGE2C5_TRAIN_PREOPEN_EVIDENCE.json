@@ -1,0 +1,68 @@
+{
+  "authority": "EVIDENCE_ONLY",
+  "automatic_promotion": false,
+  "candidate_fit_families": 553,
+  "candidate_fit_rows": 2000,
+  "candidate_fit_scope": "TRAIN-only",
+  "candidate_policy": "defense_learned__declarer_baseline",
+  "curriculum": {
+    "candidate_by_actor": {
+      "declarer": 1993,
+      "defense": 1257
+    },
+    "candidate_continuations": 3250,
+    "requested_per_actor": 1000,
+    "selected_by_actor": {
+      "declarer": 1000,
+      "defense": 1000
+    },
+    "selected_total": 2000
+  },
+  "dds_called": false,
+  "fit_shadow_family_overlap": 0,
+  "historical_database_mutated": false,
+  "learning_mutated": false,
+  "locked_prediction_sha256": "a7afde6d2409e302464ad93ea4acd4b7ed96f8621015ec81cc62312fb73c1583",
+  "next_action": "evaluate locked predictions with DDS on TRAIN shadow only",
+  "policy_basis": {
+    "defense_candidate_mean_regret": 0.553,
+    "defense_candidate_regret_2plus": 109,
+    "defense_old_mean_regret": 0.664,
+    "defense_old_regret_2plus": 149,
+    "sealed_used": false,
+    "source": "Stage 2C.4 blind regression TRAIN-only evidence",
+    "validation_used": false
+  },
+  "predeclared_train_gate": {
+    "declarer_policy_identical_to_old": true,
+    "defense_policy_mean_regret_lt_old": true,
+    "defense_policy_optimal_rate_ge_old": true,
+    "defense_policy_regret_2plus_lt_old": true
+  },
+  "predictions_locked_before_dds": true,
+  "schema": "dds-stage2c5-train-shadow-v1-preopen",
+  "sealed_accessed": false,
+  "shadow_scope": "previously unused TRAIN families",
+  "source_selection": {
+    "excluded_fit_families": 553,
+    "line_cards": 16,
+    "pairwise_family_overlap": {
+      "train_sealed": 0,
+      "train_validation": 0,
+      "validation_sealed": 0
+    },
+    "sealed_families_preserved": 3000,
+    "selected_source_families": 650,
+    "source_total": 650,
+    "split_counts": {
+      "sealed_test": 6000,
+      "train": 28000,
+      "validation": 6000
+    },
+    "train_families_available": 14000,
+    "validation_families_preserved": 3000
+  },
+  "stage": "2C.5",
+  "status": "train_shadow_predictions_locked",
+  "validation_accessed": false
+}

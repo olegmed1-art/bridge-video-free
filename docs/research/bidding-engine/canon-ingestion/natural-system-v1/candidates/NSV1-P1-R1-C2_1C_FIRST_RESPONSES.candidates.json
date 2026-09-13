@@ -1,0 +1,177 @@
+{
+  "candidate_set_version": "0.1",
+  "source_key": "school-canon-bidding-natural-system-v1",
+  "source_block_id": "NSV1-P1-R1-C2",
+  "public_auction": ["1C"],
+  "actor_role": "responder",
+  "authority_class": "school_canon_candidate",
+  "set_status": "transcribed_not_activated",
+  "external_knowledge_used": false,
+  "candidates": [
+    {
+      "candidate_id": "NSV1-1C-RSP-1D",
+      "call": "1D",
+      "source_text": "1♦ = Ф1, от 6 очков, 4♦+, если ровно 4♦, то нет 4♥/♠",
+      "known_constraints": {"points":{"min":6,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"diamonds":{"min":4}},
+      "conditional_constraints": [{"if":{"diamonds":{"eq":4}},"then":{"hearts":{"max":3},"spades":{"max":3}}}],
+      "forcing_semantics_source": "Ф1",
+      "unresolved_predicates": ["school_point_method","F1_state_transition","response_priority_when_diamonds_gte_5_and_a_four_card_major_exists"],
+      "status": "needs_priority_and_semantic_operators",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-1H",
+      "call": "1H",
+      "source_text": "1♥/♠ = Ф1, от 6 очков, 4♥/♠+, при 44 говорим 1♥, при 5/4 5ку",
+      "known_constraints": {"points":{"min":6,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"hearts":{"min":4}},
+      "explicit_selection_rules": [
+        {"if":{"hearts":{"eq":4},"spades":{"eq":4}},"select":"1H"},
+        {"if":{"hearts":{"min":5},"spades":{"eq":4}},"select":"1H"}
+      ],
+      "forcing_semantics_source": "Ф1",
+      "unresolved_predicates": ["school_point_method","F1_state_transition","major_selection_for_5_5_or_longer_equal_majors","major_selection_for_other_unequal_lengths"],
+      "status": "needs_complete_major_selection_partition",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-1S",
+      "call": "1S",
+      "source_text": "1♥/♠ = Ф1, от 6 очков, 4♥/♠+, при 44 говорим 1♥, при 5/4 5ку",
+      "known_constraints": {"points":{"min":6,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"spades":{"min":4}},
+      "explicit_selection_rules": [
+        {"if":{"spades":{"min":5},"hearts":{"eq":4}},"select":"1S"}
+      ],
+      "explicit_exclusion_rules": [
+        {"if":{"hearts":{"eq":4},"spades":{"eq":4}},"exclude":"1S"}
+      ],
+      "forcing_semantics_source": "Ф1",
+      "unresolved_predicates": ["school_point_method","F1_state_transition","major_selection_for_5_5_or_longer_equal_majors","major_selection_for_other_unequal_lengths"],
+      "status": "needs_complete_major_selection_partition",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-1NT",
+      "call": "1NT",
+      "source_text": "1NT = НФ, 6-10, нет 4♥/♠",
+      "known_constraints": {"points":{"min":6,"max":10,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"hearts":{"max":3},"spades":{"max":3}},
+      "forcing_semantics_source": "НФ",
+      "unresolved_predicates": ["school_point_method","NF_state_transition","priority_against_2C_with_five_clubs"],
+      "status": "needs_priority_and_semantic_operators",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-2C",
+      "call": "2C",
+      "source_text": "2♣ = НФ 6-10, 5♣+, нет 4♥/♠",
+      "known_constraints": {"points":{"min":6,"max":10,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"clubs":{"min":5},"hearts":{"max":3},"spades":{"max":3}},
+      "forcing_semantics_source": "НФ",
+      "unresolved_predicates": ["school_point_method","NF_state_transition"],
+      "status": "ready_for_boundary_and_priority_tests_after_point_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-2D",
+      "call": "2D",
+      "source_text": "2♦/♥/♠ = ФГ, 13+, 5♦/♥/♠+",
+      "known_constraints": {"points":{"min":13,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"diamonds":{"min":5}},
+      "forcing_semantics_source": "ФГ",
+      "unresolved_predicates": ["school_point_method","FG_state_transition","suit_selection_if_multiple_five_card_suits"],
+      "status": "needs_suit_priority_and_semantic_operators",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-2H",
+      "call": "2H",
+      "source_text": "2♦/♥/♠ = ФГ, 13+, 5♦/♥/♠+",
+      "known_constraints": {"points":{"min":13,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"hearts":{"min":5}},
+      "forcing_semantics_source": "ФГ",
+      "unresolved_predicates": ["school_point_method","FG_state_transition","suit_selection_if_multiple_five_card_suits"],
+      "status": "needs_suit_priority_and_semantic_operators",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-2S",
+      "call": "2S",
+      "source_text": "2♦/♥/♠ = ФГ, 13+, 5♦/♥/♠+",
+      "known_constraints": {"points":{"min":13,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"spades":{"min":5}},
+      "forcing_semantics_source": "ФГ",
+      "unresolved_predicates": ["school_point_method","FG_state_transition","suit_selection_if_multiple_five_card_suits"],
+      "status": "needs_suit_priority_and_semantic_operators",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-2NT",
+      "call": "2NT",
+      "source_text": "2NT = ИНВ к 3NT, 11-12, равн, нет 4♥/♠",
+      "known_constraints": {"points":{"min":11,"max":12,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"hearts":{"max":3},"spades":{"max":3}},
+      "shape_predicate_source": "равн",
+      "forcing_semantics_source": "ИНВ к 3NT",
+      "unresolved_predicates": ["school_point_method","balanced_shape_domain","INV_state_transition_and_target"],
+      "status": "needs_semantic_operators",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-3C",
+      "call": "3C",
+      "source_text": "3♣ = ИНВ, 11-12, 5♣+",
+      "known_constraints": {"points":{"min":11,"max":12,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"clubs":{"min":5}},
+      "forcing_semantics_source": "ИНВ",
+      "unresolved_predicates": ["school_point_method","INV_state_transition_and_target"],
+      "status": "needs_semantic_operators",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-3D",
+      "call": "3D",
+      "source_text": "3♦/♥/♠ = блок, 4-7, 7♦/♥/♠+",
+      "known_constraints": {"points":{"min":4,"max":7,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"diamonds":{"min":7}},
+      "semantic_tags_source": ["блок"],
+      "unresolved_predicates": ["school_point_method","whether_block_is_descriptive_or_additional_quality_predicate"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-3H",
+      "call": "3H",
+      "source_text": "3♦/♥/♠ = блок, 4-7, 7♦/♥/♠+",
+      "known_constraints": {"points":{"min":4,"max":7,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"hearts":{"min":7}},
+      "semantic_tags_source": ["блок"],
+      "unresolved_predicates": ["school_point_method","whether_block_is_descriptive_or_additional_quality_predicate"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-3S",
+      "call": "3S",
+      "source_text": "3♦/♥/♠ = блок, 4-7, 7♦/♥/♠+",
+      "known_constraints": {"points":{"min":4,"max":7,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"spades":{"min":7}},
+      "semantic_tags_source": ["блок"],
+      "unresolved_predicates": ["school_point_method","whether_block_is_descriptive_or_additional_quality_predicate"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-1C-RSP-3NT",
+      "call": "3NT",
+      "source_text": "3NT = играть, 13-15, равномер, нет 4♥/♠",
+      "known_constraints": {"points":{"min":13,"max":15,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"hearts":{"max":3},"spades":{"max":3}},
+      "shape_predicate_source": "равномер",
+      "forcing_semantics_source": "играть",
+      "unresolved_predicates": ["school_point_method","balanced_shape_domain","play_state_transition"],
+      "status": "needs_semantic_operators",
+      "activation_status": "not_eligible"
+    }
+  ],
+  "summary": {
+    "candidate_count": 14,
+    "activated": 0,
+    "database_rows_created": 0,
+    "main_blockers": [
+      "school point method",
+      "forcing-state glossary",
+      "balanced-shape domain",
+      "major and multi-suit priority rules",
+      "block semantic boundary"
+    ]
+  }
+}

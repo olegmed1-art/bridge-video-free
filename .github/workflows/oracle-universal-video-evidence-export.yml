@@ -1,0 +1,232 @@
+name: Oracle Universal Video bounded evidence export
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-universal-video-evidence-export.yml'
+      - 'tests/test_universal_video_evidence_export_workflow_contract.py'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-universal-video-evidence-export-requests/*.json'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-universal-video-evidence-export
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Validate bounded export surface
+        run: |
+          python -m pip install --disable-pip-version-check -q pytest
+          python -m pytest -q tests/test_universal_video_evidence_export_workflow_contract.py
+
+  execute:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ISSUE_NUMBER: '819'
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate one exact export request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-universal-video-evidence-export-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one evidence export request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import base64, json, os, re
+          from pathlib import Path
+
+          wrapper=json.loads(Path(os.environ['REQUEST_FILE']).read_text(encoding='utf-8'))
+          assert set(wrapper)=={'request_id','issue','export'}, wrapper
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(wrapper['request_id']))
+          assert wrapper['issue']==819
+          x=wrapper['export']
+          allowed={'schema','job_id','profile','job_hash','source_file_id','request_commit','requested_runtime_commit','timeout_seconds'}
+          assert isinstance(x,dict) and set(x)==allowed, x
+          assert x['schema']=='universal-video-evidence-export-request-v1'
+          assert re.fullmatch(r'[A-Za-z0-9._:-]{1,160}', str(x['job_id']))
+          assert re.fullmatch(r'[a-z0-9._:-]{1,80}', str(x['profile']))
+          assert re.fullmatch(r'[0-9a-f]{64}', str(x['job_hash']))
+          assert re.fullmatch(r'[A-Za-z0-9_-]{10,200}', str(x['source_file_id']))
+          assert re.fullmatch(r'[0-9a-f]{40}', str(x['request_commit']))
+          assert re.fullmatch(r'[0-9a-f]{40}', str(x['requested_runtime_commit']))
+          assert type(x['timeout_seconds']) is int and 1 <= x['timeout_seconds'] <= 20
+          canonical=json.dumps(x,sort_keys=True,separators=(',',':')).encode()
+          assert len(canonical) <= 4096
+          print('request_id='+wrapper['request_id'])
+          print('job_id='+x['job_id'])
+          print('request_b64='+base64.b64encode(canonical).decode())
+          PY
+
+      - name: Configure OCI CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${OCI_CLI_CONFIG:-}"
+          test -n "${OCI_KEY:-}"
+          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
+          umask 077
+          mkdir -p "$HOME/.oci"
+          if [[ "$OCI_KEY" == base64:* ]]; then
+            printf '%s' "${OCI_KEY#base64:}" | base64 --decode > "$HOME/.oci/oci_api_key.pem"
+          else
+            printf '%s\n' "$OCI_KEY" > "$HOME/.oci/oci_api_key.pem"
+          fi
+          printf '%s\n' "$OCI_CLI_CONFIG" > "$HOME/.oci/config"
+          openssl pkey -in "$HOME/.oci/oci_api_key.pem" -noout -check >/dev/null
+          openssl pkey -in "$HOME/.oci/oci_api_key.pem" -traditional -out "$HOME/.oci/oci_api_key.pkcs1.pem"
+          mv "$HOME/.oci/oci_api_key.pkcs1.pem" "$HOME/.oci/oci_api_key.pem"
+          actual_fingerprint="$(openssl pkey -in "$HOME/.oci/oci_api_key.pem" -pubout -outform DER | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
+          OCI_DERIVED_FINGERPRINT="$actual_fingerprint" python - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path.home()/'.oci/config'
+          lines=[]; found=set()
+          for line in p.read_text().splitlines():
+              key=line.strip().split('=',1)[0]
+              if key=='key_file': lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem'); found.add(key)
+              elif key=='region': lines.append('region=eu-frankfurt-1'); found.add(key)
+              elif key=='fingerprint': lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}'); found.add(key)
+              else: lines.append(line)
+          if 'key_file' not in found: lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem')
+          if 'region' not in found: lines.append('region=eu-frankfurt-1')
+          if 'fingerprint' not in found: lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}')
+          p.write_text('\n'.join(lines)+'\n')
+          PY
+          chmod 0600 "$HOME/.oci/config" "$HOME/.oci/oci_api_key.pem"
+          oci iam region list --output json >/dev/null
+
+      - name: Export exact completed job
+        id: remote
+        shell: bash
+        env:
+          REQUEST_B64: ${{ steps.request.outputs.request_b64 }}
+        run: |
+          set -euo pipefail
+          compartment="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
+          state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+          [[ "$state" == RUNNING ]] || { echo "Oracle instance is not RUNNING: $state" >&2; exit 1; }
+          remote="$(cat <<EOF
+          set -Eeuo pipefail
+          umask 077
+          echo UV_EVIDENCE_EXPORT_BEGIN
+          printf '%s' '$REQUEST_B64' | base64 --decode | sudo -n /usr/local/sbin/universal-video-evidence-export
+          echo UV_EVIDENCE_EXPORT_END
+          EOF
+          )"
+          content="$(SCRIPT_TEXT="$remote" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
+          target="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
+          command_id="$(oci instance-agent command create --compartment-id "$compartment" --content "$content" --target "$target" \
+            --timeout-in-seconds 300 --display-name "uv-evidence-export-${GITHUB_RUN_ID}" --query data.id --raw-output)"
+          execution=''; lifecycle=''
+          for _ in $(seq 1 90); do
+            execution="$(oci instance-agent command-execution get --command-id "$command_id" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
+            [[ -n "$execution" ]] || { sleep 3; continue; }
+            lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
+            case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break;; esac
+            sleep 3
+          done
+          printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")' > "$RUNNER_TEMP/uv-export-raw.txt"
+          REMOTE_LIFECYCLE="$lifecycle" JOB_ID='${{ steps.request.outputs.job_id }}' python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          from pathlib import Path
+          raw_path=Path(os.environ['RUNNER_TEMP'],'uv-export-raw.txt')
+          raw=raw_path.read_text(encoding='utf-8')
+          raw_path.unlink(missing_ok=True)
+          assert os.environ['REMOTE_LIFECYCLE']=='SUCCEEDED', os.environ['REMOTE_LIFECYCLE']
+          lines=[line.strip() for line in raw.splitlines()]
+          begins=[i for i,line in enumerate(lines) if line=='UV_EVIDENCE_EXPORT_BEGIN']
+          ends=[i for i,line in enumerate(lines) if line=='UV_EVIDENCE_EXPORT_END']
+          assert len(begins)==len(ends)==1
+          assert ends[0]==begins[0]+2
+          x=json.loads(lines[begins[0]+1])
+          safe_path=Path(os.environ['RUNNER_TEMP'],'uv-export-safe.json')
+          if x.get('state')=='INCONCLUSIVE':
+            allowed={'schema','state','reason','publication_state','school_canon_changed'}
+            assert set(x)==allowed
+            assert x['schema']=='universal-video-evidence-export-v1'
+            assert re.fullmatch(r'[A-Z0-9_.:-]{1,120}',str(x['reason']))
+            assert x['publication_state']=='NOT_PUBLISHED' and x['school_canon_changed'] is False
+            encoded=(json.dumps(x,ensure_ascii=False,sort_keys=True,indent=2)+'\n').encode()
+            assert len(encoded)<=4096
+            safe_path.write_bytes(encoded)
+            print('state=INCONCLUSIVE')
+            raise SystemExit('bounded evidence export returned sanitized INCONCLUSIVE')
+          assert set(x)=={'schema','state','exported_at_unix','job','runtime','technical','asr_qc','speakers','cards','publication_state','school_canon_changed'}
+          assert x['schema']=='universal-video-evidence-export-v1' and x['state']=='PASS'
+          assert x['job']['job_id']==os.environ['JOB_ID']
+          assert set(x['runtime'])=={'requested_runtime_commit','installed_runtime_commit','observed_job_runtime_commit','binding'}
+          assert x['runtime']['binding']=='OBSERVED_EXACT'
+          assert x['runtime']['requested_runtime_commit']==x['runtime']['installed_runtime_commit']==x['runtime']['observed_job_runtime_commit']
+          assert x['publication_state']=='NOT_PUBLISHED' and x['school_canon_changed'] is False
+          assert x['technical']['canonical_promotion_allowed'] is False
+          assert x['cards']['canonical_promotion_allowed'] is False
+          allowed={'transcript.jsonl','transcript.txt','transcript_qc.json','speaker_diarization.json','bridge_positions_profiled_shadow_summary.json','bridge_positions_profiled_shadow.jsonl'}
+          artifacts=list(x['asr_qc'].get('artifacts',[]))+list(x['speakers'].get('artifacts',[]))+list(x['cards'].get('artifacts',[]))
+          assert all(set(a)=={'locator','sha256','size_bytes'} and a['locator'] in allowed and re.fullmatch(r'[0-9a-f]{64}',a['sha256']) for a in artifacts)
+          encoded=(json.dumps(x,ensure_ascii=False,sort_keys=True,indent=2)+'\n').encode()
+          assert len(encoded)<=32000
+          safe_path.write_bytes(encoded)
+          print('state=PASS')
+          PY
+          echo UNIVERSAL_VIDEO_EVIDENCE_EXPORT_REMOTE_PASS
+
+      - name: External DDS3 non-regression
+        if: ${{ success() }}
+        run: |
+          READY="$(curl -fsS --retry 3 --retry-delay 3 --max-time 20 https://158.180.47.161/readyz)" python - <<'PY'
+          import json, os
+          x=json.loads(os.environ['READY'])
+          assert x.get('status')=='ready' and x.get('engine')=='DDS3'
+          assert x.get('fallback_used') is False and x.get('position_solver')=='ready'
+          print('UNIVERSAL_VIDEO_EVIDENCE_EXPORT_DDS3_PASS')
+          PY
+
+      - name: Publish sanitized receipt
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          JOB_ID: ${{ steps.request.outputs.job_id }}
+          EXPORT_STATE: ${{ steps.remote.outputs.state }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/body.md"
+          {
+            echo "Universal Video evidence export for \`$JOB_ID\`: **${EXPORT_STATE:-INCONCLUSIVE}**."
+            echo "Request: \`$REQUEST_ID\`."
+            if [[ -s "$RUNNER_TEMP/uv-export-safe.json" ]]; then
+              echo
+              echo '```json'
+              cat "$RUNNER_TEMP/uv-export-safe.json"
+              echo '```'
+            fi
+            echo
+            echo "No transcript text, raw command output, media, OAuth value, or canonical artifact was published. Run: $RUN_URL"
+          } > "$body"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"

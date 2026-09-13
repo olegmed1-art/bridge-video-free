@@ -1,0 +1,42 @@
+name: DDS Stage-2 Context Gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'dds/**'
+      - '.github/workflows/dds-stage2-context-gate.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'dds/**'
+      - '.github/workflows/dds-stage2-context-gate.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dds-stage2-context-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic-context-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential git >/dev/null
+
+      - name: Run deterministic SolverContext and TT gate
+        shell: bash
+        run: bash dds/run_stage2_context_gate.sh

@@ -1,0 +1,107 @@
+{
+  "schema": "dds-stage2c3-investigation-v1",
+  "stage": "2C.3",
+  "continuations": {
+    "declarer": {
+      "critical_1_2": {
+        "n": 249,
+        "optimal": 177,
+        "optimal_rate": 0.7108433734939759,
+        "mean_regret": 0.44176706827309237,
+        "regret_2plus": 27
+      },
+      "constrained_3_4": {
+        "n": 226,
+        "optimal": 139,
+        "optimal_rate": 0.6150442477876106,
+        "mean_regret": 0.7256637168141593,
+        "regret_2plus": 33
+      },
+      "flexible_5_8": {
+        "n": 247,
+        "optimal": 174,
+        "optimal_rate": 0.7044534412955465,
+        "mean_regret": 0.5101214574898786,
+        "regret_2plus": 23
+      },
+      "trivial_9_plus": {
+        "n": 278,
+        "optimal": 278,
+        "optimal_rate": 1.0,
+        "mean_regret": 0.0,
+        "regret_2plus": 0
+      }
+    },
+    "defense": {
+      "critical_1_2": {
+        "n": 130,
+        "optimal": 4,
+        "optimal_rate": 0.03076923076923077,
+        "mean_regret": 2.1153846153846154,
+        "regret_2plus": 65
+      },
+      "constrained_3_4": {
+        "n": 165,
+        "optimal": 43,
+        "optimal_rate": 0.2606060606060606,
+        "mean_regret": 1.4606060606060607,
+        "regret_2plus": 61
+      },
+      "flexible_5_8": {
+        "n": 320,
+        "optimal": 217,
+        "optimal_rate": 0.678125,
+        "mean_regret": 0.45,
+        "regret_2plus": 23
+      },
+      "trivial_9_plus": {
+        "n": 385,
+        "optimal": 381,
+        "optimal_rate": 0.9896103896103896,
+        "mean_regret": 0.01038961038961039,
+        "regret_2plus": 0
+      }
+    }
+  },
+  "investigations": {
+    "card_level_errors": 587,
+    "defense_errors": 355,
+    "declarer_errors": 232,
+    "severe_regret_2plus": 232,
+    "critical_or_constrained_defense": 248,
+    "card_level_errors_total": 1201,
+    "continuation_errors": 587,
+    "counterexample_opening_lead_errors": 614,
+    "severe_total_regret_2plus": 514
+  },
+  "counterexamples": {
+    "action_flip": {
+      "pairs": 20,
+      "prediction_changed": 2,
+      "transfer_passes": 0,
+      "transfer_pass_rate": 0.0
+    },
+    "partial_flip": {
+      "pairs": 421,
+      "prediction_changed": 51,
+      "transfer_passes": 72,
+      "transfer_pass_rate": 0.171021377672209
+    },
+    "negative_control": {
+      "pairs": 0,
+      "prediction_changed": 0,
+      "transfer_passes": 0,
+      "transfer_pass_rate": null
+    }
+  },
+  "regression": {
+    "candidate_cases": 1201,
+    "status": "generated_unretested"
+  },
+  "gates": {
+    "validation_opened": false,
+    "sealed_opened": false,
+    "next_gate": "blind_regression_retest_before_validation",
+    "semantic_mechanism_claims_allowed": false
+  }
+}

@@ -1,0 +1,27 @@
+name: UV Diana 11 Shadow Preflight CI
+
+on:
+  pull_request:
+    paths:
+      - 'ops/universal_video_diana11_shadow_preflight.py'
+      - 'tests/test_diana11_shadow_preflight.py'
+      - '.github/workflows/uv-diana11-shadow-preflight-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate read-only preparation boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile ops/universal_video_diana11_shadow_preflight.py
+          python -m pip install --disable-pip-version-check -q pytest
+          python -m pytest -q tests/test_diana11_shadow_preflight.py

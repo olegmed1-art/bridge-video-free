@@ -1,0 +1,9 @@
+{
+  "request_id": "diana13-runtime-attested-activate-20260829-01",
+  "mode": "activate",
+  "git_ref": "c4456347999c4323eee4bde340788c82692f9c53",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}

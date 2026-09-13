@@ -1,0 +1,12 @@
+{
+  "request_id": "director-online-observer-install-20260901-01",
+  "action": "install_online_observer",
+  "target_host": "158.180.47.161",
+  "source_revision": "84a8f9372a087111744b6b628b25f0ce7e70c65a",
+  "expected_consumer_revision": "d908565a5de4481f0bf9a1d2a489f04f8893af65",
+  "activation_scope": "SHADOW_ONLY",
+  "no_instance_stop": true,
+  "no_consumer_restart": true,
+  "min_interval_seconds": 5,
+  "max_tasks_per_hour": 720
+}

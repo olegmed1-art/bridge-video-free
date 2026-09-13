@@ -1,0 +1,25 @@
+{
+  "schema": "dds-stage2c4-selective-gate-v1",
+  "stage": "2C.4",
+  "status": "selective_gate_audited",
+  "new_dds_calls": false,
+  "validation_opened": false,
+  "sealed_opened": false,
+  "families_overlap": false,
+  "by_actor": {
+    "declarer": {
+      "old": {"n":1000,"optimal":768,"optimal_rate":0.768,"mean_regret":0.4,"regret_2plus":83},
+      "candidate": {"n":1000,"optimal":762,"optimal_rate":0.762,"mean_regret":0.39,"regret_2plus":78},
+      "hybrid": {"n":1000,"optimal":778,"optimal_rate":0.778,"mean_regret":0.383,"regret_2plus":83}
+    },
+    "defense": {
+      "old": {"n":1000,"optimal":645,"optimal_rate":0.645,"mean_regret":0.664,"regret_2plus":149},
+      "candidate": {"n":1000,"optimal":687,"optimal_rate":0.687,"mean_regret":0.553,"regret_2plus":109},
+      "hybrid": {"n":1000,"optimal":678,"optimal_rate":0.678,"mean_regret":0.566,"regret_2plus":115}
+    }
+  },
+  "switches": 841,
+  "methodology_gate_pass": true,
+  "automatic_promotion": false,
+  "next_gate": "owner_decision_on_validation"
+}

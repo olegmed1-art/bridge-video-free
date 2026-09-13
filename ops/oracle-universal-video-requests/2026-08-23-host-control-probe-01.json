@@ -1,0 +1,9 @@
+{
+  "request_id": "uv-oracle-host-control-probe-20260823-01",
+  "mode": "probe",
+  "git_ref": "636dde21a4624adc8d36d263d2ed71b7fb3442c3",
+  "expected_host_fingerprint": "",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}

@@ -1,0 +1,14 @@
+{
+  "request_id": "diana13-attested-evidence-diagnostic-20260829-03",
+  "issue": 819,
+  "export": {
+    "schema": "universal-video-evidence-export-request-v1",
+    "job_id": "diana13-video31-attested-20260829-02",
+    "profile": "bridge_lesson",
+    "job_hash": "2ab635a84f546ce7990d19e80d4a5aa33ea188f5d501b13c18fb67ef24c0c9fe",
+    "source_file_id": "198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI",
+    "request_commit": "d4fd16a7019ff9a480f87652232f581e6d55671f",
+    "requested_runtime_commit": "c4456347999c4323eee4bde340788c82692f9c53",
+    "timeout_seconds": 20
+  }
+}

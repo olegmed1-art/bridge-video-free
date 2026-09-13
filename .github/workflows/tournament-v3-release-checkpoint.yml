@@ -1,0 +1,68 @@
+name: Tournament v3 real release checkpoint
+
+on:
+  pull_request:
+    paths:
+      - "scripts/tournament_v3_release_checkpoint.py"
+      - "bridge_school_api/tournament_coverage_release_v3.py"
+      - "bridge_school_api/tournament_preanalysis_gate_v3.py"
+      - "bridge_school_api/tournament_mp_validation_v3.py"
+      - "data/tournaments/tournament_30041_round2_diana_facts_v1.json"
+      - ".github/workflows/tournament-v3-release-checkpoint.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-30041-checkpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile release checkpoint CLI
+        run: PYTHONPATH=. python -m py_compile scripts/tournament_v3_release_checkpoint.py
+      - name: Build real 30041 checkpoint
+        env:
+          ALGORITHM_REVISION_ID: "AIroW35dhYwaAOQ1dDxMCkYjVKitrJKTII3Zx0IS7RNHuQDBE8iXBw-l2Ux9qF42DTU1gUWmWDu3kn9XVb1ne2cTls8HTLvblELsTAZRRuY"
+        run: |
+          PYTHONPATH=. python scripts/tournament_v3_release_checkpoint.py \
+            --facts data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --received-at 2026-08-21T11:05:01Z \
+            --receipt-commit 0158e506-repository-ingestion \
+            --algorithm-revision-id "$ALGORITHM_REVISION_ID" \
+            --output-json tournament-30041-release-checkpoint.json \
+            --output-md tournament-30041-release-checkpoint.md
+          cat tournament-30041-release-checkpoint.md
+      - name: Enforce current evidence boundary
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('tournament-30041-release-checkpoint.json', encoding='utf-8'))
+          assert p['schema']=='tournament-v3-release-checkpoint-v1'
+          cp=p['checkpoint']; c=p['coverage']; r=p['release']; mp=p['mp_recalculation']
+          assert cp['technical_analysis_ready'] is True
+          assert cp['final_report_release_ready'] is False
+          assert cp['next_unfinished_step']=='COMPLETE_EVIDENCE_GATED_EPISODE_INVENTORY'
+          assert c['status_counts']=={'played':21,'average':1,'unplayed':2}
+          assert c['planned_deck_slide_count']==24
+          assert c['episode_inventory_complete'] is False
+          assert mp['status']=='OFFICIAL_PERCENTAGE_NOT_INDEPENDENTLY_RECALCULATED'
+          assert r['full_causal_replay_ready'] is False
+          required={'EPISODE_INVENTORY_NOT_COMPLETE','RENDERED_SLIDE_COVERAGE_NOT_PROVIDED','VISUAL_QA_NOT_PASSED'}
+          assert required.issubset(set(r['hard_stop_conditions']))
+          assert r['automatic_student_error_attribution_allowed'] is False
+          assert r['automatic_methodology_invention_allowed'] is False
+          print('TOURNAMENT_30041_RELEASE_CHECKPOINT_PASS')
+          PY
+      - name: Upload checkpoint evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: tournament-30041-release-checkpoint
+          path: |
+            tournament-30041-release-checkpoint.json
+            tournament-30041-release-checkpoint.md
+          if-no-files-found: error
+          retention-days: 30

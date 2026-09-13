@@ -1,0 +1,8 @@
+COMPONENT=bridge-ai-worker
+MODE=provider-neutral-container
+CONTROL_PLANE=production
+DATABASE=bridge-school-core/neondb
+ENGINE=BEN-optional
+PONS=adapter-pending
+DDS=adapter-pending
+SAFETY=no-engine-fails-closed

@@ -1,0 +1,206 @@
+{
+  "candidate_set_version": "0.1",
+  "source_key": "school-canon-bidding-natural-system-v1",
+  "source_block_id": "NSV1-P1-R1-C1",
+  "authority_class": "school_canon_candidate",
+  "set_status": "transcribed_not_activated",
+  "external_knowledge_used": false,
+  "candidates": [
+    {
+      "candidate_id": "NSV1-OPEN-1C",
+      "call": "1C",
+      "source_text": "1♣ = 12-22 от 3♣ при 3♣3♦, при 4♣4♦ лучшая по качеству, нет 5 карт в ♥ и ♠",
+      "known_constraints": {"hcp":{"min":12,"max":22},"clubs":{"min":3},"hearts":{"max":4},"spades":{"max":4}},
+      "source_selection_rules": ["with 3 clubs and 3 diamonds choose 1C", "with 4 clubs and 4 diamonds choose the better-quality minor"],
+      "unresolved_predicates": ["minor_suit_quality_comparator", "complete_minor_selection_partition"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-1D",
+      "call": "1D",
+      "source_text": "1♦ = 12-22, 3♦+, 3♦ только в раскладе 4432, нет 5 карт в ♥ и ♠",
+      "known_constraints": {"hcp":{"min":12,"max":22},"diamonds":{"min":3},"hearts":{"max":4},"spades":{"max":4}},
+      "conditional_constraints": [{"if":{"diamonds":3},"then":{"shape":"4432"}}],
+      "unresolved_predicates": ["complete_minor_selection_partition_with_1C"],
+      "status": "needs_pairwise_partition_test",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-1H",
+      "call": "1H",
+      "source_text": "1♥/♠ = 12-22, от 5♥/♠, 1♥ отрицает 5♠",
+      "known_constraints": {"hcp":{"min":12,"max":22},"hearts":{"min":5},"spades":{"max":4}},
+      "source_guarantees": {"hearts":{"min":5},"spades":{"max":4},"hcp":{"min":12,"max":22}},
+      "status": "ready_for_test_design",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-1S",
+      "call": "1S",
+      "source_text": "1♥/♠ = 12-22, от 5♥/♠, 1♥ отрицает 5♠",
+      "known_constraints": {"hcp":{"min":12,"max":22},"spades":{"min":5}},
+      "source_guarantees": {"spades":{"min":5},"hcp":{"min":12,"max":22}},
+      "status": "ready_for_test_design",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-1NT",
+      "call": "1NT",
+      "source_text": "1NT = 15-17 любые 5332, 5m422, 6m322",
+      "known_constraints": {"hcp":{"min":15,"max":17},"shape_tokens":["5332","5m422","6m322"]},
+      "notation_pending": ["map source token m without changing the allowed shape set"],
+      "status": "ready_for_notation_mapping_and_tests",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-2C",
+      "call": "2C",
+      "source_text": "2♣ = Форсинг гейм, 23+ равномера или сильная масть, 8+ взяток с руки",
+      "forcing_status": "game_forcing",
+      "source_condition_branches": [
+        {"branch":"balanced","hcp":{"min":23}},
+        {"branch":"strong_suit","playing_tricks_from_hand":{"min":8}}
+      ],
+      "unresolved_predicates": ["balanced_shape_domain_for_2C", "strong_suit_definition", "playing_trick_evaluator"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-2D",
+      "call": "2D",
+      "source_text": "2♦/♥/♠ = 7-11, 6♦/♥/♠, полублоки",
+      "known_constraints": {"hcp":{"min":7,"max":11},"diamonds":{"source_value":6,"operator":"UNRESOLVED_EXACT_OR_MIN"}},
+      "semantic_tags_from_source": ["semi_preemptive"],
+      "unresolved_predicates": ["length_6_exact_or_minimum", "semi_preemptive_operational_definition"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-2H",
+      "call": "2H",
+      "source_text": "2♦/♥/♠ = 7-11, 6♦/♥/♠, полублоки",
+      "known_constraints": {"hcp":{"min":7,"max":11},"hearts":{"source_value":6,"operator":"UNRESOLVED_EXACT_OR_MIN"}},
+      "semantic_tags_from_source": ["semi_preemptive"],
+      "unresolved_predicates": ["length_6_exact_or_minimum", "semi_preemptive_operational_definition"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-2S",
+      "call": "2S",
+      "source_text": "2♦/♥/♠ = 7-11, 6♦/♥/♠, полублоки",
+      "known_constraints": {"hcp":{"min":7,"max":11},"spades":{"source_value":6,"operator":"UNRESOLVED_EXACT_OR_MIN"}},
+      "semantic_tags_from_source": ["semi_preemptive"],
+      "unresolved_predicates": ["length_6_exact_or_minimum", "semi_preemptive_operational_definition"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-2NT",
+      "call": "2NT",
+      "source_text": "2NT = 20-22 любые 5332, 5m422, 6m322",
+      "known_constraints": {"hcp":{"min":20,"max":22},"shape_tokens":["5332","5m422","6m322"]},
+      "notation_pending": ["map source token m without changing the allowed shape set"],
+      "status": "ready_for_notation_mapping_and_tests",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-3C",
+      "call": "3C",
+      "source_text": "3♣/♦/♥/♠ = сила до открытия, блоки, 7 карт",
+      "known_constraints": {"clubs":{"source_value":7,"operator":"UNRESOLVED_EXACT_OR_MIN"}},
+      "source_predicates": ["below_opening_strength", "preemptive"],
+      "unresolved_predicates": ["below_opening_strength_definition", "length_7_exact_or_minimum"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-3D",
+      "call": "3D",
+      "source_text": "3♣/♦/♥/♠ = сила до открытия, блоки, 7 карт",
+      "known_constraints": {"diamonds":{"source_value":7,"operator":"UNRESOLVED_EXACT_OR_MIN"}},
+      "source_predicates": ["below_opening_strength", "preemptive"],
+      "unresolved_predicates": ["below_opening_strength_definition", "length_7_exact_or_minimum"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-3H",
+      "call": "3H",
+      "source_text": "3♣/♦/♥/♠ = сила до открытия, блоки, 7 карт",
+      "known_constraints": {"hearts":{"source_value":7,"operator":"UNRESOLVED_EXACT_OR_MIN"}},
+      "source_predicates": ["below_opening_strength", "preemptive"],
+      "unresolved_predicates": ["below_opening_strength_definition", "length_7_exact_or_minimum"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-3S",
+      "call": "3S",
+      "source_text": "3♣/♦/♥/♠ = сила до открытия, блоки, 7 карт",
+      "known_constraints": {"spades":{"source_value":7,"operator":"UNRESOLVED_EXACT_OR_MIN"}},
+      "source_predicates": ["below_opening_strength", "preemptive"],
+      "unresolved_predicates": ["below_opening_strength_definition", "length_7_exact_or_minimum"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-3NT",
+      "call": "3NT",
+      "source_text": "3NT = AKQxxxx в миноре, без задержки сбоку",
+      "known_constraints": {"minor_suit_pattern":"AKQxxxx","side_stopper":"absent"},
+      "unresolved_predicates": ["side_stopper_evaluator", "whether_x_count_is_exactly_four_lower_cards"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-4C",
+      "call": "4C",
+      "source_text": "4♣/♦/♥/♠ = сила до открытия, блоки, 8 карт",
+      "known_constraints": {"clubs":{"source_value":8,"operator":"UNRESOLVED_EXACT_OR_MIN"}},
+      "source_predicates": ["below_opening_strength", "preemptive"],
+      "unresolved_predicates": ["below_opening_strength_definition", "length_8_exact_or_minimum"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-4D",
+      "call": "4D",
+      "source_text": "4♣/♦/♥/♠ = сила до открытия, блоки, 8 карт",
+      "known_constraints": {"diamonds":{"source_value":8,"operator":"UNRESOLVED_EXACT_OR_MIN"}},
+      "source_predicates": ["below_opening_strength", "preemptive"],
+      "unresolved_predicates": ["below_opening_strength_definition", "length_8_exact_or_minimum"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-4H",
+      "call": "4H",
+      "source_text": "4♣/♦/♥/♠ = сила до открытия, блоки, 8 карт",
+      "known_constraints": {"hearts":{"source_value":8,"operator":"UNRESOLVED_EXACT_OR_MIN"}},
+      "source_predicates": ["below_opening_strength", "preemptive"],
+      "unresolved_predicates": ["below_opening_strength_definition", "length_8_exact_or_minimum"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    },
+    {
+      "candidate_id": "NSV1-OPEN-4S",
+      "call": "4S",
+      "source_text": "4♣/♦/♥/♠ = сила до открытия, блоки, 8 карт",
+      "known_constraints": {"spades":{"source_value":8,"operator":"UNRESOLVED_EXACT_OR_MIN"}},
+      "source_predicates": ["below_opening_strength", "preemptive"],
+      "unresolved_predicates": ["below_opening_strength_definition", "length_8_exact_or_minimum"],
+      "status": "needs_semantic_operator",
+      "activation_status": "not_eligible"
+    }
+  ],
+  "summary": {
+    "candidate_count": 19,
+    "ready_for_test_design": 2,
+    "ready_for_notation_mapping_and_tests": 2,
+    "needs_pairwise_partition_test": 1,
+    "needs_semantic_operator": 14,
+    "activated": 0
+  }
+}

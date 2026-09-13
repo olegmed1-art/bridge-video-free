@@ -1,0 +1,70 @@
+name: Tournament facts import — Neon
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'data/tournaments/tournament_30041_round2_diana_facts_v1.json'
+      - 'database/tournament_facts_importer.py'
+      - '.github/workflows/tournament-facts-import.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'data/tournaments/tournament_30041_round2_diana_facts_v1.json'
+      - 'database/tournament_facts_importer.py'
+      - '.github/workflows/tournament-facts-import.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-facts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependency
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+      - name: Compile importer
+        run: python -m py_compile database/tournament_facts_importer.py
+      - name: Validate 24-board evidence extract
+        run: |
+          PYTHONPATH=. python database/tournament_facts_importer.py \
+            --data data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --validate-only
+
+  import-production-facts:
+    if: github.event_name == 'push'
+    needs: validate-facts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install database dependency
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+      - name: Import audited facts only
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python database/tournament_facts_importer.py \
+            --data data/tournaments/tournament_30041_round2_diana_facts_v1.json
+
+# This workflow is facts-only. It may create source/tournament/deal/result/identity provenance
+# but the importer asserts that ErrorObservation, SuccessObservation and SkillAssessment
+# counts for the target student do not change.

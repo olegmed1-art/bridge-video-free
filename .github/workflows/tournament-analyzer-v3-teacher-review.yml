@@ -1,0 +1,107 @@
+name: Tournament Analyzer v3 Teacher Review
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_teacher_review_queue_v3.py"
+      - "tools/tournament_teacher_review_queue_v3.py"
+      - "tests/test_tournament_teacher_review_queue_v3.py"
+      - ".github/workflows/tournament-analyzer-v3-teacher-review.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  real-teacher-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Compile modules
+        run: |
+          python -m py_compile bridge_school_api/tournament_teacher_review_queue_v3.py
+          python -m py_compile tools/tournament_teacher_review_queue_v3.py
+      - name: Run focused contracts
+        run: |
+          python -m pytest -q \
+            tests/test_tournament_analyzer_v3.py \
+            tests/test_tournament_analyzer_v3_stage2.py \
+            tests/test_tournament_real_sources_v3.py \
+            tests/test_tournament_scoring_context_29912_v3.py \
+            tests/test_tournament_teacher_review_queue_v3.py
+      - name: Restore exact historical tournament evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/30041 evidence/29912 evidence/29912-source
+          for spec in \
+            "9463631738:/tmp/30041.zip:evidence/30041" \
+            "9471054929:/tmp/29912-dds3.zip:evidence/29912" \
+            "9470920077:/tmp/29912-source.zip:evidence/29912-source"; do
+            IFS=: read -r aid zip dest <<< "$spec"
+            curl -fsSL --retry 3 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${aid}/zip" \
+              -o "$zip"
+            unzip -q "$zip" -d "$dest"
+          done
+          DDS30041="$(find evidence/30041 -type f -name 'diana-30041-round2-dds3.json' -print -quit)"
+          DDS29912="$(find evidence/29912 -type f -name 'diana-29912-cross-session-dds3.json' -print -quit)"
+          FACTS29912="$(find evidence/29912-source -type d -name facts29912 -print -quit)"
+          test -n "$DDS30041" && test -n "$DDS29912" && test -n "$FACTS29912"
+          echo "DDS30041=$DDS30041" >> "$GITHUB_ENV"
+          echo "DDS29912=$DDS29912" >> "$GITHUB_ENV"
+          echo "FACTS29912=$FACTS29912" >> "$GITHUB_ENV"
+      - name: Build real cross-event teacher review queue
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD" python tools/tournament_teacher_review_queue_v3.py \
+            --facts-30041 data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --dds3-30041 "$DDS30041" \
+            --dds3-29912 "$DDS29912" \
+            --facts-29912-dir "$FACTS29912" \
+            --per-event-limit 10 \
+            --out-json tournament-teacher-review-queue.json \
+            --out-md tournament-teacher-review-queue.md
+          cat tournament-teacher-review-queue.md
+      - name: Real evidence gate
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('tournament-teacher-review-queue.json', encoding='utf-8'))
+          assert p['schema']=='tournament-teacher-review-queue-v1'
+          assert p['cross_event_numeric_ranking_allowed'] is False
+          assert p['causal_error_attribution_allowed'] is False
+          assert p['student_error_attribution_allowed'] is False
+          lanes={x['event_id']:x for x in p['lanes']}
+          assert set(lanes)=={'30041','29912'}
+          assert lanes['30041']['outcome_scale']=='MP_PERCENTAGE'
+          assert lanes['29912']['outcome_scale']=='SIGNED_SOURCE_SCORE_CONTRIBUTION'
+          assert lanes['30041']['ranking_scope']=='WITHIN_EVENT_ONLY'
+          assert lanes['29912']['ranking_scope']=='WITHIN_EVENT_ONLY'
+          assert len(lanes['30041']['items'])==7
+          assert len(lanes['29912']['items'])==10
+          assert all(x['causal_link']=='NOT_ESTABLISHED' for lane in lanes.values() for x in lane['items'])
+          assert all(x['student_error_attribution_allowed'] is False for lane in lanes.values() for x in lane['items'])
+          assert all(x['teacher_review_required'] is True for lane in lanes.values() for x in lane['items'])
+          print('TOURNAMENT_TEACHER_REVIEW_QUEUE_PASS')
+          print('top30041', lanes['30041']['items'][0]['deal_id'])
+          print('top29912', lanes['29912']['items'][0]['deal_id'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tournament-analyzer-v3-teacher-review-queue
+          path: |
+            tournament-teacher-review-queue.json
+            tournament-teacher-review-queue.md
+          if-no-files-found: error
+          retention-days: 30

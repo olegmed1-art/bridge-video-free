@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bridge-school.local/schemas/universal-video-batch-intake-v1.json",
+  "title": "Project-neutral Google Drive video batch intake",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_key",
+    "source_folder_id",
+    "output_folder_id",
+    "work_folder_id",
+    "processing_profile",
+    "algorithm_revision",
+    "canary_source_file_id"
+  ],
+  "properties": {
+    "request_key": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$"
+    },
+    "source_folder_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{10,200}$"
+    },
+    "output_folder_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{10,200}$"
+    },
+    "work_folder_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{10,200}$"
+    },
+    "processing_profile": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]{0,79}$"
+    },
+    "algorithm_revision": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+    },
+    "canary_source_file_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{10,200}$"
+    }
+  }
+}

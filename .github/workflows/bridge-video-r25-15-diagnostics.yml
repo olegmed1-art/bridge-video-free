@@ -1,0 +1,98 @@
+name: bridge-video-r25-15-diagnostics
+
+on:
+  push:
+    branches: [speaker-r25-15-collapse-repair]
+    paths:
+      - 'diagnostic_requests_r25_15/*.txt'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'diagnostic_requests_r25_15/*.txt'
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install read-only diagnostic dependencies
+        run: python -m pip install --disable-pip-version-check 'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2'
+      - name: Extract and store sanitized acoustic diagnostics
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          PDF_ID: 1NusI0alCWpij1fYqCnJmHrbC4P9bZT-7
+          OUTPUT_FOLDER_ID: 1BIyvSE3CWs5CitkbNsjmPq79vJwuMEVs
+          JOB_ID: 41daa4ca6e09d13e366c578b7c53ae31
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, pathlib
+          import requests, pymupdf
+          from run_drive_3_1_free_oidc import user_oauth_token
+
+          token=user_oauth_token()
+          if not token: raise SystemExit('BLOCKED_ACCESS: Drive OAuth unavailable')
+          headers={'Authorization': f'Bearer {token}'}
+          pdf_id=os.environ['PDF_ID']
+          output_folder=os.environ['OUTPUT_FOLDER_ID']
+          job_id=os.environ['JOB_ID']
+
+          def upload_json(name, payload):
+              data=json.dumps(payload,ensure_ascii=False,indent=2).encode('utf-8')
+              meta={'name':name,'parents':[output_folder]}
+              c=requests.post('https://www.googleapis.com/drive/v3/files',headers={**headers,'Content-Type':'application/json'},params={'fields':'id,name'},json=meta,timeout=60)
+              c.raise_for_status(); file_id=c.json()['id']
+              u=requests.patch(f'https://www.googleapis.com/upload/drive/v3/files/{file_id}',headers={**headers,'Content-Type':'application/json; charset=utf-8'},params={'uploadType':'media'},data=data,timeout=60)
+              u.raise_for_status()
+              return file_id
+
+          try:
+              r=requests.get(f'https://www.googleapis.com/drive/v3/files/{pdf_id}?alt=media', headers=headers, timeout=120)
+              r.raise_for_status()
+              path=pathlib.Path('/tmp/master.pdf'); path.write_bytes(r.content)
+              doc=pymupdf.open(path)
+              target=next((n for n in doc.embfile_names() if n.lower().endswith('master_analysis.json')), None)
+              if target is None: raise RuntimeError('embedded master_analysis.json not found')
+              master=json.loads(bytes(doc.embfile_get(target)).decode('utf-8'))
+              found=[]
+              def walk(obj,p='$'):
+                  if isinstance(obj,dict):
+                      if 'hypotheses' in obj and ('selected_hypothesis' in obj or 'collapse_repair_attempted' in obj): found.append((p,obj))
+                      for k,v in obj.items(): walk(v,p+'.'+str(k))
+                  elif isinstance(obj,list):
+                      for i,v in enumerate(obj): walk(v,f'{p}[{i}]')
+              walk(master)
+              if not found: raise RuntimeError('r25.15 diarization report not found in embedded master')
+              path_key,report=found[0]
+              safe_keys={'revision','status','engine','engine_version','model_id','selected_hypothesis','hypothesis_score','collapse_repair_attempted','speaker_turns','speaker_ids','num_speakers_requested','segments_total','segments_labeled','segments_ambiguous','speaker_labeled_ratio','mean_assignment_confidence','speaker_turn_counts','speaker_turn_duration_seconds','minor_turn_ratio','minor_duration_ratio','speaker_transitions','speech_duration_seconds','speaker_segment_counts','minor_segment_count','minor_segment_ratio','expected_speakers','minimum_segment_count_for_noncollapse','cluster_collapse_detected','collapse_reasons','role_labeled_segments','role_labeled_ratio','mapping_supported','role_mapping','cluster_scores','mapping_blocker','hypotheses','models','fallback_used','primary_engine_status','primary_engine','primary_engine_error','primary_engine_detail'}
+              safe={k:v for k,v in report.items() if k in safe_keys}
+              clean_h=[]
+              for h in safe.get('hypotheses',[]) or []:
+                  if not isinstance(h,dict): continue
+                  allowed={'model_id','status','score','error','detail','speaker_turn_counts','speaker_turn_duration_seconds','minor_turn_ratio','minor_duration_ratio','speaker_transitions','speech_duration_seconds','speaker_segment_counts','segments_labeled','minor_segment_count','minor_segment_ratio','expected_speakers','minimum_segment_count_for_noncollapse','cluster_collapse_detected','collapse_reasons','repair_qc'}
+                  clean={k:v for k,v in h.items() if k in allowed}
+                  if isinstance(clean.get('repair_qc'),dict):
+                      clean['repair_qc']={k:v for k,v in clean['repair_qc'].items() if k in {'cluster_counts','centroid_cosine_similarity','median_cosine_margin','q25_cosine_margin','repair_validation_passed','embedding_segments_total','embedding_segments_accepted','embedding_segments_ambiguous'}}
+                  clean_h.append(clean)
+              safe['hypotheses']=clean_h
+              payload={'schema':'bridge-r25.15-diarization-diagnostics-v1','job_id':job_id,'master_pdf_id':pdf_id,'report_path':path_key,'diagnostics':safe}
+              fid=upload_json(f'DIARIZATION_DIAGNOSTICS_{job_id}.json',payload)
+              print('DIARIZATION_DIAGNOSTICS_STORED file_id='+fid)
+          except Exception as exc:
+              payload={'schema':'bridge-r25.15-diarization-diagnostics-failure-v1','job_id':job_id,'master_pdf_id':pdf_id,'error_type':type(exc).__name__,'error_detail':str(exc)[:500]}
+              try:
+                  fid=upload_json(f'DIARIZATION_DIAGNOSTICS_FAILURE_{job_id}.json',payload)
+                  print('DIARIZATION_DIAGNOSTICS_FAILURE_STORED file_id='+fid)
+              finally:
+                  raise
+          PY

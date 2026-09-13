@@ -1,0 +1,174 @@
+name: Bridge Video r25.6 PDF Presentation Regression
+
+on:
+  push:
+    branches:
+      - algorithm/3.1-free-r25.6-pdf-presentation
+    paths:
+      - '.github/workflows/video-r25-6-pdf-regression.yml'
+      - 'bridge_runtime_hardening_r25_6.py'
+      - 'run_master_3_1_free.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'tests/test_asr_policy_r25_6.py'
+      - 'tests/test_pdf_presentation_r25_6.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-video-r25-6-pdf-regression
+  cancel-in-progress: false
+
+jobs:
+  pdf-regression:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.6
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+      PYTHONUNBUFFERED: '1'
+
+    steps:
+      - name: Checkout r25.6 candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Install PDF regression runtime
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-dejavu-core
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
+
+      - name: Run ASR policy and presentation unit regressions
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_asr_policy_r25_6.py
+          PYTHONPATH=. python tests/test_late_oauth_r25_3.py
+          PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
+          PYTHONPATH=. python tests/test_pdf_presentation_r25_6.py
+          python -m py_compile bridge_runtime_hardening_r25_6.py run_master_3_1_free.py run_drive_3_1_free_generic.py
+
+      - name: Google Drive OAuth preflight
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import user_oauth_token
+          if not user_oauth_token():
+              raise SystemExit('BLOCKED_ACCESS: GOOGLE_DRIVE_OAUTH_JSON secret is not configured')
+          print('Google Drive OAuth preflight: PASS')
+          PY
+
+      - name: Re-render current and earlier successful reports without changing master JSON
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import tempfile
+          from pathlib import Path
+
+          import pymupdf
+
+          import run_drive_3_1_free as io
+          import run_master_3_1_free as base
+          from run_drive_3_1_free_oidc import user_oauth_token
+
+          controls = [
+              ('logic-r25.5-current-63-page', '19sGj5XlTZKNZI7MFB-U7wDM7HjfvK3q6', True),
+              ('sunday-r25.4.1-known-good', '1WeueHnoAJLxXpfZT3Zad_B8KWyAvtohM', False),
+          ]
+          token = user_oauth_token()
+          summaries = []
+
+          with tempfile.TemporaryDirectory() as td:
+              td = Path(td)
+              for label, file_id, expect_isolated_zero in controls:
+                  old_pdf = td / f'{label}-old.pdf'
+                  new_pdf = td / f'{label}-r25.6-presentation.pdf'
+                  io.download(token, file_id, old_pdf)
+
+                  old_doc = pymupdf.open(old_pdf)
+                  old_pages = old_doc.page_count
+                  old_text = '\n'.join(page.get_text() for page in old_doc)
+                  if 'master_analysis.json' not in set(old_doc.embfile_names()):
+                      raise SystemExit(f'{label}: missing embedded master_analysis.json')
+                  raw_master = old_doc.embfile_get('master_analysis.json')
+                  old_doc.close()
+
+                  master = json.loads(raw_master.decode('utf-8'))
+                  canonical_raw = json.dumps(master, ensure_ascii=False, indent=2).encode()
+                  if canonical_raw != raw_master:
+                      raise SystemExit(f'{label}: embedded master JSON is not canonical and cannot be checksum-compared')
+                  source_sha = hashlib.sha256(raw_master).hexdigest()
+
+                  gate = (master.get('content_quality') or {}).get('r24Gate') or {}
+                  if int(gate.get('unreliableDerivedEvidenceCount') or 0) != 0:
+                      raise SystemExit(f'{label}: unreliable derived evidence is nonzero: {gate}')
+
+                  if expect_isolated_zero:
+                      failed = [
+                          q for q in ((master.get('technical_qc') or {}).get('transcript') or {}).get('qc') or []
+                          if not q.get('ok')
+                      ]
+                      zero = [q for q in failed if float(q.get('similarity') or 0) <= 0.05]
+                      halluc = [
+                          q for q in failed
+                          if 'REPEATED_NONSPEECH_HALLUCINATION' in (q.get('failureReasons') or [])
+                      ]
+                      if not zero or halluc:
+                          raise SystemExit(f'{label}: expected isolated zero disagreement without hallucination')
+                  else:
+                      if int((master.get('content_quality') or {}).get('unreliable_transcript_segments') or 0) <= 0:
+                          raise SystemExit(f'{label}: known-good isolation control was not exercised')
+
+                  base.pdf_report(new_pdf, master, [])
+                  attached_sha = base.embed_master(new_pdf, master)
+                  qc = base.pdfqc(new_pdf)
+                  if not qc.get('ok'):
+                      raise SystemExit(f'{label}: r25.6 PDF QC failed: {qc}')
+
+                  new_doc = pymupdf.open(new_pdf)
+                  new_pages = new_doc.page_count
+                  new_text = '\n'.join(page.get_text() for page in new_doc)
+                  new_raw = new_doc.embfile_get('master_analysis.json')
+                  new_doc.close()
+
+                  if hashlib.sha256(new_raw).hexdigest() != source_sha or attached_sha != source_sha:
+                      raise SystemExit(f'{label}: embedded master checksum changed')
+                  if new_raw != raw_master:
+                      raise SystemExit(f'{label}: evidence-bearing master JSON changed')
+                  if new_pages >= old_pages:
+                      raise SystemExit(f'{label}: presentation did not reduce pages: old={old_pages} new={new_pages}')
+                  if 'Надёжных меток говорящих нет.' not in new_text:
+                      raise SystemExit(f'{label}: empty actor cycles were not collapsed')
+                  if new_text.count('Действие ученика: не установлено') != 0:
+                      raise SystemExit(f'{label}: repeated empty cycles remain')
+                  if new_text.count('(score') > 20:
+                      raise SystemExit(f'{label}: canon print list exceeds 20 unique items')
+                  if 'Контроль ASR:' not in new_text or '"transcript_segments"' in new_text:
+                      raise SystemExit(f'{label}: technical QC is not readable')
+                  if 'утечки ненадёжных доказательств в производные выводы — 0' not in new_text:
+                      raise SystemExit(f'{label}: zero derived-evidence leak is not visible')
+
+                  summaries.append({
+                      'control': label,
+                      'old_pages': old_pages,
+                      'new_pages_without_visual_rehydration': new_pages,
+                      'old_empty_cycle_cards': old_text.count('Действие ученика: не установлено'),
+                      'new_empty_cycle_cards': new_text.count('Действие ученика: не установлено'),
+                      'printed_canon_links': new_text.count('(score'),
+                      'master_sha256': source_sha,
+                      'master_bytes_preserved': len(new_raw),
+                  })
+
+          print('R25_6_TWO_REPORT_PDF_REGRESSION: PASS ' + json.dumps(summaries, ensure_ascii=False))
+          PY

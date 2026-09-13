@@ -1,0 +1,47 @@
+{
+  "manifest_version": "1.0",
+  "source_key": "school-canon-bidding-natural-system-v1",
+  "title": "Натуральная система торговли",
+  "authority_class": "school_canon_source",
+  "status": "director_approved_source",
+  "language": "ru",
+  "document": {
+    "drive_file_id": "1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf",
+    "drive_title": "1569510427630_натуральная система торговли - color(1).pdf",
+    "mime_type": "application/pdf",
+    "size_bytes": 113399,
+    "page_count": 2,
+    "page_orientation": "landscape",
+    "sha256": "dc9678da5ab19a897c3f1fbd785cc6f7b0ddd9d70d90d895743db615a2fdd3d6",
+    "pdf_creation_date": "2019-09-20T15:44:23+03:00"
+  },
+  "approval": {
+    "approved_by_role": "school_director_and_bridge_canon_owner",
+    "approved_at": "2026-08-27",
+    "decision_type": "explicit_director_decision",
+    "scope": {
+      "openings": true,
+      "responses": true,
+      "continuations": true,
+      "rebids": true,
+      "all_explicit_auction_branches_in_document": true
+    },
+    "clarification": "Approval covers the entire trading system explicitly shown in both pages, not only opening bids and first responses."
+  },
+  "authority_boundaries": {
+    "source_pdf_is_authoritative": true,
+    "machine_text_extract_is_authoritative": false,
+    "external_bridge_knowledge_may_fill_gaps": false,
+    "external_engines_may_silently_modify_source": false,
+    "rejected_course_notes_are_a_source": false,
+    "activation_requires_structured_provenance_and_tests": true
+  },
+  "ingestion": {
+    "working_branch": "bidding/canon-natural-system-ingestion",
+    "program_issue": 609,
+    "log_path": "docs/research/bidding-engine/canon-ingestion/natural-system-v1/INGESTION_LOG.md",
+    "block_inventory_path": "docs/research/bidding-engine/canon-ingestion/natural-system-v1/BLOCK_INVENTORY.json",
+    "current_stage": "source_registered_and_block_inventory_started",
+    "production_database_effect": "none"
+  }
+}

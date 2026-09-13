@@ -1,0 +1,7 @@
+{
+  "request_id": "uv-diana11-durable-002-conform-publish-20260826-01",
+  "issue": 562,
+  "operation": "conform-publish-bridge",
+  "job_id": "diana11-durable-002-20260826-01",
+  "expected_job_hash": "e53fa37ce69d97bc9d8c995bc8f416b0e7b5ad42610cda4d75faa2385bcf60fc"
+}

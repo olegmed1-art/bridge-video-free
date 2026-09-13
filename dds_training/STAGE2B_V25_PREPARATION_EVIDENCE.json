@@ -1,0 +1,161 @@
+{
+  "schema": "dds-stage2b-v25-preparation-evidence-v1",
+  "recorded_at": "2026-08-18",
+  "algorithm_version": "dds-learning-v2.5-stage2b-candidate",
+  "stable_benchmark_version": "dds-learning-v2.3",
+  "source_train": {
+    "workflow_run_id": 32060398288,
+    "artifact_id": 9302550154,
+    "artifact_name": "dds-main-train-progress-32060398288-a1",
+    "artifact_zip_sha256": "c46cda2fb127371cbc1ab836c74580b25f0a0bb8ab358dfaab97cf591dd8a246",
+    "database_sha256": "7818b5dab8274c45c494e48ecd94b0979cd9461293e9862fe70b28398075f44d",
+    "dds_results": 50497,
+    "train_results": 42000,
+    "derived_results": 2497,
+    "validation_results_preserved": 3000,
+    "sealed_results_preserved": 3000
+  },
+  "preparation_run": {
+    "workflow_run_id": 32121009819,
+    "workflow_conclusion": "success",
+    "temporary_pr": 135,
+    "temporary_pr_merged": false,
+    "artifact_id": 9318545935,
+    "artifact_name": "dds-stage2b-v25-prepared-evidence-32121009819",
+    "artifact_size_bytes": 31503917,
+    "artifact_digest": "sha256:efdd62ab9a2643f231d3faea5c9475fe519cbd5b2e94dc9a764ca6087c043604",
+    "compact_archive_sha256": "f4147f9f060c703b1b9e9d629e26ab65bf6454b3da9f68ce6e4480b3a4a43643",
+    "dds_called": false,
+    "mass_training_started": false,
+    "database_changed": false,
+    "validation_opened": false,
+    "sealed_opened": false,
+    "paid_api_used": false
+  },
+  "oof": {
+    "rows": 42000,
+    "folds": 5,
+    "family_overlap": 0,
+    "primary_source_predictor": "bridge-adaptive-v0.2",
+    "families": {
+      "contract_suit": {
+        "n": 11180,
+        "source_mean_loss": 1.0778175313059033,
+        "candidate_mean_loss": 1.03783542039356,
+        "mean_improvement": 0.03998211091234347,
+        "bootstrap_95_lower": 0.03550983899821109,
+        "bootstrap_95_upper": 0.044722719141323794,
+        "source_zero_loss_rate": 0.309391771019678,
+        "candidate_zero_loss_rate": 0.31627906976744186,
+        "source_loss_2plus_rate": 0.2582289803220036,
+        "candidate_loss_2plus_rate": 0.2443649373881932,
+        "candidate_supported": true,
+        "future_validation_policy": "candidate_v0.3"
+      },
+      "contract_nt": {
+        "n": 2820,
+        "source_mean_loss": 1.0819148936170213,
+        "candidate_mean_loss": 1.079432624113475,
+        "mean_improvement": 0.0024822695035460994,
+        "bootstrap_95_lower": -0.002127659574468085,
+        "bootstrap_95_upper": 0.007446808510638298,
+        "source_zero_loss_rate": 0.2900709219858156,
+        "candidate_zero_loss_rate": 0.28936170212765955,
+        "source_loss_2plus_rate": 0.26666666666666666,
+        "candidate_loss_2plus_rate": 0.2631205673758865,
+        "candidate_supported": false,
+        "future_validation_policy": "source_v0.2_fallback"
+      },
+      "opening_lead_suit": {
+        "n": 11180,
+        "source_mean_loss": 0.31851520572450803,
+        "candidate_mean_loss": 0.24033989266547406,
+        "mean_improvement": 0.078175313059034,
+        "bootstrap_95_lower": 0.06717352415026834,
+        "bootstrap_95_upper": 0.08846153846153847,
+        "source_zero_loss_rate": 0.7265652951699463,
+        "candidate_zero_loss_rate": 0.7884615384615384,
+        "source_loss_2plus_rate": 0.038193202146690516,
+        "candidate_loss_2plus_rate": 0.023792486583184256,
+        "candidate_supported": true,
+        "future_validation_policy": "candidate_v0.3"
+      },
+      "opening_lead_nt": {
+        "n": 2820,
+        "source_mean_loss": 0.42127659574468085,
+        "candidate_mean_loss": 0.4177304964539007,
+        "mean_improvement": 0.0035460992907801418,
+        "bootstrap_95_lower": -0.02056737588652482,
+        "bootstrap_95_upper": 0.02695035460992908,
+        "source_zero_loss_rate": 0.7365248226950355,
+        "candidate_zero_loss_rate": 0.7276595744680852,
+        "source_loss_2plus_rate": 0.08723404255319149,
+        "candidate_loss_2plus_rate": 0.08723404255319149,
+        "candidate_supported": false,
+        "future_validation_policy": "source_v0.2_fallback"
+      }
+    }
+  },
+  "confidence": {
+    "raw_probability_policy": "support-aware-v2",
+    "unsupported_contract_baseline_raw_probability": 0.18,
+    "contract_answers_accepted": 0,
+    "opening_lead_nt": {
+      "accepted": 3119,
+      "accepted_actual_success_rate": 0.7579352356524527,
+      "mean_calibrated_probability": 0.7293632475841446,
+      "mean_lower_confidence_bound": 0.6895748818388269
+    },
+    "opening_lead_suit": {
+      "accepted": 12557,
+      "accepted_actual_success_rate": 0.7445249661543363,
+      "mean_calibrated_probability": 0.7250650804393154,
+      "mean_lower_confidence_bound": 0.7100211674726756
+    }
+  },
+  "curriculum": {
+    "line_sources": 650,
+    "continuation_candidates": 3250,
+    "continuation_candidates_by_actor": {
+      "declarer": 2039,
+      "defense": 1211
+    },
+    "selected_continuations": 2000,
+    "selected_by_actor": {
+      "declarer": 1000,
+      "defense": 1000
+    },
+    "exact_balance_required": true,
+    "counterexample_candidates": 441,
+    "counterexample_status": "unverified_blind_candidates",
+    "multi_contract_blueprint": {
+      "families": 500,
+      "cells_per_family": 20,
+      "tasks": 10000,
+      "predictions_locked": false,
+      "dds_called": false,
+      "next_requirement": "lock predictions before any DDS evaluation"
+    }
+  },
+  "memory_and_investigations": {
+    "investigations_total": 8140,
+    "resolved_structurally": 8140,
+    "resolved_at_card_level": 0,
+    "review_queue_groups": 25,
+    "review_queue_strains": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "NT"
+    ]
+  },
+  "current_stage": {
+    "status": "stage2b_v25_prepared",
+    "holdout_status": "closed",
+    "sealed_status": "closed",
+    "next_gate": "blind_continuation_counterexample_and_multicontract_predictions",
+    "automatic_model_promotion": false,
+    "stable_skill_claim": false
+  }
+}

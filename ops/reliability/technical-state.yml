@@ -1,0 +1,335 @@
+schema_version: 1
+updated_at_utc: "2026-08-28T06:24:00Z"
+policy: docs/TECHNICAL_GOVERNANCE.md
+whole_school_recovery:
+  target_status: RECOVERY_PROVEN_V1
+  current_status: PARTIAL
+  blockers:
+    - full_end_to_end_restore_drill_not_proven
+    - explicit_rpo_rto_not_fully_verified
+
+components:
+  github:
+    role: source_ci_evidence
+    criticality: high
+    health: observed
+    backup_required: false
+    recovery_method: git_repository_and_remote_history
+    evidence_status: partial
+    branch_protection_evidence:
+      observed_at_utc: "2026-08-27T16:47:00Z"
+      main_protected: false
+      database_production_protection: not_observed
+      source: github_branch_api
+      status: owner_action_required
+
+  neon:
+    role: canonical_durable_state
+    criticality: critical
+    health: observed
+    rpo_target_hours: 24
+    rto_target_hours: 4
+    backup_required: true
+    independent_backup: required
+    backup_status: proven
+    restore_status: proven
+    runtime_app_smoke_evidence:
+      workflow_run_id: 33094310879
+      workflow_job_id: 98595090998
+      merge_commit: 6c40d85e3c7d1d5c397038d7943bbece271fc77f
+      previous_failed_workflow_run_id: 33093768968
+      previous_failed_workflow_job_id: 98593212468
+      resolved_by_pr: 718
+      conclusion: success
+      principal: bridge_school_app_principal
+      capability: bridge_school_app
+      controlled_onboarding: verified
+      school: verified
+    independent_backup_evidence:
+      workflow_run_id: 32932896224
+      artifact_id: 9593826932
+      artifact_name: neon-independent-backup-v1-20260826T050935Z-32932896224-1
+      encrypted_backup_sha256: d4a3eee080badc849fd5346536ee49b3bb1a1448a483febbfdb81b5b4132115b
+      encrypted_bytes: 6566288
+      artifact_expires_at_utc: "2026-09-30T05:09:36Z"
+      source_tables: 234
+      restored_tables: 234
+      source_schemas: 5
+      restored_schemas: 5
+      raw_dump_uploaded: false
+      restore_target: isolated_postgres18
+      observed_restore_result: success
+    internal_checkpoint:
+      branch_id: br-nameless-leaf-b108v431
+      branch_name: recovery-governance-baseline-20260825
+      created_from: production
+      read_test: proven
+      observed_public_tables: 194
+      note: internal_neon_checkpoint_is_not_an_independent_backup
+    fail_condition: backup_or_restore_evidence_stale
+
+  oracle_frankfurt:
+    role: deterministic_compute
+    criticality: high
+    health: observed
+    rpo_target_hours: 24
+    rto_target_hours: 4
+    backup_required: true
+    backup_status: target_met_at_latest_observation_recurring_cadence_unverified
+    backup_evidence: fresh_available_full_boot_volume_backup_and_policy_assignment_observed
+    rpo_evidence:
+      initial_preflight_workflow_run_id: 33145314229
+      initial_observed_at_utc: "2026-08-28T05:38:08Z"
+      initial_backup_age_seconds: 173778
+      initial_target_met: false
+      remediation_backup_workflow_run_id: 33145409047
+      verification_workflow_run_id: 33145705145
+      verified_observed_at_utc: "2026-08-28T05:45:49Z"
+      verified_backup_time_created_utc: "2026-08-28T05:39:58.941000+00:00"
+      verified_backup_age_seconds: 350
+      verified_backup_age_hours: 0.097
+      rpo_target_hours: 24
+      target_met_at_latest_observation: true
+      recurring_policy_assignment_workflow_run_id: 33147666581
+      recurring_policy_name: Gold
+      recurring_policy_frequency: daily
+      recurring_policy_exact_assignment_verified: true
+      recurring_schedule_observed_execution: false
+      note: daily_policy_assignment_is_proven_but_the_next_scheduled_backup_has_not_yet_been_observed
+    restore_status: proven_isolated_volume_restore
+    restore_evidence:
+      workflow_run_id: 33144038748
+      workflow_elapsed_seconds: 78
+      workflow_elapsed_is_full_rto: false
+      restored_state: AVAILABLE
+      restored_size_gb: 47
+      temporary_volume_deleted: true
+      production_volume_modified: false
+      production_instance_rebooted: false
+      routing_changed: false
+      boot_acceptance_proven: false
+    reboot_recovery_status: unproven
+    unique_durable_data_allowed: false
+
+  vercel:
+    role: public_api_control
+    criticality: high
+    health: observed
+    backup_required: false
+    recovery_method: redeploy_from_git_and_environment
+    evidence_status: partial
+
+  google_drive:
+    role: source_archive_boundary
+    criticality: high
+    health: observed
+    backup_required: true
+    independent_backup_scope: irreproducible_sources_and_final_evidence
+    backup_status: proven_for_representative_large_source
+    independent_backup_evidence:
+      workflow_run_id: 32935066096
+      source_file_id: 1ZtRQYhDh2ErLkpvbDl-NE2nFDIJdBfO1
+      source_bytes: 409302227
+      source_sha256: 8229a8c3fc6b91f6bf74ea17b2478c9dfbca291d3e90e6379338a5ab83c7407d
+      previous_connector_limit_bytes: 268435456
+      source_exceeds_previous_connector_limit: true
+      target: private_oci_object_storage
+      durable_object_put: true
+      restored_bytes: 409302227
+      restored_sha256: 8229a8c3fc6b91f6bf74ea17b2478c9dfbca291d3e90e6379338a5ab83c7407d
+      checksum_equal: true
+      source_deleted_or_moved: false
+      bucket_created_or_modified: false
+      recovery_object_retained: true
+
+  dds3:
+    role: deterministic_bridge_compute
+    criticality: critical
+    health: runtime_container_proof_success
+    acceptance_requirements:
+      engine: DDS3
+      fallback_used: false
+      expected_result_required: true
+      evidence_retained: true
+    runtime_container_evidence:
+      workflow_run_id: 33093179244
+      workflow_job_id: 98591152227
+      merge_commit: 2162eac02e113276d8bad3c832350eb4b3ddcfcd
+      conclusion: success
+      jobs_observed: 1
+      proof_steps:
+        - build_pinned_dds3_core_image
+        - build_pinned_dds3_runtime_image
+        - real_dds3_readiness
+        - golden_http_compute
+        - unauthenticated_request_rejected
+      observed_engine: DDS3
+      observed_fallback_used: false
+      observed_par_score_ns: -110
+    recovery_status: partial
+
+  ben:
+    role: bounded_bridge_compute
+    criticality: medium
+    health: expansion_gate
+    backup_required: false
+    recovery_method: reinstall_from_code_and_models
+
+  video_worker:
+    role: media_preprocessing
+    criticality: medium
+    health: cleanup_gate_proven_expansion_gate
+    backup_required: false
+    unique_durable_data_allowed: false
+    cleanup_gate_evidence:
+      pr: 696
+      merge_commit: e5f650baa085338acf5f57905444a0efc6d6bb56
+      policy_commit: e6c02b524ab74bfbc222269109a97af5b159f303
+      ci:
+        universal_video_analyzer_ci: success
+        universal_video_engine_smoke: success
+        secret_gate: success
+      proof_forms:
+        - done_receipt
+        - external_receipt_proof_root
+        - local_durable_publication_proof_sidecar
+
+audit_snapshots:
+  factual_resilience_2026_08_25:
+    overall_status: CROSS_SERVICE_PARTIAL
+    whole_school_recovery_ready: false
+    neon_current_state_branch_restore: proven
+    neon_off_provider_backup_restore: proven
+    neon_recovery_checkpoint_rows_observed: 1
+    neon_recovery_verification_rows_observed: 1
+    neon_org_mfa_observed: disabled
+    oracle_boot_backup_observed: available
+    oracle_recurring_backup_policy_observed: assigned
+    oracle_boot_volume_restore: proven_isolated_volume_restore
+    large_drive_raw_export:
+      source_size_bytes: 1699568400
+      result: blocked
+      connector_limit_bytes: 268435456
+    independent_large_media_backup: proven_for_representative_large_source
+    restored_database_application_smoke: proven
+    recovery_registry_population:
+      conclusion: success
+      workflow_run_id: 33094901420
+      workflow_job_id: 98597124215
+      merge_commit: 847fe5edd984aaa933922e0eaca1c118eafee816
+      resolved_by_pr: 722
+      recovery_checkpoint_rows_observed: 1
+      recovery_verification_rows_observed: 1
+      recorded_checkpoint_id: 01a0441d-1487-7ff2-97ad-c9efd1205f47
+      recorded_verification_id: 01a0441d-14f4-742b-9482-1faabe502c7d
+    dds3_runtime_container_workflow:
+      conclusion: success
+      workflow_run_id: 33093179244
+      workflow_job_id: 98591152227
+      merge_commit: 2162eac02e113276d8bad3c832350eb4b3ddcfcd
+      jobs_observed: 1
+      zero_job_symptom_resolved_by_pr: 703
+    vercel_snapshot:
+      production_healthy: true
+      production_behind_main_commits: 4
+      deployment_rate_limited: true
+    drive_acl_snapshot_2026_08_20:
+      objects_scanned: 3130
+      shared_flag_items: 349
+      anyone_reader_items: 63
+      anyone_writer_items: 0
+    evidence_runs:
+      neon_health: 32839810693
+      neon_independent_backup_restore: 32932896224
+      dds3_production_health: 32845019060
+      dds3_runtime_container_proof: 33093179244
+      restored_database_application_smoke: 33094310879
+      recovery_registry_population: 33094901420
+      oracle_ben_dds3_health: 32835192297
+      oci_finops_backup_observation: 32820354158
+      drive_acl_main: 32415116012
+
+work_queue:
+  policy:
+    canonical_governance_issue: 523
+    wip_limit: 1
+    duplicate_rule: update_existing_tracker_before_creating_new_issue
+  active: []
+  queued:
+    - id: neon_org_mfa
+      priority: P0
+      status: owner_action_required
+      tracking_issue: 523
+    - id: independent_large_irreplaceable_media_backup
+      priority: P0
+      status: proven_for_representative_large_source
+      tracking_issue: 580
+      evidence_workflow_run_id: 32935066096
+    - id: video_result_durable_copy_before_cleanup
+      priority: P0
+      status: proven_by_code_contract
+      tracking_issue: 547
+      related_issue: 371
+      resolved_by_pr: 696
+    - id: dds3_runtime_container_ci_execution
+      priority: P0
+      status: proven_by_main_ci
+      tracking_issue: 523
+      resolved_by_pr: 703
+      evidence_workflow_run_id: 33093179244
+      evidence_workflow_job_id: 98591152227
+    - id: oracle_boot_volume_restore_drill
+      priority: P1
+      status: proven_isolated_volume_restore
+      tracking_issue: 265
+      evidence_workflow_run_id: 33144038748
+    - id: restored_database_application_smoke
+      priority: P1
+      status: proven_by_main_ci
+      tracking_issue: 523
+      resolved_by_pr: 718
+      evidence_workflow_run_id: 33094310879
+      evidence_workflow_job_id: 98595090998
+    - id: recovery_registry_population_and_rpo_rto
+      priority: P1
+      status: partially_proven_by_main_ci
+      tracking_issue: 523
+      resolved_recovery_registry_by_pr: 722
+      evidence_workflow_run_id: 33094901420
+      evidence_workflow_job_id: 98597124215
+      remaining: explicit_rpo_rto_not_fully_verified
+    - id: vercel_deploy_freshness_and_quota
+      priority: P1
+      status: queued
+      tracking_issue: 523
+    - id: scheduled_drive_acl_diff_audit
+      priority: P1
+      status: queued
+      tracking_issue: 523
+    - id: github_main_protection
+      priority: P1
+      status: owner_action_required
+      tracking_issue: 523
+      evidence: main_branch_api_reported_protected_false
+    - id: independent_external_health_alert
+      priority: P2
+      status: queued
+      tracking_issue: 523
+
+cadence:
+  critical_health: continuous
+  backup_freshness: daily
+  ci_regression: every_change
+  technical_health: weekly
+  reliability_dr: monthly
+  security: monthly_and_after_material_architecture_change
+  financial: monthly
+  architecture: quarterly_and_after_major_change
+  full_system: quarterly
+
+safety_invariants:
+  - no_unique_durable_evidence_only_on_oracle
+  - no_backup_marked_proven_without_restore_test
+  - no_dds3_marked_proven_without_real_no_fallback_request
+  - actual_state_overrides_documentation
+  - owner_only_actions_are_minimized

@@ -1,0 +1,152 @@
+name: Issue 881 Exact Canary Contract CI
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/issue-881-contract-ci.yml'
+      - 'universal_video/**'
+      - 'ops/oracle_universal_video_container_install.sh'
+      - 'ops/validate_video_queue_dsn.py'
+      - 'database/migrations/0056_universal_video_queue.sql'
+      - 'database/migrations/0057_universal_video_canary_review_gate.sql'
+      - 'database/migrations/0058_universal_video_terminal_v2_gate.sql'
+      - 'database/migrations/0058_universal_video_terminal_v2_gate/**'
+      - 'database/rollbacks/0057_universal_video_canary_review_gate.sql'
+      - 'database/rollbacks/0058_universal_video_terminal_v2_gate.sql'
+      - 'database/tests/041_universal_video_queue.sql'
+      - 'database/tests/042_issue_881_canary_gate.sql'
+      - 'database/rollback_tests/0057_universal_video_canary_review_gate.sql'
+      - 'tests/test_universal_video_issue_881_readiness.py'
+      - 'tests/test_universal_video_neon_queue.py'
+      - 'tests/test_universal_video_terminal_evidence_v2.py'
+      - 'tests/test_universal_video_drive_adapter.py'
+      - 'tests/test_issue_881_queue_dsn.py'
+      - 'ops/oracle_universal_video_precanary_attest.sh'
+      - 'ops/validate_universal_video_promotion_evidence.py'
+      - '.github/workflows/issue-881-authoritative-external-evidence.yml'
+      - '.github/workflows/oracle-universal-video-container-promote.yml'
+      - 'tests/test_universal_video_container_promotion_contract.py'
+      - 'tests/test_universal_video_promotion_evidence_validator.py'
+      - 'deploy/oracle-universal-video/Dockerfile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  EXACT_RUNTIME_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  python-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXACT_RUNTIME_SHA }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$EXACT_RUNTIME_SHA"
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install -q pytest requests google-auth psycopg[binary]
+      - name: Exact image, import closure and fail-closed recovery contracts
+        run: |
+          grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
+          python -m universal_video.precanary imports
+          python -m universal_video.precanary synthetic-result-contract
+          python -m pytest -q \
+            tests/test_universal_video_issue_881_readiness.py \
+            tests/test_universal_video_neon_queue.py \
+            tests/test_universal_video_terminal_evidence_v2.py \
+            tests/test_universal_video_drive_adapter.py \
+            tests/test_issue_881_queue_dsn.py \
+            tests/test_universal_video_container_promotion_contract.py \
+            tests/test_universal_video_promotion_evidence_validator.py
+          python -m compileall -q universal_video ops/validate_video_queue_dsn.py \
+            ops/validate_universal_video_promotion_evidence.py
+
+  database-contract:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-bookworm
+        env: {POSTGRES_PASSWORD: postgres, POSTGRES_DB: issue881}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d issue881"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env: {PGHOST: localhost, PGPORT: 5432, PGUSER: postgres, PGPASSWORD: postgres, PGDATABASE: issue881}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXACT_RUNTIME_SHA }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$EXACT_RUNTIME_SHA"
+      - name: Install exact queue schema through historical and forward migrations
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE bridge_school_reader NOLOGIN;
+          CREATE ROLE bridge_school_app NOLOGIN;
+          CREATE ROLE bridge_school_worker NOLOGIN;
+          CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+          CREATE TABLE schema_migration (migration_key text PRIMARY KEY);
+          SQL
+          psql -v ON_ERROR_STOP=1 -f database/migrations/0056_universal_video_queue.sql
+          psql -v ON_ERROR_STOP=1 -f database/migrations/0057_universal_video_canary_review_gate.sql
+          psql -v ON_ERROR_STOP=1 -f database/migrations/0058_universal_video_terminal_v2_gate.sql
+      - name: Prove no false PASS and no automatic batch release
+        run: psql -v ON_ERROR_STOP=1 -f database/tests/042_issue_881_canary_gate.sql
+      - name: Prove coherent 0058 rollback and forward re-migration
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT * FROM video_queue.enqueue_drive_batch(
+            'issue881-rollback-preserve',
+            'source-folder-rollback-123456',
+            'output-folder-rollback-123456',
+            'work-folder-rollback-123456',
+            'bridge_3_1_free',
+            '3.1-free-r25.16',
+            'source-file-rollback-123456',
+            repeat('f',64),
+            jsonb_build_array(
+              jsonb_build_object('sequence',1,'file_id','source-file-rollback-123456','name','canary.mp4','mime_type','video/mp4','size_bytes',12339062,'checksum','md5:'||repeat('5',32)),
+              jsonb_build_object('sequence',2,'file_id','source-file-rollback-223456','name','pending.mp4','mime_type','video/mp4','size_bytes',22339062,'checksum','md5:'||repeat('6',32))
+            )
+          );
+          UPDATE video_queue.batch
+             SET status='CANARY_REVIEW', completed_at=NULL
+           WHERE request_key='issue881-rollback-preserve';
+          SQL
+          psql -v ON_ERROR_STOP=1 -f database/rollbacks/0058_universal_video_terminal_v2_gate.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE pending_count integer;
+          BEGIN
+            IF EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0058_universal_video_terminal_v2_gate') THEN
+              RAISE EXCEPTION '0058 rollback left ledger entry';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0057_universal_video_canary_review_gate') THEN
+              RAISE EXCEPTION '0058 rollback removed historical 0057 ledger entry';
+            END IF;
+            SELECT count(*) INTO pending_count FROM video_queue.job j
+              JOIN video_queue.batch b ON b.batch_id=j.batch_id
+             WHERE b.request_key='issue881-rollback-preserve' AND j.status='PENDING_CANARY';
+            IF pending_count <> 1 THEN
+              RAISE EXCEPTION '0058 rollback released pending work';
+            END IF;
+          END $$;
+          SQL
+          psql -v ON_ERROR_STOP=1 -f database/migrations/0058_universal_video_terminal_v2_gate.sql
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0058_universal_video_terminal_v2_gate') THEN
+              RAISE EXCEPTION '0058 forward re-migration not recorded';
+            END IF;
+          END $$;
+          DELETE FROM video_queue.job_event
+           WHERE batch_id IN (SELECT batch_id FROM video_queue.batch WHERE request_key='issue881-rollback-preserve');
+          DELETE FROM video_queue.job
+           WHERE batch_id IN (SELECT batch_id FROM video_queue.batch WHERE request_key='issue881-rollback-preserve');
+          DELETE FROM video_queue.batch WHERE request_key='issue881-rollback-preserve';
+          SQL
+          psql -v ON_ERROR_STOP=1 -f database/tests/042_issue_881_canary_gate.sql

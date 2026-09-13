@@ -1,0 +1,94 @@
+name: Bridge Video r29 Identity Field Gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'r29_requests/*.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-video-r29-field
+  cancel-in-progress: false
+
+jobs:
+  r29-field:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BRIDGE_PAID_CLOUD: 'false'
+      BRIDGE_BILLING_FALLBACK: 'false'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Checkout public technical code only
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Resolve opaque r29 request
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^r29_requests/.*\.txt$' | head -n 1 || true)"
+          if [ -z "$REQUEST_FILE" ] && [ "$(git rev-list --count "$GITHUB_SHA")" -gt 1 ]; then
+            REQUEST_FILE="$(git diff --name-only "$GITHUB_SHA^" "$GITHUB_SHA" | grep -E '^r29_requests/.*\.txt$' | head -n 1 || true)"
+          fi
+          test -n "$REQUEST_FILE" || { echo 'No r29 request file in triggering commit' >&2; exit 2; }
+          JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+          MASTER_PDF_DRIVE_ID="$(sed -n 's/^MASTER_PDF_DRIVE_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+          OUTPUT_FOLDER_ID="$(sed -n 's/^OUTPUT_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+          WORK_FOLDER_ID="$(sed -n 's/^WORK_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+          IDENTITY_EVIDENCE_DOC_ID="$(sed -n 's/^IDENTITY_EVIDENCE_DOC_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+          PARTICIPANT_REGISTRY_DOC_ID="$(sed -n 's/^PARTICIPANT_REGISTRY_DOC_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+          test "${#JOB_ID}" -eq 32
+          case "$JOB_ID" in *[!0-9a-f]*) echo 'invalid opaque job id' >&2; exit 2 ;; esac
+          for VALUE in "$MASTER_PDF_DRIVE_ID" "$OUTPUT_FOLDER_ID" "$WORK_FOLDER_ID" "$IDENTITY_EVIDENCE_DOC_ID" "$PARTICIPANT_REGISTRY_DOC_ID"; do
+            test -n "$VALUE"
+            case "$VALUE" in *[!0-9A-Za-z_-]*) echo 'invalid opaque Drive id' >&2; exit 2 ;; esac
+          done
+          {
+            echo "BRIDGE_JOB_ID=$JOB_ID"
+            echo "BRIDGE_MASTER_PDF_DRIVE_ID=$MASTER_PDF_DRIVE_ID"
+            echo "BRIDGE_OUTPUT_FOLDER_ID=$OUTPUT_FOLDER_ID"
+            echo "BRIDGE_WORK_FOLDER_ID=$WORK_FOLDER_ID"
+            echo "BRIDGE_R29_IDENTITY_EVIDENCE_DOC_ID=$IDENTITY_EVIDENCE_DOC_ID"
+            echo "BRIDGE_R29_PARTICIPANT_REGISTRY_DOC_ID=$PARTICIPANT_REGISTRY_DOC_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install focused zero-cost runtime
+        run: |
+          python -m pip install --disable-pip-version-check \
+            'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2' 'pytest==9.1.1'
+
+      - name: Generic r29 regression gate
+        run: PYTHONPATH=. python -m pytest -q tests/test_speaker_mapping_r29.py
+
+      - name: Google Drive OAuth preflight
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import user_oauth_token
+          if not user_oauth_token():
+              raise SystemExit('BLOCKED_ACCESS: GOOGLE_DRIVE_OAUTH_JSON unavailable')
+          print('Google Drive OAuth preflight: PASS')
+          PY
+
+      - name: Build private r29 speaker map from validated r25.15 evidence
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: python r29_identity_overlay_probe.py
+
+      # Private registry/evidence document contents are never printed or committed.
+      # This workflow reuses the validated r25.15 master transcript and performs no
+      # source-video heavy processing, ASR, visual extraction, paid API call, canon
+      # activation, curriculum activation, profile write or Neon write.

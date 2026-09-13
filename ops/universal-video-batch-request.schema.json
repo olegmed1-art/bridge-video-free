@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bridge-school.local/schemas/universal-video-batch-request-v1.json",
+  "title": "Durable Oracle Universal Video batch request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_id", "host", "user", "expected_host_fingerprint", "intake"],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,80}$"
+    },
+    "host": {
+      "const": "158.180.47.161"
+    },
+    "user": {
+      "const": "ubuntu"
+    },
+    "expected_host_fingerprint": {
+      "const": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk"
+    },
+    "intake": {
+      "$ref": "universal-video-batch-intake.schema.json"
+    }
+  }
+}

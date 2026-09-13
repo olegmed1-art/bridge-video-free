@@ -1,0 +1,42 @@
+name: Tournament Analyzer v3 MP Validation
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_mp_validation_v3.py"
+      - "tests/test_tournament_mp_validation_v3.py"
+      - "data/tournaments/tournament_30041_round2_diana_facts_v1.json"
+      - ".github/workflows/tournament-analyzer-v3-mp-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mp-formula-and-real-evidence-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Compile MP validator
+        run: python -m py_compile bridge_school_api/tournament_mp_validation_v3.py
+      - name: Run MP contracts and real 30041 boundary
+        run: python -m pytest -q tests/test_tournament_mp_validation_v3.py
+      - name: Enforce official-but-unrecalculated 30041 percentage status
+        run: |
+          python - <<'PY'
+          import json
+          from bridge_school_api.tournament_mp_validation_v3 import assess_mp_recalculation_availability
+          source=json.load(open('data/tournaments/tournament_30041_round2_diana_facts_v1.json', encoding='utf-8'))
+          r=assess_mp_recalculation_availability(source)
+          assert r['scoring_method']=='MP'
+          assert r['full_traveller_available'] is False
+          assert r['independent_mp_recalculation_allowed'] is False
+          assert r['status']=='OFFICIAL_PERCENTAGE_NOT_INDEPENDENTLY_RECALCULATED'
+          assert source['tournament']['final_percentage']==54.57
+          print('TOURNAMENT_30041_MP_TRAVELLER_BOUNDARY_PASS')
+          PY

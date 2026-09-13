@@ -1,0 +1,13 @@
+{
+  "request_id": "uv-diana11-durable-002-go-01",
+  "issue": 562,
+  "job": {
+    "job_id": "diana11-durable-002-20260826-01",
+    "profile": "bridge_lesson",
+    "source": {
+      "kind": "google_drive",
+      "file_id": "1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C",
+      "name": "Диана 11"
+    }
+  }
+}

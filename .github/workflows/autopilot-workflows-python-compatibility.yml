@@ -1,0 +1,72 @@
+name: Autopilot Vercel Workflows Python compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'autopilot_service/**'
+      - '.github/workflows/autopilot-workflows-python-compatibility.yml'
+      - 'ops/autopilot/**'
+      - 'docs/architecture/SCHOOL_AUTOPILOT_CONTROLLER_V1.md'
+  push:
+    branches: [main]
+    paths:
+      - 'autopilot_service/**'
+      - '.github/workflows/autopilot-workflows-python-compatibility.yml'
+      - 'ops/autopilot/**'
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Verify runner Python contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          assert sys.version_info[:2] == (3, 12), sys.version
+          print(sys.version)
+          PY
+
+      - name: Install isolated shadow project
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q -e ./autopilot_service
+
+      - name: Inspect pinned public Workflows API
+        shell: bash
+        run: |
+          set -euo pipefail
+          python autopilot_service/tools/inspect_vercel_workflow_api.py | tee "$RUNNER_TEMP/vercel-workflow-api.jsonl"
+          grep -F '"vercel_version": "0.10.0"' "$RUNNER_TEMP/vercel-workflow-api.jsonl" >/dev/null
+          grep -F '"hook.resume": true' "$RUNNER_TEMP/vercel-workflow-api.jsonl" >/dev/null
+          grep -F '"hook.wait": true' "$RUNNER_TEMP/vercel-workflow-api.jsonl" >/dev/null
+          grep -F '"module.start": true' "$RUNNER_TEMP/vercel-workflow-api.jsonl" >/dev/null
+          grep -F '"module.start_async": true' "$RUNNER_TEMP/vercel-workflow-api.jsonl" >/dev/null
+          grep -F '"run_id": {"callable": false' "$RUNNER_TEMP/vercel-workflow-api.jsonl" >/dev/null
+
+      - name: Run shadow contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s autopilot_service/tests -p 'test_*.py' -v
+
+      - name: Enforce no production dependencies in compatibility spike
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R --line-number -E 'NEON_DATABASE_URL|OPENAI_API_KEY|OCI_CLI_|GITHUB_APP_PRIVATE_KEY|psycopg|subprocess|os\.system' \
+            autopilot_service/autopilot_app autopilot_service/tests
+          grep -F '"production_mutations_enabled": False' autopilot_service/autopilot_app/main.py >/dev/null
+          grep -F '"workflow_start_supported": True' autopilot_service/autopilot_app/main.py >/dev/null
+          grep -F 'secrets.token_urlsafe(32)' autopilot_service/autopilot_app/main.py >/dev/null
