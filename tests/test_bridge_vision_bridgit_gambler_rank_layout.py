@@ -8,6 +8,7 @@ import pytest
 import bridge_vision.bridgit_gambler_rank_layout as successor
 from bridge_vision.bridgit_rank_layout import BridgitRankLayoutProfile
 from bridge_vision.gambler_classic_reference import RANKS, SUITS, validate_sprite_bytes
+from bridge_vision.gambler_reference_authority import REFERENCE_AUTHORITY_VERSION
 
 
 def _profile(reference_sha: str) -> BridgitRankLayoutProfile:
@@ -50,7 +51,7 @@ def _sprite_payload():
     image = np.full((588, 1417, 4), 255, dtype=np.uint8)
     image[:, :, 3] = 255
     cw, ch = 109, 147
-    # Put a deterministic rank-specific pattern exactly in the native rank crop.
+    # Synthetic fixture only: adapter mechanics, not template authority/content.
     for suit_index, suit in enumerate(SUITS):
         for rank_index, rank in enumerate(RANKS):
             x = rank_index * cw + 4
@@ -81,7 +82,7 @@ def test_derived_reference_replaces_only_template_crops() -> None:
 def test_successor_selects_sprite_by_registered_card_scale_and_reports_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cv2 = pytest.importorskip("cv2")
+    pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")
     payload = _sprite_payload()
     sha = hashlib.sha256(payload).hexdigest()
@@ -92,6 +93,23 @@ def test_successor_selects_sprite_by_registered_card_scale_and_reports_provenanc
     profile = _profile(reference_sha)
     captured = {}
 
+    # This test exercises adapter mechanics with a synthetic raster. The real
+    # authority gate is covered separately against the fixed original hashes.
+    monkeypatch.setattr(
+        successor,
+        "assert_approved_sprite_binding",
+        lambda variant, supplied_sha: supplied_sha,
+    )
+    monkeypatch.setattr(
+        successor,
+        "authority_provenance",
+        lambda variant: {
+            "reference_authority": REFERENCE_AUTHORITY_VERSION,
+            "human_approved_original": True,
+            "template_content_revalidation_required": False,
+            "approved_sprite_sha256": sha,
+        },
+    )
     monkeypatch.setattr(
         successor._base,
         "_read_frame",
@@ -125,6 +143,10 @@ def test_successor_selects_sprite_by_registered_card_scale_and_reports_provenanc
     assert result["template_source"]["variant"] == 5
     assert result["template_source"]["sprite_sha256"] == sha
     assert result["template_source"]["selection_basis"] == "VERIFIED_REGISTERED_CARD_SCALE"
+    assert result["template_source"]["reference_authority"] == REFERENCE_AUTHORITY_VERSION
+    assert result["template_source"]["human_approved_original"] is True
+    assert result["template_source"]["template_content_revalidation_required"] is False
+    assert result["template_source"]["runtime_validation_scope"] == "IDENTITY_AND_STRUCTURAL_INTEGRITY_ONLY"
     assert result["mouse_cursor_used"] is False
     assert result["hidden_hand_reconstruction_performed"] is False
     assert result["canonical_promotion_allowed"] is False
