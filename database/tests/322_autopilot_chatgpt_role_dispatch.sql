@@ -1,6 +1,20 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+-- This is the contract-v1 regression suite.  When the v2 delivery-proof
+-- migration is present, keep rows created by this transaction on v1 so the
+-- rolling-upgrade compatibility path is exercised explicitly.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0327_autopilot_delivery_proof'
+    ) THEN
+        ALTER TABLE autopilot.role_dispatch_outbox
+            ALTER COLUMN delivery_contract_version SET DEFAULT 1;
+    END IF;
+END $$;
+
 DO $$
 DECLARE
     role_task_id uuid;

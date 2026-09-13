@@ -149,7 +149,33 @@ CREATE OR REPLACE FUNCTION autopilot.mark_role_dispatch_sent(
     p_github_comment_id bigint, p_dispatch_body_sha256 text
 )
 RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,autopilot
-AS $$ BEGIN RAISE EXCEPTION 'AUTOPILOT_GITHUB_IS_NOT_CHATGPT_DELIVERY'; END $$;
+AS $$
+DECLARE affected integer;
+BEGIN
+    IF p_github_comment_id<=0 OR p_dispatch_body_sha256 !~ '^[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION 'AUTOPILOT_OUTBOX_SENT_INVALID';
+    END IF;
+    -- Contract-v1 rows may already be in flight when this migration lands.
+    -- Keep their fenced completion path available, but never let a GitHub
+    -- resource mark a contract-v2 dispatch as delivered to ChatGPT.
+    UPDATE autopilot.role_dispatch_outbox
+       SET status='SENT',claim_owner=NULL,claim_until=NULL,
+           github_dispatch_comment_id=p_github_comment_id,
+           dispatch_body_sha256=p_dispatch_body_sha256,
+           sent_at=now(),callback_deadline_at=now()+interval '15 minutes',
+           updated_at=now(),last_error_code=NULL
+     WHERE dispatch_id=p_dispatch_id AND status='CLAIMED'
+       AND claim_owner=p_publisher_id AND claim_epoch=p_claim_epoch
+       AND claim_until>now() AND delivery_contract_version=1;
+    GET DIAGNOSTICS affected=ROW_COUNT;
+    IF affected=0 AND EXISTS (
+        SELECT 1 FROM autopilot.role_dispatch_outbox
+         WHERE dispatch_id=p_dispatch_id AND delivery_contract_version=2
+    ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_GITHUB_IS_NOT_CHATGPT_DELIVERY';
+    END IF;
+    RETURN affected=1;
+END $$;
 
 CREATE OR REPLACE FUNCTION autopilot.accept_role_dispatch_delivery_proof(
     p_delivery_id text, p_payload_fingerprint text, p_signature_verified boolean,
@@ -300,7 +326,8 @@ END $$;
 
 REVOKE ALL ON FUNCTION autopilot.mark_role_dispatch_published(uuid,text,bigint,bigint,text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION autopilot.mark_role_dispatch_published(uuid,text,bigint,bigint,text) TO autopilot_runtime;
-REVOKE ALL ON FUNCTION autopilot.mark_role_dispatch_sent(uuid,text,bigint,bigint,text) FROM PUBLIC,autopilot_runtime;
+REVOKE ALL ON FUNCTION autopilot.mark_role_dispatch_sent(uuid,text,bigint,bigint,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION autopilot.mark_role_dispatch_sent(uuid,text,bigint,bigint,text) TO autopilot_runtime;
 REVOKE ALL ON FUNCTION autopilot.accept_role_dispatch_callback(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb) FROM autopilot_callback;
 REVOKE ALL ON FUNCTION autopilot.accept_role_dispatch_delivery_proof(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb) FROM PUBLIC,autopilot_runtime,autopilot_runtime_principal;
 GRANT EXECUTE ON FUNCTION autopilot.accept_role_dispatch_delivery_proof(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb) TO autopilot_callback;
