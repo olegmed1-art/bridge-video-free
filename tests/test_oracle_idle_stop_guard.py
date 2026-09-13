@@ -87,12 +87,19 @@ def _run_classifier(
     lease_issued: int | None = None,
     lease_expires: int | None = None,
     service_active: bool = False,
+    service_unreadable: bool = False,
     observer_process_active: bool = False,
 ) -> str:
     now = int(time.time())
     bindir = tmp_path / "bin"
     bindir.mkdir(parents=True)
-    _exe(bindir / "systemctl", f"#!/bin/sh\nexit {0 if service_active else 3}\n")
+    if service_unreadable:
+        systemctl = "#!/bin/sh\nprintf 'failed\\n'\nexit 1\n"
+    elif service_active:
+        systemctl = "#!/bin/sh\nprintf 'active\\n'\nexit 0\n"
+    else:
+        systemctl = "#!/bin/sh\nprintf 'inactive\\n'\nexit 3\n"
+    _exe(bindir / "systemctl", systemctl)
     _exe(bindir / "pgrep", f"#!/bin/sh\nexit {0 if observer_process_active else 1}\n")
 
     module_dir = tmp_path / "modules"
@@ -221,13 +228,19 @@ def test_research_child_forbids_idle(tmp_path: Path) -> None:
     assert "ORACLE_IDLE_STATE=BUSY" in _run_classifier(tmp_path, core_counts=(0, 0, 1, 0))
 
 
-def test_active_service_or_observer_process_forbids_idle(tmp_path: Path) -> None:
+def test_resident_service_is_not_work_but_observer_experiment_is(tmp_path: Path) -> None:
     service = tmp_path / "service"
     process = tmp_path / "process"
     service.mkdir()
     process.mkdir()
-    assert "ORACLE_IDLE_STATE=BUSY" in _run_classifier(service, service_active=True)
+    assert "ORACLE_IDLE_STATE=IDLE" in _run_classifier(service, service_active=True)
     assert "ORACLE_IDLE_STATE=BUSY" in _run_classifier(process, observer_process_active=True)
+
+
+def test_unreadable_systemd_telemetry_is_unknown(tmp_path: Path) -> None:
+    out = _run_classifier(tmp_path, service_unreadable=True)
+    assert "assistant_lab_service_unknown" in out
+    assert "ORACLE_IDLE_STATE=UNKNOWN" in out
 
 
 def test_universal_video_pending_canary_forbids_idle(tmp_path: Path) -> None:
@@ -265,6 +278,16 @@ def test_terminal_video_progress_does_not_fake_work(tmp_path: Path) -> None:
         case = tmp_path / state.lower()
         case.mkdir()
         assert "ORACLE_IDLE_STATE=IDLE" in _run_classifier(case, video_leaf="progress", progress_state=state)
+
+
+def test_expired_terminal_video_progress_is_non_blocking(tmp_path: Path) -> None:
+    out = _run_classifier(
+        tmp_path,
+        video_leaf="progress",
+        progress_state="RESULT_READY",
+        progress_observed=int(time.time()) - 1000,
+    )
+    assert "ORACLE_IDLE_STATE=IDLE" in out
 
 
 def test_operator_lease_forbids_idle(tmp_path: Path) -> None:
@@ -326,11 +349,16 @@ def test_partial_success_then_video_failure_is_unknown(tmp_path: Path) -> None:
     assert "ORACLE_IDLE_STATE=UNKNOWN" in out
 
 
-def test_default_observer_spools_and_daemon_process_are_mandatory() -> None:
+def test_default_observer_spools_and_experiment_process_are_mandatory() -> None:
     script = CLASSIFIER.read_text(encoding="utf-8")
     assert "/opt/bridge-school/assistant-lab-observer/jobs/pending" in script
     assert "/opt/bridge-school/assistant-lab-observer/jobs/running" in script
-    assert "assistant_lab\\.observer[[:space:]]+(daemon|run)" in script
+    assert "[a]ssistant_lab.*observer.*experiment" in script
+    assert "[a]ssistant_lab\\.observer[[:space:]]+(daemon|run)" not in script
+
+
+def test_default_environment_matches_installed_service() -> None:
+    assert "/opt/bridge-school/assistant-lab/assistant-lab.env" in CLASSIFIER.read_text(encoding="utf-8")
 
 
 def test_unknown_always_forbids_stop(tmp_path: Path) -> None:
@@ -381,6 +409,12 @@ def test_real_stop_consumers_use_strict_guard() -> None:
     assert "ORACLE_STOP_ALLOWED=YES" in finalizer
     assert "ORACLE_STOP_ALLOWED=YES" in power
     assert "ORACLE_IDLE_STATE=IDLE" not in finalizer
+
+
+def test_guard_ci_covers_both_stop_consumers() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "oracle-idle-stop-guard-ci.yml").read_text(encoding="utf-8")
+    assert "'.github/workflows/oracle-autopilot-staging-finalize.yml'" in workflow
+    assert "'.github/workflows/oracle-instance-power.yml'" in workflow
 
 
 def test_guard_scripts_contain_no_stop_restart_or_reboot_side_effect() -> None:

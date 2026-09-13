@@ -8,6 +8,8 @@ on:
       - 'ops/oracle_stop_guard.sh'
       - 'tests/test_oracle_idle_stop_guard.py'
       - '.github/workflows/oracle-idle-stop-guard-ci.yml'
+      - '.github/workflows/oracle-autopilot-staging-finalize.yml'
+      - '.github/workflows/oracle-instance-power.yml'
   workflow_dispatch:
 
 permissions:

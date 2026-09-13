@@ -20,13 +20,11 @@ fi
 
 reason='classifier_failed_or_malformed'
 if ((probe_rc == 0)); then
-  if [[ "$output" =~ ^ORACLE_IDLE_REASON=[A-Za-z0-9_.,:;/=-]+$'\n'ORACLE_IDLE_STATE=BUSY$ ]]; then
-    reason='classifier_busy'
-  elif [[ "$output" =~ ^ORACLE_IDLE_REASON=[A-Za-z0-9_.,:;/=-]+$'\n'ORACLE_IDLE_STATE=UNKNOWN$ ]]; then
-    reason='classifier_unknown'
-  elif [[ "$output" =~ ^ORACLE_IDLE_REASON=[A-Za-z0-9_.,:;/=-]+$'\n'ORACLE_IDLE_STATE=IDLE$ ]]; then
-    reason='idle_reason_not_exact'
-  fi
+  case "$output" in
+    $'ORACLE_IDLE_REASON='?*$'\nORACLE_IDLE_STATE=BUSY') reason='classifier_busy' ;;
+    $'ORACLE_IDLE_REASON='?*$'\nORACLE_IDLE_STATE=UNKNOWN') reason='classifier_unknown' ;;
+    $'ORACLE_IDLE_REASON='?*$'\nORACLE_IDLE_STATE=IDLE') reason='idle_reason_not_exact' ;;
+  esac
 else
   reason='classifier_execution_failed'
 fi

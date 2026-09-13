@@ -5,7 +5,7 @@ set -Eeuo pipefail
 # Output is always exactly two bounded lines. Any missing/stale/malformed source
 # wins over known BUSY evidence so UNKNOWN can never be interpreted as IDLE.
 ASSISTANT_LAB_PYTHON="${ASSISTANT_LAB_PYTHON:-/opt/bridge-school/assistant-lab/.venv/bin/python}"
-ASSISTANT_LAB_ENV_FILE="${ASSISTANT_LAB_ENV_FILE:-/opt/bridge-school/assistant-lab/.env}"
+ASSISTANT_LAB_ENV_FILE="${ASSISTANT_LAB_ENV_FILE:-/opt/bridge-school/assistant-lab/assistant-lab.env}"
 BRIDGE_VIDEO_QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"
 BRIDGE_VIDEO_SPOOL_ROOT="${BRIDGE_VIDEO_SPOOL_ROOT:-/opt/bridge-school/universal-video/spool}"
 ORACLE_HOST_LEASE_FILE="${ORACLE_HOST_LEASE_FILE:-/run/bridge-school/oracle-host-lease}"
@@ -15,30 +15,27 @@ ORACLE_HOST_LEASE_MAX_SECONDS="${ORACLE_HOST_LEASE_MAX_SECONDS:-3600}"
 ORACLE_IDLE_SPOOL_PATHS="${ORACLE_IDLE_SPOOL_PATHS:-/opt/bridge-school/assistant-lab/spool:/opt/bridge-school/assistant-lab/feedback-spool:/opt/bridge-school/assistant-lab-observer/jobs/pending:/opt/bridge-school/assistant-lab-observer/jobs/running:/var/lib/bridge-school/uv-spool:/var/lib/bridge-school/feedback-spool}"
 
 # Service/process probes are independent safety sources. Unknown systemd state
-# or probe failure is UNKNOWN, not idle. A live observer daemon is BUSY even
-# when its queue directories have not yet been inspected successfully.
+# or probe failure is UNKNOWN, not idle. Resident services establish telemetry
+# health; only an active observer experiment is workload.
 run_probe() {
-  local label="$1"; shift
   local output rc
   set +e
   output="$("$@" 2>/dev/null)"
   rc=$?
   set -e
-  if ((rc == 0)); then
-    printf '%s=ACTIVE\n' "$label"
-  elif ((rc == 1 || rc == 3 || rc == 4)); then
-    printf '%s=INACTIVE\n' "$label"
-  else
-    printf '%s=UNKNOWN\n' "$label"
-  fi
+  case "$rc:$output" in
+    '0:active') printf 'ACTIVE\n' ;;
+    '3:inactive') printf 'INACTIVE\n' ;;
+    *) printf 'UNKNOWN\n' ;;
+  esac
 }
 
-assistant_service="$(run_probe ASSISTANT_LAB_SERVICE systemctl is-active --quiet assistant-lab.service)"
-observer_service="$(run_probe ASSISTANT_LAB_OBSERVER_SERVICE systemctl is-active --quiet assistant-lab-observer.service)"
-video_service="$(run_probe UNIVERSAL_VIDEO_SERVICE systemctl is-active --quiet universal-video-container.service)"
+assistant_service="$(run_probe systemctl is-active assistant-lab.service)"
+observer_service="$(run_probe systemctl is-active assistant-lab-observer.service)"
+video_service="$(run_probe systemctl is-active universal-video-container.service)"
 
 set +e
-observer_process_output="$(pgrep -f '[a]ssistant_lab.*observer.*experiment|[o]racle_assistant_lab_observer.*run|[a]ssistant_lab\.observer[[:space:]]+(daemon|run)' 2>/dev/null)"
+observer_process_output="$(pgrep -f '[a]ssistant_lab.*observer.*experiment' 2>/dev/null)"
 observer_process_rc=$?
 set -e
 case "$observer_process_rc" in
@@ -118,11 +115,9 @@ for label, value in (
     ("assistant_lab_observer_service", os.environ.get("OBSERVER_SERVICE", "UNKNOWN")),
     ("universal_video_service", os.environ.get("VIDEO_SERVICE", "UNKNOWN")),
 ):
-    if value == "ACTIVE":
-        mark_busy(f"{label}_active")
-    elif value == "UNKNOWN":
+    if value == "UNKNOWN":
         mark_unknown(f"{label}_unknown")
-    elif value != "INACTIVE":
+    elif value not in {"ACTIVE", "INACTIVE"}:
         mark_unknown(f"{label}_invalid")
 
 observer_process = os.environ.get("OBSERVER_PROCESS", "UNKNOWN")
@@ -216,8 +211,13 @@ else:
                         else:
                             mark_unknown("video_spool_progress_stale")
                     elif state_value in {"RESULT_READY", "REVIEW", "FAILED"}:
-                        if not fresh(observed):
-                            mark_unknown("video_spool_progress_terminal_stale")
+                        try:
+                            observed_epoch = int(observed)
+                        except (TypeError, ValueError):
+                            mark_unknown("video_spool_progress_terminal_timestamp_invalid")
+                        else:
+                            if clock_skew is None or observed_epoch > now + clock_skew:
+                                mark_unknown("video_spool_progress_terminal_timestamp_invalid")
                     else:
                         mark_unknown("video_spool_progress_state_invalid")
                 except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):

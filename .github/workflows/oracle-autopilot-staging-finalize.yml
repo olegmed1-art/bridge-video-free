@@ -28,9 +28,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -F 'sudo -n /usr/local/sbin/oracle-idle-state' \
+          grep -F 'sudo -n /usr/local/sbin/oracle-stop-guard' \
             .github/workflows/oracle-autopilot-staging-finalize.yml >/dev/null
-          grep -F "grep -Fx 'ORACLE_IDLE_STATE=IDLE'" \
+          grep -F "grep -Fx 'ORACLE_STOP_ALLOWED=YES'" \
             .github/workflows/oracle-autopilot-staging-finalize.yml >/dev/null
           grep -F 'AUTOPILOT_SERVICE_ACTIVE=inactive' \
             .github/workflows/oracle-autopilot-staging-finalize.yml >/dev/null
@@ -134,13 +134,13 @@ jobs:
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             'set -Eeuo pipefail
-             sudo -n /usr/local/sbin/oracle-idle-state
+             sudo -n /usr/local/sbin/oracle-stop-guard
              printf "AUTOPILOT_SERVICE_ACTIVE=%s\n" "$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"
              printf "AUTOPILOT_SERVICE_ENABLED=%s\n" "$(systemctl is-enabled school-autopilot-shadow.service 2>/dev/null || true)"
              printf "AUTOPILOT_STAGED_REVISION=%s\n" "$(sudo -n cat /opt/bridge-school/school-autopilot/current/SOURCE_REVISION)"' \
             | tee "$proof"
-          grep -Fx 'ORACLE_IDLE_STATE=IDLE' "$proof" >/dev/null
-          grep -Eq '^ORACLE_IDLE_REASON=[A-Za-z0-9_,.=-]+$' "$proof"
+          grep -Fx 'ORACLE_STOP_REASON=all_required_sources_proved_idle' "$proof" >/dev/null
+          grep -Fx 'ORACLE_STOP_ALLOWED=YES' "$proof" >/dev/null
           grep -Fx 'AUTOPILOT_SERVICE_ACTIVE=inactive' "$proof" >/dev/null
           grep -Fx 'AUTOPILOT_SERVICE_ENABLED=disabled' "$proof" >/dev/null
           grep -Fx "AUTOPILOT_STAGED_REVISION=$EXPECTED_REVISION" "$proof" >/dev/null
