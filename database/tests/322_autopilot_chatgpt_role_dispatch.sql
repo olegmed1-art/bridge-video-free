@@ -402,10 +402,24 @@ BEGIN
     END IF;
     IF has_table_privilege('autopilot_callback', 'autopilot.role_dispatch_outbox', 'SELECT')
        OR has_table_privilege('autopilot_callback', 'autopilot.role_dispatch_callback_receipt', 'SELECT')
-       OR NOT has_function_privilege(
-           'autopilot_callback',
-           'autopilot.accept_role_dispatch_callback(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)',
-           'EXECUTE')
+       OR (
+           NOT EXISTS (
+               SELECT 1 FROM public.schema_migration
+                WHERE migration_key='0327_autopilot_delivery_proof'
+           ) AND NOT has_function_privilege(
+               'autopilot_callback',
+               'autopilot.accept_role_dispatch_callback(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)',
+               'EXECUTE')
+       )
+       OR (
+           EXISTS (
+               SELECT 1 FROM public.schema_migration
+                WHERE migration_key='0327_autopilot_delivery_proof'
+           ) AND has_function_privilege(
+               'autopilot_callback',
+               'autopilot.accept_role_dispatch_callback(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)',
+               'EXECUTE')
+       )
        OR has_function_privilege(
            'autopilot_callback', 'autopilot.claim_role_dispatch_outbox(text,integer)', 'EXECUTE') THEN
         RAISE EXCEPTION 'AUTOPILOT_ROLE_CALLBACK_BOUNDARY_INVALID';
