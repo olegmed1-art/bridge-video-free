@@ -292,7 +292,7 @@ class PostgresCanonRuleStore:
                     raise RuntimeError("authoritative Canon resolution time is unavailable")
                 bound_profile = replace(profile, effective_at=effective_at)
                 cur.execute(
-                    """SELECT c.rule_id AS rule_id,c.action::text AS action,
+                    """SELECT c.rule_id AS rule_id,c.action->>'call' AS action,
                               kv.bidding_system_key AS bidding_system_key,
                               c.method_version AS method_version,
                               kv.level_scope->>'level' AS learner_level,

@@ -7,7 +7,8 @@ from unittest.mock import patch
 from bridge_school_api.bidding_world_resolver import (
     CANON_CONFLICT, UNRESOLVED_GAP, WORLD_CONFLICT, WORLD_FALLBACK,
     CanonGapReceipt, KnowledgeRule, PostgresCanonGapStore, PostgresCanonRuleStore,
-    PostgresWorldRuleStore, ResolutionProfile, learner_response, resolve_two_lane,
+    PostgresWorldRuleStore, Resolution, ResolutionProfile, learner_response,
+    resolve_two_lane,
 )
 from bridge_school_api.bidding_world_resolver import _gap_fingerprint, _profile_fingerprint, _request_fingerprint
 
@@ -240,6 +241,49 @@ def test_canon_store_binds_database_time_and_returns_visible_predicates():
     assert executed[0][0] == "SELECT clock_timestamp() AS effective_at"
     assert "c.auction_pattern AS auction_pattern" in executed[1][0]
     assert executed[1][1][:3] == ("school-1", "default", NOW)
+
+
+def test_canon_store_returns_decoded_call_to_learner_response():
+    executed = []
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def execute(self, sql, params=None): executed.append((sql, params))
+        def fetchone(self): return {"effective_at": NOW}
+        def fetchall(self):
+            return [{
+                "rule_id": "rule-1",
+                "action": "1H",
+                "bidding_system_key": "natural",
+                "method_version": "v1",
+                "learner_level": "L1",
+                "auction_context_id": "auction-1",
+                "valid_from": NOW,
+                "valid_to": None,
+                "priority": 10,
+                "specificity": 5,
+                "auction_pattern": {"context_id": "auction-1"},
+                "hand_constraints": {},
+                "public_context_constraints": {},
+            }]
+
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def cursor(self): return Cursor()
+
+    @contextmanager
+    def repository_connect():
+        yield Connection()
+
+    _, rules = PostgresCanonRuleStore(repository_connect).fetch_current(
+        "school-1", PROFILE
+    )
+    resolution = Resolution("CANON_MATCH", rules[0], rules, (), {})
+
+    assert "c.action->>'call' AS action" in executed[1][0]
+    assert learner_response(resolution)["action"] == "1H"
 
 
 def test_existing_gap_returns_its_original_effective_time():
