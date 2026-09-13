@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bridge-school/bridgit-rank-layout-holdout-score-report-v2",
+  "title": "Bridgit rank-layout holdout mechanical score report V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scorer_version",
+    "result_scope",
+    "canonical_promotion_allowed",
+    "case_count",
+    "source_session_count",
+    "gold_visible_targets",
+    "accepted_correct",
+    "accepted_wrong",
+    "accepted_wrong_card_seat",
+    "rejected_ambiguous",
+    "rejected_low_score",
+    "unknown_or_review",
+    "rejected_other",
+    "coverage",
+    "precision",
+    "recall",
+    "unknown_review_rate",
+    "seat_errors",
+    "false_complete_deals",
+    "per_source_metrics",
+    "per_layout_metrics",
+    "per_theme_metrics",
+    "per_resolution_metrics",
+    "per_stress_tag_metrics",
+    "thresholds",
+    "mechanical_thresholds_pass"
+  ],
+  "properties": {
+    "scorer_version": { "const": "bridgit-holdout-measurement-v2" },
+    "result_scope": { "const": "SHADOW_ONLY" },
+    "canonical_promotion_allowed": { "const": false },
+    "case_count": { "type": "integer", "minimum": 1 },
+    "source_session_count": { "type": "integer", "minimum": 1 },
+    "gold_visible_targets": { "type": "integer", "minimum": 0 },
+    "accepted_correct": { "type": "integer", "minimum": 0 },
+    "accepted_wrong": { "type": "integer", "minimum": 0 },
+    "accepted_wrong_card_seat": { "type": "integer", "minimum": 0 },
+    "rejected_ambiguous": { "type": "integer", "minimum": 0 },
+    "rejected_low_score": { "type": "integer", "minimum": 0 },
+    "unknown_or_review": { "type": "integer", "minimum": 0 },
+    "rejected_other": { "type": "integer", "minimum": 0 },
+    "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+    "precision": {
+      "anyOf": [
+        { "type": "number", "minimum": 0, "maximum": 1 },
+        { "type": "null" }
+      ]
+    },
+    "recall": { "type": "number", "minimum": 0, "maximum": 1 },
+    "unknown_review_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "seat_errors": { "type": "integer", "minimum": 0 },
+    "false_complete_deals": { "type": "integer", "minimum": 0 },
+    "per_source_metrics": { "$ref": "#/$defs/metricMap" },
+    "per_layout_metrics": { "$ref": "#/$defs/metricMap" },
+    "per_theme_metrics": { "$ref": "#/$defs/metricMap" },
+    "per_resolution_metrics": { "$ref": "#/$defs/metricMap" },
+    "per_stress_tag_metrics": { "$ref": "#/$defs/metricMap" },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum_precision",
+        "minimum_recall",
+        "maximum_seat_errors",
+        "maximum_false_complete_deals",
+        "frozen_before_holdout_reveal"
+      ],
+      "properties": {
+        "minimum_precision": { "const": 0.995 },
+        "minimum_recall": { "const": 0.95 },
+        "maximum_seat_errors": { "const": 0 },
+        "maximum_false_complete_deals": { "const": 0 },
+        "frozen_before_holdout_reveal": { "const": true }
+      }
+    },
+    "mechanical_thresholds_pass": { "type": "boolean" }
+  },
+  "$defs": {
+    "metricBucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gold_visible_targets",
+        "accepted_correct",
+        "accepted_wrong",
+        "accepted_wrong_card_seat",
+        "rejected_ambiguous",
+        "rejected_low_score",
+        "unknown_or_review",
+        "rejected_other",
+        "coverage",
+        "precision",
+        "recall",
+        "unknown_review_rate",
+        "seat_errors",
+        "false_complete_deals"
+      ],
+      "properties": {
+        "gold_visible_targets": { "type": "integer", "minimum": 0 },
+        "accepted_correct": { "type": "integer", "minimum": 0 },
+        "accepted_wrong": { "type": "integer", "minimum": 0 },
+        "accepted_wrong_card_seat": { "type": "integer", "minimum": 0 },
+        "rejected_ambiguous": { "type": "integer", "minimum": 0 },
+        "rejected_low_score": { "type": "integer", "minimum": 0 },
+        "unknown_or_review": { "type": "integer", "minimum": 0 },
+        "rejected_other": { "type": "integer", "minimum": 0 },
+        "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "precision": {
+          "anyOf": [
+            { "type": "number", "minimum": 0, "maximum": 1 },
+            { "type": "null" }
+          ]
+        },
+        "recall": { "type": "number", "minimum": 0, "maximum": 1 },
+        "unknown_review_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "seat_errors": { "type": "integer", "minimum": 0 },
+        "false_complete_deals": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "metricMap": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/metricBucket" }
+    }
+  }
+}

@@ -8,7 +8,7 @@ Decision: benchmark two challengers, but do not make either canonical without a 
 
 ## What “usable” means here
 
-A generic card detector returns a card code and bounding box. Universal Video additionally needs to assign the box to a bridge hand, combine evidence across frames, accept a played card that becomes visible, fuse attributable teacher speech, and derive a hidden hand only from a proven deck complement. Those bridge rules remain in the school-owned deterministic layer; no external model is allowed to infer them.
+A generic card detector returns a card code and bounding box. Universal Video additionally needs to assign the box to a bridge hand, combine evidence across frames, accept a played card that becomes visible, and fuse attributable teacher speech as corroboration. Missing or hidden cards remain `UNKNOWN`; neither an external model nor the school-owned deterministic layer may reconstruct them from the deck complement.
 
 ## Shortlist
 
@@ -40,12 +40,12 @@ The frozen evaluation set must include:
 - 38, 39 and 40 visible-card states;
 - a card newly exposed by play;
 - overlapped cards and tiny corner indices;
-- all four missing-seat positions;
+- all four missing-seat positions, which must remain `UNKNOWN`;
 - visual/speech conflicts and incomplete spoken rank/suit constraints;
 - duplicate detections of the two corners of the same physical card;
 - multiple screen layouts and compression levels.
 
-Primary metrics are exact-card precision, exact-card recall, cross-seat error rate, duplicate-card rate and false-complete-deal rate. A candidate may improve recall only if it does not invent an exact card. The canonical 39-card complement, played-card preservation and speech-constraint resolution are evaluated separately from detector accuracy.
+Primary metrics are exact-card precision, exact-card recall, cross-seat error rate, duplicate-card rate and false-complete-deal rate. A candidate may improve recall only if it does not invent an exact card. Played-card preservation and speech corroboration/conflict are evaluated separately from detector accuracy; a 39-card complement must remain incomplete.
 
 ## Sources
 

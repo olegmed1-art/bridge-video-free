@@ -719,4 +719,3 @@ GRANT EXECUTE ON FUNCTION autopilot.accept_role_dispatch_callback(text,text,bool
 
 INSERT INTO public.schema_migration(migration_key) VALUES ('0324a_autopilot_dynamic_role_registry') ON CONFLICT DO NOTHING;
 COMMIT;
-
