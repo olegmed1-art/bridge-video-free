@@ -422,13 +422,18 @@ BEGIN
     SELECT * INTO task_row FROM autopilot.task AS t
      WHERE t.task_id = outbox_row.task_id FOR UPDATE;
     IF NOT FOUND OR task_row.status <> 'WAITING_EXTERNAL'
-       OR task_row.goal_type <> 'CHATGPT_ROLE_DISPATCH_V1'
+       OR task_row.goal_type NOT IN (
+           'CHATGPT_ROLE_DISPATCH_V1', 'CHATGPT_ROLE_FOLLOWUP_V1'
+       )
        OR outbox_row.repository <> p_repository
        OR outbox_row.mailbox_pr <> p_mailbox_pr
        OR outbox_row.dispatch_epoch <> (p_body->>'dispatch_epoch')::bigint
        OR outbox_row.role <> p_body->>'role'
        OR outbox_row.target_pr <> (p_body->>'target_pr')::integer
-       OR outbox_row.expected_head_sha <> p_body->>'target_head_sha'
+       OR (
+           outbox_row.mode IN ('READ_ONLY', 'VERIFY')
+           AND outbox_row.expected_head_sha <> p_body->>'target_head_sha'
+       )
        OR outbox_row.task_fingerprint <> p_body->>'task_fingerprint' THEN
         RAISE EXCEPTION 'AUTOPILOT_CALLBACK_BINDING_INVALID';
     END IF;
@@ -604,5 +609,4 @@ DROP FUNCTION IF EXISTS autopilot.role_is_enabled(text);
 DROP TABLE IF EXISTS autopilot.role_registry;
 DELETE FROM public.schema_migration WHERE migration_key='0324a_autopilot_dynamic_role_registry';
 COMMIT;
-
 
