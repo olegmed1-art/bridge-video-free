@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: heavy-oracle-diana23-26-v6
+  group: heavy-oracle-diana23-26-v6-finalize
   cancel-in-progress: false
 
 jobs:
@@ -67,6 +67,11 @@ jobs:
           if pgrep -af 'diana167_server_report.py|diana23_26_oracle_batch.py' >/tmp/diana-resume-existing.txt; then
             cat /tmp/diana-resume-existing.txt
             exit 17
+          fi
+          oversized="$JOB_ROOT/comparison/Диана 23–26 — данные нового прогона — server v6.zip"
+          if [[ -f "$oversized" ]] && [[ "$(stat -c %s "$oversized")" -gt 500000000 ]]; then
+            rm -f "$oversized"
+            printf 'REMOVED_OVERSIZED_DATA_ZIP\n'
           fi
           available_kb="$(df -Pk /home/ubuntu | awk 'NR==2 {print $4}')"
           test "$available_kb" -ge 20971520
@@ -155,3 +160,5 @@ jobs:
           exit 2
 
 # Retry trigger: refresh Drive token per upload and reuse exact artifacts.
+
+# Finalize trigger: rebuild compact machine-data ZIP after oversized archive cleanup.
