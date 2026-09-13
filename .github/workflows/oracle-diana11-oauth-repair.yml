@@ -17,7 +17,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-diana11-oauth-repair
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'oracle-instance-workload-mutation' || format('oracle-diana11-oauth-repair-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:

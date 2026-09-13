@@ -68,7 +68,7 @@ def _complete_suit(suit: str) -> list[str]:
     return [rank + suit for rank in "AKQJT98765432"]
 
 
-def test_stable_master_pdf_appends_verified_layout_and_exact_reconstruction(tmp_path: Path):
+def test_stable_master_pdf_appends_verified_layout_without_hidden_reconstruction(tmp_path: Path):
     first = _frame(tmp_path / "frame-one.jpg", "HUMAN VERIFIED SOUTH")
     second = _frame(tmp_path / "frame-two.jpg", "EXACT 39 TO 13")
     deals = [
@@ -111,12 +111,13 @@ def test_stable_master_pdf_appends_verified_layout_and_exact_reconstruction(tmp_
 
     report = base.pdf_report(pdf, master, [first, second])
     assert report == {
-        "schema": "bridge-3.1-free-deal-review-pdf/v1",
+        "schema": "bridge-3.1-free-deal-review-pdf/v2",
         "pages": 2,
         "deals": 2,
         "screenshots_embedded": 2,
         "canon_promotion_performed": False,
-        "reconstruction_rule": "deck_subtraction_from_three_complete_hands_only",
+        "reconstruction_rule": "PROHIBITED_HIDDEN_CARDS_REMAIN_UNKNOWN",
+        "hidden_hand_reconstruction_performed": False,
     }
     master["content_quality"]["deal_review_pdf"] = report
     base.embed_master(pdf, master)
@@ -130,10 +131,11 @@ def test_stable_master_pdf_appends_verified_layout_and_exact_reconstruction(tmp_
         first_text = review_pages[0].get_text()
         second_text = review_pages[1].get_text()
         assert "E - HUMAN_VERIFIED" in first_text
-        assert "NOT_DERIVED_INSUFFICIENT_OBSERVATIONS" in first_text
+        assert "PARTIAL_OBSERVATION" in first_text
         assert "1H" in first_text and "Pass" in first_text
-        assert "W - DERIVED" in second_text
-        assert "DERIVED_39_TO_13" in second_text
+        assert "W - UNKNOWN" in second_text
+        assert "39-to-13" in second_text
+        assert "DERIVED" not in second_text
         assert "EVIDENCE REVIEW" in first_text
         attachment = document.embfile_get("master_analysis.json")
         assert b'"canon_promotion_performed": false' in attachment

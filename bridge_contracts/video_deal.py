@@ -1,16 +1,15 @@
 """Canonical fail-closed contract for bridge deals recognized from video.
 
-Observed card identities are preserved exactly. Missing cards stay unknown by
-default. When an upstream reconstruction step explicitly requests it, the
-fourth hand may be computed from three complete 13-card hands; that computation
-is recorded separately and never masquerades as visual observation.
+Observed card identities are preserved exactly. Missing and hidden cards stay
+unknown. Logical deck-complement reconstruction is prohibited because it would
+turn unavailable visual evidence into asserted card identities.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-BRIDGE_VIDEO_DEAL_CONTRACT_VERSION = "bridge-video-deal-v3"
+BRIDGE_VIDEO_DEAL_CONTRACT_VERSION = "bridge-video-deal-v4"
 SEATS = ("N", "E", "S", "W")
 SUIT_ORDER = {"S": 0, "H": 1, "D": 2, "C": 3}
 RANK_ORDER = {rank: idx for idx, rank in enumerate("AKQJT98765432")}
@@ -80,48 +79,6 @@ def _card_sort_key(card: str) -> tuple[int, int]:
     return (SUIT_ORDER[card[1]], RANK_ORDER[card[0]])
 
 
-def _derive_fourth_hand(
-    hands: dict[str, CanonicalHand],
-    observed_cards: set[str],
-) -> tuple[dict[str, CanonicalHand], tuple[dict[str, Any], ...], set[str]]:
-    complete = [seat for seat in SEATS if len(hands[seat].cards) == 13]
-    if len(complete) != 3:
-        return hands, (), set()
-
-    target = next(seat for seat in SEATS if seat not in complete)
-    complete_cards = {card for seat in complete for card in hands[seat].cards}
-    if len(complete_cards) != 39:
-        raise BridgeVideoDealContractError("three complete hands do not contain 39 unique cards")
-
-    remaining = set(FULL_DECK) - complete_cards
-    if len(remaining) != 13:
-        raise BridgeVideoDealContractError("fourth-hand derivation did not produce exactly 13 cards")
-
-    target_observed = set(hands[target].cards)
-    if not target_observed.issubset(remaining):
-        raise BridgeVideoDealContractError("observed fourth-hand cards conflict with derived hand")
-
-    computed = remaining - target_observed
-    cards = tuple(sorted(remaining, key=_card_sort_key))
-    updated = dict(hands)
-    updated[target] = CanonicalHand(cards=cards, unknown_count=0)
-
-    derivation = {
-        "seat": target,
-        "method": "deck_subtraction_from_three_complete_hands",
-        "provenance_class": "DERIVED",
-        "evidence_basis": "39_unique_cards_in_three_complete_observed_hands",
-        "from_seats": list(complete),
-        "observed_cards_preserved": sorted(target_observed, key=_card_sort_key),
-        "computed_cards": sorted(computed, key=_card_sort_key),
-        "confidence": {
-            "logical_complement": 1.0,
-            "source_observation_floor": None,
-        },
-    }
-    return updated, (derivation,), computed
-
-
 def canonicalize_video_deal(
     payload: Any,
     *,
@@ -132,10 +89,8 @@ def canonicalize_video_deal(
     Accepted input is ``{"hands": {"N": [...], "E": [...], ...}}``. Seats may
     be omitted. By default an omitted seat is represented as 13 unknown cards.
 
-    ``derive_fourth_hand=True`` implements the reconstruction rule from the
-    school's Video Analysis 3.1 FREE standard: if exactly three hands are
-    complete, the remaining hand may be computed by deck subtraction, but the
-    computed card identities are explicitly recorded in ``derivations``.
+    ``derive_fourth_hand`` is retained only as a compatibility boundary. A true
+    value fails closed; Video 3.1 FREE must never compute hidden card identities.
     """
 
     if not isinstance(payload, Mapping):
@@ -176,17 +131,16 @@ def canonicalize_video_deal(
         cards = tuple(sorted(normalized, key=_card_sort_key))
         hands[seat] = CanonicalHand(cards=cards, unknown_count=13 - len(cards))
 
-    derivations: tuple[dict[str, Any], ...] = ()
-    computed_cards: set[str] = set()
-    if derive_fourth_hand:
-        hands, derivations, computed_cards = _derive_fourth_hand(hands, observed_cards)
+    if derive_fourth_hand is not False:
+        raise BridgeVideoDealContractError(
+            "fourth-hand derivation is prohibited; hidden cards must remain UNKNOWN"
+        )
 
     output_cards = {card for hand in hands.values() for card in hand.cards}
-    expected_cards = observed_cards | computed_cards
-    if output_cards != expected_cards:
-        raise BridgeVideoDealContractError("canonicalization changed card identities outside explicit derivation")
+    if output_cards != observed_cards:
+        raise BridgeVideoDealContractError("canonicalization changed observed card identities")
 
-    return CanonicalVideoDeal(hands=hands, derivations=derivations)
+    return CanonicalVideoDeal(hands=hands, derivations=())
 
 
 __all__ = [

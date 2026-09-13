@@ -58,25 +58,18 @@ def test_no_detector_means_unknown_not_legacy_fallback():
     assert out["candidates"] == []
 
 
-def test_three_complete_recognized_hands_derive_the_fourth_with_provenance():
+def test_three_complete_recognized_hands_leave_the_fourth_unknown():
     engine = BridgeVisionEngine(
         {"generic-card-detector": lambda _: {"hands": THREE_COMPLETE_HANDS, "confidence": 0.93}}
     )
     out = engine.analyze_frame(Path("frame.jpg")).to_dict()
 
     assert out["status"] == "PARTIAL_BOARD_OBSERVATION"
-    assert out["deal"]["hands"]["W"]["unknown_count"] == 0
-    assert len(out["deal"]["hands"]["W"]["cards"]) == 13
-    derivation = out["deal"]["derivations"][0]
-    assert derivation["provenance_class"] == "DERIVED"
-    assert derivation["evidence_basis"] == "39_unique_cards_in_three_complete_observed_hands"
-    assert derivation["confidence"] == {
-        "logical_complement": 1.0,
-        "source_observation_floor": 0.93,
-    }
+    assert out["deal"]["hands"]["W"] == {"cards": [], "unknown_count": 13}
+    assert out["deal"]["derivations"] == []
 
 
-def test_38_cards_do_not_derive_but_one_exposed_play_card_allows_exact_40_card_reconstruction():
+def test_exposed_play_card_is_preserved_but_hidden_cards_remain_unknown():
     incomplete = {seat: list(cards) for seat, cards in THREE_COMPLETE_HANDS.items()}
     incomplete["S"].pop()
     out_38 = BridgeVisionEngine(
@@ -91,12 +84,10 @@ def test_38_cards_do_not_derive_but_one_exposed_play_card_allows_exact_40_card_r
     out_40 = BridgeVisionEngine(
         {"generic-card-detector": lambda _: {"hands": with_partial_fourth, "confidence": 0.97}}
     ).analyze_frame(Path("frame.jpg")).to_dict()
-    derivation = out_40["deal"]["derivations"][0]
-    assert derivation["observed_cards_preserved"] == ["AC"]
-    assert len(derivation["computed_cards"]) == 12
-    assert len(out_40["deal"]["hands"]["W"]["cards"]) == 13
+    assert out_40["deal"]["derivations"] == []
+    assert out_40["deal"]["hands"]["W"] == {"cards": ["AC"], "unknown_count": 12}
     assert out_40["deal"]["card_provenance"]["W"]["observed_cards"] == ["AC"]
-    assert len(out_40["deal"]["card_provenance"]["W"]["derived_cards"]) == 12
+    assert out_40["deal"]["card_provenance"]["W"]["derived_cards"] == []
 
 
 def test_conflicting_partial_fourth_hand_fails_closed():

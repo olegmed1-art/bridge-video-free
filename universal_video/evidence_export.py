@@ -36,7 +36,9 @@ ALLOWED_REQUEST_FIELDS = frozenset({
 })
 ALLOWED_STATUS_FIELDS = frozenset({
     "schema", "instance_state", "active_jobs", "observed_at_unix",
-    "installed_runtime_commit", "job_attestations",
+    "installed_runtime_commit", "resident_id", "process_id",
+    "process_started_at_unix", "process_start_ticks", "process_nonce",
+    "job_attestations",
 })
 ALLOWED_ATTESTATION_FIELDS = frozenset({
     "schema", "job_id", "request_commit", "requested_runtime_commit",
@@ -147,6 +149,24 @@ def _validate_status(status: dict[str, Any], *, now: float) -> dict[str, Any]:
     if not math.isfinite(observed_number) or observed_number > now + 2 or now - observed_number > MAX_STATUS_AGE_SECONDS:
         raise EvidenceExportError("resident status is stale")
     installed = _hex(status.get("installed_runtime_commit"), width=40, field="installed_runtime_commit")
+    resident_id = str(status.get("resident_id") or "")
+    if resident_id not in {"source", "container"}:
+        raise EvidenceExportError("invalid resident identity")
+    process_id = status.get("process_id")
+    if type(process_id) is not int or process_id <= 0:
+        raise EvidenceExportError("invalid resident process id")
+    process_started = status.get("process_started_at_unix")
+    if isinstance(process_started, bool) or not isinstance(process_started, (int, float)):
+        raise EvidenceExportError("invalid resident process start")
+    process_started_number = float(process_started)
+    if not math.isfinite(process_started_number) or process_started_number > observed_number:
+        raise EvidenceExportError("invalid resident process start")
+    process_start_ticks = status.get("process_start_ticks")
+    if type(process_start_ticks) is not int or process_start_ticks <= 0:
+        raise EvidenceExportError("invalid resident process start ticks")
+    process_nonce = str(status.get("process_nonce") or "")
+    if not re.fullmatch(r"^[0-9a-f]{32}$", process_nonce):
+        raise EvidenceExportError("invalid resident process nonce")
     raw = status.get("job_attestations")
     if not isinstance(raw, list) or len(raw) > 32 or any(not isinstance(item, dict) for item in raw):
         raise EvidenceExportError("invalid job attestations")
@@ -184,6 +204,11 @@ def _validate_status(status: dict[str, Any], *, now: float) -> dict[str, Any]:
         "schema": STATUS_SCHEMA,
         "observed_at_unix": observed_number,
         "installed_runtime_commit": installed,
+        "resident_id": resident_id,
+        "process_id": process_id,
+        "process_started_at_unix": process_started_number,
+        "process_start_ticks": process_start_ticks,
+        "process_nonce": process_nonce,
         "job_attestations": list(raw),
     }
 

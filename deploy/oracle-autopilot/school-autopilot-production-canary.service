@@ -1,0 +1,54 @@
+[Unit]
+Description=Bridge School Oracle Autopilot (production zero-cost canary)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=school-autopilot-canary
+Group=school-autopilot-canary
+WorkingDirectory=/opt/bridge-school/school-autopilot-production-canary/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+# The production canary deliberately retains the worker's SHADOW execution
+# contract: it may exercise the production control plane but cannot perform a
+# school-domain mutation, model call, shell command, or arbitrary task.
+Environment=AUTOPILOT_RUNTIME_MODE=SHADOW
+EnvironmentFile=/opt/bridge-school/school-autopilot-production-canary/autopilot-production-canary.env
+ExecStart=/opt/bridge-school/school-autopilot-production-canary/.venv/bin/python -m oracle_autopilot.worker
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=20
+KillSignal=SIGTERM
+UMask=0077
+Nice=10
+CPUQuota=50%
+MemoryHigh=256M
+MemoryMax=384M
+TasksMax=32
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/opt/bridge-school/school-autopilot-production-canary/runtime
+
+[Install]
+WantedBy=multi-user.target

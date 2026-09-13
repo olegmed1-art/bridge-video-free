@@ -41,7 +41,8 @@ EXPECTED_RECENT_CAPABILITIES = {
     "verified_layout_and_rotation",
     "direct_speech_card_evidence",
     "board_metadata",
-    "deal_reconstruction_39_to_13",
+    "hidden_hand_unknown_gate_v1",
+    "source_bound_speech_frame_binding_v1",
     "result_conformance_and_evidence_export",
     "separated_readiness_matrix_v1",
     "post_run_audit_loop",
@@ -110,7 +111,7 @@ def test_definition_composes_base_and_all_recent_video_capabilities():
     assert definition["canonical_promotion_allowed"] is False
     assert definition["production_activation_allowed"] is False
     assert definition["next_video_auto_start_allowed"] is False
-    assert definition["algorithm_revision"] == "3.1-test-r6-speaker-selection"
+    assert definition["algorithm_revision"] == "3.1-test-r7-source-bound-speech"
     assert definition["bridgit_layout_policy"] == BRIDGIT_LAYOUT_POLICY
     assert definition["bridgit_layout_policy"]["suit_order"] == ["H", "C", "D", "S"]
     assert definition["bridgit_layout_policy"]["screen_axes"] == {
@@ -122,9 +123,13 @@ def test_definition_composes_base_and_all_recent_video_capabilities():
     assert definition["bridgit_layout_policy"]["allowed_rotations_clockwise"] == [0, 90, 180, 270]
     assert definition["bridge_evidence_policy"] == BRIDGE_EVIDENCE_POLICY
     assert definition["bridge_evidence_policy"]["student_exact_card"] == "SUGGESTION_OR_CORROBORATION_ONLY"
+    assert definition["bridge_evidence_policy"]["teacher_exact_card"] == "CORROBORATION_OR_CONFLICT_ONLY_REQUIRES_VISUAL_OBSERVATION"
+    assert definition["bridge_evidence_policy"]["fourth_hand"] == "PROHIBITED_HIDDEN_CARDS_REMAIN_UNKNOWN"
+    assert definition["bridge_evidence_policy"]["dealer_and_vulnerability"] == "SOURCE_BOUND_VISUAL_OR_PARTIAL_DERIVATION_NEVER_CONFIRMED_BY_CYCLE_ALONE"
     assert definition["speaker_evidence_policy"] == SPEAKER_EVIDENCE_POLICY
     assert definition["speaker_evidence_policy"]["minimum_segment_label_coverage"] == 0.80
     assert definition["speaker_evidence_policy"]["minimum_speech_duration_label_coverage"] == 0.80
+    assert definition["speaker_evidence_policy"]["segment_to_frame_binding"] == "EXACTLY_ONE_SOURCE_BOUND_SHA256_FRAME_OR_REVIEW"
     assert len(definition_sha256(definition)) == 64
 
 

@@ -126,3 +126,15 @@ def test_installer_provisions_and_smoke_checks_minimal_speaker_runtime():
     assert "import numpy" in installer
     assert "numpy==2.3.2" in requirements
     assert "sherpa-onnx" not in requirements
+
+
+def test_installer_root_provisions_worker_readable_workload_lock_before_activation():
+    installer = (ROOT / "ops/oracle_universal_video_install.sh").read_text(encoding="utf-8")
+
+    provision = installer.index('WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"')
+    metadata = installer.index("root:$GROUP_NAME:640:1", provision)
+    readable = installer.index('runuser -u "$USER_NAME" -- test -r "$WORKLOAD_LOCK"', metadata)
+    activation = installer.index('systemctl enable "$SERVICE_NAME"', readable)
+    assert provision < metadata < readable < activation
+    assert '[[ -f "$WORKLOAD_LOCK" && ! -L "$WORKLOAD_LOCK" ]]' in installer
+    assert 'unsafe workload lock link count' in installer

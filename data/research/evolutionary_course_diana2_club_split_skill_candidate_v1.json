@@ -1,0 +1,81 @@
+{
+  "schema": "evolutionary-course-methodology-candidate-v1",
+  "candidate_id": "methodology.diana-2.estimate-five-card-split",
+  "skill_id": "candidate.skill.estimate-five-card-split",
+  "authority": {
+    "authority_class": "CANDIDATE_RESEARCH",
+    "review_state": "REVIEW_REQUIRED",
+    "school_canon_activation_allowed": false,
+    "curriculum_activation_allowed": false,
+    "student_profile_write_allowed": false,
+    "publication_allowed": false
+  },
+  "source_observation": {
+    "lesson_id": "diana-2",
+    "interaction_id": "interaction_f4442a16e69bedceb03f",
+    "task_wording": "Какие у нас шансы, примерно? А какие у нас шансы разыграть трефу?",
+    "teacher_intervention": "То есть, можно запомнить, что 3 на 2 будет лежать в двух случаях из трех.",
+    "verified_transcript_segment_count": 9,
+    "verified_visual_evidence_count": 6,
+    "private_receipt_required_for_source_review": true
+  },
+  "duplicate_review": {
+    "catalog_version": "SCHOOL SKILL CATALOG v1",
+    "exact_title_or_alias_match_found": false,
+    "semantic_overlap": [
+      {
+        "skill_id": "candidate.skill.eliminate-extra-loser",
+        "relationship": "RELATED_NOT_DUPLICATE",
+        "reason": "Существующий навык выбирает способ устранения потери, а новый сначала оценивает вероятность распределения отсутствующих карт."
+      }
+    ],
+    "decision": "NEW_REVIEW_REQUIRED_CANDIDATE"
+  },
+  "independent_probability_check": {
+    "model": "Пять конкретных отсутствующих карт случайно распределены между двумя руками защитников по 13 мест.",
+    "denominator": {
+      "expression": "C(26,5)",
+      "value": 65780
+    },
+    "splits": [
+      {
+        "split": "3-2",
+        "numerator_expression": "2*C(13,3)*C(13,2)",
+        "numerator": 44616,
+        "probability": 0.6782608695652174,
+        "percent": 67.82608695652173
+      },
+      {
+        "split": "4-1",
+        "numerator_expression": "2*C(13,4)*C(13,1)",
+        "numerator": 18590,
+        "probability": 0.2826086956521739,
+        "percent": 28.26086956521739
+      },
+      {
+        "split": "5-0",
+        "numerator_expression": "2*C(13,5)*C(13,0)",
+        "numerator": 2574,
+        "probability": 0.0391304347826087,
+        "percent": 3.91304347826087
+      }
+    ],
+    "verdict": "SUPPORTED",
+    "interpretation": "Фраза «в двух случаях из трёх» является корректным учебным округлением вероятности 67.826%."
+  },
+  "scope_boundary": {
+    "claim": "Для пяти отсутствующих карт расклад 3-2 является наиболее вероятным и встречается примерно в 68% случаев.",
+    "does_not_establish": [
+      "Что конкретная линия розыгрыша оптимальна без учёта полного расклада, контракта и коммуникаций.",
+      "Что видимые карты автоматически подтверждены этим вероятностным расчётом.",
+      "Что кандидат утверждён методистом или является правилом SCHOOL CANON."
+    ]
+  },
+  "proposed_mastery_criteria": {
+    "RECOGNIZED": "Ученик узнаёт расклад 3-2 как наиболее вероятный для пяти отсутствующих карт.",
+    "SUPPORTED": "После вопроса преподавателя оценивает шанс расклада 3-2 примерно в две трети.",
+    "INDEPENDENT": "До выбора линии розыгрыша самостоятельно считает отсутствующие карты и называет вероятность расклада 3-2.",
+    "TRANSFERRED": "Применяет оценку распределения пяти отсутствующих карт в другой масти и новой раздаче."
+  },
+  "next_gate": "HUMAN_METHODOLOGY_APPROVAL_REQUIRED"
+}

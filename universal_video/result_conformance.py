@@ -1243,6 +1243,7 @@ def main() -> None:
     parser.add_argument("--expected-job-hash", required=True)
     parser.add_argument("--expected-source-file-id")
     parser.add_argument("--expected-artifact-set-sha256")
+    parser.add_argument("--require-server-review", action="store_true")
     parser.add_argument("--evidence-phase", default="POST_HOC_OBSERVATION")
     args = parser.parse_args()
     try:
@@ -1254,6 +1255,7 @@ def main() -> None:
             expected_source_file_id=args.expected_source_file_id,
             expected_artifact_set_sha256=args.expected_artifact_set_sha256,
             evidence_phase=args.evidence_phase,
+            require_server_review=args.require_server_review,
         )
     except ResultConformanceError as exc:
         print(

@@ -15,7 +15,15 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: oracle-operator-${{ github.event.issue.number || github.run_id }}
+  # Only an authorized mutating owner command occupies the shared production
+  # slot. PR validation and inert comments receive unique groups so they cannot
+  # replace a pending production mutation in GitHub's concurrency queue.
+  group: >-
+    ${{ github.event_name == 'issue_comment' &&
+        github.event.comment.user.login == github.repository_owner &&
+        contains(fromJSON('["/oracle rollout-worker","/oracle rollout-ben"]'), github.event.comment.body) &&
+        'oracle-instance-workload-mutation' ||
+        format('oracle-operator-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:

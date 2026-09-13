@@ -78,7 +78,7 @@ def test_frame_metadata_is_fail_closed():
         )
 
 
-def test_frame_contract_automatically_derives_fourth_hand_from_three_complete_hands():
+def test_frame_contract_never_derives_fourth_hand_from_three_complete_hands():
     ranks = "AKQJT98765432"
     record = canonicalize_frame_recognition(
         {
@@ -92,5 +92,17 @@ def test_frame_contract_automatically_derives_fourth_hand_from_three_complete_ha
         }
     ).to_dict()
     assert record["recognized_card_count"] == 39
-    assert len(record["deal"]["hands"]["W"]["cards"]) == 13
-    assert record["deal"]["derivations"][0]["provenance_class"] == "DERIVED"
+    assert record["deal"]["hands"]["W"] == {"cards": [], "unknown_count": 13}
+    assert record["deal"]["derivations"] == []
+
+
+def test_frame_contract_rejects_explicit_hidden_hand_derivation():
+    with pytest.raises(BridgeVideoFrameContractError, match="hidden cards must remain UNKNOWN"):
+        canonicalize_frame_recognition(
+            {
+                "status": "PARTIAL_BOARD_OBSERVATION",
+                "hands": {"N": ["AS", "KS", "QS", "JS"]},
+                "recognized_card_count": 4,
+            },
+            derive_fourth_hand=True,
+        )

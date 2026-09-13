@@ -1,0 +1,21 @@
+{
+  "canonical_promoted": false,
+  "catalog_version": "SCHOOL SKILL CATALOG v1",
+  "curriculum_activated": false,
+  "decision": "ACCEPT",
+  "disposition": "PRIVATE_RESEARCH_ACCEPTED",
+  "episode_id": "evc.video31.da17a3f339d42f4cff1b158c",
+  "episode_persisted": false,
+  "episode_sha256": "b4bb3712a0bac61374f2cd9a239ad59447166b656faf33d09c1b1c53a84b9f59",
+  "follow_up_required": true,
+  "publication_allowed": false,
+  "rationale": "Episode достоверно отражает полный учебный цикл; повышение уровня мастерства не подтверждено.",
+  "reviewed_at": "2026-08-30T19:17:19Z",
+  "reviewer": {
+    "authority": "SCHOOL_DIRECTOR",
+    "reviewer_id": "school-director"
+  },
+  "schema": "evolutionary-course-private-episode-review-decision-v1",
+  "skill_id": "candidate.skill.estimate-five-card-split",
+  "student_profile_written": false
+}

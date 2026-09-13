@@ -286,6 +286,7 @@ def test_catalog_bound_mode_uses_stable_reviewed_skill_id():
     assert report["skill_binding_mode"] == "REVIEWED_CATALOG"
     episode = report["episodes"][0]
     assert episode["learning_task"]["skill_id"] == "candidate.skill.count-top-tricks"
+    assert episode["authority"]["review_state"] == "APPROVED_CANDIDATE"
     assert episode["mastery_transition"]["from_state"] == episode["mastery_transition"]["to_state"]
 
 

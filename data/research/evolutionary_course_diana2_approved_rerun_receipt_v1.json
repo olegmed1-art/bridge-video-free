@@ -1,0 +1,39 @@
+{
+  "schema": "evolutionary-course-approved-candidate-rerun-receipt-v1",
+  "created_at": "2026-08-30T18:02:51Z",
+  "execution_mode": "ARTIFACT_ONLY_READ_ONLY",
+  "status": "READY_FOR_PRIVATE_REVIEW",
+  "inputs": {
+    "quality_v2_sha256": "2b0ab7c9129adf3a2eae7fae9bc7a2774392b18b833121b49bb9cf9aec47b63a",
+    "master_analysis_sha256": "fb7c6292f7386aa04ed9d91a101adbd13470d637c2eae1b71c7a37e871f20987",
+    "skill_catalog_sha256": "2a387f02f4814c66dce8a94777cb660be081bfae2257b2c9b843b7edc4437b1d"
+  },
+  "result": {
+    "pilot_report_sha256": "fb999a3e9e599af4aa2df7ce04dcda2b4b13264f565b1ff5d49a15bb02bbb671",
+    "blockers": [],
+    "accepted_episode_count": 1,
+    "rejected_interaction_count": 103,
+    "episode_id": "evc.video31.da17a3f339d42f4cff1b158c",
+    "skill_id": "candidate.skill.estimate-five-card-split",
+    "episode_review_state": "APPROVED_CANDIDATE",
+    "mastery_transition": {
+      "from_state": "INTRODUCED",
+      "to_state": "INTRODUCED"
+    }
+  },
+  "effects": {
+    "media_reprocessed": false,
+    "server_job_created": false,
+    "drive_mutated": false,
+    "neon_mutated": false,
+    "episode_built_in_memory": true,
+    "episode_persisted": false,
+    "student_profile_written": false
+  },
+  "authority": {
+    "canonical_promotion_allowed": false,
+    "curriculum_activation_allowed": false,
+    "student_profile_write_allowed": false,
+    "publication_allowed": false
+  }
+}

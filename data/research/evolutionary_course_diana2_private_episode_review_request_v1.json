@@ -1,0 +1,41 @@
+{
+  "schema": "evolutionary-course-private-episode-review-request-v1",
+  "status": "AWAITING_PRIVATE_REVIEW",
+  "episode_id": "evc.video31.da17a3f339d42f4cff1b158c",
+  "episode_sha256": "b4bb3712a0bac61374f2cd9a239ad59447166b656faf33d09c1b1c53a84b9f59",
+  "skill_id": "candidate.skill.estimate-five-card-split",
+  "catalog_version": "SCHOOL SKILL CATALOG v1",
+  "review_summary": {
+    "occurred_at": "2021-02-28T00:10:58.820000Z",
+    "outcome": "NOT_ASSESSED",
+    "support_level": "GUIDED",
+    "mastery_from_state": "INTRODUCED",
+    "mastery_to_state": "INTRODUCED",
+    "claim_count": 1,
+    "transcript_evidence_count": 9,
+    "visual_evidence_count": 6
+  },
+  "allowed_decisions": [
+    "ACCEPT",
+    "REVISE",
+    "REJECT"
+  ],
+  "allowed_reviewer_authorities": [
+    "SCHOOL_DIRECTOR",
+    "AUTHORIZED_EPISODE_REVIEWER"
+  ],
+  "decision_input": {
+    "decision": null,
+    "reviewer_id": null,
+    "reviewer_authority": null,
+    "reviewed_at": null,
+    "rationale": null
+  },
+  "authority": {
+    "episode_persistence_allowed": false,
+    "canonical_promotion_allowed": false,
+    "curriculum_activation_allowed": false,
+    "student_profile_write_allowed": false,
+    "publication_allowed": false
+  }
+}
