@@ -14,6 +14,7 @@ DECLARE
     terminal jsonb;
     result record;
     raised boolean;
+    published boolean;
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
@@ -39,9 +40,19 @@ BEGIN
         task_row.task_id,'sql-delivery-worker-326',task_row.lease_epoch
     );
     SELECT * INTO outbox FROM autopilot.claim_role_dispatch_outbox_v2('sql-publisher-326',60);
-    IF NOT autopilot.mark_role_dispatch_published(
+    IF outbox.dispatch_id IS DISTINCT FROM dispatch.dispatch_id THEN
+        RAISE EXCEPTION 'AUTOPILOT_DELIVERY_PROOF_OUTBOX_CLAIM_MISMATCH dispatch=% claimed=%',
+            dispatch.dispatch_id,outbox.dispatch_id;
+    END IF;
+    IF (SELECT delivery_contract_version FROM autopilot.role_dispatch_outbox
+         WHERE dispatch_id=dispatch.dispatch_id) IS DISTINCT FROM 2 THEN
+        RAISE EXCEPTION 'AUTOPILOT_DELIVERY_PROOF_CONTRACT_VERSION_INVALID';
+    END IF;
+    published:=autopilot.mark_role_dispatch_published(
         dispatch.dispatch_id,'sql-publisher-326',outbox.claim_epoch,9900326,repeat('b',64)
-    ) OR (SELECT status FROM autopilot.role_dispatch_outbox WHERE dispatch_id=dispatch.dispatch_id)<>'PUBLISHED' THEN
+    );
+    IF NOT published OR (SELECT status FROM autopilot.role_dispatch_outbox
+         WHERE dispatch_id=dispatch.dispatch_id)<>'PUBLISHED' THEN
         RAISE EXCEPTION 'AUTOPILOT_GITHUB_PUBLISH_NOT_ISOLATED';
     END IF;
 
