@@ -19,10 +19,16 @@ REQUEST_HASH = _request_fingerprint(**REQUEST)
 GAP_HASH = _gap_fingerprint(REQUEST_HASH, PROFILE)
 
 
-def rule(key, lane, action, *, profile=PROFILE, priority=1, specificity=1, confidence="high"):
+def rule(key, lane, action, *, profile=PROFILE, priority=1, specificity=1,
+         confidence="high", provenance=None):
+    if provenance is None:
+        provenance = ({"source_id": "source-1", "source_sha256": "a" * 64,
+                       "repository_ref": "world-fixture-v1"}
+                      if lane == "external" else {})
     return KnowledgeRule(key, lane, action, profile.system_profile, profile.system_version,
                          profile.learner_level, profile.auction_context_id,
-                         priority=priority, specificity=specificity, confidence=confidence)
+                         priority=priority, specificity=specificity, confidence=confidence,
+                         provenance=provenance)
 
 
 def verified(gap_id, school_id, fingerprint, profile):
@@ -302,3 +308,16 @@ def test_world_disagreement_and_low_confidence_remain_unselected():
     unresolved = resolve([], [rule("w", "external", "1S", confidence="speculative")])
     assert conflict.outcome == WORLD_CONFLICT and conflict.selected is None
     assert unresolved.outcome == UNRESOLVED_GAP and unresolved.selected is None
+
+def test_world_fallback_requires_verifiable_provenance():
+    empty = resolve([], [rule("empty", "external", "1S", provenance={})])
+    bad_hash = resolve([], [rule(
+        "bad-hash", "external", "1S",
+        provenance={"source_id": "source-1", "source_sha256": "not-a-hash",
+                    "repository_ref": "world-fixture-v1"},
+    )])
+    verified = resolve([], [rule("verified", "external", "1S")])
+
+    assert empty.outcome == UNRESOLVED_GAP and empty.selected is None
+    assert bad_hash.outcome == UNRESOLVED_GAP and bad_hash.selected is None
+    assert verified.outcome == WORLD_FALLBACK and verified.selected.rule_id == "verified"

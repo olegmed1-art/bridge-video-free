@@ -170,6 +170,20 @@ def _winner_or_conflict(rules: tuple[KnowledgeRule, ...]) -> tuple[KnowledgeRule
     return (top if len(actions) == 1 else None), len(actions) > 1
 
 
+def _has_verifiable_world_provenance(rule: KnowledgeRule) -> bool:
+    """Require a stable source identity, content hash, and reproducible version."""
+    provenance = rule.provenance
+    source_id = provenance.get("source_id") if isinstance(provenance, Mapping) else None
+    source_sha256 = provenance.get("source_sha256") if isinstance(provenance, Mapping) else None
+    repository_ref = provenance.get("repository_ref") if isinstance(provenance, Mapping) else None
+    return (
+        isinstance(source_id, str) and bool(source_id.strip())
+        and isinstance(repository_ref, str) and bool(repository_ref.strip())
+        and isinstance(source_sha256, str) and len(source_sha256) == 64
+        and all(char in "0123456789abcdef" for char in source_sha256)
+    )
+
+
 def _profile_fingerprint(profile: ResolutionProfile) -> str:
     raw = json.dumps(
         [profile.system_profile, profile.system_version, profile.learner_level,
@@ -402,7 +416,10 @@ def resolve_two_lane(*, school_id: str, acting_seat: str, acting_hand: dict[str,
         return Resolution("CANON_MATCH", recheck_winner, rechecked_canon, (), trace)
     trace["canon_rechecked"] = True
     world = _rank(
-        (r for r in world_supplier(receipt, world_profile) if r.authority_class == "external"),
+        (
+            r for r in world_supplier(receipt, world_profile)
+            if r.authority_class == "external" and _has_verifiable_world_provenance(r)
+        ),
         world_profile,
         acting_hand=acting_hand,
         public_auction=public_auction,

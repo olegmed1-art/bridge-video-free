@@ -350,7 +350,7 @@ BEGIN
 
  IF NOT has_table_privilege('bridge_school_app','bidding.world_resolution_trace','INSERT')
     OR NOT has_table_privilege('bridge_school_app','bidding.world_canon_gap_binding','SELECT')
-    OR NOT has_table_privilege('bridge_school_app','bidding.rule','SELECT')
+    OR has_table_privilege('bridge_school_app','bidding.rule','SELECT')
     OR NOT has_table_privilege('bridge_school_app','public.knowledge_version','SELECT')
     OR NOT has_column_privilege('bridge_school_app','public.knowledge_gap','school_id','INSERT')
  THEN RAISE EXCEPTION 'WORLD_SMOKE_APP_RUNTIME_ACL_INCOMPLETE'; END IF;

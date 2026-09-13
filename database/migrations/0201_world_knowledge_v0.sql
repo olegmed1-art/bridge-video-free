@@ -298,7 +298,11 @@ CREATE TABLE bidding.world_resolution_trace (
  CHECK(selected_world_rule_id IS NULL OR selected_world_rule_id=ANY(world_rule_ids)), UNIQUE(school_id,request_fingerprint));
 
 CREATE OR REPLACE FUNCTION bidding.validate_world_resolution_trace()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path=pg_catalog,bidding,public
+AS $$
 BEGIN
  IF NEW.knowledge_gap_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM bidding.world_canon_gap_binding g
    WHERE g.knowledge_gap_id=NEW.knowledge_gap_id AND g.school_id=NEW.school_id
@@ -336,7 +340,8 @@ GRANT SELECT ON bidding.world_canon_gap_binding TO bridge_school_app,bridge_scho
 GRANT INSERT ON bidding.world_robot_decision TO bridge_school_worker;
 GRANT INSERT ON bidding.world_resolution_trace TO bridge_school_app,bridge_school_worker;
 GRANT SELECT ON bidding.world_robot,bidding.world_robot_configuration TO bridge_school_worker;
-GRANT SELECT ON bidding.rule TO bridge_school_app,bridge_school_worker;
+GRANT SELECT ON bidding.rule TO bridge_school_worker;
+REVOKE SELECT ON bidding.rule FROM bridge_school_app;
 GRANT SELECT ON public.knowledge_version,public.knowledge_gap TO bridge_school_app,bridge_school_worker;
 GRANT INSERT(school_id,question,context_scope,status) ON public.knowledge_gap TO bridge_school_app,bridge_school_worker;
 REVOKE UPDATE ON public.knowledge_gap FROM bridge_school_worker;
