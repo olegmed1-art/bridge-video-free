@@ -7,7 +7,7 @@ from unittest.mock import patch
 from bridge_school_api.bidding_world_resolver import (
     CANON_CONFLICT, UNRESOLVED_GAP, WORLD_CONFLICT, WORLD_FALLBACK,
     CanonGapReceipt, KnowledgeRule, PostgresCanonGapStore, PostgresCanonRuleStore,
-    ResolutionProfile, learner_response, resolve_two_lane,
+    PostgresWorldRuleStore, ResolutionProfile, learner_response, resolve_two_lane,
 )
 from bridge_school_api.bidding_world_resolver import _gap_fingerprint, _profile_fingerprint, _request_fingerprint
 
@@ -22,8 +22,10 @@ GAP_HASH = _gap_fingerprint(REQUEST_HASH, PROFILE)
 def rule(key, lane, action, *, profile=PROFILE, priority=1, specificity=1,
          confidence="high", provenance=None):
     if provenance is None:
-        provenance = ({"source_id": "source-1", "source_sha256": "a" * 64,
-                       "repository_ref": "world-fixture-v1"}
+        provenance = ({"source_id": "source-1", "source_manifest_key": "manifest-1",
+                       "source_sha256": "a" * 64, "repository_ref": "world-fixture-v1",
+                       "knowledge_version_id": "version-1", "version_no": 1,
+                       "method_version": profile.system_version, "dependencies": []}
                       if lane == "external" else {})
     return KnowledgeRule(key, lane, action, profile.system_profile, profile.system_version,
                          profile.learner_level, profile.auction_context_id,
@@ -38,29 +40,27 @@ def verified(gap_id, school_id, fingerprint, profile):
 
 STORE = PostgresCanonGapStore(lambda: None)
 CANON_STORE = PostgresCanonRuleStore(lambda: None)
+WORLD_STORE = PostgresWorldRuleStore(lambda: None)
 
 
 def resolve(canon, world):
     with patch.object(PostgresCanonRuleStore, "fetch_current",
                       side_effect=[(PROFILE, tuple(canon)), (PROFILE, ())]), \
          patch.object(PostgresCanonGapStore, "persist_and_verify",
-                      return_value=verified("gap-1", "school-1", GAP_HASH, PROFILE)):
+                      return_value=verified("gap-1", "school-1", GAP_HASH, PROFILE)), \
+         patch.object(PostgresWorldRuleStore, "fetch_verified", return_value=tuple(world)):
         return resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
                                 canon_store=CANON_STORE, gap_store=STORE,
-                                world_supplier=lambda _receipt, _profile: world)
+                                world_supplier=WORLD_STORE)
 
 
 def test_canon_match_does_not_persist_gap_or_query_world():
-    def forbidden(*_args):
-        raise AssertionError("unexpected call")
-    result = resolve([rule("c", "school_canon", "1H")], forbidden)
+    result = resolve([rule("c", "school_canon", "1H")], [])
     assert result.outcome == "CANON_MATCH" and result.trace["world_searched"] is False
 
 
 def test_canon_conflict_stops_before_gap_and_world():
-    def forbidden(*_args):
-        raise AssertionError("unexpected call")
-    result = resolve([rule("c1", "school_canon", "1H"), rule("c2", "school_canon", "1S")], forbidden)
+    result = resolve([rule("c1", "school_canon", "1H"), rule("c2", "school_canon", "1S")], [])
     assert result.outcome == CANON_CONFLICT and learner_response(result)["action"] is None
 
 
@@ -74,9 +74,10 @@ def test_gap_is_committed_before_world_supplier_runs():
         return [rule("w", "external", "1S", confidence="reproducible")]
     with patch.object(PostgresCanonRuleStore, "fetch_current",
                       side_effect=[(PROFILE, ()), (PROFILE, ())]), \
-         patch.object(PostgresCanonGapStore, "persist_and_verify", side_effect=persisted):
+         patch.object(PostgresCanonGapStore, "persist_and_verify", side_effect=persisted), \
+         patch.object(PostgresWorldRuleStore, "fetch_verified", side_effect=supplied):
         result = resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
-                                  canon_store=CANON_STORE, gap_store=STORE, world_supplier=supplied)
+                                  canon_store=CANON_STORE, gap_store=STORE, world_supplier=WORLD_STORE)
     assert events == ["gap_committed", "gap_verified_post_commit", "world_queried"] and result.outcome == WORLD_FALLBACK
 
 
@@ -87,10 +88,11 @@ def test_uncommitted_or_wrong_scope_gap_blocks_world():
         called = True
         return []
     with patch.object(PostgresCanonRuleStore, "fetch_current", return_value=(PROFILE, ())), \
-         patch.object(PostgresCanonGapStore, "persist_and_verify", side_effect=RuntimeError("not visible")):
+         patch.object(PostgresCanonGapStore, "persist_and_verify", side_effect=RuntimeError("not visible")), \
+         patch.object(PostgresWorldRuleStore, "fetch_verified", side_effect=supplied):
         with pytest.raises(RuntimeError):
             resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
-                             canon_store=CANON_STORE, gap_store=STORE, world_supplier=supplied)
+                             canon_store=CANON_STORE, gap_store=STORE, world_supplier=WORLD_STORE)
     assert called is False
 
 
@@ -184,7 +186,7 @@ def test_hidden_cards_in_public_inputs_fail_before_canon_or_world(field, payload
                 profile=PROFILE,
                 canon_store=CANON_STORE,
                 gap_store=STORE,
-                world_supplier=lambda *_: (_ for _ in ()).throw(AssertionError("WORLD queried")),
+                world_supplier=WORLD_STORE,
             )
 
 
@@ -287,7 +289,7 @@ def test_canon_constraints_are_matched_against_visible_request():
         result = resolve_two_lane(
             school_id="school-1", **request, profile=PROFILE,
             canon_store=CANON_STORE, gap_store=STORE,
-            world_supplier=lambda *_: (_ for _ in ()).throw(AssertionError("WORLD called")),
+            world_supplier=WORLD_STORE,
         )
     assert result.outcome == "CANON_MATCH"
     assert result.selected.rule_id == "match"
@@ -308,7 +310,7 @@ def test_canon_is_rechecked_immediately_before_world():
         result = resolve_two_lane(
             school_id="school-1", **REQUEST, profile=PROFILE,
             canon_store=CANON_STORE, gap_store=STORE,
-            world_supplier=lambda *_: events.append("WORLD"),
+            world_supplier=WORLD_STORE,
         )
     assert result.outcome == "CANON_MATCH"
     assert result.selected.rule_id == "late-canon"
@@ -327,7 +329,26 @@ def test_profile_fingerprint_reuses_durable_gap_across_boundary_times():
 def test_untrusted_canon_store_is_rejected():
     with pytest.raises(TypeError, match="sealed active-catalog"):
         resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
-                         canon_store=object(), gap_store=STORE, world_supplier=lambda *_: ())
+                         canon_store=object(), gap_store=STORE, world_supplier=WORLD_STORE)
+
+
+def test_self_declared_world_provenance_cannot_bypass_persisted_store():
+    fabricated = rule("fabricated", "external", "1S")
+    with patch.object(
+        PostgresCanonRuleStore,
+        "fetch_current",
+        side_effect=[(PROFILE, ()), (PROFILE, ())],
+    ), patch.object(
+        PostgresCanonGapStore,
+        "persist_and_verify",
+        return_value=verified("gap-1", "school-1", GAP_HASH, PROFILE),
+    ):
+        with pytest.raises(TypeError, match="sealed persisted-provenance"):
+            resolve_two_lane(
+                school_id="school-1", **REQUEST, profile=PROFILE,
+                canon_store=CANON_STORE, gap_store=STORE,
+                world_supplier=lambda *_: (fabricated,),
+            )
 
 
 def test_world_disagreement_and_low_confidence_remain_unselected():
@@ -340,8 +361,10 @@ def test_world_fallback_requires_verifiable_provenance():
     empty = resolve([], [rule("empty", "external", "1S", provenance={})])
     bad_hash = resolve([], [rule(
         "bad-hash", "external", "1S",
-        provenance={"source_id": "source-1", "source_sha256": "not-a-hash",
-                    "repository_ref": "world-fixture-v1"},
+        provenance={"source_id": "source-1", "source_manifest_key": "manifest-1",
+                    "source_sha256": "not-a-hash", "repository_ref": "world-fixture-v1",
+                    "knowledge_version_id": "version-1", "version_no": 1,
+                    "method_version": "v1", "dependencies": []},
     )])
     verified = resolve([], [rule("verified", "external", "1S")])
 

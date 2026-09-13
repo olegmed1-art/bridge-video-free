@@ -202,16 +202,36 @@ def _winner_or_conflict(rules: tuple[KnowledgeRule, ...]) -> tuple[KnowledgeRule
 
 
 def _has_verifiable_world_provenance(rule: KnowledgeRule) -> bool:
-    """Require a stable source identity, content hash, and reproducible version."""
+    """Validate the complete provenance assembled by the sealed WORLD store."""
     provenance = rule.provenance
-    source_id = provenance.get("source_id") if isinstance(provenance, Mapping) else None
-    source_sha256 = provenance.get("source_sha256") if isinstance(provenance, Mapping) else None
-    repository_ref = provenance.get("repository_ref") if isinstance(provenance, Mapping) else None
+    if not isinstance(provenance, Mapping):
+        return False
+    source_id = provenance.get("source_id")
+    source_manifest_key = provenance.get("source_manifest_key")
+    source_sha256 = provenance.get("source_sha256")
+    repository_ref = provenance.get("repository_ref")
+    knowledge_version_id = provenance.get("knowledge_version_id")
+    version_no = provenance.get("version_no")
+    method_version = provenance.get("method_version")
+    dependencies = provenance.get("dependencies")
     return (
         isinstance(source_id, str) and bool(source_id.strip())
+        and isinstance(source_manifest_key, str) and bool(source_manifest_key.strip())
         and isinstance(repository_ref, str) and bool(repository_ref.strip())
         and isinstance(source_sha256, str) and len(source_sha256) == 64
         and all(char in "0123456789abcdef" for char in source_sha256)
+        and isinstance(knowledge_version_id, str) and bool(knowledge_version_id.strip())
+        and isinstance(version_no, int) and not isinstance(version_no, bool) and version_no > 0
+        and isinstance(method_version, str) and bool(method_version.strip())
+        and isinstance(dependencies, list)
+        and all(
+            isinstance(dependency, Mapping)
+            and isinstance(dependency.get("rule_id"), str)
+            and bool(dependency["rule_id"].strip())
+            and isinstance(dependency.get("method_version"), str)
+            and bool(dependency["method_version"].strip())
+            for dependency in dependencies
+        )
     )
 
 
@@ -314,6 +334,110 @@ class PostgresCanonRuleStore:
         return bound_profile, rules
 
 
+class PostgresWorldRuleStore:
+    """Sealed adapter for active WORLD rules with persisted provenance evidence."""
+    def __init_subclass__(cls, **kwargs):
+        raise TypeError("PostgresWorldRuleStore is sealed")
+
+    def __init__(self, connection_factory: Callable[[], Any]):
+        self._connection_factory = connection_factory
+
+    def fetch_verified(
+        self,
+        receipt: CanonGapReceipt,
+        profile: ResolutionProfile,
+    ) -> tuple[KnowledgeRule, ...]:
+        with self._connection_factory() as connection:
+            with connection.cursor() as cur:
+                cur.execute(
+                    """SELECT w.rule_id AS rule_id,w.action::text AS action,
+                              kv.bidding_system_key AS bidding_system_key,
+                              w.method_version AS method_version,
+                              kv.level_scope->>'level' AS learner_level,
+                              w.auction_pattern->>'context_id' AS auction_context_id,
+                              w.valid_from AS valid_from,w.valid_to AS valid_to,
+                              w.priority AS priority,w.specificity AS specificity,
+                              w.auction_pattern AS auction_pattern,
+                              w.hand_constraints AS hand_constraints,
+                              w.public_context_constraints AS public_context_constraints,
+                              kv.knowledge_version_id AS knowledge_version_id,
+                              kv.version_no AS version_no,
+                              evidence.source_id AS source_id,
+                              evidence.source_manifest_key AS source_manifest_key,
+                              evidence.source_sha256 AS source_sha256,
+                              evidence.repository_ref AS repository_ref,
+                              COALESCE((
+                                  SELECT jsonb_agg(jsonb_build_object(
+                                      'rule_id',dependency.rule_id::text,
+                                      'method_version',dependency.method_version
+                                  ) ORDER BY dependency.rule_id)
+                                    FROM bidding.rule_relation relation
+                                    JOIN bidding.rule dependency
+                                      ON dependency.rule_id=relation.to_rule_id
+                                   WHERE relation.from_rule_id=w.rule_id
+                                     AND relation.relation_type='depends_on'
+                                     AND btrim(COALESCE(dependency.method_version,''))<>''
+                              ),'[]'::jsonb) AS dependencies
+                         FROM bidding.active_world_rule_v w
+                         JOIN public.knowledge_version kv
+                           ON kv.knowledge_version_id=w.knowledge_version_id
+                         JOIN LATERAL (
+                              SELECT s.source_id,ir.source_manifest_key,
+                                     ir.source_sha256,ir.repository_ref
+                                FROM public.knowledge_version_source kvs
+                                JOIN public.source s ON s.source_id=kvs.source_id
+                                JOIN bidding.ingestion_run ir ON ir.source_id=s.source_id
+                               WHERE kvs.knowledge_version_id=w.knowledge_version_id
+                                 AND s.school_id=w.school_id AND s.status='active'
+                                 AND ir.school_id=w.school_id AND ir.status='completed'
+                                 AND btrim(ir.source_manifest_key)<>''
+                                 AND btrim(COALESCE(ir.repository_ref,''))<>''
+                               ORDER BY ir.finished_at DESC,ir.ingestion_run_id DESC
+                               LIMIT 1
+                         ) evidence ON true
+                        WHERE w.school_id=%s AND w.scope_key=%s
+                          AND kv.bidding_system_key=%s AND w.method_version=%s
+                          AND kv.level_scope->>'level'=%s
+                          AND w.auction_pattern->>'context_id'=%s
+                          AND btrim(COALESCE(w.method_version,''))<>''
+                          AND w.valid_from<=%s AND (w.valid_to IS NULL OR w.valid_to>%s)
+                        ORDER BY w.priority DESC,w.specificity DESC,w.rule_id""",
+                    (receipt.school_id, profile.activation_scope,
+                     profile.system_profile, profile.system_version,
+                     profile.learner_level, profile.auction_context_id,
+                     profile.effective_at, profile.effective_at),
+                )
+                rows = cur.fetchall()
+        return tuple(KnowledgeRule(
+            str(_row_value(row, "rule_id", 0)), "external",
+            _row_value(row, "action", 1),
+            _row_value(row, "bidding_system_key", 2),
+            _row_value(row, "method_version", 3),
+            _row_value(row, "learner_level", 4),
+            _row_value(row, "auction_context_id", 5),
+            _row_value(row, "valid_from", 6),
+            _row_value(row, "valid_to", 7),
+            _row_value(row, "priority", 8),
+            _row_value(row, "specificity", 9),
+            "verified",
+            provenance={
+                "knowledge_version_id": str(_row_value(row, "knowledge_version_id", 13)),
+                "version_no": _row_value(row, "version_no", 14),
+                "source_id": str(_row_value(row, "source_id", 15)),
+                "source_manifest_key": _row_value(row, "source_manifest_key", 16),
+                "source_sha256": _row_value(row, "source_sha256", 17),
+                "repository_ref": _row_value(row, "repository_ref", 18),
+                "method_version": _row_value(row, "method_version", 3),
+                "dependencies": list(_row_value(row, "dependencies", 19) or []),
+            },
+            auction_pattern=dict(_row_value(row, "auction_pattern", 10) or {}),
+            hand_constraints=dict(_row_value(row, "hand_constraints", 11) or {}),
+            public_context_constraints=dict(
+                _row_value(row, "public_context_constraints", 12) or {}
+            ),
+        ) for row in rows)
+
+
 class PostgresCanonGapStore:
     """Trusted boundary: commit on one connection, verify on a fresh connection."""
     def __init_subclass__(cls, **kwargs):
@@ -394,7 +518,7 @@ def resolve_two_lane(*, school_id: str, acting_seat: str, acting_hand: dict[str,
                      profile: ResolutionProfile,
                      canon_store: PostgresCanonRuleStore,
                      gap_store: PostgresCanonGapStore,
-                     world_supplier: Callable[[CanonGapReceipt, ResolutionProfile], Iterable[KnowledgeRule]]) -> Resolution:
+                     world_supplier: PostgresWorldRuleStore) -> Resolution:
     """Resolve Canon first; commit its gap before invoking a lazy WORLD supplier."""
     _validate_public_inputs(
         public_auction=public_auction,
@@ -450,9 +574,11 @@ def resolve_two_lane(*, school_id: str, acting_seat: str, acting_hand: dict[str,
         trace.update({"canon_stage": "CANON_MATCH", "canon_rechecked": True})
         return Resolution("CANON_MATCH", recheck_winner, rechecked_canon, (), trace)
     trace["canon_rechecked"] = True
+    if type(world_supplier) is not PostgresWorldRuleStore:
+        raise TypeError("world_supplier must be the sealed persisted-provenance PostgresWorldRuleStore")
     world = _rank(
         (
-            r for r in world_supplier(receipt, world_profile)
+            r for r in world_supplier.fetch_verified(receipt, world_profile)
             if r.authority_class == "external" and _has_verifiable_world_provenance(r)
         ),
         world_profile,
