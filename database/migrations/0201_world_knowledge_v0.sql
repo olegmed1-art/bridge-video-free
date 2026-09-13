@@ -61,7 +61,16 @@ SELECT jsonb_typeof(payload)='object'
  AND (SELECT count(*)=13 AND count(DISTINCT value)=13
       FROM jsonb_array_elements_text(payload->'cards') c(value)
       WHERE value ~ '^[2-9TJQKA][CDHS]$')
- AND (payload->'hcp' IS NULL OR jsonb_typeof(payload->'hcp')='number')
+ AND CASE
+   WHEN payload ? 'hcp'
+    AND jsonb_typeof(payload->'hcp')='number'
+    AND payload->>'hcp' ~ '^(0|[1-9]|[12][0-9]|3[0-7])$'
+   THEN (payload->>'hcp')::integer=(
+     SELECT COALESCE(sum(CASE left(card.value,1)
+       WHEN 'A' THEN 4 WHEN 'K' THEN 3 WHEN 'Q' THEN 2 WHEN 'J' THEN 1 ELSE 0 END),0)
+     FROM jsonb_array_elements_text(payload->'cards') card(value))
+   ELSE false
+ END
  AND (payload->'shape' IS NULL OR (
    jsonb_typeof(payload->'shape')='array'
    AND jsonb_array_length(payload->'shape')=4

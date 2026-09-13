@@ -114,7 +114,7 @@ BEGIN
  VALUES(robot,repeat('c',64),'{"system":"natural"}','{"temperature":0}') RETURNING world_robot_configuration_id INTO config;
  request_hash:=encode(digest(jsonb_build_object(
   'acting_seat','N',
-  'acting_hand','{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}'::jsonb,
+  'acting_hand','{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}'::jsonb,
   'public_auction','{"calls":[]}'::jsonb,
   'public_context','{}'::jsonb)::text,'sha256'),'hex');
  trace:=jsonb_build_object('mode','ROBOT_LIVE_DECISION','request_id','req-1','engine_key','ben-ci',
@@ -124,10 +124,22 @@ BEGIN
     jsonb_build_object('seq',1,'event','request','at','2026-08-30T00:00:00Z','status','ok','input_hash',request_hash,'output_hash',repeat('2',64)),
     jsonb_build_object('seq',2,'event','response','at','2026-08-30T00:00:01Z','status','ok','input_hash',repeat('2',64),'output_hash',encode(digest(raw::text,'sha256'),'hex'))),
   'raw_response_sha256',encode(digest(raw::text,'sha256'),'hex'));
+ IF NOT bidding.valid_acting_hand(
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}'::jsonb)
+ THEN RAISE EXCEPTION 'WORLD_SMOKE_VALID_ACTING_HCP_REJECTED'; END IF;
+ IF bidding.valid_acting_hand(
+      '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}'::jsonb)
+    OR bidding.valid_acting_hand(
+      '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10.5}'::jsonb)
+    OR bidding.valid_acting_hand(
+      '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":38}'::jsonb)
+    OR bidding.valid_acting_hand(
+      '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":0}'::jsonb)
+ THEN RAISE EXCEPTION 'WORLD_SMOKE_INVALID_ACTING_HCP_ACCEPTED'; END IF;
  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
   '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',trace)
  RETURNING world_robot_decision_id INTO decision;
 
@@ -135,7 +147,7 @@ BEGIN
  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
   '{"calls":[]}','{}','{"bid":"2H"}','{"bid":"2H"}','high',
   jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest('{"bid":"2H"}'::jsonb::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest('{"bid":"2H"}'::jsonb::text,'sha256'),'hex'))));
 
@@ -143,7 +155,7 @@ BEGIN
  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
   '{"calls":[]}','{}','{"meaning":"Stayman standard"}','{"meaning":"Stayman standard"}','high',
   jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest('{"meaning":"Stayman standard"}'::jsonb::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest('{"meaning":"Stayman standard"}'::jsonb::text,'sha256'),'hex'))));
 
@@ -153,7 +165,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN GET STACKED DIAGNOSTICS v_constraint=CONSTRAINT_NAME; failed:=(v_constraint='world_robot_decision_public_raw_response'); END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_HIDDEN_DEAL_ACCEPTED'; END IF;
@@ -164,7 +176,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN GET STACKED DIAGNOSTICS v_constraint=CONSTRAINT_NAME; failed:=(v_constraint='world_robot_decision_public_raw_response'); END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NESTED_CARD_TOKENS_ACCEPTED'; END IF;
@@ -175,7 +187,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN GET STACKED DIAGNOSTICS v_constraint=CONSTRAINT_NAME; failed:=(v_constraint='world_robot_decision_public_raw_response'); END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_PACKED_CARD_TOKENS_ACCEPTED'; END IF;
@@ -186,7 +198,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN GET STACKED DIAGNOSTICS v_constraint=CONSTRAINT_NAME; failed:=(v_constraint='world_robot_decision_public_raw_response'); END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_CASE_VARIANT_PACKED_CARD_TOKENS_ACCEPTED'; END IF;
@@ -197,7 +209,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_TEN_CARD_TOKENS_ACCEPTED'; END IF;
@@ -208,7 +220,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_GLYPH_CARD_TOKENS_ACCEPTED'; END IF;
@@ -219,7 +231,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_GROUPED_PREFIX_HOLDING_ACCEPTED'; END IF;
@@ -230,7 +242,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_GROUPED_SUFFIX_HOLDING_ACCEPTED'; END IF;
@@ -241,7 +253,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_SEPARATED_GROUPED_HOLDING_ACCEPTED'; END IF;
@@ -252,7 +264,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_COMPACT_SUIT_ORDER_HOLDING_ACCEPTED'; END IF;
@@ -261,7 +273,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"shape":[["AS","KS"],0,0,0]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10,"shape":[["AS","KS"],0,0,0]}',
    '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NESTED_ACTING_SHAPE_ACCEPTED'; END IF;
@@ -270,7 +282,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"shape":[4,3,3,3]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10,"shape":[4,3,3,3]}',
    '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_CONTRADICTORY_ACTING_SHAPE_ACCEPTED'; END IF;
@@ -292,7 +304,7 @@ BEGIN
 
  bad_trace:=jsonb_set(trace,'{input_fingerprint}',to_jsonb(encode(digest(jsonb_build_object(
   'acting_seat','N',
-  'acting_hand','{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}'::jsonb,
+  'acting_hand','{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}'::jsonb,
   'public_auction','{"calls":[],"alerts":{"private_material":[51,50,49]}}'::jsonb,
   'public_context','{}'::jsonb)::text,'sha256'),'hex')));
  bad_trace:=jsonb_set(bad_trace,'{steps,0,input_hash}',bad_trace->'input_fingerprint');
@@ -300,7 +312,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[],"alerts":{"private_material":[51,50,49]}}','{}',raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN GET STACKED DIAGNOSTICS v_constraint=CONSTRAINT_NAME; failed:=(v_constraint='world_robot_decision_public_auction'); END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NESTED_AUCTION_MATERIAL_ACCEPTED'; END IF;
@@ -316,7 +328,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',
    jsonb_set(jsonb_set(jsonb_set(trace,'{request_id}','""'),'{started_at}','"2026-08-30T00:00:02Z"'),'{steps}','[null]'));
  EXCEPTION WHEN check_violation OR invalid_datetime_format THEN failed:=true; END;
@@ -326,7 +338,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',
    jsonb_set(trace,'{steps}',jsonb_build_array(
      jsonb_build_object('seq',2.5,'event','response','at','2026-08-30T00:00:01Z','status','ok','input_hash','','output_hash','bad'),
@@ -338,7 +350,7 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10}',
    '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',jsonb_set(trace,'{engine_key}','null'::jsonb));
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NULL_TRACE_PIN_ACCEPTED'; END IF;
