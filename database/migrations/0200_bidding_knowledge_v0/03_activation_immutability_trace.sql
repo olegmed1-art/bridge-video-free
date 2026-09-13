@@ -109,6 +109,21 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    -- Evidence gates must observe commits made while waiting for the shared
+    -- rule lock. A REPEATABLE READ/SERIALIZABLE snapshot can remain stale
+    -- after that wait, so activation is fail-closed outside READ COMMITTED.
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'BID_ACTIVATION_REQUIRES_READ_COMMITTED'
+            USING ERRCODE='55000';
+    END IF;
+
+    -- Shared row-lock protocol: activation and every mutable rule-dependent
+    -- definition serialize on the owning bidding.rule row.
+    PERFORM 1
+      FROM bidding.rule
+     WHERE rule_id=NEW.rule_id
+     FOR UPDATE;
+
     SELECT r.school_id, r.knowledge_version_id, kv.authority_class
       INTO v_rule_school, v_knowledge_version_id, v_authority_class
       FROM bidding.rule AS r
@@ -168,10 +183,102 @@ STABLE
 AS $$
 SELECT EXISTS (
     SELECT 1 FROM bidding.runtime_activation
-     WHERE rule_id=p_rule_id AND status='active'
-       AND valid_from <= now() AND (valid_to IS NULL OR valid_to > now())
+     WHERE rule_id=p_rule_id
+       AND status='active'
+       AND (valid_to IS NULL OR valid_to > now())
 );
 $$;
+
+COMMENT ON FUNCTION bidding.rule_is_currently_active(uuid) IS
+  'Returns true while a rule has a non-expired active activation, including a future-dated activation, so scheduled rules cannot be mutated after gate evaluation.';
+
+CREATE OR REPLACE FUNCTION bidding.reject_active_rule_test_run_insert()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_rule_id uuid;
+BEGIN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'BID_EVIDENCE_MUTATION_REQUIRES_READ_COMMITTED'
+            USING ERRCODE='55000';
+    END IF;
+
+    -- Lock the mutable test row before resolving its owner. A concurrent
+    -- reassignment must commit first, so this trigger cannot cache a stale
+    -- owner and then append evidence to a newly activated rule.
+    SELECT rule_id
+      INTO v_rule_id
+      FROM bidding.rule_test
+     WHERE rule_test_id=NEW.rule_test_id
+     FOR UPDATE;
+
+    -- Test evidence and activation must serialize on the same owner row. If
+    -- this insert wins the lock, a later activation sees its result; if the
+    -- activation wins, the evidence insert is rejected after waiting.
+    PERFORM 1
+      FROM bidding.rule
+     WHERE rule_id=v_rule_id
+     FOR UPDATE;
+
+    IF v_rule_id IS NOT NULL AND bidding.rule_is_currently_active(v_rule_id) THEN
+        RAISE EXCEPTION 'BID_ACTIVE_RULE_TEST_RUN_IMMUTABLE' USING ERRCODE='55000';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER active_rule_test_run_immutable
+BEFORE INSERT ON bidding.rule_test_run
+FOR EACH ROW EXECUTE FUNCTION bidding.reject_active_rule_test_run_insert();
+
+CREATE OR REPLACE FUNCTION bidding.reject_active_rule_conflict_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_rule_ids uuid[];
+BEGIN
+    IF NEW.status <> 'open' THEN
+        RETURN NEW;
+    END IF;
+
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'BID_EVIDENCE_MUTATION_REQUIRES_READ_COMMITTED'
+            USING ERRCODE='55000';
+    END IF;
+
+    IF TG_OP='UPDATE' THEN
+        v_rule_ids := ARRAY[
+            OLD.left_rule_id,OLD.right_rule_id,
+            NEW.left_rule_id,NEW.right_rule_id
+        ];
+    ELSE
+        v_rule_ids := ARRAY[NEW.left_rule_id,NEW.right_rule_id];
+    END IF;
+
+    -- Open conflict evidence participates in activation eligibility, so lock
+    -- every old/new owner deterministically before accepting it.
+    PERFORM 1
+      FROM bidding.rule
+     WHERE rule_id=ANY(v_rule_ids)
+     ORDER BY rule_id
+     FOR UPDATE;
+
+    IF EXISTS (
+        SELECT 1
+          FROM unnest(v_rule_ids) AS x(rule_id)
+         WHERE bidding.rule_is_currently_active(x.rule_id)
+    ) THEN
+        RAISE EXCEPTION 'BID_ACTIVE_RULE_CONFLICT_IMMUTABLE' USING ERRCODE='55000';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER active_rule_conflict_immutable
+BEFORE INSERT OR UPDATE ON bidding.rule_conflict
+FOR EACH ROW EXECUTE FUNCTION bidding.reject_active_rule_conflict_mutation();
 
 CREATE OR REPLACE FUNCTION bidding.reject_active_rule_mutation()
 RETURNS trigger
@@ -180,6 +287,11 @@ AS $$
 DECLARE
     v_rule_id uuid;
 BEGIN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'BID_DEFINITION_MUTATION_REQUIRES_READ_COMMITTED'
+            USING ERRCODE='55000';
+    END IF;
+
     IF TG_OP='DELETE' THEN
         v_rule_id := OLD.rule_id;
     ELSE
@@ -202,10 +314,34 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_rule_id uuid;
+    v_rule_ids uuid[];
 BEGIN
-    IF TG_OP='DELETE' THEN v_rule_id := OLD.rule_id; ELSE v_rule_id := NEW.rule_id; END IF;
-    IF bidding.rule_is_currently_active(v_rule_id) THEN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'BID_DEFINITION_MUTATION_REQUIRES_READ_COMMITTED'
+            USING ERRCODE='55000';
+    END IF;
+
+    IF TG_OP='INSERT' THEN
+        v_rule_ids := ARRAY[NEW.rule_id];
+    ELSIF TG_OP='UPDATE' THEN
+        v_rule_ids := ARRAY[OLD.rule_id,NEW.rule_id];
+    ELSE
+        v_rule_ids := ARRAY[OLD.rule_id];
+    END IF;
+
+    -- Lock both the old and new owners for reassignment updates. Deterministic
+    -- ordering prevents deadlocks when two rules are involved.
+    PERFORM 1
+      FROM bidding.rule
+     WHERE rule_id=ANY(v_rule_ids)
+     ORDER BY rule_id
+     FOR UPDATE;
+
+    IF EXISTS (
+        SELECT 1
+          FROM unnest(v_rule_ids) AS x(rule_id)
+         WHERE bidding.rule_is_currently_active(x.rule_id)
+    ) THEN
         RAISE EXCEPTION 'BID_ACTIVE_RULE_TEST_IMMUTABLE' USING ERRCODE='55000';
     END IF;
     IF TG_OP='DELETE' THEN RETURN OLD; END IF;
@@ -222,16 +358,37 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_from_rule uuid;
-    v_to_rule uuid;
+    v_rule_ids uuid[];
 BEGIN
-    IF TG_OP='DELETE' THEN
-        v_from_rule := OLD.from_rule_id; v_to_rule := OLD.to_rule_id;
-    ELSE
-        v_from_rule := NEW.from_rule_id; v_to_rule := NEW.to_rule_id;
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'BID_DEFINITION_MUTATION_REQUIRES_READ_COMMITTED'
+            USING ERRCODE='55000';
     END IF;
-    IF bidding.rule_is_currently_active(v_from_rule)
-       OR bidding.rule_is_currently_active(v_to_rule) THEN
+
+    IF TG_OP='INSERT' THEN
+        v_rule_ids := ARRAY[NEW.from_rule_id,NEW.to_rule_id];
+    ELSIF TG_OP='UPDATE' THEN
+        v_rule_ids := ARRAY[
+            OLD.from_rule_id,OLD.to_rule_id,
+            NEW.from_rule_id,NEW.to_rule_id
+        ];
+    ELSE
+        v_rule_ids := ARRAY[OLD.from_rule_id,OLD.to_rule_id];
+    END IF;
+
+    -- Relation reassignment must serialize with activations of every old and
+    -- new endpoint, not only the post-update owners.
+    PERFORM 1
+      FROM bidding.rule
+     WHERE rule_id=ANY(v_rule_ids)
+     ORDER BY rule_id
+     FOR UPDATE;
+
+    IF EXISTS (
+        SELECT 1
+          FROM unnest(v_rule_ids) AS x(rule_id)
+         WHERE bidding.rule_is_currently_active(x.rule_id)
+    ) THEN
         RAISE EXCEPTION 'BID_ACTIVE_RULE_RELATION_IMMUTABLE' USING ERRCODE='55000';
     END IF;
     IF TG_OP='DELETE' THEN RETURN OLD; END IF;
