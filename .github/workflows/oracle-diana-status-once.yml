@@ -69,10 +69,12 @@ jobs:
           printf 'RECENT_LOG\n'
           if [[ -f "$root/resume.log" ]]; then tail -100 "$root/resume.log"; else tail -80 "$root/run.log"; fi
           printf 'OUTPUT_FILES\n'
-          find "$root" -maxdepth 4 -type f \( -name 'validation.json' -o -name 'master_analysis.json' -o -name '*server v6.pdf' -o -name 'result.json' \) -printf '%TY-%Tm-%TdT%TH:%TM:%TS %s %p\n' | sort
+          find "$root" -maxdepth 4 -type f \( -name 'validation.json' -o -name 'master_analysis.json' -o -name '*server v6.pdf' -o -name '*server v6.zip' -o -name 'recognition_comparison.json' -o -name 'result.json' \) -printf '%TY-%Tm-%TdT%TH:%TM:%TS %s %p\n' | sort
           printf 'DISK\n'; df -h /home/ubuntu
           REMOTE
             then exit 0; fi
             sleep 15
           done
           exit 1
+
+# Status trigger: inspect final ZIP packaging and upload.
