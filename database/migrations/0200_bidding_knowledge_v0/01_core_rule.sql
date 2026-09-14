@@ -1,0 +1,772 @@
+-- 0200_bidding_knowledge_v0 / part 01
+-- Included transactionally by ../0200_bidding_knowledge_v0.sql.
+
+CREATE SCHEMA IF NOT EXISTS bidding;
+
+COMMENT ON SCHEMA bidding IS
+  'Executable bidding knowledge, test evidence, activation, ingestion audit and decision traces. SCHOOL CANON and WORLD remain authority-separated.';
+
+REVOKE ALL ON SCHEMA bidding FROM PUBLIC;
+
+GRANT USAGE ON SCHEMA bidding TO bridge_school_reader, bridge_school_app, bridge_school_worker;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA bidding REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION bidding.contains_forbidden_hidden_key(payload jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+WITH RECURSIVE walk(value,key_path) AS (
+    SELECT COALESCE(payload, 'null'::jsonb), ARRAY[]::text[]
+    UNION ALL
+    SELECT
+        child.value,
+        CASE
+            WHEN cardinality(child.key_tokens)=0 THEN w.key_path
+            ELSE w.key_path || child.key_tokens
+        END
+      FROM walk AS w
+      CROSS JOIN LATERAL (
+          SELECT
+              e.value,
+              array_remove(
+                  regexp_split_to_array(
+                      lower(
+                          regexp_replace(
+                              e.key,
+                              '([a-z0-9])([A-Z])',
+                              E'\\1_\\2',
+                              'g'
+                          )
+                      ),
+                      '[^a-z0-9]+'
+                  ),
+                  ''
+              ) AS key_tokens
+            FROM jsonb_each(
+                CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
+            ) AS e
+          UNION ALL
+          SELECT
+              a.value,
+              ARRAY[]::text[] AS key_tokens
+            FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(w.value)='array' THEN w.value ELSE '[]'::jsonb END
+            ) AS a
+      ) AS child
+), forbidden_alias(alias) AS (
+    SELECT unnest(ARRAY[
+        'partnerhand','partnerhands','opponenthand','opponenthands',
+        'opponentshand','opponentshands','otherhand','otherhands',
+        'othershand','othershands','handother','handsother',
+        'handothers','handsothers','handpartner','handspartner',
+        'handopponent','handsopponent','handopponents','handsopponents',
+        'cardpartner','cardopponent','cardopponents','cardother','cardothers',
+        'cardspartner','cardsopponent','cardsopponents','cardsother','cardsothers',
+        'partnercard','opponentcard','opponentscard','othercard','otherscard',
+        'partnercards','opponentcards','opponentscards','othercards','otherscards',
+        'northhand','easthand','southhand','westhand',
+        'northhands','easthands','southhands','westhands',
+        'handnorth','handeast','handsouth','handwest',
+        'handsnorth','handseast','handssouth','handswest',
+        'northcard','eastcard','southcard','westcard',
+        'cardnorth','cardeast','cardsouth','cardwest',
+        'northcards','eastcards','southcards','westcards',
+        'cardsnorth','cardseast','cardssouth','cardswest',
+        'handn','hande','handw',
+        'handsn','handse','handss','handsw',
+        'nhand','ehand','shand','whand',
+        'nhands','ehands','shands','whands',
+        'ncard','ecard','scard','wcard',
+        'cardn','carde','cardw',
+        'ncards','ecards','scards','wcards',
+        'cardsn','cardse','cardss','cardsw',
+        'fulldeal','dealfull','hiddencard','cardhidden',
+        'hiddencards','cardshidden',
+        'actualpartnerhand','actualopponenthand','actualopponenthands'
+    ])
+), metric_word(word) AS (
+    SELECT unnest(ARRAY[
+        'played','count','counts','total','totals',
+        'rate','rates','average','averages','avg',
+        'percentage','percentages','pct'
+    ])
+), sensitive_suffix(word) AS (
+    SELECT unnest(ARRAY[
+        'hcp','point','points','shape','distribution',
+        'length','lengths','holding','holdings','honor','honors',
+        'control','controls','spade','spades','heart','hearts',
+        'diamond','diamonds','club','clubs','card','cards',
+        'hand','hands','deal'
+    ])
+), allowed_suffix(word) AS (
+    SELECT word FROM metric_word
+    UNION ALL
+    SELECT word FROM sensitive_suffix
+), owner_word(word) AS (
+    SELECT unnest(ARRAY[
+        'partner','opponent','opponents','other','others',
+        'north','east','south','west','n','e','s','w'
+    ])
+), structural_wrapper(word) AS (
+    SELECT unnest(ARRAY[
+        'metadata','context','data','info','details','payload',
+        'attributes','stats','summary','byseat'
+    ])
+), forbidden AS (
+    SELECT 1
+      FROM walk AS w
+     WHERE EXISTS (
+        SELECT 1
+          FROM generate_subscripts(w.key_path,1) AS path_start(i)
+          CROSS JOIN generate_subscripts(w.key_path,1) AS path_end(j)
+         WHERE path_end.j >= path_start.i
+           AND EXISTS (
+                SELECT 1
+                 FROM forbidden_alias AS f
+                 WHERE (
+                       array_to_string(
+                           w.key_path[path_start.i:path_end.j],''
+                       ) = f.alias
+                       OR (
+                           array_to_string(
+                               w.key_path[path_start.i:path_end.j],''
+                           ) LIKE f.alias || '%'
+                           AND substring(
+                               array_to_string(
+                                   w.key_path[path_start.i:path_end.j],''
+                               ) FROM length(f.alias)+1
+                           ) ~ (
+                               SELECT '^(' || string_agg(word,'|') || ')+$'
+                                 FROM allowed_suffix
+                           )
+                       )
+                 )
+                   AND NOT (
+                       jsonb_typeof(w.value)='number'
+                       AND (
+                           (
+                               array_to_string(
+                                   w.key_path[path_start.i:path_end.j],''
+                               ) = f.alias
+                               AND EXISTS (
+                                   SELECT 1
+                                     FROM metric_word AS metric
+                                    WHERE path_end.j < cardinality(w.key_path)
+                                      AND w.key_path[path_end.j+1]=metric.word
+                               )
+                           )
+                           OR (
+                               array_to_string(
+                                   w.key_path[path_start.i:path_end.j],''
+                               ) LIKE f.alias || '%'
+                               AND substring(
+                                   array_to_string(
+                                       w.key_path[path_start.i:path_end.j],''
+                                   ) FROM length(f.alias)+1
+                               ) ~ (
+                                   SELECT '^(' || string_agg(word,'|') || ')+$'
+                                     FROM metric_word
+                               )
+                           )
+                        )
+                   )
+           )
+     )
+        OR EXISTS (
+            SELECT 1
+              FROM unnest(w.key_path) AS compact(segment)
+              CROSS JOIN owner_word AS owner
+             WHERE compact.segment LIKE owner.word || '%'
+               AND substring(
+                   compact.segment FROM length(owner.word)+1
+               ) ~ (
+                   SELECT '^(' || string_agg(word,'|') || ')+$'
+                     FROM allowed_suffix
+               )
+               AND substring(
+                   compact.segment FROM length(owner.word)+1
+               ) ~ (
+                   SELECT '^(' || allowed.words || ')*('
+                          || suffixes.words || ')('
+                          || allowed.words || ')*$'
+                     FROM (SELECT string_agg(word,'|') AS words
+                             FROM allowed_suffix) AS allowed
+                     CROSS JOIN (SELECT string_agg(word,'|') AS words
+                                   FROM sensitive_suffix) AS suffixes
+               )
+               AND NOT (
+                   jsonb_typeof(w.value)='number'
+                   AND EXISTS (
+                       SELECT 1
+                         FROM unnest(ARRAY['hand','hands','card','cards'])
+                              AS public_metric(subject)
+                        WHERE substring(
+                                  compact.segment FROM length(owner.word)+1
+                              ) LIKE public_metric.subject || '%'
+                          AND substring(
+                                  compact.segment
+                                  FROM length(owner.word)+
+                                       length(public_metric.subject)+1
+                              ) ~ (
+                                  SELECT '^(' || string_agg(word,'|') || ')+$'
+                                    FROM metric_word
+                              )
+                   )
+               )
+        )
+        OR EXISTS (
+            -- A compact lower-case segment can contain an owner, a bounded
+            -- structural wrapper chain and the sensitive tail together (for
+            -- example: partnermetadatacards).  Camel-case is tokenised above;
+            -- this branch keeps the equivalent compact spelling fail-closed.
+            SELECT 1
+              FROM unnest(w.key_path) AS compact(segment)
+              CROSS JOIN owner_word AS owner
+             WHERE compact.segment LIKE owner.word || '%'
+               AND substring(
+                       compact.segment FROM length(owner.word)+1
+                   ) ~ (
+                       SELECT '^(' || wrappers.words || ')+('
+                              || allowed.words || ')*('
+                              || suffixes.words || ')('
+                              || allowed.words || ')*$'
+                         FROM (SELECT string_agg(word,'|') AS words
+                                 FROM structural_wrapper) AS wrappers
+                         CROSS JOIN (SELECT string_agg(word,'|') AS words
+                                       FROM allowed_suffix) AS allowed
+                         CROSS JOIN (SELECT string_agg(word,'|') AS words
+                                       FROM sensitive_suffix) AS suffixes
+                   )
+               AND NOT (
+                   jsonb_typeof(w.value)='number'
+                   AND substring(
+                           compact.segment FROM length(owner.word)+1
+                       ) ~ (
+                           SELECT '^(' || wrappers.words || ')+'
+                                  || '(hand|hands|card|cards)'
+                                  || '(' || metrics.words || ')+$'
+                             FROM (SELECT string_agg(word,'|') AS words
+                                     FROM structural_wrapper) AS wrappers
+                             CROSS JOIN (SELECT string_agg(word,'|') AS words
+                                           FROM metric_word) AS metrics
+                       )
+               )
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM generate_subscripts(w.key_path,1) AS owner_pos(i)
+              JOIN owner_word AS owner
+                ON owner.word=w.key_path[owner_pos.i]
+                OR (
+                    length(owner.word) > 1
+                    AND w.key_path[owner_pos.i] LIKE owner.word || '%'
+                    AND substring(
+                            w.key_path[owner_pos.i]
+                            FROM length(owner.word)+1
+                        ) ~ (
+                            SELECT '^(' || string_agg(word,'|') || ')+$'
+                              FROM structural_wrapper
+                        )
+                )
+              CROSS JOIN generate_subscripts(w.key_path,1) AS suffix_pos(j)
+              JOIN sensitive_suffix AS suffix
+                ON suffix_pos.j > owner_pos.i
+               AND (
+                   suffix.word=w.key_path[suffix_pos.j]
+                   OR (
+                       w.key_path[suffix_pos.j] ~ (
+                           SELECT '^(' || string_agg(word,'|') || ')+$'
+                             FROM allowed_suffix
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM sensitive_suffix AS exact_suffix
+                            WHERE exact_suffix.word=w.key_path[suffix_pos.j]
+                       )
+                       AND position(
+                           suffix.word IN w.key_path[suffix_pos.j]
+                       ) > 0
+                   )
+               )
+             WHERE NOT (
+                 jsonb_typeof(w.value)='number'
+                 AND suffix.word IN ('hand','hands','card','cards')
+                 AND (
+                     (
+                         w.key_path[suffix_pos.j]=suffix.word
+                         AND suffix_pos.j < cardinality(w.key_path)
+                         AND NOT EXISTS (
+                             SELECT 1
+                               FROM generate_subscripts(w.key_path,1)
+                                    AS metric_pos(k)
+                              WHERE metric_pos.k > suffix_pos.j
+                                AND NOT EXISTS (
+                                    SELECT 1
+                                      FROM metric_word AS metric
+                                     WHERE metric.word=
+                                           w.key_path[metric_pos.k]
+                                )
+                         )
+                     )
+                     OR (
+                         EXISTS (
+                             SELECT 1
+                               FROM unnest(
+                                        ARRAY['hand','hands','card','cards']
+                                    ) AS public_subject(subject)
+                              WHERE w.key_path[suffix_pos.j]
+                                    LIKE public_subject.subject || '%'
+                                AND substring(
+                                        w.key_path[suffix_pos.j]
+                                        FROM length(public_subject.subject)+1
+                                    ) ~ (
+                                        SELECT '^(' || string_agg(word,'|') || ')+$'
+                                          FROM metric_word
+                                    )
+                         )
+                     )
+                 )
+             )
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM generate_subscripts(w.key_path,1) AS subject_pos(i)
+              CROSS JOIN unnest(ARRAY['hand','hands','card','cards'])
+                         AS metric_subject(subject)
+             WHERE w.key_path[subject_pos.i] LIKE metric_subject.subject || '%'
+               AND substring(
+                       w.key_path[subject_pos.i]
+                       FROM length(metric_subject.subject)+1
+                   ) ~ (
+                       SELECT '^(' || string_agg(word,'|') || ')+$'
+                         FROM metric_word
+                   )
+               AND EXISTS (
+                   SELECT 1
+                     FROM generate_subscripts(w.key_path,1) AS owner_pos(j)
+                     JOIN owner_word AS owner
+                       ON owner.word=w.key_path[owner_pos.j]
+                    WHERE owner_pos.j > subject_pos.i
+               )
+               AND EXISTS (
+                   SELECT 1
+                     FROM generate_subscripts(w.key_path,1) AS suffix_pos(k)
+                    WHERE suffix_pos.k > subject_pos.i
+                      AND EXISTS (
+                          SELECT 1
+                            FROM sensitive_suffix AS suffix
+                           WHERE w.key_path[suffix_pos.k]=suffix.word
+                              OR (
+                                  w.key_path[suffix_pos.k] ~ (
+                                      SELECT '^(' || string_agg(word,'|') || ')+$'
+                                        FROM allowed_suffix
+                                  )
+                                  AND position(
+                                      suffix.word IN w.key_path[suffix_pos.k]
+                                  ) > 0
+                              )
+                      )
+               )
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM generate_subscripts(w.key_path,1) AS left_pos(i)
+              CROSS JOIN generate_subscripts(w.key_path,1) AS right_pos(j)
+             WHERE left_pos.i < right_pos.j
+               AND NOT (
+                    jsonb_typeof(w.value)='number'
+                    AND EXISTS (
+                        SELECT 1
+                          FROM metric_word AS metric
+                         WHERE (
+                             w.key_path[left_pos.i] IN (
+                                 'hand','hands','card','cards'
+                             )
+                             AND left_pos.i < cardinality(w.key_path)
+                             AND w.key_path[left_pos.i+1]=metric.word
+                         )
+                            OR (
+                                w.key_path[right_pos.j] IN (
+                                    'hand','hands','card','cards'
+                                )
+                                AND right_pos.j < cardinality(w.key_path)
+                                AND w.key_path[right_pos.j+1]=metric.word
+                            )
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM generate_subscripts(w.key_path,1) AS suffix_pos(k)
+                         WHERE suffix_pos.k > CASE
+                             WHEN w.key_path[left_pos.i] IN (
+                                      'hand','hands','card','cards'
+                                  )
+                              AND left_pos.i < cardinality(w.key_path)
+                              AND EXISTS (
+                                  SELECT 1 FROM metric_word AS leading_metric
+                                   WHERE leading_metric.word=
+                                         w.key_path[left_pos.i+1]
+                              )
+                             THEN left_pos.i+1
+                             ELSE right_pos.j+1
+                         END
+                           AND EXISTS (
+                               SELECT 1
+                                 FROM sensitive_suffix AS suffix
+                                WHERE w.key_path[suffix_pos.k]=suffix.word
+                                   OR (
+                                       w.key_path[suffix_pos.k] ~ (
+                                           SELECT '^(' || string_agg(word,'|') || ')+$'
+                                             FROM allowed_suffix
+                                       )
+                                       AND position(
+                                           suffix.word IN w.key_path[suffix_pos.k]
+                                       ) > 0
+                                   )
+                           )
+                           AND NOT (
+                               w.key_path[suffix_pos.k] IN (
+                                   'hand','hands','card','cards'
+                               )
+                               AND suffix_pos.k < cardinality(w.key_path)
+                               AND EXISTS (
+                                   SELECT 1
+                                     FROM metric_word AS trailing_metric
+                                    WHERE trailing_metric.word=
+                                          w.key_path[suffix_pos.k+1]
+                               )
+                           )
+                    )
+               )
+               AND (
+                    (
+                        w.key_path[left_pos.i] IN ('partner','opponent','opponents','other','others')
+                        AND w.key_path[right_pos.j] IN ('hand','hands','card','cards')
+                    )
+                    OR (
+                        w.key_path[left_pos.i] IN ('hand','hands','card','cards')
+                        AND w.key_path[right_pos.j] IN (
+                            'partner','opponent','opponents','other','others'
+                        )
+                    )
+                    OR (
+                        w.key_path[left_pos.i] IN (
+                            'north','east','south','west','n','e','s','w'
+                        )
+                        AND w.key_path[right_pos.j] IN ('hand','hands','card','cards')
+                    )
+                    OR (
+                        w.key_path[left_pos.i] IN ('hand','hands','card','cards')
+                        AND w.key_path[right_pos.j] IN (
+                            'north','east','south','west','n','e','s','w'
+                        )
+                    )
+                    OR (
+                        w.key_path[left_pos.i]='full'
+                        AND w.key_path[right_pos.j]='deal'
+                    )
+                    OR (
+                        w.key_path[left_pos.i]='hidden'
+                        AND w.key_path[right_pos.j] IN ('card','cards')
+                    )
+                    OR (
+                        w.key_path[left_pos.i] IN ('card','cards')
+                        AND w.key_path[right_pos.j]='hidden'
+                    )
+                    OR (
+                        w.key_path[left_pos.i]='deal'
+                        AND w.key_path[right_pos.j]='full'
+                    )
+               )
+        )
+        OR (
+            EXISTS (
+                SELECT 1
+                  FROM unnest(w.key_path) AS compact(segment)
+                 WHERE compact.segment='allhands'
+                    OR (
+                        compact.segment LIKE 'allhands%'
+                        AND substring(
+                            compact.segment FROM length('allhands')+1
+                        ) ~ (
+                            SELECT '^(' || string_agg(word,'|') || ')+$'
+                              FROM allowed_suffix
+                        )
+                        AND (
+                            jsonb_typeof(w.value) <> 'number'
+                            OR NOT substring(
+                                compact.segment FROM length('allhands')+1
+                            ) ~ (
+                                SELECT '^(' || string_agg(word,'|') || ')+$'
+                                  FROM metric_word
+                            )
+                        )
+                    )
+            )
+            OR (
+                EXISTS (
+                    SELECT 1
+                      FROM generate_subscripts(w.key_path,1) AS all_pos(i)
+                      CROSS JOIN generate_subscripts(w.key_path,1) AS hand_pos(j)
+                     WHERE (
+                         w.key_path[all_pos.i]='all'
+                         AND w.key_path[hand_pos.j] IN ('hand','hands')
+                       )
+                       AND all_pos.i <> hand_pos.j
+                       AND (
+                           jsonb_typeof(w.value) <> 'number'
+                           OR NOT (
+                               hand_pos.j < cardinality(w.key_path)
+                               AND NOT EXISTS (
+                                   SELECT 1
+                                     FROM generate_subscripts(
+                                              w.key_path,1
+                                          ) AS split_suffix(k)
+                                    WHERE split_suffix.k > hand_pos.j
+                                      AND NOT EXISTS (
+                                          SELECT 1
+                                            FROM metric_word AS metric
+                                           WHERE metric.word=
+                                                 w.key_path[split_suffix.k]
+                                      )
+                               )
+                           )
+                       )
+                )
+            )
+        )
+        OR (
+            jsonb_typeof(w.value)='object'
+            AND EXISTS (
+                SELECT 1
+                  FROM jsonb_each(w.value) AS seat_field(key,value)
+                 WHERE jsonb_typeof(seat_field.value)='string'
+                   AND (
+                       (
+                           regexp_replace(lower(seat_field.key),'[^a-z0-9]','','g')='owner'
+                           AND lower(btrim(
+                               seat_field.value #>> '{}',
+                               E' \t\n\r\f' || chr(11) || chr(133) || chr(160)
+                               || chr(5760) || chr(8192) || chr(8193)
+                               || chr(8194) || chr(8195) || chr(8196)
+                               || chr(8197) || chr(8198) || chr(8199)
+                               || chr(8200) || chr(8201) || chr(8202)
+                               || chr(8232) || chr(8233) || chr(8239)
+                               || chr(8287) || chr(12288) || chr(65279)
+                           )) IN (
+                               'partner','opponent','opponents','other','others'
+                           )
+                       )
+                       OR (
+                           (
+                               'hand'=ANY(w.key_path)
+                               OR 'hands'=ANY(w.key_path)
+                               OR 'allhands'=ANY(w.key_path)
+                           )
+                           AND regexp_replace(
+                               lower(seat_field.key),'[^a-z0-9]','','g'
+                           ) IN ('seat','owner')
+                           AND upper(btrim(
+                               seat_field.value #>> '{}',
+                               E' \t\n\r\f' || chr(11) || chr(133) || chr(160)
+                               || chr(5760) || chr(8192) || chr(8193)
+                               || chr(8194) || chr(8195) || chr(8196)
+                               || chr(8197) || chr(8198) || chr(8199)
+                               || chr(8200) || chr(8201) || chr(8202)
+                               || chr(8232) || chr(8233) || chr(8239)
+                               || chr(8287) || chr(12288) || chr(65279)
+                           )) IN (
+                               'N','E','S','W','NORTH','EAST','SOUTH','WEST'
+                           )
+                       )
+                   )
+            )
+            AND EXISTS (
+                WITH RECURSIVE descendants(value,depth) AS (
+                    SELECT w.value,0
+                    UNION ALL
+                    SELECT child.value, descendants.depth+1
+                      FROM descendants
+                      CROSS JOIN LATERAL (
+                          SELECT e.value
+                            FROM jsonb_each(
+                                CASE WHEN jsonb_typeof(descendants.value)='object'
+                                     THEN descendants.value ELSE '{}'::jsonb END
+                            ) AS e
+                          UNION ALL
+                          SELECT a.value
+                            FROM jsonb_array_elements(
+                                CASE WHEN jsonb_typeof(descendants.value)='array'
+                                     THEN descendants.value ELSE '[]'::jsonb END
+                            ) AS a
+                      ) AS child
+                     WHERE descendants.depth < 4
+                )
+                SELECT 1
+                  FROM descendants
+                 WHERE (
+                        descendants.depth=4
+                        AND jsonb_typeof(descendants.value) IN ('object','array')
+                        AND descendants.value NOT IN ('{}'::jsonb,'[]'::jsonb)
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                          FROM jsonb_each(
+                              CASE WHEN jsonb_typeof(descendants.value)='object'
+                                   THEN descendants.value ELSE '{}'::jsonb END
+                          ) AS cards_field(key,value)
+                         WHERE regexp_replace(
+                                   lower(cards_field.key),'[^a-z0-9]','','g'
+                               ) ~ '^(metadata|context|data|info|details|payload|attributes|stats|summary|byseat|played|count|counts|total|totals|rate|rates|average|averages|avg|percentage|percentages|pct)*cards?(metadata|context|data|info|details|payload|attributes|stats|summary|byseat|played|count|counts|total|totals|rate|rates|average|averages|avg|percentage|percentages|pct)*$'
+                           AND jsonb_typeof(cards_field.value) <> 'null'
+                           AND NOT (
+                               jsonb_typeof(cards_field.value)='number'
+                               AND regexp_replace(
+                                   lower(cards_field.key),'[^a-z0-9]','','g'
+                               ) ~ '(played|count|counts|total|totals|rate|rates|average|averages|avg|percentage|percentages|pct)'
+                           )
+                    )
+            )
+        )
+     LIMIT 1
+)
+SELECT EXISTS (SELECT 1 FROM forbidden);
+$$;
+
+CREATE TABLE bidding.rule (
+    rule_id uuid PRIMARY KEY DEFAULT uuidv7(),
+    school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
+    knowledge_version_id uuid NOT NULL UNIQUE
+        REFERENCES public.knowledge_version(knowledge_version_id) ON DELETE RESTRICT,
+    rule_key text NOT NULL CHECK (btrim(rule_key) <> ''),
+    rule_kind text NOT NULL
+        CHECK (rule_kind IN ('bid','inference','priority','exception','fallback')),
+    auction_pattern jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(auction_pattern)='object'),
+    hand_constraints jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(hand_constraints)='object'),
+    public_context_constraints jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(public_context_constraints)='object'),
+    action jsonb NOT NULL CHECK (jsonb_typeof(action)='object'),
+    meaning jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(meaning)='object'),
+    public_inference jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(public_inference)='object'),
+    alert_semantics jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(alert_semantics)='object'),
+    forcing_semantics jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(forcing_semantics)='object'),
+    priority integer NOT NULL DEFAULT 0,
+    specificity integer NOT NULL DEFAULT 0 CHECK (specificity >= 0),
+    explanation jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(explanation)='object'),
+    condition_schema_version text NOT NULL DEFAULT 'bidding-condition-v0',
+    compiled_payload jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(compiled_payload)='object'),
+    lifecycle_status text NOT NULL DEFAULT 'candidate'
+        CHECK (lifecycle_status IN ('candidate','validated','retired')),
+    method_version text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (updated_at >= created_at),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(auction_pattern)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(hand_constraints)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(public_context_constraints)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(action)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(meaning)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(public_inference)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(alert_semantics)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(forcing_semantics)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(explanation)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(compiled_payload)),
+    UNIQUE (school_id, rule_key)
+);
+
+CREATE INDEX bidding_rule_runtime_lookup_idx
+    ON bidding.rule (school_id, lifecycle_status, priority DESC, specificity DESC, rule_key);
+
+CREATE OR REPLACE FUNCTION bidding.validate_rule_school_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_school_id uuid;
+BEGIN
+    SELECT ki.school_id
+      INTO v_school_id
+      FROM public.knowledge_version AS kv
+      JOIN public.knowledge_item AS ki
+        ON ki.knowledge_item_id=kv.knowledge_item_id
+     WHERE kv.knowledge_version_id=NEW.knowledge_version_id;
+    IF v_school_id IS NULL OR v_school_id <> NEW.school_id THEN
+        RAISE EXCEPTION 'BID_RULE_KNOWLEDGE_SCHOOL_MISMATCH' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER rule_school_scope_guard
+BEFORE INSERT OR UPDATE OF school_id, knowledge_version_id ON bidding.rule
+FOR EACH ROW EXECUTE FUNCTION bidding.validate_rule_school_scope();
+
+CREATE TABLE bidding.rule_relation (
+    rule_relation_id uuid PRIMARY KEY DEFAULT uuidv7(),
+    school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
+    from_rule_id uuid NOT NULL REFERENCES bidding.rule(rule_id) ON DELETE RESTRICT,
+    to_rule_id uuid NOT NULL REFERENCES bidding.rule(rule_id) ON DELETE RESTRICT,
+    relation_type text NOT NULL
+        CHECK (relation_type IN ('depends_on','overrides','excludes','continues_to','implies')),
+    conditions jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(conditions)='object'),
+    method_version text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (from_rule_id <> to_rule_id),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(conditions)),
+    UNIQUE (from_rule_id, to_rule_id, relation_type)
+);
+
+CREATE INDEX bidding_rule_relation_to_idx
+    ON bidding.rule_relation (school_id, to_rule_id, relation_type);
+
+CREATE OR REPLACE FUNCTION bidding.validate_rule_relation_school_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_from_school uuid;
+    v_to_school uuid;
+BEGIN
+    SELECT school_id INTO v_from_school FROM bidding.rule WHERE rule_id=NEW.from_rule_id;
+    SELECT school_id INTO v_to_school FROM bidding.rule WHERE rule_id=NEW.to_rule_id;
+    IF v_from_school IS NULL OR v_to_school IS NULL
+       OR v_from_school <> NEW.school_id OR v_to_school <> NEW.school_id THEN
+        RAISE EXCEPTION 'BID_RULE_RELATION_SCHOOL_MISMATCH' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER rule_relation_school_scope_guard
+BEFORE INSERT OR UPDATE OF school_id, from_rule_id, to_rule_id ON bidding.rule_relation
+FOR EACH ROW EXECUTE FUNCTION bidding.validate_rule_relation_school_scope();
+
+CREATE TABLE bidding.rule_test (
+    rule_test_id uuid PRIMARY KEY DEFAULT uuidv7(),
+    school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
+    rule_id uuid NOT NULL REFERENCES bidding.rule(rule_id) ON DELETE RESTRICT,
+    test_key text NOT NULL CHECK (btrim(test_key) <> ''),
+    test_type text NOT NULL CHECK (test_type IN (
+        'positive','negative','boundary','interference',
+        'hidden_information','conflict','regression'
+    )),
+    fixture jsonb NOT NULL CHECK (jsonb_typeof(fixture)='object'),
+    expected jsonb NOT NULL CHECK (jsonb_typeof(expected)='object'),
+    enabled boolean NOT NULL DEFAULT true,
+    method_version text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (test_type='hidden_information' OR NOT bidding.contains_forbidden_hidden_key(fixture)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(expected)),
+    UNIQUE (rule_id, test_key)
+);
