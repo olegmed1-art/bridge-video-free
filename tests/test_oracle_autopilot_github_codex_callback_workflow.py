@@ -14,6 +14,12 @@ def test_codex_callback_workflow_is_event_only_and_identity_pinned():
     assert "github.event.comment.user.id == 315099490" in source
     assert "github.event.comment.user.id == 199175422" in source
     assert "github.event.comment.performed_via_github_app.id == 1144995" in source
+    # GitHub expression string literals do not interpret ``\n`` escapes. Keep
+    # this job-level router coarse; the Python receiver validates the exact
+    # multiline command envelope and every pinned identity before ingestion.
+    assert "startsWith(github.event.comment.body, '@codex')" in source
+    assert "contains(github.event.comment.body, 'SLAVIK_CODEX_DISPATCH_V1')" in source
+    assert "startsWith(github.event.comment.body, '@codex\\n" not in source
     assert "SLAVIK_CODEX_DISPATCH_V1" in source
     assert "AUTOPILOT_CODEX_RESULT_V1" in source
 
