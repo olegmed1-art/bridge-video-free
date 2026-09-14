@@ -13,6 +13,10 @@ import re
 from typing import Any, Mapping
 from uuid import UUID
 
+from bridge_contracts.canon_source_domain_policy import (
+    evaluate_canon_source_domain_policy,
+)
+
 
 SCHEMA = "video-canon-ai-promotion-v1"
 POLICY = "school-video-auto-canon-v1"
@@ -173,6 +177,25 @@ def build_ai_canon_promotion(
         missing = sorted(REQUIRED_CHECKS - set(normalized))
         extra = sorted(set(normalized) - REQUIRED_CHECKS)
         _fail(f"verification check set mismatch: missing={missing}, extra={extra}")
+
+    source_policy = evaluate_canon_source_domain_policy(
+        "BIDDING",
+        payload.get("source_class"),
+        semantic_confidence,
+        {
+            "asr_verified": normalized["TRANSCRIPT_BINDING"]["result"] == "PASS",
+            "slip_checked": (
+                normalized["SEMANTIC_PARSE"]["result"] == "PASS"
+                and normalized["BRIDGE_LOGIC"]["result"] == "PASS"
+            ),
+            "interpretation_verified": normalized["SEMANTIC_PARSE"]["result"] == "PASS",
+            "context_verified": normalized["SOURCE_BINDING"]["result"] == "PASS",
+            "canon_conflict_free": normalized["CANON_CONFLICT_SCAN"]["result"] == "PASS",
+            "provenance_bound": normalized["SOURCE_AUTHORITY"]["result"] == "PASS",
+        },
+    )
+    if not source_policy["auto_canon_allowed"]:
+        _fail(f"Canon source/domain policy rejected candidate: {source_policy['reason']}")
 
     semantic = normalized["SEMANTIC_PARSE"]
     bridge_logic = normalized["BRIDGE_LOGIC"]
