@@ -18,6 +18,10 @@ from copy import deepcopy
 from typing import Any, Mapping
 
 import diana_longitudinal_quality_v4_1 as v41
+from bridge_contracts.video_dds_decision_comparison import DDSRequestExecutor
+from bridge_contracts.video_extended_extraction import build_extended_extraction
+from bridge_contracts.video_learning_feedback import CorrectionReceiptResolver
+from bridge_contracts.video_canon_auto_pipeline import run_video_canon_auto_pipeline
 
 QUALITY_SCHEMA = v41.QUALITY_SCHEMA
 QUALITY_SCHEMA_VERSION = 5
@@ -34,9 +38,58 @@ def _stable_quality_created_at(master: Mapping[str, Any]) -> str:
     return "1970-01-01T00:00:00Z"
 
 
+def _pass_verified_integration_evidence(
+    master: Mapping[str, Any], quality: dict[str, Any]
+) -> None:
+    """Route upstream proof receipts to their fail-closed consumers.
+
+    The v4.2 master is the integration boundary used by the real Diana job.
+    Keeping these collections only in synthetic ``quality`` dictionaries made
+    the standalone validators unreachable in production.  This adapter does
+    not declare any item valid: it preserves the supplied collection exactly,
+    records whether its container was admissible, and lets the dedicated DDS
+    and correction validators prove every field and digest.
+    """
+    fields = (
+        "verified_full_board_evidence",
+        "source_bound_logic_evidence",
+        "correction_review_receipts",
+    )
+    integration: dict[str, Any] = {
+        "source": "analysis_master",
+        "validation": "DEDICATED_DOWNSTREAM_FAIL_CLOSED",
+        "collections": {},
+    }
+    for field in fields:
+        raw = master.get(field)
+        if raw is None:
+            quality[field] = []
+            integration["collections"][field] = {
+                "status": "NOT_SUPPLIED", "item_count": 0,
+            }
+        elif isinstance(raw, list):
+            quality[field] = deepcopy(raw)
+            integration["collections"][field] = {
+                "status": "PASSED_TO_VALIDATOR", "item_count": len(raw),
+            }
+        else:
+            # Preserve the invalid value so the dedicated consumer emits an
+            # explicit gap instead of silently treating malformed proof as
+            # absent evidence.
+            quality[field] = deepcopy(raw)
+            integration["collections"][field] = {
+                "status": "INVALID_CONTAINER_PASSED_TO_VALIDATOR",
+                "item_count": 0,
+            }
+    quality["integrated_verification_evidence"] = integration
+
+
 def build_quality_layer(
     master: Mapping[str, Any],
     lesson_identity: Mapping[str, Any] | None = None,
+    *,
+    dds_request_executor: DDSRequestExecutor | None = None,
+    correction_receipt_resolver: CorrectionReceiptResolver | None = None,
 ) -> dict[str, Any]:
     working = deepcopy(dict(master))
     raw_deals = [dict(item) for item in (working.get("deals") or []) if isinstance(item, Mapping)]
@@ -118,6 +171,58 @@ def build_quality_layer(
         "heavy_video_reprocessing_for_this_layer": False,
         "reuses_existing_transcript_and_evidence": True,
     })
+    _pass_verified_integration_evidence(working, quality)
+    quality["integrated_verification_evidence"]["trusted_resolvers"] = {
+        "pinned_dds_rerun": dds_request_executor is not None,
+        "correction_review_storage": correction_receipt_resolver is not None,
+    }
+    try:
+        extended = build_extended_extraction(
+            working,
+            quality,
+            dds_request_executor=dds_request_executor,
+            correction_receipt_resolver=correction_receipt_resolver,
+        )
+    finally:
+        # These are validator inputs, not output artifacts. In particular a
+        # rejected board proof may contain full-deal/PBN material. Only the
+        # sanitized comparison, training example or explicit gap may survive.
+        for field in (
+            "verified_full_board_evidence",
+            "source_bound_logic_evidence",
+            "correction_review_receipts",
+        ):
+            quality.pop(field, None)
+    quality["extended_knowledge_extraction"] = extended
+    staging = quality.setdefault("candidate_staging_records", [])
+    staging.extend(extended["candidate_records"])
+    counts["extended_knowledge_candidates"] = len(extended["candidate_records"])
+    counts["extended_knowledge_by_type"] = extended["counts_by_type"]
+    counts["staging_records"] = len(staging)
+    learning_candidate = working.get("video_canon_learning_candidate")
+    assertions = working.get("video_canon_assertions")
+    verifications = working.get("video_canon_verification_bundles")
+    if isinstance(learning_candidate, Mapping) and isinstance(assertions, list) and isinstance(verifications, Mapping):
+        auto_pipeline = run_video_canon_auto_pipeline(
+            learning_candidate, assertions, verifications
+        )
+    else:
+        auto_pipeline = {
+            "schema": "video-canon-auto-pipeline-v1",
+            "status": "NOT_REQUESTED",
+            "candidates": [],
+            "promotion_commands": [],
+            "gaps": [],
+            "human_approval_required": False,
+            "world_lookup_performed": False,
+            "authoritative_write_performed": False,
+        }
+    quality["video_canon_auto_pipeline"] = auto_pipeline
+    staging.extend(auto_pipeline["candidates"])
+    counts["video_canon_auto_promotions_ready"] = len(auto_pipeline["promotion_commands"])
+    counts["video_canon_auto_gaps"] = len(auto_pipeline["gaps"])
+    counts["video_canon_candidates"] = len(auto_pipeline["candidates"])
+    counts["staging_records"] = len(staging)
     return quality
 
 
@@ -126,5 +231,6 @@ __all__ = [
     "QUALITY_SCHEMA_VERSION",
     "QUALITY_METHOD_VERSION",
     "_stable_quality_created_at",
+    "_pass_verified_integration_evidence",
     "build_quality_layer",
 ]
