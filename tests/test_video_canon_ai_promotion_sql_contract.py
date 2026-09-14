@@ -2,8 +2,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
-MIGRATION = (ROOT / "database/migrations/0322_workflow_video_canon_ai_promotion.sql").read_text()
-ROLLBACK = (ROOT / "database/rollbacks/0322_workflow_video_canon_ai_promotion.sql").read_text()
+MIGRATION = (ROOT / "database/migrations/0329_workflow_video_canon_ai_promotion.sql").read_text()
+ROLLBACK = (ROOT / "database/rollbacks/0329_workflow_video_canon_ai_promotion.sql").read_text()
 
 
 def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
