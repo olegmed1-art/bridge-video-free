@@ -3,7 +3,7 @@
 - Date: 2026-09-14
 - Change ID: `AUTOPILOT-0331-SIX-WORKERS`
 - Governance mode: `ASSURED`
-- Status: implemented on `codex/slavik-dispatch-p0`; production promotion pending CI and live executor acceptance
+- Status: PostgreSQL CI passed on draft PR #1420; production promotion and live executor acceptance pending
 
 ## Purpose and scope
 
@@ -49,8 +49,13 @@ idle.
   database clients and requires exactly six admitted tasks, exactly five normal
   tasks, no leaked reservation, and one waiting normal item.
 - I2 independent Red Team review identified six concrete admission, routing,
-  and rollback risks; all were corrected before commit. PostgreSQL execution
-  remains to be supplied by GitHub Actions.
+  and rollback risks; all were corrected before commit.
+- I3 GitHub Actions run
+  [`34871003212`](https://github.com/olegmed1-art/bridge-video-free/actions/runs/34871003212)
+  passed both PostgreSQL 18 jobs. The
+  `current-main-baseline` job applied the full migration chain, ran the SQL
+  regressions, completed the clean rollback/reapply cycle, and passed the
+  seven-client concurrent admission test.
 
 ## Rollback and remaining risk
 
@@ -60,10 +65,10 @@ publications exist, restores serialized planner admission, preserves strict
 lease validation, and restores the exact pre-migration chat registry snapshot.
 
 Repository and database readiness do not by themselves prove six live ChatGPT
-worker runs. Production acceptance still requires: successful PostgreSQL CI,
-reviewed promotion of migration 0331, binding the role executor to the existing
-Slavik chat, and an E2E canary with delivery proof and terminal receipts. Until
-those steps pass, the capability must not be reported as live production.
+worker runs. Production acceptance still requires: reviewed promotion of
+migration 0331, binding the role executor to the existing Slavik chat, and an
+E2E canary with delivery proof and terminal receipts. Until those steps pass,
+the capability must not be reported as live production.
 
 Cost exposure is bounded by the six-worker ceiling, but parallel agents can use
 more tokens than serialized execution. No new paid service or subscription is
