@@ -14,6 +14,13 @@ BEGIN
         RAISE EXCEPTION 'AUTOPILOT_CHAT_TARGET_GATE_MIGRATION_MISSING';
     END IF;
 
+    -- Later orchestration migrations may route every enabled role through the
+    -- existing Slavik chat.  Disable one route inside this rolled-back fixture
+    -- so the original unmapped-role gate remains independently testable.
+    UPDATE autopilot.role_chat_registry
+       SET enabled = false
+     WHERE role_id = 'VIDEO_QUEUE';
+
     SELECT work_item_id INTO unmapped_id
       FROM autopilot.register_universal_work_item(
         'sql-chat-target-unmapped-328','VIDEO_QUEUE','CHAT_TARGET_GATE_TEST',
