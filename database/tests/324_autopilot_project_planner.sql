@@ -1,6 +1,26 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+-- Migration 0328 requires a registered existing-chat target before planner
+-- work is claimable. These transaction-local rows are fixtures only and are
+-- removed by the ROLLBACK at the end of this test.
+INSERT INTO autopilot.role_chat_registry(
+    role_id, chat_id, chat_name, chat_url, executor_id
+) VALUES
+    (
+        'RECOGNIZER', '00000000-0000-4000-8000-000000000324',
+        'SQL RECOGNIZER TARGET',
+        'https://chatgpt.com/g/sql-test/c/00000000-0000-4000-8000-000000000324',
+        'chat:sql-recognizer-324'
+    ),
+    (
+        'VIDEO', '00000000-0000-4000-8000-000000000325',
+        'SQL VIDEO TARGET',
+        'https://chatgpt.com/g/sql-test/c/00000000-0000-4000-8000-000000000325',
+        'chat:sql-video-324'
+    )
+ON CONFLICT (role_id) DO NOTHING;
+
 DO $$
 DECLARE
     blocker_item uuid;
