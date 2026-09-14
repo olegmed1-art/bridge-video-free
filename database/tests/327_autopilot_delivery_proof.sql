@@ -10,6 +10,7 @@ DECLARE
     materialized record;
     dispatch record;
     outbox record;
+    target_chat record;
     proof jsonb;
     terminal jsonb;
     result record;
@@ -55,6 +56,10 @@ BEGIN
          WHERE dispatch_id=dispatch.dispatch_id)<>'PUBLISHED' THEN
         RAISE EXCEPTION 'AUTOPILOT_GITHUB_PUBLISH_NOT_ISOLATED';
     END IF;
+    SELECT chat_id, chat_name, executor_id INTO STRICT target_chat
+      FROM autopilot.role_chat_registry
+     WHERE role_id = dispatch.role
+       AND enabled;
 
     raised:=false;
     BEGIN
@@ -71,10 +76,10 @@ BEGIN
         'role',dispatch.role,'task_fingerprint',dispatch.task_fingerprint,'target_pr',dispatch.target_pr,
         'status','SUCCEEDED','result_code','DELIVERY_PROOF_E2E_GREEN',
         'target_head_sha',dispatch.expected_head_sha,'summary','Shadow delivery proof completed.',
-        'target_chat_id','6aa37eec-3910-83eb-829e-72914fdbed07',
+        'target_chat_id',target_chat.chat_id,
         'message_id','11111111-1111-1111-1111-111111111111',
         'run_id','22222222-2222-2222-2222-222222222222',
-        'executor_id','chat:6aa37eec-3910-83eb-829e-72914fdbed07'
+        'executor_id',target_chat.executor_id
     );
     raised:=false;
     BEGIN
@@ -103,11 +108,11 @@ BEGIN
     proof:=jsonb_build_object(
         'dispatch_id',dispatch.dispatch_id::text,'dispatch_epoch',dispatch.dispatch_epoch,
         'role',dispatch.role,'task_fingerprint',dispatch.task_fingerprint,'target_pr',dispatch.target_pr,
-        'target_chat_id','6aa37eec-3910-83eb-829e-72914fdbed07',
-        'target_chat_name','СЛАВИК / AUTOPILOT',
+        'target_chat_id',target_chat.chat_id,
+        'target_chat_name',target_chat.chat_name,
         'message_id','11111111-1111-1111-1111-111111111111',
         'run_id','22222222-2222-2222-2222-222222222222',
-        'executor_id','chat:6aa37eec-3910-83eb-829e-72914fdbed07',
+        'executor_id',target_chat.executor_id,
         'ui_visible',true,'run_state','RUNNING'
     );
     SELECT * INTO result FROM autopilot.accept_role_dispatch_delivery_proof(

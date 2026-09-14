@@ -75,8 +75,8 @@ BEGIN
         RAISE EXCEPTION 'AUTOPILOT_PROJECT_TASK_NOT_MATERIALIZED';
     END IF;
 
-    -- A technical failure produces exactly one repair and keeps the global
-    -- lane serialized while that repair is runnable.
+    -- A technical failure produces exactly one repair.  The six-worker policy
+    -- must still admit an unrelated dependency-free lane while it is runnable.
     UPDATE autopilot.task
        SET status = 'FAILED_CLOSED',
            terminal_reason_code = 'TECHNICAL_TEST_FAILURE',
@@ -100,8 +100,17 @@ BEGIN
     END IF;
     SELECT * INTO probe
       FROM autopilot.claim_project_work_probe('sql-project-worker-2', 60);
-    IF FOUND THEN
-        RAISE EXCEPTION 'AUTOPILOT_PROJECT_FANNED_OUT_DURING_REPAIR';
+    IF NOT FOUND OR probe.work_item_id <> independent_item THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_INDEPENDENT_WORK_NOT_PARALLELIZED';
+    END IF;
+    SELECT * INTO materialized
+      FROM autopilot.materialize_project_work_probe(
+          probe.work_item_id, 'sql-project-worker-2', probe.lease_epoch,
+          true, repeat('b', 40)
+      );
+    independent_task := materialized.task_id;
+    IF independent_task IS NULL OR materialized.created IS NOT true THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_PARALLEL_TASK_NOT_MATERIALIZED';
     END IF;
 
     -- An owner-only repair result is retained, but it releases the planner to
@@ -122,17 +131,6 @@ BEGIN
         RAISE EXCEPTION 'AUTOPILOT_PROJECT_BLOCKER_NOT_RETAINED';
     END IF;
 
-    SELECT * INTO probe
-      FROM autopilot.claim_project_work_probe('sql-project-worker-3', 60);
-    IF probe.work_item_id <> independent_item THEN
-        RAISE EXCEPTION 'AUTOPILOT_PROJECT_INDEPENDENT_WORK_NOT_SELECTED';
-    END IF;
-    SELECT * INTO materialized
-      FROM autopilot.materialize_project_work_probe(
-          probe.work_item_id, 'sql-project-worker-3', probe.lease_epoch,
-          true, repeat('b', 40)
-      );
-    independent_task := materialized.task_id;
     UPDATE autopilot.task
        SET status = 'DONE', terminal_reason_code = 'KNOWLEDGE_READY',
            safe_summary_json = jsonb_build_object(
