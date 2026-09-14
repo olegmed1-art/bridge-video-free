@@ -20,7 +20,8 @@ jobs:
       github.event.comment.user.id == 315099490 &&
       github.event.comment.author_association == 'OWNER' &&
       github.event.comment.performed_via_github_app.id == 1144995 &&
-      startsWith(github.event.comment.body, '@codex\n\nSLAVIK_CODEX_DISPATCH_V1\n')
+      startsWith(github.event.comment.body, '@codex') &&
+      contains(github.event.comment.body, 'SLAVIK_CODEX_DISPATCH_V1')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
