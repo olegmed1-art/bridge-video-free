@@ -1337,9 +1337,9 @@ def process_role_dispatch_outbox(config: WorkerConfig) -> bool:
                 dispatch_id,
                 config.worker_id,
                 claim_epoch,
-                # This is only the GitHub discovery resource.  Migration 0326
-                # keeps it PUBLISHED until the existing ChatGPT target proves
-                # both UI visibility and a RUNNING acknowledgement.
+                # This is only the GitHub discovery resource.  Contract v3
+                # keeps it PUBLISHED until the pinned Codex bot acknowledges
+                # an owner-authenticated @codex command on the exact target PR.
                 result["dispatch_pull_request"],
                 body_sha256,
             ),
