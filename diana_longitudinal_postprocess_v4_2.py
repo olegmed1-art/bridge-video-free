@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 import diana_longitudinal_postprocess as base
 from bridge_report_board_reconstruction import reconstruct_report_visual_deals
+from bridge_contracts.video_dds_pinned_executor import execute_digest_pinned_dds3
 from diana_longitudinal_quality_v4_2 import (
     QUALITY_METHOD_VERSION,
     QUALITY_SCHEMA_VERSION,
@@ -20,6 +21,14 @@ from diana_longitudinal_quality_v4_2 import (
 )
 
 SCHEMA_VERSION = 5
+
+
+def _trusted_correction_receipt_resolver():
+    raw_dsn = os.environ.get('BRIDGE_WORKER_DATABASE_URL', '').strip()
+    if not raw_dsn:
+        return None
+    from database.video_correction_review_store import DatabaseCorrectionReceiptResolver
+    return DatabaseCorrectionReceiptResolver(raw_dsn)
 
 
 def _safe_filename(value: str) -> str:
@@ -153,7 +162,12 @@ def main() -> int:
         'parser_scope': reconstruction.get('parser_scope'),
         'qc': reconstruction.get('qc') or {},
     }
-    quality = build_quality_layer(working_master, lesson)
+    quality = build_quality_layer(
+        working_master,
+        lesson,
+        dds_request_executor=execute_digest_pinned_dds3,
+        correction_receipt_resolver=_trusted_correction_receipt_resolver(),
+    )
     curriculum = base._curriculum(working_master, lesson, quality)
     gaps = list(working_master.get('knowledge_gaps') or [])
     if lesson.get('lesson_date_status') != 'CONFIRMED':
