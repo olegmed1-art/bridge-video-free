@@ -57,3 +57,13 @@ def test_sql_e2e_covers_required_negative_and_next_task_cases() -> None:
         "AUTOPILOT_TERMINAL_RECEIPT_NOT_EXACTLY_ONCE",
     ):
         assert code in sql
+
+
+def test_project_planner_requires_an_existing_chat_target() -> None:
+    migration = _read("database/migrations/0328_autopilot_chat_target_gate.sql")
+    sql_test = _read("database/tests/328_autopilot_chat_target_gate.sql")
+    assert "JOIN autopilot.role_chat_registry AS chat" in migration
+    assert "chat.role_id = item.role AND chat.enabled" in migration
+    assert "WAITING_FOR_CHAT_TARGET" in migration
+    assert "AUTOPILOT_UNMAPPED_ROLE_WAS_CLAIMED" in sql_test
+    assert "AUTOPILOT_CHAT_TARGET_WAIT_REASON_MISSING" in sql_test
