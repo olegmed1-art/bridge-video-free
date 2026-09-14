@@ -58,6 +58,24 @@ continues with the next dependency-eligible item.
 
 No idle outcome disables the resident service or its webhook executor.
 
+## Delivery proof
+
+GitHub is only the discovery transport. Creating or reusing a draft dispatch
+pull request records `PUBLISHED`; it can never record `SENT`. A dispatch reaches
+`SENT` only after the registered existing ChatGPT target supplies one bound
+proof containing the exact dispatch/task fingerprint plus:
+
+- the visible target-chat message identifier;
+- the target-chat `RUNNING` acknowledgement and run identifier;
+- the registered target chat and executor identifiers.
+
+The terminal result must repeat the same chat, message, run, and executor
+identifiers. A missing proof becomes durable `DELIVERY_FAILED`, remains
+observable through the retry interval, and then retries the same dispatch
+idempotently. A terminal receipt is unique per dispatch. Its commit wakes the
+next durable project item; when no eligible or waiting work remains, it writes
+one idempotent wake request for the existing `ДИСПЕТЧЕР` chat.
+
 ## Safety and recovery
 
 - no model call, merge, deployment, secret access, infrastructure change, or
