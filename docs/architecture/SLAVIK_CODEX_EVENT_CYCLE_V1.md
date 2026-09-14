@@ -21,7 +21,9 @@ Workspace Agent access tokens относятся к Business/Enterprise и эт�
 
 1. Neon хранит очередь, exact head, epoch, роль, приоритет и состояние.
 2. Resident Oracle worker событийно получает `NOTIFY`, резервирует один из
-   шести слотов (пять обычных и один P0) и создаёт draft dispatch PR.
+   шести слотов (пять обычных и один P0), получает exact head через строго
+   read-only endpoint закреплённого GitHub App broker и создаёт draft dispatch
+   PR. Installation token остаётся внутри broker.
 3. Единственная webhook automation проверяет dispatch PR и Neon binding, затем
    публикует один owner-authenticated `@codex` comment в **target PR**.
 4. GitHub создаёт отдельную изолированную Codex Cloud task/chat. Реальная
@@ -42,6 +44,8 @@ Workspace Agent access tokens относятся к Business/Enterprise и эт�
   повтор точного payload идемпотентен, конфликтующий повтор отклоняется.
 - Нет OpenAI API key, Workspace Agent token или сохранённой ChatGPT-сессии на
   Oracle.
+- Нет анонимного GitHub API polling: PR-head probe использует отдельный
+  least-privilege token с единственным permission `pull_requests:read`.
 - Нет polling для нормального task-to-task перехода; deadline reconciliation
   остаётся только аварийной страховкой.
 - READ_ONLY/VERIFY не меняют код. REPAIR разрешён только роли с

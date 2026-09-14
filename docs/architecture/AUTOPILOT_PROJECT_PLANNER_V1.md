@@ -29,8 +29,10 @@ continues with the next dependency-eligible item.
    reserve. Per-target exact-head fencing still prevents repair races.
 2. Select a `READY` dependency-eligible item by priority. If none exists,
    consider a previously `BLOCKED` item whose observation delay expired.
-3. Fetch the target PR through a credential-free, bounded GitHub `GET` and
-   validate repository, PR identity, state, and the 40-character head SHA.
+3. Fetch the target PR through the pinned broker's bounded read-only GitHub App
+   token and validate repository, PR identity, state, and the 40-character head
+   SHA. The installation token never leaves the broker; the resident receives
+   only the head, open/closed state, and pinned release provenance.
 4. For an open new head, materialize exactly one `READ_ONLY` role task bound to
    that head. Task keys and dispatch epochs are deterministic per generation.
 5. A technical `BLOCKED` result enters the existing bounded path: one `REPAIR`,
@@ -77,8 +79,9 @@ for v1/v2 compatibility and dashboards; they are not a v3 admission gate.
 
 ## Safety and recovery
 
-- no model call, merge, deployment, secret access, infrastructure change, or
-  paid action is available to the planner;
+- no model call, merge, deployment, infrastructure change, or paid action is
+  available to the planner; its only GitHub read goes through the attested
+  broker and cannot exhaust the 60-request anonymous API quota;
 - all target work is bound to the current public head before dispatch;
 - probe leases are fenced and expire;
 - runtime roles cannot read or write planner tables directly;
