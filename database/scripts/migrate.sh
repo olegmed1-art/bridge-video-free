@@ -64,6 +64,38 @@ external_checksum_for() {
   ' "$EXTERNAL_HISTORY_FILE"
 }
 
+migration_checksum() {
+  local migration="$1"
+  local key parts_dir unexpected part_count
+  key="$(basename "$migration" .sql)"
+  parts_dir="$MIGRATIONS_DIR/$key"
+
+  if [[ ! -d "$parts_dir" ]]; then
+    sha256sum "$migration" | awk '{print $1}'
+    return
+  fi
+
+  unexpected="$(find "$parts_dir" -maxdepth 1 -type f ! -name '*.sql' -print -quit)"
+  if [[ -n "$unexpected" ]]; then
+    echo "Composite migration contains an unsupported component: $unexpected" >&2
+    exit 1
+  fi
+  part_count="$(find "$parts_dir" -maxdepth 1 -type f -name '*.sql' -printf '.' | wc -c)"
+  if [[ "$part_count" -eq 0 ]]; then
+    echo "Composite migration has no SQL components: $parts_dir" >&2
+    exit 1
+  fi
+
+  {
+    printf 'FILE:%s\n' "$(basename "$migration")"
+    cat "$migration"
+    while IFS= read -r part; do
+      printf '\nFILE:%s\n' "${part#"$MIGRATIONS_DIR/"}"
+      cat "$part"
+    done < <(find "$parts_dir" -maxdepth 1 -type f -name '*.sql' -print | LC_ALL=C sort)
+  } | sha256sum | awk '{print $1}'
+}
+
 # Catch sequence collisions before connecting migration ordering to durable state. This
 # also checks SQL regression-test numbering when the tests directory is present in the
 # checkout, because duplicate test identities make evidence and failure attribution
@@ -115,7 +147,7 @@ fi
 for migration in "$MIGRATIONS_DIR"/*.sql; do
   [[ -e "$migration" ]] || { echo "No migration files found" >&2; exit 1; }
   key="$(basename "$migration" .sql)"
-  checksum="$(sha256sum "$migration" | awk '{print $1}')"
+  checksum="$(migration_checksum "$migration")"
 
   [[ "$key" =~ ^[A-Za-z0-9_]+$ ]] || { echo "Unsafe migration key: $key" >&2; exit 1; }
   [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid SHA-256 for $key" >&2; exit 1; }

@@ -19,6 +19,7 @@ from bridge_worker_3_1_free import stable_job_id
 from run_drive_3_1_free_oidc import user_oauth_token
 
 from bridge_neon_persistence import _load_embedded_master
+from database.outbox_publisher import publish_changeset_outbox
 from database.runtime_worker_preflight import normalize_dsn
 from database.video_result_persistence import persist_video_result
 
@@ -97,7 +98,8 @@ def main() -> None:
         try:
             master = _load_embedded_master(token, done)
             _verify_master_identity(master, job_id)
-            persist_video_result(raw_dsn, master, done)
+            result = persist_video_result(raw_dsn, master, done)
+            publish_changeset_outbox(raw_dsn, str(result["changeset_id"]))
             ok += 1
             print(json.dumps({"stage": "BACKFILL_ITEM", "job_id": job_id, "status": "ok"}))
         except Exception as exc:

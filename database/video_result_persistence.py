@@ -336,6 +336,7 @@ def persist_video_result(
     }
     analysis_qc = {
         "content_quality": master.get("content_quality") or {},
+        "meta_evidence_gate": master.get("meta_evidence_gate") or {},
         "transcript": ((master.get("technical_qc") or {}).get("transcript") or {}),
         "visual": ((master.get("technical_qc") or {}).get("visual") or {}),
     }
@@ -360,7 +361,10 @@ def persist_video_result(
         "publication_authorization_status": "blocked",
     }
     technical_event_hash = _canonical_json_digest(technical_event_payload)
-    candidate_requires_meta = algorithm_revision == "3.1-free-r25.12-meta"
+    candidate_requires_meta = algorithm_revision in {
+        "3.1-free-r25.12-meta",
+        "3.1-free-r25.13-checkpoint",
+    }
 
     with psycopg.connect(
         dsn,
