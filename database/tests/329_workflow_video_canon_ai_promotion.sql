@@ -327,6 +327,7 @@ DECLARE
   v_item_identity_failed boolean:=false;
   v_version_lifecycle_failed boolean:=false;
   v_test_binding_failed boolean:=false;
+  v_post_restore_test_failed boolean:=false;
   v_expired_restore_failed boolean:=false;
   v_bundle_id uuid:=uuidv7();
   v_good_bundle jsonb;
@@ -846,18 +847,21 @@ BEGIN
   v_restore:=bidding.restore_ai_verified_video_canon(
     v_promotion,v_good_bundle_hash,repeat('d',64)
   );
-  INSERT INTO bidding.rule_test_run(
-    school_id,rule_test_id,result,result_details,method_version
-  ) VALUES (
-    v_school,v_test_id,'pass','{"phase":"post-restore"}','post-restore-regression-v1'
-  );
-  IF NOT EXISTS (
+  BEGIN
+    INSERT INTO bidding.rule_test_run(
+      school_id,rule_test_id,result,result_details,method_version
+    ) VALUES (
+      v_school,v_test_id,'pass','{"phase":"post-restore"}','post-restore-regression-v1'
+    );
+  EXCEPTION WHEN SQLSTATE '55000' THEN
+    v_post_restore_test_failed:=true;
+  END;
+  IF NOT v_post_restore_test_failed OR EXISTS (
        SELECT 1 FROM bidding.rule_test_run
         WHERE rule_test_id=v_test_id
           AND method_version='post-restore-regression-v1'
-          AND result='pass'
      ) THEN
-    RAISE EXCEPTION 'VIDEO_CANON_RESTORED_ACTIVE_RULE_TEST_RUN_BLOCKED';
+    RAISE EXCEPTION 'VIDEO_CANON_RESTORED_ACTIVE_RULE_TEST_MUTATION_NOT_BLOCKED';
   END IF;
   v_repeat:=bidding.restore_ai_verified_video_canon(
     v_promotion,v_good_bundle_hash,repeat('d',64)
