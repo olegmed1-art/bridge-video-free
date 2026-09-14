@@ -7,10 +7,13 @@
 
 ## Purpose and scope
 
-Replace the project-wide single-task gate with bounded parallel execution under
-the existing `СЛАВИК / AUTOPILOT` coordinator. The Dispatcher remains the sole
-planner. Slavik may coordinate at most six transient workers, with five slots
-available to normal work and the sixth reserved for P0 work.
+Replace the project-wide single-task gate with bounded parallel execution in
+the single existing GitHub event-runtime conversation. The project chat
+`СЛАВИК / AUTOPILOT` remains the control surface and the Dispatcher remains the
+sole planner. The runtime may coordinate at most six transient workers, with
+five slots available to normal work and the sixth reserved for P0 work. This
+routing is necessary because a GitHub webhook automation runs in its durable
+task conversation rather than in a project control chat.
 
 The change affects repository Codex configuration, durable planner admission,
 task-level capacity enforcement, role-to-chat routing, rollback, and SQL CI. It
@@ -66,9 +69,9 @@ lease validation, and restores the exact pre-migration chat registry snapshot.
 
 Repository and database readiness do not by themselves prove six live ChatGPT
 worker runs. Production acceptance still requires: reviewed promotion of
-migration 0331, binding the role executor to the existing Slavik chat, and an
-E2E canary with delivery proof and terminal receipts. Until those steps pass,
-the capability must not be reported as live production.
+migration 0331, an in-place upgrade of the single existing event executor, and
+an E2E canary with delivery proof and terminal receipts. Until those steps
+pass, the capability must not be reported as live production.
 
 Cost exposure is bounded by the six-worker ceiling, but parallel agents can use
 more tokens than serialized execution. No new paid service or subscription is

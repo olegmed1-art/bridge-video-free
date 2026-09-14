@@ -30,8 +30,8 @@ BEGIN
            AND role.role_id <> 'PLANNING'
            AND (
                chat.role_id IS NULL
-               OR chat.chat_id <> '6aa37eec-3910-83eb-829e-72914fdbed07'
-               OR chat.executor_id <> 'chat:6aa37eec-3910-83eb-829e-72914fdbed07'
+               OR chat.chat_id <> '6aa6a4c0-4858-83eb-872c-4bc3451edc83'
+               OR chat.executor_id <> 'chat:6aa6a4c0-4858-83eb-872c-4bc3451edc83'
            )
     ) THEN
         RAISE EXCEPTION 'AUTOPILOT_ENABLED_ROLE_NOT_ROUTED_TO_SLAVIK';

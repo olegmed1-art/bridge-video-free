@@ -83,9 +83,12 @@ SELECT * FROM autopilot.role_chat_registry;
 REVOKE ALL ON TABLE autopilot.role_chat_registry_0331_backup
 FROM PUBLIC, autopilot_runtime, autopilot_runtime_principal, autopilot_callback;
 
--- Several role identities intentionally share the one existing Slavik
--- orchestrator.  A role remains the authorization boundary; chat identity is
--- now a routing target and therefore is no longer one-to-one.
+-- Several role identities intentionally share the one existing event-runtime
+-- conversation. ChatGPT webhook automations execute in their durable task
+-- conversation rather than in the project control chat, so this must be the
+-- conversation_id of the single existing executor automation. A role remains
+-- the authorization boundary; chat identity is now a routing target and
+-- therefore is no longer one-to-one.
 ALTER TABLE autopilot.role_chat_registry
     DROP CONSTRAINT role_chat_registry_chat_id_key,
     DROP CONSTRAINT role_chat_registry_chat_url_key,
@@ -95,10 +98,10 @@ INSERT INTO autopilot.role_chat_registry(
     role_id, chat_id, chat_name, chat_url, executor_id, enabled, is_dispatcher
 )
 SELECT role.role_id,
-       '6aa37eec-3910-83eb-829e-72914fdbed07',
-       'СЛАВИК / AUTOPILOT',
-       'https://chatgpt.com/g/g-p-6a75852209c48191809bf433b9e854f6-shkola-sportivnogo-bridzha/c/6aa37eec-3910-83eb-829e-72914fdbed07',
-       'chat:6aa37eec-3910-83eb-829e-72914fdbed07',
+       '6aa6a4c0-4858-83eb-872c-4bc3451edc83',
+       'Autopilot role executor',
+       'https://chatgpt.com/c/6aa6a4c0-4858-83eb-872c-4bc3451edc83',
+       'chat:6aa6a4c0-4858-83eb-872c-4bc3451edc83',
        true,
        false
   FROM autopilot.role_registry AS role
@@ -597,9 +600,9 @@ END;
 $$;
 
 COMMENT ON FUNCTION autopilot.claim_project_work_probe(text,integer) IS
-'Atomically admits project work into six worker slots: five normal plus one P0 reserve; every enabled role routes to the existing Slavik orchestrator.';
+'Atomically admits project work into six worker slots: five normal plus one P0 reserve; every enabled role routes to the single existing GitHub event-runtime conversation.';
 COMMENT ON FUNCTION autopilot.role_worker_capacity_snapshot() IS
-'Read-only authoritative capacity snapshot; the primary Slavik coordinator is excluded from the six worker slots.';
+'Read-only authoritative capacity snapshot; the dispatcher and project control chat are excluded from the six worker slots.';
 
 INSERT INTO public.schema_migration(migration_key)
 VALUES ('0331_autopilot_six_worker_capacity')
