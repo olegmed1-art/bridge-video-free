@@ -51,6 +51,9 @@ Workspace Agent access tokens относятся к Business/Enterprise и эт�
 - READ_ONLY/VERIFY не меняют код. REPAIR разрешён только роли с
   `execution_scope=REPOSITORY` и `can_repair=true`; merge, deploy, production,
   Canon, credentials, paid operations и real media запрещены исполнителю.
+- Исполняемые `task_kind`, `objective` и `task_spec_json` строятся из режима и
+  exact-head binding outbox. Старый текст work item служит только источником
+  allowlisted focus-метаданных и не может превратить READ_ONLY в REPAIR.
 - Отсутствие заранее созданного чата не блокирует роль: каждый `@codex`
   автоматически создаёт отдельную Codex Cloud task/chat.
 
