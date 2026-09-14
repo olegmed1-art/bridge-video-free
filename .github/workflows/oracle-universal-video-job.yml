@@ -36,6 +36,8 @@ jobs:
       issue: ${{ steps.request.outputs.issue }}
       job_id: ${{ steps.request.outputs.job_id }}
       profile: ${{ steps.request.outputs.profile }}
+      job_hash: ${{ steps.request.outputs.job_hash }}
+      source_file_id: ${{ steps.request.outputs.source_file_id }}
       should_execute: ${{ steps.request.outputs.should_execute }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -67,15 +69,21 @@ jobs:
           assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
           assert isinstance(x['issue'], int) and x['issue'] > 0
           job=x['job']
-          jid=job.get('job_id')
-          profile=job.get('profile')
-          from universal_video.contract import validate_job
+          from universal_video.contract import canonical_job_hash, validate_job
+          metadata=dict(job.get('metadata') or {})
+          requested=str(metadata.get('requested_runtime_commit') or '').strip().lower()
+          assert re.fullmatch(r'[0-9a-f]{40}', requested)
+          metadata['request_commit']=os.environ['GITHUB_SHA'].lower()
+          metadata['requested_runtime_commit']=requested
+          job['metadata']=metadata
           validated=validate_job(job)
           assert validated.source['kind']=='google_drive'
           print('request_id='+x['request_id'])
           print('issue='+str(x['issue']))
-          print('job_id='+jid)
-          print('profile='+profile)
+          print('job_id='+validated.job_id)
+          print('profile='+validated.profile)
+          print('job_hash='+canonical_job_hash(validated))
+          print('source_file_id='+validated.source['file_id'])
           PY
 
           issue="$(sed -n 's/^issue=//p' "$GITHUB_OUTPUT" | tail -n1)"
@@ -139,6 +147,8 @@ jobs:
       ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
       JOB_ID: ${{ needs.validate.outputs.job_id }}
       PROFILE: ${{ needs.validate.outputs.profile }}
+      JOB_HASH: ${{ needs.validate.outputs.job_hash }}
+      SOURCE_FILE_ID: ${{ needs.validate.outputs.source_file_id }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -251,7 +261,7 @@ jobs:
           PY
           )"
           submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-drive-base64 '$payload'"
-          status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status '$JOB_ID'"
+          status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status '$JOB_ID' '$PROFILE' '$JOB_HASH' '$SOURCE_FILE_ID'"
           label="Universal Video / $PROFILE / $JOB_ID"
           entry='SUBMITTED'
 
@@ -260,7 +270,7 @@ jobs:
           submit_rc=$?
           set -e
           if (( submit_rc != 0 )); then
-            if grep -qx 'UV_ERROR=job id already exists; use status or a new id' <<<"$initial"; then
+            if grep -qx 'UV_ERROR_CODE=UV_INTAKE_JOB_EXISTS' <<<"$initial"; then
               # A previous observer can lose its SSH session after the resident
               # intake has durably accepted the job.  Resume the exact same
               # immutable job id instead of submitting a duplicate workload.
@@ -286,24 +296,30 @@ jobs:
                 code='UV_SUBMIT_STAGING_UNSAFE'
               elif grep -qx 'UV_ERROR=legacy universal-video.service still active' <<<"$initial"; then
                 code='UV_SUBMIT_LEGACY_SERVICE_ACTIVE'
-              elif grep -qx 'UV_ERROR=unsafe spool or staging directory' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_ROOT_UNSAFE' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_ROOT_UNSAFE'
-              elif grep -qx 'UV_ERROR=unsafe spool inbox' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_INBOX_UNSAFE' <<<"$initial"; then
                 code='UV_SUBMIT_INBOX_UNSAFE'
-              elif grep -Eq '^UV_ERROR=\[Errno 13\] Permission denied' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_PERMISSION_DENIED' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_PERMISSION_DENIED'
-              elif grep -Eq '^UV_ERROR=\[Errno 18\] Invalid cross-device link' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_CROSS_DEVICE' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_CROSS_DEVICE'
-              elif grep -Eq '^UV_ERROR=\[Errno 28\] No space left on device' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_DISK_FULL' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_DISK_FULL'
-              elif grep -Eq '^UV_ERROR=\[Errno 30\] Read-only file system' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_READ_ONLY' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_READ_ONLY'
-              elif grep -Eq '^UV_ERROR=\[Errno 17\] File exists' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_COLLISION' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_COLLISION'
-              elif grep -Eq '^UV_ERROR=(invalid |unsupported source kind|unknown video profile|.* (outside bounded range|must be (an integer|numeric|an object)))' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_CLEANUP_FAILED' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_CLEANUP_FAILED'
+              elif grep -Eq '^UV_ERROR_CODE=UV_INTAKE_(CONTRACT_INVALID|SOURCE_UNSUPPORTED|USAGE_INVALID)$' <<<"$initial"; then
                 code='UV_SUBMIT_CONTRACT_REJECTED'
-              elif grep -qx 'UV_ERROR=server intake command failed' <<<"$initial"; then
-                code='UV_SUBMIT_INTAKE_RUNTIME_FAILED'
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_IO_FAILED' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_IO_FAILED'
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_EXECUTION_FAILED' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_EXECUTION_FAILED'
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_REJECTED' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_REJECTED'
               fi
               echo "PRE_SUBMIT_ERROR_CODE=$code" >> "$GITHUB_ENV"
               exit 1

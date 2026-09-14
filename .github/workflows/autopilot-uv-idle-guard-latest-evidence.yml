@@ -1,0 +1,158 @@
+name: Autopilot Universal Video latest idle STOP guard evidence
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-uv-idle-guard-latest-evidence.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-uv-idle-guard-evidence-ef5f6401
+  cancel-in-progress: false
+
+jobs:
+  evidence:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      EXACT_IDLE_HEAD: ef5f6401e7ba423c063d7c260fdd91733540c7b8
+      MEDIA_EXECUTION: DISABLED
+      ORACLE_LIFECYCLE_ACTION: NONE
+    steps:
+      - name: Initialize fail-closed state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          cat > "$RUNNER_TEMP/uv-idle-state.env" <<'EOF'
+          SOURCE_GATE=UNKNOWN
+          TEST_GATE=NOT_RUN
+          CONSUMER_GATE=NOT_RUN
+          SIDE_EFFECT_GATE=UNKNOWN
+          EOF
+
+      - name: Checkout exact idle-guard head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ef5f6401e7ba423c063d7c260fdd91733540c7b8
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Bind evidence to exact source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXACT_IDLE_HEAD" ]]
+          [[ -z "$(git status --porcelain)" ]]
+          test -f ops/oracle_idle_state.sh
+          test -f ops/oracle_stop_guard.sh
+          test -f tests/test_oracle_idle_stop_guard.py
+          test -f .github/workflows/oracle-instance-power.yml
+          test -f .github/workflows/oracle-autopilot-staging-finalize.yml
+          sed -i 's/^SOURCE_GATE=.*/SOURCE_GATE=PASS/' "$RUNNER_TEMP/uv-idle-state.env"
+          echo 'UV_IDLE_EXACT_SOURCE=PASS'
+
+      - name: Install bounded test dependencies
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Run classifier and STOP-boundary tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m pip install --disable-pip-version-check -q pytest pyyaml
+          bash -n ops/oracle_idle_state.sh
+          bash -n ops/oracle_stop_guard.sh
+          python -m pytest -q tests/test_oracle_idle_stop_guard.py | tee "$RUNNER_TEMP/uv-idle-pytest.log"
+          grep -Eq '[0-9]+ passed' "$RUNNER_TEMP/uv-idle-pytest.log"
+          sed -i 's/^TEST_GATE=.*/TEST_GATE=PASS/' "$RUNNER_TEMP/uv-idle-state.env"
+          echo 'UV_IDLE_TEST_GATE=PASS'
+
+      - name: Prove all real STOP consumers use the strict guard
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          paths = (
+              Path('.github/workflows/oracle-instance-power.yml'),
+              Path('.github/workflows/oracle-autopilot-staging-finalize.yml'),
+          )
+          for path in paths:
+              yaml.safe_load(path.read_text(encoding='utf-8'))
+              text = path.read_text(encoding='utf-8')
+              assert '/usr/local/sbin/oracle-stop-guard' in text, path
+              assert 'ORACLE_STOP_ALLOWED=YES' in text, path
+          finalizer = paths[1].read_text(encoding='utf-8')
+          assert 'ORACLE_IDLE_STATE=IDLE' not in finalizer
+          guard = Path('ops/oracle_stop_guard.sh').read_text(encoding='utf-8')
+          assert "expected_idle=$'ORACLE_IDLE_REASON=all_required_sources_proved_idle\\nORACLE_IDLE_STATE=IDLE'" in guard
+          assert "ORACLE_STOP_ALLOWED=YES" in guard
+          classifier = Path('ops/oracle_idle_state.sh').read_text(encoding='utf-8')
+          for required in (
+              'assistant_lab_telemetry_empty',
+              'video_queue_telemetry_empty_after_assistant_lab_success',
+              '/opt/bridge-school/assistant-lab-observer/jobs/pending',
+              '/opt/bridge-school/assistant-lab-observer/jobs/running',
+              "'PENDING_CANARY','QUEUED','LEASED'",
+          ):
+              assert required in classifier, required
+          combined = guard + classifier
+          for forbidden in ('shutdown ', 'poweroff', 'reboot ', 'systemctl stop'):
+              assert forbidden not in combined, forbidden
+          print('UV_IDLE_STRICT_CONSUMER_GATE=PASS')
+          PY
+          sed -i 's/^CONSUMER_GATE=.*/CONSUMER_GATE=PASS/' "$RUNNER_TEMP/uv-idle-state.env"
+          sed -i 's/^SIDE_EFFECT_GATE=.*/SIDE_EFFECT_GATE=PASS/' "$RUNNER_TEMP/uv-idle-state.env"
+
+      - name: Build retained secret-free receipt
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source "$RUNNER_TEMP/uv-idle-state.env"
+          result='FAIL'
+          [[ "$SOURCE_GATE" == PASS && "$TEST_GATE" == PASS && "$CONSUMER_GATE" == PASS && "$SIDE_EFFECT_GATE" == PASS ]] && result='PASS'
+          test_summary='UNAVAILABLE'
+          if [[ -f "$RUNNER_TEMP/uv-idle-pytest.log" ]]; then
+            test_summary="$(tail -n 1 "$RUNNER_TEMP/uv-idle-pytest.log" | tr -cd 'A-Za-z0-9 ._-')"
+          fi
+          jq -n \
+            --arg gate 'UV_ORACLE_IDLE_STOP_GUARD_LATEST_HEAD' \
+            --arg result "$result" \
+            --arg idle_head "$EXACT_IDLE_HEAD" \
+            --arg workflow_head "$GITHUB_SHA" \
+            --arg source_gate "$SOURCE_GATE" \
+            --arg test_gate "$TEST_GATE" \
+            --arg consumer_gate "$CONSUMER_GATE" \
+            --arg side_effect_gate "$SIDE_EFFECT_GATE" \
+            --arg test_summary "$test_summary" \
+            --arg classifier_blob "$(git hash-object ops/oracle_idle_state.sh)" \
+            --arg guard_blob "$(git hash-object ops/oracle_stop_guard.sh)" \
+            --arg tests_blob "$(git hash-object tests/test_oracle_idle_stop_guard.py)" \
+            '{gate:$gate,result:$result,idle_head:$idle_head,workflow_head:$workflow_head,source_gate:$source_gate,test_gate:$test_gate,consumer_gate:$consumer_gate,side_effect_gate:$side_effect_gate,test_summary:$test_summary,classifier_blob:$classifier_blob,guard_blob:$guard_blob,tests_blob:$tests_blob,unknown_blocks_stop:true,real_stop_consumers_use_guard:true,oracle_contact:false,oracle_lifecycle_action:"NONE",media_execution:"DISABLED",production_mutation:false}' \
+            > uv-idle-stop-guard-receipt.json
+          cat uv-idle-stop-guard-receipt.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload retained receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: uv-idle-stop-guard-${{ github.run_id }}-${{ github.run_attempt }}
+          path: uv-idle-stop-guard-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce terminal evidence gate
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          jq -e '.result == "PASS" and .idle_head == "ef5f6401e7ba423c063d7c260fdd91733540c7b8" and .unknown_blocks_stop == true and .real_stop_consumers_use_guard == true and .oracle_contact == false and .oracle_lifecycle_action == "NONE" and .production_mutation == false' uv-idle-stop-guard-receipt.json >/dev/null
+          echo 'UV_ORACLE_IDLE_STOP_GUARD_EVIDENCE=PASS'

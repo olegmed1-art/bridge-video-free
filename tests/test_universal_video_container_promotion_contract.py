@@ -9,17 +9,28 @@ OPERATOR_INSTALL = (ROOT / "ops/install_universal_video_operator.sh").read_text(
 
 
 def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
-    assert "assert x.get('conclusion') == 'success'" in WORKFLOW
-    assert "assert x.get('head_sha') == os.environ['EXPECTED_COMMIT']" in WORKFLOW
+    assert "validate_universal_video_promotion_evidence.py select-artifact" in WORKFLOW
+    assert "validate_universal_video_promotion_evidence.py verify-archive" in WORKFLOW
+    assert "actions/runs/$evidence_run_id/artifacts?per_page=100" in WORKFLOW
+    assert "actions/artifacts/$artifact_id/zip" in WORKFLOW
+    assert '--expected-artifact-digest "$artifact_digest"' in WORKFLOW
+    assert '--expected-image-digest "$image_digest"' in WORKFLOW
+    assert '--expected-run-id "$evidence_run_id"' in WORKFLOW
+    assert '--expected-receipt-id "$receipt_id"' in WORKFLOW
     assert "group: oracle-instance-workload-mutation" in WORKFLOW
     assert "ORACLE_INSTANCE_RUNNING_PASS" in WORKFLOW
     assert "compute instance action --instance-id \"$INSTANCE_ID\" --action START" in WORKFLOW
     assert "rollback" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_ROLLED_BACK" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_ROLLBACK_FAILED" in SCRIPT
     assert "stage=%s rc=%s" in SCRIPT
     for stage in ("installer-activation", "service-verification", "resident-status", "protected-postflight"):
         assert f"CURRENT_STAGE='{stage}'" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_JOB_RUNNING" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_WORKLOAD_LOCK_INVALID" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_WORKLOAD_BUSY" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_LEGACY_STATE_UNKNOWN" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_CONTAINER_STATE_UNKNOWN" in SCRIPT
     assert "UNIVERSAL_VIDEO_CONTAINER_BUILD=0" in SCRIPT
     assert "contents/ops/oracle_universal_video_container_promote.sh?ref=$EXPECTED_COMMIT" in WORKFLOW
     assert "git hash-object -- /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" in WORKFLOW
@@ -30,12 +41,119 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "UNIVERSAL_VIDEO_ACTIVATE=1" in WORKFLOW
     assert "systemctl is-active --quiet universal-video-container.service" in WORKFLOW
     assert "expected_prepare_blob" in WORKFLOW
+    assert "expected_preflight_blob" in WORKFLOW
+    assert "expected_dsn_validator_blob" in WORKFLOW
     assert 'git hash-object "$RUNNER_TEMP/prepare.sh"' in WORKFLOW
+    assert 'git hash-object "$RUNNER_TEMP/prepromotion-preflight.sh"' in WORKFLOW
+    assert 'git hash-object "$RUNNER_TEMP/validate-video-queue-dsn.py"' in WORKFLOW
     assert '--jq .content | base64 --decode > "$RUNNER_TEMP/prepare.sh"' in WORKFLOW
     assert "tr -d" not in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_ENTRYPOINT_MISSING" in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_BLOB_MISMATCH" in WORKFLOW
     assert " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" in WORKFLOW
+
+
+def test_promotion_accepts_only_one_fresh_request_commit_after_evidence() -> None:
+    assert "fetch-depth: 0" in WORKFLOW
+    assert 'git merge-base --is-ancestor "$expected_commit" "$GITHUB_SHA"' in WORKFLOW
+    assert 'git rev-list --count "$expected_commit..$GITHUB_SHA"' in WORKFLOW
+    assert 'git cat-file -e "$expected_commit:$request_file"' in WORKFLOW
+    assert 'git diff --name-only "$expected_commit" "$GITHUB_SHA"' in WORKFLOW
+    assert '"${changed_since_evidence[0]}" == "$request_file"' in WORKFLOW
+    assert "UNIVERSAL_VIDEO_PROMOTION_FRESH_REQUEST" in WORKFLOW
+    assert WORKFLOW.count('git/ref/heads/main" --jq') >= 3
+    freshness = WORKFLOW.index("UNIVERSAL_VIDEO_PROMOTION_FRESH_REQUEST")
+    oracle_mutation = WORKFLOW.index("compute instance action", freshness)
+    host_mutation = WORKFLOW.index("Promote attested image with rollback", oracle_mutation)
+    final_main = WORKFLOW.index('git/ref/heads/main" --jq', host_mutation)
+    remote_preflight = WORKFLOW.index("ssh_base=(ssh", final_main)
+    assert freshness < oracle_mutation < final_main < remote_preflight
+
+
+def test_promotion_rechecks_live_main_at_each_host_mutation_boundary() -> None:
+    promote_step = WORKFLOW.index("- name: Promote attested image with rollback")
+    initial_check = WORKFLOW.index(
+        "verify_promotion_current_main host-preflight", promote_step
+    )
+    source_condition = WORKFLOW.index(
+        "systemctl is-active --quiet universal-video-container.service", initial_check
+    )
+    source_oci_check = WORKFLOW.index(
+        "verify_no_active_instance_agent_commands source-prepare", source_condition
+    )
+    source_check = WORKFLOW.index(
+        "verify_promotion_current_main source-prepare", source_oci_check
+    )
+    source_mutation = WORKFLOW.index(
+        "UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT'", source_check
+    )
+    entrypoint_pass = WORKFLOW.index("UV_CONTAINER_PROMOTION_ENTRYPOINT_PASS", source_mutation)
+    promotion_oci_check = WORKFLOW.index(
+        "verify_no_active_instance_agent_commands image-promotion", entrypoint_pass
+    )
+    promotion_check = WORKFLOW.index(
+        "verify_promotion_current_main image-promotion", promotion_oci_check
+    )
+    promotion_mutation = WORKFLOW.index(
+        " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh",
+        promotion_check,
+    )
+
+    assert initial_check < source_condition < source_oci_check < source_check < source_mutation
+    assert (
+        source_mutation
+        < entrypoint_pass
+        < promotion_oci_check
+        < promotion_check
+        < promotion_mutation
+    )
+
+
+def test_promotion_reconciles_exact_instance_commands_before_all_mutations() -> None:
+    ensure = WORKFLOW.index("- name: Ensure Oracle instance is running")
+    lifecycle_reconcile = WORKFLOW.index(
+        "boundary=instance-lifecycle", ensure
+    )
+    instance_start = WORKFLOW.index("compute instance action", lifecycle_reconcile)
+    promote = WORKFLOW.index("- name: Promote attested image with rollback")
+    helper = WORKFLOW.index("verify_no_active_instance_agent_commands(){", promote)
+    assert lifecycle_reconcile < instance_start < promote < helper
+    assert WORKFLOW.count("instance-agent command-execution list") >= 2
+    assert WORKFLOW.count("ops/verify_oci_instance_command_executions.py") >= 2
+
+
+def test_promotion_hands_off_exclusive_fence_after_old_resident_stops() -> None:
+    lock_path = SCRIPT.index('readonly WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"')
+    lock_metadata = SCRIPT.index("root:universal-video:640:1", lock_path)
+    lock_acquire = SCRIPT.index("flock --exclusive --nonblock 9", lock_metadata)
+    final_idle = SCRIPT.index("has_running_job && fail UV_CONTAINER_PROMOTION_JOB_RUNNING", lock_acquire)
+    legacy_stop = SCRIPT.index('systemctl disable --now "$OLD_SERVICE"', final_idle)
+    container_stop = SCRIPT.index('systemctl disable --now "$NEW_SERVICE"', legacy_stop)
+    unlock = SCRIPT.index("flock --unlock 9", container_stop)
+    new_start = SCRIPT.index('oracle_universal_video_container_install.sh', unlock)
+    assert lock_path < lock_metadata < lock_acquire < final_idle < legacy_stop < container_stop < unlock < new_start
+    assert 'exec 9<"$WORKLOAD_LOCK"' in SCRIPT
+    assert "workload_lock_held=1" in SCRIPT
+    assert "release_workload_fence" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_WORKLOAD_UNLOCK_FAILED" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_CONTAINER_QUIESCE_FAILED" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_DUAL_RESIDENT" in SCRIPT
+
+
+def test_promotion_runs_exact_queue_and_speaker_gates_before_source_preparation() -> None:
+    preflight = WORKFLOW.index('"$RUNNER_TEMP/prepromotion-preflight.sh"')
+    queue_gate = WORKFLOW.index("VIDEO_QUEUE_DSN_PREFLIGHT_PASS", preflight)
+    speaker_gate = WORKFLOW.index("UNIVERSAL_VIDEO_PREPROMOTION_PREFLIGHT_PASS", queue_gate)
+    source_prepare = WORKFLOW.index(
+        "UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT'", speaker_gate
+    )
+
+    assert queue_gate < speaker_gate < source_prepare
+    assert "/opt/bridge-school/universal-video/.venv/bin/python -" in WORKFLOW
+    assert "validate-video-queue-dsn.py" in WORKFLOW
+    assert "test ! -L /opt/bridge-school/universal-video/secrets/video-queue-dsn" in WORKFLOW
+    assert 'credential_meta="$(sudo -n stat -c' in WORKFLOW
+    assert 'credential_meta="$(stat -c' not in WORKFLOW
 
 
 def test_promotion_selects_exact_image_and_excludes_legacy_worker() -> None:
@@ -52,7 +170,22 @@ def test_promotion_requires_a_fresh_status_from_the_new_resident() -> None:
     assert "(( fresh_status != 1 ))" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_STATUS_MISSING" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_STATUS_STALE" in SCRIPT
-    assert SCRIPT.count("float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])") == 2
+    assert "float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])" in SCRIPT
+    assert "x.get('resident_id') == 'container'" in SCRIPT
+    assert "x['process_id'] == int(os.environ['EXPECTED_PROCESS_ID'])" in SCRIPT
+    assert "x['process_start_ticks'] == int(os.environ['EXPECTED_PROCESS_START_TICKS'])" in SCRIPT
+    assert "re.fullmatch(r'[0-9a-f]{32}', x['process_nonce'])" in SCRIPT
+    assert "docker inspect --format '{{.State.Pid}}' universal-video-container" in SCRIPT
+    assert "pid_descends_from \"$worker_pid\" \"$container_root_pid\"" in SCRIPT
+    assert "NSpid:" in SCRIPT
+    assert 'PROCESS_STAT="/proc/$process_id/stat"' in SCRIPT
+    assert '[[ "$(process_start_ticks "$worker_pid"' in SCRIPT
+    assert "if resident_status_ready; then" in SCRIPT
+    assert "CURRENT_STAGE='resident-status-final'" in SCRIPT
+    assert "resident_status_ready || fail UV_CONTAINER_PROMOTION_STATUS_STALE" in SCRIPT
+    assert SCRIPT.index("CURRENT_STAGE='protected-postflight'") < SCRIPT.index(
+        "CURRENT_STAGE='resident-status-final'"
+    ) < SCRIPT.index("CURRENT_STAGE='complete'")
 
 
 def test_promotion_exposes_only_structured_container_runtime_failure_code() -> None:
@@ -108,12 +241,76 @@ def test_post_switch_failures_invoke_rollback_directly() -> None:
 
 
 def test_promotion_disables_legacy_and_rollback_restores_original_state() -> None:
+    assert "CURRENT_STAGE='queue-credential-preflight'" in SCRIPT
+    assert 'validate_video_queue_dsn.py" "$queue_dsn_file"' in SCRIPT
+    assert SCRIPT.index("CURRENT_STAGE='queue-credential-preflight'") < SCRIPT.index(
+        "CURRENT_STAGE='legacy-quiesce'"
+    )
+    assert SCRIPT.index("CURRENT_STAGE='speaker-model-preflight'") < SCRIPT.index(
+        "CURRENT_STAGE='legacy-quiesce'"
+    )
+    speaker_preflight = SCRIPT[
+        SCRIPT.index("CURRENT_STAGE='speaker-model-preflight'") :
+        SCRIPT.index("CURRENT_STAGE='legacy-quiesce'")
+    ]
+    assert '"$EXPECTED_DIGEST" true' in speaker_preflight
+    assert "UV_CONTAINER_PROMOTION_SPEAKER_MODEL_INVALID" in speaker_preflight
     assert 'old_enabled_before="$(systemctl is-enabled "$OLD_SERVICE"' in SCRIPT
     assert 'old_active_before="$(systemctl is-active "$OLD_SERVICE"' in SCRIPT
     assert 'systemctl disable --now "$OLD_SERVICE" || fail UV_CONTAINER_PROMOTION_LEGACY_QUIESCE_FAILED' in SCRIPT
     assert 'CURRENT_STAGE=\'legacy-quiesce\'' in SCRIPT
     assert 'systemctl enable "$OLD_SERVICE"' in SCRIPT
     assert 'if [[ "$old_active_before" == active ]]; then' in SCRIPT
+    assert 'new_enabled_before="$(systemctl is-enabled "$NEW_SERVICE"' in SCRIPT
+    assert 'new_active_before="$(systemctl is-active "$NEW_SERVICE"' in SCRIPT
+    assert 'if [[ "$new_enabled_before" == enabled ]]; then' in SCRIPT
+    assert 'if [[ "$new_active_before" == active ]]; then' in SCRIPT
+    assert 'service_matches_captured_state "$NEW_SERVICE" "$new_enabled_before" "$new_active_before"' in SCRIPT
+    assert 'service_matches_captured_state "$OLD_SERVICE" "$old_enabled_before" "$old_active_before"' in SCRIPT
+    assert '[[ "$observed_enabled" == "$expected_enabled" ]] || return 1' in SCRIPT
+    assert '[[ "$observed_active" == "$expected_active" ]] || return 1' in SCRIPT
+    assert 'current_new_enabled="$(systemctl is-enabled "$NEW_SERVICE"' in SCRIPT
+    assert '[[ "$current_new_enabled" != not-found || "$current_new_active" != inactive ]]' in SCRIPT
+    assert 'rm -f -- "$NEW_SERVICE_UNIT" || rollback_failed=1' in SCRIPT
+    assert 'systemctl daemon-reload >/dev/null 2>&1 || rollback_failed=1' in SCRIPT
+    assert 'install -o root -g root -m 0644 "$operator_backup_root/container-unit" "$NEW_SERVICE_UNIT"' in SCRIPT
+    assert 'install -o root -g root -m 0640 "$operator_backup_root/container-env" "$NEW_SERVICE_ENV"' in SCRIPT
+    assert 'runtime_files_match_snapshot || rollback_failed=1' in SCRIPT
+    assert 'operator_files_match_snapshot || rollback_failed=1' in SCRIPT
+    assert 'cmp -s "$operator_backup_root/operator" "$OPERATOR_TARGET"' in SCRIPT
+    assert 'cmp -s "$operator_backup_root/sudoers" "$OPERATOR_SUDOERS"' in SCRIPT
+    assert 'visudo -cf /etc/sudoers >/dev/null 2>&1 || return 1' in SCRIPT
+    assert 'readonly -a OBSOLETE_OPERATOR_PATHS=(' in SCRIPT
+    assert 'readonly -a OBSOLETE_SUDOERS_PATHS=(' in SCRIPT
+    assert 'obsolete_operator_existed=(0 0 0)' in SCRIPT
+    assert 'obsolete_sudoers_existed=(0 0 0)' in SCRIPT
+    assert '"$operator_backup_root/obsolete-operator-$index"' in SCRIPT
+    assert '"$operator_backup_root/obsolete-sudoers-$index"' in SCRIPT
+    assert 'cmp -s "$operator_backup_root/container-unit" "$NEW_SERVICE_UNIT"' in SCRIPT
+    assert 'cmp -s "$operator_backup_root/container-env" "$NEW_SERVICE_ENV"' in SCRIPT
+    assert "readonly RECOVERY_ROOT='/var/lib/bridge-school/universal-video-promotion-recovery'" in SCRIPT
+    assert 'operator_backup_root="$(mktemp -d "$RECOVERY_ROOT/snapshot.XXXXXX")"' in SCRIPT
+    assert "stat -c '%U:%G:%a' \"$RECOVERY_ROOT\"" in SCRIPT
+    assert "stat -c '%U:%G:%a' \"$operator_backup_root\"" in SCRIPT
+    recovery_snapshot = SCRIPT[SCRIPT.index("CURRENT_STAGE='operator-snapshot'") : SCRIPT.index("operator_snapshot_ready=1")]
+    assert "%h" not in recovery_snapshot
+    assert 'preserve_recovery_snapshot=1' in SCRIPT
+    assert 'recovery_snapshot=%s' in SCRIPT
+    cleanup = SCRIPT[SCRIPT.index("cleanup(){") : SCRIPT.index("release_workload_fence(){")]
+    assert "preserve_recovery_snapshot == 0" in cleanup
+    assert "rollback_failed=1" in SCRIPT
+    assert "if has_running_job; then\n      rollback_failed=1" in SCRIPT
+    assert 'enabled|disabled|static|indirect|masked|masked-runtime|not-found' in SCRIPT
+    assert 'active|inactive|failed' in SCRIPT
+    assert '*) return 1 ;;' in SCRIPT
+    assert 'if has_running_job || ! acquire_workload_fence; then' in SCRIPT
+    rollback = SCRIPT[SCRIPT.index("rollback(){") : SCRIPT.index("trap rollback ERR")]
+    rollback_acquire = rollback.index("acquire_workload_fence")
+    rollback_recheck = rollback.index("if has_running_job; then", rollback_acquire)
+    rollback_stop = rollback.index('systemctl disable --now "$NEW_SERVICE"', rollback_recheck)
+    rollback_release = rollback.index("release_workload_fence", rollback_stop)
+    rollback_restore = rollback.index('systemctl start "$NEW_SERVICE"', rollback_release)
+    assert rollback_acquire < rollback_recheck < rollback_stop < rollback_release < rollback_restore
     assert "UV_CONTAINER_PROMOTION_LEGACY_ENABLED" in SCRIPT
 
 
@@ -126,12 +323,16 @@ def test_promotion_atomically_syncs_revision_bound_operator() -> None:
     assert "CURRENT_STAGE='operator-install'" in SCRIPT
     assert "CURRENT_STAGE='operator-blob'" in SCRIPT
     assert "CURRENT_STAGE='operator-smoke'" in SCRIPT
-    assert 'sudo -u ocarun sudo -n "$OPERATOR_TARGET" status ..' in SCRIPT
-    assert 'if operator_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. 2>&1)"; then' in SCRIPT
+    assert 'sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. smoke' in SCRIPT
+    assert 'if operator_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. smoke' in SCRIPT
     assert "operator_smoke_rc=0" in SCRIPT
     assert "operator_smoke_rc=$?" in SCRIPT
     smoke = SCRIPT[SCRIPT.index("CURRENT_STAGE='operator-smoke'"):SCRIPT.index("CURRENT_STAGE='protected-postflight'")]
     assert "set +e" not in smoke
+    assert "CURRENT_STAGE='operator-submit-smoke'" in smoke
+    assert 'submit-drive-base64 e30=' in smoke
+    assert "UV_ERROR_CODE=UV_INTAKE_CONTRACT_INVALID" in smoke
+    assert "UV_CONTAINER_PROMOTION_OPERATOR_SUBMIT_SMOKE_REASON" in smoke
 
 
 def test_operator_installer_failures_have_bounded_nonsecret_codes() -> None:
@@ -167,6 +368,16 @@ def test_operator_sync_is_restored_by_promotion_rollback() -> None:
     assert 'rm -f -- "$OPERATOR_SUDOERS"' in SCRIPT
 
 
-def test_operator_changes_require_fresh_container_evidence() -> None:
-    assert "- 'ops/universal_video_operator.sh'" in EVIDENCE_WORKFLOW
-    assert "- 'ops/install_universal_video_operator.sh'" in EVIDENCE_WORKFLOW
+def test_retired_container_evidence_cannot_run_on_operator_changes() -> None:
+    assert EVIDENCE_WORKFLOW.startswith(
+        "name: Retired Oracle Universal Video Container Evidence Contract\n"
+    )
+    assert "name: Oracle Universal Video Container Evidence\n" not in EVIDENCE_WORKFLOW
+    assert "  retired-evidence-contract:" in EVIDENCE_WORKFLOW
+    assert "name: Retired legacy evidence entrypoint contract" in EVIDENCE_WORKFLOW
+    assert "pull_request:" in EVIDENCE_WORKFLOW
+    assert "workflow_dispatch:" not in EVIDENCE_WORKFLOW
+    assert "push:" not in EVIDENCE_WORKFLOW
+    assert "- 'ops/universal_video_operator.sh'" not in EVIDENCE_WORKFLOW
+    assert "- 'ops/install_universal_video_operator.sh'" not in EVIDENCE_WORKFLOW
+    assert "UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true" in EVIDENCE_WORKFLOW

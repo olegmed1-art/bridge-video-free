@@ -1,0 +1,21 @@
+{
+  "request_id": "autopilot-online-resume-20260902-02",
+  "action": "resume_online_pilot",
+  "target_host": "158.180.47.161",
+  "source_revision": "f7db49d121c7894b795a185917fcf977a2203c36",
+  "deployment_revision": "9064044d4c5b85803c6778060dff4843111ab888",
+  "staging_run_id": 33586404964,
+  "activation_run_id": 33586501046,
+  "deployment_canary_task_id": "04d3c0ea-0ded-4635-b82f-c14a896c626a",
+  "resume_key": "online-stale-running-deployment-resume-20260902-v1",
+  "resume_receipt_proof_sha256": "a7cbb235f60a29053e5bdf33c41f70ae7c6be53b3b1c9e0b6d286caa47bb8ffe",
+  "activation_scope": "SHADOW_ONLY",
+  "expected_circuit_code": "ONLINE_STALE_RUNNING",
+  "temp_branch_id": "br-still-tooth-b1ilkfcj",
+  "production_branch_id": "br-wispy-lab-b1rq54of",
+  "max_tasks_per_hour": 720,
+  "no_instance_stop": true,
+  "no_worker_restart": true,
+  "no_observer_restart": true,
+  "production_mutation": false
+}

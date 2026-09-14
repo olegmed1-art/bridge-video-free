@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "broker_url": "https://bridge-school-autopilot-kqkoglvkj-olegmed1-4368s-projects.vercel.app/v1/github/draft-repair",
+  "broker_source_sha": "4ef8f6c79bbf1a5688c9b2b93d72f24758c65939",
+  "broker_artifact_sha256": "909fc6d2311c9fa09f4b50d7d960c4828f2db195ddf9b629c14acfe8c76ae68f",
+  "broker_policy_sha256": "ee0bd5d64331762df03ca44dec91a0a6fd740386f53b0033e59018f21c16adf8",
+  "broker_policy_version": "physical-no-merge-v2",
+  "broker_provenance_sha256": "b889a18d7c7c79c5f01bc06430a8ebf46edcf0842b9aa236dcac1795f261ab75"
+}

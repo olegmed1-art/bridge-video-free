@@ -141,11 +141,13 @@ def upload_json_with_readiness_v2(token, parent, name, payload):
     readiness = quality.get("readiness") or {}
 
     if name.startswith("AI_DONE_"):
-        augmented = dict(payload)
-        augmented["readinessV2"] = readiness
-        augmented["qualityV2Counts"] = quality.get("counts") or {}
-        uploaded = _previous_upload_json(token, parent, name, augmented)
-        pdf_id = ((augmented.get("masterPdf") or {}).get("driveId"))
+        # The base processor returns this same mapping after upload. Mutate it
+        # before upload so terminal evidence compares against the exact bytes
+        # persisted in AI_DONE, rather than the unaugmented pre-upload value.
+        payload["readinessV2"] = readiness
+        payload["qualityV2Counts"] = quality.get("counts") or {}
+        uploaded = _previous_upload_json(token, parent, name, payload)
+        pdf_id = ((payload.get("masterPdf") or {}).get("driveId"))
         if readiness.get("technical_status") == "TECHNICAL_READY":
             _previous_upload_json(
                 token,

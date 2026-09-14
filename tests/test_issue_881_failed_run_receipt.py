@@ -1,0 +1,233 @@
+from ops.issue_881_failed_run_receipt import (
+    CLEANUP_TYPED_PROOF_REQUIREMENTS,
+    RESOURCE_FIELDS,
+    cleanup_typed_proof_verdicts,
+    parse_receipt,
+)
+
+
+RUN_ID = "33919714953"
+PREFIX = "issue-881-root-recovery-fdb6c3766909fe4e-run-"
+
+
+def receipt(*, instance="none", create_status="REQUEST_UNCERTAIN", create_rc="1"):
+    ids = {
+        "instance": instance,
+        "boot-volume": "ocid1.bootvolume.oc1.region.volume",
+        "vcn": "ocid1.vcn.oc1.region.vcn",
+        "internet-gateway": "ocid1.internetgateway.oc1.region.ig",
+        "route-table": "ocid1.routetable.oc1.region.route",
+        "security-list": "ocid1.securitylist.oc1.region.security",
+        "subnet": "ocid1.subnet.oc1.region.subnet",
+    }
+    lines = [
+        "- operation: `EXPAND_AND_RECOVER`",
+        "- workflow outcome: `failure`",
+        f"- current-run stamp: `{PREFIX}{RUN_ID}-a1`",
+        f"- isolated instance create request: `{create_status}`; rc: `{create_rc}`",
+    ]
+    lines.extend(f"- {RESOURCE_FIELDS[kind]}: `{value}`" for kind, value in ids.items())
+    lines.append(f"- run: https://github.com/olegmed1-art/bridge-video-free/actions/runs/{RUN_ID}")
+    return "\n".join(lines) + "\n"
+
+
+def test_parses_authoritative_typed_ids_and_binds_stamp_and_hash():
+    parsed = parse_receipt(receipt(), RUN_ID, PREFIX)
+    assert parsed["stamp"] == f"{PREFIX}{RUN_ID}-a1"
+    assert parsed["resources"]["instance"] == []
+    assert parsed["instance_create_rc"] == 1
+    assert parsed["resources"]["boot-volume"] == ["ocid1.bootvolume.oc1.region.volume"]
+    assert len(parsed["receipt_sha256"]) == 64
+
+
+def _assert_rejected(body):
+    try:
+        parse_receipt(body, RUN_ID, PREFIX)
+    except ValueError:
+        return
+    raise AssertionError("malformed receipt was accepted")
+
+
+def test_rejects_malformed_or_mismatched_receipt():
+    for old, new in [
+        ("workflow outcome: `failure`", "workflow outcome: `success`"),
+        (RUN_ID, "33919714954"),
+        ("temporary VCN ID: `ocid1.vcn", "temporary VCN ID: `none`\n- ignored: `ocid1.vcn"),
+        ("ocid1.subnet", "ocid1.vcn"),
+    ]:
+        _assert_rejected(receipt().replace(old, new, 1))
+
+
+def test_rejects_ocid_prefix_tricks_and_publicly_unsafe_tokens():
+    for invalid in (
+        "ocid1.vcn.evil.oc1.region.value",
+        "ocid1.vcn.oc1.region.value/extra",
+        "ocid1.vcn.oc1.region.value?query",
+        "ocid1.VCN.oc1.region.value",
+    ):
+        _assert_rejected(receipt().replace("ocid1.vcn.oc1.region.vcn", invalid))
+
+
+def test_requires_uncertain_status_when_instance_id_is_missing():
+    _assert_rejected(receipt(create_status="CAPTURED"))
+
+
+def test_requires_complete_numeric_create_request_rc():
+    _assert_rejected(receipt().replace("; rc: `1`", ""))
+    _assert_rejected(receipt(create_rc="unknown"))
+    _assert_rejected(receipt().replace("; rc: `1`", "; rc: `1`; trailing: `x`"))
+
+
+def test_accepts_authoritative_instance_id_when_launch_was_captured():
+    parsed = parse_receipt(
+        receipt(instance="ocid1.instance.oc1.region.instance", create_status="CAPTURED"),
+        RUN_ID,
+        PREFIX,
+    )
+    assert parsed["resources"]["instance"] == ["ocid1.instance.oc1.region.instance"]
+
+
+def test_accepts_exact_redacted_rejected_preflight_receipt_for_inventory_cleanup():
+    body = receipt(create_status="NOT_RECORDED", create_rc="none")
+    body = body.replace(
+        "- isolated instance create request: `NOT_RECORDED`; rc: `none`",
+        "- isolated paid instance create request: `NOT_RECORDED`; rc: `none`",
+    )
+    body = body.replace(
+        "- workflow outcome: `failure`",
+        "- workflow outcome: `failure`\n"
+        "- failing phase before cleanup: `paid_capacity_preflight`\n"
+        "- current-run temporary cleanup: `INCOMPLETE`",
+    )
+    values = {
+        "boot-volume": "ocid1.bootvolume.oc1.region.volume",
+        "vcn": "ocid1.vcn.oc1.region.vcn",
+        "internet-gateway": "ocid1.internetgateway.oc1.region.ig",
+        "route-table": "ocid1.routetable.oc1.region.route",
+        "security-list": "ocid1.securitylist.oc1.region.security",
+        "subnet": "ocid1.subnet.oc1.region.subnet",
+    }
+    for kind, value in values.items():
+        body = body.replace(
+            f"- {RESOURCE_FIELDS[kind]}: `{value}`",
+            f"- {RESOURCE_FIELDS[kind]}: `present_redacted`",
+        )
+    parsed = parse_receipt(body, RUN_ID, PREFIX)
+    assert parsed["instance_create_rc"] is None
+    assert parsed["resources"] == {kind: [] for kind in RESOURCE_FIELDS}
+    assert set(parsed["redacted_resources"]) == set(RESOURCE_FIELDS) - {"instance"}
+
+
+def test_rejects_redacted_receipt_outside_exact_preflight_cleanup_boundary():
+    body = receipt(create_status="NOT_RECORDED", create_rc="none")
+    body = body.replace(
+        "- workflow outcome: `failure`",
+        "- workflow outcome: `failure`\n"
+        "- failing phase before cleanup: `paid_capacity_preflight`\n"
+        "- current-run temporary cleanup: `INCOMPLETE`",
+    ).replace(
+        "- temporary VCN ID: `ocid1.vcn.oc1.region.vcn`",
+        "- temporary VCN ID: `present_redacted`",
+    )
+    _assert_rejected(body)
+
+
+def complete_cleanup_state(create_status="REQUEST_UNCERTAIN"):
+    state = {
+        "prior_cleanup_status": "RECONCILED_PROVEN_ABSENT",
+        "prior_instance_create_status": create_status,
+        "prior_uncertain_instance_proof": (
+            "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
+            if create_status == "REQUEST_UNCERTAIN"
+            else "NOT_APPLICABLE"
+        ),
+    }
+    for requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.values():
+        state.update(requirements)
+    return state
+
+
+def test_cleanup_typed_verdicts_require_every_resource_proof():
+    state = complete_cleanup_state()
+    assert cleanup_typed_proof_verdicts(state) == {
+        **{
+            resource: "RECONCILED_PROVEN_ABSENT"
+            for resource in CLEANUP_TYPED_PROOF_REQUIREMENTS
+        },
+        "uncertain_instance": "RECONCILED_PROVEN_ABSENT",
+    }
+    for resource, requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.items():
+        for key in requirements:
+            incomplete = state.copy()
+            incomplete.pop(key)
+            verdicts = cleanup_typed_proof_verdicts(incomplete)
+            assert set(verdicts.values()) == {"RECONCILIATION_INCOMPLETE"}
+
+
+def test_cleanup_aggregate_alone_is_insufficient():
+    verdicts = cleanup_typed_proof_verdicts(
+        {"prior_cleanup_status": "RECONCILED_PROVEN_ABSENT"}
+    )
+    assert set(verdicts.values()) == {"RECONCILIATION_INCOMPLETE"}
+
+
+def test_cleanup_typed_verdicts_reject_wrong_aggregate_or_evidence():
+    state = complete_cleanup_state()
+    state["prior_cleanup_status"] = "EXACT_NAME_INVENTORY_EMPTY"
+    assert set(cleanup_typed_proof_verdicts(state).values()) == {
+        "RECONCILIATION_INCOMPLETE"
+    }
+
+    state = complete_cleanup_state()
+    state["prior_vcn_proof"] = "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
+    verdicts = cleanup_typed_proof_verdicts(state)
+    assert verdicts["vcn"] == "RECONCILIATION_INCOMPLETE"
+    assert verdicts["instance"] == "RECONCILIATION_INCOMPLETE"
+
+
+def test_cleanup_typed_verdicts_handle_captured_instance_without_uncertainty():
+    verdicts = cleanup_typed_proof_verdicts(complete_cleanup_state("CAPTURED"))
+    assert verdicts["instance"] == "RECONCILED_PROVEN_ABSENT"
+    assert verdicts["uncertain_instance"] == "NOT_APPLICABLE"
+
+    no_launch = cleanup_typed_proof_verdicts(complete_cleanup_state("NOT_RECORDED"))
+    assert no_launch["instance"] == "RECONCILED_PROVEN_ABSENT"
+    assert no_launch["uncertain_instance"] == "NOT_APPLICABLE"
+
+    missing_status = complete_cleanup_state()
+    missing_status.pop("prior_instance_create_status")
+    assert cleanup_typed_proof_verdicts(missing_status)["uncertain_instance"] == (
+        "RECONCILIATION_INCOMPLETE"
+    )
+
+    bad_captured = complete_cleanup_state("CAPTURED")
+    bad_captured["prior_uncertain_instance_proof"] = (
+        "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
+    )
+    assert cleanup_typed_proof_verdicts(bad_captured)["uncertain_instance"] == (
+        "RECONCILIATION_INCOMPLETE"
+    )
+
+    incomplete_captured = complete_cleanup_state("CAPTURED")
+    incomplete_captured.pop("prior_vcn_proof")
+    verdicts = cleanup_typed_proof_verdicts(incomplete_captured)
+    assert verdicts["uncertain_instance"] == "NOT_APPLICABLE"
+    assert all(
+        verdicts[resource] == "RECONCILIATION_INCOMPLETE"
+        for resource in CLEANUP_TYPED_PROOF_REQUIREMENTS
+    )
+
+
+def test_cleanup_failure_receipt_verdicts_are_publishable_and_never_grant_go():
+    for failed_state in (
+        {},
+        {"authoritative_receipt_status": "FETCH_FAILED"},
+        {"prior_cleanup_status": "INVENTORY_FAILED"},
+        {"prior_cleanup_status": "DIRECT_GET_FAILED"},
+    ):
+        verdicts = cleanup_typed_proof_verdicts(failed_state)
+        assert set(verdicts) == {
+            *CLEANUP_TYPED_PROOF_REQUIREMENTS,
+            "uncertain_instance",
+        }
+        assert "RECONCILED_PROVEN_ABSENT" not in verdicts.values()

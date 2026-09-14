@@ -391,11 +391,12 @@ def diarize_transcript(
                 return None
 
         primary_diag = evaluate_soft("pyannote+3dspeaker", "3dspeaker")
-        if primary_diag is None or (
+        allow_nemo_compat = os.getenv("BRIDGE_SPEAKER_ALLOW_NEMO_COMPAT", "1") == "1"
+        if allow_nemo_compat and (primary_diag is None or (
             primary_diag["cluster_collapse_detected"]
             or min(primary_diag["segment_coverage"], primary_diag["speech_duration_coverage"])
             < 0.80
-        ):
+        )):
             evaluate_soft("pyannote+nemo", "nemo")
 
         chosen_score, chosen_turns, chosen_engine, chosen_diag = max(
@@ -460,8 +461,17 @@ def diarize_transcript(
             "segmentation_sha256": _sha256(segmentation),
             "primary_embedding": "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
             "primary_embedding_sha256": _sha256(primary_embedding),
-            "compatibility_embedding": "nemo_en_titanet_small.onnx" if nemo_path.exists() else None,
-            "compatibility_embedding_sha256": _sha256(nemo_path) if nemo_path.exists() else None,
+            "compatibility_embedding": (
+                "nemo_en_titanet_small.onnx"
+                if allow_nemo_compat and nemo_path.exists()
+                else None
+            ),
+            "compatibility_embedding_sha256": (
+                _sha256(nemo_path)
+                if allow_nemo_compat and nemo_path.exists()
+                else None
+            ),
+            "compatibility_embedding_enabled": allow_nemo_compat,
         }
         chosen_engine = dict(chosen_engine)
         chosen_engine.update(

@@ -1,0 +1,12 @@
+{
+  "request_id": "director-phase3b-activation-20260901-01",
+  "action": "activate_shadow",
+  "target_host": "158.180.47.161",
+  "source_revision": "d908565a5de4481f0bf9a1d2a489f04f8893af65",
+  "activation_scope": "SHADOW_ONLY",
+  "expected_db_user": "autopilot_runtime_login",
+  "no_instance_stop": true,
+  "neon_min_cu": 0.25,
+  "neon_max_cu": 8,
+  "runtime_connection_limit": 4
+}

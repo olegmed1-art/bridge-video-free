@@ -1,14 +1,60 @@
 # School Autopilot Controller v1
 
-Статус: **APPROVED DESIGN / NOT ACTIVATED**  
-Версия: **1.0-draft**  
-Дата: **2026-08-28**  
+Статус: **ORACLE SHADOW BUILD AUTHORIZED / NOT ACTIVATED**
+
+Версия: **1.1-shadow**
+
+Дата: **2026-08-30**
 Tracker: **#782**  
 Governance mode: **ASSURED**  
 Владелец цели: директор Школы спортивного бриджа  
 Делегированный исполнитель: AI Management System
 
-## 1. Решение
+## 0. Решение v1.1 — Oracle Autopilot Lite
+
+Явным решением директора от 2026-08-30 основной scheduler упрощён: постоянный
+контроллер размещается на уже существующей Oracle Frankfurt VM. Neon остаётся
+единственным каноническим состоянием задач. Vercel остаётся необязательным
+публичным ingress/API и больше не является обязательным durable orchestrator.
+
+При конфликте с последующими историческими формулировками v1.0 этот раздел
+имеет приоритет. Существующий Vercel Workflows compatibility spike сохраняется
+как обратимое evidence и возможный fallback adapter; он не удаляется и не
+активируется автоматически.
+
+Целевой минимальный контур:
+
+```text
+Chat / operator / Vercel ingress
+              |
+              v
+       Neon task state
+              |
+     LISTEN/NOTIFY + 30 s poll
+              |
+              v
+ Oracle school-autopilot.service
+              |
+   allow-listed adapters/workers
+```
+
+Операционные решения v1.1:
+
+- один resident Python worker под `systemd`, `Restart=always`;
+- direct Neon TCP endpoint для `LISTEN/NOTIFY`; pooler DSN запрещён;
+- `FOR UPDATE SKIP LOCKED`, leases, heartbeat и fencing epoch;
+- готовая очередь опустошается без sleep между задачами;
+- recovery polling раз в 30 секунд используется только как страховка;
+- начальный runtime строго `SHADOW`, без shell, OpenAI, GitHub write, Drive write,
+  media и production mutation;
+- Vercel/ChatGPT UI не используются как scheduler;
+- ожидаемый normal task-to-task dispatch — не более 5 секунд, аварийный
+  fallback после потерянного уведомления — не более 30 секунд.
+
+Код shadow-контура не означает runtime activation. До снятия отдельного
+production-canary gate #881 сервис остаётся staged/disabled by default.
+
+## 1. Исходное решение v1.0 (исторический adapter design)
 
 Школа строит долговечный контроллер автономной работы на уже имеющемся стеке:
 
@@ -127,7 +173,7 @@ GitHub остаётся:
 - хранилищем human-readable evidence;
 - аварийным fallback-контуром командных workflows.
 
-Phase 1 использует публичные read-only API и существующие workflow results. Для mutating GitHub API в Phase 2 нужен отдельный GitHub App с минимальными repository permissions. Токен ChatGPT connector не переиспользуется внешним сервисом.
+Phase 1 использует публичные read-only API и существующие workflow results. Разрешённые шаблоны привязаны к точному draft-PR HEAD: снимок PR и bounded CI triage через Check Runs с максимум пятью короткими failure-фрагментами. Worker повторно проверяет HEAD после чтения, не получает GitHub credential, не следует редиректам и не сохраняет сырые журналы. Для mutating GitHub API в Phase 2 нужен отдельный GitHub App с минимальными repository permissions. Токен ChatGPT connector не переиспользуется внешним сервисом.
 
 ### 5.4. Oracle
 
@@ -377,6 +423,7 @@ Exact Python SDK start/resume API и version pin считаются предме
 Примеры:
 
 - `github.read` — shadow available;
+- `github.ci.snapshot` — exact-head, public, credential-free, evidence-bounded;
 - `github.write` — Phase 2 после GitHub App;
 - `oracle.audit` — read-only;
 - `oracle.repair` — только bounded registered operation;

@@ -16,8 +16,10 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-ben-dds3-health-monitor
-  cancel-in-progress: true
+  # Only the manual live canary may occupy the shared Oracle workload slot.
+  # Scheduled no-ops and PR validation remain run-scoped.
+  group: ${{ github.event_name == 'workflow_dispatch' && 'oracle-instance-workload-mutation' || format('oracle-ben-dds3-health-monitor-noop-{0}', github.run_id) }}
+  cancel-in-progress: false
 
 jobs:
   contract:

@@ -46,7 +46,16 @@ def test_staged_video_without_audio_is_rejected_before_processing(tmp_path, monk
 def test_spool_preflight_fails_before_heavy_runner(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir(parents=True)
-    (inbox / "job.json").write_text("{}", encoding="utf-8")
+    (inbox / "job.json").write_text(
+        json.dumps(
+            {
+                "job_id": "job",
+                "profile": "transcript_only",
+                "source": {"kind": "google_drive", "file_id": "drive-file-123"},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(
         spool_worker,
@@ -62,6 +71,10 @@ def test_spool_preflight_fails_before_heavy_runner(tmp_path, monkeypatch: pytest
     assert failure["status"] == "FAILED"
     assert failure["error_type"] == "VideoRuntimeUnavailable"
     assert failure["error_code"] == "UV_RUNTIME_DEPENDENCY_MISSING"
+    assert failure["job_id"] == "job"
+    assert failure["profile"] == "transcript_only"
+    assert failure["source"] == {"kind": "google_drive", "file_id": "drive-file-123"}
+    assert len(failure["job_hash"]) == 64
     assert "error" not in failure
 
 

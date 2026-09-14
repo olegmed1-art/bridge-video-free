@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -50,6 +53,10 @@ def test_container_runtime_reports_ready_without_fallback(monkeypatch: pytest.Mo
     _environment(monkeypatch, tmp_path)
     monkeypatch.setattr("universal_video.container_runtime.validate_video_runtime", lambda: {"ffmpeg": "/usr/bin/ffmpeg", "ffprobe": "/usr/bin/ffprobe", "asr": "faster_whisper"})
     monkeypatch.setattr("universal_video.container_runtime._load_model", lambda: object())
+    monkeypatch.setattr(
+        "universal_video.container_runtime._validate_speaker_models",
+        lambda _path: {"segmentation_sha256": "a" * 64, "embedding_sha256": "b" * 64},
+    )
     report = validate_container_runtime()
     assert report["status"] == "READY"
     assert report["fallback_used"] is False
@@ -75,21 +82,117 @@ def test_container_accepts_protected_spool_root_with_writable_leaves(
         lambda: {"ffmpeg": "/usr/bin/ffmpeg", "ffprobe": "/usr/bin/ffprobe", "asr": "faster_whisper"},
     )
     monkeypatch.setattr("universal_video.container_runtime._load_model", lambda: object())
+    monkeypatch.setattr(
+        "universal_video.container_runtime._validate_speaker_models",
+        lambda _path: {"segmentation_sha256": "a" * 64, "embedding_sha256": "b" * 64},
+    )
 
     report = validate_container_runtime()
 
     assert report["status"] == "READY"
 
 
+def test_container_rejects_empty_speaker_cache_before_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _environment(monkeypatch, tmp_path)
+    with pytest.raises(ContainerRuntimeUnavailable) as error:
+        validate_container_runtime()
+    assert error.value.error_code == "UV_CONTAINER_SPEAKER_MODEL_UNAVAILABLE"
+
+
+def test_speaker_preflight_hashes_and_validates_both_models(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from universal_video import container_runtime
+
+    cache = tmp_path / "speaker"
+    cache.mkdir()
+    segmentation = cache / container_runtime.SPEAKER_SEGMENTATION_MODEL
+    embedding = cache / container_runtime.SPEAKER_EMBEDDING_MODEL
+    segmentation.write_bytes(b"s" * 2048)
+    embedding.write_bytes(b"e" * 3072)
+    monkeypatch.setattr(
+        container_runtime,
+        "SPEAKER_SEGMENTATION_SHA256",
+        hashlib.sha256(segmentation.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(
+        container_runtime,
+        "SPEAKER_EMBEDDING_SHA256",
+        hashlib.sha256(embedding.read_bytes()).hexdigest(),
+    )
+    loaded = []
+
+    class Config:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def validate(self):
+            return True
+
+    stub = types.SimpleNamespace(
+        OfflineSpeakerDiarizationConfig=Config,
+        OfflineSpeakerSegmentationModelConfig=Config,
+        OfflineSpeakerSegmentationPyannoteModelConfig=Config,
+        SpeakerEmbeddingExtractorConfig=Config,
+        FastClusteringConfig=Config,
+        OfflineSpeakerDiarization=lambda config: loaded.append(config),
+    )
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", stub)
+
+    report = container_runtime._validate_speaker_models(cache)
+    assert report == {
+        "segmentation_sha256": hashlib.sha256(segmentation.read_bytes()).hexdigest(),
+        "embedding_sha256": hashlib.sha256(embedding.read_bytes()).hexdigest(),
+    }
+    assert len(loaded) == 1
+
+
+def test_speaker_preflight_rejects_unpinned_model_digest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from universal_video import container_runtime
+
+    cache = tmp_path / "speaker"
+    cache.mkdir()
+    (cache / container_runtime.SPEAKER_SEGMENTATION_MODEL).write_bytes(b"s" * 2048)
+    (cache / container_runtime.SPEAKER_EMBEDDING_MODEL).write_bytes(b"e" * 3072)
+    monkeypatch.setattr(container_runtime, "SPEAKER_SEGMENTATION_SHA256", "0" * 64)
+
+    with pytest.raises(ContainerRuntimeUnavailable) as error:
+        container_runtime._validate_speaker_models(cache)
+
+    assert error.value.error_code == "UV_CONTAINER_SPEAKER_MODEL_DIGEST_MISMATCH"
+
+
 def test_container_image_keeps_credentials_and_media_out_of_layers() -> None:
     root = Path(__file__).resolve().parents[1]
     dockerfile = (root / "deploy/oracle-universal-video/Dockerfile").read_text(encoding="utf-8")
+    entrypoint = (root / "deploy/oracle-universal-video/universal-video-container-entrypoint.sh").read_text(encoding="utf-8")
+    assert "umask 0027" in entrypoint
     assert "HF_HUB_OFFLINE=1" in dockerfile
     assert "GOOGLE_DRIVE_OAUTH" not in dockerfile
     assert "COPY universal_video" in dockerfile
     assert "USER universal-video:universal-video" in dockerfile
     assert "UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker" in dockerfile
+    assert "BRIDGE_SPEAKER_ALLOW_NEMO_COMPAT=0" in dockerfile
     assert "fonts-dejavu-core" in dockerfile
+
+
+def test_container_disables_unpinned_nemo_compatibility_model() -> None:
+    root = Path(__file__).resolve().parents[1]
+    diarization = (root / "bridge_speaker_diarization_v3.py").read_text(
+        encoding="utf-8"
+    )
+    policy = (root / "bridge_vision/decision_dependencies.json").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'os.getenv("BRIDGE_SPEAKER_ALLOW_NEMO_COMPAT", "1") == "1"' in diarization
+    assert "if allow_nemo_compat and (" in diarization
+    assert '"compatibility_embedding_enabled": allow_nemo_compat' in diarization
+    assert "disables the unpinned NeMo compatibility path" in policy
 
 
 def test_container_image_contains_neon_processor_dependency_closure() -> None:
@@ -194,8 +297,9 @@ def test_container_activation_requires_a_bounded_protected_queue_credential() ->
     assert '[[ -f "$queue_dsn_file" && ! -L "$queue_dsn_file" ]]' in gate
     assert "protected video queue credential metadata invalid" in gate
     assert "BASH_REMATCH[1] <= 4096" in gate
-    assert 'value.startswith(("postgresql://", "postgres://"))' in gate
-    assert 'assert "\\n" not in value and "\\r" not in value' in gate
+    assert 'validate_video_queue_dsn.py" "$queue_dsn_file"' in gate
+    assert "assert " not in gate
+
 
 def test_container_queue_credential_is_validated_as_the_exact_runtime_identity() -> None:
     root = Path(__file__).resolve().parents[1]
@@ -208,7 +312,48 @@ def test_container_queue_credential_is_validated_as_the_exact_runtime_identity()
     gate = installer[credential_gate:service_activation]
     assert '[[ "$(stat -c \'%g\' "$queue_dsn_file")" == "$(id -g "$USER_NAME")" ]]' in gate
     assert (
-        'runuser -u "$USER_NAME" -- env QUEUE_DSN_FILE="$queue_dsn_file" '
-        "/usr/bin/python3 - <<'PY' >/dev/null"
+        'runuser -u "$USER_NAME" -- /usr/bin/python3 \\\n'
+        '    "$SOURCE_DIR/ops/validate_video_queue_dsn.py" "$queue_dsn_file" >/dev/null'
     ) in gate
-    assert 'QUEUE_DSN_FILE="$queue_dsn_file" python3 -' not in gate
+    assert '  python3 "$SOURCE_DIR/ops/validate_video_queue_dsn.py"' not in gate
+
+
+def test_nonactivating_install_cannot_overwrite_resident_queue_configuration() -> None:
+    root = Path(__file__).resolve().parents[1]
+    installer = (root / "ops/oracle_universal_video_container_install.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'PERSISTENT_ENV_FILE="$BASE_DIR/universal-video-container.env"' in installer
+    assert 'CANDIDATE_ENV_FILE="$BASE_DIR/universal-video-container-candidate.env"' in installer
+    assert '[[ "$ACTIVATE" == 1 ]] || ENV_FILE="$CANDIDATE_ENV_FILE"' in installer
+    queue_line = "BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=/run/secrets/video-queue-dsn"
+    assert f"printf '%s\\n' '{queue_line}' >>\"$env_tmp\"" in installer
+    assert installer.index(f"printf '%s\\n' '{queue_line}'") > installer.index(
+        'if [[ "$ACTIVATE" == 1 ]]; then',
+        installer.index('cat >"$env_tmp"'),
+    )
+    assert 'mv -fT -- "$env_tmp" "$ENV_FILE"' in installer
+    unit_install = 'install -m 0644 -o root -g root "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME"'
+    assert installer.index(unit_install) > installer.rindex('if [[ "$ACTIVATE" == 1 ]]; then')
+
+
+def test_queue_dsn_parser_rejects_malformed_and_multiline_values() -> None:
+    from ops.validate_video_queue_dsn import QueueDsnError, validate_dsn_text
+
+    validate_dsn_text("postgresql://worker:secret@db.example/neondb?sslmode=require")
+    invalid = (
+        "postgresql://[",
+        "postgresql://worker:secret@db.example/neondb\n",
+        "\npostgresql://worker:secret@db.example/neondb",
+        "postgresql://first postgresql://second",
+        "postgresql://db.example/neondb",
+        "postgresql://:secret@db.example/neondb",
+        "postgresql://worker:secret@db.example/neondb%ZZ",
+        "postgresql://worker:secret@db.example/neondb#",
+        "postgresql://worker:secret@db.example/neondb\x00",
+        "https://worker:secret@db.example/neondb",
+    )
+    for value in invalid:
+        with pytest.raises(QueueDsnError):
+            validate_dsn_text(value)
