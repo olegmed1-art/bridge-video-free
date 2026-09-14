@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=60c409ff-60db-4a72-8efd-d4dc1f905f5c
+dispatch_epoch=2
+role=VIDEO_QUEUE
+task_fingerprint=837973cafefabda549cfe911ef97cca59a32b0df7a728d0ddc18bb7626b6a273
+target_pr=1064
+mode=REPAIR
+repair_attempt=1
+origin_task_id=723a985c-ffb7-4ecd-86f7-b199378baeb5
+prior_task_id=723a985c-ffb7-4ecd-86f7-b199378baeb5
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=Outbox and envelope authorize READ_ONLY, but assignment requires REPAIR and repository mutation; binding rejected fail-closed.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
