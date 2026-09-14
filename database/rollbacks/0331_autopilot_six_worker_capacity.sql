@@ -352,6 +352,13 @@ SELECT role_id, chat_id, chat_name, chat_url, executor_id,
        enabled, is_dispatcher, created_at, updated_at
   FROM autopilot.role_chat_registry_0331_backup;
 
+-- Every restored pre-0331 row uses the original project-chat URL shape.
+ALTER TABLE autopilot.role_chat_registry
+    DROP CONSTRAINT role_chat_registry_chat_url_check,
+    ADD CONSTRAINT role_chat_registry_chat_url_check CHECK (
+        chat_url ~ '^https://chatgpt\.com/.+/c/[0-9a-f-]{36}$'
+    );
+
 ALTER TABLE autopilot.role_chat_registry
     ADD CONSTRAINT role_chat_registry_chat_id_key UNIQUE (chat_id),
     ADD CONSTRAINT role_chat_registry_chat_url_key UNIQUE (chat_url),

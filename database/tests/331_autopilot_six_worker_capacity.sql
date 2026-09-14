@@ -31,6 +31,7 @@ BEGIN
            AND (
                chat.role_id IS NULL
                OR chat.chat_id <> '6aa6a4c0-4858-83eb-872c-4bc3451edc83'
+               OR chat.chat_url <> 'https://chatgpt.com/c/6aa6a4c0-4858-83eb-872c-4bc3451edc83'
                OR chat.executor_id <> 'chat:6aa6a4c0-4858-83eb-872c-4bc3451edc83'
            )
     ) THEN

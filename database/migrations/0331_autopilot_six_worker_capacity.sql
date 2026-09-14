@@ -94,6 +94,15 @@ ALTER TABLE autopilot.role_chat_registry
     DROP CONSTRAINT role_chat_registry_chat_url_key,
     DROP CONSTRAINT role_chat_registry_executor_id_key;
 
+-- The original registry accepted only project-chat URLs. Event-triggered
+-- automations use a direct /c/<conversation_id> URL, so admit both exact
+-- ChatGPT URL shapes while keeping every other host/path rejected.
+ALTER TABLE autopilot.role_chat_registry
+    DROP CONSTRAINT role_chat_registry_chat_url_check,
+    ADD CONSTRAINT role_chat_registry_chat_url_check CHECK (
+        chat_url ~ '^https://chatgpt\.com/(.+/)?c/[0-9a-f-]{36}$'
+    );
+
 INSERT INTO autopilot.role_chat_registry(
     role_id, chat_id, chat_name, chat_url, executor_id, enabled, is_dispatcher
 )
