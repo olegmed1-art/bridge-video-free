@@ -233,3 +233,12 @@ class RoleDispatchRequest(BaseModel):
         ):
             raise ValueError("ROLE_DISPATCH_SUMMARY_INVALID")
         return self
+
+
+class ProjectHeadRequest(BaseModel):
+    """Bounded read request for one pull request's current head."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    repository: Literal["olegmed1-art/bridge-video-free"]
+    pr_number: int = Field(ge=1, le=1_000_000)

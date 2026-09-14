@@ -35,6 +35,7 @@ from oracle_autopilot.worker import (
     fetch_github_pr_snapshot,
     fetch_github_project_head,
     load_config,
+    load_project_head_broker_config,
     load_role_dispatch_broker_config,
     load_token_broker_config,
     validate_neon_direct_dsn,
@@ -88,6 +89,7 @@ def _approved_health_payload() -> dict[str, object]:
         "production_mutations_enabled": False,
         "github_token_broker_enabled": True,
         "bounded_draft_executor_enabled": True,
+        "bounded_project_head_enabled": True,
         "bounded_role_dispatch_enabled": True,
         "raw_installation_token_exposed": False,
         "merge_endpoint_enabled": False,
@@ -386,6 +388,9 @@ def test_role_dispatch_broker_config_pins_exact_endpoint():
     ):
         assert load_role_dispatch_broker_config().url == draft_url.replace(
             "/draft-repair", "/role-dispatch"
+        )
+        assert load_project_head_broker_config().url == draft_url.replace(
+            "/draft-repair", "/project-head"
         )
 
 
@@ -1315,28 +1320,78 @@ def test_ready_queue_is_drained_without_a_poll_gap(monkeypatch):
     assert calls == ["test-worker"] * 4
 
 
-def test_project_head_probe_is_public_bounded_and_accepts_closed_target(monkeypatch):
-    requested = []
+def test_project_head_probe_uses_attested_read_broker_and_accepts_closed_target(
+    monkeypatch,
+):
+    draft_url = (
+        "https://bridge-school-autopilot-cslfiz83g-"
+        "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+    )
+    project_url = draft_url.replace("/draft-repair", "/project-head")
+    observed = []
 
-    def fake_get(url, *, not_found_code):
-        requested.append((url, not_found_code))
-        return {
-            "number": 1106,
-            "html_url": "https://github.com/olegmed1-art/bridge-video-free/pull/1106",
-            "state": "closed",
-            "head": {"sha": "a" * 40},
-        }
+    class Response:
+        status = 200
 
-    monkeypatch.setattr("oracle_autopilot.worker._github_get_json", fake_get)
-    assert fetch_github_project_head(
-        "olegmed1-art/bridge-video-free", 1106
-    ) == {"head_sha": "a" * 40, "open": False}
-    assert requested == [
-        (
-            "https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/1106",
-            "PROJECT_WORK_TARGET_NOT_FOUND",
-        )
+        def __init__(self, url, payload):
+            self.url = url
+            self.payload = payload
+
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def geturl(self): return self.url
+        def read(self, _limit): return json.dumps(self.payload).encode()
+
+    class Opener:
+        @staticmethod
+        def open(request, **_kwargs):
+            observed.append((request.get_method(), request.full_url, request.data))
+            if request.get_method() == "GET":
+                return Response(
+                    draft_url.replace("/v1/github/draft-repair", "/healthz"),
+                    _approved_health_payload(),
+                )
+            return Response(
+                project_url,
+                {
+                    "repository": "olegmed1-art/bridge-video-free",
+                    "pr_number": 1106,
+                    "open": False,
+                    "head_sha": "a" * 40,
+                    "http_method": "GET",
+                    "token_exposed": False,
+                    "production_mutation": False,
+                    "operation_count": 2,
+                    "broker_policy_version": "physical-no-merge-v2",
+                    "broker_source_sha": BROKER_SOURCE_SHA,
+                    "broker_artifact_sha256": BROKER_ARTIFACT_SHA256,
+                    "broker_policy_sha256": BROKER_POLICY_SHA256,
+                    "broker_provenance_sha256": BROKER_PROVENANCE_SHA256,
+                },
+            )
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+    with patch.dict(
+        os.environ,
+        {
+            "AUTOPILOT_TOKEN_BROKER_URL": draft_url,
+            "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+            "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
+        },
+        clear=True,
+    ):
+        assert fetch_github_project_head(
+            "olegmed1-art/bridge-video-free", 1106
+        ) == {"head_sha": "a" * 40, "open": False}
+    assert [(method, url) for method, url, _data in observed] == [
+        ("GET", draft_url.replace("/v1/github/draft-repair", "/healthz")),
+        ("POST", project_url),
     ]
+    assert json.loads(observed[1][2]) == {
+        "pr_number": 1106,
+        "repository": "olegmed1-art/bridge-video-free",
+    }
 
 
 def test_project_planner_materializes_one_exact_head_task(monkeypatch):

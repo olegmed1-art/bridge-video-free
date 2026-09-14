@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "broker_url": "https://bridge-school-autopilot-kqkoglvkj-olegmed1-4368s-projects.vercel.app/v1/github/draft-repair",
-  "broker_source_sha": "4ef8f6c79bbf1a5688c9b2b93d72f24758c65939",
-  "broker_artifact_sha256": "909fc6d2311c9fa09f4b50d7d960c4828f2db195ddf9b629c14acfe8c76ae68f",
-  "broker_policy_sha256": "ee0bd5d64331762df03ca44dec91a0a6fd740386f53b0033e59018f21c16adf8",
+  "broker_url": "https://bridge-school-autopilot-77iri20rz-olegmed1-4368s-projects.vercel.app/v1/github/draft-repair",
+  "broker_source_sha": "e632334f2d5dc28f8e8ea4892e43d341850c3f11",
+  "broker_artifact_sha256": "b6ff9bfc2617ff152994d363e76b69cf7ea4426244d5de75b5844e4030724b7b",
+  "broker_policy_sha256": "418d2d1fe7873f2ed3f602ed990a64fa99adc4a2d01afaf4930feac059fa5958",
   "broker_policy_version": "physical-no-merge-v2",
-  "broker_provenance_sha256": "b889a18d7c7c79c5f01bc06430a8ebf46edcf0842b9aa236dcac1795f261ab75"
+  "broker_provenance_sha256": "a1514d3797023ccdf0db170b6f70c4a9dcfe3a1630b8e4abca728c4dedd6477b"
 }

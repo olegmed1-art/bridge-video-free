@@ -83,6 +83,7 @@ GITHUB_HARD_FAILURES = frozenset(
 TOKEN_BROKER_RESPONSE_LIMIT_BYTES = 32_768
 TOKEN_BROKER_REQUEST_LIMIT_BYTES = 65_536
 TOKEN_BROKER_PATH = "/v1/github/draft-repair"
+PROJECT_HEAD_BROKER_PATH = "/v1/github/project-head"
 ROLE_DISPATCH_BROKER_PATH = "/v1/github/role-dispatch"
 TOKEN_BROKER_HEALTH_PATH = "/healthz"
 TOKEN_BROKER_HOST_PATTERN = re.compile(
@@ -142,6 +143,20 @@ def load_role_dispatch_broker_config() -> TokenBrokerConfig:
     base = _load_token_broker_config("AUTOPILOT_TOKEN_BROKER_URL", TOKEN_BROKER_PATH)
     return TokenBrokerConfig(
         url=f"https://{base.host}{ROLE_DISPATCH_BROKER_PATH}",
+        host=base.host,
+        secret=base.secret,
+        vercel_bypass_secret=base.vercel_bypass_secret,
+        expected_source_sha=base.expected_source_sha,
+        expected_artifact_sha256=base.expected_artifact_sha256,
+        expected_policy_sha256=base.expected_policy_sha256,
+        expected_provenance_sha256=base.expected_provenance_sha256,
+    )
+
+
+def load_project_head_broker_config() -> TokenBrokerConfig:
+    base = _load_token_broker_config("AUTOPILOT_TOKEN_BROKER_URL", TOKEN_BROKER_PATH)
+    return TokenBrokerConfig(
+        url=f"https://{base.host}{PROJECT_HEAD_BROKER_PATH}",
         host=base.host,
         secret=base.secret,
         vercel_bypass_secret=base.vercel_bypass_secret,
@@ -456,30 +471,89 @@ def fetch_github_pr_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
 
 
 def fetch_github_project_head(repository: str, pr_number: int) -> dict[str, Any]:
-    """Resolve the current public head for one registered project-work item."""
+    """Resolve one PR head through the pinned least-privilege GitHub App broker."""
 
     if repository != GITHUB_REPOSITORY or type(pr_number) is not int:
         raise AutopilotContractError("PROJECT_WORK_TARGET_INVALID")
     if not 1 <= pr_number <= 1_000_000:
         raise AutopilotContractError("PROJECT_WORK_TARGET_INVALID")
-    url = f"https://{GITHUB_API_HOST}/repos/{repository}/pulls/{pr_number}"
-    payload = _github_get_json(url, not_found_code="PROJECT_WORK_TARGET_NOT_FOUND")
-    if not isinstance(payload, dict):
-        raise AutopilotContractError("GITHUB_API_JSON_INVALID")
+    config = load_project_head_broker_config()
+    request_payload = {"repository": repository, "pr_number": pr_number}
+    encoded = json.dumps(
+        request_payload, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        config.url,
+        data=encoded,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {config.secret}",
+            "Content-Type": "application/json",
+            "User-Agent": "bridge-school-autopilot-oracle/1.7",
+            "X-Vercel-Protection-Bypass": config.vercel_bypass_secret,
+        },
+    )
+    opener = urllib.request.build_opener(_RejectBrokerRedirects())
+    _require_approved_broker_release(config=config, opener=opener)
+    try:
+        with opener.open(request, timeout=30) as response:
+            if response.status != 200 or response.geturl() != config.url:
+                raise AutopilotContractError("PROJECT_HEAD_BROKER_RESPONSE_INVALID")
+            raw = response.read(TOKEN_BROKER_RESPONSE_LIMIT_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise AutopilotContractError("PROJECT_WORK_TARGET_NOT_FOUND") from exc
+        if exc.code in {408, 425, 429} or 500 <= exc.code <= 599:
+            raise AutopilotRetryableError(
+                "PROJECT_HEAD_BROKER_TRANSIENT_ERROR"
+            ) from exc
+        raise AutopilotContractError("PROJECT_HEAD_BROKER_HTTP_ERROR") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise AutopilotRetryableError("PROJECT_HEAD_BROKER_TRANSIENT_ERROR") from exc
+    if len(raw) > TOKEN_BROKER_RESPONSE_LIMIT_BYTES:
+        raise AutopilotContractError("PROJECT_HEAD_BROKER_RESPONSE_TOO_LARGE")
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AutopilotContractError("PROJECT_HEAD_BROKER_RESPONSE_INVALID") from exc
 
-    head = payload.get("head")
-    head_sha = head.get("sha") if isinstance(head, dict) else None
-    state = payload.get("state")
-    expected_html_url = f"https://github.com/{repository}/pull/{pr_number}"
+    expected_keys = {
+        "repository",
+        "pr_number",
+        "open",
+        "head_sha",
+        "http_method",
+        "token_exposed",
+        "production_mutation",
+        "operation_count",
+        "broker_policy_version",
+        "broker_source_sha",
+        "broker_artifact_sha256",
+        "broker_policy_sha256",
+        "broker_provenance_sha256",
+    }
+    head_sha = payload.get("head_sha") if isinstance(payload, dict) else None
     if (
-        payload.get("number") != pr_number
-        or payload.get("html_url") != expected_html_url
-        or state not in {"open", "closed"}
+        not isinstance(payload, dict)
+        or set(payload) != expected_keys
+        or payload.get("repository") != repository
+        or payload.get("pr_number") != pr_number
+        or type(payload.get("open")) is not bool
         or not isinstance(head_sha, str)
         or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None
+        or payload.get("http_method") != "GET"
+        or payload.get("token_exposed") is not False
+        or payload.get("production_mutation") is not False
+        or payload.get("operation_count") != 2
+        or payload.get("broker_policy_version") != "physical-no-merge-v2"
+        or payload.get("broker_source_sha") != config.expected_source_sha
+        or payload.get("broker_artifact_sha256") != config.expected_artifact_sha256
+        or payload.get("broker_policy_sha256") != config.expected_policy_sha256
+        or payload.get("broker_provenance_sha256")
+        != config.expected_provenance_sha256
     ):
-        raise AutopilotContractError("PROJECT_WORK_TARGET_RESPONSE_INVALID")
-    return {"head_sha": head_sha, "open": state == "open"}
+        raise AutopilotContractError("PROJECT_HEAD_BROKER_RESPONSE_INVALID")
+    return {"head_sha": head_sha, "open": payload["open"]}
 
 
 def fetch_github_ci_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
@@ -742,7 +816,7 @@ def _validate_token_broker_result(
 def _require_approved_broker_release(
     *, config: TokenBrokerConfig, opener: Any
 ) -> None:
-    """Verify the deployed release before sending any mutating broker request."""
+    """Verify the deployed release before sending any broker request."""
 
     health_url = f"https://{config.host}{TOKEN_BROKER_HEALTH_PATH}"
     request = urllib.request.Request(
@@ -782,6 +856,7 @@ def _require_approved_broker_release(
         "production_mutations_enabled": False,
         "github_token_broker_enabled": True,
         "bounded_draft_executor_enabled": True,
+        "bounded_project_head_enabled": True,
         "bounded_role_dispatch_enabled": True,
         "raw_installation_token_exposed": False,
         "merge_endpoint_enabled": False,
