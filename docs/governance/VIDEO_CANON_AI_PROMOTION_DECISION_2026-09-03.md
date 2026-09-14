@@ -1,9 +1,9 @@
 # Video-to-Canon AI promotion decision — 2026-09-03
 
-Status: `DIRECTOR_APPROVED / POLICY ACTIVE / PRODUCTION NOT DEPLOYED`
+Status: `DIRECTOR_APPROVED / POLICY ACTIVE / PRODUCTION ROLLOUT IN PROGRESS`
 Governance mode: `ASSURED`
 Policy version: `school-video-auto-canon-v1`
-Tracker: issue #609; implementation: draft PR #1086
+Tracker: issue #609; production implementation: `codex/video-canon-production-20260914`
 
 ## Decision
 
@@ -14,6 +14,21 @@ automatically versioned and activated in SCHOOL CANON.
 This decision does not authorize automatic promotion from WORLD / EXTERNAL,
 course notes rejected as canonical sources, legacy L1 quarantine, inferred
 repairs of unreadable material, ambiguous teacher speech or conflicting rules.
+
+## Source and domain policy
+
+Bidding remains anchored primarily in the School's authorized teacher videos and
+methodology. A teacher-video rule may enter Canon without per-item human approval
+only at semantic confidence 0.95 or greater after explicit checks for ASR
+accuracy, a possible teacher slip, interpretation, context, provenance and Canon
+conflicts. Ambiguity or contradiction remains fail-closed.
+
+Authoritative external sources may automatically qualify for the CARD_PLAY and
+DEFENSE Canon pipelines at the same minimum confidence. They must independently
+prove source authority, semantic interpretation, context, provenance, absence of
+Canon conflict and absence of conflict with the School method. External material
+may corroborate bidding, but it cannot automatically activate School bidding
+Canon. A policy decision is admission only and never mutates Canon by itself.
 
 ## Impact analysis
 
