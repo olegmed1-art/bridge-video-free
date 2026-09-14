@@ -6,6 +6,10 @@ DECLARE
     unmapped_id uuid;
     mapped_id uuid;
     probe record;
+    codex_v3 boolean := EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0332_autopilot_codex_event_cycle'
+    );
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
@@ -36,7 +40,14 @@ BEGIN
 
     SELECT * INTO probe
       FROM autopilot.claim_project_work_probe('sql-chat-target-worker-328',60);
-    IF probe.work_item_id IS DISTINCT FROM mapped_id OR probe.role <> 'AUTOPILOT' THEN
+    IF codex_v3 THEN
+        IF probe.work_item_id IS DISTINCT FROM unmapped_id
+           OR probe.role <> 'VIDEO_QUEUE' THEN
+            RAISE EXCEPTION 'AUTOPILOT_CODEX_UNMAPPED_ROLE_NOT_CLAIMED';
+        END IF;
+        RETURN;
+    ELSIF probe.work_item_id IS DISTINCT FROM mapped_id
+       OR probe.role <> 'AUTOPILOT' THEN
         RAISE EXCEPTION 'AUTOPILOT_UNMAPPED_ROLE_WAS_CLAIMED';
     END IF;
     IF (SELECT state FROM autopilot.project_work_item WHERE work_item_id=unmapped_id) <> 'READY' THEN

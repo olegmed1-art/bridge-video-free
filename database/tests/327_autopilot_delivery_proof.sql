@@ -40,6 +40,11 @@ BEGIN
     SELECT * INTO dispatch FROM autopilot.prepare_role_dispatch(
         task_row.task_id,'sql-delivery-worker-326',task_row.lease_epoch
     );
+    -- 0332 defaults new work to Codex contract v3.  This historical suite
+    -- explicitly retains one v2 row to prove rolling compatibility.
+    UPDATE autopilot.role_dispatch_outbox
+       SET delivery_contract_version=2
+     WHERE dispatch_id=dispatch.dispatch_id;
     SELECT * INTO outbox FROM autopilot.claim_role_dispatch_outbox_v2('sql-publisher-326',60);
     IF outbox.dispatch_id IS DISTINCT FROM dispatch.dispatch_id THEN
         RAISE EXCEPTION 'AUTOPILOT_DELIVERY_PROOF_OUTBOX_CLAIM_MISMATCH dispatch=% claimed=%',

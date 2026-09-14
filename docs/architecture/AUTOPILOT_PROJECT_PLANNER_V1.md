@@ -25,8 +25,8 @@ continues with the next dependency-eligible item.
 
 ## Algorithm
 
-1. If any role audit, repair, or verification is nonterminal, wait. This keeps
-   role execution sequential and prevents repair races.
+1. Admit at most six role tasks concurrently: five normal slots and one P0-only
+   reserve. Per-target exact-head fencing still prevents repair races.
 2. Select a `READY` dependency-eligible item by priority. If none exists,
    consider a previously `BLOCKED` item whose observation delay expired.
 3. Fetch the target PR through a credential-free, bounded GitHub `GET` and
@@ -62,19 +62,18 @@ No idle outcome disables the resident service or its webhook executor.
 
 GitHub is only the discovery transport. Creating or reusing a draft dispatch
 pull request records `PUBLISHED`; it can never record `SENT`. A dispatch reaches
-`SENT` only after the registered existing ChatGPT target supplies one bound
-proof containing the exact dispatch/task fingerprint plus:
+`SENT` only after an owner-authenticated `@codex` command on the exact target PR
+receives an `eyes` reaction from the pinned Codex Connector bot identity. The
+callback independently rechecks that the target PR is open on `main` and still
+has the bound head SHA. A dispatch PR or GitHub comment by itself is never
+delivery.
 
-- the visible target-chat message identifier;
-- the target-chat `RUNNING` acknowledgement and run identifier;
-- the registered target chat and executor identifiers.
-
-The terminal result must repeat the same chat, message, run, and executor
-identifiers. A missing proof becomes durable `DELIVERY_FAILED`, remains
-observable through the retry interval, and then retries the same dispatch
-idempotently. A terminal receipt is unique per dispatch. Its commit wakes the
-next durable project item; when no eligible or waiting work remains, it writes
-one idempotent wake request for the existing `ДИСПЕТЧЕР` chat.
+Codex Cloud creates one isolated task/chat per accepted command. Its terminal
+comment must come from the same pinned GitHub App, repeat the exact dispatch,
+epoch, role, fingerprint, target PR and current head, and have a prior retained
+ACK. The callback is idempotent and writes one terminal receipt and retained
+evidence before the next durable item is woken. Chat registry rows remain only
+for v1/v2 compatibility and dashboards; they are not a v3 admission gate.
 
 ## Safety and recovery
 
