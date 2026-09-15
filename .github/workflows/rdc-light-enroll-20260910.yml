@@ -1,4 +1,4 @@
-name: Light Oracle SSH metadata identity audit
+name: Light boot-volume recovery preflight
 
 on:
   push:
@@ -15,27 +15,27 @@ concurrency:
 jobs:
   preflight:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       ORACLE_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
-      OCI_SSH_PRIVATE_KEY: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
-      ORACLE_VM_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
-      BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
-      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
-      OCI_SSH_KEY: ${{ secrets.OCI_SSH_KEY }}
+      LIGHT_INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaicnbolm4whz6iex5lduf4gvk42jaj5maselesau66vvxpq
+      HEAVY_INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      EXPECTED_HEAVY_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
     steps:
-      - name: Install OCI CLI
-        run: python -m pip install --disable-pip-version-check --quiet 'oci-cli==3.90.3' 'pexpect==4.9.0' 'pyte==0.8.2'
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
-      - name: Configure existing principals
+      - name: Configure bounded OCI client
         shell: bash
         run: |
           set -Eeuo pipefail
           test -n "${OCI_CLI_CONFIG:-}"
           test -n "${OCI_CLI_KEY_CONTENT:-}"
           test -n "${ORACLE_SSH_PRIVATE_KEY:-}"
+          python -m pip install --disable-pip-version-check --quiet 'oci-cli==3.90.3'
           umask 077
           mkdir -p "$HOME/.oci"
           if [[ "$OCI_CLI_KEY_CONTENT" == base64:* ]]; then
@@ -56,128 +56,95 @@ jobs:
           for line in p.read_text().splitlines():
               s=line.strip()
               if s.startswith('key_file='):
-                  lines.append(f'key_file={Path.home()}/.oci/key.pem'); key=True
+                  lines.append(f'key_file={Path.home()}/".oci"/"key.pem"}'); key=True
               elif s.startswith('region='):
                   lines.append('region=eu-frankfurt-1'); region=True
               elif s.startswith('fingerprint='):
                   lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}'); fp=True
               else: lines.append(line)
-          if not key: lines.append(f'key_file={Path.home()}/.oci/key.pem')
+          if not key: lines.append(f'key_file={Path.home()/".oci"/"key.pem"}')
           if not region: lines.append('region=eu-frankfurt-1')
           if not fp: lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}')
-          p.write_text(chr(10).join(lines)+chr(10))
+          p.write_text('\n'.join(lines)+'\n')
           PY
-          printf '%s\n' "$ORACLE_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/oracle_ssh_key"
-          chmod 600 "$RUNNER_TEMP/oracle_ssh_key"
-          ssh-keygen -y -f "$RUNNER_TEMP/oracle_ssh_key" > "$RUNNER_TEMP/oracle_ssh_key.pub"
-          permanent_key_type="$(awk '{print $1}' "$RUNNER_TEMP/oracle_ssh_key.pub")"
-          echo "PERMANENT_KEY_TYPE=$permanent_key_type"
-          ssh-keygen -q -t rsa -b 2048 -N '' -f "$RUNNER_TEMP/console_key"
-          echo 'CONSOLE_KEY_TYPE=ssh-rsa'
           oci iam region list --output json >/dev/null
-          echo 'CONTROL_PRINCIPALS=PASS'
+          printf '%s\n' "$ORACLE_SSH_PRIVATE_KEY" | tr -d '\r' > "$RUNNER_TEMP/heavy_key"
+          chmod 600 "$RUNNER_TEMP/heavy_key"
+          ssh-keygen -y -f "$RUNNER_TEMP/heavy_key" > "$RUNNER_TEMP/approved_key.pub"
+          echo "APPROVED_KEY_FINGERPRINT=$(ssh-keygen -lf "$RUNNER_TEMP/approved_key.pub" | awk '{print $2}')"
 
-      - name: Resolve exact Light and create console connection
+      - name: Verify exact instances and movable boot volume
         shell: bash
         run: |
           set -Eeuo pipefail
-          tenancy="$(python -c 'import configparser,pathlib; p=configparser.ConfigParser(); p.read(pathlib.Path.home()/".oci"/"config"); print(p["DEFAULT"]["tenancy"])')"
-          oci iam compartment list --compartment-id "$tenancy" --include-root --compartment-id-in-subtree true --access-level ACCESSIBLE --all > "$RUNNER_TEMP/compartments.json"
-          python - "$RUNNER_TEMP/compartments.json" > "$RUNNER_TEMP/compartments" <<'PY'
+          oci compute instance get --instance-id "$LIGHT_INSTANCE_ID" > "$RUNNER_TEMP/light.json"
+          oci compute instance get --instance-id "$HEAVY_INSTANCE_ID" > "$RUNNER_TEMP/heavy.json"
+          python - "$RUNNER_TEMP/light.json" "$RUNNER_TEMP/heavy.json" <<'PY'
           import json,sys
-          for x in json.load(open(sys.argv[1]))['data']:
-              if x.get('lifecycle-state')=='ACTIVE' and isinstance(x.get('id'),str): print(x['id'])
+          light=json.load(open(sys.argv[1]))['data']
+          heavy=json.load(open(sys.argv[2]))['data']
+          assert light['display-name']=='bridge-school-autopilot-lite', light['display-name']
+          assert light['shape']=='VM.Standard.A1.Flex', light['shape']
+          assert light['lifecycle-state']=='RUNNING', light['lifecycle-state']
+          assert heavy['display-name']=='bridge-school-dds3-frankfurt', heavy['display-name']
+          assert heavy['lifecycle-state']=='RUNNING', heavy['lifecycle-state']
+          assert light['availability-domain']==heavy['availability-domain'], (light['availability-domain'],heavy['availability-domain'])
+          print('EXACT_INSTANCE_GUARDS=PASS')
+          print('SAME_AVAILABILITY_DOMAIN=PASS')
+          print('AVAILABILITY_DOMAIN='+light['availability-domain'])
+          print('COMPARTMENT_ID='+light['compartment-id'])
           PY
-          : > "$RUNNER_TEMP/instances.jsonl"
-          while IFS= read -r compartment; do
-            oci compute instance list --compartment-id "$compartment" --all |
-              python -c 'import json,sys; [print(json.dumps(x,separators=(",",":"))) for x in json.load(sys.stdin)["data"]]' >> "$RUNNER_TEMP/instances.jsonl"
-          done < "$RUNNER_TEMP/compartments"
-          python - "$RUNNER_TEMP/instances.jsonl" > "$RUNNER_TEMP/target.env" <<'PY'
+          compartment="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["compartment-id"])' "$RUNNER_TEMP/light.json")"
+          oci compute boot-volume-attachment list --compartment-id "$compartment" --instance-id "$LIGHT_INSTANCE_ID" --all > "$RUNNER_TEMP/light-bva.json"
+          python - "$RUNNER_TEMP/light-bva.json" <<'PY' > "$RUNNER_TEMP/bva.env"
           import json,sys
-          rows=[json.loads(x) for x in open(sys.argv[1]) if x.strip()]
-          rows=[x for x in rows if x.get('display-name')=='bridge-school-autopilot-lite' and x.get('lifecycle-state') not in {'TERMINATED','TERMINATING'}]
-          assert len(rows)==1
+          rows=[x for x in json.load(open(sys.argv[1]))['data'] if x.get('lifecycle-state')=='ATTACHED']
+          assert len(rows)==1, rows
           x=rows[0]
-          assert x['lifecycle-state']=='RUNNING'
-          assert x['shape']=='VM.Standard.A1.Flex'
-          print('INSTANCE_ID='+x['id'])
-          print('COMPARTMENT_ID='+x['compartment-id'])
+          print('BOOT_VOLUME_ATTACHMENT_ID='+x['id'])
+          print('BOOT_VOLUME_ID='+x['boot-volume-id'])
           PY
-          source "$RUNNER_TEMP/target.env"
-          oci compute instance list-vnics --instance-id "$INSTANCE_ID" --all > "$RUNNER_TEMP/vnics.json"
-          public_ip="$(python - "$RUNNER_TEMP/vnics.json" <<'PY'
+          source "$RUNNER_TEMP/bva.env"
+          echo "BOOT_VOLUME_ATTACHMENT_ID=$BOOT_VOLUME_ATTACHMENT_ID" >> "$GITHUB_ENV"
+          echo "BOOT_VOLUME_ID=$BOOT_VOLUME_ID" >> "$GITHUB_ENV"
+          oci bv boot-volume get --boot-volume-id "$BOOT_VOLUME_ID" > "$RUNNER_TEMP/boot.json"
+          python - "$RUNNER_TEMP/boot.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))['data']
+          assert x['lifecycle-state']=='AVAILABLE', x['lifecycle-state']
+          print('LIGHT_BOOT_VOLUME_IDENTIFIED=PASS')
+          print('BOOT_VOLUME_SIZE_GB='+str(x['size-in-gbs']))
+          PY
+
+      - name: Verify Heavy SSH and bounded recovery prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          oci compute instance list-vnics --instance-id "$HEAVY_INSTANCE_ID" --all > "$RUNNER_TEMP/heavy-vnics.json"
+          heavy_ip="$(python - "$RUNNER_TEMP/heavy-vnics.json" <<'PY'
           import json,sys
           rows=[x for x in json.load(open(sys.argv[1]))['data'] if x.get('is-primary')]
           assert len(rows)==1 and rows[0].get('public-ip')
           print(rows[0]['public-ip'])
           PY
           )"
-          echo "INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
-          echo "COMPARTMENT_ID=$COMPARTMENT_ID" >> "$GITHUB_ENV"
-          echo "PUBLIC_IP=$public_ip" >> "$GITHUB_ENV"
-          echo 'LIGHT_EXACT_TARGET=PASS'
+          [[ "$heavy_ip" == 158.180.47.161 ]]
+          known="$RUNNER_TEMP/heavy-known-hosts"
+          scan="$(ssh-keyscan -T 10 -t ed25519 "$heavy_ip" 2>/dev/null)"
+          test -n "$scan"
+          printf '%s\n' "$scan" > "$known"
+          actual="$(ssh-keygen -lf "$known" | awk '{print $2}' | head -1)"
+          [[ "$actual" == "$EXPECTED_HEAVY_FINGERPRINT" ]]
+          ssh -i "$RUNNER_TEMP/heavy_key" -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15             "ubuntu@$heavy_ip" 'sudo -n true; test "$(hostname)" = bridge-school-dds3-frankfurt; findmnt -no SOURCE /; lsblk -dn -o NAME,SIZE,TYPE'
+          echo "HEAVY_IP=$heavy_ip" >> "$GITHUB_ENV"
+          echo "HEAVY_KNOWN_HOSTS=$known" >> "$GITHUB_ENV"
+          echo 'HEAVY_RECOVERY_HOST_PREFLIGHT=PASS'
 
-      - name: Compare existing key identities with Light launch metadata
+      - name: Publish preflight verdict
         shell: bash
         run: |
           set -Eeuo pipefail
-          oci compute instance get --instance-id "$INSTANCE_ID" --output json > "$RUNNER_TEMP/light-instance.json"
-          python - "$RUNNER_TEMP/light-instance.json" "$RUNNER_TEMP/light-metadata-keys" <<'PY'
-          import json,sys
-          d=json.load(open(sys.argv[1]))['data']
-          raw=(d.get('metadata') or {}).get('ssh_authorized_keys','')
-          lines=[x.strip() for x in raw.splitlines() if x.strip() and not x.lstrip().startswith('#')]
-          open(sys.argv[2],'w').write('\n'.join(lines)+('\n' if lines else ''))
-          print(f'LIGHT_METADATA_KEY_COUNT={len(lines)}')
-          PY
-          : > "$RUNNER_TEMP/light-metadata-blobs"
-          if [[ -s "$RUNNER_TEMP/light-metadata-keys" ]]; then
-            awk '{for(i=1;i<=NF;i++) if($i ~ /^(AAAA|AAAAC3|AAAAB3)/){print $i; break}}' "$RUNNER_TEMP/light-metadata-keys" | sort -u > "$RUNNER_TEMP/light-metadata-blobs"
-          fi
-          present=0
-          matched=0
-          for name in ORACLE_SSH_PRIVATE_KEY OCI_SSH_PRIVATE_KEY ORACLE_VM_SSH_PRIVATE_KEY BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY ORACLE_SSH_KEY OCI_SSH_KEY; do
-            value="${!name:-}"
-            [[ -n "$value" ]] || continue
-            present=$((present+1))
-            key="$RUNNER_TEMP/audit-$name"
-            printf '%s\n' "$value" | tr -d '\r' > "$key"
-            chmod 600 "$key"
-            pub="$(ssh-keygen -y -f "$key" 2>/dev/null || true)"
-            blob="$(printf '%s' "$pub" | awk '{print $2}')"
-            if [[ -n "$blob" ]] && grep -qxF "$blob" "$RUNNER_TEMP/light-metadata-blobs"; then
-              echo "LIGHT_METADATA_MATCH_$name=YES"
-              matched=$((matched+1))
-            else
-              echo "LIGHT_METADATA_MATCH_$name=NO"
-            fi
-          done
-          echo "EXISTING_SECRET_KEY_COUNT=$present"
-          echo "LIGHT_METADATA_MATCH_COUNT=$matched"
-          echo 'LIGHT_METADATA_IDENTITY_AUDIT=PASS'
-
-      - name: Confirm current SSH result
-        shell: bash
-        run: |
-          set +e
-          out="$(ssh -i "$RUNNER_TEMP/oracle_ssh_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=10 "ubuntu@$PUBLIC_IP" 'hostname' 2>&1)"
-          rc=$?
-          set -e
-          if [[ "$rc" == 0 ]]; then
-            echo 'LIGHT_SSH=PASS'
-          elif printf '%s' "$out" | grep -qi 'Permission denied'; then
-            echo 'LIGHT_SSH=DENIED'
-          else
-            echo "LIGHT_SSH=FAILED rc=$rc"
-          fi
-
-      - name: Remove temporary console connection
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          if [[ -n "${CONNECTION_ID:-}" ]]; then
-            oci compute instance-console-connection delete --instance-console-connection-id "$CONNECTION_ID" --force
-            echo 'TEMP_CONSOLE_CONNECTION_REMOVED=PASS'
-          fi
+          echo 'BOOT_VOLUME_RECOVERY_PREFLIGHT=PASS'
+          echo 'LIGHT_STOP_REQUESTED=NO'
+          echo 'VOLUME_ATTACHMENT_MUTATION=NO'
+          echo 'HEAVY_FILESYSTEM_MUTATION=NO'
