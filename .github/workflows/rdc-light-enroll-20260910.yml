@@ -115,8 +115,8 @@ jobs:
             unit="$(systemctl show "$svc" -p FragmentPath --value)"
             test -r "$unit"
             awk -F= '/^(Description|User|Group|WorkingDirectory|Restart|RestartSec)=/{print}' "$unit"
-            awk -F= '/^ExecStart=/{split($2,a," "); print "ExecStartPath=" a[1]}' "$unit"
-            envfiles="$(awk -F= '/^EnvironmentFile=/{print $2}' "$unit" | tr -d '"-' || true)"
+            awk -F= '/^ExecStart=/{print "ExecStart=" $2}' "$unit" | sed -E 's#(https?://)[^ ]+#\1<redacted>#g; s#(token|password|secret|key)=[^ ]+#\1=<redacted>#Ig'
+            envfiles="$(sed -nE 's/^EnvironmentFile=-?"?([^" ]+)"?.*/\1/p' "$unit" || true)"
             for ef in $envfiles; do
               test -r "$ef" || continue
               echo "EnvironmentFile=$ef"
@@ -128,7 +128,18 @@ jobs:
           for d in $(systemctl show school-autopilot-shadow.service school-autopilot-online-observer.service -p WorkingDirectory --value | sort -u); do
             test -d "$d" || continue
             echo "WORKDIR=$d"
-            find "$d" -maxdepth 2 -type f -printf '%p\n' 2>/dev/null | sed -n '1,160p'
+            resolved="$(readlink -f "$d")"
+            echo "RESOLVED_WORKDIR=$resolved"
+            find -L "$d" -maxdepth 3 -type f -printf '%p\n' 2>/dev/null | sed -n '1,240p'
           done
           echo 'WORKDIR_FILES_END'
+          echo 'SAFE_JOURNAL_SIGNALS_BEGIN'
+          for svc in school-autopilot-shadow.service school-autopilot-online-observer.service; do
+            echo "JOURNAL_UNIT=$svc"
+            journalctl -u "$svc" --since '-30 minutes' --no-pager -o short-iso 2>/dev/null \
+              | grep -Ei 'heartbeat|queue|connected|connection|ready|healthy|error|failed|warning|poll|shadow' \
+              | tail -n 100 \
+              | sed -E 's#(https?://)[^ ]+#\1<redacted>#g; s#(postgres(ql)?://)[^ ]+#\1<redacted>#Ig; s#([A-Za-z0-9_]*(TOKEN|PASSWORD|SECRET|KEY)[A-Za-z0-9_]*)=[^ ]+#\1=<redacted>#Ig' || true
+          done
+          echo 'SAFE_JOURNAL_SIGNALS_END'
           REMOTE
