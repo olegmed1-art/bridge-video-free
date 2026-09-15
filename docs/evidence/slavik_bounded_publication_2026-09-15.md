@@ -145,6 +145,21 @@ target branches or revoke unrelated capabilities automatically.
 
 ## Official API boundaries checked
 
+### Production-continuation CI repair
+
+Fresh PR1546 checks at head `756eddc1bc5b7bbd12c8213ddfbcfa6ecaf06f4f`:
+10 workflow runs succeeded; `Autopilot role dispatch SQL CI` failed at full
+rollback. Job104305248529 proved a dependency-order error: rollback0322 tried
+to drop `role_dispatch_outbox` while the 0336 permit foreign key still existed.
+No `CASCADE` or weakened invariant is used to repair this.
+
+The existing SQL CI now includes 0335/0336 path triggers, tests, reverse-order
+rollback (0336 then0335 then0334), forward reapplication and repeated tests.
+The exact repaired SQL ladder was executed successfully in isolated PostgreSQL
+18.3/PGlite, including all preceding rollback/reapply steps through0322. This
+does not replace the new current-head hosted CI run or remove the provenance
+issuer activation blocker.
+
 - [GitHub atomic commit input](https://docs.github.com/en/graphql/reference/commits#createcommitonbranchinput)
   supplies `expectedHeadOid`, unlike REST non-force update-ref alone.
 - [GitHub workflow triggering](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)

@@ -43,3 +43,15 @@ def test_only_guarded_publisher_can_write_repository():
     assert "AUTOPILOT_CALLBACK_DATABASE_URL" in source
     assert "oracle_autopilot.github_codex_callback ack" in source
     assert "oracle_autopilot.github_codex_callback terminal" in source
+
+
+def test_sql_ci_covers_publication_dependencies_in_reverse_rollback_order():
+    source = Path(".github/workflows/autopilot-role-dispatch-sql-ci.yml").read_text()
+    triggers, script = source.split("\njobs:\n", 1)
+    for paths in triggers.split("\n  push:\n"):
+        assert "database/migrations/0336_autopilot_bounded_publication_permit.sql" in paths
+        assert "database/tests/336_autopilot_bounded_publication_permit.sql" in paths
+    assert script.count("-f database/tests/336_autopilot_bounded_publication_permit.sql") == 2
+    assert script.index("-f database/rollbacks/0336_") < script.index("-f database/rollbacks/0335_")
+    assert script.index("-f database/rollbacks/0335_") < script.index("-f database/rollbacks/0334_")
+    assert script.index("-f database/migrations/0335_") < script.index("-f database/migrations/0336_")

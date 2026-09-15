@@ -33,6 +33,12 @@ on:
       - 'database/migrations/0334_autopilot_github_probe_retry.sql'
       - 'database/rollbacks/0334_autopilot_github_probe_retry.sql'
       - 'database/tests/334_autopilot_github_probe_retry.sql'
+      - 'database/migrations/0335_autopilot_codex_delivery_window.sql'
+      - 'database/rollbacks/0335_autopilot_codex_delivery_window.sql'
+      - 'database/tests/335_autopilot_codex_delivery_window.sql'
+      - 'database/migrations/0336_autopilot_bounded_publication_permit.sql'
+      - 'database/rollbacks/0336_autopilot_bounded_publication_permit.sql'
+      - 'database/tests/336_autopilot_bounded_publication_permit.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -74,6 +80,12 @@ on:
       - 'database/migrations/0334_autopilot_github_probe_retry.sql'
       - 'database/rollbacks/0334_autopilot_github_probe_retry.sql'
       - 'database/tests/334_autopilot_github_probe_retry.sql'
+      - 'database/migrations/0335_autopilot_codex_delivery_window.sql'
+      - 'database/rollbacks/0335_autopilot_codex_delivery_window.sql'
+      - 'database/tests/335_autopilot_codex_delivery_window.sql'
+      - 'database/migrations/0336_autopilot_bounded_publication_permit.sql'
+      - 'database/rollbacks/0336_autopilot_bounded_publication_permit.sql'
+      - 'database/tests/336_autopilot_bounded_publication_permit.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -218,6 +230,10 @@ jobs:
             -f database/tests/333_autopilot_dispatch_assignment_coherence.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/334_autopilot_github_probe_retry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/335_autopilot_codex_delivery_window.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/336_autopilot_bounded_publication_permit.sql
 
       - name: Prove concurrent six-worker admission
         run: |
@@ -233,6 +249,10 @@ jobs:
           chmod +x database/tests/331_autopilot_six_worker_capacity_concurrency.sh
           database/tests/331_autopilot_six_worker_capacity_concurrency.sh \
             "$capacity_database_url"
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0336_autopilot_bounded_publication_permit.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0335_autopilot_codex_delivery_window.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0334_autopilot_github_probe_retry.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
@@ -286,6 +306,10 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/migrations/0334_autopilot_github_probe_retry.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0335_autopilot_codex_delivery_window.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0336_autopilot_bounded_publication_permit.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/323_autopilot_failure_continuation.sql
@@ -307,3 +331,7 @@ jobs:
             -f database/tests/333_autopilot_dispatch_assignment_coherence.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/334_autopilot_github_probe_retry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/335_autopilot_codex_delivery_window.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/336_autopilot_bounded_publication_permit.sql
