@@ -95,7 +95,8 @@ jobs:
           print('COMPARTMENT_ID='+light['compartment-id'])
           PY
           compartment="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["compartment-id"])' "$RUNNER_TEMP/light.json")"
-          oci compute boot-volume-attachment list --compartment-id "$compartment" --instance-id "$LIGHT_INSTANCE_ID" --all > "$RUNNER_TEMP/light-bva.json"
+          ad="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["availability-domain"])' "$RUNNER_TEMP/light.json")"
+          oci compute boot-volume-attachment list --availability-domain "$ad" --compartment-id "$compartment" --instance-id "$LIGHT_INSTANCE_ID" --all > "$RUNNER_TEMP/light-bva.json"
           python - "$RUNNER_TEMP/light-bva.json" <<'PY' > "$RUNNER_TEMP/bva.env"
           import json,sys
           rows=[x for x in json.load(open(sys.argv[1]))['data'] if x.get('lifecycle-state')=='ATTACHED']
