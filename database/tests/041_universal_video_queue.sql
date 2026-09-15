@@ -5,7 +5,7 @@ DO $$
 DECLARE
     v_files jsonb := '[
       {"sequence":1,"file_id":"driveVideo00000001","name":"Lesson 1.mp4","mime_type":"video/mp4","size_bytes":2000000,"checksum":"md5:11111111111111111111111111111111"},
-      {"sequence":2,"file_id":"driveVideo00000002","name":"Lesson 2.avi","mime_type":"video/x-msvideo","size_bytes":3000000,"checksum":null},
+      {"sequence":2,"file_id":"driveVideo00000002","name":"Lesson 2.avi","mime_type":"video/x-msvideo","size_bytes":3000000,"checksum":"md5:22222222222222222222222222222222"},
       {"sequence":3,"file_id":"driveVideo00000003","name":"Lesson 3.mkv","mime_type":"video/x-matroska","size_bytes":4000000,"checksum":"sha256:3333333333333333333333333333333333333333333333333333333333333333"}
     ]'::jsonb;
     v_batch uuid;
@@ -18,6 +18,9 @@ DECLARE
     v_third_token uuid;
     v_state text;
     v_released integer;
+    v_manifest jsonb;
+    v_receipt jsonb;
+    v_output jsonb;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0056_universal_video_queue') THEN
         RAISE EXCEPTION 'video queue migration is not registered';
@@ -98,17 +101,59 @@ BEGIN
     EXCEPTION WHEN raise_exception THEN
         IF SQLERRM <> 'VIDEO_QUEUE_LEASE_LOST' THEN RAISE; END IF;
     END;
-    SELECT f.batch_status, f.released_jobs INTO v_state, v_released
-      FROM video_queue.finish_job(
-        v_job, v_token, 'worker-1', 'REVIEW_READY',
-        jsonb_build_object(
+    BEGIN
+      PERFORM * FROM video_queue.finish_job(
+        v_job, v_token, 'worker-1', 'REVIEW_READY', jsonb_build_object(
           'result_mode','SHADOW_REVIEW_ONLY','canonical_promotion_allowed',false,
           'database_persistence_allowed',false,'publication_state','NOT_PUBLISHED',
           'source_file_id','driveVideo00000002',
           'stable_job_key',(SELECT stable_job_key FROM video_queue.job WHERE job_id=v_job),
           'algorithm_revision','3.1-free-r25.16'
-        ), NULL
-      ) f;
+        ), NULL);
+      RAISE EXCEPTION 'minimal terminal evidence was accepted';
+    EXCEPTION WHEN raise_exception THEN
+      IF SQLERRM <> 'VIDEO_QUEUE_TERMINAL_EVIDENCE_INVALID' THEN RAISE; END IF;
+    END;
+    IF (SELECT status FROM video_queue.job WHERE job_id=v_job) <> 'LEASED'
+       OR (SELECT status FROM video_queue.batch WHERE batch_id=v_batch) <> 'QUEUED_CANARY'
+       OR (SELECT count(*) FROM video_queue.job WHERE batch_id=v_batch AND status='PENDING_CANARY') <> 2 THEN
+      RAISE EXCEPTION 'failed terminal evidence mutated queue state';
+    END IF;
+
+    v_manifest := jsonb_build_object(
+      'schema','universal-video-terminal-manifest-v1',
+      'job_id',(SELECT stable_job_key FROM video_queue.job WHERE job_id=v_job),
+      'source_file_id','driveVideo00000002',
+      'source_identity',jsonb_build_object('file_id','driveVideo00000002','name','Lesson 2.avi','mime_type','video/x-msvideo','size_bytes',3000000,'parent_folder_id','sourceFolder000001','checksum','md5:'||repeat('2',32)),
+      'algorithm_revision','3.1-free-r25.16','result_mode','SHADOW_REVIEW_ONLY','publication_state','NOT_PUBLISHED',
+      'canonical_promotion_allowed',false,'database_persistence_allowed',false,
+      'artifacts',jsonb_build_array(
+        jsonb_build_object('kind','master_pdf','drive_file_id','masterPdf0000001','name','master.pdf','mime_type','application/pdf','size_bytes',100,'sha256',repeat('1',64),'md5',repeat('1',32),'parent_folder_id','outputFolder00001'),
+        jsonb_build_object('kind','ai_done','drive_file_id','aiDoneJson000001','name','AI_DONE.json','mime_type','application/json','size_bytes',200,'sha256',repeat('2',64),'md5',repeat('2',32),'parent_folder_id','outputFolder00001')));
+    v_receipt := jsonb_build_object(
+      'schema','universal-video-terminal-receipt-v1','job_id',(SELECT stable_job_key FROM video_queue.job WHERE job_id=v_job),
+      'source_file_id','driveVideo00000002','source_identity',v_manifest->'source_identity','source_identity_verified',true,
+      'route_readback_verified',true,'result_readback_verified',true,'checksum_verified',true,
+      'manifest_sha256',encode(public.digest(convert_to(video_queue.canonical_json(v_manifest),'UTF8'),'sha256'),'hex'),
+      'artifact_count',2,'publication_state','NOT_PUBLISHED','canonical_promotion_allowed',false,
+      'database_persistence_allowed',false,'media_execution_evidence_only',true);
+    v_receipt := v_receipt || jsonb_build_object('evidence_sha256',encode(public.digest(convert_to(video_queue.canonical_json(v_receipt),'UTF8'),'sha256'),'hex'));
+    v_output := jsonb_build_object(
+      'result_mode','SHADOW_REVIEW_ONLY','canonical_promotion_allowed',false,'database_persistence_allowed',false,'publication_state','NOT_PUBLISHED',
+      'source_file_id','driveVideo00000002','stable_job_key',(SELECT stable_job_key FROM video_queue.job WHERE job_id=v_job),'algorithm_revision','3.1-free-r25.16',
+      'manifest',v_manifest,'artifact_locators',jsonb_build_object('master_pdf_drive_id','masterPdf0000001','ai_done_drive_id','aiDoneJson000001'),
+      'terminal_receipt',v_receipt,'terminal_evidence_sha256',v_receipt->>'evidence_sha256');
+
+    BEGIN
+      PERFORM * FROM video_queue.finish_job(v_job,v_token,'worker-1','REVIEW_READY',jsonb_set(v_output,'{manifest,artifacts,1,mime_type}','"text/plain"'),NULL);
+      RAISE EXCEPTION 'contradictory artifact evidence was accepted';
+    EXCEPTION WHEN raise_exception THEN
+      IF SQLERRM <> 'VIDEO_QUEUE_TERMINAL_ARTIFACT_INVALID' THEN RAISE; END IF;
+    END;
+    IF (SELECT status FROM video_queue.job WHERE job_id=v_job) <> 'LEASED' THEN RAISE EXCEPTION 'contradictory evidence mutated job'; END IF;
+
+    SELECT f.batch_status, f.released_jobs INTO v_state, v_released
+      FROM video_queue.finish_job(v_job,v_token,'worker-1','REVIEW_READY',v_output,NULL) f;
     IF v_state <> 'RUNNING' OR v_released <> 2
        OR (SELECT count(*) FROM video_queue.job WHERE batch_id=v_batch AND status='QUEUED') <> 2 THEN
         RAISE EXCEPTION 'successful canary did not release remaining jobs';
