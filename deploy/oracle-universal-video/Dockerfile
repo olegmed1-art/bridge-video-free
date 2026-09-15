@@ -23,7 +23,7 @@ COPY bridge_neon_persistence.py bridge_output_scoped_idempotency.py \
      bridge_runtime_hardening_r25_3.py bridge_runtime_hardening_r25_4.py \
      bridge_runtime_hardening_r25_6.py bridge_runtime_hardening_r25_7.py \
      bridge_runtime_hardening_r25_14.py bridge_runtime_hardening_r25_15.py \
-     bridge_runtime_hardening_r25_16.py bridge_runtime_hardening_r5.py \
+     bridge_runtime_hardening_r25_16.py bridge_runtime_hardening_r26.py bridge_runtime_hardening_r5.py \
      bridge_report_board_reconstruction.py bridge_semantic_qc.py \
      bridge_speaker_diarization.py bridge_speaker_diarization_v2.py \
      bridge_speaker_diarization_v3.py bridge_speaker_diarization_v3_core.py \
