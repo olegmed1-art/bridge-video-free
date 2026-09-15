@@ -1,4 +1,4 @@
-name: Verify recovered Light SSH key and audit host
+name: Start one-time RDC authorization on Light only
 
 on:
   push:
@@ -20,7 +20,6 @@ jobs:
       OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       LIGHT_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_LIGHT_SSH_PRIVATE_KEY }}
-      HEAVY_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       LIGHT_INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaicnbolm4whz6iex5lduf4gvk42jaj5maselesau66vvxpq
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -64,10 +63,6 @@ jobs:
           chmod 600 "$RUNNER_TEMP/light_key"
           ssh-keygen -y -f "$RUNNER_TEMP/light_key" > "$RUNNER_TEMP/light_key.pub"
           echo 'LIGHT_PRIVATE_KEY_PARSE=PASS'
-          printf '%s\n' "$HEAVY_SSH_PRIVATE_KEY" | tr -d '\r' > "$RUNNER_TEMP/heavy_key"
-          chmod 600 "$RUNNER_TEMP/heavy_key"
-          ssh-keygen -y -f "$RUNNER_TEMP/heavy_key" >/dev/null
-          echo 'HEAVY_PRIVATE_KEY_PARSE=PASS'
 
       - name: Match key to exact Light metadata
         shell: bash
@@ -96,305 +91,36 @@ jobs:
           )"
           echo "LIGHT_IP=$light_ip" >> "$GITHUB_ENV"
 
-      - name: Verify SSH and collect read-only host evidence
+      - name: Start existing Light RDC and return encrypted user code
         shell: bash
         run: |
           set -Eeuo pipefail
-          opts=(-i "$RUNNER_TEMP/light_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=15)
-          ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'set -eu; test "$(hostname)" = autopilot-lite-vnic || test "$(hostname)" = bridge-school-autopilot-lite; echo LIGHT_SSH=PASS; id -un; uname -sr; test -r /etc/os-release; echo LIGHT_FILESYSTEM_READ=PASS'
-          ssh-keyscan -T 10 -t rsa "$LIGHT_IP" 2>/dev/null | awk '$2=="ssh-rsa" {print "LIGHT_HOST_RSA_PUBLIC=" $2 " " $3; found=1} END {exit !found}'
-          ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'set -u; echo SERVICE_UNITS_BEGIN; systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | sed -n "1,120p"; echo SERVICE_UNITS_END; echo CONTAINERS_BEGIN; if command -v docker >/dev/null; then sudo -n docker ps --format "{{.Names}}|{{.Image}}|{{.Status}}"; elif command -v podman >/dev/null; then sudo -n podman ps --format "{{.Names}}|{{.Image}}|{{.Status}}"; else echo NO_CONTAINER_RUNTIME; fi; echo CONTAINERS_END; echo APP_PATHS_BEGIN; find /opt /srv /home/ubuntu -maxdepth 2 -type f \( -name "docker-compose*.yml" -o -name "compose*.yml" -o -name "*.service" -o -name ".env.example" \) -print 2>/dev/null | sed -n "1,160p"; echo APP_PATHS_END'
-          echo 'LIGHT_TERMINAL=PASS'
-
-      - name: Audit Light autopilot health without exposing configuration values
-        shell: bash
-        run: |
-          set -Eeuo pipefail
+          umask 077
+          printf '%s\n' '-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsYRx9fjmsdhE/Refml8i\n64FZxT5LzoAFz9exnBiLQ+juze6qD5ZopzZYHYGVt2gvhepJOFedF5KX7ywW1ChH\nvLQHix4g+kIBSToENb8AzrMLg03K0STLrW49/zoG7kDJHM55vYS7Hq5cOfs45r0f\nNT9ANL73K+bhwkSOVd0agFoi//iQR5R1UQmMISlkYMji23YHwOmqk4q9T203k5J3\nTClnvuu9R7mddhXFOR9NZZvq4LjfmAlec5TzEgg04/yGZVaeVilFC4+t34QmbD5c\nMVVzrYDbnQvBtRCrBBH+TImVpE2/lC4CbWGzAqShk2PnNkQWtgPWVZipl1QTmH4z\ngQIDAQAB\n-----END PUBLIC KEY-----' | sed 's/\\n/\n/g' > "$RUNNER_TEMP/response.pub"
+          printf '%s %s\n' "$LIGHT_IP" 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCqwT9kNewnM61jWC/4GiR+zM1ybUiw2VuJktkBJabV18GhO22qUDct01Ac91aO2GzrmG2/OlHwUMeL7FNHyF/7pVbKF+31m1PXW8QYyZbxn3perGZutAXc6sA6yd3sHDqwkdEue5F2ORRMGC/p8LSPj6edjY39wGPhYdkubQdbPRhmvV152zSYHQIulJw8d4tvaHxn0vIULcjnKuttCrVHQedeXBVk6AUGnGAriMf6ezBTtawOcf9oo1RJDeMtrQjn0W14Dr2uYCeVu1TX9+mzhYrhl0qeJgtffroiRG5ayjHLFghs6XvQTRjrwFsHiJirf06/PchGXXatL2HHeO1o5H0Rhp+7vHVK9GkQku/L4WjeR47r71Gk+nRgy3c34dPP/EiMDgweb5sVul429kSEtFp9quyO3WQhIv9tW6beoG5JHeeZ+72qUTzwb3bTB960G+Ti702L7NXTxTV2xJDLzGSH3JhKgWbx75ux8a/3ipuIFCRzkjKUa7KQMtOX7OM=' > "$RUNNER_TEMP/light-known-hosts"
           opts=(-i "$RUNNER_TEMP/light_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=15)
-          ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'sudo -n bash -s' <<'REMOTE'
+          ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'sudo -n bash -s' > "$RUNNER_TEMP/response.txt" <<'REMOTE'
           set -Eeuo pipefail
-          for svc in school-autopilot-shadow.service school-autopilot-online-observer.service; do
-            echo "UNIT=$svc"
-            systemctl show "$svc" \
-              -p ActiveState -p SubState -p MainPID -p ExecMainStatus -p Result \
-              -p NRestarts -p ActiveEnterTimestamp -p WorkingDirectory -p FragmentPath
-            unit="$(systemctl show "$svc" -p FragmentPath --value)"
-            test -r "$unit"
-            awk -F= '/^(Description|User|Group|WorkingDirectory|Restart|RestartSec)=/{print}' "$unit"
-            awk -F= '/^ExecStart=/{print "ExecStart=" $2}' "$unit" | sed -E 's#(https?://)[^ ]+#\1<redacted>#g; s#(token|password|secret|key)=[^ ]+#\1=<redacted>#Ig'
-            envfiles="$(sed -nE 's/^EnvironmentFile=-?"?([^" ]+)"?.*/\1/p' "$unit" || true)"
-            for ef in $envfiles; do
-              test -r "$ef" || continue
-              echo "EnvironmentFile=$ef"
-              sed -E 's/^[[:space:]]*export[[:space:]]+//' "$ef" | sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*)=.*/ENV_KEY=\1/p' | sort -u
-            done
+          test "$(hostname)" = autopilot-lite-vnic || test "$(hostname)" = bridge-school-autopilot-lite
+          since="$(date -u '+%Y-%m-%d %H:%M:%S')"
+          systemctl start remote-desktop-commander.service
+          for attempt in $(seq 1 12); do
+            logs="$(journalctl -u remote-desktop-commander.service --since "$since" --no-pager -o cat)"
+            code="$(printf '%s\n' "$logs" | grep -Eo '\b[A-Z0-9]{4}-[A-Z0-9]{4}\b' | tail -n 1 || true)"
+            if test -n "$code"; then
+              printf 'USER_CODE=%s\nISSUED_AT=%s UTC\n' "$code" "$since"
+              exit 0
+            fi
+            if printf '%s\n' "$logs" | grep -q 'Device ready:'; then
+              echo 'RDC_ALREADY_AUTHORIZED=YES'
+              exit 0
+            fi
+            sleep 5
           done
-          echo 'AUTOPILOT_UNITS=PASS'
-          echo 'WORKDIR_FILES_BEGIN'
-          for d in $(systemctl show school-autopilot-shadow.service school-autopilot-online-observer.service -p WorkingDirectory --value | sort -u); do
-            test -d "$d" || continue
-            echo "WORKDIR=$d"
-            resolved="$(readlink -f "$d")"
-            echo "RESOLVED_WORKDIR=$resolved"
-            find -L "$d" -maxdepth 3 -type f -printf '%p\n' 2>/dev/null | sed -n '1,240p'
-          done
-          echo 'WORKDIR_FILES_END'
-          echo 'SAFE_JOURNAL_SIGNALS_BEGIN'
-          for svc in school-autopilot-shadow.service school-autopilot-online-observer.service; do
-            echo "JOURNAL_UNIT=$svc"
-            journalctl -u "$svc" --since '-30 minutes' --no-pager -o short-iso 2>/dev/null \
-              | grep -Ei 'heartbeat|queue|connected|connection|ready|healthy|error|failed|warning|poll|shadow' \
-              | tail -n 100 \
-              | sed -E 's#(https?://)[^ ]+#\1<redacted>#g; s#(postgres(ql)?://)[^ ]+#\1<redacted>#Ig; s#([A-Za-z0-9_]*(TOKEN|PASSWORD|SECRET|KEY)[A-Za-z0-9_]*)=[^ ]+#\1=<redacted>#Ig' || true
-          done
-          echo 'SAFE_JOURNAL_SIGNALS_END'
+          echo 'RDC_AUTH_CODE_NOT_FOUND'
+          exit 1
           REMOTE
-
-      - name: Audit Heavy database identity without exposing credentials
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          known="$RUNNER_TEMP/heavy-known-hosts"
-          ops/oracle_known_hosts_from_scan.sh 158.180.47.161 'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' "$known"
-          ssh -i "$RUNNER_TEMP/heavy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 \
-            ubuntu@158.180.47.161 'sudo -n bash -s' <<'REMOTE'
-          set -Eeuo pipefail
-          /opt/bridge-school/school-autopilot/.venv/bin/python - <<'PY'
-          import re,shlex
-          from urllib.parse import urlsplit
-          path='/opt/bridge-school/school-autopilot/autopilot-shadow.env'
-          dsn=''
-          for raw in open(path):
-              raw=raw.strip()
-              if not raw or raw.startswith('#'): continue
-              parts=shlex.split(raw,comments=True,posix=True)
-              for item in parts:
-                  if item.startswith('AUTOPILOT_DATABASE_URL='):
-                      dsn=item.split('=',1)[1]
-          assert dsn
-          u=urlsplit(dsn)
-          m=re.search(r'(ep-[a-z0-9-]+)',u.hostname or '')
-          print('HEAVY_DB_ENDPOINT='+(m.group(1) if m else 'UNKNOWN'))
-          print('HEAVY_DB_ROLE='+(u.username or ''))
-          print('HEAVY_DB_NAME='+u.path.lstrip('/'))
-          PY
-          echo 'HEAVY_DB_IDENTITY_AUDIT=PASS'
-          REMOTE
-
-      - name: Restore Light database credential and IPv4 reachability
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          opts=(-i "$RUNNER_TEMP/light_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=15)
-          ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'sudo -n bash -s' <<'REMOTE'
-          set -Eeuo pipefail
-          work="$(mktemp -d)"
-          trap 'rm -rf "$work"' EXIT
-          chmod 700 "$work"
-          printf '%s' 'GBUWRXMEkEKIlGddXnvvz9rFrICLAVGM7gjuyOsS0EHKeIeMAC0Nx/X7ZVbAE9Prpc1kgswiHJlsRLQaaJI3Ic3xtDoCZR0VVAosbhvOX7tNJLr4HWgRcD+OmrFnWSxv/GT9tk3njBSzEy0huaALDZS4O8it8DUm6j8C0o11MgLKtisuomNcTTpvXMDwFnnI9/T0h05fXkC5Erqy3wg02J4uLUyiQrhz7Wq1Ciz7JtehHdoPES6epEId7QYNYh3LgC+rn02actg9gxRF7Apx0BCkWEbSdC1KrSdiIiYsjZpsbb/FXY6ZQ0wCC6wEDfNchvt9Z+ty215LvOGKme5Jv7LcTGs4McsrvXU2SBvhppw6+Wc2VizZkOw1GlAt13nlCLG/kTcWQJPe1u3X9jjsC8S/Xpc5Nnye4KNPi6sELmHPLnKzlr5WZSn5jIqJx1ZY2FdDpFZxYCebfhjwmJwJb/BL5eALDO4/SpNvg8/0TmKGI+nreM+U/H+4qImNXw+1' | base64 --decode > "$work/dsn.enc"
-          cp /etc/ssh/ssh_host_rsa_key "$work/host.pem"
-          ssh-keygen -p -m PEM -P '' -N '' -f "$work/host.pem" >/dev/null
-          openssl pkeyutl -decrypt -inkey "$work/host.pem" \
-            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
-            -in "$work/dsn.enc" -out "$work/new-dsn"
-          chmod 600 "$work/new-dsn"
-          python3 - "$work/new-dsn" <<'PY'
-          import os,re,shutil,sys,tempfile
-          from urllib.parse import urlsplit
-          new=open(sys.argv[1]).read().strip()
-          u=urlsplit(new)
-          assert u.hostname=='ep-floral-field-b1pjs2of.c-5.eu-central-1.aws.neon.tech'
-          assert u.username=='autopilot_runtime_login'
-          assert u.path=='/neondb'
-          assert not any(c.isspace() for c in new)
-          paths=[
-            '/opt/bridge-school/school-autopilot/autopilot-shadow.env',
-            '/opt/bridge-school/school-autopilot/autopilot-broker.env',
-          ]
-          changed=[]
-          for path in paths:
-              if not os.path.isfile(path): continue
-              old=open(path).read()
-              pat=re.compile(r'(?m)^(\s*(?:export\s+)?AUTOPILOT_DATABASE_URL=).*$')
-              if not pat.search(old): continue
-              updated=pat.sub(lambda m:m.group(1)+new,old)
-              if updated==old: continue
-              backup=path+'.bak-neon-recovery-20260915'
-              if not os.path.exists(backup): shutil.copy2(path,backup)
-              st=os.stat(path)
-              fd,tmp=tempfile.mkstemp(prefix='.autopilot-env-',dir=os.path.dirname(path),text=True)
-              try:
-                  with os.fdopen(fd,'w') as f: f.write(updated)
-                  os.chmod(tmp,st.st_mode)
-                  os.chown(tmp,st.st_uid,st.st_gid)
-                  os.replace(tmp,path)
-              finally:
-                  if os.path.exists(tmp): os.unlink(tmp)
-              changed.append(path)
-          print('LIGHT_DB_CONFIG=' + ('UPDATED' if changed else 'ALREADY_CURRENT'))
-          PY
-          if ! grep -Eq '^[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100([[:space:]]|$)' /etc/gai.conf 2>/dev/null; then
-            cp -a /etc/gai.conf /etc/gai.conf.bak-neon-recovery-20260915
-            printf '\n# Prefer reachable IPv4 when this host has no IPv6 route.\nprecedence ::ffff:0:0/96  100\n' >> /etc/gai.conf
-            echo 'LIGHT_IPV4_PREFERENCE=UPDATED'
-          else
-            echo 'LIGHT_IPV4_PREFERENCE=ALREADY_PRESENT'
-          fi
-          systemctl restart school-autopilot-shadow.service school-autopilot-online-observer.service
-          sleep 5
-          echo "LIGHT_SHADOW_STATE=$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"
-          echo "LIGHT_OBSERVER_STATE=$(systemctl is-active school-autopilot-online-observer.service 2>/dev/null || true)"
-          echo 'LIGHT_AUTOPILOT_RESTART=COMPLETE'
-          REMOTE
-
-
-      - name: Prepare persistent RDC agent on Light without starting authorization
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          opts=(-i "$RUNNER_TEMP/light_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=15)
-          ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'bash -s' <<'REMOTE'
-          set -Eeuo pipefail
-          export NVM_DIR=/home/ubuntu/.nvm
-          if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
-            curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
-          fi
-          source "$NVM_DIR/nvm.sh"
-          nvm install 22.23.2
-          nvm use 22.23.2
-          npm install --global '@wonderwhy-er/desktop-commander@0.2.50'
-          node --version
-          desktop-commander --version >/dev/null 2>&1 || true
-          REMOTE
-          ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'sudo -n bash -s' <<'REMOTE'
-          set -Eeuo pipefail
-          install -d -m 0755 /usr/local/libexec
-          cat > /usr/local/libexec/remote-desktop-commander-agent <<'EOF'
-          #!/usr/bin/env bash
-          set -Eeuo pipefail
-          export HOME=/home/ubuntu
-          export USER=ubuntu
-          export LOGNAME=ubuntu
-          export PATH='/home/ubuntu/.nvm/versions/node/v22.23.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
-          exec '/home/ubuntu/.nvm/versions/node/v22.23.2/bin/npx' --yes --prefer-offline '@wonderwhy-er/desktop-commander@0.2.50' remote --disable-no-sleep
-          EOF
-          chmod 0755 /usr/local/libexec/remote-desktop-commander-agent
-          cat > /etc/systemd/system/remote-desktop-commander.service <<'EOF'
-          [Unit]
-          Description=Remote Desktop Commander device agent
-          Wants=network-online.target
-          After=network-online.target
-          StartLimitIntervalSec=300
-          StartLimitBurst=10
-          
-          [Service]
-          Type=simple
-          User=ubuntu
-          Group=ubuntu
-          WorkingDirectory=/home/ubuntu
-          Environment=HOME=/home/ubuntu
-          Environment=USER=ubuntu
-          Environment=LOGNAME=ubuntu
-          UMask=0077
-          ExecStart=/usr/local/libexec/remote-desktop-commander-agent
-          Restart=always
-          RestartSec=10
-          KillSignal=SIGTERM
-          TimeoutStopSec=30
-          NoNewPrivileges=true
-          
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-          systemctl daemon-reload
-          systemctl enable remote-desktop-commander.service
-          systemctl stop remote-desktop-commander.service 2>/dev/null || true
-          echo "LIGHT_RDC_ENABLED=$(systemctl is-enabled remote-desktop-commander.service)"
-          echo "LIGHT_RDC_STATE=$(systemctl is-active remote-desktop-commander.service 2>/dev/null || true)"
-          echo 'LIGHT_RDC_PREPARED=PASS'
-          REMOTE
-
-
-      - name: Probe Light production database path without exposing credentials
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          opts=(-i "$RUNNER_TEMP/light_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=15)
-          ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'sudo -n bash -s' <<'REMOTE'
-          set -Eeuo pipefail
-          /opt/bridge-school/school-autopilot/.venv/bin/python - <<'PY'
-          import os,re,shlex,socket,sys
-          env_path='/opt/bridge-school/school-autopilot/autopilot-shadow.env'
-          for raw in open(env_path):
-              raw=raw.strip()
-              if not raw or raw.startswith('#'): continue
-              parts=shlex.split(raw,comments=True,posix=True)
-              if not parts: continue
-              item=parts[0]
-              if item=='export' and len(parts)>1: item=parts[1]
-              if '=' in item:
-                  k,v=item.split('=',1); os.environ[k]=v
-          from urllib.parse import parse_qs,urlsplit
-          dsn=os.environ['AUTOPILOT_DATABASE_URL']
-          expected=os.environ.get('AUTOPILOT_EXPECTED_DB_USER','')
-          u=urlsplit(dsn)
-          host=u.hostname; port=u.port or 5432
-          assert host
-          endpoint_match=re.search(r'(^|\.)(ep-[a-z0-9-]+)(\.|$)',host)
-          assert endpoint_match, 'QUEUE_ENDPOINT_SLUG_NOT_FOUND'
-          print('QUEUE_ENDPOINT_SLUG='+endpoint_match.group(2))
-          print('QUEUE_ENDPOINT_REGION=' + ('PASS' if host.endswith('.eu-central-1.aws.neon.tech') else 'UNEXPECTED'))
-          print('QUEUE_DATABASE='+u.path.lstrip('/'))
-          print('QUEUE_ROLE='+str(u.username or ''))
-          print('QUEUE_EXPECTED_ROLE_MATCH=' + ('PASS' if not expected or u.username==expected else 'FAIL'))
-          def clean(value):
-              s=str(value)
-              for secret in (dsn,u.username,u.password,host):
-                  if secret: s=s.replace(secret,'<redacted>')
-              s=re.sub(r'postgres(?:ql)?://\S+','postgresql://<redacted>',s,flags=re.I)
-              return s[:800]
-          try:
-              addresses=socket.getaddrinfo(host,port,type=socket.SOCK_STREAM)
-              ipv4=[]; ipv6=[]
-              for family,_,_,_,sockaddr in addresses:
-                  target=ipv4 if family==socket.AF_INET else ipv6 if family==socket.AF_INET6 else None
-                  if target is not None and sockaddr[0] not in target: target.append(sockaddr[0])
-              print('QUEUE_DNS=PASS')
-              print(f'QUEUE_DNS_IPV4_COUNT={len(ipv4)}')
-              print(f'QUEUE_DNS_IPV6_COUNT={len(ipv6)}')
-              print('QUEUE_DSN_HOSTADDR=' + ('PRESENT' if 'hostaddr' in parse_qs(u.query) else 'ABSENT'))
-          except Exception as e:
-              print('QUEUE_DNS=FAIL',type(e).__name__,clean(e)); sys.exit(21)
-          try:
-              with socket.create_connection((host,port),timeout=10): pass
-              print('QUEUE_TCP=PASS')
-          except Exception as e:
-              print('QUEUE_TCP=FAIL',type(e).__name__,clean(e)); sys.exit(22)
-          normal_ok=False
-          try:
-              import psycopg
-              with psycopg.connect(dsn,connect_timeout=10) as conn:
-                  with conn.cursor() as cur:
-                      cur.execute('select current_user, current_database(), true')
-                      user,db,ok=cur.fetchone()
-                      print('QUEUE_POSTGRES=PASS')
-                      print('QUEUE_EXPECTED_ROLE=' + ('PASS' if not expected or user==expected else 'FAIL'))
-                      print('QUEUE_READ_ONLY_QUERY=PASS' if ok else 'QUEUE_READ_ONLY_QUERY=FAIL')
-                      normal_ok=True
-          except Exception as e:
-              print('QUEUE_POSTGRES=FAIL',type(e).__name__,clean(e))
-          if ipv4:
-              try:
-                  import psycopg
-                  with psycopg.connect(dsn,hostaddr=ipv4[0],connect_timeout=10) as conn:
-                      with conn.cursor() as cur:
-                          cur.execute('select true')
-                          assert cur.fetchone()[0] is True
-                  print('QUEUE_POSTGRES_IPV4_OVERRIDE=PASS')
-              except Exception as e:
-                  print('QUEUE_POSTGRES_IPV4_OVERRIDE=FAIL',type(e).__name__,clean(e)); sys.exit(24)
-          elif not normal_ok:
-              sys.exit(23)
-          PY
-          REMOTE
+          openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/response.pub" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in "$RUNNER_TEMP/response.txt" -out "$RUNNER_TEMP/response.enc"
+          printf 'RDC_RESPONSE_ENCRYPTED='
+          base64 -w0 "$RUNNER_TEMP/response.enc"
+          printf '\nLIGHT_RDC_START=PASS\n'
