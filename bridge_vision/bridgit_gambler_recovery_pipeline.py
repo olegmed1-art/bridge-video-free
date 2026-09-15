@@ -25,7 +25,7 @@ from bridge_vision.gambler_classic_reference import (
     select_variant_for_card_size,
 )
 
-PIPELINE_VERSION = "bridgit-gambler-recovery-pipeline-v1"
+PIPELINE_VERSION = "bridgit-gambler-recovery-pipeline-v2"
 
 
 class GamblerRecoveryPipelineError(ValueError):
