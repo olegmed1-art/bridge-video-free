@@ -1,6 +1,43 @@
 # Native CLI queue transport — unapproved design
 
-Date: 2026-09-15. Status: `NOT_ACTIVATED / LIFECYCLE_REVIEW_FAILED`.
+Date: 2026-09-15. Status: `DRAFT_SQL_VERIFIED / RUNTIME_ACTIVATION_PENDING`.
+
+## Native PostgreSQL receipt adapter
+
+The later implementation is `database/migrations/0337_autopilot_native_cli_receipts.sql`
+and `oracle_autopilot/codex_cli_queue.py`; it supersedes the rejected sketch below.
+It provides parameterized reserve, snapshot, creation-intent, ACK, authority and
+terminal RPCs. All new RPCs remain owner-only; configuration defaults disabled.
+The runtime has received no new grants and the migration has not been applied to
+production.
+
+Before the first cloud creation, a one-shot intent is committed to PostgreSQL.
+If the host journal is subsequently lost, the intent cannot be granted again;
+the attempt stays unknown instead of creating a duplicate task. Already known
+provider IDs can be acknowledged after work is paused. Success rechecks locked
+task/work/role authority; a proven BLOCKED result can close the original attempt
+while preserving a pause or a newer work assignment. A disabled role or changed
+assignment no longer leaves an ACTIVE work item pointing to a terminal task.
+Normal BLOCKED results still use the existing bounded repair continuation.
+
+Configuration disablement stops new submissions; acknowledged provider tasks
+can drain. Contract-v4 unknown/running attempts are excluded from legacy timeout
+release. Two existing terminal triggers receive a guard scoped to native attempts
+with changed authority; legacy v3 behavior is covered by existing SQL regressions.
+Rollback restores all three changed function definitions and refuses to erase a
+populated native receipt ledger.
+
+Verification: 47 Python tests passed. PostgreSQL 18.3/PGlite 0.5.8 under a
+nonsuperuser owner passed migration application, SQL332/333/336/337, the full
+updated CI rollback/reapply ladder, empty rollback, and populated-ledger refusal
+with five receipts preserved. This does not attest multi-session concurrency or
+a live production cycle. Independent Red Team identified role-disable and
+configuration semantics gaps; both were corrected and received regression cases.
+
+Remaining activation work: resident scheduling and discovery, reviewed runtime
+grants, native binary installation and service-identity sign-in, sender cutover,
+atomic repair publication, and a live event-to-terminal/recovery canary. No
+production service, queue, automation or credentials were changed by this draft.
 
 The verified ChatGPT-authenticated CLI runs as `ubuntu`; the resident worker runs as `school-autopilot`. Its current entrypoint is `oracle_autopilot.worker_v17`, whose source was not accessible to the current remote terminal identity. Reading it returned PermissionError; the remote command tool rejected the attempted `sudo -n -u school-autopilot` read with `Command not allowed`. Do not change identity, copy login credentials, weaken permissions, or replace the running service to bypass that boundary.
 

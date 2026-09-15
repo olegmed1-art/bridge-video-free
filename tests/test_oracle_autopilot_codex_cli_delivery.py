@@ -15,6 +15,13 @@ class Queue:
         self.fail_ack = None
         self.fail_finish = None
         self.released = 0
+        self.submission_started = False
+
+    def begin_submission(self, request):
+        if self.submission_started:
+            return False
+        self.submission_started = True
+        return True
 
     def snapshot(self, dispatch_id):
         return deepcopy(self.row)
@@ -100,6 +107,16 @@ def test_unknown_creation_never_retries_or_releases(rig):
         assert advance(request['dispatch_id'], queue, authority)['state'] == 'SUBMISSION_UNKNOWN'
     assert calls['create'] == 1
     assert queue.released == 0
+
+
+def test_lost_host_journal_cannot_create_second_provider_task(rig):
+    request, queue, authority, calls = rig
+    queue.fail_ack = 'before'
+    with pytest.raises(ConnectionError):
+        advance(request['dispatch_id'], queue, authority)
+    (bridge.STATE/(request['dispatch_id']+'.json')).unlink()
+    assert advance(request['dispatch_id'], queue, authority)['state'] == 'SUBMISSION_UNKNOWN'
+    assert calls['create'] == 1 and queue.released == 0
 
 
 def test_pause_after_submit_and_lost_ack_can_close_original_attempt(rig):

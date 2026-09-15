@@ -13,6 +13,9 @@ from . import codex_cli_bridge as bridge
 
 
 class QueuePort(Protocol):
+    def begin_submission(self, request: dict) -> bool:
+        """Persist one-shot creation intent; never regrant after lost journal."""
+
     def snapshot(self, dispatch_id: str) -> dict:
         """Return state, immutable request, provider_task_id, and terminal.
 
@@ -115,6 +118,8 @@ def advance(dispatch_id: str, queue: QueuePort, authority: AuthorityPort,
             current = _authority(authority, request)
             if not _bound(current, request):
                 return {'state': 'RESERVATION_HELD', 'reason': 'TARGET_AUTHORITY_CHANGED'}
+            if not queue.begin_submission(request):
+                return {'state': 'SUBMISSION_UNKNOWN', 'dispatch_id': dispatch_id}
             creation = provider.submit(request)
         if creation['state'] != 'SUBMITTED':
             return {'state': 'SUBMISSION_UNKNOWN', 'dispatch_id': dispatch_id}
