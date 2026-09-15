@@ -33,6 +33,10 @@ on:
       - 'database/migrations/0334_autopilot_github_probe_retry.sql'
       - 'database/rollbacks/0334_autopilot_github_probe_retry.sql'
       - 'database/tests/334_autopilot_github_probe_retry.sql'
+      - 'database/migrations/0336_autopilot_terminal_summary_contract.sql'
+      - 'database/rollbacks/0336_autopilot_terminal_summary_contract.sql'
+      - 'database/tests/336_autopilot_terminal_summary_contract.sql'
+      - 'tests/test_oracle_autopilot_terminal_summary_contract.py'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -74,6 +78,10 @@ on:
       - 'database/migrations/0334_autopilot_github_probe_retry.sql'
       - 'database/rollbacks/0334_autopilot_github_probe_retry.sql'
       - 'database/tests/334_autopilot_github_probe_retry.sql'
+      - 'database/migrations/0336_autopilot_terminal_summary_contract.sql'
+      - 'database/rollbacks/0336_autopilot_terminal_summary_contract.sql'
+      - 'database/tests/336_autopilot_terminal_summary_contract.sql'
+      - 'tests/test_oracle_autopilot_terminal_summary_contract.py'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -173,6 +181,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Terminal summary receiver regression
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/summary-contract-venv"
+          "$RUNNER_TEMP/summary-contract-venv/bin/pip" install 'pytest==8.3.5' 'psycopg[binary]==3.2.9'
+          "$RUNNER_TEMP/summary-contract-venv/bin/python" -m pytest --noconftest -q \
+            tests/test_oracle_autopilot_github_codex_callback.py \
+            tests/test_oracle_autopilot_terminal_summary_contract.py
+
       - name: Install PostgreSQL client
         run: |
           set -euo pipefail
@@ -218,6 +235,8 @@ jobs:
             -f database/tests/333_autopilot_dispatch_assignment_coherence.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/334_autopilot_github_probe_retry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/336_autopilot_terminal_summary_contract.sql
 
       - name: Prove concurrent six-worker admission
         run: |
@@ -233,6 +252,8 @@ jobs:
           chmod +x database/tests/331_autopilot_six_worker_capacity_concurrency.sh
           database/tests/331_autopilot_six_worker_capacity_concurrency.sh \
             "$capacity_database_url"
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0336_autopilot_terminal_summary_contract.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0334_autopilot_github_probe_retry.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
@@ -286,6 +307,8 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/migrations/0334_autopilot_github_probe_retry.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0336_autopilot_terminal_summary_contract.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/323_autopilot_failure_continuation.sql
@@ -307,3 +330,5 @@ jobs:
             -f database/tests/333_autopilot_dispatch_assignment_coherence.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/334_autopilot_github_probe_retry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/336_autopilot_terminal_summary_contract.sql
