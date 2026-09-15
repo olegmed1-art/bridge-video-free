@@ -29,8 +29,10 @@ Workspace Agent access tokens относятся к Business/Enterprise и эт�
 4. GitHub создаёт отдельную изолированную Codex Cloud task/chat. Реальная
    доставка фиксируется только после `eyes` reaction от закреплённого Codex bot
    (`id=199175422`).
-5. GitHub Actions повторно проверяет открытый target PR, base `main` и exact
+5. GitHub Actions повторно проверяет открытый target PR, его номер и exact
    head, после чего узкий `SECURITY DEFINER` RPC переводит outbox в `SENT`.
+   Target PR может опираться на промежуточную ветку; требование base `main`
+   применяется только к dispatch PR, проверяемому событийным мостом.
 6. Codex завершает ответ блоком `AUTOPILOT_CODEX_RESULT_V1`. Второй callback
    принимает только comment закреплённого GitHub App (`id=1144995`), повторно
    сверяет live head и требует сохранённый ACK.
@@ -60,7 +62,8 @@ Workspace Agent access tokens относятся к Business/Enterprise и эт�
 ## Fail-closed
 
 Команда отклоняется при неверном owner/app, PR, head, epoch, role, fingerprint,
-scope или schema. ACK имеет десятиминутное окно. Terminal result имеет
+scope или schema. ACK имеет тридцатиминутное окно с момента публикации dispatch
+PR (миграция 0335). Terminal result имеет
 двухчасовое окно, принимается только после ACK и только при совпадении live head
 с заявленным `target_head_sha`. Истечение окна становится явной retryable
 ошибкой, а не ложным успехом.
