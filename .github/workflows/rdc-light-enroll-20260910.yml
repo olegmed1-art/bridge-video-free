@@ -145,6 +145,73 @@ jobs:
           echo 'SAFE_JOURNAL_SIGNALS_END'
           REMOTE
 
+      - name: Restore Light database credential and IPv4 reachability
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          opts=(-i "$RUNNER_TEMP/light_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=15)
+          ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'sudo -n bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          chmod 700 "$work"
+          printf '%s' 'CGVGeeWLbIuCpDKHOH3/396MDiL7UswrQkVk0wk406t3V24GdcCl2/YlEOuHXa6IuQeEzjOtV9nCnAG01ZH2WNOWDRK3uU7vhMqA5OHxzs9ncdvfEzAJcD13MWfERqOYTau0v+SlQa1ED1bHUJMb92J2nWDn9UdDJPQDgprUG7YWXbaEgYuAO5wXDwBRUBuzLw6dloV4xkcCX86K9rA9wi3uFi/noaw00FJMKBUpcEeLM9/n9ArFesmAodfElfdiEI/947ZTW0T4XPioFpAtFgfTx03gkoTlotIoAmm9R3k2Kge+O/tZRrHRNUe2Dn+Q1U6SSApOKv2FYVGbUChbvJz5nKDSs1BaR3UrmQ+XyPQE0BgyqnpxdV+3Y0pWeCOz3LMQzTtmKrS7NutJEis1dDpXm+i1oz71R1BRJTKMjjatKUg42vs041eccTiArkbHSRJ6hO/DouvRNH43uQQ7VPjGokQiMd0tY6pCD2wfjov3Qq9HisXiQ+zsISjM5M9y' | base64 --decode > "$work/dsn.enc"
+          cp /etc/ssh/ssh_host_rsa_key "$work/host.pem"
+          ssh-keygen -p -m PEM -P '' -N '' -f "$work/host.pem" >/dev/null
+          openssl pkeyutl -decrypt -inkey "$work/host.pem" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+            -in "$work/dsn.enc" -out "$work/new-dsn"
+          chmod 600 "$work/new-dsn"
+          python3 - "$work/new-dsn" <<'PY'
+          import os,re,shutil,sys,tempfile
+          from urllib.parse import urlsplit
+          new=open(sys.argv[1]).read().strip()
+          u=urlsplit(new)
+          assert u.hostname=='ep-floral-field-b1pjs2of.c-5.eu-central-1.aws.neon.tech'
+          assert u.username=='autopilot_runtime_login'
+          assert u.path=='/neondb'
+          assert not any(c.isspace() for c in new)
+          paths=[
+            '/opt/bridge-school/school-autopilot/autopilot-shadow.env',
+            '/opt/bridge-school/school-autopilot/autopilot-broker.env',
+          ]
+          changed=[]
+          for path in paths:
+              if not os.path.isfile(path): continue
+              old=open(path).read()
+              pat=re.compile(r'(?m)^(\s*(?:export\s+)?AUTOPILOT_DATABASE_URL=).*$')
+              if not pat.search(old): continue
+              updated=pat.sub(lambda m:m.group(1)+new,old)
+              if updated==old: continue
+              backup=path+'.bak-neon-recovery-20260915'
+              if not os.path.exists(backup): shutil.copy2(path,backup)
+              st=os.stat(path)
+              fd,tmp=tempfile.mkstemp(prefix='.autopilot-env-',dir=os.path.dirname(path),text=True)
+              try:
+                  with os.fdopen(fd,'w') as f: f.write(updated)
+                  os.chmod(tmp,st.st_mode)
+                  os.chown(tmp,st.st_uid,st.st_gid)
+                  os.replace(tmp,path)
+              finally:
+                  if os.path.exists(tmp): os.unlink(tmp)
+              changed.append(path)
+          print('LIGHT_DB_CONFIG=' + ('UPDATED' if changed else 'ALREADY_CURRENT'))
+          PY
+          if ! grep -Eq '^[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100([[:space:]]|$)' /etc/gai.conf 2>/dev/null; then
+            cp -a /etc/gai.conf /etc/gai.conf.bak-neon-recovery-20260915
+            printf '\n# Prefer reachable IPv4 when this host has no IPv6 route.\nprecedence ::ffff:0:0/96  100\n' >> /etc/gai.conf
+            echo 'LIGHT_IPV4_PREFERENCE=UPDATED'
+          else
+            echo 'LIGHT_IPV4_PREFERENCE=ALREADY_PRESENT'
+          fi
+          systemctl restart school-autopilot-shadow.service school-autopilot-online-observer.service
+          sleep 5
+          systemctl is-active --quiet school-autopilot-shadow.service
+          systemctl is-active --quiet school-autopilot-online-observer.service
+          echo 'LIGHT_AUTOPILOT_RESTART=PASS'
+          REMOTE
+
+
       - name: Probe Light production database path without exposing credentials
         shell: bash
         run: |
