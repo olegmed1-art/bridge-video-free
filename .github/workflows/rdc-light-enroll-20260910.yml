@@ -151,11 +151,18 @@ jobs:
           opts=(-i "$RUNNER_TEMP/light_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=15)
           ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'sudo -n bash -s' <<'REMOTE'
           set -Eeuo pipefail
-          set -a
-          source /opt/bridge-school/school-autopilot/autopilot-shadow.env
-          set +a
           /opt/bridge-school/school-autopilot/.venv/bin/python - <<'PY'
-          import os,re,socket,sys
+          import os,re,shlex,socket,sys
+          env_path='/opt/bridge-school/school-autopilot/autopilot-shadow.env'
+          for raw in open(env_path):
+              raw=raw.strip()
+              if not raw or raw.startswith('#'): continue
+              parts=shlex.split(raw,comments=True,posix=True)
+              if not parts: continue
+              item=parts[0]
+              if item=='export' and len(parts)>1: item=parts[1]
+              if '=' in item:
+                  k,v=item.split('=',1); os.environ[k]=v
           from urllib.parse import urlsplit
           dsn=os.environ['AUTOPILOT_DATABASE_URL']
           expected=os.environ.get('AUTOPILOT_EXPECTED_DB_USER','')
