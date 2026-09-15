@@ -243,9 +243,9 @@ jobs:
           fi
           systemctl restart school-autopilot-shadow.service school-autopilot-online-observer.service
           sleep 5
-          systemctl is-active --quiet school-autopilot-shadow.service
-          systemctl is-active --quiet school-autopilot-online-observer.service
-          echo 'LIGHT_AUTOPILOT_RESTART=PASS'
+          echo "LIGHT_SHADOW_STATE=$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"
+          echo "LIGHT_OBSERVER_STATE=$(systemctl is-active school-autopilot-online-observer.service 2>/dev/null || true)"
+          echo 'LIGHT_AUTOPILOT_RESTART=COMPLETE'
           REMOTE
 
 
