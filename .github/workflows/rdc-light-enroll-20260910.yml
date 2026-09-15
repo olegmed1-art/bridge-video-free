@@ -97,6 +97,7 @@ jobs:
           set -Eeuo pipefail
           opts=(-i "$RUNNER_TEMP/light_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=15)
           ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'set -eu; test "$(hostname)" = autopilot-lite-vnic || test "$(hostname)" = bridge-school-autopilot-lite; echo LIGHT_SSH=PASS; id -un; uname -sr; test -r /etc/os-release; echo LIGHT_FILESYSTEM_READ=PASS'
+          ssh-keyscan -T 10 -t rsa "$LIGHT_IP" 2>/dev/null | awk '$2=="ssh-rsa" {print "LIGHT_HOST_RSA_PUBLIC=" $2 " " $3; found=1} END {exit !found}'
           ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'set -u; echo SERVICE_UNITS_BEGIN; systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | sed -n "1,120p"; echo SERVICE_UNITS_END; echo CONTAINERS_BEGIN; if command -v docker >/dev/null; then sudo -n docker ps --format "{{.Names}}|{{.Image}}|{{.Status}}"; elif command -v podman >/dev/null; then sudo -n podman ps --format "{{.Names}}|{{.Image}}|{{.Status}}"; else echo NO_CONTAINER_RUNTIME; fi; echo CONTAINERS_END; echo APP_PATHS_BEGIN; find /opt /srv /home/ubuntu -maxdepth 2 -type f \( -name "docker-compose*.yml" -o -name "compose*.yml" -o -name "*.service" -o -name ".env.example" \) -print 2>/dev/null | sed -n "1,160p"; echo APP_PATHS_END'
           echo 'LIGHT_TERMINAL=PASS'
 
