@@ -20,6 +20,7 @@ jobs:
       OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       LIGHT_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_LIGHT_SSH_PRIVATE_KEY }}
+      HEAVY_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       LIGHT_INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaicnbolm4whz6iex5lduf4gvk42jaj5maselesau66vvxpq
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -63,6 +64,10 @@ jobs:
           chmod 600 "$RUNNER_TEMP/light_key"
           ssh-keygen -y -f "$RUNNER_TEMP/light_key" > "$RUNNER_TEMP/light_key.pub"
           echo 'LIGHT_PRIVATE_KEY_PARSE=PASS'
+          printf '%s\n' "$HEAVY_SSH_PRIVATE_KEY" | tr -d '\r' > "$RUNNER_TEMP/heavy_key"
+          chmod 600 "$RUNNER_TEMP/heavy_key"
+          ssh-keygen -y -f "$RUNNER_TEMP/heavy_key" >/dev/null
+          echo 'HEAVY_PRIVATE_KEY_PARSE=PASS'
 
       - name: Match key to exact Light metadata
         shell: bash
@@ -143,6 +148,38 @@ jobs:
               | sed -E 's#(https?://)[^ ]+#\1<redacted>#g; s#(postgres(ql)?://)[^ ]+#\1<redacted>#Ig; s#([A-Za-z0-9_]*(TOKEN|PASSWORD|SECRET|KEY)[A-Za-z0-9_]*)=[^ ]+#\1=<redacted>#Ig' || true
           done
           echo 'SAFE_JOURNAL_SIGNALS_END'
+          REMOTE
+
+      - name: Audit Heavy database identity without exposing credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          known="$RUNNER_TEMP/heavy-known-hosts"
+          ops/oracle_known_hosts_from_scan.sh 158.180.47.161 'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' "$known"
+          ssh -i "$RUNNER_TEMP/heavy_key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 \
+            ubuntu@158.180.47.161 'sudo -n bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          /opt/bridge-school/school-autopilot/.venv/bin/python - <<'PY'
+          import re,shlex
+          from urllib.parse import urlsplit
+          path='/opt/bridge-school/school-autopilot/autopilot-shadow.env'
+          dsn=''
+          for raw in open(path):
+              raw=raw.strip()
+              if not raw or raw.startswith('#'): continue
+              parts=shlex.split(raw,comments=True,posix=True)
+              for item in parts:
+                  if item.startswith('AUTOPILOT_DATABASE_URL='):
+                      dsn=item.split('=',1)[1]
+          assert dsn
+          u=urlsplit(dsn)
+          m=re.search(r'(ep-[a-z0-9-]+)',u.hostname or '')
+          print('HEAVY_DB_ENDPOINT='+(m.group(1) if m else 'UNKNOWN'))
+          print('HEAVY_DB_ROLE='+(u.username or ''))
+          print('HEAVY_DB_NAME='+u.path.lstrip('/'))
+          PY
+          echo 'HEAVY_DB_IDENTITY_AUDIT=PASS'
           REMOTE
 
       - name: Restore Light database credential and IPv4 reachability
