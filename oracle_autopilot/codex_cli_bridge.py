@@ -153,17 +153,26 @@ def health():
     return {'state': 'CLI_AUTH_READY' if ready else 'CLI_AUTH_REQUIRED', 'profile': PROFILE}
 
 
+def lookup(request):
+    request = validate_request(request)
+    path = STATE / (request['dispatch_id']+'.json')
+    if not path.exists():
+        return None
+    prior = parse(path.read_text())
+    if prior['request'] != request:
+        raise ValueError('DISPATCH_REPLAY_CONFLICT')
+    return {k:v for k,v in prior.items() if k != 'request'}
+
+
 def submit(request):
     request = validate_request(request)
     STATE.mkdir(parents=True, mode=0o700, exist_ok=True)
     path = STATE / (request['dispatch_id']+'.json')
     with (STATE / 'submit.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if path.exists():
-            prior = parse(path.read_text())
-            if prior['request'] != request:
-                raise ValueError('DISPATCH_REPLAY_CONFLICT')
-            return {k:v for k,v in prior.items() if k != 'request'}
+        prior = lookup(request)
+        if prior is not None:
+            return prior
         prompt = prompt_for(request)
         record = {'request':request,'state':'SUBMISSION_UNKNOWN','prompt_sha256':digest(prompt)}
         # Persist intent BEFORE the first external creation call.
@@ -224,7 +233,7 @@ def collect(dispatch_id):
         if result_path.exists():
             return parse(result_path.read_text())
         result=_collect(dispatch_id)
-        if result['state'] in ('RESULT_RETRIEVED','PROVIDER_TERMINAL_FAILURE'):
+        if result['state'] in ('RESULT_RETRIEVED','PROVIDER_TERMINAL_FAILURE','RESULT_REJECTED'):
             save(result_path,result)
         return result
 
@@ -247,10 +256,23 @@ def _collect(dispatch_id):
         state='WAITING_PROVIDER' if marker in ('[RUNNING]','[PENDING]','[QUEUED]') else 'PROVIDER_STATUS_UNKNOWN'
         return {'state':state,'provider_task_id':task_id}
     diff=run_cli(['cloud','diff',task_id,'--attempt','1'])
-    if diff.returncode!=0 or len(diff.stdout.encode())>262144:
+    if diff.returncode!=0:
         return {'state':'RESULT_UNAVAILABLE','provider_task_id':task_id}
-    request=record['request']
-    report, changes=extract_report(diff.stdout,report_path(request))
+    try:
+        if len(diff.stdout.encode())>262144:
+            raise ValueError('RESULT_TOO_LARGE')
+        return validate_result(record['request'], diff.stdout, task_id)
+    except (ValueError, TypeError, KeyError) as error:
+        # READY plus a successfully retrieved invalid diff proves completion,
+        # not successful work. Retain rejection so it can close BLOCKED once.
+        code=str(error) if re.fullmatch('[A-Z_]{1,80}', str(error)) else 'REPORT_INVALID'
+        return {'state':'RESULT_REJECTED','provider_task_id':task_id,
+                'result_code':'NATIVE_REPORT_REJECTED','validation_error':code,
+                'patch_sha256':digest(diff.stdout),'status_sha256':digest(status.stdout)}
+
+
+def validate_result(request, patch, task_id):
+    report, changes=extract_report(patch,report_path(request))
     fields={'dispatch_id','expected_head_sha','target_pr','task_fingerprint','status','result_code','summary','evidence'}
     if set(report)!=fields or any(report[k]!=request[k] for k in ('dispatch_id','expected_head_sha','target_pr','task_fingerprint')):
         raise ValueError('REPORT_BINDING_INVALID')
@@ -265,7 +287,7 @@ def _collect(dispatch_id):
     if request['mode']!='REPAIR' and changes.strip():
         raise ValueError('READ_ONLY_SOURCE_CHANGED')
     result={'state':'RESULT_RETRIEVED','provider_task_id':task_id,'report':report,
-            'report_sha256':digest(canonical(report)),'patch_sha256':digest(diff.stdout),'changes':changes}
+            'report_sha256':digest(canonical(report)),'patch_sha256':digest(patch),'changes':changes}
     return result
 
 

@@ -113,9 +113,11 @@ def test_untrusted_reports_fail_closed(request_data, monkeypatch, updates, code)
     submitted(request_data, monkeypatch)
     monkeypatch.setattr(bridge, 'run_cli', lambda args: response(
         '[READY] task\n' if args[1]=='status' else report_patch(request_data, **updates)))
-    with pytest.raises(ValueError, match=code):
-        bridge.collect(request_data['dispatch_id'])
-    assert not (bridge.STATE/(request_data['dispatch_id']+'.result.json')).exists()
+    result = bridge.collect(request_data['dispatch_id'])
+    assert result['state'] == 'RESULT_REJECTED'
+    assert result['validation_error'] == code
+    assert bridge.collect(request_data['dispatch_id']) == result
+    assert (bridge.STATE/(request_data['dispatch_id']+'.result.json')).exists()
 
 
 def test_read_only_rejects_source_changes(request_data, monkeypatch):
@@ -123,8 +125,9 @@ def test_read_only_rejects_source_changes(request_data, monkeypatch):
     patch=report_patch(request_data)+'diff --git a/app.py b/app.py\n@@ -1 +1 @@\n-old\n+new\n'
     monkeypatch.setattr(bridge, 'run_cli', lambda args: response(
         '[READY] task\n' if args[1]=='status' else patch))
-    with pytest.raises(ValueError, match='READ_ONLY_SOURCE_CHANGED'):
-        bridge.collect(request_data['dispatch_id'])
+    result = bridge.collect(request_data['dispatch_id'])
+    assert result['state'] == 'RESULT_REJECTED'
+    assert result['validation_error'] == 'READ_ONLY_SOURCE_CHANGED'
 
 
 def test_report_hunk_count_and_duplicate_keys(request_data):

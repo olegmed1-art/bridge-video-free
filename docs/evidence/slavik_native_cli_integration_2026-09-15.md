@@ -20,6 +20,33 @@ Hosted CI at `edd30ef061477ae3f3f1968cd917ca8e2c7298af`: 10 returned workflows p
 
 ## Required integration before activation
 
+### Bounded recovery implementation
+
+`oracle_autopilot/codex_cli_delivery.py` now implements one bounded reconciliation
+step over explicit queue, authority and provider ports. It allocates no work or
+slots. The filesystem provider journal is read before considering a new submit;
+lost ACKs reuse the retained native task ID, including when work was paused after
+submission. Terminal success is emitted only after queue readback. Known provider
+failures and completed invalid/oversize results produce retained BLOCKED receipts;
+unknown submission outcomes retain the reservation without resubmission. Generated
+REPAIR patches remain BLOCKED until atomic publication is actually connected.
+
+The queue port is a **required interface, not an implemented Neon adapter**.
+Its production implementation must atomically retain ACK/terminal receipts,
+enforce locked current authority for success, preserve original-attempt BLOCKED
+closure after pause/reassignment, and release only the original shared slot.
+The existing worker has not been modified to call this component.
+
+Verification: 33 focused Python tests passed, including real filesystem intent
+and receipt handling with injected queue failures before/after ACK and terminal
+commit. These are deterministic fake-queue tests, not real Neon transaction,
+multi-host or live queue evidence. Independent Red Team reviewed the bounded
+reconciler and identified invalid-report slot retention; this is now covered by
+retained rejection and release-once tests. No production certification is claimed.
+
+Fresh production read before this work found one PUBLISHED and two SENT v3
+dispatches. They were not modified or rerouted.
+
 - Review the actual deployed worker and use its approved release path. Keep six shared queue slots; never add an independent six-slot executor.
 - Implement a durable bounded `reserve → submit → acknowledge → collect → finish` integration. Submission failures with an unknown external outcome retain the slot and must never blindly resubmit. Known terminal provider failures need a retained BLOCKED result and safe slot release.
 - Preserve existing v3 in-flight dispatches. Atomically reserve future eligible dispatches before any CLI creation, so the legacy sender cannot also send `@codex`.
