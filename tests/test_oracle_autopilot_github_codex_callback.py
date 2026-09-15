@@ -103,6 +103,17 @@ def test_parses_owner_app_command_on_exact_target_pr():
     assert command.task_spec == {"fixture": "codex-event-cycle"}
 
 
+def test_explicit_task_command_preserves_legacy_dispatch_binding():
+    explicit = COMMAND_BODY.replace("@codex\n", "@codex execute this task\n", 1)
+    assert parse_command_event(_event(explicit)) == parse_command_event(_event())
+
+
+@pytest.mark.parametrize("prefix", ["@codex review", "@codex security review", "@codex arbitrary"])
+def test_command_rejects_review_and_unrecognized_prefixes(prefix):
+    with pytest.raises(CallbackContractError, match="COMMAND_BODY_INVALID"):
+        parse_command_event(_event(COMMAND_BODY.replace("@codex\n", prefix + "\n", 1)))
+
+
 @pytest.mark.parametrize(
     ("path", "value", "code"),
     [
