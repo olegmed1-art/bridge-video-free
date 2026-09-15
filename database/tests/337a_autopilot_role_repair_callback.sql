@@ -156,7 +156,7 @@ BEGIN
             RAISE EXCEPTION 'REPAIR_ADMISSION_WRONG_FOLLOWUP case %',c.id;
         END IF;
         IF NOT c.allow_repair AND (SELECT state FROM autopilot.project_work_item WHERE work_item_id=work_id)
-           IS DISTINCT FROM CASE WHEN c.terminal_status='SUCCEEDED' THEN 'DONE' ELSE 'BLOCKED' END THEN
+           IS DISTINCT FROM (CASE WHEN c.terminal_status='SUCCEEDED' THEN 'DONE' ELSE 'BLOCKED' END) THEN
             RAISE EXCEPTION 'REPAIR_ADMISSION_WORK_ITEM_NOT_TERMINAL case %',c.id;
         END IF;
         SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_terminal(
@@ -166,7 +166,7 @@ BEGIN
         IF result.accepted IS DISTINCT FROM false OR result.duplicate IS DISTINCT FROM true
            OR (SELECT count(*) FROM autopilot.role_dispatch_followup
                WHERE parent_task_id=task_row.task_id AND followup_kind='REPAIR')
-               <>CASE WHEN c.allow_repair THEN 1 ELSE 0 END THEN
+               <>(CASE WHEN c.allow_repair THEN 1 ELSE 0 END) THEN
             RAISE EXCEPTION 'REPAIR_ADMISSION_CALLBACK_REPLAY_FAILED case %',c.id;
         END IF;
         IF c.revoke_after_ack THEN
