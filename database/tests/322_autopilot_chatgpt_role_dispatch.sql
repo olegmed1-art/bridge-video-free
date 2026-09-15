@@ -1,6 +1,20 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+-- This is the contract-v1 regression suite.  When the v2 delivery-proof
+-- migration is present, keep rows created by this transaction on v1 so the
+-- rolling-upgrade compatibility path is exercised explicitly.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0327_autopilot_delivery_proof'
+    ) THEN
+        ALTER TABLE autopilot.role_dispatch_outbox
+            ALTER COLUMN delivery_contract_version SET DEFAULT 1;
+    END IF;
+END $$;
+
 DO $$
 DECLARE
     role_task_id uuid;
@@ -288,9 +302,23 @@ BEGIN
         'chatgpt-codex-connector', 1144995, callback_body);
     IF callback_result.resulting_state <> 'FAILED_CLOSED'
        OR (SELECT status FROM autopilot.task WHERE task_id = blocked_task_id) <> 'FAILED_CLOSED'
-       OR EXISTS (SELECT 1 FROM autopilot.task WHERE task_key = 'sql-role-blocked-successor-1')
        OR NOT EXISTS (SELECT 1 FROM autopilot.evidence WHERE task_id = blocked_task_id AND retained) THEN
         RAISE EXCEPTION 'AUTOPILOT_ROLE_BLOCKED_TERMINAL_INVALID';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM autopilot.task
+         WHERE task_key = 'sql-role-blocked-successor-1'
+    ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_ROLE_BLOCKED_SUCCESSOR_INVALID';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key = '0323_autopilot_failure_continuation'
+    ) AND EXISTS (
+        SELECT 1 FROM autopilot.role_dispatch_followup
+         WHERE parent_task_id = blocked_task_id AND followup_kind = 'REPAIR'
+    ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_OWNER_BLOCKER_REPAIR_INVALID';
     END IF;
 
     -- Final publisher failure closes the wait and its step rather than orphaning it.
@@ -374,10 +402,24 @@ BEGIN
     END IF;
     IF has_table_privilege('autopilot_callback', 'autopilot.role_dispatch_outbox', 'SELECT')
        OR has_table_privilege('autopilot_callback', 'autopilot.role_dispatch_callback_receipt', 'SELECT')
-       OR NOT has_function_privilege(
-           'autopilot_callback',
-           'autopilot.accept_role_dispatch_callback(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)',
-           'EXECUTE')
+       OR (
+           NOT EXISTS (
+               SELECT 1 FROM public.schema_migration
+                WHERE migration_key='0327_autopilot_delivery_proof'
+           ) AND NOT has_function_privilege(
+               'autopilot_callback',
+               'autopilot.accept_role_dispatch_callback(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)',
+               'EXECUTE')
+       )
+       OR (
+           EXISTS (
+               SELECT 1 FROM public.schema_migration
+                WHERE migration_key='0327_autopilot_delivery_proof'
+           ) AND has_function_privilege(
+               'autopilot_callback',
+               'autopilot.accept_role_dispatch_callback(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)',
+               'EXECUTE')
+       )
        OR has_function_privilege(
            'autopilot_callback', 'autopilot.claim_role_dispatch_outbox(text,integer)', 'EXECUTE') THEN
         RAISE EXCEPTION 'AUTOPILOT_ROLE_CALLBACK_BOUNDARY_INVALID';

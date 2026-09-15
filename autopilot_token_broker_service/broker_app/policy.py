@@ -29,6 +29,7 @@ ALLOWED_PATH_PATTERNS = (
     re.compile(r"docs/evidence/autopilot/[A-Za-z0-9_.-]+\.md"),
 )
 FORBIDDEN_PATH_PREFIXES = (".github/", "database/", "deploy/", "ops/")
+ROLE_PATTERN = r"^[A-Z][A-Z0-9_]{0,63}$"
 
 
 class RepairFileChange(BaseModel):
@@ -173,17 +174,27 @@ def hmac_compare(left: str, right: str) -> bool:
 
 
 class RoleDispatchRequest(BaseModel):
-    """Public, non-secret envelope for the fixed GitHub role mailbox."""
+    """Public, non-secret envelope for the registry-gated GitHub role mailbox."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     dispatch_id: str = Field(min_length=36, max_length=36)
     dispatch_epoch: int = Field(ge=1, le=2**63 - 1)
     prepared_at_epoch: int = Field(ge=1_700_000_000, le=4_102_444_800)
-    role: Literal["RECOGNIZER", "VIDEO", "BOOKS", "KNOWLEDGE"]
+    # The broker validates only the public identifier shape.  The authoritative
+    # enabled-role and repair-capability decision is made by the bound Neon
+    # task/role_registry contract before this envelope can enter the outbox.
+    role: str = Field(pattern=ROLE_PATTERN)
     task_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     target_pr: int = Field(ge=1, le=1_000_000)
-    mode: Literal["READ_ONLY"]
+    mode: Literal["READ_ONLY", "REPAIR", "VERIFY"]
+    repair_attempt: Literal[0, 1] = 0
+    origin_task_id: str | None = None
+    prior_task_id: str | None = None
+    blocked_result_code: str | None = Field(
+        default=None, pattern=r"^[A-Z][A-Z0-9_]{0,63}$"
+    )
+    blocked_summary: str | None = Field(default=None, min_length=1, max_length=160)
 
     @model_validator(mode="after")
     def validate_dispatch_id(self) -> "RoleDispatchRequest":
@@ -193,4 +204,41 @@ class RoleDispatchRequest(BaseModel):
             raise ValueError("ROLE_DISPATCH_ID_INVALID") from exc
         if parsed.version != 4 or str(parsed) != self.dispatch_id:
             raise ValueError("ROLE_DISPATCH_ID_INVALID")
+        context = (
+            self.origin_task_id,
+            self.prior_task_id,
+            self.blocked_result_code,
+            self.blocked_summary,
+        )
+        if self.mode == "READ_ONLY":
+            if self.repair_attempt != 0 or any(value is not None for value in context):
+                raise ValueError("ROLE_DISPATCH_READ_ONLY_CONTEXT_INVALID")
+            return self
+        if self.repair_attempt != 1 or any(value is None for value in context):
+            raise ValueError("ROLE_DISPATCH_FOLLOWUP_CONTEXT_INVALID")
+        for value in (self.origin_task_id, self.prior_task_id):
+            try:
+                task_id = uuid.UUID(value or "")
+            except (ValueError, AttributeError) as exc:
+                raise ValueError("ROLE_DISPATCH_TASK_ID_INVALID") from exc
+            if task_id.version not in {1, 2, 3, 4, 5} or str(task_id) != value:
+                raise ValueError("ROLE_DISPATCH_TASK_ID_INVALID")
+        assert self.blocked_summary is not None
+        if (
+            any(ord(character) < 32 or ord(character) == 127 for character in self.blocked_summary)
+            or re.search(
+                r"(?i)(https?://|www\.|password|secret|token|api[_ -]?key|credential|private[_ -]?key)",
+                self.blocked_summary,
+            )
+        ):
+            raise ValueError("ROLE_DISPATCH_SUMMARY_INVALID")
         return self
+
+
+class ProjectHeadRequest(BaseModel):
+    """Bounded read request for one pull request's current head."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    repository: Literal["olegmed1-art/bridge-video-free"]
+    pr_number: int = Field(ge=1, le=1_000_000)

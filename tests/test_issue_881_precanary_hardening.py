@@ -1451,6 +1451,7 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
         ".github/workflows/oracle-operator-commands.yml",
         ".github/workflows/oracle-operator-v2.yml",
         ".github/workflows/oracle-operator-v3.yml",
+        ".github/workflows/oracle-autopilot-rollout.yml",
         ".github/workflows/oracle-universal-video-activation.yml",
         ".github/workflows/oracle-universal-video-job.yml",
         ".github/workflows/oracle-universal-video-queue-credential-install.yml",
@@ -1693,7 +1694,7 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
             indirect[reference] = payload
             pending.update(repository_shell_references(payload) - set(indirect))
         referenced_payloads.update(indirect)
-    assert len(shared_workflows) == 66
+    assert len(shared_workflows) == 69
     assert len(referenced_payloads) == 55
     assert "ops/universal_video_spool_repair.sh" in referenced_payloads
     assert "ops/universal_video_evidence_export_entrypoint.sh" in referenced_payloads
@@ -1711,6 +1712,7 @@ def test_every_direct_oracle_rollout_uses_a_trusted_shared_fence() -> None:
     assert rollouts == {
         ".github/workflows/oracle-assistant-lab-control-rollout.yml",
         ".github/workflows/oracle-assistant-lab-worker-rollout.yml",
+        ".github/workflows/oracle-autopilot-rollout.yml",
         ".github/workflows/oracle-ben-runtime-rollout.yml",
     }
     runner = (
@@ -1852,6 +1854,7 @@ def test_every_live_instance_command_creator_uses_the_common_actions_fence() -> 
         ".github/workflows/oracle-diana11-002-delivery.yml",
         ".github/workflows/oracle-diana11-002-job.yml",
         ".github/workflows/oracle-diana11-delivery.yml",
+        ".github/workflows/oracle-fleet-status.yml",
         ".github/workflows/oracle-instance-power.yml",
         ".github/workflows/oracle-universal-video-admin.yml",
         ".github/workflows/oracle-universal-video-evidence-export.yml",
@@ -1863,6 +1866,8 @@ def test_every_live_instance_command_creator_uses_the_common_actions_fence() -> 
             "oracle-diana11-002-pr-{0}",
         ".github/workflows/oracle-diana11-delivery.yml":
             "oracle-diana11-delivery-pr-{0}",
+        ".github/workflows/oracle-fleet-status.yml":
+            "oracle-fleet-status-pr-{0}",
         ".github/workflows/oracle-universal-video-evidence-export.yml":
             "oracle-universal-video-evidence-export-pr-{0}",
         ".github/workflows/oracle-universal-video-admin.yml":

@@ -25,9 +25,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
@@ -40,7 +41,6 @@ from .contract import (
     claimed_task_from_row,
     validate_task_contract,
 )
-
 
 CHANNEL = "autopilot_ready"
 RUNTIME_MODE = "SHADOW"
@@ -83,6 +83,7 @@ GITHUB_HARD_FAILURES = frozenset(
 TOKEN_BROKER_RESPONSE_LIMIT_BYTES = 32_768
 TOKEN_BROKER_REQUEST_LIMIT_BYTES = 65_536
 TOKEN_BROKER_PATH = "/v1/github/draft-repair"
+PROJECT_HEAD_BROKER_PATH = "/v1/github/project-head"
 ROLE_DISPATCH_BROKER_PATH = "/v1/github/role-dispatch"
 TOKEN_BROKER_HEALTH_PATH = "/healthz"
 TOKEN_BROKER_HOST_PATTERN = re.compile(
@@ -142,6 +143,20 @@ def load_role_dispatch_broker_config() -> TokenBrokerConfig:
     base = _load_token_broker_config("AUTOPILOT_TOKEN_BROKER_URL", TOKEN_BROKER_PATH)
     return TokenBrokerConfig(
         url=f"https://{base.host}{ROLE_DISPATCH_BROKER_PATH}",
+        host=base.host,
+        secret=base.secret,
+        vercel_bypass_secret=base.vercel_bypass_secret,
+        expected_source_sha=base.expected_source_sha,
+        expected_artifact_sha256=base.expected_artifact_sha256,
+        expected_policy_sha256=base.expected_policy_sha256,
+        expected_provenance_sha256=base.expected_provenance_sha256,
+    )
+
+
+def load_project_head_broker_config() -> TokenBrokerConfig:
+    base = _load_token_broker_config("AUTOPILOT_TOKEN_BROKER_URL", TOKEN_BROKER_PATH)
+    return TokenBrokerConfig(
+        url=f"https://{base.host}{PROJECT_HEAD_BROKER_PATH}",
         host=base.host,
         secret=base.secret,
         vercel_bypass_secret=base.vercel_bypass_secret,
@@ -455,6 +470,92 @@ def fetch_github_pr_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def fetch_github_project_head(repository: str, pr_number: int) -> dict[str, Any]:
+    """Resolve one PR head through the pinned least-privilege GitHub App broker."""
+
+    if repository != GITHUB_REPOSITORY or type(pr_number) is not int:
+        raise AutopilotContractError("PROJECT_WORK_TARGET_INVALID")
+    if not 1 <= pr_number <= 1_000_000:
+        raise AutopilotContractError("PROJECT_WORK_TARGET_INVALID")
+    config = load_project_head_broker_config()
+    request_payload = {"repository": repository, "pr_number": pr_number}
+    encoded = json.dumps(
+        request_payload, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        config.url,
+        data=encoded,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {config.secret}",
+            "Content-Type": "application/json",
+            "User-Agent": "bridge-school-autopilot-oracle/1.7",
+            "X-Vercel-Protection-Bypass": config.vercel_bypass_secret,
+        },
+    )
+    opener = urllib.request.build_opener(_RejectBrokerRedirects())
+    _require_approved_broker_release(config=config, opener=opener)
+    try:
+        with opener.open(request, timeout=30) as response:
+            if response.status != 200 or response.geturl() != config.url:
+                raise AutopilotContractError("PROJECT_HEAD_BROKER_RESPONSE_INVALID")
+            raw = response.read(TOKEN_BROKER_RESPONSE_LIMIT_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise AutopilotContractError("PROJECT_WORK_TARGET_NOT_FOUND") from exc
+        if exc.code in {408, 425, 429} or 500 <= exc.code <= 599:
+            raise AutopilotRetryableError(
+                "PROJECT_HEAD_BROKER_TRANSIENT_ERROR"
+            ) from exc
+        raise AutopilotContractError("PROJECT_HEAD_BROKER_HTTP_ERROR") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise AutopilotRetryableError("PROJECT_HEAD_BROKER_TRANSIENT_ERROR") from exc
+    if len(raw) > TOKEN_BROKER_RESPONSE_LIMIT_BYTES:
+        raise AutopilotContractError("PROJECT_HEAD_BROKER_RESPONSE_TOO_LARGE")
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AutopilotContractError("PROJECT_HEAD_BROKER_RESPONSE_INVALID") from exc
+
+    expected_keys = {
+        "repository",
+        "pr_number",
+        "open",
+        "head_sha",
+        "http_method",
+        "token_exposed",
+        "production_mutation",
+        "operation_count",
+        "broker_policy_version",
+        "broker_source_sha",
+        "broker_artifact_sha256",
+        "broker_policy_sha256",
+        "broker_provenance_sha256",
+    }
+    head_sha = payload.get("head_sha") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != expected_keys
+        or payload.get("repository") != repository
+        or payload.get("pr_number") != pr_number
+        or type(payload.get("open")) is not bool
+        or not isinstance(head_sha, str)
+        or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None
+        or payload.get("http_method") != "GET"
+        or payload.get("token_exposed") is not False
+        or payload.get("production_mutation") is not False
+        or payload.get("operation_count") != 2
+        or payload.get("broker_policy_version") != "physical-no-merge-v2"
+        or payload.get("broker_source_sha") != config.expected_source_sha
+        or payload.get("broker_artifact_sha256") != config.expected_artifact_sha256
+        or payload.get("broker_policy_sha256") != config.expected_policy_sha256
+        or payload.get("broker_provenance_sha256")
+        != config.expected_provenance_sha256
+    ):
+        raise AutopilotContractError("PROJECT_HEAD_BROKER_RESPONSE_INVALID")
+    return {"head_sha": head_sha, "open": payload["open"]}
+
+
 def fetch_github_ci_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
     """Inspect exact-head public GitHub checks without credentials or mutation."""
 
@@ -715,7 +816,7 @@ def _validate_token_broker_result(
 def _require_approved_broker_release(
     *, config: TokenBrokerConfig, opener: Any
 ) -> None:
-    """Verify the deployed release before sending any mutating broker request."""
+    """Verify the deployed release before sending any broker request."""
 
     health_url = f"https://{config.host}{TOKEN_BROKER_HEALTH_PATH}"
     request = urllib.request.Request(
@@ -755,6 +856,7 @@ def _require_approved_broker_release(
         "production_mutations_enabled": False,
         "github_token_broker_enabled": True,
         "bounded_draft_executor_enabled": True,
+        "bounded_project_head_enabled": True,
         "bounded_role_dispatch_enabled": True,
         "raw_installation_token_exposed": False,
         "merge_endpoint_enabled": False,
@@ -827,9 +929,19 @@ def _publish_role_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         "role": str(payload["role"]),
         "task_fingerprint": str(payload["task_fingerprint"]),
         "target_pr": int(payload["target_pr"]),
-        "mode": "READ_ONLY",
+        "mode": str(payload["mode"]),
         "prepared_at_epoch": int(payload["prepared_at_epoch"]),
     }
+    if request_payload["mode"] != "READ_ONLY":
+        request_payload.update(
+            {
+                "repair_attempt": int(payload["repair_attempt"]),
+                "origin_task_id": str(payload["origin_task_id"]),
+                "prior_task_id": str(payload["prior_task_id"]),
+                "blocked_result_code": str(payload["blocked_result_code"]),
+                "blocked_summary": str(payload["blocked_summary"]),
+            }
+        )
     public_envelope = {
         key: value for key, value in request_payload.items() if key != "prepared_at_epoch"
     }
@@ -1027,7 +1139,10 @@ def execute_task(config: WorkerConfig, task: ClaimedTask) -> None:
         )
         return
 
-    if task.goal_type == "CHATGPT_ROLE_DISPATCH_V1":
+    if task.goal_type in {
+        "CHATGPT_ROLE_DISPATCH_V1",
+        "CHATGPT_ROLE_FOLLOWUP_V1",
+    }:
         row = _rpc_one(
             config,
             "SELECT * FROM autopilot.prepare_role_dispatch(%s::uuid, %s, %s)",
@@ -1142,18 +1257,116 @@ def drain_ready(config: WorkerConfig) -> int:
     return processed
 
 
-def _dispatch_body(payload: dict[str, Any]) -> str:
-    return "\n".join(
-        (
-            "AUTOPILOT_DISPATCH_V1",
-            f"dispatch_id={payload['dispatch_id']}",
-            f"dispatch_epoch={payload['dispatch_epoch']}",
-            f"role={payload['role']}",
-            f"task_fingerprint={payload['task_fingerprint']}",
-            f"target_pr={payload['target_pr']}",
-            "mode=READ_ONLY",
+def process_project_work(config: WorkerConfig) -> bool:
+    """Advance one durable project lane without making a GitHub mutation."""
+
+    try:
+        probe = _rpc_one(
+            config,
+            "SELECT * FROM autopilot.claim_project_work_probe(%s, %s)",
+            (config.worker_id, config.lease_seconds),
         )
-    )
+    except psycopg.errors.UndefinedFunction:
+        # Rolling deployment: the worker may safely precede migration 0324.
+        return False
+    if not probe:
+        return False
+
+    work_item_id = str(probe["work_item_id"])
+    lease_epoch = int(probe["lease_epoch"])
+    try:
+        snapshot = fetch_github_project_head(
+            str(probe["repository"]), int(probe["target_pr"])
+        )
+        materialized = _rpc_one(
+            config,
+            "SELECT * FROM autopilot.materialize_project_work_probe("
+            "%s::uuid, %s, %s, %s, %s)",
+            (
+                work_item_id,
+                config.worker_id,
+                lease_epoch,
+                snapshot["open"],
+                snapshot["head_sha"],
+            ),
+        )
+        LOGGER.info(
+            "project_work_advanced work_item_id=%s work_key=%s state=%s created=%s",
+            work_item_id,
+            probe["work_key"],
+            materialized["resulting_state"] if materialized else "FENCED",
+            bool(materialized and materialized["created"]),
+        )
+    except AutopilotRetryableError as exc:
+        _rpc_one(
+            config,
+            "SELECT autopilot.fail_project_work_probe("
+            "%s::uuid, %s, %s, %s, true) AS state",
+            (work_item_id, config.worker_id, lease_epoch, str(exc)),
+        )
+        LOGGER.warning(
+            "project_work_probe_retry work_item_id=%s code=%s", work_item_id, exc
+        )
+    except AutopilotContractError as exc:
+        _rpc_one(
+            config,
+            "SELECT autopilot.fail_project_work_probe("
+            "%s::uuid, %s, %s, %s, false) AS state",
+            (work_item_id, config.worker_id, lease_epoch, str(exc)),
+        )
+        LOGGER.warning(
+            "project_work_probe_failed work_item_id=%s code=%s", work_item_id, exc
+        )
+    except (KeyError, TypeError, ValueError):
+        _rpc_one(
+            config,
+            "SELECT autopilot.fail_project_work_probe("
+            "%s::uuid, %s, %s, %s, false) AS state",
+            (
+                work_item_id,
+                config.worker_id,
+                lease_epoch,
+                "PROJECT_WORK_PROBE_ROW_INVALID",
+            ),
+        )
+        LOGGER.exception("project_work_probe_row_invalid work_item_id=%s", work_item_id)
+    return True
+
+
+def drain_project_work(config: WorkerConfig) -> int:
+    processed = 0
+    while process_project_work(config):
+        processed += 1
+    return processed
+
+
+def _dispatch_body(payload: dict[str, Any]) -> str:
+    lines = [
+        "AUTOPILOT_DISPATCH_V1",
+        f"dispatch_id={payload['dispatch_id']}",
+        f"dispatch_epoch={payload['dispatch_epoch']}",
+        f"role={payload['role']}",
+        f"task_fingerprint={payload['task_fingerprint']}",
+        f"target_pr={payload['target_pr']}",
+        f"mode={payload['mode']}",
+    ]
+    if payload["mode"] != "READ_ONLY":
+        lines.extend(
+            (
+                f"repair_attempt={payload['repair_attempt']}",
+                f"origin_task_id={payload['origin_task_id']}",
+                f"prior_task_id={payload['prior_task_id']}",
+                f"blocked_result_code={payload['blocked_result_code']}",
+                f"blocked_summary={payload['blocked_summary']}",
+                "instruction="
+                + (
+                    "DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE"
+                    if payload["mode"] == "REPAIR"
+                    else "READ_ONLY_VERIFY_REPAIR_NO_MUTATION"
+                ),
+            )
+        )
+    return "\n".join(lines)
 
 
 def process_role_dispatch_outbox(config: WorkerConfig) -> bool:
@@ -1161,11 +1374,30 @@ def process_role_dispatch_outbox(config: WorkerConfig) -> bool:
     # lease above its complete worst-case HTTP budget so another worker cannot
     # acquire the same dispatch while the first publisher is still active.
     role_dispatch_lease_seconds = 300
-    row = _rpc_one(
-        config,
-        "SELECT * FROM autopilot.claim_role_dispatch_outbox(%s, %s)",
-        (config.worker_id, role_dispatch_lease_seconds),
-    )
+    try:
+        row = _rpc_one(
+            config,
+            "SELECT * FROM autopilot.claim_role_dispatch_outbox_v2(%s, %s)",
+            (config.worker_id, role_dispatch_lease_seconds),
+        )
+    except psycopg.errors.UndefinedFunction:
+        # Rolling deployment: the new worker can safely precede migration 0323.
+        # The legacy function can only return READ_ONLY dispatches.
+        row = _rpc_one(
+            config,
+            "SELECT * FROM autopilot.claim_role_dispatch_outbox(%s, %s)",
+            (config.worker_id, role_dispatch_lease_seconds),
+        )
+        if row:
+            row = {
+                **row,
+                "mode": "READ_ONLY",
+                "repair_attempt": 0,
+                "origin_task_id": None,
+                "prior_task_id": None,
+                "blocked_result_code": None,
+                "blocked_summary": None,
+            }
     if not row:
         return False
     dispatch_id = str(row["dispatch_id"])
@@ -1175,22 +1407,22 @@ def process_role_dispatch_outbox(config: WorkerConfig) -> bool:
         body_sha256 = hashlib.sha256(_dispatch_body(row).encode("utf-8")).hexdigest()
         marked = _rpc_one(
             config,
-            "SELECT autopilot.mark_role_dispatch_sent(%s::uuid, %s, %s, %s, %s) AS marked",
+            "SELECT autopilot.mark_role_dispatch_published(%s::uuid, %s, %s, %s, %s) AS marked",
             (
                 dispatch_id,
                 config.worker_id,
                 claim_epoch,
-                # Migration 0322 named this generic delivery-resource slot
-                # after the original comment transport.  Preserve the SQL
-                # contract by storing the replacement draft PR number here.
+                # This is only the GitHub discovery resource.  Contract v3
+                # keeps it PUBLISHED until the pinned Codex bot acknowledges
+                # an owner-authenticated @codex command on the exact target PR.
                 result["dispatch_pull_request"],
                 body_sha256,
             ),
         )
         if not marked or not marked["marked"]:
-            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_SENT_FENCED")
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_PUBLISHED_FENCED")
         LOGGER.info(
-            "role_dispatch_sent dispatch_id=%s role=%s pull_request=%s",
+            "role_dispatch_published dispatch_id=%s role=%s pull_request=%s",
             dispatch_id,
             row["role"],
             result["dispatch_pull_request"],
@@ -1253,7 +1485,11 @@ def run_forever(config: WorkerConfig) -> None:
                 while True:
                     # Drain every ready transition without sleeping. The polling
                     # timeout is reached only when no runnable task exists.
-                    if drain_ready(config) or drain_role_dispatch_outbox(config):
+                    if (
+                        drain_ready(config)
+                        or drain_role_dispatch_outbox(config)
+                        or drain_project_work(config)
+                    ):
                         continue
                     wait_for_wakeup(listener, config.recovery_poll_seconds)
         except KeyboardInterrupt:

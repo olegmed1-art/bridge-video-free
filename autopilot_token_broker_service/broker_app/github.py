@@ -24,6 +24,8 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from broker_app.policy import (
     ALLOWED_PATH_PATTERNS,
     DraftRepairRequest,
+    ProjectHeadRequest,
+    ROLE_PATTERN,
     RoleDispatchRequest,
 )
 
@@ -42,6 +44,7 @@ ROLE_DISPATCH_TOKEN_PERMISSIONS = {
     "contents": "write",
     "pull_requests": "write",
 }
+PROJECT_HEAD_TOKEN_PERMISSIONS = {"pull_requests": "read"}
 TOKEN_RESPONSE_LIMIT_BYTES = 32_768
 API_RESPONSE_LIMIT_BYTES = 65_536
 HTTP_TIMEOUT_SECONDS = 15
@@ -88,12 +91,20 @@ def broker_policy_sha256() -> str:
         "sha_pattern": _SHA,
         "token_permissions": TOKEN_PERMISSIONS,
         "role_dispatch_token_permissions": ROLE_DISPATCH_TOKEN_PERMISSIONS,
+        "project_head_token_permissions": PROJECT_HEAD_TOKEN_PERMISSIONS,
+        "project_head_path_pattern": (
+            rf"{re.escape(REPOSITORY_API_PATH)}/pulls/[1-9][0-9]{{0,5}}|"
+            rf"{re.escape(REPOSITORY_API_PATH)}/pulls/1000000"
+        ),
         "role_dispatch_mailbox_pr": ROLE_DISPATCH_MAILBOX_PR,
         "role_dispatch_bot_login": ROLE_DISPATCH_BOT_LOGIN,
         "role_dispatch_branch_pattern": _ROLE_DISPATCH_BRANCH,
         "role_dispatch_file_pattern": (
             rf"docs/evidence/autopilot/role-dispatch-{_UUID4}\.md"
         ),
+        "role_dispatch_modes": ["READ_ONLY", "REPAIR", "VERIFY"],
+        "role_dispatch_role_pattern": ROLE_PATTERN,
+        "role_dispatch_repair_attempt_cap": 1,
     }
     return hashlib.sha256(_canonical_json(policy)).hexdigest()
 
@@ -112,6 +123,10 @@ class BrokerRetryableError(RuntimeError):
 
 class DraftRepairConflictError(RuntimeError):
     """Fresh GitHub state no longer matches exact request preconditions."""
+
+
+class ProjectHeadNotFoundError(RuntimeError):
+    """The exact requested pull request does not exist."""
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -300,7 +315,11 @@ def issue_installation_token(
 ) -> InstallationCredential:
     """Mint one repository- and permission-scoped internal credential."""
 
-    if dict(permissions) not in (TOKEN_PERMISSIONS, ROLE_DISPATCH_TOKEN_PERMISSIONS):
+    if dict(permissions) not in (
+        TOKEN_PERMISSIONS,
+        ROLE_DISPATCH_TOKEN_PERMISSIONS,
+        PROJECT_HEAD_TOKEN_PERMISSIONS,
+    ):
         raise BrokerConfigurationError("GITHUB_TOKEN_PERMISSIONS_INVALID")
 
     app_jwt = build_app_jwt(config, now_epoch=now_epoch)
@@ -371,6 +390,12 @@ def _authorize_github_operation(*, method: str, path: str) -> None:
     if method == "GET" and re.fullmatch(
         rf"{re.escape(REPOSITORY_API_PATH)}/git/commits/{_SHA}", clean_path
     ) and not parsed.query:
+        return
+    if method == "GET" and not parsed.query and re.fullmatch(
+        rf"{re.escape(REPOSITORY_API_PATH)}/pulls/"
+        rf"(?:[1-9][0-9]{{0,5}}|1000000)",
+        clean_path,
+    ):
         return
     if method == "GET" and clean_path.startswith(contents_prefix):
         query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
@@ -826,20 +851,89 @@ def execute_bounded_draft_repair(
     }
 
 
+def execute_bounded_project_head(
+    config: BrokerConfig,
+    request: ProjectHeadRequest,
+    *,
+    now_epoch: int,
+    opener: Any | None = None,
+) -> dict[str, object]:
+    """Read one exact PR head through a least-privilege installation token."""
+
+    credential = issue_installation_token(
+        config,
+        now_epoch=now_epoch,
+        opener=opener,
+        permissions=PROJECT_HEAD_TOKEN_PERMISSIONS,
+    )
+    payload = _api_json(
+        credential,
+        method="GET",
+        path=f"{REPOSITORY_API_PATH}/pulls/{request.pr_number}",
+        expected_status=200,
+        opener=opener,
+        not_found_ok=True,
+    )
+    if payload is None:
+        raise ProjectHeadNotFoundError("GITHUB_PROJECT_HEAD_NOT_FOUND")
+    if not isinstance(payload, dict):
+        raise BrokerContractError("GITHUB_PROJECT_HEAD_RESPONSE_INVALID")
+    head = payload.get("head")
+    state = payload.get("state")
+    expected_html_url = (
+        f"https://github.com/{REPOSITORY_FULL_NAME}/pull/{request.pr_number}"
+    )
+    if (
+        payload.get("number") != request.pr_number
+        or payload.get("html_url") != expected_html_url
+        or state not in {"open", "closed"}
+        or not isinstance(head, dict)
+    ):
+        raise BrokerContractError("GITHUB_PROJECT_HEAD_RESPONSE_INVALID")
+    head_sha = _sha(
+        head.get("sha"), error="GITHUB_PROJECT_HEAD_RESPONSE_INVALID"
+    )
+    return {
+        "repository": REPOSITORY_FULL_NAME,
+        "pr_number": request.pr_number,
+        "open": state == "open",
+        "head_sha": head_sha,
+        "http_method": "GET",
+        "token_exposed": False,
+        "production_mutation": False,
+        "operation_count": 2,
+    }
+
+
 def role_dispatch_comment_body(request: RoleDispatchRequest) -> str:
     """Render the complete public dispatch envelope deterministically."""
 
-    return "\n".join(
-        (
-            "AUTOPILOT_DISPATCH_V1",
-            f"dispatch_id={request.dispatch_id}",
-            f"dispatch_epoch={request.dispatch_epoch}",
-            f"role={request.role}",
-            f"task_fingerprint={request.task_fingerprint}",
-            f"target_pr={request.target_pr}",
-            f"mode={request.mode}",
+    lines = [
+        "AUTOPILOT_DISPATCH_V1",
+        f"dispatch_id={request.dispatch_id}",
+        f"dispatch_epoch={request.dispatch_epoch}",
+        f"role={request.role}",
+        f"task_fingerprint={request.task_fingerprint}",
+        f"target_pr={request.target_pr}",
+        f"mode={request.mode}",
+    ]
+    if request.mode != "READ_ONLY":
+        lines.extend(
+            (
+                f"repair_attempt={request.repair_attempt}",
+                f"origin_task_id={request.origin_task_id}",
+                f"prior_task_id={request.prior_task_id}",
+                f"blocked_result_code={request.blocked_result_code}",
+                f"blocked_summary={request.blocked_summary}",
+                "instruction="
+                + (
+                    "DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE"
+                    if request.mode == "REPAIR"
+                    else "READ_ONLY_VERIFY_REPAIR_NO_MUTATION"
+                ),
+            )
         )
-    )
+    return "\n".join(lines)
 
 
 def role_dispatch_branch_name(request: RoleDispatchRequest) -> str:
@@ -1172,7 +1266,7 @@ def execute_bounded_role_dispatch(
     else:
         pull_number, pull_url, author_login = existing
         state = "existing"
-    return {
+    result: dict[str, object] = {
         "status": state,
         "repository": REPOSITORY_FULL_NAME,
         "mailbox_pull_request": ROLE_DISPATCH_MAILBOX_PR,
@@ -1194,3 +1288,14 @@ def execute_bounded_role_dispatch(
         "token_exposed": False,
         "production_mutation": False,
     }
+    if request.mode != "READ_ONLY":
+        result.update(
+            {
+                "repair_attempt": request.repair_attempt,
+                "origin_task_id": request.origin_task_id,
+                "prior_task_id": request.prior_task_id,
+                "blocked_result_code": request.blocked_result_code,
+                "blocked_summary": request.blocked_summary,
+            }
+        )
+    return result

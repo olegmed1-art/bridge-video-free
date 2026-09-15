@@ -6,6 +6,40 @@ on:
       - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/tests/322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/migrations/0323_autopilot_failure_continuation.sql'
+      - 'database/rollbacks/0323_autopilot_failure_continuation.sql'
+      - 'database/tests/323_autopilot_failure_continuation.sql'
+      - 'database/migrations/0324_autopilot_project_planner.sql'
+      - 'database/rollbacks/0324_autopilot_project_planner.sql'
+      - 'database/tests/324_autopilot_project_planner.sql'
+      - 'database/migrations/0324a_autopilot_dynamic_role_registry.sql'
+      - 'database/migrations/0325_autopilot_durable_dependency_wakeup.sql'
+      - 'database/migrations/0327_autopilot_delivery_proof.sql'
+      - 'database/rollbacks/0327_autopilot_delivery_proof.sql'
+      - 'database/tests/327_autopilot_delivery_proof.sql'
+      - 'database/migrations/0328_autopilot_chat_target_gate.sql'
+      - 'database/rollbacks/0328_autopilot_chat_target_gate.sql'
+      - 'database/tests/328_autopilot_chat_target_gate.sql'
+      - 'database/migrations/0331_autopilot_six_worker_capacity.sql'
+      - 'database/rollbacks/0331_autopilot_six_worker_capacity.sql'
+      - 'database/tests/331_autopilot_six_worker_capacity.sql'
+      - 'database/tests/331_autopilot_six_worker_capacity_concurrency.sh'
+      - 'database/migrations/0332_autopilot_codex_event_cycle.sql'
+      - 'database/rollbacks/0332_autopilot_codex_event_cycle.sql'
+      - 'database/tests/332_autopilot_codex_event_cycle.sql'
+      - 'database/migrations/0333_autopilot_dispatch_assignment_coherence.sql'
+      - 'database/rollbacks/0333_autopilot_dispatch_assignment_coherence.sql'
+      - 'database/tests/333_autopilot_dispatch_assignment_coherence.sql'
+      - 'database/migrations/0334_autopilot_github_probe_retry.sql'
+      - 'database/rollbacks/0334_autopilot_github_probe_retry.sql'
+      - 'database/tests/334_autopilot_github_probe_retry.sql'
+      - 'oracle_autopilot/github_codex_callback.py'
+      - 'tests/test_oracle_autopilot_github_codex_callback.py'
+      - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
+      - '.github/workflows/autopilot-codex-event-callback.yml'
+      - '.codex/config.toml'
+      - 'oracle_autopilot/worker.py'
+      - 'tests/test_oracle_autopilot_shadow.py'
       - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
   push:
     branches: [main]
@@ -13,6 +47,40 @@ on:
       - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/tests/322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/migrations/0323_autopilot_failure_continuation.sql'
+      - 'database/rollbacks/0323_autopilot_failure_continuation.sql'
+      - 'database/tests/323_autopilot_failure_continuation.sql'
+      - 'database/migrations/0324_autopilot_project_planner.sql'
+      - 'database/rollbacks/0324_autopilot_project_planner.sql'
+      - 'database/tests/324_autopilot_project_planner.sql'
+      - 'database/migrations/0324a_autopilot_dynamic_role_registry.sql'
+      - 'database/migrations/0325_autopilot_durable_dependency_wakeup.sql'
+      - 'database/migrations/0327_autopilot_delivery_proof.sql'
+      - 'database/rollbacks/0327_autopilot_delivery_proof.sql'
+      - 'database/tests/327_autopilot_delivery_proof.sql'
+      - 'database/migrations/0328_autopilot_chat_target_gate.sql'
+      - 'database/rollbacks/0328_autopilot_chat_target_gate.sql'
+      - 'database/tests/328_autopilot_chat_target_gate.sql'
+      - 'database/migrations/0331_autopilot_six_worker_capacity.sql'
+      - 'database/rollbacks/0331_autopilot_six_worker_capacity.sql'
+      - 'database/tests/331_autopilot_six_worker_capacity.sql'
+      - 'database/tests/331_autopilot_six_worker_capacity_concurrency.sh'
+      - 'database/migrations/0332_autopilot_codex_event_cycle.sql'
+      - 'database/rollbacks/0332_autopilot_codex_event_cycle.sql'
+      - 'database/tests/332_autopilot_codex_event_cycle.sql'
+      - 'database/migrations/0333_autopilot_dispatch_assignment_coherence.sql'
+      - 'database/rollbacks/0333_autopilot_dispatch_assignment_coherence.sql'
+      - 'database/tests/333_autopilot_dispatch_assignment_coherence.sql'
+      - 'database/migrations/0334_autopilot_github_probe_retry.sql'
+      - 'database/rollbacks/0334_autopilot_github_probe_retry.sql'
+      - 'database/tests/334_autopilot_github_probe_retry.sql'
+      - 'oracle_autopilot/github_codex_callback.py'
+      - 'tests/test_oracle_autopilot_github_codex_callback.py'
+      - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
+      - '.github/workflows/autopilot-codex-event-callback.yml'
+      - '.codex/config.toml'
+      - 'oracle_autopilot/worker.py'
+      - 'tests/test_oracle_autopilot_shadow.py'
       - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
 
 permissions:
@@ -131,12 +199,111 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/323_autopilot_failure_continuation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/324_autopilot_project_planner.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/324a_autopilot_dynamic_role_registry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/325_autopilot_durable_dependency_wakeup.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/327_autopilot_delivery_proof.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/328_autopilot_chat_target_gate.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/331_autopilot_six_worker_capacity.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/332_autopilot_codex_event_cycle.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/333_autopilot_dispatch_assignment_coherence.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/334_autopilot_github_probe_retry.sql
+
+      - name: Prove concurrent six-worker admission
+        run: |
+          set -euo pipefail
+          capacity_database_url='postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/autopilot_capacity_ci'
+          cleanup() {
+            psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+              'DROP DATABASE IF EXISTS autopilot_capacity_ci WITH (FORCE);'
+          }
+          trap cleanup EXIT
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+            'CREATE DATABASE autopilot_capacity_ci WITH TEMPLATE autopilot_main_ci OWNER bridge_ci_owner;'
+          chmod +x database/tests/331_autopilot_six_worker_capacity_concurrency.sh
+          database/tests/331_autopilot_six_worker_capacity_concurrency.sh \
+            "$capacity_database_url"
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0334_autopilot_github_probe_retry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0333_autopilot_dispatch_assignment_coherence.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0332_autopilot_codex_event_cycle.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0331_autopilot_six_worker_capacity.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0328_autopilot_chat_target_gate.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0327_autopilot_delivery_proof.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0325_autopilot_durable_dependency_wakeup.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0324a_autopilot_dynamic_role_registry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0324_autopilot_project_planner.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0323_autopilot_failure_continuation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql
           test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
             "SELECT to_regclass('autopilot.role_dispatch_outbox') IS NULL;")" = t
           test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM schema_migration WHERE migration_key='0322_autopilot_chatgpt_role_dispatch';")" = 0
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM schema_migration WHERE migration_key='0323_autopilot_failure_continuation';")" = 0
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM schema_migration WHERE migration_key='0324_autopilot_project_planner';")" = 0
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/migrations/0322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0323_autopilot_failure_continuation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0324_autopilot_project_planner.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0324a_autopilot_dynamic_role_registry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0325_autopilot_durable_dependency_wakeup.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0327_autopilot_delivery_proof.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0328_autopilot_chat_target_gate.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0331_autopilot_six_worker_capacity.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0332_autopilot_codex_event_cycle.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0333_autopilot_dispatch_assignment_coherence.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0334_autopilot_github_probe_retry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/323_autopilot_failure_continuation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/324_autopilot_project_planner.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/324a_autopilot_dynamic_role_registry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/325_autopilot_durable_dependency_wakeup.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/327_autopilot_delivery_proof.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/328_autopilot_chat_target_gate.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/331_autopilot_six_worker_capacity.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/332_autopilot_codex_event_cycle.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/333_autopilot_dispatch_assignment_coherence.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/334_autopilot_github_probe_retry.sql
