@@ -102,12 +102,12 @@ BEGIN
         IF publication.dispatch_id IS DISTINCT FROM dispatch.dispatch_id
            OR NOT autopilot.mark_role_dispatch_published(
                dispatch.dispatch_id,'sql-repair-publisher-337',publication.claim_epoch,
-               99003370+c.id,repeat('b',64)) THEN
+               900370+c.id,repeat('b',64)) THEN
             RAISE EXCEPTION 'REPAIR_ADMISSION_PUBLICATION_FAILED case %',c.id;
         END IF;
         event_time:=to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"');
         ack:=jsonb_build_object(
-            'dispatch_id',dispatch.dispatch_id::text,'dispatch_pr',99003370+c.id,
+            'dispatch_id',dispatch.dispatch_id::text,'dispatch_pr',900370+c.id,
             'dispatch_epoch',dispatch.dispatch_epoch,'role',dispatch.role,
             'task_fingerprint',dispatch.task_fingerprint,'target_pr',dispatch.target_pr,
             'expected_head_sha',dispatch.expected_head_sha,'mode',publication.mode,
