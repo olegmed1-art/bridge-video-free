@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Manual Light production installation; preserves existing shadow services."""
-import ast, base64, fcntl, hashlib, json, os, pwd, shlex, socket, subprocess, tempfile, time
+import ast, base64, fcntl, hashlib, json, os, pwd, shlex, shutil, socket, subprocess, tempfile, time
 from pathlib import Path
 import urllib.request
 
@@ -43,6 +43,7 @@ def parse(path):
 def main():
     assert os.geteuid() == 0, "Administrator required"
     assert socket.gethostname() == "autopilot-lite-vnic", "Wrong host"
+    os.umask(0o022)
     with open("/run/lock/autopilot-production-light.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         unit_path = Path("/etc/systemd/system") / UNIT
@@ -75,29 +76,31 @@ def main():
             "AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256": BROKER["broker_policy_sha256"],
             "AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256": BROKER["broker_provenance_sha256"],
         })
-        ROOT.mkdir(mode=0o755)
-        RELEASE.mkdir(parents=True, mode=0o755)
-        opener = urllib.request.build_opener(NoRedirect)
-        for path, expected in MODULES.items():
-            url = "https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/" + REV + "/" + path
-            with opener.open(url, timeout=20) as response:
-                data = response.read(1000000)
-            assert hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest() == expected, "Source hash mismatch"
-            ast.parse(data)
-            target = RELEASE / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-            target.chmod(0o644)
-        (RELEASE / "SOURCE_REVISION").write_text(REV+"\n")
-        runtime = ROOT / "runtime"
-        runtime.mkdir(mode=0o700)
-        os.chown(runtime, service_user.pw_uid, service_user.pw_gid)
-        env["PYTHONPATH"] = str(RELEASE)
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["PYTHONUNBUFFERED"] = "1"
-        env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
-        preflight = '''
+        try:
+            ROOT.mkdir(mode=0o755)
+            RELEASE.mkdir(parents=True, mode=0o755)
+            opener = urllib.request.build_opener(NoRedirect)
+            for path, expected in MODULES.items():
+                url = "https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/" + REV + "/" + path
+                with opener.open(url, timeout=20) as response:
+                    data = response.read(1000000)
+                assert hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest() == expected, "Source hash mismatch"
+                ast.parse(data)
+                target = RELEASE / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                target.chmod(0o644)
+            (RELEASE / "SOURCE_REVISION").write_text(REV+"\n")
+            runtime = ROOT / "runtime"
+            runtime.mkdir(mode=0o700)
+            os.chown(runtime, service_user.pw_uid, service_user.pw_gid)
+            env["PYTHONPATH"] = str(RELEASE)
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["PYTHONUNBUFFERED"] = "1"
+            env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+            preflight = '''
 import os, sys, psycopg
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from oracle_autopilot import worker
 try:
@@ -108,9 +111,22 @@ try:
     with psycopg.connect(cfg.dsn,connect_timeout=10,options="-c default_transaction_read_only=on") as c:
         row=c.execute("SELECT current_user,current_database(),current_setting('neon.project_id'),current_setting('neon.branch_id'),autopilot.verify_broker_schema_v0321()").fetchone()
         assert row==("autopilot_light_worker_login","neondb","misty-poetry-18012774","br-wispy-lab-b1rq54of",True)
-        role=c.execute("SELECT rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil > now() FROM pg_roles WHERE rolname=current_user").fetchone()
-        assert role==(False,False,False,False,False,4,True)
-        assert not c.execute("SELECT has_table_privilege(current_user,'autopilot.task','UPDATE')").fetchone()[0]
+        role=c.execute("SELECT rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil FROM pg_roles WHERE rolname=current_user").fetchone()
+        assert role==(False,False,False,False,False,4,datetime(2026,9,22,tzinfo=timezone.utc))
+        memberships=c.execute("SELECT p.rolname FROM pg_auth_members m JOIN pg_roles p ON p.oid=m.roleid JOIN pg_roles r ON r.oid=m.member WHERE r.rolname=current_user ORDER BY p.rolname").fetchall()
+        assert memberships==[("autopilot_runtime_principal",)]
+        privileges=c.execute("""SELECT n.nspname,c.relname,v.priv
+            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),('DELETE'),('TRUNCATE'),('TRIGGER'),('REFERENCES')) v(priv)
+            WHERE c.relkind IN ('r','p','v','m','f') AND n.nspname NOT LIKE 'pg_%'
+            AND n.nspname <> 'information_schema'
+            AND has_table_privilege(current_user,c.oid,v.priv)""").fetchall()
+        allowed={("autopilot","task_status","SELECT"),("public","pg_stat_statements","SELECT"),("public","pg_stat_statements_info","SELECT")}
+        assert set(privileges)<=allowed
+        elevated=c.execute("""SELECT p.rolname FROM pg_roles p
+            WHERE pg_has_role(current_user,p.oid,'USAGE')
+            AND (p.rolsuper OR p.rolcreatedb OR p.rolcreaterole OR p.rolreplication OR p.rolbypassrls)""").fetchall()
+        assert not elevated
     print("PRODUCTION_DB_IDENTITY_AND_AUTH=PASS",flush=True)
     result=worker.fetch_github_project_head("olegmed1-art/bridge-video-free",1609)
     assert result["head_sha"]=="c3492ec64bfee7d82cd59762d6883521d5fae719"
@@ -119,11 +135,16 @@ except Exception as e:
     print("PREFLIGHT_FAILED="+type(e).__name__,flush=True)
     sys.exit(1)
 '''
-        gate = subprocess.run([str(PYTHON),"-c",preflight],env=env,cwd=RELEASE,
-                              user=service_user.pw_uid,group=service_user.pw_gid,
-                              extra_groups=[service_user.pw_gid],capture_output=True,text=True,timeout=100)
-        print(gate.stdout, end="")
-        assert gate.returncode==0, "Preflight failed; no service installed or started"
+            gate = subprocess.run([str(PYTHON),"-c",preflight],env=env,cwd=RELEASE,
+                                  user=service_user.pw_uid,group=service_user.pw_gid,
+                                  extra_groups=[service_user.pw_gid],capture_output=True,text=True,timeout=100)
+            print(gate.stdout, end="")
+            assert gate.returncode==0, "Preflight failed; no service installed or started"
+        except BaseException:
+            # Only this newly created, never-started staging tree is removed.
+            if ROOT.exists():
+                shutil.rmtree(ROOT)
+            raise
         # Preserve original configuration. The new service receives only its own env.
         keep = {k:v for k,v in env.items() if k.startswith("AUTOPILOT_")}
         assert all("\n" not in v and "\r" not in v for v in keep.values())
@@ -182,7 +203,7 @@ WantedBy=multi-user.target
             assert run("systemctl","show",UNIT,"-p","NRestarts","--value")=="0"
             journal=run("journalctl","-u",UNIT,"--since","@"+str(int(started)),"--no-pager","-o","cat")
             assert "worker_started worker_id=oracle-autopilot-light-1" in journal
-            assert not any(x in journal for x in ["Traceback","listener_reconnect","role_dispatch_failure","project_work_probe_failed"]), "Worker reported errors"
+            assert not any(x in journal for x in ["Traceback"," WARNING "," ERROR "," CRITICAL ","listener_reconnect","role_dispatch_failure","project_work_probe_failed"]), "Worker reported errors"
             assert all(run("systemctl","show",u,"-p","MainPID","--value")==p for u,p in pids.items())
         except BaseException:
             subprocess.run(["systemctl","disable","--now",UNIT],capture_output=True,timeout=40)
