@@ -163,7 +163,7 @@ jobs:
               if item=='export' and len(parts)>1: item=parts[1]
               if '=' in item:
                   k,v=item.split('=',1); os.environ[k]=v
-          from urllib.parse import urlsplit
+          from urllib.parse import parse_qs,urlsplit
           dsn=os.environ['AUTOPILOT_DATABASE_URL']
           expected=os.environ.get('AUTOPILOT_EXPECTED_DB_USER','')
           u=urlsplit(dsn)
@@ -176,8 +176,15 @@ jobs:
               s=re.sub(r'postgres(?:ql)?://\S+','postgresql://<redacted>',s,flags=re.I)
               return s[:800]
           try:
-              socket.getaddrinfo(host,port,type=socket.SOCK_STREAM)
+              addresses=socket.getaddrinfo(host,port,type=socket.SOCK_STREAM)
+              ipv4=[]; ipv6=[]
+              for family,_,_,_,sockaddr in addresses:
+                  target=ipv4 if family==socket.AF_INET else ipv6 if family==socket.AF_INET6 else None
+                  if target is not None and sockaddr[0] not in target: target.append(sockaddr[0])
               print('QUEUE_DNS=PASS')
+              print(f'QUEUE_DNS_IPV4_COUNT={len(ipv4)}')
+              print(f'QUEUE_DNS_IPV6_COUNT={len(ipv6)}')
+              print('QUEUE_DSN_HOSTADDR=' + ('PRESENT' if 'hostaddr' in parse_qs(u.query) else 'ABSENT'))
           except Exception as e:
               print('QUEUE_DNS=FAIL',type(e).__name__,clean(e)); sys.exit(21)
           try:
@@ -185,6 +192,7 @@ jobs:
               print('QUEUE_TCP=PASS')
           except Exception as e:
               print('QUEUE_TCP=FAIL',type(e).__name__,clean(e)); sys.exit(22)
+          normal_ok=False
           try:
               import psycopg
               with psycopg.connect(dsn,connect_timeout=10) as conn:
@@ -194,7 +202,20 @@ jobs:
                       print('QUEUE_POSTGRES=PASS')
                       print('QUEUE_EXPECTED_ROLE=' + ('PASS' if not expected or user==expected else 'FAIL'))
                       print('QUEUE_READ_ONLY_QUERY=PASS' if ok else 'QUEUE_READ_ONLY_QUERY=FAIL')
+                      normal_ok=True
           except Exception as e:
-              print('QUEUE_POSTGRES=FAIL',type(e).__name__,clean(e)); sys.exit(23)
+              print('QUEUE_POSTGRES=FAIL',type(e).__name__,clean(e))
+          if ipv4:
+              try:
+                  import psycopg
+                  with psycopg.connect(dsn,hostaddr=ipv4[0],connect_timeout=10) as conn:
+                      with conn.cursor() as cur:
+                          cur.execute('select true')
+                          assert cur.fetchone()[0] is True
+                  print('QUEUE_POSTGRES_IPV4_OVERRIDE=PASS')
+              except Exception as e:
+                  print('QUEUE_POSTGRES_IPV4_OVERRIDE=FAIL',type(e).__name__,clean(e)); sys.exit(24)
+          elif not normal_ok:
+              sys.exit(23)
           PY
           REMOTE
