@@ -173,6 +173,9 @@ jobs:
           assert endpoint_match, 'QUEUE_ENDPOINT_SLUG_NOT_FOUND'
           print('QUEUE_ENDPOINT_SLUG='+endpoint_match.group(2))
           print('QUEUE_ENDPOINT_REGION=' + ('PASS' if host.endswith('.eu-central-1.aws.neon.tech') else 'UNEXPECTED'))
+          print('QUEUE_DATABASE='+u.path.lstrip('/'))
+          print('QUEUE_ROLE='+str(u.username or ''))
+          print('QUEUE_EXPECTED_ROLE_MATCH=' + ('PASS' if not expected or u.username==expected else 'FAIL'))
           def clean(value):
               s=str(value)
               for secret in (dsn,u.username,u.password,host):
