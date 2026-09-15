@@ -1,4 +1,4 @@
-name: Light boot-volume recovery preflight
+name: Authorized Light boot-volume SSH recovery
 
 on:
   push:
@@ -13,9 +13,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  preflight:
+  recover:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 40
     env:
       OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
@@ -28,7 +28,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Configure bounded OCI client
+      - name: Configure bounded OCI and SSH clients
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -62,7 +62,7 @@ jobs:
               elif s.startswith('fingerprint='):
                   lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}'); fp=True
               else: lines.append(line)
-          if not key: lines.append(f'key_file={Path.home()/".oci"/"key.pem"}')
+          if not key: lines.append('key_file='+str(Path.home()/'.oci'/'key.pem'))
           if not region: lines.append('region=eu-frankfurt-1')
           if not fp: lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}')
           p.write_text('\n'.join(lines)+'\n')
@@ -71,56 +71,107 @@ jobs:
           printf '%s\n' "$ORACLE_SSH_PRIVATE_KEY" | tr -d '\r' > "$RUNNER_TEMP/heavy_key"
           chmod 600 "$RUNNER_TEMP/heavy_key"
           ssh-keygen -y -f "$RUNNER_TEMP/heavy_key" > "$RUNNER_TEMP/approved_key.pub"
-          echo "APPROVED_KEY_FINGERPRINT=$(ssh-keygen -lf "$RUNNER_TEMP/approved_key.pub" | awk '{print $2}')"
+          [[ "$(awk '{print NF}' "$RUNNER_TEMP/approved_key.pub")" -ge 2 ]]
 
-      - name: Verify exact instances and movable boot volume
+      - name: Execute guarded recovery with restoration trap
         shell: bash
         run: |
           set -Eeuo pipefail
+          success=0
+          light_stopped=0
+          heavy_attachment_id=''
+          light_attachment_id=''
+          boot_volume_id=''
+          heavy_ip=''
+          known="$RUNNER_TEMP/heavy-known-hosts"
+
+          get_instance_state() {
+            oci compute instance get --instance-id "$1" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true
+          }
+          wait_attachment_state() {
+            local id="$1" wanted="$2" state=''
+            for _ in $(seq 1 90); do
+              state="$(oci compute boot-volume-attachment get --boot-volume-attachment-id "$id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true)"
+              [[ "$state" == "$wanted" ]] && return 0
+              [[ "$wanted" == DETACHED && -z "$state" ]] && return 0
+              sleep 5
+            done
+            echo "ATTACHMENT_WAIT_TIMEOUT id=$id wanted=$wanted last=$state" >&2
+            return 1
+          }
+          attached_to() {
+            local instance="$1" out="$RUNNER_TEMP/attachments-$(basename "$instance").json"
+            oci compute boot-volume-attachment list --availability-domain "$availability_domain" --compartment-id "$compartment_id" --instance-id "$instance" --all > "$out"
+            python - "$out" "$boot_volume_id" <<'PY'
+          import json,sys
+          rows=[x for x in json.load(open(sys.argv[1]))['data'] if x.get('boot-volume-id')==sys.argv[2] and x.get('lifecycle-state') not in {'DETACHED','DETACHING'}]
+          if rows: print(rows[0]['id'])
+          PY
+          }
+          rollback() {
+            rc=$?
+            [[ "$success" == 1 ]] && return "$rc"
+            trap - EXIT
+            set +e
+            echo "RECOVERY_ROLLBACK_BEGIN rc=$rc"
+            if [[ -n "$heavy_ip" ]]; then
+              ssh -i "$RUNNER_TEMP/heavy_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "ubuntu@$heavy_ip" \
+                "sudo -n umount '/mnt/light-rdc-recovery-${GITHUB_RUN_ID}' 2>/dev/null || true; sudo -n rmdir '/mnt/light-rdc-recovery-${GITHUB_RUN_ID}' 2>/dev/null || true; sudo -n rm -f '/tmp/light-approved-${GITHUB_RUN_ID}.pub' '/tmp/light-before-${GITHUB_RUN_ID}.blocks'" || true
+            fi
+            if [[ -n "$boot_volume_id" && -n "${availability_domain:-}" && -n "${compartment_id:-}" ]]; then
+              current_heavy="$(attached_to "$HEAVY_INSTANCE_ID" || true)"
+              if [[ -n "$current_heavy" ]]; then
+                oci compute boot-volume-attachment detach --boot-volume-attachment-id "$current_heavy" --force || true
+                wait_attachment_state "$current_heavy" DETACHED || true
+              fi
+              current_light="$(attached_to "$LIGHT_INSTANCE_ID" || true)"
+              if [[ -z "$current_light" ]]; then
+                oci compute boot-volume-attachment attach --instance-id "$LIGHT_INSTANCE_ID" --boot-volume-id "$boot_volume_id" --type paravirtualized > "$RUNNER_TEMP/rollback-light-attach.json" || true
+                rollback_id="$(python -c 'import json,sys; print(json.load(open(sys.argv[1])).get("data",{}).get("id",""))' "$RUNNER_TEMP/rollback-light-attach.json" 2>/dev/null || true)"
+                [[ -n "$rollback_id" ]] && wait_attachment_state "$rollback_id" ATTACHED || true
+              fi
+            fi
+            if [[ "$(get_instance_state "$LIGHT_INSTANCE_ID")" == STOPPED ]]; then
+              oci compute instance action --instance-id "$LIGHT_INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 || true
+            fi
+            echo 'RECOVERY_ROLLBACK_END'
+            exit "$rc"
+          }
+          trap rollback EXIT
+
           oci compute instance get --instance-id "$LIGHT_INSTANCE_ID" > "$RUNNER_TEMP/light.json"
           oci compute instance get --instance-id "$HEAVY_INSTANCE_ID" > "$RUNNER_TEMP/heavy.json"
-          python - "$RUNNER_TEMP/light.json" "$RUNNER_TEMP/heavy.json" <<'PY'
-          import json,sys
-          light=json.load(open(sys.argv[1]))['data']
-          heavy=json.load(open(sys.argv[2]))['data']
-          assert light['display-name']=='bridge-school-autopilot-lite', light['display-name']
-          assert light['shape']=='VM.Standard.A1.Flex', light['shape']
-          assert light['lifecycle-state']=='RUNNING', light['lifecycle-state']
-          assert heavy['display-name']=='bridge-school-dds3-frankfurt', heavy['display-name']
-          assert heavy['lifecycle-state']=='RUNNING', heavy['lifecycle-state']
-          assert light['availability-domain']==heavy['availability-domain'], (light['availability-domain'],heavy['availability-domain'])
-          print('EXACT_INSTANCE_GUARDS=PASS')
-          print('SAME_AVAILABILITY_DOMAIN=PASS')
-          print('AVAILABILITY_DOMAIN='+light['availability-domain'])
-          print('COMPARTMENT_ID='+light['compartment-id'])
+          eval "$(python - "$RUNNER_TEMP/light.json" "$RUNNER_TEMP/heavy.json" <<'PY'
+          import json,shlex,sys
+          light=json.load(open(sys.argv[1]))['data']; heavy=json.load(open(sys.argv[2]))['data']
+          assert light['display-name']=='bridge-school-autopilot-lite'
+          assert light['shape']=='VM.Standard.A1.Flex'
+          assert light['lifecycle-state']=='RUNNING'
+          assert heavy['display-name']=='bridge-school-dds3-frankfurt'
+          assert heavy['lifecycle-state']=='RUNNING'
+          assert light['availability-domain']==heavy['availability-domain']
+          for k,v in [('availability_domain',light['availability-domain']),('compartment_id',light['compartment-id'])]:
+              print(k+'='+shlex.quote(v))
           PY
-          compartment="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["compartment-id"])' "$RUNNER_TEMP/light.json")"
-          ad="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["availability-domain"])' "$RUNNER_TEMP/light.json")"
-          oci compute boot-volume-attachment list --availability-domain "$ad" --compartment-id "$compartment" --instance-id "$LIGHT_INSTANCE_ID" --all > "$RUNNER_TEMP/light-bva.json"
-          python - "$RUNNER_TEMP/light-bva.json" <<'PY' > "$RUNNER_TEMP/bva.env"
-          import json,sys
+          )"
+          oci compute boot-volume-attachment list --availability-domain "$availability_domain" --compartment-id "$compartment_id" --instance-id "$LIGHT_INSTANCE_ID" --all > "$RUNNER_TEMP/light-before.json"
+          eval "$(python - "$RUNNER_TEMP/light-before.json" <<'PY'
+          import json,shlex,sys
           rows=[x for x in json.load(open(sys.argv[1]))['data'] if x.get('lifecycle-state')=='ATTACHED']
           assert len(rows)==1, rows
-          x=rows[0]
-          print('BOOT_VOLUME_ATTACHMENT_ID='+x['id'])
-          print('BOOT_VOLUME_ID='+x['boot-volume-id'])
+          print('light_attachment_id='+shlex.quote(rows[0]['id']))
+          print('boot_volume_id='+shlex.quote(rows[0]['boot-volume-id']))
           PY
-          source "$RUNNER_TEMP/bva.env"
-          echo "BOOT_VOLUME_ATTACHMENT_ID=$BOOT_VOLUME_ATTACHMENT_ID" >> "$GITHUB_ENV"
-          echo "BOOT_VOLUME_ID=$BOOT_VOLUME_ID" >> "$GITHUB_ENV"
-          oci bv boot-volume get --boot-volume-id "$BOOT_VOLUME_ID" > "$RUNNER_TEMP/boot.json"
-          python - "$RUNNER_TEMP/boot.json" <<'PY'
+          )"
+          oci bv boot-volume get --boot-volume-id "$boot_volume_id" > "$RUNNER_TEMP/boot.json"
+          python - "$RUNNER_TEMP/boot.json" "$availability_domain" <<'PY'
           import json,sys
           x=json.load(open(sys.argv[1]))['data']
-          assert x['lifecycle-state']=='AVAILABLE', x['lifecycle-state']
-          print('LIGHT_BOOT_VOLUME_IDENTIFIED=PASS')
-          print('BOOT_VOLUME_SIZE_GB='+str(x['size-in-gbs']))
+          assert x['lifecycle-state']=='AVAILABLE'
+          assert x['availability-domain']==sys.argv[2]
+          assert x['size-in-gbs']==47
+          print('EXACT_BOOT_VOLUME_GUARD=PASS')
           PY
-
-      - name: Verify Heavy SSH and bounded recovery prerequisites
-        shell: bash
-        run: |
-          set -Eeuo pipefail
           oci compute instance list-vnics --instance-id "$HEAVY_INSTANCE_ID" --all > "$RUNNER_TEMP/heavy-vnics.json"
           heavy_ip="$(python - "$RUNNER_TEMP/heavy-vnics.json" <<'PY'
           import json,sys
@@ -130,18 +181,133 @@ jobs:
           PY
           )"
           [[ "$heavy_ip" == 158.180.47.161 ]]
-          known="$RUNNER_TEMP/heavy-known-hosts"
           ops/oracle_known_hosts_from_scan.sh "$heavy_ip" "$EXPECTED_HEAVY_FINGERPRINT" "$known"
-          ssh -i "$RUNNER_TEMP/heavy_key" -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15             "ubuntu@$heavy_ip" 'sudo -n true; test "$(hostname)" = bridge-school-dds3-frankfurt; findmnt -no SOURCE /; lsblk -dn -o NAME,SIZE,TYPE'
-          echo "HEAVY_IP=$heavy_ip" >> "$GITHUB_ENV"
-          echo "HEAVY_KNOWN_HOSTS=$known" >> "$GITHUB_ENV"
-          echo 'HEAVY_RECOVERY_HOST_PREFLIGHT=PASS'
+          ssh_opts=(-i "$RUNNER_TEMP/heavy_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15)
+          ssh "${ssh_opts[@]}" "ubuntu@$heavy_ip" 'sudo -n true; test "$(hostname)" = bridge-school-dds3-frankfurt; lsblk -dn -o NAME | sort -u' > "$RUNNER_TEMP/heavy-before.blocks"
+          scp "${ssh_opts[@]}" "$RUNNER_TEMP/approved_key.pub" "ubuntu@$heavy_ip:/tmp/light-approved-${GITHUB_RUN_ID}.pub"
+          scp "${ssh_opts[@]}" "$RUNNER_TEMP/heavy-before.blocks" "ubuntu@$heavy_ip:/tmp/light-before-${GITHUB_RUN_ID}.blocks"
 
-      - name: Publish preflight verdict
+          echo 'LIGHT_STOP_BEGIN'
+          oci compute instance action --instance-id "$LIGHT_INSTANCE_ID" --action STOP --wait-for-state STOPPED --max-wait-seconds 600 --wait-interval-seconds 10 >/dev/null
+          light_stopped=1
+          [[ "$(get_instance_state "$LIGHT_INSTANCE_ID")" == STOPPED ]]
+          echo 'LIGHT_STOPPED=PASS'
+
+          oci compute boot-volume-attachment detach --boot-volume-attachment-id "$light_attachment_id" --force >/dev/null
+          wait_attachment_state "$light_attachment_id" DETACHED
+          echo 'LIGHT_BOOT_VOLUME_DETACHED=PASS'
+
+          oci compute boot-volume-attachment attach --instance-id "$HEAVY_INSTANCE_ID" --boot-volume-id "$boot_volume_id" --type paravirtualized > "$RUNNER_TEMP/heavy-attach.json"
+          heavy_attachment_id="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["id"])' "$RUNNER_TEMP/heavy-attach.json")"
+          test -n "$heavy_attachment_id"
+          wait_attachment_state "$heavy_attachment_id" ATTACHED
+          echo 'LIGHT_BOOT_VOLUME_ATTACHED_TO_HEAVY=PASS'
+          sleep 10
+
+          ssh "${ssh_opts[@]}" "ubuntu@$heavy_ip" "sudo -n env RECOVERY_RUN_ID='${GITHUB_RUN_ID}' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          run="$RECOVERY_RUN_ID"
+          before="/tmp/light-before-$run.blocks"
+          approved="/tmp/light-approved-$run.pub"
+          mountpoint="/mnt/light-rdc-recovery-$run"
+          test -s "$before"
+          test -s "$approved"
+          mapfile -t new_disks < <(comm -13 <(sort -u "$before") <(lsblk -dn -o NAME | sort -u))
+          [[ "${#new_disks[@]}" == 1 ]]
+          disk="/dev/${new_disks[0]}"
+          [[ "$(lsblk -dn -o TYPE "$disk")" == disk ]]
+          [[ "$(lsblk -bdn -o SIZE "$disk")" -ge 45000000000 ]]
+          [[ "$(lsblk -bdn -o SIZE "$disk")" -le 52000000000 ]]
+          mkdir -p "$mountpoint"
+          target=''
+          while read -r candidate fstype; do
+            [[ -n "$candidate" && -n "$fstype" ]] || continue
+            case "$fstype" in
+              ext4) opts='ro,noload,nosuid,nodev' ;;
+              xfs) opts='ro,norecovery,nouuid,nosuid,nodev' ;;
+              *) continue ;;
+            esac
+            if mount -o "$opts" "$candidate" "$mountpoint" 2>/dev/null; then
+              hostname_value="$(cat "$mountpoint/etc/hostname" 2>/dev/null || true)"
+              if [[ "$hostname_value" == autopilot-lite-vnic || "$hostname_value" == bridge-school-autopilot-lite ]] && [[ -d "$mountpoint/home/ubuntu" ]]; then
+                target="$candidate"
+                umount "$mountpoint"
+                break
+              fi
+              umount "$mountpoint"
+            fi
+          done < <(lsblk -lnpo NAME,FSTYPE "$disk")
+          [[ -n "$target" ]]
+          fstype="$(lsblk -no FSTYPE "$target")"
+          if [[ "$fstype" == xfs ]]; then
+            mount -o rw,nouuid,nosuid,nodev "$target" "$mountpoint"
+          else
+            mount -o rw,nosuid,nodev "$target" "$mountpoint"
+          fi
+          trap 'sync; umount "$mountpoint" 2>/dev/null || true; rmdir "$mountpoint" 2>/dev/null || true' EXIT
+          [[ "$(cat "$mountpoint/etc/hostname")" == autopilot-lite-vnic || "$(cat "$mountpoint/etc/hostname")" == bridge-school-autopilot-lite ]]
+          uid="$(stat -c %u "$mountpoint/home/ubuntu")"
+          gid="$(stat -c %g "$mountpoint/home/ubuntu")"
+          install -d -m 0700 -o "$uid" -g "$gid" "$mountpoint/home/ubuntu/.ssh"
+          auth="$mountpoint/home/ubuntu/.ssh/authorized_keys"
+          touch "$auth"
+          chown "$uid:$gid" "$auth"
+          chmod 0600 "$auth"
+          blob="$(awk '{print $2}' "$approved")"
+          [[ -n "$blob" ]]
+          if ! awk '{print $2}' "$auth" | grep -qxF "$blob"; then
+            printf '%s rdc-light-recovery-%s\n' "$(cut -d' ' -f1,2 "$approved")" "$run" >> "$auth"
+          fi
+          [[ "$(awk -v b="$blob" '$2==b{n++} END{print n+0}' "$auth")" == 1 ]]
+          sync -f "$auth" 2>/dev/null || sync
+          echo 'LIGHT_AUTHORIZED_KEY_REPAIR=PASS'
+          umount "$mountpoint"
+          trap - EXIT
+          rmdir "$mountpoint"
+          rm -f "$approved" "$before"
+          REMOTE
+
+          echo 'LIGHT_FILESYSTEM_UNMOUNTED=PASS'
+          oci compute boot-volume-attachment detach --boot-volume-attachment-id "$heavy_attachment_id" --force >/dev/null
+          wait_attachment_state "$heavy_attachment_id" DETACHED
+          heavy_attachment_id=''
+          echo 'LIGHT_BOOT_VOLUME_DETACHED_FROM_HEAVY=PASS'
+
+          oci compute boot-volume-attachment attach --instance-id "$LIGHT_INSTANCE_ID" --boot-volume-id "$boot_volume_id" --type paravirtualized > "$RUNNER_TEMP/light-reattach.json"
+          light_attachment_id="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["id"])' "$RUNNER_TEMP/light-reattach.json")"
+          test -n "$light_attachment_id"
+          wait_attachment_state "$light_attachment_id" ATTACHED
+          echo 'LIGHT_BOOT_VOLUME_REATTACHED=PASS'
+
+          oci compute instance action --instance-id "$LIGHT_INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 --wait-interval-seconds 10 >/dev/null
+          [[ "$(get_instance_state "$LIGHT_INSTANCE_ID")" == RUNNING ]]
+          echo 'LIGHT_RUNNING=PASS'
+          oci compute instance list-vnics --instance-id "$LIGHT_INSTANCE_ID" --all > "$RUNNER_TEMP/light-vnics.json"
+          light_ip="$(python - "$RUNNER_TEMP/light-vnics.json" <<'PY'
+          import json,sys
+          rows=[x for x in json.load(open(sys.argv[1]))['data'] if x.get('is-primary')]
+          assert len(rows)==1 and rows[0].get('public-ip')
+          print(rows[0]['public-ip'])
+          PY
+          )"
+          for _ in $(seq 1 60); do
+            if ssh -i "$RUNNER_TEMP/heavy_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=8 "ubuntu@$light_ip" 'test "$(hostname)" = autopilot-lite-vnic || test "$(hostname)" = bridge-school-autopilot-lite' 2>/dev/null; then
+              echo "LIGHT_IP=$light_ip" >> "$GITHUB_ENV"
+              echo 'LIGHT_SSH_RECOVERED=PASS'
+              success=1
+              break
+            fi
+            sleep 10
+          done
+          [[ "$success" == 1 ]]
+          trap - EXIT
+          echo 'AUTHORIZED_BOOT_VOLUME_RECOVERY=PASS'
+
+      - name: Verify Light read-only guest access
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo 'BOOT_VOLUME_RECOVERY_PREFLIGHT=PASS'
-          echo 'LIGHT_STOP_REQUESTED=NO'
-          echo 'VOLUME_ATTACHMENT_MUTATION=NO'
-          echo 'HEAVY_FILESYSTEM_MUTATION=NO'
+          ssh -i "$RUNNER_TEMP/heavy_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=15 "ubuntu@$LIGHT_IP" \
+            'hostname; id -un; uname -sr; test -r /etc/os-release; printf "LIGHT_FILESYSTEM_READ=PASS\n"; systemctl is-system-running 2>/dev/null || true'
+          echo 'LIGHT_TERMINAL=PASS'
+
