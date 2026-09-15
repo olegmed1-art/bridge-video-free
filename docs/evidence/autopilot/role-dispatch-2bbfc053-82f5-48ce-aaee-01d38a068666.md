@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=2bbfc053-82f5-48ce-aaee-01d38a068666
+dispatch_epoch=71
+role=AUTOPILOT
+task_fingerprint=a934347b6687a89c3bf9bcfe26d6dde4557e7ce7079da63d3368676d197058eb
+target_pr=1150
+mode=REPAIR
+repair_attempt=1
+origin_task_id=5c03f2ec-6b1a-41d9-9374-3fe43c2c00be
+prior_task_id=5c03f2ec-6b1a-41d9-9374-3fe43c2c00be
+blocked_result_code=ROLE_EXECUTOR_FALLBACK_MISSING
+blocked_summary=Exact-role chat gating strands enabled unmapped roles; no verified singleton executor fallback exists in the audited repository snapshot.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
