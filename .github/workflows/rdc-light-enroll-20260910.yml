@@ -131,11 +131,7 @@ jobs:
           )"
           [[ "$heavy_ip" == 158.180.47.161 ]]
           known="$RUNNER_TEMP/heavy-known-hosts"
-          scan="$(ssh-keyscan -T 10 -t ed25519 "$heavy_ip" 2>/dev/null)"
-          test -n "$scan"
-          printf '%s\n' "$scan" > "$known"
-          actual="$(ssh-keygen -lf "$known" | awk '{print $2}' | head -1)"
-          [[ "$actual" == "$EXPECTED_HEAVY_FINGERPRINT" ]]
+          ops/oracle_known_hosts_from_scan.sh "$heavy_ip" "$EXPECTED_HEAVY_FINGERPRINT" "$known"
           ssh -i "$RUNNER_TEMP/heavy_key" -o BatchMode=yes -o IdentitiesOnly=yes             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15             "ubuntu@$heavy_ip" 'sudo -n true; test "$(hostname)" = bridge-school-dds3-frankfurt; findmnt -no SOURCE /; lsblk -dn -o NAME,SIZE,TYPE'
           echo "HEAVY_IP=$heavy_ip" >> "$GITHUB_ENV"
           echo "HEAVY_KNOWN_HOSTS=$known" >> "$GITHUB_ENV"
