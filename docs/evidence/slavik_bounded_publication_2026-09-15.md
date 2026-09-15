@@ -169,3 +169,8 @@ issuer activation blocker.
 - [OpenAI GitHub integration](https://learn.chatgpt.com/docs/third-party/github)
   documents task invocation and branch fixes with permission, but does not by
   itself establish the missing task-origin attestation contract.
+
+## Cloud transport canary payload
+
+Canary ID: 5ae030c3-404c-4d75-903a-2352c67a23b7.
+This text is a transport test payload; it does not attest publication, deployment or production readiness.
