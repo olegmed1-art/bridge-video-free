@@ -192,7 +192,7 @@ jobs:
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
           chmod 700 "$work"
-          printf '%s' 'GBUWRXMEkEKIlGddXnvvz9rFrICLAVGM7gjuyOsS0EHKeIeMAC0Nx/X7ZVbAE9Prpc1kgswiHJlsRLQaaJI3Ic3xtDoCZR0VVAosbhvOX7tNJLr4HWgRcD+OmrFnWSxv/GT9tk3njBSzEy0huaALDZS4O8it8DUm6j8C0o11MgLKtisuomNcTTpvXMDwFnnI9/T0h05fXkC5Erqy3wg02J4uLUyiQrhz7Wq1Ciz7JtehHdoPES6epEId7QYNYh3LgC+rn02actg9gxRF7Apx0BCkWEbSdC1KrSdiIiYsjZpsbb/FXY6ZQ0wCC6wEDfNchvt9Z+ty215LvOGKme5Jv7LcTGs4McsrvXU2SBvhppw6+Wc2VizZkOw1GlAt13nlCLG/kTcWQJPe1u3X9jjsC8S/Xpc5Nnye4KNPi6sELmHPLnKzlr5WZSn5jIqJx1ZY2FdDpFZxYCebfhjwmJwJb/BL5eALDO4/SpNvg8/0TmKGI+nreM+U/H+4qImNXw+1' | base64 --decode > "$work/dsn.enc"
+          printf '%s' 'cH8gOB5ptyhkOZxhu9nGoMT9WNdCtHy6mv+io6qwehBBxxWMmRTVTDq2gXb8WulXARAeTykyWjDMl+r/XbX1VNCkmHKYLJ+hTNiKf1Oc8j+Obo4bPRJqFlxvJ0rdzCQ/c+Vxfq96mOZ/IhaC8mUo/iLrJlhmzWBFhkWQyY6nK61Mlv4UXGqaGtBfqVO0dmwnYSVU5OW1WUyBtwkkJfU2+R2J5XWs/lGlS0L/iGkD+Ne7tc75p79+wwjWZFrY2LAN4snyX0PKu3ZqIcsaEDVD2Ua/34wL31bNbBSBVUEE91RN7AulrX0Zbs7gLPj/JYQqdpGWVGH0XN5LFx4CVdSlPKK8vP9hfLHncuBVW7g4vhN2pSbmuaFfqVKFOkTtrA1mLrV/BesD+BxmGnrQuqvRZITFW4dWDMedgZEEjoc0yXXu7tItxGZ21BhrFXmB3QwUEOilkbYlxDTMh1rYO8QZ+vLyE1OWpqfO9sbnaytDdGctsOZ91NFgWgz+ecsNpkfr' | base64 --decode > "$work/dsn.enc"
           cp /etc/ssh/ssh_host_rsa_key "$work/host.pem"
           ssh-keygen -p -m PEM -P '' -N '' -f "$work/host.pem" >/dev/null
           openssl pkeyutl -decrypt -inkey "$work/host.pem" \
@@ -204,7 +204,7 @@ jobs:
           from urllib.parse import urlsplit
           new=open(sys.argv[1]).read().strip()
           u=urlsplit(new)
-          assert u.hostname=='ep-floral-field-b1pjs2of.c-5.eu-central-1.aws.neon.tech'
+          assert u.hostname=='ep-floral-field-b1pjs2of-pooler.c-5.eu-central-1.aws.neon.tech'
           assert u.username=='autopilot_runtime_login'
           assert u.path=='/neondb'
           assert not any(c.isspace() for c in new)
