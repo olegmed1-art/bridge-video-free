@@ -21,6 +21,13 @@ DECLARE
     v_manifest jsonb;
     v_receipt jsonb;
     v_output jsonb;
+    v_invalid jsonb;
+    v_path text[];
+    v_variant text;
+    v_jobs_before jsonb;
+    v_batch_before jsonb;
+    v_events_before bigint;
+    v_rejected integer := 0;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0056_universal_video_queue') THEN
         RAISE EXCEPTION 'video queue migration is not registered';
@@ -101,6 +108,10 @@ BEGIN
     EXCEPTION WHEN raise_exception THEN
         IF SQLERRM <> 'VIDEO_QUEUE_LEASE_LOST' THEN RAISE; END IF;
     END;
+    SELECT jsonb_agg(to_jsonb(j) ORDER BY j.job_id) INTO v_jobs_before
+      FROM video_queue.job j WHERE batch_id=v_batch;
+    SELECT to_jsonb(b) INTO v_batch_before FROM video_queue.batch b WHERE batch_id=v_batch;
+    SELECT count(*) INTO v_events_before FROM video_queue.job_event WHERE batch_id=v_batch;
     BEGIN
       PERFORM * FROM video_queue.finish_job(
         v_job, v_token, 'worker-1', 'REVIEW_READY', jsonb_build_object(
@@ -114,9 +125,9 @@ BEGIN
     EXCEPTION WHEN raise_exception THEN
       IF SQLERRM <> 'VIDEO_QUEUE_TERMINAL_EVIDENCE_INVALID' THEN RAISE; END IF;
     END;
-    IF (SELECT status FROM video_queue.job WHERE job_id=v_job) <> 'LEASED'
-       OR (SELECT status FROM video_queue.batch WHERE batch_id=v_batch) <> 'QUEUED_CANARY'
-       OR (SELECT count(*) FROM video_queue.job WHERE batch_id=v_batch AND status='PENDING_CANARY') <> 2 THEN
+    IF (SELECT jsonb_agg(to_jsonb(j) ORDER BY j.job_id) FROM video_queue.job j WHERE batch_id=v_batch) IS DISTINCT FROM v_jobs_before
+       OR (SELECT to_jsonb(b) FROM video_queue.batch b WHERE batch_id=v_batch) IS DISTINCT FROM v_batch_before
+       OR (SELECT count(*) FROM video_queue.job_event WHERE batch_id=v_batch) <> v_events_before THEN
       RAISE EXCEPTION 'failed terminal evidence mutated queue state';
     END IF;
 
@@ -151,6 +162,58 @@ BEGIN
       IF SQLERRM <> 'VIDEO_QUEUE_TERMINAL_ARTIFACT_INVALID' THEN RAISE; END IF;
     END;
     IF (SELECT status FROM video_queue.job WHERE job_id=v_job) <> 'LEASED' THEN RAISE EXCEPTION 'contradictory evidence mutated job'; END IF;
+
+    -- Recompute the dependent hashes so these vectors test required fields,
+    -- rather than accidentally passing only because a stale digest rejected them.
+    FOR v_path IN
+      SELECT string_to_array(path, '.') FROM unnest(ARRAY[
+        'result_mode','publication_state','source_file_id','stable_job_key','algorithm_revision',
+        'manifest.schema','manifest.job_id','manifest.source_file_id','manifest.algorithm_revision',
+        'manifest.result_mode','manifest.publication_state','manifest.artifacts',
+        'manifest.artifacts.0.drive_file_id','manifest.artifacts.0.mime_type','manifest.artifacts.0.parent_folder_id',
+        'manifest.artifacts.1.drive_file_id','manifest.artifacts.1.mime_type','manifest.artifacts.1.parent_folder_id',
+        'artifact_locators.master_pdf_drive_id','artifact_locators.ai_done_drive_id',
+        'terminal_receipt.schema','terminal_receipt.job_id','terminal_receipt.source_file_id',
+        'terminal_receipt.publication_state','terminal_receipt.manifest_sha256',
+        'terminal_receipt.evidence_sha256','terminal_evidence_sha256'
+      ]) AS required(path)
+    LOOP
+      FOREACH v_variant IN ARRAY ARRAY['missing','null'] LOOP
+        v_invalid := CASE WHEN v_variant='missing' THEN v_output #- v_path
+                          ELSE jsonb_set(v_output,v_path,'null'::jsonb) END;
+        IF v_path[1]='manifest' THEN
+          v_invalid := jsonb_set(v_invalid,'{terminal_receipt,manifest_sha256}',
+            to_jsonb(encode(public.digest(convert_to(video_queue.canonical_json(v_invalid->'manifest'),'UTF8'),'sha256'),'hex')));
+        END IF;
+        IF v_path <> ARRAY['terminal_receipt','evidence_sha256'] AND v_path <> ARRAY['terminal_evidence_sha256'] THEN
+          v_receipt := (v_invalid->'terminal_receipt') - 'evidence_sha256';
+          v_receipt := v_receipt || jsonb_build_object('evidence_sha256',
+            encode(public.digest(convert_to(video_queue.canonical_json(v_receipt),'UTF8'),'sha256'),'hex'));
+          v_invalid := jsonb_set(jsonb_set(v_invalid,'{terminal_receipt}',v_receipt),
+            '{terminal_evidence_sha256}',v_receipt->'evidence_sha256');
+        END IF;
+        BEGIN
+          PERFORM * FROM video_queue.finish_job(v_job,v_token,'worker-1','REVIEW_READY',v_invalid,NULL);
+          RAISE EXCEPTION 'incomplete rehashed evidence accepted: % %',v_path,v_variant;
+        EXCEPTION WHEN raise_exception THEN
+          IF SQLERRM NOT IN ('VIDEO_QUEUE_FINISH_ARGUMENT_INVALID','VIDEO_QUEUE_RESULT_IDENTITY_MISMATCH',
+            'VIDEO_QUEUE_TERMINAL_EVIDENCE_INVALID','VIDEO_QUEUE_TERMINAL_ARTIFACT_INVALID','VIDEO_QUEUE_TERMINAL_RECEIPT_INVALID') THEN RAISE; END IF;
+        END;
+        v_rejected := v_rejected + 1;
+        IF (SELECT jsonb_agg(to_jsonb(j) ORDER BY j.job_id) FROM video_queue.job j WHERE batch_id=v_batch) IS DISTINCT FROM v_jobs_before
+           OR (SELECT to_jsonb(b) FROM video_queue.batch b WHERE batch_id=v_batch) IS DISTINCT FROM v_batch_before
+           OR (SELECT count(*) FROM video_queue.job_event WHERE batch_id=v_batch) <> v_events_before THEN
+          RAISE EXCEPTION 'invalid rehashed evidence mutated queue state';
+        END IF;
+      END LOOP;
+    END LOOP;
+    IF v_rejected <> 54 THEN RAISE EXCEPTION 'required-field rejection coverage incomplete'; END IF;
+    BEGIN
+      PERFORM * FROM video_queue.finish_job(v_job,NULL,'worker-1','REVIEW_READY',v_output,NULL);
+      RAISE EXCEPTION 'null fencing token accepted';
+    EXCEPTION WHEN raise_exception THEN
+      IF SQLERRM <> 'VIDEO_QUEUE_LEASE_LOST' THEN RAISE; END IF;
+    END;
 
     SELECT f.batch_status, f.released_jobs INTO v_state, v_released
       FROM video_queue.finish_job(v_job,v_token,'worker-1','REVIEW_READY',v_output,NULL) f;
