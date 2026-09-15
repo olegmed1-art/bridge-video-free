@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -128,6 +129,46 @@ def test_source_has_only_guarded_rpc_and_no_execution_or_model_primitives():
         "autopilot-broker.env",
     ):
         assert forbidden not in source
+
+
+def test_status_heartbeat_serializes_database_timestamps_with_circuit_open(tmp_path):
+    config = _config(tmp_path)
+    open_local_circuit(
+        config, code="ONLINE_TEST_FINDING", task_key=None,
+        required_fix="Keep the circuit open during heartbeat recovery.",
+    )
+    marker = (tmp_path / "circuit-open.json").read_bytes()
+    stamp = datetime(2026, 9, 15, 20, 40, 30, 123456, tzinfo=UTC)
+    offset_stamp = stamp.astimezone(timezone(timedelta(hours=3)))
+    status = {
+        "observer_mode": "SHADOW_ONLY", "circuit_open": True,
+        "last_created_at": stamp, "last_pass_at": None,
+        "details": [{"observed_at": offset_stamp}],
+    }
+    write_heartbeat(config, status)
+    heartbeat = json.loads((tmp_path / "heartbeat.json").read_text())
+    assert datetime.fromisoformat(heartbeat["last_created_at"]) == stamp
+    assert datetime.fromisoformat(heartbeat["details"][0]["observed_at"]) == stamp
+    assert heartbeat["last_pass_at"] is None
+    assert heartbeat["circuit_open"] is True
+    assert status["last_created_at"] is stamp
+    assert (tmp_path / "circuit-open.json").read_bytes() == marker
+    assert (tmp_path / "heartbeat.json").stat().st_mode & 0o777 == 0o600
+    assert not (tmp_path / "heartbeat.json.tmp").exists()
+
+
+def test_heartbeat_rejects_unknown_objects_and_preserves_previous_file(tmp_path):
+    class Unsupported:
+        def __str__(self):
+            return "sensitive-value"
+
+    config = _config(tmp_path)
+    write_heartbeat(config, {"observer_mode": "SHADOW_ONLY"})
+    previous = (tmp_path / "heartbeat.json").read_bytes()
+    with pytest.raises(TypeError, match="Unsupported"):
+        write_heartbeat(config, {"unexpected": Unsupported()})
+    assert (tmp_path / "heartbeat.json").read_bytes() == previous
+    assert not (tmp_path / "heartbeat.json.tmp").exists()
 
 
 def test_systemd_unit_is_isolated_shadow_only_and_resource_bounded():

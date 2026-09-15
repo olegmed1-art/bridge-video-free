@@ -184,11 +184,21 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _json_default(value: Any) -> str:
+    """Preserve PostgreSQL timestamps without stringifying unknown objects."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        json.dumps(
+            payload, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), default=_json_default,
+        )
         + "\n",
         encoding="utf-8",
     )
