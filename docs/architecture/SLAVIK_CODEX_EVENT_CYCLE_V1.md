@@ -25,7 +25,12 @@ Workspace Agent access tokens относятся к Business/Enterprise и эт�
    read-only endpoint закреплённого GitHub App broker и создаёт draft dispatch
    PR. Installation token остаётся внутри broker.
 3. Единственная webhook automation проверяет dispatch PR и Neon binding, затем
-   публикует один owner-authenticated `@codex` comment в **target PR**.
+   публикует один owner-authenticated comment в **target PR**, начиная с точной
+   строки `@codex execute this task`. Далее идут пустая строка,
+   `SLAVIK_CODEX_DISPATCH_V1`, поля задания, execution policy и result contract.
+   Явный глагол задаёт выполнение cloud task; обычное PR review не возвращает
+   обязательный terminal envelope. Приёмник также принимает старую первую
+   строку `@codex` для уже отправленных команд.
 4. GitHub создаёт отдельную изолированную Codex Cloud task/chat. Реальная
    доставка фиксируется только после `eyes` reaction от закреплённого Codex bot
    (`id=199175422`).

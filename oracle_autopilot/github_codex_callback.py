@@ -38,6 +38,7 @@ CODEX_APP_ID = 1_144_995
 CODEX_BOT_LOGIN = "chatgpt-codex-connector[bot]"
 CODEX_BOT_ID = 199_175_422
 COMMAND_MARKER = "SLAVIK_CODEX_DISPATCH_V1"
+TASK_COMMAND_PREFIX = "@codex execute this task"
 RESULT_MARKER = "AUTOPILOT_CODEX_RESULT_V1"
 ACK_RETRY_DELAYS_SECONDS = (0, 1, 2, 4, 8, 15, 30, 60)
 COMMAND_FIELDS = (
@@ -271,7 +272,14 @@ def parse_command_event(event: object) -> CodexCommand:
     if not isinstance(body, str) or len(body.encode()) > 16_384:
         raise CallbackContractError("CODEX_COMMAND_BODY_INVALID")
     lines = body.splitlines()
-    if len(lines) < 3 or lines[:3] != ["@codex", "", COMMAND_MARKER]:
+    # Prefer an explicit task verb so the GitHub integration does not route an
+    # envelope-only request to ordinary PR review. Accept in-flight legacy
+    # commands without admitting arbitrary mention/review prefixes.
+    if (
+        len(lines) < 3
+        or lines[0] not in {"@codex", TASK_COMMAND_PREFIX}
+        or lines[1:3] != ["", COMMAND_MARKER]
+    ):
         raise CallbackContractError("CODEX_COMMAND_BODY_INVALID")
     if sum(line == COMMAND_MARKER for line in lines) != 1:
         raise CallbackContractError("CODEX_COMMAND_BODY_INVALID")
