@@ -56,7 +56,7 @@ jobs:
           for line in p.read_text().splitlines():
               s=line.strip()
               if s.startswith('key_file='):
-                  lines.append(f'key_file={Path.home()}/".oci"/"key.pem"}'); key=True
+                  lines.append('key_file='+str(Path.home()/'.oci'/'key.pem')); key=True
               elif s.startswith('region='):
                   lines.append('region=eu-frankfurt-1'); region=True
               elif s.startswith('fingerprint='):
