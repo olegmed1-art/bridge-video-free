@@ -99,6 +99,22 @@ jobs:
             echo "ATTACHMENT_WAIT_TIMEOUT id=$id wanted=$wanted last=$state" >&2
             return 1
           }
+          wait_volume_unattached() {
+            local out="$RUNNER_TEMP/volume-attachment-drain.json" active=''
+            for _ in $(seq 1 90); do
+              oci compute boot-volume-attachment list --availability-domain "$availability_domain" --compartment-id "$compartment_id" --all > "$out"
+              active="$(python - "$out" "$boot_volume_id" <<'PY'
+          import json,sys
+          rows=[x for x in json.load(open(sys.argv[1]))['data'] if x.get('boot-volume-id')==sys.argv[2] and x.get('lifecycle-state') not in {'DETACHED'}]
+          print(len(rows))
+          PY
+              )"
+              [[ "$active" == 0 ]] && return 0
+              sleep 5
+            done
+            echo "VOLUME_ATTACHMENT_DRAIN_TIMEOUT active=$active" >&2
+            return 1
+          }
           attached_to() {
             local instance="$1"
             local out="$RUNNER_TEMP/attachments-$(basename "$instance").json"
@@ -196,9 +212,22 @@ jobs:
 
           oci compute boot-volume-attachment detach --boot-volume-attachment-id "$light_attachment_id" --force >/dev/null
           wait_attachment_state "$light_attachment_id" DETACHED
+          wait_volume_unattached
+          sleep 30
           echo 'LIGHT_BOOT_VOLUME_DETACHED=PASS'
 
-          oci compute boot-volume-attachment attach --instance-id "$HEAVY_INSTANCE_ID" --boot-volume-id "$boot_volume_id" > "$RUNNER_TEMP/heavy-attach.json"
+          : > "$RUNNER_TEMP/heavy-attach.json"
+          attached=0
+          for _ in $(seq 1 20); do
+            if oci compute boot-volume-attachment attach --instance-id "$HEAVY_INSTANCE_ID" --boot-volume-id "$boot_volume_id" > "$RUNNER_TEMP/heavy-attach.json" 2> "$RUNNER_TEMP/heavy-attach.err"; then
+              attached=1
+              break
+            fi
+            grep -q 'currently attached' "$RUNNER_TEMP/heavy-attach.err" || { sed -n '1,80p' "$RUNNER_TEMP/heavy-attach.err" >&2; break; }
+            [[ "$(get_instance_state "$LIGHT_INSTANCE_ID")" == STOPPED ]]
+            sleep 15
+          done
+          [[ "$attached" == 1 ]]
           heavy_attachment_id="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["id"])' "$RUNNER_TEMP/heavy-attach.json")"
           test -n "$heavy_attachment_id"
           wait_attachment_state "$heavy_attachment_id" ATTACHED
