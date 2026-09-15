@@ -15,7 +15,7 @@ concurrency:
 jobs:
   recover:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 55
     env:
       OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
@@ -218,15 +218,20 @@ jobs:
 
           : > "$RUNNER_TEMP/heavy-attach.json"
           attached=0
-          for _ in $(seq 1 20); do
+          for attempt in $(seq 1 120); do
             if oci compute boot-volume-attachment attach --instance-id "$HEAVY_INSTANCE_ID" --boot-volume-id "$boot_volume_id" > "$RUNNER_TEMP/heavy-attach.json" 2> "$RUNNER_TEMP/heavy-attach.err"; then
               attached=1
               break
             fi
             grep -q 'currently attached' "$RUNNER_TEMP/heavy-attach.err" || { sed -n '1,80p' "$RUNNER_TEMP/heavy-attach.err" >&2; break; }
+            echo "HEAVY_ATTACH_TRANSIENT_RETRY=$attempt"
             [[ "$(get_instance_state "$LIGHT_INSTANCE_ID")" == STOPPED ]]
             sleep 15
           done
+          if [[ "$attached" != 1 ]]; then
+            echo 'HEAVY_ATTACH_RETRIES_EXHAUSTED' >&2
+            sed -n '1,80p' "$RUNNER_TEMP/heavy-attach.err" >&2
+          fi
           [[ "$attached" == 1 ]]
           heavy_attachment_id="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["id"])' "$RUNNER_TEMP/heavy-attach.json")"
           test -n "$heavy_attachment_id"
