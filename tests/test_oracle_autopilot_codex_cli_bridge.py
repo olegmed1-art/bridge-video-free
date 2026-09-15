@@ -138,11 +138,37 @@ def test_report_hunk_count_and_duplicate_keys(request_data):
 def test_cli_forces_chatgpt_and_removes_api_key_fallback(monkeypatch):
     monkeypatch.setenv('OPENAI_API_KEY', 'test-placeholder')
     monkeypatch.setenv('CODEX_API_KEY', 'test-placeholder')
+    monkeypatch.setenv('AUTOPILOT_DATABASE_URL', 'postgresql://test-placeholder')
+    monkeypatch.setenv('AUTOPILOT_TOKEN_BROKER_SECRET', 'test-placeholder')
+    monkeypatch.setenv('OPENAI_BASE_URL', 'https://invalid.example')
     def run(args, **kwargs):
         assert args[1:3] == ['-c', 'forced_login_method="chatgpt"']
         assert 'OPENAI_API_KEY' not in kwargs['env']
         assert 'CODEX_API_KEY' not in kwargs['env']
+        assert set(kwargs['env']) == {'HOME', 'CODEX_HOME', 'PATH', 'LANG', 'LC_ALL'}
         assert 'shell' not in kwargs
         return response('ok')
     monkeypatch.setattr(subprocess, 'run', run)
     bridge.run_cli(['login', 'status'])
+
+
+def test_service_profile_stays_inside_existing_service_paths():
+    try:
+        bridge.configure_profile('service')
+        assert str(bridge.CLI) == '/opt/bridge-school/school-autopilot/runtime-bin/codex'
+        assert str(bridge.STATE) == '/opt/bridge-school/school-autopilot/runtime/codex-dispatch'
+        env = bridge.child_environment()
+        assert env['CODEX_HOME'] == '/opt/bridge-school/school-autopilot/runtime/codex-home'
+        assert '/home/ubuntu' not in str(env)
+    finally:
+        bridge.configure_profile('ubuntu')
+
+
+@pytest.mark.parametrize('text,code,state', [
+    ('Logged in using ChatGPT\n', 0, 'CLI_AUTH_READY'),
+    ('Logged in using an API key\n', 0, 'CLI_AUTH_REQUIRED'),
+    ('sensitive diagnostic text', 1, 'CLI_AUTH_REQUIRED'),
+])
+def test_health_reports_only_auth_state(monkeypatch, text, code, state):
+    monkeypatch.setattr(bridge, 'run_cli', lambda *args, **kwargs: response(text, code))
+    assert bridge.health() == {'state': state, 'profile': 'ubuntu'}

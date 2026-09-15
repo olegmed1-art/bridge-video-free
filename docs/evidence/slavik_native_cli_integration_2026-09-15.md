@@ -4,7 +4,19 @@ Date: 2026-09-15. Status: `NOT_ACTIVATED / LIFECYCLE_REVIEW_FAILED`.
 
 The verified ChatGPT-authenticated CLI runs as `ubuntu`; the resident worker runs as `school-autopilot`. Its current entrypoint is `oracle_autopilot.worker_v17`, whose source was not accessible to the current remote terminal identity. Reading it returned PermissionError; the remote command tool rejected the attempted `sudo -n -u school-autopilot` read with `Command not allowed`. Do not change identity, copy login credentials, weaken permissions, or replace the running service to bypass that boundary.
 
-The standalone client has durable pre-submission intent, duplicate suppression, strict report binding, immutable collected results, and explicit provider failure/unknown states. Sixteen focused offline tests pass. It is not yet an installed queue adapter, an autonomous completion monitor, or a publication issuer. No paid API key is used by the client.
+The standalone client has durable pre-submission intent, duplicate suppression, strict report binding, immutable collected results, and explicit provider failure/unknown states. Twenty focused offline tests pass. It is not yet an installed queue adapter, an autonomous completion monitor, or a publication issuer. No paid API key is used by the client.
+
+## Service boundary follow-up
+
+Fresh read-only `systemctl show` confirmed the running service is active as `school-autopilot`, with `ProtectHome=yes`, `NoNewPrivileges=yes`, and only `/opt/bridge-school/school-autopilot/runtime` writable. A sudo helper is incompatible with this boundary. Keep these restrictions.
+
+The existing `.github/workflows/oracle-autopilot-rollout.yml` provides an authorized deployment path: current default-branch source, pinned SSH host identity, empty-queue gate, backup, and rollback. It has been inspected, not triggered; current default-branch code does not include the native adapter.
+
+The client now supports an explicit `--profile service`: a separately installed root-owned native binary at `runtime-bin/codex`, `CODEX_HOME` at `runtime/codex-home`, and receipts at `runtime/codex-dispatch`, all beneath the existing service root. These are prepared paths, not an attestation of installation. A fresh ChatGPT device sign-in directly for this service identity is required; ubuntu authentication is not copied. The child environment contains only HOME, CODEX_HOME, PATH, LANG and LC_ALL, so the worker's database and broker credentials cannot be inherited. `health` returns only authentication state, never raw login diagnostics.
+
+Independent Red Team recommends this same-UID design. Native completion reconciliation must run unconditionally on each worker wake/recovery tick, not after the existing short-circuit `drain_ready or drain_role_dispatch_outbox or drain_project_work` chain. It must not wait synchronously for a cloud task to finish.
+
+Hosted CI at `edd30ef061477ae3f3f1968cd917ca8e2c7298af`: 10 returned workflows passed, one failed on a trailing blank line in this evidence file (job 104333007180). The whitespace defect is corrected. Local `git diff --check HEAD` and 20 client tests pass. No production migration, service update, owner login, queue cutover or end-to-end receipt is claimed.
 
 ## Required integration before activation
 
@@ -188,4 +200,3 @@ REVOKE ALL ON FUNCTION autopilot.reserve_codex_cli(uuid,jsonb),autopilot.ack_cod
 INSERT INTO public.schema_migration(migration_key) VALUES('0337_autopilot_cli_transport');
 COMMIT;
 ```
-

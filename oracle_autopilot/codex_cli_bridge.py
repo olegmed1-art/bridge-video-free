@@ -19,6 +19,8 @@ import tempfile
 
 CLI = Path('/home/ubuntu/.local/share/slavik-codex/node_modules/.bin/codex')
 STATE = Path('/home/ubuntu/.local/state/slavik-codex-bridge')
+PROFILE = 'ubuntu'
+SERVICE_ROOT = Path('/opt/bridge-school/school-autopilot')
 UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}')
 SHA = re.compile(r'[0-9a-f]{40}')
 TASK_URL = re.compile(r'https://chatgpt\.com/codex/tasks/(task_[A-Za-z0-9_]{1,120})')
@@ -109,11 +111,46 @@ def save(path, value):
             os.unlink(name)
 
 
+def configure_profile(profile):
+    global CLI, STATE, PROFILE
+    if profile not in ('ubuntu', 'service'):
+        raise ValueError('CLI_PROFILE_INVALID')
+    PROFILE = profile
+    if profile == 'service':
+        CLI = SERVICE_ROOT / 'runtime-bin/codex'
+        STATE = SERVICE_ROOT / 'runtime/codex-dispatch'
+    else:
+        CLI = Path('/home/ubuntu/.local/share/slavik-codex/node_modules/.bin/codex')
+        STATE = Path('/home/ubuntu/.local/state/slavik-codex-bridge')
+
+
+def child_environment():
+    # The resident worker holds DB/broker secrets. Never inherit its environment
+    # into an external provider client, even when no model API key is present.
+    if PROFILE == 'service':
+        home = str(SERVICE_ROOT / 'runtime')
+        codex_home = str(SERVICE_ROOT / 'runtime/codex-home')
+        path = '/usr/local/bin:/usr/bin:/bin'
+    else:
+        home = '/home/ubuntu'
+        codex_home = '/home/ubuntu/.codex'
+        path = '/home/ubuntu/.nvm/versions/node/v22.23.2/bin:/usr/local/bin:/usr/bin:/bin'
+    return {'HOME': home, 'CODEX_HOME': codex_home, 'PATH': path,
+            'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
+
+
 def run_cli(arguments, input_text=None, timeout=90):
     # No API-key fallback. Credentials remain exclusively inside official CLI.
-    env = {k:v for k,v in os.environ.items() if k not in ('OPENAI_API_KEY','CODEX_API_KEY')}
     return subprocess.run([str(CLI), '-c', 'forced_login_method="chatgpt"', *arguments],
-                          input=input_text, text=True, capture_output=True, timeout=timeout, env=env)
+                          input=input_text, text=True, capture_output=True, timeout=timeout,
+                          env=child_environment())
+
+
+def health():
+    status = run_cli(['login', 'status'], timeout=15)
+    lines = (status.stdout+'\n'+status.stderr).splitlines()
+    ready = status.returncode == 0 and 'Logged in using ChatGPT' in lines
+    return {'state': 'CLI_AUTH_READY' if ready else 'CLI_AUTH_REQUIRED', 'profile': PROFILE}
 
 
 def submit(request):
@@ -234,11 +271,15 @@ def _collect(dispatch_id):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('action',choices=('submit','collect'))
+    parser.add_argument('action',choices=('submit','collect','health'))
+    parser.add_argument('--profile',choices=('ubuntu','service'),default='ubuntu')
     parser.add_argument('--dispatch-id')
     args=parser.parse_args()
     try:
-        if args.action=='submit':
+        configure_profile(args.profile)
+        if args.action=='health':
+            result=health()
+        elif args.action=='submit':
             raw=sys.stdin.read(20001)
             if len(raw)>20000:
                 raise ValueError('REQUEST_TOO_LARGE')
