@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=73fb883d-3013-46ad-98ba-33bee4fbe361
+dispatch_epoch=23
+role=VIDEO_QUEUE
+task_fingerprint=3daf882625cbab0f939594f5877d2e85aefd5b55627510912d8cd5d31d3725bf
+target_pr=1059
+mode=REPAIR
+repair_attempt=1
+origin_task_id=560c75c5-584f-44f5-aec0-da233c65a54c
+prior_task_id=560c75c5-584f-44f5-aec0-da233c65a54c
+blocked_result_code=P1_DATABASE_TERMINAL_GATE_MISSING
+blocked_summary=Exact head verified; Python gates hold, but direct finish_job still accepts legacy evidence and can release pending canaries.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
