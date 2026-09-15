@@ -169,6 +169,10 @@ jobs:
           u=urlsplit(dsn)
           host=u.hostname; port=u.port or 5432
           assert host
+          endpoint_match=re.search(r'(^|\.)(ep-[a-z0-9-]+)(\.|$)',host)
+          assert endpoint_match, 'QUEUE_ENDPOINT_SLUG_NOT_FOUND'
+          print('QUEUE_ENDPOINT_SLUG='+endpoint_match.group(2))
+          print('QUEUE_ENDPOINT_REGION=' + ('PASS' if host.endswith('.eu-central-1.aws.neon.tech') else 'UNEXPECTED'))
           def clean(value):
               s=str(value)
               for secret in (dsn,u.username,u.password,host):
