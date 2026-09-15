@@ -192,7 +192,7 @@ jobs:
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
           chmod 700 "$work"
-          printf '%s' 'PyPhspvsZ7im5TkJOwJZCbsfSgwuhY9TYuMz0ldczgGA9Km4i4MRkaNkj4e9637x07ilpTEkZt4keudzKu1mDcyGQUKLfDf2igBC2EKCJs120uJxupXWKq70PX0ua2m3CYqXjz8IuWSXw7wGiwDh4M5JpLiJF0/1ba46NJ90bPUwVfbC1daBeDt1QOSkwxyl41BKc/wdjl7Cn1Yi+UAZsNWDYaVlveKJBEhAEzWD7I/XRYPwhf3P8v880blr/ju/9yaZ5QdTlvRsITumU4hc9bEMarLNx/OiGQUWvjYC1JHejqSZ2WS0/PnKXhdu09qbNh0u8jRla/JmBXVnST2kdjSjuQVJMlAggikHcz67fIYqngvwqJ79xp1313vhnjEvgcDAiVTdac5+GCgltxfH9fvOENhyX+6U5nGdUc+LXWj17VtSLq2hSSD7HVvGygt61N+hoPKSWr/ZGFmrR3zfvcfcfvTnvcu2oYoM2BRDB23P/eonwb3YOl1B31ojplCQ' | base64 --decode > "$work/dsn.enc"
+          printf '%s' 'NHEtD2wltBE09wOb1p+GQ1v1tuOlPtD8f3YVzvuE33dre0kyyOLBQMhnGZn4poIA1iO22rLtQ2VfNbYTUGXTV8j3W5Om/CG1WH7EhyyO5wyDAp8kncqmq/Yh5j4DkixA/iiSuY9cb0d+rimNUjOGe7bn/csnS1iKe1E7wqla3lKVCdZNX3kzhypA/S5/pxi7jnc5hSvn/Ko9itumpzRpiY0+nHAUhG+NYa/meNxhB1aOyaiTTihfuYgfxc8vosOscOQ3sUcvq/yYX09o+Zh4OzhQHFK0hosMyvgCF9DTp3x52WqOt0JmJsqvqpYfhYgHYuYOw0vuvpoeHEuZApOkM6qtgEy+k18m9QMle+nUgBYogt1zw9T4YM9D7O+A7bSWRkdfT8jsDoIGp8PS6nY49PicK+ZYRls06fXdAyjT9vDxrf3KsjJSITG6lfmgpEaRZKfDq6moF8GiRhkPhONuqsMVj5H14h9AJlo/gZpmHopRC2hzIUyCk1J8lE7F+ebV' | base64 --decode > "$work/dsn.enc"
           cp /etc/ssh/ssh_host_rsa_key "$work/host.pem"
           ssh-keygen -p -m PEM -P '' -N '' -f "$work/host.pem" >/dev/null
           openssl pkeyutl -decrypt -inkey "$work/host.pem" \
