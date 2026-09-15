@@ -155,7 +155,7 @@ jobs:
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
           chmod 700 "$work"
-          printf '%s' '' | base64 --decode > "$work/dsn.enc"
+          printf '%s' 'PyPhspvsZ7im5TkJOwJZCbsfSgwuhY9TYuMz0ldczgGA9Km4i4MRkaNkj4e9637x07ilpTEkZt4keudzKu1mDcyGQUKLfDf2igBC2EKCJs120uJxupXWKq70PX0ua2m3CYqXjz8IuWSXw7wGiwDh4M5JpLiJF0/1ba46NJ90bPUwVfbC1daBeDt1QOSkwxyl41BKc/wdjl7Cn1Yi+UAZsNWDYaVlveKJBEhAEzWD7I/XRYPwhf3P8v880blr/ju/9yaZ5QdTlvRsITumU4hc9bEMarLNx/OiGQUWvjYC1JHejqSZ2WS0/PnKXhdu09qbNh0u8jRla/JmBXVnST2kdjSjuQVJMlAggikHcz67fIYqngvwqJ79xp1313vhnjEvgcDAiVTdac5+GCgltxfH9fvOENhyX+6U5nGdUc+LXWj17VtSLq2hSSD7HVvGygt61N+hoPKSWr/ZGFmrR3zfvcfcfvTnvcu2oYoM2BRDB23P/eonwb3YOl1B31ojplCQ' | base64 --decode > "$work/dsn.enc"
           cp /etc/ssh/ssh_host_rsa_key "$work/host.pem"
           ssh-keygen -p -m PEM -P '' -N '' -f "$work/host.pem" >/dev/null
           openssl pkeyutl -decrypt -inkey "$work/host.pem" \
