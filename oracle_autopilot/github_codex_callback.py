@@ -430,6 +430,9 @@ def verify_pr_head(
     *,
     opener: Callable[[urllib.request.Request, int], Any] = _default_open,
 ) -> None:
+    # This is the assigned work PR, which may be stacked on an integration
+    # branch. The dispatch PR's main-only policy is enforced by the publisher
+    # and event bridge, not by this target identity/head check.
     if not 1 <= pr_number <= 1_000_000 or SHA_PATTERN.fullmatch(expected_head_sha) is None:
         raise CallbackContractError("CODEX_PR_HEAD_REQUEST_INVALID")
     url = f"https://api.github.com/repos/{REPOSITORY}/pulls/{pr_number}"
@@ -448,13 +451,11 @@ def verify_pr_head(
     try:
         payload = _mapping(json.loads(raw), "CODEX_PR_HEAD_RESPONSE_INVALID")
         head = _mapping(payload.get("head"), "CODEX_PR_HEAD_RESPONSE_INVALID")
-        base = _mapping(payload.get("base"), "CODEX_PR_HEAD_RESPONSE_INVALID")
     except (TypeError, ValueError) as exc:
         raise CallbackContractError("CODEX_PR_HEAD_RESPONSE_INVALID") from exc
     if (
         payload.get("number") != pr_number
         or payload.get("state") != "open"
-        or base.get("ref") != "main"
         or head.get("sha") != expected_head_sha
     ):
         raise CallbackContractError("CODEX_PR_HEAD_MISMATCH")

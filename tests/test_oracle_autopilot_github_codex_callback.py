@@ -264,13 +264,17 @@ def test_ack_rejects_lookalike_and_exhausts_bounded_budget():
     assert sleeps == [1, 2]
 
 
-def test_live_pr_head_gate_accepts_only_open_main_exact_head():
+@pytest.mark.parametrize(
+    "base_ref",
+    ["main", "codex/oracle-autopilot-lite-shadow", "fix/uv-intake-structured-smoke-20260830"],
+)
+def test_live_target_pr_gate_accepts_open_exact_head_on_any_base(base_ref):
     expected = "2ceb48716988ec9cbd01be438a0ebf8b46836667"
     payload = {
         "number": 1150,
         "state": "open",
         "head": {"sha": expected},
-        "base": {"ref": "main"},
+        "base": {"ref": base_ref},
     }
 
     def exact_opener(request, timeout):
@@ -281,6 +285,14 @@ def test_live_pr_head_gate_accepts_only_open_main_exact_head():
 
     verify_pr_head(1150, expected, "test-token", opener=exact_opener)
 
-    payload["head"] = {"sha": "a" * 40}
-    with pytest.raises(CallbackContractError, match="PR_HEAD_MISMATCH"):
-        verify_pr_head(1150, expected, "test-token", opener=exact_opener)
+    for invalid_fields in (
+        {"head": {"sha": "a" * 40}},
+        {"state": "closed"},
+        {"number": 1429},
+    ):
+        original = copy.deepcopy(payload)
+        payload.update(invalid_fields)
+        with pytest.raises(CallbackContractError, match="PR_HEAD_MISMATCH"):
+            verify_pr_head(1150, expected, "test-token", opener=exact_opener)
+        payload.clear()
+        payload.update(original)
