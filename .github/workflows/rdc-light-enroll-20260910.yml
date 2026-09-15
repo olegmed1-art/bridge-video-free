@@ -99,3 +99,36 @@ jobs:
           ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'set -eu; test "$(hostname)" = autopilot-lite-vnic || test "$(hostname)" = bridge-school-autopilot-lite; echo LIGHT_SSH=PASS; id -un; uname -sr; test -r /etc/os-release; echo LIGHT_FILESYSTEM_READ=PASS'
           ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'set -u; echo SERVICE_UNITS_BEGIN; systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | sed -n "1,120p"; echo SERVICE_UNITS_END; echo CONTAINERS_BEGIN; if command -v docker >/dev/null; then sudo -n docker ps --format "{{.Names}}|{{.Image}}|{{.Status}}"; elif command -v podman >/dev/null; then sudo -n podman ps --format "{{.Names}}|{{.Image}}|{{.Status}}"; else echo NO_CONTAINER_RUNTIME; fi; echo CONTAINERS_END; echo APP_PATHS_BEGIN; find /opt /srv /home/ubuntu -maxdepth 2 -type f \( -name "docker-compose*.yml" -o -name "compose*.yml" -o -name "*.service" -o -name ".env.example" \) -print 2>/dev/null | sed -n "1,160p"; echo APP_PATHS_END'
           echo 'LIGHT_TERMINAL=PASS'
+
+      - name: Audit Light autopilot health without exposing configuration values
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          opts=(-i "$RUNNER_TEMP/light_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/light-known-hosts" -o ConnectTimeout=15)
+          ssh "${opts[@]}" "ubuntu@$LIGHT_IP" 'sudo -n bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          for svc in school-autopilot-shadow.service school-autopilot-online-observer.service; do
+            echo "UNIT=$svc"
+            systemctl show "$svc" \
+              -p ActiveState -p SubState -p MainPID -p ExecMainStatus -p Result \
+              -p NRestarts -p ActiveEnterTimestamp -p WorkingDirectory -p FragmentPath
+            unit="$(systemctl show "$svc" -p FragmentPath --value)"
+            test -r "$unit"
+            awk -F= '/^(Description|User|Group|WorkingDirectory|Restart|RestartSec)=/{print}' "$unit"
+            awk -F= '/^ExecStart=/{split($2,a," "); print "ExecStartPath=" a[1]}' "$unit"
+            envfiles="$(awk -F= '/^EnvironmentFile=/{print $2}' "$unit" | tr -d '"-' || true)"
+            for ef in $envfiles; do
+              test -r "$ef" || continue
+              echo "EnvironmentFile=$ef"
+              sed -E 's/^[[:space:]]*export[[:space:]]+//' "$ef" | sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*)=.*/ENV_KEY=\1/p' | sort -u
+            done
+          done
+          echo 'AUTOPILOT_UNITS=PASS'
+          echo 'WORKDIR_FILES_BEGIN'
+          for d in $(systemctl show school-autopilot-shadow.service school-autopilot-online-observer.service -p WorkingDirectory --value | sort -u); do
+            test -d "$d" || continue
+            echo "WORKDIR=$d"
+            find "$d" -maxdepth 2 -type f -printf '%p\n' 2>/dev/null | sed -n '1,160p'
+          done
+          echo 'WORKDIR_FILES_END'
+          REMOTE
