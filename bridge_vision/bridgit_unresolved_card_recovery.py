@@ -28,11 +28,12 @@ RANKS = tuple("AKQJT98765432")
 SUITS = tuple("SHDC")
 SEATS = tuple("NESW")
 FULL_DECK = frozenset(rank + suit for suit in SUITS for rank in RANKS)
-RECOVERY_VERSION = "bridgit-unresolved-gambler-recovery-v1"
+RECOVERY_VERSION = "bridgit-unresolved-gambler-recovery-v2"
 HIGH_CONFIDENCE = 0.95
 BORDERLINE_CONFIDENCE = 0.92
 BORDERLINE_MIN_INDEPENDENT_FRAMES = 2
 MAX_RETRY_FRAMES = 32
+MIN_IDENTITY_MARGIN = 0.02
 
 _PRIMARY_CROPS = (
     (14 / 109, 40 / 147),
@@ -185,6 +186,102 @@ def _scaled_crop(sprite: GamblerClassicSprite, fractions: tuple[float, float]) -
     )
 
 
+def _fused_same_location_match(
+    frame: Any,
+    source: Any,
+    sprite: GamblerClassicSprite,
+    crop_fractions: Sequence[tuple[float, float]],
+) -> tuple[float, tuple[int, int] | None]:
+    """Require every crop to agree at the same top-left candidate location."""
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("opencv-python-headless and numpy are required") from exc
+    sizes = [_scaled_crop(sprite, item) for item in crop_fractions]
+    max_width = max(width for width, _ in sizes)
+    max_height = max(height for _, height in sizes)
+    out_height = int(frame.shape[0]) - max_height + 1
+    out_width = int(frame.shape[1]) - max_width + 1
+    if out_height <= 0 or out_width <= 0:
+        return -1.0, None
+    fused = None
+    for width, height in sizes:
+        template = source[:height, :width]
+        response = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+        response = response[:out_height, :out_width]
+        fused = response if fused is None else np.minimum(fused, response)
+    assert fused is not None
+    _, score, _, location = cv2.minMaxLoc(fused)
+    return float(score), (int(location[0]), int(location[1]))
+
+
+def _same_location_score(
+    frame: Any,
+    source: Any,
+    sprite: GamblerClassicSprite,
+    crop_fractions: Sequence[tuple[float, float]],
+    location: tuple[int, int],
+) -> float:
+    """Score all crops at one already selected location; never mix maxima."""
+    try:
+        import cv2  # type: ignore
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("opencv-python-headless is required") from exc
+    x, y = location
+    scores = []
+    for fractions in crop_fractions:
+        width, height = _scaled_crop(sprite, fractions)
+        patch = frame[y : y + height, x : x + width]
+        if tuple(patch.shape[:2]) != (height, width):
+            return -1.0
+        template = source[:height, :width]
+        score = cv2.matchTemplate(patch, template, cv2.TM_CCOEFF_NORMED)[0, 0]
+        scores.append(float(score))
+    return min(scores)
+
+
+def _identity_competition(
+    frame: Any,
+    cells: Mapping[str, Any],
+    sprite: GamblerClassicSprite,
+    card: str,
+    crop_fractions: Sequence[tuple[float, float]],
+    location: tuple[int, int],
+) -> dict[str, Any]:
+    """Prove rank and suit independently against their nearest competitors."""
+    rank, suit = card
+    contenders = {rank + other_suit for other_suit in SUITS}
+    contenders.update(other_rank + suit for other_rank in RANKS)
+    scores = {
+        contender: _same_location_score(
+            frame,
+            _flatten_bgr(cells[contender]),
+            sprite,
+            crop_fractions,
+            location,
+        )
+        for contender in contenders
+    }
+    same_rank = sorted(
+        ((rank + other_suit, scores[rank + other_suit]) for other_suit in SUITS),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    same_suit = sorted(
+        ((other_rank + suit, scores[other_rank + suit]) for other_rank in RANKS),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    return {
+        "card_score": scores[card],
+        "best_same_rank": same_rank[0][0],
+        "suit_margin": scores[card] - max(score for name, score in same_rank if name != card),
+        "best_same_suit": same_suit[0][0],
+        "rank_margin": scores[card] - max(score for name, score in same_suit if name != card),
+    }
+
+
 def scan_unresolved_in_registered_frame(
     frame: Any,
     sprite: GamblerClassicSprite,
@@ -196,16 +293,13 @@ def scan_unresolved_in_registered_frame(
     high_confidence: float = HIGH_CONFIDENCE,
     borderline_confidence: float = BORDERLINE_CONFIDENCE,
 ) -> list[dict[str, Any]]:
-    """Search only unresolved card identities in one already registered frame.
+    """Search unresolved identities with same-location rank+suit competition.
 
-    Pass 1 uses three native corner crops. Pass 2 is an occlusion-aware
-    smaller-corner retry, but remains only a candidate until recovery
-    aggregation sees independent-frame support.
+    Every crop must support the same pixel location.  The requested card must
+    then beat all same-rank suits and all same-suit ranks at that exact location
+    by a conservative identity margin.  A rank/colour-only lookalike therefore
+    remains UNKNOWN instead of becoming a concrete card.
     """
-    try:
-        import cv2  # type: ignore
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("opencv-python-headless is required") from exc
     if frame is None or not hasattr(frame, "shape") or len(frame.shape) < 2:
         raise UnresolvedRecoveryError("frame is not a raster")
     height, width = int(frame.shape[0]), int(frame.shape[1])
@@ -217,38 +311,33 @@ def scan_unresolved_in_registered_frame(
 
     for card in requested:
         source = _flatten_bgr(cells[card])
-        primary_scores = []
-        best_location = None
-        for fractions in _PRIMARY_CROPS:
-            cw, ch = _scaled_crop(sprite, fractions)
-            template = source[:ch, :cw]
-            response = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
-            _, score, _, location = cv2.minMaxLoc(response)
-            primary_scores.append(float(score))
-            if best_location is None:
-                best_location = location
-        primary_confidence = min(primary_scores)
+        confidence, best_location = _fused_same_location_match(
+            frame, source, sprite, _PRIMARY_CROPS
+        )
+        crop_fractions = _PRIMARY_CROPS
         accepted_source = "GAMBLER_PRIMARY_RETRY"
-        confidence = primary_confidence
 
-        if primary_confidence < high_confidence:
-            small_scores = []
-            small_location = None
-            for fractions in _OCCLUSION_CROPS:
-                cw, ch = _scaled_crop(sprite, fractions)
-                template = source[:ch, :cw]
-                response = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
-                _, score, _, location = cv2.minMaxLoc(response)
-                small_scores.append(float(score))
-                if small_location is None:
-                    small_location = location
-            small_confidence = min(small_scores)
+        if confidence < high_confidence:
+            small_confidence, small_location = _fused_same_location_match(
+                frame, source, sprite, _OCCLUSION_CROPS
+            )
             if small_confidence > confidence:
                 confidence = small_confidence
                 best_location = small_location
+                crop_fractions = _OCCLUSION_CROPS
                 accepted_source = "GAMBLER_OCCLUSION_RETRY"
 
         if confidence < borderline_confidence or best_location is None:
+            continue
+        identity = _identity_competition(
+            frame, cells, sprite, card, crop_fractions, best_location
+        )
+        if identity["best_same_rank"] != card or identity["best_same_suit"] != card:
+            continue
+        if (
+            identity["suit_margin"] < MIN_IDENTITY_MARGIN
+            or identity["rank_margin"] < MIN_IDENTITY_MARGIN
+        ):
             continue
         seat = bind_location_to_seat(
             int(best_location[0]),
@@ -269,6 +358,9 @@ def scan_unresolved_in_registered_frame(
                 "source": accepted_source,
                 "x": int(best_location[0]),
                 "y": int(best_location[1]),
+                "rank_margin": round(float(identity["rank_margin"]), 6),
+                "suit_margin": round(float(identity["suit_margin"]), 6),
+                "comparison_method": "SAME_LOCATION_RANK_SUIT_COMPETITION_V1",
                 "mouse_cursor_used": False,
             }
         )
