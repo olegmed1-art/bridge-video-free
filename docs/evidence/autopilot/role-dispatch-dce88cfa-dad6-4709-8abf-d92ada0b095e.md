@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=dce88cfa-dad6-4709-8abf-d92ada0b095e
+dispatch_epoch=65
+role=INFRA
+task_fingerprint=81a30ed4e74a099cb18ae90947194c493ed02cbbb96979b11be3b78a082bf3fb
+target_pr=1095
+mode=REPAIR
+repair_attempt=1
+origin_task_id=09b59b71-04b0-4300-9352-ebe908530a7b
+prior_task_id=09b59b71-04b0-4300-9352-ebe908530a7b
+blocked_result_code=SUPERSEDED_RECOVERY_FLOW_AND_READ_ONLY_GATE_BYPASS
+blocked_summary=Task blocked. See execution details above.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
