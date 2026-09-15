@@ -1,0 +1,128 @@
+\set ON_ERROR_STOP on
+BEGIN;
+
+CREATE FUNCTION pg_temp.expect_publication_rejection(command jsonb, comment_id bigint, digest text)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE denied boolean:=false;
+BEGIN
+    BEGIN
+        PERFORM autopilot.authorize_codex_publication(command,comment_id,digest);
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM NOT LIKE 'PUBLICATION_%' THEN RAISE; END IF;
+        denied:=true;
+    END;
+    IF NOT denied THEN RAISE EXCEPTION 'TEST_UNSAFE_PUBLICATION_AUTHORIZED'; END IF;
+END $$;
+
+DO $$
+DECLARE
+    work_id uuid;
+    probe record;
+    materialized record;
+    claimed record;
+    dispatch record;
+    outbox record;
+    assignment record;
+    repair_id uuid;
+    command jsonb;
+    ack jsonb;
+    event_time text;
+    key text;
+    result jsonb;
+    raised boolean:=false;
+BEGIN
+    IF EXISTS (SELECT 1 FROM autopilot.codex_publication_permit) THEN
+        RAISE EXCEPTION 'TEST_PUBLICATION_LEDGER_NOT_EMPTY';
+    END IF;
+    SELECT work_item_id INTO work_id FROM autopilot.register_universal_work_item(
+        'sql-publication-336','AUTOPILOT','REPOSITORY_REPAIR','Bounded synthetic publication test.',
+        1150,0,'{"expected_changed_files":["tests/test_example.py"]}'::jsonb,
+        NULL,'database-test','SQL_TEST');
+    SELECT * INTO probe FROM autopilot.claim_project_work_probe('sql-pub-planner-336',60);
+    SELECT * INTO materialized FROM autopilot.materialize_project_work_probe(
+        work_id,'sql-pub-planner-336',probe.lease_epoch,true,repeat('a',40));
+    SELECT * INTO claimed FROM autopilot.claim_next_task('sql-pub-worker-336',60);
+    SELECT * INTO dispatch FROM autopilot.prepare_role_dispatch(
+        claimed.task_id,'sql-pub-worker-336',claimed.lease_epoch);
+    SELECT * INTO outbox FROM autopilot.claim_role_dispatch_outbox_v2('sql-pub-publisher-336',60);
+    PERFORM autopilot.mark_role_dispatch_published(
+        dispatch.dispatch_id,'sql-pub-publisher-336',outbox.claim_epoch,9900335,repeat('b',64));
+    repair_id:=autopilot.materialize_role_repair(
+        materialized.task_id,'BOUNDED_DEFECT','One synthetic bounded defect.');
+    SELECT * INTO claimed FROM autopilot.claim_next_task('sql-pub-repair-336',60);
+    IF claimed.task_id IS DISTINCT FROM repair_id THEN RAISE EXCEPTION 'TEST_REPAIR_NOT_CLAIMED'; END IF;
+    SELECT * INTO dispatch FROM autopilot.prepare_role_dispatch(
+        claimed.task_id,'sql-pub-repair-336',claimed.lease_epoch);
+    SELECT * INTO outbox FROM autopilot.claim_role_dispatch_outbox_v2('sql-pub-publisher-336',60);
+    PERFORM autopilot.mark_role_dispatch_published(
+        dispatch.dispatch_id,'sql-pub-publisher-336',outbox.claim_epoch,9900336,repeat('b',64));
+    SELECT * INTO assignment FROM autopilot.get_dispatch_assignment(dispatch.dispatch_id);
+    event_time:=to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"');
+    ack:=jsonb_build_object(
+        'dispatch_id',dispatch.dispatch_id::text,'dispatch_pr',9900336,
+        'dispatch_epoch',dispatch.dispatch_epoch,'role',dispatch.role,
+        'task_fingerprint',dispatch.task_fingerprint,'target_pr',dispatch.target_pr,
+        'expected_head_sha',dispatch.expected_head_sha,'mode','REPAIR',
+        'command_pr',1150,'command_comment_id',99003360,'command_created_at',event_time,
+        'ack_reaction_id',99003362,'ack_created_at',event_time);
+    PERFORM * FROM autopilot.accept_role_dispatch_codex_ack(
+        'github-codex-ack:99003362',repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
+        'olegmed1-art',315099490,'OWNER','chatgpt-codex-connector',1144995,
+        'chatgpt-codex-connector[bot]',199175422,ack);
+    command:=jsonb_build_object(
+        'comment_id',99003360,'command_pr',1150,'created_at',event_time,
+        'dispatch_id',dispatch.dispatch_id::text,'dispatch_pr',9900336,
+        'dispatch_epoch',dispatch.dispatch_epoch,'role',dispatch.role,
+        'task_fingerprint',dispatch.task_fingerprint,'target_pr',dispatch.target_pr,
+        'expected_head_sha',dispatch.expected_head_sha,'mode','REPAIR',
+        'execution_scope',assignment.execution_scope,'can_repair',assignment.can_repair,
+        'task_kind',assignment.task_kind,'objective',assignment.objective,'task_spec',assignment.task_spec_json);
+
+    -- Public IDs plus authentic ACK do not constitute provenance authority.
+    PERFORM pg_temp.expect_publication_rejection(command,99003361,repeat('e',64));
+    INSERT INTO autopilot.codex_publication_permit(
+        dispatch_id,command_comment_id,publication_comment_id,payload_sha256,
+        provenance_evidence_sha256,expires_at)
+    VALUES (dispatch.dispatch_id,99003360,99003361,repeat('e',64),repeat('f',64),clock_timestamp()+interval '10 minutes');
+    result:=autopilot.authorize_codex_publication(command,99003361,repeat('e',64));
+    IF result IS DISTINCT FROM '{"state":"SENT"}'::jsonb THEN RAISE EXCEPTION 'TEST_VALID_PUBLICATION_DENIED'; END IF;
+
+    -- All 16 required command fields must reject both absence and explicit null.
+    FOR key IN SELECT jsonb_object_keys(command) LOOP
+        PERFORM pg_temp.expect_publication_rejection(command-key,99003361,repeat('e',64));
+        PERFORM pg_temp.expect_publication_rejection(jsonb_set(command,ARRAY[key],'null'::jsonb),99003361,repeat('e',64));
+    END LOOP;
+    PERFORM pg_temp.expect_publication_rejection(command,99003361,repeat('0',64));
+    PERFORM pg_temp.expect_publication_rejection(command,99003363,repeat('e',64));
+    PERFORM pg_temp.expect_publication_rejection(command,NULL,repeat('e',64));
+    PERFORM pg_temp.expect_publication_rejection(command,99003361,NULL);
+    UPDATE autopilot.codex_publication_permit SET revoked=true WHERE dispatch_id=dispatch.dispatch_id;
+    PERFORM pg_temp.expect_publication_rejection(command,99003361,repeat('e',64));
+    UPDATE autopilot.codex_publication_permit SET revoked=false,
+        expires_at=clock_timestamp()+interval '10 seconds' WHERE dispatch_id=dispatch.dispatch_id;
+    PERFORM pg_temp.expect_publication_rejection(command,99003361,repeat('e',64));
+    UPDATE autopilot.codex_publication_permit SET expires_at=clock_timestamp()+interval '10 minutes'
+        WHERE dispatch_id=dispatch.dispatch_id;
+    UPDATE autopilot.role_registry SET enabled=false WHERE role_id='AUTOPILOT';
+    PERFORM pg_temp.expect_publication_rejection(command,99003361,repeat('e',64));
+    UPDATE autopilot.role_registry SET enabled=true WHERE role_id='AUTOPILOT';
+    UPDATE autopilot.project_work_item SET state='PAUSED' WHERE work_item_id=work_id;
+    PERFORM pg_temp.expect_publication_rejection(command,99003361,repeat('e',64));
+    UPDATE autopilot.project_work_item SET state='ACTIVE',last_task_id=NULL WHERE work_item_id=work_id;
+    PERFORM pg_temp.expect_publication_rejection(command,99003361,repeat('e',64));
+    UPDATE autopilot.project_work_item SET last_task_id=repair_id WHERE work_item_id=work_id;
+    UPDATE autopilot.role_dispatch_outbox SET callback_deadline_at=clock_timestamp()+interval '10 seconds'
+        WHERE dispatch_id=dispatch.dispatch_id;
+    PERFORM pg_temp.expect_publication_rejection(command,99003361,repeat('e',64));
+
+    -- No broad table read/write, no permit self-issue, no assignment-reader grant.
+    IF has_table_privilege('autopilot_callback','autopilot.codex_publication_permit','SELECT')
+       OR has_table_privilege('autopilot_callback','autopilot.codex_publication_permit','INSERT')
+       OR has_table_privilege('autopilot_runtime','autopilot.codex_publication_permit','INSERT')
+       OR has_function_privilege('autopilot_callback','autopilot.get_dispatch_assignment(uuid)','EXECUTE')
+       OR NOT has_function_privilege('autopilot_callback',
+           'autopilot.authorize_codex_publication(jsonb,bigint,text)','EXECUTE') THEN
+        RAISE EXCEPTION 'TEST_PUBLICATION_PRIVILEGE_INVALID';
+    END IF;
+END $$;
+ROLLBACK;
