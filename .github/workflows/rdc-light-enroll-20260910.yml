@@ -15,7 +15,7 @@ concurrency:
 jobs:
   recover:
     runs-on: ubuntu-24.04
-    timeout-minutes: 55
+    timeout-minutes: 45
     env:
       OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
@@ -210,7 +210,7 @@ jobs:
           [[ "$(get_instance_state "$LIGHT_INSTANCE_ID")" == STOPPED ]]
           echo 'LIGHT_STOPPED=PASS'
 
-          oci compute boot-volume-attachment detach --boot-volume-attachment-id "$light_attachment_id" --force >/dev/null
+          oci compute boot-volume-attachment detach --boot-volume-attachment-id "$light_attachment_id" >/dev/null
           wait_attachment_state "$light_attachment_id" DETACHED
           wait_volume_unattached
           sleep 30
@@ -218,7 +218,7 @@ jobs:
 
           : > "$RUNNER_TEMP/heavy-attach.json"
           attached=0
-          for attempt in $(seq 1 120); do
+          for attempt in $(seq 1 80); do
             if oci compute boot-volume-attachment attach --instance-id "$HEAVY_INSTANCE_ID" --boot-volume-id "$boot_volume_id" > "$RUNNER_TEMP/heavy-attach.json" 2> "$RUNNER_TEMP/heavy-attach.err"; then
               attached=1
               break
