@@ -148,6 +148,21 @@ BEGIN
                  THEN 'Task completed. See execution details above.'
                  ELSE 'Task blocked. See execution details above.' END);
         receipt_key:='github-codex-result:'||(9900337000::bigint+c.id);
+        IF c.id=8 THEN
+            BEGIN
+                PERFORM * FROM autopilot.accept_role_dispatch_codex_terminal(
+                    receipt_key||'-null-role',repeat('e',64),true,
+                    'olegmed1-art/bridge-video-free',1150,
+                    'chatgpt-codex-connector[bot]',199175422,'NONE',
+                    'chatgpt-codex-connector',1144995,
+                    terminal||jsonb_build_object('role',NULL));
+                RAISE EXCEPTION 'REPAIR_ADMISSION_NULL_ROLE_ACCEPTED';
+            EXCEPTION WHEN OTHERS THEN
+                IF SQLERRM<>'AUTOPILOT_CODEX_TERMINAL_BODY_INVALID' THEN
+                    RAISE;
+                END IF;
+            END;
+        END IF;
         SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_terminal(
             receipt_key,repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
             'chatgpt-codex-connector[bot]',199175422,'NONE',
