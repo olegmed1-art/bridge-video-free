@@ -27,12 +27,12 @@ Every changed functional path below has an explicit security/runtime reason. “
 | `database/migrations/0339_autopilot_native_cli_receipts.sql` | REQUIRED_FOR_1546_CORE | Adds native CLI reservation/receipt fencing and unknown-submission retention required by the requested native receipt contract. | SQL test 339; `codex_cli_queue.py` RPCs and delivery state machine. |
 | `database/migrations/0340_autopilot_publication_permit_issuer.sql` | REQUIRED_FOR_1546_CORE | Adds the owner-only, exact-dispatch permit issuer with idempotent replay and reuse conflict fencing; no runtime/callback grant is made. | SQL test 340 and concurrent 340a test; offline permit verifier `issue()`. |
 | `database/rollbacks/0338_autopilot_bounded_publication_permit.sql` | REQUIRED_FOR_1546_CORE | Defines fail-closed rollback for publication ledger and refuses destructive rollback when permit evidence exists. | Focused PostgreSQL18 lifecycle CI. |
-| `database/rollbacks/0339_autopilot_native_cli_receipts.sql` | REQUIRED_FOR_1546_CORE | Restores pre-native receipt functions/contract and refuses rollback when native evidence exists. | Focused PostgreSQL18 lifecycle CI. |
+| `database/rollbacks/0339_autopilot_native_cli_receipts.sql` | REQUIRED_FOR_1546_CORE | Restores pre-native receipt functions/contract, takes `ACCESS EXCLUSIVE` on the receipt ledger before the emptiness check, and refuses rollback when native evidence exists. | Focused PostgreSQL18 lifecycle CI and 340a rollback/write race proof. |
 | `database/rollbacks/0340_autopilot_publication_permit_issuer.sql` | REQUIRED_FOR_1546_CORE | Removes only owner issuer on clean ledgers and refuses rollback if retained permit evidence exists. | Focused PostgreSQL18 lifecycle CI and 340a populated-ledger check. |
 | `database/tests/338_autopilot_bounded_publication_permit.sql` | REQUIRED_FOR_1546_CORE | Proves exact assignment/provenance/ACL/revocation/deadline checks for callback authorization. | PostgreSQL18 CI after migration 0338. |
 | `database/tests/339_autopilot_native_cli_receipts.sql` | REQUIRED_FOR_1546_CORE | Proves disabled-by-default native path, reservation ownership, replay/conflict, unknown outcome retention and ACL isolation. | PostgreSQL18 CI after migration 0339. |
 | `database/tests/340_autopilot_publication_permit_issuer.sql` | REQUIRED_FOR_1546_CORE | Proves exact owner-bound evidence fields, wrong task/dispatch/head rejection, replay/reuse/expiry/revocation and no runtime grants. | PostgreSQL18 CI after migration 0340. |
-| `database/tests/340a_autopilot_publication_permit_concurrency.sh` | REQUIRED_FOR_1546_CORE | Provides a two-session conflict proof and populated-ledger rollback evidence retention that a single SQL transaction cannot prove. | Focused PostgreSQL18 cloned-database CI job. |
+| `database/tests/340a_autopilot_publication_permit_concurrency.sh` | REQUIRED_FOR_1546_CORE | Provides two-session permit conflict proof, populated-ledger rollback retention, and a deterministic native-receipt rollback/write serialization race proof that a single SQL transaction cannot prove. | Focused PostgreSQL18 cloned-database CI job. |
 | `oracle_autopilot/codex_cli_bridge.py` | REQUIRED_FOR_1546_CORE | Maintains crash-safe local provider evidence and fail-closed `PUBLICATION_OUTCOME_UNKNOWN`/submission ambiguity handling for native CLI. | CLI bridge and delivery unit tests. |
 | `oracle_autopilot/codex_cli_delivery.py` | REQUIRED_FOR_1546_CORE | Orchestrates reserve/begin/ack/finish without treating an unconfirmed mutation as success. | `test_oracle_autopilot_codex_cli_delivery.py` fault injection. |
 | `oracle_autopilot/codex_cli_queue.py` | REQUIRED_FOR_1546_CORE | Binds native client state to owner-only SQL receipt RPCs and uses parameters rather than executable receipt values. | `test_oracle_autopilot_codex_cli_queue.py` and migration 0339. |
@@ -71,7 +71,7 @@ No unenumerated path from the retired 69-path manifest is silently carried forwa
 
 Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>\n` plus lexicographically sorted tab-separated `path, operation, base_blob_sha, content_sha256, mode` records.
 
-- Functional core aggregate SHA-256: `d7f402b0f352d5ca1e2e5c9f8e7fb447a040768249814cc84d564a6686a06412`.
+- Functional core aggregate SHA-256: `77707219a9677ac0bd5339d931712e47b14205cebb148a5e5930aae61fbfe906`.
 - DELETE operations: **none** relative to merged `main`.
 
 | Operation | Base blob SHA | Content SHA-256 | Mode | Path |
@@ -82,12 +82,12 @@ Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>
 | CREATE | `-` | `5f37acb6ae97694f93851c3288b0c580bbeecde9246c5bb2665f70327436a3a5` | `100644` | `database/migrations/0339_autopilot_native_cli_receipts.sql` |
 | CREATE | `-` | `ace9c41ada9e6603775c33d9c621c8309578e70d15a11410b5641a752604c76b` | `100644` | `database/migrations/0340_autopilot_publication_permit_issuer.sql` |
 | CREATE | `-` | `65040ae7eb04f90aff558f6745564f7377e5fc1aa5cbe49fdca38e9aa92b01bb` | `100644` | `database/rollbacks/0338_autopilot_bounded_publication_permit.sql` |
-| CREATE | `-` | `daa7a2b1d6e37c620f41c6e780092de325d709d76c23e704c65341bfba1c5c18` | `100644` | `database/rollbacks/0339_autopilot_native_cli_receipts.sql` |
+| CREATE | `-` | `849176f6595f857f9fed2f7a29a65ba1f85729c7ab8e9fce517bfda47098351e` | `100644` | `database/rollbacks/0339_autopilot_native_cli_receipts.sql` |
 | CREATE | `-` | `aabb543cdcd257b83e244667077922582d950249ff4c2dd08dd605eae7f12e9d` | `100644` | `database/rollbacks/0340_autopilot_publication_permit_issuer.sql` |
 | CREATE | `-` | `3d4b5094f23eb828fc19f1cb174364a2e7962e514f35eedfd3d5a355a57dbd90` | `100644` | `database/tests/338_autopilot_bounded_publication_permit.sql` |
 | CREATE | `-` | `b5981aa2a5c4af870618b34bdedfdcfdcf77403de2737924173b86bd2791c940` | `100644` | `database/tests/339_autopilot_native_cli_receipts.sql` |
 | CREATE | `-` | `c1ec4d584a6da43cbdcac8a873d130d4cec043452f3c3df3f3e290f1aa320de1` | `100644` | `database/tests/340_autopilot_publication_permit_issuer.sql` |
-| CREATE | `-` | `7b5e42b7945e17ddf356f5e50da245f682938abf45160599a713c6063402e0d5` | `100755` | `database/tests/340a_autopilot_publication_permit_concurrency.sh` |
+| CREATE | `-` | `78d37932b25fe6652a900da69d4c94996d52b3a10424ec7d58edf3ce305d57e0` | `100755` | `database/tests/340a_autopilot_publication_permit_concurrency.sh` |
 | CREATE | `-` | `4ca1c67eb2e80742ba02cf8cb69add6a9122f874ee7e5ff783990b140d6710de` | `100644` | `oracle_autopilot/codex_cli_bridge.py` |
 | CREATE | `-` | `72ce096ce6792ffbc3938a94cb90b9d04d7e4d1f290f43181fde79229a146010` | `100644` | `oracle_autopilot/codex_cli_delivery.py` |
 | CREATE | `-` | `39c6fe1acbca6bb207e52df2ba07a2bb26b5a38a0e411db8b2818fe431e84cf5` | `100644` | `oracle_autopilot/codex_cli_queue.py` |
@@ -115,7 +115,7 @@ Intended repository commit message: `fix: reconcile minimal publication security
 
 ## Rollback plan
 
-Clean rollback order is `0340 → 0339 → 0338`. 0340 and 0338 refuse destructive rollback when permit evidence exists; 0339 refuses rollback when native receipt evidence exists. The focused PostgreSQL18 job verifies clean rollback, preservation of merged-main 0337, reapply, and retest. Populated-ledger concurrency coverage verifies rollback failure retains evidence. No production rollback/apply is authorized by this package.
+Clean rollback order is `0340 → 0339 → 0338`. 0340 and 0338 refuse destructive rollback when permit evidence exists; 0339 takes an `ACCESS EXCLUSIVE` ledger lock before checking emptiness, so a concurrent receipt writer cannot cross the check/drop boundary, and refuses rollback when native receipt evidence exists. The focused PostgreSQL18 job verifies clean rollback, preservation of merged-main 0337, reapply, and retest. Populated-ledger concurrency coverage verifies rollback failure retains evidence. No production rollback/apply is authorized by this package.
 
 ## Verification performed before repository publication
 
@@ -124,6 +124,7 @@ Clean rollback order is `0340 → 0339 → 0338`. 0340 and 0338 refuse destructi
 - Python compile and `git diff --check`: PASS.
 - `database/tests/340a_autopilot_publication_permit_concurrency.sh`: shell syntax check PASS.
 - Exact-head review of `b02d130f0bc448cceb4f3e03073248bc24f16d31` found P2: the publisher could rewrite existing `database/migrations/0000–0099` files. The remediation removes `database/migrations/**` from the publication allowlist entirely and adds regression coverage for historical migrations; new migration creation was already impossible because bounded publication only modifies existing files.
+- Exact-head review of `dfdbee10e37881877860624c747b1f36227d4c58` found P2: 0339 checked receipt-ledger emptiness without first excluding concurrent writers, allowing an insert to commit between the check and `DROP TABLE`. The remediation takes `ACCESS EXCLUSIVE` on `autopilot.native_cli_receipt` before the check. `340a` now deterministically stalls rollback after the check path with a backup-table blocker and proves a concurrent receipt insert cannot cross the rollback lock (`native receipt rollback/write serialization: PASS`).
 - Dependency PR #1625 passed its exact PostgreSQL18 role-dispatch roundtrip CI and Current-Main Authoritative CI before merge as `26615eb9689f1e4bb05d1b22d7e6a15214588803`; no production state was touched.
 - Ephemeral local PostgreSQL 18 validation on the merged-main tree: migrations through 0340 applied; SQL tests 338/339/340 passed; two-session 340a conflict fencing and retained-evidence rollback refusal passed; clean rollback 0340→0339→0338 preserved 0337; reapply and tests passed.
 - The local PostgreSQL run used an isolated disposable Docker database only. No production database or server state was changed. Hosted exact-head CI remains required after repository publication.

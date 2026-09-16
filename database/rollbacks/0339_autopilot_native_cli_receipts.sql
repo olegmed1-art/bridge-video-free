@@ -1,5 +1,9 @@
 \set ON_ERROR_STOP on
 BEGIN;
+-- Serialize against owner/native receipt writers before checking emptiness.
+-- Without this lock, a concurrent insert could commit after the check and be
+-- erased by the later DROP TABLE.
+LOCK TABLE autopilot.native_cli_receipt IN ACCESS EXCLUSIVE MODE;
 DO $$ BEGIN
  IF EXISTS(SELECT FROM autopilot.native_cli_receipt) THEN
   RAISE EXCEPTION 'NATIVE_ROLLBACK_REQUIRES_RETAINED_EVIDENCE_PLAN';

@@ -48,6 +48,55 @@ BEGIN
 END $$;
 SQL
 
+# Prove 0339 rollback serializes with a receipt writer.  A blocker on the
+# backup table holds the rollback after its receipt emptiness check.  With the
+# required ACCESS EXCLUSIVE receipt lock, the concurrent insert must remain
+# blocked until rollback drops the table and then fail; it must never commit
+# evidence that the rollback can subsequently erase.
+psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  -f "$repo_root/database/rollbacks/0340_autopilot_publication_permit_issuer.sql" \
+  >/dev/null
+{
+  echo 'BEGIN;'
+  echo 'LOCK TABLE autopilot.migration_0339_function_backup IN ACCESS EXCLUSIVE MODE;'
+  echo 'SELECT pg_sleep(2);'
+  echo 'COMMIT;'
+} | psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >"$tmp/0339-blocker.out" 2>"$tmp/0339-blocker.err" &
+blocker_pid=$!
+sleep 0.2
+set +e
+psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  -f "$repo_root/database/rollbacks/0339_autopilot_native_cli_receipts.sql" \
+  >"$tmp/0339-rollback.out" 2>"$tmp/0339-rollback.err" &
+rollback_0339_pid=$!
+sleep 0.3
+psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+  "INSERT INTO autopilot.native_cli_receipt(dispatch_id,request)
+   SELECT dispatch_id,jsonb_build_object('race','rollback-0339')
+   FROM autopilot.role_dispatch_outbox WHERE github_dispatch_comment_id=9903421;" \
+  >"$tmp/0339-insert.out" 2>"$tmp/0339-insert.err" &
+insert_0339_pid=$!
+wait "$blocker_pid"
+blocker_rc=$?
+wait "$rollback_0339_pid"
+rollback_0339_rc=$?
+wait "$insert_0339_pid"
+insert_0339_rc=$?
+set -e
+if [[ $blocker_rc -ne 0 || $rollback_0339_rc -ne 0 || $insert_0339_rc -eq 0 ]]; then
+  echo "0339 rollback/write serialization failed: blocker=$blocker_rc rollback=$rollback_0339_rc insert=$insert_0339_rc" >&2
+  cat "$tmp/0339-blocker.err" "$tmp/0339-rollback.err" "$tmp/0339-insert.err" >&2
+  exit 1
+fi
+test "$(psql "$DATABASE_URL" -XAt -c "SELECT count(*) FROM public.schema_migration WHERE migration_key='0339_autopilot_native_cli_receipts';")" = 0
+test "$(psql "$DATABASE_URL" -XAt -c "SELECT to_regclass('autopilot.native_cli_receipt') IS NULL;")" = t
+psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  -f "$repo_root/database/migrations/0339_autopilot_native_cli_receipts.sql" >/dev/null
+psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  -f "$repo_root/database/migrations/0340_autopilot_publication_permit_issuer.sql" >/dev/null
+
+echo 'native receipt rollback/write serialization: PASS'
+
 make_evidence() {
   local publication_id=$1 approval_id=$2 payload=$3 provenance=$4
   cat <<SQL
