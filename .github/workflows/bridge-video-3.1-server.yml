@@ -203,7 +203,7 @@ jobs:
             BRIDGE_OUTPUT_FOLDER_ID='$OUTPUT_ID' BRIDGE_WORK_FOLDER_ID='$WORK_ID' \
             BRIDGE_LESSON_NUMBER='$LESSON_NUMBER' BRIDGE_LESSON_DATE_CANDIDATE='$LESSON_DATE_CANDIDATE' \
             BRIDGE_LESSON_DATE_SOURCE='${BRIDGE_LESSON_DATE_SOURCE:-}' BRIDGE_PERSIST_DATABASE='$PERSIST_DATABASE' \
-            '$release/ops/run_bridge_video_oracle_legacy_remote.sh'"
+            bash '$release/ops/run_bridge_video_oracle_legacy_remote.sh'"
           cleanup
           trap - EXIT
           echo SERVER_PRODUCTION_REMOTE_EXECUTION_PASS

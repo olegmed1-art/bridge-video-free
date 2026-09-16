@@ -28,6 +28,7 @@ def test_server_workflow_fails_closed_and_uses_pinned_ssh():
     assert 'EXPECTED_FINGERPRINT: SHA256:' in text
     assert 'concurrency:' in text and 'oracle-instance-workload-mutation' in text
     assert text.index('Resolve request and fail-closed route gate') < text.index('GOOGLE_DRIVE_OAUTH_JSON')
+    assert "bash '$release/ops/run_bridge_video_oracle_legacy_remote.sh'" in text
 
 
 def test_remote_runtime_preserves_legacy_revision_and_identity_contracts():
