@@ -90,11 +90,13 @@ BEGIN
         'target_head_sha',dispatch.expected_head_sha,
         'summary','Codex event cycle completed with exact bound evidence.'
     );
+    -- A terminal result can now prove delivery without an optional eyes ack,
+    -- so pre-ack rejection is tested with a deliberately wrong event PR.
     raised:=false;
     BEGIN
         PERFORM * FROM autopilot.accept_role_dispatch_codex_terminal(
             'github-codex-result:99003320',repeat('c',64),true,
-            'olegmed1-art/bridge-video-free',1150,
+            'olegmed1-art/bridge-video-free',1151,
             'chatgpt-codex-connector[bot]',199175422,'NONE',
             'chatgpt-codex-connector',1144995,terminal
         );
@@ -105,7 +107,7 @@ BEGIN
         END IF;
     END;
     IF NOT raised THEN
-        RAISE EXCEPTION 'AUTOPILOT_CODEX_TERMINAL_WITHOUT_ACK_ACCEPTED';
+        RAISE EXCEPTION 'AUTOPILOT_CODEX_WRONG_EVENT_PR_ACCEPTED';
     END IF;
 
     event_time:=to_char(
