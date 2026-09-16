@@ -1,4 +1,8 @@
 \set ON_ERROR_STOP on
+\if :{?persist_accepted}
+\else
+  \set persist_accepted false
+\endif
 BEGIN;
 
 -- Synthetic fixtures are for isolated SQL CI only, never a production probe.
@@ -21,6 +25,8 @@ DECLARE
     expected_error text;
     delivery_id text;
     event_time text;
+    run_suffix text := txid_current()::text;
+    backup_row record;
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
@@ -28,13 +34,44 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'AUTOPILOT_CODEX_IMPLICIT_DELIVERY_MIGRATION_MISSING';
     END IF;
+    SELECT * INTO backup_row
+      FROM autopilot.migration_0336_function_backup
+     WHERE function_key='accept_role_dispatch_codex_terminal';
+    IF NOT FOUND
+       OR backup_row.previous_definition IS NULL
+       OR backup_row.installed_definition IS NULL
+       OR backup_row.previous_owner IS NULL
+       OR backup_row.installed_owner IS NULL
+       OR backup_row.previous_acl IS NULL
+       OR backup_row.installed_acl IS NULL
+       OR backup_row.installed_definition IS DISTINCT FROM pg_get_functiondef(
+          'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
+       ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_CODEX_336_BACKUP_STATE_INVALID';
+    END IF;
+    IF has_table_privilege(
+           'autopilot_callback','autopilot.migration_0336_function_backup','SELECT'
+       ) OR has_table_privilege(
+           'autopilot_runtime','autopilot.migration_0336_function_backup','SELECT'
+       ) OR NOT has_function_privilege(
+           'autopilot_callback',
+           'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)',
+           'EXECUTE'
+       ) OR has_function_privilege(
+           'autopilot_runtime',
+           'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)',
+           'EXECUTE'
+       ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_CODEX_336_PRIVILEGE_CONTRACT_INVALID';
+    END IF;
 
     FOREACH has_ack IN ARRAY ARRAY[false,true] LOOP
         case_number := case_number+1;
-        delivery_id := 'github-codex-result:9900336-'||case_number;
+        delivery_id := 'github-codex-result:9900336-'||run_suffix||'-'||case_number;
         SELECT work_item_id INTO work_id
           FROM autopilot.register_universal_work_item(
-            'sql-codex-terminal-implicit-336-'||case_number,'AUTOPILOT',
+            'sql-codex-terminal-implicit-336-'||run_suffix||'-'||case_number,
+            'AUTOPILOT',
             'CODEX_TERMINAL_IMPLICIT_DELIVERY_TEST',
             'Prove exact-bound pinned terminal acceptance within its deadline, with or without an eyes reaction.',
             1150,0,'{"media":false}'::jsonb,NULL,'database-test','SQL_TEST'
@@ -90,7 +127,8 @@ BEGIN
                 'ack_created_at',event_time
             );
             SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_ack(
-                'github-codex-ack:336-'||case_number,repeat('d',64),true,
+                'github-codex-ack:336-'||run_suffix||'-'||case_number,
+                repeat('d',64),true,
                 'olegmed1-art/bridge-video-free',1150,
                 'olegmed1-art',315099490,'OWNER',
                 'chatgpt-codex-connector',1144995,
@@ -116,6 +154,7 @@ BEGIN
         FOREACH kind IN ARRAY ARRAY[
             'wrong_actor','wrong_actor_id','wrong_app','wrong_app_id',
             'unverified_signature','wrong_repository','wrong_event_pr',
+            'wrong_target_pr','wrong_role','wrong_dispatch_id',
             'stale_head','wrong_epoch','wrong_fingerprint',
             'expired_deadline','missing_delivery_deadline'
         ] LOOP
@@ -134,6 +173,14 @@ BEGIN
                 candidate := terminal||jsonb_build_object('dispatch_epoch',dispatch.dispatch_epoch+1);
             ELSIF kind='wrong_fingerprint' THEN
                 candidate := terminal||jsonb_build_object('task_fingerprint',repeat('9',64));
+            ELSIF kind='wrong_target_pr' THEN
+                candidate := terminal||jsonb_build_object('target_pr',dispatch.target_pr+1);
+            ELSIF kind='wrong_role' THEN
+                candidate := terminal||jsonb_build_object('role','VIDEO_QUEUE');
+            ELSIF kind='wrong_dispatch_id' THEN
+                candidate := terminal||jsonb_build_object(
+                    'dispatch_id','00000000-0000-4000-8000-000000000336'
+                );
             END IF;
             BEGIN
                 -- These changes roll back with the expected exception.
@@ -261,4 +308,8 @@ BEGIN
     END LOOP;
 END $$;
 
+\if :persist_accepted
+COMMIT;
+\else
 ROLLBACK;
+\endif

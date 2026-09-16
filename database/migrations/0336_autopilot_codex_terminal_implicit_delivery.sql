@@ -19,15 +19,28 @@ END $$;
 -- the optional reaction acknowledgement without fabricating reaction data.
 CREATE TABLE autopilot.migration_0336_function_backup (
     function_key text PRIMARY KEY,
-    function_definition text NOT NULL
-        CHECK (length(function_definition) BETWEEN 100 AND 100000)
+    previous_definition text NOT NULL
+        CHECK (length(previous_definition) BETWEEN 100 AND 100000),
+    previous_owner text NOT NULL,
+    previous_acl text NOT NULL,
+    previous_comment text,
+    installed_definition text
+        CHECK (installed_definition IS NULL OR
+               length(installed_definition) BETWEEN 100 AND 100000),
+    installed_owner text,
+    installed_acl text,
+    installed_comment text
 );
 INSERT INTO autopilot.migration_0336_function_backup(
-    function_key,function_definition
+    function_key,previous_definition,previous_owner,previous_acl,
+    previous_comment
 )
-SELECT 'accept_role_dispatch_codex_terminal',pg_get_functiondef(
-    'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
-);
+SELECT 'accept_role_dispatch_codex_terminal',pg_get_functiondef(proc.oid),
+       pg_get_userbyid(proc.proowner),COALESCE(proc.proacl::text,''),
+       obj_description(proc.oid,'pg_proc')
+  FROM pg_proc AS proc
+ WHERE proc.oid=
+       'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure;
 REVOKE ALL ON TABLE autopilot.migration_0336_function_backup
 FROM PUBLIC,autopilot_runtime,autopilot_runtime_principal,autopilot_callback;
 
@@ -287,6 +300,29 @@ REVOKE ALL ON FUNCTION autopilot.accept_role_dispatch_codex_terminal(
 GRANT EXECUTE ON FUNCTION autopilot.accept_role_dispatch_codex_terminal(
     text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb
 ) TO autopilot_callback;
+
+-- Retain the exact installed state as well as the previous definition.  The
+-- rollback compares this snapshot before executing anything, so an operator
+-- can never silently overwrite a later hotfix or privilege/ownership change.
+UPDATE autopilot.migration_0336_function_backup AS backup
+   SET installed_definition=pg_get_functiondef(proc.oid),
+       installed_owner=pg_get_userbyid(proc.proowner),
+       installed_acl=COALESCE(proc.proacl::text,''),
+       installed_comment=obj_description(proc.oid,'pg_proc')
+  FROM pg_proc AS proc
+ WHERE backup.function_key='accept_role_dispatch_codex_terminal'
+   AND proc.oid=
+       'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure;
+ALTER TABLE autopilot.migration_0336_function_backup
+    ALTER COLUMN installed_definition SET NOT NULL,
+    ALTER COLUMN installed_owner SET NOT NULL,
+    ALTER COLUMN installed_acl SET NOT NULL;
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM autopilot.migration_0336_function_backup)<>1 THEN
+        RAISE EXCEPTION 'AUTOPILOT_CODEX_TERMINAL_IMPLICIT_DELIVERY_BACKUP_INVALID';
+    END IF;
+END $$;
 
 INSERT INTO public.schema_migration(migration_key)
 VALUES ('0336_autopilot_codex_terminal_implicit_delivery');
