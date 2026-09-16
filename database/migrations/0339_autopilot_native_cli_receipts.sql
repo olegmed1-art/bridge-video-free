@@ -2,8 +2,8 @@
 BEGIN;
 
 DO $$ BEGIN
- IF NOT EXISTS(SELECT FROM public.schema_migration WHERE migration_key='0335_autopilot_codex_delivery_window') THEN
-  RAISE EXCEPTION 'NATIVE_REQUIRES_0335';
+ IF NOT EXISTS(SELECT FROM public.schema_migration WHERE migration_key='0338_autopilot_bounded_publication_permit') THEN
+  RAISE EXCEPTION 'NATIVE_REQUIRES_0338';
  END IF;
 END $$;
 
@@ -28,8 +28,8 @@ CREATE TABLE autopilot.native_cli_receipt (
  CHECK(state='RESERVED' OR (provider_task_id IS NOT NULL AND prompt_sha256 IS NOT NULL AND submitted_at IS NOT NULL)),
  CHECK((state='TERMINAL')=(terminal IS NOT NULL AND completed_at IS NOT NULL))
 );
-CREATE TABLE autopilot.migration_0337_function_backup(function_key text PRIMARY KEY,definition text NOT NULL);
-INSERT INTO autopilot.migration_0337_function_backup
+CREATE TABLE autopilot.migration_0339_function_backup(function_key text PRIMARY KEY,definition text NOT NULL);
+INSERT INTO autopilot.migration_0339_function_backup
  SELECT 'reconcile',pg_get_functiondef('autopilot.reconcile_role_dispatch_callbacks()'::regprocedure)
  UNION ALL SELECT 'followup',pg_get_functiondef('autopilot.on_role_task_terminal()'::regprocedure)
  UNION ALL SELECT 'project_terminal',pg_get_functiondef('autopilot.on_project_work_task_terminal()'::regprocedure);
@@ -40,7 +40,7 @@ ALTER TABLE autopilot.role_dispatch_outbox ADD CONSTRAINT role_dispatch_delivery
 -- A lost create response is not proof that the provider stopped. Native slots
 -- are released only by a retained terminal receipt, never a legacy timeout.
 DO $$ DECLARE source text; revised text; BEGIN
- SELECT definition INTO STRICT source FROM autopilot.migration_0337_function_backup WHERE function_key='reconcile';
+ SELECT definition INTO STRICT source FROM autopilot.migration_0339_function_backup WHERE function_key='reconcile';
  IF position('WHERE (status=''PUBLISHED'' AND delivery_deadline_at<=now())' in source)=0
  OR position('OR (status=''SENT'' AND callback_deadline_at<=now())' in source)=0 THEN
   RAISE EXCEPTION 'NATIVE_RECONCILER_SHAPE_CHANGED';
@@ -241,7 +241,7 @@ END $$;
 -- Preserve legacy followups. A native task whose role/work was paused can be
 -- closed, but must not create a repair task that overrides that pause.
 DO $$ DECLARE source text; revised text; BEGIN
- FOR source IN SELECT definition FROM autopilot.migration_0337_function_backup
+ FOR source IN SELECT definition FROM autopilot.migration_0339_function_backup
  WHERE function_key IN ('followup','project_terminal') LOOP
  IF position(E'BEGIN\n' in source)=0 THEN RAISE EXCEPTION 'NATIVE_FOLLOWUP_SHAPE_CHANGED'; END IF;
  revised:=regexp_replace(source,E'BEGIN\n',E'BEGIN\n'
@@ -253,7 +253,7 @@ DO $$ DECLARE source text; revised text; BEGIN
  END LOOP;
 END $$;
 
-REVOKE ALL ON TABLE autopilot.native_cli_config,autopilot.native_cli_receipt,autopilot.migration_0337_function_backup
+REVOKE ALL ON TABLE autopilot.native_cli_config,autopilot.native_cli_receipt,autopilot.migration_0339_function_backup
  FROM PUBLIC,autopilot_runtime,autopilot_runtime_principal,autopilot_callback;
 REVOKE ALL ON FUNCTION autopilot.native_cli_authority_locked(uuid,jsonb),autopilot.native_cli_snapshot(uuid),
  autopilot.native_cli_current(jsonb),autopilot.native_cli_begin(jsonb),
@@ -261,5 +261,5 @@ REVOKE ALL ON FUNCTION autopilot.native_cli_authority_locked(uuid,jsonb),autopil
  autopilot.native_cli_finish(jsonb,text,jsonb) FROM PUBLIC,autopilot_runtime,autopilot_runtime_principal,autopilot_callback;
 -- Owner-only draft: runtime privilege activation requires its reviewed native
 -- provider installation and authority adapter. No broad table access is added.
-INSERT INTO public.schema_migration(migration_key) VALUES('0337_autopilot_native_cli_receipts');
+INSERT INTO public.schema_migration(migration_key) VALUES('0339_autopilot_native_cli_receipts');
 COMMIT;

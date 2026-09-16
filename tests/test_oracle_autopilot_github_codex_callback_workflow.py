@@ -45,13 +45,30 @@ def test_only_guarded_publisher_can_write_repository():
     assert "oracle_autopilot.github_codex_callback terminal" in source
 
 
-def test_sql_ci_covers_publication_dependencies_in_reverse_rollback_order():
-    source = Path(".github/workflows/autopilot-role-dispatch-sql-ci.yml").read_text()
-    triggers, script = source.split("\njobs:\n", 1)
-    for paths in triggers.split("\n  push:\n"):
-        assert "database/migrations/0336_autopilot_bounded_publication_permit.sql" in paths
-        assert "database/tests/336_autopilot_bounded_publication_permit.sql" in paths
-    assert script.count("-f database/tests/336_autopilot_bounded_publication_permit.sql") == 2
-    assert script.index("-f database/rollbacks/0336_") < script.index("-f database/rollbacks/0335_")
-    assert script.index("-f database/rollbacks/0335_") < script.index("-f database/rollbacks/0334_")
-    assert script.index("-f database/migrations/0335_") < script.index("-f database/migrations/0336_")
+
+def test_focused_publication_ci_covers_lifecycle_without_duplicating_1608_sql_ci():
+    source = Path(".github/workflows/autopilot-publication-security-ci.yml").read_text()
+    for filename in (
+        "0338_autopilot_bounded_publication_permit.sql",
+        "0339_autopilot_native_cli_receipts.sql",
+        "0340_autopilot_publication_permit_issuer.sql",
+        "338_autopilot_bounded_publication_permit.sql",
+        "339_autopilot_native_cli_receipts.sql",
+        "340_autopilot_publication_permit_issuer.sql",
+        "340a_autopilot_publication_permit_concurrency.sh",
+    ):
+        assert filename in source
+    script = source.split("\njobs:\n", 1)[1]
+    assert script.index("-f database/rollbacks/0340_") < script.index("-f database/rollbacks/0339_")
+    assert script.index("-f database/rollbacks/0339_") < script.index("-f database/rollbacks/0338_")
+    assert script.index("-f database/migrations/0338_") < script.index("-f database/migrations/0339_")
+    assert script.index("-f database/migrations/0339_") < script.index("-f database/migrations/0340_")
+    assert "postgres:18" in source
+    assert "github_codex_publication_permit" in source
+
+    inherited = Path(".github/workflows/autopilot-role-dispatch-sql-ci.yml").read_text()
+    assert "0337_autopilot_role_repair_admission.sql" in inherited
+    assert "337a_autopilot_role_repair_callback.sql" in inherited
+    assert "0338_autopilot_bounded_publication_permit.sql" not in inherited
+    assert "0339_autopilot_native_cli_receipts.sql" not in inherited
+    assert "0340_autopilot_publication_permit_issuer.sql" not in inherited

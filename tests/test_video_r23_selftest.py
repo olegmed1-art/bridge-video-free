@@ -163,6 +163,74 @@ def test_already_done_reconciles_database_without_heavy_reprocessing():
     assert persistence_calls == ["synthetic-token"]
 
 
+
+def test_persist_database_false_skips_neon_after_processing():
+    job_id = "d" * 32
+    old_job = os.environ.get("BRIDGE_JOB_ID")
+    old_persist_flag = os.environ.get("BRIDGE_PERSIST_DATABASE")
+    old_existing = r23._existing_same_revision_done
+    old_process = r23.base.process_job
+    old_persist = r23.persist_completed_drive_job
+    persistence_calls = []
+    try:
+        os.environ["BRIDGE_JOB_ID"] = job_id
+        os.environ["BRIDGE_PERSIST_DATABASE"] = "false"
+        r23._existing_same_revision_done = lambda token, requested_job_id: None
+        r23.base.process_job = lambda token: {"status": "AI_DONE"}
+        r23.persist_completed_drive_job = lambda token: persistence_calls.append(token)
+        result = r23.process_job("synthetic-token")
+    finally:
+        if old_job is None:
+            os.environ.pop("BRIDGE_JOB_ID", None)
+        else:
+            os.environ["BRIDGE_JOB_ID"] = old_job
+        if old_persist_flag is None:
+            os.environ.pop("BRIDGE_PERSIST_DATABASE", None)
+        else:
+            os.environ["BRIDGE_PERSIST_DATABASE"] = old_persist_flag
+        r23._existing_same_revision_done = old_existing
+        r23.base.process_job = old_process
+        r23.persist_completed_drive_job = old_persist
+
+    assert result == {"status": "AI_DONE"}
+    assert persistence_calls == []
+
+
+def test_persist_database_false_skips_reconcile_for_existing_done():
+    job_id = "e" * 32
+    payload = {"status": "AI_DONE", "job_id": job_id}
+    old_job = os.environ.get("BRIDGE_JOB_ID")
+    old_persist_flag = os.environ.get("BRIDGE_PERSIST_DATABASE")
+    old_existing = r23._existing_same_revision_done
+    old_process = r23.base.process_job
+    old_persist = r23.persist_completed_drive_job
+    old_safe = r23.base.io.safe
+    persistence_calls = []
+    try:
+        os.environ["BRIDGE_JOB_ID"] = job_id
+        os.environ["BRIDGE_PERSIST_DATABASE"] = "false"
+        r23._existing_same_revision_done = lambda token, requested_job_id: payload
+        r23.base.process_job = lambda token: (_ for _ in ()).throw(AssertionError("must not rerun"))
+        r23.persist_completed_drive_job = lambda token: persistence_calls.append(token)
+        r23.base.io.safe = lambda **kwargs: None
+        result = r23.process_job("synthetic-token")
+    finally:
+        if old_job is None:
+            os.environ.pop("BRIDGE_JOB_ID", None)
+        else:
+            os.environ["BRIDGE_JOB_ID"] = old_job
+        if old_persist_flag is None:
+            os.environ.pop("BRIDGE_PERSIST_DATABASE", None)
+        else:
+            os.environ["BRIDGE_PERSIST_DATABASE"] = old_persist_flag
+        r23._existing_same_revision_done = old_existing
+        r23.base.process_job = old_process
+        r23.persist_completed_drive_job = old_persist
+        r23.base.io.safe = old_safe
+
+    assert result == payload
+    assert persistence_calls == []
+
 def test_workflow_is_one_shot_and_serialized():
     text = Path(".github/workflows/bridge-video-3.1-free.yml").read_text(encoding="utf-8")
     assert "group: bridge-video-heavy" in text
@@ -178,6 +246,8 @@ def main():
         test_same_revision_done_is_detected_before_heavy_processing,
         test_ai_done_without_methodology_ready_does_not_skip_processing,
         test_already_done_reconciles_database_without_heavy_reprocessing,
+        test_persist_database_false_skips_neon_after_processing,
+        test_persist_database_false_skips_reconcile_for_existing_done,
         test_workflow_is_one_shot_and_serialized,
     ]
     for test in tests:

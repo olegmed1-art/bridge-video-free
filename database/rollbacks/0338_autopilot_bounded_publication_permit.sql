@@ -10,5 +10,5 @@ END $$;
 DROP FUNCTION autopilot.authorize_codex_publication(jsonb,bigint,text);
 DROP TABLE autopilot.codex_publication_permit;
 DELETE FROM public.schema_migration
-WHERE migration_key='0336_autopilot_bounded_publication_permit';
+WHERE migration_key='0338_autopilot_bounded_publication_permit';
 COMMIT;

@@ -3,25 +3,28 @@ BEGIN;
 
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM public.schema_migration
-                   WHERE migration_key='0335_autopilot_codex_delivery_window') THEN
-        RAISE EXCEPTION 'PUBLICATION_REQUIRES_0335';
+                   WHERE migration_key='0337_autopilot_role_repair_admission') THEN
+        RAISE EXCEPTION 'PUBLICATION_REQUIRES_0337';
     END IF;
 END $$;
 
 -- Intentionally EMPTY. Bot/app identity is not proof that an output originates
 -- from the acknowledged owner command. Only a separately reviewed provenance
--- verifier / owner-controlled canary may populate this capability ledger.
--- No issuer, automatic backfill or writer grant is installed by this migration.
+-- verifier / owner-bound issuer may populate this capability ledger after a
+-- separate owner gate. No automatic backfill or runtime writer is installed.
 CREATE TABLE autopilot.codex_publication_permit (
     dispatch_id uuid PRIMARY KEY REFERENCES autopilot.role_dispatch_outbox(dispatch_id),
     command_comment_id bigint NOT NULL CHECK (command_comment_id > 0),
     publication_comment_id bigint NOT NULL UNIQUE CHECK (publication_comment_id > 0),
+    approval_comment_id bigint NOT NULL UNIQUE CHECK (approval_comment_id > 0),
     payload_sha256 text NOT NULL CHECK (payload_sha256 ~ '^[0-9a-f]{64}$'),
     provenance_evidence_sha256 text NOT NULL CHECK (provenance_evidence_sha256 ~ '^[0-9a-f]{64}$'),
     expires_at timestamptz NOT NULL,
     revoked boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    CHECK (expires_at > created_at)
+    CHECK (expires_at > created_at),
+    CHECK (approval_comment_id <> command_comment_id
+           AND approval_comment_id <> publication_comment_id)
 );
 REVOKE ALL ON TABLE autopilot.codex_publication_permit
 FROM PUBLIC,autopilot_runtime,autopilot_runtime_principal,autopilot_callback;
@@ -133,5 +136,5 @@ GRANT EXECUTE ON FUNCTION autopilot.authorize_codex_publication(jsonb,bigint,tex
 TO autopilot_callback;
 
 INSERT INTO public.schema_migration(migration_key)
-VALUES ('0336_autopilot_bounded_publication_permit');
+VALUES ('0338_autopilot_bounded_publication_permit');
 COMMIT;

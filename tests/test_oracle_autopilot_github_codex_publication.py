@@ -153,7 +153,7 @@ def test_security_and_cas_rejections_do_not_write(setting, value, code):
 @pytest.mark.parametrize("path", [".github/workflows/callback.yml", "../x.py", "/test.py",
     "tests//x.py", "tests/../x.py", "tests/AGENTS.md", "tests/key_secret.py",
     "oracle_autopilot/github_codex_callback.py", "oracle_autopilot/__init__.py",
-    "database/migrations/0336_autopilot_bounded_publication_permit.sql", "docs/canon/x.md",
+    "database/migrations/0338_autopilot_bounded_publication_permit.sql", "docs/canon/x.md",
     "setup.py", "sitecustomize.py", "tests/х.py", "tests/*.py"])
 def test_sensitive_paths_denied(path):
     assert not pub.safe_path(path)

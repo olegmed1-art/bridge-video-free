@@ -1,6 +1,6 @@
 """Native receipt QueuePort over parameterized PostgreSQL RPCs.
 
-Pass the existing worker's single-RPC connection function. Migration 0337 is
+Pass the existing worker's single-RPC connection function. Migration 0339 is
 owner-only until native runtime activation is separately reviewed; there is no
 credential fallback, broad table query, or legacy GitHub proof conversion here.
 """

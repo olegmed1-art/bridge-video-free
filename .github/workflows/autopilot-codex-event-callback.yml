@@ -85,8 +85,8 @@ jobs:
           python -m oracle_autopilot.github_codex_callback terminal
 
   publish:
-    # Receiver-first rollout. Enable only after 0336 and the bounded canary.
-    # Other callback jobs keep their read-only repository token.
+    # Disabled-by-default receiver. Activation requires 0338/0339/0340, exact-head CI,
+    # independent security review, and a separate owner gate. Other callback jobs stay read-only.
     if: >-
       vars.AUTOPILOT_BOUNDED_PUBLICATION_ENABLED == 'true' &&
       github.event.repository.id == 1330085090 &&
