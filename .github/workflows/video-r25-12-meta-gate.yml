@@ -9,6 +9,9 @@ on:
       - 'database/**'
       - 'tests/fixtures/asr_block_11_r25_11.json'
       - 'tests/test_meta_asr_gate_r25_12.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'bridge_runtime_hardening_r26.py'
+      - '.github/workflows/bridge-video-3.1-free.yml'
       - '.github/workflows/video-r25-12-meta-gate.yml'
   push:
     branches:
