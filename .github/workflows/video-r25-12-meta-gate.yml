@@ -65,6 +65,7 @@ jobs:
             fi
           fi
           python - <<'PY'
+          import ast
           from pathlib import Path
           import re
 
@@ -76,12 +77,41 @@ jobs:
           )
           if not match:
               raise SystemExit('production algorithm revision is missing or malformed')
-          revision = match.group(1)
-          expected_module = f"bridge_runtime_hardening_r{revision.replace('.', '_')}"
-          expected_import = f'import {expected_module} as hardening'
-          if expected_import not in adapter:
+          requested_revision = f"3.1-free-r{match.group(1)}"
+
+          adapter_tree = ast.parse(adapter, filename='run_drive_3_1_free_generic.py')
+          runtime_modules = [
+              alias.name
+              for node in adapter_tree.body
+              if isinstance(node, ast.Import)
+              for alias in node.names
+              if alias.asname == 'hardening'
+              and re.fullmatch(r'bridge_runtime_hardening_r[0-9_]+', alias.name)
+          ]
+          if len(runtime_modules) != 1:
+              raise SystemExit('production adapter must import exactly one versioned runtime as hardening')
+
+          runtime_module = runtime_modules[0]
+          runtime_path = Path(f'{runtime_module}.py')
+          if not runtime_path.is_file():
+              raise SystemExit(f'production runtime module is missing: {runtime_module}')
+          runtime_tree = ast.parse(runtime_path.read_text(encoding='utf-8'), filename=str(runtime_path))
+          declared_revisions = [
+              node.value.value
+              for node in runtime_tree.body
+              if isinstance(node, ast.Assign)
+              and any(isinstance(target, ast.Name) and target.id == 'REVISION' for target in node.targets)
+              and isinstance(node.value, ast.Constant)
+              and isinstance(node.value.value, str)
+          ]
+          if declared_revisions != [requested_revision]:
               raise SystemExit(
-                  f'production workflow/runtime mismatch: revision r{revision} expects {expected_module}'
+                  'production workflow/runtime mismatch: '
+                  f'workflow requests {requested_revision}, '
+                  f'{runtime_module} declares {declared_revisions!r}'
               )
-          print(f'Production baseline preserved and internally consistent: r{revision}')
+          print(
+              'Production baseline preserved and internally consistent: '
+              f'{requested_revision} via {runtime_module}'
+          )
           PY
