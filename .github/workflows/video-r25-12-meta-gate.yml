@@ -69,11 +69,20 @@ jobs:
           import dis
           from pathlib import Path
           import re
+          from types import CodeType
 
           workflow = Path('.github/workflows/bridge-video-3.1-free.yml').read_text(encoding='utf-8')
           adapter = Path('run_drive_3_1_free_generic.py').read_text(encoding='utf-8')
 
-          binding_opcodes = {'STORE_NAME', 'STORE_GLOBAL', 'DELETE_NAME', 'DELETE_GLOBAL'}
+          module_binding_opcodes = {'STORE_NAME', 'STORE_GLOBAL', 'DELETE_NAME', 'DELETE_GLOBAL'}
+          nested_binding_opcodes = {'STORE_GLOBAL', 'DELETE_GLOBAL'}
+
+          def recursive_instructions(code, depth=0):
+              for instruction in dis.get_instructions(code):
+                  yield depth, instruction
+              for constant in code.co_consts:
+                  if isinstance(constant, CodeType):
+                      yield from recursive_instructions(constant, depth + 1)
 
           def module_instructions(source, filename):
               tree = ast.parse(source, filename=filename)
@@ -83,14 +92,16 @@ jobs:
                   for node in ast.walk(tree)
               ):
                   raise SystemExit(f'wildcard import is forbidden: {filename}')
-              instructions = list(dis.get_instructions(compile(source, filename, 'exec')))
-              return instructions
+              return list(recursive_instructions(compile(source, filename, 'exec')))
 
           def bindings_for(instructions, name):
               return [
                   instruction
-                  for instruction in instructions
-                  if instruction.opname in binding_opcodes and instruction.argval == name
+                  for depth, instruction in instructions
+                  if instruction.argval == name
+                  and instruction.opname in (
+                      module_binding_opcodes if depth == 0 else nested_binding_opcodes
+                  )
               ]
 
           match = re.search(
