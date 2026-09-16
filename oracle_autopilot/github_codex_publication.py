@@ -60,9 +60,9 @@ def safe_path(path: Any) -> bool:
     if path.endswith("AGENTS.md") or re.search(r"(?i)(secret|credential|token|password)", path):
         return False
     # No self-modification of the privileged receiver, orchestration, governance,
-    # build/install hooks or Canon. New path families require reviewed policy.
+    # build/install hooks, Canon, or migration history. Publication only modifies
+    # existing files, so allowing database/migrations/** could rewrite applied SQL.
     return (path.startswith(("tests/", "database/tests/", "docs/evidence/"))
-            or bool(re.fullmatch(r"database/migrations/00[0-9A-Za-z_/-]+\.sql", path))
             or ("/" not in path and path.endswith(".py")
                 and path not in {"setup.py", "conftest.py", "sitecustomize.py", "usercustomize.py"}))
 

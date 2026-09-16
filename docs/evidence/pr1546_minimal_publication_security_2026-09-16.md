@@ -70,7 +70,7 @@ No unenumerated path from the retired 69-path manifest is silently carried forwa
 
 Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>\n` plus lexicographically sorted tab-separated `path, operation, base_blob_sha, content_sha256, mode` records.
 
-- Functional core aggregate SHA-256: `e7a6fda29d8e5ab904177b4481a5dd1462df7625f31a525b4612f26faf2cf5f6`.
+- Functional core aggregate SHA-256: `1eead23aab7ecd50084c4af089afa1c5237fbb37bd5ef030b1c61b9781646d1f`.
 - DELETE operations: **none** relative to merged `main`.
 
 | Operation | Base blob SHA | Content SHA-256 | Mode | Path |
@@ -90,13 +90,13 @@ Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>
 | CREATE | `-` | `4ca1c67eb2e80742ba02cf8cb69add6a9122f874ee7e5ff783990b140d6710de` | `100644` | `oracle_autopilot/codex_cli_bridge.py` |
 | CREATE | `-` | `72ce096ce6792ffbc3938a94cb90b9d04d7e4d1f290f43181fde79229a146010` | `100644` | `oracle_autopilot/codex_cli_delivery.py` |
 | CREATE | `-` | `39c6fe1acbca6bb207e52df2ba07a2bb26b5a38a0e411db8b2818fe431e84cf5` | `100644` | `oracle_autopilot/codex_cli_queue.py` |
-| CREATE | `-` | `8662fe46d0bc43d3463c3b8b8aef78dd6a2e5c3fa81b78e0335909d2887fc189` | `100644` | `oracle_autopilot/github_codex_publication.py` |
+| CREATE | `-` | `0e1f0b8e3f0c11d288338fa9f56d6e4216a2087a3639c05089657bcc065a8914` | `100644` | `oracle_autopilot/github_codex_publication.py` |
 | CREATE | `-` | `35dc5676c346577df94af4ab272f70aead1e8e678f22bc770c7c2a391a34f3f4` | `100644` | `oracle_autopilot/github_codex_publication_permit.py` |
 | CREATE | `-` | `bb1dc5120896afaa38c2bdf015c7ea3a2d1537bbdc9a7a07b41b6bb9de044ee5` | `100644` | `tests/test_oracle_autopilot_codex_cli_bridge.py` |
 | CREATE | `-` | `ac1ca1aa466906b2126dd9e523df3ad343f625efa6f9d6977b249aadb71f16a4` | `100644` | `tests/test_oracle_autopilot_codex_cli_delivery.py` |
 | CREATE | `-` | `36cd1bdc53792db0a65b6ab773bc53364972b672de2075066014e7df15ea5850` | `100644` | `tests/test_oracle_autopilot_codex_cli_queue.py` |
 | UPDATE | `ee49d635e7151a466e35ee6e7506a3fe0b267e31` | `5d51053f1e015b1a0f692760200d26a8f4bff6958166704cd0869402d74e26de` | `100644` | `tests/test_oracle_autopilot_github_codex_callback_workflow.py` |
-| CREATE | `-` | `bfd00a159878f7a3afa1348cb18ad2b5831572a9f7f60282bebfc2e7e1afcd54` | `100644` | `tests/test_oracle_autopilot_github_codex_publication.py` |
+| CREATE | `-` | `4ec5bd2f4f48cb5f871084a246756a0eb9be866a451f5a6277ff4a6759b3d4b9` | `100644` | `tests/test_oracle_autopilot_github_codex_publication.py` |
 | CREATE | `-` | `039e130a3ae805540bda5e7ce588f24040db2b8777a657549a466a5b0c4785d3` | `100644` | `tests/test_oracle_autopilot_github_codex_publication_permit.py` |
 
 ## Dependency and application map
@@ -117,10 +117,11 @@ Clean rollback order is `0340 → 0339 → 0338`. 0340 and 0338 refuse destructi
 
 ## Verification performed before repository publication
 
-- Focused Python publication/callback/permit/native-receipt suite: **129 passed**.
+- Focused Python publication/callback/permit/native-receipt suite: **131 passed**.
 - Both touched workflow YAML files parse successfully.
 - Python compile and `git diff --check`: PASS.
 - `database/tests/340a_autopilot_publication_permit_concurrency.sh`: shell syntax check PASS.
+- Exact-head review of `b02d130f0bc448cceb4f3e03073248bc24f16d31` found P2: the publisher could rewrite existing `database/migrations/0000–0099` files. The remediation removes `database/migrations/**` from the publication allowlist entirely and adds regression coverage for historical migrations; new migration creation was already impossible because bounded publication only modifies existing files.
 - Ephemeral local PostgreSQL 18 validation on the merged-main tree: migrations through 0340 applied; SQL tests 338/339/340 passed; two-session 340a conflict fencing and retained-evidence rollback refusal passed; clean rollback 0340→0339→0338 preserved 0337; reapply and tests passed.
 - The local PostgreSQL run used an isolated disposable Docker database only. No production database or server state was changed. Hosted exact-head CI remains required after repository publication.
 
@@ -138,7 +139,7 @@ Clean rollback order is `0340 → 0339 → 0338`. 0340 and 0338 refuse destructi
 
 - Immutable receiver: publisher executes `github.workflow_sha`, not submitted PR code.
 - Only guarded publish job has `contents: write`; ACK/terminal remain read-only.
-- Bounded existing-file allowlist plus sensitive-path denial is enforced before mutation.
+- Bounded existing-file allowlist plus sensitive-path denial is enforced before mutation; `database/migrations/**` is never publication-writable, preventing mutation-history rewrites.
 - Publication is expected-head atomic and verifies parent/files/blob/live-head readback.
 - Direct owner approval is distinct from command and publication comments; app-mediated copied approval is rejected; command/publication/approval records are re-fetched before issuance.
 - Issuer binds dispatch/epoch/role/fingerprint/target/head/comment IDs/payload/provenance hash under database locks; replay is exact-idempotent, conflicting reuse fails closed.
