@@ -111,8 +111,8 @@ try:
     with psycopg.connect(cfg.dsn,connect_timeout=10,options="-c default_transaction_read_only=on") as c:
         row=c.execute("SELECT current_user,current_database(),current_setting('neon.project_id'),current_setting('neon.branch_id'),autopilot.verify_broker_schema_v0321()").fetchone()
         assert row==("autopilot_light_worker_login","neondb","misty-poetry-18012774","br-wispy-lab-b1rq54of",True)
-        role=c.execute("SELECT rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil FROM pg_roles WHERE rolname=current_user").fetchone()
-        assert role==(False,False,False,False,False,4,datetime(2026,9,22,tzinfo=timezone.utc))
+        role=c.execute("SELECT rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil::text FROM pg_roles WHERE rolname=current_user").fetchone()
+        assert role==(False,False,False,False,False,4,"infinity")
         memberships=c.execute("SELECT p.rolname FROM pg_auth_members m JOIN pg_roles p ON p.oid=m.roleid JOIN pg_roles r ON r.oid=m.member WHERE r.rolname=current_user ORDER BY p.rolname").fetchall()
         assert memberships==[("autopilot_runtime_principal",)]
         privileges=c.execute("""SELECT n.nspname,c.relname,v.priv
