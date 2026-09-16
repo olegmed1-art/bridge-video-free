@@ -1,6 +1,16 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+DO $prerequisite$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0336_autopilot_codex_terminal_implicit_delivery'
+    ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_REPAIR_ADMISSION_REQUIRES_0336';
+    END IF;
+END $prerequisite$;
+
 -- Do not turn a retained BLOCKED result into unauthorized or obsolete work.
 -- Return NULL (not an exception): the callback must still retain the result,
 -- release the original task, and let independent work continue.
@@ -48,6 +58,11 @@ $enabled_check$;
        -- Later disablement must not discard terminal evidence or retain resources.
        OR COALESCE(p_body->>'role','') !~ '^[A-Z][A-Z0-9_]{0,63}$'
 $bound_role$;
+    implicit_role_check text := $implicit_role_check$           OR (implicit_delivery
+               AND autopilot.role_is_enabled(COALESCE(p_body->>'role','')))
+$implicit_role_check$;
+    implicit_delivery_branch text := $implicit_delivery_branch$           OR implicit_delivery
+$implicit_delivery_branch$;
 BEGIN
     original := pg_get_functiondef(
         'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure);
@@ -58,7 +73,13 @@ BEGIN
        OR strpos(original,'AUTOPILOT_CODEX_TERMINAL_BINDING_INVALID') = 0 THEN
         RAISE EXCEPTION 'AUTOPILOT_TERMINAL_BOUND_ROLE_SOURCE_DRIFT';
     END IF;
-    EXECUTE replace(original,enabled_check,bound_role);
+    original := replace(original,enabled_check,bound_role);
+    IF (length(original)-length(replace(original,implicit_delivery_branch,'')))
+       /length(implicit_delivery_branch) <> 1
+       OR strpos(original,'autopilot.role_is_enabled(COALESCE(p_body->>''role'',''''))') > 0 THEN
+        RAISE EXCEPTION 'AUTOPILOT_TERMINAL_IMPLICIT_ROLE_SOURCE_DRIFT';
+    END IF;
+    EXECUTE replace(original,implicit_delivery_branch,implicit_role_check);
 END $terminal_callback$;
 
 INSERT INTO public.schema_migration(migration_key)
