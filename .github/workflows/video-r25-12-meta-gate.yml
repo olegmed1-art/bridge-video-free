@@ -65,62 +65,11 @@ jobs:
             fi
           fi
           python - <<'PY'
-          import ast
-          import dis
+          import hashlib
           from pathlib import Path
           import re
-          from types import CodeType
 
           workflow = Path('.github/workflows/bridge-video-3.1-free.yml').read_text(encoding='utf-8')
-          adapter = Path('run_drive_3_1_free_generic.py').read_text(encoding='utf-8')
-
-          module_binding_opcodes = {'STORE_NAME', 'STORE_GLOBAL', 'DELETE_NAME', 'DELETE_GLOBAL'}
-          nested_binding_opcodes = {'STORE_GLOBAL', 'DELETE_GLOBAL'}
-          namespace_primitives = {
-              '__import__', 'compile', 'delattr', 'eval', 'exec', 'globals', 'locals', 'setattr', 'vars'
-          }
-          namespace_attributes = {
-              '__dict__', '__getattribute__', '__globals__', 'ag_frame', 'cr_frame',
-              'f_globals', 'gi_frame', 'modules'
-          }
-
-          def reject_indirect_namespace_mutation(tree, filename):
-              for node in ast.walk(tree):
-                  if isinstance(node, ast.Name) and node.id in namespace_primitives:
-                      raise SystemExit(f'indirect namespace primitive is forbidden in {filename}: {node.id}')
-                  if isinstance(node, ast.alias) and node.name in namespace_primitives:
-                      raise SystemExit(f'indirect namespace import is forbidden in {filename}: {node.name}')
-                  if isinstance(node, ast.Attribute) and node.attr in namespace_attributes:
-                      raise SystemExit(f'module/frame namespace access is forbidden in {filename}: {node.attr}')
-                  if isinstance(node, ast.Constant) and node.value in namespace_attributes:
-                      raise SystemExit(f'dynamic module/frame attribute is forbidden in {filename}: {node.value}')
-
-          def recursive_instructions(code, depth=0):
-              for instruction in dis.get_instructions(code):
-                  yield depth, instruction
-              for constant in code.co_consts:
-                  if isinstance(constant, CodeType):
-                      yield from recursive_instructions(constant, depth + 1)
-
-          def module_instructions(source, filename):
-              tree = ast.parse(source, filename=filename)
-              if any(
-                  isinstance(node, ast.ImportFrom)
-                  and any(alias.name == '*' for alias in node.names)
-                  for node in ast.walk(tree)
-              ):
-                  raise SystemExit(f'wildcard import is forbidden: {filename}')
-              return list(recursive_instructions(compile(source, filename, 'exec')))
-
-          def bindings_for(instructions, name):
-              return [
-                  instruction
-                  for depth, instruction in instructions
-                  if instruction.argval == name
-                  and instruction.opname in (
-                      module_binding_opcodes if depth == 0 else nested_binding_opcodes
-                  )
-              ]
 
           match = re.search(
               r'BRIDGE_REQUESTED_ALGORITHM_REVISION:\s*["\']3\.1-free-r([0-9]+(?:\.[0-9]+)*)["\']',
@@ -130,51 +79,37 @@ jobs:
               raise SystemExit('production algorithm revision is missing or malformed')
           requested_revision = f"3.1-free-r{match.group(1)}"
 
-          adapter_tree = ast.parse(adapter, filename='run_drive_3_1_free_generic.py')
-          reject_indirect_namespace_mutation(adapter_tree, 'run_drive_3_1_free_generic.py')
-          runtime_modules = [
-              alias.name
-              for node in adapter_tree.body
-              if isinstance(node, ast.Import)
-              for alias in node.names
-              if alias.asname == 'hardening'
-              and re.fullmatch(r'bridge_runtime_hardening_r[0-9_]+', alias.name)
-          ]
-          adapter_bindings = bindings_for(
-              module_instructions(adapter, 'run_drive_3_1_free_generic.py'), 'hardening'
-          )
-          if len(runtime_modules) != 1 or len(adapter_bindings) != 1:
-              raise SystemExit('production adapter must import exactly one versioned runtime as hardening')
-          runtime_module = runtime_modules[0]
+          contracts = {
+              '3.1-free-r26.1': {
+                  'runtime_module': 'bridge_runtime_hardening_r26',
+                  'adapter_sha256': 'c105673f51596db3a7c77fbd0e6e6cc7ab595ffa8b468bfa05a33c7895ce74cf',
+                  'runtime_sha256': 'ae5b8750efd7029d0d926bdcc0121b7a0ba051baca40b2ecf59ac445db9afe9c',
+              },
+          }
+          contract = contracts.get(requested_revision)
+          if contract is None:
+              raise SystemExit(f'production revision lacks an exact evidence contract: {requested_revision}')
+
+          adapter_path = Path('run_drive_3_1_free_generic.py')
+          adapter_bytes = adapter_path.read_bytes()
+          adapter_sha256 = hashlib.sha256(adapter_bytes).hexdigest()
+          if adapter_sha256 != contract['adapter_sha256']:
+              raise SystemExit(f'production adapter drift: {adapter_sha256}')
+          adapter = adapter_bytes.decode('utf-8')
+          runtime_module = contract['runtime_module']
+          if adapter.count(f'import {runtime_module} as hardening') != 1:
+              raise SystemExit('production adapter runtime import does not match the exact contract')
+
           runtime_path = Path(f'{runtime_module}.py')
           if not runtime_path.is_file():
               raise SystemExit(f'production runtime module is missing: {runtime_module}')
-          runtime = runtime_path.read_text(encoding='utf-8')
-          runtime_tree = ast.parse(runtime, filename=str(runtime_path))
-          reject_indirect_namespace_mutation(runtime_tree, str(runtime_path))
-          literal_revisions = [
-              node.value.value
-              for node in runtime_tree.body
-              if isinstance(node, ast.Assign)
-              and len(node.targets) == 1
-              and isinstance(node.targets[0], ast.Name)
-              and node.targets[0].id == 'REVISION'
-              and isinstance(node.value, ast.Constant)
-              and isinstance(node.value.value, str)
-          ]
-          revision_bindings = bindings_for(
-              module_instructions(runtime, str(runtime_path)), 'REVISION'
-          )
-          if (
-              len(revision_bindings) != 1
-              or literal_revisions != [requested_revision]
-          ):
-              raise SystemExit(
-                  'production workflow/runtime mismatch: '
-                  f'workflow requests {requested_revision}, '
-                  f'{runtime_module} binding_count={len(revision_bindings)} '
-                  f'literals={literal_revisions!r}'
-              )
+          runtime_bytes = runtime_path.read_bytes()
+          runtime_sha256 = hashlib.sha256(runtime_bytes).hexdigest()
+          if runtime_sha256 != contract['runtime_sha256']:
+              raise SystemExit(f'production runtime drift: {runtime_sha256}')
+          runtime = runtime_bytes.decode('utf-8')
+          if runtime.count(f'REVISION = "{requested_revision}"') != 1:
+              raise SystemExit('production runtime revision does not match the exact contract')
           print(
               'Production baseline preserved and internally consistent: '
               f'{requested_revision} via {runtime_module}'
