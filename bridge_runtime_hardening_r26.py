@@ -9,7 +9,7 @@ from bridge_output_scoped_idempotency import existing_same_revision_done
 from bridge_vision.bridgit_primary_production import install as install_primary_recognizer
 from bridge_vision import bridgit_primary_video as primary_video
 from bridge_vision.bridgit_primary_compat import native_gambler_geometry
-REVISION = "3.1-free-r26.1"
+REVISION = "3.1-free-r26.2"
 
 def install(token_func):
     requested = os.getenv("BRIDGE_REQUESTED_ALGORITHM_REVISION", "").strip()
@@ -33,6 +33,16 @@ def install(token_func):
                 return original_geometry_gate(image, bank, profile)
         native_geometry_gate._r261_native_gambler = True
         primary_video._full_geometry_gate = native_geometry_gate
+    selector_cls = primary_video.EventFrameSelector
+    if not getattr(selector_cls.observe, "_r262_settle_retry", False):
+        original_observe = selector_cls.observe
+        def observe_with_settle_retry(self, signature, timestamp_ms):
+            event = original_observe(self, signature, timestamp_ms)
+            if event is not None and event.reason != "WATCHDOG_STABLE_STATE":
+                self.schedule_retry(timestamp_ms, delay_ms=1_500)
+            return event
+        observe_with_settle_retry._r262_settle_retry = True
+        selector_cls.observe = observe_with_settle_retry
     install_primary_recognizer(base, token_func)
 
 def run(token_func):
