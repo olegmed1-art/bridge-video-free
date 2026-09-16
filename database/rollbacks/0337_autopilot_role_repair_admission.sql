@@ -29,6 +29,24 @@ BEGIN
     END IF;
     EXECUTE replace(current_definition,admission,'');
 END $rollback$;
+DO $terminal_callback_rollback$
+DECLARE
+    current_definition text;
+    bound_role text := $bound_role$       -- TERMINAL_BOUND_ROLE_V1: authority was bound by the accepted ACK.
+       -- Later disablement must not discard terminal evidence or retain resources.
+$bound_role$;
+    enabled_check text := $enabled_check$       OR NOT autopilot.role_is_enabled(COALESCE(p_body->>'role',''))
+$enabled_check$;
+BEGIN
+    current_definition := pg_get_functiondef(
+        'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure);
+    IF current_definition IS NULL
+       OR (length(current_definition)-length(replace(current_definition,bound_role,'')))
+          /length(bound_role) <> 1 THEN
+        RAISE EXCEPTION 'AUTOPILOT_TERMINAL_BOUND_ROLE_ROLLBACK_DRIFT';
+    END IF;
+    EXECUTE replace(current_definition,bound_role,enabled_check);
+END $terminal_callback_rollback$;
 -- Only the activation marker is removed; tasks, receipts and evidence remain.
 DELETE FROM public.schema_migration
  WHERE migration_key='0337_autopilot_role_repair_admission';

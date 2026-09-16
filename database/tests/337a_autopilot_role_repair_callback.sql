@@ -1,9 +1,9 @@
 \set ON_ERROR_STOP on
--- Synthetic fixtures ONLY in the two existing isolated PostgreSQL CI jobs.
+-- Synthetic fixtures ONLY in the existing isolated PostgreSQL CI/preflight jobs.
 -- Never run this lifecycle/callback test against Neon or a production database.
 DO $isolation$
 BEGIN
-    IF current_database() NOT IN ('bridge_school_ci','autopilot_main_ci')
+    IF current_database() NOT IN ('bridge_school_ci','autopilot_main_ci','bridge_school_preflight')
        OR session_user <> 'bridge_ci_owner' THEN
         RAISE EXCEPTION 'REPAIR_CALLBACK_TEST_REQUIRES_ISOLATED_CI';
     END IF;
@@ -16,11 +16,18 @@ SELECT pg_get_functiondef(p.oid) AS definition,p.proowner,p.proacl,m.checksum
 FROM pg_proc p CROSS JOIN public.schema_migration m
 WHERE p.oid='autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
   AND m.migration_key='0337_autopilot_role_repair_admission';
+CREATE TEMP TABLE terminal_callback_snapshot AS
+SELECT pg_get_functiondef(p.oid) AS definition,p.proowner,p.proacl
+FROM pg_proc p
+WHERE p.oid='autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure;
 DO $installed$
 BEGIN
     IF (SELECT count(*) FROM repair_lifecycle_snapshot)<>1
        OR (SELECT strpos(definition,'REPAIR_ADMISSION_V1')
-             FROM repair_lifecycle_snapshot)=0 THEN
+             FROM repair_lifecycle_snapshot)=0
+       OR (SELECT count(*) FROM terminal_callback_snapshot)<>1
+       OR (SELECT strpos(definition,'TERMINAL_BOUND_ROLE_V1')
+             FROM terminal_callback_snapshot)=0 THEN
         RAISE EXCEPTION 'REPAIR_ADMISSION_NOT_INSTALLED';
     END IF;
 END $installed$;
@@ -31,7 +38,10 @@ BEGIN
               WHERE migration_key='0337_autopilot_role_repair_admission')
        OR strpos(pg_get_functiondef(
            'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure),
-           'REPAIR_ADMISSION_V1')>0 THEN
+           'REPAIR_ADMISSION_V1')>0
+       OR strpos(pg_get_functiondef(
+           'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure),
+           'TERMINAL_BOUND_ROLE_V1')>0 THEN
         RAISE EXCEPTION 'REPAIR_ADMISSION_ROLLBACK_NOT_EXACT';
     END IF;
 END $rolled_back$;
@@ -41,6 +51,11 @@ BEGIN
     IF NOT EXISTS(
         SELECT 1 FROM pg_proc p CROSS JOIN repair_lifecycle_snapshot s
         WHERE p.oid='autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
+          AND pg_get_functiondef(p.oid)=s.definition
+          AND p.proowner=s.proowner AND p.proacl IS NOT DISTINCT FROM s.proacl
+    ) OR NOT EXISTS(
+        SELECT 1 FROM pg_proc p CROSS JOIN terminal_callback_snapshot s
+        WHERE p.oid='autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
           AND pg_get_functiondef(p.oid)=s.definition
           AND p.proowner=s.proowner AND p.proacl IS NOT DISTINCT FROM s.proacl
     ) THEN
@@ -122,7 +137,7 @@ BEGIN
             RAISE EXCEPTION 'REPAIR_ADMISSION_ACK_FAILED case %',c.id;
         END IF;
         IF c.revoke_after_ack THEN
-            UPDATE autopilot.role_registry SET can_repair=false WHERE role_id=c.role_id;
+            UPDATE autopilot.role_registry SET enabled=false,can_repair=false WHERE role_id=c.role_id;
         END IF;
         terminal:=jsonb_build_object(
             'dispatch_id',dispatch.dispatch_id::text,'dispatch_epoch',dispatch.dispatch_epoch,
@@ -170,7 +185,7 @@ BEGIN
             RAISE EXCEPTION 'REPAIR_ADMISSION_CALLBACK_REPLAY_FAILED case %',c.id;
         END IF;
         IF c.revoke_after_ack THEN
-            UPDATE autopilot.role_registry SET can_repair=true WHERE role_id=c.role_id;
+            UPDATE autopilot.role_registry SET enabled=true,can_repair=true WHERE role_id=c.role_id;
         END IF;
         RAISE NOTICE 'REPAIR_CALLBACK_CASE_PASS id=% role=% status=% repair=%',
             c.id,c.role_id,c.terminal_status,c.allow_repair;
