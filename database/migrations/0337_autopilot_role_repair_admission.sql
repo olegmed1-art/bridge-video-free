@@ -46,24 +46,7 @@ DECLARE
 $enabled_check$;
     bound_role text := $bound_role$       -- TERMINAL_BOUND_ROLE_V1: authority was bound by the accepted ACK.
        -- Later disablement must not discard terminal evidence or retain resources.
-       OR COALESCE(p_body->>'role','') !~ '^[A-Z][A-Z0-9_]{0,63}
-BEGIN
-    original := pg_get_functiondef(
-        'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure);
-    IF original IS NULL
-       OR (length(original)-length(replace(original,enabled_check,'')))
-          /length(enabled_check) <> 1
-       OR strpos(original,'TERMINAL_BOUND_ROLE_V1') > 0
-       OR strpos(original,'AUTOPILOT_CODEX_TERMINAL_BINDING_INVALID') = 0 THEN
-        RAISE EXCEPTION 'AUTOPILOT_TERMINAL_BOUND_ROLE_SOURCE_DRIFT';
-    END IF;
-    EXECUTE replace(original,enabled_check,bound_role);
-END $terminal_callback$;
-
-INSERT INTO public.schema_migration(migration_key)
-VALUES ('0337_autopilot_role_repair_admission');
-COMMIT;
-
+       OR COALESCE(p_body->>'role','') !~ '^[A-Z][A-Z0-9_]{0,63}$'
 $bound_role$;
 BEGIN
     original := pg_get_functiondef(
