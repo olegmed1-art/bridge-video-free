@@ -12,6 +12,8 @@ cd "$BRIDGE_SERVER_RELEASE_DIR"
 PY="$BRIDGE_SERVER_VENV/bin/python"
 [[ -x "$PY" ]] || { echo 'SERVER_PROD_VENV_MISSING' >&2; exit 78; }
 [[ -f "$BRIDGE_SERVER_DRIVE_OAUTH_FILE" && ! -L "$BRIDGE_SERVER_DRIVE_OAUTH_FILE" ]] || { echo 'SERVER_PROD_DRIVE_SECRET_INVALID' >&2; exit 78; }
+command -v ffmpeg >/dev/null || { echo 'SERVER_PROD_FFMPEG_MISSING' >&2; exit 78; }
+command -v ffprobe >/dev/null || { echo 'SERVER_PROD_FFPROBE_MISSING' >&2; exit 78; }
 
 REVISION="$($PY - <<'PYREV'
 import bridge_runtime_hardening_r26 as runtime
@@ -21,6 +23,15 @@ PYREV
 [[ "$REVISION" =~ ^3\.1-free-r[0-9]+([.][0-9]+)?$ ]] || { echo 'SERVER_PROD_REVISION_INVALID' >&2; exit 78; }
 export BRIDGE_REQUESTED_ALGORITHM_REVISION="$REVISION"
 export GOOGLE_DRIVE_OAUTH_JSON="$(cat "$BRIDGE_SERVER_DRIVE_OAUTH_FILE")"
+export BRIDGE_DIARIZATION_ENABLED=true
+export WHISPER_MODEL=small
+export BRIDGE_PAID_CLOUD=false
+export BRIDGE_BILLING_FALLBACK=false
+export BRIDGE_LARGER_RUNNER=false
+export BRIDGE_REPOSITORY_PRIVATE=false
+if [[ -n "${BRIDGE_LESSON_DATE_SOURCE_B64:-}" ]]; then
+  export BRIDGE_LESSON_DATE_SOURCE="$(printf '%s' "$BRIDGE_LESSON_DATE_SOURCE_B64" | base64 --decode)"
+fi
 if [[ -n "${BRIDGE_SERVER_WORKER_DB_FILE:-}" && -f "$BRIDGE_SERVER_WORKER_DB_FILE" && ! -L "$BRIDGE_SERVER_WORKER_DB_FILE" ]]; then
   export BRIDGE_WORKER_DATABASE_URL="$(cat "$BRIDGE_SERVER_WORKER_DB_FILE")"
 fi
