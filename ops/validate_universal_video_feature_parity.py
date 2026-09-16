@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PARITY_FILE = ROOT / "ops/universal-video-r26-feature-parity.json"
 EXPECTED_SCHEMA = "universal-video-feature-parity-v1"
-EXPECTED_REVISION = "3.1-free-r26.1"
+EXPECTED_REVISION = "3.1-free-r26.2"
 EXPECTED_TARGET = "oracle_container"
 ALLOWED_STATES = {"PARITY_PROVEN","IMPLEMENTED_NOT_PARITY_PROVEN","COMPONENT_ONLY","MISSING"}
 BLOCKER_RE = re.compile(r"^UV_PARITY_[A-Z0-9_]{1,80}$")

@@ -7,8 +7,8 @@ def test_r26_installs_primary_visual_hooks(monkeypatch):
     before_visual = master.visual
     runtime.install(lambda: 'token')
     assert master.visual is not before_visual
-    assert runtime.REVISION == '3.1-free-r26.1'
-    assert master.ALGORITHM_REVISION == '3.1-free-r26.1'
+    assert runtime.REVISION == '3.1-free-r26.2'
+    assert master.ALGORITHM_REVISION == '3.1-free-r26.2'
 
 def test_primary_contract_is_fail_closed_in_source():
     source = Path('bridge_vision/bridgit_primary_production.py').read_text(encoding='utf-8')
@@ -34,3 +34,10 @@ def test_r261_geometry_gate_wraps_native_gambler_context(monkeypatch):
     runtime._INSTALLED_BASE_IDS = getattr(runtime, '_INSTALLED_BASE_IDS', set())
     runtime.install(lambda: 'token')
     assert primary._full_geometry_gate(None, None, None) is True
+
+
+def test_r262_selector_schedules_one_settle_retry(monkeypatch):
+    from bridge_vision import bridgit_primary_video as primary
+    monkeypatch.setattr(runtime.previous, 'install', lambda token_func: None)
+    runtime.install(lambda: 'token')
+    assert getattr(primary.EventFrameSelector.observe, '_r262_settle_retry', False) is True
