@@ -66,81 +66,32 @@ jobs:
           fi
           python - <<'PY'
           import ast
+          import dis
           from pathlib import Path
           import re
 
           workflow = Path('.github/workflows/bridge-video-3.1-free.yml').read_text(encoding='utf-8')
           adapter = Path('run_drive_3_1_free_generic.py').read_text(encoding='utf-8')
 
-          class ModuleBindingVisitor(ast.NodeVisitor):
-              """Collect bindings evaluated in module scope, excluding nested scopes."""
+          binding_opcodes = {'STORE_NAME', 'STORE_GLOBAL', 'DELETE_NAME', 'DELETE_GLOBAL'}
 
-              def __init__(self, name):
-                  self.name = name
-                  self.bindings = []
-                  self.literal_assignments = []
+          def module_instructions(source, filename):
+              tree = ast.parse(source, filename=filename)
+              if any(
+                  isinstance(node, ast.ImportFrom)
+                  and any(alias.name == '*' for alias in node.names)
+                  for node in ast.walk(tree)
+              ):
+                  raise SystemExit(f'wildcard import is forbidden: {filename}')
+              instructions = list(dis.get_instructions(compile(source, filename, 'exec')))
+              return instructions
 
-              def visit_Import(self, node):
-                  for alias in node.names:
-                      bound_name = alias.asname or alias.name.split('.')[0]
-                      if bound_name == self.name:
-                          self.bindings.append(('import', alias.name, node.lineno))
-
-              def visit_ImportFrom(self, node):
-                  for alias in node.names:
-                      if alias.name == '*':
-                          self.bindings.append(('wildcard-import', node.module, node.lineno))
-                          continue
-                      bound_name = alias.asname or alias.name
-                      if bound_name == self.name:
-                          self.bindings.append(('import-from', node.module, node.lineno))
-
-              def visit_Name(self, node):
-                  if node.id == self.name and isinstance(node.ctx, (ast.Store, ast.Del)):
-                      self.bindings.append(('name', None, node.lineno))
-
-              def visit_Assign(self, node):
-                  if (
-                      len(node.targets) == 1
-                      and isinstance(node.targets[0], ast.Name)
-                      and node.targets[0].id == self.name
-                      and isinstance(node.value, ast.Constant)
-                      and isinstance(node.value.value, str)
-                  ):
-                      self.literal_assignments.append(node.value.value)
-                  self.generic_visit(node)
-
-              def _visit_definition_header(self, node):
-                  if node.name == self.name:
-                      self.bindings.append(('definition', None, node.lineno))
-                  for decorator in node.decorator_list:
-                      self.visit(decorator)
-
-              def visit_FunctionDef(self, node):
-                  self._visit_definition_header(node)
-                  for default in (*node.args.defaults, *node.args.kw_defaults):
-                      if default is not None:
-                          self.visit(default)
-
-              visit_AsyncFunctionDef = visit_FunctionDef
-
-              def visit_ClassDef(self, node):
-                  self._visit_definition_header(node)
-                  for base in node.bases:
-                      self.visit(base)
-                  for keyword in node.keywords:
-                      self.visit(keyword.value)
-
-              def visit_Lambda(self, node):
-                  return
-
-              def visit_ExceptHandler(self, node):
-                  if node.name == self.name:
-                      self.bindings.append(('except', None, node.lineno))
-                  if node.type is not None:
-                      self.visit(node.type)
-                  for statement in node.body:
-                      self.visit(statement)
+          def bindings_for(instructions, name):
+              return [
+                  instruction
+                  for instruction in instructions
+                  if instruction.opname in binding_opcodes and instruction.argval == name
+              ]
 
           match = re.search(
               r'BRIDGE_REQUESTED_ALGORITHM_REVISION:\s*["\']3\.1-free-r([0-9]+(?:\.[0-9]+)*)["\']',
@@ -151,30 +102,47 @@ jobs:
           requested_revision = f"3.1-free-r{match.group(1)}"
 
           adapter_tree = ast.parse(adapter, filename='run_drive_3_1_free_generic.py')
-          hardening_bindings = ModuleBindingVisitor('hardening')
-          hardening_bindings.visit(adapter_tree)
-          if len(hardening_bindings.bindings) != 1:
+          runtime_modules = [
+              alias.name
+              for node in adapter_tree.body
+              if isinstance(node, ast.Import)
+              for alias in node.names
+              if alias.asname == 'hardening'
+              and re.fullmatch(r'bridge_runtime_hardening_r[0-9_]+', alias.name)
+          ]
+          adapter_bindings = bindings_for(
+              module_instructions(adapter, 'run_drive_3_1_free_generic.py'), 'hardening'
+          )
+          if len(runtime_modules) != 1 or len(adapter_bindings) != 1:
               raise SystemExit('production adapter must import exactly one versioned runtime as hardening')
-          binding_kind, runtime_module, _ = hardening_bindings.bindings[0]
-          if binding_kind != 'import' or not re.fullmatch(
-              r'bridge_runtime_hardening_r[0-9_]+', runtime_module or ''
-          ):
-              raise SystemExit('production adapter hardening binding must be a versioned runtime import')
+          runtime_module = runtime_modules[0]
           runtime_path = Path(f'{runtime_module}.py')
           if not runtime_path.is_file():
               raise SystemExit(f'production runtime module is missing: {runtime_module}')
-          runtime_tree = ast.parse(runtime_path.read_text(encoding='utf-8'), filename=str(runtime_path))
-          revision_bindings = ModuleBindingVisitor('REVISION')
-          revision_bindings.visit(runtime_tree)
+          runtime = runtime_path.read_text(encoding='utf-8')
+          runtime_tree = ast.parse(runtime, filename=str(runtime_path))
+          literal_revisions = [
+              node.value.value
+              for node in runtime_tree.body
+              if isinstance(node, ast.Assign)
+              and len(node.targets) == 1
+              and isinstance(node.targets[0], ast.Name)
+              and node.targets[0].id == 'REVISION'
+              and isinstance(node.value, ast.Constant)
+              and isinstance(node.value.value, str)
+          ]
+          revision_bindings = bindings_for(
+              module_instructions(runtime, str(runtime_path)), 'REVISION'
+          )
           if (
-              len(revision_bindings.bindings) != 1
-              or revision_bindings.literal_assignments != [requested_revision]
+              len(revision_bindings) != 1
+              or literal_revisions != [requested_revision]
           ):
               raise SystemExit(
                   'production workflow/runtime mismatch: '
                   f'workflow requests {requested_revision}, '
-                  f'{runtime_module} bindings={revision_bindings.bindings!r} '
-                  f'literals={revision_bindings.literal_assignments!r}'
+                  f'{runtime_module} binding_count={len(revision_bindings)} '
+                  f'literals={literal_revisions!r}'
               )
           print(
               'Production baseline preserved and internally consistent: '
