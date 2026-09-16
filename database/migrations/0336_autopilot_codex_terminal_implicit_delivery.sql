@@ -59,6 +59,7 @@ DECLARE
     created_successor_id uuid;
     new_state text;
     implicit_delivery boolean := false;
+    acceptance_time timestamptz;
 BEGIN
     IF p_signature_verified IS DISTINCT FROM true
        OR p_repository IS DISTINCT FROM 'olegmed1-art/bridge-video-free'
@@ -140,11 +141,18 @@ BEGIN
     SELECT * INTO task_row FROM autopilot.task AS task
      WHERE task.task_id=outbox.task_id FOR UPDATE;
 
-    -- Normal v3 path keeps the immutable eyes proof.  If that optional UI
-    -- reaction never appeared, a terminal callback from the pinned Codex App
-    -- may close a still-PUBLISHED dispatch directly.  No synthetic reaction
-    -- id is stored; codex_ack_* stays NULL so provenance remains truthful.
-    implicit_delivery := outbox.status='PUBLISHED' AND proof.dispatch_id IS NULL;
+    -- Sample the clock after locks: a callback that waited past its deadline
+    -- must not win a race with reconciliation. Already accepted duplicates
+    -- returned above remain idempotent even after the original window closes.
+    acceptance_time := clock_timestamp();
+    -- Normal v3 path keeps the immutable eyes proof. If that optional UI
+    -- reaction never appeared, a pinned terminal may close a still-PUBLISHED
+    -- dispatch only inside its existing delivery window. No synthetic eyes
+    -- id is stored; codex_ack_* remains truthful.
+    implicit_delivery := outbox.status='PUBLISHED'
+        AND proof.dispatch_id IS NULL
+        AND outbox.delivery_deadline_at IS NOT NULL
+        AND outbox.delivery_deadline_at>acceptance_time;
     IF outbox.dispatch_id IS NULL
        OR task_row.task_id IS NULL
        OR outbox.delivery_contract_version<>3
@@ -163,7 +171,9 @@ BEGIN
        OR NOT (
            (outbox.status='SENT'
             AND proof.dispatch_id IS NOT NULL
-            AND proof.command_pr=p_event_pr)
+            AND proof.command_pr=p_event_pr
+            AND outbox.callback_deadline_at IS NOT NULL
+            AND outbox.callback_deadline_at>acceptance_time)
            OR implicit_delivery
        ) THEN
         RAISE EXCEPTION 'AUTOPILOT_CODEX_TERMINAL_BINDING_INVALID';

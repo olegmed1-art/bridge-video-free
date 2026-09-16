@@ -20,7 +20,7 @@
     "state": "BLOCKED_ON_FEATURE_PARITY",
     "required_evidence": [
       "resident_container_promotion_pass",
-      "r25_16_feature_parity_pass",
+      "r26_feature_parity_pass",
       "one_bounded_end_to_end_pass",
       "rollback_proof_pass"
     ],
