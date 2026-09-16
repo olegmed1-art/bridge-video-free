@@ -71,9 +71,9 @@ BEGIN
         case_number := case_number+1;
         delivery_id := 'github-codex-result:9900336-'||run_suffix||'-'||case_number;
         command_comment_id := 5669000000 +
-            (txid_current() % 100000)*10 + case_number;
+            txid_current()*10 + case_number;
         reaction_id := 417000000 +
-            (txid_current() % 100000)*10 + case_number;
+            txid_current()*10 + case_number;
         SELECT work_item_id INTO work_id
           FROM autopilot.register_universal_work_item(
             'sql-codex-terminal-implicit-336-'||run_suffix||'-'||case_number,
