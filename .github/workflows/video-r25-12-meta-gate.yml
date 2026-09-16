@@ -76,6 +76,24 @@ jobs:
 
           module_binding_opcodes = {'STORE_NAME', 'STORE_GLOBAL', 'DELETE_NAME', 'DELETE_GLOBAL'}
           nested_binding_opcodes = {'STORE_GLOBAL', 'DELETE_GLOBAL'}
+          namespace_primitives = {
+              '__import__', 'compile', 'delattr', 'eval', 'exec', 'globals', 'locals', 'setattr', 'vars'
+          }
+          namespace_attributes = {
+              '__dict__', '__getattribute__', '__globals__', 'ag_frame', 'cr_frame',
+              'f_globals', 'gi_frame', 'modules'
+          }
+
+          def reject_indirect_namespace_mutation(tree, filename):
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Name) and node.id in namespace_primitives:
+                      raise SystemExit(f'indirect namespace primitive is forbidden in {filename}: {node.id}')
+                  if isinstance(node, ast.alias) and node.name in namespace_primitives:
+                      raise SystemExit(f'indirect namespace import is forbidden in {filename}: {node.name}')
+                  if isinstance(node, ast.Attribute) and node.attr in namespace_attributes:
+                      raise SystemExit(f'module/frame namespace access is forbidden in {filename}: {node.attr}')
+                  if isinstance(node, ast.Constant) and node.value in namespace_attributes:
+                      raise SystemExit(f'dynamic module/frame attribute is forbidden in {filename}: {node.value}')
 
           def recursive_instructions(code, depth=0):
               for instruction in dis.get_instructions(code):
@@ -113,6 +131,7 @@ jobs:
           requested_revision = f"3.1-free-r{match.group(1)}"
 
           adapter_tree = ast.parse(adapter, filename='run_drive_3_1_free_generic.py')
+          reject_indirect_namespace_mutation(adapter_tree, 'run_drive_3_1_free_generic.py')
           runtime_modules = [
               alias.name
               for node in adapter_tree.body
@@ -132,6 +151,7 @@ jobs:
               raise SystemExit(f'production runtime module is missing: {runtime_module}')
           runtime = runtime_path.read_text(encoding='utf-8')
           runtime_tree = ast.parse(runtime, filename=str(runtime_path))
+          reject_indirect_namespace_mutation(runtime_tree, str(runtime_path))
           literal_revisions = [
               node.value.value
               for node in runtime_tree.body
