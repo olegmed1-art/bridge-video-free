@@ -15,7 +15,7 @@ def test_production_route_is_confirmed_r26_with_inheritance_chain():
     runtime_source = Path('bridge_runtime_hardening_r26.py').read_text(encoding='utf-8')
     primary = Path('bridge_vision/bridgit_primary_production.py').read_text(encoding='utf-8')
     assert 'bridge_runtime_hardening_r26' in adapter
-    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r26"' in workflow
+    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r26.1"' in workflow
     assert 'BRIDGE_DIARIZATION_ENABLED: "true"' in workflow
     assert 'WHISPER_MODEL: small' in workflow
     assert 'BRIDGE_PAID_CLOUD: "false"' in workflow
