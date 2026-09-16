@@ -27,6 +27,8 @@ DECLARE
     event_time text;
     run_suffix text := txid_current()::text;
     backup_row record;
+    command_comment_id bigint;
+    reaction_id bigint;
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
@@ -68,6 +70,10 @@ BEGIN
     FOREACH has_ack IN ARRAY ARRAY[false,true] LOOP
         case_number := case_number+1;
         delivery_id := 'github-codex-result:9900336-'||run_suffix||'-'||case_number;
+        command_comment_id := 5669000000 +
+            (txid_current() % 100000)*10 + case_number;
+        reaction_id := 417000000 +
+            (txid_current() % 100000)*10 + case_number;
         SELECT work_item_id INTO work_id
           FROM autopilot.register_universal_work_item(
             'sql-codex-terminal-implicit-336-'||run_suffix||'-'||case_number,
@@ -121,9 +127,9 @@ BEGIN
                 'expected_head_sha',dispatch.expected_head_sha,
                 'mode',outbox.mode,
                 'command_pr',1150,
-                'command_comment_id',5669716360+case_number,
+                'command_comment_id',command_comment_id,
                 'command_created_at',event_time,
-                'ack_reaction_id',417240536+case_number,
+                'ack_reaction_id',reaction_id,
                 'ack_created_at',event_time
             );
             SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_ack(
