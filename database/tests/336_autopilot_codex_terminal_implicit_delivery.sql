@@ -27,6 +27,19 @@ DECLARE
     event_time text;
     run_suffix text := txid_current()::text;
     backup_row record;
+    backup_found boolean;
+    current_definition text;
+    bound_role text := $bound_role$       -- TERMINAL_BOUND_ROLE_V1: authority was bound by the accepted ACK.
+       -- Later disablement must not discard terminal evidence or retain resources.
+       OR COALESCE(p_body->>'role','') !~ '^[A-Z][A-Z0-9_]{0,63}$'
+$bound_role$;
+    enabled_check text := $enabled_check$       OR NOT autopilot.role_is_enabled(COALESCE(p_body->>'role',''))
+$enabled_check$;
+    implicit_role_check text := $implicit_role_check$           OR (implicit_delivery
+               AND autopilot.role_is_enabled(COALESCE(p_body->>'role','')))
+$implicit_role_check$;
+    implicit_delivery_branch text := $implicit_delivery_branch$           OR implicit_delivery
+$implicit_delivery_branch$;
     command_comment_id bigint;
     reaction_id bigint;
 BEGIN
@@ -39,16 +52,37 @@ BEGIN
     SELECT * INTO backup_row
       FROM autopilot.migration_0336_function_backup
      WHERE function_key='accept_role_dispatch_codex_terminal';
-    IF NOT FOUND
+    backup_found := FOUND;
+    current_definition := pg_get_functiondef(
+        'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
+    );
+    -- Full-chain CI may have applied the ledger-bound 0337 successor. Reduce
+    -- only its two exact edits before comparing with the immutable 0336
+    -- installed snapshot. The dedicated bounded 0336 job still compares the
+    -- live definition directly because 0337 is absent there.
+    IF EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0337_autopilot_role_repair_admission'
+    ) THEN
+        IF (length(current_definition)-length(replace(current_definition,bound_role,'')))
+              /length(bound_role) <> 1
+           OR (length(current_definition)-length(replace(current_definition,implicit_role_check,'')))
+              /length(implicit_role_check) <> 1 THEN
+            RAISE EXCEPTION 'AUTOPILOT_CODEX_336_SUCCESSOR_DEFINITION_INVALID';
+        END IF;
+        current_definition := replace(
+            replace(current_definition,implicit_role_check,implicit_delivery_branch),
+            bound_role,enabled_check
+        );
+    END IF;
+    IF NOT backup_found
        OR backup_row.previous_definition IS NULL
        OR backup_row.installed_definition IS NULL
        OR backup_row.previous_owner IS NULL
        OR backup_row.installed_owner IS NULL
        OR backup_row.previous_acl IS NULL
        OR backup_row.installed_acl IS NULL
-       OR backup_row.installed_definition IS DISTINCT FROM pg_get_functiondef(
-          'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
-       ) THEN
+       OR backup_row.installed_definition IS DISTINCT FROM current_definition THEN
         RAISE EXCEPTION 'AUTOPILOT_CODEX_336_BACKUP_STATE_INVALID';
     END IF;
     IF has_table_privilege(

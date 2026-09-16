@@ -36,6 +36,10 @@ on:
       - 'database/migrations/0336_autopilot_codex_terminal_implicit_delivery.sql'
       - 'database/rollbacks/0336_autopilot_codex_terminal_implicit_delivery.sql'
       - 'database/tests/336_autopilot_codex_terminal_implicit_delivery.sql'
+      - 'database/migrations/0337_autopilot_role_repair_admission.sql'
+      - 'database/rollbacks/0337_autopilot_role_repair_admission.sql'
+      - 'database/tests/337_autopilot_role_repair_admission.sql'
+      - 'database/tests/337a_autopilot_role_repair_callback.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -80,6 +84,10 @@ on:
       - 'database/migrations/0336_autopilot_codex_terminal_implicit_delivery.sql'
       - 'database/rollbacks/0336_autopilot_codex_terminal_implicit_delivery.sql'
       - 'database/tests/336_autopilot_codex_terminal_implicit_delivery.sql'
+      - 'database/migrations/0337_autopilot_role_repair_admission.sql'
+      - 'database/rollbacks/0337_autopilot_role_repair_admission.sql'
+      - 'database/tests/337_autopilot_role_repair_admission.sql'
+      - 'database/tests/337a_autopilot_role_repair_callback.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -228,6 +236,10 @@ jobs:
             -f database/tests/335_autopilot_codex_delivery_window.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/336_autopilot_codex_terminal_implicit_delivery.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/337_autopilot_role_repair_admission.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/337a_autopilot_role_repair_callback.sql
 
       - name: Prove concurrent six-worker admission
         run: |
@@ -243,6 +255,8 @@ jobs:
           chmod +x database/tests/331_autopilot_six_worker_capacity_concurrency.sh
           database/tests/331_autopilot_six_worker_capacity_concurrency.sh \
             "$capacity_database_url"
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0337_autopilot_role_repair_admission.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0336_autopilot_codex_terminal_implicit_delivery.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
@@ -304,6 +318,8 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/migrations/0336_autopilot_codex_terminal_implicit_delivery.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0337_autopilot_role_repair_admission.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/323_autopilot_failure_continuation.sql
@@ -329,6 +345,10 @@ jobs:
             -f database/tests/335_autopilot_codex_delivery_window.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/336_autopilot_codex_terminal_implicit_delivery.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/337_autopilot_role_repair_admission.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/337a_autopilot_role_repair_callback.sql
 
   migration-0336-roundtrip:
     runs-on: ubuntu-24.04
@@ -378,7 +398,20 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x database/scripts/migrate.sh
-          database/scripts/migrate.sh
+          bounded_migrations="$RUNNER_TEMP/migrations-through-0336"
+          mkdir -p "$bounded_migrations"
+          for migration in database/migrations/*.sql; do
+            migration_name="$(basename "$migration")"
+            sequence="${migration_name:0:4}"
+            if ((10#$sequence <= 336)); then
+              cp -a "$migration" "$bounded_migrations/"
+              parts="${migration%.sql}"
+              if [ -d "$parts" ]; then
+                cp -a "$parts" "$bounded_migrations/"
+              fi
+            fi
+          done
+          MIGRATIONS_DIR="$bounded_migrations" database/scripts/migrate.sh
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -v persist_accepted=true \
             -f database/tests/336_autopilot_codex_terminal_implicit_delivery.sql
@@ -403,6 +436,6 @@ jobs:
             "SELECT count(*) FROM autopilot.evidence WHERE evidence_class='CHATGPT_ROLE_DISPATCH_RESULT' AND retained;")" = "$before_evidence"
           test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM autopilot.task WHERE status='DONE' AND terminal_reason_code='CODEX_CLOUD_RESULT_RETAINED';")" = "$before_done"
-          database/scripts/migrate.sh
+          MIGRATIONS_DIR="$bounded_migrations" database/scripts/migrate.sh
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/336_autopilot_codex_terminal_implicit_delivery.sql
