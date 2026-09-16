@@ -1,0 +1,48 @@
+{
+  "schema": "bridge-primary-recognizer-production-baseline-v1",
+  "revision": "3.1-free-r26.2",
+  "status": "PRODUCTION_BASELINE_CONFIRMED",
+  "active_compute_route": "github_actions_legacy",
+  "oracle_container_parity": "BLOCKED",
+  "source": {
+    "title": "Диана 29.mp4",
+    "drive_id": "1arn4rXDjEKaJ9HqmDFYfiqENm1x1Hs37",
+    "sha256": "135664d4f7eec1a66c9e9da7d6adeef748f315308c2885126ca6ce2b0b574ed3",
+    "stable_job_id": "be25b3b737fd1a32f3bb9af55cc390a1"
+  },
+  "production_run": {
+    "workflow_run_id": 35112375563,
+    "workflow_job_id": 104849130258,
+    "workflow_conclusion": "success",
+    "merge_commit": "e1624baa0901958559f933a5fb7eb96388113702",
+    "output_drive_id": "1v4vOPoHzbKC33tAPMmQygANxe0cjrJHZ",
+    "output_parent_drive_id": "1Fr-H2NgBKEpp3q_H4FzNmQwCV6bj2x6b"
+  },
+  "control_deal": {
+    "deal_review_index": 84,
+    "timestamp": "01:55:35",
+    "recognized_cards": 52,
+    "unique_cards": 52,
+    "cards_per_seat": 13,
+    "exact_reference_match": true,
+    "hands": {
+      "N": {"S": "852", "H": "AQJ8", "D": "K43", "C": "K76"},
+      "E": {"S": "J9", "H": "KT64", "D": "QJT6", "C": "T82"},
+      "S": {"S": "AQ6", "H": "753", "D": "A85", "C": "A543"},
+      "W": {"S": "KT743", "H": "92", "D": "972", "C": "QJ9"}
+    }
+  },
+  "safety_contract": {
+    "derive_fourth_hand": false,
+    "deck_complement": false,
+    "hidden_hand_inference": false,
+    "canonical_promotion": false,
+    "unknown_hidden_cards_remain_unknown": true
+  },
+  "fix_under_test": {
+    "mechanism": "bounded settle retry after non-watchdog EventFrameSelector events",
+    "retry_delay_ms": 1500,
+    "watchdog_event_reschedules_retry": false
+  },
+  "evidence_scope": "This baseline confirms one real end-to-end production control deal. It is not an Oracle cutover claim and does not by itself prove cross-video regression safety."
+}
