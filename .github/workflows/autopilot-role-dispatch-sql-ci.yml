@@ -401,8 +401,9 @@ jobs:
           bounded_migrations="$RUNNER_TEMP/migrations-through-0336"
           mkdir -p "$bounded_migrations"
           for migration in database/migrations/*.sql; do
-            prefix="$(basename "$migration" | cut -d_ -f1)"
-            if [ "$prefix" -le 0336 ]; then
+            migration_name="$(basename "$migration")"
+            sequence="${migration_name:0:4}"
+            if ((10#$sequence <= 336)); then
               cp -a "$migration" "$bounded_migrations/"
               parts="${migration%.sql}"
               if [ -d "$parts" ]; then
