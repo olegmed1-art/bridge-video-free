@@ -3,12 +3,13 @@
 ## Identity and hard boundaries
 
 - Package identity: `PR1546_MINIMAL_V1`.
-- Functional base: merged `main` exact head `3ea999617adc3bafa603e9cb45ef5ba0e8c5af7e`.
-- Main anchor used for final reconciliation: `3ea999617adc3bafa603e9cb45ef5ba0e8c5af7e`.
+- Functional base: merged `main` exact head `26615eb9689f1e4bb05d1b22d7e6a15214588803`.
+- Main anchor used for final reconciliation: `26615eb9689f1e4bb05d1b22d7e6a15214588803`.
 - Frozen pre-minimization PR #1546 head: `b8a48795fff264220f7df915c119e2936a35256e`.
 - Last repository-published minimal predecessor before this reconciliation: `6f12f61cfe38eaa40797c571266a043e136ec898`.
 - Merged dependency boundary: migrations 0336 and 0337 are authoritative on `main`; PR #1546 does not duplicate or rewrite them. PR #1600 is not inspected, reviewed, reconstructed, commented on, or modified here.
 - Merged PR #1608 supplied migration 0337 and repair-admission/callback semantics now inherited from `main` unchanged by #1546.
+- Merged PR #1625 made the inherited role-dispatch lower-chain CI roundtrip upper-chain-aware: when 0338/0339/0340 are present it cleanly rolls them back before 0337→0322 and reapplies them afterward; #1546 inherits that CI fix unchanged.
 - PR #1546 owns only 0338 bounded publication, 0339 native CLI receipts, 0340 owner-bound permit issuance, their focused integrations/tests, and strictly necessary evidence.
 - Publication remains **DISABLED**. Permit issuance remains **DISCONNECTED FROM RUNTIME/ACTIONS**. No merge, production migration, activation, production permit, canary, server/credential/ruleset/Canon/Drive change is part of this package.
 
@@ -49,13 +50,13 @@ Every changed functional path below has an explicit security/runtime reason. “
 ## Required dependencies that are intentionally not owned by #1546
 
 - `oracle_autopilot/github_codex_callback.py` — `REQUIRED_DEPENDENCY_FOR_1546`; existing immutable command/terminal parsing and binding API consumed by publication code. No #1546 diff is needed.
-- `.github/workflows/autopilot-role-dispatch-sql-ci.yml` — `REQUIRED_DEPENDENCY_FOR_1546`; merged-main CI covering 0336/0337 repair/callback lifecycle. #1546 deliberately does not modify it.
+- `.github/workflows/autopilot-role-dispatch-sql-ci.yml` — `REQUIRED_DEPENDENCY_FOR_1546`; merged-main CI covering 0336/0337 repair/callback lifecycle and, after #1625, safely unwinding/reapplying an installed 0338/0339/0340 chain around its lower-chain roundtrip. #1546 deliberately does not modify it.
 - `database/migrations/0337_autopilot_role_repair_admission.sql`, its rollback, `database/tests/337_autopilot_role_repair_admission.sql`, and `database/tests/337a_autopilot_role_repair_callback.sql` — `REQUIRED_DEPENDENCY_FOR_1546`; merged into `main` and inherited unchanged.
 - `database/migrations/0336_autopilot_codex_terminal_implicit_delivery.sql` and its merged-main lifecycle support — `REQUIRED_DEPENDENCY_FOR_1546`; present on `main` as the predecessor to 0337. #1546 does not own or modify it.
 
 ## DROP set and minimization rationale
 
-- `.github/workflows/autopilot-role-dispatch-sql-ci.yml` as a **#1546 update** — `UNRELATED_DROP`: it is now authoritative on merged `main`. #1546 inherits it unchanged rather than duplicating dependency scope.
+- `.github/workflows/autopilot-role-dispatch-sql-ci.yml` as a **#1546 update** — `UNRELATED_DROP`: it is authoritative on merged `main`, including the #1625 upper-chain-aware roundtrip fix. #1546 inherits it unchanged rather than duplicating dependency scope.
 - `.github/workflows/bridge-video-3.1-free.yml` — `UNRELATED_DROP`: frozen V5 chunk 3 was reconciliation-only Video workflow state; bounded publication does not execute or modify Video pipelines.
 - `bridge_runtime_hardening_r26.py` — `UNRELATED_DROP`: frozen V5 chunk 4 was current-main reconciliation. No publication/permit/native receipt import or test requires it.
 - `bridge_vision/**` including `bridge_vision/anchor_registration.py`, `bridge_vision/bridgit_event_frame_selector.py`, and the never-started next cursor `bridge_vision/bridgit_gambler_rank_layout.py` — `UNRELATED_DROP`: Vision/recognizer layout code has no path in the publication receiver, permit issuer, or native receipt contract.
@@ -70,13 +71,13 @@ No unenumerated path from the retired 69-path manifest is silently carried forwa
 
 Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>\n` plus lexicographically sorted tab-separated `path, operation, base_blob_sha, content_sha256, mode` records.
 
-- Functional core aggregate SHA-256: `1eead23aab7ecd50084c4af089afa1c5237fbb37bd5ef030b1c61b9781646d1f`.
+- Functional core aggregate SHA-256: `d7f402b0f352d5ca1e2e5c9f8e7fb447a040768249814cc84d564a6686a06412`.
 - DELETE operations: **none** relative to merged `main`.
 
 | Operation | Base blob SHA | Content SHA-256 | Mode | Path |
 |---|---|---|---|---|
 | UPDATE | `2c49fcf95bc3ded580c842ec0dbe61f08271f6f5` | `b8107d35df94adae2fe83c788fd3ba71284bd25be7f13650abef183524dbffbf` | `100644` | `.github/workflows/autopilot-codex-event-callback.yml` |
-| CREATE | `-` | `e3fafe39467e6efa4034c488ba5d6fbb852114bf61bfea5585d1e585a82c2a8b` | `100644` | `.github/workflows/autopilot-publication-security-ci.yml` |
+| CREATE | `-` | `71a5723e11e1d46cc9840bb23ed00732a5c134cc5f301b2b487a4188fd622a1e` | `100644` | `.github/workflows/autopilot-publication-security-ci.yml` |
 | CREATE | `-` | `510f74783d914498dba1e6d7b0195c5ed7bedb240cce060f9478cb361d1b6fad` | `100644` | `database/migrations/0338_autopilot_bounded_publication_permit.sql` |
 | CREATE | `-` | `5f37acb6ae97694f93851c3288b0c580bbeecde9246c5bb2665f70327436a3a5` | `100644` | `database/migrations/0339_autopilot_native_cli_receipts.sql` |
 | CREATE | `-` | `ace9c41ada9e6603775c33d9c621c8309578e70d15a11410b5641a752604c76b` | `100644` | `database/migrations/0340_autopilot_publication_permit_issuer.sql` |
@@ -95,15 +96,16 @@ Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>
 | CREATE | `-` | `bb1dc5120896afaa38c2bdf015c7ea3a2d1537bbdc9a7a07b41b6bb9de044ee5` | `100644` | `tests/test_oracle_autopilot_codex_cli_bridge.py` |
 | CREATE | `-` | `ac1ca1aa466906b2126dd9e523df3ad343f625efa6f9d6977b249aadb71f16a4` | `100644` | `tests/test_oracle_autopilot_codex_cli_delivery.py` |
 | CREATE | `-` | `36cd1bdc53792db0a65b6ab773bc53364972b672de2075066014e7df15ea5850` | `100644` | `tests/test_oracle_autopilot_codex_cli_queue.py` |
-| UPDATE | `ee49d635e7151a466e35ee6e7506a3fe0b267e31` | `5d51053f1e015b1a0f692760200d26a8f4bff6958166704cd0869402d74e26de` | `100644` | `tests/test_oracle_autopilot_github_codex_callback_workflow.py` |
+| UPDATE | `ee49d635e7151a466e35ee6e7506a3fe0b267e31` | `0aaeb9fe2b883c8f88acda4c8e8c0765991cf453e608c6e710d072b893c7342d` | `100644` | `tests/test_oracle_autopilot_github_codex_callback_workflow.py` |
 | CREATE | `-` | `4ec5bd2f4f48cb5f871084a246756a0eb9be866a451f5a6277ff4a6759b3d4b9` | `100644` | `tests/test_oracle_autopilot_github_codex_publication.py` |
 | CREATE | `-` | `039e130a3ae805540bda5e7ce588f24040db2b8777a657549a466a5b0c4785d3` | `100644` | `tests/test_oracle_autopilot_github_codex_publication_permit.py` |
+
 
 ## Dependency and application map
 
 `main 0336` → `main 0337` → `#1546 0338 bounded publication` → `#1546 0339 native receipts` → `#1546 0340 owner permit issuer`.
 
-- Repository integration base is merged `main` exact head `3ea999617adc3bafa603e9cb45ef5ba0e8c5af7e`; #1546 must not duplicate 0336/0337 or their callback/repair semantics.
+- Repository integration base is merged `main` exact head `26615eb9689f1e4bb05d1b22d7e6a15214588803`; #1546 must not duplicate 0336/0337 or their callback/repair semantics.
 - 0338 installs permit ledger + callback authorization RPC; callback can consume a permit but cannot issue one.
 - 0339 installs native receipt/reservation fencing, disabled by default and without runtime grants.
 - 0340 installs owner-only issuance. The offline verifier is not wired into a workflow/service; explicit owner-gated execution is required later.
@@ -122,6 +124,7 @@ Clean rollback order is `0340 → 0339 → 0338`. 0340 and 0338 refuse destructi
 - Python compile and `git diff --check`: PASS.
 - `database/tests/340a_autopilot_publication_permit_concurrency.sh`: shell syntax check PASS.
 - Exact-head review of `b02d130f0bc448cceb4f3e03073248bc24f16d31` found P2: the publisher could rewrite existing `database/migrations/0000–0099` files. The remediation removes `database/migrations/**` from the publication allowlist entirely and adds regression coverage for historical migrations; new migration creation was already impossible because bounded publication only modifies existing files.
+- Dependency PR #1625 passed its exact PostgreSQL18 role-dispatch roundtrip CI and Current-Main Authoritative CI before merge as `26615eb9689f1e4bb05d1b22d7e6a15214588803`; no production state was touched.
 - Ephemeral local PostgreSQL 18 validation on the merged-main tree: migrations through 0340 applied; SQL tests 338/339/340 passed; two-session 340a conflict fencing and retained-evidence rollback refusal passed; clean rollback 0340→0339→0338 preserved 0337; reapply and tests passed.
 - The local PostgreSQL run used an isolated disposable Docker database only. No production database or server state was changed. Hosted exact-head CI remains required after repository publication.
 

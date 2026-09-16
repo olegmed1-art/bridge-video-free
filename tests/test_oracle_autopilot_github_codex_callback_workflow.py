@@ -69,6 +69,16 @@ def test_focused_publication_ci_covers_lifecycle_without_duplicating_1608_sql_ci
     inherited = Path(".github/workflows/autopilot-role-dispatch-sql-ci.yml").read_text()
     assert "0337_autopilot_role_repair_admission.sql" in inherited
     assert "337a_autopilot_role_repair_callback.sql" in inherited
-    assert "0338_autopilot_bounded_publication_permit.sql" not in inherited
-    assert "0339_autopilot_native_cli_receipts.sql" not in inherited
-    assert "0340_autopilot_publication_permit_issuer.sql" not in inherited
+    # The merged dependency CI may reference the upper publication chain only
+    # to unwind/reapply it around its lower-chain roundtrip. It must not take
+    # ownership by triggering on #1546 migration paths.
+    triggers = inherited.split("\npermissions:\n", 1)[0]
+    for filename in (
+        "0338_autopilot_bounded_publication_permit.sql",
+        "0339_autopilot_native_cli_receipts.sql",
+        "0340_autopilot_publication_permit_issuer.sql",
+    ):
+        assert filename not in triggers
+        assert filename in inherited
+    assert "upper_publication_chain_count" in inherited
+    assert "partial publication migration chain" in inherited

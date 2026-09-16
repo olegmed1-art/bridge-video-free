@@ -48,7 +48,7 @@ jobs:
       - name: Prove stacked exact-head ancestry
         run: |
           set -euo pipefail
-          git merge-base --is-ancestor 3ea999617adc3bafa603e9cb45ef5ba0e8c5af7e HEAD
+          git merge-base --is-ancestor 26615eb9689f1e4bb05d1b22d7e6a15214588803 HEAD
 
       - name: Run focused publication, permit, callback, and native receipt tests
         run: |
