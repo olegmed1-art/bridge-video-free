@@ -1,0 +1,209 @@
+name: bridge-video-3.1-server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'run_requests/*.txt'
+      - 'ops/oracle-legacy-server-canary-requests/*.txt'
+  workflow_dispatch:
+    inputs:
+      request_path:
+        description: Existing validated request file path
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  server-worker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Checkout exact production control plane
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Resolve request and fail-closed route gate
+        id: request
+        shell: bash
+        env:
+          INPUT_REQUEST_PATH: ${{ inputs.request_path }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            REQUEST_FILE="$INPUT_REQUEST_PATH"
+          else
+            mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+              | grep -E '^(run_requests|ops/oracle-legacy-server-canary-requests)/[^/]+\.txt$' | sort -u)
+            [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one server video request' >&2; exit 78; }
+            REQUEST_FILE="${files[0]}"
+          fi
+          [[ -f "$REQUEST_FILE" && ! -L "$REQUEST_FILE" ]]
+          case "$REQUEST_FILE" in
+            run_requests/*.txt)
+              python ops/validate_universal_video_runtime_routing.py --require-active oracle_legacy_server
+              CANARY=false
+              ;;
+            ops/oracle-legacy-server-canary-requests/*.txt)
+              CANARY=true
+              python - <<'PYROUTE'
+          import json
+          from pathlib import Path
+          x=json.loads(Path('ops/universal-video-runtime-routing.json').read_text())
+          routes=x.get('routes') or {}
+          assert 'oracle_legacy_server' in routes
+          assert routes['oracle_legacy_server'].get('compute_location') == 'oracle_server'
+          assert x.get('active_production_route') in {'github_actions_legacy','oracle_legacy_server'}
+          print('ORACLE_LEGACY_SERVER_CANARY_ROUTE_PASS')
+          PYROUTE
+              ;;
+            *) echo 'unsupported request path' >&2; exit 78 ;;
+          esac
+          value(){ sed -n "s/^$1=//p" "$REQUEST_FILE" | tail -n1; }
+          JOB_ID="$(value JOB_ID | tr -d '[:space:]')"
+          SOURCE_ID="$(value ORIGINAL_SOURCE_DRIVE_ID | tr -d '[:space:]')"
+          OUTPUT_ID="$(value OUTPUT_FOLDER_ID | tr -d '[:space:]')"
+          WORK_ID="$(value WORK_FOLDER_ID | tr -d '[:space:]')"
+          LESSON_NUMBER="$(value LESSON_NUMBER | tr -d '[:space:]')"
+          LESSON_DATE_CANDIDATE="$(value LESSON_DATE_CANDIDATE | tr -d '[:space:]')"
+          LESSON_DATE_SOURCE="$(value LESSON_DATE_SOURCE)"
+          PERSIST="$(value PERSIST_DATABASE | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          PERSIST="${PERSIST:-false}"
+          [[ "$JOB_ID" =~ ^[0-9a-f]{32}$ ]]
+          [[ "$SOURCE_ID" =~ ^[0-9A-Za-z_-]+$ ]]
+          [[ "$PERSIST" == true || "$PERSIST" == false ]]
+          for v in "$OUTPUT_ID" "$WORK_ID"; do [[ -z "$v" || "$v" =~ ^[0-9A-Za-z_-]+$ ]]; done
+          if [[ "$CANARY" == true ]]; then
+            [[ -n "$OUTPUT_ID" ]] || { echo 'canary requires isolated output folder' >&2; exit 78; }
+            [[ "$PERSIST" == false ]] || { echo 'canary database persistence forbidden' >&2; exit 78; }
+          fi
+          expected="$(BRIDGE_ORIGINAL_SOURCE_DRIVE_ID="$SOURCE_ID" python - <<'PYID'
+          import os
+          from bridge_worker_3_1_free import stable_job_id
+          print(stable_job_id('drive', os.environ['BRIDGE_ORIGINAL_SOURCE_DRIVE_ID']))
+          PYID
+          )"
+          [[ "$expected" == "$JOB_ID" ]] || { echo 'job/source identity mismatch' >&2; exit 78; }
+          {
+            echo "request_file=$REQUEST_FILE"
+            echo "canary=$CANARY"
+            echo "job_id=$JOB_ID"
+            echo "source_id=$SOURCE_ID"
+            echo "output_id=$OUTPUT_ID"
+            echo "work_id=$WORK_ID"
+            echo "lesson_number=$LESSON_NUMBER"
+            echo "lesson_date_candidate=$LESSON_DATE_CANDIDATE"
+            echo "persist=$PERSIST"
+          } >> "$GITHUB_OUTPUT"
+          echo "BRIDGE_LESSON_DATE_SOURCE=$LESSON_DATE_SOURCE" >> "$GITHUB_ENV"
+          echo "SERVER_CONTROL_PLANE_PREFLIGHT_PASS canary=$CANARY job=$JOB_ID"
+
+      - name: Ensure Oracle server is running
+        env:
+          OCI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q oci-cli
+          u="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          f="$(printf '%s\n' "$OCI_FINGERPRINT" | sed -nE 's/^[[:space:]]*(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})[[:space:]]*$/\2/p' | head -n1)"
+          t="$(printf '%s\n' "$OCI_TENANCY" | sed -nE 's/^[[:space:]]*(tenancy=)?(ocid1\.tenancy\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          [[ -n "$u" && -n "$f" && -n "$t" ]]
+          install -d -m 0700 "$RUNNER_TEMP/oci"
+          printf '%s\n' "$OCI_KEY" > "$RUNNER_TEMP/oci/key.pem"; chmod 0600 "$RUNNER_TEMP/oci/key.pem"
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s\n' \
+            "$u" "$f" "$t" "$OCI_REGION" "$RUNNER_TEMP/oci/key.pem" > "$RUNNER_TEMP/oci/config"
+          chmod 0600 "$RUNNER_TEMP/oci/config"
+          state="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+          case "$state" in
+            RUNNING) ;;
+            STOPPED) oci --config-file "$RUNNER_TEMP/oci/config" compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+            *) echo "unsupported Oracle state: $state" >&2; exit 78 ;;
+          esac
+          echo ORACLE_LEGACY_SERVER_RUNNING_PASS
+
+      - name: Resolve pinned SSH transport
+        id: ssh
+        env:
+          SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+          SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+          SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+          SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"; printf '%s\n' "${!selected}" > "$key"; chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"; echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Execute exact legacy production runtime on Oracle server
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          JOB_ID: ${{ steps.request.outputs.job_id }}
+          SOURCE_ID: ${{ steps.request.outputs.source_id }}
+          OUTPUT_ID: ${{ steps.request.outputs.output_id }}
+          WORK_ID: ${{ steps.request.outputs.work_id }}
+          LESSON_NUMBER: ${{ steps.request.outputs.lesson_number }}
+          LESSON_DATE_CANDIDATE: ${{ steps.request.outputs.lesson_date_candidate }}
+          PERSIST_DATABASE: ${{ steps.request.outputs.persist }}
+          CANARY: ${{ steps.request.outputs.canary }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$GOOGLE_DRIVE_OAUTH_JSON" && -n "$BRIDGE_WORKER_DATABASE_URL" ]]
+          ssh_base=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          scp_base=(scp -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15)
+          base='/home/ubuntu/bridge-video-production'
+          release="$base/releases/$GITHUB_SHA"
+          secret_dir="$base/run-secrets/$GITHUB_RUN_ID"
+          archive="$RUNNER_TEMP/runtime.tar.gz"
+          git archive --format=tar.gz -o "$archive" "$GITHUB_SHA"
+          archive_sha="$(sha256sum "$archive" | awk '{print $1}')"
+          printf '%s' "$GOOGLE_DRIVE_OAUTH_JSON" > "$RUNNER_TEMP/drive-oauth.json"
+          printf '%s' "$BRIDGE_WORKER_DATABASE_URL" > "$RUNNER_TEMP/worker-db-url"
+          chmod 0600 "$RUNNER_TEMP/drive-oauth.json" "$RUNNER_TEMP/worker-db-url"
+          "${ssh_base[@]}" "set -e; umask 077; mkdir -p '$base/releases' '$secret_dir'; rm -rf '$release.tmp'; mkdir -p '$release.tmp'"
+          "${scp_base[@]}" "$archive" "$RUNNER_TEMP/drive-oauth.json" "$RUNNER_TEMP/worker-db-url" "$ORACLE_USER@$ORACLE_HOST:$secret_dir/"
+          cleanup(){ "${ssh_base[@]}" "rm -rf '$secret_dir' '$release.tmp'" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          "${ssh_base[@]}" "set -euo pipefail; test \"\$(sha256sum '$secret_dir/runtime.tar.gz' | awk '{print \$1}')\" = '$archive_sha'; tar -xzf '$secret_dir/runtime.tar.gz' -C '$release.tmp'; mv '$release.tmp' '$release'; python3 -m venv '$base/.venv'; '$base/.venv/bin/python' -m pip install --disable-pip-version-check -q -r '$release/requirements-worker.txt'; cd '$release'; '$base/.venv/bin/python' -m py_compile bridge_runtime_hardening_r26.py run_drive_3_1_free_oidc.py; echo SERVER_RUNTIME_INSTALL_PASS commit='$GITHUB_SHA' archive_sha256='$archive_sha'"
+          "${ssh_base[@]}" "cd '$release' && env \
+            BRIDGE_SERVER_RELEASE_DIR='$release' BRIDGE_SERVER_VENV='$base/.venv' \
+            BRIDGE_SERVER_DRIVE_OAUTH_FILE='$secret_dir/drive-oauth.json' BRIDGE_SERVER_WORKER_DB_FILE='$secret_dir/worker-db-url' \
+            BRIDGE_SERVER_RUNTIME_COMMIT='$GITHUB_SHA' BRIDGE_SERVER_CANARY='$CANARY' \
+            BRIDGE_JOB_ID='$JOB_ID' BRIDGE_ORIGINAL_SOURCE_DRIVE_ID='$SOURCE_ID' \
+            BRIDGE_OUTPUT_FOLDER_ID='$OUTPUT_ID' BRIDGE_WORK_FOLDER_ID='$WORK_ID' \
+            BRIDGE_LESSON_NUMBER='$LESSON_NUMBER' BRIDGE_LESSON_DATE_CANDIDATE='$LESSON_DATE_CANDIDATE' \
+            BRIDGE_LESSON_DATE_SOURCE='${BRIDGE_LESSON_DATE_SOURCE:-}' BRIDGE_PERSIST_DATABASE='$PERSIST_DATABASE' \
+            '$release/ops/run_bridge_video_oracle_legacy_remote.sh'"
+          cleanup
+          trap - EXIT
+          echo SERVER_PRODUCTION_REMOTE_EXECUTION_PASS
