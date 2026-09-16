@@ -29,6 +29,7 @@ export BRIDGE_PAID_CLOUD=false
 export BRIDGE_BILLING_FALLBACK=false
 export BRIDGE_LARGER_RUNNER=false
 export BRIDGE_REPOSITORY_PRIVATE=false
+export BRIDGE_RUNNER_LABEL=ubuntu-24.04
 if [[ -n "${BRIDGE_LESSON_DATE_SOURCE_B64:-}" ]]; then
   export BRIDGE_LESSON_DATE_SOURCE="$(printf '%s' "$BRIDGE_LESSON_DATE_SOURCE_B64" | base64 --decode)"
 fi

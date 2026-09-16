@@ -42,3 +42,4 @@ def test_remote_runtime_preserves_legacy_revision_and_identity_contracts():
     assert 'persist_completed_drive_job' in text
     assert 'compute":"oracle_legacy_server' in text
     assert 'GOOGLE_DRIVE_OAUTH_JSON=' in text
+    assert 'BRIDGE_RUNNER_LABEL=ubuntu-24.04' in text
