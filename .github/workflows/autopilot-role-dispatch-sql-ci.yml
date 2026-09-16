@@ -33,6 +33,9 @@ on:
       - 'database/migrations/0334_autopilot_github_probe_retry.sql'
       - 'database/rollbacks/0334_autopilot_github_probe_retry.sql'
       - 'database/tests/334_autopilot_github_probe_retry.sql'
+      - 'database/migrations/0336_autopilot_codex_terminal_implicit_delivery.sql'
+      - 'database/rollbacks/0336_autopilot_codex_terminal_implicit_delivery.sql'
+      - 'database/tests/336_autopilot_codex_terminal_implicit_delivery.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -74,6 +77,9 @@ on:
       - 'database/migrations/0334_autopilot_github_probe_retry.sql'
       - 'database/rollbacks/0334_autopilot_github_probe_retry.sql'
       - 'database/tests/334_autopilot_github_probe_retry.sql'
+      - 'database/migrations/0336_autopilot_codex_terminal_implicit_delivery.sql'
+      - 'database/rollbacks/0336_autopilot_codex_terminal_implicit_delivery.sql'
+      - 'database/tests/336_autopilot_codex_terminal_implicit_delivery.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -218,6 +224,10 @@ jobs:
             -f database/tests/333_autopilot_dispatch_assignment_coherence.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/334_autopilot_github_probe_retry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/335_autopilot_codex_delivery_window.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/336_autopilot_codex_terminal_implicit_delivery.sql
 
       - name: Prove concurrent six-worker admission
         run: |
@@ -233,6 +243,10 @@ jobs:
           chmod +x database/tests/331_autopilot_six_worker_capacity_concurrency.sh
           database/tests/331_autopilot_six_worker_capacity_concurrency.sh \
             "$capacity_database_url"
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0336_autopilot_codex_terminal_implicit_delivery.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0335_autopilot_codex_delivery_window.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0334_autopilot_github_probe_retry.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
@@ -286,6 +300,10 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/migrations/0334_autopilot_github_probe_retry.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0335_autopilot_codex_delivery_window.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0336_autopilot_codex_terminal_implicit_delivery.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/323_autopilot_failure_continuation.sql
@@ -307,3 +325,84 @@ jobs:
             -f database/tests/333_autopilot_dispatch_assignment_coherence.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/334_autopilot_github_probe_retry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/335_autopilot_codex_delivery_window.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/336_autopilot_codex_terminal_implicit_delivery.sql
+
+  migration-0336-roundtrip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: autopilot_0336_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d autopilot_0336_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/autopilot_0336_ci
+      DATABASE_URL: postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/autopilot_0336_ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Bootstrap managed-owner-compatible database
+        run: |
+          set -euo pipefail
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE EXTENSION IF NOT EXISTS btree_gist;
+          CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+          CREATE ROLE bridge_ci_owner LOGIN PASSWORD 'bridge_ci_owner' CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION;
+          ALTER DATABASE autopilot_0336_ci OWNER TO bridge_ci_owner;
+          ALTER SCHEMA public OWNER TO bridge_ci_owner;
+          SQL
+
+      - name: Apply, test, rollback, reapply, and retest 0336
+        run: |
+          set -euo pipefail
+          chmod +x database/scripts/migrate.sh
+          database/scripts/migrate.sh
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -v persist_accepted=true \
+            -f database/tests/336_autopilot_codex_terminal_implicit_delivery.sql
+          before_receipts="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM autopilot.role_dispatch_codex_terminal_receipt;")"
+          before_evidence="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM autopilot.evidence WHERE evidence_class='CHATGPT_ROLE_DISPATCH_RESULT' AND retained;")"
+          before_done="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM autopilot.task WHERE status='DONE' AND terminal_reason_code='CODEX_CLOUD_RESULT_RETAINED';")"
+          test "$before_receipts" -ge 2
+          test "$before_evidence" -ge 2
+          test "$before_done" -ge 2
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0336_autopilot_codex_terminal_implicit_delivery.sql
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0336_autopilot_codex_terminal_implicit_delivery';")" = 0
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT to_regclass('autopilot.migration_0336_function_backup') IS NULL;")" = t
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM autopilot.role_dispatch_codex_terminal_receipt;")" = "$before_receipts"
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM autopilot.evidence WHERE evidence_class='CHATGPT_ROLE_DISPATCH_RESULT' AND retained;")" = "$before_evidence"
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM autopilot.task WHERE status='DONE' AND terminal_reason_code='CODEX_CLOUD_RESULT_RETAINED';")" = "$before_done"
+          database/scripts/migrate.sh
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/336_autopilot_codex_terminal_implicit_delivery.sql
