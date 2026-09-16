@@ -2,9 +2,11 @@
 
 The command comment is accepted only when it was created by the repository
 owner through the pinned ChatGPT Codex Connector GitHub App.  Delivery becomes
-real only after the immutable Codex bot account adds an ``eyes`` reaction.
-Terminal results are accepted only from that same bot/app identity and only
-after an acknowledged command has been bound by the database.
+real either when the immutable Codex bot account adds an ``eyes`` reaction or
+when that same pinned bot/app returns an exact-bound terminal while the outbox
+is still ``PUBLISHED`` and its delivery deadline is open.  The latter path does
+not fabricate ACK provenance.  Both paths remain database-bound to repository,
+dispatch/epoch, role, target PR/head, fingerprint, state, and deadlines.
 """
 
 from __future__ import annotations

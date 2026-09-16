@@ -34,16 +34,19 @@ Workspace Agent access tokens относятся к Business/Enterprise и эт�
    При rollout сначала развернуть и проверить приёмник с поддержкой обеих
    строк, затем переключить publisher. При откате сначала вернуть publisher на
    `@codex`, после этого можно откатывать поддержку новой строки в приёмнике.
-4. GitHub создаёт отдельную изолированную Codex Cloud task/chat. Реальная
-   доставка фиксируется только после `eyes` reaction от закреплённого Codex bot
-   (`id=199175422`).
+4. GitHub создаёт отдельную изолированную Codex Cloud task/chat. Обычный путь
+   фиксирует доставку после `eyes` reaction от закреплённого Codex bot
+   (`id=199175422`). Если необязательная UI-reaction не появилась, exact-bound
+   terminal того же закреплённого bot/app может сам подтвердить доставку только
+   пока outbox остаётся `PUBLISHED` и delivery deadline ещё открыт.
 5. GitHub Actions повторно проверяет открытый target PR, его номер и exact
    head, после чего узкий `SECURITY DEFINER` RPC переводит outbox в `SENT`.
    Target PR может опираться на промежуточную ветку; требование base `main`
    применяется только к dispatch PR, проверяемому событийным мостом.
 6. Codex завершает ответ блоком `AUTOPILOT_CODEX_RESULT_V1`. Второй callback
    принимает только comment закреплённого GitHub App (`id=1144995`), повторно
-   сверяет live head и требует сохранённый ACK.
+   сверяет live head и требует либо сохранённый ACK в открытом callback window,
+   либо строго ограниченный `PUBLISHED`/delivery-deadline контракт из шага 4.
 7. Neon атомарно сохраняет terminal receipt/evidence, закрывает task/work item
    и посылает `NOTIFY` для следующей независимой задачи.
 
@@ -52,6 +55,8 @@ Workspace Agent access tokens относятся к Business/Enterprise и эт�
 - `PUBLISHED` означает только существование dispatch PR, не доставку.
 - Один `dispatch_id` получает не более одного ACK и одного terminal receipt;
   повтор точного payload идемпотентен, конфликтующий повтор отклоняется.
+- Terminal без `eyes` не создаёт синтетический ACK: `codex_ack_*` остаются NULL,
+  а retained evidence явно помечается `PINNED_CODEX_TERMINAL`.
 - Нет OpenAI API key, Workspace Agent token или сохранённой ChatGPT-сессии на
   Oracle.
 - Нет анонимного GitHub API polling: PR-head probe использует отдельный
@@ -72,6 +77,9 @@ Workspace Agent access tokens относятся к Business/Enterprise и эт�
 Команда отклоняется при неверном owner/app, PR, head, epoch, role, fingerprint,
 scope или schema. ACK имеет тридцатиминутное окно с момента публикации dispatch
 PR (миграция 0335). Terminal result имеет
-двухчасовое окно, принимается только после ACK и только при совпадении live head
-с заявленным `target_head_sha`. Истечение окна становится явной retryable
-ошибкой, а не ложным успехом.
+двухчасовое окно после ACK. Без ACK terminal принимается только для всё ещё
+`PUBLISHED` dispatch внутри delivery window. В обоих путях обязательны точные
+repository, bot/app identity, dispatch id/epoch, role, target PR, fingerprint,
+state и (для READ_ONLY/VERIFY) live `target_head_sha`. Истечение окна становится
+явной retryable ошибкой, а не ложным успехом; WORLD/Canon и другие semantic
+контуры этот транспортный контракт не изменяет.
