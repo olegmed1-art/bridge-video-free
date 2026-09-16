@@ -88,6 +88,9 @@ jobs:
 
               def visit_ImportFrom(self, node):
                   for alias in node.names:
+                      if alias.name == '*':
+                          self.bindings.append(('wildcard-import', node.module, node.lineno))
+                          continue
                       bound_name = alias.asname or alias.name
                       if bound_name == self.name:
                           self.bindings.append(('import-from', node.module, node.lineno))
