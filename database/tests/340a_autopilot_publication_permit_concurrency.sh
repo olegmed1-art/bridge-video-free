@@ -23,7 +23,7 @@ BEGIN
     claimed.task_id,'publication-concurrency-worker-340',claimed.lease_epoch);
   SELECT * INTO outbox FROM autopilot.claim_role_dispatch_outbox_v2('publication-concurrency-publisher-340',60);
   PERFORM autopilot.mark_role_dispatch_published(
-    dispatch.dispatch_id,'publication-concurrency-publisher-340',outbox.claim_epoch,99003420,repeat('b',64));
+    dispatch.dispatch_id,'publication-concurrency-publisher-340',outbox.claim_epoch,9903420,repeat('b',64));
   repair_id:=autopilot.materialize_role_repair(
     materialized.task_id,'BOUNDED_DEFECT','Concurrent permit fixture.');
   SELECT * INTO claimed FROM autopilot.claim_next_task('publication-concurrency-repair-340',60);
@@ -32,17 +32,17 @@ BEGIN
     claimed.task_id,'publication-concurrency-repair-340',claimed.lease_epoch);
   SELECT * INTO outbox FROM autopilot.claim_role_dispatch_outbox_v2('publication-concurrency-publisher-340',60);
   PERFORM autopilot.mark_role_dispatch_published(
-    dispatch.dispatch_id,'publication-concurrency-publisher-340',outbox.claim_epoch,99003421,repeat('b',64));
+    dispatch.dispatch_id,'publication-concurrency-publisher-340',outbox.claim_epoch,9903421,repeat('b',64));
   event_time:=to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"');
   ack:=jsonb_build_object(
-    'dispatch_id',dispatch.dispatch_id::text,'dispatch_pr',99003421,
+    'dispatch_id',dispatch.dispatch_id::text,'dispatch_pr',9903421,
     'dispatch_epoch',dispatch.dispatch_epoch,'role',dispatch.role,
     'task_fingerprint',dispatch.task_fingerprint,'target_pr',dispatch.target_pr,
     'expected_head_sha',dispatch.expected_head_sha,'mode','REPAIR',
-    'command_pr',1150,'command_comment_id',990034210,'command_created_at',event_time,
-    'ack_reaction_id',990034211,'ack_created_at',event_time);
+    'command_pr',1150,'command_comment_id',99034210,'command_created_at',event_time,
+    'ack_reaction_id',99034211,'ack_created_at',event_time);
   PERFORM * FROM autopilot.accept_role_dispatch_codex_ack(
-    'github-codex-ack:990034211',repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
+    'github-codex-ack:99034211',repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
     'olegmed1-art',315099490,'OWNER','chatgpt-codex-connector',1144995,
     'chatgpt-codex-connector[bot]',199175422,ack);
 END $$;
@@ -65,20 +65,20 @@ SELECT autopilot.issue_codex_publication_permit(
     'payload_sha256',repeat('$payload',64),
     'provenance_evidence_sha256',repeat('$provenance',64))
    FROM autopilot.role_dispatch_outbox o
-   WHERE o.github_dispatch_comment_id=99003421),600);
+   WHERE o.github_dispatch_comment_id=9903421),600);
 SQL
 }
 
 {
   echo 'BEGIN;'
-  make_evidence 990034212 990034213 e f
+  make_evidence 99034212 99034213 e f
   echo 'SELECT pg_sleep(2);'
   echo 'COMMIT;'
 } | psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >"$tmp/a.out" 2>"$tmp/a.err" &
 a_pid=$!
 sleep 0.4
 set +e
-make_evidence 990034214 990034215 1 2 | psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >"$tmp/b.out" 2>"$tmp/b.err"
+make_evidence 99034214 99034215 1 2 | psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >"$tmp/b.out" 2>"$tmp/b.err"
 b_rc=$?
 set -e
 wait "$a_pid"
@@ -89,7 +89,7 @@ fi
 grep -F 'PUBLICATION_PERMIT_REUSE_CONFLICT' "$tmp/b.err"
 
 # Exact replay is idempotent after the winning transaction commits.
-make_evidence 990034212 990034213 e f | psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >/dev/null
+make_evidence 99034212 99034213 e f | psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >/dev/null
 
 # Populated evidence must block rollback and remain readable afterwards.
 set +e

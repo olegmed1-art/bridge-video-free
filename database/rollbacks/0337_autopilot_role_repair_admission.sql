@@ -36,6 +36,11 @@ DECLARE
        -- Later disablement must not discard terminal evidence or retain resources.
        OR COALESCE(p_body->>'role','') !~ '^[A-Z][A-Z0-9_]{0,63}$'
 $bound_role$;
+    implicit_role_check text := $implicit_role_check$           OR (implicit_delivery
+               AND autopilot.role_is_enabled(COALESCE(p_body->>'role','')))
+$implicit_role_check$;
+    implicit_delivery_branch text := $implicit_delivery_branch$           OR implicit_delivery
+$implicit_delivery_branch$;
     enabled_check text := $enabled_check$       OR NOT autopilot.role_is_enabled(COALESCE(p_body->>'role',''))
 $enabled_check$;
 BEGIN
@@ -43,9 +48,12 @@ BEGIN
         'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure);
     IF current_definition IS NULL
        OR (length(current_definition)-length(replace(current_definition,bound_role,'')))
-          /length(bound_role) <> 1 THEN
+          /length(bound_role) <> 1
+       OR (length(current_definition)-length(replace(current_definition,implicit_role_check,'')))
+          /length(implicit_role_check) <> 1 THEN
         RAISE EXCEPTION 'AUTOPILOT_TERMINAL_BOUND_ROLE_ROLLBACK_DRIFT';
     END IF;
+    current_definition := replace(current_definition,implicit_role_check,implicit_delivery_branch);
     EXECUTE replace(current_definition,bound_role,enabled_check);
 END $terminal_callback_rollback$;
 -- Only the activation marker is removed; tasks, receipts and evidence remain.

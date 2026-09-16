@@ -45,7 +45,7 @@ BEGIN
         claimed.task_id,'sql-pub-issuer-worker-340',claimed.lease_epoch);
     SELECT * INTO outbox FROM autopilot.claim_role_dispatch_outbox_v2('sql-pub-issuer-publisher-340',60);
     PERFORM autopilot.mark_role_dispatch_published(
-        dispatch.dispatch_id,'sql-pub-issuer-publisher-340',outbox.claim_epoch,99003400,repeat('b',64));
+        dispatch.dispatch_id,'sql-pub-issuer-publisher-340',outbox.claim_epoch,9903400,repeat('b',64));
     repair_id:=autopilot.materialize_role_repair(
         materialized.task_id,'BOUNDED_DEFECT','Synthetic publication defect.');
     SELECT * INTO claimed FROM autopilot.claim_next_task('sql-pub-issuer-repair-340',60);
@@ -54,18 +54,18 @@ BEGIN
         claimed.task_id,'sql-pub-issuer-repair-340',claimed.lease_epoch);
     SELECT * INTO outbox FROM autopilot.claim_role_dispatch_outbox_v2('sql-pub-issuer-publisher-340',60);
     PERFORM autopilot.mark_role_dispatch_published(
-        dispatch.dispatch_id,'sql-pub-issuer-publisher-340',outbox.claim_epoch,99003401,repeat('b',64));
+        dispatch.dispatch_id,'sql-pub-issuer-publisher-340',outbox.claim_epoch,9903401,repeat('b',64));
     SELECT * INTO assignment FROM autopilot.get_dispatch_assignment(dispatch.dispatch_id);
     event_time:=to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"');
     ack:=jsonb_build_object(
-        'dispatch_id',dispatch.dispatch_id::text,'dispatch_pr',99003401,
+        'dispatch_id',dispatch.dispatch_id::text,'dispatch_pr',9903401,
         'dispatch_epoch',dispatch.dispatch_epoch,'role',dispatch.role,
         'task_fingerprint',dispatch.task_fingerprint,'target_pr',dispatch.target_pr,
         'expected_head_sha',dispatch.expected_head_sha,'mode','REPAIR',
-        'command_pr',1150,'command_comment_id',990034010,'command_created_at',event_time,
-        'ack_reaction_id',990034011,'ack_created_at',event_time);
+        'command_pr',1150,'command_comment_id',99034010,'command_created_at',event_time,
+        'ack_reaction_id',99034011,'ack_created_at',event_time);
     PERFORM * FROM autopilot.accept_role_dispatch_codex_ack(
-        'github-codex-ack:990034011',repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
+        'github-codex-ack:99034011',repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
         'olegmed1-art',315099490,'OWNER','chatgpt-codex-connector',1144995,
         'chatgpt-codex-connector[bot]',199175422,ack);
 
@@ -76,9 +76,9 @@ BEGIN
         'task_fingerprint',dispatch.task_fingerprint,
         'target_pr',dispatch.target_pr,
         'expected_head_sha',dispatch.expected_head_sha,
-        'command_comment_id',990034010,
-        'publication_comment_id',990034012,
-        'approval_comment_id',990034013,
+        'command_comment_id',99034010,
+        'publication_comment_id',99034012,
+        'approval_comment_id',99034013,
         'payload_sha256',repeat('e',64),
         'provenance_evidence_sha256',repeat('f',64));
     issued:=autopilot.issue_codex_publication_permit(evidence,600);
@@ -90,9 +90,9 @@ BEGIN
         SELECT 1 FROM autopilot.codex_publication_permit p
         JOIN autopilot.role_dispatch_outbox o USING(dispatch_id)
         WHERE p.dispatch_id=dispatch.dispatch_id
-          AND p.command_comment_id=990034010
-          AND p.publication_comment_id=990034012
-          AND p.approval_comment_id=990034013
+          AND p.command_comment_id=99034010
+          AND p.publication_comment_id=99034012
+          AND p.approval_comment_id=99034013
           AND p.payload_sha256=repeat('e',64)
           AND p.provenance_evidence_sha256=repeat('f',64)
           AND p.expires_at<=o.callback_deadline_at

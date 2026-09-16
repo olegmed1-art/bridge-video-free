@@ -86,15 +86,16 @@ DECLARE
     receipt_key text;
 BEGIN
     FOR c IN SELECT * FROM (VALUES
-        (1,'INFRA','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,false),
-        (2,'PLANNING','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,false),
-        (3,'AUTOPILOT','BLOCKED','TARGET_PR_SUPERSEDED_AND_CHECKS_INCOMPLETE',false,false),
-        (4,'AUTOPILOT','BLOCKED','TARGET_PR_OBSOLETE',false,false),
-        (5,'AUTOPILOT','BLOCKED','OWNER_REQUIRED',false,false),
-        (6,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,true),
-        (7,'AUTOPILOT','SUCCEEDED','READ_ONLY_AUDIT_COMPLETE',false,false),
-        (8,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',true,false)
-    ) AS cases(id,role_id,terminal_status,result_code,allow_repair,revoke_after_ack)
+        (1,'INFRA','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,false,false),
+        (2,'PLANNING','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,false,false),
+        (3,'AUTOPILOT','BLOCKED','TARGET_PR_SUPERSEDED_AND_CHECKS_INCOMPLETE',false,false,false),
+        (4,'AUTOPILOT','BLOCKED','TARGET_PR_OBSOLETE',false,false,false),
+        (5,'AUTOPILOT','BLOCKED','OWNER_REQUIRED',false,false,false),
+        (6,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,true,false),
+        (7,'AUTOPILOT','SUCCEEDED','READ_ONLY_AUDIT_COMPLETE',false,false,false),
+        (8,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,false,true),
+        (9,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',true,false,false)
+    ) AS cases(id,role_id,terminal_status,result_code,allow_repair,revoke_after_ack,implicit_after_revoke)
     ORDER BY id LOOP
         SELECT work_item_id INTO work_id FROM autopilot.register_universal_work_item(
             'sql-repair-callback-337-'||c.id,c.role_id,'REPOSITORY_AUDIT',
@@ -129,14 +130,16 @@ BEGIN
             'command_pr',1150,'command_comment_id',990033700+c.id,
             'command_created_at',event_time,'ack_reaction_id',99003370+c.id,
             'ack_created_at',event_time);
-        SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_ack(
-            'github-codex-ack:'||(99003370+c.id),repeat('c',64),true,
-            'olegmed1-art/bridge-video-free',1150,'olegmed1-art',315099490,'OWNER',
-            'chatgpt-codex-connector',1144995,'chatgpt-codex-connector[bot]',199175422,ack);
-        IF NOT result.accepted OR result.duplicate OR result.resulting_state<>'SENT' THEN
-            RAISE EXCEPTION 'REPAIR_ADMISSION_ACK_FAILED case %',c.id;
+        IF NOT c.implicit_after_revoke THEN
+            SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_ack(
+                'github-codex-ack:'||(99003370+c.id),repeat('c',64),true,
+                'olegmed1-art/bridge-video-free',1150,'olegmed1-art',315099490,'OWNER',
+                'chatgpt-codex-connector',1144995,'chatgpt-codex-connector[bot]',199175422,ack);
+            IF NOT result.accepted OR result.duplicate OR result.resulting_state<>'SENT' THEN
+                RAISE EXCEPTION 'REPAIR_ADMISSION_ACK_FAILED case %',c.id;
+            END IF;
         END IF;
-        IF c.revoke_after_ack THEN
+        IF c.revoke_after_ack OR c.implicit_after_revoke THEN
             UPDATE autopilot.role_registry SET enabled=false,can_repair=false WHERE role_id=c.role_id;
         END IF;
         terminal:=jsonb_build_object(
@@ -148,7 +151,34 @@ BEGIN
                  THEN 'Task completed. See execution details above.'
                  ELSE 'Task blocked. See execution details above.' END);
         receipt_key:='github-codex-result:'||(9900337000::bigint+c.id);
-        IF c.id=8 THEN
+        IF c.implicit_after_revoke THEN
+            BEGIN
+                PERFORM * FROM autopilot.accept_role_dispatch_codex_terminal(
+                    receipt_key,repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
+                    'chatgpt-codex-connector[bot]',199175422,'NONE',
+                    'chatgpt-codex-connector',1144995,terminal);
+                RAISE EXCEPTION 'REPAIR_ADMISSION_REVOKED_IMPLICIT_ACCEPTED';
+            EXCEPTION WHEN OTHERS THEN
+                IF SQLERRM<>'AUTOPILOT_CODEX_TERMINAL_BINDING_INVALID' THEN
+                    RAISE;
+                END IF;
+            END;
+            IF EXISTS(SELECT 1 FROM autopilot.role_dispatch_codex_terminal_receipt
+                      WHERE dispatch_id=dispatch.dispatch_id)
+               OR EXISTS(SELECT 1 FROM autopilot.evidence
+                         WHERE task_id=task_row.task_id
+                           AND evidence_class='CHATGPT_ROLE_DISPATCH_RESULT')
+               OR (SELECT status FROM autopilot.role_dispatch_outbox
+                   WHERE dispatch_id=dispatch.dispatch_id)<>'PUBLISHED'
+               OR (SELECT status FROM autopilot.task
+                   WHERE task_id=task_row.task_id)<>'WAITING_EXTERNAL' THEN
+                RAISE EXCEPTION 'REPAIR_ADMISSION_REVOKED_IMPLICIT_CHANGED_STATE';
+            END IF;
+            UPDATE autopilot.role_registry SET enabled=true,can_repair=true
+             WHERE role_id=c.role_id;
+            CONTINUE;
+        END IF;
+        IF c.id=9 THEN
             BEGIN
                 PERFORM * FROM autopilot.accept_role_dispatch_codex_terminal(
                     receipt_key||'-null-role',repeat('e',64),true,
@@ -207,4 +237,4 @@ BEGIN
     END LOOP;
 END $callbacks$;
 ROLLBACK;
-\echo REPAIR_ADMISSION_CALLBACK_8_CASES_PASS
+\echo REPAIR_ADMISSION_CALLBACK_9_CASES_PASS

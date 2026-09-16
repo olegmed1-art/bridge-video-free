@@ -3,11 +3,12 @@
 ## Identity and hard boundaries
 
 - Package identity: `PR1546_MINIMAL_V1`.
-- Functional base: PR #1608 exact head `48619755728d7eb02538a54cbfebaf484b0d2d0b`.
-- Main anchor used for minimization: `eef7d5f216db0ff620959f87736b2315aded6a6b`.
+- Functional base: merged `main` exact head `3ea999617adc3bafa603e9cb45ef5ba0e8c5af7e`.
+- Main anchor used for final reconciliation: `3ea999617adc3bafa603e9cb45ef5ba0e8c5af7e`.
 - Frozen pre-minimization PR #1546 head: `b8a48795fff264220f7df915c119e2936a35256e`.
-- External migration boundary: `0336 = EXTERNAL_0336_DEPENDENCY_PENDING`. PR #1600 is not inspected, reviewed, reconstructed, or modified here.
-- PR #1608 owns migration 0337 and repair-admission/callback semantics. Those files are inherited unchanged.
+- Last repository-published minimal predecessor before this reconciliation: `6f12f61cfe38eaa40797c571266a043e136ec898`.
+- Merged dependency boundary: migrations 0336 and 0337 are authoritative on `main`; PR #1546 does not duplicate or rewrite them. PR #1600 is not inspected, reviewed, reconstructed, commented on, or modified here.
+- Merged PR #1608 supplied migration 0337 and repair-admission/callback semantics now inherited from `main` unchanged by #1546.
 - PR #1546 owns only 0338 bounded publication, 0339 native CLI receipts, 0340 owner-bound permit issuance, their focused integrations/tests, and strictly necessary evidence.
 - Publication remains **DISABLED**. Permit issuance remains **DISCONNECTED FROM RUNTIME/ACTIONS**. No merge, production migration, activation, production permit, canary, server/credential/ruleset/Canon/Drive change is part of this package.
 
@@ -20,7 +21,7 @@ Every changed functional path below has an explicit security/runtime reason. “
 | Path | Classification | Contract that fails without it | Required by |
 |---|---|---|---|
 | `.github/workflows/autopilot-codex-event-callback.yml` | REQUIRED_FOR_1546_CORE | Only existing callback receiver may get the guarded publisher job; without it no immutable `github.workflow_sha` receiver or job-scoped `contents: write` path exists. | `tests/test_oracle_autopilot_github_codex_callback_workflow.py`; runtime module `github_codex_publication`. |
-| `.github/workflows/autopilot-publication-security-ci.yml` | REQUIRED_FOR_1546_CORE | Provides #1546-only exact-head Python/PostgreSQL18/migration-lifecycle/namespace checks without taking ownership of #1608 SQL CI. | Hosted PR CI; parsed by callback-workflow test. |
+| `.github/workflows/autopilot-publication-security-ci.yml` | REQUIRED_FOR_1546_CORE | Provides #1546-only exact-head Python/PostgreSQL18/migration-lifecycle/namespace checks without taking ownership of the merged role-dispatch SQL CI. | Hosted PR CI; parsed by callback-workflow test. |
 | `database/migrations/0338_autopilot_bounded_publication_permit.sql` | REQUIRED_FOR_1546_CORE | Creates the bounded publication permit ledger and locked authorization RPC consumed by the callback publisher; carries owner-approval binding while keeping issuer grants absent. | SQL test 338; `github_codex_publication.authorize`. |
 | `database/migrations/0339_autopilot_native_cli_receipts.sql` | REQUIRED_FOR_1546_CORE | Adds native CLI reservation/receipt fencing and unknown-submission retention required by the requested native receipt contract. | SQL test 339; `codex_cli_queue.py` RPCs and delivery state machine. |
 | `database/migrations/0340_autopilot_publication_permit_issuer.sql` | REQUIRED_FOR_1546_CORE | Adds the owner-only, exact-dispatch permit issuer with idempotent replay and reuse conflict fencing; no runtime/callback grant is made. | SQL test 340 and concurrent 340a test; offline permit verifier `issue()`. |
@@ -39,7 +40,7 @@ Every changed functional path below has an explicit security/runtime reason. “
 | `tests/test_oracle_autopilot_codex_cli_bridge.py` | REQUIRED_FOR_1546_CORE | Exercises native provider evidence parsing, crash/retry boundaries and ambiguous submission behavior. | Focused Python CI. |
 | `tests/test_oracle_autopilot_codex_cli_delivery.py` | REQUIRED_FOR_1546_CORE | Fault-injects native delivery and proves no false terminal success on ambiguous provider/receipt failures. | Focused Python CI. |
 | `tests/test_oracle_autopilot_codex_cli_queue.py` | REQUIRED_FOR_1546_CORE | Proves queue values are bound SQL parameters and validates receipt authority calls. | Focused Python CI. |
-| `tests/test_oracle_autopilot_github_codex_callback_workflow.py` | REQUIRED_FOR_1546_CORE | Pins workflow permission/flag/immutable-checkout expectations and proves #1608 SQL CI is inherited rather than duplicated by #1546. | Focused Python CI. |
+| `tests/test_oracle_autopilot_github_codex_callback_workflow.py` | REQUIRED_FOR_1546_CORE | Pins workflow permission/flag/immutable-checkout expectations and proves merged role-dispatch SQL CI is inherited rather than duplicated by #1546. | Focused Python CI. |
 | `tests/test_oracle_autopilot_github_codex_publication.py` | REQUIRED_FOR_1546_CORE | Covers parser, bounded paths, sensitive denial, base/live head, CAS readback, replay and fail-closed publication outcomes. | Focused Python CI; runtime publisher contract. |
 | `tests/test_oracle_autopilot_github_codex_publication_permit.py` | REQUIRED_FOR_1546_CORE | Covers direct-owner approval, copied-envelope forgery, edited/refetched records, wrong bindings, ID reuse and issuer disconnection. | Focused Python CI; offline permit verifier contract. |
 
@@ -48,34 +49,34 @@ Every changed functional path below has an explicit security/runtime reason. “
 ## Required dependencies that are intentionally not owned by #1546
 
 - `oracle_autopilot/github_codex_callback.py` — `REQUIRED_DEPENDENCY_FOR_1546`; existing immutable command/terminal parsing and binding API consumed by publication code. No #1546 diff is needed.
-- `.github/workflows/autopilot-role-dispatch-sql-ci.yml` — `REQUIRED_DEPENDENCY_FOR_1546`; #1608-owned CI covering 0337 repair/callback lifecycle. #1546 deliberately does not modify it.
-- `database/migrations/0337_autopilot_role_repair_admission.sql`, its rollback, `database/tests/337_autopilot_role_repair_admission.sql`, and `database/tests/337a_autopilot_role_repair_callback.sql` — `REQUIRED_DEPENDENCY_FOR_1546`; owned by #1608 and inherited unchanged.
-- `0336 = EXTERNAL_0336_DEPENDENCY_PENDING` — required external predecessor. No implementation detail is assumed in this package.
+- `.github/workflows/autopilot-role-dispatch-sql-ci.yml` — `REQUIRED_DEPENDENCY_FOR_1546`; merged-main CI covering 0336/0337 repair/callback lifecycle. #1546 deliberately does not modify it.
+- `database/migrations/0337_autopilot_role_repair_admission.sql`, its rollback, `database/tests/337_autopilot_role_repair_admission.sql`, and `database/tests/337a_autopilot_role_repair_callback.sql` — `REQUIRED_DEPENDENCY_FOR_1546`; merged into `main` and inherited unchanged.
+- `database/migrations/0336_autopilot_codex_terminal_implicit_delivery.sql` and its merged-main lifecycle support — `REQUIRED_DEPENDENCY_FOR_1546`; present on `main` as the predecessor to 0337. #1546 does not own or modify it.
 
 ## DROP set and minimization rationale
 
-- `.github/workflows/autopilot-role-dispatch-sql-ci.yml` as a **#1546 update** — `UNRELATED_DROP`: it entered the reconciled stream because #1608 changed the file. #1546 now inherits it unchanged; duplicating it would steal #1608 scope.
+- `.github/workflows/autopilot-role-dispatch-sql-ci.yml` as a **#1546 update** — `UNRELATED_DROP`: it is now authoritative on merged `main`. #1546 inherits it unchanged rather than duplicating dependency scope.
 - `.github/workflows/bridge-video-3.1-free.yml` — `UNRELATED_DROP`: frozen V5 chunk 3 was reconciliation-only Video workflow state; bounded publication does not execute or modify Video pipelines.
 - `bridge_runtime_hardening_r26.py` — `UNRELATED_DROP`: frozen V5 chunk 4 was current-main reconciliation. No publication/permit/native receipt import or test requires it.
 - `bridge_vision/**` including `bridge_vision/anchor_registration.py`, `bridge_vision/bridgit_event_frame_selector.py`, and the never-started next cursor `bridge_vision/bridgit_gambler_rank_layout.py` — `UNRELATED_DROP`: Vision/recognizer layout code has no path in the publication receiver, permit issuer, or native receipt contract.
 - Any Video workflow, runtime/recognizer, vision, media, or other path that appeared solely because of reconciliation with current main — `UNRELATED_DROP`; current base versions remain inherited unchanged.
-- Old #1546 `database/migrations/0336_autopilot_bounded_publication_permit.sql`, rollback, and test 336 — `UNRELATED_DROP` from the target package because 0336 is externally owned; the bounded publication migration is collision-neutralized as 0338.
-- Old #1546 `database/migrations/0337_autopilot_native_cli_receipts.sql`, rollback, and test 337 — `UNRELATED_DROP` because #1608 owns 0337; native receipts are collision-neutralized as 0339.
+- Old #1546 `database/migrations/0336_autopilot_bounded_publication_permit.sql`, rollback, and test 336 — `UNRELATED_DROP` from the target package because merged `main` owns 0336 for the terminal-delivery prerequisite; bounded publication remains collision-neutralized as 0338.
+- Old #1546 `database/migrations/0337_autopilot_native_cli_receipts.sql`, rollback, and test 337 — `UNRELATED_DROP` because merged `main` owns 0337 for repair admission; native receipts remain collision-neutralized as 0339.
 - `docs/evidence/slavik_bounded_publication_2026-09-15.md` and `docs/evidence/slavik_native_cli_integration_2026-09-15.md` — `UNRELATED_DROP`: stale evidence for obsolete numbering/pre-minimization package; replaced by this exact package evidence.
 
 No unenumerated path from the retired 69-path manifest is silently carried forward. If an old-stream path not named above is ever proposed again it is `UNCERTAIN_NEEDS_PROOF` until a direct 1546 security/runtime/test dependency is demonstrated. It is not part of `PR1546_MINIMAL_V1`.
 
 ## Exact operations and content identities (functional core)
 
-Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<1608-head>\n` plus lexicographically sorted tab-separated `path, operation, base_blob_sha, content_sha256, mode` records.
+Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>\n` plus lexicographically sorted tab-separated `path, operation, base_blob_sha, content_sha256, mode` records.
 
-- Functional core aggregate SHA-256: `a060633d4c70ff8a3240ebdc34976e520562bb3eef45ced182b87c72ae60c94c`.
-- DELETE operations: **none** relative to #1608.
+- Functional core aggregate SHA-256: `e7a6fda29d8e5ab904177b4481a5dd1462df7625f31a525b4612f26faf2cf5f6`.
+- DELETE operations: **none** relative to merged `main`.
 
 | Operation | Base blob SHA | Content SHA-256 | Mode | Path |
 |---|---|---|---|---|
 | UPDATE | `2c49fcf95bc3ded580c842ec0dbe61f08271f6f5` | `b8107d35df94adae2fe83c788fd3ba71284bd25be7f13650abef183524dbffbf` | `100644` | `.github/workflows/autopilot-codex-event-callback.yml` |
-| CREATE | `-` | `e3a7602069c46588b63dc0b39b07c68f47f1a73d7e609acc90bfc206730af88a` | `100644` | `.github/workflows/autopilot-publication-security-ci.yml` |
+| CREATE | `-` | `e3fafe39467e6efa4034c488ba5d6fbb852114bf61bfea5585d1e585a82c2a8b` | `100644` | `.github/workflows/autopilot-publication-security-ci.yml` |
 | CREATE | `-` | `510f74783d914498dba1e6d7b0195c5ed7bedb240cce060f9478cb361d1b6fad` | `100644` | `database/migrations/0338_autopilot_bounded_publication_permit.sql` |
 | CREATE | `-` | `5f37acb6ae97694f93851c3288b0c580bbeecde9246c5bb2665f70327436a3a5` | `100644` | `database/migrations/0339_autopilot_native_cli_receipts.sql` |
 | CREATE | `-` | `ace9c41ada9e6603775c33d9c621c8309578e70d15a11410b5641a752604c76b` | `100644` | `database/migrations/0340_autopilot_publication_permit_issuer.sql` |
@@ -84,8 +85,8 @@ Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<1608-head>
 | CREATE | `-` | `aabb543cdcd257b83e244667077922582d950249ff4c2dd08dd605eae7f12e9d` | `100644` | `database/rollbacks/0340_autopilot_publication_permit_issuer.sql` |
 | CREATE | `-` | `3d4b5094f23eb828fc19f1cb174364a2e7962e514f35eedfd3d5a355a57dbd90` | `100644` | `database/tests/338_autopilot_bounded_publication_permit.sql` |
 | CREATE | `-` | `b5981aa2a5c4af870618b34bdedfdcfdcf77403de2737924173b86bd2791c940` | `100644` | `database/tests/339_autopilot_native_cli_receipts.sql` |
-| CREATE | `-` | `c41b511c20850b01cb083434ba98e1b51ffb0f3c12f9eb9d25f004994fa5eba5` | `100644` | `database/tests/340_autopilot_publication_permit_issuer.sql` |
-| CREATE | `-` | `656315b86e6eac422aa9abecbc41bdd9f92247559a3f829c6a57efa767ea1d82` | `100755` | `database/tests/340a_autopilot_publication_permit_concurrency.sh` |
+| CREATE | `-` | `c1ec4d584a6da43cbdcac8a873d130d4cec043452f3c3df3f3e290f1aa320de1` | `100644` | `database/tests/340_autopilot_publication_permit_issuer.sql` |
+| CREATE | `-` | `7b5e42b7945e17ddf356f5e50da245f682938abf45160599a713c6063402e0d5` | `100755` | `database/tests/340a_autopilot_publication_permit_concurrency.sh` |
 | CREATE | `-` | `4ca1c67eb2e80742ba02cf8cb69add6a9122f874ee7e5ff783990b140d6710de` | `100644` | `oracle_autopilot/codex_cli_bridge.py` |
 | CREATE | `-` | `72ce096ce6792ffbc3938a94cb90b9d04d7e4d1f290f43181fde79229a146010` | `100644` | `oracle_autopilot/codex_cli_delivery.py` |
 | CREATE | `-` | `39c6fe1acbca6bb207e52df2ba07a2bb26b5a38a0e411db8b2818fe431e84cf5` | `100644` | `oracle_autopilot/codex_cli_queue.py` |
@@ -100,19 +101,19 @@ Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<1608-head>
 
 ## Dependency and application map
 
-`EXTERNAL 0336` → `#1608 0337` → `#1546 0338 bounded publication` → `#1546 0339 native receipts` → `#1546 0340 owner permit issuer`.
+`main 0336` → `main 0337` → `#1546 0338 bounded publication` → `#1546 0339 native receipts` → `#1546 0340 owner permit issuer`.
 
-- Repository integration base is #1608 exact head; #1546 must not duplicate 0337 or its repair/callback semantics.
+- Repository integration base is merged `main` exact head `3ea999617adc3bafa603e9cb45ef5ba0e8c5af7e`; #1546 must not duplicate 0336/0337 or their callback/repair semantics.
 - 0338 installs permit ledger + callback authorization RPC; callback can consume a permit but cannot issue one.
 - 0339 installs native receipt/reservation fencing, disabled by default and without runtime grants.
 - 0340 installs owner-only issuance. The offline verifier is not wired into a workflow/service; explicit owner-gated execution is required later.
 - Publisher job remains gated by `AUTOPILOT_BOUNDED_PUBLICATION_ENABLED == true`; this package does not set that variable.
 
-Intended repository commit message: `Autopilot: minimize PR1546 publication security package`.
+Intended repository commit message: `fix: reconcile minimal publication security package`.
 
 ## Rollback plan
 
-Clean rollback order is `0340 → 0339 → 0338`. 0340 and 0338 refuse destructive rollback when permit evidence exists; 0339 refuses rollback when native receipt evidence exists. The focused PostgreSQL18 job verifies clean rollback, preservation of #1608 0337, reapply, and retest. Populated-ledger concurrency coverage verifies rollback failure retains evidence. No production rollback/apply is authorized by this package.
+Clean rollback order is `0340 → 0339 → 0338`. 0340 and 0338 refuse destructive rollback when permit evidence exists; 0339 refuses rollback when native receipt evidence exists. The focused PostgreSQL18 job verifies clean rollback, preservation of merged-main 0337, reapply, and retest. Populated-ledger concurrency coverage verifies rollback failure retains evidence. No production rollback/apply is authorized by this package.
 
 ## Verification performed before repository publication
 
@@ -120,13 +121,14 @@ Clean rollback order is `0340 → 0339 → 0338`. 0340 and 0338 refuse destructi
 - Both touched workflow YAML files parse successfully.
 - Python compile and `git diff --check`: PASS.
 - `database/tests/340a_autopilot_publication_permit_concurrency.sh`: shell syntax check PASS.
-- No PostgreSQL production database or server state was changed for this local preparation. Hosted PostgreSQL18 lifecycle evidence is intentionally obtained only after repository publication.
+- Ephemeral local PostgreSQL 18 validation on the merged-main tree: migrations through 0340 applied; SQL tests 338/339/340 passed; two-session 340a conflict fencing and retained-evidence rollback refusal passed; clean rollback 0340→0339→0338 preserved 0337; reapply and tests passed.
+- The local PostgreSQL run used an isolated disposable Docker database only. No production database or server state was changed. Hosted exact-head CI remains required after repository publication.
 
 ## Exact-head CI checklist after repository publication
 
 - [ ] `Autopilot publication security CI / focused-python` on exact #1546 head.
 - [ ] `Autopilot publication security CI / postgresql18-publication-chain` on exact #1546 head: 0338/0339/0340 apply, focused SQL tests, concurrent issuer fencing, populated-evidence rollback refusal, clean rollback 0340→0339→0338, 0337 preservation, reapply.
-- [ ] Existing `Autopilot role dispatch SQL CI` inherited from #1608.
+- [ ] Existing `Autopilot role dispatch SQL CI` inherited from merged `main`.
 - [ ] `Bridge School Database CI` PostgreSQL18 full migration/invariant suite.
 - [ ] `Current-Main Authoritative CI` exact-head compatibility.
 - [ ] Migration namespace guard proves one 0338/0339/0340 and no obsolete #1546 0336/0337 names.
@@ -148,9 +150,8 @@ Clean rollback order is `0340 → 0339 → 0338`. 0340 and 0338 refuse destructi
 
 ## Remaining blockers
 
-1. `EXTERNAL_0336_DEPENDENCY_PENDING` from the separately owned #1600 lane.
-2. Exact-head hosted CI listed above must pass on the repository-published package.
-3. Independent I2+ exact-head security review must be obtained after the final code/CI head.
-4. Merge, production migration apply, publication activation, production permit issuance and canary remain separate owner gates.
+1. Exact-head hosted CI listed above must pass on the repository-published package.
+2. Independent I2+ exact-head security review must be obtained after the final code/CI head.
+3. Merge, production migration apply, publication activation, production permit issuance and canary remain separate owner gates.
 
 Until those gates are satisfied, this package is repository/CI/review preparation only and publication stays disabled.
