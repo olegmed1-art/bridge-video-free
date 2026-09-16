@@ -244,6 +244,9 @@ BEGIN
     UPDATE autopilot.role_dispatch_outbox
        SET status='CALLBACK_ACCEPTED',completed_at=now(),updated_at=now(),
            sent_at=CASE WHEN implicit_delivery THEN COALESCE(sent_at,now()) ELSE sent_at END,
+           callback_deadline_at=CASE WHEN implicit_delivery
+               THEN COALESCE(callback_deadline_at,now()+interval '30 minutes')
+               ELSE callback_deadline_at END,
            delivered_at=CASE WHEN implicit_delivery THEN COALESCE(delivered_at,now()) ELSE delivered_at END
      WHERE dispatch_id=outbox.dispatch_id;
     PERFORM autopilot.record_event(
