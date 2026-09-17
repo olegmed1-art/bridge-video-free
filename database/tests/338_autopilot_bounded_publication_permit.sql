@@ -63,14 +63,16 @@ BEGIN
         'dispatch_epoch',dispatch.dispatch_epoch,'role',dispatch.role,
         'task_fingerprint',dispatch.task_fingerprint,'target_pr',dispatch.target_pr,
         'expected_head_sha',dispatch.expected_head_sha,'mode','REPAIR',
-        'command_pr',1150,'command_comment_id',99003380,'command_created_at',event_time,
+        'command_pr',dispatch.mailbox_pr,'command_comment_id',99003380,
+        'command_created_at',event_time,
         'ack_reaction_id',99003382,'ack_created_at',event_time);
     PERFORM * FROM autopilot.accept_role_dispatch_codex_ack(
-        'github-codex-ack:99003382',repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
+        'github-codex-ack:99003382',repeat('d',64),true,
+        'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
         'olegmed1-art',315099490,'OWNER','chatgpt-codex-connector',1144995,
         'chatgpt-codex-connector[bot]',199175422,ack);
     command:=jsonb_build_object(
-        'comment_id',99003380,'command_pr',1150,'created_at',event_time,
+        'comment_id',99003380,'command_pr',dispatch.mailbox_pr,'created_at',event_time,
         'dispatch_id',dispatch.dispatch_id::text,'dispatch_pr',9900338,
         'dispatch_epoch',dispatch.dispatch_epoch,'role',dispatch.role,
         'task_fingerprint',dispatch.task_fingerprint,'target_pr',dispatch.target_pr,

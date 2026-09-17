@@ -144,13 +144,14 @@ BEGIN
             'dispatch_epoch',dispatch.dispatch_epoch,'role',dispatch.role,
             'task_fingerprint',dispatch.task_fingerprint,'target_pr',dispatch.target_pr,
             'expected_head_sha',dispatch.expected_head_sha,'mode',publication.mode,
-            'command_pr',1150,'command_comment_id',990033700+c.id,
+            'command_pr',dispatch.mailbox_pr,'command_comment_id',990033700+c.id,
             'command_created_at',event_time,'ack_reaction_id',99003370+c.id,
             'ack_created_at',event_time);
         IF NOT c.implicit_after_revoke THEN
             SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_ack(
                 'github-codex-ack:'||(99003370+c.id),repeat('c',64),true,
-                'olegmed1-art/bridge-video-free',1150,'olegmed1-art',315099490,'OWNER',
+                'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
+                'olegmed1-art',315099490,'OWNER',
                 'chatgpt-codex-connector',1144995,'chatgpt-codex-connector[bot]',199175422,ack);
             IF NOT result.accepted OR result.duplicate OR result.resulting_state<>'SENT' THEN
                 RAISE EXCEPTION 'REPAIR_ADMISSION_ACK_FAILED case %',c.id;
@@ -171,7 +172,8 @@ BEGIN
         IF c.implicit_after_revoke THEN
             BEGIN
                 PERFORM * FROM autopilot.accept_role_dispatch_codex_terminal(
-                    receipt_key,repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
+                    receipt_key,repeat('d',64),true,
+                    'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
                     'chatgpt-codex-connector[bot]',199175422,'NONE',
                     'chatgpt-codex-connector',1144995,terminal);
                 RAISE EXCEPTION 'REPAIR_ADMISSION_REVOKED_IMPLICIT_ACCEPTED';
@@ -199,7 +201,7 @@ BEGIN
             BEGIN
                 PERFORM * FROM autopilot.accept_role_dispatch_codex_terminal(
                     receipt_key||'-null-role',repeat('e',64),true,
-                    'olegmed1-art/bridge-video-free',1150,
+                    'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
                     'chatgpt-codex-connector[bot]',199175422,'NONE',
                     'chatgpt-codex-connector',1144995,
                     terminal||jsonb_build_object('role',NULL));
@@ -211,7 +213,8 @@ BEGIN
             END;
         END IF;
         SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_terminal(
-            receipt_key,repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
+            receipt_key,repeat('d',64),true,
+            'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
             'chatgpt-codex-connector[bot]',199175422,'NONE',
             'chatgpt-codex-connector',1144995,terminal);
         expected_state:=CASE WHEN c.terminal_status='SUCCEEDED' THEN 'DONE' ELSE 'FAILED_CLOSED' END;
@@ -237,7 +240,8 @@ BEGIN
             RAISE EXCEPTION 'REPAIR_ADMISSION_WORK_ITEM_NOT_TERMINAL case %',c.id;
         END IF;
         SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_terminal(
-            receipt_key,repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
+            receipt_key,repeat('d',64),true,
+            'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
             'chatgpt-codex-connector[bot]',199175422,'NONE',
             'chatgpt-codex-connector',1144995,terminal);
         IF result.accepted IS DISTINCT FROM false OR result.duplicate IS DISTINCT FROM true
