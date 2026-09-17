@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=859d5866-7bcc-4cfd-86db-1cf98313c1b3
+dispatch_epoch=8
+role=RECOGNIZER
+task_fingerprint=0a97dc051845366dc62d603df081b4e0769bf074bc0acb10409fbd40e76242fa
+target_pr=1106
+mode=REPAIR
+repair_attempt=1
+origin_task_id=104d33bf-3d82-4a77-8ab6-e47ffe10bf60
+prior_task_id=104d33bf-3d82-4a77-8ab6-e47ffe10bf60
+blocked_result_code=PRODUCTION_READINESS_EVIDENCE_INCOMPLETE
+blocked_summary=Task blocked. See execution details above.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
