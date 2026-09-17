@@ -6,6 +6,7 @@ DECLARE
     active_count integer;
     retained_count integer;
     default_value text;
+    rejected boolean;
 BEGIN
     SELECT count(*) FILTER (WHERE mailbox_pr=1637 AND lifecycle='ACTIVE'
                                     AND expected_head_sha='352bdd7d4879d3ca11922ac6d869f0f2dd0afbad'
@@ -31,9 +32,33 @@ BEGIN
         RAISE EXCEPTION 'CALLBACK_DUAL_MAILBOX_GUARD_MISSING';
     END IF;
     IF pg_get_functiondef(
+        'autopilot.create_chatgpt_role_dispatch_task(text,jsonb,integer,text,text)'::regprocedure
+       ) NOT LIKE '%mailbox_pr%IS DISTINCT FROM ''1637''::jsonb%'
+       OR pg_get_functiondef(
+        'autopilot.create_chatgpt_role_followup_task(text,jsonb,integer,text,text)'::regprocedure
+       ) NOT LIKE '%mailbox_pr%IS DISTINCT FROM ''1637''::jsonb%' THEN
+        RAISE EXCEPTION 'OUTBOUND_ACTIVE_MAILBOX_GUARD_MISSING';
+    END IF;
+    IF pg_get_functiondef(
+        'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
+       ) NOT LIKE '%''mailbox_pr'', 1637%'
+       OR pg_get_functiondef(
+        'autopilot.materialize_role_verification(uuid,text)'::regprocedure
+       ) NOT LIKE '%''mailbox_pr'', 1637%' THEN
+        RAISE EXCEPTION 'FOLLOWUP_ACTIVE_MAILBOX_ROUTING_MISSING';
+    END IF;
+    IF pg_get_functiondef(
         'autopilot.register_universal_work_item(text,text,text,text,integer,integer,jsonb,text,text,text)'::regprocedure
        ) NOT LIKE '%1637%' THEN
         RAISE EXCEPTION 'UNIVERSAL_WORK_V2_DEFAULT_MISSING';
+    END IF;
+    IF pg_get_functiondef(
+        'autopilot.enforce_role_dispatch_mailbox_capacity()'::regprocedure
+       ) NOT LIKE '%FOR UPDATE%'
+       OR pg_get_functiondef(
+        'autopilot.enforce_role_dispatch_mailbox_capacity()'::regprocedure
+       ) NOT LIKE '%AUTOPILOT_MAILBOX_RETAINED%' THEN
+        RAISE EXCEPTION 'MAILBOX_CAPACITY_NOT_SERIALIZED';
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_trigger
@@ -41,6 +66,32 @@ BEGIN
            AND tgname='role_dispatch_mailbox_capacity_guard' AND NOT tgisinternal
     ) THEN
         RAISE EXCEPTION 'MAILBOX_CAPACITY_GUARD_MISSING';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+         WHERE schemaname='autopilot'
+           AND indexname='role_dispatch_mailbox_single_active_idx'
+    ) THEN
+        RAISE EXCEPTION 'MAILBOX_SINGLE_ACTIVE_GUARD_MISSING';
+    END IF;
+
+    rejected:=false;
+    BEGIN
+        PERFORM * FROM autopilot.create_chatgpt_role_dispatch_task(
+            'sql-mailbox-v2-retained-rejected-344',
+            jsonb_build_object(
+                'repository','olegmed1-art/bridge-video-free',
+                'mailbox_pr',1150,'role','RECOGNIZER','target_pr',1150,
+                'expected_head_sha',repeat('a',40),'dispatch_epoch',1,
+                'successor_task_key',NULL,'successor_role',NULL,
+                'successor_target_pr',NULL,'successor_expected_head_sha',NULL
+            ),0,'database-test','SQL_TEST'
+        );
+    EXCEPTION WHEN OTHERS THEN
+        rejected:=SQLERRM LIKE '%AUTOPILOT_ROLE_GOAL_INVALID%';
+    END;
+    IF NOT rejected THEN
+        RAISE EXCEPTION 'RETAINED_MAILBOX_ACCEPTED_NEW_TASK';
     END IF;
 END $test$;
 
