@@ -47,6 +47,12 @@ Workspace Agent access tokens относятся к Business/Enterprise и эт�
    принимает только comment закреплённого GitHub App (`id=1144995`), повторно
    сверяет live head и требует либо сохранённый ACK в открытом callback window,
    либо строго ограниченный `PUBLISHED`/delivery-deadline контракт из шага 4.
+   Точная неизменённая provider-фраза `Codex couldn't complete this request.
+   Try again later.` принимается как `BLOCKED` только от того же закреплённого
+   bot/app, не позднее пяти минут и только когда она является следующим
+   issue-comment после валидной owner-команды на том же PR. Перед ingestion оба
+   комментария повторно считываются; любой intervening/edited/ambiguous случай
+   остаётся fail-closed до обычного deadline reconciliation.
 7. Neon атомарно сохраняет terminal receipt/evidence, закрывает task/work item
    и посылает `NOTIFY` для следующей независимой задачи.
 

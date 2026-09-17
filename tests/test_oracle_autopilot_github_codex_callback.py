@@ -10,9 +10,11 @@ from oracle_autopilot.github_codex_callback import (
     CODEX_BOT_ID,
     CODEX_BOT_LOGIN,
     CallbackContractError,
+    GENERIC_FAILURE_BODY,
     fetch_codex_ack,
     parse_command_event,
     parse_terminal_event,
+    resolve_generic_failure_terminal,
     verify_pr_head,
 )
 
@@ -192,7 +194,7 @@ def test_terminal_rejects_unsafe_public_summary(unsafe_summary):
 
 
 class _Response:
-    def __init__(self, url: str, values: list[dict[str, object]]) -> None:
+    def __init__(self, url: str, values: object) -> None:
         self.status = 200
         self._url = url
         self._body = io.BytesIO(json.dumps(values).encode())
@@ -208,6 +210,86 @@ class _Response:
 
     def read(self, limit: int) -> bytes:
         return self._body.read(limit)
+
+
+def _generic_failure_event() -> dict[str, object]:
+    event = _terminal_event()
+    comment = event["comment"]
+    comment["id"] = 5_669_745_749  # type: ignore[index]
+    comment["created_at"] = "2026-09-14T19:38:00Z"  # type: ignore[index]
+    comment["updated_at"] = "2026-09-14T19:38:00Z"  # type: ignore[index]
+    comment["body"] = GENERIC_FAILURE_BODY  # type: ignore[index]
+    return event
+
+
+def _generic_failure_opener(event, command_event=None):
+    command_event = command_event or _event(
+        COMMAND_BODY.replace("@codex\n", "@codex execute this task\n", 1)
+    )
+    command = copy.deepcopy(command_event["comment"])
+    command["updated_at"] = command["created_at"]
+    failure = copy.deepcopy(event["comment"])
+
+    def opener(request, timeout):
+        assert timeout == 10
+        if "/issues/1150/comments?" in request.full_url:
+            return _Response(request.full_url, [command, failure])
+        if request.full_url.endswith(f"/issues/comments/{command['id']}"):
+            return _Response(request.full_url, command)
+        if request.full_url.endswith(f"/issues/comments/{failure['id']}"):
+            return _Response(request.full_url, failure)
+        raise AssertionError(request.full_url)
+
+    return opener
+
+
+def test_generic_failure_binds_to_immediately_prior_exact_owner_command():
+    event = _generic_failure_event()
+    terminal = resolve_generic_failure_terminal(
+        event, "test-token", opener=_generic_failure_opener(event)
+    )
+    assert terminal.dispatch_id == "6275443a-5868-4c1f-9406-c0d72b8068bd"
+    assert terminal.status == "BLOCKED"
+    assert terminal.result_code == "CODEX_PROVIDER_GENERIC_FAILURE"
+    assert terminal.target_head_sha == "2ceb48716988ec9cbd01be438a0ebf8b46836667"
+    assert terminal.delivery_id == "github-codex-result:5669745749"
+
+
+def test_generic_failure_rejects_intervening_comment():
+    event = _generic_failure_event()
+    command = copy.deepcopy(_event(COMMAND_BODY)["comment"])
+    command["updated_at"] = command["created_at"]
+    intervening = copy.deepcopy(command)
+    intervening["id"] = 5_669_745_748
+    intervening["created_at"] = "2026-09-14T19:37:50Z"
+    intervening["updated_at"] = intervening["created_at"]
+    intervening["body"] = "unrelated owner comment"
+    failure = copy.deepcopy(event["comment"])
+
+    def opener(request, _timeout):
+        if "/issues/1150/comments?" in request.full_url:
+            return _Response(request.full_url, [command, intervening, failure])
+        raise AssertionError(request.full_url)
+
+    with pytest.raises(CallbackContractError, match="COMMAND_BODY_INVALID"):
+        resolve_generic_failure_terminal(event, "test-token", opener=opener)
+
+
+def test_generic_failure_rejects_edited_or_late_comment():
+    edited = _generic_failure_event()
+    edited["comment"]["updated_at"] = "2026-09-14T19:38:01Z"  # type: ignore[index]
+    with pytest.raises(CallbackContractError, match="GENERIC_FAILURE_TIME_INVALID"):
+        resolve_generic_failure_terminal(
+            edited, "test-token", opener=_generic_failure_opener(edited)
+        )
+
+    late = _generic_failure_event()
+    late["comment"]["created_at"] = "2026-09-14T19:45:00Z"  # type: ignore[index]
+    late["comment"]["updated_at"] = "2026-09-14T19:45:00Z"  # type: ignore[index]
+    with pytest.raises(CallbackContractError, match="GENERIC_FAILURE_ADJACENCY_INVALID"):
+        resolve_generic_failure_terminal(
+            late, "test-token", opener=_generic_failure_opener(late)
+        )
 
 
 def test_ack_polls_until_exact_codex_bot_eyes_reaction():
