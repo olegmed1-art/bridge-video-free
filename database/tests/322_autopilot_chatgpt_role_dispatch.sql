@@ -31,7 +31,13 @@ DECLARE
     sent_marked boolean;
     failure_status text;
     reconciled_count integer;
+    mailbox_pr integer := 1150;
 BEGIN
+    IF to_regclass('autopilot.role_dispatch_mailbox_registry') IS NOT NULL THEN
+        SELECT registry.mailbox_pr INTO STRICT mailbox_pr
+          FROM autopilot.role_dispatch_mailbox_registry AS registry
+         WHERE registry.lifecycle='ACTIVE';
+    END IF;
     IF strpos(
         pg_get_functiondef(
             'autopilot.complete_task(uuid,text,bigint,text,text,jsonb)'::regprocedure
@@ -46,7 +52,7 @@ BEGIN
           'sql-role-dispatch-1',
           jsonb_build_object(
               'repository', 'olegmed1-art/bridge-video-free',
-              'mailbox_pr', 1150,
+              'mailbox_pr', mailbox_pr,
               'role', 'RECOGNIZER',
               'target_pr', 1106,
               'expected_head_sha', repeat('a', 40),
@@ -63,7 +69,7 @@ BEGIN
           'sql-role-dispatch-1',
           jsonb_build_object(
               'repository', 'olegmed1-art/bridge-video-free',
-              'mailbox_pr', 1150, 'role', 'RECOGNIZER', 'target_pr', 1106,
+              'mailbox_pr', mailbox_pr, 'role', 'RECOGNIZER', 'target_pr', 1106,
               'expected_head_sha', repeat('a', 40), 'dispatch_epoch', 1,
               'successor_task_key', 'sql-role-dispatch-successor-1',
               'successor_role', 'VIDEO', 'successor_target_pr', 1125,
@@ -77,7 +83,7 @@ BEGIN
         PERFORM * FROM autopilot.create_chatgpt_role_dispatch_task(
             'sql-role-invalid-1',
             jsonb_build_object(
-                'repository', 'other/repository', 'mailbox_pr', 1150,
+                'repository', 'other/repository', 'mailbox_pr', mailbox_pr,
                 'role', 'RECOGNIZER', 'target_pr', 1106,
                 'expected_head_sha', repeat('a', 40), 'dispatch_epoch', 1,
                 'successor_task_key', NULL, 'successor_role', NULL,
@@ -102,7 +108,7 @@ BEGIN
     SELECT * INTO dispatch FROM autopilot.prepare_role_dispatch(
         role_task_id, 'sql-role-worker-1', claimed_task.lease_epoch);
     IF dispatch.dispatch_id IS NULL OR dispatch.repository <> 'olegmed1-art/bridge-video-free'
-       OR dispatch.mailbox_pr <> 1150 OR dispatch.role <> 'RECOGNIZER'
+       OR dispatch.mailbox_pr <> mailbox_pr OR dispatch.role <> 'RECOGNIZER'
        OR dispatch.target_pr <> 1106 OR dispatch.expected_head_sha <> repeat('a', 40)
        OR dispatch.dispatch_epoch <> 1 OR dispatch.task_fingerprint !~ '^[0-9a-f]{64}$'
        OR (SELECT status FROM autopilot.task WHERE task_id = role_task_id) <> 'WAITING_EXTERNAL'
@@ -172,7 +178,7 @@ BEGIN
     BEGIN
         PERFORM * FROM autopilot.accept_role_dispatch_callback(
             'delivery-wrong-identity', repeat('d', 64), true,
-            'olegmed1-art/bridge-video-free', 1150,
+            'olegmed1-art/bridge-video-free', mailbox_pr,
             'olegmed1-art', 315099490, 'OWNER',
             'wrong-app', 1144995, callback_body
         );
@@ -185,7 +191,7 @@ BEGIN
     BEGIN
         PERFORM * FROM autopilot.accept_role_dispatch_callback(
             'delivery-forged-binding', repeat('d', 64), true,
-            'olegmed1-art/bridge-video-free', 1150,
+            'olegmed1-art/bridge-video-free', mailbox_pr,
             'olegmed1-art', 315099490, 'OWNER',
             'chatgpt-codex-connector', 1144995,
             jsonb_set(callback_body, '{target_head_sha}', to_jsonb(repeat('9', 40)))
@@ -201,7 +207,7 @@ BEGIN
 
     SELECT * INTO callback_result FROM autopilot.accept_role_dispatch_callback(
         'delivery-role-1', repeat('d', 64), true,
-        'olegmed1-art/bridge-video-free', 1150,
+        'olegmed1-art/bridge-video-free', mailbox_pr,
         'olegmed1-art', 315099490, 'OWNER',
         'chatgpt-codex-connector', 1144995, callback_body
     );
@@ -234,7 +240,7 @@ BEGIN
 
     SELECT * INTO callback_result FROM autopilot.accept_role_dispatch_callback(
         'delivery-role-1', repeat('d', 64), true,
-        'olegmed1-art/bridge-video-free', 1150,
+        'olegmed1-art/bridge-video-free', mailbox_pr,
         'olegmed1-art', 315099490, 'OWNER',
         'chatgpt-codex-connector', 1144995, callback_body
     );
@@ -246,7 +252,7 @@ BEGIN
     END IF;
     SELECT * INTO callback_result FROM autopilot.accept_role_dispatch_callback(
         'delivery-role-1-duplicate-comment', repeat('d', 64), true,
-        'olegmed1-art/bridge-video-free', 1150,
+        'olegmed1-art/bridge-video-free', mailbox_pr,
         'olegmed1-art', 315099490, 'OWNER',
         'chatgpt-codex-connector', 1144995, callback_body
     );
@@ -260,7 +266,7 @@ BEGIN
     BEGIN
         PERFORM * FROM autopilot.accept_role_dispatch_callback(
             'delivery-role-1', repeat('e', 64), true,
-            'olegmed1-art/bridge-video-free', 1150,
+            'olegmed1-art/bridge-video-free', mailbox_pr,
             'olegmed1-art', 315099490, 'OWNER',
             'chatgpt-codex-connector', 1144995, callback_body
         );
@@ -273,7 +279,7 @@ BEGIN
     SELECT task_id INTO blocked_task_id
       FROM autopilot.create_chatgpt_role_dispatch_task(
           'sql-role-blocked-1', jsonb_build_object(
-              'repository', 'olegmed1-art/bridge-video-free', 'mailbox_pr', 1150,
+              'repository', 'olegmed1-art/bridge-video-free', 'mailbox_pr', mailbox_pr,
               'role', 'BOOKS', 'target_pr', 1131,
               'expected_head_sha', repeat('f', 40), 'dispatch_epoch', 3,
               'successor_task_key', 'sql-role-blocked-successor-1',
@@ -297,7 +303,7 @@ BEGIN
     );
     SELECT * INTO callback_result FROM autopilot.accept_role_dispatch_callback(
         'delivery-role-blocked-1', repeat('2', 64), true,
-        'olegmed1-art/bridge-video-free', 1150,
+        'olegmed1-art/bridge-video-free', mailbox_pr,
         'olegmed1-art', 315099490, 'OWNER',
         'chatgpt-codex-connector', 1144995, callback_body);
     IF callback_result.resulting_state <> 'FAILED_CLOSED'
@@ -325,7 +331,7 @@ BEGIN
     SELECT task_id INTO exhausted_task_id
       FROM autopilot.create_chatgpt_role_dispatch_task(
           'sql-role-exhausted-1', jsonb_build_object(
-              'repository', 'olegmed1-art/bridge-video-free', 'mailbox_pr', 1150,
+              'repository', 'olegmed1-art/bridge-video-free', 'mailbox_pr', mailbox_pr,
               'role', 'KNOWLEDGE', 'target_pr', 1131,
               'expected_head_sha', repeat('3', 40), 'dispatch_epoch', 4,
               'successor_task_key', NULL, 'successor_role', NULL,
@@ -351,7 +357,7 @@ BEGIN
     SELECT task_id INTO timeout_task_id
       FROM autopilot.create_chatgpt_role_dispatch_task(
           'sql-role-timeout-1', jsonb_build_object(
-              'repository', 'olegmed1-art/bridge-video-free', 'mailbox_pr', 1150,
+              'repository', 'olegmed1-art/bridge-video-free', 'mailbox_pr', mailbox_pr,
               'role', 'VIDEO', 'target_pr', 1125,
               'expected_head_sha', repeat('4', 40), 'dispatch_epoch', 5,
               'successor_task_key', NULL, 'successor_role', NULL,
