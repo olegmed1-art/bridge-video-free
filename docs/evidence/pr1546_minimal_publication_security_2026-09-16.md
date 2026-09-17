@@ -3,8 +3,8 @@
 ## Identity and hard boundaries
 
 - Package identity: `PR1546_MINIMAL_V1`.
-- Functional base: merged `main` exact head `26615eb9689f1e4bb05d1b22d7e6a15214588803`.
-- Main anchor used for final reconciliation: `26615eb9689f1e4bb05d1b22d7e6a15214588803`.
+- Functional base: merged `main` exact head `2189f1014bedaee69c3304b7e90670a3a1785d46`.
+- Main anchor used for final reconciliation: `2189f1014bedaee69c3304b7e90670a3a1785d46`.
 - Frozen pre-minimization PR #1546 head: `b8a48795fff264220f7df915c119e2936a35256e`.
 - Last repository-published minimal predecessor before this reconciliation: `6f12f61cfe38eaa40797c571266a043e136ec898`.
 - Merged dependency boundary: migrations 0336 and 0337 are authoritative on `main`; PR #1546 does not duplicate or rewrite them. PR #1600 is not inspected, reviewed, reconstructed, commented on, or modified here.
@@ -71,13 +71,13 @@ No unenumerated path from the retired 69-path manifest is silently carried forwa
 
 Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>\n` plus lexicographically sorted tab-separated `path, operation, base_blob_sha, content_sha256, mode` records.
 
-- Functional core aggregate SHA-256: `77707219a9677ac0bd5339d931712e47b14205cebb148a5e5930aae61fbfe906`.
+- Functional core aggregate SHA-256: `87262e6df27459e80085852a744284eeed705950acf6a1782b4dea8d40d36780`.
 - DELETE operations: **none** relative to merged `main`.
 
 | Operation | Base blob SHA | Content SHA-256 | Mode | Path |
 |---|---|---|---|---|
 | UPDATE | `2c49fcf95bc3ded580c842ec0dbe61f08271f6f5` | `b8107d35df94adae2fe83c788fd3ba71284bd25be7f13650abef183524dbffbf` | `100644` | `.github/workflows/autopilot-codex-event-callback.yml` |
-| CREATE | `-` | `71a5723e11e1d46cc9840bb23ed00732a5c134cc5f301b2b487a4188fd622a1e` | `100644` | `.github/workflows/autopilot-publication-security-ci.yml` |
+| CREATE | `-` | `6306e146bb070fc6fd322daab767c25379a90e1f45d0095f3a5208de7696afb5` | `100644` | `.github/workflows/autopilot-publication-security-ci.yml` |
 | CREATE | `-` | `510f74783d914498dba1e6d7b0195c5ed7bedb240cce060f9478cb361d1b6fad` | `100644` | `database/migrations/0338_autopilot_bounded_publication_permit.sql` |
 | CREATE | `-` | `5f37acb6ae97694f93851c3288b0c580bbeecde9246c5bb2665f70327436a3a5` | `100644` | `database/migrations/0339_autopilot_native_cli_receipts.sql` |
 | CREATE | `-` | `ace9c41ada9e6603775c33d9c621c8309578e70d15a11410b5641a752604c76b` | `100644` | `database/migrations/0340_autopilot_publication_permit_issuer.sql` |
@@ -105,7 +105,7 @@ Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>
 
 `main 0336` → `main 0337` → `#1546 0338 bounded publication` → `#1546 0339 native receipts` → `#1546 0340 owner permit issuer`.
 
-- Repository integration base is merged `main` exact head `26615eb9689f1e4bb05d1b22d7e6a15214588803`; #1546 must not duplicate 0336/0337 or their callback/repair semantics.
+- Repository integration base is merged `main` exact head `2189f1014bedaee69c3304b7e90670a3a1785d46`; #1546 must not duplicate 0336/0337 or their callback/repair semantics.
 - 0338 installs permit ledger + callback authorization RPC; callback can consume a permit but cannot issue one.
 - 0339 installs native receipt/reservation fencing, disabled by default and without runtime grants.
 - 0340 installs owner-only issuance. The offline verifier is not wired into a workflow/service; explicit owner-gated execution is required later.
