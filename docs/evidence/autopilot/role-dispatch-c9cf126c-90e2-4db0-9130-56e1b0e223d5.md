@@ -1,0 +1,7 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=c9cf126c-90e2-4db0-9130-56e1b0e223d5
+dispatch_epoch=46
+role=RECOGNIZER
+task_fingerprint=337a0eb2122b5e127276802eb4d52fe59f7176fb527dc1b281e0d1fa0fd782cf
+target_pr=1106
+mode=READ_ONLY
