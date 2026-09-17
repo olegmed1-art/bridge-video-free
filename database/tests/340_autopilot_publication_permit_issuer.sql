@@ -81,6 +81,15 @@ BEGIN
         'approval_comment_id',99034013,
         'payload_sha256',repeat('e',64),
         'provenance_evidence_sha256',repeat('f',64));
+    -- The documented minimum TTL is genuinely issuable (it is recovery-only
+    -- authority by the time a later callback samples the clock, but issuance
+    -- itself must not reject the exact lower bound).
+    issued:=autopilot.issue_codex_publication_permit(evidence,180);
+    IF issued->>'state'<>'ISSUED' THEN
+        RAISE EXCEPTION 'TEST_ISSUER_MIN_TTL_REJECTED';
+    END IF;
+    DELETE FROM autopilot.codex_publication_permit WHERE dispatch_id=dispatch.dispatch_id;
+
     issued:=autopilot.issue_codex_publication_permit(evidence,600);
     replayed:=autopilot.issue_codex_publication_permit(evidence,600);
     IF issued IS DISTINCT FROM replayed OR issued->>'state'<>'ISSUED' THEN
