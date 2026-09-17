@@ -130,6 +130,13 @@ def test_parses_owner_app_command_on_exact_dispatch_pr():
     assert command.target_pr == 1150
 
 
+def test_parses_historical_command_on_nonretained_exact_target_pr():
+    body = COMMAND_BODY.replace("target_pr=1150", "target_pr=1641", 1)
+    command = parse_command_event(_event_on_pr(_event(body), 1641))
+    assert command.command_pr == command.target_pr == 1641
+    assert command.dispatch_pr == 1429
+
+
 def test_command_rejects_unretained_non_dispatch_pr():
     with pytest.raises(CallbackContractError, match="COMMAND_PR_INVALID"):
         parse_command_event(_event_on_pr(_event(), 1641))

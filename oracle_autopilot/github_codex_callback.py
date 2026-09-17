@@ -322,9 +322,13 @@ def parse_command_event(event: object) -> CodexCommand:
     dispatch_pr = int(values["dispatch_pr"])
     # GitHub identity and the exact envelope are authenticated here.  The
     # database RPC remains authoritative for the current outbox mailbox and
-    # dispatch PR, so this parser admits only the bounded mailbox history or
-    # the envelope's own dispatch PR before that canonical check.
-    if event_pr not in RETAINED_MAILBOX_PRS and event_pr != dispatch_pr:
+    # dispatch PR. Retain the historical exact target-PR path so completed
+    # pre-mailbox publications can reach the RPC's read-only replay branch.
+    if (
+        event_pr not in RETAINED_MAILBOX_PRS
+        and event_pr != dispatch_pr
+        and event_pr != target_pr
+    ):
         raise CallbackContractError("CODEX_COMMAND_PR_INVALID")
     return CodexCommand(
         comment_id=comment_id,
