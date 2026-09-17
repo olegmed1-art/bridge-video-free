@@ -99,7 +99,7 @@ BEGIN
     SELECT * INTO callback_result
       FROM autopilot.accept_role_dispatch_callback(
           'delivery-wakeup-325',repeat('5',64),true,
-          'olegmed1-art/bridge-video-free',1150,
+          'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
           'olegmed1-art',315099490,'OWNER',
           'chatgpt-codex-connector',1144995,callback_body
       );
