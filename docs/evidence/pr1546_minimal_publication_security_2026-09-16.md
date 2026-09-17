@@ -71,26 +71,26 @@ No unenumerated path from the retired 69-path manifest is silently carried forwa
 
 Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>\n` plus lexicographically sorted tab-separated `path, operation, base_blob_sha, content_sha256, mode` records.
 
-- Functional core aggregate SHA-256: `712b955f81afe9067558bfcc3d11fd62d69e8a730b8601e73024c076a0aa3386`.
+- Functional core aggregate SHA-256: `15a3687eae41b8a31516aae848f89f2ffd6bf66706f9d13de73f395fbc2b87e8`.
 - DELETE operations: **none** relative to merged `main`.
 
 | Operation | Base blob SHA | Content SHA-256 | Mode | Path |
 |---|---|---|---|---|
 | UPDATE | `2c49fcf95bc3ded580c842ec0dbe61f08271f6f5` | `b8107d35df94adae2fe83c788fd3ba71284bd25be7f13650abef183524dbffbf` | `100644` | `.github/workflows/autopilot-codex-event-callback.yml` |
 | CREATE | `-` | `6306e146bb070fc6fd322daab767c25379a90e1f45d0095f3a5208de7696afb5` | `100644` | `.github/workflows/autopilot-publication-security-ci.yml` |
-| CREATE | `-` | `2ed355d8cfc37363187cf4056b67eaba846f04f8e5a14c4db5fc21d451e56f11` | `100644` | `database/migrations/0338_autopilot_bounded_publication_permit.sql` |
+| CREATE | `-` | `12ea33b39d50ee1afb0436959230c070a89ab968f948bf4c738c599290bb289e` | `100644` | `database/migrations/0338_autopilot_bounded_publication_permit.sql` |
 | CREATE | `-` | `5f37acb6ae97694f93851c3288b0c580bbeecde9246c5bb2665f70327436a3a5` | `100644` | `database/migrations/0339_autopilot_native_cli_receipts.sql` |
-| CREATE | `-` | `b9615fabd6f95487522cc2a78ca8c14035d02178bc205625dba5e02b184912e4` | `100644` | `database/migrations/0340_autopilot_publication_permit_issuer.sql` |
+| CREATE | `-` | `137dc726b2edc156c51e04ecfeea4a1031ede01498d1c7dd28e04509d37b4d38` | `100644` | `database/migrations/0340_autopilot_publication_permit_issuer.sql` |
 | CREATE | `-` | `65040ae7eb04f90aff558f6745564f7377e5fc1aa5cbe49fdca38e9aa92b01bb` | `100644` | `database/rollbacks/0338_autopilot_bounded_publication_permit.sql` |
 | CREATE | `-` | `849176f6595f857f9fed2f7a29a65ba1f85729c7ab8e9fce517bfda47098351e` | `100644` | `database/rollbacks/0339_autopilot_native_cli_receipts.sql` |
 | CREATE | `-` | `aabb543cdcd257b83e244667077922582d950249ff4c2dd08dd605eae7f12e9d` | `100644` | `database/rollbacks/0340_autopilot_publication_permit_issuer.sql` |
 | CREATE | `-` | `7d5c63a5ec3d368b099387a158b33a64b217e70291ca6556728bad4fa3f1f81a` | `100644` | `database/tests/338_autopilot_bounded_publication_permit.sql` |
 | CREATE | `-` | `b5981aa2a5c4af870618b34bedfdcfdcf77403de2737924173b86bd2791c940` | `100644` | `database/tests/339_autopilot_native_cli_receipts.sql` |
-| CREATE | `-` | `a99098a6c4569150bb3b1580da262be3b3563c6282c77f4885e189bab1d03612` | `100644` | `database/tests/340_autopilot_publication_permit_issuer.sql` |
-| CREATE | `-` | `e0de15461fd5f86133e35f10e87f2383bcfbfd0d2e8e7de887ffa4ed022abd19` | `100755` | `database/tests/340a_autopilot_publication_permit_concurrency.sh` |
+| CREATE | `-` | `bf3fedee059b4487c009467d99c10cfaf8f3620913ed2e7fa5d83a0fca54642e` | `100644` | `database/tests/340_autopilot_publication_permit_issuer.sql` |
+| CREATE | `-` | `d3ef676359bd23c9dce1f73c2594f2f41c4a567b40b8fd591d1f44128001c525` | `100755` | `database/tests/340a_autopilot_publication_permit_concurrency.sh` |
 | CREATE | `-` | `4ca1c67eb2e80742ba02cf8cb69add6a9122f874ee7e5ff783990b140d6710de` | `100644` | `oracle_autopilot/codex_cli_bridge.py` |
 | CREATE | `-` | `72ce096ce6792ffbc3938a94cb90b9d04d7e4d1f290f43181fde79229a146010` | `100644` | `oracle_autopilot/codex_cli_delivery.py` |
-| CREATE | `-` | `39c6fe1acbca6bb207e52df2ba07a2bb26b5a38a0e411db8b2818fe431e84cf5` | `100644` | `oracle_autopilot/codex_cli_queue.py` |
+| CREATE | `-` | `39c6fe1acbca6bb2075066014e7df15ea5850` | `100644` | `oracle_autopilot/codex_cli_queue.py` |
 | CREATE | `-` | `5a3db72ee352854eab33da712f3e9ef8aef6932275f4a2939a87122003862e47` | `100644` | `oracle_autopilot/github_codex_publication.py` |
 | CREATE | `-` | `1e831b5ed4236ff71ce3f4d4d8a78778c6b3881fefdc2b35028dcd121815b984` | `100644` | `oracle_autopilot/github_codex_publication_permit.py` |
 | CREATE | `-` | `bb1dc5120896afaa38c2bdf015c7ea3a2d1537bbdc9a7a07b41b6bb9de044ee5` | `100644` | `tests/test_oracle_autopilot_codex_cli_bridge.py` |
@@ -99,7 +99,6 @@ Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>
 | UPDATE | `ee49d635e7151a466e35ee6e7506a3fe0b267e31` | `0aaeb9fe2b883c8f88acda4c8e8c0765991cf453e608c6e710d072b893c7342d` | `100644` | `tests/test_oracle_autopilot_github_codex_callback_workflow.py` |
 | CREATE | `-` | `4ec05baba723dcade22a4c71ba1479172498738fe851010be54be947b6284037` | `100644` | `tests/test_oracle_autopilot_github_codex_publication.py` |
 | CREATE | `-` | `6e1513cf22d01444de320f830b68da51896390e4fa36f535f7e09aa66b6be8d8` | `100644` | `tests/test_oracle_autopilot_github_codex_publication_permit.py` |
-
 
 ## Dependency and application map
 
@@ -125,7 +124,7 @@ Clean rollback order is `0340 → 0339 → 0338`. 0340 and 0338 refuse destructi
 - `database/tests/340a_autopilot_publication_permit_concurrency.sh`: shell syntax check PASS.
 - Exact-head review of `b02d130f0bc448cceb4f3e03073248bc24f16d31` found P2: the publisher could rewrite existing `database/migrations/0000–0099` files. The remediation removes `database/migrations/**` from the publication allowlist entirely and adds regression coverage for historical migrations; new migration creation was already impossible because bounded publication only modifies existing files.
 - Exact-head review of `dfdbee10e37881877860624c747b1f36227d4c58` found P2: 0339 checked receipt-ledger emptiness without first excluding concurrent writers, allowing an insert to commit between the check and `DROP TABLE`. The remediation takes `ACCESS EXCLUSIVE` on `autopilot.native_cli_receipt` before the check. `340a` now deterministically stalls rollback after the check path with a backup-table blocker and proves a concurrent receipt insert cannot cross the rollback lock (`native receipt rollback/write serialization: PASS`).
-- Independent review of predecessor `41037d512ebeb1d15df8603341d7533594eb3933` found a P2 receipt-window gap: a CAS could start with only 45 seconds left and cross the callback/permit deadline before exact readback and terminal retention. The remediation reserves 180 seconds before any mutation, requires a second pre-CAS authorization to remain `SENT`, downgrades near/expired permit authority to `RECOVERY_ONLY`, forbids a CAS in recovery-only state, and permits only read-only exact-commit recovery while the canonical callback task still has at least 90 seconds to retain the terminal receipt. The owner-only issuer and offline verifier now require a 180–900 second permit TTL.
+- Independent review of predecessor `41037d512ebeb1d15df8603341d7533594eb3933` found a P2 receipt-window gap: a CAS could start with only 45 seconds left and cross the callback/permit deadline before exact readback and terminal retention. The remediation reserves 180 seconds before any mutation, requires a second pre-CAS authorization to remain `SENT`, downgrades near/expired permit authority to `RECOVERY_ONLY`, forbids a CAS in recovery-only state, and permits only read-only exact-commit recovery while the canonical callback task still has at least 120 seconds to retain the terminal receipt. The owner-only issuer and offline verifier now require a 180–900 second permit TTL.
 - The same review cycle found a P2 nondeterministic `340a` rollback/write race proof. Fixed sleeps were replaced by `pg_locks`/`pg_stat_activity` synchronization barriers that prove the blocker lock and the rollback session's granted `ACCESS EXCLUSIVE` receipt-table lock before launching the competing writer.
 - Dependency PR #1625 passed its exact PostgreSQL18 role-dispatch roundtrip CI and Current-Main Authoritative CI before merge as `26615eb9689f1e4bb05d1b22d7e6a15214588803`; no production state was touched.
 - Ephemeral local PostgreSQL 18 validation on the current package tree: migrations through 0340 applied; SQL tests 338/339/340 passed; deterministic `pg_locks`-synchronized 340a conflict fencing, rollback/write serialization and retained-evidence rollback refusal passed; clean rollback 0340→0339→0338 preserved 0337; reapply and retest passed.
