@@ -22,7 +22,7 @@
 
 Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>\n` plus lexicographically sorted tab-separated `path, operation, base_blob_sha, content_sha256, mode` records.
 
-- Functional core aggregate SHA-256: `15a3687eae41b8a31516aae848f89f2ffd6bf66706f9d13de73f395fbc2b87e8`.
+- Functional core aggregate SHA-256: `dd8f41e5da6552e99b0625f36d93e7b1aba6cb382fb338c4b575109940f64cf2`.
 - DELETE operations: **none** relative to merged `main`.
 
 | Operation | Base blob SHA | Content SHA-256 | Mode | Path |
@@ -36,9 +36,9 @@ Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>
 | CREATE | `-` | `849176f6595f857f9fed2f7a29a65ba1f85729c7ab8e9fce517bfda47098351e` | `100644` | `database/rollbacks/0339_autopilot_native_cli_receipts.sql` |
 | CREATE | `-` | `aabb543cdcd257b83e244667077922582d950249ff4c2dd08dd605eae7f12e9d` | `100644` | `database/rollbacks/0340_autopilot_publication_permit_issuer.sql` |
 | CREATE | `-` | `7d5c63a5ec3d368b099387a158b33a64b217e70291ca6556728bad4fa3f1f81a` | `100644` | `database/tests/338_autopilot_bounded_publication_permit.sql` |
-| CREATE | `-` | `b5981aa2a5c4af870618b34bedfdcfdcf77403de2737924173b86bd2791c940` | `100644` | `database/tests/339_autopilot_native_cli_receipts.sql` |
+| CREATE | `-` | `b5981aa2a5c4af870618b34bdedfdcfdcf77403de2737924173b86bd2791c940` | `100644` | `database/tests/339_autopilot_native_cli_receipts.sql` |
 | CREATE | `-` | `bf3fedee059b4487c009467d99c10cfaf8f3620913ed2e7fa5d83a0fca54642e` | `100644` | `database/tests/340_autopilot_publication_permit_issuer.sql` |
-| CREATE | `-` | `d3ef676359bd23c9dce1f73c2594f2f41c4a567b40b8fd591d1f44128001c525` | `100755` | `database/tests/340a_autopilot_publication_permit_concurrency.sh` |
+| CREATE | `-` | `f3c724b01c18bc915ed1eeff2d256d0a30bf83c08db63984b92b06546fb98954` | `100755` | `database/tests/340a_autopilot_publication_permit_concurrency.sh` |
 | CREATE | `-` | `4ca1c67eb2e80742ba02cf8cb69add6a9122f874ee7e5ff783990b140d6710de` | `100644` | `oracle_autopilot/codex_cli_bridge.py` |
 | CREATE | `-` | `72ce096ce6792ffbc3938a94cb90b9d04d7e4d1f290f43181fde79229a146010` | `100644` | `oracle_autopilot/codex_cli_delivery.py` |
 | CREATE | `-` | `39c6fe1acbca6bb207e52df2ba07a2bb26b5a38a0e411db8b2818fe431e84cf5` | `100644` | `oracle_autopilot/codex_cli_queue.py` |
@@ -71,6 +71,7 @@ Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>
 - Prior receipt-window P2: fixed with 180-second mutation authority, second pre-CAS authorization, `RECOVERY_ONLY`, and a 120-second recovery receipt margin.
 - Latest P2 minimum TTL bug: fixed by capturing `issued_at` once; TTL=180 is explicitly regression-tested.
 - Latest P2 concurrent issuer test race: fixed by polling `pg_stat_activity`/`pg_locks` for session A's granted role-dispatch lock before starting session B.
+- Hosted PostgreSQL18 synchronization regression on `94b41f3` was isolated to the 0339 blocker test identity: the blocker changed `application_name` after taking its lock while the barrier polled the original name. The blocker now retains `pr1546-0339-blocker`, so the `pg_locks` barrier observes the intended session deterministically.
 
 ## Final gates
 
