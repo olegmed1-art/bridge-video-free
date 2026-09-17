@@ -40,15 +40,15 @@ $enabled_check$;
 $implicit_role_check$;
     implicit_delivery_branch text := $implicit_delivery_branch$           OR implicit_delivery
 $implicit_delivery_branch$;
-    mailbox_event_binding text := $$OR NOT (
+    mailbox_event_binding text := $mailbox_event$OR NOT (
            p_event_pr IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)
            OR (outbox.mode='REPAIR'
                AND p_body->>'status'='SUCCEEDED'
                AND p_body->>'result_code'='BOUNDED_REPAIR_PUBLISHED'
                AND p_event_pr=outbox.target_pr)
-       )$$;
+       )$mailbox_event$;
     target_event_binding text := 'OR p_event_pr<>outbox.target_pr';
-    mailbox_proof_binding text := $$AND (
+    mailbox_proof_binding text := $mailbox_proof$AND (
                 proof.command_pr=p_event_pr
                 OR (outbox.mode='REPAIR'
                     AND p_body->>'status'='SUCCEEDED'
@@ -61,7 +61,7 @@ $implicit_delivery_branch$;
                            AND publication_permit.command_comment_id=outbox.codex_command_comment_id
                            AND p_delivery_id='github-codex-result:'||publication_permit.publication_comment_id::text
                     ))
-            )$$;
+            )$mailbox_proof$;
     target_proof_binding text := 'AND proof.command_pr=p_event_pr';
     mailbox_marker text :=
         '    -- MAILBOX_V2_CODEX_INBOUND_V1: bind the response to its mailbox.' || chr(10);
