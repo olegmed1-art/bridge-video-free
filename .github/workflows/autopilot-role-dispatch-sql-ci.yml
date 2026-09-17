@@ -46,6 +46,9 @@ on:
       - 'database/migrations/0344_autopilot_mailbox_v2_rotation.sql'
       - 'database/rollbacks/0344_autopilot_mailbox_v2_rotation.sql'
       - 'database/tests/344_autopilot_mailbox_v2_rotation.sql'
+      - 'database/migrations/0345_autopilot_mailbox_v2_codex_inbound.sql'
+      - 'database/rollbacks/0345_autopilot_mailbox_v2_codex_inbound.sql'
+      - 'database/tests/345_autopilot_mailbox_v2_codex_inbound.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -100,6 +103,9 @@ on:
       - 'database/migrations/0344_autopilot_mailbox_v2_rotation.sql'
       - 'database/rollbacks/0344_autopilot_mailbox_v2_rotation.sql'
       - 'database/tests/344_autopilot_mailbox_v2_rotation.sql'
+      - 'database/migrations/0345_autopilot_mailbox_v2_codex_inbound.sql'
+      - 'database/rollbacks/0345_autopilot_mailbox_v2_codex_inbound.sql'
+      - 'database/tests/345_autopilot_mailbox_v2_codex_inbound.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -256,6 +262,8 @@ jobs:
             -f database/tests/343_autopilot_provider_failure_no_repair.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/344_autopilot_mailbox_v2_rotation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/345_autopilot_mailbox_v2_codex_inbound.sql
 
       - name: Prove concurrent six-worker admission
         run: |
@@ -275,15 +283,18 @@ jobs:
           # If the publication chain is present, roll it back first so this lower-chain
           # roundtrip never bypasses its evidence-preserving rollback guards.
           upper_publication_chain_count="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
-            "SELECT count(*) FROM public.schema_migration WHERE migration_key IN ('0338_autopilot_bounded_publication_permit','0339_autopilot_native_cli_receipts','0340_autopilot_publication_permit_issuer','0343_autopilot_provider_failure_no_repair','0344_autopilot_mailbox_v2_rotation');")"
-          if [ "$upper_publication_chain_count" -eq 5 ]; then
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key IN ('0338_autopilot_bounded_publication_permit','0339_autopilot_native_cli_receipts','0340_autopilot_publication_permit_issuer','0343_autopilot_provider_failure_no_repair','0344_autopilot_mailbox_v2_rotation','0345_autopilot_mailbox_v2_codex_inbound');")"
+          if [ "$upper_publication_chain_count" -eq 6 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+              "UPDATE autopilot.project_planner_state SET enabled=false,last_decision_code='SQL_ROUNDTRIP_PAUSED',last_decision_at=clock_timestamp() WHERE singleton;"
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0345_autopilot_mailbox_v2_codex_inbound.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0344_autopilot_mailbox_v2_rotation.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0343_autopilot_provider_failure_no_repair.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0340_autopilot_publication_permit_issuer.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0339_autopilot_native_cli_receipts.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0338_autopilot_bounded_publication_permit.sql
           elif [ "$upper_publication_chain_count" -ne 0 ]; then
-            echo "partial publication migration chain: $upper_publication_chain_count/5" >&2
+            echo "partial publication migration chain: $upper_publication_chain_count/6" >&2
             exit 1
           fi
 
@@ -351,14 +362,17 @@ jobs:
             -f database/migrations/0336_autopilot_codex_terminal_implicit_delivery.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/migrations/0337_autopilot_role_repair_admission.sql
-          if [ "$upper_publication_chain_count" -eq 5 ]; then
+          if [ "$upper_publication_chain_count" -eq 6 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0338_autopilot_bounded_publication_permit.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0339_autopilot_native_cli_receipts.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0340_autopilot_publication_permit_issuer.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0343_autopilot_provider_failure_no_repair.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0344_autopilot_mailbox_v2_rotation.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0345_autopilot_mailbox_v2_codex_inbound.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+              "UPDATE autopilot.project_planner_state SET enabled=true,last_decision_code='SQL_ROUNDTRIP_RESTORED',last_decision_at=clock_timestamp() WHERE singleton;"
             test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
-              "SELECT count(*) FROM public.schema_migration WHERE migration_key IN ('0338_autopilot_bounded_publication_permit','0339_autopilot_native_cli_receipts','0340_autopilot_publication_permit_issuer','0343_autopilot_provider_failure_no_repair','0344_autopilot_mailbox_v2_rotation');")" = 5
+              "SELECT count(*) FROM public.schema_migration WHERE migration_key IN ('0338_autopilot_bounded_publication_permit','0339_autopilot_native_cli_receipts','0340_autopilot_publication_permit_issuer','0343_autopilot_provider_failure_no_repair','0344_autopilot_mailbox_v2_rotation','0345_autopilot_mailbox_v2_codex_inbound');")" = 6
           fi
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
@@ -394,6 +408,8 @@ jobs:
             -f database/tests/343_autopilot_provider_failure_no_repair.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/344_autopilot_mailbox_v2_rotation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/345_autopilot_mailbox_v2_codex_inbound.sql
 
   migration-0336-roundtrip:
     runs-on: ubuntu-24.04
