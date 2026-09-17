@@ -59,6 +59,7 @@ psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
 {
   echo 'BEGIN;'
   echo 'LOCK TABLE autopilot.migration_0339_function_backup IN ACCESS EXCLUSIVE MODE;'
+  echo "SET application_name='pr1546-permit-a';"
   echo 'SELECT pg_sleep(2);'
   echo 'COMMIT;'
 } | PGAPPNAME=pr1546-0339-blocker psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >"$tmp/0339-blocker.out" 2>"$tmp/0339-blocker.err" &
@@ -153,11 +154,23 @@ SQL
 {
   echo 'BEGIN;'
   make_evidence 99034212 99034213 e f
+  echo "SET application_name='pr1546-permit-a';"
   echo 'SELECT pg_sleep(2);'
   echo 'COMMIT;'
 } | psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >"$tmp/a.out" 2>"$tmp/a.err" &
 a_pid=$!
-sleep 0.4
+for _ in {1..100}; do
+  if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT EXISTS (SELECT 1 FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid WHERE a.application_name='pr1546-permit-a' AND a.query LIKE 'SELECT pg_sleep%' AND l.granted AND l.relation='autopilot.role_dispatch_outbox'::regclass);")" == t ]]; then
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT EXISTS (SELECT 1 FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid WHERE a.application_name='pr1546-permit-a' AND a.query LIKE 'SELECT pg_sleep%' AND l.granted AND l.relation='autopilot.role_dispatch_outbox'::regclass);")" != t ]]; then
+  echo 'issuer session A lock barrier not observed' >&2
+  kill "$a_pid" 2>/dev/null || true
+  wait "$a_pid" 2>/dev/null || true
+  exit 1
+fi
 set +e
 make_evidence 99034214 99034215 1 2 | psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >"$tmp/b.out" 2>"$tmp/b.err"
 b_rc=$?
