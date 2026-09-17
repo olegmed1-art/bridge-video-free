@@ -1,0 +1,170 @@
+name: Autopilot publication security CI
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/autopilot-codex-event-callback.yml'
+      - '.github/workflows/autopilot-publication-security-ci.yml'
+      - 'database/migrations/0338_autopilot_bounded_publication_permit.sql'
+      - 'database/migrations/0339_autopilot_native_cli_receipts.sql'
+      - 'database/migrations/0340_autopilot_publication_permit_issuer.sql'
+      - 'database/rollbacks/0338_autopilot_bounded_publication_permit.sql'
+      - 'database/rollbacks/0339_autopilot_native_cli_receipts.sql'
+      - 'database/rollbacks/0340_autopilot_publication_permit_issuer.sql'
+      - 'database/tests/338_autopilot_bounded_publication_permit.sql'
+      - 'database/tests/339_autopilot_native_cli_receipts.sql'
+      - 'database/tests/340_autopilot_publication_permit_issuer.sql'
+      - 'database/tests/340a_autopilot_publication_permit_concurrency.sh'
+      - 'oracle_autopilot/codex_cli_*.py'
+      - 'oracle_autopilot/github_codex_publication*.py'
+      - 'tests/test_oracle_autopilot_codex_cli_*.py'
+      - 'tests/test_oracle_autopilot_github_codex_publication*.py'
+      - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
+      - 'docs/evidence/pr1546_minimal_publication_security_2026-09-16.md'
+
+permissions:
+  contents: read
+
+jobs:
+  focused-python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install focused dependencies
+        run: python -m pip install --disable-pip-version-check 'pytest==8.4.2' 'psycopg[binary]==3.3.4' 'PyYAML==6.0.2'
+
+      - name: Prove stacked exact-head ancestry
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 2189f1014bedaee69c3304b7e90670a3a1785d46 HEAD
+
+      - name: Run focused publication, permit, callback, and native receipt tests
+        run: |
+          python -m pytest -q \
+            tests/test_oracle_autopilot_github_codex_callback.py \
+            tests/test_oracle_autopilot_github_codex_callback_workflow.py \
+            tests/test_oracle_autopilot_github_codex_publication.py \
+            tests/test_oracle_autopilot_github_codex_publication_permit.py \
+            tests/test_oracle_autopilot_codex_cli_bridge.py \
+            tests/test_oracle_autopilot_codex_cli_delivery.py \
+            tests/test_oracle_autopilot_codex_cli_queue.py
+
+      - name: Parse workflows and guard the publication migration namespace
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          for path in (
+              '.github/workflows/autopilot-codex-event-callback.yml',
+              '.github/workflows/autopilot-publication-security-ci.yml',
+          ):
+              yaml.safe_load(Path(path).read_text())
+          expected = {
+              '0338': '0338_autopilot_bounded_publication_permit.sql',
+              '0339': '0339_autopilot_native_cli_receipts.sql',
+              '0340': '0340_autopilot_publication_permit_issuer.sql',
+          }
+          names = [p.name for p in Path('database/migrations').glob('*.sql')]
+          for prefix, name in expected.items():
+              matches = [value for value in names if value.startswith(prefix + '_')]
+              assert matches == [name], (prefix, matches)
+          assert '0336_autopilot_bounded_publication_permit.sql' not in names
+          assert '0337_autopilot_native_cli_receipts.sql' not in names
+          PY
+
+  postgresql18-publication-chain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: autopilot_publication_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d autopilot_publication_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/autopilot_publication_ci
+      DATABASE_URL: postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/autopilot_publication_ci
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Bootstrap managed-owner-compatible PostgreSQL 18 database
+        run: |
+          set -euo pipefail
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE EXTENSION IF NOT EXISTS btree_gist;
+          CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+          CREATE ROLE bridge_ci_owner LOGIN PASSWORD 'bridge_ci_owner' CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION;
+          ALTER DATABASE autopilot_publication_ci OWNER TO bridge_ci_owner;
+          ALTER SCHEMA public OWNER TO bridge_ci_owner;
+          SQL
+
+      - name: Apply 0338-0340 chain and focused SQL tests
+        run: |
+          set -euo pipefail
+          chmod +x database/scripts/migrate.sh
+          database/scripts/migrate.sh
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/338_autopilot_bounded_publication_permit.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/339_autopilot_native_cli_receipts.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/340_autopilot_publication_permit_issuer.sql
+
+      - name: Prove concurrent permit fencing and retained-evidence rollback
+        run: |
+          set -euo pipefail
+          concurrency_url='postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/autopilot_publication_concurrency_ci'
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+            'CREATE DATABASE autopilot_publication_concurrency_ci WITH TEMPLATE autopilot_publication_ci OWNER bridge_ci_owner;'
+          chmod +x database/tests/340a_autopilot_publication_permit_concurrency.sh
+          database/tests/340a_autopilot_publication_permit_concurrency.sh "$concurrency_url"
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+            'DROP DATABASE autopilot_publication_concurrency_ci WITH (FORCE);'
+
+      - name: Prove clean rollback, 0337 preservation, reapply, and retest
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0340_autopilot_publication_permit_issuer.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0339_autopilot_native_cli_receipts.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0338_autopilot_bounded_publication_permit.sql
+          test "$(psql "$DATABASE_URL" -XAt -c "SELECT count(*) FROM public.schema_migration WHERE migration_key IN ('0338_autopilot_bounded_publication_permit','0339_autopilot_native_cli_receipts','0340_autopilot_publication_permit_issuer');")" = 0
+          test "$(psql "$DATABASE_URL" -XAt -c "SELECT count(*) FROM public.schema_migration WHERE migration_key='0337_autopilot_role_repair_admission';")" = 1
+          test "$(psql "$DATABASE_URL" -XAt -c "SELECT to_regclass('autopilot.codex_publication_permit') IS NULL;")" = t
+          test "$(psql "$DATABASE_URL" -XAt -c "SELECT to_regclass('autopilot.native_cli_receipt') IS NULL;")" = t
+          test "$(psql "$DATABASE_URL" -XAt -c "SELECT to_regprocedure('autopilot.issue_codex_publication_permit(jsonb,integer)') IS NULL;")" = t
+
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0338_autopilot_bounded_publication_permit.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0339_autopilot_native_cli_receipts.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0340_autopilot_publication_permit_issuer.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/338_autopilot_bounded_publication_permit.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/339_autopilot_native_cli_receipts.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/340_autopilot_publication_permit_issuer.sql
