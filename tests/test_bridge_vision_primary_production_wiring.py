@@ -41,3 +41,39 @@ def test_r262_selector_schedules_one_settle_retry(monkeypatch):
     monkeypatch.setattr(runtime.previous, 'install', lambda token_func: None)
     runtime.install(lambda: 'token')
     assert getattr(primary.EventFrameSelector.observe, '_r262_settle_retry', False) is True
+
+
+def test_r262_settle_retry_is_bounded_and_non_recursive(monkeypatch):
+    from bridge_vision import bridgit_event_frame_selector as event_selector
+    from bridge_vision import bridgit_primary_video as primary
+
+    class Signature:
+        def copy(self):
+            return self
+
+    monkeypatch.setattr(event_selector, 'signature_distance', lambda first, second: 0.0)
+    monkeypatch.setattr(runtime.previous, 'install', lambda token_func: None)
+    runtime.install(lambda: 'token')
+
+    selector = primary.EventFrameSelector(settle_ms=0, watchdog_ms=10_000)
+    signature = Signature()
+
+    assert selector.observe(signature, 0) is None
+    first = selector.observe(signature, 1)
+    assert first is not None
+    assert first.reason == 'INITIAL_STABLE_STATE'
+
+    # r26.2 schedules exactly one short watchdog-style retry after the
+    # non-watchdog event. With a 1.5 s retry delay it becomes due at 1.501 s
+    # in this strictly-increasing-timestamp test sequence.
+    assert selector.last_emit_ms == -8_499
+    assert selector.observe(signature, 1_500) is None
+
+    retry = selector.observe(signature, 1_501)
+    assert retry is not None
+    assert retry.reason == 'WATCHDOG_STABLE_STATE'
+    assert selector.last_emit_ms == 1_501
+
+    # The watchdog retry must not schedule another short retry recursively.
+    assert selector.observe(signature, 1_502) is None
+    assert selector.last_emit_ms == 1_501
