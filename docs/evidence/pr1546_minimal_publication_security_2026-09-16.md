@@ -22,7 +22,7 @@
 
 Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>\n` plus lexicographically sorted tab-separated `path, operation, base_blob_sha, content_sha256, mode` records.
 
-- Functional core aggregate SHA-256: `dd8f41e5da6552e99b0625f36d93e7b1aba6cb382fb338c4b575109940f64cf2`.
+- Functional core aggregate SHA-256: `50c4961ea3fbca849404f98835b7ed6594a7d40b4b49727b8fe8cc242ac0f0ca`.
 - DELETE operations: **none** relative to merged `main`.
 
 | Operation | Base blob SHA | Content SHA-256 | Mode | Path |
@@ -31,14 +31,14 @@ Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>
 | CREATE | `-` | `6306e146bb070fc6fd322daab767c25379a90e1f45d0095f3a5208de7696afb5` | `100644` | `.github/workflows/autopilot-publication-security-ci.yml` |
 | CREATE | `-` | `12ea33b39d50ee1afb0436959230c070a89ab968f948bf4c738c599290bb289e` | `100644` | `database/migrations/0338_autopilot_bounded_publication_permit.sql` |
 | CREATE | `-` | `5f37acb6ae97694f93851c3288b0c580bbeecde9246c5bb2665f70327436a3a5` | `100644` | `database/migrations/0339_autopilot_native_cli_receipts.sql` |
-| CREATE | `-` | `137dc726b2edc156c51e04ecfeea4a1031ede01498d1c7dd28e04509d37b4d38` | `100644` | `database/migrations/0340_autopilot_publication_permit_issuer.sql` |
+| CREATE | `-` | `ec0de1a0e176a3b2ee875c7c62c2636d8ed9b51bff8446a65874d315ab1d9395` | `100644` | `database/migrations/0340_autopilot_publication_permit_issuer.sql` |
 | CREATE | `-` | `65040ae7eb04f90aff558f6745564f7377e5fc1aa5cbe49fdca38e9aa92b01bb` | `100644` | `database/rollbacks/0338_autopilot_bounded_publication_permit.sql` |
 | CREATE | `-` | `849176f6595f857f9fed2f7a29a65ba1f85729c7ab8e9fce517bfda47098351e` | `100644` | `database/rollbacks/0339_autopilot_native_cli_receipts.sql` |
-| CREATE | `-` | `aabb543cdcd257b83e244667077922582d950249ff4c2dd08dd605eae7f12e9d` | `100644` | `database/rollbacks/0340_autopilot_publication_permit_issuer.sql` |
+| CREATE | `-` | `9e6d92afa13d33e26d536fe39ec92cf48905a98b2c502a73534c1d5da8fbcf66` | `100644` | `database/rollbacks/0340_autopilot_publication_permit_issuer.sql` |
 | CREATE | `-` | `7d5c63a5ec3d368b099387a158b33a64b217e70291ca6556728bad4fa3f1f81a` | `100644` | `database/tests/338_autopilot_bounded_publication_permit.sql` |
 | CREATE | `-` | `b5981aa2a5c4af870618b34bdedfdcfdcf77403de2737924173b86bd2791c940` | `100644` | `database/tests/339_autopilot_native_cli_receipts.sql` |
 | CREATE | `-` | `bf3fedee059b4487c009467d99c10cfaf8f3620913ed2e7fa5d83a0fca54642e` | `100644` | `database/tests/340_autopilot_publication_permit_issuer.sql` |
-| CREATE | `-` | `f3c724b01c18bc915ed1eeff2d256d0a30bf83c08db63984b92b06546fb98954` | `100755` | `database/tests/340a_autopilot_publication_permit_concurrency.sh` |
+| CREATE | `-` | `f53f576760f1a5fc5dda6d50ddb4999071b16beef26325a6ed9b3be28db4b94c` | `100755` | `database/tests/340a_autopilot_publication_permit_concurrency.sh` |
 | CREATE | `-` | `4ca1c67eb2e80742ba02cf8cb69add6a9122f874ee7e5ff783990b140d6710de` | `100644` | `oracle_autopilot/codex_cli_bridge.py` |
 | CREATE | `-` | `72ce096ce6792ffbc3938a94cb90b9d04d7e4d1f290f43181fde79229a146010` | `100644` | `oracle_autopilot/codex_cli_delivery.py` |
 | CREATE | `-` | `39c6fe1acbca6bb207e52df2ba07a2bb26b5a38a0e411db8b2818fe431e84cf5` | `100644` | `oracle_autopilot/codex_cli_queue.py` |
@@ -58,7 +58,7 @@ Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>
 - 0338 callback authorization can consume but cannot issue permits. Mutation requires ≥180 seconds; exact-commit recovery is read-only and requires ≥120 seconds callback budget.
 - 0339 is disabled by default, installs no runtime grant, retains ambiguous native outcomes, and its rollback takes `ACCESS EXCLUSIVE` before testing ledger emptiness.
 - 0340 is owner-only, accepts TTL 180–900 seconds using one captured issuance timestamp, binds exact dispatch/task/head/provenance fields, and has no callback/runtime grant.
-- Clean rollback order is `0340 → 0339 → 0338`; populated evidence causes fail-closed refusal.
+- Clean rollback order is `0340 → 0339 → 0338`; 0340 serializes with in-flight owner issuance through a shared transaction advisory fence and post-fence migration-marker recheck, while populated evidence causes fail-closed refusal.
 - Publisher is still gated by `AUTOPILOT_BOUNDED_PUBLICATION_ENABLED == true`; this package does not set that variable.
 
 ## Verification and review history
@@ -71,6 +71,7 @@ Canonical core hash algorithm: SHA-256 over `PR1546_MINIMAL_V1\nbase=<main-head>
 - Prior receipt-window P2: fixed with 180-second mutation authority, second pre-CAS authorization, `RECOVERY_ONLY`, and a 120-second recovery receipt margin.
 - Latest P2 minimum TTL bug: fixed by capturing `issued_at` once; TTL=180 is explicitly regression-tested.
 - Latest P2 concurrent issuer test race: fixed by polling `pg_stat_activity`/`pg_locks` for session A's granted role-dispatch lock before starting session B.
+- Latest P2 0340 rollback/issuer race: fixed with a shared transaction advisory fence between owner issuance and rollback, a post-fence migration-marker recheck, and deterministic 340a proofs for both issuer-first and rollback-first ordering.
 - Hosted PostgreSQL18 synchronization regression on `94b41f3` was isolated to the 0339 blocker test identity: the blocker changed `application_name` after taking its lock while the barrier polled the original name. The blocker now retains `pr1546-0339-blocker`, so the `pg_locks` barrier observes the intended session deterministically.
 
 ## Final gates

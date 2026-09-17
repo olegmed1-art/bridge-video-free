@@ -29,6 +29,18 @@ DECLARE
     issued_at timestamptz;
     expected jsonb;
 BEGIN
+    -- Serialize all owner-only issuance against 0340 rollback. The marker
+    -- recheck makes an already-started caller fail closed if rollback wins
+    -- the fence before the function reaches this point.
+    PERFORM pg_advisory_xact_lock(hashtextextended(
+        'autopilot.codex_publication_permit.issuer_rollback_fence.v1',0));
+    IF NOT EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0340_autopilot_publication_permit_issuer'
+    ) THEN
+        RAISE EXCEPTION 'PUBLICATION_ISSUER_NOT_ACTIVE';
+    END IF;
+
     IF jsonb_typeof(p_evidence) IS DISTINCT FROM 'object'
        OR octet_length(COALESCE(p_evidence::text,''))>16384
        OR p_ttl_seconds IS NULL OR p_ttl_seconds NOT BETWEEN 180 AND 900 THEN

@@ -1,5 +1,9 @@
 \set ON_ERROR_STOP on
 BEGIN;
+-- Drain/serialize any in-flight owner issuer before deciding that the ledger
+-- is empty. The issuer takes the same transaction-scoped fence first.
+SELECT pg_advisory_xact_lock(hashtextextended(
+    'autopilot.codex_publication_permit.issuer_rollback_fence.v1',0));
 LOCK TABLE autopilot.codex_publication_permit IN ACCESS EXCLUSIVE MODE;
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM autopilot.codex_publication_permit) THEN

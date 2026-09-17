@@ -151,31 +151,215 @@ SELECT autopilot.issue_codex_publication_permit(
 SQL
 }
 
+# Prove rollback-first ordering as well. A table blocker keeps the clean
+# rollback in-flight after it has acquired the global issuer/rollback fence.
+# An already-started issuer must then queue on that fence. Releasing the table
+# blocker lets rollback remove 0340; the queued issuer must fail closed on the
+# migration-marker recheck and must not recreate mutation authority.
 {
   echo 'BEGIN;'
-  make_evidence 99034212 99034213 e f
-  echo "SET application_name='pr1546-permit-a';"
-  echo 'SELECT pg_sleep(2);'
+  echo "SELECT set_config('application_name','pr1546-0340-table-blocker',false);"
+  echo 'LOCK TABLE autopilot.codex_publication_permit IN ACCESS SHARE MODE;'
+  echo 'SELECT pg_sleep(600);'
   echo 'COMMIT;'
-} | psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >"$tmp/a.out" 2>"$tmp/a.err" &
-a_pid=$!
+} | PGAPPNAME=pr1546-0340-table-blocker psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  >"$tmp/0340-table-blocker.out" 2>"$tmp/0340-table-blocker.err" &
+table_blocker_pid=$!
+table_blocker_ready=false
 for _ in {1..100}; do
-  if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT EXISTS (SELECT 1 FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid WHERE a.application_name='pr1546-permit-a' AND a.query LIKE 'SELECT pg_sleep%' AND l.granted AND l.relation='autopilot.role_dispatch_outbox'::regclass);")" == t ]]; then
+  if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT EXISTS (
+      SELECT 1 FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid
+      WHERE a.application_name='pr1546-0340-table-blocker'
+        AND a.query LIKE 'SELECT pg_sleep%'
+        AND l.relation='autopilot.codex_publication_permit'::regclass
+        AND l.mode='AccessShareLock' AND l.granted);" )" == t ]]; then
+    table_blocker_ready=true
     break
   fi
   sleep 0.05
 done
-if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT EXISTS (SELECT 1 FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid WHERE a.application_name='pr1546-permit-a' AND a.query LIKE 'SELECT pg_sleep%' AND l.granted AND l.relation='autopilot.role_dispatch_outbox'::regclass);")" != t ]]; then
-  echo 'issuer session A lock barrier not observed' >&2
-  kill "$a_pid" 2>/dev/null || true
-  wait "$a_pid" 2>/dev/null || true
+if [[ "$table_blocker_ready" != true ]]; then
+  echo '0340 table blocker lock barrier not observed' >&2
+  kill "$table_blocker_pid" 2>/dev/null || true
+  wait "$table_blocker_pid" 2>/dev/null || true
   exit 1
 fi
+
+PGAPPNAME=pr1546-0340-rollback-first psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  -f "$repo_root/database/rollbacks/0340_autopilot_publication_permit_issuer.sql" \
+  >"$tmp/0340-rollback-first.out" 2>"$tmp/0340-rollback-first.err" &
+rollback_first_pid=$!
+rollback_fence_ready=false
+for _ in {1..100}; do
+  if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT EXISTS (
+      SELECT 1 FROM pg_stat_activity a JOIN pg_locks advisory ON advisory.pid=a.pid
+      JOIN pg_locks tbl ON tbl.pid=a.pid
+      WHERE a.application_name='pr1546-0340-rollback-first'
+        AND advisory.locktype='advisory' AND advisory.granted
+        AND tbl.relation='autopilot.codex_publication_permit'::regclass
+        AND tbl.mode='AccessExclusiveLock' AND NOT tbl.granted);" )" == t ]]; then
+    rollback_fence_ready=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$rollback_fence_ready" != true ]]; then
+  echo 'rollback-first fence/table wait barrier not observed' >&2
+  kill "$rollback_first_pid" "$table_blocker_pid" 2>/dev/null || true
+  wait "$rollback_first_pid" "$table_blocker_pid" 2>/dev/null || true
+  exit 1
+fi
+
+make_evidence 99034216 99034217 3 4 | \
+  PGAPPNAME=pr1546-0340-issuer-after-rollback psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  >"$tmp/0340-issuer-after-rollback.out" 2>"$tmp/0340-issuer-after-rollback.err" &
+issuer_after_rollback_pid=$!
+issuer_waiting=false
+for _ in {1..100}; do
+  if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT EXISTS (
+      SELECT 1 FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid
+      WHERE a.application_name='pr1546-0340-issuer-after-rollback'
+        AND NOT l.granted
+        AND (l.locktype='advisory'
+             OR l.relation='autopilot.codex_publication_permit'::regclass));" )" == t ]]; then
+    issuer_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$issuer_waiting" != true ]]; then
+  echo 'issuer did not queue behind rollback-first fence/table lock' >&2
+  kill "$issuer_after_rollback_pid" "$rollback_first_pid" "$table_blocker_pid" 2>/dev/null || true
+  wait "$issuer_after_rollback_pid" "$rollback_first_pid" "$table_blocker_pid" 2>/dev/null || true
+  exit 1
+fi
+
+# The barriers above prove both wait edges. Terminate the artificial blocker
+# by backend identity so its transaction releases the table lock immediately;
+# killing only the psql client can leave pg_sleep() holding locks server-side.
+if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT bool_and(pg_terminate_backend(pid))
+      FROM pg_stat_activity WHERE application_name='pr1546-0340-table-blocker';")" != t ]]; then
+  echo 'failed to terminate 0340 table blocker backend' >&2
+  exit 1
+fi
+set +e
+wait "$table_blocker_pid"; table_blocker_rc=$?
+wait "$rollback_first_pid"; rollback_first_rc=$?
+wait "$issuer_after_rollback_pid"; issuer_after_rollback_rc=$?
+set -e
+if [[ $table_blocker_rc -eq 0 || $rollback_first_rc -ne 0 || $issuer_after_rollback_rc -eq 0 ]]; then
+  echo "rollback-first serialization failed: blocker=$table_blocker_rc rollback=$rollback_first_rc issuer=$issuer_after_rollback_rc" >&2
+  cat "$tmp/0340-table-blocker.err" "$tmp/0340-rollback-first.err" "$tmp/0340-issuer-after-rollback.err" >&2
+  exit 1
+fi
+grep -F 'PUBLICATION_ISSUER_NOT_ACTIVE' "$tmp/0340-issuer-after-rollback.err"
+test "$(psql "$DATABASE_URL" -XAt -c "SELECT count(*) FROM public.schema_migration WHERE migration_key='0340_autopilot_publication_permit_issuer';")" = 0
+test "$(psql "$DATABASE_URL" -XAt -c "SELECT count(*) FROM autopilot.codex_publication_permit;")" = 0
+test "$(psql "$DATABASE_URL" -XAt -c "SELECT to_regprocedure('autopilot.issue_codex_publication_permit(jsonb,integer)') IS NULL;")" = t
+psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  -f "$repo_root/database/migrations/0340_autopilot_publication_permit_issuer.sql" >/dev/null
+
+echo 'publication issuer rollback-first serialization: PASS'
+
+# Hold the canonical dispatch row so an issuer can enter 0340, acquire the
+# issuer/rollback fence, and remain in-flight before touching the permit table.
+# A concurrent clean rollback must wait on that fence; after issuance commits,
+# it must observe retained evidence and fail rather than remove the issuer.
+{
+  echo 'BEGIN;'
+  echo "SELECT set_config('application_name','pr1546-0340-outbox-blocker',false);"
+  echo "SELECT 1 FROM autopilot.role_dispatch_outbox WHERE github_dispatch_comment_id=9903421 FOR UPDATE;"
+  echo 'SELECT pg_sleep(10);'
+  echo 'COMMIT;'
+} | PGAPPNAME=pr1546-0340-outbox-blocker psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  >"$tmp/0340-outbox-blocker.out" 2>"$tmp/0340-outbox-blocker.err" &
+outbox_blocker_pid=$!
+outbox_blocker_ready=false
+for _ in {1..100}; do
+  if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT EXISTS (
+      SELECT 1 FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid
+      WHERE a.application_name='pr1546-0340-outbox-blocker'
+        AND a.query LIKE 'SELECT pg_sleep%'
+        AND l.relation='autopilot.role_dispatch_outbox'::regclass
+        AND l.granted);" )" == t ]]; then
+    outbox_blocker_ready=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$outbox_blocker_ready" != true ]]; then
+  echo '0340 outbox blocker lock barrier not observed' >&2
+  kill "$outbox_blocker_pid" 2>/dev/null || true
+  wait "$outbox_blocker_pid" 2>/dev/null || true
+  exit 1
+fi
+
+make_evidence 99034212 99034213 e f | \
+  PGAPPNAME=pr1546-0340-issuer-race psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  >"$tmp/a.out" 2>"$tmp/a.err" &
+a_pid=$!
+issuer_fence_ready=false
+for _ in {1..100}; do
+  if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT EXISTS (
+      SELECT 1 FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid
+      WHERE a.application_name='pr1546-0340-issuer-race'
+        AND l.locktype='advisory' AND l.granted);" )" == t ]]; then
+    issuer_fence_ready=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$issuer_fence_ready" != true ]]; then
+  echo 'issuer/rollback fence was not acquired by in-flight issuer' >&2
+  kill "$a_pid" "$outbox_blocker_pid" 2>/dev/null || true
+  wait "$a_pid" "$outbox_blocker_pid" 2>/dev/null || true
+  exit 1
+fi
+
+set +e
+PGAPPNAME=pr1546-0340-rollback-race psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  -f "$repo_root/database/rollbacks/0340_autopilot_publication_permit_issuer.sql" \
+  >"$tmp/0340-race-rollback.out" 2>"$tmp/0340-race-rollback.err" &
+rollback_0340_pid=$!
+set -e
+rollback_waiting=false
+for _ in {1..100}; do
+  if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT EXISTS (
+      SELECT 1 FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid
+      WHERE a.application_name='pr1546-0340-rollback-race'
+        AND l.locktype='advisory' AND NOT l.granted);" )" == t ]]; then
+    rollback_waiting=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$rollback_waiting" != true ]]; then
+  echo '0340 rollback did not wait on in-flight issuer fence' >&2
+  kill "$rollback_0340_pid" "$a_pid" "$outbox_blocker_pid" 2>/dev/null || true
+  wait "$rollback_0340_pid" "$a_pid" "$outbox_blocker_pid" 2>/dev/null || true
+  exit 1
+fi
+
+set +e
+wait "$outbox_blocker_pid"; outbox_blocker_rc=$?
+wait "$a_pid"; a_rc=$?
+wait "$rollback_0340_pid"; rollback_0340_rc=$?
+set -e
+if [[ $outbox_blocker_rc -ne 0 || $a_rc -ne 0 || $rollback_0340_rc -eq 0 ]]; then
+  echo "0340 issuer/rollback serialization failed: blocker=$outbox_blocker_rc issuer=$a_rc rollback=$rollback_0340_rc" >&2
+  cat "$tmp/0340-outbox-blocker.err" "$tmp/a.err" "$tmp/0340-race-rollback.err" >&2
+  exit 1
+fi
+grep -F 'PUBLICATION_ISSUER_ROLLBACK_REQUIRES_RETAINED_EVIDENCE_PLAN' "$tmp/0340-race-rollback.err"
+test "$(psql "$DATABASE_URL" -XAt -c "SELECT count(*) FROM public.schema_migration WHERE migration_key='0340_autopilot_publication_permit_issuer';")" = 1
+test "$(psql "$DATABASE_URL" -XAt -c "SELECT count(*) FROM autopilot.codex_publication_permit;")" = 1
+
+# A conflicting issuer runs only after the winning transaction is durable and
+# must fail closed as permit reuse rather than replacing its evidence.
 set +e
 make_evidence 99034214 99034215 1 2 | psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >"$tmp/b.out" 2>"$tmp/b.err"
 b_rc=$?
 set -e
-wait "$a_pid"
 if [[ $b_rc -eq 0 ]]; then
   echo 'conflicting concurrent issuer unexpectedly succeeded' >&2
   exit 1
