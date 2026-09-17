@@ -1,6 +1,17 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+DO $successor_guard$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0346_autopilot_canary_acceptance_guard'
+    ) THEN
+        RAISE EXCEPTION
+            'AUTOPILOT_PROVIDER_FAILURE_ROLLBACK_REQUIRES_0346_ROLLBACK_FIRST';
+    END IF;
+END $successor_guard$;
+
 DO $rollback$
 DECLARE
     current_definition text;

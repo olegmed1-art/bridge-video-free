@@ -11,6 +11,18 @@ END $isolation$;
 SET statement_timeout='30s';
 SET lock_timeout='2s';
 
+SELECT EXISTS(
+    SELECT 1 FROM public.schema_migration
+     WHERE migration_key='0346_autopilot_canary_acceptance_guard'
+) AS has_0346 \gset
+
+CREATE TEMP TABLE acceptance_lifecycle_snapshot AS
+SELECT migration.checksum,
+       (SELECT enabled FROM autopilot.project_planner_state WHERE singleton)
+           AS planner_enabled
+  FROM public.schema_migration AS migration
+ WHERE migration.migration_key='0346_autopilot_canary_acceptance_guard';
+
 CREATE TEMP TABLE repair_lifecycle_snapshot AS
 SELECT pg_get_functiondef(p.oid) AS definition,p.proowner,p.proacl,
        m.checksum,provider.checksum AS provider_checksum
@@ -37,6 +49,10 @@ BEGIN
         RAISE EXCEPTION 'REPAIR_ADMISSION_NOT_INSTALLED';
     END IF;
 END $installed$;
+\if :has_0346
+UPDATE autopilot.project_planner_state SET enabled=false WHERE singleton;
+\ir ../rollbacks/0346_autopilot_canary_acceptance_guard.sql
+\endif
 \ir ../rollbacks/0343_autopilot_provider_failure_no_repair.sql
 \ir ../rollbacks/0337_autopilot_role_repair_admission.sql
 DO $rolled_back$
@@ -60,6 +76,15 @@ BEGIN
 END $rolled_back$;
 \ir ../migrations/0337_autopilot_role_repair_admission.sql
 \ir ../migrations/0343_autopilot_provider_failure_no_repair.sql
+\if :has_0346
+\ir ../migrations/0346_autopilot_canary_acceptance_guard.sql
+UPDATE public.schema_migration
+   SET checksum=(SELECT checksum FROM acceptance_lifecycle_snapshot)
+ WHERE migration_key='0346_autopilot_canary_acceptance_guard';
+UPDATE autopilot.project_planner_state
+   SET enabled=(SELECT planner_enabled FROM acceptance_lifecycle_snapshot)
+ WHERE singleton;
+\endif
 DO $reapplied$
 BEGIN
     IF NOT EXISTS(

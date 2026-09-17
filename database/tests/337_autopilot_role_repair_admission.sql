@@ -13,6 +13,15 @@ CREATE TEMP TABLE task (
     task_id uuid PRIMARY KEY,goal_type text NOT NULL,
     goal_json jsonb NOT NULL,priority integer NOT NULL
 ) ON COMMIT DROP;
+-- Later admission guards may bind an origin task back to planner work. Keep
+-- the instrumented function isolated while providing the same empty relation
+-- shape as production for non-planner fixtures in this focused test.
+CREATE TEMP TABLE project_work_item (
+    work_item_id uuid PRIMARY KEY,task_spec_json jsonb NOT NULL
+) ON COMMIT DROP;
+CREATE TEMP TABLE project_work_task (
+    task_id uuid PRIMARY KEY,work_item_id uuid NOT NULL
+) ON COMMIT DROP;
 CREATE TEMP TABLE role_registry (
     role_id text PRIMARY KEY,enabled boolean,execution_scope text,can_repair boolean
 ) ON COMMIT DROP;
