@@ -12,10 +12,14 @@ SET statement_timeout='30s';
 SET lock_timeout='2s';
 
 CREATE TEMP TABLE repair_lifecycle_snapshot AS
-SELECT pg_get_functiondef(p.oid) AS definition,p.proowner,p.proacl,m.checksum
-FROM pg_proc p CROSS JOIN public.schema_migration m
+SELECT pg_get_functiondef(p.oid) AS definition,p.proowner,p.proacl,
+       m.checksum,provider.checksum AS provider_checksum
+FROM pg_proc p
+CROSS JOIN public.schema_migration m
+CROSS JOIN public.schema_migration provider
 WHERE p.oid='autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
-  AND m.migration_key='0337_autopilot_role_repair_admission';
+  AND m.migration_key='0337_autopilot_role_repair_admission'
+  AND provider.migration_key='0343_autopilot_provider_failure_no_repair';
 CREATE TEMP TABLE terminal_callback_snapshot AS
 SELECT pg_get_functiondef(p.oid) AS definition,p.proowner,p.proacl
 FROM pg_proc p
@@ -25,20 +29,29 @@ BEGIN
     IF (SELECT count(*) FROM repair_lifecycle_snapshot)<>1
        OR (SELECT strpos(definition,'REPAIR_ADMISSION_V1')
              FROM repair_lifecycle_snapshot)=0
+       OR (SELECT strpos(definition,'REPAIR_ADMISSION_PROVIDER_TERMINAL_V1')
+             FROM repair_lifecycle_snapshot)=0
        OR (SELECT count(*) FROM terminal_callback_snapshot)<>1
        OR (SELECT strpos(definition,'TERMINAL_BOUND_ROLE_V1')
              FROM terminal_callback_snapshot)=0 THEN
         RAISE EXCEPTION 'REPAIR_ADMISSION_NOT_INSTALLED';
     END IF;
 END $installed$;
+\ir ../rollbacks/0343_autopilot_provider_failure_no_repair.sql
 \ir ../rollbacks/0337_autopilot_role_repair_admission.sql
 DO $rolled_back$
 BEGIN
     IF EXISTS(SELECT 1 FROM public.schema_migration
-              WHERE migration_key='0337_autopilot_role_repair_admission')
+              WHERE migration_key IN (
+                  '0337_autopilot_role_repair_admission',
+                  '0343_autopilot_provider_failure_no_repair'
+              ))
        OR strpos(pg_get_functiondef(
            'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure),
            'REPAIR_ADMISSION_V1')>0
+       OR strpos(pg_get_functiondef(
+           'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure),
+           'REPAIR_ADMISSION_PROVIDER_TERMINAL_V1')>0
        OR strpos(pg_get_functiondef(
            'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure),
            'TERMINAL_BOUND_ROLE_V1')>0 THEN
@@ -46,6 +59,7 @@ BEGIN
     END IF;
 END $rolled_back$;
 \ir ../migrations/0337_autopilot_role_repair_admission.sql
+\ir ../migrations/0343_autopilot_provider_failure_no_repair.sql
 DO $reapplied$
 BEGIN
     IF NOT EXISTS(
@@ -65,6 +79,8 @@ END $reapplied$;
 -- Preserve the migration runner's checksum across this isolated lifecycle test.
 UPDATE public.schema_migration SET checksum=(SELECT checksum FROM repair_lifecycle_snapshot)
 WHERE migration_key='0337_autopilot_role_repair_admission';
+UPDATE public.schema_migration SET checksum=(SELECT provider_checksum FROM repair_lifecycle_snapshot)
+WHERE migration_key='0343_autopilot_provider_failure_no_repair';
 \echo REPAIR_ADMISSION_LIFECYCLE_PASS
 
 BEGIN;
@@ -94,7 +110,8 @@ BEGIN
         (6,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,true,false),
         (7,'AUTOPILOT','SUCCEEDED','READ_ONLY_AUDIT_COMPLETE',false,false,false),
         (8,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,false,true),
-        (9,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',true,false,false)
+        (9,'AUTOPILOT','BLOCKED','CODEX_PROVIDER_GENERIC_FAILURE',false,false,false),
+        (10,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',true,false,false)
     ) AS cases(id,role_id,terminal_status,result_code,allow_repair,revoke_after_ack,implicit_after_revoke)
     ORDER BY id LOOP
         SELECT work_item_id INTO work_id FROM autopilot.register_universal_work_item(
@@ -178,7 +195,7 @@ BEGIN
              WHERE role_id=c.role_id;
             CONTINUE;
         END IF;
-        IF c.id=9 THEN
+        IF c.id=10 THEN
             BEGIN
                 PERFORM * FROM autopilot.accept_role_dispatch_codex_terminal(
                     receipt_key||'-null-role',repeat('e',64),true,
@@ -237,4 +254,4 @@ BEGIN
     END LOOP;
 END $callbacks$;
 ROLLBACK;
-\echo REPAIR_ADMISSION_CALLBACK_9_CASES_PASS
+\echo REPAIR_ADMISSION_CALLBACK_10_CASES_PASS
