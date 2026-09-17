@@ -52,14 +52,14 @@ def _event() -> dict[str, object]:
             "full_name": "olegmed1-art/bridge-video-free",
         },
         "issue": {
-            "number": 1150,
+            "number": 1637,
             "pull_request": {
-                "url": "https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/1150"
+                "url": "https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/1637"
             },
         },
         "comment": {
             "id": 5620277568,
-            "issue_url": "https://api.github.com/repos/olegmed1-art/bridge-video-free/issues/1150",
+            "issue_url": "https://api.github.com/repos/olegmed1-art/bridge-video-free/issues/1637",
             "author_association": "OWNER",
             "user": {"login": "olegmed1-art", "id": 315099490},
             "performed_via_github_app": {
@@ -74,10 +74,24 @@ def _event() -> dict[str, object]:
 def test_parses_live_shaped_provider_authenticated_callback():
     callback = parse_issue_comment_event(_event())
     assert callback.provider_event_id == "github-comment:5620277568"
+    assert callback.mailbox_pr == 1637
     assert callback.dispatch_epoch == 1
     assert callback.role == "VIDEO"
     assert callback.status == "BLOCKED"
     assert len(callback.payload_fingerprint) == 64
+
+
+def test_accepts_retained_v1_mailbox_for_late_bound_receipts():
+    event = _event()
+    event["issue"]["number"] = 1150
+    event["issue"]["pull_request"]["url"] = (
+        "https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/1150"
+    )
+    event["comment"]["issue_url"] = (
+        "https://api.github.com/repos/olegmed1-art/bridge-video-free/issues/1150"
+    )
+    callback = parse_issue_comment_event(event)
+    assert callback.mailbox_pr == 1150
 
 
 def test_parses_correlated_ui_visible_running_delivery_proof():
