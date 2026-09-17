@@ -40,9 +40,29 @@ $enabled_check$;
 $implicit_role_check$;
     implicit_delivery_branch text := $implicit_delivery_branch$           OR implicit_delivery
 $implicit_delivery_branch$;
-    mailbox_event_binding text :=
-        'OR p_event_pr NOT IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)';
+    mailbox_event_binding text := $$OR NOT (
+           p_event_pr IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)
+           OR (outbox.mode='REPAIR'
+               AND p_body->>'status'='SUCCEEDED'
+               AND p_body->>'result_code'='BOUNDED_REPAIR_PUBLISHED'
+               AND p_event_pr=outbox.target_pr)
+       )$$;
     target_event_binding text := 'OR p_event_pr<>outbox.target_pr';
+    mailbox_proof_binding text := $$AND (
+                proof.command_pr=p_event_pr
+                OR (outbox.mode='REPAIR'
+                    AND p_body->>'status'='SUCCEEDED'
+                    AND p_body->>'result_code'='BOUNDED_REPAIR_PUBLISHED'
+                    AND p_event_pr=outbox.target_pr
+                    AND proof.command_pr=outbox.mailbox_pr
+                    AND EXISTS (
+                        SELECT 1 FROM autopilot.codex_publication_permit AS publication_permit
+                         WHERE publication_permit.dispatch_id=outbox.dispatch_id
+                           AND publication_permit.command_comment_id=outbox.codex_command_comment_id
+                           AND p_delivery_id='github-codex-result:'||publication_permit.publication_comment_id::text
+                    ))
+            )$$;
+    target_proof_binding text := 'AND proof.command_pr=p_event_pr';
     mailbox_marker text :=
         '    -- MAILBOX_V2_CODEX_INBOUND_V1: bind the response to its mailbox.' || chr(10);
     command_comment_id bigint;
@@ -90,12 +110,18 @@ BEGIN
                 current_definition,mailbox_event_binding,''
             )))/length(mailbox_event_binding)<>1
            OR (length(current_definition)-length(replace(
+                current_definition,mailbox_proof_binding,''
+            )))/length(mailbox_proof_binding)<>1
+           OR (length(current_definition)-length(replace(
                 current_definition,mailbox_marker,''
             )))/length(mailbox_marker)<>1 THEN
             RAISE EXCEPTION 'AUTOPILOT_CODEX_336_MAILBOX_SUCCESSOR_INVALID';
         END IF;
         current_definition := replace(
-            replace(current_definition,mailbox_event_binding,target_event_binding),
+            replace(
+                replace(current_definition,mailbox_event_binding,target_event_binding),
+                mailbox_proof_binding,target_proof_binding
+            ),
             mailbox_marker,''
         );
     END IF;
