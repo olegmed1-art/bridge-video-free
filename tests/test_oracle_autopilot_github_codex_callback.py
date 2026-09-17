@@ -86,6 +86,18 @@ def _event(body: str = COMMAND_BODY) -> dict[str, object]:
     }
 
 
+def _event_on_pr(event: dict[str, object], pr_number: int) -> dict[str, object]:
+    relocated = copy.deepcopy(event)
+    relocated["issue"]["number"] = pr_number  # type: ignore[index]
+    relocated["issue"]["pull_request"]["url"] = (  # type: ignore[index]
+        f"https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/{pr_number}"
+    )
+    relocated["comment"]["issue_url"] = (  # type: ignore[index]
+        f"https://api.github.com/repos/olegmed1-art/bridge-video-free/issues/{pr_number}"
+    )
+    return relocated
+
+
 def _terminal_event() -> dict[str, object]:
     event = _event(TERMINAL_BODY)
     comment = event["comment"]
@@ -103,6 +115,24 @@ def test_parses_owner_app_command_on_exact_target_pr():
     assert command.execution_scope == "REPOSITORY"
     assert command.can_repair is True
     assert command.task_spec == {"fixture": "codex-event-cycle"}
+
+
+def test_parses_owner_app_command_on_active_mailbox():
+    command = parse_command_event(_event_on_pr(_event(), 1637))
+    assert command.command_pr == 1637
+    assert command.target_pr == 1150
+    assert command.dispatch_pr == 1429
+
+
+def test_parses_owner_app_command_on_exact_dispatch_pr():
+    command = parse_command_event(_event_on_pr(_event(), 1429))
+    assert command.command_pr == command.dispatch_pr == 1429
+    assert command.target_pr == 1150
+
+
+def test_command_rejects_unretained_non_dispatch_pr():
+    with pytest.raises(CallbackContractError, match="COMMAND_PR_INVALID"):
+        parse_command_event(_event_on_pr(_event(), 1641))
 
 
 def test_explicit_task_command_preserves_legacy_dispatch_binding():
@@ -230,9 +260,11 @@ def _generic_failure_opener(event, command_event=None):
     command["updated_at"] = command["created_at"]
     failure = copy.deepcopy(event["comment"])
 
+    event_pr = event["issue"]["number"]
+
     def opener(request, timeout):
         assert timeout == 10
-        if "/issues/1150/comments?" in request.full_url:
+        if f"/issues/{event_pr}/comments?" in request.full_url:
             return _Response(request.full_url, [command, failure])
         if request.full_url.endswith(f"/issues/comments/{command['id']}"):
             return _Response(request.full_url, command)
@@ -253,6 +285,22 @@ def test_generic_failure_binds_to_immediately_prior_exact_owner_command():
     assert terminal.result_code == "CODEX_PROVIDER_GENERIC_FAILURE"
     assert terminal.target_head_sha == "2ceb48716988ec9cbd01be438a0ebf8b46836667"
     assert terminal.delivery_id == "github-codex-result:5669745749"
+
+
+def test_generic_failure_binds_to_active_mailbox_command():
+    event = _event_on_pr(_generic_failure_event(), 1637)
+    command_event = _event_on_pr(
+        _event(COMMAND_BODY.replace("@codex\n", "@codex execute this task\n", 1)),
+        1637,
+    )
+    terminal = resolve_generic_failure_terminal(
+        event,
+        "test-token",
+        opener=_generic_failure_opener(event, command_event),
+    )
+    assert terminal.event_pr == 1637
+    assert terminal.target_pr == 1150
+    assert terminal.result_code == "CODEX_PROVIDER_GENERIC_FAILURE"
 
 
 def test_generic_failure_rejects_intervening_comment():

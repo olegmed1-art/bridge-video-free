@@ -10,11 +10,11 @@ from pathlib import Path
 import pytest
 
 from oracle_autopilot import github_codex_publication as pub
-from test_oracle_autopilot_github_codex_callback import _event, _terminal_event
+from test_oracle_autopilot_github_codex_callback import _event, _event_on_pr, _terminal_event
 
 
 def fixture():
-    owner = _event()
+    owner = _event_on_pr(_event(), 1637)
     body = owner["comment"]["body"].replace("mode=READ_ONLY", "mode=REPAIR")
     body = body.replace('task_spec_json={"fixture":"codex-event-cycle"}',
                         'task_spec_json={"expected_changed_files":["tests/test_example.py"]}')

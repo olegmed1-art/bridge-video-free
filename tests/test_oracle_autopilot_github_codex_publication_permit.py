@@ -10,11 +10,11 @@ import pytest
 from oracle_autopilot import github_codex_publication as publication
 from oracle_autopilot import github_codex_publication_permit as permit
 from oracle_autopilot.github_codex_callback import CallbackContractError
-from test_oracle_autopilot_github_codex_callback import _event, _terminal_event
+from test_oracle_autopilot_github_codex_callback import _event, _event_on_pr, _terminal_event
 
 
 def fixture():
-    owner = _event()
+    owner = _event_on_pr(_event(), 1637)
     owner["comment"]["updated_at"] = owner["comment"]["created_at"]
     body = owner["comment"]["body"].replace("mode=READ_ONLY", "mode=REPAIR")
     body = body.replace('task_spec_json={"fixture":"codex-event-cycle"}',
@@ -44,7 +44,7 @@ def fixture():
         "id": 5_669_799_001,
         "created_at": "2026-09-14T19:40:00Z",
         "updated_at": "2026-09-14T19:40:00Z",
-        "issue_url": owner["comment"]["issue_url"],
+        "issue_url": request_event["comment"]["issue_url"],
         "author_association": "OWNER",
         "user": {"login": "olegmed1-art", "id": 315_099_490},
         "performed_via_github_app": None,

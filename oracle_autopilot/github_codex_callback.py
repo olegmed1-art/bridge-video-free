@@ -29,6 +29,7 @@ import psycopg
 
 from oracle_autopilot.github_role_callback import (
     CallbackContractError,
+    RETAINED_MAILBOX_PRS,
     validate_callback_dsn,
 )
 
@@ -318,14 +319,19 @@ def parse_command_event(event: object) -> CodexCommand:
 
     event_pr = int(issue["number"])
     target_pr = int(values["target_pr"])
-    if event_pr != target_pr:
-        raise CallbackContractError("CODEX_COMMAND_NOT_ON_TARGET_PR")
+    dispatch_pr = int(values["dispatch_pr"])
+    # GitHub identity and the exact envelope are authenticated here.  The
+    # database RPC remains authoritative for the current outbox mailbox and
+    # dispatch PR, so this parser admits only the bounded mailbox history or
+    # the envelope's own dispatch PR before that canonical check.
+    if event_pr not in RETAINED_MAILBOX_PRS and event_pr != dispatch_pr:
+        raise CallbackContractError("CODEX_COMMAND_PR_INVALID")
     return CodexCommand(
         comment_id=comment_id,
         command_pr=event_pr,
         created_at=created_at,
         dispatch_id=values["dispatch_id"],
-        dispatch_pr=int(values["dispatch_pr"]),
+        dispatch_pr=dispatch_pr,
         dispatch_epoch=int(values["dispatch_epoch"]),
         role=values["role"],
         task_fingerprint=values["task_fingerprint"],

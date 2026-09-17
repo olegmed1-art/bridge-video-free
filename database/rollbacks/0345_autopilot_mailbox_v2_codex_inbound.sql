@@ -3,6 +3,8 @@ BEGIN;
 
 LOCK TABLE autopilot.task IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE autopilot.role_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE autopilot.role_dispatch_codex_delivery_proof IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE autopilot.codex_publication_permit IN SHARE ROW EXCLUSIVE MODE;
 
 DO $guard$
 BEGIN
@@ -23,6 +25,22 @@ BEGIN
               )
        ) THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_INBOUND_ROLLBACK_REQUIRES_PAUSE';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+          FROM autopilot.role_dispatch_outbox AS outbox
+          JOIN autopilot.role_dispatch_codex_delivery_proof AS proof
+            USING (dispatch_id)
+          JOIN autopilot.codex_publication_permit AS permit
+            USING (dispatch_id)
+         WHERE outbox.mailbox_pr=1637
+           AND outbox.mode='REPAIR'
+           AND outbox.status='CALLBACK_ACCEPTED'
+           AND proof.command_pr=outbox.mailbox_pr
+           AND permit.command_comment_id=proof.command_comment_id
+    ) THEN
+        RAISE EXCEPTION
+            'AUTOPILOT_MAILBOX_V2_CODEX_INBOUND_ROLLBACK_RETAINED_PUBLICATION';
     END IF;
 END $guard$;
 
