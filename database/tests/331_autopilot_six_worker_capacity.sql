@@ -13,7 +13,13 @@ DECLARE
     null_lease_rejected boolean := false;
     priority_mutation_rejected boolean := false;
     overflow_rejected boolean := false;
+    mailbox_pr integer := 1150;
 BEGIN
+    IF to_regclass('autopilot.role_dispatch_mailbox_registry') IS NOT NULL THEN
+        SELECT registry.mailbox_pr INTO STRICT mailbox_pr
+          FROM autopilot.role_dispatch_mailbox_registry AS registry
+         WHERE registry.lifecycle='ACTIVE';
+    END IF;
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
          WHERE migration_key = '0331_autopilot_six_worker_capacity'
@@ -204,7 +210,7 @@ BEGIN
             'sql-six-worker-direct-overflow',
             jsonb_build_object(
                 'repository', 'olegmed1-art/bridge-video-free',
-                'mailbox_pr', 1150,
+                'mailbox_pr', mailbox_pr,
                 'role', 'AUTOPILOT',
                 'target_pr', 1699,
                 'expected_head_sha', repeat('b', 40),
