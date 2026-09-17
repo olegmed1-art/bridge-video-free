@@ -15,8 +15,8 @@ DECLARE
     terminal jsonb;
     event_time text;
     run_suffix text := txid_current()::text;
-    command_comment_id bigint := 5716244285;
-    reaction_id bigint := 419566958;
+    command_comment_id bigint := 99003450;
+    reaction_id bigint := 99003451;
     rejected boolean;
 BEGIN
     IF NOT EXISTS (
@@ -30,7 +30,13 @@ BEGIN
        ) NOT LIKE '%MAILBOX_V2_CODEX_INBOUND_V1%outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer%'
        OR pg_get_functiondef(
         'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
-       ) NOT LIKE '%MAILBOX_V2_CODEX_INBOUND_V1%p_event_pr NOT IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)%' THEN
+       ) NOT LIKE '%MAILBOX_V2_CODEX_INBOUND_V1%p_event_pr NOT IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)%'
+       OR pg_get_functiondef(
+        'autopilot.authorize_codex_publication(jsonb,bigint,text)'::regprocedure
+       ) NOT LIKE '%MAILBOX_V2_CODEX_PUBLICATION_V1%''command_pr'',outbox.mailbox_pr%proof.command_pr IS DISTINCT FROM outbox.mailbox_pr%'
+       OR pg_get_functiondef(
+        'autopilot.issue_codex_publication_permit(jsonb,integer)'::regprocedure
+       ) NOT LIKE '%MAILBOX_V2_CODEX_ISSUER_V1%proof.command_pr IS DISTINCT FROM outbox.mailbox_pr%' THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_INBOUND_DEFINITION_INVALID';
     END IF;
 

@@ -32,6 +32,10 @@ DECLARE
         'autopilot.accept_role_dispatch_codex_ack(text,text,boolean,text,integer,text,bigint,text,text,bigint,text,bigint,jsonb)'::regprocedure;
     terminal_proc regprocedure :=
         'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure;
+    publication_proc regprocedure :=
+        'autopilot.authorize_codex_publication(jsonb,bigint,text)'::regprocedure;
+    issuer_proc regprocedure :=
+        'autopilot.issue_codex_publication_permit(jsonb,integer)'::regprocedure;
     current_definition text;
     restored text;
     old_ack_binding text :=
@@ -42,6 +46,14 @@ DECLARE
         'OR p_event_pr<>outbox.target_pr';
     new_terminal_binding text :=
         'OR p_event_pr NOT IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)';
+    old_publication_command_binding text :=
+        $$'command_pr',outbox.target_pr$$;
+    new_publication_command_binding text :=
+        $$'command_pr',outbox.mailbox_pr$$;
+    old_proof_binding text :=
+        'proof.command_pr IS DISTINCT FROM outbox.target_pr';
+    new_proof_binding text :=
+        'proof.command_pr IS DISTINCT FROM outbox.mailbox_pr';
 BEGIN
     current_definition := pg_get_functiondef(ack_proc);
     IF current_definition IS NULL
@@ -73,6 +85,43 @@ BEGIN
     restored := replace(
         restored,
         '    -- MAILBOX_V2_CODEX_INBOUND_V1: bind the response to its mailbox.' || chr(10),
+        ''
+    );
+    EXECUTE restored;
+
+    current_definition := pg_get_functiondef(publication_proc);
+    IF current_definition IS NULL
+       OR (length(current_definition)-length(replace(current_definition,new_publication_command_binding,'')))
+          /length(new_publication_command_binding)<>1
+       OR (length(current_definition)-length(replace(current_definition,new_proof_binding,'')))
+          /length(new_proof_binding)<>1
+       OR (length(current_definition)-length(replace(
+              current_definition,'MAILBOX_V2_CODEX_PUBLICATION_V1',''
+          )))/length('MAILBOX_V2_CODEX_PUBLICATION_V1')<>1 THEN
+        RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_PUBLICATION_ROLLBACK_DRIFT';
+    END IF;
+    restored := replace(current_definition,new_publication_command_binding,old_publication_command_binding);
+    restored := replace(restored,new_proof_binding,old_proof_binding);
+    restored := replace(
+        restored,
+        '    -- MAILBOX_V2_CODEX_PUBLICATION_V1: bind provenance to the mailbox.' || chr(10),
+        ''
+    );
+    EXECUTE restored;
+
+    current_definition := pg_get_functiondef(issuer_proc);
+    IF current_definition IS NULL
+       OR (length(current_definition)-length(replace(current_definition,new_proof_binding,'')))
+          /length(new_proof_binding)<>1
+       OR (length(current_definition)-length(replace(
+              current_definition,'MAILBOX_V2_CODEX_ISSUER_V1',''
+          )))/length('MAILBOX_V2_CODEX_ISSUER_V1')<>1 THEN
+        RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_ISSUER_ROLLBACK_DRIFT';
+    END IF;
+    restored := replace(current_definition,new_proof_binding,old_proof_binding);
+    restored := replace(
+        restored,
+        '    -- MAILBOX_V2_CODEX_ISSUER_V1: bind provenance to the mailbox.' || chr(10),
         ''
     );
     EXECUTE restored;
