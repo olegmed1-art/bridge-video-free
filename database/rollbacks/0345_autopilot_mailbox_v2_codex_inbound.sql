@@ -63,14 +63,41 @@ DECLARE
     old_terminal_binding text :=
         'OR p_event_pr<>outbox.target_pr';
     new_terminal_binding text :=
-        'OR p_event_pr NOT IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)';
+        $$OR NOT (
+           p_event_pr IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)
+           OR (outbox.mode='REPAIR'
+               AND p_body->>'status'='SUCCEEDED'
+               AND p_body->>'result_code'='BOUNDED_REPAIR_PUBLISHED'
+               AND p_event_pr=outbox.target_pr)
+       )$$;
+    old_terminal_proof_binding text :=
+        'AND proof.command_pr=p_event_pr';
+    new_terminal_proof_binding text :=
+        $$AND (
+                proof.command_pr=p_event_pr
+                OR (outbox.mode='REPAIR'
+                    AND p_body->>'status'='SUCCEEDED'
+                    AND p_body->>'result_code'='BOUNDED_REPAIR_PUBLISHED'
+                    AND p_event_pr=outbox.target_pr
+                    AND proof.command_pr=outbox.mailbox_pr
+                    AND EXISTS (
+                        SELECT 1 FROM autopilot.codex_publication_permit AS publication_permit
+                         WHERE publication_permit.dispatch_id=outbox.dispatch_id
+                           AND publication_permit.command_comment_id=outbox.codex_command_comment_id
+                           AND p_delivery_id='github-codex-result:'||publication_permit.publication_comment_id::text
+                    ))
+            )$$;
     old_publication_command_binding text :=
         $$'command_pr',outbox.target_pr$$;
     new_publication_command_binding text :=
-        $$'command_pr',outbox.mailbox_pr$$;
+        $$'command_pr',proof.command_pr$$;
     old_proof_binding text :=
         'proof.command_pr IS DISTINCT FROM outbox.target_pr';
-    new_proof_binding text :=
+    new_publication_proof_binding text :=
+        $$proof.command_pr IS DISTINCT FROM outbox.mailbox_pr
+       AND NOT (outbox.status='CALLBACK_ACCEPTED'
+                AND proof.command_pr IS NOT DISTINCT FROM outbox.target_pr)$$;
+    new_issuer_proof_binding text :=
         'proof.command_pr IS DISTINCT FROM outbox.mailbox_pr';
 BEGIN
     current_definition := pg_get_functiondef(ack_proc);
@@ -94,12 +121,15 @@ BEGIN
     IF current_definition IS NULL
        OR (length(current_definition)-length(replace(current_definition,new_terminal_binding,'')))
           /length(new_terminal_binding)<>1
+       OR (length(current_definition)-length(replace(current_definition,new_terminal_proof_binding,'')))
+          /length(new_terminal_proof_binding)<>1
        OR (length(current_definition)-length(replace(
               current_definition,'MAILBOX_V2_CODEX_INBOUND_V1',''
           )))/length('MAILBOX_V2_CODEX_INBOUND_V1')<>1 THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_TERMINAL_ROLLBACK_DRIFT';
     END IF;
     restored := replace(current_definition,new_terminal_binding,old_terminal_binding);
+    restored := replace(restored,new_terminal_proof_binding,old_terminal_proof_binding);
     restored := replace(
         restored,
         '    -- MAILBOX_V2_CODEX_INBOUND_V1: bind the response to its mailbox.' || chr(10),
@@ -111,15 +141,15 @@ BEGIN
     IF current_definition IS NULL
        OR (length(current_definition)-length(replace(current_definition,new_publication_command_binding,'')))
           /length(new_publication_command_binding)<>1
-       OR (length(current_definition)-length(replace(current_definition,new_proof_binding,'')))
-          /length(new_proof_binding)<>1
+       OR (length(current_definition)-length(replace(current_definition,new_publication_proof_binding,'')))
+          /length(new_publication_proof_binding)<>1
        OR (length(current_definition)-length(replace(
               current_definition,'MAILBOX_V2_CODEX_PUBLICATION_V1',''
           )))/length('MAILBOX_V2_CODEX_PUBLICATION_V1')<>1 THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_PUBLICATION_ROLLBACK_DRIFT';
     END IF;
     restored := replace(current_definition,new_publication_command_binding,old_publication_command_binding);
-    restored := replace(restored,new_proof_binding,old_proof_binding);
+    restored := replace(restored,new_publication_proof_binding,old_proof_binding);
     restored := replace(
         restored,
         '    -- MAILBOX_V2_CODEX_PUBLICATION_V1: bind provenance to the mailbox.' || chr(10),
@@ -129,14 +159,14 @@ BEGIN
 
     current_definition := pg_get_functiondef(issuer_proc);
     IF current_definition IS NULL
-       OR (length(current_definition)-length(replace(current_definition,new_proof_binding,'')))
-          /length(new_proof_binding)<>1
+       OR (length(current_definition)-length(replace(current_definition,new_issuer_proof_binding,'')))
+          /length(new_issuer_proof_binding)<>1
        OR (length(current_definition)-length(replace(
               current_definition,'MAILBOX_V2_CODEX_ISSUER_V1',''
           )))/length('MAILBOX_V2_CODEX_ISSUER_V1')<>1 THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_ISSUER_ROLLBACK_DRIFT';
     END IF;
-    restored := replace(current_definition,new_proof_binding,old_proof_binding);
+    restored := replace(current_definition,new_issuer_proof_binding,old_proof_binding);
     restored := replace(
         restored,
         '    -- MAILBOX_V2_CODEX_ISSUER_V1: bind provenance to the mailbox.' || chr(10),

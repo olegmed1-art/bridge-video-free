@@ -13,8 +13,9 @@ END $prerequisite$;
 
 -- The GitHub owner command and the Codex response live in the dispatch's
 -- mailbox PR. After mailbox rotation that PR is no longer necessarily the
--- audited target PR. Bind both inbound stages to mailbox_pr while retaining
--- the existing dispatch-PR fallback used by the event bridge.
+-- audited target PR. Bind ordinary inbound stages to mailbox_pr while
+-- retaining the dispatch-PR fallback and the permit-bound target-PR terminal
+-- used only by bounded publication.
 DO $migration$
 DECLARE
     ack_proc regprocedure :=
@@ -34,14 +35,41 @@ DECLARE
     old_terminal_binding text :=
         'OR p_event_pr<>outbox.target_pr';
     new_terminal_binding text :=
-        'OR p_event_pr NOT IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)';
+        $$OR NOT (
+           p_event_pr IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)
+           OR (outbox.mode='REPAIR'
+               AND p_body->>'status'='SUCCEEDED'
+               AND p_body->>'result_code'='BOUNDED_REPAIR_PUBLISHED'
+               AND p_event_pr=outbox.target_pr)
+       )$$;
+    old_terminal_proof_binding text :=
+        'AND proof.command_pr=p_event_pr';
+    new_terminal_proof_binding text :=
+        $$AND (
+                proof.command_pr=p_event_pr
+                OR (outbox.mode='REPAIR'
+                    AND p_body->>'status'='SUCCEEDED'
+                    AND p_body->>'result_code'='BOUNDED_REPAIR_PUBLISHED'
+                    AND p_event_pr=outbox.target_pr
+                    AND proof.command_pr=outbox.mailbox_pr
+                    AND EXISTS (
+                        SELECT 1 FROM autopilot.codex_publication_permit AS publication_permit
+                         WHERE publication_permit.dispatch_id=outbox.dispatch_id
+                           AND publication_permit.command_comment_id=outbox.codex_command_comment_id
+                           AND p_delivery_id='github-codex-result:'||publication_permit.publication_comment_id::text
+                    ))
+            )$$;
     old_publication_command_binding text :=
         $$'command_pr',outbox.target_pr$$;
     new_publication_command_binding text :=
-        $$'command_pr',outbox.mailbox_pr$$;
+        $$'command_pr',proof.command_pr$$;
     old_proof_binding text :=
         'proof.command_pr IS DISTINCT FROM outbox.target_pr';
-    new_proof_binding text :=
+    new_publication_proof_binding text :=
+        $$proof.command_pr IS DISTINCT FROM outbox.mailbox_pr
+       AND NOT (outbox.status='CALLBACK_ACCEPTED'
+                AND proof.command_pr IS NOT DISTINCT FROM outbox.target_pr)$$;
+    new_issuer_proof_binding text :=
         'proof.command_pr IS DISTINCT FROM outbox.mailbox_pr';
 BEGIN
     original := pg_get_functiondef(ack_proc);
@@ -68,10 +96,13 @@ BEGIN
     IF original IS NULL
        OR strpos(original,'MAILBOX_V2_CODEX_INBOUND_V1')>0
        OR (length(original)-length(replace(original,old_terminal_binding,'')))
-          /length(old_terminal_binding)<>1 THEN
+          /length(old_terminal_binding)<>1
+       OR (length(original)-length(replace(original,old_terminal_proof_binding,'')))
+          /length(old_terminal_proof_binding)<>1 THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_TERMINAL_SOURCE_DRIFT';
     END IF;
     patched := replace(original,old_terminal_binding,new_terminal_binding);
+    patched := replace(patched,old_terminal_proof_binding,new_terminal_proof_binding);
     patched := replace(
         patched,
         'BEGIN' || chr(10) || '    IF p_signature_verified',
@@ -85,8 +116,9 @@ BEGIN
     EXECUTE patched;
 
     -- A REPAIR response uses the retained delivery proof to authorize its
-    -- bounded publication. That proof now names the mailbox command PR, so
-    -- both publication gates must follow the same canonical binding.
+    -- bounded publication. New proof names the mailbox command PR. Completed
+    -- pre-0345 target-bound publication receipts retain read-only replay, so
+    -- authorization derives command_pr from the immutable proof itself.
     original := pg_get_functiondef(publication_proc);
     IF original IS NULL
        OR strpos(original,'MAILBOX_V2_CODEX_PUBLICATION_V1')>0
@@ -97,7 +129,7 @@ BEGIN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_PUBLICATION_SOURCE_DRIFT';
     END IF;
     patched := replace(original,old_publication_command_binding,new_publication_command_binding);
-    patched := replace(patched,old_proof_binding,new_proof_binding);
+    patched := replace(patched,old_proof_binding,new_publication_proof_binding);
     patched := replace(
         patched,
         'BEGIN' || chr(10) || '    IF jsonb_typeof(p_command)',
@@ -117,7 +149,7 @@ BEGIN
           /length(old_proof_binding)<>1 THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_ISSUER_SOURCE_DRIFT';
     END IF;
-    patched := replace(original,old_proof_binding,new_proof_binding);
+    patched := replace(original,old_proof_binding,new_issuer_proof_binding);
     patched := replace(
         patched,
         'BEGIN' || chr(10) || '    -- Serialize all owner-only issuance',

@@ -25,7 +25,10 @@ DECLARE
     assignment record;
     repair_id uuid;
     command jsonb;
+    legacy_command jsonb;
     ack jsonb;
+    terminal jsonb;
+    terminal_result record;
     event_time text;
     key text;
     result jsonb;
@@ -136,6 +139,55 @@ BEGIN
        OR NOT has_function_privilege('autopilot_callback',
            'autopilot.authorize_codex_publication(jsonb,bigint,text)','EXECUTE') THEN
         RAISE EXCEPTION 'TEST_PUBLICATION_PRIVILEGE_INVALID';
+    END IF;
+
+    -- A bounded publication result is the sole terminal allowed on the
+    -- audited target PR after mailbox rotation. It must be tied to the exact
+    -- retained permit while its owner command/proof remain mailbox-bound.
+    UPDATE autopilot.codex_publication_permit
+       SET revoked=false,expires_at=clock_timestamp()+interval '10 minutes'
+     WHERE dispatch_id=dispatch.dispatch_id;
+    UPDATE autopilot.role_dispatch_outbox
+       SET callback_deadline_at=clock_timestamp()+interval '10 minutes'
+     WHERE dispatch_id=dispatch.dispatch_id;
+    terminal:=jsonb_build_object(
+        'dispatch_id',dispatch.dispatch_id::text,
+        'dispatch_epoch',dispatch.dispatch_epoch,
+        'role',dispatch.role,
+        'task_fingerprint',dispatch.task_fingerprint,
+        'target_pr',dispatch.target_pr,
+        'status','SUCCEEDED',
+        'result_code','BOUNDED_REPAIR_PUBLISHED',
+        'target_head_sha',repeat('c',40),
+        'summary','Bounded repair published and verified at the exact head.');
+    SELECT * INTO terminal_result
+      FROM autopilot.accept_role_dispatch_codex_terminal(
+        'github-codex-result:99003381',repeat('a',64),true,
+        'olegmed1-art/bridge-video-free',dispatch.target_pr,
+        'chatgpt-codex-connector[bot]',199175422,'NONE',
+        'chatgpt-codex-connector',1144995,terminal);
+    IF NOT terminal_result.accepted OR terminal_result.duplicate
+       OR terminal_result.resulting_state<>'DONE' THEN
+        RAISE EXCEPTION 'TEST_TARGET_PUBLICATION_TERMINAL_DENIED';
+    END IF;
+    result:=autopilot.authorize_codex_publication(command,99003381,repeat('e',64));
+    IF result->>'state'<>'CALLBACK_ACCEPTED'
+       OR result->'terminal_body' IS DISTINCT FROM terminal THEN
+        RAISE EXCEPTION 'TEST_MAILBOX_PUBLICATION_REPLAY_DENIED';
+    END IF;
+
+    -- Historical publications completed before 0345 have target-bound proof.
+    -- Their exact receipt replay must remain readable after forward migration.
+    UPDATE autopilot.role_dispatch_codex_delivery_proof
+       SET command_pr=dispatch.target_pr,
+           proof_body=jsonb_set(proof_body,'{command_pr}',to_jsonb(dispatch.target_pr))
+     WHERE dispatch_id=dispatch.dispatch_id;
+    legacy_command:=jsonb_set(command,'{command_pr}',to_jsonb(dispatch.target_pr));
+    result:=autopilot.authorize_codex_publication(
+        legacy_command,99003381,repeat('e',64));
+    IF result->>'state'<>'CALLBACK_ACCEPTED'
+       OR result->'terminal_body' IS DISTINCT FROM terminal THEN
+        RAISE EXCEPTION 'TEST_LEGACY_PUBLICATION_REPLAY_DENIED';
     END IF;
 END $$;
 ROLLBACK;

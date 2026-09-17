@@ -30,10 +30,10 @@ BEGIN
        ) NOT LIKE '%MAILBOX_V2_CODEX_INBOUND_V1%outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer%'
        OR pg_get_functiondef(
         'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
-       ) NOT LIKE '%MAILBOX_V2_CODEX_INBOUND_V1%p_event_pr NOT IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)%'
+       ) NOT LIKE '%MAILBOX_V2_CODEX_INBOUND_V1%BOUNDED_REPAIR_PUBLISHED%publication_permit.command_comment_id=outbox.codex_command_comment_id%'
        OR pg_get_functiondef(
         'autopilot.authorize_codex_publication(jsonb,bigint,text)'::regprocedure
-       ) NOT LIKE '%MAILBOX_V2_CODEX_PUBLICATION_V1%''command_pr'',outbox.mailbox_pr%proof.command_pr IS DISTINCT FROM outbox.mailbox_pr%'
+       ) NOT LIKE '%MAILBOX_V2_CODEX_PUBLICATION_V1%''command_pr'',proof.command_pr%outbox.status=''CALLBACK_ACCEPTED''%proof.command_pr IS NOT DISTINCT FROM outbox.target_pr%'
        OR pg_get_functiondef(
         'autopilot.issue_codex_publication_permit(jsonb,integer)'::regprocedure
        ) NOT LIKE '%MAILBOX_V2_CODEX_ISSUER_V1%proof.command_pr IS DISTINCT FROM outbox.mailbox_pr%' THEN
@@ -187,6 +187,16 @@ BEGIN
        OR (SELECT count(*) FROM autopilot.role_dispatch_codex_terminal_receipt
             WHERE dispatch_id=dispatch.dispatch_id)<>1 THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_TERMINAL_NOT_IDEMPOTENT';
+    END IF;
+
+    -- The publication-specific terminal is the only target-PR result admitted
+    -- after mailbox rotation, and only with a matching retained permit. The
+    -- full REPAIR lifecycle is covered by test 338; pin both source predicates
+    -- here so an ordinary target-PR result cannot reuse this exception.
+    IF pg_get_functiondef(
+        'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
+       ) NOT LIKE '%p_event_pr=outbox.target_pr%proof.command_pr=outbox.mailbox_pr%p_delivery_id=''github-codex-result:''||publication_permit.publication_comment_id::text%' THEN
+        RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_PUBLICATION_TERMINAL_COMPATIBILITY_MISSING';
     END IF;
 END $test$;
 
