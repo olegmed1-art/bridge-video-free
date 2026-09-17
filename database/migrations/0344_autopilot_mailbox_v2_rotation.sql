@@ -183,7 +183,7 @@ BEGIN
     patched := replace(original,'p_target_pr integer DEFAULT 1150','p_target_pr integer DEFAULT 1637');
     patched := replace(patched,
         $$p_work_key,'olegmed1-art/bridge-video-free',1150,$$,
-        $$p_work_key,'olegmed1-art/bridge-video-free',1637$$);
+        $$p_work_key,'olegmed1-art/bridge-video-free',1637,$$);
     IF patched=original OR strpos(patched,'1637')=0 THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_REGISTRATION_SOURCE_DRIFT';
     END IF;
