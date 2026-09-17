@@ -26,6 +26,7 @@ DECLARE
     work_row autopilot.project_work_item;
     existing autopilot.codex_publication_permit;
     expiry timestamptz;
+    issued_at timestamptz;
     expected jsonb;
 BEGIN
     IF jsonb_typeof(p_evidence) IS DISTINCT FROM 'object'
@@ -135,9 +136,10 @@ BEGIN
             'payload_sha256',existing.payload_sha256,'expires_at',existing.expires_at);
     END IF;
 
+    issued_at:=clock_timestamp();
     expiry:=LEAST(outbox.callback_deadline_at,
-                  clock_timestamp()+make_interval(secs=>p_ttl_seconds));
-    IF expiry<=clock_timestamp()+interval '180 seconds' THEN
+                  issued_at+make_interval(secs=>p_ttl_seconds));
+    IF expiry<issued_at+interval '180 seconds' THEN
         RAISE EXCEPTION 'PUBLICATION_PERMIT_WINDOW_TOO_SHORT';
     END IF;
     INSERT INTO autopilot.codex_publication_permit(
