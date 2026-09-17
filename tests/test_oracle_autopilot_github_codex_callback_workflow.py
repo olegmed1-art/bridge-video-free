@@ -22,6 +22,7 @@ def test_codex_callback_workflow_is_event_only_and_identity_pinned():
     assert "startsWith(github.event.comment.body, '@codex\\n" not in source
     assert "SLAVIK_CODEX_DISPATCH_V1" in source
     assert "AUTOPILOT_CODEX_RESULT_V1" in source
+    assert "Codex couldn''t complete this request. Try again later." in source
 
 
 def test_only_guarded_publisher_can_write_repository():

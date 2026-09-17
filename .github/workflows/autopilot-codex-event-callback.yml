@@ -56,7 +56,10 @@ jobs:
       github.event.comment.author_association == 'NONE' &&
       github.event.comment.performed_via_github_app.id == 1144995 &&
       !contains(github.event.comment.body, 'AUTOPILOT_CODEX_PUBLICATION_V1') &&
-      contains(github.event.comment.body, 'AUTOPILOT_CODEX_RESULT_V1')
+      (
+        contains(github.event.comment.body, 'AUTOPILOT_CODEX_RESULT_V1') ||
+        github.event.comment.body == 'Codex couldn''t complete this request. Try again later.'
+      )
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

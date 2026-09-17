@@ -18,8 +18,10 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -42,6 +44,9 @@ CODEX_BOT_ID = 199_175_422
 COMMAND_MARKER = "SLAVIK_CODEX_DISPATCH_V1"
 TASK_COMMAND_PREFIX = "@codex execute this task"
 RESULT_MARKER = "AUTOPILOT_CODEX_RESULT_V1"
+GENERIC_FAILURE_BODY = "Codex couldn't complete this request. Try again later."
+GENERIC_FAILURE_LOOKBACK_SECONDS = 600
+GENERIC_FAILURE_MAX_DELAY_SECONDS = 300
 ACK_RETRY_DELAYS_SECONDS = (0, 1, 2, 4, 8, 15, 30, 60)
 COMMAND_FIELDS = (
     "dispatch_id",
@@ -402,6 +407,181 @@ def parse_terminal_event(event: object) -> CodexTerminal:
     )
 
 
+def _stable_comment_record(comment: dict[str, Any]) -> dict[str, Any]:
+    actor = _mapping(comment.get("user"), "CODEX_RESULT_ACTOR_INVALID")
+    app = _mapping(comment.get("performed_via_github_app"), "CODEX_RESULT_APP_INVALID")
+    return {
+        "id": comment.get("id"),
+        "body": comment.get("body"),
+        "created_at": comment.get("created_at"),
+        "updated_at": comment.get("updated_at"),
+        "issue_url": comment.get("issue_url"),
+        "author_association": comment.get("author_association"),
+        "actor_login": actor.get("login"),
+        "actor_id": actor.get("id"),
+        "app_slug": app.get("slug"),
+        "app_id": app.get("id"),
+    }
+
+
+def _fetch_json(
+    url: str,
+    token: str,
+    *,
+    opener: Callable[[urllib.request.Request, int], Any],
+    max_bytes: int,
+    error_code: str,
+) -> Any:
+    request = _github_request(url, token)
+    try:
+        with opener(request, 10) as response:
+            if response.status != 200 or response.geturl() != url:
+                raise CallbackContractError(error_code)
+            raw = response.read(max_bytes + 1)
+    except urllib.error.HTTPError as exc:
+        raise CallbackContractError(error_code) from exc
+    except urllib.error.URLError as exc:
+        raise CallbackContractError(error_code) from exc
+    if len(raw) > max_bytes:
+        raise CallbackContractError(error_code)
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise CallbackContractError(error_code) from exc
+
+
+def resolve_generic_failure_terminal(
+    event: object,
+    token: str,
+    *,
+    opener: Callable[[urllib.request.Request, int], Any] | None = None,
+) -> CodexTerminal:
+    """Bind one exact pinned provider failure to its immediately prior command."""
+
+    if opener is None:
+        opener = _default_open
+    issue, failure = _validate_repository_event(event)
+    actor = _mapping(failure.get("user"), "CODEX_RESULT_ACTOR_INVALID")
+    app = _mapping(failure.get("performed_via_github_app"), "CODEX_RESULT_APP_INVALID")
+    if (
+        actor.get("login") != CODEX_BOT_LOGIN
+        or actor.get("id") != CODEX_BOT_ID
+        or failure.get("author_association") != "NONE"
+    ):
+        raise CallbackContractError("CODEX_RESULT_ACTOR_INVALID")
+    if app.get("slug") != CODEX_APP_SLUG or app.get("id") != CODEX_APP_ID:
+        raise CallbackContractError("CODEX_RESULT_APP_INVALID")
+    if failure.get("body") != GENERIC_FAILURE_BODY:
+        raise CallbackContractError("CODEX_GENERIC_FAILURE_BODY_INVALID")
+
+    failure_id = _positive_bigint(failure.get("id"), "CODEX_COMMENT_INVALID")
+    created_at = failure.get("created_at")
+    updated_at = failure.get("updated_at")
+    if (
+        not isinstance(created_at, str)
+        or TIMESTAMP_PATTERN.fullmatch(created_at) is None
+        or updated_at != created_at
+    ):
+        raise CallbackContractError("CODEX_GENERIC_FAILURE_TIME_INVALID")
+    failure_time = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
+    since = (failure_time - timedelta(seconds=GENERIC_FAILURE_LOOKBACK_SECONDS)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    event_pr = _positive_integer(issue.get("number"), "CODEX_PR_INVALID")
+    comments_url = (
+        f"https://api.github.com/repos/{REPOSITORY}/issues/{event_pr}/comments"
+        f"?per_page=100&since={urllib.parse.quote(since, safe=':-')}"
+    )
+    comments = _fetch_json(
+        comments_url,
+        token,
+        opener=opener,
+        max_bytes=1_048_576,
+        error_code="CODEX_GENERIC_FAILURE_COMMENTS_INVALID",
+    )
+    if not isinstance(comments, list) or not 2 <= len(comments) < 100:
+        raise CallbackContractError("CODEX_GENERIC_FAILURE_COMMENTS_INVALID")
+    comment_rows = [
+        _mapping(comment, "CODEX_GENERIC_FAILURE_COMMENTS_INVALID")
+        for comment in comments
+    ]
+    for comment in comment_rows:
+        comment_created_at = comment.get("created_at")
+        if (
+            not isinstance(comment_created_at, str)
+            or TIMESTAMP_PATTERN.fullmatch(comment_created_at) is None
+        ):
+            raise CallbackContractError("CODEX_GENERIC_FAILURE_COMMENTS_INVALID")
+        _positive_bigint(comment.get("id"), "CODEX_GENERIC_FAILURE_COMMENTS_INVALID")
+    comment_rows.sort(key=lambda comment: (comment["created_at"], comment["id"]))
+    indexes = [index for index, comment in enumerate(comment_rows) if comment.get("id") == failure_id]
+    if len(indexes) != 1 or indexes[0] == 0:
+        raise CallbackContractError("CODEX_GENERIC_FAILURE_ADJACENCY_INVALID")
+    current = comment_rows[indexes[0]]
+    if _stable_comment_record(current) != _stable_comment_record(failure):
+        raise CallbackContractError("CODEX_GENERIC_FAILURE_CHANGED")
+    previous = comment_rows[indexes[0] - 1]
+    command_event = dict(_mapping(event, "CODEX_EVENT_INVALID"))
+    command_event["comment"] = previous
+    command = parse_command_event(command_event)
+    command_time = datetime.strptime(command.created_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
+    delay = (failure_time - command_time).total_seconds()
+    if (
+        command.comment_id >= failure_id
+        or delay < 0
+        or delay > GENERIC_FAILURE_MAX_DELAY_SECONDS
+    ):
+        raise CallbackContractError("CODEX_GENERIC_FAILURE_ADJACENCY_INVALID")
+
+    command_url = (
+        f"https://api.github.com/repos/{REPOSITORY}/issues/comments/{command.comment_id}"
+    )
+    failure_url = f"https://api.github.com/repos/{REPOSITORY}/issues/comments/{failure_id}"
+    fresh_command = _mapping(
+        _fetch_json(
+            command_url,
+            token,
+            opener=opener,
+            max_bytes=65_536,
+            error_code="CODEX_GENERIC_FAILURE_READBACK_INVALID",
+        ),
+        "CODEX_GENERIC_FAILURE_READBACK_INVALID",
+    )
+    fresh_failure = _mapping(
+        _fetch_json(
+            failure_url,
+            token,
+            opener=opener,
+            max_bytes=65_536,
+            error_code="CODEX_GENERIC_FAILURE_READBACK_INVALID",
+        ),
+        "CODEX_GENERIC_FAILURE_READBACK_INVALID",
+    )
+    if (
+        _stable_comment_record(fresh_command) != _stable_comment_record(previous)
+        or _stable_comment_record(fresh_failure) != _stable_comment_record(failure)
+    ):
+        raise CallbackContractError("CODEX_GENERIC_FAILURE_CHANGED")
+
+    return CodexTerminal(
+        comment_id=failure_id,
+        event_pr=event_pr,
+        dispatch_id=command.dispatch_id,
+        dispatch_epoch=command.dispatch_epoch,
+        role=command.role,
+        task_fingerprint=command.task_fingerprint,
+        target_pr=command.target_pr,
+        status="BLOCKED",
+        result_code="CODEX_PROVIDER_GENERIC_FAILURE",
+        target_head_sha=command.expected_head_sha,
+        summary="Task blocked. See the pinned provider failure comment.",
+    )
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(
         self,
@@ -612,7 +792,12 @@ def main() -> None:
         ack = fetch_codex_ack(command, token)
         accepted, state = ingest_ack(dsn, ack)
     else:
-        terminal = parse_terminal_event(event)
+        comment = _mapping(event.get("comment"), "CODEX_COMMENT_INVALID")
+        terminal = (
+            resolve_generic_failure_terminal(event, os.environ["GITHUB_TOKEN"])
+            if comment.get("body") == GENERIC_FAILURE_BODY
+            else parse_terminal_event(event)
+        )
         verify_pr_head(
             terminal.target_pr, terminal.target_head_sha, os.environ["GITHUB_TOKEN"]
         )
