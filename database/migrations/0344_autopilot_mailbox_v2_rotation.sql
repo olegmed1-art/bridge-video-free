@@ -24,7 +24,9 @@ BEGIN
         SELECT 1
           FROM autopilot.task
          WHERE goal_type IN ('CHATGPT_ROLE_DISPATCH_V1','CHATGPT_ROLE_FOLLOWUP_V1')
-           AND status NOT IN ('DONE','FAILED_CLOSED','BUDGET_STOP','CANCELLED')
+           AND status NOT IN (
+               'OWNER_REQUIRED','DONE','FAILED_CLOSED','BUDGET_STOP','CANCELLED'
+           )
     ) THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_ACTIVE_ROLE_TASK_PRESENT';
     END IF;
