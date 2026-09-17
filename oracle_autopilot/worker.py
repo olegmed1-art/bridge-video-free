@@ -37,6 +37,7 @@ from .contract import (
     AutopilotContractError,
     AutopilotRetryableError,
     ClaimedTask,
+    ROLE_DISPATCH_MAILBOX_PR,
     build_draft_repair_broker_payload,
     claimed_task_from_row,
     validate_task_contract,
@@ -1017,7 +1018,7 @@ def _publish_role_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         or set(result) != expected_keys
         or any(result.get(key) != value for key, value in public_envelope.items())
         or result.get("repository") != GITHUB_REPOSITORY
-        or result.get("mailbox_pull_request") != 1150
+        or result.get("mailbox_pull_request") != ROLE_DISPATCH_MAILBOX_PR
         or result.get("status") not in {"created", "existing"}
         or type(result.get("replayed")) is not bool
         or type(pull_number) is not int
