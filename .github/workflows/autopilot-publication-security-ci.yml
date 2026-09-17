@@ -8,13 +8,16 @@ on:
       - 'database/migrations/0338_autopilot_bounded_publication_permit.sql'
       - 'database/migrations/0339_autopilot_native_cli_receipts.sql'
       - 'database/migrations/0340_autopilot_publication_permit_issuer.sql'
+      - 'database/migrations/0345_autopilot_mailbox_v2_codex_inbound.sql'
       - 'database/rollbacks/0338_autopilot_bounded_publication_permit.sql'
       - 'database/rollbacks/0339_autopilot_native_cli_receipts.sql'
       - 'database/rollbacks/0340_autopilot_publication_permit_issuer.sql'
+      - 'database/rollbacks/0345_autopilot_mailbox_v2_codex_inbound.sql'
       - 'database/tests/338_autopilot_bounded_publication_permit.sql'
       - 'database/tests/339_autopilot_native_cli_receipts.sql'
       - 'database/tests/340_autopilot_publication_permit_issuer.sql'
       - 'database/tests/340a_autopilot_publication_permit_concurrency.sh'
+      - 'database/tests/345_autopilot_mailbox_v2_codex_inbound.sql'
       - 'oracle_autopilot/codex_cli_*.py'
       - 'oracle_autopilot/github_codex_publication*.py'
       - 'tests/test_oracle_autopilot_codex_cli_*.py'
@@ -153,6 +156,9 @@ jobs:
       - name: Prove clean rollback, 0337 preservation, reapply, and retest
         run: |
           set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+            "UPDATE autopilot.project_planner_state SET enabled=false WHERE singleton;"
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0345_autopilot_mailbox_v2_codex_inbound.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0340_autopilot_publication_permit_issuer.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0339_autopilot_native_cli_receipts.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0338_autopilot_bounded_publication_permit.sql
@@ -165,6 +171,9 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0338_autopilot_bounded_publication_permit.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0339_autopilot_native_cli_receipts.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0340_autopilot_publication_permit_issuer.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0345_autopilot_mailbox_v2_codex_inbound.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+            "UPDATE autopilot.project_planner_state SET enabled=true WHERE singleton;"
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/338_autopilot_bounded_publication_permit.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/339_autopilot_native_cli_receipts.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/340_autopilot_publication_permit_issuer.sql

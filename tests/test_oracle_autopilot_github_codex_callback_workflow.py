@@ -83,3 +83,22 @@ def test_focused_publication_ci_covers_lifecycle_without_duplicating_1608_sql_ci
         assert filename in inherited
     assert "upper_publication_chain_count" in inherited
     assert "partial publication migration chain" in inherited
+
+
+def test_mailbox_v2_successor_and_retained_evidence_rollback_guards_are_pinned():
+    rollback_338 = Path("database/rollbacks/0338_autopilot_bounded_publication_permit.sql").read_text()
+    rollback_340 = Path("database/rollbacks/0340_autopilot_publication_permit_issuer.sql").read_text()
+    rollback_345 = Path("database/rollbacks/0345_autopilot_mailbox_v2_codex_inbound.sql").read_text()
+
+    assert "PUBLICATION_ROLLBACK_REQUIRES_0345_ROLLBACK_FIRST" in rollback_338
+    assert "PUBLICATION_ISSUER_ROLLBACK_REQUIRES_0345_ROLLBACK_FIRST" in rollback_340
+    assert "migration_key='0345_autopilot_mailbox_v2_codex_inbound'" in rollback_338
+    assert "migration_key='0345_autopilot_mailbox_v2_codex_inbound'" in rollback_340
+    for fragment in (
+        "outbox.mode='REPAIR'",
+        "outbox.status='CALLBACK_ACCEPTED'",
+        "proof.command_pr=outbox.mailbox_pr",
+        "permit.command_comment_id=proof.command_comment_id",
+        "ROLLBACK_RETAINED_PUBLICATION",
+    ):
+        assert fragment in rollback_345

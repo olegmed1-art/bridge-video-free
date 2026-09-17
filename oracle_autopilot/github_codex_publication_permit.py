@@ -150,7 +150,6 @@ def verify(github: Any, command_comment_id: int, publication_comment_id: int,
     require(request.comment_id == publication_comment_id, "PERMIT_PUBLICATION_ID_INVALID")
 
     command_comment = _fetch_comment(github, command_comment_id)
-    require(_issue_number(command_comment) == target_pr, "PERMIT_COMMAND_TARGET_INVALID")
     command = publication.bind_command(request, publication_event, command_comment)
     require(command.comment_id == command_comment_id, "PERMIT_COMMAND_ID_INVALID")
 

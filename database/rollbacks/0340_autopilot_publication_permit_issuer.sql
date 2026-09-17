@@ -1,5 +1,13 @@
 \set ON_ERROR_STOP on
 BEGIN;
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0345_autopilot_mailbox_v2_codex_inbound'
+    ) THEN
+        RAISE EXCEPTION 'PUBLICATION_ISSUER_ROLLBACK_REQUIRES_0345_ROLLBACK_FIRST';
+    END IF;
+END $$;
 -- Drain/serialize any in-flight owner issuer before deciding that the ledger
 -- is empty. The issuer takes the same transaction-scoped fence first.
 SELECT pg_advisory_xact_lock(hashtextextended(

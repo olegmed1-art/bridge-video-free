@@ -96,7 +96,7 @@ BEGIN
     BEGIN
         PERFORM * FROM autopilot.accept_role_dispatch_codex_terminal(
             'github-codex-result:99003320',repeat('c',64),true,
-            'olegmed1-art/bridge-video-free',1151,
+            'olegmed1-art/bridge-video-free',dispatch.mailbox_pr+1,
             'chatgpt-codex-connector[bot]',199175422,'NONE',
             'chatgpt-codex-connector',1144995,terminal
         );
@@ -123,7 +123,7 @@ BEGIN
         'target_pr',dispatch.target_pr,
         'expected_head_sha',dispatch.expected_head_sha,
         'mode',outbox.mode,
-        'command_pr',1150,
+        'command_pr',dispatch.mailbox_pr,
         'command_comment_id',5669716994,
         'command_created_at',event_time,
         'ack_reaction_id',417240549,
@@ -133,7 +133,7 @@ BEGIN
     BEGIN
         PERFORM * FROM autopilot.accept_role_dispatch_codex_ack(
             'github-codex-ack:417240549',repeat('d',64),true,
-            'olegmed1-art/bridge-video-free',1150,
+            'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
             'olegmed1-art',315099490,'OWNER',
             'chatgpt-codex-connector',1144995,
             'lookalike[bot]',199175422,ack
@@ -148,7 +148,7 @@ BEGIN
     SELECT * INTO result
       FROM autopilot.accept_role_dispatch_codex_ack(
         'github-codex-ack:417240549',repeat('d',64),true,
-        'olegmed1-art/bridge-video-free',1150,
+        'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
         'olegmed1-art',315099490,'OWNER',
         'chatgpt-codex-connector',1144995,
         'chatgpt-codex-connector[bot]',199175422,ack
@@ -167,7 +167,7 @@ BEGIN
     SELECT * INTO result
       FROM autopilot.accept_role_dispatch_codex_ack(
         'github-codex-ack:417240549',repeat('d',64),true,
-        'olegmed1-art/bridge-video-free',1150,
+        'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
         'olegmed1-art',315099490,'OWNER',
         'chatgpt-codex-connector',1144995,
         'chatgpt-codex-connector[bot]',199175422,ack
@@ -180,7 +180,7 @@ BEGIN
     BEGIN
         PERFORM * FROM autopilot.accept_role_dispatch_codex_terminal(
             'github-codex-result:99003321',repeat('e',64),true,
-            'olegmed1-art/bridge-video-free',1150,
+            'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
             'lookalike[bot]',199175422,'NONE',
             'chatgpt-codex-connector',1144995,terminal
         );
@@ -194,7 +194,7 @@ BEGIN
     SELECT * INTO result
       FROM autopilot.accept_role_dispatch_codex_terminal(
         'github-codex-result:99003321',repeat('e',64),true,
-        'olegmed1-art/bridge-video-free',1150,
+        'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
         'chatgpt-codex-connector[bot]',199175422,'NONE',
         'chatgpt-codex-connector',1144995,terminal
       );
@@ -218,7 +218,7 @@ BEGIN
     SELECT * INTO result
       FROM autopilot.accept_role_dispatch_codex_terminal(
         'github-codex-result:99003321',repeat('e',64),true,
-        'olegmed1-art/bridge-video-free',1150,
+        'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
         'chatgpt-codex-connector[bot]',199175422,'NONE',
         'chatgpt-codex-connector',1144995,terminal
       );

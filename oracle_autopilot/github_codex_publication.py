@@ -135,7 +135,28 @@ def parse_publication_event(event: Any) -> Publication:
 
 
 def bind_command(publication: Publication, event: dict[str, Any], comment: dict[str, Any]) -> CodexCommand:
-    command = parse_command_event({**event, "comment": comment})
+    issue_url = comment.get("issue_url")
+    prefix = f"https://api.github.com/repos/{REPOSITORY}/issues/"
+    require(isinstance(issue_url, str) and issue_url.startswith(prefix),
+            "PUBLICATION_COMMAND_PR_INVALID")
+    suffix = issue_url[len(prefix):]
+    require(re.fullmatch(r"[1-9][0-9]{0,6}", suffix) is not None,
+            "PUBLICATION_COMMAND_PR_INVALID")
+    command_pr = int(suffix)
+    # The publication result can be carried by a different PR than the owner
+    # command. Rebuild the authenticated event around the fetched command's
+    # immutable issue URL instead of borrowing the publication event's issue.
+    command_event = {
+        **event,
+        "issue": {
+            "number": command_pr,
+            "pull_request": {
+                "url": f"https://api.github.com/repos/{REPOSITORY}/pulls/{command_pr}"
+            },
+        },
+        "comment": comment,
+    }
+    command = parse_command_event(command_event)
     require(command.comment_id == publication.body["command_comment_id"], "PUBLICATION_COMMAND_MISMATCH")
     require(all(type(publication.body[key]) is type(getattr(command, key))
                 and publication.body[key] == getattr(command, key) for key in BINDING_FIELDS),

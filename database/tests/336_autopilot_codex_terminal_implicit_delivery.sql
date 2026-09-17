@@ -40,6 +40,31 @@ $enabled_check$;
 $implicit_role_check$;
     implicit_delivery_branch text := $implicit_delivery_branch$           OR implicit_delivery
 $implicit_delivery_branch$;
+    mailbox_event_binding text := $mailbox_event$OR NOT (
+           p_event_pr IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)
+           OR (outbox.mode='REPAIR'
+               AND p_body->>'status'='SUCCEEDED'
+               AND p_body->>'result_code'='BOUNDED_REPAIR_PUBLISHED'
+               AND p_event_pr=outbox.target_pr)
+       )$mailbox_event$;
+    target_event_binding text := 'OR p_event_pr<>outbox.target_pr';
+    mailbox_proof_binding text := $mailbox_proof$AND (
+                proof.command_pr=p_event_pr
+                OR (outbox.mode='REPAIR'
+                    AND p_body->>'status'='SUCCEEDED'
+                    AND p_body->>'result_code'='BOUNDED_REPAIR_PUBLISHED'
+                    AND p_event_pr=outbox.target_pr
+                    AND proof.command_pr=outbox.mailbox_pr
+                    AND EXISTS (
+                        SELECT 1 FROM autopilot.codex_publication_permit AS publication_permit
+                         WHERE publication_permit.dispatch_id=outbox.dispatch_id
+                           AND publication_permit.command_comment_id=outbox.codex_command_comment_id
+                           AND p_delivery_id='github-codex-result:'||publication_permit.publication_comment_id::text
+                    ))
+            )$mailbox_proof$;
+    target_proof_binding text := 'AND proof.command_pr=p_event_pr';
+    mailbox_marker text :=
+        '    -- MAILBOX_V2_CODEX_INBOUND_V1: bind the response to its mailbox.' || chr(10);
     command_comment_id bigint;
     reaction_id bigint;
 BEGIN
@@ -73,6 +98,31 @@ BEGIN
         current_definition := replace(
             replace(current_definition,implicit_role_check,implicit_delivery_branch),
             bound_role,enabled_check
+        );
+    END IF;
+    -- 0345 changes only the event-PR binding and adds a source marker. Reduce
+    -- those exact edits before comparing with the immutable 0336 snapshot.
+    IF EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0345_autopilot_mailbox_v2_codex_inbound'
+    ) THEN
+        IF (length(current_definition)-length(replace(
+                current_definition,mailbox_event_binding,''
+            )))/length(mailbox_event_binding)<>1
+           OR (length(current_definition)-length(replace(
+                current_definition,mailbox_proof_binding,''
+            )))/length(mailbox_proof_binding)<>1
+           OR (length(current_definition)-length(replace(
+                current_definition,mailbox_marker,''
+            )))/length(mailbox_marker)<>1 THEN
+            RAISE EXCEPTION 'AUTOPILOT_CODEX_336_MAILBOX_SUCCESSOR_INVALID';
+        END IF;
+        current_definition := replace(
+            replace(
+                replace(current_definition,mailbox_event_binding,target_event_binding),
+                mailbox_proof_binding,target_proof_binding
+            ),
+            mailbox_marker,''
         );
     END IF;
     IF NOT backup_found
@@ -160,7 +210,7 @@ BEGIN
                 'target_pr',dispatch.target_pr,
                 'expected_head_sha',dispatch.expected_head_sha,
                 'mode',outbox.mode,
-                'command_pr',1150,
+                'command_pr',dispatch.mailbox_pr,
                 'command_comment_id',command_comment_id,
                 'command_created_at',event_time,
                 'ack_reaction_id',reaction_id,
@@ -169,7 +219,7 @@ BEGIN
             SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_ack(
                 'github-codex-ack:336-'||run_suffix||'-'||case_number,
                 repeat('d',64),true,
-                'olegmed1-art/bridge-video-free',1150,
+                'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
                 'olegmed1-art',315099490,'OWNER',
                 'chatgpt-codex-connector',1144995,
                 'chatgpt-codex-connector[bot]',199175422,ack
@@ -243,7 +293,8 @@ BEGIN
                     delivery_id||'-'||kind,repeat('8',64),kind<>'unverified_signature',
                     CASE WHEN kind='wrong_repository' THEN 'other/repository'
                          ELSE 'olegmed1-art/bridge-video-free' END,
-                    CASE WHEN kind='wrong_event_pr' THEN 1151 ELSE 1150 END,
+                    CASE WHEN kind='wrong_event_pr' THEN dispatch.mailbox_pr+1
+                         ELSE dispatch.mailbox_pr END,
                     CASE WHEN kind='wrong_actor' THEN 'lookalike[bot]'
                          ELSE 'chatgpt-codex-connector[bot]' END,
                     CASE WHEN kind='wrong_actor_id' THEN 199175423 ELSE 199175422 END,
@@ -271,7 +322,7 @@ BEGIN
 
         SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_terminal(
             delivery_id,repeat('8',64),true,
-            'olegmed1-art/bridge-video-free',1150,
+            'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
             'chatgpt-codex-connector[bot]',199175422,'NONE',
             'chatgpt-codex-connector',1144995,terminal
         );
@@ -312,7 +363,7 @@ BEGIN
          WHERE dispatch_id=dispatch.dispatch_id;
         SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_terminal(
             delivery_id,repeat('8',64),true,
-            'olegmed1-art/bridge-video-free',1150,
+            'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
             'chatgpt-codex-connector[bot]',199175422,'NONE',
             'chatgpt-codex-connector',1144995,terminal
         );
@@ -321,7 +372,7 @@ BEGIN
         END IF;
         SELECT * INTO result FROM autopilot.accept_role_dispatch_codex_terminal(
             delivery_id||'-redelivery',repeat('8',64),true,
-            'olegmed1-art/bridge-video-free',1150,
+            'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
             'chatgpt-codex-connector[bot]',199175422,'NONE',
             'chatgpt-codex-connector',1144995,terminal
         );
@@ -331,7 +382,7 @@ BEGIN
         BEGIN
             PERFORM * FROM autopilot.accept_role_dispatch_codex_terminal(
                 delivery_id,repeat('9',64),true,
-                'olegmed1-art/bridge-video-free',1150,
+                'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
                 'chatgpt-codex-connector[bot]',199175422,'NONE',
                 'chatgpt-codex-connector',1144995,terminal
             );
