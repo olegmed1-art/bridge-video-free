@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=23fb5cf8-acb0-4f85-8fc6-cab1b02d9d0a
+dispatch_epoch=11
+role=AUTOPILOT
+task_fingerprint=c394cb5197958ef8f1fa523e286e29eaa05ae3a1382154db4d57977726934d5f
+target_pr=1150
+mode=REPAIR
+repair_attempt=1
+origin_task_id=326a80de-2330-49f1-9a41-58a5c5dc6195
+prior_task_id=326a80de-2330-49f1-9a41-58a5c5dc6195
+blocked_result_code=CODEX_PROVIDER_GENERIC_FAILURE
+blocked_summary=Task blocked. See the pinned provider failure comment.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
