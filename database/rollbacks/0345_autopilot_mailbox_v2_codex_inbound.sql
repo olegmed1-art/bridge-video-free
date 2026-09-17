@@ -1,6 +1,17 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+DO $successor_guard$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0346_autopilot_canary_acceptance_guard'
+    ) THEN
+        RAISE EXCEPTION
+            'AUTOPILOT_MAILBOX_V2_INBOUND_ROLLBACK_REQUIRES_0346_ROLLBACK_FIRST';
+    END IF;
+END $successor_guard$;
+
 LOCK TABLE autopilot.task IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE autopilot.role_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE autopilot.role_dispatch_codex_delivery_proof IN SHARE ROW EXCLUSIVE MODE;
