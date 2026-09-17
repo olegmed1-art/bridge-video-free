@@ -110,8 +110,8 @@ BEGIN
         (6,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,true,false),
         (7,'AUTOPILOT','SUCCEEDED','READ_ONLY_AUDIT_COMPLETE',false,false,false),
         (8,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,false,true),
-        (9,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',true,false,false),
-        (10,'AUTOPILOT','BLOCKED','CODEX_PROVIDER_GENERIC_FAILURE',false,false,false)
+        (9,'AUTOPILOT','BLOCKED','CODEX_PROVIDER_GENERIC_FAILURE',false,false,false),
+        (10,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',true,false,false)
     ) AS cases(id,role_id,terminal_status,result_code,allow_repair,revoke_after_ack,implicit_after_revoke)
     ORDER BY id LOOP
         SELECT work_item_id INTO work_id FROM autopilot.register_universal_work_item(
@@ -195,7 +195,7 @@ BEGIN
              WHERE role_id=c.role_id;
             CONTINUE;
         END IF;
-        IF c.id=9 THEN
+        IF c.id=10 THEN
             BEGIN
                 PERFORM * FROM autopilot.accept_role_dispatch_codex_terminal(
                     receipt_key||'-null-role',repeat('e',64),true,
