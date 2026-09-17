@@ -199,6 +199,41 @@ def test_verified_replay_does_not_publish_twice():
     assert len(github.writes) == 1
 
 
+def test_expired_permit_can_only_recover_an_exact_existing_commit():
+    data = fixture()
+    github, cursor = FakeGitHub(*data), FakeCursor(state="RECOVERY_ONLY")
+    with pytest.raises(pub.CallbackContractError, match="RECOVERY_ONLY"):
+        pub.publish(github, cursor, data[-1])
+    assert github.writes == []
+
+    github.live = github.new
+    result = pub.publish(github, cursor, data[-1])
+    assert result["status"] == "PUBLISHED"
+    assert result["target_head_sha"] == github.new
+    assert github.writes == []
+    assert cursor.terminal["result_code"] == "BOUNDED_REPAIR_PUBLISHED"
+
+
+def test_second_authorization_can_close_mutation_window_without_writing():
+    class ClosingCursor(FakeCursor):
+        def __init__(self):
+            super().__init__()
+            self.authorizations = 0
+
+        def execute(self, sql, params):
+            if "authorize_codex_publication" in sql:
+                self.authorizations += 1
+                self.state = "SENT" if self.authorizations == 1 else "RECOVERY_ONLY"
+            super().execute(sql, params)
+
+    data = fixture()
+    github, cursor = FakeGitHub(*data), ClosingCursor()
+    with pytest.raises(pub.CallbackContractError, match="RECOVERY_ONLY"):
+        pub.publish(github, cursor, data[-1])
+    assert cursor.authorizations == 2
+    assert github.writes == []
+
+
 def test_repair_with_bad_terminal_state_is_not_success():
     data = fixture()
     github, cursor = FakeGitHub(*data), FakeCursor()

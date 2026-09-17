@@ -166,6 +166,14 @@ def test_issue_uses_only_owner_sql_issuer_with_exact_evidence():
     assert params[1] == 300
 
 
+def test_issue_requires_post_cas_receipt_time_budget():
+    _, verified = run_verify(fixture())
+    with pytest.raises(CallbackContractError, match="PERMIT_TTL_INVALID"):
+        permit.issue(Cursor(), verified, 179)
+    with pytest.raises(CallbackContractError, match="PERMIT_TTL_INVALID"):
+        permit.issue(Cursor(), verified, 901)
+
+
 def test_issuer_is_disconnected_from_runtime_and_actions():
     workflow = Path(".github/workflows/autopilot-codex-event-callback.yml").read_text()
     source = Path(permit.__file__).read_text()

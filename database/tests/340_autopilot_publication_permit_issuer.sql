@@ -96,7 +96,7 @@ BEGIN
           AND p.payload_sha256=repeat('e',64)
           AND p.provenance_evidence_sha256=repeat('f',64)
           AND p.expires_at<=o.callback_deadline_at
-          AND p.expires_at>clock_timestamp()+interval '45 seconds') THEN
+          AND p.expires_at>clock_timestamp()+interval '180 seconds') THEN
         RAISE EXCEPTION 'TEST_ISSUER_LEDGER_BINDING_INVALID';
     END IF;
 

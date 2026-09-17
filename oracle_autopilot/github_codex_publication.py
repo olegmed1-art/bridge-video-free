@@ -243,7 +243,7 @@ def authorize(cursor: Any, command: CodexCommand, publication: Publication) -> d
                    (json.dumps(asdict(command)), publication.comment_id, publication.fingerprint))
     row = cursor.fetchone()
     require(row is not None and isinstance(row[0], dict), "PUBLICATION_AUTHORIZATION_MISSING")
-    require(row[0].get("state") in {"SENT", "CALLBACK_ACCEPTED"}, "PUBLICATION_AUTHORIZATION_INVALID")
+    require(row[0].get("state") in {"SENT", "RECOVERY_ONLY", "CALLBACK_ACCEPTED"}, "PUBLICATION_AUTHORIZATION_INVALID")
     return row[0]
 
 
@@ -257,14 +257,15 @@ def publish(github: GitHub, cursor: Any, event: dict[str, Any]) -> dict[str, Any
     branch, live_sha = target(github, command)
     verify_files(github, publication, command.expected_head_sha, base=True)
     if live_sha == command.expected_head_sha:
-        require(authorization["state"] == "SENT", "PUBLICATION_ALREADY_COMPLETED")
+        require(authorization["state"] == "SENT", "PUBLICATION_RECOVERY_ONLY")
         require(github.call(comment_path) == owner_comment, "PUBLICATION_COMMAND_CHANGED")
         # Re-read the bot result too: deleted/edited messages cannot be replayed.
         fresh = github.call(f"issues/comments/{publication.comment_id}")
         require(parse_publication_event({**event, "comment": fresh}) == publication,
                 "PUBLICATION_REQUEST_CHANGED")
         require(target(github, command) == (branch, live_sha), "PUBLICATION_TARGET_CHANGED")
-        authorize(cursor, command, publication)  # locks retained; wall clock rechecked
+        final_authorization = authorize(cursor, command, publication)  # locks retained; wall clock rechecked
+        require(final_authorization["state"] == "SENT", "PUBLICATION_RECOVERY_ONLY")
         github.publication_attempted = True
         response = github.call("graphql", {"query": MUTATION, "variables": {"input": {
             "branch": {"repositoryNameWithOwner": REPOSITORY, "branchName": branch},

@@ -30,7 +30,7 @@ DECLARE
 BEGIN
     IF jsonb_typeof(p_evidence) IS DISTINCT FROM 'object'
        OR octet_length(COALESCE(p_evidence::text,''))>16384
-       OR p_ttl_seconds IS NULL OR p_ttl_seconds NOT BETWEEN 60 AND 900 THEN
+       OR p_ttl_seconds IS NULL OR p_ttl_seconds NOT BETWEEN 180 AND 900 THEN
         RAISE EXCEPTION 'PUBLICATION_ISSUER_INPUT_INVALID';
     END IF;
     SELECT array_agg(key ORDER BY key) INTO keys FROM jsonb_object_keys(p_evidence) key;
@@ -110,7 +110,7 @@ BEGIN
        OR work_row.target_pr IS DISTINCT FROM outbox.target_pr
        OR work_row.role IS DISTINCT FROM outbox.role
        OR outbox.callback_deadline_at IS NULL
-       OR outbox.callback_deadline_at<=clock_timestamp()+interval '45 seconds' THEN
+       OR outbox.callback_deadline_at<=clock_timestamp()+interval '180 seconds' THEN
         RAISE EXCEPTION 'PUBLICATION_ISSUER_BINDING_INVALID';
     END IF;
 
@@ -125,7 +125,7 @@ BEGIN
            OR existing.revoked IS DISTINCT FROM false THEN
             RAISE EXCEPTION 'PUBLICATION_PERMIT_REUSE_CONFLICT';
         END IF;
-        IF existing.expires_at<=clock_timestamp()+interval '45 seconds' THEN
+        IF existing.expires_at<=clock_timestamp()+interval '180 seconds' THEN
             RAISE EXCEPTION 'PUBLICATION_PERMIT_EXPIRED';
         END IF;
         RETURN jsonb_build_object(
@@ -137,7 +137,7 @@ BEGIN
 
     expiry:=LEAST(outbox.callback_deadline_at,
                   clock_timestamp()+make_interval(secs=>p_ttl_seconds));
-    IF expiry<=clock_timestamp()+interval '45 seconds' THEN
+    IF expiry<=clock_timestamp()+interval '180 seconds' THEN
         RAISE EXCEPTION 'PUBLICATION_PERMIT_WINDOW_TOO_SHORT';
     END IF;
     INSERT INTO autopilot.codex_publication_permit(

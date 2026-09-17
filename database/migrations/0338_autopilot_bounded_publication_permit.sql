@@ -124,9 +124,17 @@ BEGIN
        OR work_row.target_pr IS DISTINCT FROM outbox.target_pr
        OR work_row.role IS DISTINCT FROM outbox.role
        OR outbox.callback_deadline_at IS NULL
-       OR outbox.callback_deadline_at<=clock_timestamp()+interval '45 seconds'
-       OR permit.expires_at<=clock_timestamp()+interval '45 seconds' THEN
+       OR outbox.callback_deadline_at<=clock_timestamp()+interval '90 seconds' THEN
         RAISE EXCEPTION 'PUBLICATION_ASSIGNMENT_NOT_ACTIVE';
+    END IF;
+    -- A permit is mutation authority only while both windows have enough budget
+    -- for the CAS plus every bounded post-CAS GitHub read and terminal receipt.
+    -- Once permit authority is near/after expiry, exact-commit recovery remains
+    -- read-only at GitHub and is allowed only while the canonical callback task
+    -- is still current and has at least 90 seconds left to retain its receipt.
+    IF permit.expires_at<=clock_timestamp()+interval '180 seconds'
+       OR outbox.callback_deadline_at<=clock_timestamp()+interval '180 seconds' THEN
+        RETURN jsonb_build_object('state','RECOVERY_ONLY');
     END IF;
     RETURN jsonb_build_object('state','SENT');
 END $$;

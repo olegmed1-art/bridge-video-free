@@ -100,7 +100,18 @@ BEGIN
     PERFORM pg_temp.expect_publication_rejection(command,99003381,repeat('e',64));
     UPDATE autopilot.codex_publication_permit SET revoked=false,
         expires_at=clock_timestamp()+interval '10 seconds' WHERE dispatch_id=dispatch.dispatch_id;
-    PERFORM pg_temp.expect_publication_rejection(command,99003381,repeat('e',64));
+    result:=autopilot.authorize_codex_publication(command,99003381,repeat('e',64));
+    IF result IS DISTINCT FROM '{"state":"RECOVERY_ONLY"}'::jsonb THEN
+        RAISE EXCEPTION 'TEST_EXPIRING_PERMIT_NOT_RECOVERY_ONLY';
+    END IF;
+    UPDATE autopilot.codex_publication_permit
+       SET created_at=clock_timestamp()-interval '10 minutes',
+           expires_at=clock_timestamp()-interval '1 second'
+     WHERE dispatch_id=dispatch.dispatch_id;
+    result:=autopilot.authorize_codex_publication(command,99003381,repeat('e',64));
+    IF result IS DISTINCT FROM '{"state":"RECOVERY_ONLY"}'::jsonb THEN
+        RAISE EXCEPTION 'TEST_EXPIRED_PERMIT_NOT_RECOVERY_ONLY';
+    END IF;
     UPDATE autopilot.codex_publication_permit SET expires_at=clock_timestamp()+interval '10 minutes'
         WHERE dispatch_id=dispatch.dispatch_id;
     UPDATE autopilot.role_registry SET enabled=false WHERE role_id='AUTOPILOT';

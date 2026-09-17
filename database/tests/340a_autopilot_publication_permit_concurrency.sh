@@ -61,15 +61,47 @@ psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
   echo 'LOCK TABLE autopilot.migration_0339_function_backup IN ACCESS EXCLUSIVE MODE;'
   echo 'SELECT pg_sleep(2);'
   echo 'COMMIT;'
-} | psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >"$tmp/0339-blocker.out" 2>"$tmp/0339-blocker.err" &
+} | PGAPPNAME=pr1546-0339-blocker psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >"$tmp/0339-blocker.out" 2>"$tmp/0339-blocker.err" &
 blocker_pid=$!
-sleep 0.2
+blocker_locked=false
+for _ in {1..100}; do
+  if [[ "$(psql "$DATABASE_URL" -XAt -c "SELECT EXISTS(
+      SELECT 1 FROM pg_locks l JOIN pg_stat_activity a USING(pid)
+      WHERE l.relation='autopilot.migration_0339_function_backup'::regclass
+        AND l.mode='AccessExclusiveLock' AND l.granted
+        AND a.application_name='pr1546-0339-blocker');")" == t ]]; then
+    blocker_locked=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$blocker_locked" != true ]]; then
+  echo '0339 blocker failed to acquire backup-table lock' >&2
+  exit 1
+fi
 set +e
-psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+PGAPPNAME=pr1546-0339-rollback psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
   -f "$repo_root/database/rollbacks/0339_autopilot_native_cli_receipts.sql" \
   >"$tmp/0339-rollback.out" 2>"$tmp/0339-rollback.err" &
 rollback_0339_pid=$!
-sleep 0.3
+receipt_locked=false
+for _ in {1..100}; do
+  if [[ "$(psql "$DATABASE_URL" -XAt -c "SELECT EXISTS(
+      SELECT 1 FROM pg_locks l JOIN pg_stat_activity a USING(pid)
+      WHERE l.relation='autopilot.native_cli_receipt'::regclass
+        AND l.mode='AccessExclusiveLock' AND l.granted
+        AND a.application_name='pr1546-0339-rollback');")" == t ]]; then
+    receipt_locked=true
+    break
+  fi
+  sleep 0.05
+done
+if [[ "$receipt_locked" != true ]]; then
+  echo '0339 rollback failed to acquire receipt-table lock before writer' >&2
+  kill "$rollback_0339_pid" "$blocker_pid" 2>/dev/null || true
+  wait "$rollback_0339_pid" "$blocker_pid" 2>/dev/null || true
+  exit 1
+fi
 psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
   "INSERT INTO autopilot.native_cli_receipt(dispatch_id,request)
    SELECT dispatch_id,jsonb_build_object('race','rollback-0339')

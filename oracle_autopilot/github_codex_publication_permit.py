@@ -210,7 +210,7 @@ def verify(github: Any, command_comment_id: int, publication_comment_id: int,
 
 
 def issue(cursor: Any, verification: dict[str, Any], ttl_seconds: int = 600) -> dict[str, Any]:
-    require(type(ttl_seconds) is int and 60 <= ttl_seconds <= 900, "PERMIT_TTL_INVALID")
+    require(type(ttl_seconds) is int and 180 <= ttl_seconds <= 900, "PERMIT_TTL_INVALID")
     cursor.execute("SELECT autopilot.issue_codex_publication_permit(%s::jsonb,%s)",
                    (canonical(verification["evidence"]), ttl_seconds))
     row = cursor.fetchone()
