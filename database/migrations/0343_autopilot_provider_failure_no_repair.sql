@@ -5,9 +5,9 @@ DO $prerequisite$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
-         WHERE migration_key='0340_autopilot_publication_permit_issuer'
+         WHERE migration_key='0337_autopilot_role_repair_admission'
     ) THEN
-        RAISE EXCEPTION 'AUTOPILOT_PROVIDER_FAILURE_NO_REPAIR_REQUIRES_0340';
+        RAISE EXCEPTION 'AUTOPILOT_PROVIDER_FAILURE_NO_REPAIR_REQUIRES_0337';
     END IF;
 END $prerequisite$;
 
