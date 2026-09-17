@@ -59,7 +59,7 @@ psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
 {
   echo 'BEGIN;'
   echo 'LOCK TABLE autopilot.migration_0339_function_backup IN ACCESS EXCLUSIVE MODE;'
-  echo "SET application_name='pr1546-permit-a';"
+  echo "SET application_name='pr1546-0339-blocker';"
   echo 'SELECT pg_sleep(2);'
   echo 'COMMIT;'
 } | PGAPPNAME=pr1546-0339-blocker psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 >"$tmp/0339-blocker.out" 2>"$tmp/0339-blocker.err" &
