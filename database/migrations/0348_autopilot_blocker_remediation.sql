@@ -28,5 +28,24 @@ RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
  SELECT autopilot.blocker_remediation_action(p_result_code)='REPOSITORY_REPAIR'
 $$;
 
+-- Wire deterministic classification into the existing repair controller.
+DO $patch$
+DECLARE
+ original text;
+ anchor text := $a$    -- REPAIR_ADMISSION_V1: authority and target disposition before side effects.$a$;
+ guard_sql text := $g$    -- BLOCKER_REMEDIATION_ADMISSION_V1
+    IF NOT autopilot.blocker_repository_repair_allowed(p_result_code) THEN
+        RETURN NULL;
+    END IF;
+
+$g$;
+BEGIN
+ original := pg_get_functiondef('autopilot.materialize_role_repair(uuid,text,text)'::regprocedure);
+ IF original IS NULL OR strpos(original,'BLOCKER_REMEDIATION_ADMISSION_V1')>0 OR strpos(original,anchor)=0 THEN
+   RAISE EXCEPTION 'AUTOPILOT_BLOCKER_REMEDIATION_SOURCE_DRIFT';
+ END IF;
+ EXECUTE replace(original,anchor,guard_sql||anchor);
+END $patch$;
+
 INSERT INTO public.schema_migration(migration_key) VALUES ('0348_autopilot_blocker_remediation');
 COMMIT;
