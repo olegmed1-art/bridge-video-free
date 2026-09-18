@@ -31,6 +31,7 @@ DECLARE
     independent_task uuid;
     dependent_task uuid;
     changed_head_task uuid;
+    has_planner_v2 boolean;
     probe record;
     materialized record;
 BEGIN
@@ -40,6 +41,10 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'AUTOPILOT_PROJECT_PLANNER_MIGRATION_MISSING';
     END IF;
+    SELECT EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0347_autopilot_planner_loop_guard'
+    ) INTO has_planner_v2;
 
     SELECT work_item_id INTO blocker_item
       FROM autopilot.register_project_work_item(
@@ -165,6 +170,7 @@ BEGIN
            ), completed_at = now()
      WHERE task_id = dependent_task;
 
+    IF has_planner_v2 THEN
     -- Planner V2: unchanged blocked work becomes an explicit no-progress hold.
     UPDATE autopilot.project_work_item
        SET not_before = now() WHERE work_item_id = blocker_item;
@@ -214,6 +220,26 @@ BEGIN
        OR (SELECT goal_json->>'expected_head_sha' FROM autopilot.task WHERE task_id=changed_head_task) <> repeat('d',40)
        OR (SELECT generation FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 2 THEN
         RAISE EXCEPTION 'AUTOPILOT_PROJECT_CHANGED_HEAD_NOT_REACTIVATED';
+    END IF;
+
+    ELSE
+    -- Legacy baseline (without 0347): unchanged blocked head is retained,
+    -- while a changed head may reactivate the lane.
+    UPDATE autopilot.project_work_item SET not_before=now() WHERE work_item_id=blocker_item;
+    SELECT * INTO probe FROM autopilot.claim_project_work_probe('sql-project-worker-5',60);
+    SELECT * INTO materialized FROM autopilot.materialize_project_work_probe(
+      probe.work_item_id,'sql-project-worker-5',probe.lease_epoch,true,repeat('a',40));
+    IF materialized.task_id IS NOT NULL OR materialized.created IS NOT false THEN
+      RAISE EXCEPTION 'AUTOPILOT_PROJECT_UNCHANGED_HEAD_REDISPATCHED';
+    END IF;
+    UPDATE autopilot.project_work_item SET not_before=now() WHERE work_item_id=blocker_item;
+    SELECT * INTO probe FROM autopilot.claim_project_work_probe('sql-project-worker-6',60);
+    SELECT * INTO materialized FROM autopilot.materialize_project_work_probe(
+      probe.work_item_id,'sql-project-worker-6',probe.lease_epoch,true,repeat('d',40));
+    changed_head_task:=materialized.task_id;
+    IF changed_head_task IS NULL THEN
+      RAISE EXCEPTION 'AUTOPILOT_PROJECT_CHANGED_HEAD_NOT_REACTIVATED';
+    END IF;
     END IF;
 
     IF has_table_privilege(
