@@ -83,6 +83,19 @@ BEGIN
 END $rolled_back$;
 \ir ../migrations/0337_autopilot_role_repair_admission.sql
 \ir ../migrations/0343_autopilot_provider_failure_no_repair.sql
+\if :has_0348
+DO $pre0348_exact$
+DECLARE expected text; actual text;
+BEGIN
+ SELECT function_definition INTO expected
+ FROM autopilot.migration_0348_function_backup
+ WHERE function_key='materialize_role_repair';
+ actual:=pg_get_functiondef('autopilot.materialize_role_repair(uuid,text,text)'::regprocedure);
+ IF actual IS DISTINCT FROM expected THEN
+   RAISE EXCEPTION 'REPAIR_ADMISSION_PRE0348_BODY_DRIFT';
+ END IF;
+END $pre0348_exact$;
+\endif
 \if :has_0346
 \ir ../migrations/0346_autopilot_canary_acceptance_guard.sql
 UPDATE public.schema_migration
