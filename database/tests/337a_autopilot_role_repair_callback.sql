@@ -14,7 +14,11 @@ SET lock_timeout='2s';
 SELECT EXISTS(
     SELECT 1 FROM public.schema_migration
      WHERE migration_key='0346_autopilot_canary_acceptance_guard'
-) AS has_0346 \gset
+) AS has_0346,
+EXISTS(
+    SELECT 1 FROM public.schema_migration
+     WHERE migration_key='0348_autopilot_blocker_remediation'
+) AS has_0348 \gset
 
 CREATE TEMP TABLE acceptance_lifecycle_snapshot AS
 SELECT migration.checksum,
@@ -49,6 +53,14 @@ BEGIN
         RAISE EXCEPTION 'REPAIR_ADMISSION_NOT_INSTALLED';
     END IF;
 END $installed$;
+\if :has_0348
+-- 0348 intentionally wraps materialize_role_repair. Rehearse the older
+-- admission lifecycle against its own baseline, then reapply 0348 below.
+DROP FUNCTION IF EXISTS autopilot.blocker_repository_repair_allowed(text);
+DROP FUNCTION IF EXISTS autopilot.blocker_remediation_action(text);
+SELECT function_definition AS definition FROM autopilot.migration_0347_function_backup WHERE false;
+-- Restore pre-0348 repair body from migration source by replaying older chain below.
+\endif
 \if :has_0346
 UPDATE autopilot.project_planner_state SET enabled=false WHERE singleton;
 \ir ../rollbacks/0346_autopilot_canary_acceptance_guard.sql
