@@ -28,7 +28,12 @@ SELECT migration.checksum,
  WHERE migration.migration_key='0346_autopilot_canary_acceptance_guard';
 
 CREATE TEMP TABLE repair_lifecycle_snapshot AS
-SELECT pg_get_functiondef(p.oid) AS definition,p.proowner,p.proacl,
+SELECT pg_get_functiondef(p.oid) AS definition,
+       CASE WHEN to_regclass('autopilot.migration_0348_function_backup') IS NOT NULL
+            THEN (SELECT function_definition FROM autopilot.migration_0348_function_backup
+                  WHERE function_key='materialize_role_repair')
+            ELSE pg_get_functiondef(p.oid) END AS pre0348_definition,
+       p.proowner,p.proacl,
        m.checksum,provider.checksum AS provider_checksum
 FROM pg_proc p
 CROSS JOIN public.schema_migration m
@@ -87,9 +92,8 @@ END $rolled_back$;
 DO $pre0348_exact$
 DECLARE expected text; actual text;
 BEGIN
- SELECT function_definition INTO expected
- FROM autopilot.migration_0348_function_backup
- WHERE function_key='materialize_role_repair';
+ SELECT pre0348_definition INTO expected
+ FROM repair_lifecycle_snapshot;
  actual:=pg_get_functiondef('autopilot.materialize_role_repair(uuid,text,text)'::regprocedure);
  IF actual IS DISTINCT FROM expected THEN
    RAISE EXCEPTION 'REPAIR_ADMISSION_PRE0348_BODY_DRIFT';
