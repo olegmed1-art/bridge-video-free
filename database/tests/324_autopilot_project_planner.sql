@@ -165,12 +165,14 @@ BEGIN
            ), completed_at = now()
      WHERE task_id = dependent_task;
 
-    -- The unchanged blocked head is never redelivered.  A genuinely changed
-    -- head reactivates the same lane with a new exact-head task.
+    -- Planner V2: unchanged blocked work becomes an explicit no-progress hold.
     UPDATE autopilot.project_work_item
        SET not_before = now() WHERE work_item_id = blocker_item;
     SELECT * INTO probe
       FROM autopilot.claim_project_work_probe('sql-project-worker-5', 60);
+    IF NOT FOUND OR probe.work_item_id <> blocker_item THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_BLOCKER_NOT_CLAIMED_FOR_HOLD';
+    END IF;
     SELECT * INTO materialized
       FROM autopilot.materialize_project_work_probe(
           probe.work_item_id, 'sql-project-worker-5', probe.lease_epoch,
@@ -178,26 +180,39 @@ BEGIN
       );
     IF materialized.task_id IS NOT NULL
        OR materialized.created IS NOT false
+       OR materialized.resulting_state <> 'PAUSED'
+       OR (SELECT state FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 'PAUSED'
+       OR (SELECT hold_reason FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 'NO_PROGRESS_NO_RETRY'
+       OR (SELECT generation FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 1
        OR (SELECT count(*) FROM autopilot.project_work_task
-            WHERE work_item_id = blocker_item AND run_kind = 'AUDIT') <> 1 THEN
-        RAISE EXCEPTION 'AUTOPILOT_PROJECT_UNCHANGED_HEAD_REDISPATCHED';
+            WHERE work_item_id=blocker_item AND run_kind='AUDIT') <> 1 THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_HOLD_INVALID';
     END IF;
 
-    UPDATE autopilot.project_work_item
-       SET not_before = now() WHERE work_item_id = blocker_item;
     SELECT * INTO probe
       FROM autopilot.claim_project_work_probe('sql-project-worker-6', 60);
+    IF FOUND AND probe.work_item_id = blocker_item THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_PAUSED_BLOCKER_RECLAIMED';
+    END IF;
+
+    -- Meaningful target progress requires an explicit resume/reconcile transition.
+    UPDATE autopilot.project_work_item
+       SET state='READY', hold_reason=NULL, hold_until=NULL, not_before=now()
+     WHERE work_item_id=blocker_item;
+    SELECT * INTO probe
+      FROM autopilot.claim_project_work_probe('sql-project-worker-7', 60);
+    IF NOT FOUND OR probe.work_item_id <> blocker_item THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_EXPLICIT_RESUME_NOT_CLAIMED';
+    END IF;
     SELECT * INTO materialized
       FROM autopilot.materialize_project_work_probe(
-          probe.work_item_id, 'sql-project-worker-6', probe.lease_epoch,
+          probe.work_item_id, 'sql-project-worker-7', probe.lease_epoch,
           true, repeat('d', 40)
       );
     changed_head_task := materialized.task_id;
     IF changed_head_task IS NULL
-       OR (SELECT goal_json->>'expected_head_sha' FROM autopilot.task
-            WHERE task_id = changed_head_task) <> repeat('d', 40)
-       OR (SELECT generation FROM autopilot.project_work_item
-            WHERE work_item_id = blocker_item) <> 2 THEN
+       OR (SELECT goal_json->>'expected_head_sha' FROM autopilot.task WHERE task_id=changed_head_task) <> repeat('d',40)
+       OR (SELECT generation FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 2 THEN
         RAISE EXCEPTION 'AUTOPILOT_PROJECT_CHANGED_HEAD_NOT_REACTIVATED';
     END IF;
 
