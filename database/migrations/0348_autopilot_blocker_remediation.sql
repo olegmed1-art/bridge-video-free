@@ -50,10 +50,14 @@ DECLARE
 
 $g$;
 BEGIN
- original := pg_get_functiondef('autopilot.materialize_role_repair(uuid,text,text)'::regprocedure);
+ SELECT function_definition INTO original
+ FROM autopilot.migration_0348_function_backup
+ WHERE function_key='materialize_role_repair';
  IF original IS NULL OR strpos(original,'BLOCKER_REMEDIATION_ADMISSION_V1')>0 OR strpos(original,anchor)=0 THEN
    RAISE EXCEPTION 'AUTOPILOT_BLOCKER_REMEDIATION_SOURCE_DRIFT';
  END IF;
+ -- Always derive the installed body from the canonical pre-0348 snapshot.
+ -- Initial apply and lifecycle reapply therefore produce the same definition.
  EXECUTE replace(original,anchor,guard_sql||anchor);
 END $patch$;
 
