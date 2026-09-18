@@ -94,6 +94,9 @@ UPDATE autopilot.project_planner_state
 \endif
 \if :has_0348
 \ir ../migrations/0348_autopilot_blocker_remediation.sql
+-- Lifecycle reapply is expected to reproduce the exact installed 0348 body.
+-- The migration backup captures the immediately-pre-0348 body; the wrapper
+-- itself is deterministic over that body.
 \endif
 DO $reapplied$
 DECLARE
