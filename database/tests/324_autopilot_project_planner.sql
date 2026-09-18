@@ -184,15 +184,22 @@ BEGIN
           probe.work_item_id, 'sql-project-worker-5', probe.lease_epoch,
           true, repeat('a', 40)
       );
-    IF materialized.task_id IS NOT NULL
-       OR materialized.created IS NOT false
-       OR materialized.resulting_state <> 'PAUSED'
-       OR (SELECT state FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 'PAUSED'
-       OR (SELECT to_jsonb(w)->>'hold_reason' FROM autopilot.project_work_item w WHERE work_item_id=blocker_item) <> 'NO_PROGRESS_NO_RETRY'
-       OR (SELECT generation FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 1
-       OR (SELECT count(*) FROM autopilot.project_work_task
-            WHERE work_item_id=blocker_item AND run_kind='AUDIT') <> 1 THEN
-        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_HOLD_INVALID';
+    IF materialized.task_id IS NOT NULL OR materialized.created IS NOT false
+       OR materialized.resulting_state <> 'PAUSED' THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_MATERIALIZATION_INVALID';
+    END IF;
+    IF (SELECT state FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 'PAUSED' THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_STATE_INVALID';
+    END IF;
+    IF (SELECT to_jsonb(w)->>'hold_reason' FROM autopilot.project_work_item w WHERE work_item_id=blocker_item) <> 'NO_PROGRESS_NO_RETRY' THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_REASON_INVALID';
+    END IF;
+    IF (SELECT generation FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 1 THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_GENERATION_CHANGED';
+    END IF;
+    IF (SELECT count(*) FROM autopilot.project_work_task
+         WHERE work_item_id=blocker_item AND run_kind='AUDIT') <> 1 THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_AUDIT_DUPLICATED';
     END IF;
 
     SELECT * INTO probe
