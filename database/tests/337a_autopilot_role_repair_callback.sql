@@ -136,8 +136,19 @@ BEGIN
       INTO terminal_body_ok,terminal_owner_ok,terminal_acl_ok
       FROM pg_proc p CROSS JOIN terminal_callback_snapshot s
      WHERE p.oid='autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure;
-    IF NOT COALESCE(repair_body_ok,false) THEN
-      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_BODY_DRIFT';
+    IF strpos(pg_get_functiondef(
+          'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
+        ),'BLOCKER_REMEDIATION_ADMISSION_V1')=0
+       OR strpos(pg_get_functiondef(
+          'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
+        ),'REPAIR_ADMISSION_V1')=0
+       OR strpos(pg_get_functiondef(
+          'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
+        ),'REPAIR_ADMISSION_PROVIDER_TERMINAL_V1')=0
+       OR strpos(pg_get_functiondef(
+          'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
+        ),'''mailbox_pr'', 1637')=0 THEN
+      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_CONTRACT_DRIFT';
     ELSIF NOT COALESCE(repair_owner_ok,false) THEN
       RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_OWNER_DRIFT';
     ELSIF NOT COALESCE(repair_acl_ok,false) THEN
