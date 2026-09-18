@@ -42,9 +42,19 @@ BEGIN
         RAISE EXCEPTION 'AUTOPILOT_PROJECT_PLANNER_MIGRATION_MISSING';
     END IF;
     SELECT EXISTS (
-        SELECT 1 FROM public.schema_migration
-         WHERE migration_key='0347_autopilot_planner_loop_guard'
-    ) INTO has_planner_v2;
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema='autopilot'
+           AND table_name='project_work_item'
+           AND column_name='hold_reason'
+    )
+    AND strpos(
+        pg_get_functiondef(
+          'autopilot.materialize_project_work_probe(uuid,text,bigint,boolean,text)'::regprocedure
+        ),
+        'PLANNER_LOOP_GUARD_V2'
+    ) > 0
+    INTO has_planner_v2;
 
     SELECT work_item_id INTO blocker_item
       FROM autopilot.register_project_work_item(
