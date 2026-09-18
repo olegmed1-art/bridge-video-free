@@ -137,8 +137,9 @@ BEGIN
         RAISE EXCEPTION 'AUTOPILOT_DEPENDENT_NOT_CLAIMABLE_AFTER_RECEIPT';
     END IF;
 
-    -- A transport failure may be retried at the same exact head, but receives
-    -- a new generation-scoped task key. Semantic blockers are still pinned.
+    -- A bounded non-provider transport failure may be retried at the same
+    -- exact head and receives a new generation-scoped task key. Provider/Codex
+    -- exhaustion is covered separately by the 0347 circuit-breaker contract.
     SELECT work_item_id INTO retry_item
       FROM autopilot.register_universal_work_item(
           'sql-wakeup-transport-325','AUTOPILOT','TRANSPORT_RETRY_TEST',
@@ -154,7 +155,7 @@ BEGIN
     retry_task_1 := materialized.task_id;
     UPDATE autopilot.task
        SET status='FAILED_CLOSED',
-           terminal_reason_code='STALE_RETRY_BUDGET_EXHAUSTED',
+           terminal_reason_code='GITHUB_API_TRANSIENT_ERROR',
            safe_summary_json='{}'::jsonb,completed_at=now()
      WHERE task_id=retry_task_1;
     UPDATE autopilot.project_work_item SET not_before=now()
