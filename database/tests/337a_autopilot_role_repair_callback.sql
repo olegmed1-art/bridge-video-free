@@ -88,18 +88,6 @@ BEGIN
 END $rolled_back$;
 \ir ../migrations/0337_autopilot_role_repair_admission.sql
 \ir ../migrations/0343_autopilot_provider_failure_no_repair.sql
-\if :has_0348
-DO $pre0348_exact$
-DECLARE expected text; actual text;
-BEGIN
- SELECT pre0348_definition INTO expected
- FROM repair_lifecycle_snapshot;
- actual:=pg_get_functiondef('autopilot.materialize_role_repair(uuid,text,text)'::regprocedure);
- IF actual IS DISTINCT FROM expected THEN
-   RAISE EXCEPTION 'REPAIR_ADMISSION_PRE0348_BODY_DRIFT';
- END IF;
-END $pre0348_exact$;
-\endif
 \if :has_0346
 \ir ../migrations/0346_autopilot_canary_acceptance_guard.sql
 UPDATE public.schema_migration
@@ -110,6 +98,15 @@ UPDATE autopilot.project_planner_state
  WHERE singleton;
 \endif
 \if :has_0348
+DO $pre0348_exact$
+DECLARE expected text; actual text;
+BEGIN
+ SELECT pre0348_definition INTO expected FROM repair_lifecycle_snapshot;
+ actual:=pg_get_functiondef('autopilot.materialize_role_repair(uuid,text,text)'::regprocedure);
+ IF actual IS DISTINCT FROM expected THEN
+   RAISE EXCEPTION 'REPAIR_ADMISSION_PRE0348_BODY_DRIFT';
+ END IF;
+END $pre0348_exact$;
 \ir ../migrations/0348_autopilot_blocker_remediation.sql
 -- Lifecycle reapply is expected to reproduce the exact installed 0348 body.
 -- The migration backup captures the immediately-pre-0348 body; the wrapper
