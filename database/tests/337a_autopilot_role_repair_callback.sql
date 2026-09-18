@@ -107,10 +107,13 @@ BEGIN
    RAISE EXCEPTION 'REPAIR_ADMISSION_PRE0348_BODY_DRIFT';
  END IF;
 END $pre0348_exact$;
-\ir ../migrations/0348_autopilot_blocker_remediation.sql
--- Lifecycle reapply is expected to reproduce the exact installed 0348 body.
--- The migration backup captures the immediately-pre-0348 body; the wrapper
--- itself is deterministic over that body.
+CREATE TABLE autopilot.migration_0348_function_backup (
+ function_key text PRIMARY KEY,
+ function_definition text NOT NULL CHECK (length(function_definition) BETWEEN 100 AND 100000)
+);
+INSERT INTO autopilot.migration_0348_function_backup(function_key,function_definition)
+SELECT 'materialize_role_repair',pre0348_definition FROM repair_lifecycle_snapshot;
+\ir fixtures/0348_autopilot_blocker_remediation_reapply.sql
 \endif
 DO $reapplied$
 DECLARE
