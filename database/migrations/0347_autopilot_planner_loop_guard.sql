@@ -114,6 +114,7 @@ DECLARE
 
     IF item.state='BLOCKED'
        AND item.last_observed_head_sha=p_observed_head_sha
+       AND NOT autopilot.project_work_transport_retryable(item.result_code)
        AND NOT EXISTS (
          SELECT 1 FROM autopilot.role_dispatch_followup f
          JOIN autopilot.project_work_task m ON m.task_id=f.followup_task_id
