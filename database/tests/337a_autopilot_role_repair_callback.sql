@@ -96,19 +96,38 @@ UPDATE autopilot.project_planner_state
 \ir ../migrations/0348_autopilot_blocker_remediation.sql
 \endif
 DO $reapplied$
+DECLARE
+ repair_body_ok boolean;
+ repair_owner_ok boolean;
+ repair_acl_ok boolean;
+ terminal_body_ok boolean;
+ terminal_owner_ok boolean;
+ terminal_acl_ok boolean;
 BEGIN
-    IF NOT EXISTS(
-        SELECT 1 FROM pg_proc p CROSS JOIN repair_lifecycle_snapshot s
-        WHERE p.oid='autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
-          AND pg_get_functiondef(p.oid)=s.definition
-          AND p.proowner=s.proowner AND p.proacl IS NOT DISTINCT FROM s.proacl
-    ) OR NOT EXISTS(
-        SELECT 1 FROM pg_proc p CROSS JOIN terminal_callback_snapshot s
-        WHERE p.oid='autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
-          AND pg_get_functiondef(p.oid)=s.definition
-          AND p.proowner=s.proowner AND p.proacl IS NOT DISTINCT FROM s.proacl
-    ) THEN
-        RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_BODY_OR_ACL_DRIFT';
+    SELECT pg_get_functiondef(p.oid)=s.definition,
+           p.proowner=s.proowner,
+           p.proacl IS NOT DISTINCT FROM s.proacl
+      INTO repair_body_ok,repair_owner_ok,repair_acl_ok
+      FROM pg_proc p CROSS JOIN repair_lifecycle_snapshot s
+     WHERE p.oid='autopilot.materialize_role_repair(uuid,text,text)'::regprocedure;
+    SELECT pg_get_functiondef(p.oid)=s.definition,
+           p.proowner=s.proowner,
+           p.proacl IS NOT DISTINCT FROM s.proacl
+      INTO terminal_body_ok,terminal_owner_ok,terminal_acl_ok
+      FROM pg_proc p CROSS JOIN terminal_callback_snapshot s
+     WHERE p.oid='autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure;
+    IF NOT COALESCE(repair_body_ok,false) THEN
+      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_BODY_DRIFT';
+    ELSIF NOT COALESCE(repair_owner_ok,false) THEN
+      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_OWNER_DRIFT';
+    ELSIF NOT COALESCE(repair_acl_ok,false) THEN
+      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_ACL_DRIFT';
+    ELSIF NOT COALESCE(terminal_body_ok,false) THEN
+      RAISE EXCEPTION 'TERMINAL_CALLBACK_REAPPLY_BODY_DRIFT';
+    ELSIF NOT COALESCE(terminal_owner_ok,false) THEN
+      RAISE EXCEPTION 'TERMINAL_CALLBACK_REAPPLY_OWNER_DRIFT';
+    ELSIF NOT COALESCE(terminal_acl_ok,false) THEN
+      RAISE EXCEPTION 'TERMINAL_CALLBACK_REAPPLY_ACL_DRIFT';
     END IF;
 END $reapplied$;
 -- Preserve the migration runner's checksum across this isolated lifecycle test.
