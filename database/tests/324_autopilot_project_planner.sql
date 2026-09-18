@@ -188,7 +188,7 @@ BEGIN
        OR materialized.created IS NOT false
        OR materialized.resulting_state <> 'PAUSED'
        OR (SELECT state FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 'PAUSED'
-       OR (SELECT hold_reason FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 'NO_PROGRESS_NO_RETRY'
+       OR (SELECT to_jsonb(w)->>'hold_reason' FROM autopilot.project_work_item w WHERE work_item_id=blocker_item) <> 'NO_PROGRESS_NO_RETRY'
        OR (SELECT generation FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 1
        OR (SELECT count(*) FROM autopilot.project_work_task
             WHERE work_item_id=blocker_item AND run_kind='AUDIT') <> 1 THEN
@@ -202,9 +202,8 @@ BEGIN
     END IF;
 
     -- Meaningful target progress requires an explicit resume/reconcile transition.
-    UPDATE autopilot.project_work_item
-       SET state='READY', hold_reason=NULL, hold_until=NULL, not_before=now()
-     WHERE work_item_id=blocker_item;
+    EXECUTE 'UPDATE autopilot.project_work_item SET state=''READY'', hold_reason=NULL, hold_until=NULL, not_before=now() WHERE work_item_id=$1'
+       USING blocker_item;
     SELECT * INTO probe
       FROM autopilot.claim_project_work_probe('sql-project-worker-7', 60);
     IF NOT FOUND OR probe.work_item_id <> blocker_item THEN
