@@ -72,6 +72,13 @@ BEGIN
     EXECUTE replace(replace(
         pg_get_functiondef('autopilot.role_blocker_requires_owner(text)'::regprocedure),
         'autopilot.','pg_temp.'),'''autopilot''','''pg_temp''');
+    EXECUTE replace(replace(
+        pg_get_functiondef('autopilot.blocker_remediation_action(text)'::regprocedure),
+        'autopilot.','pg_temp.'),'''autopilot''','''pg_temp''');
+    EXECUTE replace(replace(
+        pg_get_functiondef('autopilot.blocker_repository_repair_allowed(text)'::regprocedure),
+        'autopilot.','pg_temp.'),'''autopilot''','''pg_temp''');
+
     definition := replace(replace(definition,
         'autopilot.','pg_temp.'),'''autopilot''','''pg_temp''');
     IF strpos(definition,'autopilot.')>0 THEN

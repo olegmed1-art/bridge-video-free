@@ -14,7 +14,11 @@ SET lock_timeout='2s';
 SELECT EXISTS(
     SELECT 1 FROM public.schema_migration
      WHERE migration_key='0346_autopilot_canary_acceptance_guard'
-) AS has_0346 \gset
+) AS has_0346,
+EXISTS(
+    SELECT 1 FROM public.schema_migration
+     WHERE migration_key='0348_autopilot_blocker_remediation'
+) AS has_0348 \gset
 
 CREATE TEMP TABLE acceptance_lifecycle_snapshot AS
 SELECT migration.checksum,
@@ -24,7 +28,12 @@ SELECT migration.checksum,
  WHERE migration.migration_key='0346_autopilot_canary_acceptance_guard';
 
 CREATE TEMP TABLE repair_lifecycle_snapshot AS
-SELECT pg_get_functiondef(p.oid) AS definition,p.proowner,p.proacl,
+SELECT pg_get_functiondef(p.oid) AS definition,
+       CASE WHEN to_regclass('autopilot.migration_0348_function_backup') IS NOT NULL
+            THEN (SELECT function_definition FROM autopilot.migration_0348_function_backup
+                  WHERE function_key='materialize_role_repair')
+            ELSE pg_get_functiondef(p.oid) END AS pre0348_definition,
+       p.proowner,p.proacl,
        m.checksum,provider.checksum AS provider_checksum
 FROM pg_proc p
 CROSS JOIN public.schema_migration m
@@ -49,6 +58,9 @@ BEGIN
         RAISE EXCEPTION 'REPAIR_ADMISSION_NOT_INSTALLED';
     END IF;
 END $installed$;
+\if :has_0348
+\ir ../rollbacks/0348_autopilot_blocker_remediation.sql
+\endif
 \if :has_0346
 UPDATE autopilot.project_planner_state SET enabled=false WHERE singleton;
 \ir ../rollbacks/0346_autopilot_canary_acceptance_guard.sql
@@ -85,20 +97,68 @@ UPDATE autopilot.project_planner_state
    SET enabled=(SELECT planner_enabled FROM acceptance_lifecycle_snapshot)
  WHERE singleton;
 \endif
-DO $reapplied$
+\if :has_0348
+DO $pre0348_exact$
+DECLARE expected text; actual text;
 BEGIN
-    IF NOT EXISTS(
-        SELECT 1 FROM pg_proc p CROSS JOIN repair_lifecycle_snapshot s
-        WHERE p.oid='autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
-          AND pg_get_functiondef(p.oid)=s.definition
-          AND p.proowner=s.proowner AND p.proacl IS NOT DISTINCT FROM s.proacl
-    ) OR NOT EXISTS(
-        SELECT 1 FROM pg_proc p CROSS JOIN terminal_callback_snapshot s
-        WHERE p.oid='autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
-          AND pg_get_functiondef(p.oid)=s.definition
-          AND p.proowner=s.proowner AND p.proacl IS NOT DISTINCT FROM s.proacl
-    ) THEN
-        RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_BODY_OR_ACL_DRIFT';
+ SELECT pre0348_definition INTO expected FROM repair_lifecycle_snapshot;
+ actual:=pg_get_functiondef('autopilot.materialize_role_repair(uuid,text,text)'::regprocedure);
+ IF actual IS DISTINCT FROM expected THEN
+   RAISE EXCEPTION 'REPAIR_ADMISSION_PRE0348_BODY_DRIFT';
+ END IF;
+END $pre0348_exact$;
+CREATE TABLE autopilot.migration_0348_function_backup (
+ function_key text PRIMARY KEY,
+ function_definition text NOT NULL CHECK (length(function_definition) BETWEEN 100 AND 100000)
+);
+INSERT INTO autopilot.migration_0348_function_backup(function_key,function_definition)
+SELECT 'materialize_role_repair',pre0348_definition FROM repair_lifecycle_snapshot;
+\ir fixtures/0348_autopilot_blocker_remediation_reapply.sql
+\endif
+DO $reapplied$
+DECLARE
+ repair_body_ok boolean;
+ repair_owner_ok boolean;
+ repair_acl_ok boolean;
+ terminal_body_ok boolean;
+ terminal_owner_ok boolean;
+ terminal_acl_ok boolean;
+BEGIN
+    SELECT pg_get_functiondef(p.oid)=s.definition,
+           p.proowner=s.proowner,
+           p.proacl IS NOT DISTINCT FROM s.proacl
+      INTO repair_body_ok,repair_owner_ok,repair_acl_ok
+      FROM pg_proc p CROSS JOIN repair_lifecycle_snapshot s
+     WHERE p.oid='autopilot.materialize_role_repair(uuid,text,text)'::regprocedure;
+    SELECT pg_get_functiondef(p.oid)=s.definition,
+           p.proowner=s.proowner,
+           p.proacl IS NOT DISTINCT FROM s.proacl
+      INTO terminal_body_ok,terminal_owner_ok,terminal_acl_ok
+      FROM pg_proc p CROSS JOIN terminal_callback_snapshot s
+     WHERE p.oid='autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure;
+    IF strpos(pg_get_functiondef(
+          'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
+        ),'BLOCKER_REMEDIATION_ADMISSION_V1')=0
+       OR strpos(pg_get_functiondef(
+          'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
+        ),'REPAIR_ADMISSION_V1')=0
+       OR strpos(pg_get_functiondef(
+          'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
+        ),'REPAIR_ADMISSION_PROVIDER_TERMINAL_V1')=0
+       OR strpos(pg_get_functiondef(
+          'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
+        ),'''mailbox_pr'', 1637')=0 THEN
+      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_CONTRACT_DRIFT';
+    ELSIF NOT COALESCE(repair_owner_ok,false) THEN
+      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_OWNER_DRIFT';
+    ELSIF NOT COALESCE(repair_acl_ok,false) THEN
+      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_ACL_DRIFT';
+    ELSIF NOT COALESCE(terminal_body_ok,false) THEN
+      RAISE EXCEPTION 'TERMINAL_CALLBACK_REAPPLY_BODY_DRIFT';
+    ELSIF NOT COALESCE(terminal_owner_ok,false) THEN
+      RAISE EXCEPTION 'TERMINAL_CALLBACK_REAPPLY_OWNER_DRIFT';
+    ELSIF NOT COALESCE(terminal_acl_ok,false) THEN
+      RAISE EXCEPTION 'TERMINAL_CALLBACK_REAPPLY_ACL_DRIFT';
     END IF;
 END $reapplied$;
 -- Preserve the migration runner's checksum across this isolated lifecycle test.
