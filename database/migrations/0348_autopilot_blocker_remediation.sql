@@ -7,6 +7,16 @@ BEGIN
  THEN RAISE EXCEPTION 'AUTOPILOT_BLOCKER_REMEDIATION_REQUIRES_0347'; END IF;
 END $pre$;
 
+CREATE TABLE autopilot.migration_0348_function_backup (
+ function_key text PRIMARY KEY,
+ function_definition text NOT NULL CHECK (length(function_definition) BETWEEN 100 AND 100000)
+);
+INSERT INTO autopilot.migration_0348_function_backup(function_key,function_definition)
+VALUES (
+ 'materialize_role_repair',
+ pg_get_functiondef('autopilot.materialize_role_repair(uuid,text,text)'::regprocedure)
+);
+
 CREATE OR REPLACE FUNCTION autopilot.blocker_remediation_action(p_result_code text)
 RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 SELECT CASE
