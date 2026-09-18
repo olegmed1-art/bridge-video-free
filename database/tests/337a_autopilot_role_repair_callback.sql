@@ -54,12 +54,7 @@ BEGIN
     END IF;
 END $installed$;
 \if :has_0348
--- 0348 intentionally wraps materialize_role_repair. Rehearse the older
--- admission lifecycle against its own baseline, then reapply 0348 below.
-DROP FUNCTION IF EXISTS autopilot.blocker_repository_repair_allowed(text);
-DROP FUNCTION IF EXISTS autopilot.blocker_remediation_action(text);
-SELECT function_definition AS definition FROM autopilot.migration_0347_function_backup WHERE false;
--- Restore pre-0348 repair body from migration source by replaying older chain below.
+\ir ../rollbacks/0348_autopilot_blocker_remediation.sql
 \endif
 \if :has_0346
 UPDATE autopilot.project_planner_state SET enabled=false WHERE singleton;
@@ -96,6 +91,9 @@ UPDATE public.schema_migration
 UPDATE autopilot.project_planner_state
    SET enabled=(SELECT planner_enabled FROM acceptance_lifecycle_snapshot)
  WHERE singleton;
+\endif
+\if :has_0348
+\ir ../migrations/0348_autopilot_blocker_remediation.sql
 \endif
 DO $reapplied$
 BEGIN
