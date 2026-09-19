@@ -31,7 +31,7 @@ ROLLBACK;
 DO $post$
 BEGIN
  IF position(
-   'PAUSED_EVIDENCE_REMEDIATION_READY',
+   'PAUSED_EVIDENCE_REMEDIATION_READY' in
    pg_get_functiondef(
      'autopilot.reconcile_paused_project_work(uuid,text,text,text,text)'::regprocedure
    )
