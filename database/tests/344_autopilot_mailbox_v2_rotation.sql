@@ -29,7 +29,7 @@ BEGIN
 
     IF pg_get_functiondef(
         'autopilot.accept_role_dispatch_callback(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
-       ) NOT LIKE CASE WHEN active_mailbox=1685 THEN '%p_mailbox_pr NOT IN (1150,1637,1685)%' ELSE '%p_mailbox_pr NOT IN (1150,1637)%' END THEN
+       ) NOT LIKE (CASE WHEN active_mailbox=1685 THEN '%p_mailbox_pr NOT IN (1150,1637,1685)%' ELSE '%p_mailbox_pr NOT IN (1150,1637)%' END) THEN
         RAISE EXCEPTION 'CALLBACK_DUAL_MAILBOX_GUARD_MISSING';
     END IF;
     IF pg_get_functiondef(
@@ -37,7 +37,7 @@ BEGIN
        ) NOT LIKE ('%mailbox_pr%IS DISTINCT FROM ''' || active_mailbox::text || '''::jsonb%')
        OR pg_get_functiondef(
         'autopilot.create_chatgpt_role_followup_task(text,jsonb,integer,text,text)'::regprocedure
-       ) NOT LIKE '%mailbox_pr%IS DISTINCT FROM ''1637''::jsonb%' THEN
+       ) NOT LIKE ('%mailbox_pr%IS DISTINCT FROM ''' || active_mailbox::text || '''::jsonb%') THEN
         RAISE EXCEPTION 'OUTBOUND_ACTIVE_MAILBOX_GUARD_MISSING';
     END IF;
     IF pg_get_functiondef(
@@ -45,12 +45,12 @@ BEGIN
        ) NOT LIKE ('%''mailbox_pr'', ' || active_mailbox::text || '%')
        OR pg_get_functiondef(
         'autopilot.materialize_role_verification(uuid,text)'::regprocedure
-       ) NOT LIKE '%''mailbox_pr'', 1637%' THEN
+       ) NOT LIKE ('%''mailbox_pr'', ' || active_mailbox::text || '%') THEN
         RAISE EXCEPTION 'FOLLOWUP_ACTIVE_MAILBOX_ROUTING_MISSING';
     END IF;
     IF pg_get_functiondef(
         'autopilot.register_universal_work_item(text,text,text,text,integer,integer,jsonb,text,text,text)'::regprocedure
-       ) NOT LIKE '%1637%' THEN
+       ) NOT LIKE ('%' || active_mailbox::text || '%') THEN
         RAISE EXCEPTION 'UNIVERSAL_WORK_V2_DEFAULT_MISSING';
     END IF;
     IF pg_get_functiondef(
