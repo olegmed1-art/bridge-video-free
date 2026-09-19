@@ -51,6 +51,11 @@ PROFILE_SCHEMA = "bridge-vision-bridgit-rank-layout/v1"
 JOB_TYPE = "BRIDGIT_RANK_LAYOUT_SHADOW_V1"
 RECEIPT_TYPE = "BRIDGIT_RANK_LAYOUT_SHADOW_RECEIPT_V1"
 BACKEND_VERSION = "bridge-vision-bridgit-rank-layout-v1"
+AUTONOMOUS_MANIFEST_SHA256 = "8c3a71cdb3f5125c1cdc31cfd5b4378fb5441393da77d23e64352147130c198d"
+AUTONOMOUS_VALIDATION_SHA256 = "123b7f7fb5005d9be85bd413d1d7c5d58178ab99a9972dcea1f3a33345efe4d1"
+AUTONOMOUS_INTEGRITY_SHA256 = "0bc0398514a255a7566121d9b4a72bf9c45d53ca341270736d6f15865afe2aa4"
+AUTONOMOUS_TEMPLATE_SET_SHA256 = "c763a35745c8817141d573e235c28c14c1c3343644650a4c4a73b9ccb1593d7c"
+AUTONOMOUS_RANK_SET_SHA256 = "697c9e36760d76717a50e80dac037194db1bd754b2b56c0c7e6a459537db35bd"
 
 RANKS = tuple("AKQJT98765432")
 SUITS = tuple("HCDS")
@@ -277,9 +282,28 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
     manifest_sha = _required_sha(
         verification.get("manifest_sha256"), "verification manifest_sha256"
     )
+    if manifest_sha != AUTONOMOUS_MANIFEST_SHA256:
+        raise BridgitRankLayoutError("autonomous manifest identity mismatch")
+    validation_sha = _required_sha(
+        verification.get("validation_sha256"), "verification validation_sha256"
+    )
+    if validation_sha != AUTONOMOUS_VALIDATION_SHA256:
+        raise BridgitRankLayoutError("autonomous validation identity mismatch")
+    integrity_sha = _required_sha(
+        verification.get("integrity_sha256"), "verification integrity_sha256"
+    )
+    if integrity_sha != AUTONOMOUS_INTEGRITY_SHA256:
+        raise BridgitRankLayoutError("autonomous integrity identity mismatch")
     template_set_sha = _required_sha(
         verification.get("template_set_sha256"), "verification template_set_sha256"
     )
+    if template_set_sha != AUTONOMOUS_TEMPLATE_SET_SHA256:
+        raise BridgitRankLayoutError("autonomous template set identity mismatch")
+    rank_set_sha = _required_sha(
+        verification.get("rank_set_sha256"), "verification rank_set_sha256"
+    )
+    if rank_set_sha != AUTONOMOUS_RANK_SET_SHA256:
+        raise BridgitRankLayoutError("autonomous rank set identity mismatch")
     if verification.get("deck_bijection") != "PASS":
         raise BridgitRankLayoutError("autonomous deck bijection proof did not pass")
     rank_predictions = _integer(
@@ -294,7 +318,10 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
         "method": "AUTONOMOUS_HASH_GEOMETRY_V1",
         "reference_frame_sha256": reference_sha,
         "manifest_sha256": manifest_sha,
+        "validation_sha256": validation_sha,
+        "integrity_sha256": integrity_sha,
         "template_set_sha256": template_set_sha,
+        "rank_set_sha256": rank_set_sha,
         "deck_bijection": "PASS",
         "rank_separation_predictions": 104,
     }

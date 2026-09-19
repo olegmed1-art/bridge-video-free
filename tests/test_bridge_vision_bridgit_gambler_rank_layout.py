@@ -79,6 +79,28 @@ def test_derived_reference_replaces_only_template_crops() -> None:
         assert not (derived[y : y + 16, x : x + 19] == 127).all()
 
 
+def test_derived_reference_resamples_pinned_variant_to_requested_card_size() -> None:
+    np = pytest.importorskip("numpy")
+    payload = _sprite_payload()
+    sha = hashlib.sha256(payload).hexdigest()
+    sprite = validate_sprite_bytes(payload, expected_sha256=sha, expected_variant=5)
+    reference = np.full((480, 640, 3), 127, dtype=np.uint8)
+    profile = _profile("a" * 64)
+
+    derived = successor.derive_original_asset_reference(
+        reference,
+        profile,
+        sprite,
+        target_card_width_px=95,
+        target_card_height_px=130,
+    )
+    assert tuple(derived.shape) == tuple(reference.shape)
+    assert any(
+        not (derived[y : y + 16, x : x + 19] == 127).all()
+        for _, x, y in profile.template_slots
+    )
+
+
 def test_successor_selects_sprite_by_registered_card_scale_and_reports_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -97,17 +119,22 @@ def test_successor_selects_sprite_by_registered_card_scale_and_reports_provenanc
     # authority gate is covered separately against the fixed original hashes.
     monkeypatch.setattr(
         successor,
-        "assert_approved_sprite_binding",
+        "assert_pinned_sprite_binding",
         lambda variant, supplied_sha: supplied_sha,
+    )
+    monkeypatch.setattr(
+        successor,
+        "variant_for_pinned_sprite_sha256",
+        lambda supplied_sha: 5,
     )
     monkeypatch.setattr(
         successor,
         "authority_provenance",
         lambda variant: {
             "reference_authority": REFERENCE_AUTHORITY_VERSION,
-            "human_approved_original": True,
-            "template_content_revalidation_required": False,
-            "approved_sprite_sha256": sha,
+            "identity_check": "FIXED_SHA256_ALLOWLIST",
+            "structural_decode": "52_CARD_GRID_REQUIRED",
+            "pinned_sprite_sha256": sha,
         },
     )
     monkeypatch.setattr(
@@ -142,10 +169,11 @@ def test_successor_selects_sprite_by_registered_card_scale_and_reports_provenanc
     assert result["template_source"]["kind"] == "GAMBLER_CLASSIC_ORIGINAL_ASSET"
     assert result["template_source"]["variant"] == 5
     assert result["template_source"]["sprite_sha256"] == sha
-    assert result["template_source"]["selection_basis"] == "VERIFIED_REGISTERED_CARD_SCALE"
+    assert result["template_source"]["selection_basis"] == "MEASURED_REGISTERED_CARD_SCALE"
     assert result["template_source"]["reference_authority"] == REFERENCE_AUTHORITY_VERSION
-    assert result["template_source"]["human_approved_original"] is True
-    assert result["template_source"]["template_content_revalidation_required"] is False
+    assert result["template_source"]["identity_check"] == "FIXED_SHA256_ALLOWLIST"
+    assert result["template_source"]["structural_decode"] == "52_CARD_GRID_REQUIRED"
+    assert result["template_source"]["pinned_sprite_sha256"] == sha
     assert result["template_source"]["runtime_validation_scope"] == "IDENTITY_AND_STRUCTURAL_INTEGRITY_ONLY"
     assert result["mouse_cursor_used"] is False
     assert result["hidden_hand_reconstruction_performed"] is False

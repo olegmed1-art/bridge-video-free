@@ -11,6 +11,11 @@ import pytest
 import bridge_vision.bridgit_rank_layout as bridgit_rank_layout
 from bridge_vision import BridgeVisionEngine
 from bridge_vision.bridgit_rank_layout import (
+    AUTONOMOUS_MANIFEST_SHA256,
+    AUTONOMOUS_VALIDATION_SHA256,
+    AUTONOMOUS_INTEGRITY_SHA256,
+    AUTONOMOUS_TEMPLATE_SET_SHA256,
+    AUTONOMOUS_RANK_SET_SHA256,
     CARDS,
     JOB_TYPE,
     PROFILE_SCHEMA,
@@ -52,13 +57,17 @@ def profile_raw(reference_sha: str = "a" * 64) -> dict:
     raw = {
         "schema": PROFILE_SCHEMA,
         "profile_id": "bridgit.desktop.test.v1",
-        "human_verified": True,
         "reference_frame_sha256": reference_sha,
         "verification": {
-            "method": "HUMAN_LABEL_REVIEW",
-            "reviewer_id": "bridge-school-reviewer",
-            "verified_at": "2026-09-05T20:00:00Z",
+            "method": "AUTONOMOUS_HASH_GEOMETRY_V1",
             "reference_frame_sha256": reference_sha,
+            "manifest_sha256": AUTONOMOUS_MANIFEST_SHA256,
+            "validation_sha256": AUTONOMOUS_VALIDATION_SHA256,
+            "integrity_sha256": AUTONOMOUS_INTEGRITY_SHA256,
+            "template_set_sha256": AUTONOMOUS_TEMPLATE_SET_SHA256,
+            "rank_set_sha256": AUTONOMOUS_RANK_SET_SHA256,
+            "deck_bijection": "PASS",
+            "rank_separation_predictions": 104,
         },
         "frame_size": {"width": 1000, "height": 720},
         "ordering": {"suits": list("HCDS"), "ranks": list("AKQJT98765432")},
@@ -91,7 +100,90 @@ def profile_raw(reference_sha: str = "a" * 64) -> dict:
     return raw
 
 
-def test_profile_is_human_reviewed_hash_bound_and_complete():
+def test_profile_is_autonomous_hash_bound_and_complete():
+    profile = parse_profile(profile_raw())
+    assert profile.profile_id == "bridgit.desktop.test.v1"
+    assert {card for card, _, _ in profile.template_slots} == CARDS
+    assert len(profile.template_slots) == 52
+
+
+def test_autonomous_profile_needs_no_human_fields_and_ignores_legacy_metadata():
+    raw = profile_raw()
+    assert "human_verified" not in raw
+    assert "reviewer_id" not in raw["verification"]
+    assert "verified_at" not in raw["verification"]
+    assert parse_profile(raw).profile_id == "bridgit.desktop.test.v1"
+
+    raw["human_verified"] = False
+    raw["verification"]["reviewer_id"] = "legacy-metadata-only"
+    raw["verification"]["verified_at"] = "not-a-runtime-gate"
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    assert parse_profile(raw).profile_id == "bridgit.desktop.test.v1"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("manifest_sha256", "0" * 64, "manifest identity mismatch"),
+        ("validation_sha256", "0" * 64, "validation identity mismatch"),
+        ("integrity_sha256", "0" * 64, "integrity identity mismatch"),
+        ("template_set_sha256", "0" * 64, "template set identity mismatch"),
+        ("rank_set_sha256", "0" * 64, "rank set identity mismatch"),
+        ("deck_bijection", "FAIL", "bijection proof did not pass"),
+        ("rank_separation_predictions", 103, "rank separation proof is incomplete"),
+    ],
+)
+def test_autonomous_profile_machine_evidence_fails_closed(field, value, message):
+    raw = profile_raw()
+    raw["verification"][field] = value
+    raw["profile_sha256"] = canonical_hash(
+        {key: item for key, item in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match=message):
+        parse_profile(raw)
+
+
+def test_profile_hash_drift_fails_closed():
+    raw = profile_raw()
+    raw["gates"]["min_peak_score"] = 0.73
+    with pytest.raises(BridgitRankLayoutError, match="profile hash mismatch"):
+        parse_profile(raw)
+
+
+def test_profile_structural_deck_bijection_fails_closed():
+    raw = profile_raw()
+    raw["template_slots"][1]["card"] = raw["template_slots"][0]["card"]
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="every card exactly once"):
+        parse_profile(raw)
+
+
+def test_profile_geometry_invariants_fail_closed():
+    raw = profile_raw()
+    raw["geometry"]["vertical_search"]["W"]["edge_x"] = 15
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="must match side anchors"):
+        parse_profile(raw)
+
+
+def test_profile_ordering_invariants_fail_closed():
+    raw = profile_raw()
+    raw["ordering"]["suits"] = list("SHDC")
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="suit order"):
+        parse_profile(raw)
+
+
+def test_existing_profile_validation_regressions():
+    """Keep the original broad profile boundary checks grouped below."""
     profile = parse_profile(profile_raw())
     assert profile.profile_id == "bridgit.desktop.test.v1"
     assert {card for card, _, _ in profile.template_slots} == CARDS
@@ -279,7 +371,7 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
     raw["profile_sha256"] = canonical_hash(
         {key: value for key, value in raw.items() if key != "profile_sha256"}
     )
-    with pytest.raises(BridgitRankLayoutError, match="verified suit order"):
+    with pytest.raises(BridgitRankLayoutError, match="canonical suit order"):
         parse_profile(raw)
 
     raw = profile_raw()

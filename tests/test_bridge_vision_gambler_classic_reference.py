@@ -16,6 +16,7 @@ from bridge_vision.gambler_classic_reference import (
     card_box,
     png_dimensions,
     select_variant_for_card_size,
+    variant_candidates_for_card_size,
     validate_sprite_bytes,
 )
 
@@ -85,6 +86,13 @@ def test_scale_selects_variant_5_for_verified_native_size() -> None:
 def test_scale_rejects_unmatched_card_size() -> None:
     with pytest.raises(GamblerClassicReferenceError, match="no classic variant"):
         select_variant_for_card_size(75, 160)
+
+
+def test_unmatched_scale_has_deterministic_fallback_candidates() -> None:
+    candidates = variant_candidates_for_card_size(75, 160)
+    assert len(candidates) == 8
+    assert {variant for _, variant in candidates} == set(range(1, 9))
+    assert [error for error, _ in candidates] == sorted(error for error, _ in candidates)
 
 
 def test_original_asset_rank_bank_is_complete_and_deterministic() -> None:
