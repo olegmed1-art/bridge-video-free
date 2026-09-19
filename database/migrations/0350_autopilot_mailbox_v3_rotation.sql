@@ -26,6 +26,18 @@ DO $patch$
 DECLARE proc regprocedure; original text; patched text;
 BEGIN
  FOREACH proc IN ARRAY ARRAY[
+  'autopilot.accept_role_dispatch_callback(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure,
+  'autopilot.accept_role_dispatch_delivery_proof(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
+ ] LOOP
+  original:=pg_get_functiondef(proc);
+  patched:=replace(original,'p_mailbox_pr NOT IN (1150,1637)','p_mailbox_pr NOT IN (1150,1637,1685)');
+  IF proc::text LIKE 'autopilot.accept_role_dispatch_callback(%' THEN
+   patched:=replace(patched,'''mailbox_pr'', 1637','''mailbox_pr'', 1685');
+  END IF;
+  IF patched=original OR position('1685' in patched)=0 THEN RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V3_INBOUND_SOURCE_DRIFT: %',proc; END IF;
+  EXECUTE patched;
+ END LOOP;
+ FOREACH proc IN ARRAY ARRAY[
   'autopilot.materialize_role_continuation(uuid,text)'::regprocedure,
   'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure,
   'autopilot.materialize_role_verification(uuid,text)'::regprocedure,
