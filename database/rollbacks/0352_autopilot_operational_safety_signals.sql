@@ -13,7 +13,7 @@ BEGIN
  SELECT function_definition INTO d FROM autopilot.migration_0352_function_backup WHERE function_key='claim_project_work_probe';
  IF d IS NULL THEN RAISE EXCEPTION 'AUTOPILOT_0352_ROLLBACK_PLANNER_BACKUP_MISSING'; END IF;
  EXECUTE d;
- SELECT function_definition INTO d FROM autopilot.migration_0352_function_backup WHERE function_key='blocker_remediation_action';
+ SELECT function_definition INTO d FROM autopilot.migration_0352_function_backup WHERE function_key='role_blocker_requires_owner';
  IF d IS NULL THEN RAISE EXCEPTION 'AUTOPILOT_0352_ROLLBACK_BLOCKER_BACKUP_MISSING'; END IF;
  EXECUTE d;
  SELECT function_definition INTO d FROM autopilot.migration_0352_function_backup WHERE function_key='enforce_role_dispatch_mailbox_capacity';
