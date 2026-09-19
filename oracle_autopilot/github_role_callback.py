@@ -22,8 +22,8 @@ import psycopg
 
 REPOSITORY = "olegmed1-art/bridge-video-free"
 REPOSITORY_ID = 1_330_085_090
-ACTIVE_MAILBOX_PR = 1637
-RETAINED_MAILBOX_PRS = frozenset({1150, ACTIVE_MAILBOX_PR})
+ACTIVE_MAILBOX_PR = 1685
+RETAINED_MAILBOX_PRS = frozenset({1150, 1637, ACTIVE_MAILBOX_PR})
 ACTOR_LOGIN = "olegmed1-art"
 ACTOR_ID = 315_099_490
 APP_SLUG = "chatgpt-codex-connector"
