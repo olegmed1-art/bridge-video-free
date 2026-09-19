@@ -85,12 +85,8 @@ DECLARE original text; patched text; anchor text;
 BEGIN
  SELECT function_definition INTO original FROM autopilot.migration_0352_function_backup WHERE function_key='claim_project_work_probe';
  anchor := 'WHEN NOT EXISTS ('||E'\n'||'                       SELECT 1 FROM autopilot.project_work_item'||E'\n'||'                        WHERE state NOT IN (''DONE'',''PAUSED'')'||E'\n'||'                   ) THEN ''PROJECT_DONE''';
- patched:=replace(original,anchor,anchor||E'\n'||'                   WHEN EXISTS ('||E'\n'||'                       SELECT 1 FROM autopilot.project_work_item WHERE state=''PAUSED'''||E'\n'||'                   ) THEN ''PROJECT_DONE_WITH_PAUSED_BACKLOG''');
- IF patched=original THEN
-   patched:=replace(original,
-     ') THEN ''PROJECT_DONE'''||E'\n'||'                   ELSE ''IDLE_NO_ELIGIBLE_TASK''',
-     ') THEN CASE WHEN EXISTS (SELECT 1 FROM autopilot.project_work_item WHERE state=''PAUSED'') THEN ''PROJECT_DONE_WITH_PAUSED_BACKLOG'' ELSE ''PROJECT_DONE'' END'||E'\n'||'                   ELSE ''IDLE_NO_ELIGIBLE_TASK''');
- END IF;
+ patched:=replace(original,anchor,
+   'WHEN NOT EXISTS ('||E'\n'||'                       SELECT 1 FROM autopilot.project_work_item'||E'\n'||'                        WHERE state NOT IN (''DONE'',''PAUSED'')'||E'\n'||'                   ) THEN CASE WHEN EXISTS (SELECT 1 FROM autopilot.project_work_item WHERE state=''PAUSED'') THEN ''PROJECT_DONE_WITH_PAUSED_BACKLOG'' ELSE ''PROJECT_DONE'' END');
  IF patched=original OR position('PROJECT_DONE_WITH_PAUSED_BACKLOG' in patched)=0 THEN RAISE EXCEPTION 'AUTOPILOT_0352_PLANNER_SOURCE_DRIFT'; END IF;
  EXECUTE patched;
 END $planner_patch$;
