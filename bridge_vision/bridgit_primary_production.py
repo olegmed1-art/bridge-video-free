@@ -10,7 +10,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, Callable
 
-from bridge_vision.bridgit_gold_profile import build_verified_gold_profile
+from bridge_vision.bridgit_gold_profile import build_autonomous_gold_profile
 from bridge_vision.bridgit_primary_video import recognize_video_primary
 from bridge_vision.gambler_classic_reference import MAX_SPRITE_BYTES
 from bridge_vision.gambler_reference_authority import APPROVED_GAMBLER_CLASSIC_SPRITE_SHA256
@@ -23,14 +23,14 @@ def _q(value: object) -> str:
     return str(value).replace("'", "\\'")
 
 
-def _prepare_gold(base, token: str, work: Path):
+def _prepare_profile_seed(base, token: str, work: Path):
     candidates = base.io.search(token, "trashed=false and name='bridgit_gold_v2.zip'")
     failures = []
     for index, item in enumerate(sorted(candidates, key=lambda x: str(x.get("id") or ""))[:16]):
         target = work / f"bridgit-gold-v2-{index}.zip"
         try:
             base.io.download(token, item["id"], target)
-            reference, profile_path, payload = build_verified_gold_profile(target, work / f"bridgit-gold-v2-{index}")
+            reference, profile_path, payload = build_autonomous_gold_profile(target, work / f"bridgit-gold-v2-{index}")
             return reference, profile_path, payload, item
         except Exception as exc:
             failures.append(type(exc).__name__)
@@ -82,7 +82,7 @@ def _prepare_assets(base, token: str, work: Path) -> Path:
 
 def _run_primary(base, token: str, video: Path, work: Path, job: str):
     try:
-        reference, profile_path, profile, gold = _prepare_gold(base, token, work)
+        reference, profile_path, profile, gold = _prepare_profile_seed(base, token, work)
         assets = _prepare_assets(base, token, work)
         result = recognize_video_primary(
             video, reference_frame=reference, profile_path=profile_path,
