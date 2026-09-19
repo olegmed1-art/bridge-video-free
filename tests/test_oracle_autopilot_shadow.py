@@ -38,6 +38,7 @@ from oracle_autopilot.worker import (
     load_project_head_broker_config,
     load_role_dispatch_broker_config,
     load_token_broker_config,
+    process_one,
     validate_neon_direct_dsn,
 )
 
@@ -216,6 +217,62 @@ def test_only_allowlisted_task_kinds_are_claimed():
     }
     with pytest.raises(AutopilotContractError, match="CAPABILITY_UNKNOWN"):
         claimed_task_from_row(row)
+
+
+def test_claim_contract_failure_is_failed_closed_without_worker_restart(
+    monkeypatch,
+):
+    row = {
+        "task_id": "00000000-0000-4000-8000-000000000002",
+        "goal_type": "CHATGPT_ROLE_DISPATCH_V1",
+        "goal_json": {
+            "repository": "olegmed1-art/bridge-video-free",
+            "mailbox_pr": 1637,
+            "role": "QA_AUDITOR",
+            "target_pr": 1150,
+            "expected_head_sha": "a" * 40,
+            "dispatch_epoch": 1,
+            "successor_task_key": None,
+            "successor_role": None,
+            "successor_target_pr": None,
+            "successor_expected_head_sha": None,
+        },
+        "current_step_key": "github.chatgpt.role.dispatch",
+        "step_cursor": 0,
+        "lease_epoch": 7,
+        "attempts": 1,
+        "max_attempts": 3,
+        "cost_cap_microusd": 0,
+        "cost_reserved_microusd": 0,
+    }
+    calls = []
+
+    def fake_rpc(_config, sql, params):
+        calls.append((sql, params))
+        if "claim_next_task" in sql:
+            return row
+        if "fail_task" in sql:
+            return {"resulting_state": "FAILED_CLOSED"}
+        raise AssertionError(f"unexpected RPC: {sql}")
+
+    monkeypatch.setattr("oracle_autopilot.worker.reconcile_stale", lambda _config: (0, 0))
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker.execute_task",
+        lambda *_args: pytest.fail("invalid task must not execute"),
+    )
+
+    config = WorkerConfig(dsn=DIRECT_DSN, worker_id="test-worker")
+    assert process_one(config) is True
+    assert len(calls) == 2
+    assert "claim_next_task" in calls[0][0]
+    assert calls[1][1] == (
+        row["task_id"],
+        "test-worker",
+        7,
+        "AUTOPILOT_ROLE_DISPATCH_MAILBOX_INVALID",
+        False,
+    )
 
 
 def test_wait_task_requires_exact_state_and_correlation():
