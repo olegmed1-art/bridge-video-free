@@ -1,0 +1,7 @@
+{
+  "request_id": "autopilot-stability-dual-service-20260919-01",
+  "action": "inspect_shadow_failure",
+  "target_host": "158.180.47.161",
+  "source_revision": "fda9422315ab19e218a4b9cbb59effeb7fc64659",
+  "no_instance_stop": true
+}

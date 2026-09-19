@@ -205,6 +205,18 @@ jobs:
           done < <(
             sed -nE 's/.*\]: ([A-Za-z_][A-Za-z0-9_.]{0,80}):.*/\1/p' <<<"$journal" | sort -u
           )
+          light_service=school-autopilot-production-light.service
+          printf 'AUTOPILOT_DIAG_PRODUCTION_LIGHT_ACTIVE=%s\n' "$(systemctl is-active "$light_service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_PRODUCTION_LIGHT_ENABLED=%s\n' "$(systemctl is-enabled "$light_service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_PRODUCTION_LIGHT_NRESTARTS=%s\n' "$(systemctl show -p NRestarts --value "$light_service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_PRODUCTION_LIGHT_RESULT=%s\n' "$(systemctl show -p Result --value "$light_service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_PRODUCTION_LIGHT_EXEC_MAIN_CODE=%s\n' "$(systemctl show -p ExecMainCode --value "$light_service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_PRODUCTION_LIGHT_EXEC_MAIN_STATUS=%s\n' "$(systemctl show -p ExecMainStatus --value "$light_service" 2>/dev/null || true)"
+          light_journal="$(journalctl -u "$light_service" --since '2 hours ago' --no-pager -n 300 2>/dev/null || true)"
+          light_count() { grep -Eic "$1" <<<"$light_journal" || true; }
+          printf 'AUTOPILOT_DIAG_PRODUCTION_LIGHT_TRACEBACK_COUNT=%s\n' "$(light_count 'Traceback|RuntimeError')"
+          printf 'AUTOPILOT_DIAG_PRODUCTION_LIGHT_CONTRACT_FAILURE_COUNT=%s\n' "$(light_count 'contract[_ -]?fail|FAILED_CLOSED|CONTRACT_[A-Z0-9_]+')"
+          printf 'AUTOPILOT_DIAG_PRODUCTION_LIGHT_DATABASE_COUNT=%s\n' "$(light_count 'OperationalError|authentication failed|connection refused|could not connect')"
           echo 'AUTOPILOT_DIAGNOSTIC_READ_ONLY=YES'
           echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
           printf 'AUTOPILOT_DIAG_PRECONDITION=%s\n' "$precondition"
