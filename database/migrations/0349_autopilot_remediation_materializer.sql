@@ -21,21 +21,21 @@ BEGIN
  ELSIF action NOT IN ('EVIDENCE_REMEDIATION','RECONCILE_TARGET') THEN
    RETURN NULL;
  END IF;
- mode:=CASE action WHEN 'EVIDENCE_REMEDIATION' THEN 'EVIDENCE' ELSE 'RECONCILE' END;
+ mode:='REPAIR';
  SELECT created.task_id INTO followup_id
  FROM autopilot.create_chatgpt_role_followup_task(
-   'role-remediation:'||lower(mode)||':'||origin_row.task_id::text,
+   'role-remediation:'||lower(action)||':'||origin_row.task_id::text,
    jsonb_build_object(
     'repository',origin_row.goal_json->>'repository','mailbox_pr',1637,
     'role',origin_row.goal_json->>'role','target_pr',(origin_row.goal_json->>'target_pr')::integer,
     'expected_head_sha',origin_row.goal_json->>'expected_head_sha',
     'dispatch_epoch',(origin_row.goal_json->>'dispatch_epoch')::bigint+1,
-    'mode',mode,'origin_task_id',origin_row.task_id::text,'prior_task_id',origin_row.task_id::text,
-    'blocked_result_code',p_result_code,'blocked_summary',p_summary,'repository_mutation',false
+    'mode',mode,'repair_attempt',1,'origin_task_id',origin_row.task_id::text,'prior_task_id',origin_row.task_id::text,
+    'blocked_result_code',p_result_code,'blocked_summary',p_summary
    ),origin_row.priority,'AUTOPILOT_REMEDIATION_CONTROLLER','AUTOPILOT_REMEDIATION'
  ) created;
  INSERT INTO autopilot.role_dispatch_followup(parent_task_id,followup_kind,followup_task_id,origin_task_id,trigger_result_code)
- VALUES(origin_row.task_id,mode,followup_id,origin_row.task_id,p_result_code)
+ VALUES(origin_row.task_id,action,followup_id,origin_row.task_id,p_result_code)
  ON CONFLICT(parent_task_id,followup_kind) DO NOTHING;
  RETURN followup_id;
 END $f$;
