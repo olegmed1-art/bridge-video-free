@@ -4,6 +4,7 @@ BEGIN;
 DO $t$
 DECLARE
  wid uuid;
+ wid2 uuid;
  action text;
  candidate record;
  token1 text:=repeat('a',64);
@@ -92,17 +93,17 @@ BEGIN
    'test-0353-owner-gated-role','SERVER',1106,0,'PAUSED','sql-test','SQL_TEST',
    'REPOSITORY_AUDIT','0353 owner-gated role preservation','SERVER_EVIDENCE_INCOMPLETE',1685
  )
- RETURNING work_item_id INTO wid;
+ RETURNING work_item_id INTO wid2;
 
  action:=autopilot.reconcile_paused_project_work(
-   wid,repeat('c',64),NULL,'SERVER_EVIDENCE_INCOMPLETE','Fresh evidence must not bypass owner-gated SERVER role.'
+   wid2,repeat('c',64),NULL,'SERVER_EVIDENCE_INCOMPLETE','Fresh evidence must not bypass owner-gated SERVER role.'
  );
  IF action<>'OWNER_HOLD' THEN
    RAISE EXCEPTION 'AUTOPILOT_0353_OWNER_GATED_ROLE_BYPASSED';
  END IF;
  IF NOT EXISTS(
    SELECT 1 FROM autopilot.project_work_item
-   WHERE work_item_id=wid
+   WHERE work_item_id=wid2
      AND state='PAUSED'
      AND hold_reason='OWNER_HOLD'
  ) THEN
