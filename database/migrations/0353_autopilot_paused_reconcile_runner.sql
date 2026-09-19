@@ -70,7 +70,7 @@ SET search_path TO 'pg_catalog','autopilot'
 AS $f$
 DECLARE
  w autopilot.project_work_item;
- action text;
+ decision_action text;
  blocker_action text;
  fp text;
  effective_code text;
@@ -113,7 +113,7 @@ BEGIN
           result_summary=left(COALESCE(p_summary,w.result_summary,'Owner decision required by new evidence.'),160),
           updated_at=now()
     WHERE work_item_id=w.work_item_id;
-   action:='OWNER_HOLD';
+   decision_action:='OWNER_HOLD';
 
  ELSIF p_target_disposition IN ('MERGED','CLOSED','SUPERSEDED','SUBSUMED_BY_MAIN') THEN
    UPDATE autopilot.project_work_item
@@ -127,14 +127,14 @@ BEGIN
           progress_token=p_evidence_token,
           blocker_fingerprint=fp
     WHERE work_item_id=w.work_item_id;
-   action:='CLOSE_SUPERSEDED';
+   decision_action:='CLOSE_SUPERSEDED';
 
  ELSIF blocker_action IN (
    'RECONCILE_TARGET','REPOSITORY_REPAIR','EVIDENCE_REMEDIATION','TRANSPORT_REMEDIATION'
  ) THEN
    IF w.progress_token IS NOT DISTINCT FROM p_evidence_token
       OR w.blocker_fingerprint IS NOT DISTINCT FROM fp THEN
-     action:='NO_CHANGE';
+     decision_action:='NO_CHANGE';
    ELSE
      UPDATE autopilot.project_work_item
         SET state='READY',
@@ -157,19 +157,19 @@ BEGIN
             last_decision_at=now()
       WHERE singleton;
      PERFORM pg_notify('autopilot_ready','paused-evidence-remediation');
-     action:='REMEDIATE';
+     decision_action:='REMEDIATE';
    END IF;
 
  ELSE
-   action:='NO_CHANGE';
+   decision_action:='NO_CHANGE';
  END IF;
 
  INSERT INTO autopilot.paused_work_reconcile_receipt(
    work_item_id,evidence_token,action,blocker_fingerprint,followup_task_id,result_code
  )
- VALUES(w.work_item_id,p_evidence_token,action,fp,NULL,effective_code);
+ VALUES(w.work_item_id,p_evidence_token,decision_action,fp,NULL,effective_code);
 
- RETURN action;
+ RETURN decision_action;
 END $f$;
 
 REVOKE ALL ON FUNCTION autopilot.reconcile_paused_project_work(uuid,text,text,text,text) FROM PUBLIC;
