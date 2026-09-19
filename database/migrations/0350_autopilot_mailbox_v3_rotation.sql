@@ -14,7 +14,7 @@ END $pre$;
 
 UPDATE autopilot.role_dispatch_mailbox_registry SET lifecycle='RETAINED',retained_at=clock_timestamp() WHERE mailbox_pr=1637 AND lifecycle='ACTIVE';
 INSERT INTO autopilot.role_dispatch_mailbox_registry(mailbox_pr,expected_head_sha,lifecycle,max_dispatches,activated_at,retained_at)
-VALUES(1685,'0000000000000000000000000000000000000000','ACTIVE',40,clock_timestamp(),NULL);
+VALUES(1685,'7bfae72289f12ca5c28ce6a3754ccab5383b7f75','ACTIVE',40,clock_timestamp(),NULL);
 
 ALTER TABLE autopilot.project_work_item DROP CONSTRAINT project_work_item_mailbox_pr_check;
 ALTER TABLE autopilot.project_work_item ADD CONSTRAINT project_work_item_mailbox_pr_check CHECK(mailbox_pr IN (1150,1637,1685));
