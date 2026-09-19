@@ -24,5 +24,14 @@ BEGIN
  IF position('mailbox_rotation_signal' in pg_get_functiondef('autopilot.enforce_role_dispatch_mailbox_capacity()'::regprocedure))=0 THEN
    RAISE EXCEPTION 'AUTOPILOT_0352_PRE_ROTATION_SIGNAL_MISSING';
  END IF;
+ IF to_regclass('public.autopilot_operational_health_signal') IS NULL THEN
+   RAISE EXCEPTION 'AUTOPILOT_0352_HEALTH_VIEW_MISSING';
+ END IF;
+ IF NOT has_table_privilege('bridge_school_health','public.autopilot_operational_health_signal','SELECT') THEN
+   RAISE EXCEPTION 'AUTOPILOT_0352_HEALTH_VIEW_PRIVILEGE_MISSING';
+ END IF;
+ IF (SELECT count(*) FROM public.autopilot_operational_health_signal WHERE signal_key IN ('autopilot_planner_backlog','autopilot_mailbox_capacity','autopilot_mailbox_e2e'))<>3 THEN
+   RAISE EXCEPTION 'AUTOPILOT_0352_HEALTH_SIGNALS_INVALID';
+ END IF;
 END $t$;
 ROLLBACK;
