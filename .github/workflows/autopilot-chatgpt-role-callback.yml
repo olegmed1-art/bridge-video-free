@@ -14,7 +14,7 @@ concurrency:
 jobs:
   ingest:
     if: >-
-      contains(fromJSON('[1150,1637]'), github.event.issue.number) &&
+      contains(fromJSON('[1150,1637,1685]'), github.event.issue.number) &&
       github.event.repository.id == 1330085090 &&
       github.event.comment.user.id == 315099490 &&
       github.event.comment.author_association == 'OWNER' &&
