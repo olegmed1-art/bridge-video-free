@@ -5,6 +5,10 @@ LOCK TABLE autopilot.role_dispatch_mailbox_registry IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE autopilot.role_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE autopilot.task IN SHARE ROW EXCLUSIVE MODE;
 
+UPDATE autopilot.project_planner_state
+SET enabled=false
+WHERE singleton;
+
 DO $pre$
 BEGIN
  IF NOT EXISTS (
@@ -12,9 +16,6 @@ BEGIN
    WHERE migration_key='0353_autopilot_paused_reconcile_runner'
  ) THEN
    RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V3_FINAL_HEAD_REQUIRES_0353';
- END IF;
- IF (SELECT enabled FROM autopilot.project_planner_state WHERE singleton) THEN
-   RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V3_FINAL_HEAD_REQUIRES_PLANNER_PAUSED';
  END IF;
  IF NOT EXISTS (
    SELECT 1 FROM autopilot.role_dispatch_mailbox_registry
