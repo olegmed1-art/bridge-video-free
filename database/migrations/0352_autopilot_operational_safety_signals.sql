@@ -44,6 +44,7 @@ AS $f$
  GROUP BY r.mailbox_pr,r.max_dispatches
 $f$;
 REVOKE ALL ON FUNCTION autopilot.mailbox_rotation_readiness() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION autopilot.mailbox_rotation_readiness() TO bridge_school_worker;
 
 CREATE OR REPLACE FUNCTION autopilot.mailbox_e2e_acceptance()
 RETURNS TABLE(mailbox_pr integer,dispatch_count integer,published_count integer,callback_count integer,retained_evidence_count integer,state text,first_dispatch_at timestamptz,last_callback_at timestamptz)
