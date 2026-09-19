@@ -13,7 +13,7 @@ CREATE TABLE autopilot.migration_0352_function_backup (
 INSERT INTO autopilot.migration_0352_function_backup(function_key,function_definition)
 VALUES
  ('claim_project_work_probe',pg_get_functiondef('autopilot.claim_project_work_probe(text,integer)'::regprocedure)),
- ('blocker_remediation_action',pg_get_functiondef('autopilot.blocker_remediation_action(text)'::regprocedure)),
+ ('role_blocker_requires_owner',pg_get_functiondef('autopilot.role_blocker_requires_owner(text)'::regprocedure)),
  ('enforce_role_dispatch_mailbox_capacity',pg_get_functiondef('autopilot.enforce_role_dispatch_mailbox_capacity()'::regprocedure));
 
 CREATE TABLE autopilot.mailbox_rotation_signal (
@@ -148,10 +148,10 @@ END $planner_patch$;
 DO $blocker_patch$
 DECLARE original text; patched text;
 BEGIN
- SELECT function_definition INTO original FROM autopilot.migration_0352_function_backup WHERE function_key='blocker_remediation_action';
+ SELECT function_definition INTO original FROM autopilot.migration_0352_function_backup WHERE function_key='role_blocker_requires_owner';
  patched:=replace(original,
-   'WHEN autopilot.role_blocker_requires_owner(p_result_code) THEN ''OWNER_HOLD''',
-   'WHEN autopilot.role_blocker_requires_owner(p_result_code) THEN ''OWNER_HOLD'' WHEN p_result_code=''AUTOPILOT_UNCLASSIFIED_FAILURE'' THEN ''OWNER_HOLD''');
+   'OR p_result_code ~ ''(^|_)(ACCOUNT|CREDENTIAL|SECRET|SPEND|PAYMENT|BILLING|CANON_DECISION)(_|$)'';',
+   'OR p_result_code ~ ''(^|_)(ACCOUNT|CREDENTIAL|SECRET|SPEND|PAYMENT|BILLING|CANON_DECISION)(_|$)'' OR p_result_code=''AUTOPILOT_UNCLASSIFIED_FAILURE'';');
  IF patched=original OR position('AUTOPILOT_UNCLASSIFIED_FAILURE' in patched)=0 THEN RAISE EXCEPTION 'AUTOPILOT_0352_BLOCKER_SOURCE_DRIFT'; END IF;
  EXECUTE patched;
 END $blocker_patch$;
