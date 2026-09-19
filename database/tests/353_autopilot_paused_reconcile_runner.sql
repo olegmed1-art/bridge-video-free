@@ -5,7 +5,7 @@ DO $t$
 DECLARE
  wid uuid;
  wid2 uuid;
- action text;
+ result_action text;
  candidate record;
  token1 text:=repeat('a',64);
  token2 text:=repeat('b',64);
@@ -31,10 +31,10 @@ BEGIN
  )
  RETURNING work_item_id INTO wid;
 
- action:=autopilot.reconcile_paused_project_work(
+ result_action:=autopilot.reconcile_paused_project_work(
    wid,token1,NULL,'BOUNDED_DEFECT','Fresh repository evidence permits one bounded attempt.'
  );
- IF action<>'REMEDIATE' THEN
+ IF result_action<>'REMEDIATE' THEN
    RAISE EXCEPTION 'AUTOPILOT_0353_REMEDIATE_ACTION_INVALID';
  END IF;
  IF NOT EXISTS(
@@ -48,9 +48,9 @@ BEGIN
    RAISE EXCEPTION 'AUTOPILOT_0353_REMEDIATE_STATE_INVALID';
  END IF;
  IF NOT EXISTS(
-   SELECT 1 FROM autopilot.paused_work_reconcile_receipt
-   WHERE work_item_id=wid AND evidence_token=token1
-     AND action='REMEDIATE' AND followup_task_id IS NULL
+   SELECT 1 FROM autopilot.paused_work_reconcile_receipt r
+   WHERE r.work_item_id=wid AND r.evidence_token=token1
+     AND r.action='REMEDIATE' AND r.followup_task_id IS NULL
  ) THEN
    RAISE EXCEPTION 'AUTOPILOT_0353_REMEDIATE_RECEIPT_INVALID';
  END IF;
@@ -60,10 +60,10 @@ BEGIN
      completed_at=NULL,updated_at=now()
  WHERE work_item_id=wid;
 
- action:=autopilot.reconcile_paused_project_work(
+ result_action:=autopilot.reconcile_paused_project_work(
    wid,token2,NULL,'AUTOPILOT_UNCLASSIFIED_FAILURE','Unclassified failure requires owner review.'
  );
- IF action<>'OWNER_HOLD' THEN
+ IF result_action<>'OWNER_HOLD' THEN
    RAISE EXCEPTION 'AUTOPILOT_0353_OWNER_HOLD_ACTION_INVALID';
  END IF;
  IF NOT EXISTS(
@@ -80,8 +80,8 @@ BEGIN
  )<>'NO_CHANGE' THEN
    RAISE EXCEPTION 'AUTOPILOT_0353_REPLAY_INVALID';
  END IF;
- IF (SELECT count(*) FROM autopilot.paused_work_reconcile_receipt
-     WHERE work_item_id=wid AND evidence_token=token2)<>1 THEN
+ IF (SELECT count(*) FROM autopilot.paused_work_reconcile_receipt r
+     WHERE r.work_item_id=wid AND r.evidence_token=token2)<>1 THEN
    RAISE EXCEPTION 'AUTOPILOT_0353_REPLAY_RECEIPT_INVALID';
  END IF;
 
@@ -95,10 +95,10 @@ BEGIN
  )
  RETURNING work_item_id INTO wid2;
 
- action:=autopilot.reconcile_paused_project_work(
+ result_action:=autopilot.reconcile_paused_project_work(
    wid2,repeat('c',64),NULL,'SERVER_EVIDENCE_INCOMPLETE','Fresh evidence must not bypass owner-gated SERVER role.'
  );
- IF action<>'OWNER_HOLD' THEN
+ IF result_action<>'OWNER_HOLD' THEN
    RAISE EXCEPTION 'AUTOPILOT_0353_OWNER_GATED_ROLE_BYPASSED';
  END IF;
  IF NOT EXISTS(
