@@ -48,35 +48,3 @@ BEGIN
 END $patch$;
 INSERT INTO public.schema_migration(migration_key) VALUES('0350_autopilot_mailbox_v3_rotation');
 COMMIT;
-mailbox_pr',1637$lit$,$lit
-  IF patched=original THEN RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V3_MATERIALIZER_SOURCE_DRIFT: %',proc; END IF; EXECUTE patched;
- END LOOP;
- FOREACH proc IN ARRAY ARRAY[
-  'autopilot.adopt_project_work_task(text,uuid,text,text)'::regprocedure,
-  'autopilot.create_chatgpt_role_dispatch_task(text,jsonb,integer,text,text)'::regprocedure,
-  'autopilot.create_chatgpt_role_followup_task(text,jsonb,integer,text,text)'::regprocedure
- ] LOOP
-  original:=pg_get_functiondef(proc); patched:=replace(original,$$task_row.goal_json->>'mailbox_pr' <> '1637'$$,$$task_row.goal_json->>'mailbox_pr' <> '1685'$$);
-  patched:=replace(patched,$$p_goal_json->'mailbox_pr' IS DISTINCT FROM '1637'::jsonb$$,$$p_goal_json->'mailbox_pr' IS DISTINCT FROM '1685'::jsonb$$);
-  patched:=replace(patched,$$'mailbox_pr', 1637$$,$$'mailbox_pr', 1685$$);
-  IF patched=original THEN RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V3_OUTBOUND_SOURCE_DRIFT: %',proc; END IF; EXECUTE patched;
- END LOOP;
-END $patch$;
-INSERT INTO public.schema_migration(migration_key) VALUES('0350_autopilot_mailbox_v3_rotation');
-COMMIT;
-mailbox_pr',1685$lit$);
-  IF patched=original THEN RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V3_MATERIALIZER_SOURCE_DRIFT: %',proc; END IF; EXECUTE patched;
- END LOOP;
- FOREACH proc IN ARRAY ARRAY[
-  'autopilot.adopt_project_work_task(text,uuid,text,text)'::regprocedure,
-  'autopilot.create_chatgpt_role_dispatch_task(text,jsonb,integer,text,text)'::regprocedure,
-  'autopilot.create_chatgpt_role_followup_task(text,jsonb,integer,text,text)'::regprocedure
- ] LOOP
-  original:=pg_get_functiondef(proc); patched:=replace(original,$$task_row.goal_json->>'mailbox_pr' <> '1637'$$,$$task_row.goal_json->>'mailbox_pr' <> '1685'$$);
-  patched:=replace(patched,$$p_goal_json->'mailbox_pr' IS DISTINCT FROM '1637'::jsonb$$,$$p_goal_json->'mailbox_pr' IS DISTINCT FROM '1685'::jsonb$$);
-  patched:=replace(patched,$$'mailbox_pr', 1637$$,$$'mailbox_pr', 1685$$);
-  IF patched=original THEN RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V3_OUTBOUND_SOURCE_DRIFT: %',proc; END IF; EXECUTE patched;
- END LOOP;
-END $patch$;
-INSERT INTO public.schema_migration(migration_key) VALUES('0350_autopilot_mailbox_v3_rotation');
-COMMIT;
