@@ -84,6 +84,31 @@ BEGIN
    RAISE EXCEPTION 'AUTOPILOT_0353_REPLAY_RECEIPT_INVALID';
  END IF;
 
+
+ INSERT INTO autopilot.project_work_item(
+   work_key,role,target_pr,priority,state,created_by,source,
+   task_kind,objective,result_code,mailbox_pr
+ ) VALUES(
+   'test-0353-owner-gated-role','SERVER',1106,0,'PAUSED','sql-test','SQL_TEST',
+   'REPOSITORY_AUDIT','0353 owner-gated role preservation','SERVER_EVIDENCE_INCOMPLETE',1685
+ )
+ RETURNING work_item_id INTO wid;
+
+ action:=autopilot.reconcile_paused_project_work(
+   wid,repeat('c',64),NULL,'SERVER_EVIDENCE_INCOMPLETE','Fresh evidence must not bypass owner-gated SERVER role.'
+ );
+ IF action<>'OWNER_HOLD' THEN
+   RAISE EXCEPTION 'AUTOPILOT_0353_OWNER_GATED_ROLE_BYPASSED';
+ END IF;
+ IF NOT EXISTS(
+   SELECT 1 FROM autopilot.project_work_item
+   WHERE work_item_id=wid
+     AND state='PAUSED'
+     AND hold_reason='OWNER_HOLD'
+ ) THEN
+   RAISE EXCEPTION 'AUTOPILOT_0353_OWNER_GATED_ROLE_STATE_INVALID';
+ END IF;
+
  SELECT * INTO candidate
  FROM autopilot.paused_reconcile_candidates(50)
  WHERE work_item_id=wid;
