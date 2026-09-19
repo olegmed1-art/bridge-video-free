@@ -30,6 +30,7 @@ RETURNS TABLE(
  progress_token text,
  hold_reason text,
  blocker_action text,
+ owner_gated boolean,
  provider_state text,
  provider_last_success_at timestamptz,
  updated_at timestamptz
@@ -46,6 +47,10 @@ BEGIN
  SELECT w.work_item_id,w.work_key,w.role,w.task_kind,w.target_pr,w.result_code,
         w.last_observed_head_sha,w.progress_token,w.hold_reason,
         autopilot.blocker_remediation_action(w.result_code),
+        EXISTS (
+          SELECT 1 FROM autopilot.role_registry rr
+          WHERE rr.role_id=w.role AND rr.execution_scope='OWNER_GATED'
+        ),
         (SELECT pcs.state FROM autopilot.provider_circuit_state pcs WHERE pcs.provider_id='CODEX'),
         (SELECT pcs.last_success_at FROM autopilot.provider_circuit_state pcs WHERE pcs.provider_id='CODEX'),
         w.updated_at
