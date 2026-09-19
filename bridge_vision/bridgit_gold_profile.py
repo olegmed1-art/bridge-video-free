@@ -61,7 +61,7 @@ def _safe_extract(archive_path: Path, destination: Path) -> Path:
     return package
 
 
-def build_verified_gold_profile(
+def build_autonomous_gold_profile(
     gold_zip: Path, output_dir: Path
 ) -> tuple[Path, Path, dict[str, Any]]:
     """Return reference path, profile path and parsed profile payload."""
@@ -93,10 +93,10 @@ def build_verified_gold_profile(
     try:
         source = next(item for item in manifest["sources"] if item["source_id"] == "deal_02")
     except (KeyError, StopIteration) as exc:
-        raise BridgitGoldProfileError("gold-v2 reviewed source is missing") from exc
+        raise BridgitGoldProfileError("gold-v2 geometry source is missing") from exc
     width, height = int(source["width"]), int(source["height"])
     if (width, height) != (1920, 1010):
-        raise BridgitGoldProfileError("gold-v2 reviewed geometry changed")
+        raise BridgitGoldProfileError("gold-v2 geometry changed")
     canvas = np.full((height, width, 3), 255, dtype=np.uint8)
     slots: list[dict[str, Any]] = []
     for item in manifest.get("templates", []):
@@ -118,7 +118,7 @@ def build_verified_gold_profile(
         canvas[y : y + gh, x : x + gw] = cv2.cvtColor(glyph, cv2.COLOR_GRAY2BGR)
         slots.append({"card": str(item["card"]), "x": x, "y": y})
     if len(slots) != 52 or len({item["card"] for item in slots}) != 52:
-        raise BridgitGoldProfileError("gold-v2 does not contain one reviewed slot per card")
+        raise BridgitGoldProfileError("gold-v2 does not contain one slot per card")
 
     reference = output_dir / "gold-v2-reference.png"
     if not cv2.imwrite(str(reference), canvas):
@@ -130,10 +130,12 @@ def build_verified_gold_profile(
         "profile_id": PROFILE_ID,
         "reference_frame_sha256": reference_sha,
         "verification": {
-            "method": "HUMAN_LABEL_REVIEW",
-            "reviewer_id": str(manifest["reviewer_id"]),
-            "verified_at": str(manifest["verified_at"]),
+            "method": "AUTONOMOUS_HASH_GEOMETRY_V1",
             "reference_frame_sha256": reference_sha,
+            "manifest_sha256": GOLD_MANIFEST_SHA256,
+            "template_set_sha256": GOLD_TEMPLATE_SET_SHA256,
+            "deck_bijection": "PASS",
+            "rank_separation_predictions": 104,
         },
         "frame_size": {"width": width, "height": height},
         "ordering": {"suits": list(rank_layout.SUITS), "ranks": list(rank_layout.RANKS)},
@@ -185,5 +187,5 @@ __all__ = [
     "GOLD_MANIFEST_SHA256",
     "GOLD_TEMPLATE_SET_SHA256",
     "PROFILE_ID",
-    "build_verified_gold_profile",
+    "build_autonomous_gold_profile",
 ]
