@@ -159,7 +159,7 @@ BEGIN
     SELECT * INTO result
       FROM autopilot.accept_role_dispatch_codex_terminal(
         'github-codex-result:345-'||run_suffix,repeat('e',64),true,
-        'olegmed1-art/bridge-video-free',1637,
+        'olegmed1-art/bridge-video-free',active_mailbox,
         'chatgpt-codex-connector[bot]',199175422,'NONE',
         'chatgpt-codex-connector',1144995,terminal
       );
@@ -181,7 +181,7 @@ BEGIN
     SELECT * INTO result
       FROM autopilot.accept_role_dispatch_codex_terminal(
         'github-codex-result:345-'||run_suffix,repeat('e',64),true,
-        'olegmed1-art/bridge-video-free',1637,
+        'olegmed1-art/bridge-video-free',active_mailbox,
         'chatgpt-codex-connector[bot]',199175422,'NONE',
         'chatgpt-codex-connector',1144995,terminal
       );
