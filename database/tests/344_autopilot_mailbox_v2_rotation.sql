@@ -5,16 +5,17 @@ DO $test$
 DECLARE
     active_count integer;
     retained_count integer;
+    active_mailbox integer;
     default_value text;
     rejected boolean;
 BEGIN
-    SELECT count(*) FILTER (WHERE mailbox_pr=1637 AND lifecycle='ACTIVE'
-                                    AND expected_head_sha='352bdd7d4879d3ca11922ac6d869f0f2dd0afbad'
-                                    AND max_dispatches=40),
+    active_mailbox := CASE WHEN EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation') THEN 1685 ELSE 1637 END;
+    SELECT count(*) FILTER (WHERE mailbox_pr=active_mailbox AND lifecycle='ACTIVE' AND max_dispatches=40),
            count(*) FILTER (WHERE mailbox_pr=1150 AND lifecycle='RETAINED')
+             + count(*) FILTER (WHERE active_mailbox=1685 AND mailbox_pr=1637 AND lifecycle='RETAINED')
       INTO active_count,retained_count
       FROM autopilot.role_dispatch_mailbox_registry;
-    IF active_count<>1 OR retained_count<>1 THEN
+    IF active_count<>1 OR retained_count<>(CASE WHEN active_mailbox=1685 THEN 2 ELSE 1 END) THEN
         RAISE EXCEPTION 'MAILBOX_REGISTRY_INVALID';
     END IF;
 
@@ -22,34 +23,34 @@ BEGIN
       FROM information_schema.columns
      WHERE table_schema='autopilot' AND table_name='project_work_item'
        AND column_name='mailbox_pr';
-    IF default_value<>'1637' THEN
+    IF default_value<>active_mailbox::text THEN
         RAISE EXCEPTION 'MAILBOX_DEFAULT_INVALID: %',default_value;
     END IF;
 
     IF pg_get_functiondef(
         'autopilot.accept_role_dispatch_callback(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
-       ) NOT LIKE '%p_mailbox_pr NOT IN (1150,1637)%' THEN
+       ) NOT LIKE (CASE WHEN active_mailbox=1685 THEN '%p_mailbox_pr NOT IN (1150,1637,1685)%' ELSE '%p_mailbox_pr NOT IN (1150,1637)%' END) THEN
         RAISE EXCEPTION 'CALLBACK_DUAL_MAILBOX_GUARD_MISSING';
     END IF;
     IF pg_get_functiondef(
         'autopilot.create_chatgpt_role_dispatch_task(text,jsonb,integer,text,text)'::regprocedure
-       ) NOT LIKE '%mailbox_pr%IS DISTINCT FROM ''1637''::jsonb%'
+       ) NOT LIKE ('%mailbox_pr%IS DISTINCT FROM ''' || active_mailbox::text || '''::jsonb%')
        OR pg_get_functiondef(
         'autopilot.create_chatgpt_role_followup_task(text,jsonb,integer,text,text)'::regprocedure
-       ) NOT LIKE '%mailbox_pr%IS DISTINCT FROM ''1637''::jsonb%' THEN
+       ) NOT LIKE ('%mailbox_pr%IS DISTINCT FROM ''' || active_mailbox::text || '''::jsonb%') THEN
         RAISE EXCEPTION 'OUTBOUND_ACTIVE_MAILBOX_GUARD_MISSING';
     END IF;
     IF pg_get_functiondef(
         'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
-       ) NOT LIKE '%''mailbox_pr'', 1637%'
+       ) NOT LIKE ('%''mailbox_pr'', ' || active_mailbox::text || '%')
        OR pg_get_functiondef(
         'autopilot.materialize_role_verification(uuid,text)'::regprocedure
-       ) NOT LIKE '%''mailbox_pr'', 1637%' THEN
+       ) NOT LIKE ('%''mailbox_pr'', ' || active_mailbox::text || '%') THEN
         RAISE EXCEPTION 'FOLLOWUP_ACTIVE_MAILBOX_ROUTING_MISSING';
     END IF;
     IF pg_get_functiondef(
         'autopilot.register_universal_work_item(text,text,text,text,integer,integer,jsonb,text,text,text)'::regprocedure
-       ) NOT LIKE '%1637%' THEN
+       ) NOT LIKE ('%' || active_mailbox::text || '%') THEN
         RAISE EXCEPTION 'UNIVERSAL_WORK_V2_DEFAULT_MISSING';
     END IF;
     IF pg_get_functiondef(

@@ -159,6 +159,11 @@ jobs:
       - name: Prove clean rollback, 0337 preservation, reapply, and retest
         run: |
           set -euo pipefail
+          had_mailbox_v3="$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation';")"
+          if [ "$had_mailbox_v3" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0350_autopilot_mailbox_v3_rotation.sql
+          fi
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
             "UPDATE autopilot.project_planner_state SET enabled=false WHERE singleton;"
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0346_autopilot_canary_acceptance_guard.sql
@@ -177,6 +182,9 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0340_autopilot_publication_permit_issuer.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0345_autopilot_mailbox_v2_codex_inbound.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0346_autopilot_canary_acceptance_guard.sql
+          if [ "$had_mailbox_v3" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0350_autopilot_mailbox_v3_rotation.sql
+          fi
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
             "UPDATE autopilot.project_planner_state SET enabled=true WHERE singleton;"
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/338_autopilot_bounded_publication_permit.sql

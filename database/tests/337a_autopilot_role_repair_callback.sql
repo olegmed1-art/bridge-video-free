@@ -115,6 +115,17 @@ INSERT INTO autopilot.migration_0348_function_backup(function_key,function_defin
 SELECT 'materialize_role_repair',pre0348_definition FROM repair_lifecycle_snapshot;
 \ir fixtures/0348_autopilot_blocker_remediation_reapply.sql
 \endif
+DO $restore_active_mailbox$
+DECLARE original text; patched text; active_mailbox text;
+BEGIN
+ IF EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation') THEN
+  SELECT mailbox_pr::text INTO STRICT active_mailbox FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE';
+  original:=pg_get_functiondef('autopilot.materialize_role_repair(uuid,text,text)'::regprocedure);
+  patched:=replace(original,'''mailbox_pr'', 1637','''mailbox_pr'', '||active_mailbox);
+  IF patched=original THEN RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_MAILBOX_RESTORE_DRIFT'; END IF;
+  EXECUTE patched;
+ END IF;
+END $restore_active_mailbox$;
 DO $reapplied$
 DECLARE
  repair_body_ok boolean;
@@ -138,17 +149,27 @@ BEGIN
      WHERE p.oid='autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure;
     IF strpos(pg_get_functiondef(
           'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
-        ),'BLOCKER_REMEDIATION_ADMISSION_V1')=0
-       OR strpos(pg_get_functiondef(
+        ),'BLOCKER_REMEDIATION_ADMISSION_V1')=0 THEN
+      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_BLOCKER_MARKER_DRIFT';
+    ELSIF strpos(pg_get_functiondef(
           'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
-        ),'REPAIR_ADMISSION_V1')=0
-       OR strpos(pg_get_functiondef(
+        ),'REPAIR_ADMISSION_V1')=0 THEN
+      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_MARKER_DRIFT';
+    ELSIF strpos(pg_get_functiondef(
           'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
-        ),'REPAIR_ADMISSION_PROVIDER_TERMINAL_V1')=0
-       OR strpos(pg_get_functiondef(
+        ),'REPAIR_ADMISSION_PROVIDER_TERMINAL_V1')=0 THEN
+      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_PROVIDER_MARKER_DRIFT';
+    ELSIF EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation')
+          AND (SELECT count(*) FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE')<>1 THEN
+      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_ACTIVE_MAILBOX_COUNT_DRIFT';
+    ELSIF strpos(pg_get_functiondef(
           'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
-        ),'''mailbox_pr'', 1637')=0 THEN
-      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_CONTRACT_DRIFT';
+        ),'''mailbox_pr'', ' || CASE
+             WHEN EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation')
+             THEN (SELECT mailbox_pr::text FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE')
+             ELSE '1637'
+           END)=0 THEN
+      RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_MAILBOX_ROUTE_DRIFT';
     ELSIF NOT COALESCE(repair_owner_ok,false) THEN
       RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_OWNER_DRIFT';
     ELSIF NOT COALESCE(repair_acl_ok,false) THEN

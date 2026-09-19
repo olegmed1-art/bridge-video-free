@@ -13,8 +13,10 @@ DECLARE
     repair_task_id uuid;
     run_suffix text := txid_current()::text;
     expected_head text := repeat('6',40);
+    active_mailbox text;
     original_checks jsonb := '["exact head","UI-visible delivery proof","RUNNING acknowledgement","exactly-once terminal receipt"]'::jsonb;
 BEGIN
+    active_mailbox := CASE WHEN EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation') THEN '1685' ELSE '1637' END;
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
          WHERE migration_key='0346_autopilot_canary_acceptance_guard'
@@ -73,7 +75,7 @@ BEGIN
     SELECT * INTO assignment
       FROM autopilot.get_dispatch_assignment(dispatch.dispatch_id);
     IF assignment.task_kind IS DISTINCT FROM 'REPOSITORY_AUDIT'
-       OR assignment.task_spec_json->>'mailbox_pr' IS DISTINCT FROM '1637'
+       OR assignment.task_spec_json->>'mailbox_pr' IS DISTINCT FROM active_mailbox
        OR assignment.task_spec_json->'required_checks'
             IS DISTINCT FROM '["exact target head","UI-visible dispatch envelope"]'::jsonb
        OR assignment.task_spec_json->'controller_postconditions'
@@ -82,7 +84,7 @@ BEGIN
             IS DISTINCT FROM 'true'::jsonb
        OR assignment.task_spec_json->'max_repair_attempts'
             IS DISTINCT FROM '0'::jsonb
-       OR position('active mailbox PR #1637' IN assignment.objective)=0
+       OR position('active mailbox PR #'||active_mailbox IN assignment.objective)=0
        OR position('Do not require or attempt to pre-verify' IN assignment.objective)=0
        OR octet_length(assignment.task_spec_json::text)>4096 THEN
         RAISE EXCEPTION 'AUTOPILOT_CANARY_ASSIGNMENT_NOT_CONTROLLER_SPLIT: %',

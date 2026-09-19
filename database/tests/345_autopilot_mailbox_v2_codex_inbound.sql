@@ -18,7 +18,9 @@ DECLARE
     command_comment_id bigint := 99003450;
     reaction_id bigint := 99003451;
     rejected boolean;
+    active_mailbox integer;
 BEGIN
+    active_mailbox := CASE WHEN EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation') THEN 1685 ELSE 1637 END;
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
          WHERE migration_key='0345_autopilot_mailbox_v2_codex_inbound'
@@ -47,7 +49,7 @@ BEGIN
         'Prove that a clean mailbox can carry a Codex ACK and terminal result for a distinct retained target PR.',
         1150,0,'{"media":false}'::jsonb,NULL,'database-test','SQL_TEST'
       );
-    IF (SELECT mailbox_pr FROM autopilot.project_work_item WHERE work_item_id=work_id)<>1637
+    IF (SELECT mailbox_pr FROM autopilot.project_work_item WHERE work_item_id=work_id)<>active_mailbox
        OR (SELECT target_pr FROM autopilot.project_work_item WHERE work_item_id=work_id)<>1150 THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_TEST_BINDING_INVALID';
     END IF;
@@ -87,7 +89,7 @@ BEGIN
         'target_pr',dispatch.target_pr,
         'expected_head_sha',dispatch.expected_head_sha,
         'mode',outbox.mode,
-        'command_pr',1637,
+        'command_pr',active_mailbox,
         'command_comment_id',command_comment_id,
         'command_created_at',event_time,
         'ack_reaction_id',reaction_id,
@@ -114,7 +116,7 @@ BEGIN
     SELECT * INTO result
       FROM autopilot.accept_role_dispatch_codex_ack(
         'github-codex-ack:345-'||run_suffix,repeat('d',64),true,
-        'olegmed1-art/bridge-video-free',1637,
+        'olegmed1-art/bridge-video-free',active_mailbox,
         'olegmed1-art',315099490,'OWNER',
         'chatgpt-codex-connector',1144995,
         'chatgpt-codex-connector[bot]',199175422,ack
@@ -157,7 +159,7 @@ BEGIN
     SELECT * INTO result
       FROM autopilot.accept_role_dispatch_codex_terminal(
         'github-codex-result:345-'||run_suffix,repeat('e',64),true,
-        'olegmed1-art/bridge-video-free',1637,
+        'olegmed1-art/bridge-video-free',active_mailbox,
         'chatgpt-codex-connector[bot]',199175422,'NONE',
         'chatgpt-codex-connector',1144995,terminal
       );
@@ -179,7 +181,7 @@ BEGIN
     SELECT * INTO result
       FROM autopilot.accept_role_dispatch_codex_terminal(
         'github-codex-result:345-'||run_suffix,repeat('e',64),true,
-        'olegmed1-art/bridge-video-free',1637,
+        'olegmed1-art/bridge-video-free',active_mailbox,
         'chatgpt-codex-connector[bot]',199175422,'NONE',
         'chatgpt-codex-connector',1144995,terminal
       );

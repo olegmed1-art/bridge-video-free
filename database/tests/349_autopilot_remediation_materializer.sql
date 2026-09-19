@@ -1,11 +1,12 @@
 \set ON_ERROR_STOP on
 BEGIN;
 DO $t$
-DECLARE origin_id uuid; reconcile_origin_id uuid; child uuid; c record;
+DECLARE origin_id uuid; reconcile_origin_id uuid; child uuid; c record; active_mailbox integer;
 BEGIN
+ active_mailbox := CASE WHEN EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation') THEN 1685 ELSE 1637 END;
  SELECT task_id INTO origin_id FROM autopilot.create_chatgpt_role_dispatch_task(
   'sql-0349-origin',jsonb_build_object(
-   'repository','olegmed1-art/bridge-video-free','mailbox_pr',1637,'role','AUTOPILOT',
+   'repository','olegmed1-art/bridge-video-free','mailbox_pr',active_mailbox,'role','AUTOPILOT',
    'target_pr',1682,'expected_head_sha',repeat('a',40),'dispatch_epoch',1,
    'successor_task_key',NULL,'successor_role',NULL,'successor_target_pr',NULL,'successor_expected_head_sha',NULL
   ),0,'database-test','SQL_TEST');
@@ -20,7 +21,7 @@ BEGIN
 
  SELECT task_id INTO reconcile_origin_id FROM autopilot.create_chatgpt_role_dispatch_task(
   'sql-0349-reconcile-origin',jsonb_build_object(
-   'repository','olegmed1-art/bridge-video-free','mailbox_pr',1637,'role','AUTOPILOT',
+   'repository','olegmed1-art/bridge-video-free','mailbox_pr',active_mailbox,'role','AUTOPILOT',
    'target_pr',1682,'expected_head_sha',repeat('b',40),'dispatch_epoch',1,
    'successor_task_key',NULL,'successor_role',NULL,'successor_target_pr',NULL,'successor_expected_head_sha',NULL
   ),0,'database-test','SQL_TEST');
