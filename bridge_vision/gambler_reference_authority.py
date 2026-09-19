@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-REFERENCE_AUTHORITY_VERSION = "gambler-classic-original-human-approved-v1"
+REFERENCE_AUTHORITY_VERSION = "gambler-classic-original-hash-bound-v2"
 
 APPROVED_GAMBLER_CLASSIC_SPRITE_SHA256: dict[int, str] = {
     1: "627cc3170c39d19304d81b54e92144714bddb7b3917e21c66bd221c31bd82390",
@@ -39,14 +39,14 @@ def approved_sprite_sha256(variant: int) -> str:
 
 
 def assert_approved_sprite_binding(variant: int, supplied_sha256: str) -> str:
-    """Return the canonical approved hash or fail closed on a different asset."""
+    """Return the canonical pinned hash or fail closed on a different asset."""
     normalized = str(supplied_sha256 or "").lower()
     if _SHA256.fullmatch(normalized) is None:
         raise GamblerReferenceAuthorityError("invalid Gambler sprite SHA-256")
     approved = approved_sprite_sha256(variant)
     if normalized != approved:
         raise GamblerReferenceAuthorityError(
-            "Gambler sprite is not the human-approved original asset for this variant"
+            "Gambler sprite does not match the pinned original asset for this variant"
         )
     return approved
 
