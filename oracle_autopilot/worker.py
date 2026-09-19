@@ -316,9 +316,7 @@ def claim_one(config: WorkerConfig) -> ClaimedTask | None:
     )
     if not row:
         return None
-    task = claimed_task_from_row(row)
-    validate_task_contract(task)
-    return task
+    return claimed_task_from_row(row)
 
 
 def heartbeat_task(config: WorkerConfig, task: ClaimedTask) -> bool:
@@ -1202,14 +1200,17 @@ def process_one(config: WorkerConfig) -> bool:
     task = claim_one(config)
     if task is None:
         return False
-    LOGGER.info(
-        "task_claimed task_id=%s kind=%s lease_epoch=%s attempt=%s",
-        task.task_id,
-        task.goal_type,
-        task.lease_epoch,
-        task.attempts,
-    )
     try:
+        # Validate after the lease is materialized so every permanent contract
+        # failure is recorded through fail_task instead of escaping the loop.
+        validate_task_contract(task)
+        LOGGER.info(
+            "task_claimed task_id=%s kind=%s lease_epoch=%s attempt=%s",
+            task.task_id,
+            task.goal_type,
+            task.lease_epoch,
+            task.attempts,
+        )
         with keep_lease_alive(config, task):
             execute_task(config, task)
         LOGGER.info("task_transitioned task_id=%s kind=%s", task.task_id, task.goal_type)
