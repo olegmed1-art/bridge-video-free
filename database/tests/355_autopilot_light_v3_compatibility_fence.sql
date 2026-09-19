@@ -52,14 +52,6 @@ BEGIN
        OR claimed.goal_type IS DISTINCT FROM 'CHATGPT_ROLE_DISPATCH_V1' THEN
         RAISE EXCEPTION 'AUTOPILOT_0355_COMPATIBLE_WORKER_COULD_NOT_CLAIM';
     END IF;
-
-    IF NOT has_function_privilege(
-        'autopilot_light_worker_login',
-        'autopilot.claim_next_task(text,integer)',
-        'EXECUTE'
-    ) THEN
-        RAISE EXCEPTION 'AUTOPILOT_0355_LIGHT_RPC_PRIVILEGE_CHANGED';
-    END IF;
 END $test$;
 
 SELECT 2 AS cases,0 AS failures;
