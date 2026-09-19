@@ -28,7 +28,7 @@ BEGIN
  IF position('PROJECT_DONE_WITH_PAUSED_BACKLOG' in pg_get_functiondef('autopilot.claim_project_work_probe(text,integer)'::regprocedure))=0 THEN
    RAISE EXCEPTION 'AUTOPILOT_0352_TRANSACTION_RESTORE_FAILED';
  END IF;
- IF autopilot.role_blocker_requires_owner('AUTOPILOT_UNCLASSIFIED_FAILURE')<>'OWNER_HOLD' THEN
+ IF autopilot.role_blocker_requires_owner('AUTOPILOT_UNCLASSIFIED_FAILURE') IS DISTINCT FROM true THEN
    RAISE EXCEPTION 'AUTOPILOT_0352_BLOCKER_TRANSACTION_RESTORE_FAILED';
  END IF;
 END $post$;
