@@ -147,7 +147,8 @@ BEGIN
         ),'REPAIR_ADMISSION_PROVIDER_TERMINAL_V1')=0
        OR strpos(pg_get_functiondef(
           'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
-        ),'''mailbox_pr'', ' || (SELECT mailbox_pr::text FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE'))=0 THEN
+        ),'''mailbox_pr'', ' || (SELECT mailbox_pr::text FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE'))=0
+       OR (SELECT count(*) FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE')<>1 THEN
       RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_CONTRACT_DRIFT';
     ELSIF NOT COALESCE(repair_owner_ok,false) THEN
       RAISE EXCEPTION 'REPAIR_ADMISSION_REAPPLY_OWNER_DRIFT';
