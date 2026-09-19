@@ -99,7 +99,13 @@ BEGIN
  blocker_action:=autopilot.blocker_remediation_action(effective_code);
  fp:=encode(public.digest(convert_to(COALESCE(effective_code,'')||'|'||p_evidence_token,'UTF8'),'sha256'),'hex');
 
- IF autopilot.role_blocker_requires_owner(effective_code) THEN
+ IF autopilot.role_blocker_requires_owner(effective_code)
+    OR EXISTS (
+      SELECT 1
+      FROM autopilot.role_registry rr
+      WHERE rr.role_id=w.role
+        AND rr.execution_scope='OWNER_GATED'
+    ) THEN
    UPDATE autopilot.project_work_item
       SET hold_reason='OWNER_HOLD',
           progress_token=p_evidence_token,
