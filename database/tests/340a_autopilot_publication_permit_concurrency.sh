@@ -6,11 +6,15 @@ repo_root=$(cd "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d)
 
 # This test exercises the 0339/0340 rollback fences in isolation. A current
-# database may already have the 0345/0346 successor patches installed; unwind
+# database may already have the 0345/0346/0350 successor patches installed; unwind
 # them in reverse order in the disposable concurrency clone before constructing
 # the lower-chain fixture, then use the original target-PR command binding.
 if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
     "SELECT count(*) FROM public.schema_migration WHERE migration_key='0345_autopilot_mailbox_v2_codex_inbound';")" == 1 ]]; then
+  if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
+      "SELECT count(*) FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation';")" == 1 ]]; then
+    psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$repo_root/database/rollbacks/0350_autopilot_mailbox_v3_rotation.sql" >/dev/null
+  fi
   psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
     "UPDATE autopilot.project_planner_state SET enabled=false WHERE singleton;"
   if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
