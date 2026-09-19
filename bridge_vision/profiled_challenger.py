@@ -206,7 +206,10 @@ def _observed_metadata_field(raw: Any, field_name: str) -> tuple[Any, dict[str, 
     if confidence < 0.90:
         raise ProfiledChallengerError(f"{field_name} confidence below gate")
     source = str(raw.get("source") or "").upper()
-    if source not in {"VISUAL_TEXT", "TEACHER_SPEECH", "HUMAN_VERIFIED"}:
+    # Speech may corroborate a review, but it cannot create board/dealer/
+    # vulnerability facts.  Those values need source-bound visual evidence (or
+    # an explicit human verification record).
+    if source not in {"VISUAL_TEXT", "VISUAL_MARKER", "HUMAN_VERIFIED"}:
         raise ProfiledChallengerError(f"unsupported {field_name} source")
     locator = str(raw.get("evidence_locator") or "").strip()
     if not locator or len(locator) > 256:
@@ -245,6 +248,7 @@ def _board_metadata_candidate(raw: Any) -> dict[str, Any] | None:
         "board_number": board_number,
         "dealer": dealer,
         "vulnerability": vulnerability,
+        "independent_fields_complete": dealer_evidence is not None and vulnerability_evidence is not None,
         "provenance": {
             "board_number": {"class": "OBSERVED", **board_evidence},
             "dealer": {
@@ -695,10 +699,14 @@ def _board_metadata_state(track: _Track, profile: InterfaceProfile) -> dict[str,
             "rotation_degrees_clockwise": profile.ordering_prior["rotation_degrees_clockwise"],
         }
     candidate = candidates[0]
+    enough_frames = candidate["independent_frames"] >= profile.min_temporal_observations
+    independently_observed = candidate.get("independent_fields_complete") is True
     return {
         "status": (
             "CONFIRMED"
-            if candidate["independent_frames"] >= profile.min_temporal_observations
+            if enough_frames and independently_observed
+            else "PARTIAL_VISUAL_EVIDENCE"
+            if enough_frames
             else "PENDING_TEMPORAL_CONSENSUS"
         ),
         **candidate,
