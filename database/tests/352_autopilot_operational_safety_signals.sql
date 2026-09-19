@@ -30,6 +30,9 @@ BEGIN
  IF NOT has_table_privilege('bridge_school_health','public.autopilot_operational_health_signal','SELECT') THEN
    RAISE EXCEPTION 'AUTOPILOT_0352_HEALTH_VIEW_PRIVILEGE_MISSING';
  END IF;
+ IF NOT has_function_privilege('bridge_school_worker','autopilot.mailbox_rotation_readiness()','EXECUTE') THEN
+   RAISE EXCEPTION 'AUTOPILOT_0352_WORKER_ROTATION_READ_MISSING';
+ END IF;
  IF (SELECT count(*) FROM public.autopilot_operational_health_signal WHERE signal_key IN ('autopilot_planner_backlog','autopilot_mailbox_capacity','autopilot_mailbox_e2e'))<>3 THEN
    RAISE EXCEPTION 'AUTOPILOT_0352_HEALTH_SIGNALS_INVALID';
  END IF;
