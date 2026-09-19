@@ -31,7 +31,7 @@ BEGIN
   'autopilot.materialize_role_verification(uuid,text)'::regprocedure,
   'autopilot.materialize_blocker_remediation(uuid,text,text)'::regprocedure
  ] LOOP
-  original:=pg_get_functiondef(proc); patched:=replace(original,$lit
+  original:=pg_get_functiondef(proc); patched:=replace(original,'''mailbox_pr'',1637','''mailbox_pr'',1685');
   IF patched=original THEN RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V3_MATERIALIZER_SOURCE_DRIFT: %',proc; END IF; EXECUTE patched;
  END LOOP;
  FOREACH proc IN ARRAY ARRAY[
