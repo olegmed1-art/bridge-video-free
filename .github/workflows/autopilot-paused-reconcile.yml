@@ -1,0 +1,145 @@
+name: Autopilot paused evidence reconciliation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '37 * * * *'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: autopilot-paused-evidence-reconciliation
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Reconcile at most one paused item from fresh evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}" || {
+            echo 'BRIDGE_WORKER_DATABASE_URL is not configured'
+            exit 1
+          }
+
+          installed="$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "
+            SELECT to_regprocedure(
+              'autopilot.paused_reconcile_candidates(integer)'
+            ) IS NOT NULL;")"
+          if [ "$installed" != "t" ]; then
+            echo '0353 is not installed in production; clean skip.'
+            exit 0
+          fi
+
+          main_sha="$(git rev-parse HEAD)"
+          mutated=false
+
+          while IFS=$'\t' read -r wid target result_code last_head blocker_action progress_token owner_gated provider_state provider_success_epoch work_epoch; do
+            [ -n "$wid" ] || continue
+
+            pr_json="$(gh api "repos/$REPOSITORY/pulls/$target")"
+            state="$(jq -r '.state' <<<"$pr_json")"
+            head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+            pr_updated="$(jq -r '.updated_at' <<<"$pr_json")"
+            merged_at="$(jq -r '.merged_at // empty' <<<"$pr_json")"
+            pr_epoch="$(date -u -d "$pr_updated" +%s)"
+
+            check_updated="$(gh api -H 'Accept: application/vnd.github+json' \
+              "repos/$REPOSITORY/commits/$head_sha/check-runs" \
+              --jq '[.check_runs[] | select(.completed_at != null) | .completed_at] | max // ""')"
+            check_epoch=0
+            if [ -n "$check_updated" ]; then
+              check_epoch="$(date -u -d "$check_updated" +%s)"
+            fi
+
+            disposition=''
+            fresh=false
+            compare_status=''
+
+            if [ "$state" = 'closed' ] || [ "$blocker_action" = 'RECONCILE_TARGET' ]; then
+              compare_status="$(gh api \
+                "repos/$REPOSITORY/compare/$head_sha...$main_sha" \
+                --jq '.status' 2>/dev/null || true)"
+              if [ "$compare_status" = 'ahead' ] || [ "$compare_status" = 'identical' ]; then
+                disposition='SUBSUMED_BY_MAIN'
+                fresh=true
+              fi
+            fi
+
+            if [ -n "$merged_at" ]; then
+              disposition='MERGED'
+              fresh=true
+            elif [ "$head_sha" != "$last_head" ]; then
+              fresh=true
+            elif [ "$pr_epoch" -gt "$work_epoch" ] || [ "$check_epoch" -gt "$work_epoch" ]; then
+              fresh=true
+            elif { [ "$blocker_action" = 'OWNER_HOLD' ] || [ "$owner_gated" = 't' ]; } \
+                 && [ -z "$progress_token" ]; then
+              fresh=true
+            elif [ "$blocker_action" = 'PROVIDER_HOLD' ] \
+                 && [ "$provider_state" = 'CLOSED' ] \
+                 && [ "${provider_success_epoch:-0}" -gt "$work_epoch" ]; then
+              fresh=true
+            fi
+
+            if [ "$fresh" != true ]; then
+              continue
+            fi
+
+            token="$(printf '%s' \
+              "paused-reconcile-v1|$wid|$target|$state|$head_sha|$pr_updated|$check_updated|$main_sha|$result_code|$blocker_action|$owner_gated|$provider_state|$provider_success_epoch|$disposition" \
+              | sha256sum | awk '{print $1}')"
+            summary="Fresh repository or CI evidence observed for PR #$target at ${head_sha:0:12}."
+
+            action="$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 \
+              -v wid="$wid" -v token="$token" -v disposition="$disposition" \
+              -v result_code="$result_code" -v summary="$summary" -c "
+              SELECT autopilot.reconcile_paused_project_work(
+                :'wid'::uuid,
+                :'token',
+                NULLIF(:'disposition',''),
+                :'result_code',
+                :'summary'
+              );")"
+
+            echo "work_item=$wid target_pr=$target blocker_action=$blocker_action result=$action"
+            mutated=true
+            break
+          done < <(
+            psql "$DATABASE_URL" -XAt -F $'\t' -v ON_ERROR_STOP=1 -c "
+              SELECT work_item_id,target_pr,result_code,
+                     COALESCE(last_observed_head_sha,''),
+                     blocker_action,
+                     COALESCE(progress_token,''),
+                     owner_gated,
+                     COALESCE(provider_state,''),
+                     COALESCE(extract(epoch from provider_last_success_at)::bigint,0),
+                     extract(epoch from updated_at)::bigint
+              FROM autopilot.paused_reconcile_candidates(50);"
+          )
+
+          if [ "$mutated" != true ]; then
+            echo 'No paused work has fresh actionable evidence.'
+          fi
