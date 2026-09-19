@@ -1,7 +1,7 @@
 """Production adapter: old rank-layout recognizer first, Gambler recovery second.
 
 The primary path is the proven geometry/ordered-DP Bridgit recognizer with the
-human-approved original Gambler classic deck as rank authority.  This module
+hash-bound original Gambler classic deck as rank authority.  This module
 only emits recognizer candidates; it never writes SCHOOL CANON and never uses
 hidden-hand/deck-complement inference.
 """
@@ -20,12 +20,20 @@ from bridge_vision.bridgit_gambler_rank_layout import (
     derive_original_asset_reference,
     recognize_frames_with_original_gambler_deck,
 )
-from bridge_vision.gambler_classic_reference import load_sprite, select_variant_for_card_size
+from bridge_vision.gambler_classic_reference import (
+    GamblerClassicReferenceError,
+    load_sprite,
+    variant_candidates_for_card_size,
+)
 from bridge_vision.bridgit_event_frame_selector import EventFrameSelector, bridge_layout_regions, frame_signature
-from bridge_vision.gambler_reference_authority import approved_sprite_sha256
+from bridge_vision.gambler_reference_authority import (
+    GamblerReferenceAuthorityError,
+    pinned_sprite_sha256,
+    variant_for_pinned_sprite_sha256,
+)
 from bridge_vision.bridgit_primary_compat import (MAX_VERTICAL_PADDING_PX, horizontal_geometry_detail, native_gambler_geometry, register_same_width_vertical_padding)
 
-PRIMARY_VIDEO_VERSION = "bridgit-primary-video-gambler-v1"
+PRIMARY_VIDEO_VERSION = "bridgit-primary-video-gambler-v2"
 DEFAULT_SCAN_MS = 3000
 DEFAULT_ATTEMPT_GAP_MS = 15000
 
@@ -40,37 +48,42 @@ def resolve_original_gambler_asset(
     verified_card_width_px: float,
     verified_card_height_px: float,
 ) -> tuple[int, Path, str]:
-    """Resolve one of the eight approved native Gambler classic sprites.
+    """Resolve one of the eight pinned native Gambler classic sprites.
 
-    The selected variant is determined only from the verified registered card
-    scale.  The proprietary asset must already be present in the private
-    runtime; the repository never substitutes or downloads a different deck.
+    Variants are tried by deterministic distance from the measured card scale.
+    Every fallback remains bound to its own fixed SHA-256; arbitrary decks are
+    never accepted. Template synthesis later rescales the pinned source to the
+    measured dimensions when they are not native.
     """
-    variant = select_variant_for_card_size(
-        verified_card_width_px, verified_card_height_px
-    )
-    expected_sha = approved_sprite_sha256(variant)
     root = Path(asset_root)
-    candidates = (root / f"all-v{variant}.png", root / str(variant) / "all.png")
-    existing = [path for path in candidates if path.is_file()]
-    if not existing:
-        raise PrimaryVideoRecognitionError(
-            f"approved Gambler classic variant {variant} is unavailable"
-        )
-    selected = existing[0]
-    sprite = load_sprite(
-        selected, expected_sha256=expected_sha, expected_variant=variant
-    )
-    if any(
-        path != selected
-        and path.is_file()
-        and _sha256_file(path) != sprite.sprite_sha256
-        for path in candidates
+    for _, variant in variant_candidates_for_card_size(
+        verified_card_width_px, verified_card_height_px
     ):
-        raise PrimaryVideoRecognitionError(
-            f"conflicting Gambler classic variant {variant} assets"
-        )
-    return variant, selected, expected_sha
+        expected_sha = pinned_sprite_sha256(variant)
+        candidates = (root / f"all-v{variant}.png", root / str(variant) / "all.png")
+        existing = [path for path in candidates if path.is_file()]
+        if not existing:
+            continue
+        selected = existing[0]
+        try:
+            sprite = load_sprite(
+                selected, expected_sha256=expected_sha, expected_variant=variant
+            )
+        except GamblerClassicReferenceError as exc:
+            raise PrimaryVideoRecognitionError(
+                f"pinned Gambler classic variant {variant} failed integrity validation"
+            ) from exc
+        if any(
+            path != selected
+            and path.is_file()
+            and _sha256_file(path) != sprite.sprite_sha256
+            for path in candidates
+        ):
+            raise PrimaryVideoRecognitionError(
+                f"conflicting Gambler classic variant {variant} assets"
+            )
+        return variant, selected, expected_sha
+    raise PrimaryVideoRecognitionError("no pinned Gambler classic sprite is available")
 
 
 def _sha256_file(path: Path) -> str:
@@ -178,9 +191,6 @@ def recognize_video_primary(
         raise PrimaryVideoRecognitionError("max_deals outside supported bounds")
     output_dir.mkdir(parents=True, exist_ok=True)
     profile = rank_layout.load_profile(profile_path)
-    selected_variant = select_variant_for_card_size(
-        verified_card_width_px, verified_card_height_px
-    )
     if gambler_asset_root is not None:
         selected_variant, gambler_sprite_path, gambler_sprite_sha256 = (
             resolve_original_gambler_asset(
@@ -191,14 +201,15 @@ def recognize_video_primary(
         )
     elif gambler_sprite_path is None or gambler_sprite_sha256 is None:
         raise PrimaryVideoRecognitionError(
-            "Gambler asset root or explicit approved sprite is required"
+            "Gambler asset root or explicit pinned sprite is required"
         )
     else:
-        approved = approved_sprite_sha256(selected_variant)
-        if str(gambler_sprite_sha256).lower() != approved:
+        try:
+            selected_variant = variant_for_pinned_sprite_sha256(gambler_sprite_sha256)
+        except GamblerReferenceAuthorityError as exc:
             raise PrimaryVideoRecognitionError(
-                "explicit Gambler sprite hash does not match selected approved variant"
-            )
+                "explicit Gambler sprite hash is not pinned"
+            ) from exc
     assert gambler_sprite_path is not None
     assert gambler_sprite_sha256 is not None
     sprite = load_sprite(
@@ -212,7 +223,13 @@ def recognize_video_primary(
         raise PrimaryVideoRecognitionError("reference frame cannot be decoded")
     if tuple(reference.shape[:2]) != (profile.height, profile.width):
         raise PrimaryVideoRecognitionError("reference dimensions do not match profile")
-    derived_reference = derive_original_asset_reference(reference, profile, sprite)
+    derived_reference = derive_original_asset_reference(
+        reference,
+        profile,
+        sprite,
+        target_card_width_px=verified_card_width_px,
+        target_card_height_px=verified_card_height_px,
+    )
     bank = rank_layout._template_bank(derived_reference, profile)
 
     capture = cv2.VideoCapture(str(video_path))
@@ -371,6 +388,14 @@ def recognize_video_primary(
         "source_size": {"width": width, "height": height},
         "gambler_variant": selected_variant,
         "gambler_sprite_sha256": gambler_sprite_sha256,
+        "template_card_size": {
+            "width": float(verified_card_width_px),
+            "height": float(verified_card_height_px),
+        },
+        "template_resampled": (
+            abs(float(verified_card_width_px) - sprite.card_width) > 1e-9
+            or abs(float(verified_card_height_px) - sprite.card_height) > 1e-9
+        ),
         "scan_ms": scan_ms,
         "attempt_gap_ms": attempt_gap_ms,
         "event_counts": dict(sorted(event_counts.items())),

@@ -10,10 +10,10 @@ import hashlib
 from pathlib import Path
 from typing import Any, Callable
 
-from bridge_vision.bridgit_gold_profile import build_verified_gold_profile
+from bridge_vision.bridgit_gold_profile import build_autonomous_gold_profile
 from bridge_vision.bridgit_primary_video import recognize_video_primary
 from bridge_vision.gambler_classic_reference import MAX_SPRITE_BYTES
-from bridge_vision.gambler_reference_authority import APPROVED_GAMBLER_CLASSIC_SPRITE_SHA256
+from bridge_vision.gambler_reference_authority import PINNED_GAMBLER_CLASSIC_SPRITE_SHA256
 
 _STATE: dict[str, Any] = {"deals": [], "shots": [], "qc": {"status": "NOT_RUN"}}
 _INSTALLED_BASE_IDS: set[int] = set()
@@ -23,14 +23,14 @@ def _q(value: object) -> str:
     return str(value).replace("'", "\\'")
 
 
-def _prepare_gold(base, token: str, work: Path):
+def _prepare_profile_seed(base, token: str, work: Path):
     candidates = base.io.search(token, "trashed=false and name='bridgit_gold_v2.zip'")
     failures = []
     for index, item in enumerate(sorted(candidates, key=lambda x: str(x.get("id") or ""))[:16]):
         target = work / f"bridgit-gold-v2-{index}.zip"
         try:
             base.io.download(token, item["id"], target)
-            reference, profile_path, payload = build_verified_gold_profile(target, work / f"bridgit-gold-v2-{index}")
+            reference, profile_path, payload = build_autonomous_gold_profile(target, work / f"bridgit-gold-v2-{index}")
             return reference, profile_path, payload, item
         except Exception as exc:
             failures.append(type(exc).__name__)
@@ -40,7 +40,7 @@ def _prepare_gold(base, token: str, work: Path):
 
 def _prepare_assets(base, token: str, work: Path) -> Path:
     roots = base.io.search(token, "trashed=false and mimeType='application/vnd.google-apps.folder' and name='classic'")
-    expected = {int(k): v for k, v in APPROVED_GAMBLER_CLASSIC_SPRITE_SHA256.items()}
+    expected = {int(k): v for k, v in PINNED_GAMBLER_CLASSIC_SPRITE_SHA256.items()}
     failures = []
     for root_index, root in enumerate(sorted(roots, key=lambda x: str(x.get("id") or ""))[:16]):
         children = base.io.search(token, f"'{_q(root['id'])}' in parents and trashed=false")
@@ -82,7 +82,7 @@ def _prepare_assets(base, token: str, work: Path) -> Path:
 
 def _run_primary(base, token: str, video: Path, work: Path, job: str):
     try:
-        reference, profile_path, profile, gold = _prepare_gold(base, token, work)
+        reference, profile_path, profile, gold = _prepare_profile_seed(base, token, work)
         assets = _prepare_assets(base, token, work)
         result = recognize_video_primary(
             video, reference_frame=reference, profile_path=profile_path,
@@ -105,10 +105,11 @@ def _run_primary(base, token: str, video: Path, work: Path, job: str):
                 "version": result.get("version"), "backend_status": item.get("backend_status"),
                 "minimum_assigned_score": item.get("minimum_assigned_score"), "median_assigned_score": item.get("median_assigned_score"),
                 "gambler_variant": result.get("gambler_variant"), "gambler_sprite_sha256": result.get("gambler_sprite_sha256"),
+                "template_card_size": result.get("template_card_size"), "template_resampled": result.get("template_resampled"),
                 "canonical_promotion_allowed": False,
             },
         })
-    qc = {k: result.get(k) for k in ("version", "status", "source_size", "gambler_variant", "gambler_sprite_sha256", "scan_ms", "attempt_gap_ms", "event_counts", "rejections")}
+    qc = {k: result.get(k) for k in ("version", "status", "source_size", "gambler_variant", "gambler_sprite_sha256", "template_card_size", "template_resampled", "scan_ms", "attempt_gap_ms", "event_counts", "rejections")}
     qc.update({"deal_count": len(deals), "gold_profile_id": profile.get("profile_id"), "gold_drive_id": gold.get("id")})
     return deals, shots, qc
 

@@ -1,17 +1,16 @@
-"""Authority binding for human-approved original Gambler classic card artwork.
+"""Mechanical identity authority for original Gambler classic card artwork.
 
 The hashes in this module identify the original card sprites supplied from the
-installed Gambler client. Their card artwork is treated as the approved visual
-reference. Runtime checks only prove identity/integrity of the selected original
-asset; they do not re-validate whether the card set itself is correct.
+installed Gambler client. Runtime accepts only a fixed SHA-256 allowlist and the
+sprite loader separately enforces the expected dimensions and 52-card grid.
 """
 from __future__ import annotations
 
 import re
 
-REFERENCE_AUTHORITY_VERSION = "gambler-classic-original-human-approved-v1"
+REFERENCE_AUTHORITY_VERSION = "gambler-classic-original-hash-bound-v2"
 
-APPROVED_GAMBLER_CLASSIC_SPRITE_SHA256: dict[int, str] = {
+PINNED_GAMBLER_CLASSIC_SPRITE_SHA256: dict[int, str] = {
     1: "627cc3170c39d19304d81b54e92144714bddb7b3917e21c66bd221c31bd82390",
     2: "53b9a93fb25c7f4efd367b5219ae664c8b1b7b2e1243df5383f37df779ef2c90",
     3: "0eee20f34a8fe380c06231f93129c5ff32acd2a31d790797e06f12b436dd2d8f",
@@ -26,35 +25,49 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class GamblerReferenceAuthorityError(ValueError):
-    """The supplied sprite is not bound to the approved original reference."""
+    """The supplied sprite is not bound to the pinned original reference."""
 
 
-def approved_sprite_sha256(variant: int) -> str:
+def pinned_sprite_sha256(variant: int) -> str:
     if isinstance(variant, bool):
         raise GamblerReferenceAuthorityError("invalid Gambler classic variant")
     try:
-        return APPROVED_GAMBLER_CLASSIC_SPRITE_SHA256[int(variant)]
+        return PINNED_GAMBLER_CLASSIC_SPRITE_SHA256[int(variant)]
     except (KeyError, TypeError, ValueError) as exc:
         raise GamblerReferenceAuthorityError("unknown Gambler classic variant") from exc
 
 
-def assert_approved_sprite_binding(variant: int, supplied_sha256: str) -> str:
-    """Return the canonical approved hash or fail closed on a different asset."""
+def assert_pinned_sprite_binding(variant: int, supplied_sha256: str) -> str:
+    """Return the canonical pinned hash or fail closed on a different asset."""
     normalized = str(supplied_sha256 or "").lower()
     if _SHA256.fullmatch(normalized) is None:
         raise GamblerReferenceAuthorityError("invalid Gambler sprite SHA-256")
-    approved = approved_sprite_sha256(variant)
-    if normalized != approved:
+    pinned = pinned_sprite_sha256(variant)
+    if normalized != pinned:
         raise GamblerReferenceAuthorityError(
-            "Gambler sprite is not the human-approved original asset for this variant"
+            "Gambler sprite does not match the pinned original asset for this variant"
         )
-    return approved
+    return pinned
+
+
+def variant_for_pinned_sprite_sha256(supplied_sha256: str) -> int:
+    normalized = str(supplied_sha256 or "").lower()
+    if _SHA256.fullmatch(normalized) is None:
+        raise GamblerReferenceAuthorityError("invalid Gambler sprite SHA-256")
+    matches = [
+        variant
+        for variant, pinned in PINNED_GAMBLER_CLASSIC_SPRITE_SHA256.items()
+        if pinned == normalized
+    ]
+    if len(matches) != 1:
+        raise GamblerReferenceAuthorityError("Gambler sprite is not in the pinned allowlist")
+    return matches[0]
 
 
 def authority_provenance(variant: int) -> dict[str, object]:
     return {
         "reference_authority": REFERENCE_AUTHORITY_VERSION,
-        "human_approved_original": True,
-        "template_content_revalidation_required": False,
-        "approved_sprite_sha256": approved_sprite_sha256(variant),
+        "identity_check": "FIXED_SHA256_ALLOWLIST",
+        "structural_decode": "52_CARD_GRID_REQUIRED",
+        "pinned_sprite_sha256": pinned_sprite_sha256(variant),
     }
