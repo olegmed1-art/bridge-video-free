@@ -35,7 +35,7 @@ BEGIN
    ),origin_row.priority,'AUTOPILOT_REMEDIATION_CONTROLLER','AUTOPILOT_REMEDIATION'
  ) created;
  INSERT INTO autopilot.role_dispatch_followup(parent_task_id,followup_kind,followup_task_id,origin_task_id,trigger_result_code)
- VALUES(origin_row.task_id,action,followup_id,origin_row.task_id,p_result_code)
+ VALUES(origin_row.task_id,'REPAIR',followup_id,origin_row.task_id,p_result_code)
  ON CONFLICT(parent_task_id,followup_kind) DO NOTHING;
  RETURN followup_id;
 END $f$;
