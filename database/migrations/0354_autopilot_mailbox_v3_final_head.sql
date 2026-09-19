@@ -5,10 +5,6 @@ LOCK TABLE autopilot.role_dispatch_mailbox_registry IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE autopilot.role_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE autopilot.task IN SHARE ROW EXCLUSIVE MODE;
 
-UPDATE autopilot.project_planner_state
-SET enabled=false
-WHERE singleton;
-
 DO $pre$
 BEGIN
  IF NOT EXISTS (
