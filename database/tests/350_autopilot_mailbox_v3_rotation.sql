@@ -12,7 +12,7 @@ BEGIN
  SELECT pg_get_functiondef('autopilot.accept_role_dispatch_callback(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure) INTO def;
  IF position('1150' in def)=0 OR position('1637' in def)=0 OR position('1685' in def)=0 THEN RAISE EXCEPTION 'AUTOPILOT_0350_CALLBACK_HISTORY_GUARD_INVALID'; END IF;
  SELECT pg_get_functiondef('autopilot.materialize_blocker_remediation(uuid,text,text)'::regprocedure) INTO def;
- IF position($'mailbox_pr',1685$ in def)=0 THEN RAISE EXCEPTION 'AUTOPILOT_0350_0349_ROUTE_NOT_ROTATED'; END IF;
+ IF position('''mailbox_pr'',1685' in def)=0 THEN RAISE EXCEPTION 'AUTOPILOT_0350_0349_ROUTE_NOT_ROTATED'; END IF;
  SELECT pg_get_functiondef('autopilot.create_chatgpt_role_followup_task(text,jsonb,integer,text,text)'::regprocedure) INTO def;
  IF position('1685' in def)=0 OR position('1637' in def)>0 THEN RAISE EXCEPTION 'AUTOPILOT_0350_FOLLOWUP_ADMISSION_NOT_ROTATED'; END IF;
 END $t$;
