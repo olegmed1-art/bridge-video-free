@@ -27,7 +27,7 @@ DECLARE original text; patched text;
 BEGIN
  original:=pg_get_functiondef('autopilot.register_universal_work_item(text,text,text,text,integer,integer,jsonb,text,text,text)'::regprocedure);
  patched:=replace(original,'p_target_pr integer DEFAULT 1637','p_target_pr integer DEFAULT 1685');
- patched:=replace(patched,$p_work_key,'olegmed1-art/bridge-video-free',1637,$,$p_work_key,'olegmed1-art/bridge-video-free',1685,$);
+ patched:=replace(patched,'''olegmed1-art/bridge-video-free'',1637,','''olegmed1-art/bridge-video-free'',1685,');
  IF patched=original OR position('1685' in patched)=0 THEN RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V3_REGISTRATION_SOURCE_DRIFT'; END IF;
  EXECUTE patched;
 END $register_patch$;
