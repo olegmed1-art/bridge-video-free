@@ -372,8 +372,8 @@ class RoleDispatchContractTests(unittest.TestCase):
         )
         _authorize_github_operation(method="GET", path=allowed)
         for method, path in (
-            ("POST", f"{REPOSITORY_API_PATH}/issues/1637/comments"),
-            ("GET", f"{REPOSITORY_API_PATH}/issues/1637"),
+            ("POST", f"{REPOSITORY_API_PATH}/issues/1685/comments"),
+            ("GET", f"{REPOSITORY_API_PATH}/issues/1685"),
             ("PATCH", allowed),
             ("DELETE", allowed),
         ):
