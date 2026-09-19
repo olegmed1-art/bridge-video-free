@@ -30,6 +30,8 @@ RETURNS TABLE(
  progress_token text,
  hold_reason text,
  blocker_action text,
+ provider_state text,
+ provider_last_success_at timestamptz,
  updated_at timestamptz
 )
 LANGUAGE plpgsql
@@ -43,7 +45,10 @@ BEGIN
  RETURN QUERY
  SELECT w.work_item_id,w.work_key,w.role,w.task_kind,w.target_pr,w.result_code,
         w.last_observed_head_sha,w.progress_token,w.hold_reason,
-        autopilot.blocker_remediation_action(w.result_code),w.updated_at
+        autopilot.blocker_remediation_action(w.result_code),
+        (SELECT pcs.state FROM autopilot.provider_circuit_state pcs WHERE pcs.provider_id='CODEX'),
+        (SELECT pcs.last_success_at FROM autopilot.provider_circuit_state pcs WHERE pcs.provider_id='CODEX'),
+        w.updated_at
  FROM autopilot.project_work_item w
  WHERE w.state='PAUSED'
  ORDER BY
@@ -115,7 +120,7 @@ BEGIN
     WHERE work_item_id=w.work_item_id;
    decision_action:='OWNER_HOLD';
 
- ELSIF p_target_disposition IN ('MERGED','CLOSED','SUPERSEDED','SUBSUMED_BY_MAIN') THEN
+ ELSIF p_target_disposition IN ('MERGED','SUPERSEDED','SUBSUMED_BY_MAIN') THEN
    UPDATE autopilot.project_work_item
       SET state='DONE',
           result_code='TARGET_SUPERSEDED_BY_CURRENT_MAIN',
@@ -131,6 +136,17 @@ BEGIN
 
  ELSIF blocker_action IN (
    'RECONCILE_TARGET','REPOSITORY_REPAIR','EVIDENCE_REMEDIATION','TRANSPORT_REMEDIATION'
+ )
+ OR (
+   blocker_action='PROVIDER_HOLD'
+   AND EXISTS (
+     SELECT 1
+     FROM autopilot.provider_circuit_state pcs
+     WHERE pcs.provider_id='CODEX'
+       AND pcs.state='CLOSED'
+       AND pcs.last_success_at IS NOT NULL
+       AND pcs.last_success_at>w.updated_at
+   )
  ) THEN
    IF w.progress_token IS NOT DISTINCT FROM p_evidence_token
       OR w.blocker_fingerprint IS NOT DISTINCT FROM fp THEN
