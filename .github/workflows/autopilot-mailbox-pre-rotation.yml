@@ -2,6 +2,10 @@ name: Autopilot mailbox pre-rotation
 
 on:
   workflow_dispatch:
+  push:
+    branches: [verify/autopilot-pre-rotation-0356]
+    paths:
+      - 'ops/autopilot-pre-rotation-verification/*.json'
   schedule:
     - cron: '23 * * * *'
 
@@ -51,7 +55,7 @@ jobs:
           printf 'mailbox=%s used=%s capacity=%s readiness=%s\n' "$mailbox" "$used" "$capacity" "$readiness"
 
       - name: Prepare bounded draft mailbox PR
-        if: steps.signal.outputs.readiness == 'PREPARE_ROTATION'
+        if: steps.signal.outputs.readiness == 'PREPARE_ROTATION' && github.event_name != 'push'
         shell: bash
         env:
           MAILBOX: ${{ steps.signal.outputs.mailbox }}
