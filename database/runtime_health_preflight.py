@@ -131,6 +131,27 @@ def main() -> None:
                 if severity == "critical" or int(critical_count or 0) > 0:
                     fail("critical operational health signal detected")
 
+                cur.execute("SELECT to_regclass('public.autopilot_operational_health_signal')")
+                if cur.fetchone()[0] is not None:
+                    cur.execute(
+                        "SELECT signal_key,severity FROM public.autopilot_operational_health_signal ORDER BY signal_key"
+                    )
+                    autopilot_signals = cur.fetchall()
+                    autopilot_critical = [key for key, sev in autopilot_signals if sev == "critical"]
+                    autopilot_warning = [key for key, sev in autopilot_signals if sev == "warning"]
+                    print(
+                        "RUNTIME_AUTOPILOT_HEALTH: "
+                        f"critical={len(autopilot_critical)} warning={len(autopilot_warning)} "
+                        f"signals={len(autopilot_signals)}"
+                    )
+                    if autopilot_critical:
+                        fail(
+                            "critical Autopilot operational health signal detected: "
+                            + ",".join(autopilot_critical)
+                        )
+                else:
+                    print("RUNTIME_AUTOPILOT_HEALTH: SKIP view_not_installed")
+
         print(
             "RUNTIME_DB_HEALTH: PASS "
             f"principal={EXPECTED_PRINCIPAL} capability={EXPECTED_CAPABILITY}"
