@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+      DATABASE_URL: ${{ secrets.AUTOPILOT_CALLBACK_DATABASE_URL }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout main
@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${DATABASE_URL:-}" || { echo 'BRIDGE_WORKER_DATABASE_URL is not configured'; exit 1; }
+          test -n "${DATABASE_URL:-}" || { echo 'AUTOPILOT_CALLBACK_DATABASE_URL is not configured'; exit 1; }
           row="$(psql "$DATABASE_URL" -XAt -F '|' -v ON_ERROR_STOP=1 -c "
             SELECT mailbox_pr,used_dispatches,max_dispatches,readiness
             FROM autopilot.mailbox_rotation_readiness();")"
