@@ -43,9 +43,9 @@ BEGIN
   'autopilot.create_chatgpt_role_followup_task(text,jsonb,integer,text,text)'::regprocedure
  ] LOOP
   original:=pg_get_functiondef(proc);
-  restored:=replace(original,$task_row.goal_json->>'mailbox_pr' <> '1685'$,$task_row.goal_json->>'mailbox_pr' <> '1637'$);
-  restored:=replace(restored,$p_goal_json->'mailbox_pr' IS DISTINCT FROM '1685'::jsonb$,$p_goal_json->'mailbox_pr' IS DISTINCT FROM '1637'::jsonb$);
-  restored:=replace(restored,$'mailbox_pr', 1685$,$'mailbox_pr', 1637$);
+  restored:=replace(original,'task_row.goal_json->>''mailbox_pr'' <> ''1685''','task_row.goal_json->>''mailbox_pr'' <> ''1637''');
+  restored:=replace(restored,'p_goal_json->''mailbox_pr'' IS DISTINCT FROM ''1685''::jsonb','p_goal_json->''mailbox_pr'' IS DISTINCT FROM ''1637''::jsonb');
+  restored:=replace(restored,'''mailbox_pr'', 1685','''mailbox_pr'', 1637');
   IF restored=original THEN RAISE EXCEPTION 'AUTOPILOT_0350_ROLLBACK_OUTBOUND_SOURCE_DRIFT: %',proc; END IF;
   EXECUTE restored;
  END LOOP;
