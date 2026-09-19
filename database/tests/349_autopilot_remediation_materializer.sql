@@ -11,7 +11,8 @@ BEGIN
   ),0,'database-test','SQL_TEST');
 
  child:=autopilot.materialize_blocker_remediation(origin_id,'SERVER_EVIDENCE_INCOMPLETE','Evidence missing.');
- IF child IS NULL OR (SELECT followup_kind FROM autopilot.role_dispatch_followup WHERE followup_task_id=child)<>'REPAIR'\n OR autopilot.blocker_remediation_action((SELECT goal_json->>'blocked_result_code' FROM autopilot.task WHERE task_id=child))<>'EVIDENCE_REMEDIATION'
+ IF child IS NULL OR (SELECT followup_kind FROM autopilot.role_dispatch_followup WHERE followup_task_id=child)<>'REPAIR'
+ OR autopilot.blocker_remediation_action((SELECT goal_json->>'blocked_result_code' FROM autopilot.task WHERE task_id=child))<>'EVIDENCE_REMEDIATION'
  OR (SELECT goal_json->>'mode' FROM autopilot.task WHERE task_id=child)<>'REPAIR'
  OR (SELECT goal_json->>'repair_attempt' FROM autopilot.task WHERE task_id=child)<>'1' THEN
   RAISE EXCEPTION 'AUTOPILOT_0349_EVIDENCE_ROUTE_INVALID';
@@ -20,7 +21,8 @@ BEGIN
  DELETE FROM autopilot.role_dispatch_followup WHERE parent_task_id=origin_id;
  DELETE FROM autopilot.task WHERE task_id=child;
  child:=autopilot.materialize_blocker_remediation(origin_id,'TARGET_SUPERSEDED_BY_CURRENT_MAIN','Target stale.');
- IF child IS NULL OR (SELECT followup_kind FROM autopilot.role_dispatch_followup WHERE followup_task_id=child)<>'REPAIR'\n OR autopilot.blocker_remediation_action((SELECT goal_json->>'blocked_result_code' FROM autopilot.task WHERE task_id=child))<>'RECONCILE_TARGET'
+ IF child IS NULL OR (SELECT followup_kind FROM autopilot.role_dispatch_followup WHERE followup_task_id=child)<>'REPAIR'
+ OR autopilot.blocker_remediation_action((SELECT goal_json->>'blocked_result_code' FROM autopilot.task WHERE task_id=child))<>'RECONCILE_TARGET'
  OR (SELECT goal_json->>'mode' FROM autopilot.task WHERE task_id=child)<>'REPAIR' THEN
   RAISE EXCEPTION 'AUTOPILOT_0349_RECONCILE_ROUTE_INVALID';
  END IF;
