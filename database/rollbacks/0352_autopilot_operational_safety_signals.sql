@@ -21,6 +21,7 @@ BEGIN
  EXECUTE d;
 END $restore$;
 
+DROP VIEW public.autopilot_operational_health_signal;
 DROP FUNCTION autopilot.mailbox_e2e_acceptance();
 DROP FUNCTION autopilot.mailbox_rotation_readiness();
 DROP TABLE autopilot.mailbox_rotation_signal;
