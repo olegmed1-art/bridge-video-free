@@ -1,0 +1,64 @@
+{
+  "schema": "bridge-primary-recognizer-canonical-promotion-gate-v1",
+  "revision": "3.1-free-r26.2",
+  "production_status": "ACTIVE",
+  "production_promotion_commit": "8474548071105e164f79b512b1d0de06a7f17a02",
+  "canonical_promotion_state": "BLOCKED_HOLDOUT",
+  "authority_boundary": {
+    "canonical_promotion_allowed": false,
+    "school_canon_write_allowed": false,
+    "world_write_allowed": false,
+    "derive_fourth_hand": false,
+    "deck_complement": false,
+    "hidden_hand_inference": false,
+    "unknown_hidden_cards_remain_unknown": true
+  },
+  "current_evidence": {
+    "production_baseline": "ops/r262-production-baseline.json",
+    "production_promotion": "ops/r262-production-promotion.json",
+    "confirmed_control_deals": 1,
+    "confirmed_control_cards": 52,
+    "independent_frozen_holdout_present": false,
+    "cross_source_accuracy_measured": false
+  },
+  "required_holdout": {
+    "minimum_cases": 24,
+    "minimum_independent_source_sessions": 4,
+    "complete_visible_deals": 12,
+    "fail_closed_non_complete_cases": 12,
+    "minimum_resolution_groups": 3,
+    "minimum_layout_theme_families_when_available": 2,
+    "minimum_complete_deals_with_void": 4,
+    "gold_must_be_frozen_before_recognizer_output": true,
+    "holdout_threshold_tuning_allowed": false,
+    "development_inputs_must_be_excluded": true,
+    "frame_and_decoded_pixel_hash_overlap_with_development_allowed": false
+  },
+  "acceptance": {
+    "card_seat_precision_min": 0.995,
+    "visible_target_recall_min": 0.95,
+    "seat_errors_max": 0,
+    "false_complete_deals_max": 0,
+    "stratified_metrics_required": [
+      "source_session",
+      "layout_family",
+      "theme_family",
+      "resolution_group",
+      "stress_tag",
+      "complete_vs_non_complete"
+    ]
+  },
+  "required_immutable_receipts": [
+    "recognizer_exact_head",
+    "runtime_artifact_digest",
+    "gambler_reference_digest",
+    "profile_config_digest",
+    "manifest_digest",
+    "human_gold_digest",
+    "scorer_taxonomy_version",
+    "recognizer_output_digest",
+    "independent_i2_recomputation"
+  ],
+  "next_action": "Build and freeze the independent human-gold holdout package on current main without changing thresholds or production routing. Run exactly one untuned shadow evaluation only after the package and gold digests are sealed.",
+  "note": "Production activation is complete. Canonical promotion is intentionally separate and remains fail-closed until independent evidence satisfies every gate."
+}
