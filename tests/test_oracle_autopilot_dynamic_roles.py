@@ -27,7 +27,7 @@ def _task(goal_type: str, goal_json: dict) -> ClaimedTask:
 def _dispatch_goal(role: str) -> dict:
     return {
         "repository": "olegmed1-art/bridge-video-free",
-        "mailbox_pr": 1637,
+        "mailbox_pr": 1685,
         "role": role,
         "target_pr": 1200,
         "expected_head_sha": "a" * 40,
