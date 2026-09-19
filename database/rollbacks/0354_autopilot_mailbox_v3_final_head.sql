@@ -6,9 +6,6 @@ LOCK TABLE autopilot.role_dispatch_outbox IN SHARE ROW EXCLUSIVE MODE;
 
 DO $guard$
 BEGIN
- IF (SELECT enabled FROM autopilot.project_planner_state WHERE singleton) THEN
-   RAISE EXCEPTION 'AUTOPILOT_0354_ROLLBACK_REQUIRES_PLANNER_PAUSED';
- END IF;
  IF EXISTS (
    SELECT 1 FROM autopilot.role_dispatch_outbox
    WHERE mailbox_pr=1685
