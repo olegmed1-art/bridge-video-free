@@ -6,6 +6,7 @@ DECLARE
  item_id uuid;
  origin_id uuid;
  repair_id uuid;
+ replayed_repair_id uuid;
  probe record;
  materialized record;
 BEGIN
@@ -82,11 +83,12 @@ BEGIN
    RAISE EXCEPTION 'AUTOPILOT_0363_REPAIR_SUCCESSOR_INVALID';
  END IF;
 
- PERFORM autopilot.materialize_role_repair(
+ SELECT autopilot.materialize_role_repair(
    origin_id,'AUDIT_FINDINGS_REPORTED',
    'Task completed. See execution details above.'
- );
- IF (SELECT count(*) FROM autopilot.role_dispatch_followup
+ ) INTO replayed_repair_id;
+ IF replayed_repair_id IS DISTINCT FROM repair_id
+    OR (SELECT count(*) FROM autopilot.role_dispatch_followup
      WHERE parent_task_id=origin_id AND followup_kind='REPAIR')<>1
     OR (SELECT count(*) FROM autopilot.project_work_task
         WHERE work_item_id=item_id AND run_kind='REPAIR')<>1 THEN
