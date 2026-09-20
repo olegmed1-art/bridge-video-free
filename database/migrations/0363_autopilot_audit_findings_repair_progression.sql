@@ -89,9 +89,18 @@ BEGIN
     SELECT existing_followup.followup_task_id INTO followup_id
       FROM autopilot.role_dispatch_followup AS existing_followup
      WHERE existing_followup.parent_task_id = origin_row.task_id
-       AND existing_followup.followup_kind = 'REPAIR';
+       AND existing_followup.followup_kind = 'REPAIR'
+       AND existing_followup.trigger_result_code = p_result_code;
     IF FOUND THEN
         RETURN followup_id;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+          FROM autopilot.role_dispatch_followup AS existing_followup
+         WHERE existing_followup.parent_task_id = origin_row.task_id
+           AND existing_followup.followup_kind = 'REPAIR'
+    ) THEN
+        RETURN NULL;
     END IF;
 
     SELECT created.task_id INTO followup_id
