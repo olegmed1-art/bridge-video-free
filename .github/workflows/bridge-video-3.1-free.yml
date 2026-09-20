@@ -7,6 +7,14 @@ on:
         description: "Opaque deterministic job id"
         required: true
         type: string
+      algorithm_revision:
+        description: "Bounded manual validation revision; push-triggered production remains r26.3"
+        required: false
+        default: "3.1-free-r26.3"
+        type: choice
+        options:
+          - "3.1-free-r26.3"
+          - "3.1-free-r26.4"
       output_folder_id:
         description: "Optional Drive folder for derived outputs; source video is never moved"
         required: false
@@ -62,6 +70,11 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
+
+      - name: Select bounded manual validation revision
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.algorithm_revision == '3.1-free-r26.4' }}
+        shell: bash
+        run: echo 'BRIDGE_REQUESTED_ALGORITHM_REVISION=3.1-free-r26.4' >> "$GITHUB_ENV"
 
       - name: Enforce single active production compute route
         shell: bash
@@ -260,7 +273,11 @@ jobs:
           trap cleanup_heartbeat EXIT
 
           set +e
-          python run_drive_3_1_free_oidc.py
+          if [ "${{ inputs.algorithm_revision }}" = "3.1-free-r26.4" ]; then
+            python run_drive_3_1_free_oidc_r264.py
+          else
+            python run_drive_3_1_free_oidc.py
+          fi
           RC=$?
           set -e
           cleanup_heartbeat
