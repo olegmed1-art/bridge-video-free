@@ -1,3 +1,3 @@
 """Immutable source provenance bundled into direct Vercel deployments."""
 
-SOURCE_REVISION = "4ef8f6c79bbf1a5688c9b2b93d72f24758c65939"
+SOURCE_REVISION = "e632334f2d5dc28f8e8ea4892e43d341850c3f11"

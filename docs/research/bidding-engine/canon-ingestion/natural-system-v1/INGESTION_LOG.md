@@ -282,7 +282,6 @@ Each entry records:
 **Unresolved:** PR is intentionally draft and not merge-ready while transcription and review continue.  
 **Next:** Persist the independently validated infrastructure migration and transcribe the next auction block.
 
-
 ## 2026-08-28 / LOG-0025 - Infrastructure PR #630 status corrected
 
 **Role:** Observatory / Coordinator  

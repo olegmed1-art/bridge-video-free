@@ -1,0 +1,89 @@
+name: Autopilot mailbox pre-rotation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 * * * *'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: autopilot-mailbox-pre-rotation
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.AUTOPILOT_CALLBACK_DATABASE_URL }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Read durable mailbox rotation signal
+        id: signal
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}" || { echo 'AUTOPILOT_CALLBACK_DATABASE_URL is not configured'; exit 1; }
+          row="$(psql "$DATABASE_URL" -XAt -F '|' -v ON_ERROR_STOP=1 -c "
+            SELECT mailbox_pr,used_dispatches,max_dispatches,readiness
+            FROM autopilot.mailbox_rotation_readiness();")"
+          IFS='|' read -r mailbox used capacity readiness <<<"$row"
+          echo "mailbox=$mailbox" >> "$GITHUB_OUTPUT"
+          echo "used=$used" >> "$GITHUB_OUTPUT"
+          echo "capacity=$capacity" >> "$GITHUB_OUTPUT"
+          echo "readiness=$readiness" >> "$GITHUB_OUTPUT"
+          printf 'mailbox=%s used=%s capacity=%s readiness=%s\n' "$mailbox" "$used" "$capacity" "$readiness"
+
+      - name: Prepare bounded draft mailbox PR
+        if: steps.signal.outputs.readiness == 'PREPARE_ROTATION'
+        shell: bash
+        env:
+          MAILBOX: ${{ steps.signal.outputs.mailbox }}
+          USED: ${{ steps.signal.outputs.used }}
+          CAPACITY: ${{ steps.signal.outputs.capacity }}
+        run: |
+          set -euo pipefail
+          title="chore(autopilot): prepare mailbox rotation from #$MAILBOX"
+          if gh pr list --state open --search "$title in:title" --json number --jq 'length' | grep -qx '[1-9][0-9]*'; then
+            echo "bounded rotation draft already exists"
+            exit 0
+          fi
+          branch="autopilot/mailbox-rotation-from-$MAILBOX"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch" origin/main
+          mkdir -p docs/evidence/autopilot
+          cat > "docs/evidence/autopilot/mailbox-rotation-from-$MAILBOX.md" <<EOF
+          # Autopilot mailbox pre-rotation bootstrap
+
+          - Source active mailbox: #$MAILBOX
+          - Observed dispatch usage: $USED / $CAPACITY
+          - Trigger: PREPARE_ROTATION (80% capacity threshold)
+          - Scope: repository-side preparation only
+          - Production cutover: OWNER-GATED
+          - Merge: OWNER-GATED
+
+          This bootstrap intentionally contains no production migration and no credentials.
+          The PR number created from this branch becomes the candidate mailbox identity for
+          the subsequent bounded rotation migration.
+          EOF
+          git add "docs/evidence/autopilot/mailbox-rotation-from-$MAILBOX.md"
+          git commit -m "chore(autopilot): bootstrap next mailbox rotation"
+          git push --force-with-lease origin "$branch"
+          gh pr create --draft --base main --head "$branch" --title "$title" --body "Automatically prepared at mailbox capacity threshold. Repository-side bootstrap only. No production migration, merge, credential, ruleset, Canon, or Drive changes are authorized by this workflow."

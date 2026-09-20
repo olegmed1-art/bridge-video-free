@@ -307,6 +307,11 @@ def _existing_same_revision_done(token, job_id):
     return None
 
 
+def _database_persistence_enabled():
+    value = os.environ.get("BRIDGE_PERSIST_DATABASE")
+    return True if value is None else value.strip().lower() == "true"
+
+
 def process_job(token):
     job_id = os.environ["BRIDGE_JOB_ID"]
     existing = _existing_same_revision_done(token, job_id)
@@ -315,9 +320,11 @@ def process_job(token):
         # AI_DONE proves the expensive Drive analysis is complete, but it does not prove
         # that the final Neon transaction succeeded. Reconcile the idempotent database
         # persistence before returning so a retry repairs partial completion.
-        persist_completed_drive_job(token)
+        if _database_persistence_enabled():
+            persist_completed_drive_job(token)
         return existing
 
     result = base.process_job(token)
-    persist_completed_drive_job(token)
+    if _database_persistence_enabled():
+        persist_completed_drive_job(token)
     return result

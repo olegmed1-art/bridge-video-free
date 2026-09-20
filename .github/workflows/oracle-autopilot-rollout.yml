@@ -268,6 +268,7 @@ jobs:
               'preview_only': True,
               'production_mutations_enabled': False,
               'github_token_broker_enabled': True,
+              'bounded_project_head_enabled': True,
               'bounded_role_dispatch_enabled': True,
               'merge_endpoint_enabled': False,
               'source_revision': os.environ['BROKER_SOURCE_SHA'],

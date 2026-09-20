@@ -27,7 +27,7 @@ def _task(goal_type: str, goal_json: dict) -> ClaimedTask:
 def _dispatch_goal(role: str) -> dict:
     return {
         "repository": "olegmed1-art/bridge-video-free",
-        "mailbox_pr": 1150,
+        "mailbox_pr": 1703,
         "role": role,
         "target_pr": 1200,
         "expected_head_sha": "a" * 40,
@@ -49,7 +49,7 @@ def test_registry_shaped_successor_role_is_accepted() -> None:
     goal.update(
         successor_task_key="next-task",
         successor_role="REPORTING",
-        successor_target_pr=1150,
+        successor_target_pr=1637,
         successor_expected_head_sha="b" * 40,
     )
     validate_task_contract(_task("CHATGPT_ROLE_DISPATCH_V1", goal))

@@ -2,6 +2,17 @@
 BEGIN;
 
 DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0327_autopilot_delivery_proof'
+    ) THEN
+        ALTER TABLE autopilot.role_dispatch_outbox
+            ALTER COLUMN delivery_contract_version SET DEFAULT 1;
+    END IF;
+END $$;
+
+DO $$
 DECLARE
     root_item uuid;
     child_item uuid;
@@ -88,7 +99,7 @@ BEGIN
     SELECT * INTO callback_result
       FROM autopilot.accept_role_dispatch_callback(
           'delivery-wakeup-325',repeat('5',64),true,
-          'olegmed1-art/bridge-video-free',1150,
+          'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
           'olegmed1-art',315099490,'OWNER',
           'chatgpt-codex-connector',1144995,callback_body
       );
@@ -126,8 +137,9 @@ BEGIN
         RAISE EXCEPTION 'AUTOPILOT_DEPENDENT_NOT_CLAIMABLE_AFTER_RECEIPT';
     END IF;
 
-    -- A transport failure may be retried at the same exact head, but receives
-    -- a new generation-scoped task key. Semantic blockers are still pinned.
+    -- A bounded non-provider transport failure may be retried at the same
+    -- exact head and receives a new generation-scoped task key. Provider/Codex
+    -- exhaustion is covered separately by the 0347 circuit-breaker contract.
     SELECT work_item_id INTO retry_item
       FROM autopilot.register_universal_work_item(
           'sql-wakeup-transport-325','AUTOPILOT','TRANSPORT_RETRY_TEST',
@@ -143,7 +155,7 @@ BEGIN
     retry_task_1 := materialized.task_id;
     UPDATE autopilot.task
        SET status='FAILED_CLOSED',
-           terminal_reason_code='STALE_RETRY_BUDGET_EXHAUSTED',
+           terminal_reason_code='GITHUB_API_TRANSIENT_ERROR',
            safe_summary_json='{}'::jsonb,completed_at=now()
      WHERE task_id=retry_task_1;
     UPDATE autopilot.project_work_item SET not_before=now()
