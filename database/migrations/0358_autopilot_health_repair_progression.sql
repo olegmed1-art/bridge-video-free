@@ -22,8 +22,7 @@ BEGIN
    RAISE EXCEPTION 'AUTOPILOT_HEALTH_REPAIR_ALREADY_APPLIED';
  END IF;
  IF to_regprocedure('autopilot.mailbox_rotation_readiness()') IS NULL
-    OR to_regprocedure('autopilot.blocker_remediation_action(text)') IS NULL
-    OR to_regprocedure('autopilot.blocker_repository_repair_allowed(text)') IS NULL
+    OR to_regprocedure('autopilot.materialize_role_repair(uuid,text,text)') IS NULL
     OR to_regprocedure('autopilot.on_role_task_terminal()') IS NULL THEN
    RAISE EXCEPTION 'AUTOPILOT_HEALTH_REPAIR_PREREQUISITE_MISSING';
  END IF;
@@ -66,76 +65,9 @@ SELECT p.oid::regprocedure::text,pg_get_functiondef(p.oid)
 FROM pg_proc AS p
 JOIN pg_namespace AS n ON n.oid=p.pronamespace
 WHERE p.oid IN (
- 'autopilot.blocker_remediation_action(text)'::regprocedure,
- 'autopilot.blocker_repository_repair_allowed(text)'::regprocedure,
+ 'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure,
  'autopilot.on_role_task_terminal()'::regprocedure
 );
-
-CREATE OR REPLACE FUNCTION autopilot.blocker_remediation_action(
- p_result_code text
-)
-RETURNS text
-LANGUAGE sql
-IMMUTABLE
-PARALLEL SAFE
-AS $$
-SELECT CASE
- WHEN p_result_code IS NULL THEN 'HOLD_UNKNOWN'
- -- Explicit retained defect results precede the unknown-code owner fallback.
- WHEN p_result_code='REPAIR_REQUIRED' THEN 'REPOSITORY_REPAIR'
- WHEN autopilot.role_blocker_requires_owner(p_result_code) THEN 'OWNER_HOLD'
- WHEN p_result_code IN (
-   'CODEX_PROVIDER_GENERIC_FAILURE',
-   'CODEX_ACK_DEADLINE_EXCEEDED',
-   'CODEX_RESULT_DEADLINE_EXCEEDED'
- ) THEN 'PROVIDER_HOLD'
- WHEN p_result_code IN (
-   'TARGET_SUPERSEDED_BY_CURRENT_MAIN',
-   'CURRENT_MAIN_SUBSUMES_TARGET',
-   'TARGET_PR_NOT_UPDATED'
- ) THEN 'RECONCILE_TARGET'
- WHEN p_result_code IN (
-   'SERVER_EVIDENCE_INCOMPLETE',
-   'SERVER_PARITY_EVIDENCE_INCOMPLETE',
-   'PRODUCTION_ACCEPTANCE_PLAN_INCOMPLETE',
-   'WORLD_EVIDENCE_NOT_VERSION_BOUND'
- ) THEN 'EVIDENCE_REMEDIATION'
- WHEN p_result_code IN (
-   'QA_GATES_FAILED',
-   'FINDINGS_REQUIRE_REPAIR',
-   'VIRTUALENV_INTERPRETER_REQUIRED',
-   'HISTORICAL_RULE_CONTENT_MUTABLE',
-   'FINDING_STALE_BLOCK_LEDGER',
-   'RECOGNIZER_READINESS_GAP',
-   'TECHNICAL_TEST_FAILURE',
-   'BOUNDED_DEFECT',
-   'BOUNDED_REPOSITORY_DEFECT'
- ) THEN 'REPOSITORY_REPAIR'
- WHEN p_result_code IN (
-   'PROJECT_HEAD_BROKER_TRANSIENT_ERROR',
-   'ROLE_DISPATCH_RESPONSE_INVALID',
-   'GITHUB_API_TRANSIENT_ERROR',
-   'AUTOPILOT_TRANSIENT_DATABASE_ERROR'
- ) THEN 'TRANSPORT_REMEDIATION'
- WHEN p_result_code IN (
-   'ROOT_CAUSE_IDENTIFIED',
-   'BOUNDED_REPAIR_UNIT_SELECTED',
-   'NEXT_REPAIR_UNIT_CONFIRMED'
- ) THEN 'REPOSITORY_REPAIR'
- ELSE 'HOLD_UNKNOWN'
-END
-$$;
-
-CREATE OR REPLACE FUNCTION autopilot.blocker_repository_repair_allowed(
- p_result_code text
-)
-RETURNS boolean
-LANGUAGE sql
-IMMUTABLE
-PARALLEL SAFE
-AS $$
- SELECT autopilot.blocker_remediation_action(p_result_code)='REPOSITORY_REPAIR'
-$$;
 
 DO $patch$
 DECLARE
@@ -144,9 +76,32 @@ DECLARE
  old_terminal text;
  new_terminal text;
 BEGIN
- IF (SELECT count(*) FROM autopilot.migration_0358_function_backup)<>3 THEN
+ IF (SELECT count(*) FROM autopilot.migration_0358_function_backup)<>2 THEN
    RAISE EXCEPTION 'AUTOPILOT_HEALTH_REPAIR_BACKUP_INCOMPLETE';
  END IF;
+
+ SELECT definition INTO STRICT original
+ FROM autopilot.migration_0358_function_backup
+ WHERE function_key='autopilot.materialize_role_repair(uuid,text,text)';
+ patched:=replace(
+   original,
+   $old$    IF NOT autopilot.blocker_repository_repair_allowed(p_result_code) THEN
+        RETURN NULL;
+    END IF;
+$old$,
+   $new$    -- REPAIR_REQUIRED_DIRECT_ADMISSION_V1: an explicit retained defect
+    -- bypasses only the unknown-code fallback; all other codes keep the gate.
+    IF p_result_code <> 'REPAIR_REQUIRED'
+       AND NOT autopilot.blocker_repository_repair_allowed(p_result_code) THEN
+        RETURN NULL;
+    END IF;
+$new$
+ );
+ IF patched=original
+    OR position('REPAIR_REQUIRED_DIRECT_ADMISSION_V1' in patched)=0 THEN
+   RAISE EXCEPTION 'AUTOPILOT_HEALTH_REPAIR_ADMISSION_SOURCE_DRIFT';
+ END IF;
+ EXECUTE patched;
 
  SELECT definition INTO STRICT original
  FROM autopilot.migration_0358_function_backup
@@ -163,12 +118,12 @@ $old$;
             -- REPAIR_REQUIRED_SUCCESSOR_V1: a syntactically successful callback
             -- may still retain a bounded repository defect. Route it through the
             -- repair controller before project completion is evaluated.
-            IF autopilot.blocker_remediation_action(result_code) = 'REPOSITORY_REPAIR' THEN
+            IF result_code = 'REPAIR_REQUIRED' THEN
                 result_summary := COALESCE(
                     NULLIF(NEW.safe_summary_json->>'summary', ''),
                     'Role result requires bounded repository repair.'
                 );
-                PERFORM autopilot.materialize_blocker_remediation(
+                PERFORM autopilot.materialize_role_repair(
                     NEW.task_id, result_code, result_summary
                 );
             ELSE

@@ -15,13 +15,13 @@ BEGIN
  ) THEN
    RAISE EXCEPTION 'AUTOPILOT_0358_MIGRATION_MISSING';
  END IF;
- IF autopilot.blocker_remediation_action('REPAIR_REQUIRED')<>'REPOSITORY_REPAIR'
-    OR autopilot.blocker_repository_repair_allowed('REPAIR_REQUIRED') IS DISTINCT FROM true THEN
-   RAISE EXCEPTION
-     'AUTOPILOT_0358_REPAIR_REQUIRED_CLASS_INVALID: action=%, allowed=%, owner=%',
-     autopilot.blocker_remediation_action('REPAIR_REQUIRED'),
-     autopilot.blocker_repository_repair_allowed('REPAIR_REQUIRED'),
-     autopilot.role_blocker_requires_owner('REPAIR_REQUIRED');
+ IF strpos(
+      pg_get_functiondef(
+        'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
+      ),
+      'REPAIR_REQUIRED_DIRECT_ADMISSION_V1'
+    )=0 THEN
+   RAISE EXCEPTION 'AUTOPILOT_0358_REPAIR_ADMISSION_NOT_INSTALLED';
  END IF;
  IF strpos(
       pg_get_functiondef('autopilot.on_role_task_terminal()'::regprocedure),
@@ -93,7 +93,7 @@ BEGIN
    RAISE EXCEPTION 'AUTOPILOT_0358_REPAIR_SUCCESSOR_INVALID';
  END IF;
 
- PERFORM autopilot.materialize_blocker_remediation(
+ PERFORM autopilot.materialize_role_repair(
    origin_id,'REPAIR_REQUIRED',
    'Bounded implementation and tests remain required.'
  );
