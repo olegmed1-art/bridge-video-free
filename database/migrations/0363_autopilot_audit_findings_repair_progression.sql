@@ -100,7 +100,7 @@ BEGIN
  IF patched=original
     OR strpos(patched,'AUDIT_FINDINGS_REPAIR_SUCCESSOR_V1')=0
     OR strpos(patched,'AUDIT_FINDINGS_REPAIR_REPLAY_V1')=0
-    OR strpos(patched,$p_result_code <> 'REPAIR_REQUIRED'$)>0 THEN
+    OR strpos(patched, 'p_result_code <> ''REPAIR_REQUIRED''')>0 THEN
    RAISE EXCEPTION 'AUTOPILOT_AUDIT_FINDINGS_REPAIR_ADMISSION_PATCH_FAILED';
  END IF;
  EXECUTE patched;
