@@ -58,6 +58,9 @@ on:
       - 'database/migrations/0359_autopilot_historical_repair_reopen.sql'
       - 'database/rollbacks/0359_autopilot_historical_repair_reopen.sql'
       - 'database/tests/359_autopilot_historical_repair_reopen.sql'
+      - 'database/migrations/0360_autopilot_health_e2e_acl.sql'
+      - 'database/rollbacks/0360_autopilot_health_e2e_acl.sql'
+      - 'database/tests/360_autopilot_health_e2e_acl.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -124,6 +127,9 @@ on:
       - 'database/migrations/0359_autopilot_historical_repair_reopen.sql'
       - 'database/rollbacks/0359_autopilot_historical_repair_reopen.sql'
       - 'database/tests/359_autopilot_historical_repair_reopen.sql'
+      - 'database/migrations/0360_autopilot_health_e2e_acl.sql'
+      - 'database/rollbacks/0360_autopilot_health_e2e_acl.sql'
+      - 'database/tests/360_autopilot_health_e2e_acl.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -318,6 +324,11 @@ jobs:
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0358_autopilot_health_repair_progression';")"
           had_historical_repair="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0359_autopilot_historical_repair_reopen';")"
+          had_health_e2e_acl="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0360_autopilot_health_e2e_acl';")"
+          if [ "$had_health_e2e_acl" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0360_autopilot_health_e2e_acl.sql
+          fi
           if [ "$had_historical_repair" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0359_autopilot_historical_repair_reopen.sql
           fi
@@ -452,6 +463,9 @@ jobs:
           if [ "$had_historical_repair" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0359_autopilot_historical_repair_reopen.sql
           fi
+          if [ "$had_health_e2e_acl" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0360_autopilot_health_e2e_acl.sql
+          fi
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
@@ -494,6 +508,8 @@ jobs:
             -f database/tests/358_autopilot_health_repair_progression.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/359_autopilot_historical_repair_reopen.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/360_autopilot_health_e2e_acl.sql
 
   migration-0336-roundtrip:
     runs-on: ubuntu-24.04
