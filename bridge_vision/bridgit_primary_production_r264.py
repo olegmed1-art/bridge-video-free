@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from bridge_vision.bridgit_gold_profile import build_autonomous_gold_profile
-from bridge_vision.bridgit_primary_video import recognize_video_primary
+from bridge_vision.bridgit_primary_video_r264 import recognize_video_primary
 from bridge_vision.gambler_classic_reference import MAX_SPRITE_BYTES
 from bridge_vision.gambler_reference_authority import PINNED_GAMBLER_CLASSIC_SPRITE_SHA256
 
 _STATE: dict[str, Any] = {"deals": [], "shots": [], "qc": {"status": "NOT_RUN"}}
 _INSTALLED_BASE_IDS: set[int] = set()
+VISUAL_ONLY_RECONSTRUCTION_RULE = "VISUAL_ONLY; NO_DECK_COMPLEMENT"
 
 
 def _q(value: object) -> str:
@@ -98,18 +99,35 @@ def _run_primary(base, token: str, video: Path, work: Path, job: str):
         shots.append({"evidence_id": evidence_id, "time": item["timestamp_ms"] / 1000.0, "path": str(item["screenshot"]), "sha256": item["screenshot_sha256"], "source": "primary_card_recognizer"})
         deals.append({
             "deal_id": base.stable_entity_id("deal", job, "primary-card|" + item["layout_sha256"]),
-            "episode_id": None, "status": "VISUAL_PRIMARY_RECOGNIZED", "hands": item["hands"],
+            "episode_id": None,
+            "status": (
+                "VISUAL_PRIMARY_RECOGNIZED_WITH_DECK_COMPLEMENT"
+                if item.get("hidden_hand_reconstruction_performed")
+                else "VISUAL_PRIMARY_RECOGNIZED"
+            ),
+            "hands": item["hands"],
             "auction": None, "contract": None, "declarer": None, "opening_lead": None, "result": None,
-            "reconstruction_rule": "VISUAL_ONLY; NO_DECK_COMPLEMENT", "statement_type": "FACT",
+            "reconstruction_rule": item.get(
+                "reconstruction_rule", VISUAL_ONLY_RECONSTRUCTION_RULE
+            ), "statement_type": "FACT",
+            "visual_hands": item.get("visual_hands"),
+            "visual_seats": item.get("visual_seats"),
+            "inferred_seats": item.get("inferred_seats"),
+            "hidden_hand_reconstruction_performed": bool(
+                item.get("hidden_hand_reconstruction_performed")
+            ),
+            "canonical_deal": item.get("canonical_deal"),
             "evidence": [evidence_id], "recognizer": {
                 "version": result.get("version"), "backend_status": item.get("backend_status"),
                 "minimum_assigned_score": item.get("minimum_assigned_score"), "median_assigned_score": item.get("median_assigned_score"),
                 "gambler_variant": result.get("gambler_variant"), "gambler_sprite_sha256": result.get("gambler_sprite_sha256"),
                 "template_card_size": result.get("template_card_size"), "template_resampled": result.get("template_resampled"),
+                "temporal_card_union": item.get("temporal_card_union"),
+                "temporal_card_support_rule": item.get("temporal_card_support_rule"),
                 "canonical_promotion_allowed": False,
             },
         })
-    qc = {k: result.get(k) for k in ("version", "status", "source_size", "gambler_variant", "gambler_sprite_sha256", "template_card_size", "template_resampled", "scan_ms", "attempt_gap_ms", "event_counts", "rejections")}
+    qc = {k: result.get(k) for k in ("version", "status", "source_size", "gambler_variant", "gambler_sprite_sha256", "template_card_size", "template_resampled", "scan_ms", "attempt_gap_ms", "temporal_card_union_enabled", "fourth_hand_derivation_enabled", "event_counts", "rejections")}
     qc.update({"deal_count": len(deals), "gold_profile_id": profile.get("profile_id"), "gold_drive_id": gold.get("id")})
     return deals, shots, qc
 

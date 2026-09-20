@@ -10,9 +10,9 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from .video_deal import CanonicalVideoDeal, canonicalize_video_deal
+from .video_deal_r264 import CanonicalVideoDeal, canonicalize_video_deal
 
-BRIDGE_VIDEO_FRAME_CONTRACT_VERSION = "bridge-video-frame-v3"
+BRIDGE_VIDEO_FRAME_CONTRACT_VERSION = "bridge-video-frame-v4"
 PARSER_STATUSES = frozenset({"PARTIAL_BOARD_OBSERVATION", "INSUFFICIENT", "CONFLICT", "UNAVAILABLE"})
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _STATE_FP_RE = re.compile(r"^[0-9a-f]{20}$")
@@ -78,11 +78,6 @@ def canonicalize_frame_recognition(
 ) -> CanonicalVideoFrame:
     if not isinstance(recognition, Mapping):
         raise BridgeVideoFrameContractError("recognition must be an object")
-    if derive_fourth_hand is not False:
-        raise BridgeVideoFrameContractError(
-            "fourth-hand derivation is prohibited; hidden cards must remain UNKNOWN"
-        )
-
     status = str(recognition.get("status") or "").strip().upper()
     if status not in PARSER_STATUSES:
         raise BridgeVideoFrameContractError("unsupported parser status")
@@ -122,7 +117,9 @@ def canonicalize_frame_recognition(
 
     deal = None
     if recognized_count:
-        deal = canonicalize_video_deal({"hands": dict(hands)})
+        deal = canonicalize_video_deal(
+            {"hands": dict(hands)}, derive_fourth_hand=derive_fourth_hand
+        )
 
     sha = _optional_text(frame_sha256, "frame_sha256", max_len=64)
     if sha is not None:

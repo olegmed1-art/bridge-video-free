@@ -12,7 +12,8 @@ the expected 52-card structure.
 
 No Gambler asset bytes are committed. The caller supplies a local sprite plus
 its SHA-256 and a verified registered card scale. No network access, cursor
-input, hidden-hand completion, Canon write, or production activation occurs.
+input, Canon write, or production activation occurs. The r26.4 caller may use
+one explicit deck complement after three complete visual hands are proven.
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
-import bridge_vision.bridgit_rank_layout as _base
+import bridge_vision.bridgit_rank_layout_r264 as _base
 from bridge_vision.gambler_classic_reference import (
     GamblerClassicReferenceError,
     GamblerClassicSprite,
@@ -147,6 +148,7 @@ def recognize_frames_with_original_gambler_deck(
     verified_card_height_px: float,
     expected_frame_sha256s: Sequence[str] | None = None,
     observation_timestamps_ms: Sequence[int] | None = None,
+    allow_fourth_hand_derivation: bool = False,
 ) -> dict[str, Any]:
     """Run the shadow recognizer against the pinned original Gambler templates.
 
@@ -200,6 +202,7 @@ def recognize_frames_with_original_gambler_deck(
             derived_profile,
             expected_frame_sha256s=expected_frame_sha256s,
             observation_timestamps_ms=observation_timestamps_ms,
+            allow_fourth_hand_derivation=allow_fourth_hand_derivation,
         )
 
     result = dict(result)
@@ -220,6 +223,11 @@ def recognize_frames_with_original_gambler_deck(
         "runtime_validation_scope": "IDENTITY_AND_STRUCTURAL_INTEGRITY_ONLY",
     }
     result["mouse_cursor_used"] = False
-    result["hidden_hand_reconstruction_performed"] = False
+    if allow_fourth_hand_derivation:
+        result["hidden_hand_reconstruction_performed"] = (
+            result.get("status") == "SHADOW_THREE_HAND_LAYOUT_CANDIDATE"
+        )
+    else:
+        result["hidden_hand_reconstruction_performed"] = False
     result["canonical_promotion_allowed"] = False
     return result

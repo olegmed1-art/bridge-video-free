@@ -273,7 +273,11 @@ jobs:
           trap cleanup_heartbeat EXIT
 
           set +e
-          python run_drive_3_1_free_oidc.py
+          if [ "${{ inputs.algorithm_revision }}" = "3.1-free-r26.4" ]; then
+            python run_drive_3_1_free_oidc_r264.py
+          else
+            python run_drive_3_1_free_oidc.py
+          fi
           RC=$?
           set -e
           cleanup_heartbeat

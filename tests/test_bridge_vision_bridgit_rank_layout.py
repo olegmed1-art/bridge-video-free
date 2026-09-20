@@ -641,35 +641,6 @@ def test_receipt_write_is_atomic_and_default_engine_remains_empty(tmp_path: Path
     assert BridgeVisionEngine().detector_names == ()
 
 
-def test_three_hand_assignment_adds_only_virtual_slots_for_absent_seat():
-    lengths = {
-        "N": {"S": 4, "H": 0, "D": 0, "C": 0},
-        "E": {"S": 3, "H": 4, "D": 3, "C": 3},
-        "S": {"S": 3, "H": 3, "D": 4, "C": 3},
-        "W": {"S": 0, "H": 0, "D": 0, "C": 0},
-    }
-    # N is completed in the other suits in the real geometry; use a full
-    # 13-card total here while retaining four visible spades.
-    lengths["N"].update({"H": 3, "D": 3, "C": 3})
-    visible_slots = [
-        (seat, (index, 10))
-        for seat, count in (("N", 4), ("E", 3), ("S", 3))
-        for index in range(count)
-    ]
-    visible_matrix = [[0.9] * 13 for _ in visible_slots]
-    assignment_lengths, slots, matrix = bridgit_rank_layout._assignment_inputs(
-        lengths, "S", visible_slots, visible_matrix
-    )
-
-    assert assignment_lengths == {"N": 4, "E": 3, "S": 3, "W": 3}
-    assert len(slots) == len(matrix) == 13
-    assert [slot for seat, slot in slots if seat == "W"] == [None, None, None]
-    assert matrix[-1] == (0.0,) * 13
-    assert bridgit_rank_layout.ordered_assignments(
-        matrix, [seat for seat, _ in slots], assignment_lengths
-    )
-
-
 def test_valid_shadow_job_is_hash_bound_deterministic_and_never_promotable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1501,8 +1472,7 @@ def test_registered_pixel_replay_stops_before_next_anchor_match(monkeypatch):
     assert registration_count == 2
 
 
-def test_weak_frame_miss_does_not_veto_fused_deal_but_confident_conflict_does(monkeypatch):
-    monkeypatch.setattr(bridgit_rank_layout, "TEMPORAL_CARD_UNION_ENABLED", True)
+def test_each_frame_must_independently_support_the_fused_deal():
     profile = parse_profile(profile_raw())
     agreed = {suit: tuple("N" * 13) for suit in "HCDS"}
     changed = dict(agreed)
@@ -1521,7 +1491,7 @@ def test_weak_frame_miss_does_not_veto_fused_deal_but_confident_conflict_does(mo
         )
         == []
     )
-    assert bridgit_rank_layout._frame_assignment_issues(
+    issues = bridgit_rank_layout._frame_assignment_issues(
         hashes,
         agreed,
         [agreed, changed],
@@ -1529,24 +1499,19 @@ def test_weak_frame_miss_does_not_veto_fused_deal_but_confident_conflict_does(mo
         [0.5, 0.11],
         [0.3, 0.19],
         profile,
-    ) == []
-
-    issues = bridgit_rank_layout._frame_assignment_issues(
-        hashes,
-        agreed,
-        [agreed, changed],
-        [0.8, 0.8],
-        [0.5, 0.5],
-        [0.3, 0.3],
-        profile,
     )
     assert issues == [
         {
             "frame_sha256": "b" * 64,
-            "reasons": ["deal_assignment_disagrees"],
-            "minimum_assigned_score": 0.8,
-            "minimum_assignment_margin": 0.5,
-            "minimum_rank_ink_fraction": 0.3,
+            "reasons": [
+                "deal_assignment_disagrees",
+                "assigned_rank_score_below_threshold",
+                "assignment_margin_below_threshold",
+                "rank_ink_below_threshold",
+            ],
+            "minimum_assigned_score": 0.39,
+            "minimum_assignment_margin": 0.11,
+            "minimum_rank_ink_fraction": 0.19,
         }
     ]
 
@@ -1715,43 +1680,6 @@ def test_slot_evidence_uses_one_origin_per_frame_and_rank(monkeypatch):
     assert components["raw"][rank_index] == pytest.approx(0.9)
     assert components["assignment"][rank_index] == pytest.approx(0.6)
     assert components["ink"][rank_index] == pytest.approx(0.1)
-
-
-def test_slot_evidence_uses_confident_card_from_either_frame(monkeypatch):
-    np = pytest.importorskip("numpy")
-    profile = replace(parse_profile(profile_raw()), local_registration_px=0)
-    monkeypatch.setattr(bridgit_rank_layout, "TEMPORAL_CARD_UNION_ENABLED", True)
-    first, second = object(), object()
-    monkeypatch.setattr(bridgit_rank_layout, "_pixel_runtime", lambda: (object(), np))
-    monkeypatch.setattr(
-        bridgit_rank_layout,
-        "_glyph",
-        lambda frame, _x, _y, _profile: frame,
-    )
-    monkeypatch.setattr(
-        bridgit_rank_layout,
-        "_similarity",
-        lambda glyph, rank: (
-            0.10 if glyph is first else (0.91 if rank == "A" else 0.20)
-        ),
-    )
-    monkeypatch.setattr(bridgit_rank_layout, "_rank_hole_count", lambda *_args: 0)
-    monkeypatch.setattr(
-        bridgit_rank_layout,
-        "_rank_ink_fraction",
-        lambda frame, *_args: 0.05 if frame is first else 0.40,
-    )
-
-    components = bridgit_rank_layout._slot_score_components(
-        [first, second],
-        {rank: rank for rank in bridgit_rank_layout.RANKS},
-        (10, 10),
-        profile,
-    )
-    ace = bridgit_rank_layout.RANKS.index("A")
-    assert components["per_frame_raw"][:, ace].tolist() == pytest.approx([0.10, 0.91])
-    assert components["raw"][ace] == pytest.approx(0.91)
-    assert components["ink"][ace] == pytest.approx(0.40)
 
 
 def test_generated_glyph_coordinates_must_be_unique_across_suits():
@@ -2018,8 +1946,7 @@ def test_side_fan_coordinate_preflight_includes_registration_radius():
     assert not bridgit_rank_layout._glyph_coords_fit_frame([(980, 100)], profile)
 
 
-def test_single_good_frame_is_pending_not_weak_evidence(monkeypatch):
-    monkeypatch.setattr(bridgit_rank_layout, "TEMPORAL_CARD_UNION_ENABLED", True)
+def test_single_good_frame_is_pending_not_weak_evidence():
     assert bridgit_rank_layout._temporal_support_gates(
         observed_frames=1,
         required_frames=2,
@@ -2037,7 +1964,7 @@ def test_single_good_frame_is_pending_not_weak_evidence(monkeypatch):
         required_frames=2,
         minimum_ink_support=1,
         distinct_timestamps=2,
-    ) == (True, True)
+    ) == (False, True)
     assert bridgit_rank_layout._temporal_support_gates(
         observed_frames=2,
         required_frames=2,

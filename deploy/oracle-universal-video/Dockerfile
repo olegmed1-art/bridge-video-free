@@ -30,8 +30,8 @@ COPY bridge_neon_persistence.py bridge_output_scoped_idempotency.py \
      bridge_speaker_diarization_v3_repair.py bridge_speaker_identity_postprocess.py \
      bridge_speaker_mapping_r29.py bridge_worker_3_1_free.py \
      diana_longitudinal_quality_v2.py r29_identity_overlay_probe.py \
-     route_drive_job_outputs.py run_drive_3_1_free.py run_drive_3_1_free_generic.py \
-     run_drive_3_1_free_oidc.py run_master_3_1_free.py \
+     route_drive_job_outputs.py run_drive_3_1_free.py run_drive_3_1_free_generic.py run_drive_3_1_free_r264.py \
+     run_drive_3_1_free_oidc.py run_drive_3_1_free_oidc_r264.py run_master_3_1_free.py \
      run_master_3_1_free_semantic.py run_master_3_1_free_semantic_v2.py \
      transcript_stage_checkpoint_v1.py ./
 COPY bridge_contracts ./bridge_contracts

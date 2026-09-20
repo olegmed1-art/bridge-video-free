@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import os
 
-import bridge_runtime_hardening_r26 as previous
+import bridge_runtime_hardening_r25_16 as previous
 import bridge_worker_3_1_free as core
 import run_master_3_1_free as base
 from bridge_output_scoped_idempotency import existing_same_revision_done
-from bridge_vision import bridgit_primary_video as primary_video
-from bridge_vision import bridgit_rank_layout as rank_layout
+from bridge_vision import bridgit_primary_video_r264 as primary_video
+from bridge_vision import bridgit_rank_layout_r264 as rank_layout
+from bridge_vision.bridgit_primary_compat import native_gambler_geometry
+from bridge_vision.bridgit_primary_production_r264 import (
+    install as install_primary_recognizer,
+)
 
 REVISION = "3.1-free-r26.4"
 
@@ -47,6 +51,28 @@ def install(token_func):
     )
     core.ALGORITHM_REVISION = REVISION
     base.ALGORITHM_REVISION = REVISION
+    if not getattr(primary_video._full_geometry_gate, "_r264_native_gambler", False):
+        original_geometry_gate = primary_video._full_geometry_gate
+
+        def native_geometry_gate(image, bank, profile):
+            with native_gambler_geometry():
+                return original_geometry_gate(image, bank, profile)
+
+        native_geometry_gate._r264_native_gambler = True
+        primary_video._full_geometry_gate = native_geometry_gate
+    selector_cls = primary_video.EventFrameSelector
+    if not getattr(selector_cls.observe, "_r264_settle_retry", False):
+        original_observe = selector_cls.observe
+
+        def observe_with_settle_retry(self, signature, timestamp_ms):
+            event = original_observe(self, signature, timestamp_ms)
+            if event is not None and event.reason != "WATCHDOG_STABLE_STATE":
+                self.schedule_retry(timestamp_ms, delay_ms=1_500)
+            return event
+
+        observe_with_settle_retry._r264_settle_retry = True
+        selector_cls.observe = observe_with_settle_retry
+    install_primary_recognizer(base, token_func)
 
 
 def run(token_func):
