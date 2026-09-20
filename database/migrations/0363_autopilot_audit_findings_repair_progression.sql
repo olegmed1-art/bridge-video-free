@@ -80,9 +80,27 @@ BEGIN
    $marker$           -- AUDIT_FINDINGS_REPAIR_SUCCESSOR_V1: retained audit findings require one bounded repair.
            -- REPAIR_REQUIRED_DIRECT_ADMISSION_V1: explicit retained defect.$marker$
  );
+ patched:=replace(
+   patched,
+   $old$    SELECT created.task_id INTO followup_id
+      FROM autopilot.create_chatgpt_role_followup_task($old$,
+   $new$    -- AUDIT_FINDINGS_REPAIR_REPLAY_V1: lineage is the durable
+    -- idempotency boundary even if the successor goal has advanced.
+    SELECT existing_followup.followup_task_id INTO followup_id
+      FROM autopilot.role_dispatch_followup AS existing_followup
+     WHERE existing_followup.parent_task_id = origin_row.task_id
+       AND existing_followup.followup_kind = 'REPAIR';
+    IF FOUND THEN
+        RETURN followup_id;
+    END IF;
+
+    SELECT created.task_id INTO followup_id
+      FROM autopilot.create_chatgpt_role_followup_task($new$
+ );
  IF patched=original
     OR strpos(patched,'AUDIT_FINDINGS_REPAIR_SUCCESSOR_V1')=0
-    OR strpos(patched,$$p_result_code <> 'REPAIR_REQUIRED'$$)>0 THEN
+    OR strpos(patched,'AUDIT_FINDINGS_REPAIR_REPLAY_V1')=0
+    OR strpos(patched,$p_result_code <> 'REPAIR_REQUIRED'$)>0 THEN
    RAISE EXCEPTION 'AUTOPILOT_AUDIT_FINDINGS_REPAIR_ADMISSION_PATCH_FAILED';
  END IF;
  EXECUTE patched;
