@@ -1,0 +1,73 @@
+{
+  "schema": "bridge-primary-recognizer-bounded-production-validation-v1",
+  "revision": "3.1-free-r26.3",
+  "validation_state": "PASS",
+  "validated_runtime_commit": "e00a3540b315a0099b97f165b17a073dcb4f7a10",
+  "autonomous_recognizer_commit": "9487791cf1d3958338ec4f56d35aee8df11389b9",
+  "source": {
+    "title": "Диана 29.mp4",
+    "drive_id": "1arn4rXDjEKaJ9HqmDFYfiqENm1x1Hs37",
+    "sha256": "135664d4f7eec1a66c9e9da7d6adeef748f315308c2885126ca6ce2b0b574ed3",
+    "stable_job_id": "be25b3b737fd1a32f3bb9af55cc390a1"
+  },
+  "workflow": {
+    "run_id": 35516293326,
+    "job_id": 106092690049,
+    "attempt": 1,
+    "conclusion": "success",
+    "process_outcome": "success",
+    "duplicate_heavy_runs": 0,
+    "requested_revision": "3.1-free-r26.3"
+  },
+  "output": {
+    "ai_done_drive_id": "1wMFTXJae7fZT6N5CBOS9QGUgkbWsTW8z",
+    "master_pdf_drive_id": "1VwGGEtfu-nTBv73pDhocNjicjOsi9Hsx",
+    "master_pdf_sha256": "9180a5705aee7f2b7743889105dc062b5038054f0c6dca13942edbc91f70a04b",
+    "embedded_master_json_sha256": "2b5f035419c3d18934fc14e564bffbe363c39d9e47cbbbc36debdd4c7180b872",
+    "ai_done_revision": "3.1-free-r26.3",
+    "primary_visual_deals": 1,
+    "false_complete_deals": 0,
+    "duplicate_complete_deals": 0
+  },
+  "control_deal": {
+    "timestamp_seconds": 6935.0,
+    "timestamp": "01:55:35",
+    "evidence_sha256": "190bf2f82b11388946dac0caf3a53c0ea1bde85947835d8f11561b027111ddaa",
+    "recognized_cards": 52,
+    "unique_cards": 52,
+    "cards_per_seat": 13,
+    "exact_reference_match": true,
+    "no_uncertainty": true,
+    "hands": {
+      "N": ["AH", "QH", "JH", "8H", "KC", "7C", "6C", "KD", "4D", "3D", "8S", "5S", "2S"],
+      "E": ["KH", "TH", "6H", "4H", "TC", "8C", "2C", "QD", "JD", "TD", "6D", "JS", "9S"],
+      "S": ["7H", "5H", "3H", "AC", "5C", "4C", "3C", "AD", "8D", "5D", "AS", "QS", "6S"],
+      "W": ["9H", "2H", "QC", "JC", "9C", "9D", "7D", "2D", "KS", "TS", "7S", "4S", "3S"]
+    }
+  },
+  "recognizer_evidence": {
+    "profile_verification_method": "AUTONOMOUS_HASH_GEOMETRY_V1",
+    "human_verification_required": false,
+    "backend_status": "SHADOW_FULL_LAYOUT_CANDIDATE",
+    "primary_status": "VISUAL_PRIMARY_RECOGNIZED",
+    "recognizer_version": "bridgit-primary-video-gambler-v2",
+    "sprite_binding": "PINNED_SHA256_ONLY",
+    "gambler_variant": 5,
+    "gambler_sprite_sha256": "52eb9c97c9685758f48beb6e84013e9289bdb97f8a31b4ae8e46a0ecee3a37fb",
+    "template_resampled": false,
+    "minimum_assigned_score": 0.920203,
+    "median_assigned_score": 0.972045
+  },
+  "safety_contract": {
+    "reconstruction_rule": "VISUAL_ONLY; NO_DECK_COMPLEMENT",
+    "derive_fourth_hand": false,
+    "deck_complement": false,
+    "hidden_hand_inference": false,
+    "unknown_hidden_cards_remain_unknown": true,
+    "canonical_promotion_allowed": false,
+    "school_canon_write_allowed": false,
+    "world_write_allowed": false,
+    "active_compute_route": "github_actions_legacy"
+  },
+  "scope": "One known production regression control. This is sufficient for bounded production promotion but is not an independent holdout or a canonical-promotion accuracy claim."
+}
