@@ -9,13 +9,15 @@ DECLARE
     default_value text;
     rejected boolean;
 BEGIN
-    active_mailbox := CASE WHEN EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation') THEN 1685 ELSE 1637 END;
+    SELECT mailbox_pr INTO STRICT active_mailbox
+      FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE';
     SELECT count(*) FILTER (WHERE mailbox_pr=active_mailbox AND lifecycle='ACTIVE' AND max_dispatches=40),
-           count(*) FILTER (WHERE mailbox_pr=1150 AND lifecycle='RETAINED')
-             + count(*) FILTER (WHERE active_mailbox=1685 AND mailbox_pr=1637 AND lifecycle='RETAINED')
+           count(*) FILTER (WHERE lifecycle='RETAINED')
       INTO active_count,retained_count
       FROM autopilot.role_dispatch_mailbox_registry;
-    IF active_count<>1 OR retained_count<>(CASE WHEN active_mailbox=1685 THEN 2 ELSE 1 END) THEN
+    IF active_count<>1 OR retained_count<>(
+        (SELECT count(*) FROM autopilot.role_dispatch_mailbox_registry)-1
+    ) THEN
         RAISE EXCEPTION 'MAILBOX_REGISTRY_INVALID';
     END IF;
 
@@ -29,7 +31,7 @@ BEGIN
 
     IF pg_get_functiondef(
         'autopilot.accept_role_dispatch_callback(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
-       ) NOT LIKE (CASE WHEN active_mailbox=1685 THEN '%p_mailbox_pr NOT IN (1150,1637,1685)%' ELSE '%p_mailbox_pr NOT IN (1150,1637)%' END) THEN
+       ) NOT LIKE '%p_mailbox_pr NOT IN (%' || active_mailbox::text || ')%' THEN
         RAISE EXCEPTION 'CALLBACK_DUAL_MAILBOX_GUARD_MISSING';
     END IF;
     IF pg_get_functiondef(

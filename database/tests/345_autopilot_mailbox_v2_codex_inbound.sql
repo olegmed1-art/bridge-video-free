@@ -20,7 +20,8 @@ DECLARE
     rejected boolean;
     active_mailbox integer;
 BEGIN
-    active_mailbox := CASE WHEN EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation') THEN 1685 ELSE 1637 END;
+    SELECT mailbox_pr INTO STRICT active_mailbox
+      FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE';
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
          WHERE migration_key='0345_autopilot_mailbox_v2_codex_inbound'

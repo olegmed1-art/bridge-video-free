@@ -6,10 +6,9 @@ frame from the already verified UI reference, replacing only the 52 rank-glyph
 crops with source-bound original Gambler classic artwork. The base recognizer
 then builds its ordinary rank bank from those original-client glyphs.
 
-The original Gambler card artwork is an externally human-approved reference.
-Runtime checks prove only that the selected bytes are exactly the approved
-original asset and structurally usable; they do not re-validate the correctness
-or completeness of the card artwork itself.
+The original Gambler card artwork is a hash-bound mechanical reference. Runtime
+checks prove that the selected bytes match the fixed allowlist and decode into
+the expected 52-card structure.
 
 No Gambler asset bytes are committed. The caller supplies a local sprite plus
 its SHA-256 and a verified registered card scale. No network access, cursor
@@ -30,15 +29,15 @@ from bridge_vision.gambler_classic_reference import (
     bank_provenance,
     decode_card_cells,
     load_sprite,
-    select_variant_for_card_size,
 )
 from bridge_vision.gambler_reference_authority import (
     GamblerReferenceAuthorityError,
-    assert_approved_sprite_binding,
+    assert_pinned_sprite_binding,
     authority_provenance,
+    variant_for_pinned_sprite_sha256,
 )
 
-SUCCESSOR_VERSION = "bridge-vision-bridgit-rank-layout-gambler-classic-v1"
+SUCCESSOR_VERSION = "bridge-vision-bridgit-rank-layout-gambler-classic-v2"
 _RANK_CROP_X_FRACTION = 4 / 109
 _RANK_CROP_Y_FRACTION = 5 / 147
 
@@ -72,6 +71,9 @@ def derive_original_asset_reference(
     verified_reference_image: Any,
     profile: _base.BridgitRankLayoutProfile,
     sprite: GamblerClassicSprite,
+    *,
+    target_card_width_px: float | None = None,
+    target_card_height_px: float | None = None,
 ) -> Any:
     """Return a copy whose rank-template crops come from the original client sprite."""
     try:
@@ -84,9 +86,16 @@ def derive_original_asset_reference(
         raise BridgitGamblerRankLayoutError("verified reference dimensions do not match profile")
     derived = verified_reference_image.copy()
     cells = decode_card_cells(sprite)
-    crop_x = max(1, round(sprite.card_width * _RANK_CROP_X_FRACTION))
-    crop_y = max(1, round(sprite.card_height * _RANK_CROP_Y_FRACTION))
-    if crop_x + profile.glyph_width > sprite.card_width or crop_y + profile.glyph_height > sprite.card_height:
+    try:
+        target_width = round(float(target_card_width_px or sprite.card_width))
+        target_height = round(float(target_card_height_px or sprite.card_height))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise BridgitGamblerRankLayoutError("target card template size is invalid") from exc
+    if not 24 <= target_width <= 4096 or not 32 <= target_height <= 4096:
+        raise BridgitGamblerRankLayoutError("target card template size is outside bounds")
+    crop_x = max(1, round(target_width * _RANK_CROP_X_FRACTION))
+    crop_y = max(1, round(target_height * _RANK_CROP_Y_FRACTION))
+    if crop_x + profile.glyph_width > target_width or crop_y + profile.glyph_height > target_height:
         raise BridgitGamblerRankLayoutError("original-asset rank crop leaves native card cell")
 
     anchor_rect = _interface_anchor_rect(profile)
@@ -103,6 +112,17 @@ def derive_original_asset_reference(
             source = cv2.cvtColor(cell, cv2.COLOR_GRAY2BGR)
         else:
             raise BridgitGamblerRankLayoutError("unsupported original-asset card raster")
+        if (target_width, target_height) != (sprite.card_width, sprite.card_height):
+            interpolation = (
+                cv2.INTER_AREA
+                if target_width <= sprite.card_width and target_height <= sprite.card_height
+                else cv2.INTER_CUBIC
+            )
+            source = cv2.resize(
+                source,
+                (target_width, target_height),
+                interpolation=interpolation,
+            )
         patch = source[
             crop_y : crop_y + profile.glyph_height,
             crop_x : crop_x + profile.glyph_width,
@@ -128,34 +148,37 @@ def recognize_frames_with_original_gambler_deck(
     expected_frame_sha256s: Sequence[str] | None = None,
     observation_timestamps_ms: Sequence[int] | None = None,
 ) -> dict[str, Any]:
-    """Run the shadow recognizer against the approved original Gambler templates.
+    """Run the shadow recognizer against the pinned original Gambler templates.
 
-    The native sprite variant is selected from the verified *registered card
+    The native sprite variant is selected from the measured *registered card
     scale*, never from source-video resolution or window position. The supplied
-    SHA must identify the already human-approved original Gambler asset for that
-    native variant; no card-content re-validation is performed here.
+    SHA must identify the fixed original Gambler asset for that native variant.
     """
     try:
-        expected_variant = select_variant_for_card_size(
-            verified_card_width_px, verified_card_height_px
-        )
-        approved_sha = assert_approved_sprite_binding(
+        expected_variant = variant_for_pinned_sprite_sha256(gambler_sprite_sha256)
+        pinned_sha = assert_pinned_sprite_binding(
             expected_variant, gambler_sprite_sha256
         )
         sprite = load_sprite(
             Path(gambler_sprite_path),
-            expected_sha256=approved_sha,
+            expected_sha256=pinned_sha,
             expected_variant=expected_variant,
         )
     except (GamblerClassicReferenceError, GamblerReferenceAuthorityError) as exc:
         raise BridgitGamblerRankLayoutError(f"invalid Gambler classic reference: {exc}") from exc
 
     # Use the base decoder so the same byte/raster safety boundary and profile
-    # dimensions apply to the human-reviewed UI reference.
+    # dimensions apply to the hash-bound UI reference.
     reference, reference_hash, _, _ = _base._read_frame(Path(reference_frame), profile)
     if reference_hash != profile.reference_frame_sha256:
         raise BridgitGamblerRankLayoutError("verified reference frame hash mismatch")
-    derived = derive_original_asset_reference(reference, profile, sprite)
+    derived = derive_original_asset_reference(
+        reference,
+        profile,
+        sprite,
+        target_card_width_px=verified_card_width_px,
+        target_card_height_px=verified_card_height_px,
+    )
 
     try:
         import cv2  # type: ignore
@@ -184,9 +207,13 @@ def recognize_frames_with_original_gambler_deck(
     result["template_source"] = {
         **bank_provenance(sprite),
         **authority_provenance(sprite.variant),
-        "selection_basis": "VERIFIED_REGISTERED_CARD_SCALE",
+        "selection_basis": "MEASURED_REGISTERED_CARD_SCALE",
         "verified_card_width_px": float(verified_card_width_px),
         "verified_card_height_px": float(verified_card_height_px),
+        "template_resampled": (
+            abs(float(verified_card_width_px) - sprite.card_width) > 1e-9
+            or abs(float(verified_card_height_px) - sprite.card_height) > 1e-9
+        ),
         "legacy_reference_frame_sha256": profile.reference_frame_sha256,
         "derived_reference_frame_sha256": derived_sha,
         "replacement_scope": "RANK_TEMPLATE_CROPS_ONLY",

@@ -11,7 +11,10 @@ DECLARE
  candidate record;
  token1 text:=repeat('a',64);
  token2 text:=repeat('b',64);
+ active_mailbox integer;
 BEGIN
+ SELECT mailbox_pr INTO STRICT active_mailbox
+ FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE';
  IF NOT has_function_privilege(
    'bridge_school_worker',
    'autopilot.paused_reconcile_candidates(integer)',
@@ -29,7 +32,7 @@ BEGIN
    task_kind,objective,result_code,mailbox_pr
  ) VALUES(
    'test-0353-remediate','AUTOPILOT',1150,0,'PAUSED','sql-test','SQL_TEST',
-   'REPOSITORY_REPAIR','0353 bounded remediation test','BOUNDED_DEFECT',1685
+   'REPOSITORY_REPAIR','0353 bounded remediation test','BOUNDED_DEFECT',active_mailbox
  )
  RETURNING work_item_id INTO wid;
 
@@ -93,7 +96,7 @@ BEGIN
    task_kind,objective,result_code,mailbox_pr
  ) VALUES(
    'test-0353-owner-gated-role','SERVER',1106,0,'PAUSED','sql-test','SQL_TEST',
-   'REPOSITORY_AUDIT','0353 owner-gated role preservation','SERVER_EVIDENCE_INCOMPLETE',1685
+   'REPOSITORY_AUDIT','0353 owner-gated role preservation','SERVER_EVIDENCE_INCOMPLETE',active_mailbox
  )
  RETURNING work_item_id INTO wid2;
 
@@ -117,7 +120,7 @@ BEGIN
    task_kind,objective,result_code,mailbox_pr
  ) VALUES(
    'test-0353-provider-recovery','VIDEO',1599,0,'PAUSED','sql-test','SQL_TEST',
-   'REPOSITORY_AUDIT','0353 provider recovery evidence','CODEX_PROVIDER_GENERIC_FAILURE',1685
+   'REPOSITORY_AUDIT','0353 provider recovery evidence','CODEX_PROVIDER_GENERIC_FAILURE',active_mailbox
  )
  RETURNING work_item_id INTO wid3;
 
@@ -148,7 +151,7 @@ BEGIN
    task_kind,objective,result_code,mailbox_pr
  ) VALUES(
    'test-0353-closed-not-success','AUTOPILOT',1150,0,'PAUSED','sql-test','SQL_TEST',
-   'REPOSITORY_AUDIT','0353 closed target is not success','TARGET_PR_NOT_UPDATED',1685
+   'REPOSITORY_AUDIT','0353 closed target is not success','TARGET_PR_NOT_UPDATED',active_mailbox
  )
  RETURNING work_item_id INTO wid4;
 

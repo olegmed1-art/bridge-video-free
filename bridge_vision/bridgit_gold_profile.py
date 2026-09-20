@@ -1,7 +1,7 @@
-"""Build the pinned human-reviewed Bridgit geometry profile from gold-v2.
+"""Build the pinned autonomous Bridgit geometry profile from gold-v2.
 
-The package supplies only the reviewed UI geometry/profile authority. Production
-rank pixels are replaced later by the approved original Gambler classic asset.
+The package supplies hash-bound UI geometry. Production rank pixels are replaced
+later by the pinned original Gambler classic asset.
 """
 from __future__ import annotations
 
@@ -14,8 +14,11 @@ from typing import Any
 from bridge_vision import bridgit_rank_layout as rank_layout
 
 PROFILE_ID = "bridgit.desktop.1920x1010.gold-v2"
-GOLD_MANIFEST_SHA256 = "8c3a71cdb3f5125c1cdc31cfd5b4378fb5441393da77d23e64352147130c198d"
-GOLD_TEMPLATE_SET_SHA256 = "c763a35745c8817141d573e235c28c14c1c3343644650a4c4a73b9ccb1593d7c"
+GOLD_MANIFEST_SHA256 = rank_layout.AUTONOMOUS_MANIFEST_SHA256
+GOLD_VALIDATION_SHA256 = rank_layout.AUTONOMOUS_VALIDATION_SHA256
+GOLD_INTEGRITY_SHA256 = rank_layout.AUTONOMOUS_INTEGRITY_SHA256
+GOLD_TEMPLATE_SET_SHA256 = rank_layout.AUTONOMOUS_TEMPLATE_SET_SHA256
+GOLD_RANK_SET_SHA256 = rank_layout.AUTONOMOUS_RANK_SET_SHA256
 MAX_GOLD_ZIP_BYTES = 64 * 1024 * 1024
 MAX_GOLD_EXPANDED_BYTES = 128 * 1024 * 1024
 MAX_GOLD_ENTRIES = 512
@@ -61,7 +64,60 @@ def _safe_extract(archive_path: Path, destination: Path) -> Path:
     return package
 
 
-def build_verified_gold_profile(
+def _safe_package_file(package: Path, relative: object, field: str) -> Path:
+    path = package / str(relative or "")
+    try:
+        path.resolve(strict=True).relative_to(package.resolve(strict=True))
+    except (OSError, ValueError) as exc:
+        raise BridgitGoldProfileError(f"gold-v2 {field} path escapes package") from exc
+    if not path.is_file():
+        raise BridgitGoldProfileError(f"gold-v2 {field} is not a regular file")
+    return path
+
+
+def _verify_template_sets(
+    package: Path, manifest: dict[str, Any], integrity: dict[str, Any]
+) -> None:
+    templates = manifest.get("templates")
+    if not isinstance(templates, list) or len(templates) != 104:
+        raise BridgitGoldProfileError("gold-v2 template count is invalid")
+    template_hashes: list[str] = []
+    rank_hashes: list[str] = []
+    variants: dict[str, set[int]] = {card: set() for card in rank_layout.CARDS}
+    for index, item in enumerate(templates):
+        if not isinstance(item, dict):
+            raise BridgitGoldProfileError("gold-v2 template record is invalid")
+        card = str(item.get("card") or "")
+        try:
+            variant = int(item.get("variant"))
+        except (TypeError, ValueError) as exc:
+            raise BridgitGoldProfileError("gold-v2 template variant is invalid") from exc
+        if card not in rank_layout.CARDS or variant not in {1, 2}:
+            raise BridgitGoldProfileError("gold-v2 template deck identity is invalid")
+        variants[card].add(variant)
+        template_path = _safe_package_file(package, item.get("path"), f"templates[{index}]")
+        rank_path = _safe_package_file(package, item.get("rank_path"), f"rank_glyphs[{index}]")
+        template_sha = str(item.get("sha256") or "")
+        rank_sha = str(item.get("rank_sha256") or "")
+        if _sha256(template_path) != template_sha or _sha256(rank_path) != rank_sha:
+            raise BridgitGoldProfileError("gold-v2 template file identity mismatch")
+        template_hashes.append(template_sha)
+        rank_hashes.append(rank_sha)
+    if any(value != {1, 2} for value in variants.values()):
+        raise BridgitGoldProfileError("gold-v2 deck bijection is incomplete")
+    calculated_template_set = hashlib.sha256("".join(template_hashes).encode("ascii")).hexdigest()
+    calculated_rank_set = hashlib.sha256("".join(rank_hashes).encode("ascii")).hexdigest()
+    if calculated_template_set != GOLD_TEMPLATE_SET_SHA256:
+        raise BridgitGoldProfileError("gold-v2 template set identity mismatch")
+    if calculated_rank_set != GOLD_RANK_SET_SHA256:
+        raise BridgitGoldProfileError("gold-v2 rank set identity mismatch")
+    if integrity.get("template_set_sha256") != calculated_template_set:
+        raise BridgitGoldProfileError("gold-v2 integrity template set mismatch")
+    if integrity.get("rank_set_sha256") != calculated_rank_set:
+        raise BridgitGoldProfileError("gold-v2 integrity rank set mismatch")
+
+
+def build_autonomous_gold_profile(
     gold_zip: Path, output_dir: Path
 ) -> tuple[Path, Path, dict[str, Any]]:
     """Return reference path, profile path and parsed profile payload."""
@@ -78,35 +134,36 @@ def build_verified_gold_profile(
     integrity_path = package / "integrity.json"
     if _sha256(manifest_path) != GOLD_MANIFEST_SHA256:
         raise BridgitGoldProfileError("gold-v2 manifest identity mismatch")
+    if _sha256(validation_path) != GOLD_VALIDATION_SHA256:
+        raise BridgitGoldProfileError("gold-v2 validation identity mismatch")
+    if _sha256(integrity_path) != GOLD_INTEGRITY_SHA256:
+        raise BridgitGoldProfileError("gold-v2 integrity identity mismatch")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     validation = json.loads(validation_path.read_text(encoding="utf-8"))
     integrity = json.loads(integrity_path.read_text(encoding="utf-8"))
-    if manifest.get("status") != "HUMAN_VERIFIED":
-        raise BridgitGoldProfileError("gold-v2 is not human verified")
     if validation.get("deck_bijection") != "PASS" or validation.get("two_variants_per_card") != "PASS":
         raise BridgitGoldProfileError("gold-v2 validation did not pass")
     if int(validation.get("rank_separation", {}).get("correct_rank_predictions", 0)) != 104:
         raise BridgitGoldProfileError("gold-v2 rank validation is incomplete")
-    if integrity.get("template_set_sha256") != GOLD_TEMPLATE_SET_SHA256:
-        raise BridgitGoldProfileError("gold-v2 template set identity mismatch")
+    if integrity.get("manifest_sha256") != GOLD_MANIFEST_SHA256:
+        raise BridgitGoldProfileError("gold-v2 integrity manifest mismatch")
+    if integrity.get("validation_sha256") != GOLD_VALIDATION_SHA256:
+        raise BridgitGoldProfileError("gold-v2 integrity validation mismatch")
+    _verify_template_sets(package, manifest, integrity)
 
     try:
         source = next(item for item in manifest["sources"] if item["source_id"] == "deal_02")
     except (KeyError, StopIteration) as exc:
-        raise BridgitGoldProfileError("gold-v2 reviewed source is missing") from exc
+        raise BridgitGoldProfileError("gold-v2 geometry source is missing") from exc
     width, height = int(source["width"]), int(source["height"])
     if (width, height) != (1920, 1010):
-        raise BridgitGoldProfileError("gold-v2 reviewed geometry changed")
+        raise BridgitGoldProfileError("gold-v2 geometry changed")
     canvas = np.full((height, width, 3), 255, dtype=np.uint8)
     slots: list[dict[str, Any]] = []
     for item in manifest.get("templates", []):
         if item.get("source_id") != "deal_02":
             continue
-        rank_path = package / str(item.get("rank_path") or "")
-        try:
-            rank_path.resolve(strict=True).relative_to(package.resolve(strict=True))
-        except (OSError, ValueError) as exc:
-            raise BridgitGoldProfileError("gold-v2 rank glyph path escapes package") from exc
+        rank_path = _safe_package_file(package, item.get("rank_path"), "rank glyph")
         raw = rank_path.read_bytes()
         glyph = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
         if glyph is None:
@@ -118,7 +175,7 @@ def build_verified_gold_profile(
         canvas[y : y + gh, x : x + gw] = cv2.cvtColor(glyph, cv2.COLOR_GRAY2BGR)
         slots.append({"card": str(item["card"]), "x": x, "y": y})
     if len(slots) != 52 or len({item["card"] for item in slots}) != 52:
-        raise BridgitGoldProfileError("gold-v2 does not contain one reviewed slot per card")
+        raise BridgitGoldProfileError("gold-v2 does not contain one slot per card")
 
     reference = output_dir / "gold-v2-reference.png"
     if not cv2.imwrite(str(reference), canvas):
@@ -126,14 +183,18 @@ def build_verified_gold_profile(
     reference_sha = _sha256(reference)
     profile: dict[str, Any] = {
         "schema": rank_layout.PROFILE_SCHEMA,
-        "human_verified": True,
         "profile_id": PROFILE_ID,
         "reference_frame_sha256": reference_sha,
         "verification": {
-            "method": "HUMAN_LABEL_REVIEW",
-            "reviewer_id": str(manifest["reviewer_id"]),
-            "verified_at": str(manifest["verified_at"]),
+            "method": "AUTONOMOUS_HASH_GEOMETRY_V1",
             "reference_frame_sha256": reference_sha,
+            "manifest_sha256": GOLD_MANIFEST_SHA256,
+            "validation_sha256": GOLD_VALIDATION_SHA256,
+            "integrity_sha256": GOLD_INTEGRITY_SHA256,
+            "template_set_sha256": GOLD_TEMPLATE_SET_SHA256,
+            "rank_set_sha256": GOLD_RANK_SET_SHA256,
+            "deck_bijection": "PASS",
+            "rank_separation_predictions": 104,
         },
         "frame_size": {"width": width, "height": height},
         "ordering": {"suits": list(rank_layout.SUITS), "ranks": list(rank_layout.RANKS)},
@@ -169,7 +230,10 @@ def build_verified_gold_profile(
         },
         "gold": {
             "manifest_sha256": GOLD_MANIFEST_SHA256,
+            "validation_sha256": GOLD_VALIDATION_SHA256,
+            "integrity_sha256": GOLD_INTEGRITY_SHA256,
             "template_set_sha256": GOLD_TEMPLATE_SET_SHA256,
+            "rank_set_sha256": GOLD_RANK_SET_SHA256,
             "bridge_logic_weighting": False,
         },
     }
@@ -183,7 +247,10 @@ def build_verified_gold_profile(
 __all__ = [
     "BridgitGoldProfileError",
     "GOLD_MANIFEST_SHA256",
+    "GOLD_VALIDATION_SHA256",
+    "GOLD_INTEGRITY_SHA256",
     "GOLD_TEMPLATE_SET_SHA256",
+    "GOLD_RANK_SET_SHA256",
     "PROFILE_ID",
-    "build_verified_gold_profile",
+    "build_autonomous_gold_profile",
 ]

@@ -7,7 +7,7 @@ from ops.validate_universal_video_runtime_routing import RoutingContractError, l
 
 def test_r26_to_oracle_parity_is_honestly_blocked() -> None:
     parity = load_and_validate_feature_parity()
-    assert parity["source_revision"] == "3.1-free-r26.2"
+    assert parity["source_revision"] == "3.1-free-r26.3"
     assert parity["target_route"] == "oracle_container"
     assert parity["overall_status"] == "BLOCKED"
     blocked = {name for name, capability in parity["capabilities"].items() if capability["state"] != "PARITY_PROVEN"}

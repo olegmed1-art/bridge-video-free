@@ -170,6 +170,22 @@ def select_variant_for_card_size(
     maximum_relative_error: float = 0.08,
 ) -> int:
     """Select the single nearest native variant from verified registered card scale."""
+    if not 0 < maximum_relative_error < 0.5:
+        raise GamblerClassicReferenceError("invalid card-scale selection input")
+    scored = variant_candidates_for_card_size(card_width, card_height)
+    best_error, best_variant = scored[0]
+    if best_error > maximum_relative_error:
+        raise GamblerClassicReferenceError("no classic variant matches the verified card scale")
+    if len(scored) > 1 and abs(scored[1][0] - best_error) < 1e-9:
+        raise GamblerClassicReferenceError("classic variant selection is ambiguous")
+    return best_variant
+
+
+def variant_candidates_for_card_size(
+    card_width: float,
+    card_height: float,
+) -> tuple[tuple[float, int], ...]:
+    """Return pinned native variants ordered by deterministic scale distance."""
     try:
         width = float(card_width)
         height = float(card_height)
@@ -180,7 +196,8 @@ def select_variant_for_card_size(
         or not math.isfinite(height)
         or width <= 0
         or height <= 0
-        or not 0 < maximum_relative_error < 0.5
+        or width > 4096
+        or height > 4096
     ):
         raise GamblerClassicReferenceError("invalid card-scale selection input")
     scored = []
@@ -188,12 +205,7 @@ def select_variant_for_card_size(
         error = max(abs(width - native_width) / native_width, abs(height - native_height) / native_height)
         scored.append((error, variant))
     scored.sort()
-    best_error, best_variant = scored[0]
-    if best_error > maximum_relative_error:
-        raise GamblerClassicReferenceError("no classic variant matches the verified card scale")
-    if len(scored) > 1 and abs(scored[1][0] - best_error) < 1e-9:
-        raise GamblerClassicReferenceError("classic variant selection is ambiguous")
-    return best_variant
+    return tuple(scored)
 
 
 def decode_card_cells(sprite: GamblerClassicSprite) -> dict[str, Any]:

@@ -5,7 +5,10 @@ DO $test$
 DECLARE
     signal record;
     trigger_definition text;
+    active_mailbox integer;
 BEGIN
+    SELECT mailbox_pr INTO STRICT active_mailbox
+      FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE';
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
          WHERE migration_key='0356_autopilot_provider_health_recovery'
@@ -37,7 +40,7 @@ BEGIN
         work_key,mailbox_pr,role,target_pr,state,created_by,source
     ) VALUES(
         'sql-provider-health-356-'||txid_current()::text,
-        1685,'AUTOPILOT',1150,'PAUSED','SQL_TEST','SQL_TEST'
+        active_mailbox,'AUTOPILOT',1150,'PAUSED','SQL_TEST','SQL_TEST'
     );
     UPDATE autopilot.project_planner_state
        SET last_decision_code='PROJECT_DONE_WITH_PAUSED_BACKLOG',

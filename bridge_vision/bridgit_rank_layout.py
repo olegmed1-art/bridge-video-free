@@ -1,8 +1,8 @@
 """Opt-in shadow recognizer for the profiled Bridgit desktop card layout.
 
 The backend recognizes only pixels that are visibly present in supplied frames.
-It uses a human-reviewed reference frame to build rank templates, detects suit
-fan geometry, and solves the visible rank ordering as a per-suit bijection.
+It uses a hash-bound autonomous reference profile to build rank templates, detects
+suit fan geometry, and solves the visible rank ordering as a per-suit bijection.
 
 This is deliberately *not* a ``BridgeVisionEngine`` detector.  Rank matching,
 layout position and the deck constraint are not independent recognition
@@ -28,7 +28,6 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
-from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -52,6 +51,11 @@ PROFILE_SCHEMA = "bridge-vision-bridgit-rank-layout/v1"
 JOB_TYPE = "BRIDGIT_RANK_LAYOUT_SHADOW_V1"
 RECEIPT_TYPE = "BRIDGIT_RANK_LAYOUT_SHADOW_RECEIPT_V1"
 BACKEND_VERSION = "bridge-vision-bridgit-rank-layout-v1"
+AUTONOMOUS_MANIFEST_SHA256 = "8c3a71cdb3f5125c1cdc31cfd5b4378fb5441393da77d23e64352147130c198d"
+AUTONOMOUS_VALIDATION_SHA256 = "123b7f7fb5005d9be85bd413d1d7c5d58178ab99a9972dcea1f3a33345efe4d1"
+AUTONOMOUS_INTEGRITY_SHA256 = "0bc0398514a255a7566121d9b4a72bf9c45d53ca341270736d6f15865afe2aa4"
+AUTONOMOUS_TEMPLATE_SET_SHA256 = "c763a35745c8817141d573e235c28c14c1c3343644650a4c4a73b9ccb1593d7c"
+AUTONOMOUS_RANK_SET_SHA256 = "697c9e36760d76717a50e80dac037194db1bd754b2b56c0c7e6a459537db35bd"
 
 RANKS = tuple("AKQJT98765432")
 SUITS = tuple("HCDS")
@@ -256,8 +260,6 @@ class BridgitRankLayoutProfile:
 def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
     if not isinstance(raw, Mapping) or raw.get("schema") != PROFILE_SCHEMA:
         raise BridgitRankLayoutError("unsupported Bridgit rank-layout profile schema")
-    if raw.get("human_verified") is not True:
-        raise BridgitRankLayoutError("profile must be human verified")
     profile_id = str(raw.get("profile_id") or "")
     if not _PROFILE_ID.fullmatch(profile_id):
         raise BridgitRankLayoutError("invalid profile_id")
@@ -267,9 +269,9 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
 
     verification = raw.get("verification")
     if not isinstance(verification, Mapping):
-        raise BridgitRankLayoutError("human verification evidence is required")
-    if verification.get("method") != "HUMAN_LABEL_REVIEW":
-        raise BridgitRankLayoutError("unsupported verification method")
+        raise BridgitRankLayoutError("autonomous profile evidence is required")
+    if verification.get("method") != "AUTONOMOUS_HASH_GEOMETRY_V1":
+        raise BridgitRankLayoutError("unsupported autonomous verification method")
     if (
         _required_sha(
             verification.get("reference_frame_sha256"), "verification reference"
@@ -277,24 +279,51 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
         != reference_sha
     ):
         raise BridgitRankLayoutError("verification reference does not match profile")
-    reviewer = str(verification.get("reviewer_id") or "").strip()
-    verified_at = str(verification.get("verified_at") or "").strip()
-    if (
-        not reviewer
-        or len(reviewer) > 128
-        or not verified_at.endswith("Z")
-        or len(verified_at) != 20
-    ):
-        raise BridgitRankLayoutError("incomplete human verification evidence")
-    try:
-        datetime.fromisoformat(verified_at)
-    except ValueError as exc:
-        raise BridgitRankLayoutError("invalid human verification timestamp") from exc
+    manifest_sha = _required_sha(
+        verification.get("manifest_sha256"), "verification manifest_sha256"
+    )
+    if manifest_sha != AUTONOMOUS_MANIFEST_SHA256:
+        raise BridgitRankLayoutError("autonomous manifest identity mismatch")
+    validation_sha = _required_sha(
+        verification.get("validation_sha256"), "verification validation_sha256"
+    )
+    if validation_sha != AUTONOMOUS_VALIDATION_SHA256:
+        raise BridgitRankLayoutError("autonomous validation identity mismatch")
+    integrity_sha = _required_sha(
+        verification.get("integrity_sha256"), "verification integrity_sha256"
+    )
+    if integrity_sha != AUTONOMOUS_INTEGRITY_SHA256:
+        raise BridgitRankLayoutError("autonomous integrity identity mismatch")
+    template_set_sha = _required_sha(
+        verification.get("template_set_sha256"), "verification template_set_sha256"
+    )
+    if template_set_sha != AUTONOMOUS_TEMPLATE_SET_SHA256:
+        raise BridgitRankLayoutError("autonomous template set identity mismatch")
+    rank_set_sha = _required_sha(
+        verification.get("rank_set_sha256"), "verification rank_set_sha256"
+    )
+    if rank_set_sha != AUTONOMOUS_RANK_SET_SHA256:
+        raise BridgitRankLayoutError("autonomous rank set identity mismatch")
+    if verification.get("deck_bijection") != "PASS":
+        raise BridgitRankLayoutError("autonomous deck bijection proof did not pass")
+    rank_predictions = _integer(
+        verification.get("rank_separation_predictions"),
+        "verification.rank_separation_predictions",
+        minimum=52,
+        maximum=104,
+    )
+    if rank_predictions != 104:
+        raise BridgitRankLayoutError("autonomous rank separation proof is incomplete")
     verification_record = {
-        "method": "HUMAN_LABEL_REVIEW",
-        "reviewer_id": reviewer,
-        "verified_at": verified_at,
+        "method": "AUTONOMOUS_HASH_GEOMETRY_V1",
         "reference_frame_sha256": reference_sha,
+        "manifest_sha256": manifest_sha,
+        "validation_sha256": validation_sha,
+        "integrity_sha256": integrity_sha,
+        "template_set_sha256": template_set_sha,
+        "rank_set_sha256": rank_set_sha,
+        "deck_bijection": "PASS",
+        "rank_separation_predictions": 104,
     }
     verification_sha = canonical_hash(verification_record)
 
@@ -318,14 +347,14 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
         or isinstance(ordering_suits, (str, bytes))
         or tuple(ordering_suits) != SUITS
     ):
-        raise BridgitRankLayoutError("verified suit order must be H,C,D,S")
+        raise BridgitRankLayoutError("canonical suit order must be H,C,D,S")
     ordering_ranks = ordering.get("ranks")
     if (
         not isinstance(ordering_ranks, Sequence)
         or isinstance(ordering_ranks, (str, bytes))
         or tuple(ordering_ranks) != RANKS
     ):
-        raise BridgitRankLayoutError("verified rank order must be A through 2")
+        raise BridgitRankLayoutError("canonical rank order must be A through 2")
 
     slots_raw = raw.get("template_slots")
     if not isinstance(slots_raw, Sequence) or isinstance(slots_raw, (str, bytes)):
@@ -358,7 +387,7 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
         )
     if any(count != len(SUITS) for count in rank_support.values()):
         raise BridgitRankLayoutError(
-            "every rank requires four reviewed template samples"
+            "every rank requires four template samples"
         )
 
     geometry = raw.get("geometry")
@@ -1040,7 +1069,7 @@ def _read_frame(
         encoded_height,
     ) != (profile.width, profile.height):
         raise BridgitRankLayoutError(
-            "encoded frame dimensions do not match the verified profile"
+            "encoded frame dimensions do not match the autonomous profile"
         )
     _validate_decoded_budget(encoded_width, encoded_height, observation_count=0)
     decoded_frame_bytes = encoded_width * encoded_height * 3

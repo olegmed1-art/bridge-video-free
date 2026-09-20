@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bridge Video 3.1 FREE r26: geometry-first Gambler card recognition."""
+"""Bridge Video 3.1 FREE r26.3: autonomous geometry-first card recognition."""
 from __future__ import annotations
 import os
 import bridge_runtime_hardening_r25_16 as previous
@@ -9,7 +9,7 @@ from bridge_output_scoped_idempotency import existing_same_revision_done
 from bridge_vision.bridgit_primary_production import install as install_primary_recognizer
 from bridge_vision import bridgit_primary_video as primary_video
 from bridge_vision.bridgit_primary_compat import native_gambler_geometry
-REVISION = "3.1-free-r26.2"
+REVISION = "3.1-free-r26.3"
 
 def install(token_func):
     requested = os.getenv("BRIDGE_REQUESTED_ALGORITHM_REVISION", "").strip()

@@ -310,6 +310,17 @@ def test_generic_failure_binds_to_active_mailbox_command():
     assert terminal.result_code == "CODEX_PROVIDER_GENERIC_FAILURE"
 
 
+def test_generic_failure_accepts_provider_latency_within_ten_minute_window():
+    event = _generic_failure_event()
+    event["comment"]["created_at"] = "2026-09-14T19:45:32Z"  # type: ignore[index]
+    event["comment"]["updated_at"] = "2026-09-14T19:45:32Z"  # type: ignore[index]
+    terminal = resolve_generic_failure_terminal(
+        event, "test-token", opener=_generic_failure_opener(event)
+    )
+    assert terminal.status == "BLOCKED"
+    assert terminal.result_code == "CODEX_PROVIDER_GENERIC_FAILURE"
+
+
 def test_generic_failure_rejects_intervening_comment():
     event = _generic_failure_event()
     command = copy.deepcopy(_event(COMMAND_BODY)["comment"])
@@ -339,8 +350,8 @@ def test_generic_failure_rejects_edited_or_late_comment():
         )
 
     late = _generic_failure_event()
-    late["comment"]["created_at"] = "2026-09-14T19:45:00Z"  # type: ignore[index]
-    late["comment"]["updated_at"] = "2026-09-14T19:45:00Z"  # type: ignore[index]
+    late["comment"]["created_at"] = "2026-09-14T19:48:00Z"  # type: ignore[index]
+    late["comment"]["updated_at"] = "2026-09-14T19:48:00Z"  # type: ignore[index]
     with pytest.raises(CallbackContractError, match="GENERIC_FAILURE_ADJACENCY_INVALID"):
         resolve_generic_failure_terminal(
             late, "test-token", opener=_generic_failure_opener(late)

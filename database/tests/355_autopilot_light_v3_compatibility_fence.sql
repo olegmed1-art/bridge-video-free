@@ -6,7 +6,10 @@ DECLARE
     created_task_id uuid;
     claimed record;
     run_suffix text := txid_current()::text;
+    active_mailbox integer;
 BEGIN
+    SELECT mailbox_pr INTO STRICT active_mailbox
+      FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE';
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
          WHERE migration_key='0355_autopilot_light_v3_compatibility_fence'
@@ -25,7 +28,7 @@ BEGIN
         'sql-light-v3-fence-355-'||run_suffix,
         jsonb_build_object(
             'repository','olegmed1-art/bridge-video-free',
-            'mailbox_pr',1685,
+            'mailbox_pr',active_mailbox,
             'role','AUTOPILOT',
             'target_pr',1150,
             'expected_head_sha',repeat('a',40),
