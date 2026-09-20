@@ -182,6 +182,20 @@ BEGIN
       RAISE EXCEPTION 'TERMINAL_CALLBACK_REAPPLY_ACL_DRIFT';
     END IF;
 END $reapplied$;
+-- Restore the exact higher-migration wrapper captured before this lower-chain
+-- lifecycle rehearsal. Without this, 0348 reapply leaks into later CI tests.
+DO $restore_higher_migration$
+DECLARE expected text; actual text;
+BEGIN
+ SELECT definition INTO STRICT expected FROM repair_lifecycle_snapshot;
+ EXECUTE expected;
+ actual:=pg_get_functiondef(
+   'autopilot.materialize_role_repair(uuid,text,text)'::regprocedure
+ );
+ IF actual IS DISTINCT FROM expected THEN
+   RAISE EXCEPTION 'REPAIR_ADMISSION_HIGHER_WRAPPER_RESTORE_FAILED';
+ END IF;
+END $restore_higher_migration$;
 -- Preserve the migration runner's checksum across this isolated lifecycle test.
 UPDATE public.schema_migration SET checksum=(SELECT checksum FROM repair_lifecycle_snapshot)
 WHERE migration_key='0337_autopilot_role_repair_admission';

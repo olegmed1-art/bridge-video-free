@@ -302,6 +302,11 @@ jobs:
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0353_autopilot_paused_reconcile_runner';")"
           had_mailbox_v4="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0357_autopilot_mailbox_v4_rotation';")"
+          had_health_repair="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0358_autopilot_health_repair_progression';")"
+          if [ "$had_health_repair" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0358_autopilot_health_repair_progression.sql
+          fi
           if [ "$had_mailbox_v4" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0357_autopilot_mailbox_v4_rotation.sql
           fi
@@ -424,6 +429,9 @@ jobs:
           if [ "$had_mailbox_v4" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0357_autopilot_mailbox_v4_rotation.sql
           fi
+          if [ "$had_health_repair" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0358_autopilot_health_repair_progression.sql
+          fi
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
@@ -462,6 +470,8 @@ jobs:
             -f database/tests/345_autopilot_mailbox_v2_codex_inbound.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/346_autopilot_canary_acceptance_guard.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/358_autopilot_health_repair_progression.sql
 
   migration-0336-roundtrip:
     runs-on: ubuntu-24.04
