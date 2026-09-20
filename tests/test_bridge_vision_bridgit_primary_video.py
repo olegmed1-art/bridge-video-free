@@ -5,6 +5,7 @@ import pytest
 
 from bridge_vision.bridgit_primary_video import (
     PrimaryVideoRecognitionError,
+    _accepted_primary_result,
     resolve_original_gambler_asset,
 )
 from bridge_vision.gambler_reference_authority import pinned_sprite_sha256
@@ -77,3 +78,58 @@ def test_resolver_accepts_client_directory_layout(tmp_path: Path):
         verified_card_height_px=147.0,
     )
     assert (variant, path, sha) == (5, target, pinned_sprite_sha256(5))
+
+
+def test_primary_accepts_three_visual_hands_with_explicit_reconstruction():
+    result = {
+        "status": "SHADOW_THREE_HAND_LAYOUT_CANDIDATE",
+        "hidden_hand_reconstruction_performed": True,
+        "integrity": {
+            "cards": 39,
+            "unique": 39,
+            "seat_counts": {"N": 13, "E": 13, "S": 13, "W": 0},
+        },
+        "hands": {
+            "N": {"S": list("AKQJT98765432")},
+            "E": {"H": list("AKQJT98765432")},
+            "S": {"D": list("AKQJT98765432")},
+            "W": {},
+        },
+        "uncertainties": [],
+        "frame_assignment_issues": [],
+        "evidence": {"per_frame_deal_agreement": True},
+    }
+    assert _accepted_primary_result(result) is True
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"hidden_hand_reconstruction_performed": False},
+        {"integrity": {"cards": 38, "unique": 38, "seat_counts": {"N": 13, "E": 13, "S": 12, "W": 0}}},
+        {"uncertainties": [{"seat": "N"}]},
+        {"frame_assignment_issues": [{"reason": "disagreement"}]},
+        {"evidence": {"per_frame_deal_agreement": False}},
+    ],
+)
+def test_primary_three_hand_path_fails_closed_on_incomplete_evidence(mutation):
+    result = {
+        "status": "SHADOW_THREE_HAND_LAYOUT_CANDIDATE",
+        "hidden_hand_reconstruction_performed": True,
+        "integrity": {
+            "cards": 39,
+            "unique": 39,
+            "seat_counts": {"N": 13, "E": 13, "S": 13, "W": 0},
+        },
+        "hands": {
+            "N": {"S": list("AKQJT98765432")},
+            "E": {"H": list("AKQJT98765432")},
+            "S": {"D": list("AKQJT98765432")},
+            "W": {},
+        },
+        "uncertainties": [],
+        "frame_assignment_issues": [],
+        "evidence": {"per_frame_deal_agreement": True},
+    }
+    result.update(mutation)
+    assert _accepted_primary_result(result) is False

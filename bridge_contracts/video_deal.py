@@ -1,15 +1,15 @@
 """Canonical fail-closed contract for bridge deals recognized from video.
 
-Observed card identities are preserved exactly. Missing and hidden cards stay
-unknown. Logical deck-complement reconstruction is prohibited because it would
-turn unavailable visual evidence into asserted card identities.
+Observed card identities are preserved exactly. A fourth hand may be derived
+only when exactly three complete, disjoint 13-card hands were observed. The
+derived cards remain explicitly separated from visual evidence.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-BRIDGE_VIDEO_DEAL_CONTRACT_VERSION = "bridge-video-deal-v4"
+BRIDGE_VIDEO_DEAL_CONTRACT_VERSION = "bridge-video-deal-v5"
 SEATS = ("N", "E", "S", "W")
 SUIT_ORDER = {"S": 0, "H": 1, "D": 2, "C": 3}
 RANK_ORDER = {rank: idx for idx, rank in enumerate("AKQJT98765432")}
@@ -89,8 +89,9 @@ def canonicalize_video_deal(
     Accepted input is ``{"hands": {"N": [...], "E": [...], ...}}``. Seats may
     be omitted. By default an omitted seat is represented as 13 unknown cards.
 
-    ``derive_fourth_hand`` is retained only as a compatibility boundary. A true
-    value fails closed; Video 3.1 FREE must never compute hidden card identities.
+    ``derive_fourth_hand=True`` permits exactly one operation: complementing
+    three complete visual hands to one wholly absent fourth hand. Partial hands
+    and every other shape fail closed.
     """
 
     if not isinstance(payload, Mapping):
@@ -131,16 +132,40 @@ def canonicalize_video_deal(
         cards = tuple(sorted(normalized, key=_card_sort_key))
         hands[seat] = CanonicalHand(cards=cards, unknown_count=13 - len(cards))
 
-    if derive_fourth_hand is not False:
-        raise BridgeVideoDealContractError(
-            "fourth-hand derivation is prohibited; hidden cards must remain UNKNOWN"
+    derivations: tuple[dict[str, Any], ...] = ()
+    if derive_fourth_hand:
+        complete_seats = [seat for seat in SEATS if len(hands[seat].cards) == 13]
+        absent_seats = [seat for seat in SEATS if len(hands[seat].cards) == 0]
+        if (
+            len(complete_seats) != 3
+            or len(absent_seats) != 1
+            or len(observed_cards) != 39
+        ):
+            raise BridgeVideoDealContractError(
+                "fourth-hand derivation requires exactly three complete hands and one absent hand"
+            )
+        missing_seat = absent_seats[0]
+        computed = tuple(sorted(FULL_DECK - observed_cards, key=_card_sort_key))
+        if len(computed) != 13:
+            raise BridgeVideoDealContractError("deck complement is not exactly 13 cards")
+        hands[missing_seat] = CanonicalHand(cards=computed, unknown_count=0)
+        derivations = (
+            {
+                "type": "DECK_COMPLEMENT_FROM_THREE_VISUAL_HANDS",
+                "seat": missing_seat,
+                "source_seats": complete_seats,
+                "observed_card_count": 39,
+                "computed_cards": list(computed),
+                "provenance": "INFERRED_DECK_COMPLEMENT",
+            },
         )
 
     output_cards = {card for hand in hands.values() for card in hand.cards}
-    if output_cards != observed_cards:
+    expected_output = FULL_DECK if derivations else observed_cards
+    if output_cards != expected_output:
         raise BridgeVideoDealContractError("canonicalization changed observed card identities")
 
-    return CanonicalVideoDeal(hands=hands, derivations=())
+    return CanonicalVideoDeal(hands=hands, derivations=derivations)
 
 
 __all__ = [

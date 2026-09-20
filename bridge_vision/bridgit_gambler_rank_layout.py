@@ -147,6 +147,7 @@ def recognize_frames_with_original_gambler_deck(
     verified_card_height_px: float,
     expected_frame_sha256s: Sequence[str] | None = None,
     observation_timestamps_ms: Sequence[int] | None = None,
+    allow_fourth_hand_derivation: bool = False,
 ) -> dict[str, Any]:
     """Run the shadow recognizer against the pinned original Gambler templates.
 
@@ -200,6 +201,7 @@ def recognize_frames_with_original_gambler_deck(
             derived_profile,
             expected_frame_sha256s=expected_frame_sha256s,
             observation_timestamps_ms=observation_timestamps_ms,
+            allow_fourth_hand_derivation=allow_fourth_hand_derivation,
         )
 
     result = dict(result)
@@ -220,6 +222,11 @@ def recognize_frames_with_original_gambler_deck(
         "runtime_validation_scope": "IDENTITY_AND_STRUCTURAL_INTEGRITY_ONLY",
     }
     result["mouse_cursor_used"] = False
-    result["hidden_hand_reconstruction_performed"] = False
+    if allow_fourth_hand_derivation:
+        result["hidden_hand_reconstruction_performed"] = (
+            result.get("status") == "SHADOW_THREE_HAND_LAYOUT_CANDIDATE"
+        )
+    else:
+        result["hidden_hand_reconstruction_performed"] = False
     result["canonical_promotion_allowed"] = False
     return result

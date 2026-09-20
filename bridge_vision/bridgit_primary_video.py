@@ -1,9 +1,9 @@
 """Production adapter: old rank-layout recognizer first, Gambler recovery second.
 
 The primary path is the proven geometry/ordered-DP Bridgit recognizer with the
-hash-bound original Gambler classic deck as rank authority.  This module
-only emits recognizer candidates; it never writes SCHOOL CANON and never uses
-hidden-hand/deck-complement inference.
+hash-bound original Gambler classic deck as rank authority. This module never
+writes SCHOOL CANON. A wholly absent fourth hand may be reconstructed only as
+an explicitly marked deck complement of three complete visual hands.
 """
 from __future__ import annotations
 
@@ -34,12 +34,23 @@ from bridge_vision.gambler_reference_authority import (
 from bridge_vision.bridgit_primary_compat import (MAX_VERTICAL_PADDING_PX, horizontal_geometry_detail, native_gambler_geometry, register_same_width_vertical_padding)
 
 PRIMARY_VIDEO_VERSION = "bridgit-primary-video-gambler-v2"
+PRIMARY_VIDEO_TEMPORAL_COMPLEMENT_VERSION = "bridgit-primary-video-gambler-v3"
 DEFAULT_SCAN_MS = 3000
 DEFAULT_ATTEMPT_GAP_MS = 15000
+ALLOW_FOURTH_HAND_DERIVATION = False
+MAX_TEMPORAL_PAIR_GAP_MS = 10_000
 
 
 class PrimaryVideoRecognitionError(ValueError):
     """The bounded primary-video pass cannot continue safely."""
+
+
+def _runtime_version() -> str:
+    return (
+        PRIMARY_VIDEO_TEMPORAL_COMPLEMENT_VERSION
+        if ALLOW_FOURTH_HAND_DERIVATION and rank_layout.TEMPORAL_CARD_UNION_ENABLED
+        else PRIMARY_VIDEO_VERSION
+    )
 
 
 def resolve_original_gambler_asset(
@@ -128,13 +139,25 @@ def _full_geometry_gate(image: Any, bank: Mapping[str, Any], profile: rank_layou
     lengths: dict[str, dict[str, int]] = {}
     for seat in ("N", "S"):
         lengths[seat], anchors, _ = horizontal_geometry_detail(registered, seat, profile)
-        if not anchors or sum(lengths[seat].values()) != 13:
+        total = sum(lengths[seat].values())
+        if total not in {0, 13} or (total == 13 and not anchors):
             return None
     side = rank_layout._side_lengths([registered], bank, profile)
     lengths["W"], lengths["E"] = side["W"], side["E"]
-    if any(sum(lengths[seat].values()) != 13 for seat in rank_layout.SEATS):
+    seat_totals = {seat: sum(lengths[seat].values()) for seat in rank_layout.SEATS}
+    absent = [seat for seat, total in seat_totals.items() if total == 0]
+    complete = [seat for seat, total in seat_totals.items() if total == 13]
+    three_hand = len(complete) == 3 and len(absent) == 1
+    if not (len(complete) == 4 or (ALLOW_FOURTH_HAND_DERIVATION and three_hand)):
         return None
-    if any(sum(lengths[seat][suit] for seat in rank_layout.SEATS) != 13 for suit in rank_layout.SUITS):
+    if any(
+        sum(lengths[seat][suit] for seat in rank_layout.SEATS) > 13
+        or (
+            not absent
+            and sum(lengths[seat][suit] for seat in rank_layout.SEATS) != 13
+        )
+        for suit in rank_layout.SUITS
+    ):
         return None
     return lengths
 
@@ -150,13 +173,30 @@ def _flatten_hands(result: Mapping[str, Any]) -> dict[str, list[str]]:
 
 
 def _accepted_primary_result(result: Mapping[str, Any]) -> bool:
-    if result.get("status") != "SHADOW_FULL_LAYOUT_CANDIDATE":
+    status = result.get("status")
+    if status not in {
+        "SHADOW_FULL_LAYOUT_CANDIDATE",
+        "SHADOW_THREE_HAND_LAYOUT_CANDIDATE",
+    }:
         return False
     integrity = result.get("integrity") or {}
-    if integrity.get("cards") != 52 or integrity.get("unique") != 52:
-        return False
-    if any(int((integrity.get("seat_counts") or {}).get(seat, 0)) != 13 for seat in rank_layout.SEATS):
-        return False
+    seat_counts = {
+        seat: int((integrity.get("seat_counts") or {}).get(seat, 0))
+        for seat in rank_layout.SEATS
+    }
+    derive = status == "SHADOW_THREE_HAND_LAYOUT_CANDIDATE"
+    if derive:
+        if integrity.get("cards") != 39 or integrity.get("unique") != 39:
+            return False
+        if sorted(seat_counts.values()) != [0, 13, 13, 13]:
+            return False
+        if result.get("hidden_hand_reconstruction_performed") is not True:
+            return False
+    else:
+        if integrity.get("cards") != 52 or integrity.get("unique") != 52:
+            return False
+        if any(count != 13 for count in seat_counts.values()):
+            return False
     if result.get("uncertainties"):
         return False
     evidence = result.get("evidence") or {}
@@ -164,7 +204,14 @@ def _accepted_primary_result(result: Mapping[str, Any]) -> bool:
         return False
     if result.get("frame_assignment_issues"):
         return False
-    canonicalize_video_deal({"hands": _flatten_hands(result)}, derive_fourth_hand=False)
+    if derive:
+        canonicalize_video_deal(
+            {"hands": _flatten_hands(result)}, derive_fourth_hand=True
+        )
+    else:
+        canonicalize_video_deal(
+            {"hands": _flatten_hands(result)}, derive_fourth_hand=False
+        )
     return True
 
 
@@ -247,7 +294,7 @@ def recognize_video_primary(
     ):
         capture.release()
         return {
-            "version": PRIMARY_VIDEO_VERSION,
+            "version": _runtime_version(),
             "status": "LAYOUT_UNSUPPORTED",
             "deals": [],
             "source_size": {"width": width, "height": height},
@@ -263,6 +310,7 @@ def recognize_video_primary(
                 event_regions.append(region)
     selector = EventFrameSelector(settle_ms=750, watchdog_ms=180_000)
     event_counts: Counter[str] = Counter()
+    pending_by_geometry: dict[str, tuple[int, Any]] = {}
     timestamp_ms = 0
     try:
         while timestamp_ms < duration_ms and len(candidates) < max_deals * 8:
@@ -294,20 +342,41 @@ def recognize_video_primary(
             if timestamp_ms - last_attempt_ms < attempt_gap_ms:
                 timestamp_ms += scan_ms
                 continue
-            second_timestamp = min(duration_ms - 1, timestamp_ms + 600)
-            second = _frame_at(capture, second_timestamp)
-            if second is None:
-                rejections["retry_decode"] += 1
-                timestamp_ms += scan_ms
-                continue
-            try:
-                second_geometry = _full_geometry_gate(second, bank, profile)
-            except Exception:
-                second_geometry = None
-            if second_geometry != first_geometry:
-                rejections["geometry_not_stable"] += 1
-                timestamp_ms += scan_ms
-                continue
+            geometry_key = json.dumps(first_geometry, sort_keys=True, separators=(",", ":"))
+            pending_by_geometry = {
+                key: value
+                for key, value in pending_by_geometry.items()
+                if 0 < timestamp_ms - value[0] <= MAX_TEMPORAL_PAIR_GAP_MS
+            }
+            prior = pending_by_geometry.pop(geometry_key, None)
+            if prior is not None:
+                first_timestamp, first = prior
+                second_timestamp = timestamp_ms
+                second = _frame_at(capture, timestamp_ms)
+                if second is None:
+                    rejections["temporal_union_decode"] += 1
+                    timestamp_ms += scan_ms
+                    continue
+            else:
+                first_timestamp = timestamp_ms
+                second_timestamp = min(duration_ms - 1, timestamp_ms + 600)
+                second = _frame_at(capture, second_timestamp)
+                if second is None:
+                    rejections["retry_decode"] += 1
+                    timestamp_ms += scan_ms
+                    continue
+                try:
+                    second_geometry = _full_geometry_gate(second, bank, profile)
+                except Exception:
+                    second_geometry = None
+                if second_geometry != first_geometry:
+                    # Visibility may legitimately change between frames. Keep a
+                    # bounded observation so a later frame with the same visible
+                    # geometry can supply independent per-card evidence.
+                    pending_by_geometry[geometry_key] = (timestamp_ms, first.copy())
+                    rejections["geometry_visibility_changed"] += 1
+                    timestamp_ms += scan_ms
+                    continue
             last_attempt_ms = timestamp_ms
             with tempfile.TemporaryDirectory(prefix="bridgit-primary-observation-") as tmp:
                 tmp_root = Path(tmp)
@@ -325,26 +394,47 @@ def recognize_video_primary(
                         verified_card_width_px=verified_card_width_px,
                         verified_card_height_px=verified_card_height_px,
                         expected_frame_sha256s=[first_sha, second_sha],
-                        observation_timestamps_ms=[timestamp_ms, second_timestamp],
+                        observation_timestamps_ms=[first_timestamp, second_timestamp],
+                        allow_fourth_hand_derivation=ALLOW_FOURTH_HAND_DERIVATION,
                     )
             if not _accepted_primary_result(result):
                 rejections[str(result.get("status") or "primary_rejected")] += 1
                 timestamp_ms += scan_ms
                 continue
             hands = _flatten_hands(result)
-            canonical = canonicalize_video_deal({"hands": hands}, derive_fourth_hand=False).to_dict()
+            derive_fourth = result.get("status") == "SHADOW_THREE_HAND_LAYOUT_CANDIDATE"
+            canonical = canonicalize_video_deal(
+                {"hands": hands}, derive_fourth_hand=derive_fourth
+            ).to_dict()
+            complete_hands = {
+                seat: list(canonical["hands"][seat]["cards"])
+                for seat in rank_layout.SEATS
+            }
+            visual_seats = [seat for seat in rank_layout.SEATS if hands[seat]]
+            inferred_seats = [
+                str(item["seat"]) for item in canonical.get("derivations") or []
+            ]
             layout_sha = hashlib.sha256(
                 json.dumps(canonical["hands"], sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
-            screenshot = output_dir / f"primary_{timestamp_ms:010d}.png"
+            screenshot = output_dir / f"primary_{first_timestamp:010d}.png"
             screenshot_sha = _write_png(screenshot, first)
             evidence = result.get("evidence") or {}
             candidates.append(
                 {
-                    "timestamp_ms": timestamp_ms,
+                    "timestamp_ms": first_timestamp,
                     "status": "PRIMARY_RECOGNIZER_CANDIDATE",
                     "layout_sha256": layout_sha,
-                    "hands": hands,
+                    "hands": complete_hands,
+                    "visual_hands": hands,
+                    "visual_seats": visual_seats,
+                    "inferred_seats": inferred_seats,
+                    "hidden_hand_reconstruction_performed": derive_fourth,
+                    "reconstruction_rule": (
+                        "THREE_VISUAL_HANDS_PLUS_DECK_COMPLEMENT"
+                        if derive_fourth
+                        else "VISUAL_ONLY; NO_DECK_COMPLEMENT"
+                    ),
                     "canonical_deal": canonical,
                     "screenshot": str(screenshot),
                     "screenshot_sha256": screenshot_sha,
@@ -356,6 +446,12 @@ def recognize_video_primary(
                     "template_source": result.get("template_source"),
                     "event_reason": event.reason,
                     "canonical_promotion_allowed": False,
+                    "temporal_card_union": bool(
+                        evidence.get("temporal_card_union")
+                    ),
+                    "temporal_card_support_rule": evidence.get(
+                        "temporal_card_support_rule"
+                    ),
                 }
             )
             timestamp_ms += scan_ms
@@ -375,6 +471,57 @@ def recognize_video_primary(
             ),
         )
         deal = dict(best)
+        aggregated_visual_hands = {seat: set() for seat in rank_layout.SEATS}
+        visibility_observations = []
+        for item in values:
+            visual_hands = item.get("visual_hands") or {}
+            visible_seats = []
+            for seat in rank_layout.SEATS:
+                cards = set(visual_hands.get(seat) or [])
+                if cards:
+                    aggregated_visual_hands[seat].update(cards)
+                    visible_seats.append(seat)
+            visibility_observations.append(
+                {
+                    "timestamp_ms": item["timestamp_ms"],
+                    "visible_seats": visible_seats,
+                }
+            )
+        if any(len(cards) not in {0, 13} for cards in aggregated_visual_hands.values()):
+            raise PrimaryVideoRecognitionError(
+                "same-layout observations produced a partial hand conflict"
+            )
+        aggregate_payload = {
+            "hands": {
+                seat: sorted(cards)
+                for seat, cards in aggregated_visual_hands.items()
+            }
+        }
+        aggregate_visible_seats = [
+            seat for seat in rank_layout.SEATS if aggregated_visual_hands[seat]
+        ]
+        aggregate_derive = len(aggregate_visible_seats) == 3
+        aggregate_canonical = canonicalize_video_deal(
+            aggregate_payload, derive_fourth_hand=aggregate_derive
+        ).to_dict()
+        if aggregate_canonical["hands"] != deal["canonical_deal"]["hands"]:
+            raise PrimaryVideoRecognitionError(
+                "same-layout observations disagree with canonical hands"
+            )
+        deal["visual_hands"] = aggregate_payload["hands"]
+        deal["visual_seats"] = aggregate_visible_seats
+        deal["inferred_seats"] = [
+            str(item["seat"])
+            for item in aggregate_canonical.get("derivations") or []
+        ]
+        deal["hidden_hand_reconstruction_performed"] = aggregate_derive
+        deal["reconstruction_rule"] = (
+            "THREE_VISUAL_HANDS_PLUS_DECK_COMPLEMENT"
+            if aggregate_derive
+            else "VISUAL_ONLY; NO_DECK_COMPLEMENT"
+        )
+        deal["canonical_deal"] = aggregate_canonical
+        deal["visibility_observations"] = visibility_observations
         deal["server_confirmations"] = len(values)
         deal["confirmation_timestamps_ms"] = [item["timestamp_ms"] for item in values]
         deals.append(deal)
@@ -383,7 +530,7 @@ def recognize_video_primary(
         if str(path) not in keep:
             path.unlink(missing_ok=True)
     return {
-        "version": PRIMARY_VIDEO_VERSION,
+        "version": _runtime_version(),
         "status": "PRIMARY_COMPLETE" if deals else "NO_FULL_LAYOUT_ACCEPTED",
         "source_size": {"width": width, "height": height},
         "gambler_variant": selected_variant,
@@ -398,6 +545,8 @@ def recognize_video_primary(
         ),
         "scan_ms": scan_ms,
         "attempt_gap_ms": attempt_gap_ms,
+        "temporal_card_union_enabled": rank_layout.TEMPORAL_CARD_UNION_ENABLED,
+        "fourth_hand_derivation_enabled": ALLOW_FOURTH_HAND_DERIVATION,
         "event_counts": dict(sorted(event_counts.items())),
         "rejections": dict(sorted(rejections.items())),
         "deals": deals[:max_deals],
@@ -405,4 +554,10 @@ def recognize_video_primary(
     }
 
 
-__all__ = ["PRIMARY_VIDEO_VERSION", "PrimaryVideoRecognitionError", "recognize_video_primary", "resolve_original_gambler_asset"]
+__all__ = [
+    "PRIMARY_VIDEO_VERSION",
+    "PRIMARY_VIDEO_TEMPORAL_COMPLEMENT_VERSION",
+    "PrimaryVideoRecognitionError",
+    "recognize_video_primary",
+    "resolve_original_gambler_asset",
+]

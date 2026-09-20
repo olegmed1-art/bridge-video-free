@@ -51,6 +51,7 @@ PROFILE_SCHEMA = "bridge-vision-bridgit-rank-layout/v1"
 JOB_TYPE = "BRIDGIT_RANK_LAYOUT_SHADOW_V1"
 RECEIPT_TYPE = "BRIDGIT_RANK_LAYOUT_SHADOW_RECEIPT_V1"
 BACKEND_VERSION = "bridge-vision-bridgit-rank-layout-v1"
+TEMPORAL_CARD_UNION_ENABLED = False
 AUTONOMOUS_MANIFEST_SHA256 = "8c3a71cdb3f5125c1cdc31cfd5b4378fb5441393da77d23e64352147130c198d"
 AUTONOMOUS_VALIDATION_SHA256 = "123b7f7fb5005d9be85bd413d1d7c5d58178ab99a9972dcea1f3a33345efe4d1"
 AUTONOMOUS_INTEGRITY_SHA256 = "0bc0398514a255a7566121d9b4a72bf9c45d53ca341270736d6f15865afe2aa4"
@@ -810,13 +811,20 @@ def _frame_assignment_issues(
             suit: tuple(frame_assignments[index].get(suit, ())) for suit in SUITS
         }
         reasons = []
-        if observed != expected:
+        confident_frame = (
+            frame_minimum_scores[index] >= profile.min_template_score
+            and frame_minimum_ink[index] >= profile.min_rank_ink_fraction
+        )
+        # A weak frame is a missing observation, not a contradiction. Only a
+        # confident incompatible assignment can veto evidence supplied by a
+        # different frame.
+        if (confident_frame if TEMPORAL_CARD_UNION_ENABLED else True) and observed != expected:
             reasons.append("deal_assignment_disagrees")
-        if frame_minimum_scores[index] < profile.min_template_score:
+        if not TEMPORAL_CARD_UNION_ENABLED and frame_minimum_scores[index] < profile.min_template_score:
             reasons.append("assigned_rank_score_below_threshold")
-        if frame_minimum_margins[index] < profile.min_assignment_margin:
+        if (confident_frame if TEMPORAL_CARD_UNION_ENABLED else True) and frame_minimum_margins[index] < profile.min_assignment_margin:
             reasons.append("assignment_margin_below_threshold")
-        if frame_minimum_ink[index] < profile.min_rank_ink_fraction:
+        if not TEMPORAL_CARD_UNION_ENABLED and frame_minimum_ink[index] < profile.min_rank_ink_fraction:
             reasons.append("rank_ink_below_threshold")
         if reasons:
             issues.append(
@@ -846,11 +854,17 @@ def _temporal_support_gates(
         or (distinct_timestamps is not None and distinct_timestamps != observed_frames)
     ):
         raise BridgitRankLayoutError("invalid temporal support evidence")
-    every_observed_frame_has_ink = minimum_ink_support == observed_frames
+    # Per-card temporal union: one independent frame may supply a card that is
+    # absent or unreadable in another frame.
+    every_card_has_ink_support = (
+        minimum_ink_support >= 1
+        if TEMPORAL_CARD_UNION_ENABLED
+        else minimum_ink_support == observed_frames
+    )
     enough_frames_for_consensus = (
         distinct_timestamps is not None and distinct_timestamps >= required_frames
     )
-    return every_observed_frame_has_ink, enough_frames_for_consensus
+    return every_card_has_ink_support, enough_frames_for_consensus
 
 
 def _validate_decoded_budget(
@@ -1237,10 +1251,30 @@ def _slot_score_components(
     assignment_array = np.asarray(per_frame_assignment)
     raw_array = np.asarray(per_frame_raw)
     ink_array = np.asarray(per_frame_ink)
+    # Fuse each rank hypothesis from the frame that supports it best. This is
+    # deliberately an OR across time: a missed glyph in one frame must not
+    # erase a confident observation in another.
+    if TEMPORAL_CARD_UNION_ENABLED:
+        supported = (
+            (raw_array >= profile.min_template_score)
+            & (ink_array >= profile.min_rank_ink_fraction)
+        )
+        best_frame_by_rank = np.argmax(
+            assignment_array + supported.astype(np.float32) * 1000.0,
+            axis=0,
+        )
+        rank_indexes = np.arange(len(RANKS))
+        assignment = assignment_array[best_frame_by_rank, rank_indexes]
+        raw = raw_array[best_frame_by_rank, rank_indexes]
+        ink = ink_array[best_frame_by_rank, rank_indexes]
+    else:
+        assignment = np.median(assignment_array, axis=0)
+        raw = np.median(raw_array, axis=0)
+        ink = np.median(ink_array, axis=0)
     return {
-        "assignment": np.median(assignment_array, axis=0),
-        "raw": np.median(raw_array, axis=0),
-        "ink": np.median(ink_array, axis=0),
+        "assignment": assignment,
+        "raw": raw,
+        "ink": ink,
         "per_frame_assignment": assignment_array,
         "per_frame_raw": raw_array,
         "per_frame_ink": ink_array,
@@ -1500,10 +1534,13 @@ def _calibrate_side_steps(
                 for _, xy in slots:
                     score_cache.setdefault(xy, _slot_scores(frames, bank, xy, profile))
                     matrix.append(score_cache[xy])
+                assignment_lengths, assignment_slots, matrix = _assignment_inputs(
+                    lengths, suit, slots, matrix
+                )
                 best = ordered_assignments(
                     matrix,
-                    [seat for seat, _ in slots],
-                    {seat: lengths[seat][suit] for seat in SEATS},
+                    [seat for seat, _ in assignment_slots],
+                    assignment_lengths,
                 )[0][0]
                 geometry_key = tuple(
                     (
@@ -1535,6 +1572,58 @@ def _calibrate_side_steps(
     return result
 
 
+def _hidden_seat_for_lengths(
+    lengths: Mapping[str, Mapping[str, int]],
+) -> str | None:
+    totals = {seat: sum(int(lengths[seat][suit]) for suit in SUITS) for seat in SEATS}
+    absent = [seat for seat in SEATS if totals[seat] == 0]
+    complete = [seat for seat in SEATS if totals[seat] == 13]
+    if len(absent) == 1 and len(complete) == 3:
+        return absent[0]
+    return None
+
+
+def _assignment_inputs(
+    lengths: Mapping[str, Mapping[str, int]],
+    suit: str,
+    visible_slots: Sequence[tuple[str, tuple[int, int]]],
+    visible_matrix: Sequence[Sequence[float]],
+) -> tuple[dict[str, int], list[tuple[str, tuple[int, int] | None]], list[Sequence[float]]]:
+    """Add score-neutral virtual slots for one wholly absent hand.
+
+    Virtual slots make ordered DP choose which ranks are missing without
+    pretending that those ranks were observed in image pixels.
+    """
+    hidden_seat = _hidden_seat_for_lengths(lengths)
+    assignment_lengths = {seat: int(lengths[seat][suit]) for seat in SEATS}
+    if hidden_seat is not None:
+        inferred = len(RANKS) - sum(assignment_lengths.values())
+        if inferred < 0:
+            raise BridgitRankLayoutError("visible suit contains more than thirteen cards")
+        assignment_lengths[hidden_seat] = inferred
+
+    source = list(zip(visible_slots, visible_matrix))
+    cursor = 0
+    slots: list[tuple[str, tuple[int, int] | None]] = []
+    matrix: list[Sequence[float]] = []
+    for seat in SEATS:
+        visible_count = int(lengths[seat][suit])
+        for _ in range(visible_count):
+            if cursor >= len(source) or source[cursor][0][0] != seat:
+                raise BridgitRankLayoutError("visible assignment slots are not grouped by seat")
+            slot, row = source[cursor]
+            slots.append(slot)
+            matrix.append(row)
+            cursor += 1
+        if seat == hidden_seat:
+            for _ in range(assignment_lengths[seat]):
+                slots.append((seat, None))
+                matrix.append((0.0,) * len(RANKS))
+    if cursor != len(source):
+        raise BridgitRankLayoutError("visible assignment slots are incomplete")
+    return assignment_lengths, slots, matrix
+
+
 def _recognize_frames(
     reference_frame: Path,
     frame_paths: Sequence[Path],
@@ -1543,6 +1632,7 @@ def _recognize_frames(
     expected_frame_sha256s: Sequence[str] | None = None,
     observation_timestamps_ms: Sequence[int] | None = None,
     trusted_pinned_inputs: bool,
+    allow_fourth_hand_derivation: bool = False,
 ) -> dict[str, Any]:
     """Recognize one stable, fully visible deal as a shadow candidate."""
     if not frame_paths or len(frame_paths) > MAX_FRAMES:
@@ -1764,23 +1854,24 @@ def _recognize_frames(
             if detected and 0 < visible < 13:
                 geometry_failure = f"{seat}_has_fewer_than_13_visible_cards"
                 break
-            if not detected or visible != 13:
+            if visible not in {0, 13} or (visible == 13 and not detected):
                 geometry_failure = f"{seat}_fan_geometry_not_proven"
                 break
-            horizontal_coords = [
-                xy
-                for suit in SUITS
-                for xy in _coords(
-                    seat,
-                    suit,
-                    frame_lengths[seat][suit],
-                    detected_anchors,
-                    {},
-                )
-            ]
-            if not _glyph_coords_fit_frame(horizontal_coords, profile):
-                geometry_failure = f"{seat}_fan_geometry_out_of_frame"
-                break
+            if visible == 13:
+                horizontal_coords = [
+                    xy
+                    for suit in SUITS
+                    for xy in _coords(
+                        seat,
+                        suit,
+                        frame_lengths[seat][suit],
+                        detected_anchors,
+                        {},
+                    )
+                ]
+                if not _glyph_coords_fit_frame(horizontal_coords, profile):
+                    geometry_failure = f"{seat}_fan_geometry_out_of_frame"
+                    break
         if geometry_failure is None:
             side = _side_lengths([frame], bank, profile)
             frame_lengths["W"], frame_lengths["E"] = side["W"], side["E"]
@@ -1801,10 +1892,24 @@ def _recognize_frames(
                     for seat in ("W", "E")
                 }
             frame_side_chains.append(side_chains)
-            if any(sum(frame_lengths[seat].values()) != 13 for seat in SEATS):
+            seat_totals = {
+                seat: sum(frame_lengths[seat].values()) for seat in SEATS
+            }
+            hidden_seat = _hidden_seat_for_lengths(frame_lengths)
+            if hidden_seat is not None and not allow_fourth_hand_derivation:
+                hidden_seat = None
+            if not (
+                all(total == 13 for total in seat_totals.values())
+                or hidden_seat is not None
+            ):
                 geometry_failure = "rank_peak_counts_fail_hand_total"
             elif any(
-                sum(frame_lengths[seat][suit] for seat in SEATS) != 13 for suit in SUITS
+                sum(frame_lengths[seat][suit] for seat in SEATS) > 13
+                or (
+                    hidden_seat is None
+                    and sum(frame_lengths[seat][suit] for seat in SEATS) != 13
+                )
+                for suit in SUITS
             ):
                 geometry_failure = "rank_peak_counts_fail_suit_total"
         if geometry_failure is not None:
@@ -1857,6 +1962,8 @@ def _recognize_frames(
     for seat in ("N", "S"):
         anchors[seat].update(frame_horizontal_anchors[0][seat])
 
+    hidden_seat = _hidden_seat_for_lengths(lengths)
+
     try:
         side_steps = _calibrate_side_steps(frames, bank, lengths, anchors, profile)
     except _SideStepCalibrationAmbiguous:
@@ -1897,40 +2004,55 @@ def _recognize_frames(
     frame_ink_scores: list[list[float]] = [[] for _ in frame_hashes]
     raw_visual_observations: list[dict[str, Any]] = []
     for suit in SUITS:
-        slots = [
+        visible_slots = [
             (seat, xy)
             for seat in SEATS
             for xy in _coords(seat, suit, lengths[seat][suit], anchors, side_steps)
         ]
         score_components = [
-            _slot_score_components(frames, bank, xy, profile) for _, xy in slots
+            _slot_score_components(frames, bank, xy, profile) for _, xy in visible_slots
         ]
-        matrix = [component["assignment"] for component in score_components]
-        raw_matrix = [component["raw"] for component in score_components]
-        ink_matrix = [component["ink"] for component in score_components]
+        assignment_lengths, slots, matrix = _assignment_inputs(
+            lengths,
+            suit,
+            visible_slots,
+            [component["assignment"] for component in score_components],
+        )
+        _, _, raw_matrix = _assignment_inputs(
+            lengths, suit, visible_slots, [component["raw"] for component in score_components]
+        )
+        _, _, ink_matrix = _assignment_inputs(
+            lengths, suit, visible_slots, [component["ink"] for component in score_components]
+        )
         alternatives = ordered_assignments(
             matrix,
             [seat for seat, _ in slots],
-            {seat: lengths[seat][suit] for seat in SEATS},
+            assignment_lengths,
         )
         best_score, best_path = alternatives[0]
         fused_assignments[suit] = best_path
         used = {seat: 0 for seat in SEATS}
         for rank, seat in zip(RANKS, best_path):
-            hands[seat][suit].append(rank)
+            if seat != hidden_seat:
+                hands[seat][suit].append(rank)
             row = (
-                sum(lengths[other][suit] for other in SEATS[: SEATS.index(seat)])
+                sum(assignment_lengths[other] for other in SEATS[: SEATS.index(seat)])
                 + used[seat]
             )
-            rank_index = RANKS.index(rank)
-            evidence_scores.append(float(raw_matrix[row][rank_index]))
-            ink_scores.append(float(ink_matrix[row][rank_index]))
-            ink_support_counts.append(
-                sum(
-                    value >= profile.min_rank_ink_fraction
-                    for value in score_components[row]["per_frame_ink"][:, rank_index]
+            if seat != hidden_seat:
+                rank_index = RANKS.index(rank)
+                evidence_scores.append(float(raw_matrix[row][rank_index]))
+                ink_scores.append(float(ink_matrix[row][rank_index]))
+                visible_row = sum(
+                    int(lengths[other][suit])
+                    for other in SEATS[: SEATS.index(seat)]
+                ) + used[seat]
+                ink_support_counts.append(
+                    sum(
+                        value >= profile.min_rank_ink_fraction
+                        for value in score_components[visible_row]["per_frame_ink"][:, rank_index]
+                    )
                 )
-            )
             used[seat] += 1
         if len(alternatives) > 1:
             second_score, second_path = alternatives[1]
@@ -1962,26 +2084,45 @@ def _recognize_frames(
                 component["per_frame_ink"][frame_index]
                 for component in score_components
             ]
+            _, _, single_matrix = _assignment_inputs(
+                lengths, suit, visible_slots, single_matrix
+            )
+            _, _, single_raw_matrix = _assignment_inputs(
+                lengths, suit, visible_slots, single_raw_matrix
+            )
+            _, _, single_ink_matrix = _assignment_inputs(
+                lengths, suit, visible_slots, single_ink_matrix
+            )
             single_alternatives = ordered_assignments(
                 single_matrix,
                 [seat for seat, _ in slots],
-                {seat: lengths[seat][suit] for seat in SEATS},
+                assignment_lengths,
             )
             single_best_score, single_path = single_alternatives[0]
             frame_assignments[frame_index][suit] = single_path
             single_used = {seat: 0 for seat in SEATS}
             for rank, seat in zip(RANKS, single_path):
                 row = (
-                    sum(lengths[other][suit] for other in SEATS[: SEATS.index(seat)])
+                    sum(assignment_lengths[other] for other in SEATS[: SEATS.index(seat)])
                     + single_used[seat]
                 )
+                if seat == hidden_seat:
+                    single_used[seat] += 1
+                    continue
                 rank_index = RANKS.index(rank)
                 assigned_score = float(single_raw_matrix[row][rank_index])
                 frame_assigned_scores[frame_index].append(assigned_score)
                 assigned_ink = float(single_ink_matrix[row][rank_index])
                 frame_ink_scores[frame_index].append(assigned_ink)
-                _, (_, y) = slots[row]
-                x = score_components[row]["per_frame_origins"][frame_index][rank_index]
+                _, slot_xy = slots[row]
+                if slot_xy is None:
+                    raise BridgitRankLayoutError("visual rank was assigned to a virtual slot")
+                _, y = slot_xy
+                visible_row = sum(
+                    int(lengths[other][suit])
+                    for other in SEATS[: SEATS.index(seat)]
+                ) + single_used[seat]
+                x = score_components[visible_row]["per_frame_origins"][frame_index][rank_index]
                 game_window = frame_registrations[frame_index]["game_window"]
                 normalized_x = x / profile.width
                 normalized_y = y / profile.height
@@ -1995,8 +2136,14 @@ def _recognize_frames(
                     game_window["y"] + normalized_y * game_window["height"],
                     normalized_height * game_window["height"],
                 )
-                raw_visual_observations.append(
-                    {
+                if (
+                    not TEMPORAL_CARD_UNION_ENABLED
+                    or (
+                    assigned_score >= profile.min_template_score
+                    and assigned_ink >= profile.min_rank_ink_fraction
+                    )
+                ):
+                    raw_visual_observations.append({
                         "seat": seat,
                         "suit": suit,
                         "rank": rank,
@@ -2013,8 +2160,7 @@ def _recognize_frames(
                         "confidence": round(max(0.0, min(1.0, assigned_score)), 6),
                         "confidence_kind": "TEMPLATE_SIMILARITY_UNCALIBRATED",
                         "recognizer_version": BACKEND_VERSION,
-                    }
-                )
+                    })
                 single_used[seat] += 1
             if len(single_alternatives) > 1:
                 frame_assignment_margins[frame_index].append(
@@ -2074,6 +2220,13 @@ def _recognize_frames(
         "timestamp_independence_proven": validated_timestamps is not None,
         "minimum_rank_ink_frame_support": min(ink_support_counts),
         "per_frame_deal_agreement": not frame_assignment_issues,
+        "temporal_card_union": TEMPORAL_CARD_UNION_ENABLED,
+        "temporal_card_support_rule": (
+            "AT_LEAST_ONE_INDEPENDENT_FRAME_PER_CARD"
+            if TEMPORAL_CARD_UNION_ENABLED
+            else "EVERY_INDEPENDENT_FRAME_PER_CARD"
+        ),
+        "confident_frame_conflicts": frame_assignment_issues,
         "per_frame_assignment_receipts": per_frame_assignment_receipts,
         "reference_frame_sha256": profile.reference_frame_sha256,
         "profile_sha256": profile.profile_sha256,
@@ -2096,6 +2249,12 @@ def _recognize_frames(
     complete = (
         len(cards) == 52 and len(set(cards)) == 52 and set(seat_counts.values()) == {13}
     )
+    three_hand_complete = (
+        hidden_seat is not None
+        and len(cards) == 39
+        and len(set(cards)) == 39
+        and sorted(seat_counts.values()) == [0, 13, 13, 13]
+    )
     if (
         complete
         and not weak
@@ -2105,7 +2264,16 @@ def _recognize_frames(
     ):
         status = "SHADOW_FULL_LAYOUT_CANDIDATE"
         reason = None
-    elif complete and not weak and not uncertainties and not frame_assignment_issues:
+    elif (
+        three_hand_complete
+        and not weak
+        and not uncertainties
+        and not frame_assignment_issues
+        and temporal_pass
+    ):
+        status = "SHADOW_THREE_HAND_LAYOUT_CANDIDATE"
+        reason = None
+    elif (complete or three_hand_complete) and not weak and not uncertainties and not frame_assignment_issues:
         status = "PENDING_TEMPORAL_CONSENSUS"
         reason = "independent_frame_gate_not_met"
     else:
@@ -2129,6 +2297,7 @@ def _recognize_frames(
             "cards": len(cards),
             "unique": len(set(cards)),
             "seat_counts": seat_counts,
+            "hidden_seat": hidden_seat,
         },
         evidence=evidence,
         uncertainties=uncertainties,
@@ -2136,8 +2305,15 @@ def _recognize_frames(
         frame_registrations=frame_registration_receipts,
         _visual_observations=(
             raw_visual_observations
-            if status in {"SHADOW_FULL_LAYOUT_CANDIDATE", "PENDING_TEMPORAL_CONSENSUS"}
+            if status in {
+                "SHADOW_FULL_LAYOUT_CANDIDATE",
+                "SHADOW_THREE_HAND_LAYOUT_CANDIDATE",
+                "PENDING_TEMPORAL_CONSENSUS",
+            }
             else []
+        ),
+        hidden_hand_reconstruction_performed=(
+            status == "SHADOW_THREE_HAND_LAYOUT_CANDIDATE"
         ),
     )
 
@@ -2149,6 +2325,7 @@ def recognize_frames(
     *,
     expected_frame_sha256s: Sequence[str] | None = None,
     observation_timestamps_ms: Sequence[int] | None = None,
+    allow_fourth_hand_derivation: bool = False,
 ) -> dict[str, Any]:
     """Recognize public regular-file inputs as a shadow candidate."""
     return _recognize_frames(
@@ -2158,6 +2335,7 @@ def recognize_frames(
         expected_frame_sha256s=expected_frame_sha256s,
         observation_timestamps_ms=observation_timestamps_ms,
         trusted_pinned_inputs=False,
+        allow_fourth_hand_derivation=allow_fourth_hand_derivation,
     )
 
 
