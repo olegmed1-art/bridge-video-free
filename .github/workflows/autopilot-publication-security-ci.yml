@@ -11,12 +11,15 @@ on:
       - 'database/migrations/0345_autopilot_mailbox_v2_codex_inbound.sql'
       - 'database/migrations/0346_autopilot_canary_acceptance_guard.sql'
       - 'database/migrations/0362_autopilot_target_pr_codex_context.sql'
+      - 'database/migrations/0363_autopilot_audit_findings_repair_progression.sql'
       - 'database/rollbacks/0338_autopilot_bounded_publication_permit.sql'
       - 'database/rollbacks/0339_autopilot_native_cli_receipts.sql'
       - 'database/rollbacks/0340_autopilot_publication_permit_issuer.sql'
       - 'database/rollbacks/0345_autopilot_mailbox_v2_codex_inbound.sql'
       - 'database/rollbacks/0346_autopilot_canary_acceptance_guard.sql'
       - 'database/rollbacks/0362_autopilot_target_pr_codex_context.sql'
+      - 'database/rollbacks/0363_autopilot_audit_findings_repair_progression.sql'
+      - 'database/tests/363_autopilot_audit_findings_repair_progression.sql'
       - 'database/tests/338_autopilot_bounded_publication_permit.sql'
       - 'database/tests/339_autopilot_native_cli_receipts.sql'
       - 'database/tests/340_autopilot_publication_permit_issuer.sql'
@@ -168,6 +171,12 @@ jobs:
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0357_autopilot_mailbox_v4_rotation';")"
           had_target_pr_context="$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0362_autopilot_target_pr_codex_context';")"
+          had_audit_findings_repair="$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0363_autopilot_audit_findings_repair_progression';")"
+          if [ "$had_audit_findings_repair" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/363_autopilot_audit_findings_repair_progression.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0363_autopilot_audit_findings_repair_progression.sql
+          fi
           if [ "$had_target_pr_context" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/362_autopilot_target_pr_codex_context.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0362_autopilot_target_pr_codex_context.sql
@@ -197,6 +206,9 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0345_autopilot_mailbox_v2_codex_inbound.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0346_autopilot_canary_acceptance_guard.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0362_autopilot_target_pr_codex_context.sql
+          if [ "$had_audit_findings_repair" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0363_autopilot_audit_findings_repair_progression.sql
+          fi
           if [ "$had_mailbox_v3" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0350_autopilot_mailbox_v3_rotation.sql
           fi
@@ -210,3 +222,4 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/340_autopilot_publication_permit_issuer.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/346_autopilot_canary_acceptance_guard.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/362_autopilot_target_pr_codex_context.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/363_autopilot_audit_findings_repair_progression.sql
