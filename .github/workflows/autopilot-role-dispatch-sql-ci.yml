@@ -462,6 +462,8 @@ jobs:
             -f database/tests/345_autopilot_mailbox_v2_codex_inbound.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/346_autopilot_canary_acceptance_guard.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/358_autopilot_health_repair_progression.sql
 
   migration-0336-roundtrip:
     runs-on: ubuntu-24.04
