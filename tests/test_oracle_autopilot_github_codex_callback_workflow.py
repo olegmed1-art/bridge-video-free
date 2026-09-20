@@ -4,6 +4,25 @@ from pathlib import Path
 WORKFLOW_PATH = Path(".github/workflows/autopilot-codex-event-callback.yml")
 
 
+def test_provider_terminal_sql_ci_covers_trigger_and_ordered_roundtrip():
+    source = Path(".github/workflows/autopilot-role-dispatch-sql-ci.yml").read_text()
+    triggers, jobs = source.split("\npermissions:\n", 1)
+    migration = "0361_autopilot_provider_terminal_classification.sql"
+    regression = "361_autopilot_provider_terminal_classification.sql"
+    for path in (f"database/migrations/{migration}",
+                 f"database/rollbacks/{migration}",
+                 f"database/tests/{regression}"):
+        assert triggers.count(f"'{path}'") == 2
+    test_call = f"-f database/tests/{regression}"
+    rollback_call = f"-f database/rollbacks/{migration}"
+    apply_call = f"-f database/migrations/{migration}"
+    assert jobs.count(test_call) == 2
+    assert jobs.index(test_call) < jobs.index(rollback_call)
+    assert jobs.index(rollback_call) < jobs.index("-f database/rollbacks/0360_")
+    assert jobs.index("-f database/migrations/0360_") < jobs.index(apply_call)
+    assert jobs.index(apply_call) < jobs.rindex(test_call)
+
+
 def test_codex_callback_workflow_is_event_only_and_identity_pinned():
     source = WORKFLOW_PATH.read_text(encoding="utf-8")
     assert "on:\n  issue_comment:\n    types: [created]" in source
