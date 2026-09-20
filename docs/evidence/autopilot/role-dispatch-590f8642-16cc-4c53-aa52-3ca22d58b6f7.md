@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=590f8642-16cc-4c53-aa52-3ca22d58b6f7
+dispatch_epoch=11
+role=VIDEO_QUEUE
+task_fingerprint=7341878bceef37dd3bc2e591b9d94a12423b9525caaa9e56a5c1dbd6c9880da8
+target_pr=1698
+mode=REPAIR
+repair_attempt=1
+origin_task_id=6be14317-0ac0-4fd3-9ba1-54158d4f25b5
+prior_task_id=6be14317-0ac0-4fd3-9ba1-54158d4f25b5
+blocked_result_code=REPAIR_REQUIRED
+blocked_summary=Task completed. See execution details above.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
