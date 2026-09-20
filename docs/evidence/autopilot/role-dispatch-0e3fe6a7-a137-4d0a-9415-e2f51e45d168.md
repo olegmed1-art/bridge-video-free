@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=0e3fe6a7-a137-4d0a-9415-e2f51e45d168
+dispatch_epoch=5
+role=VIDEO_QUEUE
+task_fingerprint=a7df5380591296bd2fa0a295aba654949a67f1882df5b1e56dbdd01a58381477
+target_pr=1698
+mode=REPAIR
+repair_attempt=1
+origin_task_id=b3206db6-300d-4f3e-817e-f32fee502dfb
+prior_task_id=b3206db6-300d-4f3e-817e-f32fee502dfb
+blocked_result_code=REPAIR_REQUIRED
+blocked_summary=Bounded implementation and tests remain required.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
