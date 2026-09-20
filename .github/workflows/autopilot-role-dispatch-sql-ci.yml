@@ -300,6 +300,11 @@ jobs:
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0352_autopilot_operational_safety_signals';")"
           had_paused_runner="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0353_autopilot_paused_reconcile_runner';")"
+          had_mailbox_v4="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0357_autopilot_mailbox_v4_rotation';")"
+          if [ "$had_mailbox_v4" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0357_autopilot_mailbox_v4_rotation.sql
+          fi
           if [ "$had_paused_runner" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0353_autopilot_paused_reconcile_runner.sql
           fi
@@ -415,6 +420,9 @@ jobs:
           fi
           if [ "$had_paused_runner" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0353_autopilot_paused_reconcile_runner.sql
+          fi
+          if [ "$had_mailbox_v4" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0357_autopilot_mailbox_v4_rotation.sql
           fi
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql

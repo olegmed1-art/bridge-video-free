@@ -15,7 +15,7 @@ BEGIN
  IF NOT EXISTS (
    SELECT 1 FROM autopilot.role_dispatch_mailbox_registry
    WHERE mailbox_pr=1685
-     AND lifecycle='ACTIVE'
+     AND lifecycle IN ('ACTIVE','RETAINED')
      AND expected_head_sha='5ff5d9abe497a50cac6564d856297b68c7b4a6c0'
      AND max_dispatches=40
  ) THEN

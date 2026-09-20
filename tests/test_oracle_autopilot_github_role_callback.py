@@ -52,14 +52,14 @@ def _event() -> dict[str, object]:
             "full_name": "olegmed1-art/bridge-video-free",
         },
         "issue": {
-            "number": 1685,
+            "number": 1703,
             "pull_request": {
-                "url": "https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/1685"
+                "url": "https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/1703"
             },
         },
         "comment": {
             "id": 5620277568,
-            "issue_url": "https://api.github.com/repos/olegmed1-art/bridge-video-free/issues/1685",
+            "issue_url": "https://api.github.com/repos/olegmed1-art/bridge-video-free/issues/1703",
             "author_association": "OWNER",
             "user": {"login": "olegmed1-art", "id": 315099490},
             "performed_via_github_app": {
@@ -74,7 +74,7 @@ def _event() -> dict[str, object]:
 def test_parses_live_shaped_provider_authenticated_callback():
     callback = parse_issue_comment_event(_event())
     assert callback.provider_event_id == "github-comment:5620277568"
-    assert callback.mailbox_pr == 1685
+    assert callback.mailbox_pr == 1703
     assert callback.dispatch_epoch == 1
     assert callback.role == "VIDEO"
     assert callback.status == "BLOCKED"

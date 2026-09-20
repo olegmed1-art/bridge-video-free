@@ -97,7 +97,7 @@ ROLE_FOLLOWUP_GOAL_KEYS = frozenset(
 ROLE_DISPATCH_ROLE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 ROLE_FOLLOWUP_MODES = frozenset({"REPAIR", "VERIFY"})
 ROLE_DISPATCH_REPOSITORY = "olegmed1-art/bridge-video-free"
-ROLE_DISPATCH_MAILBOX_PR = 1685
+ROLE_DISPATCH_MAILBOX_PR = 1703
 
 
 class AutopilotContractError(RuntimeError):

@@ -3,7 +3,8 @@ BEGIN;
 DO $t$
 DECLARE origin_id uuid; reconcile_origin_id uuid; child uuid; c record; active_mailbox integer;
 BEGIN
- active_mailbox := CASE WHEN EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation') THEN 1685 ELSE 1637 END;
+ SELECT mailbox_pr INTO STRICT active_mailbox
+ FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE';
  SELECT task_id INTO origin_id FROM autopilot.create_chatgpt_role_dispatch_task(
   'sql-0349-origin',jsonb_build_object(
    'repository','olegmed1-art/bridge-video-free','mailbox_pr',active_mailbox,'role','AUTOPILOT',

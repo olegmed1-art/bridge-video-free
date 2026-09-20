@@ -348,7 +348,7 @@ def test_github_ci_task_is_exactly_bounded():
 def test_chatgpt_role_dispatch_task_is_public_and_exactly_bounded():
     valid_goal = {
         "repository": "olegmed1-art/bridge-video-free",
-        "mailbox_pr": 1685,
+        "mailbox_pr": 1703,
         "role": "VIDEO",
         "target_pr": 1125,
         "expected_head_sha": "a" * 40,
@@ -385,7 +385,7 @@ def test_chatgpt_role_dispatch_task_is_public_and_exactly_bounded():
 def test_chatgpt_role_followup_is_one_bounded_repair_or_verification():
     base_goal = {
         "repository": "olegmed1-art/bridge-video-free",
-        "mailbox_pr": 1685,
+        "mailbox_pr": 1703,
         "role": "RECOGNIZER",
         "target_pr": 1106,
         "expected_head_sha": "a" * 40,
@@ -488,7 +488,7 @@ def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch)
     response_payload = {
         "status": "created",
         "repository": "olegmed1-art/bridge-video-free",
-        "mailbox_pull_request": 1685,
+        "mailbox_pull_request": 1703,
         "dispatch_id": dispatch_id,
         "dispatch_epoch": 1,
         "role": "VIDEO",
@@ -566,7 +566,7 @@ def test_github_publish_never_marks_chatgpt_dispatch_sent(monkeypatch):
     claimed = {
         "dispatch_id": "462b8120-9039-4395-bbfb-2b4fbabdc486",
         "repository": "olegmed1-art/bridge-video-free",
-        "mailbox_pr": 1685,
+        "mailbox_pr": 1703,
         "role": "VIDEO",
         "target_pr": 1125,
         "expected_head_sha": "a" * 40,
@@ -619,7 +619,7 @@ def test_role_dispatch_outbox_rolls_forward_safely_before_migration_0323(monkeyp
     legacy_claim = {
         "dispatch_id": "462b8120-9039-4395-bbfb-2b4fbabdc486",
         "repository": "olegmed1-art/bridge-video-free",
-        "mailbox_pr": 1685,
+        "mailbox_pr": 1703,
         "role": "KNOWLEDGE",
         "target_pr": 1129,
         "expected_head_sha": "a" * 40,
