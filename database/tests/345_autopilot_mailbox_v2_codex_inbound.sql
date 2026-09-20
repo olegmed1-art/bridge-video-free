@@ -19,6 +19,7 @@ DECLARE
     reaction_id bigint := 99003451;
     rejected boolean;
     active_mailbox integer;
+    target_context boolean;
 BEGIN
     SELECT mailbox_pr INTO STRICT active_mailbox
       FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE';
@@ -28,7 +29,27 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_INBOUND_MIGRATION_MISSING';
     END IF;
-    IF pg_get_functiondef(
+    target_context:=EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0362_autopilot_target_pr_codex_context'
+    );
+    IF target_context AND (
+       pg_get_functiondef(
+        'autopilot.accept_role_dispatch_codex_ack(text,text,boolean,text,integer,text,bigint,text,text,bigint,text,bigint,jsonb)'::regprocedure
+       ) NOT LIKE '%TARGET_PR_CODEX_CONTEXT_V1%outbox.target_pr,outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer%'
+       OR pg_get_functiondef(
+        'autopilot.accept_role_dispatch_codex_terminal(text,text,boolean,text,integer,text,bigint,text,text,bigint,jsonb)'::regprocedure
+       ) NOT LIKE '%TARGET_PR_CODEX_CONTEXT_V1%BOUNDED_REPAIR_PUBLISHED%publication_permit.command_comment_id=outbox.codex_command_comment_id%'
+       OR pg_get_functiondef(
+        'autopilot.authorize_codex_publication(jsonb,bigint,text)'::regprocedure
+       ) NOT LIKE '%TARGET_PR_CODEX_CONTEXT_V1%''command_pr'',proof.command_pr%proof.command_pr IS DISTINCT FROM outbox.target_pr%proof.command_pr IS DISTINCT FROM outbox.mailbox_pr%'
+       OR pg_get_functiondef(
+        'autopilot.issue_codex_publication_permit(jsonb,integer)'::regprocedure
+       ) NOT LIKE '%TARGET_PR_CODEX_CONTEXT_V1%proof.command_pr IS DISTINCT FROM outbox.target_pr%proof.command_pr IS DISTINCT FROM outbox.mailbox_pr%'
+    ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_TARGET_PR_CODEX_CONTEXT_DEFINITION_INVALID';
+    ELSIF NOT target_context AND (
+       pg_get_functiondef(
         'autopilot.accept_role_dispatch_codex_ack(text,text,boolean,text,integer,text,bigint,text,text,bigint,text,bigint,jsonb)'::regprocedure
        ) NOT LIKE '%MAILBOX_V2_CODEX_INBOUND_V1%outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer%'
        OR pg_get_functiondef(
@@ -39,7 +60,8 @@ BEGIN
        ) NOT LIKE '%MAILBOX_V2_CODEX_PUBLICATION_V1%''command_pr'',proof.command_pr%outbox.status=''CALLBACK_ACCEPTED''%proof.command_pr IS NOT DISTINCT FROM outbox.target_pr%'
        OR pg_get_functiondef(
         'autopilot.issue_codex_publication_permit(jsonb,integer)'::regprocedure
-       ) NOT LIKE '%MAILBOX_V2_CODEX_ISSUER_V1%proof.command_pr IS DISTINCT FROM outbox.mailbox_pr%' THEN
+       ) NOT LIKE '%MAILBOX_V2_CODEX_ISSUER_V1%proof.command_pr IS DISTINCT FROM outbox.mailbox_pr%'
+    ) THEN
         RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_INBOUND_DEFINITION_INVALID';
     END IF;
 
@@ -97,21 +119,23 @@ BEGIN
         'ack_created_at',event_time
     );
 
-    rejected:=false;
-    BEGIN
-        PERFORM * FROM autopilot.accept_role_dispatch_codex_ack(
-            'github-codex-ack:345-wrong-target-'||run_suffix,repeat('d',64),true,
-            'olegmed1-art/bridge-video-free',1150,
-            'olegmed1-art',315099490,'OWNER',
-            'chatgpt-codex-connector',1144995,
-            'chatgpt-codex-connector[bot]',199175422,
-            ack||jsonb_build_object('command_pr',1150)
-        );
-    EXCEPTION WHEN OTHERS THEN
-        rejected:=SQLERRM='AUTOPILOT_CODEX_ACK_BINDING_INVALID';
-    END;
-    IF NOT rejected THEN
-        RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_TARGET_ACCEPTED_AS_MAILBOX';
+    IF NOT target_context THEN
+        rejected:=false;
+        BEGIN
+            PERFORM * FROM autopilot.accept_role_dispatch_codex_ack(
+                'github-codex-ack:345-wrong-target-'||run_suffix,repeat('d',64),true,
+                'olegmed1-art/bridge-video-free',1150,
+                'olegmed1-art',315099490,'OWNER',
+                'chatgpt-codex-connector',1144995,
+                'chatgpt-codex-connector[bot]',199175422,
+                ack||jsonb_build_object('command_pr',1150)
+            );
+        EXCEPTION WHEN OTHERS THEN
+            rejected:=SQLERRM='AUTOPILOT_CODEX_ACK_BINDING_INVALID';
+        END;
+        IF NOT rejected THEN
+            RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V2_CODEX_TARGET_ACCEPTED_AS_MAILBOX';
+        END IF;
     END IF;
 
     SELECT * INTO result
