@@ -85,8 +85,8 @@ BEGIN
  WHERE function_key='autopilot.blocker_remediation_action(text)';
  patched:=replace(
    original,
-   $$'TECHNICAL_TEST_FAILURE','BOUNDED_DEFECT','BOUNDED_REPOSITORY_DEFECT') THEN 'REPOSITORY_REPAIR'$$,
-   $$'TECHNICAL_TEST_FAILURE','BOUNDED_DEFECT','BOUNDED_REPOSITORY_DEFECT','REPAIR_REQUIRED') THEN 'REPOSITORY_REPAIR'$$
+   $$WHEN p_result_code IS NULL THEN 'HOLD_UNKNOWN' WHEN autopilot.role_blocker_requires_owner(p_result_code) THEN 'OWNER_HOLD'$$,
+   $$WHEN p_result_code IS NULL THEN 'HOLD_UNKNOWN' WHEN p_result_code='REPAIR_REQUIRED' THEN 'REPOSITORY_REPAIR' WHEN autopilot.role_blocker_requires_owner(p_result_code) THEN 'OWNER_HOLD'$$
  );
  IF patched=original OR position('REPAIR_REQUIRED' in patched)=0 THEN
    RAISE EXCEPTION 'AUTOPILOT_HEALTH_REPAIR_CLASSIFIER_SOURCE_DRIFT';
