@@ -16,7 +16,8 @@ DECLARE
     active_mailbox text;
     original_checks jsonb := '["exact head","UI-visible delivery proof","RUNNING acknowledgement","exactly-once terminal receipt"]'::jsonb;
 BEGIN
-    active_mailbox := CASE WHEN EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation') THEN '1685' ELSE '1637' END;
+    SELECT mailbox_pr::text INTO STRICT active_mailbox
+      FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE';
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
          WHERE migration_key='0346_autopilot_canary_acceptance_guard'
