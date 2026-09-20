@@ -98,6 +98,7 @@ jobs:
           LESSON_DATE_CANDIDATE=""
           LESSON_DATE_SOURCE=""
           LESSON_DATE_EVIDENCE_JSON=""
+          REQUESTED_ALGORITHM_REVISION=""
           PERSIST_DATABASE="false"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             JOB_ID="$INPUT_JOB_ID"
@@ -119,6 +120,7 @@ jobs:
             LESSON_DATE_CANDIDATE="$(sed -n 's/^LESSON_DATE_CANDIDATE=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
             LESSON_DATE_SOURCE="$(sed -n 's/^LESSON_DATE_SOURCE=//p' "$REQUEST_FILE" | tail -n 1)"
             LESSON_DATE_EVIDENCE_JSON="$(sed -n 's/^LESSON_DATE_EVIDENCE_JSON=//p' "$REQUEST_FILE" | tail -n 1)"
+            REQUESTED_ALGORITHM_REVISION="$(sed -n 's/^ALGORITHM_REVISION=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
             PERSIST_DATABASE="$(sed -n 's/^PERSIST_DATABASE=//p' "$REQUEST_FILE" | tail -n 1 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
             PERSIST_DATABASE="${PERSIST_DATABASE:-false}"
             if [ -z "$JOB_ID" ]; then
@@ -130,6 +132,10 @@ jobs:
             *[!0-9a-f]*) echo "invalid opaque job id" >&2; exit 2 ;;
           esac
           test "${#JOB_ID}" -eq 32
+          if [ -n "$REQUESTED_ALGORITHM_REVISION" ]; then
+            test "$REQUESTED_ALGORITHM_REVISION" = "3.1-free-r26.4" || { echo "unsupported run-request algorithm revision" >&2; exit 2; }
+            echo "BRIDGE_REQUESTED_ALGORITHM_REVISION=$REQUESTED_ALGORITHM_REVISION" >> "$GITHUB_ENV"
+          fi
           for ID_VALUE in "$OUTPUT_FOLDER_ID" "$WORK_FOLDER_ID" "$ORIGINAL_SOURCE_DRIVE_ID"; do
             if [ -n "$ID_VALUE" ]; then
               case "$ID_VALUE" in
@@ -273,7 +279,7 @@ jobs:
           trap cleanup_heartbeat EXIT
 
           set +e
-          if [ "${{ inputs.algorithm_revision }}" = "3.1-free-r26.4" ]; then
+          if [ "$BRIDGE_REQUESTED_ALGORITHM_REVISION" = "3.1-free-r26.4" ]; then
             python run_drive_3_1_free_oidc_r264.py
           else
             python run_drive_3_1_free_oidc.py
