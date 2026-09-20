@@ -64,6 +64,9 @@ on:
       - 'database/migrations/0361_autopilot_provider_terminal_classification.sql'
       - 'database/rollbacks/0361_autopilot_provider_terminal_classification.sql'
       - 'database/tests/361_autopilot_provider_terminal_classification.sql'
+      - 'database/migrations/0362_autopilot_target_pr_codex_context.sql'
+      - 'database/rollbacks/0362_autopilot_target_pr_codex_context.sql'
+      - 'database/tests/362_autopilot_target_pr_codex_context.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -136,6 +139,9 @@ on:
       - 'database/migrations/0361_autopilot_provider_terminal_classification.sql'
       - 'database/rollbacks/0361_autopilot_provider_terminal_classification.sql'
       - 'database/tests/361_autopilot_provider_terminal_classification.sql'
+      - 'database/migrations/0362_autopilot_target_pr_codex_context.sql'
+      - 'database/rollbacks/0362_autopilot_target_pr_codex_context.sql'
+      - 'database/tests/362_autopilot_target_pr_codex_context.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -334,6 +340,12 @@ jobs:
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0360_autopilot_health_e2e_acl';")"
           had_provider_terminal="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0361_autopilot_provider_terminal_classification';")"
+          had_target_pr_context="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0362_autopilot_target_pr_codex_context';")"
+          if [ "$had_target_pr_context" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/362_autopilot_target_pr_codex_context.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0362_autopilot_target_pr_codex_context.sql
+          fi
           if [ "$had_provider_terminal" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/361_autopilot_provider_terminal_classification.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0361_autopilot_provider_terminal_classification.sql
@@ -481,6 +493,9 @@ jobs:
           if [ "$had_provider_terminal" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0361_autopilot_provider_terminal_classification.sql
           fi
+          if [ "$had_target_pr_context" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0362_autopilot_target_pr_codex_context.sql
+          fi
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
@@ -527,6 +542,8 @@ jobs:
             -f database/tests/360_autopilot_health_e2e_acl.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/361_autopilot_provider_terminal_classification.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/362_autopilot_target_pr_codex_context.sql
 
   migration-0336-roundtrip:
     runs-on: ubuntu-24.04
