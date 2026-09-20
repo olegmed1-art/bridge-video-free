@@ -65,6 +65,9 @@ $implicit_delivery_branch$;
     target_proof_binding text := 'AND proof.command_pr=p_event_pr';
     mailbox_marker text :=
         '    -- MAILBOX_V2_CODEX_INBOUND_V1: bind the response to its mailbox.' || chr(10);
+    target_context_event_binding text := $target_context_event$p_event_pr IN (outbox.target_pr,outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)$target_context_event$;
+    target_context_marker text :=
+        '    -- TARGET_PR_CODEX_CONTEXT_V1: target is primary; retain legacy routes.' || chr(10);
     command_comment_id bigint;
     reaction_id bigint;
 BEGIN
@@ -98,6 +101,31 @@ BEGIN
         current_definition := replace(
             replace(current_definition,implicit_role_check,implicit_delivery_branch),
             bound_role,enabled_check
+        );
+    END IF;
+    -- 0362 widens the ordinary event route to the target PR while retaining
+    -- the 0345 mailbox/dispatch routes. Reduce only those exact edits first;
+    -- the 0345 reduction below then reaches the immutable 0336 snapshot.
+    IF EXISTS (
+        SELECT 1 FROM public.schema_migration
+         WHERE migration_key='0362_autopilot_target_pr_codex_context'
+    ) THEN
+        IF (length(current_definition)-length(replace(
+                current_definition,target_context_event_binding,''
+            )))/length(target_context_event_binding)<>1
+           OR (length(current_definition)-length(replace(
+                current_definition,target_context_marker,''
+            )))/length(target_context_marker)<>1 THEN
+            RAISE EXCEPTION 'AUTOPILOT_CODEX_336_TARGET_CONTEXT_SUCCESSOR_INVALID';
+        END IF;
+        current_definition := replace(
+            replace(
+                current_definition,
+                target_context_event_binding,
+                'p_event_pr IN (outbox.mailbox_pr,outbox.github_dispatch_comment_id::integer)'
+            ),
+            target_context_marker,
+            mailbox_marker
         );
     END IF;
     -- 0345 changes only the event-PR binding and adds a source marker. Reduce
