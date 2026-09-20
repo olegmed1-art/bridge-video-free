@@ -23,6 +23,7 @@ BEGIN
  END IF;
  IF to_regprocedure('autopilot.mailbox_rotation_readiness()') IS NULL
     OR to_regprocedure('autopilot.blocker_remediation_action(text)') IS NULL
+    OR to_regprocedure('autopilot.blocker_repository_repair_allowed(text)') IS NULL
     OR to_regprocedure('autopilot.on_role_task_terminal()') IS NULL THEN
    RAISE EXCEPTION 'AUTOPILOT_HEALTH_REPAIR_PREREQUISITE_MISSING';
  END IF;
@@ -66,6 +67,7 @@ FROM pg_proc AS p
 JOIN pg_namespace AS n ON n.oid=p.pronamespace
 WHERE p.oid IN (
  'autopilot.blocker_remediation_action(text)'::regprocedure,
+ 'autopilot.blocker_repository_repair_allowed(text)'::regprocedure,
  'autopilot.on_role_task_terminal()'::regprocedure
 );
 
@@ -124,6 +126,17 @@ SELECT CASE
 END
 $$;
 
+CREATE OR REPLACE FUNCTION autopilot.blocker_repository_repair_allowed(
+ p_result_code text
+)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+ SELECT autopilot.blocker_remediation_action(p_result_code)='REPOSITORY_REPAIR'
+$$;
+
 DO $patch$
 DECLARE
  original text;
@@ -131,7 +144,7 @@ DECLARE
  old_terminal text;
  new_terminal text;
 BEGIN
- IF (SELECT count(*) FROM autopilot.migration_0358_function_backup)<>2 THEN
+ IF (SELECT count(*) FROM autopilot.migration_0358_function_backup)<>3 THEN
    RAISE EXCEPTION 'AUTOPILOT_HEALTH_REPAIR_BACKUP_INCOMPLETE';
  END IF;
 
