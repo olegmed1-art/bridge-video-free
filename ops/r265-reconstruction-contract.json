@@ -1,0 +1,51 @@
+{
+  "schema": "bridge-multisource-reconstruction-revision-contract-v1",
+  "revision": "3.1-free-r26.5",
+  "state": "CODE_PENDING_BOUNDED_VALIDATION",
+  "production_allowed": false,
+  "production_promotion_state": "OBSERVED_PENDING_BOUNDED_VALIDATION",
+  "active_production_revision": "3.1-free-r26.3",
+  "active_compute_route": "github_actions_legacy",
+  "base_recognizer_revision": "3.1-free-r26.4",
+  "recognizer_profile": "AUTONOMOUS_HASH_GEOMETRY_V1",
+  "human_verification_required": false,
+  "audio_text": {
+    "enabled": true,
+    "engine": "EXISTING_LOCAL_ASR_WITH_QC_AND_DIARIZATION",
+    "timeline_required": true,
+    "teacher_role_confidence_minimum": 0.9,
+    "unreliable_segments_allowed": false,
+    "exact_card_and_single_seat_required": true
+  },
+  "evidence_precedence": {
+    "visual_cards_checked_against_speech": false,
+    "speech_may_change_visual_card": false,
+    "speech_may_fill_unknown_card": true,
+    "student_speech_may_fill_unknown_card": false,
+    "provenance_preserved_per_card": true
+  },
+  "reconstruction": {
+    "separate_post_recognition_module": true,
+    "teacher_speech_supported_for_any_seat": true,
+    "deck_complement_after_three_complete_hands": true,
+    "partial_remaining_hand_completion_allowed": true,
+    "partial_remaining_hand_must_be_subset_of_complement": true,
+    "sources": [
+      "VISUAL",
+      "TEACHER_SPEECH",
+      "INFERRED_DECK_COMPLEMENT"
+    ]
+  },
+  "canonical_promotion_allowed": false,
+  "school_canon_write_allowed": false,
+  "world_write_allowed": false,
+  "oracle_container_cutover_included": false,
+  "validation_required": {
+    "real_exact_teacher_card_case": true,
+    "real_visual_card_without_speech_check": true,
+    "real_partial_remaining_hand_complement_case": true,
+    "exact_52_unique_and_13_per_seat": true,
+    "false_complete_deals_max": 0,
+    "duplicate_complete_deals_max": 0
+  }
+}
