@@ -85,14 +85,22 @@ BEGIN
  WHERE function_key='autopilot.materialize_role_repair(uuid,text,text)';
  patched:=replace(
    original,
+   'OR autopilot.role_blocker_requires_owner(p_result_code) THEN',
+   $new$OR (
+           -- REPAIR_REQUIRED_DIRECT_ADMISSION_V1: explicit retained defect.
+           p_result_code <> 'REPAIR_REQUIRED'
+           AND autopilot.role_blocker_requires_owner(p_result_code)
+       ) THEN$new$
+ );
+ patched:=replace(
+   patched,
    'IF NOT autopilot.blocker_repository_repair_allowed(p_result_code) THEN',
-   $new$-- REPAIR_REQUIRED_DIRECT_ADMISSION_V1: an explicit retained defect
-    -- bypasses only the unknown-code fallback; all other codes keep the gate.
-    IF p_result_code <> 'REPAIR_REQUIRED'
+   $new$IF p_result_code <> 'REPAIR_REQUIRED'
        AND NOT autopilot.blocker_repository_repair_allowed(p_result_code) THEN$new$
  );
- IF patched=original
-    OR position('REPAIR_REQUIRED_DIRECT_ADMISSION_V1' in patched)=0 THEN
+ IF patched=original OR position(
+      'REPAIR_REQUIRED_DIRECT_ADMISSION_V1' in patched
+    )=0 THEN
    RAISE EXCEPTION 'AUTOPILOT_HEALTH_REPAIR_ADMISSION_SOURCE_DRIFT';
  END IF;
  EXECUTE patched;
