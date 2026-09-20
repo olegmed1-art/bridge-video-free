@@ -16,8 +16,12 @@ BEGIN
    RAISE EXCEPTION 'AUTOPILOT_0358_MIGRATION_MISSING';
  END IF;
  IF autopilot.blocker_remediation_action('REPAIR_REQUIRED')<>'REPOSITORY_REPAIR'
-    OR NOT autopilot.blocker_repository_repair_allowed('REPAIR_REQUIRED') THEN
-   RAISE EXCEPTION 'AUTOPILOT_0358_REPAIR_REQUIRED_CLASS_INVALID';
+    OR autopilot.blocker_repository_repair_allowed('REPAIR_REQUIRED') IS DISTINCT FROM true THEN
+   RAISE EXCEPTION
+     'AUTOPILOT_0358_REPAIR_REQUIRED_CLASS_INVALID: action=%, allowed=%, owner=%',
+     autopilot.blocker_remediation_action('REPAIR_REQUIRED'),
+     autopilot.blocker_repository_repair_allowed('REPAIR_REQUIRED'),
+     autopilot.role_blocker_requires_owner('REPAIR_REQUIRED');
  END IF;
  IF strpos(
       pg_get_functiondef('autopilot.on_role_task_terminal()'::regprocedure),
