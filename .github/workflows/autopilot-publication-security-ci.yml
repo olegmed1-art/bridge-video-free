@@ -161,6 +161,11 @@ jobs:
           set -euo pipefail
           had_mailbox_v3="$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation';")"
+          had_mailbox_v4="$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0357_autopilot_mailbox_v4_rotation';")"
+          if [ "$had_mailbox_v4" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0357_autopilot_mailbox_v4_rotation.sql
+          fi
           if [ "$had_mailbox_v3" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0350_autopilot_mailbox_v3_rotation.sql
           fi
@@ -184,6 +189,9 @@ jobs:
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0346_autopilot_canary_acceptance_guard.sql
           if [ "$had_mailbox_v3" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0350_autopilot_mailbox_v3_rotation.sql
+          fi
+          if [ "$had_mailbox_v4" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0357_autopilot_mailbox_v4_rotation.sql
           fi
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
             "UPDATE autopilot.project_planner_state SET enabled=true WHERE singleton;"
