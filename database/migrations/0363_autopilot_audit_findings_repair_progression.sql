@@ -76,9 +76,9 @@ BEGIN
  );
  patched:=replace(
    patched,
-   '    -- BLOCKER_REMEDIATION_ADMISSION_V1',
-   $marker$    -- AUDIT_FINDINGS_REPAIR_SUCCESSOR_V1: retained audit findings require one bounded repair.
-    -- BLOCKER_REMEDIATION_ADMISSION_V1$marker$
+   '           -- REPAIR_REQUIRED_DIRECT_ADMISSION_V1: explicit retained defect.',
+   $marker$           -- AUDIT_FINDINGS_REPAIR_SUCCESSOR_V1: retained audit findings require one bounded repair.
+           -- REPAIR_REQUIRED_DIRECT_ADMISSION_V1: explicit retained defect.$marker$
  );
  IF patched=original
     OR strpos(patched,'AUDIT_FINDINGS_REPAIR_SUCCESSOR_V1')=0
