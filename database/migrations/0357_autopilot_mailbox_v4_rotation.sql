@@ -18,7 +18,14 @@ BEGIN
    SELECT 1 FROM autopilot.role_dispatch_mailbox_registry
    WHERE mailbox_pr=1685
      AND lifecycle='ACTIVE'
-     AND expected_head_sha='5ff5d9abe497a50cac6564d856297b68c7b4a6c0'
+     AND expected_head_sha IN (
+       '7bfae72289f12ca5c28ce6a3754ccab5383b7f75',
+       '5ff5d9abe497a50cac6564d856297b68c7b4a6c0'
+     )
+     AND EXISTS (
+       SELECT 1 FROM public.schema_migration
+       WHERE migration_key='0354_autopilot_mailbox_v3_final_head'
+     )
  ) THEN
    RAISE EXCEPTION 'AUTOPILOT_MAILBOX_V4_SOURCE_NOT_ACTIVE';
  END IF;
@@ -67,7 +74,9 @@ BEGIN
 END $backup$;
 
 UPDATE autopilot.role_dispatch_mailbox_registry
-SET lifecycle='RETAINED',retained_at=clock_timestamp()
+SET lifecycle='RETAINED',
+    expected_head_sha='5ff5d9abe497a50cac6564d856297b68c7b4a6c0',
+    retained_at=clock_timestamp()
 WHERE mailbox_pr=1685 AND lifecycle='ACTIVE';
 
 INSERT INTO autopilot.role_dispatch_mailbox_registry(
