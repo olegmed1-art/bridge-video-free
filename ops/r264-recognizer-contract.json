@@ -1,0 +1,39 @@
+{
+  "schema": "bridge-primary-recognizer-revision-contract-v1",
+  "revision": "3.1-free-r26.4",
+  "state": "CODE_PENDING_BOUNDED_VALIDATION",
+  "production_allowed": false,
+  "production_promotion_state": "OBSERVED_PENDING_BOUNDED_VALIDATION",
+  "active_production_revision": "3.1-free-r26.3",
+  "active_compute_route": "github_actions_legacy",
+  "recognizer_profile": "AUTONOMOUS_HASH_GEOMETRY_V1",
+  "human_verification_required": false,
+  "temporal_fusion": {
+    "rule": "UNION_OF_NON_CONFLICTING_CARD_OBSERVATIONS",
+    "minimum_support_per_card": 1,
+    "weak_frame_miss_is_conflict": false,
+    "confident_incompatible_assignment_is_conflict": true,
+    "distinct_timestamp_consensus_required": true
+  },
+  "fourth_hand_derivation": {
+    "allowed": true,
+    "precondition": "EXACTLY_THREE_COMPLETE_DISJOINT_VISUAL_HANDS_AND_ONE_WHOLE_ABSENT_HAND",
+    "observed_cards_required": 39,
+    "observed_cards_per_visible_seat": 13,
+    "derived_cards_required": 13,
+    "partial_fourth_hand_completion_allowed": false,
+    "provenance": "INFERRED_DECK_COMPLEMENT",
+    "success_status": "VISUAL_PRIMARY_RECOGNIZED_WITH_DECK_COMPLEMENT"
+  },
+  "canonical_promotion_allowed": false,
+  "school_canon_write_allowed": false,
+  "world_write_allowed": false,
+  "oracle_container_cutover_included": false,
+  "validation_required": {
+    "known_full_layout_regression": true,
+    "real_three-visible-hand_case": true,
+    "changing_visibility_case": true,
+    "false_complete_deals_max": 0,
+    "duplicate_complete_deals_max": 0
+  }
+}
