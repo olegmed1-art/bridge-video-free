@@ -29,12 +29,17 @@ def main():
         deadline_id = connection.execute("SELECT pg_temp.codex_send_fixture('deadline')").fetchone()[0]
         rollback_first_id = connection.execute("SELECT pg_temp.codex_send_fixture('rollback-first')").fetchone()[0]
         claim_first_id = connection.execute("SELECT pg_temp.codex_send_fixture('claim-first')").fetchone()[0]
-        parent_dispatch = connection.execute("SELECT pg_temp.codex_send_fixture('parent')").fetchone()[0]
         child_dispatch = connection.execute("SELECT pg_temp.codex_send_fixture('child')").fetchone()[0]
         binding = connection.execute('SELECT autopilot.codex_command_send_binding(%s)', (did,)).fetchone()[0]
         first_binding = connection.execute('SELECT autopilot.codex_command_send_binding(%s)', (claim_first_id,)).fetchone()[0]
-        parent_work = connection.execute('SELECT work_item_id FROM autopilot.project_work_task WHERE task_id=(SELECT task_id FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s)', (parent_dispatch,)).fetchone()[0]
-        connection.execute("UPDATE autopilot.project_work_item SET state='DONE',completed_at=clock_timestamp() WHERE work_item_id=%s", (parent_work,))
+        # A completed prerequisite needs no active task. Keep all real capacity
+        # triggers enabled and respect the five non-P0 slots plus P0 reserve.
+        parent_work = connection.execute("""INSERT INTO autopilot.project_work_item(
+            work_key,role,target_pr,state,mailbox_pr,created_by,source,completed_at)
+            SELECT 'sql-0370-dependency-parent','AUTOPILOT',999970,'DONE',mailbox_pr,
+                   'sql-test','SQL_TEST',clock_timestamp()
+            FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE'
+            RETURNING work_item_id""").fetchone()[0]
         connection.execute('UPDATE autopilot.project_work_item SET depends_on_work_item_id=%s WHERE last_task_id=(SELECT task_id FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s)', (parent_work, child_dispatch))
         child_binding = connection.execute('SELECT autopilot.codex_command_send_binding(%s)', (child_dispatch,)).fetchone()[0]
     digest = command_sha256(render_command(binding))
