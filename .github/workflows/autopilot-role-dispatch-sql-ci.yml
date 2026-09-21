@@ -329,6 +329,14 @@ jobs:
           chmod +x database/tests/331_autopilot_six_worker_capacity_concurrency.sh
           database/tests/331_autopilot_six_worker_capacity_concurrency.sh \
             "$capacity_database_url"
+          # Test the new upgrade/rollback on the complete modern schema. The
+          # historical lower-chain fixture below intentionally rebuilds 0324's
+          # table shape and is NOT a modern-schema reconstruction test (0347
+          # has no rollback). Never run modern tests against that stale fixture.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/367_autopilot_reliable_progress.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0367_autopilot_reliable_progress.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0367_autopilot_reliable_progress.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/367_autopilot_reliable_progress.sql
           # A higher migration may legitimately depend on the role-dispatch tables.
           # If the publication chain is present, roll it back first so this lower-chain
           # roundtrip never bypasses its evidence-preserving rollback guards.
@@ -531,10 +539,9 @@ jobs:
           if [ "$had_repair_head_rebind" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0364_autopilot_repair_head_rebind.sql
           fi
-          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0365_autopilot_parallel_work_intake.sql
-          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0366_autopilot_terminal_dispatch_history.sql
-          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0367_autopilot_reliable_progress.sql
-          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/367_autopilot_reliable_progress.sql
+          # Leave 0365-0367 uninstalled in this legacy-only fixture. Full-chain
+          # reconstruction, all SQL invariants and upper rollback/reapply are
+          # verified independently by database-ci on its current-schema fixture.
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
