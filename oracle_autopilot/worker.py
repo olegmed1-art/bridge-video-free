@@ -34,14 +34,15 @@ import psycopg
 from psycopg.rows import dict_row
 
 from .contract import (
+    ROLE_DISPATCH_MAILBOX_PR,
     AutopilotContractError,
     AutopilotRetryableError,
     ClaimedTask,
-    ROLE_DISPATCH_MAILBOX_PR,
     build_draft_repair_broker_payload,
     claimed_task_from_row,
     validate_task_contract,
 )
+from .parallel_work_intake import canonical_manifest_text, manifest_sha256
 
 CHANNEL = "autopilot_ready"
 RUNTIME_MODE = "SHADOW"
@@ -90,6 +91,7 @@ TOKEN_BROKER_HEALTH_PATH = "/healthz"
 TOKEN_BROKER_HOST_PATTERN = re.compile(
     r"bridge-school-autopilot-[a-z0-9]+-olegmed1-4368s-projects\.vercel\.app"
 )
+_PARALLEL_WORK_MANIFEST_REGISTERED = False
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -1336,10 +1338,48 @@ def process_project_work(config: WorkerConfig) -> bool:
 
 
 def drain_project_work(config: WorkerConfig) -> int:
+    reconcile_parallel_work_intake(config)
     processed = 0
     while process_project_work(config):
         processed += 1
     return processed
+
+
+def reconcile_parallel_work_intake(config: WorkerConfig) -> int:
+    """Register the reviewed independent-work manifest once per release.
+
+    The database RPC revalidates the complete manifest and is the durable
+    idempotency boundary.  The process-local flag only avoids redundant reads
+    after a successful receipt; rolling workers safely tolerate migration 0365
+    not being installed yet.
+    """
+
+    global _PARALLEL_WORK_MANIFEST_REGISTERED
+    if _PARALLEL_WORK_MANIFEST_REGISTERED:
+        return 0
+    try:
+        row = _rpc_one(
+            config,
+            "SELECT * FROM autopilot.register_parallel_work_manifest(%s, %s)",
+            (canonical_manifest_text(), manifest_sha256()),
+        )
+    except psycopg.errors.UndefinedFunction:
+        return 0
+    if not row:
+        raise AutopilotContractError("AUTOPILOT_PARALLEL_MANIFEST_RECEIPT_MISSING")
+    registered_count = row.get("registered_count")
+    if type(registered_count) is not int or not 0 <= registered_count <= 5:
+        raise AutopilotContractError("AUTOPILOT_PARALLEL_MANIFEST_RECEIPT_INVALID")
+    _PARALLEL_WORK_MANIFEST_REGISTERED = True
+    LOGGER.info(
+        "parallel_work_manifest_reconciled "
+        "sha256=%s items=%s registered=%s replayed=%s",
+        row.get("manifest_sha256"),
+        row.get("item_count"),
+        registered_count,
+        row.get("replayed"),
+    )
+    return registered_count
 
 
 def _dispatch_body(payload: dict[str, Any]) -> str:

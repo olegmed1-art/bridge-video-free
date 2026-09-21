@@ -29,6 +29,7 @@ def test_hardening_provisions_isolated_login_and_rotates_credential_safely() -> 
     assert "has_table_privilege" in source
     assert "has_function_privilege" in source
     assert "autopilot.claim_project_work_probe(text,integer)" in source
+    assert "autopilot.register_parallel_work_manifest(text,text)" in source
     assert "autopilot.materialize_project_work_probe(uuid,text,bigint,boolean,text)" in source
     assert "autopilot.fail_project_work_probe(uuid,text,bigint,text,boolean)" in source
     assert "autopilot.project_work_item" in source
