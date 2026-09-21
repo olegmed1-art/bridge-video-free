@@ -177,6 +177,11 @@ def build_deal_review_views(master: Mapping[str, Any], shots: Sequence[Mapping[s
         except Exception as exc:
             raise DealReviewPdfError("deal cards violate the canonical 52-card contract") from exc
         observed_count = sum(len(observed["hands"][seat]["cards"]) for seat in SEATS)
+        if (
+            bool((master.get("principles") or {}).get("deal_review_requires_card_evidence"))
+            and observed_count == 0
+        ):
+            continue
         evidence_status = "OBSERVED_COMPLETE" if observed_count == 52 else "PARTIAL_OBSERVATION"
         chosen = next((by_id[item] for item in _evidence_ids(deal) if item in by_id), None)
         safe_shot = _safe_shot(chosen)

@@ -35,9 +35,11 @@ from bridge_vision.bridgit_primary_compat import (MAX_VERTICAL_PADDING_PX, horiz
 
 PRIMARY_VIDEO_VERSION = "bridgit-primary-video-gambler-v2"
 PRIMARY_VIDEO_TEMPORAL_COMPLEMENT_VERSION = "bridgit-primary-video-gambler-v3"
+PRIMARY_VIDEO_PARTIAL_OBSERVATION_VERSION = "bridgit-primary-video-gambler-v4"
 DEFAULT_SCAN_MS = 3000
 DEFAULT_ATTEMPT_GAP_MS = 15000
 ALLOW_FOURTH_HAND_DERIVATION = False
+ALLOW_PARTIAL_OBSERVATIONS = False
 MAX_TEMPORAL_PAIR_GAP_MS = 10_000
 
 
@@ -46,6 +48,8 @@ class PrimaryVideoRecognitionError(ValueError):
 
 
 def _runtime_version() -> str:
+    if ALLOW_PARTIAL_OBSERVATIONS:
+        return PRIMARY_VIDEO_PARTIAL_OBSERVATION_VERSION
     return (
         PRIMARY_VIDEO_TEMPORAL_COMPLEMENT_VERSION
         if ALLOW_FOURTH_HAND_DERIVATION and rank_layout.TEMPORAL_CARD_UNION_ENABLED
@@ -162,6 +166,251 @@ def _full_geometry_gate(image: Any, bank: Mapping[str, Any], profile: rank_layou
     return lengths
 
 
+def _partial_geometry_gate(
+    image: Any,
+    bank: Mapping[str, Any],
+    profile: rank_layout.BridgitRankLayoutProfile,
+) -> dict[str, Any] | None:
+    """Locate any bounded visible hand without claiming a complete deal.
+
+    The legacy full-layout gate intentionally remains unchanged.  r26.6 uses
+    this additive gate to retain partial visual evidence before completeness is
+    evaluated.  Geometry supplies slot locations only; it never invents ranks.
+    """
+
+    registered = _registered_candidate(image, profile)
+    if registered is None:
+        return None
+    lengths: dict[str, dict[str, int]] = {}
+    anchors = {seat: dict(values) for seat, values in profile.anchors.items()}
+    horizontal_steps: dict[str, float] = {}
+    for seat in ("N", "S"):
+        seat_lengths, detected, step = horizontal_geometry_detail(
+            registered, seat, profile
+        )
+        total = sum(seat_lengths.values())
+        if total > 13 or (total and not detected):
+            return None
+        lengths[seat] = seat_lengths
+        if detected:
+            anchors[seat].update(detected)
+            if step is None:
+                return None
+            horizontal_steps[seat] = float(step)
+    side = rank_layout._side_lengths([registered], bank, profile)
+    lengths["W"], lengths["E"] = side["W"], side["E"]
+    if any(sum(lengths[seat].values()) > 13 for seat in rank_layout.SEATS):
+        return None
+    if not any(sum(lengths[seat].values()) for seat in rank_layout.SEATS):
+        return None
+    if any(
+        sum(lengths[seat][suit] for seat in rank_layout.SEATS) > 13
+        for suit in rank_layout.SUITS
+    ):
+        return None
+    chains = side.get("_chains") or {"W": {}, "E": {}}
+    return {
+        "lengths": lengths,
+        "anchors": anchors,
+        "horizontal_steps": horizontal_steps,
+        "side_chains": {
+            seat: {
+                suit: tuple(int(value) for value in chains.get(seat, {}).get(suit, ()))
+                for suit in rank_layout.SUITS
+            }
+            for seat in ("W", "E")
+        },
+    }
+
+
+def _ordered_subset_assignments(
+    matrix: Sequence[Sequence[float]],
+) -> list[tuple[float, tuple[int, ...]]]:
+    """Return the two best monotone rank subsets for visible suit slots."""
+
+    rows = [tuple(float(value) for value in row) for row in matrix]
+    if not rows:
+        return [(0.0, ())]
+    if len(rows) > len(rank_layout.RANKS) or any(
+        len(row) != len(rank_layout.RANKS) for row in rows
+    ):
+        raise PrimaryVideoRecognitionError("partial rank matrix is invalid")
+    states: dict[tuple[int, int], list[tuple[float, tuple[int, ...]]]] = {
+        (0, -1): [(0.0, ())]
+    }
+    for row_index, row in enumerate(rows):
+        next_states: dict[tuple[int, int], list[tuple[float, tuple[int, ...]]]] = {}
+        for (_, previous_rank), values in states.items():
+            remaining = len(rows) - row_index - 1
+            for rank_index in range(previous_rank + 1, len(rank_layout.RANKS) - remaining):
+                key = (row_index + 1, rank_index)
+                for score, path in values:
+                    next_states.setdefault(key, []).append(
+                        (score + row[rank_index], path + (rank_index,))
+                    )
+        states = {
+            key: sorted(values, key=lambda item: (-item[0], item[1]))[:2]
+            for key, values in next_states.items()
+        }
+    ranked = sorted(
+        (item for values in states.values() for item in values),
+        key=lambda item: (-item[0], item[1]),
+    )
+    distinct: list[tuple[float, tuple[int, ...]]] = []
+    for item in ranked:
+        if item[1] not in {path for _, path in distinct}:
+            distinct.append(item)
+        if len(distinct) == 2:
+            break
+    return distinct
+
+
+def _partial_slot_coordinates(
+    geometry: Mapping[str, Any],
+    seat: str,
+    suit: str,
+    profile: rank_layout.BridgitRankLayoutProfile,
+) -> list[tuple[int, int]]:
+    count = int(geometry["lengths"][seat][suit])
+    if not count:
+        return []
+    if seat in {"N", "S"}:
+        x, y = geometry["anchors"][seat][suit]
+        step = float(geometry["horizontal_steps"][seat])
+        return [(round(x + step * index), y) for index in range(count)]
+    chain = list(geometry["side_chains"][seat][suit])
+    if len(chain) != count:
+        raise PrimaryVideoRecognitionError("partial side geometry lost its peak chain")
+    if seat == "E":
+        chain.reverse()
+    y = profile.anchors[seat][suit][1]
+    return [(x, y) for x in chain]
+
+
+def _recognize_partial_pair(
+    first: Any,
+    second: Any,
+    *,
+    bank: Mapping[str, Any],
+    profile: rank_layout.BridgitRankLayoutProfile,
+    geometry: Mapping[str, Any],
+    frame_sha256s: Sequence[str],
+    timestamps_ms: Sequence[int],
+) -> dict[str, Any]:
+    """Recognize only proven visible ranks and retain UNKNOWN elsewhere."""
+
+    frames = [
+        _registered_candidate(frame, profile) for frame in (first, second)
+    ]
+    if any(frame is None for frame in frames):
+        raise PrimaryVideoRecognitionError("partial observation registration failed")
+    if len(frame_sha256s) != 2 or len(set(frame_sha256s)) != 2:
+        raise PrimaryVideoRecognitionError("partial observation frames are not independent")
+    if len(timestamps_ms) != 2 or len(set(int(value) for value in timestamps_ms)) != 2:
+        raise PrimaryVideoRecognitionError("partial observation timestamps are not independent")
+    pixel_hashes = [hashlib.sha256(frame.tobytes()).hexdigest() for frame in frames]
+    if len(set(pixel_hashes)) != 2:
+        raise PrimaryVideoRecognitionError("partial observation pixels are not independent")
+    hands = {seat: [] for seat in rank_layout.SEATS}
+    observations: list[dict[str, Any]] = []
+    rejected_suits: list[dict[str, Any]] = []
+    for seat in rank_layout.SEATS:
+        for suit in rank_layout.SUITS:
+            coords = _partial_slot_coordinates(geometry, seat, suit, profile)
+            if not coords:
+                continue
+            components = [
+                rank_layout._slot_score_components(frames, bank, xy, profile)
+                for xy in coords
+            ]
+            alternatives = _ordered_subset_assignments(
+                [component["assignment"] for component in components]
+            )
+            if not alternatives:
+                rejected_suits.append({"seat": seat, "suit": suit, "reason": "NO_ORDERED_ASSIGNMENT"})
+                continue
+            score, path = alternatives[0]
+            margin = (
+                score - alternatives[1][0]
+                if len(alternatives) > 1
+                else 1_000_000.0
+            )
+            if margin < profile.min_assignment_margin:
+                rejected_suits.append({
+                    "seat": seat,
+                    "suit": suit,
+                    "reason": "ASSIGNMENT_MARGIN_BELOW_THRESHOLD",
+                    "margin": round(margin, 6),
+                })
+                continue
+            suit_cards: list[tuple[str, dict[str, Any]]] = []
+            for component, rank_index in zip(components, path):
+                per_frame_score = [
+                    float(value) for value in component["per_frame_raw"][:, rank_index]
+                ]
+                per_frame_ink = [
+                    float(value) for value in component["per_frame_ink"][:, rank_index]
+                ]
+                support = [
+                    index
+                    for index, (assigned_score, ink) in enumerate(
+                        zip(per_frame_score, per_frame_ink)
+                    )
+                    if assigned_score >= profile.min_template_score
+                    and ink >= profile.min_rank_ink_fraction
+                ]
+                if not support:
+                    suit_cards = []
+                    rejected_suits.append({
+                        "seat": seat,
+                        "suit": suit,
+                        "reason": "CARD_WITHOUT_CONFIDENT_FRAME_SUPPORT",
+                    })
+                    break
+                rank = rank_layout.RANKS[rank_index]
+                card = rank + suit
+                best_frame = max(support, key=lambda index: per_frame_score[index])
+                suit_cards.append((card, {
+                    "seat": seat,
+                    "card": card,
+                    "source": "VISUAL",
+                    "frame_sha256": frame_sha256s[best_frame],
+                    "timestamp_ms": int(timestamps_ms[best_frame]),
+                    "confidence": round(per_frame_score[best_frame], 6),
+                    "confidence_kind": "TEMPLATE_SIMILARITY_UNCALIBRATED",
+                }))
+            for card, evidence in suit_cards:
+                hands[seat].append(card)
+                observations.append(evidence)
+
+    owners: dict[str, str] = {}
+    conflicts = []
+    for seat in rank_layout.SEATS:
+        for card in hands[seat]:
+            prior = owners.setdefault(card, seat)
+            if prior != seat:
+                conflicts.append({"card": card, "seats": sorted({prior, seat})})
+    if conflicts:
+        return {
+            "status": "PARTIAL_VISUAL_CONFLICT",
+            "hands": hands,
+            "conflicts": conflicts,
+            "observations": observations,
+            "rejected_suits": rejected_suits,
+        }
+    return {
+        "status": "PARTIAL_VISUAL_OBSERVATION" if owners else "NO_CARD_OBSERVATIONS",
+        "hands": hands,
+        "observations": observations,
+        "rejected_suits": rejected_suits,
+        "integrity": {
+            "cards": sum(len(cards) for cards in hands.values()),
+            "unique": len(owners),
+            "seat_counts": {seat: len(hands[seat]) for seat in rank_layout.SEATS},
+        },
+    }
+
+
 def _flatten_hands(result: Mapping[str, Any]) -> dict[str, list[str]]:
     raw = result.get("hands") or {}
     hands: dict[str, list[str]] = {}
@@ -174,6 +423,19 @@ def _flatten_hands(result: Mapping[str, Any]) -> dict[str, list[str]]:
 
 def _accepted_primary_result(result: Mapping[str, Any]) -> bool:
     status = result.get("status")
+    if status == "PARTIAL_VISUAL_OBSERVATION":
+        integrity = result.get("integrity") or {}
+        counts = {
+            seat: int((integrity.get("seat_counts") or {}).get(seat, 0))
+            for seat in rank_layout.SEATS
+        }
+        cards = int(integrity.get("cards") or 0)
+        return (
+            0 < cards == int(integrity.get("unique") or 0)
+            and cards == sum(counts.values())
+            and all(0 <= count <= 13 for count in counts.values())
+            and not result.get("conflicts")
+        )
     if status not in {
         "SHADOW_FULL_LAYOUT_CANDIDATE",
         "SHADOW_THREE_HAND_LAYOUT_CANDIDATE",
@@ -331,12 +593,20 @@ def recognize_video_primary(
             event_counts[event.reason] += 1
             try:
                 first_geometry = _full_geometry_gate(first, bank, profile)
+                partial_mode = False
+                if first_geometry is None and ALLOW_PARTIAL_OBSERVATIONS:
+                    first_geometry = _partial_geometry_gate(first, bank, profile)
+                    partial_mode = first_geometry is not None
             except Exception:
                 rejections["geometry_exception"] += 1
                 timestamp_ms += scan_ms
                 continue
             if first_geometry is None:
-                rejections["full_geometry_not_proven"] += 1
+                rejections[
+                    "visible_geometry_not_proven"
+                    if ALLOW_PARTIAL_OBSERVATIONS
+                    else "full_geometry_not_proven"
+                ] += 1
                 timestamp_ms += scan_ms
                 continue
             if timestamp_ms - last_attempt_ms < attempt_gap_ms:
@@ -367,9 +637,14 @@ def recognize_video_primary(
                     continue
                 try:
                     second_geometry = _full_geometry_gate(second, bank, profile)
+                    second_partial_mode = False
+                    if second_geometry is None and ALLOW_PARTIAL_OBSERVATIONS:
+                        second_geometry = _partial_geometry_gate(second, bank, profile)
+                        second_partial_mode = second_geometry is not None
                 except Exception:
                     second_geometry = None
-                if second_geometry != first_geometry:
+                    second_partial_mode = False
+                if second_geometry != first_geometry or second_partial_mode != partial_mode:
                     # Visibility may legitimately change between frames. Keep a
                     # bounded observation so a later frame with the same visible
                     # geometry can supply independent per-card evidence.
@@ -385,23 +660,39 @@ def recognize_video_primary(
                 first_sha = _write_png(first_path, first)
                 second_sha = _write_png(second_path, second)
                 with native_gambler_geometry():
-                    result = recognize_frames_with_original_gambler_deck(
-                        reference_frame,
-                        [first_path, second_path],
-                        profile,
-                        gambler_sprite_path=gambler_sprite_path,
-                        gambler_sprite_sha256=gambler_sprite_sha256,
-                        verified_card_width_px=verified_card_width_px,
-                        verified_card_height_px=verified_card_height_px,
-                        expected_frame_sha256s=[first_sha, second_sha],
-                        observation_timestamps_ms=[first_timestamp, second_timestamp],
-                        allow_fourth_hand_derivation=ALLOW_FOURTH_HAND_DERIVATION,
-                    )
+                    if partial_mode:
+                        result = _recognize_partial_pair(
+                            first,
+                            second,
+                            bank=bank,
+                            profile=profile,
+                            geometry=first_geometry,
+                            frame_sha256s=[first_sha, second_sha],
+                            timestamps_ms=[first_timestamp, second_timestamp],
+                        )
+                    else:
+                        result = recognize_frames_with_original_gambler_deck(
+                            reference_frame,
+                            [first_path, second_path],
+                            profile,
+                            gambler_sprite_path=gambler_sprite_path,
+                            gambler_sprite_sha256=gambler_sprite_sha256,
+                            verified_card_width_px=verified_card_width_px,
+                            verified_card_height_px=verified_card_height_px,
+                            expected_frame_sha256s=[first_sha, second_sha],
+                            observation_timestamps_ms=[first_timestamp, second_timestamp],
+                            allow_fourth_hand_derivation=ALLOW_FOURTH_HAND_DERIVATION,
+                        )
             if not _accepted_primary_result(result):
                 rejections[str(result.get("status") or "primary_rejected")] += 1
                 timestamp_ms += scan_ms
                 continue
-            hands = _flatten_hands(result)
+            is_partial = result.get("status") == "PARTIAL_VISUAL_OBSERVATION"
+            hands = (
+                {seat: list((result.get("hands") or {}).get(seat) or []) for seat in rank_layout.SEATS}
+                if is_partial
+                else _flatten_hands(result)
+            )
             derive_fourth = result.get("status") == "SHADOW_THREE_HAND_LAYOUT_CANDIDATE"
             canonical = canonicalize_video_deal(
                 {"hands": hands}, derive_fourth_hand=derive_fourth
@@ -423,7 +714,11 @@ def recognize_video_primary(
             candidates.append(
                 {
                     "timestamp_ms": first_timestamp,
-                    "status": "PRIMARY_RECOGNIZER_CANDIDATE",
+                    "status": (
+                        "PRIMARY_PARTIAL_OBSERVATION"
+                        if is_partial
+                        else "PRIMARY_RECOGNIZER_CANDIDATE"
+                    ),
                     "layout_sha256": layout_sha,
                     "hands": complete_hands,
                     "visual_hands": hands,
@@ -442,7 +737,7 @@ def recognize_video_primary(
                     "minimum_assigned_score": evidence.get("minimum_assigned_score"),
                     "median_assigned_score": evidence.get("median_assigned_score"),
                     "backend_status": result.get("status"),
-                    "backend_version": result.get("successor_version"),
+                    "backend_version": result.get("successor_version") or _runtime_version(),
                     "template_source": result.get("template_source"),
                     "event_reason": event.reason,
                     "canonical_promotion_allowed": False,
@@ -452,6 +747,8 @@ def recognize_video_primary(
                     "temporal_card_support_rule": evidence.get(
                         "temporal_card_support_rule"
                     ),
+                    "visual_observations": result.get("observations") or [],
+                    "rejected_partial_suits": result.get("rejected_suits") or [],
                 }
             )
             timestamp_ms += scan_ms
@@ -487,10 +784,18 @@ def recognize_video_primary(
                     "visible_seats": visible_seats,
                 }
             )
-        if any(len(cards) not in {0, 13} for cards in aggregated_visual_hands.values()):
+        if any(len(cards) > 13 for cards in aggregated_visual_hands.values()):
             raise PrimaryVideoRecognitionError(
-                "same-layout observations produced a partial hand conflict"
+                "same-layout observations exceeded hand capacity"
             )
+        owner: dict[str, str] = {}
+        for seat, cards in aggregated_visual_hands.items():
+            for card in cards:
+                prior = owner.setdefault(card, seat)
+                if prior != seat:
+                    raise PrimaryVideoRecognitionError(
+                        "same-layout observations assigned one card to two seats"
+                    )
         aggregate_payload = {
             "hands": {
                 seat: sorted(cards)
@@ -500,7 +805,10 @@ def recognize_video_primary(
         aggregate_visible_seats = [
             seat for seat in rank_layout.SEATS if aggregated_visual_hands[seat]
         ]
-        aggregate_derive = len(aggregate_visible_seats) == 3
+        aggregate_derive = (
+            len(aggregate_visible_seats) == 3
+            and all(len(aggregated_visual_hands[seat]) == 13 for seat in aggregate_visible_seats)
+        )
         aggregate_canonical = canonicalize_video_deal(
             aggregate_payload, derive_fourth_hand=aggregate_derive
         ).to_dict()
@@ -531,7 +839,18 @@ def recognize_video_primary(
             path.unlink(missing_ok=True)
     return {
         "version": _runtime_version(),
-        "status": "PRIMARY_COMPLETE" if deals else "NO_FULL_LAYOUT_ACCEPTED",
+        "status": (
+            "PRIMARY_COMPLETE"
+            if any(
+                all(len((deal.get("hands") or {}).get(seat) or []) == 13 for seat in rank_layout.SEATS)
+                for deal in deals
+            )
+            else "PARTIAL_OBSERVATIONS_RETAINED"
+            if deals
+            else "NO_CARD_OBSERVATIONS"
+            if ALLOW_PARTIAL_OBSERVATIONS
+            else "NO_FULL_LAYOUT_ACCEPTED"
+        ),
         "source_size": {"width": width, "height": height},
         "gambler_variant": selected_variant,
         "gambler_sprite_sha256": gambler_sprite_sha256,
@@ -547,6 +866,7 @@ def recognize_video_primary(
         "attempt_gap_ms": attempt_gap_ms,
         "temporal_card_union_enabled": rank_layout.TEMPORAL_CARD_UNION_ENABLED,
         "fourth_hand_derivation_enabled": ALLOW_FOURTH_HAND_DERIVATION,
+        "partial_observations_enabled": ALLOW_PARTIAL_OBSERVATIONS,
         "event_counts": dict(sorted(event_counts.items())),
         "rejections": dict(sorted(rejections.items())),
         "deals": deals[:max_deals],
@@ -557,6 +877,7 @@ def recognize_video_primary(
 __all__ = [
     "PRIMARY_VIDEO_VERSION",
     "PRIMARY_VIDEO_TEMPORAL_COMPLEMENT_VERSION",
+    "PRIMARY_VIDEO_PARTIAL_OBSERVATION_VERSION",
     "PrimaryVideoRecognitionError",
     "recognize_video_primary",
     "resolve_original_gambler_asset",

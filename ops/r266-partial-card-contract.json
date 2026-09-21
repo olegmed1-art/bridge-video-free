@@ -1,0 +1,30 @@
+{
+  "schema": "bridge-partial-card-observation-revision-contract-v1",
+  "revision": "3.1-free-r26.6",
+  "state": "CODE_PENDING_BOUNDED_VALIDATION",
+  "production_allowed": false,
+  "active_production_revision": "3.1-free-r26.3",
+  "base_reconstruction_revision": "3.1-free-r26.5",
+  "observation_contract": {
+    "complete_deal_required_before_ocr": false,
+    "ordered_visible_rank_subset_only": true,
+    "minimum_independent_frames": 2,
+    "unknown_cards_remain_unknown": true,
+    "cross_seat_duplicate_is_conflict": true,
+    "maximum_cards_per_seat": 13,
+    "visual_card_disappearance_deletes_evidence": false
+  },
+  "evidence_fusion": {
+    "visual_precedes_teacher_speech": true,
+    "teacher_speech_fills_unknown_only": true,
+    "deck_complement_requires_three_complete_disjoint_hands": true
+  },
+  "reporting": {
+    "zero_card_semantic_candidates_rendered_as_deals": false,
+    "zero_visual_card_run_is_success": false,
+    "per_card_provenance_required": true
+  },
+  "canonical_promotion_allowed": false,
+  "source_media_write_allowed": false,
+  "database_write_allowed": false
+}
