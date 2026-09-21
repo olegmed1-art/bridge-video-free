@@ -74,6 +74,7 @@ def safe_path(path: Any) -> bool:
         "database/migrations/",
         "database/rollbacks/",
         "deploy/",
+        "docs/canon/",
         "oracle_autopilot/",
         "ops/autopilot/",
         "ops/oracle-autopilot-activation-requests/",
