@@ -299,7 +299,8 @@ jobs:
           PY
           )"
           [[ "$database_url" == postgresql://* ]]
-          active_count="$(AUTOPILOT_DATABASE_URL="$database_url" "$root/.venv/bin/python" - <<'PY'
+          queue_active_count() {
+          AUTOPILOT_DATABASE_URL="$database_url" "$root/.venv/bin/python" - <<'PY'
           import os, psycopg
           with psycopg.connect(
               os.environ['AUTOPILOT_DATABASE_URL'], autocommit=True,
@@ -307,17 +308,22 @@ jobs:
               options='-c statement_timeout=5000 -c default_transaction_read_only=on',
           ) as connection:
               row = connection.execute("""
-                  SELECT count(*)::integer FROM autopilot.task_status
-                  WHERE status IN ('READY', 'RUNNING', 'WAITING_EXTERNAL')
+                  SELECT (SELECT count(*) FROM autopilot.task_status
+                    WHERE status IN ('NEW','VALIDATING','READY','RUNNING','WAITING_EXTERNAL','EVALUATING'))
+                    + (SELECT probe_reservations FROM autopilot.role_worker_capacity_snapshot())
               """).fetchone()
           print(int(row[0]))
           PY
-          )"
+          }
+          active_count="$(queue_active_count)"
           [[ "$active_count" == 0 ]] || { echo "AUTOPILOT_ROLLOUT_QUEUE_BUSY=$active_count" >&2; exit 1; }
 
           stopped=1
           systemctl disable --now "$service"
           [[ "$(systemctl is-active "$service" 2>/dev/null || true)" == inactive ]]
+          # Fence the count/stop race. The rollback trap restores the old worker.
+          active_count="$(queue_active_count)"
+          [[ "$active_count" == 0 ]] || { echo "AUTOPILOT_ROLLOUT_QUEUE_RACED=$active_count" >&2; exit 1; }
           release="$root/releases/$SOURCE_REVISION"
           release_stage="$work/release"
           install -d -m 0755 -o root -g root "$release_stage/oracle_autopilot"
@@ -443,9 +449,28 @@ jobs:
           PY
           active_since="$(systemctl show -p ActiveEnterTimestamp --value "$service")"
           test -n "$active_since"
-          journal="$(journalctl -u "$service" --since "$active_since" --no-pager -n 100)"
+          invocation="$(systemctl show -p InvocationID --value "$service")"
+          [[ "$invocation" =~ ^[0-9a-f]{32}$ ]]
+          manifest_sha="$(PYTHONPATH="$release" "$root/.venv/bin/python" -c \
+            'from oracle_autopilot.parallel_work_intake import manifest_sha256; print(manifest_sha256())')"
+          [[ "$manifest_sha" =~ ^[0-9a-f]{64}$ ]]
+          # Durable receipts alone can be stale. Require this process invocation
+          # to reach validated intake, while keeping rollback armed throughout.
+          for attempt in $(seq 1 24); do
+            journal="$(journalctl -u "$service" "_SYSTEMD_INVOCATION_ID=$invocation" --no-pager)"
+            if grep -F "parallel_work_manifest_reconciled sha256=$manifest_sha " <<<"$journal" >/dev/null; then
+              break
+            fi
+            sleep 5
+          done
           grep -F 'worker_started' <<<"$journal" >/dev/null
+          grep -F "parallel_work_manifest_reconciled sha256=$manifest_sha " <<<"$journal" >/dev/null
           ! grep -Eq 'Traceback|AUTOPILOT_UNCLASSIFIED_FAILURE' <<<"$journal"
+          [[ "$(systemctl show -p InvocationID --value "$service")" == "$invocation" ]]
+          [[ "$(systemctl show -p NRestarts --value "$service")" == 0 ]]
+          systemctl is-active --quiet "$service"
+          AUTOPILOT_DATABASE_URL="$database_url" PYTHONPATH="$release" \
+            "$root/.venv/bin/python" -m oracle_autopilot.rollout_verify
           stopped=0
           trap - EXIT
           cleanup
