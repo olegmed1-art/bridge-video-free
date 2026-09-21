@@ -1476,6 +1476,9 @@ def test_project_planner_materializes_one_exact_head_task(monkeypatch):
 
     monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
     monkeypatch.setattr(
+        "oracle_autopilot.worker.reconcile_parallel_work_intake", lambda _config: 0
+    )
+    monkeypatch.setattr(
         "oracle_autopilot.worker.fetch_github_project_head",
         lambda _repository, _target_pr: {"head_sha": "b" * 40, "open": True},
     )
@@ -1514,6 +1517,9 @@ def test_project_planner_retries_transient_probe_and_rolls_forward(monkeypatch):
         return None
 
     monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker.reconcile_parallel_work_intake", lambda _config: 0
+    )
     monkeypatch.setattr(
         "oracle_autopilot.worker.fetch_github_project_head",
         lambda _repository, _target_pr: (_ for _ in ()).throw(

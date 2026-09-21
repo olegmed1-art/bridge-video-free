@@ -14,6 +14,9 @@ DECLARE
     priority_mutation_rejected boolean := false;
     overflow_rejected boolean := false;
     mailbox_pr integer := 1150;
+    normal_roles text[] := ARRAY[
+        'AUTOPILOT','VIDEO','VIDEO_QUEUE','KNOWLEDGE','QA','SECURITY'
+    ];
 BEGIN
     IF to_regclass('autopilot.role_dispatch_mailbox_registry') IS NOT NULL THEN
         SELECT registry.mailbox_pr INTO STRICT mailbox_pr
@@ -66,7 +69,7 @@ BEGIN
     FOR i IN 1..6 LOOP
         PERFORM * FROM autopilot.register_universal_work_item(
             'sql-six-worker-normal-' || i,
-            'AUTOPILOT',
+            normal_roles[i],
             'SIX_WORKER_CAPACITY_TEST',
             'Prove bounded normal worker admission.',
             1600 + i,
@@ -119,7 +122,7 @@ BEGIN
     SELECT work_item_id INTO p0_id
       FROM autopilot.register_universal_work_item(
           'sql-six-worker-p0',
-          'AUTOPILOT',
+          'RECOGNIZER',
           'SIX_WORKER_CAPACITY_TEST',
           'Prove admission to the reserved P0 worker slot.',
           1690,
