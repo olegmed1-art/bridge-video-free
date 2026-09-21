@@ -555,7 +555,7 @@ def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch)
         },
         clear=True,
     ):
-        for mailbox_pr in (1685, 1703):
+        for mailbox_pr in (1150, 1685, 1703):
             response_payload["mailbox_pull_request"] = mailbox_pr
             result = _publish_role_dispatch(request_payload)
             assert result["dispatch_pull_request"] == 1152
