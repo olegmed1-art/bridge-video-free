@@ -358,6 +358,11 @@ jobs:
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0363_autopilot_audit_findings_repair_progression';")"
           had_repair_head_rebind="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0364_autopilot_repair_head_rebind';")"
+          # Restore the full upper chain before the lower-chain roundtrip.
+          # Otherwise the ledger claims 0367 while 0353 restores stale code.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0367_autopilot_reliable_progress.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0366_autopilot_terminal_dispatch_history.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0365_autopilot_parallel_work_intake.sql
           if [ "$had_repair_head_rebind" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/364_autopilot_repair_head_rebind.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0364_autopilot_repair_head_rebind.sql
@@ -526,6 +531,10 @@ jobs:
           if [ "$had_repair_head_rebind" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0364_autopilot_repair_head_rebind.sql
           fi
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0365_autopilot_parallel_work_intake.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0366_autopilot_terminal_dispatch_history.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0367_autopilot_reliable_progress.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/367_autopilot_reliable_progress.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \

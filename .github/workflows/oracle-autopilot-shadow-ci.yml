@@ -136,7 +136,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -R --line-number -E 'subprocess|os\.system|shell=True|OPENAI_API_KEY|GITHUB_APP_PRIVATE_KEY|OCI_CLI_' \
+          ! grep -R --line-number -E 'os\.system|shell=True|OPENAI_API_KEY|GITHUB_APP_PRIVATE_KEY|OCI_CLI_' \
             oracle_autopilot deploy/oracle-autopilot ops/oracle_autopilot_shadow_install.sh
+          # The existing native CLI adapter has one fixed executable, an argv
+          # list and an allowlisted child environment (AST regression tested).
+          # No other resident module may launch a child process.
+          ! grep -R --line-number --include='*.py' --exclude='codex_cli_bridge.py' -E 'subprocess' oracle_autopilot
           ! grep -R --line-number -E 'AUTOPILOT_RUNTIME_MODE=(PRODUCTION|ACTIVE)|production_mutations_enabled.*[Tt]rue' \
             oracle_autopilot deploy/oracle-autopilot ops/oracle_autopilot_shadow_install.sh

@@ -132,6 +132,10 @@ jobs:
         run: |
           set -euo pipefail
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0367_autopilot_reliable_progress.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0366_autopilot_terminal_dispatch_history.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -v persist_accepted=true \
             -f database/tests/365_autopilot_parallel_work_intake.sql
           test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \

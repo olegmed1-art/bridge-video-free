@@ -96,6 +96,8 @@ TOKEN_BROKER_HOST_PATTERN = re.compile(
     r"bridge-school-autopilot-[a-z0-9]+-olegmed1-4368s-projects\.vercel\.app"
 )
 _PARALLEL_WORK_MANIFEST_REGISTERED = False
+_PARALLEL_WORK_MANIFEST_RETRY_AT = 0.0
+QUEUE_BATCH_SIZE = 6
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -1260,7 +1262,7 @@ def wait_for_wakeup(listener, timeout_seconds: float) -> None:
 
 def drain_ready(config: WorkerConfig) -> int:
     processed = 0
-    while process_one(config):
+    while processed < QUEUE_BATCH_SIZE and process_one(config):
         processed += 1
     return processed
 
@@ -1342,9 +1344,17 @@ def process_project_work(config: WorkerConfig) -> bool:
 
 
 def drain_project_work(config: WorkerConfig) -> int:
-    reconcile_parallel_work_intake(config)
+    global _PARALLEL_WORK_MANIFEST_RETRY_AT
+    if time.monotonic() >= _PARALLEL_WORK_MANIFEST_RETRY_AT:
+        try:
+            reconcile_parallel_work_intake(config)
+        except (psycopg.Error, AutopilotContractError) as exc:
+            # A failed new intake must not starve already admitted work. Never
+            # log the database exception text: it may contain connection data.
+            _PARALLEL_WORK_MANIFEST_RETRY_AT = time.monotonic() + 60
+            LOGGER.error("parallel_work_manifest_failed error_type=%s", type(exc).__name__)
     processed = 0
-    while process_project_work(config):
+    while processed < QUEUE_BATCH_SIZE and process_project_work(config):
         processed += 1
     return processed
 
@@ -1372,7 +1382,15 @@ def reconcile_parallel_work_intake(config: WorkerConfig) -> int:
     if not row:
         raise AutopilotContractError("AUTOPILOT_PARALLEL_MANIFEST_RECEIPT_MISSING")
     registered_count = row.get("registered_count")
-    if type(registered_count) is not int or not 0 <= registered_count <= 5:
+    item_count = len(json.loads(canonical_manifest_text())["items"])
+    if (
+        row.get("manifest_sha256") != manifest_sha256()
+        or type(row.get("item_count")) is not int
+        or row["item_count"] != item_count
+        or type(registered_count) is not int
+        or not 0 <= registered_count <= item_count
+        or type(row.get("replayed")) is not bool
+    ):
         raise AutopilotContractError("AUTOPILOT_PARALLEL_MANIFEST_RECEIPT_INVALID")
     _PARALLEL_WORK_MANIFEST_REGISTERED = True
     LOGGER.info(
@@ -1512,9 +1530,18 @@ def drain_role_dispatch_outbox(config: WorkerConfig) -> int:
         (),
     )
     processed = 0
-    while process_role_dispatch_outbox(config):
+    while processed < QUEUE_BATCH_SIZE and process_role_dispatch_outbox(config):
         processed += 1
     return processed + int(expired["reconciled"] if expired else 0)
+
+
+def drain_cycle(config: WorkerConfig) -> int:
+    """Visit every bounded lane, even when an earlier lane remains busy."""
+    return sum((
+        drain_ready(config),
+        drain_role_dispatch_outbox(config),
+        drain_project_work(config),
+    ))
 
 
 def run_forever(config: WorkerConfig) -> None:
@@ -1531,11 +1558,7 @@ def run_forever(config: WorkerConfig) -> None:
                 while True:
                     # Drain every ready transition without sleeping. The polling
                     # timeout is reached only when no runnable task exists.
-                    if (
-                        drain_ready(config)
-                        or drain_role_dispatch_outbox(config)
-                        or drain_project_work(config)
-                    ):
+                    if drain_cycle(config):
                         continue
                     wait_for_wakeup(listener, config.recovery_poll_seconds)
         except KeyboardInterrupt:
