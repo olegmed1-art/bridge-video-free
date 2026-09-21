@@ -1,11 +1,6 @@
 name: Autopilot reconciliation read-only diagnostic
 
 on:
-  push:
-    branches: [fix/autopilot-runner-idle-20260921]
-    paths:
-      - oracle_autopilot/reconcile_diagnostics.py
-      - .github/workflows/autopilot-reconcile-diagnostic.yml
   workflow_dispatch:
 
 permissions:
@@ -26,5 +21,4 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
           GH_TOKEN: ${{ github.token }}
-          RECONCILE_ISOLATED_CANARY: '1'
         run: python -m oracle_autopilot.reconcile_diagnostics

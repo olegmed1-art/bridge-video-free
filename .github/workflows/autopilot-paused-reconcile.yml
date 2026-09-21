@@ -37,6 +37,7 @@ jobs:
         run: python -m pip install 'psycopg[binary]==3.3.4'
 
       - name: Verify connection, bounded RPC access, and check-runs
+        id: preflight
         env:
           DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
           GH_TOKEN: ${{ github.token }}
@@ -50,7 +51,7 @@ jobs:
         run: python -m oracle_autopilot.paused_reconcile
 
       - name: Admit bounded read-only next steps
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.preflight.outcome == 'success' }}
         env:
           DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
           GH_TOKEN: ${{ github.token }}

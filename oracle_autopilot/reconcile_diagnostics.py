@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import re
 import urllib.error
-from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 
@@ -97,30 +96,8 @@ def main():
     except (SystemExit, ValueError):
         print('db_diagnostic result=FAIL code=DSN_CONTRACT_INVALID')
         return 1
-    if os.environ.get('RECONCILE_ISOLATED_CANARY') == '1':
-        # This endpoint is the user-preserved 0368 test branch, never production.
-        parsed = urlsplit(normalized)
-        if parsed.hostname != EXPECTED_HOST:
-            raise SystemExit('DIAGNOSTIC_CANONICAL_HOST_INVALID')
-        userinfo = parsed.netloc.rsplit('@', 1)[0]
-        endpoint = 'ep-raspy-lake-b1ro5zin-pooler.c-5.eu-central-1.aws.neon.tech'
-        normalized = urlunsplit(parsed._replace(netloc=userinfo + '@' + endpoint))
-        ok = probe(normalized, 'isolated_gateway', gateway=True)
-        if ok:
-            with psycopg.connect(normalized, connect_timeout=10, autocommit=True) as conn:
-                with conn.transaction(force_rollback=True):
-                    conn.execute("SET LOCAL statement_timeout = '10s'")
-                    conn.execute("SET LOCAL lock_timeout = '3s'")
-                    for sql in (
-                        "SELECT autopilot_reconcile.apply_paused('00000000-0000-0000-0000-000000000000',now(),repeat('a',64),NULL,NULL)",
-                        "SELECT autopilot_reconcile.apply_progress('00000000-0000-0000-0000-000000000000',now(),repeat('a',40),NULL)",
-                    ):
-                        if conn.execute(sql).fetchone() != ('NO_CHANGE',):
-                            raise ValueError('DIAGNOSTIC_NOOP_INVALID')
-            print('db_diagnostic variant=isolated_gateway stage=mutators_noop_rollback result=PASS')
-    else:
-        print(f'db_diagnostic normalized_changed={normalized != raw}')
-        ok = probe(normalized, 'production_gateway', gateway=True)
+    print(f'db_diagnostic normalized_changed={normalized != raw}')
+    ok = probe(normalized, 'production_gateway', gateway=True)
     try:
         head = github('git/ref/heads/main')['object']['sha']
         if not re.fullmatch('[0-9a-f]{40}', head):

@@ -1,5 +1,11 @@
 \set ON_ERROR_STOP on
 BEGIN;
+-- Test-only, transaction-local impersonation. The final ROLLBACK restores the
+-- migration owner's original SET FALSE membership; never persist this grant.
+DO $test_role$
+BEGIN
+ EXECUTE format('GRANT bridge_school_worker TO %I WITH SET TRUE',current_user);
+END $test_role$;
 DO $test$
 BEGIN
  IF has_schema_privilege('bridge_school_worker','autopilot','USAGE')
