@@ -50,10 +50,10 @@ LOGGER = logging.getLogger("oracle_autopilot")
 GITHUB_API_HOST = "api.github.com"
 GITHUB_REPOSITORY = "olegmed1-art/bridge-video-free"
 ROLE_DISPATCH_BOT_LOGIN = "bridge-school-oracle-autopilot[bot]"
-# The pinned broker release predates mailbox-v4 rotation and reports retained
-# mailbox #1685 as release metadata. Dispatch PR creation is repository-wide;
-# accept only that pinned retained value or the current active mailbox.
-ROLE_DISPATCH_BROKER_MAILBOX_PRS = frozenset({1685, ROLE_DISPATCH_MAILBOX_PR})
+# Pinned broker releases predate mailbox-v4 rotation and report retained
+# mailbox metadata from their immutable source revision. Dispatch PR creation is
+# repository-wide; accept only pinned retained values or the active mailbox.
+ROLE_DISPATCH_BROKER_MAILBOX_PRS = frozenset({1150, 1685, ROLE_DISPATCH_MAILBOX_PR})
 GITHUB_RESPONSE_LIMIT_BYTES = 1_048_576
 GITHUB_CHECK_RUN_LIMIT = 100
 GITHUB_FAILED_CHECK_LIMIT = 5
