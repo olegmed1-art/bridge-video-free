@@ -50,6 +50,10 @@ LOGGER = logging.getLogger("oracle_autopilot")
 GITHUB_API_HOST = "api.github.com"
 GITHUB_REPOSITORY = "olegmed1-art/bridge-video-free"
 ROLE_DISPATCH_BOT_LOGIN = "bridge-school-oracle-autopilot[bot]"
+# The pinned broker release predates mailbox-v4 rotation and reports retained
+# mailbox #1685 as release metadata. Dispatch PR creation is repository-wide;
+# accept only that pinned retained value or the current active mailbox.
+ROLE_DISPATCH_BROKER_MAILBOX_PRS = frozenset({1685, ROLE_DISPATCH_MAILBOX_PR})
 GITHUB_RESPONSE_LIMIT_BYTES = 1_048_576
 GITHUB_CHECK_RUN_LIMIT = 100
 GITHUB_FAILED_CHECK_LIMIT = 5
@@ -1018,7 +1022,7 @@ def _publish_role_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         or set(result) != expected_keys
         or any(result.get(key) != value for key, value in public_envelope.items())
         or result.get("repository") != GITHUB_REPOSITORY
-        or result.get("mailbox_pull_request") != ROLE_DISPATCH_MAILBOX_PR
+        or result.get("mailbox_pull_request") not in ROLE_DISPATCH_BROKER_MAILBOX_PRS
         or result.get("status") not in {"created", "existing"}
         or type(result.get("replayed")) is not bool
         or type(pull_number) is not int
