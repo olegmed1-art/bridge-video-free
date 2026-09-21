@@ -24,7 +24,7 @@ ROLLBACK = ROOT / "database/rollbacks/0365_autopilot_parallel_work_intake.sql"
 def test_release_manifest_is_independent_repository_only_and_canonical() -> None:
     validate_parallel_work_manifest(PARALLEL_WORK_MANIFEST)
     items = PARALLEL_WORK_MANIFEST["items"]
-    assert [item["target_pr"] for item in items] == [1059, 1599, 1683, 1736]
+    assert [item["target_pr"] for item in items] == [1148, 1599, 1683, 1736]
     assert len({item["role"] for item in items}) == len(items)
     assert all(item["task_spec_json"]["parallel_safe"] is True for item in items)
     assert all(

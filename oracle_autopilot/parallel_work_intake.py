@@ -62,15 +62,15 @@ PARALLEL_WORK_MANIFEST: dict[str, Any] = {
     "source": "REVIEWED_WORKER_RELEASE",
     "items": [
         {
-            "work_key": "video-queue-pr1059-current-head-audit-20260921",
+            "work_key": "video-queue-pr1148-current-head-audit-20260921",
             "role": "VIDEO_QUEUE",
             "task_kind": "REPOSITORY_AUDIT",
             "objective": (
-                "Audit PR #1059 on its live exact head against current main. "
+                "Audit PR #1148 on its live exact head against current main. "
                 "Verify repository code and CI evidence only; do not access or "
                 "write Drive, production, Neon, servers, credentials, or media."
             ),
-            "target_pr": 1059,
+            "target_pr": 1148,
             "priority": 20,
             "task_spec_json": _task_spec(
                 repair_policy="DISABLED",
