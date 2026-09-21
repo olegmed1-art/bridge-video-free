@@ -3,6 +3,9 @@ name: Autopilot role dispatch SQL CI
 on:
   pull_request:
     paths:
+      - 'database/migrations/0368_autopilot_next_step.sql'
+      - 'database/rollbacks/0368_autopilot_next_step.sql'
+      - 'database/tests/368_autopilot_next_step.sql'
       - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/tests/322_autopilot_chatgpt_role_dispatch.sql'
@@ -84,6 +87,9 @@ on:
   push:
     branches: [main]
     paths:
+      - 'database/migrations/0368_autopilot_next_step.sql'
+      - 'database/rollbacks/0368_autopilot_next_step.sql'
+      - 'database/tests/368_autopilot_next_step.sql'
       - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql'
       - 'database/tests/322_autopilot_chatgpt_role_dispatch.sql'
@@ -333,10 +339,14 @@ jobs:
           # historical lower-chain fixture below intentionally rebuilds 0324's
           # table shape and is NOT a modern-schema reconstruction test (0347
           # has no rollback). Never run modern tests against that stale fixture.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/368_autopilot_next_step.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0368_autopilot_next_step.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/367_autopilot_reliable_progress.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0367_autopilot_reliable_progress.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0367_autopilot_reliable_progress.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/367_autopilot_reliable_progress.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0368_autopilot_next_step.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/368_autopilot_next_step.sql
           # A higher migration may legitimately depend on the role-dispatch tables.
           # If the publication chain is present, roll it back first so this lower-chain
           # roundtrip never bypasses its evidence-preserving rollback guards.
@@ -368,6 +378,18 @@ jobs:
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0364_autopilot_repair_head_rebind';")"
           # Restore the full upper chain before the lower-chain roundtrip.
           # Otherwise the ledger claims 0367 while 0353 restores stale code.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0368_autopilot_next_step.sql
+          # Production rollback retains budgets. Only this empty, disposable CI
+          # fixture may remove the receipt table before rebuilding historical 0324.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$ BEGIN
+            IF current_database()<>'autopilot_main_ci' OR session_user<>'bridge_ci_owner'
+               OR EXISTS(SELECT FROM autopilot.project_progress_receipt) THEN
+              RAISE EXCEPTION 'NEXT_STEP_EMPTY_CI_FIXTURE_REQUIRED';
+            END IF;
+            DROP TABLE autopilot.project_progress_receipt;
+          END $$;
+          SQL
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0367_autopilot_reliable_progress.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0366_autopilot_terminal_dispatch_history.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0365_autopilot_parallel_work_intake.sql
