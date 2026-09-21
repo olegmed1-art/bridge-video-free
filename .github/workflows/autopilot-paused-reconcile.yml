@@ -4,6 +4,13 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '37 * * * *'
+  workflow_run:
+    workflows:
+      - 'Issue 881 Exact Canary Contract CI'
+      - 'Issue 881 Current-Main Authoritative CI'
+      - 'Bridge School Database CI'
+      - 'Autopilot publication security CI'
+    types: [completed]
 
 permissions:
   contents: read
@@ -34,3 +41,7 @@ jobs:
 
       - name: Reconcile at most three paused items from fresh evidence
         run: python -m oracle_autopilot.paused_reconcile
+
+      - name: Admit bounded read-only next steps
+        if: ${{ !cancelled() }}
+        run: python -m oracle_autopilot.next_step_reconcile
