@@ -123,4 +123,7 @@ def test_rollback_refuses_to_delete_progressed_manifest_work() -> None:
     sql = ROLLBACK.read_text()
     assert "AUTOPILOT_PARALLEL_INTAKE_ROLLBACK_REQUIRES_RECONCILIATION" in sql
     assert "state<>'READY' OR last_task_id IS NOT NULL" in sql
+    assert "UPDATE autopilot.project_planner_state AS planner" in sql
+    assert "SET last_work_item_id=NULL" in sql
+    assert "planner.last_work_item_id IN" in sql
     assert "EXECUTE original" in sql

@@ -1,4 +1,8 @@
 \set ON_ERROR_STOP on
+\if :{?persist_accepted}
+\else
+  \set persist_accepted false
+\endif
 BEGIN;
 
 DO $test$
@@ -81,4 +85,8 @@ BEGIN
 END;
 $test$;
 
+\if :persist_accepted
+COMMIT;
+\else
 ROLLBACK;
+\endif

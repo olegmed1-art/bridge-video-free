@@ -25,6 +25,19 @@ BEGIN
  EXECUTE original;
 END $rollback$;
 
+UPDATE autopilot.project_planner_state AS planner
+SET last_work_item_id=NULL,
+    last_decision_code='IDLE_NO_ELIGIBLE_TASK',
+    last_decision_at=now()
+WHERE planner.last_work_item_id IN (
+  SELECT work_item_id
+  FROM autopilot.project_work_item
+  WHERE created_by='AUTOPILOT_PARALLEL_INTAKE'
+    AND source LIKE 'REVIEWED_WORKER_RELEASE:%'
+    AND state='READY'
+    AND last_task_id IS NULL
+);
+
 DELETE FROM autopilot.project_work_item
 WHERE created_by='AUTOPILOT_PARALLEL_INTAKE'
   AND source LIKE 'REVIEWED_WORKER_RELEASE:%'
