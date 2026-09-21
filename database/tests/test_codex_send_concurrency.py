@@ -28,7 +28,15 @@ def main():
         did = connection.execute("SELECT pg_temp.codex_send_fixture('concurrent')").fetchone()[0]
         deadline_id = connection.execute("SELECT pg_temp.codex_send_fixture('deadline')").fetchone()[0]
         rollback_first_id = connection.execute("SELECT pg_temp.codex_send_fixture('rollback-first')").fetchone()[0]
+        claim_first_id = connection.execute("SELECT pg_temp.codex_send_fixture('claim-first')").fetchone()[0]
+        parent_dispatch = connection.execute("SELECT pg_temp.codex_send_fixture('parent')").fetchone()[0]
+        child_dispatch = connection.execute("SELECT pg_temp.codex_send_fixture('child')").fetchone()[0]
         binding = connection.execute('SELECT autopilot.codex_command_send_binding(%s)', (did,)).fetchone()[0]
+        first_binding = connection.execute('SELECT autopilot.codex_command_send_binding(%s)', (claim_first_id,)).fetchone()[0]
+        parent_work = connection.execute('SELECT work_item_id FROM autopilot.project_work_task WHERE task_id=(SELECT task_id FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s)', (parent_dispatch,)).fetchone()[0]
+        connection.execute("UPDATE autopilot.project_work_item SET state='DONE',completed_at=clock_timestamp() WHERE work_item_id=%s", (parent_work,))
+        connection.execute('UPDATE autopilot.project_work_item SET depends_on_work_item_id=%s WHERE last_task_id=(SELECT task_id FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s)', (parent_work, child_dispatch))
+        child_binding = connection.execute('SELECT autopilot.codex_command_send_binding(%s)', (child_dispatch,)).fetchone()[0]
     digest = command_sha256(render_command(binding))
     barrier = threading.Barrier(8)
     attempts = [uuid.uuid4() for _ in range(8)]
@@ -51,6 +59,32 @@ def main():
     # a fresh attempt can recover POST authority by looking up the ledger.
     assert claim(winner, wait=False) is False
     assert claim(uuid.uuid4(), wait=False) is False
+
+    # A dependency changing while claim waits must not grant stale authority.
+    assert child_binding is not None
+    parent_wait_pid = []
+    parent_wait_started = threading.Event()
+
+    def claim_child():
+        with psycopg.connect(dsn, options='-c statement_timeout=10000') as connection:
+            parent_wait_pid.append(connection.info.backend_pid)
+            parent_wait_started.set()
+            return connection.execute('SELECT autopilot.claim_codex_command_send(%s,%s,%s,%s)',
+                (child_dispatch, uuid.uuid4(), Jsonb(child_binding), digest)).fetchone()[0]
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with psycopg.connect(dsn) as parent_writer:
+            parent_writer.execute('SELECT work_item_id FROM autopilot.project_work_item WHERE work_item_id=%s FOR UPDATE', (parent_work,))
+            child_future = pool.submit(claim_child)
+            assert parent_wait_started.wait(timeout=5)
+            until = time.monotonic()+5
+            with psycopg.connect(dsn, autocommit=True) as observer:
+                while not observer.execute('SELECT %s=ANY(pg_blocking_pids(%s))',
+                        (parent_writer.info.backend_pid, parent_wait_pid[0])).fetchone()[0]:
+                    assert time.monotonic()<until, 'DEPENDENCY_NOT_LOCKED'
+                    time.sleep(.02)
+            parent_writer.execute("UPDATE autopilot.project_work_item SET state='PAUSED',completed_at=NULL WHERE work_item_id=%s", (parent_work,))
+        assert child_future.result(timeout=10) is False
 
     # Expiry while waiting for an authority row lock must use wall clock, not
     # transaction-start now(). No send right survives the 180-second margin.
@@ -99,9 +133,10 @@ def main():
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with psycopg.connect(dsn) as holder:
-            # A denied replay still holds the shared fence until COMMIT.
+            first_attempt = uuid.uuid4()
+            # A fresh successful intent remains uncommitted while rollback waits.
             assert holder.execute('SELECT autopilot.claim_codex_command_send(%s,%s,%s,%s)',
-                (did, winner, Jsonb(binding), digest)).fetchone()[0] is False
+                (claim_first_id, first_attempt, Jsonb(first_binding), digest)).fetchone()[0] is True
             rollback_future = pool.submit(rollback)
             assert blocked_started.wait(timeout=5)
             await_advisory_wait(blocked_pid[0])
@@ -109,6 +144,10 @@ def main():
         rollback_future.result(timeout=10)
     subprocess.run(['bash', 'database/scripts/migrate.sh'], cwd=root, check=True)
     assert claim(winner, wait=False) is False
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute('SELECT autopilot.claim_codex_command_send(%s,%s,%s,%s)',
+            (claim_first_id, first_attempt, Jsonb(first_binding), digest)).fetchone()[0] is False
+        assert connection.execute('SELECT count(*) FROM autopilot.codex_command_send_intent WHERE dispatch_id=%s', (claim_first_id,)).fetchone()[0] == 1
 
     # Rollback-first: a caller already running but waiting on the shared fence
     # must observe the deleted migration marker and return false, not consume.
@@ -137,6 +176,19 @@ def main():
         assert connection.execute('SELECT count(*) FROM autopilot.codex_command_send_intent WHERE dispatch_id=%s', (did,)).fetchone()[0] == 1
         assert connection.execute('SELECT status FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s', (did,)).fetchone()[0] == 'PUBLISHED'
         assert connection.execute('SELECT count(*) FROM autopilot.codex_command_send_intent WHERE dispatch_id=%s', (rollback_first_id,)).fetchone()[0] == 0
+        assert connection.execute('SELECT count(*) FROM autopilot.codex_command_send_intent WHERE dispatch_id=%s', (child_dispatch,)).fetchone()[0] == 0
+
+    # Retained/precreated column-level grants are not erased by a table-level
+    # REVOKE. Reapply must reject them instead of silently adopting the ledger.
+    with psycopg.connect(dsn) as connection:
+        connection.execute(rollback_sql)
+        connection.execute('GRANT SELECT(binding) ON autopilot.codex_command_send_intent TO autopilot_callback')
+    denied = subprocess.run(['bash', 'database/scripts/migrate.sh'], cwd=root,
+                            capture_output=True, text=True)
+    assert denied.returncode != 0 and 'CODEX_SEND_LEDGER_SHAPE_INVALID' in denied.stderr
+    with psycopg.connect(dsn) as connection:
+        connection.execute('REVOKE SELECT(binding) ON autopilot.codex_command_send_intent FROM autopilot_callback')
+    subprocess.run(['bash', 'database/scripts/migrate.sh'], cwd=root, check=True)
     print('PASS: 8 concurrent claimants / 1 grant; no replay; deadline fencing; retained rollback ledger; no fabricated ACK')
 
 

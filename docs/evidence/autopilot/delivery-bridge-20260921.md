@@ -70,12 +70,20 @@ claim release, expired dispatch replay or server rollback is authorized.
 
 Status: DRAFT / NOT APPROVED FOR ACTIVATION. The live bridge prompt is unchanged.
 
-The targeted local regression run passed 85 tests:
+The targeted local regression run passed 86 tests:
 `python -m pytest -q tests/test_oracle_autopilot_bridge_prompt.py tests/test_oracle_autopilot_github_codex_callback.py tests/test_oracle_autopilot_github_codex_callback_workflow.py`.
 The database CI adds real PostgreSQL invariant/concurrency tests: eight callers,
 one grant; identical/fresh replay rejected; expiry while blocked on a row lock;
 retention across rollback/reapply; no manufactured delivery state. These are
-pending CI execution at this checkpoint. A local PostgreSQL service was not
+implemented and the first exact-head PostgreSQL run passed:
+[run 35660854216 / job 106535459486](https://github.com/olegmed1-art/bridge-video-free/actions/runs/35660854216/job/106535459486)
+on `aeabb57579afb723716ef2f8d1489baf352c5d7c`; all eleven workflows passed on that
+head. Independent review then found and fixed fast-terminal readback being
+misclassified as a duplicate command, incomplete column/function ACL checks,
+and dependency-parent locking. Tests now additionally cover an uncommitted
+fresh claim versus rollback and rejection of retained column-grant drift.
+Final exact-head CI and I2 review remain pending for those follow-up changes.
+A local PostgreSQL service was not
 available; no Neon branch was used for mutation tests.
 
 Activation gates: exact-head CI plus final independent I2 review; explicit owner

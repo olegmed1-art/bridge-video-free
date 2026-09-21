@@ -19,7 +19,7 @@ BEGIN
      aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a
      WHERE p.oid IN ('autopilot.claim_codex_command_send(uuid,uuid,jsonb,text)'::regprocedure,
        'autopilot.codex_command_send_binding(uuid)'::regprocedure)
-       AND (a.grantee=0 OR p.prosecdef OR p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog'])) THEN
+       AND (a.grantee<>p.proowner OR p.prosecdef OR p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog'])) THEN
    RAISE EXCEPTION '0370_FUNCTION_SECURITY_INVALID';
  END IF;
  did:=pg_temp.codex_send_fixture('once');

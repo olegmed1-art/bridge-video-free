@@ -80,7 +80,7 @@ def test_exact_readback_and_ambiguous_post(binding):
     ('author_association', 'MEMBER'),
     ('performed_via_github_app', {'slug': 'chatgpt-codex-connector', 'id': 1}),
     ('issue_url', 'https://api.github.com/repos/other/repo/issues/999970'),
-    ('body', 'conflicting body'),
+    ('body', '@codex conflicting body '),
 ])
 def test_readback_requires_full_identity_and_binding(binding, field, value):
     body = render_command(binding)
@@ -88,6 +88,18 @@ def test_readback_requires_full_identity_and_binding(binding, field, value):
     record[field] = value + binding['dispatch_id'] if field == 'body' else value
     with pytest.raises(CallbackContractError):
         readback_command([record], complete=True, binding=binding, expected_body=body)
+
+
+def test_fast_terminal_and_view_task_are_not_duplicate_commands(binding):
+    body = render_command(binding)
+    terminal = comment(binding, 'AUTOPILOT_CODEX_RESULT_V1\ndispatch_id='+binding['dispatch_id'])
+    terminal.update(id=124, author_association='NONE',
+                    user={'login': 'chatgpt-codex-connector[bot]', 'id': 199175422})
+    view = dict(terminal, id=125, body='[View task →](https://chatgpt.com/s/cd_example)')
+    assert readback_command([comment(binding, body), terminal, view], complete=True,
+                           binding=binding, expected_body=body) == 123
+    assert readback_command([terminal, view], complete=True,
+                           binding=binding, expected_body=body) is None
 
 
 @pytest.mark.parametrize('required', [

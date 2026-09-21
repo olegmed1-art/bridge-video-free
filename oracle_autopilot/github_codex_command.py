@@ -83,14 +83,19 @@ def readback_command(comments: list[dict], *, complete: bool, binding: dict,
     """All-page exact-body/identity readback; None is UNKNOWN, never retry.
 
     Caller must attest successful complete pagination on the exact target PR.
-    Any same-dispatch mention with a conflicting body/actor is fail-closed.
+    Any same-dispatch command-shaped record with a conflicting body/actor is
+    fail-closed. Bot results/ACKs can legitimately mention the same dispatch.
     This proves command existence, not ACK, terminal, or ownership of the POST.
     """
     if complete is not True:
         raise CallbackContractError('CODEX_COMMENT_PAGINATION_INCOMPLETE')
     if expected_body != render_command(binding):
         raise CallbackContractError('CODEX_READBACK_EXPECTED_BODY_INVALID')
-    matches = [c for c in comments if binding['dispatch_id'] in str(c.get('body', ''))]
+    matches = []
+    for record in comments:
+        body = str(record.get('body', ''))
+        if binding['dispatch_id'] in body and (COMMAND_MARKER in body or body.startswith('@codex')):
+            matches.append(record)
     if not matches:
         return None
     if len(matches) != 1:

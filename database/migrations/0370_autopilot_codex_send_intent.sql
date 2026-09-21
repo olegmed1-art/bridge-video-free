@@ -40,6 +40,11 @@ BEGIN
  OR EXISTS(SELECT FROM pg_trigger WHERE tgrelid='autopilot.codex_command_send_intent'::regclass AND NOT tgisinternal)
  OR EXISTS(SELECT FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) a
    WHERE c.oid='autopilot.codex_command_send_intent'::regclass AND a.grantee<>c.relowner)
+ OR EXISTS(SELECT FROM pg_attribute col JOIN pg_class c ON c.oid=col.attrelid
+   CROSS JOIN LATERAL aclexplode(col.attacl) a
+   WHERE c.oid='autopilot.codex_command_send_intent'::regclass AND a.grantee<>c.relowner)
+ OR NOT EXISTS(SELECT FROM pg_attrdef WHERE adrelid='autopilot.codex_command_send_intent'::regclass
+   AND adnum=5 AND pg_get_expr(adbin,adrelid)='clock_timestamp()')
  OR (SELECT count(*) FROM pg_constraint WHERE conrelid='autopilot.codex_command_send_intent'::regclass AND contype<>'n')<>6
  OR NOT EXISTS(SELECT FROM pg_constraint WHERE conrelid='autopilot.codex_command_send_intent'::regclass
    AND contype='p' AND conkey=ARRAY[1]::smallint[] AND NOT condeferrable AND convalidated)
@@ -108,7 +113,7 @@ CREATE FUNCTION autopilot.claim_codex_command_send(
 SET search_path TO 'pg_catalog'
 AS $f$
 DECLARE current_binding jsonb; inserted integer; outbox autopilot.role_dispatch_outbox;
- work_id uuid;
+ work_id uuid; parent_id uuid;
 BEGIN
  IF current_setting('transaction_isolation')<>'read committed' THEN
    RAISE EXCEPTION 'CODEX_SEND_READ_COMMITTED_REQUIRED';
@@ -133,7 +138,11 @@ BEGIN
  SELECT work_item_id INTO work_id FROM autopilot.project_work_task
  WHERE task_id=outbox.task_id FOR SHARE;
  IF NOT FOUND THEN RETURN false; END IF;
- PERFORM 1 FROM autopilot.project_work_item WHERE work_item_id=work_id FOR UPDATE;
+ SELECT depends_on_work_item_id INTO parent_id FROM autopilot.project_work_item
+ WHERE work_item_id=work_id FOR UPDATE;
+ IF parent_id IS NOT NULL THEN
+   PERFORM 1 FROM autopilot.project_work_item WHERE work_item_id=parent_id FOR SHARE;
+ END IF;
  PERFORM 1 FROM autopilot.role_registry WHERE role_id=outbox.role FOR SHARE;
  current_binding:=autopilot.codex_command_send_binding(p_dispatch_id);
  IF current_binding IS NULL OR current_binding IS DISTINCT FROM p_binding THEN
@@ -152,6 +161,19 @@ END $f$;
 REVOKE ALL ON FUNCTION autopilot.codex_command_send_binding(uuid),
  autopilot.claim_codex_command_send(uuid,uuid,jsonb,text) FROM PUBLIC,
  autopilot_runtime,autopilot_runtime_principal,autopilot_callback,bridge_school_worker;
+
+DO $acl$
+BEGIN
+ IF EXISTS(SELECT FROM pg_proc p WHERE p.oid IN (
+   'autopilot.codex_command_send_binding(uuid)'::regprocedure,
+   'autopilot.claim_codex_command_send(uuid,uuid,jsonb,text)'::regprocedure)
+   AND (p.proowner<>(SELECT oid FROM pg_roles WHERE rolname=current_user)
+     OR p.prosecdef OR p.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog']
+     OR EXISTS(SELECT FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a
+       WHERE a.grantee<>p.proowner))) THEN
+   RAISE EXCEPTION 'CODEX_SEND_FUNCTION_ACL_INVALID';
+ END IF;
+END $acl$;
 
 INSERT INTO public.schema_migration(migration_key)
 VALUES('0370_autopilot_codex_send_intent');
