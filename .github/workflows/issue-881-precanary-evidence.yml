@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
+      EXACT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       EXACT_SHA: ${{ github.event.pull_request.head.sha }}
 
     steps:
@@ -28,8 +29,11 @@ jobs:
       - name: Validate exact revision and no-media contracts
         run: |
           set -euo pipefail
+          [[ "$EXACT_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXACT_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          merge_base="$(git merge-base "$EXACT_BASE_SHA" "$EXACT_SHA")"
+          [[ "$merge_base" =~ ^[0-9a-f]{40}$ ]]
           grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
           bash -n ops/issue_881_external_precanary_workflow.sh
           bash -n ops/oracle_universal_video_precanary_attest.sh
@@ -53,7 +57,7 @@ jobs:
           grep -F '"$image_id" true' ops/oracle_universal_video_container_install.sh
           grep -F 'with shared_workload_lock():' universal_video/neon_worker.py
           grep -F 'verify_terminal_output_live(claim, output' universal_video/neon_worker.py
-          git diff --check "$EXACT_SHA^" "$EXACT_SHA"
+          git diff --check "$merge_base" "$EXACT_SHA"
 
       - name: Prove the only external entrypoint is Director-gated
         run: |
