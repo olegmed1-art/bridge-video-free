@@ -44,11 +44,14 @@ BEGIN
  END IF;
  patched:=replace(source,'    result_code := COALESCE(',
  $guard$    -- Fence before the repair controller can attach an older task's child.
-    IF EXISTS(SELECT FROM autopilot.project_work_task m WHERE m.task_id=NEW.task_id)
-       AND NOT EXISTS(SELECT FROM autopilot.project_work_task m
-         JOIN autopilot.project_work_item w USING(work_item_id)
-         WHERE m.task_id=NEW.task_id AND w.last_task_id=NEW.task_id) THEN
-      RETURN NEW;
+    IF EXISTS(SELECT FROM autopilot.project_work_task m WHERE m.task_id=NEW.task_id) THEN
+      -- Same lock order as the planner: capacity, then work item. Successor
+      -- creation must not race a newer generation after the lineage check.
+      PERFORM pg_advisory_xact_lock(hashtextextended('autopilot.role-worker-capacity-v1',0));
+      PERFORM 1 FROM autopilot.project_work_task m
+        JOIN autopilot.project_work_item w USING(work_item_id)
+        WHERE m.task_id=NEW.task_id AND w.last_task_id=NEW.task_id FOR UPDATE OF w;
+      IF NOT FOUND THEN RETURN NEW; END IF;
     END IF;
     result_code := COALESCE($guard$);
  EXECUTE patched;
