@@ -89,7 +89,7 @@ BEGIN
     raised:=false;
     BEGIN
         PERFORM * FROM autopilot.accept_role_dispatch_terminal_v2(
-            'terminal-before-proof-326',repeat('c',64),true,'olegmed1-art/bridge-video-free',1150,
+            'terminal-before-proof-326',repeat('c',64),true,'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
             'olegmed1-art',315099490,'OWNER','chatgpt-codex-connector',1144995,terminal
         );
     EXCEPTION WHEN OTHERS THEN
@@ -121,7 +121,7 @@ BEGIN
         'ui_visible',true,'run_state','RUNNING'
     );
     SELECT * INTO result FROM autopilot.accept_role_dispatch_delivery_proof(
-        'proof-326',repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
+        'proof-326',repeat('d',64),true,'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
         'olegmed1-art',315099490,'OWNER','chatgpt-codex-connector',1144995,proof
     );
     IF NOT result.accepted OR result.duplicate OR result.resulting_state<>'SENT' THEN
@@ -131,7 +131,7 @@ BEGIN
     raised:=false;
     BEGIN
         PERFORM * FROM autopilot.accept_role_dispatch_terminal_v2(
-            'stale-executor-326',repeat('e',64),true,'olegmed1-art/bridge-video-free',1150,
+            'stale-executor-326',repeat('e',64),true,'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
             'olegmed1-art',315099490,'OWNER','chatgpt-codex-connector',1144995,
             jsonb_set(terminal,'{executor_id}','"chat:different-executor"'::jsonb)
         );
@@ -143,7 +143,7 @@ BEGIN
     raised:=false;
     BEGIN
         PERFORM * FROM autopilot.accept_role_dispatch_terminal_v2(
-            'head-change-326',repeat('f',64),true,'olegmed1-art/bridge-video-free',1150,
+            'head-change-326',repeat('f',64),true,'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
             'olegmed1-art',315099490,'OWNER','chatgpt-codex-connector',1144995,
             jsonb_set(terminal,'{target_head_sha}',to_jsonb(repeat('9',40)))
         );
@@ -153,7 +153,7 @@ BEGIN
     IF NOT raised THEN RAISE EXCEPTION 'AUTOPILOT_HEAD_CHANGE_CALLBACK_ACCEPTED'; END IF;
 
     SELECT * INTO result FROM autopilot.accept_role_dispatch_terminal_v2(
-        'terminal-326',repeat('1',64),true,'olegmed1-art/bridge-video-free',1150,
+        'terminal-326',repeat('1',64),true,'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
         'olegmed1-art',315099490,'OWNER','chatgpt-codex-connector',1144995,terminal
     );
     IF NOT result.accepted OR result.duplicate
@@ -162,7 +162,7 @@ BEGIN
         RAISE EXCEPTION 'AUTOPILOT_TERMINAL_DID_NOT_WAKE_NEXT_TASK';
     END IF;
     SELECT * INTO result FROM autopilot.accept_role_dispatch_terminal_v2(
-        'terminal-326',repeat('1',64),true,'olegmed1-art/bridge-video-free',1150,
+        'terminal-326',repeat('1',64),true,'olegmed1-art/bridge-video-free',dispatch.mailbox_pr,
         'olegmed1-art',315099490,'OWNER','chatgpt-codex-connector',1144995,terminal
     );
     IF result.accepted OR NOT result.duplicate

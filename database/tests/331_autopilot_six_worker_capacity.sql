@@ -13,7 +13,16 @@ DECLARE
     null_lease_rejected boolean := false;
     priority_mutation_rejected boolean := false;
     overflow_rejected boolean := false;
+    mailbox_pr integer := 1150;
+    normal_roles text[] := ARRAY[
+        'AUTOPILOT','VIDEO','VIDEO_QUEUE','KNOWLEDGE','QA','SECURITY'
+    ];
 BEGIN
+    IF to_regclass('autopilot.role_dispatch_mailbox_registry') IS NOT NULL THEN
+        SELECT registry.mailbox_pr INTO STRICT mailbox_pr
+          FROM autopilot.role_dispatch_mailbox_registry AS registry
+         WHERE registry.lifecycle='ACTIVE';
+    END IF;
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
          WHERE migration_key = '0331_autopilot_six_worker_capacity'
@@ -60,7 +69,7 @@ BEGIN
     FOR i IN 1..6 LOOP
         PERFORM * FROM autopilot.register_universal_work_item(
             'sql-six-worker-normal-' || i,
-            'AUTOPILOT',
+            normal_roles[i],
             'SIX_WORKER_CAPACITY_TEST',
             'Prove bounded normal worker admission.',
             1600 + i,
@@ -113,7 +122,7 @@ BEGIN
     SELECT work_item_id INTO p0_id
       FROM autopilot.register_universal_work_item(
           'sql-six-worker-p0',
-          'AUTOPILOT',
+          'RECOGNIZER',
           'SIX_WORKER_CAPACITY_TEST',
           'Prove admission to the reserved P0 worker slot.',
           1690,
@@ -204,7 +213,7 @@ BEGIN
             'sql-six-worker-direct-overflow',
             jsonb_build_object(
                 'repository', 'olegmed1-art/bridge-video-free',
-                'mailbox_pr', 1150,
+                'mailbox_pr', mailbox_pr,
                 'role', 'AUTOPILOT',
                 'target_pr', 1699,
                 'expected_head_sha', repeat('b', 40),

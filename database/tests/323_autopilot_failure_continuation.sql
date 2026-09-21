@@ -25,7 +25,13 @@ DECLARE
     claimed_outbox record;
     callback_result record;
     callback_body jsonb;
+    mailbox_pr integer := 1150;
 BEGIN
+    IF to_regclass('autopilot.role_dispatch_mailbox_registry') IS NOT NULL THEN
+        SELECT registry.mailbox_pr INTO STRICT mailbox_pr
+          FROM autopilot.role_dispatch_mailbox_registry AS registry
+         WHERE registry.lifecycle='ACTIVE';
+    END IF;
     IF NOT EXISTS (
         SELECT 1 FROM public.schema_migration
          WHERE migration_key = '0323_autopilot_failure_continuation'
@@ -38,7 +44,7 @@ BEGIN
           'sql-failure-origin-1',
           jsonb_build_object(
               'repository', 'olegmed1-art/bridge-video-free',
-              'mailbox_pr', 1150,
+              'mailbox_pr', mailbox_pr,
               'role', 'RECOGNIZER',
               'target_pr', 1106,
               'expected_head_sha', repeat('a', 40),
@@ -80,7 +86,7 @@ BEGIN
     SELECT * INTO callback_result
       FROM autopilot.accept_role_dispatch_callback(
           'delivery-failure-origin-1', repeat('2', 64), true,
-          'olegmed1-art/bridge-video-free', 1150,
+          'olegmed1-art/bridge-video-free', mailbox_pr,
           'olegmed1-art', 315099490, 'OWNER',
           'chatgpt-codex-connector', 1144995, callback_body
       );
@@ -137,7 +143,7 @@ BEGIN
     SELECT * INTO callback_result
       FROM autopilot.accept_role_dispatch_callback(
           'delivery-repair-1', repeat('4', 64), true,
-          'olegmed1-art/bridge-video-free', 1150,
+          'olegmed1-art/bridge-video-free', mailbox_pr,
           'olegmed1-art', 315099490, 'OWNER',
           'chatgpt-codex-connector', 1144995, callback_body
       );
@@ -189,7 +195,7 @@ BEGIN
     );
     PERFORM * FROM autopilot.accept_role_dispatch_callback(
         'delivery-verify-1', repeat('6', 64), true,
-        'olegmed1-art/bridge-video-free', 1150,
+        'olegmed1-art/bridge-video-free', mailbox_pr,
         'olegmed1-art', 315099490, 'OWNER',
         'chatgpt-codex-connector', 1144995, callback_body
     );
@@ -217,7 +223,7 @@ BEGIN
           'sql-explicit-failed-verify-1',
           jsonb_build_object(
               'repository', 'olegmed1-art/bridge-video-free',
-              'mailbox_pr', 1150, 'role', 'RECOGNIZER', 'target_pr', 1106,
+              'mailbox_pr', mailbox_pr, 'role', 'RECOGNIZER', 'target_pr', 1106,
               'expected_head_sha', repeat('c', 40), 'dispatch_epoch', 103,
               'mode', 'VERIFY', 'repair_attempt', 1,
               'origin_task_id', origin_id::text,
@@ -252,7 +258,7 @@ BEGIN
     );
     PERFORM * FROM autopilot.accept_role_dispatch_callback(
         'delivery-failed-verify-1', repeat('8', 64), true,
-        'olegmed1-art/bridge-video-free', 1150,
+        'olegmed1-art/bridge-video-free', mailbox_pr,
         'olegmed1-art', 315099490, 'OWNER',
         'chatgpt-codex-connector', 1144995, callback_body
     );
@@ -271,7 +277,7 @@ BEGIN
           'sql-owner-blocker-1',
           jsonb_build_object(
               'repository', 'olegmed1-art/bridge-video-free',
-              'mailbox_pr', 1150, 'role', 'KNOWLEDGE', 'target_pr', 1129,
+              'mailbox_pr', mailbox_pr, 'role', 'KNOWLEDGE', 'target_pr', 1129,
               'expected_head_sha', repeat('d', 40), 'dispatch_epoch', 200,
               'successor_task_key', NULL, 'successor_role', NULL,
               'successor_target_pr', NULL, 'successor_expected_head_sha', NULL
@@ -301,7 +307,7 @@ BEGIN
     );
     PERFORM * FROM autopilot.accept_role_dispatch_callback(
         'delivery-owner-1', repeat('a', 64), true,
-        'olegmed1-art/bridge-video-free', 1150,
+        'olegmed1-art/bridge-video-free', mailbox_pr,
         'olegmed1-art', 315099490, 'OWNER',
         'chatgpt-codex-connector', 1144995, callback_body
     );

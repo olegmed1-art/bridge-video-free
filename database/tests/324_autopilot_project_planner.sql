@@ -31,6 +31,7 @@ DECLARE
     independent_task uuid;
     dependent_task uuid;
     changed_head_task uuid;
+    has_planner_v2 boolean;
     probe record;
     materialized record;
 BEGIN
@@ -40,6 +41,20 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'AUTOPILOT_PROJECT_PLANNER_MIGRATION_MISSING';
     END IF;
+    SELECT EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema='autopilot'
+           AND table_name='project_work_item'
+           AND column_name='hold_reason'
+    )
+    AND strpos(
+        pg_get_functiondef(
+          'autopilot.materialize_project_work_probe(uuid,text,bigint,boolean,text)'::regprocedure
+        ),
+        'PLANNER_LOOP_GUARD_V2'
+    ) > 0
+    INTO has_planner_v2;
 
     SELECT work_item_id INTO blocker_item
       FROM autopilot.register_project_work_item(
@@ -165,40 +180,82 @@ BEGIN
            ), completed_at = now()
      WHERE task_id = dependent_task;
 
-    -- The unchanged blocked head is never redelivered.  A genuinely changed
-    -- head reactivates the same lane with a new exact-head task.
+    IF has_planner_v2 THEN
+    -- Planner V2: unchanged blocked work becomes an explicit no-progress hold.
     UPDATE autopilot.project_work_item
        SET not_before = now() WHERE work_item_id = blocker_item;
     SELECT * INTO probe
       FROM autopilot.claim_project_work_probe('sql-project-worker-5', 60);
+    IF NOT FOUND OR probe.work_item_id <> blocker_item THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_BLOCKER_NOT_CLAIMED_FOR_HOLD';
+    END IF;
     SELECT * INTO materialized
       FROM autopilot.materialize_project_work_probe(
           probe.work_item_id, 'sql-project-worker-5', probe.lease_epoch,
           true, repeat('a', 40)
       );
-    IF materialized.task_id IS NOT NULL
-       OR materialized.created IS NOT false
-       OR (SELECT count(*) FROM autopilot.project_work_task
-            WHERE work_item_id = blocker_item AND run_kind = 'AUDIT') <> 1 THEN
-        RAISE EXCEPTION 'AUTOPILOT_PROJECT_UNCHANGED_HEAD_REDISPATCHED';
+    IF materialized.task_id IS NOT NULL OR materialized.created IS NOT false
+       OR materialized.resulting_state <> 'PAUSED' THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_MATERIALIZATION_INVALID';
+    END IF;
+    IF (SELECT state FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 'PAUSED' THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_STATE_INVALID';
+    END IF;
+    IF (SELECT to_jsonb(w)->>'hold_reason' FROM autopilot.project_work_item w WHERE work_item_id=blocker_item) <> 'NO_PROGRESS_NO_RETRY' THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_REASON_INVALID';
+    END IF;
+    IF (SELECT generation FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 1 THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_GENERATION_CHANGED';
+    END IF;
+    IF (SELECT count(*) FROM autopilot.project_work_task
+         WHERE work_item_id=blocker_item AND run_kind='AUDIT') <> 1 THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_AUDIT_DUPLICATED';
     END IF;
 
-    UPDATE autopilot.project_work_item
-       SET not_before = now() WHERE work_item_id = blocker_item;
     SELECT * INTO probe
       FROM autopilot.claim_project_work_probe('sql-project-worker-6', 60);
+    IF FOUND AND probe.work_item_id = blocker_item THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_PAUSED_BLOCKER_RECLAIMED';
+    END IF;
+
+    -- Meaningful target progress requires an explicit resume/reconcile transition.
+    EXECUTE 'UPDATE autopilot.project_work_item SET state=''READY'', hold_reason=NULL, hold_until=NULL, not_before=now() WHERE work_item_id=$1'
+       USING blocker_item;
+    SELECT * INTO probe
+      FROM autopilot.claim_project_work_probe('sql-project-worker-7', 60);
+    IF NOT FOUND OR probe.work_item_id <> blocker_item THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_EXPLICIT_RESUME_NOT_CLAIMED';
+    END IF;
     SELECT * INTO materialized
       FROM autopilot.materialize_project_work_probe(
-          probe.work_item_id, 'sql-project-worker-6', probe.lease_epoch,
+          probe.work_item_id, 'sql-project-worker-7', probe.lease_epoch,
           true, repeat('d', 40)
       );
     changed_head_task := materialized.task_id;
     IF changed_head_task IS NULL
-       OR (SELECT goal_json->>'expected_head_sha' FROM autopilot.task
-            WHERE task_id = changed_head_task) <> repeat('d', 40)
-       OR (SELECT generation FROM autopilot.project_work_item
-            WHERE work_item_id = blocker_item) <> 2 THEN
+       OR (SELECT goal_json->>'expected_head_sha' FROM autopilot.task WHERE task_id=changed_head_task) <> repeat('d',40)
+       OR (SELECT generation FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 2 THEN
         RAISE EXCEPTION 'AUTOPILOT_PROJECT_CHANGED_HEAD_NOT_REACTIVATED';
+    END IF;
+
+    ELSE
+    -- Legacy baseline (without 0347): unchanged blocked head is retained,
+    -- while a changed head may reactivate the lane.
+    UPDATE autopilot.project_work_item SET not_before=now() WHERE work_item_id=blocker_item;
+    SELECT * INTO probe FROM autopilot.claim_project_work_probe('sql-project-worker-5',60);
+    SELECT * INTO materialized FROM autopilot.materialize_project_work_probe(
+      probe.work_item_id,'sql-project-worker-5',probe.lease_epoch,true,repeat('a',40));
+    IF materialized.task_id IS NOT NULL OR materialized.created IS NOT false THEN
+      RAISE EXCEPTION 'AUTOPILOT_PROJECT_UNCHANGED_HEAD_REDISPATCHED';
+    END IF;
+    UPDATE autopilot.project_work_item SET not_before=now() WHERE work_item_id=blocker_item;
+    SELECT * INTO probe FROM autopilot.claim_project_work_probe('sql-project-worker-6',60);
+    SELECT * INTO materialized FROM autopilot.materialize_project_work_probe(
+      probe.work_item_id,'sql-project-worker-6',probe.lease_epoch,true,repeat('d',40));
+    changed_head_task:=materialized.task_id;
+    IF changed_head_task IS NULL THEN
+      RAISE EXCEPTION 'AUTOPILOT_PROJECT_CHANGED_HEAD_NOT_REACTIVATED';
+    END IF;
     END IF;
 
     IF has_table_privilege(
