@@ -137,6 +137,7 @@ def test_missing_authoritative_provenance_permit_never_writes():
 @pytest.mark.parametrize("setting,value,code", [
     ("fork", True, "TARGET_INVALID"), ("protected", True, "BRANCH_UNVERIFIED"),
     ("branch", "main", "BRANCH_DENIED"), ("branch", "autopilot/dispatch/id", "BRANCH_DENIED"),
+    ("branch", "autopilot/mailbox-v5", "BRANCH_DENIED"),
     ("tree_mode", "120000", "FILE_READBACK_FAILED"),
     ("parent_mode", "120000", "PARENT_NOT_TREE"),
     ("race", True, "GITHUB_REJECTED"),
@@ -158,6 +159,23 @@ def test_security_and_cas_rejections_do_not_write(setting, value, code):
     "setup.py", "sitecustomize.py", "tests/х.py", "tests/*.py"])
 def test_sensitive_paths_denied(path):
     assert not pub.safe_path(path)
+
+
+def test_exact_assignment_application_paths_and_nonprivileged_branch_are_allowed():
+    for path in (
+        "bridge_school_api/l1_canonical_runtime_v2.py",
+        "docs/research/bidding-engine/canon-ingestion/natural-system-v1/BLOCK_INVENTORY.json",
+        "ops/oracle_universal_video_container_install.sh",
+        "tests/test_bidding_canon_ingestion_contract.py",
+    ):
+        assert pub.safe_path(path)
+
+    data = fixture()
+    github, cursor = FakeGitHub(*data), FakeCursor()
+    github.branch = "bidding/content-intake-snapshot"
+    result = pub.publish(github, cursor, data[-1])
+    assert result["status"] == "PUBLISHED"
+    assert len(github.writes) == 1
 
 
 def test_strict_json_rejects_duplicates_and_mixed_result():
