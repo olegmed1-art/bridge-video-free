@@ -5,6 +5,43 @@ DATABASE_URL=${1:?DATABASE_URL required}
 repo_root=$(cd "$(dirname "$0")/../.." && pwd)
 tmp=$(mktemp -d)
 
+# This test exercises the 0339/0340 rollback fences in isolation. A current
+# database may already have the 0345/0346/0350/0357/0362 successor patches installed; unwind
+# them in reverse order in the disposable concurrency clone before constructing
+# the lower-chain fixture, then use the original target-PR command binding.
+if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
+    "SELECT count(*) FROM public.schema_migration WHERE migration_key='0345_autopilot_mailbox_v2_codex_inbound';")" == 1 ]]; then
+  if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
+      "SELECT count(*) FROM public.schema_migration WHERE migration_key='0362_autopilot_target_pr_codex_context';")" == 1 ]]; then
+    psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+      -f "$repo_root/database/rollbacks/0362_autopilot_target_pr_codex_context.sql" \
+      >/dev/null
+  fi
+  if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
+      "SELECT count(*) FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation';")" == 1 ]]; then
+    if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
+        "SELECT count(*) FROM public.schema_migration WHERE migration_key='0357_autopilot_mailbox_v4_rotation';")" == 1 ]]; then
+      psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+        -f "$repo_root/database/rollbacks/0357_autopilot_mailbox_v4_rotation.sql" \
+        >/dev/null
+    fi
+    psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$repo_root/database/rollbacks/0350_autopilot_mailbox_v3_rotation.sql" >/dev/null
+  fi
+  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+    "UPDATE autopilot.project_planner_state SET enabled=false WHERE singleton;"
+  if [[ "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c \
+      "SELECT count(*) FROM public.schema_migration WHERE migration_key='0346_autopilot_canary_acceptance_guard';")" == 1 ]]; then
+    psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+      -f "$repo_root/database/rollbacks/0346_autopilot_canary_acceptance_guard.sql" \
+      >/dev/null
+  fi
+  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+    -f "$repo_root/database/rollbacks/0345_autopilot_mailbox_v2_codex_inbound.sql" \
+    >/dev/null
+  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+    "UPDATE autopilot.project_planner_state SET enabled=true WHERE singleton;"
+fi
+
 psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
 DO $$
 DECLARE
@@ -39,10 +76,12 @@ BEGIN
     'dispatch_epoch',dispatch.dispatch_epoch,'role',dispatch.role,
     'task_fingerprint',dispatch.task_fingerprint,'target_pr',dispatch.target_pr,
     'expected_head_sha',dispatch.expected_head_sha,'mode','REPAIR',
-    'command_pr',1150,'command_comment_id',99034210,'command_created_at',event_time,
+    'command_pr',dispatch.target_pr,'command_comment_id',99034210,
+    'command_created_at',event_time,
     'ack_reaction_id',99034211,'ack_created_at',event_time);
   PERFORM * FROM autopilot.accept_role_dispatch_codex_ack(
-    'github-codex-ack:99034211',repeat('d',64),true,'olegmed1-art/bridge-video-free',1150,
+    'github-codex-ack:99034211',repeat('d',64),true,
+    'olegmed1-art/bridge-video-free',dispatch.target_pr,
     'olegmed1-art',315099490,'OWNER','chatgpt-codex-connector',1144995,
     'chatgpt-codex-connector[bot]',199175422,ack);
 END $$;
