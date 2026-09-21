@@ -21,11 +21,9 @@ CREATE TABLE IF NOT EXISTS autopilot.codex_command_send_intent (
  consumed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  CONSTRAINT codex_send_binding_bound CHECK (octet_length(binding::text)<=16384)
 );
-REVOKE ALL ON autopilot.codex_command_send_intent FROM PUBLIC,
- autopilot_runtime,autopilot_runtime_principal,autopilot_callback,bridge_school_worker;
-
 -- Rollback retains the ledger. Do not silently adopt a drifted/precreated
 -- replacement whose uniqueness, FK, owner, RLS or triggers could break safety.
+-- Inspect before REVOKE: revocation can erase evidence of existing ACL drift.
 DO $ledger$
 DECLARE columns text[]; checks text[];
 BEGIN
@@ -65,6 +63,8 @@ BEGIN
    RAISE EXCEPTION 'CODEX_SEND_LEDGER_CHECKS_INVALID';
  END IF;
 END $ledger$;
+REVOKE ALL ON autopilot.codex_command_send_intent FROM PUBLIC,
+ autopilot_runtime,autopilot_runtime_principal,autopilot_callback,bridge_school_worker;
 
 -- A read-only snapshot of the exact command authority. NULL never authorizes
 -- a send. No SECURITY DEFINER and no new grants to a runtime or connector role.

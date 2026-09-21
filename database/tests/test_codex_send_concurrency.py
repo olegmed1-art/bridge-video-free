@@ -183,14 +183,14 @@ def main():
         assert connection.execute('SELECT count(*) FROM autopilot.codex_command_send_intent WHERE dispatch_id=%s', (rollback_first_id,)).fetchone()[0] == 0
         assert connection.execute('SELECT count(*) FROM autopilot.codex_command_send_intent WHERE dispatch_id=%s', (child_dispatch,)).fetchone()[0] == 0
 
-    # Retained/precreated column-level grants are not erased by a table-level
-    # REVOKE. Reapply must reject them instead of silently adopting the ledger.
+    # Inspect retained column grants BEFORE revocation can erase evidence of
+    # drift. Reapply must reject rather than silently repair/adopt the ledger.
     with psycopg.connect(dsn) as connection:
         connection.execute(rollback_sql)
         connection.execute('GRANT SELECT(binding) ON autopilot.codex_command_send_intent TO autopilot_callback')
     denied = subprocess.run(['bash', 'database/scripts/migrate.sh'], cwd=root,
                             capture_output=True, text=True)
-    assert denied.returncode != 0 and 'CODEX_SEND_LEDGER_SHAPE_INVALID' in denied.stderr
+    assert denied.returncode != 0 and 'CODEX_SEND_LEDGER_SHAPE_INVALID' in denied.stderr, (denied.returncode, denied.stderr[-1000:])
     with psycopg.connect(dsn) as connection:
         connection.execute('REVOKE SELECT(binding) ON autopilot.codex_command_send_intent FROM autopilot_callback')
     subprocess.run(['bash', 'database/scripts/migrate.sh'], cwd=root, check=True)
