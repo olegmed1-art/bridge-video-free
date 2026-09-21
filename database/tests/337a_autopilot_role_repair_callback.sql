@@ -228,7 +228,8 @@ BEGIN
         (4,'AUTOPILOT','BLOCKED','TARGET_PR_OBSOLETE',false,false,false),
         (5,'AUTOPILOT','BLOCKED','OWNER_REQUIRED',false,false,false),
         (6,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,true,false),
-        (7,'AUTOPILOT','SUCCEEDED','READ_ONLY_AUDIT_COMPLETE',false,false,false),
+        -- Completion releases dependents only for an explicitly verified audit.
+        (7,'AUTOPILOT','SUCCEEDED','AUDIT_VERIFIED_NO_REPAIR',false,false,false),
         (8,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,false,true),
         -- Case 8 intentionally leaves AUTOPILOT WAITING_EXTERNAL.  Distinct
         -- roles prove the next independent item still uses free role slots.
