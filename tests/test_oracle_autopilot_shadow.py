@@ -555,8 +555,14 @@ def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch)
         },
         clear=True,
     ):
-        result = _publish_role_dispatch(request_payload)
-        assert result["dispatch_pull_request"] == 1152
+        for mailbox_pr in (1685, 1703):
+            response_payload["mailbox_pull_request"] = mailbox_pr
+            result = _publish_role_dispatch(request_payload)
+            assert result["dispatch_pull_request"] == 1152
+        response_payload["mailbox_pull_request"] = 1637
+        with pytest.raises(AutopilotContractError, match="RESPONSE_INVALID"):
+            _publish_role_dispatch(request_payload)
+        response_payload["mailbox_pull_request"] = 1703
         response_payload["dispatch_author_login"] = "different-valid-app[bot]"
         with pytest.raises(AutopilotContractError, match="RESPONSE_INVALID"):
             _publish_role_dispatch(request_payload)
