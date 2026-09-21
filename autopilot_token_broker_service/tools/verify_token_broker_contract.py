@@ -52,7 +52,23 @@ def verify() -> dict[str, object]:
         raise SystemExit("BROKER_REPOSITORY_INVALID")
     if assignments.get("TOKEN_PERMISSIONS") != expected_permissions:
         raise SystemExit("BROKER_PERMISSIONS_INVALID")
-    if assignments.get("BROKER_POLICY_VERSION") != "physical-no-merge-v1":
+    if assignments.get("ROLE_DISPATCH_TOKEN_PERMISSIONS") != {
+        "contents": "write",
+        "pull_requests": "write",
+    }:
+        raise SystemExit("BROKER_ROLE_DISPATCH_PERMISSIONS_INVALID")
+    if assignments.get("PROJECT_HEAD_TOKEN_PERMISSIONS") != {
+        "pull_requests": "read",
+    }:
+        raise SystemExit("BROKER_PROJECT_HEAD_PERMISSIONS_INVALID")
+    if assignments.get("ROLE_DISPATCH_MAILBOX_PR") != 1685:
+        raise SystemExit("BROKER_ROLE_DISPATCH_MAILBOX_INVALID")
+    if (
+        assignments.get("ROLE_DISPATCH_BOT_LOGIN")
+        != "bridge-school-oracle-autopilot[bot]"
+    ):
+        raise SystemExit("BROKER_ROLE_DISPATCH_BOT_INVALID")
+    if assignments.get("BROKER_POLICY_VERSION") != "physical-no-merge-v2":
         raise SystemExit("BROKER_POLICY_VERSION_INVALID")
     expected_exact_operations = {
         ("GET", "/repos/olegmed1-art/bridge-video-free/git/ref/heads/main"),
@@ -75,6 +91,8 @@ def verify() -> dict[str, object]:
         raise SystemExit("BROKER_POLICY_BASE_INVALID")
     if policy_assignments.get("BRANCH_PREFIX") != "autopilot/repair/":
         raise SystemExit("BROKER_POLICY_BRANCH_INVALID")
+    if policy_assignments.get("ROLE_PATTERN") != r"^[A-Z][A-Z0-9_]{0,63}$":
+        raise SystemExit("BROKER_ROLE_PATTERN_INVALID")
     if (
         policy_assignments.get("MAX_FILES") != 3
         or policy_assignments.get("MAX_FILE_BYTES") != 16_384
@@ -101,6 +119,23 @@ def verify() -> dict[str, object]:
         raise SystemExit("BROKER_MAIN_RAW_HTTP_PRIMITIVE")
     if "execute_bounded_draft_repair" not in main_text:
         raise SystemExit("BROKER_BOUNDED_EXECUTOR_MISSING")
+    if "execute_bounded_role_dispatch" not in main_text:
+        raise SystemExit("BROKER_ROLE_DISPATCH_EXECUTOR_MISSING")
+    if "execute_bounded_project_head" not in main_text:
+        raise SystemExit("BROKER_PROJECT_HEAD_EXECUTOR_MISSING")
+    if "permissions=PROJECT_HEAD_TOKEN_PERMISSIONS" not in github_text:
+        raise SystemExit("BROKER_PROJECT_HEAD_TOKEN_BOUNDARY_MISSING")
+    if 'f"{REPOSITORY_API_PATH}/pulls/{request.pr_number}"' not in github_text:
+        raise SystemExit("BROKER_PROJECT_HEAD_PATH_BOUNDARY_MISSING")
+    for required in (
+        'mode: Literal["READ_ONLY", "REPAIR", "VERIFY"]',
+        "repair_attempt: Literal[0, 1] = 0",
+        "DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE",
+        "READ_ONLY_VERIFY_REPAIR_NO_MUTATION",
+        '"role_dispatch_repair_attempt_cap": 1',
+    ):
+        if required not in policy_text + github_text:
+            raise SystemExit("BROKER_ROLE_FOLLOWUP_BOUNDARY_MISSING")
     if "issue_installation_token" in main_text:
         raise SystemExit("BROKER_RAW_TOKEN_ROUTE_PRESENT")
 
@@ -125,6 +160,8 @@ def verify() -> dict[str, object]:
     if routes != {
         ("GET", "/healthz"),
         ("POST", "/v1/github/draft-repair"),
+        ("POST", "/v1/github/project-head"),
+        ("POST", "/v1/github/role-dispatch"),
     }:
         raise SystemExit("BROKER_ROUTE_SURFACE_INVALID")
     if '"production_mutations_enabled": False' not in main_text:
@@ -133,6 +170,8 @@ def verify() -> dict[str, object]:
         raise SystemExit("BROKER_PREVIEW_RUNTIME_GUARD_MISSING")
     if '"raw_installation_token_exposed": False' not in main_text:
         raise SystemExit("BROKER_RAW_TOKEN_GUARD_MISSING")
+    if '"bounded_project_head_enabled": _broker_enabled()' not in main_text:
+        raise SystemExit("BROKER_PROJECT_HEAD_HEALTH_GUARD_MISSING")
     for required in (
         '"broker_policy_version": BROKER_POLICY_VERSION',
         '"source_revision": _source_revision()',
@@ -181,13 +220,14 @@ def verify() -> dict[str, object]:
         "delete_routes": 0,
         "github_origin": "api.github.com",
         "merge_routes": 0,
-        "policy_version": "physical-no-merge-v1",
+        "policy_version": "physical-no-merge-v2",
         "permissions": expected_permissions,
         "production_mutations": 0,
         "raw_token_responses": 0,
+        "read_route_count": 1,
         "repository": "olegmed1-art/bridge-video-free",
         "result": "PASS",
-        "write_route_count": 1,
+        "write_route_count": 2,
     }
 
 

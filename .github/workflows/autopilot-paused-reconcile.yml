@@ -1,0 +1,36 @@
+name: Autopilot paused evidence reconciliation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '37 * * * *'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: autopilot-paused-evidence-reconciliation
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install bounded reconciliation dependencies
+        run: python -m pip install 'psycopg[binary]==3.3.4'
+
+      - name: Reconcile at most three paused items from fresh evidence
+        run: python -m oracle_autopilot.paused_reconcile

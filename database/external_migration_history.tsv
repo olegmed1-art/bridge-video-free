@@ -2,3 +2,4 @@
 # Explicitly records production migrations that predate repository migration files.
 # Entries are audit exceptions only: they are never executed from this manifest.
 2026-08-20-ai-decision-layer-v1	5b87f7a2cb3491fb60b88238482b35c1aefb3f500253432b6b87de1e94daa9bb	Neon production ai schema; repository parity is restored by 0054_ai_decision_layer_reconciliation.sql
+2026-08-22-assistant-lab-v1	dfd28f43fc87485cd3730d841ad8c9e344b74f3ee7d36ce4bb6d1a43355808b4	Assistant Lab v1 schema from PR #293 head c198385b71d71f151b16c3140ec6c5d3262ad683; exact SHA-256 of assistant_lab/schema.sql

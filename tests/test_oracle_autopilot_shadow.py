@@ -6,8 +6,15 @@ import os
 import urllib.error
 from unittest.mock import patch
 
+import psycopg
 import pytest
 
+from autopilot_phase3b.policy import (
+    FileChange,
+    RepairRequest,
+    expected_branch_name,
+    repair_fingerprint,
+)
 from oracle_autopilot.contract import (
     AutopilotContractError,
     AutopilotRetryableError,
@@ -18,21 +25,22 @@ from oracle_autopilot.contract import (
 )
 from oracle_autopilot.worker import (
     WorkerConfig,
+    _dispatch_body,
+    _publish_role_dispatch,
+    drain_project_work,
     drain_ready,
+    drain_role_dispatch_outbox,
     execute_bounded_draft_repair,
     fetch_github_ci_snapshot,
     fetch_github_pr_snapshot,
+    fetch_github_project_head,
     load_config,
+    load_project_head_broker_config,
+    load_role_dispatch_broker_config,
     load_token_broker_config,
+    process_one,
     validate_neon_direct_dsn,
 )
-from autopilot_phase3b.policy import (
-    FileChange,
-    RepairRequest,
-    expected_branch_name,
-    repair_fingerprint,
-)
-
 
 DIRECT_DSN = (
     "postgresql://autopilot_runtime_login:secret@"
@@ -47,7 +55,7 @@ BROKER_PROVENANCE_SHA256 = hashlib.sha256(
         {
             "artifact_sha256": BROKER_ARTIFACT_SHA256,
             "policy_sha256": BROKER_POLICY_SHA256,
-            "policy_version": "physical-no-merge-v1",
+            "policy_version": "physical-no-merge-v2",
             "source_sha": BROKER_SOURCE_SHA,
         },
         sort_keys=True,
@@ -75,13 +83,15 @@ def _approved_health_payload() -> dict[str, object]:
         "artifact_sha256": BROKER_ARTIFACT_SHA256,
         "policy_sha256": BROKER_POLICY_SHA256,
         "provenance_sha256": BROKER_PROVENANCE_SHA256,
-        "broker_policy_version": "physical-no-merge-v1",
+        "broker_policy_version": "physical-no-merge-v2",
         "source_attested": True,
         "artifact_attested": True,
         "preview_only": True,
         "production_mutations_enabled": False,
         "github_token_broker_enabled": True,
         "bounded_draft_executor_enabled": True,
+        "bounded_project_head_enabled": True,
+        "bounded_role_dispatch_enabled": True,
         "raw_installation_token_exposed": False,
         "merge_endpoint_enabled": False,
         "ref_update_delete_enabled": False,
@@ -209,6 +219,62 @@ def test_only_allowlisted_task_kinds_are_claimed():
         claimed_task_from_row(row)
 
 
+def test_claim_contract_failure_is_failed_closed_without_worker_restart(
+    monkeypatch,
+):
+    row = {
+        "task_id": "00000000-0000-4000-8000-000000000002",
+        "goal_type": "CHATGPT_ROLE_DISPATCH_V1",
+        "goal_json": {
+            "repository": "olegmed1-art/bridge-video-free",
+            "mailbox_pr": 1637,
+            "role": "QA_AUDITOR",
+            "target_pr": 1150,
+            "expected_head_sha": "a" * 40,
+            "dispatch_epoch": 1,
+            "successor_task_key": None,
+            "successor_role": None,
+            "successor_target_pr": None,
+            "successor_expected_head_sha": None,
+        },
+        "current_step_key": "github.chatgpt.role.dispatch",
+        "step_cursor": 0,
+        "lease_epoch": 7,
+        "attempts": 1,
+        "max_attempts": 3,
+        "cost_cap_microusd": 0,
+        "cost_reserved_microusd": 0,
+    }
+    calls = []
+
+    def fake_rpc(_config, sql, params):
+        calls.append((sql, params))
+        if "claim_next_task" in sql:
+            return row
+        if "fail_task" in sql:
+            return {"resulting_state": "FAILED_CLOSED"}
+        raise AssertionError(f"unexpected RPC: {sql}")
+
+    monkeypatch.setattr("oracle_autopilot.worker.reconcile_stale", lambda _config: (0, 0))
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker.execute_task",
+        lambda *_args: pytest.fail("invalid task must not execute"),
+    )
+
+    config = WorkerConfig(dsn=DIRECT_DSN, worker_id="test-worker")
+    assert process_one(config) is True
+    assert len(calls) == 2
+    assert "claim_next_task" in calls[0][0]
+    assert calls[1][1] == (
+        row["task_id"],
+        "test-worker",
+        7,
+        "AUTOPILOT_ROLE_DISPATCH_MAILBOX_INVALID",
+        False,
+    )
+
+
 def test_wait_task_requires_exact_state_and_correlation():
     valid = _task(
         goal_type="EXTERNAL_WAIT_SHADOW_V1",
@@ -277,6 +343,323 @@ def test_github_ci_task_is_exactly_bounded():
                 current_step_key="github.pr.snapshot",
             )
         )
+
+
+def test_chatgpt_role_dispatch_task_is_public_and_exactly_bounded():
+    valid_goal = {
+        "repository": "olegmed1-art/bridge-video-free",
+        "mailbox_pr": 1703,
+        "role": "VIDEO",
+        "target_pr": 1125,
+        "expected_head_sha": "a" * 40,
+        "dispatch_epoch": 1,
+        "successor_task_key": None,
+        "successor_role": None,
+        "successor_target_pr": None,
+        "successor_expected_head_sha": None,
+    }
+    validate_task_contract(
+        _task(
+            goal_type="CHATGPT_ROLE_DISPATCH_V1",
+            goal_json=valid_goal,
+            current_step_key="github.chatgpt.role.dispatch",
+        )
+    )
+
+    for bad_goal in (
+        {**valid_goal, "mailbox_pr": 881},
+        {**valid_goal, "role": "bad-role"},
+        {**valid_goal, "private_prompt": "must never reach public GitHub"},
+        {**valid_goal, "successor_task_key": "next", "successor_role": None},
+    ):
+        with pytest.raises(AutopilotContractError):
+            validate_task_contract(
+                _task(
+                    goal_type="CHATGPT_ROLE_DISPATCH_V1",
+                    goal_json=bad_goal,
+                    current_step_key="github.chatgpt.role.dispatch",
+                )
+            )
+
+
+def test_chatgpt_role_followup_is_one_bounded_repair_or_verification():
+    base_goal = {
+        "repository": "olegmed1-art/bridge-video-free",
+        "mailbox_pr": 1703,
+        "role": "RECOGNIZER",
+        "target_pr": 1106,
+        "expected_head_sha": "a" * 40,
+        "dispatch_epoch": 2,
+        "mode": "REPAIR",
+        "repair_attempt": 1,
+        "origin_task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "prior_task_id": "550e8400-e29b-41d4-a716-446655440000",
+        "blocked_result_code": "RECOGNIZER_READINESS_GAP",
+        "blocked_summary": "Independent holdout evidence is missing.",
+    }
+    validate_task_contract(
+        _task(
+            goal_type="CHATGPT_ROLE_FOLLOWUP_V1",
+            goal_json=base_goal,
+            current_step_key="github.chatgpt.role.dispatch",
+        )
+    )
+    validate_task_contract(
+        _task(
+            goal_type="CHATGPT_ROLE_FOLLOWUP_V1",
+            goal_json={**base_goal, "mode": "VERIFY"},
+            current_step_key="github.chatgpt.role.dispatch",
+        )
+    )
+
+    for bad_goal in (
+        {**base_goal, "repair_attempt": 2},
+        {**base_goal, "mode": "READ_ONLY"},
+        {**base_goal, "blocked_result_code": "owner input"},
+        {**base_goal, "private_prompt": "unbounded"},
+    ):
+        with pytest.raises(AutopilotContractError):
+            validate_task_contract(
+                _task(
+                    goal_type="CHATGPT_ROLE_FOLLOWUP_V1",
+                    goal_json=bad_goal,
+                    current_step_key="github.chatgpt.role.dispatch",
+                )
+            )
+
+
+def test_role_dispatch_broker_config_pins_exact_endpoint():
+    draft_url = (
+        "https://bridge-school-autopilot-cslfiz83g-"
+        "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+    )
+    with patch.dict(
+        os.environ,
+        {
+            "AUTOPILOT_TOKEN_BROKER_URL": draft_url,
+            "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+            "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
+        },
+        clear=True,
+    ):
+        assert load_role_dispatch_broker_config().url == draft_url.replace(
+            "/draft-repair", "/role-dispatch"
+        )
+        assert load_project_head_broker_config().url == draft_url.replace(
+            "/draft-repair", "/project-head"
+        )
+
+
+def test_repair_dispatch_body_carries_bounded_failure_context():
+    payload = {
+        "dispatch_id": "462b8120-9039-4395-bbfb-2b4fbabdc486",
+        "dispatch_epoch": 2,
+        "role": "RECOGNIZER",
+        "task_fingerprint": "b" * 64,
+        "target_pr": 1106,
+        "mode": "REPAIR",
+        "repair_attempt": 1,
+        "origin_task_id": "550e8400-e29b-41d4-a716-446655440001",
+        "prior_task_id": "550e8400-e29b-41d4-a716-446655440001",
+        "blocked_result_code": "RECOGNIZER_READINESS_GAP",
+        "blocked_summary": "Independent holdout evidence is missing.",
+    }
+    body = _dispatch_body(payload)
+    assert "mode=REPAIR" in body
+    assert "repair_attempt=1" in body
+    assert "instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE" in body
+    assert "secret" not in body.lower()
+
+
+def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch):
+    dispatch_id = "462b8120-9039-4395-bbfb-2b4fbabdc486"
+    request_payload = {
+        "dispatch_id": dispatch_id,
+        "repository": "olegmed1-art/bridge-video-free",
+        "role": "VIDEO",
+        "target_pr": 1125,
+        "expected_head_sha": "a" * 40,
+        "dispatch_epoch": 1,
+        "task_fingerprint": "b" * 64,
+        "mode": "READ_ONLY",
+        "prepared_at_epoch": 1_789_150_000,
+    }
+    response_payload = {
+        "status": "created",
+        "repository": "olegmed1-art/bridge-video-free",
+        "mailbox_pull_request": 1703,
+        "dispatch_id": dispatch_id,
+        "dispatch_epoch": 1,
+        "role": "VIDEO",
+        "task_fingerprint": "b" * 64,
+        "target_pr": 1125,
+        "mode": "READ_ONLY",
+        "dispatch_branch": f"autopilot/dispatch/{dispatch_id}",
+        "dispatch_commit_sha": "c" * 40,
+        "dispatch_file": (
+            f"docs/evidence/autopilot/role-dispatch-{dispatch_id}.md"
+        ),
+        "dispatch_pull_request": 1152,
+        "dispatch_pull_request_url": (
+            "https://github.com/olegmed1-art/bridge-video-free/pull/1152"
+        ),
+        "dispatch_author_login": "bridge-school-oracle-autopilot[bot]",
+        "dispatch_author_type": "Bot",
+        "draft": True,
+        "replayed": False,
+        "token_exposed": False,
+        "production_mutation": False,
+        "broker_policy_version": "physical-no-merge-v2",
+        "broker_source_sha": BROKER_SOURCE_SHA,
+        "broker_artifact_sha256": BROKER_ARTIFACT_SHA256,
+        "broker_policy_sha256": BROKER_POLICY_SHA256,
+        "broker_provenance_sha256": BROKER_PROVENANCE_SHA256,
+    }
+    draft_url = (
+        "https://bridge-school-autopilot-cslfiz83g-"
+        "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+    )
+    role_url = draft_url.replace("/draft-repair", "/role-dispatch")
+
+    class Response:
+        status = 200
+
+        def __init__(self, url, payload):
+            self.url = url
+            self.payload = payload
+
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def geturl(self): return self.url
+        def read(self, _limit): return json.dumps(self.payload).encode()
+
+    class Opener:
+        @staticmethod
+        def open(request, **_kwargs):
+            if request.get_method() == "GET":
+                return Response(
+                    draft_url.replace("/v1/github/draft-repair", "/healthz"),
+                    _approved_health_payload(),
+                )
+            return Response(role_url, response_payload)
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+    with patch.dict(
+        os.environ,
+        {
+            "AUTOPILOT_TOKEN_BROKER_URL": draft_url,
+            "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+            "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
+        },
+        clear=True,
+    ):
+        for mailbox_pr in (1685, 1703):
+            response_payload["mailbox_pull_request"] = mailbox_pr
+            result = _publish_role_dispatch(request_payload)
+            assert result["dispatch_pull_request"] == 1152
+        response_payload["mailbox_pull_request"] = 1637
+        with pytest.raises(AutopilotContractError, match="RESPONSE_INVALID"):
+            _publish_role_dispatch(request_payload)
+        response_payload["mailbox_pull_request"] = 1703
+        response_payload["dispatch_author_login"] = "different-valid-app[bot]"
+        with pytest.raises(AutopilotContractError, match="RESPONSE_INVALID"):
+            _publish_role_dispatch(request_payload)
+
+
+def test_github_publish_never_marks_chatgpt_dispatch_sent(monkeypatch):
+    claimed = {
+        "dispatch_id": "462b8120-9039-4395-bbfb-2b4fbabdc486",
+        "repository": "olegmed1-art/bridge-video-free",
+        "mailbox_pr": 1703,
+        "role": "VIDEO",
+        "target_pr": 1125,
+        "expected_head_sha": "a" * 40,
+        "dispatch_epoch": 1,
+        "task_fingerprint": "b" * 64,
+        "prepared_at_epoch": 1789150000,
+        "claim_epoch": 2,
+        "attempt_no": 1,
+        "mode": "READ_ONLY",
+        "repair_attempt": 0,
+        "origin_task_id": None,
+        "prior_task_id": None,
+        "blocked_result_code": None,
+        "blocked_summary": None,
+    }
+    calls = []
+    pending = [claimed]
+
+    def fake_rpc(_config, sql, params):
+        calls.append((sql, params))
+        if "claim_role_dispatch_outbox" in sql:
+            return pending.pop(0) if pending else None
+        if "mark_role_dispatch_published" in sql:
+            return {"marked": True}
+        return None
+
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker._publish_role_dispatch",
+        lambda _payload: {"dispatch_pull_request": 1152},
+    )
+    config = WorkerConfig(dsn=DIRECT_DSN, worker_id="oracle-test")
+    assert drain_role_dispatch_outbox(config) == 1
+    claimed_params = next(params for sql, params in calls if "claim_role_dispatch_outbox" in sql)
+    assert claimed_params == ("oracle-test", 300)
+    published = next(
+        params for sql, params in calls if "mark_role_dispatch_published" in sql
+    )
+    assert published[:4] == (
+        claimed["dispatch_id"],
+        "oracle-test",
+        2,
+        1152,
+    )
+    assert len(published[4]) == 64
+    assert not any("mark_role_dispatch_sent" in sql for sql, _params in calls)
+
+
+def test_role_dispatch_outbox_rolls_forward_safely_before_migration_0323(monkeypatch):
+    legacy_claim = {
+        "dispatch_id": "462b8120-9039-4395-bbfb-2b4fbabdc486",
+        "repository": "olegmed1-art/bridge-video-free",
+        "mailbox_pr": 1703,
+        "role": "KNOWLEDGE",
+        "target_pr": 1129,
+        "expected_head_sha": "a" * 40,
+        "dispatch_epoch": 1,
+        "task_fingerprint": "b" * 64,
+        "prepared_at_epoch": 1789150000,
+        "claim_epoch": 2,
+        "attempt_no": 1,
+    }
+    calls: list[str] = []
+    legacy_pending = [legacy_claim]
+    published: list[dict] = []
+
+    def fake_rpc(_config, sql, _params):
+        calls.append(sql)
+        if "claim_role_dispatch_outbox_v2" in sql:
+            raise psycopg.errors.UndefinedFunction("v2 not installed")
+        if "claim_role_dispatch_outbox(" in sql:
+            return legacy_pending.pop(0) if legacy_pending else None
+        if "mark_role_dispatch_published" in sql:
+            return {"marked": True}
+        return None
+
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker._publish_role_dispatch",
+        lambda payload: published.append(payload) or {"dispatch_pull_request": 1152},
+    )
+    config = WorkerConfig(dsn=DIRECT_DSN, worker_id="oracle-test")
+    assert drain_role_dispatch_outbox(config) == 1
+    assert any("claim_role_dispatch_outbox_v2" in sql for sql in calls)
+    assert any("claim_role_dispatch_outbox(" in sql for sql in calls)
+    assert published[0]["mode"] == "READ_ONLY"
+    assert published[0]["repair_attempt"] == 0
 
 
 def test_github_draft_repair_task_is_exactly_bounded():
@@ -353,7 +736,7 @@ def test_bounded_draft_repair_posts_only_to_pinned_broker(monkeypatch):
     provenance = {
         "artifact_sha256": "c" * 64,
         "policy_sha256": "d" * 64,
-        "policy_version": "physical-no-merge-v1",
+        "policy_version": "physical-no-merge-v2",
         "source_sha": "e" * 40,
     }
     response_payload.update({
@@ -463,7 +846,7 @@ def test_bounded_draft_repair_rejects_forged_evidence(monkeypatch):
     response_payload.update({
         "broker_artifact_sha256": "c" * 64,
         "broker_policy_sha256": "d" * 64,
-        "broker_policy_version": "physical-no-merge-v1",
+        "broker_policy_version": "physical-no-merge-v2",
         "broker_source_sha": "e" * 40,
         "broker_provenance_sha256": "f" * 64,
     })
@@ -998,6 +1381,173 @@ def test_ready_queue_is_drained_without_a_poll_gap(monkeypatch):
     config = WorkerConfig(dsn=DIRECT_DSN, worker_id="test-worker")
     assert drain_ready(config) == 3
     assert calls == ["test-worker"] * 4
+
+
+def test_project_head_probe_uses_attested_read_broker_and_accepts_closed_target(
+    monkeypatch,
+):
+    draft_url = (
+        "https://bridge-school-autopilot-cslfiz83g-"
+        "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+    )
+    project_url = draft_url.replace("/draft-repair", "/project-head")
+    observed = []
+
+    class Response:
+        status = 200
+
+        def __init__(self, url, payload):
+            self.url = url
+            self.payload = payload
+
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def geturl(self): return self.url
+        def read(self, _limit): return json.dumps(self.payload).encode()
+
+    class Opener:
+        @staticmethod
+        def open(request, **_kwargs):
+            observed.append((request.get_method(), request.full_url, request.data))
+            if request.get_method() == "GET":
+                return Response(
+                    draft_url.replace("/v1/github/draft-repair", "/healthz"),
+                    _approved_health_payload(),
+                )
+            return Response(
+                project_url,
+                {
+                    "repository": "olegmed1-art/bridge-video-free",
+                    "pr_number": 1106,
+                    "open": False,
+                    "head_sha": "a" * 40,
+                    "http_method": "GET",
+                    "token_exposed": False,
+                    "production_mutation": False,
+                    "operation_count": 2,
+                    "broker_policy_version": "physical-no-merge-v2",
+                    "broker_source_sha": BROKER_SOURCE_SHA,
+                    "broker_artifact_sha256": BROKER_ARTIFACT_SHA256,
+                    "broker_policy_sha256": BROKER_POLICY_SHA256,
+                    "broker_provenance_sha256": BROKER_PROVENANCE_SHA256,
+                },
+            )
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+    with patch.dict(
+        os.environ,
+        {
+            "AUTOPILOT_TOKEN_BROKER_URL": draft_url,
+            "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+            "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
+        },
+        clear=True,
+    ):
+        assert fetch_github_project_head(
+            "olegmed1-art/bridge-video-free", 1106
+        ) == {"head_sha": "a" * 40, "open": False}
+    assert [(method, url) for method, url, _data in observed] == [
+        ("GET", draft_url.replace("/v1/github/draft-repair", "/healthz")),
+        ("POST", project_url),
+    ]
+    assert json.loads(observed[1][2]) == {
+        "pr_number": 1106,
+        "repository": "olegmed1-art/bridge-video-free",
+    }
+
+
+def test_project_planner_materializes_one_exact_head_task(monkeypatch):
+    probe = {
+        "work_item_id": "00000000-0000-0000-0000-000000000007",
+        "work_key": "recognizer-readiness",
+        "repository": "olegmed1-art/bridge-video-free",
+        "target_pr": 1106,
+        "lease_epoch": 4,
+    }
+    calls = []
+    pending = [probe]
+
+    def fake_rpc(_config, sql, params):
+        calls.append((sql, params))
+        if "claim_project_work_probe" in sql:
+            return pending.pop(0) if pending else None
+        if "materialize_project_work_probe" in sql:
+            return {
+                "task_id": "00000000-0000-0000-0000-000000000008",
+                "resulting_state": "ACTIVE",
+                "created": True,
+            }
+        return None
+
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker.reconcile_parallel_work_intake", lambda _config: 0
+    )
+    monkeypatch.setattr(
+        "oracle_autopilot.worker.fetch_github_project_head",
+        lambda _repository, _target_pr: {"head_sha": "b" * 40, "open": True},
+    )
+    config = WorkerConfig(dsn=DIRECT_DSN, worker_id="project-worker")
+    assert drain_project_work(config) == 1
+    materialize = next(
+        params for sql, params in calls if "materialize_project_work_probe" in sql
+    )
+    assert materialize == (
+        probe["work_item_id"],
+        "project-worker",
+        4,
+        True,
+        "b" * 40,
+    )
+
+
+def test_project_planner_retries_transient_probe_and_rolls_forward(monkeypatch):
+    probe = {
+        "work_item_id": "00000000-0000-0000-0000-000000000009",
+        "work_key": "video-readiness",
+        "repository": "olegmed1-art/bridge-video-free",
+        "target_pr": 1125,
+        "lease_epoch": 2,
+    }
+    calls = []
+
+    def fake_rpc(_config, sql, params):
+        calls.append((sql, params))
+        if "claim_project_work_probe" in sql:
+            if len([call for call, _ in calls if "claim_project_work_probe" in call]) == 1:
+                return probe
+            return None
+        if "fail_project_work_probe" in sql:
+            return {"state": "BLOCKED"}
+        return None
+
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker.reconcile_parallel_work_intake", lambda _config: 0
+    )
+    monkeypatch.setattr(
+        "oracle_autopilot.worker.fetch_github_project_head",
+        lambda _repository, _target_pr: (_ for _ in ()).throw(
+            AutopilotRetryableError("GITHUB_API_TRANSIENT_ERROR")
+        ),
+    )
+    config = WorkerConfig(dsn=DIRECT_DSN, worker_id="project-worker")
+    assert drain_project_work(config) == 1
+    failed = next(params for sql, params in calls if "fail_project_work_probe" in sql)
+    assert failed == (
+        probe["work_item_id"],
+        "project-worker",
+        2,
+        "GITHUB_API_TRANSIENT_ERROR",
+    )
+
+    def missing_rpc(_config, sql, _params):
+        if "claim_project_work_probe" in sql:
+            raise psycopg.errors.UndefinedFunction("0324 not installed")
+
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", missing_rpc)
+    assert drain_project_work(config) == 0
 
 
 def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
