@@ -67,6 +67,9 @@ on:
       - 'database/migrations/0362_autopilot_target_pr_codex_context.sql'
       - 'database/rollbacks/0362_autopilot_target_pr_codex_context.sql'
       - 'database/tests/362_autopilot_target_pr_codex_context.sql'
+      - 'database/migrations/0363_autopilot_audit_findings_repair_progression.sql'
+      - 'database/rollbacks/0363_autopilot_audit_findings_repair_progression.sql'
+      - 'database/tests/363_autopilot_audit_findings_repair_progression.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -142,6 +145,9 @@ on:
       - 'database/migrations/0362_autopilot_target_pr_codex_context.sql'
       - 'database/rollbacks/0362_autopilot_target_pr_codex_context.sql'
       - 'database/tests/362_autopilot_target_pr_codex_context.sql'
+      - 'database/migrations/0363_autopilot_audit_findings_repair_progression.sql'
+      - 'database/rollbacks/0363_autopilot_audit_findings_repair_progression.sql'
+      - 'database/tests/363_autopilot_audit_findings_repair_progression.sql'
       - 'oracle_autopilot/github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
@@ -342,6 +348,12 @@ jobs:
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0361_autopilot_provider_terminal_classification';")"
           had_target_pr_context="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM public.schema_migration WHERE migration_key='0362_autopilot_target_pr_codex_context';")"
+          had_audit_findings_repair="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0363_autopilot_audit_findings_repair_progression';")"
+          if [ "$had_audit_findings_repair" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/363_autopilot_audit_findings_repair_progression.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0363_autopilot_audit_findings_repair_progression.sql
+          fi
           if [ "$had_target_pr_context" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/362_autopilot_target_pr_codex_context.sql
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0362_autopilot_target_pr_codex_context.sql
@@ -496,6 +508,9 @@ jobs:
           if [ "$had_target_pr_context" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0362_autopilot_target_pr_codex_context.sql
           fi
+          if [ "$had_audit_findings_repair" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0363_autopilot_audit_findings_repair_progression.sql
+          fi
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
@@ -544,6 +559,8 @@ jobs:
             -f database/tests/361_autopilot_provider_terminal_classification.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/362_autopilot_target_pr_codex_context.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/363_autopilot_audit_findings_repair_progression.sql
 
   migration-0336-roundtrip:
     runs-on: ubuntu-24.04
