@@ -26,4 +26,5 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
           GH_TOKEN: ${{ github.token }}
+          RECONCILE_ISOLATED_CANARY: '1'
         run: python -m oracle_autopilot.reconcile_diagnostics

@@ -13,6 +13,8 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
+from . import reconcile_db
+
 REPOSITORY = "olegmed1-art/bridge-video-free"
 MUTATIONS = frozenset({"REMEDIATE", "CLOSE_SUPERSEDED", "OWNER_HOLD"})
 
@@ -119,6 +121,15 @@ def collect_evidence(row, main_sha, api=github, now=None):
         fresh = row["progress_token"] is None
     if not fresh:
         return None
+    # GitHub evidence can change while check pages / ancestry are collected.
+    # DB CAS alone fences the work item, not a force-pushed or reopened PR.
+    current = api(f"pulls/{row['target_pr']}")
+    if (current.get('number') != row['target_pr']
+            or current['base']['repo']['full_name'] != REPOSITORY
+            or current['head']['sha'] != head
+            or current.get('state') != pr['state']
+            or current.get('merged_at') != pr.get('merged_at')):
+        raise ValueError('PAUSED_GITHUB_EVIDENCE_CHANGED')
     evidence = {"schema": "paused-reconcile-v2", "work_item_id": str(row["work_item_id"]),
                 "target_pr": row["target_pr"], "head": head, "main": main_sha,
                 "state": pr["state"], "checks_completed": latest.isoformat() if latest else None,
@@ -161,16 +172,15 @@ def main():
     if os.environ.get("REPOSITORY") != REPOSITORY:
         raise ValueError("PAUSED_REPOSITORY_INVALID")
     main_sha = github("git/ref/heads/main")["object"]["sha"]
-    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True,
-                         row_factory=dict_row, connect_timeout=10,
-                         options="-c statement_timeout=10000 -c lock_timeout=3000") as conn:
-        rows = conn.execute("SELECT * FROM autopilot.paused_reconcile_candidates(50)").fetchall()
+    with reconcile_db.connect() as conn:
+        rows = [row['candidate'] for row in reconcile_db.query(conn,
+            'SELECT autopilot_reconcile.paused_candidates(50) AS candidate', read_only=True)]
 
         def apply(row, token, disposition, summary):
-            return conn.execute(
-                "SELECT autopilot.reconcile_paused_project_work_cas(%s,%s,%s,%s,%s) AS action",
+            return reconcile_db.query(conn,
+                "SELECT autopilot_reconcile.apply_paused(%s,%s,%s,%s,%s) AS action",
                 (row["work_item_id"], row["updated_at"], token, disposition, summary),
-            ).fetchone()["action"]
+            )[0]["action"]
 
         print(f"paused_reconcile_changed={reconcile_batch(rows, main_sha, apply)}")
 

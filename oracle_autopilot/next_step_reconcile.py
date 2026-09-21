@@ -10,6 +10,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from .paused_reconcile import REPOSITORY, github, timestamp
+from . import reconcile_db
 
 
 def pr_binding(pr, number):
@@ -100,17 +101,15 @@ def reconcile(rows, apply, api=github, limit=3):
 def main():
     if os.environ.get('REPOSITORY') != REPOSITORY:
         raise ValueError('NEXT_STEP_REPOSITORY_INVALID')
-    with psycopg.connect(os.environ['DATABASE_URL'], autocommit=True, row_factory=dict_row,
-                         connect_timeout=10,
-                         options='-c statement_timeout=10000 -c lock_timeout=3000') as conn:
-        rows = [r['candidate'] for r in conn.execute(
-            'SELECT autopilot.project_progress_candidates(50) AS candidate').fetchall()]
+    with reconcile_db.connect() as conn:
+        rows = [r['candidate'] for r in reconcile_db.query(conn,
+            'SELECT autopilot_reconcile.progress_candidates(50) AS candidate', read_only=True)]
 
         def apply(row, head, completed):
-            return conn.execute(
-                'SELECT autopilot.reconcile_project_progress(%s,%s,%s,%s) AS action',
+            return reconcile_db.query(conn,
+                'SELECT autopilot_reconcile.apply_progress(%s,%s,%s,%s) AS action',
                 (row['work_item_id'], row['updated_at'], head, completed),
-            ).fetchone()['action']
+            )[0]['action']
 
         print(f'next_step_changed={reconcile(rows, apply)}')
 

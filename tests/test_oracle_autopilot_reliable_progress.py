@@ -132,6 +132,27 @@ def test_null_result_code_is_preserved():
     assert paused.collect_evidence(candidate(result_code=None, blocker_action='HOLD_UNKNOWN'), 'c'*40, api)
 
 
+@pytest.mark.parametrize('change', ['head', 'state', 'merged_at'])
+def test_paused_evidence_changed_during_collection_never_applies(change):
+    reads = 0
+    def changing(path):
+        nonlocal reads
+        value = api(path)
+        if path.startswith('pulls/'):
+            reads += 1
+            if reads == 2:
+                if change == 'head':
+                    value['head']['sha'] = 'd'*40
+                elif change == 'state':
+                    value['state'] = 'closed'
+                else:
+                    value['merged_at'] = datetime.now(timezone.utc).isoformat()
+        return value
+    with pytest.raises(RuntimeError, match='PARTIAL_FAILURE'):
+        paused.reconcile_batch([candidate()], 'c'*40,
+                              lambda *a: pytest.fail('stale mutation'), changing)
+
+
 def test_only_reviewed_native_cli_adapter_launches_a_child():
     root = Path(__file__).resolve().parents[1] / 'oracle_autopilot'
     for path in root.glob('*.py'):

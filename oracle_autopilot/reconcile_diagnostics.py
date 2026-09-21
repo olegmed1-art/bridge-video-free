@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import re
 import urllib.error
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 
@@ -35,7 +35,7 @@ def error_code(exc):
     return 'UNCLASSIFIED'
 
 
-def probe(dsn, label, *, startup_options=False):
+def probe(dsn, label, *, startup_options=False, gateway=False):
     stage = 'connect'
     kwargs = dict(connect_timeout=10, autocommit=True,
                   application_name='autopilot-reconcile-diagnostic')
@@ -59,10 +59,24 @@ def probe(dsn, label, *, startup_options=False):
                 if not principal_ok or not database_ok:
                     print(f'db_diagnostic variant={label} result=FAIL code=IDENTITY_MISMATCH')
                     return False
-                for name, sql in (
+                statements = (
                     ('paused_candidates', 'SELECT count(*) FROM autopilot.paused_reconcile_candidates(50)'),
                     ('progress_candidates', 'SELECT count(*) FROM autopilot.project_progress_candidates(50)'),
-                ):
+                ) if not gateway else (
+                    ('paused_candidates', 'SELECT count(*) FROM autopilot_reconcile.paused_candidates(50)'),
+                    ('progress_candidates', 'SELECT count(*) FROM autopilot_reconcile.progress_candidates(50)'),
+                )
+                if gateway:
+                    stage = 'least_privilege'
+                    internal, create, table_write = conn.execute(
+                        "SELECT has_schema_privilege(current_user,'autopilot','USAGE'),"
+                        "has_schema_privilege(current_user,'autopilot_reconcile','CREATE'),"
+                        "has_table_privilege(current_user,'autopilot.project_work_item','UPDATE')"
+                    ).fetchone()
+                    if internal or create or table_write:
+                        print(f'db_diagnostic variant={label} result=FAIL code=EXCESS_PRIVILEGE')
+                        return False
+                for name, sql in statements:
                     stage = name
                     count = conn.execute(sql).fetchone()[0]
                     print(f'db_diagnostic variant={label} stage={stage} count={count} result=PASS')
@@ -78,18 +92,35 @@ def main():
     if not raw:
         print('db_diagnostic result=FAIL code=DSN_MISSING')
         return 1
-    # Execute the existing production path first, before any normalization.
-    production_path_ok = probe(raw, 'raw_startup', startup_options=True)
-    probe(raw, 'raw_plain')
     try:
         normalized = normalize_dsn(raw)
     except (SystemExit, ValueError):
         print('db_diagnostic result=FAIL code=DSN_CONTRACT_INVALID')
         return 1
-    print(f'db_diagnostic normalized_changed={normalized != raw} host_expected={urlsplit(raw.strip(chr(34) + chr(39))).hostname == EXPECTED_HOST}')
-    ok = probe(normalized, 'canonical_plain')
-    print(f'db_diagnostic production_path_ok={production_path_ok} canonical_path_ok={ok} production_repaired=False')
-    probe(normalized, 'canonical_startup', startup_options=True)
+    if os.environ.get('RECONCILE_ISOLATED_CANARY') == '1':
+        # This endpoint is the user-preserved 0368 test branch, never production.
+        parsed = urlsplit(normalized)
+        if parsed.hostname != EXPECTED_HOST:
+            raise SystemExit('DIAGNOSTIC_CANONICAL_HOST_INVALID')
+        userinfo = parsed.netloc.rsplit('@', 1)[0]
+        endpoint = 'ep-raspy-lake-b1ro5zin-pooler.c-5.eu-central-1.aws.neon.tech'
+        normalized = urlunsplit(parsed._replace(netloc=userinfo + '@' + endpoint))
+        ok = probe(normalized, 'isolated_gateway', gateway=True)
+        if ok:
+            with psycopg.connect(normalized, connect_timeout=10, autocommit=True) as conn:
+                with conn.transaction(force_rollback=True):
+                    conn.execute("SET LOCAL statement_timeout = '10s'")
+                    conn.execute("SET LOCAL lock_timeout = '3s'")
+                    for sql in (
+                        "SELECT autopilot_reconcile.apply_paused('00000000-0000-0000-0000-000000000000',now(),repeat('a',64),NULL,NULL)",
+                        "SELECT autopilot_reconcile.apply_progress('00000000-0000-0000-0000-000000000000',now(),repeat('a',40),NULL)",
+                    ):
+                        if conn.execute(sql).fetchone() != ('NO_CHANGE',):
+                            raise ValueError('DIAGNOSTIC_NOOP_INVALID')
+            print('db_diagnostic variant=isolated_gateway stage=mutators_noop_rollback result=PASS')
+    else:
+        print(f'db_diagnostic normalized_changed={normalized != raw}')
+        ok = probe(normalized, 'production_gateway', gateway=True)
     try:
         head = github('git/ref/heads/main')['object']['sha']
         if not re.fullmatch('[0-9a-f]{40}', head):
@@ -107,4 +138,8 @@ def main():
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f'db_diagnostic result=FAIL code={error_code(exc)}')
+        raise SystemExit(1) from None
