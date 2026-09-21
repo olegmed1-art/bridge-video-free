@@ -230,7 +230,7 @@ jobs:
         run: python check_completed_job.py
 
       - name: Record durable worker start checkpoint
-        if: steps.terminal.outputs.already_completed != 'true'
+        if: steps.terminal.outputs.already_completed != 'true' && env.BRIDGE_PERSIST_DATABASE == 'true'
         env:
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: python database/run_checkpoint_persistence.py --stage worker_start --state started
@@ -277,19 +277,24 @@ jobs:
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: |
           set -euo pipefail
-          python database/run_checkpoint_persistence.py --stage process_job --state started
-          (
-            while true; do
-              sleep 300
-              python database/run_checkpoint_persistence.py \
-                --stage process_job --state progress \
-                --details-json '{"heartbeat":true}' || true
-            done
-          ) &
-          HEARTBEAT_PID=$!
+          HEARTBEAT_PID=""
+          if [ "$BRIDGE_PERSIST_DATABASE" = "true" ]; then
+            python database/run_checkpoint_persistence.py --stage process_job --state started
+            (
+              while true; do
+                sleep 300
+                python database/run_checkpoint_persistence.py \
+                  --stage process_job --state progress \
+                  --details-json '{"heartbeat":true}' || true
+              done
+            ) &
+            HEARTBEAT_PID=$!
+          fi
           cleanup_heartbeat() {
-            kill "$HEARTBEAT_PID" 2>/dev/null || true
-            wait "$HEARTBEAT_PID" 2>/dev/null || true
+            if [ -n "$HEARTBEAT_PID" ]; then
+              kill "$HEARTBEAT_PID" 2>/dev/null || true
+              wait "$HEARTBEAT_PID" 2>/dev/null || true
+            fi
           }
           trap cleanup_heartbeat EXIT
 
@@ -307,14 +312,16 @@ jobs:
           set -e
           cleanup_heartbeat
           trap - EXIT
-          if [ "$RC" -eq 0 ]; then
-            python database/run_checkpoint_persistence.py \
-              --stage process_job --state completed
-          else
-            python database/run_checkpoint_persistence.py \
-              --stage process_job --state failed \
-              --error-class PRIMARY_PROCESS_FAILURE \
-              --details-json "{\"exit_code\":$RC}" || true
+          if [ "$BRIDGE_PERSIST_DATABASE" = "true" ]; then
+            if [ "$RC" -eq 0 ]; then
+              python database/run_checkpoint_persistence.py \
+                --stage process_job --state completed
+            else
+              python database/run_checkpoint_persistence.py \
+                --stage process_job --state failed \
+                --error-class PRIMARY_PROCESS_FAILURE \
+                --details-json "{\"exit_code\":$RC}" || true
+            fi
           fi
           exit "$RC"
 
@@ -356,7 +363,7 @@ jobs:
           PY
 
       - name: Record durable workflow final checkpoint
-        if: always()
+        if: always() && env.BRIDGE_PERSIST_DATABASE == 'true'
         shell: bash
         env:
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}

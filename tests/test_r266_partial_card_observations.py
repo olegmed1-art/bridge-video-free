@@ -153,3 +153,16 @@ def test_r266_workflow_is_bounded_and_not_the_default():
     assert 'default: "3.1-free-r26.3"' in workflow
     assert 'inputs.algorithm_revision == \'3.1-free-r26.6\'' in workflow
     assert "python run_drive_3_1_free_oidc_r266.py" in workflow
+
+
+def test_manual_non_persistent_run_disables_all_neon_checkpoint_writes():
+    workflow = open(".github/workflows/bridge-video-3.1-free.yml", encoding="utf-8").read()
+    assert (
+        "if: steps.terminal.outputs.already_completed != 'true' && "
+        "env.BRIDGE_PERSIST_DATABASE == 'true'"
+    ) in workflow
+    assert workflow.count('if [ "$BRIDGE_PERSIST_DATABASE" = "true" ]; then') >= 2
+    assert (
+        "- name: Record durable workflow final checkpoint\n"
+        "        if: always() && env.BRIDGE_PERSIST_DATABASE == 'true'"
+    ) in workflow
