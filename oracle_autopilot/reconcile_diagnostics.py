@@ -70,9 +70,11 @@ def probe(dsn, label, *, startup_options=False, gateway=False):
                     internal, create, table_write = conn.execute(
                         "SELECT has_schema_privilege(current_user,'autopilot','USAGE'),"
                         "has_schema_privilege(current_user,'autopilot_reconcile','CREATE'),"
-                        "has_table_privilege(current_user,'autopilot.project_work_item','UPDATE')"
+                        "has_table_privilege(current_user,(SELECT c.oid FROM pg_class c "
+                        "JOIN pg_namespace n ON n.oid=c.relnamespace WHERE "
+                        "n.nspname='autopilot' AND c.relname='project_work_item'),'UPDATE')"
                     ).fetchone()
-                    if internal or create or table_write:
+                    if internal is not False or create is not False or table_write is not False:
                         print(f'db_diagnostic variant={label} result=FAIL code=EXCESS_PRIVILEGE')
                         return False
                 for name, sql in statements:

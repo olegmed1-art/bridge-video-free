@@ -35,6 +35,15 @@ BEGIN
 END $test$;
 
 SET LOCAL ROLE bridge_school_worker;
+-- The preflight must inspect internal table privileges by catalog OID: text
+-- resolution itself requires the deliberately absent internal-schema USAGE.
+DO $test$
+BEGIN
+ IF has_table_privilege(current_user,(SELECT c.oid FROM pg_class c JOIN pg_namespace n
+    ON n.oid=c.relnamespace WHERE n.nspname='autopilot' AND c.relname='project_work_item'),'UPDATE') IS DISTINCT FROM false THEN
+   RAISE EXCEPTION 'RECONCILE_GATEWAY_TABLE_WRITE_NOT_FENCED';
+ END IF;
+END $test$;
 SELECT count(*) FROM autopilot_reconcile.paused_candidates(50);
 SELECT count(*) FROM autopilot_reconcile.progress_candidates(50);
 DO $test$
