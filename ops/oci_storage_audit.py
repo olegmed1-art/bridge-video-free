@@ -57,6 +57,7 @@ def main():
               'backup_count': len(backups), 'buckets': buckets,
               'object_bytes_approximate': sum(b['bytes'] or 0 for b in buckets)}
     print(json.dumps(result, sort_keys=True))
+    return block, next(iter(light_boot)), result
 
 
 if __name__ == '__main__':
