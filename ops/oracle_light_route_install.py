@@ -128,6 +128,18 @@ def main():
     assert set(route) == {'version','backend','database','epoch'} and route['version'] == 1
     assert route['backend'] == 'neon' and route['database'] == 'autopilot' and route['epoch'] == 0, 'pre_cutover_only'
     run('/usr/sbin/sshd', '-t')
+    if old_config == NEW_CONFIG and old_key == new_key and account.pw_shell == '/bin/sh':
+        expected = {'forcecommand':COMMAND,'allowtcpforwarding':'local','permitopen':'127.0.0.1:55432',
+                    'permitlisten':'none','allowstreamlocalforwarding':'no','allowagentforwarding':'no',
+                    'permittty':'no','permituserrc':'no','permituserenvironment':'no','x11forwarding':'no',
+                    'passwordauthentication':'no','kbdinteractiveauthentication':'no',
+                    'authenticationmethods':'publickey','authorizedkeysfile':str(ROOT / 'authorized_keys')}
+        state = effective(USER)
+        assert all(state.get(k) == v for k,v in expected.items())
+        assert run('systemctl', 'is-active', 'ssh.service') == 'active'
+        assert effective('ubuntu') == ubuntu_before and Path('/home/ubuntu/.ssh/authorized_keys').read_bytes() == ubuntu_keys
+        print(json.dumps({'routing_lease':'ALREADY_INSTALLED','backend':'neon','epoch':0,'database_writes':False,'ubuntu_access_unchanged':True}))
+        return
     try:
         # Key-level fixed command must precede enabling an executable account shell.
         replace(ROOT / 'authorized_keys', old_key, new_key)
