@@ -23,7 +23,7 @@ TARGETS = {
     'diagnostics': ('DATABASE_URL','bridge_school_worker_principal','oracle_autopilot.reconcile_diagnostics',()),
     'reconcile': ('DATABASE_URL','bridge_school_worker_principal','oracle_autopilot.paused_reconcile',()),
     'next-step': ('DATABASE_URL','bridge_school_worker_principal','oracle_autopilot.next_step_reconcile',()),
-    'mailbox': ('DATABASE_URL','autopilot_callback_login','oracle_autopilot.github_db_route',('--mailbox-read',)),
+    'mailbox': ('DATABASE_URL','autopilot_callback_login','ops.github_autopilot_db_route',('--mailbox-read',)),
 }
 
 

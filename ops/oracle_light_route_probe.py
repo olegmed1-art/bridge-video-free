@@ -5,7 +5,7 @@ import subprocess
 import sys
 import time
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from oracle_autopilot.github_db_route import header,parse_record,stop
+from ops.github_autopilot_db_route import header,parse_record,stop
 from oracle_light_pg_tunnel_probe import options
 
 LOCK_CHECK = '''import fcntl,json,os,stat,sys

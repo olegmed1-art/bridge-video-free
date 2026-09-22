@@ -7,14 +7,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from oracle_autopilot import github_db_route as target
+from ops import github_autopilot_db_route as target
 
 
 class ConsumerRouting(unittest.TestCase):
     def test_dsn_constructed_from_pinned_identity(self):
-        raw='postgresql://autopilot_callback_login:a%40b%3Ac@'+target.SOURCE+'/neondb?sslmode=require'
+        raw='postgresql://autopilot_callback_login:synthetic-password@'+target.SOURCE+'/neondb?sslmode=require'
+        raw=raw.replace('synthetic-password',target.quote('synthetic-password@:',safe=''))
         value=target.target_dsn(raw,'autopilot_callback_login','/tmp/ca.crt')
-        self.assertIn('a%40b%3Ac@127.0.0.1:55432/autopilot?',value)
+        self.assertIn('synthetic-password%40%3A@127.0.0.1:55432/autopilot?',value)
         self.assertIn('sslmode=verify-full',value)
         self.assertIn('channel_binding=require',value)
         for invalid in [raw.replace(target.SOURCE,'attacker.invalid'),raw+'&host=elsewhere',
