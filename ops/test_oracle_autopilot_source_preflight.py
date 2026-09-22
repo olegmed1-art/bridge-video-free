@@ -1,6 +1,6 @@
 """Contract tests use synthetic credentials only; never connect to a database."""
 import unittest
-from ops.oracle_autopilot_source_preflight import HOST, connection_parameters
+from ops.oracle_autopilot_source_preflight import HOST, POOLER_HOST, connection_parameters
 
 
 class Contract(unittest.TestCase):
@@ -9,6 +9,11 @@ class Contract(unittest.TestCase):
         self.assertEqual(p["sslmode"], "verify-full")
         self.assertIn("default_transaction_read_only=on", p["options"])
         self.assertNotIn("unsafe", p["options"])
+
+    def test_pinned_pooler_normalized_to_direct_tls(self):
+        p = connection_parameters(f"postgresql://neondb_owner:test@{POOLER_HOST}/neondb?sslmode=require&channel_binding=require", "neondb_owner")
+        self.assertEqual(p["host"], HOST)
+        self.assertEqual(p["sslrootcert"], "/etc/ssl/certs/ca-certificates.crt")
 
     def test_wrong_source_rejected(self):
         good = f"postgresql://neondb_owner:test@{HOST}/neondb?sslmode=require&channel_binding=require"
