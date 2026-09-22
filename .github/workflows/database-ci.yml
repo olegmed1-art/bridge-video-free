@@ -142,6 +142,8 @@ jobs:
         run: |
           set -euo pipefail
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0371_autopilot_provider_retry_budget.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0370_autopilot_codex_send_intent.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0369_autopilot_reconcile_gateway.sql
