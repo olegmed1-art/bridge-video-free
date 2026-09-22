@@ -344,13 +344,13 @@ jobs:
           # Production rollback retains send history. Only an empty disposable
           # CI fixture may remove this table before rebuilding historical 0322.
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
-          DO $ BEGIN
+          DO $$ BEGIN
             IF current_database()<>'autopilot_main_ci' OR session_user<>'bridge_ci_owner'
                OR EXISTS(SELECT FROM autopilot.codex_command_send_intent) THEN
               RAISE EXCEPTION 'SEND_INTENT_EMPTY_CI_FIXTURE_REQUIRED';
             END IF;
             DROP TABLE autopilot.codex_command_send_intent;
-          END $;
+          END $$;
           SQL
 
           # Test the new upgrade/rollback on the complete modern schema. The
