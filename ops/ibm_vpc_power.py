@@ -47,6 +47,11 @@ def _request_json(request: urllib.request.Request, *, timeout: int = 20) -> dict
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read(1024 * 1024 + 1)
+    except urllib.error.HTTPError as exc:
+        # The HTTP status is safe and useful for distinguishing a bad key,
+        # missing IAM access, and a wrong provider endpoint. Never echo the
+        # provider response body because it may contain request metadata.
+        raise BoundedClientError(f"provider_http_{exc.code}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise BoundedClientError("provider_request_failed") from exc
     if len(raw) > 1024 * 1024:
@@ -75,7 +80,10 @@ def obtain_token(api_key: str) -> str:
         headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
-    response = _request_json(request)
+    try:
+        response = _request_json(request)
+    except BoundedClientError as exc:
+        raise BoundedClientError(f"iam_{exc}") from exc
     token = response.get("access_token")
     if not isinstance(token, str) or len(token) < 20 or any(c.isspace() for c in token):
         raise BoundedClientError("iam_token_invalid")
@@ -111,7 +119,11 @@ def read_instance(token: str, *, region: str, instance_id: str, name: str) -> In
         headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
         method="GET",
     )
-    return parse_instance(_request_json(request), expected_id=instance_id, expected_name=name)
+    try:
+        response = _request_json(request)
+    except BoundedClientError as exc:
+        raise BoundedClientError(f"vpc_{exc}") from exc
+    return parse_instance(response, expected_id=instance_id, expected_name=name)
 
 
 def create_action(

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest import mock
 
 from ops.ibm_vpc_power import (
     BoundedClientError,
     MUTATION_AUTHORIZATION,
     _instance_url,
+    _request_json,
+    obtain_token,
     parse_instance,
+    read_instance,
 )
 
 
@@ -67,6 +72,34 @@ class IbmVpcPowerContractTests(unittest.TestCase):
         self.assertNotIn("ibm_vpc_power.py start", workflow)
         self.assertNotIn("ibm_vpc_power.py stop", workflow)
         self.assertNotIn("--mutation-authorization", workflow)
+
+    def test_http_error_reports_only_safe_status(self) -> None:
+        request = mock.Mock()
+        error = urllib.error.HTTPError("https://example.invalid", 403, "denied", {}, None)
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(BoundedClientError, "^provider_http_403$"):
+                _request_json(request)
+
+    def test_iam_failure_is_stage_specific(self) -> None:
+        with mock.patch(
+            "ops.ibm_vpc_power._request_json",
+            side_effect=BoundedClientError("provider_http_400"),
+        ):
+            with self.assertRaisesRegex(BoundedClientError, "^iam_provider_http_400$"):
+                obtain_token("valid-looking-key")
+
+    def test_vpc_failure_is_stage_specific(self) -> None:
+        with mock.patch(
+            "ops.ibm_vpc_power._request_json",
+            side_effect=BoundedClientError("provider_http_403"),
+        ):
+            with self.assertRaisesRegex(BoundedClientError, "^vpc_provider_http_403$"):
+                read_instance(
+                    "token",
+                    region="eu-de",
+                    instance_id=INSTANCE_ID,
+                    name=INSTANCE_NAME,
+                )
 
 
 if __name__ == "__main__":
