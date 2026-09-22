@@ -77,4 +77,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api --method DELETE repos/olegmed1-art/bridge-video-free/actions/runs/35724596459/logs
+          if ! gh api --method DELETE repos/olegmed1-art/bridge-video-free/actions/runs/35724596459/logs 2> "$RUNNER_TEMP/cleanup-error"; then
+            grep -q 'HTTP 404' "$RUNNER_TEMP/cleanup-error" || { echo 'DIAGNOSTIC_LOG_CLEANUP_FAILED'; exit 1; }
+          fi
