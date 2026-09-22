@@ -50,9 +50,14 @@ def harness(tmp_path,monkeypatch,failure=None):
     if failure=='atomic_rename':
         monkeypatch.setattr(target.os,'rename',Mock(side_effect=OSError('rename failed')))
     real_resolve=Path.resolve
+    real_lstat=Path.lstat
     def resolve(path,*a,**kw):
         return release if str(path)=='/proc/999999992/cwd' else real_resolve(path,*a,**kw)
+    def root_lstat(path):
+        values=list(real_lstat(path));values[4]=0
+        return os.stat_result(values)
     monkeypatch.setattr(Path,'resolve',resolve)
+    monkeypatch.setattr(Path,'lstat',root_lstat)
     def environment(pid):
         return {**old_env,**({'AUTOPILOT_ADMISSION_MODE':'HOLD'} if pid==999999992 else {})}
     monkeypatch.setattr(target,'process_environment',environment)
