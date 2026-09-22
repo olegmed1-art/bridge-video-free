@@ -22,6 +22,15 @@ def exact_light_rule(rule):
     return bool(re.fullmatch(r"\s*instance\.id\s*=\s*'" + re.escape(LIGHT) + r"'\s*", rule or ''))
 
 
+def clients(config, key):
+    import oci
+    config = dict(config, key_content=key)
+    signer = oci.signer.Signer(config['tenancy'], config['user'], config['fingerprint'],
+                               None, private_key_content=key)
+    kwargs = dict(signer=signer, timeout=(10, 30), retry_strategy=oci.retry.NoneRetryStrategy())
+    return oci.core.ComputeClient(config, **kwargs), oci.identity.IdentityClient(config, **kwargs)
+
+
 def main():
     import oci
     config = {key: scalar(os.environ[env], key) for key, env in (
@@ -30,11 +39,7 @@ def main():
     if config['tenancy'] != TENANCY or config['region'] != 'eu-frankfurt-1':
         raise ValueError('target mismatch')
     key = os.environ['OCI_KEY'].replace('\\r', '').replace('\\n', '\n')
-    signer = oci.signer.Signer(config['tenancy'], config['user'], config['fingerprint'],
-                               None, private_key_content=key)
-    kwargs = dict(signer=signer, timeout=(10, 30), retry_strategy=oci.retry.NoneRetryStrategy())
-    compute = oci.core.ComputeClient(config, **kwargs)
-    iam = oci.identity.IdentityClient(config, **kwargs)
+    compute, iam = clients(config, key)
     result = {'mode': 'READ_ONLY', 'write_permission': 'NOT_TESTED', 'oci_resources_changed': False}
 
     def read(label, fn, *args, **kw):
