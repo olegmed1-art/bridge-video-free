@@ -66,17 +66,18 @@ def execution_contract(value):
 
 
 def attest_loaded_config(before,configured,release):
-    expected={**before,'WorkingDirectory':str(release),'DropInPaths':str(DROP)}
     allowed_fields={'ActiveState','SubState','MainPID','NRestarts','InvocationID',
         'WorkingDirectory','User','Group','DropInPaths','FragmentPath','ExecStart','EnvironmentFiles'}
-    check(set(expected)==set(configured) and set(expected)<=allowed_fields,'SERVICE_FIELD_DRIFT')
-    mismatches=sorted(k for k in expected if configured[k]!=expected[k])
-    if mismatches:
-        print(json.dumps({'pre_stop_mismatched_fields':mismatches}))
-    if 'ExecStart' in expected:
-        expected['ExecStart']=execution_contract(expected['ExecStart'])
-        configured={**configured,'ExecStart':execution_contract(configured['ExecStart'])}
-    check(configured==expected,'PRE_STOP_LOADED_CONFIG_DRIFT')
+    check(set(before)==set(configured) and set(before)<=allowed_fields,'SERVICE_FIELD_DRIFT')
+    stable=set(before)-{'WorkingDirectory','DropInPaths','ExecStart'}
+    check(all(configured[key]==before[key] for key in stable),'PRE_STOP_LOADED_CONFIG_DRIFT')
+    # daemon-reload loads the drop-in for the next start but reports the cwd of
+    # the still-running process until that process is replaced.
+    check(configured['WorkingDirectory']==before['WorkingDirectory'],
+          'PRE_STOP_WORKING_DIRECTORY_DRIFT')
+    check(configured['DropInPaths']==str(DROP),'PRE_STOP_DROP_IN_NOT_LOADED')
+    check(execution_contract(configured['ExecStart'])==execution_contract(before['ExecStart']),
+          'PRE_STOP_LOADED_CONFIG_DRIFT')
 
 
 def probe(h,release,old_env):
