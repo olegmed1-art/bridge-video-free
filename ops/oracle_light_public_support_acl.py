@@ -19,8 +19,9 @@ def main():
         names=','.join("'"+r+"'" for r in candidate.ROLES)
         assert candidate.sql(container,database,f'SELECT count(*) FROM pg_roles WHERE rolname IN ({names}) AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls);')=='0'
         candidate.sql(container,database,'BEGIN;'+candidate.SUPPORT_SQL+'COMMIT;')
-        proof=candidate.sql(container,database,'BEGIN; SET SESSION AUTHORIZATION bridge_school_worker_principal; SELECT count(*) FROM public.autopilot_operational_health_signal; ROLLBACK;')
-        assert proof=='3'
+        proof=candidate.sql(container,database,"BEGIN; SET SESSION AUTHORIZATION bridge_school_worker_principal; SELECT count(*)>0 FROM public.schema_migration; SELECT has_table_privilege(current_user,'public.autopilot_operational_health_signal','SELECT'); ROLLBACK;")
+        assert proof=='t\nt'
+        assert candidate.sql(container,database,"SELECT has_function_privilege('bridge_school_worker_principal','autopilot.mailbox_e2e_acceptance()','EXECUTE');")=='f'
         assert candidate.sql(container,database,'BEGIN; SET SESSION AUTHORIZATION bridge_school_health; SELECT count(*) FROM public.autopilot_operational_health_signal; ROLLBACK;')=='3'
     candidate.main()
     print(json.dumps({'public_support_acl':'VERIFIED','scope':'two_fenced_rehearsals_only','neon_changed':False}))
