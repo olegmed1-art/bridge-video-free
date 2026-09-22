@@ -56,6 +56,7 @@ jobs:
           import base64
           import json
           import os
+          import urllib.error
           import urllib.parse
           import urllib.request
 
@@ -83,6 +84,42 @@ jobs:
           print("IBM_IAM_CLAIM_KEYS=" + ",".join(sorted(payload)))
           if not matched:
               raise SystemExit(4)
+
+          account_claim = payload.get("account", {})
+          account_id = account_claim.get("bss", "") if isinstance(account_claim, dict) else ""
+          account_id = account_id or payload.get("account_id", "")
+          iam_id = payload.get("iam_id", "") or payload.get("id", "")
+          if not account_id or not iam_id:
+              print("IBM_IAM_POLICY_READ=REFUSED reason=identity_claims_missing")
+              raise SystemExit(4)
+
+          query = urllib.parse.urlencode({"account_id": account_id, "iam_id": iam_id})
+          policy_request = urllib.request.Request(
+              "https://iam.cloud.ibm.com/v1/policies?" + query,
+              headers={"Accept": "application/json", "Authorization": "Bearer " + token},
+          )
+          try:
+              with urllib.request.urlopen(policy_request, timeout=20) as response:
+                  policies = json.load(response).get("policies", [])
+          except urllib.error.HTTPError as exc:
+              print(f"IBM_IAM_POLICY_READ=HTTP_{exc.code}")
+          else:
+              print("IBM_IAM_POLICY_COUNT=" + str(len(policies)))
+              for index, policy in enumerate(policies, start=1):
+                  roles = sorted(role.get("display_name") or role.get("role_id", "").rsplit(":", 1)[-1] for role in policy.get("roles", []))
+                  attributes = {}
+                  for resource in policy.get("resources", []):
+                      for attribute in resource.get("attributes", []):
+                          name = attribute.get("name", "")
+                          value = attribute.get("value", "")
+                          if name in {"serviceName", "resourceType"}:
+                              attributes[name] = value
+                          elif name == "instanceId":
+                              attributes[name] = "MATCH" if value == os.environ["IBM_VPC_INSTANCE_ID"] else "MISMATCH"
+                          elif name == "accountId":
+                              attributes[name] = "PRESENT"
+                  safe_attrs = ",".join(f"{key}={attributes[key]}" for key in sorted(attributes))
+                  print(f"IBM_IAM_POLICY_{index}=roles:{'+'.join(roles) or 'NONE'} attrs:{safe_attrs or 'NONE'}")
           PY
       - name: Read exact IBM instance state
         run: |
