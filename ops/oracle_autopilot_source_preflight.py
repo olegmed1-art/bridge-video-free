@@ -5,6 +5,7 @@ import sys
 from urllib.parse import parse_qs, unquote, urlsplit
 
 HOST = "ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech"
+POOLER_HOST = HOST.replace(".c-5.", "-pooler.c-5.")
 PRINCIPALS = {
     "NEON_DATABASE_URL": ("neondb_owner", None),
     "AUTOPILOT_CALLBACK_DATABASE_URL": ("autopilot_callback_login", "autopilot_callback"),
@@ -17,7 +18,7 @@ def connection_parameters(raw, principal):
     parsed = urlsplit(raw.strip())
     query = parse_qs(parsed.query, keep_blank_values=True)
     user, password = unquote(parsed.username or ""), unquote(parsed.password or "")
-    if (parsed.scheme not in {"postgres", "postgresql"} or parsed.hostname != HOST
+    if (parsed.scheme not in {"postgres", "postgresql"} or parsed.hostname not in {HOST, POOLER_HOST}
             or parsed.port not in {None, 5432} or parsed.path != "/neondb"
             or parsed.fragment or user != principal or not password
             or any(ord(c) < 32 or ord(c) == 127 for c in user + password)
@@ -26,7 +27,8 @@ def connection_parameters(raw, principal):
         raise ValueError("SOURCE_CREDENTIAL_CONTRACT")
     # Reconstruct fixed libpq settings; never forward arbitrary URI options.
     return dict(host=HOST, port=5432, dbname="neondb", user=user, password=password,
-                sslmode="verify-full", channel_binding="require", connect_timeout=10,
+                sslmode="verify-full", sslrootcert="/etc/ssl/certs/ca-certificates.crt",
+                channel_binding="require", connect_timeout=10,
                 application_name="autopilot-migration-source-preflight",
                 options="-c default_transaction_read_only=on -c statement_timeout=10000 -c lock_timeout=3000")
 
@@ -64,7 +66,13 @@ def main():
             print(json.dumps({"credential": name, "principal": principal, "status": "PASS"}))
         except Exception as exc:
             # Never serialize exceptions: libpq errors can carry connection details.
-            print(json.dumps({"credential": name, "status": "FAIL", "error_type": type(exc).__name__}))
+            reason = "CONNECTION_OR_CONTRACT"
+            message = str(exc).lower()
+            for needle, code in (("root certificate", "TRUST_ROOT"), ("password authentication failed", "AUTHENTICATION"), ("timeout", "TIMEOUT"), ("source_credential_contract", "SOURCE_URI_POLICY")):
+                if needle in message:
+                    reason = code
+                    break
+            print(json.dumps({"credential": name, "status": "FAIL", "error_type": type(exc).__name__, "reason": reason}))
             failed = True
     return 1 if failed else 0
 
