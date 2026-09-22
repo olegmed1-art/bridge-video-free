@@ -77,4 +77,3 @@ jobs:
             exit 1
           fi
           cat "$work/result"
-
