@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
 import signal
 import stat
 import subprocess
@@ -51,6 +52,31 @@ def fsync_directory(path):
 
 def process_environment(pid):
     return dict(x.decode().split('=',1) for x in Path(f'/proc/{pid}/environ').read_bytes().split(b'\0') if b'=' in x)
+
+
+def execution_contract(value):
+    # systemctl's ExecStart includes execution accounting as well as config.
+    # Keep the complete executable/argv/ignore-errors contract, accepting only
+    # the observed single-command shape and named volatile accounting fields.
+    match=re.fullmatch(r'\{ (path=[^;{}]+ ; argv\[\]=[^;{}]+ ; ignore_errors=(?:yes|no)) ; '
+        r'start_time=\[[^\]\n]*\] ; stop_time=\[[^\]\n]*\] ; pid=[0-9]+ ; '
+        r'code=[^;{}\n]+ ; status=[^;{}\n]+ \}',value)
+    check(match is not None,'EXEC_START_FORMAT_DRIFT')
+    return match.group(1)
+
+
+def attest_loaded_config(before,configured,release):
+    expected={**before,'WorkingDirectory':str(release),'DropInPaths':str(DROP)}
+    allowed_fields={'ActiveState','SubState','MainPID','NRestarts','InvocationID',
+        'WorkingDirectory','User','Group','DropInPaths','FragmentPath','ExecStart','EnvironmentFiles'}
+    check(set(expected)==set(configured) and set(expected)<=allowed_fields,'SERVICE_FIELD_DRIFT')
+    mismatches=sorted(k for k in expected if configured[k]!=expected[k])
+    if mismatches:
+        print(json.dumps({'pre_stop_mismatched_fields':mismatches}))
+    if 'ExecStart' in expected:
+        expected['ExecStart']=execution_contract(expected['ExecStart'])
+        configured={**configured,'ExecStart':execution_contract(configured['ExecStart'])}
+    check(configured==expected,'PRE_STOP_LOADED_CONFIG_DRIFT')
 
 
 def probe(h,release,old_env):
@@ -215,8 +241,7 @@ def install(bundle,helper_source):
             fsync_directory(DROP_DIR.parent)
             run('systemctl','daemon-reload')
             configured=h['service']()
-            check(configured=={**before,'WorkingDirectory':str(release),'DropInPaths':str(DROP)},
-                  'PRE_STOP_LOADED_CONFIG_DRIFT')
+            attest_loaded_config(before,configured,release)
             environment=run('systemctl','show',h['UNIT'],'--property=Environment','--value')
             check('AUTOPILOT_ADMISSION_MODE=HOLD' in environment.split(),'PRE_STOP_HOLD_NOT_EFFECTIVE')
             check(process_environment(int(before['MainPID']))==old_env and
