@@ -142,6 +142,8 @@ jobs:
         run: |
           set -euo pipefail
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0370_autopilot_codex_send_intent.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0369_autopilot_reconcile_gateway.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0368_autopilot_next_step.sql
@@ -165,6 +167,12 @@ jobs:
           database/scripts/migrate.sh
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/tests/365_autopilot_parallel_work_intake.sql
+
+      - name: Prove one-shot Codex send concurrency and rollback retention
+        run: PYTHONPATH=. python database/tests/test_codex_send_concurrency.py
+
+      - name: Verify owner command rendering and delivery contract
+        run: python -m pytest -q tests/test_oracle_autopilot_bridge_prompt.py tests/test_oracle_autopilot_github_codex_callback.py
 
       - name: Prove concurrent bidding activation exclusion
         run: python database/tests/test_bidding_activation_concurrency.py
