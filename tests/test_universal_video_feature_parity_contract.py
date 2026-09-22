@@ -45,4 +45,3 @@ def historical_routing(monkeypatch, tmp_path):
     path = tmp_path / "historical-routing.json"
     path.write_text(json.dumps(routing), encoding="utf-8")
     monkeypatch.setattr("ops.validate_universal_video_runtime_routing.ROUTING_FILE", path)
-
