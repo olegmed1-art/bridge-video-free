@@ -19,6 +19,7 @@ jobs:
         with:
           persist-credentials: false
       - run: python -m py_compile ops/oci_light_first_backup.py ops/oci_storage_audit.py
+      - run: python ops/test_oci_light_first_backup.py
   backup:
     needs: contract
     if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
