@@ -70,4 +70,3 @@ jobs:
           ssh_opts=(-F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=2)
           ssh "${ssh_opts[@]}" ubuntu@92.5.47.149 'sudo -n /usr/bin/cat /etc/bridge-autopilot-postgres/ca.crt' > "$work/ca.crt"
           python ops/oracle_light_pg_tunnel_probe.py "$work"
-
