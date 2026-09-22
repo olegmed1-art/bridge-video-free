@@ -1,0 +1,57 @@
+name: IBM VPC power read-only probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/ibm-vpc-power-probe.yml'
+      - 'ops/ibm_vpc_power.py'
+      - 'tests/test_ibm_vpc_power.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ibm-vpc-power-controller
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate bounded client contract
+        run: |
+          set -euo pipefail
+          python -m unittest -v tests.test_ibm_vpc_power
+          python -m py_compile ops/ibm_vpc_power.py
+
+  probe:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+      IBM_VPC_REGION: eu-de
+      IBM_VPC_INSTANCE_ID: 02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2
+      IBM_VPC_INSTANCE_NAME: bridge-school-compute-ibm
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Verify secret presence without disclosure
+        run: |
+          set -euo pipefail
+          test -n "${IBM_CLOUD_API_KEY:-}"
+          echo 'IBM_CLOUD_API_KEY_PRESENT=YES'
+      - name: Read exact IBM instance state
+        run: |
+          set -euo pipefail
+          python3 ops/ibm_vpc_power.py status \
+            --region "$IBM_VPC_REGION" \
+            --instance-id "$IBM_VPC_INSTANCE_ID" \
+            --instance-name "$IBM_VPC_INSTANCE_NAME"
