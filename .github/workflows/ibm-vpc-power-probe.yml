@@ -36,6 +36,7 @@ jobs:
     timeout-minutes: 5
     env:
       IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+      IBM_EXPECTED_SERVICE_ID: ServiceId-e08e417c-dd54-49ec-9159-4df0b147c837
       IBM_VPC_REGION: eu-de
       IBM_VPC_INSTANCE_ID: 02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2
       IBM_VPC_INSTANCE_NAME: bridge-school-compute-ibm
@@ -48,6 +49,41 @@ jobs:
           set -euo pipefail
           test -n "${IBM_CLOUD_API_KEY:-}"
           echo 'IBM_CLOUD_API_KEY_PRESENT=YES'
+      - name: Verify API key identity without disclosure
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          body = urllib.parse.urlencode({
+              "grant_type": "urn:ibm:params:oauth:grant-type:apikey",
+              "apikey": os.environ["IBM_CLOUD_API_KEY"],
+          }).encode("ascii")
+          request = urllib.request.Request(
+              "https://iam.cloud.ibm.com/identity/token",
+              data=body,
+              headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=20) as response:
+              token = json.load(response).get("access_token", "")
+
+          parts = token.split(".")
+          if len(parts) < 2:
+              print("IBM_IAM_IDENTITY_RESULT=REFUSED reason=token_not_jwt")
+              raise SystemExit(4)
+          payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+          expected = os.environ["IBM_EXPECTED_SERVICE_ID"]
+          matched = expected in json.dumps(payload, separators=(",", ":"))
+          print("IBM_IAM_EXPECTED_SERVICE_ID_MATCH=" + ("YES" if matched else "NO"))
+          print("IBM_IAM_CLAIM_KEYS=" + ",".join(sorted(payload)))
+          if not matched:
+              raise SystemExit(4)
+          PY
       - name: Read exact IBM instance state
         run: |
           set -euo pipefail
