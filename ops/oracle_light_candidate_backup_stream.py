@@ -5,7 +5,7 @@ import pwd
 import stat
 import sys
 
-path=Path('/home/ubuntu/autopilot-db-migration-20260922/candidate-backup-20260922.tar.gz')
+path=Path('/home/ubuntu/autopilot-db-migration-20260922/candidate-backup-v2-20260922.tar.gz')
 assert not any(p.is_symlink() for p in [path,*path.parents])
 before=path.lstat()
 assert stat.S_ISREG(before.st_mode) and stat.S_IMODE(before.st_mode)==0o600

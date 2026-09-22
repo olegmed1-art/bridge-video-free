@@ -19,8 +19,12 @@ class ArchiveSafety(unittest.TestCase):
         manifest=dict(format=1,database=target.candidate.DATABASE,snapshot_scope='FENCED_CANDIDATE_ONLY',
                       roles_nologin=list(target.candidate.ROLES),locale='C.UTF-8',
                       files={k:hashlib.sha256(v).hexdigest() for k,v in files.items()},
-                      data={'function_definitions':[97,'hash'],'effective_acl':[291,'hash']})
+                      data={'function_definitions':[97,'hash'],'effective_acl':[291,'hash'],
+                            'public_support_acl':[6,'hash'],**{f'fixture.table{i}':[0,'hash'] for i in range(65)}})
         if mode=='wrong_locale': manifest['locale']='en_US'
+        if mode=='wrong_roles': manifest['roles_nologin']=[]
+        if mode=='missing_support': del manifest['data']['public_support_acl']
+        if mode=='wrong_support': manifest['data']['public_support_acl'][0]=5
         if mode=='corrupt_hash': manifest['files']['autopilot.dump']='0'*64
         files['manifest.json']=json.dumps(manifest).encode()
         if mode=='extra_path': files['../escape']=b'bad'
@@ -46,12 +50,12 @@ class ArchiveSafety(unittest.TestCase):
                 self.assertEqual(set(payloads),target.MEMBERS)
 
     def test_unsafe_archives_rejected(self):
-        for mode in ('wrong_locale','corrupt_hash','extra_path','symlink'):
+        for mode in ('wrong_locale','wrong_roles','missing_support','wrong_support','corrupt_hash','extra_path','symlink'):
             with self.subTest(mode=mode),tempfile.TemporaryDirectory() as d:
                 path=Path(d)/'backup.tar.gz'
                 digest=self.make(path,mode)
                 with patch.dict(target.candidate.FILES,{'rehearsal-only-acl.sql':digest}):
-                    with self.assertRaises(AssertionError):
+                    with self.assertRaises((AssertionError,KeyError)):
                         target.validate_archive(path)
 
 

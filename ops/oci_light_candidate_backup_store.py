@@ -74,7 +74,8 @@ def main():
             storage_tier='Standard',versioning='Disabled',auto_tiering='Disabled',
             freeform_tags={'managed_by':TAG}))
     PHASE='validate_private_bucket'
-    validate_bucket(client.get_bucket(namespace,BUCKET).data)
+    # autoTiering is opt-in response metadata; omitted fields are not proof of Disabled.
+    validate_bucket(client.get_bucket(namespace,BUCKET,fields=['autoTiering']).data)
     PHASE='no_public_links'
     assert not oci.pagination.list_call_get_all_results(client.list_preauthenticated_requests,namespace,BUCKET).data
     PHASE='no_replication'
