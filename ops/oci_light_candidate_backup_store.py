@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 from oci_storage_audit import main as audit
+from oracle_light_candidate_backup import validate_archive
 from oci_light_access_audit import TENANCY, scalar
 
 BUCKET='bridge-light-autopilot-backups'
@@ -26,6 +27,7 @@ def main():
     assert len(sys.argv)==3
     source,destination=map(Path,sys.argv[1:])
     assert source.is_file() and not source.is_symlink() and not destination.exists()
+    validate_archive(source)
     size=source.stat().st_size
     assert 0<size<32*1024**2
     digest=hashlib.sha256(source.read_bytes()).hexdigest()
