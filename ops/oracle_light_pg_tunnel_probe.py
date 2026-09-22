@@ -72,7 +72,12 @@ def main(work):
                 pass
     finally:
         _, error = stop(process)
-    assert b'administratively prohibited' in error.lower(), 'unix_forwarding_denial_not_proved'
+    # OpenSSH 9.6 server_request_direct_streamlocal leaves the default
+    # CONNECT_FAILED / "open failed" response when policy denies this channel.
+    # A permitted forward to the absent path instead reports "No such file...".
+    if b'open failed: connect failed: open failed' not in error.lower():
+        print(json.dumps({'unix_probe_error': error.decode(errors='replace')[:1000]}))
+        raise AssertionError('unix_forwarding_denial_not_proved')
     result = subprocess.run(base + ['-T', host, 'id'], capture_output=True, text=True, timeout=25)
     assert result.returncode != 0 and 'uid=' not in result.stdout, 'remote_command_not_denied'
     result = subprocess.run(base + ['-T', 'ubuntu@92.5.47.149', 'id -un'], capture_output=True, text=True, timeout=25)
