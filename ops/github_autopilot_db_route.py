@@ -35,7 +35,17 @@ def mask(value):
 
 def target_dsn(raw, principal, ca):
     assert raw and not any(ord(c)<32 or ord(c)==127 for c in raw)
+    if principal == 'bridge_school_worker_principal':
+        raw = raw.strip()
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in (chr(39), chr(34)):
+            raw = raw[1:-1].strip()
     parsed = urlsplit(raw)
+    # Match the established worker's input normalization; destination stays Oracle.
+    if principal == 'bridge_school_worker_principal' and (parsed.hostname or '').endswith('.neon.tech'):
+        assert parsed.port in {None,5432}
+        userinfo, separator, _ = parsed.netloc.rpartition('@')
+        assert separator
+        parsed = parsed._replace(netloc=userinfo+'@'+SOURCE)
     query = parse_qs(parsed.query,strict_parsing=True,keep_blank_values=True)
     assert parsed.scheme in {'postgres','postgresql'} and parsed.hostname in {SOURCE,SOURCE.replace('.c-5.','-pooler.c-5.')}
     assert parsed.path == '/neondb' and unquote(parsed.username or '') == principal and parsed.password
@@ -135,7 +145,7 @@ def execute_under_lease(ssh, selection, environment, work):
             child_env['AUTOPILOT_DB_BACKEND'] = route['backend']
             if route['backend']=='postgresql':
                 value = target_dsn(child_env[env_name],principal,ca)
-                mask(unquote(urlsplit(child_env[env_name]).password))
+                mask(unquote(urlsplit(value).password))
                 mask(value)
                 child_env[env_name] = value
                 child_env.update(AUTOPILOT_PG_HOST='127.0.0.1',AUTOPILOT_PG_PORT='55432',AUTOPILOT_PG_DATABASE='autopilot')
