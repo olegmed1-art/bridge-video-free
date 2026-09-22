@@ -24,9 +24,10 @@ def test_only_source_defined_assertions_publish_codes():
 EXEC_START='{ path=/worker/python ; argv[]=/worker/python -m worker ; ignore_errors=no ; start_time=[Tue 2026-09-22 18:40:23 UTC] ; stop_time=[n/a] ; pid=42 ; code=(null) ; status=0/0 }'
 
 
-def test_reload_execution_accounting_is_not_command_drift(capsys):
+@pytest.mark.parametrize('reported_cwd',['/old','/release'])
+def test_reload_execution_accounting_is_not_command_drift(capsys,reported_cwd):
     before={'ExecStart':EXEC_START,'MainPID':'42','InvocationID':'same','WorkingDirectory':'/old','DropInPaths':''}
-    after={**before,'WorkingDirectory':before.get('WorkingDirectory','/old'),'DropInPaths':str(target.DROP),
+    after={**before,'WorkingDirectory':reported_cwd,'DropInPaths':str(target.DROP),
         'ExecStart':EXEC_START.replace('Tue 2026-09-22 18:40:23 UTC','n/a').replace('pid=42','pid=0')}
     target.attest_loaded_config(before,after,Path('/release'))
     assert capsys.readouterr().out==''
@@ -74,7 +75,7 @@ def test_same_process_readiness_is_bounded_and_never_accepts_restart(monkeypatch
         assert json.loads(capsys.readouterr().out)=={'held_process_ready':True,'readiness_poll':2}
 
 
-def harness(tmp_path,monkeypatch,failure=None):
+def harness(tmp_path,monkeypatch,failure=None,reload_reports_release=False):
     route=tmp_path/'route'
     route.mkdir()
     lock=route/'route.lock'
@@ -148,6 +149,8 @@ def harness(tmp_path,monkeypatch,failure=None):
         commands.append(args)
         if args[:2]==('systemctl','daemon-reload'):
             state.update(DropInPaths=str(drop) if drop.exists() else '')
+            if reload_reports_release and drop.exists():
+                state.update(WorkingDirectory=str(release))
             if failure=='before_stop' and drop.exists():
                 raise RuntimeError('interrupted after reload')
         if args[:2]==('systemctl','stop'):
@@ -178,8 +181,11 @@ def harness(tmp_path,monkeypatch,failure=None):
     return lambda:target.install(bundle,'from _held_install_fixture import *'),state,commands,drop,release
 
 
-def test_success_stays_held_and_preserves_previous_release(tmp_path,monkeypatch,capsys):
-    action,state,commands,drop,release=harness(tmp_path,monkeypatch)
+@pytest.mark.parametrize('reload_reports_release',[False,True])
+def test_success_stays_held_and_preserves_previous_release(
+        tmp_path,monkeypatch,capsys,reload_reports_release):
+    action,state,commands,drop,release=harness(
+        tmp_path,monkeypatch,reload_reports_release=reload_reports_release)
     action()
     assert state['MainPID']=='999999992' and state['WorkingDirectory']==str(release)
     assert drop.read_text()=='[Service]\nWorkingDirectory='+str(release)+'\nEnvironment=AUTOPILOT_ADMISSION_MODE=HOLD\n'
