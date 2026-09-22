@@ -15,6 +15,13 @@ class Contract(unittest.TestCase):
         self.assertEqual(p["host"], HOST)
         self.assertEqual(p["sslrootcert"], "/etc/ssl/certs/ca-certificates.crt")
 
+    def test_existing_worker_normalization(self):
+        raw = "'postgresql://bridge_school_worker_principal:test@legacy.neon.tech/neondb?sslmode=require&channel_binding=require'"
+        p = connection_parameters(raw, "bridge_school_worker_principal")
+        self.assertEqual(p["host"], HOST)
+        with self.assertRaises(ValueError):
+            connection_parameters(raw.replace("legacy.neon.tech", "example.com"), "bridge_school_worker_principal")
+
     def test_wrong_source_rejected(self):
         good = f"postgresql://neondb_owner:test@{HOST}/neondb?sslmode=require&channel_binding=require"
         for bad in (good.replace(HOST, "example.com"), good.replace("/neondb", "/other"),
