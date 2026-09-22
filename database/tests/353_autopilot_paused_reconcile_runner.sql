@@ -134,14 +134,15 @@ BEGIN
  result_action:=autopilot.reconcile_paused_project_work(
    wid3,repeat('d',64),NULL,'CODEX_PROVIDER_GENERIC_FAILURE','Provider recovery verified after paused item.'
  );
- IF result_action<>'REMEDIATE' THEN
-   RAISE EXCEPTION 'AUTOPILOT_0353_PROVIDER_RECOVERY_NOT_REMEDIATED';
+ -- 0371 retires global-health-only rearm; recovery must use durable budgets.
+ IF result_action<>'NO_CHANGE' THEN
+   RAISE EXCEPTION 'AUTOPILOT_0353_PROVIDER_RECOVERY_BYPASSED_BUDGET';
  END IF;
  IF NOT EXISTS(
    SELECT 1 FROM autopilot.project_work_item
    WHERE work_item_id=wid3
-     AND state='READY'
-     AND progress_token=repeat('d',64)
+     AND state='PAUSED'
+     AND progress_token IS NULL
  ) THEN
    RAISE EXCEPTION 'AUTOPILOT_0353_PROVIDER_RECOVERY_STATE_INVALID';
  END IF;
