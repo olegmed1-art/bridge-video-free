@@ -63,82 +63,85 @@ jobs:
       - name: Collect exact read-only inventory
         run: |
           set -euo pipefail
-          work="$RUNNER_TEMP/heavy-audit"
-          mkdir -p "$work"
-          oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --output json > "$work/instance.json"
-          compartment="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["compartment-id"])' "$work/instance.json")"
-          ad="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["availability-domain"])' "$work/instance.json")"
-          oci compute boot-volume-attachment list --compartment-id "$compartment" --availability-domain "$ad" --instance-id "$OCI_INSTANCE_OCID" --all --output json > "$work/boot-attachments.json"
-          oci compute volume-attachment list --compartment-id "$compartment" --instance-id "$OCI_INSTANCE_OCID" --all --output json > "$work/volume-attachments.json"
-          oci compute vnic-attachment list --compartment-id "$compartment" --instance-id "$OCI_INSTANCE_OCID" --all --output json > "$work/vnic-attachments.json"
-          oci bv boot-volume list --compartment-id "$compartment" --availability-domain "$ad" --all --output json > "$work/boot-volumes.json"
-          oci bv volume list --compartment-id "$compartment" --availability-domain "$ad" --all --output json > "$work/volumes.json"
-          oci bv boot-volume-backup list --compartment-id "$compartment" --all --output json > "$work/boot-backups.json"
-          oci bv backup list --compartment-id "$compartment" --all --output json > "$work/volume-backups.json"
-          oci network public-ip list --scope REGION --compartment-id "$compartment" --all --output json > "$work/public-ips.json"
-          (oci lb load-balancer list --compartment-id "$compartment" --all --output json > "$work/load-balancers.json") || printf '{"data":[]}' > "$work/load-balancers.json"
-          (oci nlb network-load-balancer list --compartment-id "$compartment" --all --output json > "$work/network-load-balancers.json") || printf '{"data":[]}' > "$work/network-load-balancers.json"
-          WORK="$work" python - <<'PY'
-          import json, os, re
-          from pathlib import Path
-          p=Path(os.environ['WORK'])
-          def data(name):
-              raw=(p/name).read_text().strip()
-              if not raw:
-                  print(f'AUDIT_SOURCE_EMPTY {name}')
-                  return []
+          python - <<'PY'
+          import json, os
+          import oci
+
+          cfg=oci.config.from_file()
+          compute=oci.core.ComputeClient(cfg)
+          block=oci.core.BlockstorageClient(cfg)
+          network=oci.core.VirtualNetworkClient(cfg)
+
+          def all_pages(fn, *args, **kwargs):
               try:
-                  value=json.loads(raw).get('data',[])
-              except json.JSONDecodeError:
-                  print(f'AUDIT_SOURCE_INVALID_JSON {name}')
+                  return oci.pagination.list_call_get_all_results(fn,*args,**kwargs).data
+              except Exception as exc:
+                  print(f'AUDIT_SOURCE_ERROR {fn.__name__}: {type(exc).__name__}')
                   return []
-              return value
+
+          def d(x):
+              return oci.util.to_dict(x)
+
           def short(v):
-              if not isinstance(v,str): return v
-              return ('…'+v[-12:]) if v.startswith('ocid1.') else v
-          def rows(name, fields, active=None):
+              if isinstance(v,str) and v.startswith('ocid1.'):
+                  return '…'+v[-12:]
+              if isinstance(v,list):
+                  return [short(x) for x in v]
+              return v
+
+          def pick(items, fields, active=None):
               out=[]
-              for x in data(name):
-                  if active and x.get('lifecycle-state') not in active: continue
+              for obj in items:
+                  x=d(obj)
+                  state=x.get('lifecycle_state')
+                  if active and state not in active:
+                      continue
                   out.append({k:short(x.get(v)) for k,v in fields.items()})
               return out
-          inst=data('instance.json')
-          if isinstance(inst,list): inst=inst[0]
-          else: inst=json.loads((p/'instance.json').read_text())['data']
-          assert inst['display-name']==os.environ['EXPECTED_NAME']
+
+          inst=compute.get_instance(os.environ['OCI_INSTANCE_OCID']).data
+          ix=d(inst)
+          assert ix['display_name']==os.environ['EXPECTED_NAME']
+          comp=ix['compartment_id']; ad=ix['availability_domain']
+
+          boot_att=all_pages(compute.list_boot_volume_attachments,comp,availability_domain=ad,instance_id=ix['id'])
+          vol_att=all_pages(compute.list_volume_attachments,comp,instance_id=ix['id'])
+          vnic_att=all_pages(compute.list_vnic_attachments,comp,instance_id=ix['id'])
+          boots=all_pages(block.list_boot_volumes,comp,availability_domain=ad)
+          vols=all_pages(block.list_volumes,comp,availability_domain=ad)
+          boot_bak=all_pages(block.list_boot_volume_backups,comp)
+          vol_bak=all_pages(block.list_volume_backups,comp)
+          ips=all_pages(network.list_public_ips,'REGION',compartment_id=comp)
+
           report={
-            'exact_instance':{
-              'name':inst.get('display-name'),'state':inst.get('lifecycle-state'),
-              'id':short(inst.get('id')),'created':inst.get('time-created')
-            },
-            'boot_attachments':rows('boot-attachments.json',{'id':'id','state':'lifecycle-state','boot_volume':'boot-volume-id'}),
-            'block_attachments':rows('volume-attachments.json',{'id':'id','state':'lifecycle-state','volume':'volume-id'}),
-            'vnic_attachments':rows('vnic-attachments.json',{'id':'id','state':'lifecycle-state','vnic':'vnic-id'}),
-            'active_boot_volumes':rows('boot-volumes.json',{'id':'id','name':'display-name','state':'lifecycle-state','gb':'size-in-gbs','created':'time-created'}, {'AVAILABLE','PROVISIONING','RESTORING'}),
-            'active_block_volumes':rows('volumes.json',{'id':'id','name':'display-name','state':'lifecycle-state','gb':'size-in-gbs','created':'time-created'}, {'AVAILABLE','PROVISIONING','RESTORING'}),
-            'available_boot_backups':rows('boot-backups.json',{'id':'id','name':'display-name','state':'lifecycle-state','gb':'size-in-gbs','created':'time-created'}, {'AVAILABLE','CREATING'}),
-            'available_volume_backups':rows('volume-backups.json',{'id':'id','name':'display-name','state':'lifecycle-state','gb':'size-in-gbs','created':'time-created'}, {'AVAILABLE','CREATING'}),
-            'public_ips':rows('public-ips.json',{'id':'id','name':'display-name','ip':'ip-address','lifetime':'lifetime','state':'lifecycle-state','assigned':'assigned-entity-id'}),
-            'load_balancers':rows('load-balancers.json',{'id':'id','name':'display-name','state':'lifecycle-state','ip_addresses':'ip-addresses'}),
-            'network_load_balancers':rows('network-load-balancers.json',{'id':'id','name':'display-name','state':'lifecycle-state','ip_addresses':'ip-addresses'})
+            'exact_instance':{'name':ix.get('display_name'),'state':ix.get('lifecycle_state'),'id':short(ix.get('id')),'created':str(ix.get('time_created'))},
+            'boot_attachments':pick(boot_att,{'id':'id','state':'lifecycle_state','boot_volume':'boot_volume_id'}),
+            'block_attachments':pick(vol_att,{'id':'id','state':'lifecycle_state','volume':'volume_id'}),
+            'vnic_attachments':pick(vnic_att,{'id':'id','state':'lifecycle_state','vnic':'vnic_id'}),
+            'active_boot_volumes':pick(boots,{'id':'id','name':'display_name','state':'lifecycle_state','gb':'size_in_gbs','created':'time_created'},{'AVAILABLE','PROVISIONING','RESTORING'}),
+            'active_block_volumes':pick(vols,{'id':'id','name':'display_name','state':'lifecycle_state','gb':'size_in_gbs','created':'time_created'},{'AVAILABLE','PROVISIONING','RESTORING'}),
+            'available_boot_backups':pick(boot_bak,{'id':'id','name':'display_name','state':'lifecycle_state','gb':'size_in_gbs','created':'time_created'},{'AVAILABLE','CREATING'}),
+            'available_volume_backups':pick(vol_bak,{'id':'id','name':'display_name','state':'lifecycle_state','gb':'size_in_gbs','created':'time_created'},{'AVAILABLE','CREATING'}),
+            'public_ips':pick(ips,{'id':'id','name':'display_name','ip':'ip_address','lifetime':'lifetime','state':'lifecycle_state','assigned':'assigned_entity_id'})
           }
           old=os.environ['OLD_PUBLIC_IP']
           report['old_public_ip_present']=any(x.get('ip')==old for x in report['public_ips'])
           tokens=('bridge-school-dds3-frankfurt','dds3-frankfurt','heavy')
           candidates=[]
-          for kind in ('active_boot_volumes','active_block_volumes','available_boot_backups','available_volume_backups','public_ips','load_balancers','network_load_balancers'):
+          for kind in ('active_boot_volumes','active_block_volumes','available_boot_backups','available_volume_backups','public_ips'):
               for x in report[kind]:
-                  text=json.dumps(x,ensure_ascii=False).lower()
+                  text=json.dumps(x,ensure_ascii=False,default=str).lower()
                   if any(t in text for t in tokens) or old in text:
                       candidates.append({'kind':kind,**x})
           report['named_or_ip_candidates']=candidates
-          print(json.dumps(report,indent=2,ensure_ascii=False,sort_keys=True))
+          print(json.dumps(report,indent=2,ensure_ascii=False,sort_keys=True,default=str))
+          live=lambda xs: sum(x.get('state') not in ('TERMINATED','DETACHED') for x in xs)
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
               f.write('### Retired heavy Oracle read-only audit\n')
               f.write(f"- exact instance: {report['exact_instance']['state']}\n")
-              f.write(f"- live boot attachments: {sum(x.get('state') not in ('TERMINATED','DETACHED') for x in report['boot_attachments'])}\n")
-              f.write(f"- live block attachments: {sum(x.get('state') not in ('TERMINATED','DETACHED') for x in report['block_attachments'])}\n")
-              f.write(f"- live VNIC attachments: {sum(x.get('state') not in ('TERMINATED','DETACHED') for x in report['vnic_attachments'])}\n")
+              f.write(f"- live boot attachments: {live(report['boot_attachments'])}\n")
+              f.write(f"- live block attachments: {live(report['block_attachments'])}\n")
+              f.write(f"- live VNIC attachments: {live(report['vnic_attachments'])}\n")
               f.write(f"- old public IP present: {report['old_public_ip_present']}\n")
               f.write(f"- named/IP deletion candidates: {len(candidates)}\n")
               f.write(f"- active boot volumes in compartment/AD: {len(report['active_boot_volumes'])}\n")
