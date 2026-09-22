@@ -7,7 +7,7 @@ on:
         description: Exact lifecycle action
         required: true
         type: choice
-        options: [status, start, stop]
+        options: [status, start, stop, terminate-delete-boot]
       idle_source_run_id:
         description: Optional terminal workload run binding for automatic stop
         required: false
@@ -23,7 +23,7 @@ concurrency:
   # Every authorized status/start/stop can create an exact-instance Run
   # Command and shares the production fence. Unrelated comments are inert and
   # must not be able to occupy that non-cancelling mutation slot.
-  group: ${{ ((github.event_name == 'workflow_dispatch' && contains(fromJSON('["status","start","stop"]'), inputs.action)) || (github.event_name == 'issue_comment' && github.actor == github.repository_owner && contains(fromJSON('["/oracle-instance status","/oracle-instance start","/oracle-instance stop"]'), github.event.comment.body))) && 'oracle-instance-workload-mutation' || format('oracle-instance-power-noop-{0}', github.run_id) }}
+  group: ${{ ((github.event_name == 'workflow_dispatch' && contains(fromJSON('["status","start","stop","terminate-delete-boot"]'), inputs.action)) || (github.event_name == 'issue_comment' && github.actor == github.repository_owner && contains(fromJSON('["/oracle-instance status","/oracle-instance start","/oracle-instance stop","/oracle-instance terminate-delete-boot"]'), github.event.comment.body))) && 'oracle-instance-workload-mutation' || format('oracle-instance-power-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -32,7 +32,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'issue_comment' &&
        github.actor == github.repository_owner &&
-       contains(fromJSON('["/oracle-instance status","/oracle-instance start","/oracle-instance stop"]'), github.event.comment.body))
+       contains(fromJSON('["/oracle-instance status","/oracle-instance start","/oracle-instance stop","/oracle-instance terminate-delete-boot"]'), github.event.comment.body))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -55,7 +55,7 @@ jobs:
           else
             action="${COMMENT_COMMAND#/oracle-instance }"
           fi
-          case "$action" in status|start|stop) ;; *) echo "invalid action" >&2; exit 2 ;; esac
+          case "$action" in status|start|stop|terminate-delete-boot) ;; *) echo "invalid action" >&2; exit 2 ;; esac
           idle_source_run_id="${DISPATCH_IDLE_SOURCE_RUN_ID:-}"
           if [[ -n "$idle_source_run_id" ]]; then
             [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$action" == "stop" ]] || { echo "idle source is valid only for dispatched stop" >&2; exit 2; }
@@ -380,6 +380,85 @@ jobs:
           [[ "$state" == "STOPPED" ]] || { echo "stop timed out" >&2; exit 8; }
           echo "instance reached STOPPED after final fresh IDLE proof"
 
+      - name: Resolve exact boot volume for owner-authorized deletion
+        id: delete_target
+        if: ${{ steps.command.outputs.action == 'terminate-delete-boot' && (steps.state.outputs.current_state == 'RUNNING' || steps.state.outputs.current_state == 'STOPPED') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          instance_json="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --output json)"
+          INSTANCE_JSON="$instance_json" python - <<'PY'
+          import json, os
+          data=json.loads(os.environ["INSTANCE_JSON"])["data"]
+          assert data["id"] == os.environ["OCI_INSTANCE_OCID"]
+          assert data["display-name"] == "bridge-school-dds3-frankfurt"
+          assert data["region"] == "eu-frankfurt-1"
+          assert data["lifecycle-state"] in {"RUNNING","STOPPED"}
+          PY
+          compartment="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["compartment-id"])')"
+          ad="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["availability-domain"])')"
+          attachments="$(oci compute boot-volume-attachment list --compartment-id "$compartment" --availability-domain "$ad" --instance-id "$OCI_INSTANCE_OCID" --all --output json)"
+          boot_id="$(printf '%s' "$attachments" | python -c 'import json,os,sys; xs=[x for x in json.load(sys.stdin)["data"] if x.get("instance-id")==os.environ["OCI_INSTANCE_OCID"] and x.get("lifecycle-state")=="ATTACHED"]; assert len(xs)==1; print(xs[0]["boot-volume-id"])')"
+          boot_json="$(oci bv boot-volume get --boot-volume-id "$boot_id" --output json)"
+          BOOT_JSON="$boot_json" EXPECTED_BOOT_ID="$boot_id" EXPECTED_COMPARTMENT="$compartment" EXPECTED_AD="$ad" python - <<'PY'
+          import json, os
+          data=json.loads(os.environ["BOOT_JSON"])["data"]
+          assert data["id"] == os.environ["EXPECTED_BOOT_ID"]
+          assert data["compartment-id"] == os.environ["EXPECTED_COMPARTMENT"]
+          assert data["availability-domain"] == os.environ["EXPECTED_AD"]
+          assert data["lifecycle-state"] == "AVAILABLE"
+          assert data["size-in-gbs"] == 97
+          PY
+          echo "boot_volume_id=$boot_id" >> "$GITHUB_OUTPUT"
+          echo "exact heavy Oracle and its 97 GB boot volume resolved"
+
+      - name: Terminate heavy Oracle and delete boot volume
+        id: terminate
+        if: ${{ steps.command.outputs.action == 'terminate-delete-boot' && steps.delete_target.outputs.boot_volume_id != '' }}
+        shell: bash
+        env:
+          BOOT_VOLUME_ID: ${{ steps.delete_target.outputs.boot_volume_id }}
+          OWNER_DELETE_TOKEN: DELETE_HEAVY_ORACLE_AND_BOOT_20260922
+        run: |
+          set -euo pipefail
+          [[ "$OWNER_DELETE_TOKEN" == DELETE_HEAVY_ORACLE_AND_BOOT_20260922 ]]
+          oci compute instance terminate --instance-id "$OCI_INSTANCE_OCID" --preserve-boot-volume false --force >/dev/null
+          state=""
+          for _ in $(seq 1 120); do
+            state="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true)"
+            [[ "$state" == TERMINATED ]] && break
+            [[ "$state" == TERMINATING || "$state" == STOPPING || "$state" == RUNNING || "$state" == STOPPED ]] || { echo "unexpected termination state: ${state:-ABSENT}" >&2; exit 7; }
+            sleep 10
+          done
+          [[ "$state" == TERMINATED ]] || { echo "instance termination timed out" >&2; exit 8; }
+
+          delete_requested=0
+          for _ in $(seq 1 120); do
+            if ! boot_state="$(oci bv boot-volume get --boot-volume-id "$BOOT_VOLUME_ID" --query 'data."lifecycle-state"' --raw-output 2>/dev/null)"; then
+              echo "boot volume is absent after instance termination"
+              echo "deleted=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            case "$boot_state" in
+              TERMINATED)
+                echo "boot volume reached TERMINATED"
+                echo "deleted=true" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              AVAILABLE)
+                if [[ "$delete_requested" == 0 ]]; then
+                  oci bv boot-volume delete --boot-volume-id "$BOOT_VOLUME_ID" --force >/dev/null
+                  delete_requested=1
+                fi
+                ;;
+              TERMINATING) ;;
+              *) echo "unexpected boot volume state: $boot_state" >&2; exit 9 ;;
+            esac
+            sleep 10
+          done
+          echo "boot volume deletion timed out" >&2
+          exit 10
+
       - name: Start exact instance
         id: start
         if: ${{ steps.command.outputs.action == 'start' && steps.state.outputs.current_state == 'STOPPED' }}
@@ -453,5 +532,5 @@ jobs:
             echo "- idle_reason: ${IDLE_REASON:-not_applicable}"
             echo "- automatic_epoch: ${EPOCH_STATE:-not_applicable}"
             echo "- target: exact Frankfurt VM only"
-            echo "- controller: manual only (status/start/stop, stop requires fail-closed idle proof)"
+            echo "- controller: manual lifecycle; owner-authorized terminate-delete-boot is exact-OCID and exact-volume bounded"
           } >> "$GITHUB_STEP_SUMMARY"
