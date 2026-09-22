@@ -21,13 +21,24 @@ TEMP_DROP = DROP_DIR/'.40-reviewed-runtime-hold.conf.tmp'
 RELEASES = Path('/opt/bridge-school/school-autopilot-production-light/releases')
 
 
+class InstallBlocked(RuntimeError):
+    """A source-defined assertion code, never a provider error or credential."""
+
+
+def failure_record(exc):
+    result={'runtime_hold':'NOT_CONFIRMED','error_type':type(exc).__name__}
+    if type(exc) is InstallBlocked:
+        result['error_code']=exc.args[0]
+    return result
+
+
 def run(*args,timeout=45):
     return subprocess.run(args,check=True,capture_output=True,text=True,timeout=timeout).stdout.strip()
 
 
 def check(condition,code):
     if not condition:
-        raise RuntimeError(code)
+        raise InstallBlocked(code)
 
 
 def fsync_directory(path):
@@ -320,5 +331,5 @@ if __name__=='__main__':
         try:
             install(json.loads(base64.b64decode(BUNDLE_DATA)),base64.b64decode(HELPER_DATA).decode())
         except BaseException as exc:
-            print(json.dumps({'runtime_hold':'NOT_CONFIRMED','error_type':type(exc).__name__}))
+            print(json.dumps(failure_record(exc)))
             sys.exit(2)
