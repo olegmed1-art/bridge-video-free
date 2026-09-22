@@ -104,19 +104,34 @@ jobs:
           assert ix['display_name']==os.environ['EXPECTED_NAME']
           comp=ix['compartment_id']; ad=ix['availability_domain']
 
-          boot_att=all_pages(compute.list_boot_volume_attachments,comp,availability_domain=ad,instance_id=ix['id'])
-          vol_att=all_pages(compute.list_volume_attachments,comp,instance_id=ix['id'])
-          vnic_att=all_pages(compute.list_vnic_attachments,comp,instance_id=ix['id'])
-          boots=all_pages(block.list_boot_volumes,comp,availability_domain=ad)
-          vols=all_pages(block.list_volumes,comp,availability_domain=ad)
-          boot_bak=all_pages(block.list_boot_volume_backups,comp)
-          vol_bak=all_pages(block.list_volume_backups,comp)
-          ips=all_pages(network.list_public_ips,'REGION',compartment_id=comp)
+          boot_att=all_pages(compute.list_boot_volume_attachments,compartment_id=comp,availability_domain=ad,instance_id=ix['id'])
+          vol_att=all_pages(compute.list_volume_attachments,compartment_id=comp,instance_id=ix['id'])
+          vnic_att=all_pages(compute.list_vnic_attachments,compartment_id=comp,instance_id=ix['id'])
+          boots=all_pages(block.list_boot_volumes,compartment_id=comp,availability_domain=ad)
+          vols=all_pages(block.list_volumes,compartment_id=comp,availability_domain=ad)
+          boot_bak=all_pages(block.list_boot_volume_backups,compartment_id=comp)
+          vol_bak=all_pages(block.list_volume_backups,compartment_id=comp)
+          ips=all_pages(network.list_public_ips,scope='REGION',compartment_id=comp)
+
+          detached_volume_details=[]
+          for attachment in vol_att:
+              vid=getattr(attachment,'volume_id',None)
+              if not vid: continue
+              try:
+                  vx=d(block.get_volume(vid).data)
+                  detached_volume_details.append({
+                    'id':short(vx.get('id')),'name':vx.get('display_name'),
+                    'state':vx.get('lifecycle_state'),'gb':vx.get('size_in_gbs'),
+                    'created':str(vx.get('time_created'))
+                  })
+              except Exception as exc:
+                  detached_volume_details.append({'id':short(vid),'state':'LOOKUP_ERROR','error':type(exc).__name__})
 
           report={
             'exact_instance':{'name':ix.get('display_name'),'state':ix.get('lifecycle_state'),'id':short(ix.get('id')),'created':str(ix.get('time_created'))},
             'boot_attachments':pick(boot_att,{'id':'id','state':'lifecycle_state','boot_volume':'boot_volume_id'}),
             'block_attachments':pick(vol_att,{'id':'id','state':'lifecycle_state','volume':'volume_id'}),
+            'formerly_attached_block_volumes':detached_volume_details,
             'vnic_attachments':pick(vnic_att,{'id':'id','state':'lifecycle_state','vnic':'vnic_id'}),
             'active_boot_volumes':pick(boots,{'id':'id','name':'display_name','state':'lifecycle_state','gb':'size_in_gbs','created':'time_created'},{'AVAILABLE','PROVISIONING','RESTORING'}),
             'active_block_volumes':pick(vols,{'id':'id','name':'display_name','state':'lifecycle_state','gb':'size_in_gbs','created':'time_created'},{'AVAILABLE','PROVISIONING','RESTORING'}),
@@ -141,6 +156,7 @@ jobs:
               f.write(f"- exact instance: {report['exact_instance']['state']}\n")
               f.write(f"- live boot attachments: {live(report['boot_attachments'])}\n")
               f.write(f"- live block attachments: {live(report['block_attachments'])}\n")
+              f.write(f"- formerly attached block volumes: {json.dumps(report['formerly_attached_block_volumes'],default=str)}\n")
               f.write(f"- live VNIC attachments: {live(report['vnic_attachments'])}\n")
               f.write(f"- old public IP present: {report['old_public_ip_present']}\n")
               f.write(f"- named/IP deletion candidates: {len(candidates)}\n")
