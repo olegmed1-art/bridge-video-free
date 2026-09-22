@@ -22,10 +22,13 @@ def main():
     time.sleep(15)
     r = call(['systemctl', 'show', UNIT, '-p', 'ActiveState', '-p', 'SubState',
               '-p', 'UnitFileState', '-p', 'Restart', '-p', 'NRestarts'])
-    print(json.dumps({'state': dict(x.split('=', 1) for x in r.stdout.splitlines() if '=' in x),
+    state = dict(x.split('=', 1) for x in r.stdout.splitlines() if '=' in x)
+    print(json.dumps({'state': state,
                       'connector_verification': 'REQUIRED'}))
     if r.returncode:
         raise RuntimeError('state_unavailable')
+    if state.get('ActiveState') != 'active' or state.get('SubState') != 'running':
+        raise RuntimeError('agent_not_running_after_restart')
 
 
 if __name__ == '__main__':
