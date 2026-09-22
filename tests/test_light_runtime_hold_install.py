@@ -24,9 +24,10 @@ def test_only_source_defined_assertions_publish_codes():
 EXEC_START='{ path=/worker/python ; argv[]=/worker/python -m worker ; ignore_errors=no ; start_time=[Tue 2026-09-22 18:40:23 UTC] ; stop_time=[n/a] ; pid=42 ; code=(null) ; status=0/0 }'
 
 
-def test_reload_execution_accounting_is_not_command_drift(capsys):
+@pytest.mark.parametrize('reported_cwd',['/old','/release'])
+def test_reload_execution_accounting_is_not_command_drift(capsys,reported_cwd):
     before={'ExecStart':EXEC_START,'MainPID':'42','InvocationID':'same','WorkingDirectory':'/old','DropInPaths':''}
-    after={**before,'WorkingDirectory':before.get('WorkingDirectory','/old'),'DropInPaths':str(target.DROP),
+    after={**before,'WorkingDirectory':reported_cwd,'DropInPaths':str(target.DROP),
         'ExecStart':EXEC_START.replace('Tue 2026-09-22 18:40:23 UTC','n/a').replace('pid=42','pid=0')}
     target.attest_loaded_config(before,after,Path('/release'))
     assert capsys.readouterr().out==''
@@ -46,7 +47,35 @@ def test_reload_still_rejects_process_and_execution_drift(field,value):
         target.attest_loaded_config(before,after,Path('/release'))
 
 
-def harness(tmp_path,monkeypatch,failure=None):
+@pytest.mark.parametrize('failure',[None,'env','cwd','restart','pid'])
+def test_same_process_readiness_is_bounded_and_never_accepts_restart(monkeypatch,capsys,failure):
+    initial={'MainPID':'42','InvocationID':'same','NRestarts':'0'}
+    old_env={'AUTOPILOT_WORKER_ID':'worker','AUTOPILOT_DATABASE_URL':'private-dsn'}
+    calls=0;sleeps=[]
+    def environment(pid):
+        nonlocal calls
+        calls+=1
+        if failure=='env' or calls<3:return {}
+        return {**old_env,'AUTOPILOT_ADMISSION_MODE':'HOLD'}
+    def service():
+        if calls and failure=='restart':return {**initial,'NRestarts':'1'}
+        if calls and failure=='pid':return {**initial,'MainPID':'43'}
+        return initial.copy()
+    monkeypatch.setattr(target,'process_environment',environment)
+    monkeypatch.setattr(target.time,'sleep',sleeps.append)
+    monkeypatch.setattr(Path,'resolve',lambda p:Path('/wrong' if failure=='cwd' or calls<3 else '/release'))
+    if failure:
+        with pytest.raises(target.InstallBlocked):
+            target.wait_for_held_process({'service':service},initial,old_env,Path('/release'))
+        assert len(sleeps)<=50
+        assert 'private-dsn' not in capsys.readouterr().out
+    else:
+        result=target.wait_for_held_process({'service':service},initial,old_env,Path('/release'))
+        assert result['AUTOPILOT_ADMISSION_MODE']=='HOLD' and calls==3 and sleeps==[0.1,0.1]
+        assert json.loads(capsys.readouterr().out)=={'held_process_ready':True,'readiness_poll':2}
+
+
+def harness(tmp_path,monkeypatch,failure=None,reload_reports_release=False):
     route=tmp_path/'route'
     route.mkdir()
     lock=route/'route.lock'
@@ -120,6 +149,8 @@ def harness(tmp_path,monkeypatch,failure=None):
         commands.append(args)
         if args[:2]==('systemctl','daemon-reload'):
             state.update(DropInPaths=str(drop) if drop.exists() else '')
+            if reload_reports_release and drop.exists():
+                state.update(WorkingDirectory=str(release))
             if failure=='before_stop' and drop.exists():
                 raise RuntimeError('interrupted after reload')
         if args[:2]==('systemctl','stop'):
@@ -150,14 +181,17 @@ def harness(tmp_path,monkeypatch,failure=None):
     return lambda:target.install(bundle,'from _held_install_fixture import *'),state,commands,drop,release
 
 
-def test_success_stays_held_and_preserves_previous_release(tmp_path,monkeypatch,capsys):
-    action,state,commands,drop,release=harness(tmp_path,monkeypatch)
+@pytest.mark.parametrize('reload_reports_release',[False,True])
+def test_success_stays_held_and_preserves_previous_release(
+        tmp_path,monkeypatch,capsys,reload_reports_release):
+    action,state,commands,drop,release=harness(
+        tmp_path,monkeypatch,reload_reports_release=reload_reports_release)
     action()
     assert state['MainPID']=='999999992' and state['WorkingDirectory']==str(release)
     assert drop.read_text()=='[Service]\nWorkingDirectory='+str(release)+'\nEnvironment=AUTOPILOT_ADMISSION_MODE=HOLD\n'
     assert commands.count(('systemctl','stop','unit'))==1
     assert commands.count(('systemctl','start','unit'))==1
-    result=json.loads(capsys.readouterr().out)
+    result=json.loads(capsys.readouterr().out.splitlines()[-1])
     assert result['runtime_hold']=='PASS' and result['admission']=='HOLD'
     assert result['database_writes'] is False
 
@@ -169,7 +203,7 @@ def test_pre_outcome_failure_restores_old_service(tmp_path,monkeypatch,capsys,fa
     with pytest.raises(expected):action()
     assert state['ActiveState']=='active' and state['WorkingDirectory']=='/old'
     assert not drop.exists() and not drop.parent.exists() and release.exists()
-    assert json.loads(capsys.readouterr().out)['rollback']=='PREVIOUS_RELEASE_RUNNING'
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])['rollback']=='PREVIOUS_RELEASE_RUNNING'
 
 
 def test_durable_boot_hold_precedes_first_stop(tmp_path,monkeypatch):
@@ -195,7 +229,7 @@ def test_uncertainty_never_leaves_old_worker_active(tmp_path,monkeypatch,capsys,
     assert state['MainPID']=='0' and state['ActiveState']=='inactive'
     text=capsys.readouterr().out
     assert 'private-dsn' not in text
-    assert json.loads(text)['rollback']=='LEFT_STOPPED_EVIDENCE_UNCERTAIN'
+    assert json.loads(text.splitlines()[-1])['rollback']=='LEFT_STOPPED_EVIDENCE_UNCERTAIN'
     assert release.exists()
 
 

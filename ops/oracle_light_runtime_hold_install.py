@@ -73,11 +73,29 @@ def attest_loaded_config(before,configured,release):
     check(all(configured[key]==before[key] for key in stable),'PRE_STOP_LOADED_CONFIG_DRIFT')
     # daemon-reload loads the drop-in for the next start but reports the cwd of
     # the still-running process until that process is replaced.
-    check(configured['WorkingDirectory']==before['WorkingDirectory'],
+    check(configured['WorkingDirectory'] in (before['WorkingDirectory'],str(release)),
           'PRE_STOP_WORKING_DIRECTORY_DRIFT')
     check(configured['DropInPaths']==str(DROP),'PRE_STOP_DROP_IN_NOT_LOADED')
     check(execution_contract(configured['ExecStart'])==execution_contract(before['ExecStart']),
           'PRE_STOP_LOADED_CONFIG_DRIFT')
+
+
+def wait_for_held_process(h,initial,old_env,release):
+    # Type=simple start completion can precede child exec/chdir/environment setup.
+    # Wait only for that same invocation; never accept a crash/restart as readiness.
+    for attempt in range(51):
+        check(h['service']()==initial,'NEW_PROCESS_CHANGED_DURING_READINESS')
+        new_env=process_environment(int(initial['MainPID']))
+        env_ready=(new_env.get('AUTOPILOT_ADMISSION_MODE')=='HOLD' and
+            all(new_env.get(k)==v for k,v in old_env.items() if k.startswith('AUTOPILOT_')))
+        cwd_ready=Path('/proc/'+initial['MainPID']+'/cwd').resolve()==release
+        if env_ready and cwd_ready:
+            print(json.dumps({'held_process_ready':True,'readiness_poll':attempt}))
+            return new_env
+        if attempt==50:
+            check(env_ready,'LIVE_ENV_CHANGED')
+            check(cwd_ready,'LIVE_CODE_PATH')
+        time.sleep(0.1)
 
 
 def probe(h,release,old_env):
@@ -268,10 +286,7 @@ def install(bundle,helper_source):
                   initial['Group']==before['Group'] and initial['DropInPaths']==str(DROP),'NEW_UNIT_DRIFT')
             environment=run('systemctl','show',h['UNIT'],'--property=Environment','--value')
             check('AUTOPILOT_ADMISSION_MODE=HOLD' in environment.split(),'HOLD_NOT_EFFECTIVE')
-            new_env=process_environment(int(initial['MainPID']))
-            check(new_env.get('AUTOPILOT_ADMISSION_MODE')=='HOLD' and
-                  all(new_env.get(k)==v for k,v in old_env.items() if k.startswith('AUTOPILOT_')),'LIVE_ENV_CHANGED')
-            check(Path('/proc/'+initial['MainPID']+'/cwd').resolve()==release,'LIVE_CODE_PATH')
+            new_env=wait_for_held_process(h,initial,old_env,release)
             # Bounded soak: no need for a new task or publication to prove HOLD.
             for _ in range(10):
                 time.sleep(2)
