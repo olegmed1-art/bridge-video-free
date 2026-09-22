@@ -11,9 +11,9 @@ import tempfile
 import oracle_light_candidate_restore as candidate
 
 ROOT=candidate.ROOT
-ARCHIVE=ROOT/'candidate-backup-20260922.tar.gz'
-DOWNLOADED=ROOT/'candidate-backup-from-object-storage-20260922.tar.gz'
-DRILL='autopilot_restore_drill_20260922'
+ARCHIVE=ROOT/'candidate-backup-v2-20260922.tar.gz'
+DOWNLOADED=ROOT/'candidate-backup-v2-from-object-storage-20260922.tar.gz'
+DRILL='autopilot_restore_drill_v2_20260922'
 MEMBERS={'autopilot.dump','ledger.dump','health.dump','acl.sql','manifest.json'}
 
 
@@ -105,6 +105,7 @@ def restore():
             candidate.sql(candidate.TARGET,DRILL,(work/'acl.sql').read_text())
         fence=json.loads(candidate.sql(candidate.TARGET,'postgres',f"SELECT jsonb_build_array(pg_get_userbyid(datdba),datlocprovider,datlocale,(SELECT count(*) FROM aclexplode(coalesce(datacl,acldefault('d',datdba))) a WHERE a.grantee<>datdba)) FROM pg_database WHERE datname='{DRILL}';"))
         assert fence==['neondb_owner','b','C.UTF-8',0]
+        candidate.sql(candidate.TARGET,DRILL,candidate.SUPPORT_SQL)
         actual=json.loads(candidate.sql(candidate.TARGET,DRILL,candidate.MANIFEST))
         assert actual==manifest['data']
         names=','.join("'"+r+"'" for r in candidate.ROLES)

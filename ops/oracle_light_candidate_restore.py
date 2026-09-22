@@ -20,7 +20,15 @@ FILES = {
 }
 ROLES = ('neondb_owner','autopilot_runtime','autopilot_runtime_principal',
          'autopilot_callback','autopilot_callback_login','autopilot_light_worker_login',
-         'bridge_school_worker','bridge_school_worker_principal','bridge_school_reader','bridge_school_health')
+         'bridge_school_worker','bridge_school_worker_principal','bridge_school_reader','bridge_school_health','bridge_school_app')
+
+
+SUPPORT_SQL = """
+GRANT SELECT ON public.schema_migration TO bridge_school_reader;
+GRANT SELECT ON public.autopilot_operational_health_signal TO bridge_school_reader,bridge_school_health;
+GRANT bridge_school_reader TO bridge_school_app;
+GRANT bridge_school_app TO bridge_school_worker;
+"""
 
 
 def run(*args, input=None):
@@ -51,6 +59,10 @@ INSERT INTO restore_manifest SELECT 'effective_acl',count(*),
  has_function_privilege(r.oid,p.oid,'EXECUTE')::text,E'\n' ORDER BY r.rolname,n.nspname,p.proname,pg_get_function_identity_arguments(p.oid)))
  FROM pg_roles r CROSS JOIN pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
  WHERE n.nspname IN ('autopilot','autopilot_reconcile') AND r.rolname IN ('autopilot_callback_login','autopilot_light_worker_login','bridge_school_worker_principal');
+INSERT INTO restore_manifest SELECT 'public_support_acl',count(*),
+ md5(string_agg(r.rolname||':'||v.name||':'||has_table_privilege(r.oid,v.name,'SELECT')::text,E'\\n' ORDER BY r.rolname,v.name))
+ FROM pg_roles r CROSS JOIN (VALUES ('public.schema_migration'),('public.autopilot_operational_health_signal')) v(name)
+ WHERE r.rolname IN ('autopilot_callback_login','autopilot_light_worker_login','bridge_school_worker_principal');
 SELECT jsonb_object_agg(k,jsonb_build_array(n,h)) FROM restore_manifest;
 """
 
@@ -89,6 +101,7 @@ def main():
         sql(TARGET,DATABASE,(ROOT/'rehearsal-only-acl.sql').read_text())
     fence=json.loads(sql(TARGET,'postgres',f"SELECT jsonb_build_array(pg_get_userbyid(datdba),datlocprovider,datlocale,(SELECT count(*) FROM aclexplode(coalesce(datacl,acldefault('d',datdba))) a WHERE a.grantee<>datdba)) FROM pg_database WHERE datname='{DATABASE}';"))
     assert fence==['neondb_owner','b','C.UTF-8',0], 'candidate owner/locale/database ACL mismatch'
+    sql(TARGET,DATABASE,SUPPORT_SQL)
     assert sql(TARGET,'postgres',f'SELECT count(*) FROM pg_roles WHERE rolname IN ({names}) AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls);')=='0'
     actual=json.loads(sql(TARGET,DATABASE,MANIFEST))
     assert actual==expected, 'candidate differs; preserve for inspection, do not retry restore'

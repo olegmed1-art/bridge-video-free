@@ -21,6 +21,7 @@ class ArchiveSafety(unittest.TestCase):
                       files={k:hashlib.sha256(v).hexdigest() for k,v in files.items()},
                       data={'function_definitions':[97,'hash'],'effective_acl':[291,'hash']})
         if mode=='wrong_locale': manifest['locale']='en_US'
+        if mode=='wrong_roles': manifest['roles_nologin']=[]
         if mode=='corrupt_hash': manifest['files']['autopilot.dump']='0'*64
         files['manifest.json']=json.dumps(manifest).encode()
         if mode=='extra_path': files['../escape']=b'bad'
@@ -46,7 +47,7 @@ class ArchiveSafety(unittest.TestCase):
                 self.assertEqual(set(payloads),target.MEMBERS)
 
     def test_unsafe_archives_rejected(self):
-        for mode in ('wrong_locale','corrupt_hash','extra_path','symlink'):
+        for mode in ('wrong_locale','wrong_roles','corrupt_hash','extra_path','symlink'):
             with self.subTest(mode=mode),tempfile.TemporaryDirectory() as d:
                 path=Path(d)/'backup.tar.gz'
                 digest=self.make(path,mode)
