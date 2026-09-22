@@ -24,6 +24,17 @@ class ConsumerRouting(unittest.TestCase):
             with self.subTest(invalid=invalid),self.assertRaises(AssertionError):
                 target.target_dsn(invalid,'autopilot_callback_login','/tmp/ca.crt')
 
+    def test_worker_legacy_quoted_input_has_fixed_oracle_destination(self):
+        raw="'postgresql://bridge_school_worker_principal:synthetic%40password@legacy.neon.tech/neondb?sslmode=require&channel_binding=require'"
+        value=target.target_dsn(raw,'bridge_school_worker_principal','/tmp/ca.crt')
+        parsed=target.urlsplit(value)
+        self.assertEqual((parsed.hostname,parsed.port,parsed.path),('127.0.0.1',55432,'/autopilot'))
+        self.assertEqual(target.unquote(parsed.password),'synthetic@password')
+        for invalid in (raw.replace('legacy.neon.tech','attacker.invalid'),raw.replace('/neondb','/other'),
+                        raw.replace('legacy.neon.tech','legacy.neon.tech:9999'),raw+'\\n'):
+            with self.assertRaises(AssertionError):
+                target.target_dsn(invalid,'bridge_school_worker_principal','/tmp/ca.crt')
+
     def test_route_fails_closed_and_epoch_never_decreases(self):
         route={'version':1,'backend':'neon','database':'autopilot','epoch':4}
         with patch.object(target,'CA_SHA256',hashlib.sha256(b'certificate').hexdigest()):

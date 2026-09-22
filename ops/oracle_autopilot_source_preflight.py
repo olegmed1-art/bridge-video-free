@@ -15,10 +15,17 @@ PRINCIPALS = {
 
 
 def connection_parameters(raw, principal):
-    parsed = urlsplit(raw.strip())
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in (chr(39), chr(34)):
+        value = value[1:-1].strip()
+    parsed = urlsplit(value)
     query = parse_qs(parsed.query, keep_blank_values=True)
     user, password = unquote(parsed.username or ""), unquote(parsed.password or "")
-    if (parsed.scheme not in {"postgres", "postgresql"} or parsed.hostname not in {HOST, POOLER_HOST}
+    # Match the established worker validator's legacy Neon-host normalization.
+    # The supplied host is never contacted: libpq always receives fixed HOST.
+    worker_legacy_host = (principal == "bridge_school_worker_principal"
+                          and (parsed.hostname or "").endswith(".neon.tech"))
+    if (parsed.scheme not in {"postgres", "postgresql"} or (parsed.hostname not in {HOST, POOLER_HOST} and not worker_legacy_host)
             or parsed.port not in {None, 5432} or parsed.path != "/neondb"
             or parsed.fragment or user != principal or not password
             or any(ord(c) < 32 or ord(c) == 127 for c in user + password)
