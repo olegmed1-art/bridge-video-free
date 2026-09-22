@@ -83,4 +83,3 @@ jobs:
           OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
           OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
         run: python ops/oci_storage_audit.py
-
