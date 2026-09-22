@@ -15,10 +15,12 @@ concurrency:
 
 jobs:
   prepare:
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       DATABASE_URL: ${{ secrets.AUTOPILOT_CALLBACK_DATABASE_URL }}
+      SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout main
@@ -28,11 +30,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Install PostgreSQL client
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y postgresql-client >/dev/null
+      - name: Install pinned PostgreSQL client library
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
 
       - name: Read durable mailbox rotation signal
         id: signal
@@ -40,9 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${DATABASE_URL:-}" || { echo 'AUTOPILOT_CALLBACK_DATABASE_URL is not configured'; exit 1; }
-          row="$(psql "$DATABASE_URL" -XAt -F '|' -v ON_ERROR_STOP=1 -c "
-            SELECT mailbox_pr,used_dispatches,max_dispatches,readiness
-            FROM autopilot.mailbox_rotation_readiness();")"
+          row="$(python -m ops.github_autopilot_db_route mailbox)"
           IFS='|' read -r mailbox used capacity readiness <<<"$row"
           echo "mailbox=$mailbox" >> "$GITHUB_OUTPUT"
           echo "used=$used" >> "$GITHUB_OUTPUT"

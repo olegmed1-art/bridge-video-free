@@ -18,7 +18,7 @@ def main() -> None:
         "secrets.BRIDGE_WORKER_DATABASE_URL",
         "python database/runtime_worker_preflight.py",
         "secrets.BRIDGE_HEALTH_DATABASE_URL",
-        "python database/runtime_health_preflight.py",
+        "python -m ops.github_autopilot_db_route health",
     ]
     missing = [item for item in required if item not in text]
     if missing:

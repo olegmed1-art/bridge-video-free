@@ -23,6 +23,7 @@ TARGETS = {
     'diagnostics': ('DATABASE_URL','bridge_school_worker_principal','oracle_autopilot.reconcile_diagnostics',()),
     'reconcile': ('DATABASE_URL','bridge_school_worker_principal','oracle_autopilot.paused_reconcile',()),
     'next-step': ('DATABASE_URL','bridge_school_worker_principal','oracle_autopilot.next_step_reconcile',()),
+    'health': ('AUTOPILOT_HEALTH_DATABASE_URL','bridge_school_health_principal','database.runtime_health_preflight',()),
     'mailbox': ('DATABASE_URL','autopilot_callback_login','ops.github_autopilot_db_route',('--mailbox-read',)),
 }
 
