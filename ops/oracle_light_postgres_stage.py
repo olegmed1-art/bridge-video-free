@@ -31,8 +31,8 @@ def write_new(path, content, mode=0o600, owner=0):
 
 
 def config():
-    return """listen_addresses = '*'
-port = 5432
+    return """listen_addresses = '127.0.0.1'
+port = 55432
 ssl = on
 ssl_cert_file = '/run/bridge-tls/server.crt'
 ssl_key_file = '/run/bridge-tls/server.key'
@@ -80,7 +80,16 @@ def verify_container(item):
     assert item['Image'] == IMAGE
     assert item['Config']['Labels'].get('managed_by') == LABEL
     host = item['HostConfig']
-    assert host['PortBindings'] == {'5432/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '55432'}]}
+    assert host['NetworkMode'] == 'host' and not host['PortBindings']
+    assert host['NanoCpus'] == 1000000000 and host['PidsLimit'] == 128
+    assert host['LogConfig'] == {'Type':'json-file','Config':{'max-size':'10m','max-file':'3'}}
+    assert item['Config']['Cmd'] == ['postgres','-c','config_file=/run/bridge-config/postgresql.conf']
+    env = dict(entry.split('=',1) for entry in item['Config']['Env'])
+    assert env['POSTGRES_PASSWORD_FILE'] == '/run/secrets/admin-password'
+    assert env['POSTGRES_INITDB_ARGS'] == '--data-checksums --locale-provider=builtin --locale=C.UTF-8'
+    assert env.get('POSTGRES_USER','postgres') == 'postgres'
+    assert env.get('POSTGRES_DB','postgres') == 'postgres'
+    assert 'POSTGRES_PASSWORD' not in env and 'POSTGRES_HOST_AUTH_METHOD' not in env
     assert host['Memory'] == 2 * 1024**3 and not host['Privileged']
     assert host['RestartPolicy']['Name'] == 'no'
     mounts = {m['Destination']: (m['Source'], m['RW']) for m in item['Mounts']}
@@ -108,6 +117,8 @@ def main():
     if not marker.exists():
         assert not CONF.exists() and not UNIT.exists() and not (ROOT/'postgresql').exists()
         assert not run('docker','ps','-aq','--filter','name=^/'+NAME+'$')
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1',55432))
         CONF.mkdir(mode=0o700)
         for name in ('config','tls'):
             (CONF/name).mkdir(mode=0o755)
@@ -139,8 +150,8 @@ def main():
     if not run('docker','ps','-aq','--filter','name=^/'+NAME+'$'):
         run('docker','create','--name',NAME,'--label','managed_by='+LABEL,
             '--restart','no','--memory','2g','--cpus','1','--pids-limit','128',
-            '--log-opt','max-size=10m','--log-opt','max-file=3',
-            '--publish','127.0.0.1:55432:5432',
+            '--log-driver','json-file','--log-opt','max-size=10m','--log-opt','max-file=3',
+            '--network','host',
             '--mount','type=bind,src='+str(ROOT/'postgresql')+',dst=/var/lib/postgresql',
             '--mount','type=bind,src='+str(CONF/'config')+',dst=/run/bridge-config,readonly',
             '--mount','type=bind,src='+str(CONF/'tls')+',dst=/run/bridge-tls,readonly',
@@ -157,13 +168,13 @@ def main():
     run('systemctl','daemon-reload')
     run('systemctl','enable','--now',UNIT.name)
     for attempt in range(30):
-        ready=subprocess.run(['docker','exec',NAME,'pg_isready','-U','postgres'],capture_output=True,timeout=10)
+        ready=subprocess.run(['docker','exec',NAME,'pg_isready','-p','55432','-U','postgres'],capture_output=True,timeout=10)
         if ready.returncode==0:
             break
         time.sleep(2)
     else:
         raise TimeoutError('PostgreSQL readiness')
-    check=run('docker','exec','--user','postgres',NAME,'psql','-XAt','-U','postgres','-d','postgres',
+    check=run('docker','exec','--user','postgres',NAME,'psql','-XAt','-p','55432','-U','postgres','-d','postgres',
               '-c',"SELECT current_setting('ssl'),current_setting('server_version_num'),current_setting('data_checksums');")
     assert check.startswith('on|18') and check.endswith('|on')
     context=ssl.create_default_context(cafile=str(CONF/'ca.crt'))
