@@ -21,6 +21,31 @@ def test_only_source_defined_assertions_publish_codes():
         assert 'private' not in json.dumps(record)
 
 
+EXEC_START='{ path=/worker/python ; argv[]=/worker/python -m worker ; ignore_errors=no ; start_time=[Tue 2026-09-22 18:40:23 UTC] ; stop_time=[n/a] ; pid=42 ; code=(null) ; status=0/0 }'
+
+
+def test_reload_execution_accounting_is_not_command_drift(capsys):
+    before={'ExecStart':EXEC_START,'MainPID':'42','InvocationID':'same'}
+    after={**before,'WorkingDirectory':'/release','DropInPaths':str(target.DROP),
+        'ExecStart':EXEC_START.replace('Tue 2026-09-22 18:40:23 UTC','n/a').replace('pid=42','pid=0')}
+    target.attest_loaded_config(before,after,Path('/release'))
+    assert json.loads(capsys.readouterr().out)=={'pre_stop_mismatched_fields':['ExecStart']}
+
+
+@pytest.mark.parametrize('field,value',[
+    ('MainPID','43'),('InvocationID','different'),('NRestarts','1'),
+    ('WorkingDirectory','/wrong'),('DropInPaths','/extra'),
+    ('ExecStart',EXEC_START.replace(' -m worker',' -m wrong')),
+    ('ExecStart',EXEC_START+' { path=/extra ; }'),
+    ('ExecStart',EXEC_START.replace('ignore_errors=no','ignore_errors=yes')),
+])
+def test_reload_still_rejects_process_and_execution_drift(field,value):
+    before={'ExecStart':EXEC_START,'MainPID':'42','InvocationID':'same','NRestarts':'0'}
+    after={**before,'WorkingDirectory':'/release','DropInPaths':str(target.DROP),field:value}
+    with pytest.raises(target.InstallBlocked):
+        target.attest_loaded_config(before,after,Path('/release'))
+
+
 def harness(tmp_path,monkeypatch,failure=None):
     route=tmp_path/'route'
     route.mkdir()
