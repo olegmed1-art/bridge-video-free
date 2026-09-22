@@ -72,10 +72,47 @@ def normalize_health_dsn(raw: str) -> str:
     return value
 
 
+def check_autopilot_health(cur, *, required=False):
+    cur.execute("SELECT to_regclass('public.autopilot_operational_health_signal')")
+    if cur.fetchone()[0] is not None:
+        cur.execute(
+            "SELECT signal_key,severity FROM public.autopilot_operational_health_signal ORDER BY signal_key"
+        )
+        autopilot_signals = cur.fetchall()
+        if required and not autopilot_signals:
+            fail("Oracle autopilot health view returned no signals")
+        autopilot_critical = [key for key, sev in autopilot_signals if sev == "critical"]
+        autopilot_warning = [key for key, sev in autopilot_signals if sev == "warning"]
+        print(
+            "RUNTIME_AUTOPILOT_HEALTH: "
+            f"critical={len(autopilot_critical)} warning={len(autopilot_warning)} "
+            f"signals={len(autopilot_signals)}"
+        )
+        if autopilot_critical:
+            fail(
+                "critical Autopilot operational health signal detected: "
+                + ",".join(autopilot_critical)
+            )
+    else:
+        if required:
+            fail("Oracle autopilot health view is missing")
+        print("RUNTIME_AUTOPILOT_HEALTH: SKIP view_not_installed")
+
+
 def main() -> None:
     dsn = normalize_health_dsn(os.environ.get("BRIDGE_HEALTH_DATABASE_URL", ""))
     if not dsn:
         fail("BRIDGE_HEALTH_DATABASE_URL is not configured")
+    backend = os.environ.get("AUTOPILOT_DB_BACKEND", "neon")
+    if backend not in {"neon", "postgresql"}:
+        fail("unknown autopilot health backend")
+    autopilot_dsn = None
+    if backend == "postgresql":
+        from oracle_autopilot.database_target import validate_pinned_dsn
+        try:
+            autopilot_dsn = validate_pinned_dsn(os.environ.get("AUTOPILOT_HEALTH_DATABASE_URL", ""), expected_user=EXPECTED_PRINCIPAL)
+        except ValueError:
+            fail("Oracle autopilot health connection is not pinned")
     try:
         with psycopg.connect(dsn, connect_timeout=10, application_name="bridge-school-health-monitor") as conn:
             with conn.cursor() as cur:
@@ -131,26 +168,24 @@ def main() -> None:
                 if severity == "critical" or int(critical_count or 0) > 0:
                     fail("critical operational health signal detected")
 
-                cur.execute("SELECT to_regclass('public.autopilot_operational_health_signal')")
-                if cur.fetchone()[0] is not None:
-                    cur.execute(
-                        "SELECT signal_key,severity FROM public.autopilot_operational_health_signal ORDER BY signal_key"
-                    )
-                    autopilot_signals = cur.fetchall()
-                    autopilot_critical = [key for key, sev in autopilot_signals if sev == "critical"]
-                    autopilot_warning = [key for key, sev in autopilot_signals if sev == "warning"]
-                    print(
-                        "RUNTIME_AUTOPILOT_HEALTH: "
-                        f"critical={len(autopilot_critical)} warning={len(autopilot_warning)} "
-                        f"signals={len(autopilot_signals)}"
-                    )
-                    if autopilot_critical:
-                        fail(
-                            "critical Autopilot operational health signal detected: "
-                            + ",".join(autopilot_critical)
-                        )
-                else:
-                    print("RUNTIME_AUTOPILOT_HEALTH: SKIP view_not_installed")
+                if autopilot_dsn is None:
+                    check_autopilot_health(cur)
+
+        if autopilot_dsn is not None:
+            with psycopg.connect(autopilot_dsn, connect_timeout=10, application_name="autopilot-oracle-health-monitor") as oracle:
+                oracle.read_only = True
+                with oracle.cursor() as cur:
+                    cur.execute("""SELECT current_user, current_database(),
+                        pg_has_role(current_user, 'bridge_school_health', 'member'),
+                        has_table_privilege(current_user, 'public.autopilot_operational_health_signal', 'SELECT'),
+                        has_table_privilege(current_user, 'autopilot.task', 'INSERT,UPDATE,DELETE,TRUNCATE'),
+                        has_schema_privilege(current_user, 'public', 'CREATE'),
+                        rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
+                        FROM pg_roles WHERE rolname=current_user""")
+                    row = cur.fetchone()
+                    if not row or row[:4] != (EXPECTED_PRINCIPAL, "autopilot", True, True) or any(row[4:]):
+                        fail("Oracle autopilot health principal exceeds or lacks required privileges")
+                    check_autopilot_health(cur, required=True)
 
         print(
             "RUNTIME_DB_HEALTH: PASS "

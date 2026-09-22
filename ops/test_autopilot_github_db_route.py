@@ -48,7 +48,7 @@ class ConsumerRouting(unittest.TestCase):
         self.assertIsNotNone(p.poll())
 
     def test_only_approved_entrypoints_exist(self):
-        self.assertEqual(set(target.TARGETS),{'role-callback','codex-ack','codex-terminal','codex-publication','diagnostics','reconcile','next-step','mailbox'})
+        self.assertEqual(set(target.TARGETS),{'role-callback','codex-ack','codex-terminal','codex-publication','diagnostics','reconcile','next-step','mailbox','health'})
         self.assertEqual(target.TARGETS['codex-ack'][2:],('oracle_autopilot.github_codex_callback',('ack',)))
         self.assertEqual(target.TARGETS['codex-terminal'][2:],('oracle_autopilot.github_codex_callback',('terminal',)))
         self.assertEqual(target.TARGETS['codex-publication'][2],'oracle_autopilot.github_codex_publication')

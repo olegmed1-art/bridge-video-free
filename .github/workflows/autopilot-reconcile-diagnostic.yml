@@ -9,9 +9,9 @@ permissions:
 
 jobs:
   diagnose:
-    if: github.repository == 'olegmed1-art/bridge-video-free'
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -20,5 +20,6 @@ jobs:
       - name: Probe existing runner connection and read-only SQL
         env:
           DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}
-        run: python -m oracle_autopilot.reconcile_diagnostics
+        run: python -m ops.github_autopilot_db_route diagnostics

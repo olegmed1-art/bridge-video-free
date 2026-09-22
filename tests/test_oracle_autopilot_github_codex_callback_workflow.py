@@ -52,7 +52,7 @@ def test_only_guarded_publisher_can_write_repository():
     assert "permissions:\n      contents: write" in publisher
     assert "vars.AUTOPILOT_BOUNDED_PUBLICATION_ENABLED == 'true'" in publisher
     assert "!contains(github.event.comment.body, 'AUTOPILOT_CODEX_PUBLICATION_V1')" in before
-    assert "oracle_autopilot.github_codex_publication" in publisher
+    assert "ops.github_autopilot_db_route codex-publication" in publisher
     assert "issues: write" not in source
     assert "pull-requests: write" not in source
     assert "actions: write" not in source
@@ -61,8 +61,8 @@ def test_only_guarded_publisher_can_write_repository():
     assert "github.event.pull_request.head" not in source
     assert "persist-credentials: false" in source
     assert "AUTOPILOT_CALLBACK_DATABASE_URL" in source
-    assert "oracle_autopilot.github_codex_callback ack" in source
-    assert "oracle_autopilot.github_codex_callback terminal" in source
+    assert "ops.github_autopilot_db_route codex-ack" in source
+    assert "ops.github_autopilot_db_route codex-terminal" in source
 
 
 

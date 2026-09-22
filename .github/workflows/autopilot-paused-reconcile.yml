@@ -23,8 +23,9 @@ concurrency:
 
 jobs:
   reconcile:
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout main
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -40,20 +41,23 @@ jobs:
         id: preflight
         env:
           DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}
-        run: python -m oracle_autopilot.reconcile_diagnostics
+        run: python -m ops.github_autopilot_db_route diagnostics
 
       - name: Reconcile at most three paused items from fresh evidence
         env:
           DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-        run: python -m oracle_autopilot.paused_reconcile
+        run: python -m ops.github_autopilot_db_route reconcile
 
       - name: Admit bounded read-only next steps
         if: ${{ !cancelled() && steps.preflight.outcome == 'success' }}
         env:
           DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-        run: python -m oracle_autopilot.next_step_reconcile
+        run: python -m ops.github_autopilot_db_route next-step

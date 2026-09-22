@@ -16,6 +16,7 @@ concurrency:
 jobs:
   acknowledge:
     if: >-
+      github.ref == 'refs/heads/main' &&
       github.event.repository.id == 1330085090 &&
       github.event.comment.user.id == 315099490 &&
       github.event.comment.author_association == 'OWNER' &&
@@ -23,7 +24,7 @@ jobs:
       startsWith(github.event.comment.body, '@codex') &&
       contains(github.event.comment.body, 'SLAVIK_CODEX_DISPATCH_V1')
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - name: Checkout immutable default-branch receiver
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -42,15 +43,17 @@ jobs:
       - name: Require Codex bot acknowledgement and ingest delivery
         env:
           AUTOPILOT_CALLBACK_DATABASE_URL: ${{ secrets.AUTOPILOT_CALLBACK_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test -n "${AUTOPILOT_CALLBACK_DATABASE_URL:-}"
           test -n "${GITHUB_TOKEN:-}"
-          python -m oracle_autopilot.github_codex_callback ack
+          python -m ops.github_autopilot_db_route codex-ack
 
   terminal:
     if: >-
+      github.ref == 'refs/heads/main' &&
       github.event.repository.id == 1330085090 &&
       github.event.comment.user.id == 199175422 &&
       github.event.comment.author_association == 'NONE' &&
@@ -61,7 +64,7 @@ jobs:
         github.event.comment.body == 'Codex couldn''t complete this request. Try again later.'
       )
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - name: Checkout immutable default-branch receiver
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -80,17 +83,19 @@ jobs:
       - name: Validate pinned Codex App result and ingest terminal receipt
         env:
           AUTOPILOT_CALLBACK_DATABASE_URL: ${{ secrets.AUTOPILOT_CALLBACK_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test -n "${AUTOPILOT_CALLBACK_DATABASE_URL:-}"
           test -n "${GITHUB_TOKEN:-}"
-          python -m oracle_autopilot.github_codex_callback terminal
+          python -m ops.github_autopilot_db_route codex-terminal
 
   publish:
     # Disabled-by-default receiver. Activation requires 0338/0339/0340, exact-head CI,
     # independent security review, and a separate owner gate. Other callback jobs stay read-only.
     if: >-
+      github.ref == 'refs/heads/main' &&
       vars.AUTOPILOT_BOUNDED_PUBLICATION_ENABLED == 'true' &&
       github.event.repository.id == 1330085090 &&
       github.event.comment.user.id == 199175422 &&
@@ -105,7 +110,7 @@ jobs:
       group: autopilot-codex-publication-${{ github.event.issue.number }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - name: Checkout immutable default-branch receiver
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -121,9 +126,10 @@ jobs:
       - name: Authorize, publish with exact-head CAS, and verify readback
         env:
           AUTOPILOT_CALLBACK_DATABASE_URL: ${{ secrets.AUTOPILOT_CALLBACK_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test -n "${AUTOPILOT_CALLBACK_DATABASE_URL:-}"
           test -n "${GITHUB_TOKEN:-}"
-          python -m oracle_autopilot.github_codex_publication
+          python -m ops.github_autopilot_db_route codex-publication
