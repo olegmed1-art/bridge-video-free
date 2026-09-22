@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import pwd
-import re
 import signal
 import stat
 import subprocess
@@ -20,6 +19,25 @@ DROP_DIR = Path('/etc/systemd/system/school-autopilot-production-light.service.d
 DROP = DROP_DIR/'40-reviewed-runtime-hold.conf'
 TEMP_DROP = DROP_DIR/'.40-reviewed-runtime-hold.conf.tmp'
 RELEASES = Path('/opt/bridge-school/school-autopilot-production-light/releases')
+SAFE_GUARDS = frozenset({
+    'ACTIVE_LOOP_SEEN','ADMISSION_ALREADY_CONFIGURED','CURRENT_MAIN_CHANGED',
+    'DROP_IN_ALREADY_EXISTS','HOLD_CONNECTION_NOT_ATTESTED','HOLD_NOT_EFFECTIVE',
+    'HOST_IDENTITY','INSTALL_INTERRUPTED','LIVE_CODE_PATH','LIVE_ENV_CHANGED',
+    'LOCK_IDENTITY','LOCK_METADATA','LOCK_REPLACED','MAIN_READ_FAILED',
+    'MAIN_REDIRECT_REJECTED','MAIN_RESPONSE_SIZE','NEW_PROCESS_MISSING',
+    'NEW_PROCESS_NOT_STABLE','NEW_PROCESS_RESTARTED','NEW_UNIT_DRIFT',
+    'OLD_PROCESS_CHANGED_BEFORE_STOP','OLD_PROCESS_NOT_QUIESCENT',
+    'POST_START_QUEUE_OR_FENCE_DRIFT','PRE_STOP_CONFIG_CHANGED','PRE_STOP_DRIFT',
+    'PRE_STOP_HOLD_NOT_EFFECTIVE','PRE_STOP_LOADED_CONFIG_DRIFT','PROBE_IDENTITY',
+    'PROBE_OUTPUT_SIZE','PROTECTED_CONFIG_CHANGED','PYTHON_IMPORT_OVERRIDE',
+    'QUEUE_CHANGED_DURING_STOP','RELEASE_DIRECTORY_MODE','RELEASE_FILE_DRIFT',
+    'RELEASE_INVENTORY_DRIFT','RELEASE_LINK','RELEASE_OWNER_OR_LINK',
+    'RELEASE_PARENT','RESTRICTED_PROBE_FAILED','ROLLBACK_CONFIG_DRIFT',
+    'ROLLBACK_DROP_IN_DRIFT','ROLLBACK_NOT_CONFIRMED','ROLLBACK_NOT_STABLE',
+    'ROLLBACK_PARTIAL_DROP_IN','ROLLBACK_QUEUE_DRIFT','ROLLBACK_QUEUE_UNCERTAIN',
+    'ROLLBACK_STOP_NOT_CONFIRMED','ROLLBACK_TEMP_METADATA','ROUTE_CHANGED',
+    'STOP_NOT_CONFIRMED',
+})
 
 
 def run(*args,timeout=45):
@@ -37,6 +55,11 @@ def fsync_directory(path):
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def diagnostic_guard(exc):
+    value=str(exc)
+    return value if isinstance(exc,RuntimeError) and value in SAFE_GUARDS else 'SYSTEM_ERROR'
 
 
 def process_environment(pid):
@@ -321,6 +344,6 @@ if __name__=='__main__':
         try:
             install(json.loads(base64.b64decode(BUNDLE_DATA)),base64.b64decode(HELPER_DATA).decode())
         except BaseException as exc:
-            guard=str(exc) if isinstance(exc,RuntimeError) and re.fullmatch('[A-Z_]{1,64}',str(exc)) else 'SYSTEM_ERROR'
-            print(json.dumps({'runtime_hold':'NOT_CONFIRMED','error_type':type(exc).__name__,'guard':guard}))
+            print(json.dumps({'runtime_hold':'NOT_CONFIRMED','error_type':type(exc).__name__,
+                              'guard':diagnostic_guard(exc)}))
             sys.exit(2)

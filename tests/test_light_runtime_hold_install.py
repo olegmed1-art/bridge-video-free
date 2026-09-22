@@ -11,6 +11,12 @@ import pytest
 from ops import oracle_light_runtime_hold_install as target
 
 
+def test_diagnostic_guard_is_explicitly_allowlisted():
+    assert target.diagnostic_guard(RuntimeError('NEW_UNIT_DRIFT'))=='NEW_UNIT_DRIFT'
+    assert target.diagnostic_guard(RuntimeError('PRIVATE_SECRET'))=='SYSTEM_ERROR'
+    assert target.diagnostic_guard(ValueError('NEW_UNIT_DRIFT'))=='SYSTEM_ERROR'
+
+
 def harness(tmp_path,monkeypatch,failure=None):
     route=tmp_path/'route'
     route.mkdir()
