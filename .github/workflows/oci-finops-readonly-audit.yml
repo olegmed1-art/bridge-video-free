@@ -116,39 +116,79 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          instance="$(oci compute instance get --instance-id "$INSTANCE_ID" --output json)"
-          INSTANCE_JSON="$instance" python - <<'PY' > "$RUNNER_TEMP/capacity.txt"
+          instances="$(oci compute instance list -c "$OCI_TENANCY" --all --output json)"
+          INSTANCES_JSON="$instances" python - <<'PY' > "$RUNNER_TEMP/capacity.txt"
           import json, os
-          d=json.loads(os.environ['INSTANCE_JSON'])['data']
-          cfg=d.get('shape-config') or {}
-          print('shape='+str(d.get('shape') or 'unknown'))
-          print('ocpus='+str(cfg.get('ocpus') or 'unknown'))
-          print('memory_gb='+str(cfg.get('memory-in-gbs') or cfg.get('memoryInGBs') or 'unknown'))
-          print('lifecycle_state='+str(d.get('lifecycle-state') or 'unknown'))
-          print('availability_domain='+str(d.get('availability-domain') or 'unknown'))
+          xs=json.loads(os.environ['INSTANCES_JSON']).get('data') or []
+          matches=[
+              x for x in xs
+              if x.get('display-name')=='bridge-school-autopilot-lite'
+              and x.get('shape')=='VM.Standard.A1.Flex'
+              and x.get('lifecycle-state') not in {'TERMINATED','TERMINATING'}
+          ]
+          print('light_instance_active='+('yes' if len(matches)==1 else 'no'))
+          if len(matches)==1:
+              d=matches[0]; cfg=d.get('shape-config') or {}
+              print('light_instance_id='+str(d.get('id') or 'unknown'))
+              print('shape='+str(d.get('shape') or 'unknown'))
+              print('ocpus='+str(cfg.get('ocpus') or 'unknown'))
+              print('memory_gb='+str(cfg.get('memory-in-gbs') or 'unknown'))
+              print('lifecycle_state='+str(d.get('lifecycle-state') or 'unknown'))
+              print('availability_domain='+str(d.get('availability-domain') or 'unknown'))
+          elif matches:
+              raise SystemExit('multiple active light instances')
           PY
-          ad="$(grep '^availability_domain=' "$RUNNER_TEMP/capacity.txt" | cut -d= -f2-)"
-          compartment="$(printf '%s' "$instance" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["compartment-id"])')"
-          attachment="$(oci compute boot-volume-attachment list -c "$compartment" --availability-domain "$ad" --instance-id "$INSTANCE_ID" --all --output json)"
-          boot_id="$(printf '%s' "$attachment" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin).get("data",[]) if x.get("lifecycle-state") in {"ATTACHED","ATTACHING"}]; print(xs[0].get("boot-volume-id","") if len(xs)==1 else "")')"
+          light_id="$(grep '^light_instance_id=' "$RUNNER_TEMP/capacity.txt" | cut -d= -f2- || true)"
+          boot_id=''
+          if [[ -n "$light_id" && "$light_id" != unknown ]]; then
+            ad="$(grep '^availability_domain=' "$RUNNER_TEMP/capacity.txt" | cut -d= -f2-)"
+            attachment="$(oci compute boot-volume-attachment list -c "$OCI_TENANCY" --availability-domain "$ad" --instance-id "$light_id" --all --output json)"
+            boot_id="$(printf '%s' "$attachment" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin).get("data",[]) if x.get("lifecycle-state") in {"ATTACHED","ATTACHING"}]; print(xs[0].get("boot-volume-id","") if len(xs)==1 else "")')"
+          fi
+          boots="$(oci bv boot-volume list -c "$OCI_TENANCY" --all --output json)"
+          if [[ -z "$boot_id" ]]; then
+            boot_id="$(BOOTS_JSON="$boots" python - <<'PY'
+          import json, os
+          xs=json.loads(os.environ['BOOTS_JSON']).get('data') or []
+          xs=[x for x in xs if x.get('display-name')=='bridge-school-autopilot-lite (Boot Volume)' and x.get('lifecycle-state') not in {'TERMINATED','TERMINATING'}]
+          print(xs[0].get('id','') if len(xs)==1 else '')
+          PY
+            )"
+          fi
           [[ -n "$boot_id" ]]
           boot="$(oci bv boot-volume get --boot-volume-id "$boot_id" --output json)"
-          printf 'boot_volume_gb=%s\n' "$(printf '%s' "$boot" | python -c 'import json,sys; print(json.load(sys.stdin)["data"].get("size-in-gbs","unknown"))')" >> "$RUNNER_TEMP/capacity.txt"
+          BOOT_JSON="$boot" python - <<'PY' >> "$RUNNER_TEMP/capacity.txt"
+          import json, os
+          d=json.loads(os.environ['BOOT_JSON'])['data']
+          print('boot_volume_gb='+str(d.get('size-in-gbs','unknown')))
+          print('boot_volume_state='+str(d.get('lifecycle-state','unknown')))
+          PY
           assignment="$(oci bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id "$boot_id" --output json || true)"
           ASSIGNMENT_JSON="$assignment" python - <<'PY' >> "$RUNNER_TEMP/capacity.txt"
           import json, os
-          try:
-              d=json.loads(os.environ.get('ASSIGNMENT_JSON') or '{}').get('data') or []
-          except Exception:
-              d=[]
+          try: d=json.loads(os.environ.get('ASSIGNMENT_JSON') or '{}').get('data') or []
+          except Exception: d=[]
           print('backup_policy_assigned='+('yes' if d else 'no'))
           PY
-          backups="$(oci bv boot-volume-backup list -c "$compartment" --boot-volume-id "$boot_id" --all --output json)"
+          backups="$(oci bv boot-volume-backup list -c "$OCI_TENANCY" --boot-volume-id "$boot_id" --all --output json)"
           BACKUPS_JSON="$backups" python - <<'PY' >> "$RUNNER_TEMP/capacity.txt"
           import json, os
           xs=json.loads(os.environ['BACKUPS_JSON']).get('data') or []
-          available=[x for x in xs if x.get('lifecycle-state')=='AVAILABLE']
-          print('available_boot_backups='+str(len(available)))
+          print('available_boot_backups='+str(sum(x.get('lifecycle-state')=='AVAILABLE' for x in xs)))
+          PY
+          volumes="$(oci bv volume list -c "$OCI_TENANCY" --all --output json)"
+          BOOTS_JSON="$boots" VOLUMES_JSON="$volumes" python - <<'PY' >> "$RUNNER_TEMP/capacity.txt"
+          import json, os
+          terminal={'TERMINATED','TERMINATING'}
+          boots=json.loads(os.environ['BOOTS_JSON']).get('data') or []
+          vols=json.loads(os.environ['VOLUMES_JSON']).get('data') or []
+          active_boot=[x for x in boots if x.get('lifecycle-state') not in terminal]
+          active_vol=[x for x in vols if x.get('lifecycle-state') not in terminal]
+          total=sum(int(x.get('size-in-gbs') or 0) for x in active_boot+active_vol)
+          print('active_boot_volumes='+str(len(active_boot)))
+          print('active_block_volumes='+str(len(active_vol)))
+          print('active_block_storage_gb='+str(total))
+          print('always_free_remaining_estimate_gb='+str(max(0,200-total)))
           PY
           budgets="$(oci budgets budget budget list -c "$OCI_TENANCY" --display-name bridge-school-dds3-trial-guard --all --output json || true)"
           BUDGETS_JSON="$budgets" python - <<'PY' >> "$RUNNER_TEMP/capacity.txt"
