@@ -30,6 +30,25 @@ BEGIN
    RAISE EXCEPTION 'AUTOPILOT_PROVIDER_BUDGET_SOURCE_DRIFT';
   END IF;
   source:=replace(source,anchor,replacement);
+  IF saved.function_key='autopilot.reconcile_paused_project_work(uuid,text,text,text,text)' THEN
+   -- Disable global-health rearm for every task kind. Target disposition
+   -- closure remains earlier in the function and retains its existing gates.
+   anchor:=$a$ OR (
+   blocker_action='PROVIDER_HOLD'
+   AND EXISTS (
+     SELECT 1
+     FROM autopilot.provider_circuit_state pcs
+     WHERE pcs.provider_id='CODEX'
+       AND pcs.state='CLOSED'
+       AND pcs.last_success_at IS NOT NULL
+       AND pcs.last_success_at>w.updated_at
+   )
+ )$a$;
+   IF (length(source)-length(replace(source,anchor,'')))/length(anchor)<>1 THEN
+    RAISE EXCEPTION 'AUTOPILOT_PROVIDER_BUDGET_LEGACY_DRIFT';
+   END IF;
+   source:=replace(source,anchor,'');
+  END IF;
   IF saved.function_key='autopilot.reconcile_project_progress(uuid,timestamp with time zone,text,timestamp with time zone)' THEN
    anchor:=$a$IF w.result_code='ROLE_DISPATCH_RESPONSE_INVALID' THEN$a$;
    IF strpos(source,anchor)=0 THEN RAISE EXCEPTION 'AUTOPILOT_PROVIDER_BUDGET_TRANSPORT_DRIFT'; END IF;

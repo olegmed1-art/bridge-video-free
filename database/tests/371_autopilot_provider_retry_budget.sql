@@ -43,7 +43,7 @@ BEGIN
 END $f$;
 
 DO $test$
-DECLARE wid uuid; proof uuid; tid uuid; stamp timestamptz; action text;
+DECLARE wid uuid; proof uuid; other_kind uuid; tid uuid; stamp timestamptz; action text;
  code text; n integer:=0; before_row jsonb;
 BEGIN
  -- A fresh global provider timestamp alone must never renew retry authority.
@@ -71,6 +71,21 @@ BEGIN
    RAISE EXCEPTION '0371_PROVIDER_HEAD_BUDGET_RESET';
   END IF;
  END LOOP;
+
+ -- Global health must not rearm other task kinds with AUDIT-only lineage.
+ other_kind:=pg_temp.provider_budget_fixture('non-audit-kind',999874);
+ UPDATE autopilot.project_work_item SET task_kind='GITHUB_EVENT_RUNTIME_E2E_CANARY',
+   result_code='CODEX_ACK_DEADLINE_EXCEEDED',hold_reason='PROVIDER_HOLD'
+   WHERE work_item_id=other_kind;
+ SELECT to_jsonb(w) INTO before_row FROM autopilot.project_work_item w WHERE work_item_id=other_kind;
+ action:=autopilot.reconcile_paused_project_work(other_kind,repeat('d',64),NULL,NULL,'Fresh provider health');
+ IF action<>'NO_CHANGE' OR (SELECT to_jsonb(w) FROM autopilot.project_work_item w WHERE work_item_id=other_kind) IS DISTINCT FROM before_row THEN
+  RAISE EXCEPTION '0371_NON_AUDIT_PROVIDER_BYPASS';
+ END IF;
+ action:=autopilot.reconcile_paused_project_work(other_kind,repeat('e',64),'MERGED',NULL,'Verified target merged');
+ IF action<>'CLOSE_SUPERSEDED' OR (SELECT state FROM autopilot.project_work_item WHERE work_item_id=other_kind)<>'DONE' THEN
+  RAISE EXCEPTION '0371_TARGET_DISPOSITION_CLOSURE_BLOCKED';
+ END IF;
 
  -- Build independent real task/outbox proof on the same delivery route.
  -- Fixture mutations stay inside this rolled-back test transaction.

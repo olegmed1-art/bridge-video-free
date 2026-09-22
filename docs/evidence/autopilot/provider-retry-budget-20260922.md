@@ -21,7 +21,9 @@ before registering a canary. The resident worker, callback receiver, and protect
 bridge were left active. No old work status, retry receipt or dispatch was reset.
 
 Migration 0371 adds provider deadline/generic-failure audit outcomes to the
-existing bounded progress controller and denies their legacy rearm path. It
+existing bounded progress controller and removes global-health-only legacy rearm
+for every task kind, including unsupported non-audit work. Verified target
+disposition closure retains its existing gates. It
 requires a newer accepted non-provider-failure result on the exact same transport
 route. A global circuit timestamp or green CI is insufficient. The existing
 atomic work/head receipt and lifetime cap remain authoritative. Existing same-head
@@ -31,7 +33,9 @@ by the migration, and no new execution grants are added.
 Regression tests run on disposable PostgreSQL 18 with real task triggers. They
 exercise all three failure codes, global-health/CI false evidence, legacy bypass,
 same-head receipt retention, provider-failure callback rejection, wrong-route
-rejection, owner holds, one positive admission and stale-snapshot replay.
+rejection, owner holds, unsupported task kinds, retained disposition closure,
+one positive admission and stale-snapshot replay. The 0353 regression now expects
+global provider health alone to preserve PAUSED rather than grant a retry.
 
 Rollback restores the saved function definitions but retains all progress and
 send-intent receipts. It is unsafe to resume the old reconciler after rollback;
