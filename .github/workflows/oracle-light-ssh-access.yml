@@ -2,10 +2,10 @@ name: Oracle Light SSH access
 
 on:
   pull_request:
-    paths: ['.github/workflows/oracle-light-ssh-access.yml']
+    paths: ['.github/workflows/oracle-light-ssh-access.yml', 'ops/oracle_light_rdc_diagnose.py']
   push:
     branches: [main]
-    paths: ['.github/workflows/oracle-light-ssh-access.yml']
+    paths: ['.github/workflows/oracle-light-ssh-access.yml', 'ops/oracle_light_rdc_diagnose.py']
   workflow_dispatch:
 
 permissions:
@@ -57,7 +57,7 @@ jobs:
           echo 'LIGHT_SSH_KEY=VALID'
           bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
           echo 'LIGHT_SSH_HOST=VERIFIED_AGAINST_OWNER_ACCEPTED_FINGERPRINT'
-          if ! ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 ubuntu@92.5.47.149 'printf "LIGHT_SSH_LOGIN=OK\n"; id; uptime; df -h /; systemctl show remote-desktop-commander.service -p LoadState -p ActiveState -p SubState -p NRestarts' > "$work/result" 2> "$work/error"; then
+          if ! ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 ubuntu@92.5.47.149 'python3 -' < ops/oracle_light_rdc_diagnose.py > "$work/result" 2> "$work/error"; then
             echo 'LIGHT_SSH_LOGIN=FAILED'
             if grep -q 'Permission denied' "$work/error"; then echo 'LIGHT_SSH_FAILURE=AUTHORIZATION'; else echo 'LIGHT_SSH_FAILURE=TRANSPORT_OR_REMOTE_COMMAND'; fi
             echo 'LIGHT_SSH_PUBLIC_KEY_FOR_OWNER_INSTALL_BEGIN'
