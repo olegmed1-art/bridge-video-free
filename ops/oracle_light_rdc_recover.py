@@ -53,6 +53,11 @@ def main():
     privilege = run(['sudo', '-n', '/usr/bin/true'])
     if privilege.returncode:
         raise RuntimeError('noninteractive_sudo_unavailable')
+    # Atomic, root-owned one-shot marker. Retained even if restart fails:
+    # a retry requires a separately reviewed recovery decision.
+    once = run(['sudo', '-n', 'mkdir', '--', '/var/lib/bridge-light-rdc-recovery-20260922'])
+    if once.returncode:
+        raise RuntimeError('recovery_already_attempted_or_marker_unavailable')
     # Explicit owner-authorized short restart of this agent only. No VM restart,
     # sudoers changes, key export, dependency changes or application service changes.
     restart = run(['sudo', '-n', 'systemctl', 'restart', UNIT], timeout=45)
