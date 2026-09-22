@@ -83,7 +83,16 @@ jobs:
           from pathlib import Path
           p=Path(os.environ['WORK'])
           def data(name):
-              return json.loads((p/name).read_text()).get('data',[])
+              raw=(p/name).read_text().strip()
+              if not raw:
+                  print(f'AUDIT_SOURCE_EMPTY {name}')
+                  return []
+              try:
+                  value=json.loads(raw).get('data',[])
+              except json.JSONDecodeError:
+                  print(f'AUDIT_SOURCE_INVALID_JSON {name}')
+                  return []
+              return value
           def short(v):
               if not isinstance(v,str): return v
               return ('…'+v[-12:]) if v.startswith('ocid1.') else v
