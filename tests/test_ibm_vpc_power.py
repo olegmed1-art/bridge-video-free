@@ -79,7 +79,7 @@ class IbmVpcPowerContractTests(unittest.TestCase):
         error = urllib.error.HTTPError("https://example.invalid", 403, "denied", {}, None)
         with mock.patch("urllib.request.urlopen", side_effect=error):
             with self.assertRaisesRegex(
-                BoundedClientError, "^provider_http_403_shape_empty$"
+                BoundedClientError, "^provider_http_403_shape_empty_category_unknown$"
             ):
                 _request_json(request)
 
@@ -110,7 +110,7 @@ class IbmVpcPowerContractTests(unittest.TestCase):
         )
         with mock.patch("urllib.request.urlopen", side_effect=error):
             with self.assertRaisesRegex(
-                BoundedClientError, "^provider_http_403_shape_json_object$"
+                BoundedClientError, "^provider_http_403_shape_json_object_category_unknown$"
             ):
                 _request_json(request)
 
@@ -122,10 +122,24 @@ class IbmVpcPowerContractTests(unittest.TestCase):
         )
         with mock.patch("urllib.request.urlopen", side_effect=error):
             with self.assertRaisesRegex(
-                BoundedClientError, "^provider_http_403_shape_html$"
+                BoundedClientError, "^provider_http_403_shape_html_category_unknown$"
             ) as caught:
                 _request_json(request)
         self.assertNotIn("private", str(caught.exception))
+
+    def test_http_error_classifies_known_denial_without_echoing_message(self) -> None:
+        request = mock.Mock()
+        body = BytesIO(b'{"message":"request blocked by context-based restrictions"}')
+        error = urllib.error.HTTPError(
+            "https://example.invalid", 403, "denied", {}, body
+        )
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(
+                BoundedClientError,
+                "^provider_http_403_shape_json_object_category_context_restriction$",
+            ) as caught:
+                _request_json(request)
+        self.assertNotIn("request blocked", str(caught.exception))
 
     def test_iam_failure_is_stage_specific(self) -> None:
         with mock.patch(

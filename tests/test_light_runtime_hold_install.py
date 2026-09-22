@@ -109,7 +109,8 @@ def test_success_stays_held_and_preserves_previous_release(tmp_path,monkeypatch,
 @pytest.mark.parametrize('failure',['new_start','no_connected','atomic_rename'])
 def test_pre_outcome_failure_restores_old_service(tmp_path,monkeypatch,capsys,failure):
     action,state,commands,drop,release=harness(tmp_path,monkeypatch,failure)
-    with pytest.raises(RuntimeError):action()
+    expected=OSError if failure=='atomic_rename' else RuntimeError
+    with pytest.raises(expected):action()
     assert state['ActiveState']=='active' and state['WorkingDirectory']=='/old'
     assert not drop.exists() and not drop.parent.exists() and release.exists()
     assert json.loads(capsys.readouterr().out)['rollback']=='PREVIOUS_RELEASE_RUNNING'

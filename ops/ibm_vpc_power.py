@@ -39,7 +39,7 @@ class BoundedClientError(RuntimeError):
     """A stable, non-secret provider or target validation failure."""
 
 
-def _safe_provider_error_detail(exc: urllib.error.HTTPError) -> tuple[str, str]:
+def _safe_provider_error_detail(exc: urllib.error.HTTPError) -> tuple[str, str, str]:
     """Return only a bounded machine code and coarse body shape.
 
     Provider messages, request IDs, traces, and arbitrary response fields are
@@ -48,18 +48,18 @@ def _safe_provider_error_detail(exc: urllib.error.HTTPError) -> tuple[str, str]:
     try:
         raw = exc.read(MAX_ERROR_BODY_BYTES + 1)
     except (AttributeError, OSError):
-        return "", "unreadable"
+        return "", "unreadable", "unknown"
     if not raw:
-        return "", "empty"
+        return "", "empty", "unknown"
     if len(raw) > MAX_ERROR_BODY_BYTES:
-        return "", "oversize"
+        return "", "oversize", "unknown"
     try:
         value = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError):
         stripped = raw.lstrip().lower()
-        return "", "html" if stripped.startswith((b"<!doctype html", b"<html")) else "text"
+        return "", "html" if stripped.startswith((b"<!doctype html", b"<html")) else "text", "unknown"
     if not isinstance(value, dict):
-        return "", "json_other"
+        return "", "json_other", "unknown"
     errors = value.get("errors")
     if isinstance(errors, list):
         shape = "json_errors"
@@ -72,8 +72,19 @@ def _safe_provider_error_detail(exc: urllib.error.HTTPError) -> tuple[str, str]:
         candidates.append(errors[0].get("code"))
     for candidate in candidates:
         if isinstance(candidate, str) and SAFE_PROVIDER_CODE.fullmatch(candidate):
-            return candidate.lower(), shape
-    return "", shape
+            return candidate.lower(), shape, "machine_code"
+    rendered = json.dumps(value, separators=(",", ":")).lower()
+    if "context-based restriction" in rendered or "context based restriction" in rendered:
+        category = "context_restriction"
+    elif "not authorized" in rendered or "not authorised" in rendered:
+        category = "not_authorized"
+    elif "access denied" in rendered or "access is denied" in rendered:
+        category = "access_denied"
+    elif "permission" in rendered or "forbidden" in rendered:
+        category = "permission_denied"
+    else:
+        category = "unknown"
+    return "", shape, category
 
 
 @dataclass(frozen=True)
@@ -91,8 +102,12 @@ def _request_json(request: urllib.request.Request, *, timeout: int = 20) -> dict
         # The HTTP status is safe and useful for distinguishing a bad key,
         # missing IAM access, and a wrong provider endpoint. Never echo the
         # provider response body because it may contain request metadata.
-        provider_code, provider_shape = _safe_provider_error_detail(exc)
-        suffix = f"_code_{provider_code}" if provider_code else f"_shape_{provider_shape}"
+        provider_code, provider_shape, provider_category = _safe_provider_error_detail(exc)
+        suffix = (
+            f"_code_{provider_code}"
+            if provider_code
+            else f"_shape_{provider_shape}_category_{provider_category}"
+        )
         raise BoundedClientError(f"provider_http_{exc.code}{suffix}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise BoundedClientError("provider_request_failed") from exc
