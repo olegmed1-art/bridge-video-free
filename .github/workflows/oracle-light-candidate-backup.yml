@@ -1,0 +1,72 @@
+name: Oracle Light candidate off-VM backup
+
+on:
+  pull_request:
+    paths: ['.github/workflows/oracle-light-candidate-backup.yml', 'ops/oci_light_candidate_backup_store.py']
+  push:
+    branches: [main]
+    paths: ['.github/workflows/oracle-light-candidate-backup.yml', 'ops/oci_light_candidate_backup_store.py']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-light-backup-mutation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python -m py_compile ops/oci_light_candidate_backup_store.py ops/oracle_light_candidate_backup.py
+      - run: python ops/test_oci_light_candidate_backup_store.py
+      - name: Validate shell syntax
+        run: |
+          ruby -ryaml -e 'd=YAML.load_file(ARGV[0]); d.fetch("jobs").each_value { |j| j.fetch("steps").each { |s| next unless s["run"]; IO.popen(["bash", "-n"], "w") { |p| p.write(s["run"]) }; abort "invalid shell" unless $?.success? } }' .github/workflows/oracle-light-candidate-backup.yml
+
+  backup:
+    needs: contract
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python -m pip install --disable-pip-version-check -q oci==2.186.0
+      - name: Upload private candidate backup and retrieve verified bytes
+        env:
+          OCI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          if [[ -z "${SSH_PRIVATE_KEY:-}" ]]; then
+            echo 'LIGHT_SSH_KEY=ABSENT'
+            exit 1
+          fi
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$work/key"
+          unset SSH_PRIVATE_KEY
+          if ! ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null; then
+            echo 'LIGHT_SSH_KEY=INVALID_OR_ENCRYPTED'
+            exit 1
+          fi
+          echo 'LIGHT_SSH_KEY=VALID'
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          echo 'LIGHT_SSH_HOST=VERIFIED_AGAINST_OWNER_ACCEPTED_FINGERPRINT'
+          ssh_opts=(-F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=2)
+          ssh "${ssh_opts[@]}" ubuntu@92.5.47.149 'cat /home/ubuntu/autopilot-db-migration-20260922/candidate-backup-20260922.tar.gz' > "$work/source.tar.gz"
+          python ops/oci_light_candidate_backup_store.py "$work/source.tar.gz" "$work/download.tar.gz"
+          ssh "${ssh_opts[@]}" ubuntu@92.5.47.149 'umask 077; target=/home/ubuntu/autopilot-db-migration-20260922/candidate-backup-from-object-storage-20260922.tar.gz; if test -e "$target"; then cmp - "$target"; else (set -C; cat > "$target"); fi' < "$work/download.tar.gz"
+          echo 'CANDIDATE_BACKUP_RETURNED_TO_LIGHT_FOR_RESTORE_DRILL'
