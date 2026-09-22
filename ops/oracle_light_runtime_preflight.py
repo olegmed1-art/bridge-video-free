@@ -64,7 +64,7 @@ def parse_environment(raw):
 
 def service():
     keys = ('ActiveState', 'SubState', 'MainPID', 'NRestarts', 'InvocationID',
-            'WorkingDirectory', 'User', 'Group', 'DropInPaths', 'FragmentPath')
+            'WorkingDirectory', 'User', 'Group', 'DropInPaths', 'FragmentPath', 'ExecStart', 'EnvironmentFiles')
     result = subprocess.run(['systemctl','show',UNIT,*['--property='+k for k in keys]],
                             check=True,capture_output=True,text=True,timeout=10)
     return dict(line.split('=',1) for line in result.stdout.splitlines())
@@ -77,13 +77,16 @@ def validate_service(value):
     require(value['WorkingDirectory'] == OLD_DIRECTORY and value['User'] == 'school-autopilot'
             and value['Group'] == 'school-autopilot' and not value['DropInPaths'] and
             value['FragmentPath'] == str(UNIT_PATH), 'SERVICE_DRIFT')
+    require('path='+PYTHON+' ;' in value['ExecStart'] and
+            'argv[]='+PYTHON+' -m oracle_autopilot.worker_v17 ;' in value['ExecStart'] and
+            value['EnvironmentFiles'] == str(ENV_PATH)+' (ignore_errors=no)', 'SERVICE_EXEC_DRIFT')
 
 
 def validate_bundle(bundle):
     require(set(bundle) == {'revision','files','sha256'},'BUNDLE_FIELDS')
     require(re.fullmatch('[a-f0-9]{40}',bundle['revision']), 'SOURCE_REVISION')
     require(1 <= len(bundle['files']) <= 80, 'BUNDLE_SIZE')
-    digest = hashlib.sha256(json.dumps(bundle['files'],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    digest = hashlib.sha256(json.dumps({'revision':bundle['revision'],'files':bundle['files']},sort_keys=True,separators=(',',':')).encode()).hexdigest()
     require(digest == bundle['sha256'], 'BUNDLE_DIGEST')
     required = {'oracle_autopilot/worker.py','oracle_autopilot/worker_v17.py',
                 'oracle_autopilot/contract.py','ops/autopilot/broker-release.json',
@@ -155,6 +158,9 @@ def main(bundle):
             require(isinstance(proof,dict) and set(proof) <= {'status','stage','error_type','mailbox_pr','worker_id','database_user','fence_sha256','manifest_sha256'},'PROBE_OUTPUT_FIELDS')
             for key,value in proof.items():
                 require(isinstance(value,(str,int)) and re.fullmatch('[a-zA-Z0-9_-]{1,128}',str(value)), 'PROBE_OUTPUT_VALUE')
+            final_lock = (ROUTE/'route.lock').lstat()
+            require((final_lock.st_dev,final_lock.st_ino) == (info.st_dev,info.st_ino) and
+                    json.loads(read_owned(ROUTE/'lock-identity.json',0o644)) == identity,'LOCK_REPLACED')
             unchanged = service() == before and read_owned(UNIT_PATH,0o644) == unit and read_owned(ENV_PATH,0o600) == raw_env and read_owned(ROUTE/'route.json',0o644) == route
             require(unchanged,'RUNTIME_CHANGED_DURING_PREFLIGHT')
             print(json.dumps({'preflight':proof,'source_revision':bundle['revision'],
@@ -169,7 +175,7 @@ def bundle(revision):
     files = {p.relative_to(root).as_posix():p.read_text() for package in ('oracle_autopilot','autopilot_phase3b')
              for p in sorted((root/package).glob('*.py'))}
     files['ops/autopilot/broker-release.json'] = (root/'ops/autopilot/broker-release.json').read_text()
-    value = {'revision':revision,'files':files,'sha256':hashlib.sha256(json.dumps(files,sort_keys=True,separators=(',',':')).encode()).hexdigest()}
+    value = {'revision':revision,'files':files,'sha256':hashlib.sha256(json.dumps({'revision':revision,'files':files},sort_keys=True,separators=(',',':')).encode()).hexdigest()}
     validate_bundle(value)
     return value
 

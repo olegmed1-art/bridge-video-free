@@ -21,7 +21,7 @@ def test_current_bundle_and_executable_transport():
     assert 'BUNDLE = ' in program
 
 
-@pytest.mark.parametrize('change',[{'revision':'main'},{'revision':'a'*39},{'sha256':'0'*64}])
+@pytest.mark.parametrize('change',[{'revision':'main'},{'revision':'a'*39},{'revision':'b'*40},{'sha256':'0'*64}])
 def test_bundle_identity_rejected(change):
     value = host.bundle('a'*40)
     value.update(change)
@@ -33,7 +33,7 @@ def test_bundle_identity_rejected(change):
 def test_bundle_path_traversal_rejected_even_with_matching_digest(name):
     value = host.bundle('a'*40)
     value['files'][name]='pass\n'
-    value['sha256']=hashlib.sha256(json.dumps(value['files'],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    value['sha256']=hashlib.sha256(json.dumps({'revision':value['revision'],'files':value['files']},sort_keys=True,separators=(',',':')).encode()).hexdigest()
     with pytest.raises(host.PreflightBlocked,match='BUNDLE_PATH'):
         host.validate_bundle(value)
 
@@ -50,7 +50,7 @@ def test_quoted_environment_not_executed():
 
 def ready():
     return {'task_id':probe.CANARY,'status':'READY','attempts':0,'goal_type':'CHATGPT_ROLE_DISPATCH_V1',
-            'lease_until':None,'lease_epoch':0,'cost_reserved_microusd':0,'cost_actual_microusd':0}
+            'lease_until':None,'lease_epoch':0,'cost_reserved_microusd':0,'cost_actual_microusd':0,'cost_cap_microusd':0}
 
 
 @pytest.mark.parametrize('change',[{'task_id':'another'},{'status':'RUNNING'},{'attempts':1},
@@ -88,7 +88,7 @@ def test_probe_has_no_queue_mutation_calls():
         if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute):
             assert node.func.attr not in prohibited
             if node.func.attr=='execute':
-                assert isinstance(node.args[0],ast.Constant) and node.args[0].value.startswith('SELECT ')
+                assert isinstance(node.args[0],ast.Constant) and node.args[0].value.split()[0] == 'SELECT'
 
 
 def test_workflow_untrusted_events_cannot_access_ssh():
@@ -99,3 +99,15 @@ def test_workflow_untrusted_events_cannot_access_ssh():
     assert 'SOURCE_REVISION: ${{ github.sha }}' in text
     assert 'sudo -n /usr/bin/python3 -' in text
     assert 'systemctl restart' not in text
+
+
+@pytest.mark.parametrize('change',[{'name':'neondb_owner'},{'db':'other'},{'rolsuper':True},
+    {'rolcreatedb':True},{'rolcreaterole':True},{'rolreplication':True},{'rolbypassrls':True},
+    {'rolcanlogin':False},{'rolconnlimit':-1},{'rolconnlimit':100}])
+def test_privileged_or_unbounded_identity_rejected(change):
+    identity={'name':'autopilot_light_worker_login','db':'neondb','rolsuper':False,
+        'rolcreatedb':False,'rolcreaterole':False,'rolreplication':False,'rolbypassrls':False,
+        'rolcanlogin':True,'rolconnlimit':4}
+    probe.validate_identity(identity)
+    with pytest.raises(ValueError):
+        probe.validate_identity({**identity,**change})

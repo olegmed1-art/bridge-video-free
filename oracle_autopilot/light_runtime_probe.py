@@ -26,8 +26,14 @@ def validate_queue(rows, capacity):
     require(str(row['task_id']) == CANARY and row['status'] == 'READY' and row['attempts'] == 0
             and row['goal_type'] == 'CHATGPT_ROLE_DISPATCH_V1' and row['lease_until'] is None
             and row['lease_epoch'] == 0 and row['cost_reserved_microusd'] == 0
-            and row['cost_actual_microusd'] == 0)
+            and row['cost_actual_microusd'] == 0 and row['cost_cap_microusd'] == 0)
     require(capacity['active_workers'] == 1 and capacity['probe_reservations'] == 0)
+
+
+def validate_identity(identity):
+    require(identity['name'] == 'autopilot_light_worker_login' and identity['db'] == 'neondb'
+            and identity['rolcanlogin'] and 1 <= identity['rolconnlimit'] <= 4
+            and not any(identity[k] for k in ('rolsuper','rolcreatedb','rolcreaterole','rolreplication','rolbypassrls')))
 
 
 def main():
@@ -37,6 +43,7 @@ def main():
         config = worker.load_config()
         require(config.worker_id == 'oracle-autopilot-light-1')
         require(os.environ.get('AUTOPILOT_DB_BACKEND','neon') == 'neon')
+        stage = 'broker_configuration'
         broker = worker.load_token_broker_config()
         release = json.loads((Path.cwd()/'ops/autopilot/broker-release.json').read_text())
         require(all(getattr(broker,key) == release[value] for key,value in {
@@ -46,16 +53,27 @@ def main():
         stage = 'database_identity'
         with worker.psycopg.connect(config.dsn,autocommit=True,connect_timeout=10,
                 row_factory=worker.dict_row,options='-c statement_timeout=5000 -c default_transaction_read_only=on') as conn:
-            identity = conn.execute("SELECT current_user AS name, current_database() AS db, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls FROM pg_roles WHERE rolname=current_user").fetchone()
-            require(identity['name'] == 'autopilot_light_worker_login' and identity['db'] == 'neondb'
-                    and not any(identity[k] for k in ('rolsuper','rolcreatedb','rolcreaterole','rolreplication','rolbypassrls')))
+            identity = conn.execute("SELECT current_user AS name, current_database() AS db, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls, rolcanlogin, rolconnlimit FROM pg_roles WHERE rolname=current_user").fetchone()
+            validate_identity(identity)
             stage = 'acl_and_fence'
-            acl = conn.execute("SELECT has_table_privilege(current_user,'autopilot.task','SELECT,INSERT,UPDATE,DELETE') AS direct_task, has_table_privilege(current_user,'autopilot.role_dispatch_outbox','SELECT,INSERT,UPDATE,DELETE') AS direct_outbox, has_function_privilege(current_user,'autopilot.claim_next_task(text,integer)','EXECUTE') AS can_claim, has_function_privilege(current_user,'autopilot.claim_role_dispatch_outbox_v2(text,integer)','EXECUTE') AS can_publish").fetchone()
-            require(not acl['direct_task'] and not acl['direct_outbox'] and acl['can_claim'] and acl['can_publish'])
+            acl = conn.execute("""SELECT
+                pg_has_role(current_user,'autopilot_runtime_principal','MEMBER') AS runtime_member,
+                (pg_has_role(current_user,'neondb_owner','MEMBER') OR
+                 pg_has_role(current_user,'autopilot_callback','MEMBER') OR
+                 pg_has_role(current_user,'bridge_school_worker','MEMBER')) AS forbidden_member,
+                EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                    WHERE n.nspname IN ('autopilot','autopilot_reconcile') AND c.relkind IN ('r','p')
+                    AND (has_table_privilege(current_user,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                         OR has_any_column_privilege(current_user,c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))) AS direct_access,
+                has_function_privilege(current_user,'autopilot.claim_next_task(text,integer)','EXECUTE') AS can_claim,
+                has_function_privilege(current_user,'autopilot.claim_role_dispatch_outbox_v2(text,integer)','EXECUTE') AS can_publish
+                """).fetchone()
+            require(acl['runtime_member'] and not acl['forbidden_member'] and not acl['direct_access']
+                    and acl['can_claim'] and acl['can_publish'])
             definition = conn.execute("SELECT pg_get_functiondef('autopilot.claim_next_task(text,integer)'::regprocedure) AS definition").fetchone()['definition']
             require(definition.count(FENCE) == 1 and "p_worker_id = 'oracle-autopilot-light-1'" in definition)
             stage = 'queue'
-            rows = conn.execute("SELECT task_id,status,attempts,goal_type,lease_until,lease_epoch,cost_reserved_microusd,cost_actual_microusd FROM autopilot.task_status WHERE status IN ('NEW','VALIDATING','READY','RUNNING','WAITING_EXTERNAL','EVALUATING')").fetchall()
+            rows = conn.execute("SELECT task_id,status,attempts,goal_type,lease_until,lease_epoch,cost_reserved_microusd,cost_actual_microusd,cost_cap_microusd FROM autopilot.task_status WHERE status IN ('NEW','VALIDATING','READY','RUNNING','WAITING_EXTERNAL','EVALUATING')").fetchall()
             capacity = conn.execute('SELECT * FROM autopilot.role_worker_capacity_snapshot()').fetchone()
             validate_queue(rows,capacity)
             stage = 'manifest'

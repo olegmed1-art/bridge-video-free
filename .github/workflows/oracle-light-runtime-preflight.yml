@@ -62,6 +62,8 @@ jobs:
           echo 'LIGHT_SSH_KEY=VALID'
           bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
           echo 'LIGHT_SSH_HOST=VERIFIED_AGAINST_OWNER_ACCEPTED_FINGERPRINT'
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_REVISION" ]]
+          git diff --exit-code HEAD --
           python ops/oracle_light_runtime_preflight.py bundle "$SOURCE_REVISION" > "$work/preflight.py"
           if ! ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 ubuntu@92.5.47.149 'sudo -n /usr/bin/python3 -' < "$work/preflight.py" > "$work/result" 2> "$work/error"; then
             cat "$work/result"
