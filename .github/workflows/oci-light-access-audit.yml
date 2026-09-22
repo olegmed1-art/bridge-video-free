@@ -48,6 +48,23 @@ jobs:
           assert scope['scalar']('region=eu-frankfurt-1', 'region') == 'eu-frankfurt-1'
           print('READ_ONLY_CONTRACT_PASS')
           PY
+      - name: Install official SDK for offline configuration regression
+        run: python -m pip install --disable-pip-version-check -q oci==2.186.0
+      - name: Verify real SDK clients with disposable in-memory key, no API calls
+        run: |
+          python - <<'PY'
+          import importlib.util
+          from cryptography.hazmat.primitives.asymmetric import rsa
+          from cryptography.hazmat.primitives import serialization
+          spec = importlib.util.spec_from_file_location('audit', 'ops/oci_light_access_audit.py')
+          m = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(m)
+          key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+          pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()
+          config = {'user': 'ocid1.user.oc1..test', 'tenancy': m.TENANCY, 'fingerprint': ':'.join(['00'] * 16), 'region': 'eu-frankfurt-1'}
+          compute, iam = m.clients(config, pem)
+          print('REAL_SDK_OFFLINE_CONFIG_PASS')
+          PY
 
   audit:
     if: github.event_name == 'push' && github.repository == 'olegmed1-art/bridge-video-free'
