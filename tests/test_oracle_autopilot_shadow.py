@@ -1640,9 +1640,10 @@ def test_shadow_diagnostics_are_read_only_and_secret_free():
         assert forbidden not in workflow
 
 
-def test_oracle_power_workflow_has_no_automatic_trigger():
+def test_retired_oracle_power_workflow_stays_inactive():
+    assert not os.path.exists(".github/workflows/oracle-instance-power.yml")
     workflow = open(
-        ".github/workflows/oracle-instance-power.yml", encoding="utf-8"
+        "tests/fixtures/retired_oracle/oracle-instance-power.yml", encoding="utf-8"
     ).read()
     assert "\n  schedule:" not in workflow
     assert "\n  push:" not in workflow

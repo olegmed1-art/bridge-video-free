@@ -6,7 +6,14 @@ import os
 import psycopg
 from psycopg.rows import dict_row
 
-from database.runtime_worker_preflight import normalize_dsn, EXPECTED_PRINCIPAL
+from database.runtime_worker_preflight import normalize_dsn as normalize_neon_dsn, EXPECTED_PRINCIPAL
+from .database_target import backend, expected_database, validate_pinned_dsn
+
+
+def normalize_dsn(raw):
+    if backend() == "postgresql":
+        return validate_pinned_dsn(raw, expected_user=EXPECTED_PRINCIPAL)
+    return normalize_neon_dsn(raw)
 
 
 def connect():
@@ -19,8 +26,8 @@ def connect():
         with conn.transaction():
             conn.execute("SET LOCAL statement_timeout = '10s'")
             identity = conn.execute(
-                "SELECT current_user = %s AS principal_ok, current_database() = 'neondb' AS database_ok",
-                (EXPECTED_PRINCIPAL,),
+                "SELECT current_user = %s AS principal_ok, current_database() = %s AS database_ok",
+                (EXPECTED_PRINCIPAL, expected_database()),
             ).fetchone()
             if not identity['principal_ok'] or not identity['database_ok']:
                 raise ValueError('RECONCILE_IDENTITY_MISMATCH')

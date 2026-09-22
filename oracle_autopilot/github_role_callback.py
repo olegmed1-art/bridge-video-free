@@ -19,6 +19,8 @@ from typing import Any
 
 import psycopg
 
+from .database_target import backend, validate_pinned_dsn
+
 
 REPOSITORY = "olegmed1-art/bridge-video-free"
 REPOSITORY_ID = 1_330_085_090
@@ -104,6 +106,11 @@ class DeliveryProof:
 
 
 def validate_callback_dsn(raw: str) -> str:
+    try:
+        if backend() == "postgresql":
+            return validate_pinned_dsn(raw, expected_user="autopilot_callback_login")
+    except ValueError:
+        raise CallbackContractError("CALLBACK_DSN_INVALID") from None
     value = raw.strip()
     parsed = urllib.parse.urlsplit(value)
     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
