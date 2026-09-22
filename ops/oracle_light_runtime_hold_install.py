@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
 import signal
 import stat
 import subprocess
@@ -320,5 +321,6 @@ if __name__=='__main__':
         try:
             install(json.loads(base64.b64decode(BUNDLE_DATA)),base64.b64decode(HELPER_DATA).decode())
         except BaseException as exc:
-            print(json.dumps({'runtime_hold':'NOT_CONFIRMED','error_type':type(exc).__name__}))
+            guard=str(exc) if isinstance(exc,RuntimeError) and re.fullmatch('[A-Z_]{1,64}',str(exc)) else 'SYSTEM_ERROR'
+            print(json.dumps({'runtime_hold':'NOT_CONFIRMED','error_type':type(exc).__name__,'guard':guard}))
             sys.exit(2)
