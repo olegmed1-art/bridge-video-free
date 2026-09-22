@@ -46,18 +46,29 @@ def harness(tmp_path,monkeypatch,failure=None):
         values=list(real_fstat(fd));values[4]=0
         return os.stat_result(values)
     monkeypatch.setattr(target.os,'fstat',root_stat)
+    real_lstat=Path.lstat
+    def owned_lstat(path):
+        values=list(real_lstat(path));values[4]=0
+        return os.stat_result(values)
+    monkeypatch.setattr(Path,'lstat',owned_lstat)
     monkeypatch.setattr(target.time,'sleep',lambda _:None)
     if failure=='atomic_rename':
         monkeypatch.setattr(target.os,'rename',Mock(side_effect=OSError('rename failed')))
     real_resolve=Path.resolve
-    real_lstat=Path.lstat
     def resolve(path,*a,**kw):
+        if str(path)=='/proc/999999991/cwd':return Path('/old')
         return release if str(path)=='/proc/999999992/cwd' else real_resolve(path,*a,**kw)
-    def root_lstat(path):
-        values=list(real_lstat(path));values[4]=0
-        return os.stat_result(values)
     monkeypatch.setattr(Path,'resolve',resolve)
-    monkeypatch.setattr(Path,'lstat',root_lstat)
+    real_sync=target.fsync_directory
+    sync_failed=False
+    def sync(path):
+        nonlocal sync_failed
+        commands.append(('fsync',str(path)))
+        if failure=='after_rename' and drop.exists() and not sync_failed:
+            sync_failed=True
+            raise OSError('directory flush failed')
+        return real_sync(path)
+    monkeypatch.setattr(target,'fsync_directory',sync)
     def environment(pid):
         return {**old_env,**({'AUTOPILOT_ADMISSION_MODE':'HOLD'} if pid==999999992 else {})}
     monkeypatch.setattr(target,'process_environment',environment)
@@ -71,6 +82,11 @@ def harness(tmp_path,monkeypatch,failure=None):
     def run(*args,**kw):
         nonlocal started_new
         commands.append(args)
+        if args[:2]==('systemctl','daemon-reload'):
+            state.update(WorkingDirectory=str(release) if drop.exists() else '/old',
+                         DropInPaths=str(drop) if drop.exists() else '')
+            if failure=='before_stop' and drop.exists():
+                raise RuntimeError('interrupted after reload')
         if args[:2]==('systemctl','stop'):
             state.update(ActiveState='inactive',SubState='dead',MainPID='0')
         if args[:2]==('systemctl','start'):
@@ -111,14 +127,30 @@ def test_success_stays_held_and_preserves_previous_release(tmp_path,monkeypatch,
     assert result['database_writes'] is False
 
 
-@pytest.mark.parametrize('failure',['new_start','no_connected','atomic_rename'])
+@pytest.mark.parametrize('failure',['new_start','no_connected','atomic_rename','after_rename','before_stop'])
 def test_pre_outcome_failure_restores_old_service(tmp_path,monkeypatch,capsys,failure):
     action,state,commands,drop,release=harness(tmp_path,monkeypatch,failure)
-    expected=OSError if failure=='atomic_rename' else RuntimeError
+    expected=OSError if failure in {'atomic_rename','after_rename'} else RuntimeError
     with pytest.raises(expected):action()
     assert state['ActiveState']=='active' and state['WorkingDirectory']=='/old'
     assert not drop.exists() and not drop.parent.exists() and release.exists()
     assert json.loads(capsys.readouterr().out)['rollback']=='PREVIOUS_RELEASE_RUNNING'
+
+
+def test_durable_boot_hold_precedes_first_stop(tmp_path,monkeypatch):
+    action,state,commands,drop,release=harness(tmp_path,monkeypatch)
+    original_run=target.run
+    def run(*args,**kw):
+        if args[:2]==('systemctl','stop'):
+            assert drop.read_text()=='[Service]\nWorkingDirectory='+str(release)+'\nEnvironment=AUTOPILOT_ADMISSION_MODE=HOLD\n'
+            assert ('fsync',str(drop.parent)) in commands
+            assert ('fsync',str(drop.parent.parent)) in commands
+            assert ('systemctl','daemon-reload') in commands
+            assert ('systemctl','show','unit','--property=Environment','--value') in commands
+            assert state['MainPID']=='999999991' and state['WorkingDirectory']==str(release)
+        return original_run(*args,**kw)
+    monkeypatch.setattr(target,'run',run)
+    action()
 
 
 @pytest.mark.parametrize('failure',['uncertain_queue','drop_drift','rollback_start'])

@@ -102,6 +102,7 @@ def stage(bundle):
     check(not target.is_symlink(),'RELEASE_LINK')
     if target.exists():
         verify_release(target,bundle)
+        persist_release(target)
         return target
     with tempfile.TemporaryDirectory(prefix='.hold-stage-',dir=RELEASES) as temporary:
         root=Path(temporary)
@@ -121,7 +122,21 @@ def stage(bundle):
         (root/'RUNTIME_BUNDLE_SHA256').chmod(0o444)
         os.rename(root,target)
     verify_release(target,bundle)
+    persist_release(target)
     return target
+
+
+def persist_release(target):
+    # The boot-visible HOLD config must never reference an unflushed release.
+    paths=list(target.rglob('*'))
+    for path in paths:
+        if path.is_file():
+            with path.open('rb') as file:
+                os.fsync(file.fileno())
+    for path in sorted((p for p in paths if p.is_dir()),key=lambda p:len(p.parts),reverse=True):
+        fsync_directory(path)
+    fsync_directory(target)
+    fsync_directory(target.parent)
 
 
 def install(bundle,helper_source):
@@ -169,12 +184,8 @@ def install(bundle,helper_source):
             require_current_main(bundle['revision'])
             check(h['service']()==before and read(h['UNIT_PATH'],0o644)==unit and
                   read(h['ENV_PATH'],0o600)==env_bytes,'PRE_STOP_DRIFT')
-            stopped=True
-            run('systemctl','stop',h['UNIT'])
-            after_stop=h['service']()
-            check(after_stop['ActiveState']=='inactive' and after_stop['MainPID']=='0' and
-                  not Path('/proc/'+before['MainPID']).exists(),'OLD_PROCESS_NOT_QUIESCENT')
-            check(probe(h,release,old_env)==baseline,'QUEUE_CHANGED_DURING_STOP')
+            # Persist the complete compatible HOLD configuration before stopping.
+            # A reboot after this point enters HOLD even if this installer dies.
             DROP_DIR.mkdir(mode=0o755)
             DROP_DIR.chmod(0o755)
             created_dir=True
@@ -187,11 +198,29 @@ def install(bundle,helper_source):
                 os.fsync(file.fileno())
             TEMP_DROP.chmod(0o644)
             os.rename(TEMP_DROP,DROP)
+            changed=True
             temporary_created=False
             fsync_directory(DROP_DIR)
             fsync_directory(DROP_DIR.parent)
-            changed=True
             run('systemctl','daemon-reload')
+            configured=h['service']()
+            check(configured=={**before,'WorkingDirectory':str(release),'DropInPaths':str(DROP)},
+                  'PRE_STOP_LOADED_CONFIG_DRIFT')
+            environment=run('systemctl','show',h['UNIT'],'--property=Environment','--value')
+            check('AUTOPILOT_ADMISSION_MODE=HOLD' in environment.split(),'PRE_STOP_HOLD_NOT_EFFECTIVE')
+            check(process_environment(int(before['MainPID']))==old_env and
+                  Path('/proc/'+before['MainPID']+'/cwd').resolve()==Path(before['WorkingDirectory']),
+                  'OLD_PROCESS_CHANGED_BEFORE_STOP')
+            same_route()
+            require_current_main(bundle['revision'])
+            check(read(h['UNIT_PATH'],0o644)==unit and read(h['ENV_PATH'],0o600)==env_bytes and
+                  read(DROP,0o644).decode()==content,'PRE_STOP_CONFIG_CHANGED')
+            stopped=True
+            run('systemctl','stop',h['UNIT'])
+            after_stop=h['service']()
+            check(after_stop['ActiveState']=='inactive' and after_stop['MainPID']=='0' and
+                  not Path('/proc/'+before['MainPID']).exists(),'OLD_PROCESS_NOT_QUIESCENT')
+            check(probe(h,release,old_env)==baseline,'QUEUE_CHANGED_DURING_STOP')
             run('systemctl','start',h['UNIT'])
             initial=h['service']()
             check(initial['ActiveState']=='active' and int(initial['MainPID'])>0 and
@@ -224,7 +253,7 @@ def install(bundle,helper_source):
                 'restarts_delta':int(initial['NRestarts'])-int(before['NRestarts']),'fence_sha256':baseline['fence_sha256'],
                 'route':'neon_epoch_0','admission':'HOLD','database_writes':False}))
         except BaseException:
-            if stopped:
+            if stopped or changed or created_dir:
                 # Never resume the incompatible old worker if queue/fence/route evidence is uncertain.
                 handlers={sig:signal.signal(sig,signal.SIG_IGN) for sig in (signal.SIGTERM,signal.SIGHUP)}
                 try:
