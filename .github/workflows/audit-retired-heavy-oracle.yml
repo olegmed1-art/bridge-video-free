@@ -1,0 +1,139 @@
+name: Audit retired heavy Oracle residue
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: >-
+      github.actor == github.repository_owner &&
+      github.event.issue.number == 1131 &&
+      github.event.comment.body == '/audit-retired-heavy-oracle'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      OCI_REGION: eu-frankfurt-1
+      OCI_INSTANCE_OCID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      EXPECTED_NAME: bridge-school-dds3-frankfurt
+      OLD_PUBLIC_IP: 158.180.47.161
+    steps:
+      - name: Configure read-only OCI client
+        env:
+          OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          test -n "${OCI_CLI_CONFIG:-}"
+          test -n "${OCI_CLI_KEY_CONTENT:-}"
+          python -m pip install --disable-pip-version-check --quiet 'oci-cli==3.90.3'
+          umask 077
+          mkdir -p "$HOME/.oci"
+          if [[ "$OCI_CLI_KEY_CONTENT" == base64:* ]]; then
+            printf '%s' "${OCI_CLI_KEY_CONTENT#base64:}" | base64 --decode > "$HOME/.oci/key.pem"
+          else
+            printf '%s\n' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/key.pem"
+          fi
+          printf '%s\n' "$OCI_CLI_CONFIG" > "$HOME/.oci/config"
+          openssl pkey -in "$HOME/.oci/key.pem" -traditional -out "$HOME/.oci/key.pkcs1.pem"
+          mv "$HOME/.oci/key.pkcs1.pem" "$HOME/.oci/key.pem"
+          fp="$(openssl pkey -in "$HOME/.oci/key.pem" -pubout -outform DER | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
+          OCI_FP="$fp" python - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path.home()/'.oci/config'
+          out=[]; found=set()
+          repl={'key_file':str(Path.home()/'.oci/key.pem'),'region':'eu-frankfurt-1','fingerprint':os.environ['OCI_FP']}
+          for line in p.read_text().splitlines():
+              key=line.partition('=')[0].strip()
+              if key in repl:
+                  out.append(f'{key}={repl[key]}'); found.add(key)
+              else:
+                  out.append(line)
+          for key,value in repl.items():
+              if key not in found: out.append(f'{key}={value}')
+          p.write_text('\n'.join(out)+'\n')
+          PY
+          chmod 0600 "$HOME/.oci/config" "$HOME/.oci/key.pem"
+          oci iam region list --output json >/dev/null
+
+      - name: Collect exact read-only inventory
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/heavy-audit"
+          mkdir -p "$work"
+          oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --output json > "$work/instance.json"
+          compartment="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["compartment-id"])' "$work/instance.json")"
+          ad="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["availability-domain"])' "$work/instance.json")"
+          oci compute boot-volume-attachment list --compartment-id "$compartment" --availability-domain "$ad" --instance-id "$OCI_INSTANCE_OCID" --all --output json > "$work/boot-attachments.json"
+          oci compute volume-attachment list --compartment-id "$compartment" --instance-id "$OCI_INSTANCE_OCID" --all --output json > "$work/volume-attachments.json"
+          oci compute vnic-attachment list --compartment-id "$compartment" --instance-id "$OCI_INSTANCE_OCID" --all --output json > "$work/vnic-attachments.json"
+          oci bv boot-volume list --compartment-id "$compartment" --availability-domain "$ad" --all --output json > "$work/boot-volumes.json"
+          oci bv volume list --compartment-id "$compartment" --availability-domain "$ad" --all --output json > "$work/volumes.json"
+          oci bv boot-volume-backup list --compartment-id "$compartment" --all --output json > "$work/boot-backups.json"
+          oci bv backup list --compartment-id "$compartment" --all --output json > "$work/volume-backups.json"
+          oci network public-ip list --scope REGION --compartment-id "$compartment" --all --output json > "$work/public-ips.json"
+          (oci lb load-balancer list --compartment-id "$compartment" --all --output json > "$work/load-balancers.json") || printf '{"data":[]}' > "$work/load-balancers.json"
+          (oci nlb network-load-balancer list --compartment-id "$compartment" --all --output json > "$work/network-load-balancers.json") || printf '{"data":[]}' > "$work/network-load-balancers.json"
+          WORK="$work" python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          p=Path(os.environ['WORK'])
+          def data(name):
+              return json.loads((p/name).read_text()).get('data',[])
+          def short(v):
+              if not isinstance(v,str): return v
+              return ('…'+v[-12:]) if v.startswith('ocid1.') else v
+          def rows(name, fields, active=None):
+              out=[]
+              for x in data(name):
+                  if active and x.get('lifecycle-state') not in active: continue
+                  out.append({k:short(x.get(v)) for k,v in fields.items()})
+              return out
+          inst=data('instance.json')
+          if isinstance(inst,list): inst=inst[0]
+          else: inst=json.loads((p/'instance.json').read_text())['data']
+          assert inst['display-name']==os.environ['EXPECTED_NAME']
+          report={
+            'exact_instance':{
+              'name':inst.get('display-name'),'state':inst.get('lifecycle-state'),
+              'id':short(inst.get('id')),'created':inst.get('time-created')
+            },
+            'boot_attachments':rows('boot-attachments.json',{'id':'id','state':'lifecycle-state','boot_volume':'boot-volume-id'}),
+            'block_attachments':rows('volume-attachments.json',{'id':'id','state':'lifecycle-state','volume':'volume-id'}),
+            'vnic_attachments':rows('vnic-attachments.json',{'id':'id','state':'lifecycle-state','vnic':'vnic-id'}),
+            'active_boot_volumes':rows('boot-volumes.json',{'id':'id','name':'display-name','state':'lifecycle-state','gb':'size-in-gbs','created':'time-created'}, {'AVAILABLE','PROVISIONING','RESTORING'}),
+            'active_block_volumes':rows('volumes.json',{'id':'id','name':'display-name','state':'lifecycle-state','gb':'size-in-gbs','created':'time-created'}, {'AVAILABLE','PROVISIONING','RESTORING'}),
+            'available_boot_backups':rows('boot-backups.json',{'id':'id','name':'display-name','state':'lifecycle-state','gb':'size-in-gbs','created':'time-created'}, {'AVAILABLE','CREATING'}),
+            'available_volume_backups':rows('volume-backups.json',{'id':'id','name':'display-name','state':'lifecycle-state','gb':'size-in-gbs','created':'time-created'}, {'AVAILABLE','CREATING'}),
+            'public_ips':rows('public-ips.json',{'id':'id','name':'display-name','ip':'ip-address','lifetime':'lifetime','state':'lifecycle-state','assigned':'assigned-entity-id'}),
+            'load_balancers':rows('load-balancers.json',{'id':'id','name':'display-name','state':'lifecycle-state','ip_addresses':'ip-addresses'}),
+            'network_load_balancers':rows('network-load-balancers.json',{'id':'id','name':'display-name','state':'lifecycle-state','ip_addresses':'ip-addresses'})
+          }
+          old=os.environ['OLD_PUBLIC_IP']
+          report['old_public_ip_present']=any(x.get('ip')==old for x in report['public_ips'])
+          tokens=('bridge-school-dds3-frankfurt','dds3-frankfurt','heavy')
+          candidates=[]
+          for kind in ('active_boot_volumes','active_block_volumes','available_boot_backups','available_volume_backups','public_ips','load_balancers','network_load_balancers'):
+              for x in report[kind]:
+                  text=json.dumps(x,ensure_ascii=False).lower()
+                  if any(t in text for t in tokens) or old in text:
+                      candidates.append({'kind':kind,**x})
+          report['named_or_ip_candidates']=candidates
+          print(json.dumps(report,indent=2,ensure_ascii=False,sort_keys=True))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('### Retired heavy Oracle read-only audit\n')
+              f.write(f"- exact instance: {report['exact_instance']['state']}\n")
+              f.write(f"- live boot attachments: {sum(x.get('state') not in ('TERMINATED','DETACHED') for x in report['boot_attachments'])}\n")
+              f.write(f"- live block attachments: {sum(x.get('state') not in ('TERMINATED','DETACHED') for x in report['block_attachments'])}\n")
+              f.write(f"- live VNIC attachments: {sum(x.get('state') not in ('TERMINATED','DETACHED') for x in report['vnic_attachments'])}\n")
+              f.write(f"- old public IP present: {report['old_public_ip_present']}\n")
+              f.write(f"- named/IP deletion candidates: {len(candidates)}\n")
+              f.write(f"- active boot volumes in compartment/AD: {len(report['active_boot_volumes'])}\n")
+              f.write(f"- active block volumes in compartment/AD: {len(report['active_block_volumes'])}\n")
+              f.write(f"- available boot backups: {len(report['available_boot_backups'])}\n")
+              f.write(f"- available block backups: {len(report['available_volume_backups'])}\n")
+          PY
