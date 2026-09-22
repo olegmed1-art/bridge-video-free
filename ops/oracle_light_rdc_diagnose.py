@@ -5,6 +5,7 @@ import subprocess
 
 
 def redact(message):
+    message = re.sub(r'\b[A-Z0-9]{4}-[A-Z0-9]{4}\b', '<device-code>', message)
     message = re.sub(r'https?://\S+|wss?://\S+', '<url>', message)
     message = re.sub(r'[\w.+-]+@[\w.-]+', '<email>', message)
     message = re.sub(r'(?i)(bearer|token|password|secret|authorization|api[_ -]?key|pairing code|verification code)\s*[:= ]+.*', r'\1 <redacted>', message)

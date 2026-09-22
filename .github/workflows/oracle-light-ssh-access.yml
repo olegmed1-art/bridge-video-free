@@ -66,3 +66,15 @@ jobs:
             exit 1
           fi
           cat "$work/result"
+
+  cleanup_expiring_device_codes:
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Remove diagnostic log containing expiring device pairing codes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method DELETE repos/olegmed1-art/bridge-video-free/actions/runs/35724596459/logs
