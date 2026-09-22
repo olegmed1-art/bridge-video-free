@@ -17,6 +17,7 @@ import urllib.request
 
 DROP_DIR = Path('/etc/systemd/system/school-autopilot-production-light.service.d')
 DROP = DROP_DIR/'40-reviewed-runtime-hold.conf'
+TEMP_DROP = DROP_DIR/'.40-reviewed-runtime-hold.conf.tmp'
 RELEASES = Path('/opt/bridge-school/school-autopilot-production-light/releases')
 
 
@@ -27,6 +28,14 @@ def run(*args,timeout=45):
 def check(condition,code):
     if not condition:
         raise RuntimeError(code)
+
+
+def fsync_directory(path):
+    fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def process_environment(pid):
@@ -151,6 +160,8 @@ def install(bundle,helper_source):
         baseline=probe(h,release,old_env)
         content='[Service]\nWorkingDirectory='+str(release)+'\nEnvironment=AUTOPILOT_ADMISSION_MODE=HOLD\n'
         changed=False
+        created_dir=False
+        temporary_created=False
         stopped=False
         try:
             # Last-second local CAS before stopping only this unit.
@@ -166,12 +177,19 @@ def install(bundle,helper_source):
             check(probe(h,release,old_env)==baseline,'QUEUE_CHANGED_DURING_STOP')
             DROP_DIR.mkdir(mode=0o755)
             DROP_DIR.chmod(0o755)
-            fd=os.open(DROP,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o644)
+            created_dir=True
+            fsync_directory(DROP_DIR.parent)
+            fd=os.open(TEMP_DROP,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o644)
+            temporary_created=True
             with os.fdopen(fd,'w') as file:
                 file.write(content)
                 file.flush()
                 os.fsync(file.fileno())
-            DROP.chmod(0o644)
+            TEMP_DROP.chmod(0o644)
+            os.rename(TEMP_DROP,DROP)
+            temporary_created=False
+            fsync_directory(DROP_DIR)
+            fsync_directory(DROP_DIR.parent)
             changed=True
             run('systemctl','daemon-reload')
             run('systemctl','start',h['UNIT'])
@@ -218,7 +236,19 @@ def install(bundle,helper_source):
                     if changed:
                         check(read(DROP,0o644).decode()==content,'ROLLBACK_DROP_IN_DRIFT')
                         DROP.unlink()
+                        fsync_directory(DROP_DIR)
                         DROP_DIR.rmdir()
+                        fsync_directory(DROP_DIR.parent)
+                    elif created_dir:
+                        check(not DROP.exists() and temporary_created and TEMP_DROP.exists() and
+                              set(DROP_DIR.iterdir())=={TEMP_DROP},'ROLLBACK_PARTIAL_DROP_IN')
+                        info=TEMP_DROP.lstat()
+                        check(stat.S_ISREG(info.st_mode) and info.st_uid==0 and
+                              stat.S_IMODE(info.st_mode)==0o644,'ROLLBACK_TEMP_METADATA')
+                        TEMP_DROP.unlink()
+                        fsync_directory(DROP_DIR)
+                        DROP_DIR.rmdir()
+                        fsync_directory(DROP_DIR.parent)
                     else:
                         check(not DROP_DIR.exists(),'ROLLBACK_PARTIAL_DROP_IN')
                     run('systemctl','daemon-reload')

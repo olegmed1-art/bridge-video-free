@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import types
+from unittest.mock import Mock
 
 import pytest
 from ops import oracle_light_runtime_hold_install as target
@@ -35,6 +36,7 @@ def harness(tmp_path,monkeypatch,failure=None):
     h.read_owned=lambda path,mode:path.read_bytes()
     monkeypatch.setitem(sys.modules,h.__name__,h)
     monkeypatch.setattr(target,'DROP_DIR',dropdir);monkeypatch.setattr(target,'DROP',drop)
+    monkeypatch.setattr(target,'TEMP_DROP',dropdir/'.hold.conf.tmp')
     monkeypatch.setattr(target,'stage',lambda bundle:release)
     monkeypatch.setattr(target,'require_current_main',lambda revision:None)
     monkeypatch.setattr(target.os,'geteuid',lambda:0)
@@ -45,6 +47,8 @@ def harness(tmp_path,monkeypatch,failure=None):
         return os.stat_result(values)
     monkeypatch.setattr(target.os,'fstat',root_stat)
     monkeypatch.setattr(target.time,'sleep',lambda _:None)
+    if failure=='atomic_rename':
+        monkeypatch.setattr(target.os,'rename',Mock(side_effect=OSError('rename failed')))
     real_resolve=Path.resolve
     def resolve(path,*a,**kw):
         return release if str(path)=='/proc/999999992/cwd' else real_resolve(path,*a,**kw)
@@ -102,7 +106,7 @@ def test_success_stays_held_and_preserves_previous_release(tmp_path,monkeypatch,
     assert result['database_writes'] is False
 
 
-@pytest.mark.parametrize('failure',['new_start','no_connected'])
+@pytest.mark.parametrize('failure',['new_start','no_connected','atomic_rename'])
 def test_pre_outcome_failure_restores_old_service(tmp_path,monkeypatch,capsys,failure):
     action,state,commands,drop,release=harness(tmp_path,monkeypatch,failure)
     with pytest.raises(RuntimeError):action()
