@@ -21,6 +21,7 @@ def main():
         candidate.sql(container,database,'BEGIN;'+candidate.SUPPORT_SQL+'COMMIT;')
         proof=candidate.sql(container,database,'BEGIN; SET SESSION AUTHORIZATION bridge_school_worker_principal; SELECT count(*) FROM public.autopilot_operational_health_signal; ROLLBACK;')
         assert proof=='3'
+        assert candidate.sql(container,database,'BEGIN; SET SESSION AUTHORIZATION bridge_school_health; SELECT count(*) FROM public.autopilot_operational_health_signal; ROLLBACK;')=='3'
     candidate.main()
     print(json.dumps({'public_support_acl':'VERIFIED','scope':'two_fenced_rehearsals_only','neon_changed':False}))
 

@@ -46,6 +46,8 @@ def validate_archive(path):
     assert manifest['files']['acl.sql']==candidate.FILES['rehearsal-only-acl.sql']
     assert manifest['data']['function_definitions'][0]==97
     assert manifest['data']['effective_acl'][0]==291
+    assert manifest['data']['public_support_acl'][0]==6
+    assert len(manifest['data'])==68
     return payloads,manifest
 
 
