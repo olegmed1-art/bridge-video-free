@@ -103,6 +103,9 @@ EXPECTED_RESEARCH_PRODUCERS = {
 
 
 def _workflow_text(name: str) -> str:
+    if name == "oracle-instance-power.yml":
+        assert not (WORKFLOWS / name).exists(), "retired power controller reactivated"
+        return (ROOT / "tests/fixtures/retired_oracle" / name).read_text(encoding="utf-8")
     return (WORKFLOWS / name).read_text(encoding="utf-8")
 
 

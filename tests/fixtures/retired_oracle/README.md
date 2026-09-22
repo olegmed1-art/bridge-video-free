@@ -1,0 +1,1 @@
+Historical test fixture from f6fd9d7d^ (before retirement). Never deploy as a GitHub workflow. Retained solely to regression-test the idle-stop proof protocol; tests separately require the live workflow to remain absent.
