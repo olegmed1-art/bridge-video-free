@@ -308,7 +308,21 @@ def _connect(dsn: str, *, autocommit: bool = False):
     )
 
 
+def admission_mode() -> str:
+    """A deliberate rollout hold cannot silently become active on a typo."""
+    value = os.environ.get("AUTOPILOT_ADMISSION_MODE", "ACTIVE")
+    if value not in {"ACTIVE", "HOLD"}:
+        raise RuntimeError("AUTOPILOT_ADMISSION_MODE_INVALID")
+    return value
+
+
+def require_active_admission() -> None:
+    if admission_mode() != "ACTIVE":
+        raise RuntimeError("AUTOPILOT_ADMISSION_HELD")
+
+
 def _rpc_one(config: WorkerConfig, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
+    require_active_admission()
     with _connect(config.dsn) as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         row = cur.fetchone()
@@ -1544,6 +1558,7 @@ def drain_role_dispatch_outbox(config: WorkerConfig) -> int:
 
 def drain_cycle(config: WorkerConfig) -> int:
     """Visit every bounded lane, even when an earlier lane remains busy."""
+    require_active_admission()
     return sum((
         drain_ready(config),
         drain_role_dispatch_outbox(config),
@@ -1551,7 +1566,37 @@ def drain_cycle(config: WorkerConfig) -> int:
     ))
 
 
+def run_held(config: WorkerConfig) -> None:
+    """Attest connectivity while all queue/planner/publication lanes remain off.
+
+    The systemd rollout hold must be removed in a separate reviewed activation.
+    Database reconnects and NOTIFY events never promote this process to ACTIVE.
+    """
+    LOGGER.info("worker_admission_held worker_id=%s mailbox_pr=%s", config.worker_id,
+                ROLE_DISPATCH_MAILBOX_PR)
+    while True:
+        try:
+            with psycopg.connect(config.dsn, autocommit=True, connect_timeout=10,
+                    application_name="school-autopilot-runtime-hold",
+                    options="-c statement_timeout=5000 -c default_transaction_read_only=on") as listener:
+                require = listener.execute("SHOW default_transaction_read_only").fetchone()
+                if not require or require[0] != "on":
+                    raise RuntimeError("AUTOPILOT_HOLD_READONLY_REQUIRED")
+                listener.execute(f"LISTEN {CHANNEL}")
+                LOGGER.info("worker_hold_connected worker_id=%s", config.worker_id)
+                while True:
+                    wait_for_wakeup(listener, config.recovery_poll_seconds)
+        except KeyboardInterrupt:
+            return
+        except psycopg.Error as exc:
+            LOGGER.warning("held_listener_reconnect error_type=%s", type(exc).__name__)
+            time.sleep(2)
+
+
 def run_forever(config: WorkerConfig) -> None:
+    if admission_mode() == "HOLD":
+        run_held(config)
+        return
     LOGGER.info(
         "worker_started worker_id=%s mode=%s recovery_poll_seconds=%s",
         config.worker_id,
