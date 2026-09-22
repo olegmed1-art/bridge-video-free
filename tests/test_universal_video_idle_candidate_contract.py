@@ -3,9 +3,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CANDIDATE = ROOT / ".github/workflows/oracle-instance-idle-candidate.yml"
-VIDEO = ROOT / ".github/workflows/oracle-universal-video-job.yml"
-POWER = ROOT / ".github/workflows/oracle-instance-power.yml"
-AUTO = ROOT / ".github/workflows/oracle-instance-power-auto.yml"
+VIDEO = ROOT / "tests/fixtures/retired_oracle/oracle-universal-video-job.yml"
+POWER = ROOT / "tests/fixtures/retired_oracle/oracle-instance-power.yml"
+AUTO = ROOT / "tests/fixtures/retired_oracle/oracle-instance-power-auto.yml"
 EPOCH_PROBE = ROOT / ".github/workflows/oracle-epoch-readonly-probe.yml"
 
 

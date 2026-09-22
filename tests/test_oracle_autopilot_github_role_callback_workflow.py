@@ -25,4 +25,4 @@ def test_callback_workflow_uses_dedicated_secret_and_immutable_workflow_code():
     assert "secrets.NEON_DATABASE_URL" not in WORKFLOW
     assert "ref: ${{ github.workflow_sha }}" in WORKFLOW
     assert "persist-credentials: false" in WORKFLOW
-    assert "python -m oracle_autopilot.github_role_callback" in WORKFLOW
+    assert "python -m ops.github_autopilot_db_route role-callback" in WORKFLOW
