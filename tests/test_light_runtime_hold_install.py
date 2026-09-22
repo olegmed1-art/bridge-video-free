@@ -36,6 +36,7 @@ def harness(tmp_path,monkeypatch,failure=None):
     monkeypatch.setitem(sys.modules,h.__name__,h)
     monkeypatch.setattr(target,'DROP_DIR',dropdir);monkeypatch.setattr(target,'DROP',drop)
     monkeypatch.setattr(target,'stage',lambda bundle:release)
+    monkeypatch.setattr(target,'require_current_main',lambda revision:None)
     monkeypatch.setattr(target.os,'geteuid',lambda:0)
     monkeypatch.setattr(target.os,'uname',lambda:types.SimpleNamespace(nodename='autopilot-lite-vnic'))
     real_fstat=os.fstat
@@ -132,3 +133,36 @@ def test_bundle_script_compiles_and_workflow_is_explicit_only():
     assert 'git/ref/heads/main --jq .object.sha' in workflow
     assert 'group: oracle-light-backup-mutation' in workflow
     assert 'contents: write' not in workflow
+
+
+def test_main_drift_aborts_before_service_stop(tmp_path,monkeypatch):
+    action,state,commands,drop,release=harness(tmp_path,monkeypatch)
+    def drift(revision):
+        raise RuntimeError('CURRENT_MAIN_CHANGED')
+    monkeypatch.setattr(target,'require_current_main',drift)
+    with pytest.raises(RuntimeError,match='CURRENT_MAIN_CHANGED'):
+        action()
+    assert state['ActiveState']=='active' and state['WorkingDirectory']=='/old'
+    assert not commands and not drop.exists()
+
+
+@pytest.mark.parametrize('damage',['extra','changed','writable','symlink'])
+def test_retained_release_rejects_drift(tmp_path,monkeypatch,damage):
+    root=tmp_path/'release';root.mkdir(mode=0o755)
+    bundle={'revision':'a'*40,'sha256':'b'*64,'files':{'oracle_autopilot/worker.py':'pass\n'}}
+    (root/'oracle_autopilot').mkdir(mode=0o755)
+    for name,text in {**bundle['files'],'SOURCE_REVISION':bundle['revision']+'\n',
+        'RUNTIME_BUNDLE_SHA256':bundle['sha256']+'\n'}.items():
+        p=root/name;p.write_text(text);p.chmod(0o444)
+    real_lstat=Path.lstat
+    def root_stat(path):
+        values=list(real_lstat(path));values[4]=0
+        return os.stat_result(values)
+    monkeypatch.setattr(Path,'lstat',root_stat)
+    target.verify_release(root,bundle)
+    file=root/'oracle_autopilot/worker.py'
+    if damage=='extra':(root/'unexpected').write_text('x')
+    elif damage=='changed':file.chmod(0o644);file.write_text('different');file.chmod(0o444)
+    elif damage=='writable':file.chmod(0o644)
+    elif damage=='symlink':file.unlink();file.symlink_to(root/'SOURCE_REVISION')
+    with pytest.raises(RuntimeError):target.verify_release(root,bundle)

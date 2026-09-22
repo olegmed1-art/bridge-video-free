@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -30,10 +31,49 @@ ALLOWED_STATES = {
     "failed",
 }
 MUTATION_AUTHORIZATION = "IBM_POWER_MUTATION_AUTHORIZED=YES"
+MAX_ERROR_BODY_BYTES = 64 * 1024
+SAFE_PROVIDER_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
 
 class BoundedClientError(RuntimeError):
     """A stable, non-secret provider or target validation failure."""
+
+
+def _safe_provider_error_detail(exc: urllib.error.HTTPError) -> tuple[str, str]:
+    """Return only a bounded machine code and coarse body shape.
+
+    Provider messages, request IDs, traces, and arbitrary response fields are
+    deliberately ignored so diagnostics cannot echo secrets or metadata.
+    """
+    try:
+        raw = exc.read(MAX_ERROR_BODY_BYTES + 1)
+    except (AttributeError, OSError):
+        return "", "unreadable"
+    if not raw:
+        return "", "empty"
+    if len(raw) > MAX_ERROR_BODY_BYTES:
+        return "", "oversize"
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        stripped = raw.lstrip().lower()
+        return "", "html" if stripped.startswith((b"<!doctype html", b"<html")) else "text"
+    if not isinstance(value, dict):
+        return "", "json_other"
+    errors = value.get("errors")
+    if isinstance(errors, list):
+        shape = "json_errors"
+    elif "error" in value:
+        shape = "json_error"
+    else:
+        shape = "json_object"
+    candidates = [value.get("code")]
+    if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+        candidates.append(errors[0].get("code"))
+    for candidate in candidates:
+        if isinstance(candidate, str) and SAFE_PROVIDER_CODE.fullmatch(candidate):
+            return candidate.lower(), shape
+    return "", shape
 
 
 @dataclass(frozen=True)
@@ -51,7 +91,9 @@ def _request_json(request: urllib.request.Request, *, timeout: int = 20) -> dict
         # The HTTP status is safe and useful for distinguishing a bad key,
         # missing IAM access, and a wrong provider endpoint. Never echo the
         # provider response body because it may contain request metadata.
-        raise BoundedClientError(f"provider_http_{exc.code}") from exc
+        provider_code, provider_shape = _safe_provider_error_detail(exc)
+        suffix = f"_code_{provider_code}" if provider_code else f"_shape_{provider_shape}"
+        raise BoundedClientError(f"provider_http_{exc.code}{suffix}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise BoundedClientError("provider_request_failed") from exc
     if len(raw) > 1024 * 1024:

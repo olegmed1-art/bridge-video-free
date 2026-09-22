@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import urllib.error
+from io import BytesIO
 from pathlib import Path
 from unittest import mock
 
@@ -77,8 +78,54 @@ class IbmVpcPowerContractTests(unittest.TestCase):
         request = mock.Mock()
         error = urllib.error.HTTPError("https://example.invalid", 403, "denied", {}, None)
         with mock.patch("urllib.request.urlopen", side_effect=error):
-            with self.assertRaisesRegex(BoundedClientError, "^provider_http_403$"):
+            with self.assertRaisesRegex(
+                BoundedClientError, "^provider_http_403_shape_empty$"
+            ):
                 _request_json(request)
+
+    def test_http_error_reports_bounded_machine_code_only(self) -> None:
+        request = mock.Mock()
+        body = BytesIO(
+            b'{"errors":[{"code":"missing_permission","message":"do not echo"}],'
+            b'"trace":"do not echo"}'
+        )
+        error = urllib.error.HTTPError(
+            "https://example.invalid", 403, "denied", {}, body
+        )
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(
+                BoundedClientError,
+                "^provider_http_403_code_missing_permission$",
+            ) as caught:
+                _request_json(request)
+        rendered = str(caught.exception)
+        self.assertNotIn("do not echo", rendered)
+        self.assertNotIn("trace", rendered)
+
+    def test_http_error_ignores_unsafe_machine_code(self) -> None:
+        request = mock.Mock()
+        body = BytesIO(b'{"code":"bad code with spaces","message":"private"}')
+        error = urllib.error.HTTPError(
+            "https://example.invalid", 403, "denied", {}, body
+        )
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(
+                BoundedClientError, "^provider_http_403_shape_json_object$"
+            ):
+                _request_json(request)
+
+    def test_http_error_classifies_html_without_echoing_body(self) -> None:
+        request = mock.Mock()
+        body = BytesIO(b"<!doctype html><title>private gateway response</title>")
+        error = urllib.error.HTTPError(
+            "https://example.invalid", 403, "denied", {}, body
+        )
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(
+                BoundedClientError, "^provider_http_403_shape_html$"
+            ) as caught:
+                _request_json(request)
+        self.assertNotIn("private", str(caught.exception))
 
     def test_iam_failure_is_stage_specific(self) -> None:
         with mock.patch(

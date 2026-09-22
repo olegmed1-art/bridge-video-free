@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import ssl
+import urllib.request
 
 DROP_DIR = Path('/etc/systemd/system/school-autopilot-production-light.service.d')
 DROP = DROP_DIR/'40-reviewed-runtime-hold.conf'
@@ -49,13 +51,49 @@ def probe(h,release,old_env):
     return record
 
 
+def require_current_main(revision):
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self,*args,**kwargs):
+            raise RuntimeError('MAIN_REDIRECT_REJECTED')
+    url='https://api.github.com/repos/olegmed1-art/bridge-video-free/git/ref/heads/main'
+    context=ssl.create_default_context(cafile='/etc/ssl/certs/ca-certificates.crt')
+    opener=urllib.request.build_opener(NoRedirect(),urllib.request.HTTPSHandler(context=context))
+    request=urllib.request.Request(url,headers={'Accept':'application/vnd.github+json','User-Agent':'bridge-autopilot-held-rollout'})
+    with opener.open(request,timeout=15) as response:
+        check(response.status==200 and response.geturl()==url,'MAIN_READ_FAILED')
+        content=response.read(65537)
+    check(len(content)<=65536,'MAIN_RESPONSE_SIZE')
+    check(json.loads(content)['object']['sha']==revision,'CURRENT_MAIN_CHANGED')
+
+
+def verify_release(target,bundle):
+    expected={**bundle['files'],'SOURCE_REVISION':bundle['revision']+'\n',
+              'RUNTIME_BUNDLE_SHA256':bundle['sha256']+'\n'}
+    directories={'.'}
+    for name in expected:
+        directories.update(str(p) for p in Path(name).parents)
+    paths={p.relative_to(target).as_posix():p for p in target.rglob('*')}
+    check(set(paths)==set(expected)|(directories-{'.'}),'RELEASE_INVENTORY_DRIFT')
+    for name,path in {'.':target,**paths}.items():
+        info=path.lstat()
+        check(info.st_uid==0 and not stat.S_ISLNK(info.st_mode),'RELEASE_OWNER_OR_LINK')
+        if name in directories:
+            check(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode)==0o755,'RELEASE_DIRECTORY_MODE')
+        else:
+            check(stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode)==0o444 and
+                  path.read_text()==expected[name],'RELEASE_FILE_DRIFT')
+
+
 def stage(bundle):
     # Immutable retained release. Never overwrite/reuse an existing directory.
     for parent in [RELEASES,*RELEASES.parents]:
         info=parent.lstat()
         check(stat.S_ISDIR(info.st_mode) and info.st_uid==0 and not info.st_mode&0o022,'RELEASE_PARENT')
     target=RELEASES/bundle['revision']
-    check(not target.exists() and not target.is_symlink(),'RELEASE_ALREADY_EXISTS')
+    check(not target.is_symlink(),'RELEASE_LINK')
+    if target.exists():
+        verify_release(target,bundle)
+        return target
     with tempfile.TemporaryDirectory(prefix='.hold-stage-',dir=RELEASES) as temporary:
         root=Path(temporary)
         root.chmod(0o755)
@@ -73,6 +111,7 @@ def stage(bundle):
         (root/'RUNTIME_BUNDLE_SHA256').write_text(bundle['sha256']+'\n')
         (root/'RUNTIME_BUNDLE_SHA256').chmod(0o444)
         os.rename(root,target)
+    verify_release(target,bundle)
     return target
 
 
@@ -106,6 +145,8 @@ def install(bundle,helper_source):
         check('AUTOPILOT_ADMISSION_MODE' not in old_env and
               'AUTOPILOT_ADMISSION_MODE' not in h['parse_environment'](env_bytes),'ADMISSION_ALREADY_CONFIGURED')
         check(not DROP_DIR.exists() and not DROP_DIR.is_symlink(),'DROP_IN_ALREADY_EXISTS')
+        check(not any(k in old_env for k in ('PYTHONPATH','PYTHONHOME')),'PYTHON_IMPORT_OVERRIDE')
+        require_current_main(bundle['revision'])
         release=stage(bundle)
         baseline=probe(h,release,old_env)
         content='[Service]\nWorkingDirectory='+str(release)+'\nEnvironment=AUTOPILOT_ADMISSION_MODE=HOLD\n'
@@ -114,6 +155,7 @@ def install(bundle,helper_source):
         try:
             # Last-second local CAS before stopping only this unit.
             same_route()
+            require_current_main(bundle['revision'])
             check(h['service']()==before and read(h['UNIT_PATH'],0o644)==unit and
                   read(h['ENV_PATH'],0o600)==env_bytes,'PRE_STOP_DRIFT')
             stopped=True
@@ -137,6 +179,7 @@ def install(bundle,helper_source):
             check(initial['ActiveState']=='active' and int(initial['MainPID'])>0 and
                   initial['InvocationID']!=before['InvocationID'] and
                   initial['MainPID']!=before['MainPID'],'NEW_PROCESS_MISSING')
+            check(initial['NRestarts']==before['NRestarts'],'NEW_PROCESS_RESTARTED')
             check(initial['WorkingDirectory']==str(release) and initial['User']==before['User'] and
                   initial['Group']==before['Group'] and initial['DropInPaths']==str(DROP),'NEW_UNIT_DRIFT')
             environment=run('systemctl','show',h['UNIT'],'--property=Environment','--value')
@@ -160,13 +203,15 @@ def install(bundle,helper_source):
             print(json.dumps({'runtime_hold':'PASS','source_revision':bundle['revision'],
                 'bundle_sha256':bundle['sha256'],'previous_revision':h['OLD_REVISION'],
                 'invocation_id':initial['InvocationID'],'main_pid':int(initial['MainPID']),
-                'restarts_delta':0,'fence_sha256':baseline['fence_sha256'],
+                'restarts_delta':int(initial['NRestarts'])-int(before['NRestarts']),'fence_sha256':baseline['fence_sha256'],
                 'route':'neon_epoch_0','admission':'HOLD','database_writes':False}))
         except BaseException:
             if stopped:
                 # Never resume the incompatible old worker if queue/fence/route evidence is uncertain.
-                run('systemctl','stop',h['UNIT'])
+                handlers={sig:signal.signal(sig,signal.SIG_IGN) for sig in (signal.SIGTERM,signal.SIGHUP)}
                 try:
+                    run('systemctl','stop',h['UNIT'])
+                    check(h['service']()['MainPID']=='0','ROLLBACK_STOP_NOT_CONFIRMED')
                     same_route()
                     check(probe(h,release,old_env)==baseline,'ROLLBACK_QUEUE_UNCERTAIN')
                     check(read(h['UNIT_PATH'],0o644)==unit and read(h['ENV_PATH'],0o600)==env_bytes,'ROLLBACK_CONFIG_DRIFT')
@@ -179,8 +224,13 @@ def install(bundle,helper_source):
                     run('systemctl','daemon-reload')
                     run('systemctl','start',h['UNIT'])
                     restored=h['service']()
+                    h['validate_service'](restored)
                     check(restored['ActiveState']=='active' and restored['WorkingDirectory']==before['WorkingDirectory']
                           and not restored['DropInPaths'],'ROLLBACK_NOT_CONFIRMED')
+                    for _ in range(3):
+                        time.sleep(2)
+                        check(h['service']()==restored,'ROLLBACK_NOT_STABLE')
+                    check(probe(h,release,old_env)==baseline,'ROLLBACK_QUEUE_DRIFT')
                     print(json.dumps({'rollback':'PREVIOUS_RELEASE_RUNNING','database_writes':False}))
                 except BaseException:
                     try:
@@ -190,6 +240,9 @@ def install(bundle,helper_source):
                     except BaseException:
                         state='SERVICE_STATE_UNCERTAIN'
                     print(json.dumps({'rollback':state,'manual_review_required':True}))
+                finally:
+                    for sig,handler in handlers.items():
+                        signal.signal(sig,handler)
             raise
 
 
