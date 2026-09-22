@@ -52,9 +52,7 @@ jobs:
               'oci compute instance ' + 'action',
           ):
               assert forbidden not in workflow
-          power = Path('.github/workflows/oracle-instance-power.yml').read_text()
-          assert '\n  schedule:' not in power
-          assert '\n  push:' not in power
+          assert not Path('.github/workflows/oracle-instance-power.yml').exists()
           PY
 
   activate:

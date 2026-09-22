@@ -335,6 +335,24 @@ jobs:
           chmod +x database/tests/331_autopilot_six_worker_capacity_concurrency.sh
           database/tests/331_autopilot_six_worker_capacity_concurrency.sh \
             "$capacity_database_url"
+          # Verify and unwind the modern upper chain before historical tests.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/370_autopilot_codex_send_intent.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/371_autopilot_provider_retry_budget.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0371_autopilot_provider_retry_budget.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0370_autopilot_codex_send_intent.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0369_autopilot_reconcile_gateway.sql
+          # Production rollback retains send history. Only an empty disposable
+          # CI fixture may remove this table before rebuilding historical 0322.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          DO $ BEGIN
+            IF current_database()<>'autopilot_main_ci' OR session_user<>'bridge_ci_owner'
+               OR EXISTS(SELECT FROM autopilot.codex_command_send_intent) THEN
+              RAISE EXCEPTION 'SEND_INTENT_EMPTY_CI_FIXTURE_REQUIRED';
+            END IF;
+            DROP TABLE autopilot.codex_command_send_intent;
+          END $;
+          SQL
+
           # Test the new upgrade/rollback on the complete modern schema. The
           # historical lower-chain fixture below intentionally rebuilds 0324's
           # table shape and is NOT a modern-schema reconstruction test (0347
@@ -561,7 +579,7 @@ jobs:
           if [ "$had_repair_head_rebind" -eq 1 ]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0364_autopilot_repair_head_rebind.sql
           fi
-          # Leave 0365-0367 uninstalled in this legacy-only fixture. Full-chain
+          # Leave 0365-0371 uninstalled in this legacy-only fixture. Full-chain
           # reconstruction, all SQL invariants and upper rollback/reapply are
           # verified independently by database-ci on its current-schema fixture.
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
