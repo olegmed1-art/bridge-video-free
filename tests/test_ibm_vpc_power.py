@@ -78,7 +78,9 @@ class IbmVpcPowerContractTests(unittest.TestCase):
         request = mock.Mock()
         error = urllib.error.HTTPError("https://example.invalid", 403, "denied", {}, None)
         with mock.patch("urllib.request.urlopen", side_effect=error):
-            with self.assertRaisesRegex(BoundedClientError, "^provider_http_403$"):
+            with self.assertRaisesRegex(
+                BoundedClientError, "^provider_http_403_shape_empty$"
+            ):
                 _request_json(request)
 
     def test_http_error_reports_bounded_machine_code_only(self) -> None:
@@ -107,8 +109,23 @@ class IbmVpcPowerContractTests(unittest.TestCase):
             "https://example.invalid", 403, "denied", {}, body
         )
         with mock.patch("urllib.request.urlopen", side_effect=error):
-            with self.assertRaisesRegex(BoundedClientError, "^provider_http_403$"):
+            with self.assertRaisesRegex(
+                BoundedClientError, "^provider_http_403_shape_json_object$"
+            ):
                 _request_json(request)
+
+    def test_http_error_classifies_html_without_echoing_body(self) -> None:
+        request = mock.Mock()
+        body = BytesIO(b"<!doctype html><title>private gateway response</title>")
+        error = urllib.error.HTTPError(
+            "https://example.invalid", 403, "denied", {}, body
+        )
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(
+                BoundedClientError, "^provider_http_403_shape_html$"
+            ) as caught:
+                _request_json(request)
+        self.assertNotIn("private", str(caught.exception))
 
     def test_iam_failure_is_stage_specific(self) -> None:
         with mock.patch(
