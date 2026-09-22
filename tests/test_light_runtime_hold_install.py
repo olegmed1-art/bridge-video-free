@@ -11,6 +11,16 @@ import pytest
 from ops import oracle_light_runtime_hold_install as target
 
 
+def test_only_source_defined_assertions_publish_codes():
+    with pytest.raises(target.InstallBlocked) as caught:
+        target.check(False,'LIVE_CODE_PATH')
+    assert target.failure_record(caught.value)['error_code']=='LIVE_CODE_PATH'
+    for error in (RuntimeError('private-dsn'),OSError('private-token')):
+        record=target.failure_record(error)
+        assert 'error_code' not in record
+        assert 'private' not in json.dumps(record)
+
+
 def harness(tmp_path,monkeypatch,failure=None):
     route=tmp_path/'route'
     route.mkdir()
