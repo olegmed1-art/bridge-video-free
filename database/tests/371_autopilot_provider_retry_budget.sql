@@ -93,7 +93,10 @@ BEGIN
  SELECT last_task_id INTO tid FROM autopilot.project_work_item WHERE work_item_id=proof;
  UPDATE autopilot.task SET safe_summary_json=jsonb_build_object('status','BLOCKED',
    'result_code','CODEX_PROVIDER_GENERIC_FAILURE','summary','Task blocked. See execution details above.') WHERE task_id=tid;
- UPDATE autopilot.role_dispatch_outbox SET status='CALLBACK_ACCEPTED',sent_at=clock_timestamp(),completed_at=clock_timestamp() WHERE task_id=tid;
+ UPDATE autopilot.role_dispatch_outbox SET status='CALLBACK_ACCEPTED',
+   github_dispatch_comment_id=999875,dispatch_body_sha256=repeat('f',64),
+   sent_at=clock_timestamp(),callback_deadline_at=clock_timestamp()+interval '2 hours',
+   completed_at=clock_timestamp() WHERE task_id=tid;
  action:=autopilot.reconcile_project_progress(wid,stamp,repeat('b',40));
  IF action<>'NO_CHANGE' THEN RAISE EXCEPTION '0371_PROVIDER_FAILURE_FALSE_RECOVERY'; END IF;
  UPDATE autopilot.task SET safe_summary_json=jsonb_build_object('status','BLOCKED',
