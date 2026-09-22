@@ -7,7 +7,9 @@ import urllib.error
 
 import psycopg
 
-from database.runtime_worker_preflight import EXPECTED_HOST, EXPECTED_PRINCIPAL, normalize_dsn
+from database.runtime_worker_preflight import EXPECTED_HOST, EXPECTED_PRINCIPAL
+from .reconcile_db import normalize_dsn
+from .database_target import expected_database
 from .paused_reconcile import github
 
 
@@ -51,8 +53,8 @@ def probe(dsn, label, *, startup_options=False, gateway=False):
                 assert conn.execute('SELECT 1').fetchone() == (1,)
                 stage = 'identity'
                 principal_ok, database_ok = conn.execute(
-                    "SELECT current_user = %s, current_database() = 'neondb'",
-                    (EXPECTED_PRINCIPAL,),
+                    "SELECT current_user = %s, current_database() = %s",
+                    (EXPECTED_PRINCIPAL, expected_database()),
                 ).fetchone()
                 print(f'db_diagnostic variant={label} principal_expected={principal_ok} database_expected={database_ok}')
                 if not principal_ok or not database_ok:

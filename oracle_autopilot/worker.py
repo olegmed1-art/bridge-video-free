@@ -42,6 +42,7 @@ from .contract import (
     claimed_task_from_row,
     validate_task_contract,
 )
+from .database_target import backend, validate_pinned_dsn
 from .parallel_work_intake import canonical_manifest_text, manifest_sha256
 
 CHANNEL = "autopilot_ready"
@@ -239,6 +240,12 @@ def _load_token_broker_config(url_env: str, expected_path: str) -> TokenBrokerCo
 
 
 def validate_neon_direct_dsn(raw: str) -> str:
+    # Keep the established function name for existing callers and Neon deployments.
+    if backend() == "postgresql":
+        try:
+            return validate_pinned_dsn(raw, expected_user=os.getenv("AUTOPILOT_EXPECTED_DB_USER", ""))
+        except ValueError:
+            raise RuntimeError("autopilot PostgreSQL target is invalid") from None
     value = raw.strip()
     parsed = urllib.parse.urlsplit(value)
     if parsed.scheme not in {"postgresql", "postgres"}:
