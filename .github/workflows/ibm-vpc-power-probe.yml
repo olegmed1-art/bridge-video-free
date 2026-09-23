@@ -11,6 +11,8 @@ on:
     paths:
       - '.github/workflows/ibm-vpc-power-probe.yml'
       - 'ops/ibm_vpc_power.py'
+      - 'ops/ibm_vpc_lifecycle.py'
+      - 'tests/test_ibm_vpc_lifecycle.py'
       - 'tests/test_ibm_vpc_power.py'
       - 'ops/ibm_vpc_oracle_probe.py'
       - 'tests/test_ibm_vpc_oracle_probe.py'
@@ -33,8 +35,8 @@ jobs:
       - name: Validate bounded client contract
         run: |
           set -euo pipefail
-          python -m unittest -v tests.test_ibm_vpc_power tests.test_ibm_vpc_oracle_probe
-          python -m py_compile ops/ibm_vpc_power.py ops/ibm_vpc_oracle_probe.py
+          python -m unittest -v tests.test_ibm_vpc_power tests.test_ibm_vpc_oracle_probe tests.test_ibm_vpc_lifecycle
+          python -m py_compile ops/ibm_vpc_power.py ops/ibm_vpc_oracle_probe.py ops/ibm_vpc_lifecycle.py
 
   oracle-probe:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_oracle }}
