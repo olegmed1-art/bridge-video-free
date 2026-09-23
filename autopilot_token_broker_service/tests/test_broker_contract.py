@@ -473,6 +473,7 @@ class BrokerContractTests(unittest.TestCase):
         self.assertFalse(payload["github_token_broker_enabled"])
         self.assertFalse(payload["raw_installation_token_exposed"])
         self.assertEqual(payload["broker_policy_version"], "physical-no-merge-v2")
+        self.assertEqual(payload["role_dispatch_mailbox_pr"], 1703)
         self.assertEqual(payload["source_revision"], BUNDLED_SOURCE_REVISION)
         self.assertTrue(payload["source_attested"])
         self.assertRegex(payload["artifact_sha256"], r"^[0-9a-f]{64}$")
