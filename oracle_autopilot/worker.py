@@ -886,6 +886,7 @@ def _require_approved_broker_release(
         "bounded_draft_executor_enabled": True,
         "bounded_project_head_enabled": True,
         "bounded_role_dispatch_enabled": True,
+        "role_dispatch_mailbox_pr": ROLE_DISPATCH_MAILBOX_PR,
         "raw_installation_token_exposed": False,
         "merge_endpoint_enabled": False,
         "ref_update_delete_enabled": False,
