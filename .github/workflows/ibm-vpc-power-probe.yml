@@ -2,11 +2,18 @@ name: IBM VPC power read-only probe
 
 on:
   workflow_dispatch:
+    inputs:
+      test_oracle:
+        description: 'Also send one authenticated read-only request from Oracle Light'
+        type: boolean
+        default: false
   pull_request:
     paths:
       - '.github/workflows/ibm-vpc-power-probe.yml'
       - 'ops/ibm_vpc_power.py'
       - 'tests/test_ibm_vpc_power.py'
+      - 'ops/ibm_vpc_oracle_probe.py'
+      - 'tests/test_ibm_vpc_oracle_probe.py'
 
 permissions:
   contents: read
@@ -26,8 +33,35 @@ jobs:
       - name: Validate bounded client contract
         run: |
           set -euo pipefail
-          python -m unittest -v tests.test_ibm_vpc_power
-          python -m py_compile ops/ibm_vpc_power.py
+          python -m unittest -v tests.test_ibm_vpc_power tests.test_ibm_vpc_oracle_probe
+          python -m py_compile ops/ibm_vpc_power.py ops/ibm_vpc_oracle_probe.py
+
+  oracle-probe:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_oracle }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Read exact IBM instance state directly from Oracle Light
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+          ORACLE_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          probe_dir=$(mktemp -d)
+          trap 'rm -rf "$probe_dir"' EXIT
+          test -n "${ORACLE_SSH_PRIVATE_KEY:-}"
+          printf '%s\n' "$ORACLE_SSH_PRIVATE_KEY" | tr -d '\r' > "$probe_dir/key"
+          unset ORACLE_SSH_PRIVATE_KEY
+          ssh-keygen -y -f "$probe_dir/key" > /dev/null
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 \
+            'SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go' "$probe_dir/known_hosts"
+          python3 ops/ibm_vpc_oracle_probe.py \
+            --ssh-key "$probe_dir/key" --known-hosts "$probe_dir/known_hosts"
 
   probe:
     if: ${{ github.event_name == 'workflow_dispatch' }}
