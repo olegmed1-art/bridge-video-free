@@ -1,0 +1,24 @@
+# Autopilot production and shadow cutover gates — 2026-09-23
+
+Status: BLOCKED. The last observed route is `backend=neon, epoch=0`. This document authorizes no route change, source fence, deletion or new spend. Both PR #1852 and PR #1855 are draft. School knowledge remains on Neon.
+
+## Client closure
+
+Pin current main and inspect live DSNs (without printing credentials) before each production mutation. The known resident services are `school-autopilot-production-light`, `school-autopilot-shadow`, and `school-autopilot-online-observer`. The continuous GitHub workflow definitions include role callback, codex event callback, paused reconcile, and mailbox pre-rotation. The shared database health workflow must split its school checks from its Autopilot check. Legacy branch/manual workflows, source owner and old credentials must be fenced at the database, even if route leases appear healthy. Compare this list against the live process table, GitHub runs and the pinned inventory; any unclassified writer blocks cutover.
+
+## Recovery before routing
+
+1. Dispatcher coordinates with executor 1: record mailbox 1703 task ID, dispatch count, acknowledgement and terminal state. Pause admissions and drain leases only after the task has one terminal receipt or a proven safe pause. Never re-register or resend the task during database migration.
+2. Administrator supplies the scoped protected runtime and OCI access. Verify target capacity, mounted data volume, PostgreSQL 18 image/extensions and TLS. Create separate `autopilot` and `autopilot_shadow` databases with separate least-privilege roles. The 22 September candidate and rehearsal shadow are not current destinations.
+3. Export each source branch separately from direct TLS connections with PostgreSQL 18 tools. Preserve source identity, snapshot time, database definitions, role/ACL/RLS and sequence state. Restrict source writes under the reviewed schema fence and prove effective denial for *every* writer including owner/legacy paths. Fresh final exports must occur after this fence, without mixing production and shadow schema generations.
+4. Restore into isolated target databases, compare per-relation row/content hashes, function definitions, ACLs, ownership and sequences, and test each application principal. Check external delivery is disabled during rehearsals. Independently review discrepancies; a count alone is insufficient.
+5. Keep the source recovery point outside Light Oracle. Download its off-host object, verify SHA-256 and restore into a separate PostgreSQL instance. Record a signed/trusted workflow run, object version/metadata, checksums, manifest results and target identity. Do this for both production and shadow.
+6. Configure daily scheduled immutable/off-host backups, bounded 30-day retention (subject to observed size and approved quota), missed-run and failure alerts with acknowledged delivery, and independent restore access. PR #1855 currently implements only a *post-route production* backup mechanism and cannot satisfy the preceding source recovery gate or shadow backup gate. Do not enable a schedule before its route and source checks pass.
+
+## Route promotion and rollback
+
+A fresh primary-source audit must show exactly one authoritative writer, matching code and route lease contracts on every service and GitHub client, no outstanding mailbox dispatch, verified backups of both databases, and an independently reviewed restore. Switch the route and clients together under the root-owned lock; enable one writer, observe a genuine task dispatch, acknowledgement and linked terminal answer, then enable the rest. Inspect live DSNs and the route epoch, not just the route file.
+
+Before any Oracle write, rollback restores captured Neon ACLs and the Neon route under the same lock after stopping Oracle clients. After an Oracle write, fence both sides, export/reconcile Oracle-only writes and verify them on Neon before considering a reverse switch. Never operate dual authoritative writers. Keep Neon and off-host objects until recovery acceptance.
+
+Evidence still missing: fresh live DSN/branch mapping, source and target production/shadow manifests, source fence proof, current off-host objects, independent restore, schedule/retention/alert delivery, and Oracle end-to-end task receipt.
