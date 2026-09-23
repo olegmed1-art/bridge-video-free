@@ -253,6 +253,7 @@ def main():
             "--no-owner", "--table=public.autopilot_operational_health_signal"),
     ]
     actual_manifest["schema_sha256"] = schema_digest_texts(schema_texts)
+    actual_manifest["schema_parts_sha256"] = [schema_digest_texts([text]) for text in schema_texts]
     if actual_manifest != expected_manifest:
         expected_entries = expected_manifest.get("entries", {})
         actual_entries = actual_manifest.get("entries", {})
@@ -276,6 +277,13 @@ def main():
                 categories.add(fixed.get(key, "OTHER_ENTRY"))
         if actual_manifest.get("schema_sha256") != expected_manifest.get("schema_sha256"):
             categories.add("SCHEMA_DIGEST")
+        expected_parts = expected_manifest.get("schema_parts_sha256", [])
+        actual_parts = actual_manifest.get("schema_parts_sha256", [])
+        part_labels = ("SCHEMA_CORE", "SCHEMA_LEDGER", "SCHEMA_HEALTH")
+        for index, label in enumerate(part_labels):
+            if (index >= len(expected_parts) or index >= len(actual_parts)
+                    or expected_parts[index] != actual_parts[index]):
+                categories.add(label)
         if actual_manifest.get("format") != expected_manifest.get("format"):
             categories.add("FORMAT")
         if actual_manifest.get("scope") != expected_manifest.get("scope"):
