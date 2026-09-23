@@ -33,6 +33,12 @@ The current resident dispatcher in `oracle_autopilot/worker.py` claims the gener
 
 The current Light runtime preflight also pins its checked database identity to Neon/`neondb`. Before connecting the heavy-work lane, reconcile this with the Autopilot database migration target and use the actual authoritative production queue. The lifecycle decision core stays independent of whether that queue is Neon or Oracle PostgreSQL.
 
+### First queue lane: Universal Video
+
+Migration `0056_universal_video_queue.sql` defines the read-only `video_queue.job_status` view. For the first integration, only `QUEUED` jobs may request IBM start and `LEASED` jobs count as active work. `PENDING_CANARY` is intentionally not runnable until the canary gate explicitly releases it; it must not wake IBM. `REVIEW_READY`, `AMBIGUOUS`, and `FAILED` are terminal and do not require compute. Unknown future statuses fail closed. The controller must query aggregated counts through a read-only principal; it must never claim or mutate video jobs.
+
+Books and Knowledge/Canon do not yet have a confirmed equivalent durable queue contract in the inspected Autopilot task types. They remain out of automatic IBM admission until their exact sources, statuses, and leases are identified and tested.
+
 ## Required production observation sources
 
 Before enabling lifecycle actions, the Light Oracle controller must build a single
