@@ -7,6 +7,8 @@ on:
       - 'ops/oracle_autopilot_production_backup.py'
       - 'ops/test_oracle_autopilot_production_backup.py'
       - 'ops/oracle_light_candidate_restore.py'
+      - 'ops/oracle_autopilot_dual_source_preflight.py'
+      - 'ops/test_oracle_autopilot_dual_source_preflight.py'
   push:
     branches: [main]
     paths:
@@ -14,6 +16,8 @@ on:
       - 'ops/oracle_autopilot_production_backup.py'
       - 'ops/test_oracle_autopilot_production_backup.py'
       - 'ops/oracle_light_candidate_restore.py'
+      - 'ops/oracle_autopilot_dual_source_preflight.py'
+      - 'ops/test_oracle_autopilot_dual_source_preflight.py'
 
 permissions:
   contents: read
@@ -32,3 +36,4 @@ jobs:
       # The route and receipt fixtures must be owned by root to exercise the
       # production ownership checks on this disposable CI runner.
       - run: sudo "$(command -v python)" -m unittest -v ops.test_oracle_autopilot_production_backup
+      - run: python -m unittest -v ops.test_oracle_autopilot_dual_source_preflight
