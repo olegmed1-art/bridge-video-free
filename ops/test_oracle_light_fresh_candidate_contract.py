@@ -16,6 +16,8 @@ def main():
     keeper = (ROOT / "ops/oracle_autopilot_snapshot_keeper.py").read_text()
     assert "REPEATABLE READ, READ ONLY" in keeper
     assert "SERIALIZABLE" not in keeper
+    connection = (ROOT / "ops/oracle_autopilot_dump_connection.py").read_text()
+    assert "sslrootcert=/secrets/ca-certificates.crt" in connection
     assert "postgres@sha256:0377e72c5289ed2f98cf61b1a9c2db9eb9d300317fe14244492fbc94343b3d04" in workflow
     assert "ALLOW_CONNECTIONS false CONNECTION LIMIT 0" in restore
     assert "SOURCE_TARGET_MANIFEST_MISMATCH" in restore

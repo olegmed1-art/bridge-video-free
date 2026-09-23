@@ -36,7 +36,7 @@ port=5432
 dbname=neondb
 user=neondb_owner
 sslmode=verify-full
-sslrootcert=/etc/ssl/certs/ca-certificates.crt
+sslrootcert=/secrets/ca-certificates.crt
 channel_binding=require
 connect_timeout=10
 options=-c default_transaction_read_only=on -c statement_timeout=0 -c lock_timeout=3000
