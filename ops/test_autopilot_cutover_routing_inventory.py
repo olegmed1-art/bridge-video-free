@@ -17,7 +17,9 @@ ROUTES = {
     'autopilot-mailbox-pre-rotation.yml': {'mailbox'},
     'database-health-monitor.yml': {'health'},
 }
-ROUTE_CALL = re.compile(r'python\s+-m\s+ops\.github_autopilot_db_route\s+([a-z-]+)\b')
+COMMAND = r'^\s*(?:run:\s*)?(?:row="\$\()?python\s+-m\s+'
+ROUTE_CALL = re.compile(COMMAND + r'ops\.github_autopilot_db_route\s+([a-z-]+)\b', re.MULTILINE)
+DIRECT_CALL = re.compile(COMMAND + r'oracle_autopilot\.', re.MULTILINE)
 
 
 def verify(workflows=WORKFLOWS):
@@ -28,7 +30,7 @@ def verify(workflows=WORKFLOWS):
             raise AssertionError(f'{name}: route selection drift: {observed} != {expected}')
         # A second direct module invocation could silently write to Neon while
         # the route lease holds the Oracle writer. Require review if introduced.
-        if re.search(r'python\s+-m\s+oracle_autopilot\.', source):
+        if DIRECT_CALL.search(source):
             raise AssertionError(f'{name}: direct autopilot module bypasses routing lease')
         if 'refs/heads/main' not in source:
             raise AssertionError(f'{name}: main-only execution guard missing')
@@ -50,7 +52,12 @@ class CutoverRoutingInventory(unittest.TestCase):
             path.write_text(original.replace('ops.github_autopilot_db_route reconcile', 'oracle_autopilot.paused_reconcile'))
             with self.assertRaises(AssertionError):
                 verify(temporary)
-            path.write_text(original + '\n# python -m oracle_autopilot.paused_reconcile\n')
+            path.write_text(original + '\n          python -m oracle_autopilot.paused_reconcile\n')
+            with self.assertRaises(AssertionError):
+                verify(temporary)
+            path.write_text(original.replace('ops.github_autopilot_db_route reconcile',
+                                             'ignored.route reconcile') +
+                            '\n# python -m ops.github_autopilot_db_route reconcile\n')
             with self.assertRaises(AssertionError):
                 verify(temporary)
 
