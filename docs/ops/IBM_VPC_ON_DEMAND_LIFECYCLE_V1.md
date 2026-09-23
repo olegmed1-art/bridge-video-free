@@ -40,7 +40,7 @@ consistent observation from:
 6. disk headroom, using the platform-specific floor and fresh telemetry;
 7. exact IBM VPC instance ID, name, region and provider lifecycle status.
 
-Every source must be complete and fresh. Missing telemetry is `HOLD`, never idle.
+Queue, lease, worker, and storage sources must be complete and fresh. Missing telemetry in these sources is `HOLD`, never idle. Fresh disk headroom is required before admitting/starting workload; a verified low-disk reading alone does not prevent stopping a fully idle VM.
 Queue leases must be extended while IBM boots. A new job cancels a pending stop.
 Only one lifecycle writer may send start/stop calls at a time.
 
