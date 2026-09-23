@@ -36,7 +36,8 @@ BEGIN
         WHERE status IN ('NEW','VALIDATING','READY','RUNNING','WAITING_EXTERNAL','EVALUATING')) <> 1
        OR NOT EXISTS (SELECT FROM autopilot.task
            WHERE task_id='f05c605f-f664-4ff7-9927-a039f000a929'::uuid
-             AND status='READY' AND attempts=0 AND lease_owner IS NULL
+             AND status='READY' AND attempts=0 AND not_before <= now()
+             AND max_attempts > 0 AND lease_owner IS NULL
              AND lease_until IS NULL AND lease_epoch=0
              AND goal_type='CHATGPT_ROLE_DISPATCH_V1'
              AND goal_json->>'mailbox_pr'='1703'
@@ -44,6 +45,8 @@ BEGIN
              AND goal_json->>'expected_head_sha'='2586929313ab40326d64353b513ff86e5ae3350c')
        OR EXISTS (SELECT FROM autopilot.role_dispatch_outbox
                   WHERE task_id='f05c605f-f664-4ff7-9927-a039f000a929'::uuid)
+       OR EXISTS (SELECT FROM autopilot.role_dispatch_outbox
+                  WHERE status='CLAIMED' OR claim_until IS NOT NULL)
     THEN
         RAISE EXCEPTION 'LIGHT_0355_QUEUE_DRIFT';
     END IF;
