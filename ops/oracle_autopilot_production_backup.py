@@ -141,6 +141,20 @@ def source_snapshot(dsn):
     if version // 10000 != 18 or database != 'autopilot' or address != '127.0.0.1' or port != 55432:
         connection.close()
         raise ValueError('SOURCE_IDENTITY_MISMATCH')
+    # pg_dump exports the entire database. Refuse unexpected application data,
+    # including a shadow schema accidentally restored into this database.
+    cursor.execute("SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+                   "WHERE c.relkind IN ('r','p','v','m','S','f') "
+                   "AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\' "
+                   "AND n.nspname <> 'information_schema' "
+                   "AND NOT EXISTS (SELECT 1 FROM pg_depend d "
+                   "WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='e') "
+                   "AND NOT (n.nspname IN ('autopilot','autopilot_reconcile') "
+                   "OR (n.nspname='public' AND c.relname IN "
+                   "('schema_migration','autopilot_operational_health_signal')))")
+    if cursor.fetchone()[0]:
+        connection.close()
+        raise ValueError('UNEXPECTED_DATABASE_RELATIONS')
     cursor.execute('SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)', (list(ROLES),))
     existing_roles = {row[0] for row in cursor.fetchall()}
     if not {'autopilot_callback_login', 'autopilot_light_worker_login',
