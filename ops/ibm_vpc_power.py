@@ -12,11 +12,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import re
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass
 
 IAM_URL = "https://iam.cloud.ibm.com/identity/token"
@@ -33,6 +35,20 @@ ALLOWED_STATES = {
 MUTATION_AUTHORIZATION = "IBM_POWER_MUTATION_AUTHORIZED=YES"
 MAX_ERROR_BODY_BYTES = 64 * 1024
 SAFE_PROVIDER_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+USER_AGENT = (
+    "bridge-video-free/ibm-vpc-power "
+    f"(lang=python; os={platform.system()}; arch={platform.machine()}; "
+    f"python.version={platform.python_version()})"
+)
+
+
+def _request_headers() -> dict[str, str]:
+    """Identify this API client and make each request traceable at IBM."""
+    return {
+        "Accept": "application/json",
+        "User-Agent": USER_AGENT,
+        "X-Request-Id": str(uuid.uuid4()),
+    }
 
 
 class BoundedClientError(RuntimeError):
@@ -150,7 +166,10 @@ def obtain_token(api_key: str) -> str:
     request = urllib.request.Request(
         IAM_URL,
         data=body,
-        headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+        headers={
+            **_request_headers(),
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
         method="POST",
     )
     try:
@@ -189,7 +208,7 @@ def parse_instance(value: dict, *, expected_id: str, expected_name: str) -> Inst
 def read_instance(token: str, *, region: str, instance_id: str, name: str) -> Instance:
     request = urllib.request.Request(
         _instance_url(region, instance_id),
-        headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
+        headers={**_request_headers(), "Authorization": f"Bearer {token}"},
         method="GET",
     )
     try:
@@ -221,7 +240,7 @@ def create_action(
         _instance_url(region, instance_id, action=True),
         data=payload,
         headers={
-            "Accept": "application/json",
+            **_request_headers(),
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         },
