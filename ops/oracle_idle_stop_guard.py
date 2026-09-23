@@ -9,7 +9,9 @@ future-dated, partial, or extra-output proof emits NO and exits non-zero.
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import stat
 import sys
 import time
 from dataclasses import dataclass
@@ -44,12 +46,20 @@ class ProofError(ValueError):
 
 
 def _read_exact_lines(path: Path) -> list[str]:
-    if path.is_symlink():
-        raise ProofError("proof_symlink_forbidden")
     try:
-        raw = path.read_bytes()
+        # Open the checked inode once. O_NOFOLLOW closes the symlink swap gap;
+        # O_NONBLOCK prevents an attacker-controlled FIFO from hanging STOP.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as exc:
         raise ProofError("proof_missing_or_unreadable") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ProofError("proof_not_regular_file")
+        raw = os.read(fd, MAX_PROOF_BYTES + 1)
+    except OSError as exc:
+        raise ProofError("proof_missing_or_unreadable") from exc
+    finally:
+        os.close(fd)
     if not raw or len(raw) > MAX_PROOF_BYTES:
         raise ProofError("proof_size_invalid")
     if b"\x00" in raw or b"\r" in raw:

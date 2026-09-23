@@ -570,6 +570,26 @@ class OracleStopAuthorizerTests(unittest.TestCase):
             "proof_missing_or_unreadable",
         )
 
+    def test_symlink_and_fifo_cannot_supply_idle_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "valid"
+            target.write_text(_proof_text("IDLE"), encoding="utf-8")
+            link = root / "link"
+            link.symlink_to(target)
+            fifo = root / "fifo"
+            os.mkfifo(fifo)
+            for path, reason in (
+                (link, "proof_missing_or_unreadable"),
+                (fifo, "proof_not_regular_file"),
+            ):
+                with self.subTest(path=path.name):
+                    result = subprocess.run(
+                        [sys.executable, str(AUTHORIZER), "--proof", str(path)],
+                        check=False, capture_output=True, text=True, timeout=3,
+                    )
+                    self.assert_forbidden(result, reason)
+
     def test_missing_line_forbids_stop(self) -> None:
         partial = "\n".join(_proof_text("IDLE").splitlines()[:-1]) + "\n"
         self.assert_forbidden(
