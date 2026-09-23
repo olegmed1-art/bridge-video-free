@@ -142,7 +142,10 @@ jobs:
             "${pg_local[@]}" pg_restore -h 127.0.0.1 -p 5432 -U postgres -d recovery --role=neondb_owner \
               --no-owner --single-transaction --exit-on-error "/backup/$dump"
           done
-          "${psql_base[@]}" -f ops/oracle_autopilot_snapshot_manifest.sql > reference-manifest.json
+          "${pg_local[@]}" psql -h 127.0.0.1 -p 5432 -U postgres -d recovery \
+            -XAtqv ON_ERROR_STOP=1 -f /backup/ops/oracle_autopilot_snapshot_manifest.sql \
+            > reference-manifest.json
+          test -s reference-manifest.json
           "${pg_local[@]}" pg_dump -h 127.0.0.1 -p 5432 -U postgres -d recovery \
             --schema-only --no-owner --schema=autopilot --schema=autopilot_reconcile > schema-core.sql
           "${pg_local[@]}" pg_dump -h 127.0.0.1 -p 5432 -U postgres -d recovery \

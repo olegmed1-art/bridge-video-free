@@ -23,6 +23,9 @@ def main():
     assert '--exit-on-error "/backup/$dump"' in workflow
     assert '-v "$PWD:/backup:ro" "$pg_image"' in workflow
     assert "ALTER DATABASE recovery OWNER TO neondb_owner;" in workflow
+    assert '"${pg_local[@]}" psql' in workflow
+    assert "-f /backup/ops/oracle_autopilot_snapshot_manifest.sql" in workflow
+    assert "test -s reference-manifest.json" in workflow
     assert "\n            pg_restore -h 127.0.0.1" not in workflow
     assert "ALLOW_CONNECTIONS false CONNECTION LIMIT 0" in restore
     assert "SOURCE_TARGET_MANIFEST_MISMATCH" in restore
