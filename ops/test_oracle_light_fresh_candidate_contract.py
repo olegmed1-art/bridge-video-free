@@ -6,8 +6,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    first = "header\n\\restrict abc\nbody\n\\unrestrict abc\n"
-    second = "header\n\\restrict xyz\nbody\n\\unrestrict xyz\n"
+    first = (
+        "header\n\\restrict abc\n-- Dumped from database version 18.6 (Debian build)\n"
+        "-- Dumped by pg_dump version 18.6 (Debian build)\nbody\n\\unrestrict abc\n"
+    )
+    second = (
+        "header\n\\restrict xyz\n-- Dumped from database version 18.6 (Ubuntu build)\n"
+        "-- Dumped by pg_dump version 18.6 (Ubuntu build)\nbody\n\\unrestrict xyz\n"
+    )
     assert schema_digest_texts([first]) == schema_digest_texts([second])
     workflow = (ROOT / ".github/workflows/oracle-light-fresh-candidate.yml").read_text()
     restore = (ROOT / "ops/oracle_light_fresh_candidate_restore.py").read_text()
