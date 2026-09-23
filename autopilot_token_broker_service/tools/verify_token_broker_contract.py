@@ -61,7 +61,7 @@ def verify() -> dict[str, object]:
         "pull_requests": "read",
     }:
         raise SystemExit("BROKER_PROJECT_HEAD_PERMISSIONS_INVALID")
-    if assignments.get("ROLE_DISPATCH_MAILBOX_PR") != 1685:
+    if assignments.get("ROLE_DISPATCH_MAILBOX_PR") != 1703:
         raise SystemExit("BROKER_ROLE_DISPATCH_MAILBOX_INVALID")
     if (
         assignments.get("ROLE_DISPATCH_BOT_LOGIN")
