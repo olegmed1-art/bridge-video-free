@@ -32,6 +32,13 @@ OWNERSHIP_SQL = """SELECT coalesce(jsonb_agg(jsonb_build_array(n.nspname,p.prona
  FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
  JOIN pg_roles r ON r.oid=p.proowner
  WHERE n.nspname IN ('autopilot','autopilot_reconcile')"""
+SEQUENCE_SQL = """SELECT coalesce(jsonb_agg(jsonb_build_array(
+ n.nspname,c.relname,pg_get_userbyid(c.relowner),s.seqtypid::regtype::text,
+ s.seqstart,s.seqincrement,s.seqmin,s.seqmax,s.seqcache,s.seqcycle)
+ ORDER BY n.nspname,c.relname),'[]'::jsonb)
+ FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+ JOIN pg_sequence s ON s.seqrelid=c.oid
+ WHERE n.nspname IN ('autopilot','autopilot_reconcile')"""
 
 
 def required(name):
@@ -188,13 +195,18 @@ def source_snapshot(dsn):
     if not owners or any(item[3] not in existing_roles for item in owners):
         connection.close()
         raise ValueError('UNSUPPORTED_FUNCTION_OWNER')
+    cursor.execute(SEQUENCE_SQL)
+    sequences = cursor.fetchone()[0]
+    if not isinstance(sequences, list) or any(item[2] not in existing_roles for item in sequences):
+        connection.close()
+        raise ValueError('UNSUPPORTED_SEQUENCE_STRUCTURE')
     cursor.execute("SELECT role.rolname, member.rolname FROM pg_auth_members a "
                    "JOIN pg_roles role ON role.oid=a.roleid "
                    "JOIN pg_roles member ON member.oid=a.member "
                    "WHERE role.rolname = ANY(%s) AND member.rolname = ANY(%s) "
                    "ORDER BY role.rolname,member.rolname", (list(ROLES), list(ROLES)))
     memberships = cursor.fetchall()
-    return connection, snapshot, database, db_oid, observed, manifest, owners, existing_roles, memberships
+    return connection, snapshot, database, db_oid, observed, manifest, owners, sequences, existing_roles, memberships
 
 
 def private_bucket(client, namespace, bucket):
@@ -248,7 +260,7 @@ def upload_download(source, destination, name):
     return namespace, bucket, sha
 
 
-def drill(archive, expected, owners, roles, memberships):
+def drill(archive, expected, owners, sequences, roles, memberships):
     # An ephemeral PG18 container, isolated from the host network and production
     # volume. The archive is mounted read-only; --rm removes the drill database.
     image = required('AUTOPILOT_RESTORE_IMAGE')
@@ -272,7 +284,9 @@ def drill(archive, expected, owners, roles, memberships):
                'psql -XAt -h /tmp -U postgres -d autopilot -v ON_ERROR_STOP=1 '
                '-f /backup/manifest.sql; '
                'psql -XAt -h /tmp -U postgres -d autopilot -v ON_ERROR_STOP=1 '
-               '-f /backup/owners.sql')
+               '-f /backup/owners.sql; '
+               'psql -XAt -h /tmp -U postgres -d autopilot -v ON_ERROR_STOP=1 '
+               '-f /backup/sequences.sql')
     with tempfile.TemporaryDirectory(prefix='autopilot-manifest-', dir=str(archive.parent)) as folder:
         sql = Path(folder) / 'manifest.sql'
         sql.write_text(MANIFEST, encoding='utf-8')
@@ -288,9 +302,12 @@ def drill(archive, expected, owners, roles, memberships):
         owner_sql = Path(folder) / 'owners.sql'
         owner_sql.write_text(OWNERSHIP_SQL + ';\n', encoding='utf-8')
         os.chmod(owner_sql, 0o600)
+        sequence_sql = Path(folder) / 'sequences.sql'
+        sequence_sql.write_text(SEQUENCE_SQL + ';\n', encoding='utf-8')
+        os.chmod(sequence_sql, 0o600)
         os.chown(folder, 0, 999)
         os.chmod(folder, 0o710)
-        for source in (sql, role_sql, owner_sql):
+        for source in (sql, role_sql, owner_sql, sequence_sql):
             os.chown(source, 0, 999)
             os.chmod(source, 0o640)
         output = execute(['docker', 'run', '--rm', '--network', 'none', '--read-only',
@@ -300,18 +317,22 @@ def drill(archive, expected, owners, roles, memberships):
                           '-v', str(sql.resolve()) + ':/backup/manifest.sql:ro',
                           '-v', str(role_sql.resolve()) + ':/backup/roles.sql:ro',
                           '-v', str(owner_sql.resolve()) + ':/backup/owners.sql:ro',
+                          '-v', str(sequence_sql.resolve()) + ':/backup/sequences.sql:ro',
                           image, 'sh', '-c', command], timeout=1200)
     lines = output.decode().strip().splitlines()
     if not lines:
         raise ValueError('RESTORE_MANIFEST_MISSING')
-    if len(lines) < 2:
+    if len(lines) < 3:
         raise ValueError('RESTORE_OWNERSHIP_MISSING')
-    actual = json.loads(lines[-2])
-    actual_owners = json.loads(lines[-1])
+    actual = json.loads(lines[-3])
+    actual_owners = json.loads(lines[-2])
+    actual_sequences = json.loads(lines[-1])
     if actual != expected:
         raise ValueError('RESTORE_MANIFEST_MISMATCH')
     if actual_owners != owners:
         raise ValueError('RESTORE_OWNERSHIP_MISMATCH')
+    if actual_sequences != sequences:
+        raise ValueError('RESTORE_SEQUENCE_STRUCTURE_MISMATCH')
     return hashlib.sha256(json.dumps(actual, sort_keys=True).encode()).hexdigest()
 
 
@@ -319,7 +340,7 @@ def perform_backup(receipt, dsn, dump_env, run_id, head, route):
     with tempfile.TemporaryDirectory(prefix='autopilot-production-backup-') as directory:
         folder = Path(directory)
         os.chmod(folder, 0o700)
-        source, snapshot, database, db_oid, observed, expected, owners, roles, memberships = source_snapshot(dsn)
+        source, snapshot, database, db_oid, observed, expected, owners, sequences, roles, memberships = source_snapshot(dsn)
         try:
             archive = folder / 'archive.dump'
             execute(['pg_dump', '--format=custom', '--file', str(archive),
@@ -337,7 +358,7 @@ def perform_backup(receipt, dsn, dump_env, run_id, head, route):
         namespace, bucket, archive_sha = upload_download(archive, downloaded, object_name)
         manifest_sha = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
         owners_sha = hashlib.sha256(json.dumps(owners, sort_keys=True).encode()).hexdigest()
-        restored_sha = drill(downloaded, expected, owners, roles, memberships)
+        restored_sha = drill(downloaded, expected, owners, sequences, roles, memberships)
         record = {'format': FORMAT, 'result': 'PASS', 'database': database,
                   'database_oid': db_oid, 'snapshot_id': snapshot,
                   'route_epoch': route['epoch'], 'route_backend': route['backend'],
@@ -345,6 +366,8 @@ def perform_backup(receipt, dsn, dump_env, run_id, head, route):
                   'archive_sha256': archive_sha, 'download_sha256': digest(downloaded),
                   'manifest_sha256': manifest_sha, 'restored_manifest_sha256': restored_sha,
                   'function_ownership_sha256': owners_sha,
+                  'sequence_structure_sha256': hashlib.sha256(
+                      json.dumps(sequences, sort_keys=True).encode()).hexdigest(),
                   'object': {'namespace': namespace, 'bucket': bucket, 'name': object_name},
                   'restore_image': required('AUTOPILOT_RESTORE_IMAGE'),
                   'workflow': {'repository': required('GITHUB_REPOSITORY'),
