@@ -33,7 +33,11 @@ SQL = """SELECT current_setting('neon.project_id',true),
  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
   WHERE c.relkind IN ('r','p','m') AND n.nspname NOT IN
   ('autopilot','autopilot_reconcile','pg_catalog','information_schema')
-  AND n.nspname NOT LIKE 'pg_toast%')"""
+  AND n.nspname NOT LIKE 'pg_toast%'),
+ (SELECT count(*) FROM public.schema_migration
+  WHERE migration_key ~ '(^|_)autopilot(_|$)'),
+ (SELECT count(*) FROM public.schema_migration
+  WHERE migration_key !~ '(^|_)autopilot(_|$)')"""
 
 
 def pinned_parameters(raw, label):
@@ -71,19 +75,25 @@ def inspect(label, parameters):
         connection.read_only = True
         with connection.cursor() as cursor:
             cursor.execute(SQL)
-            project, branch, database, version, relations, functions, reconcile, size, contour_size, other_relations = cursor.fetchone()
+            (project, branch, database, version, relations, functions, reconcile,
+             size, contour_size, other_relations, autopilot_ledger_rows,
+             other_ledger_rows) = cursor.fetchone()
         connection.rollback()
     if (project != PROJECT or branch != SOURCES[label][1] or database != 'neondb'
             or version // 10000 != 18 or relations < 1 or functions < 1
             or (label == 'production' and reconcile < 1)
             or (label == 'shadow' and reconcile != 0)
-            or contour_size <= 0 or other_relations < 1):
+            or contour_size <= 0 or other_relations < 1
+            or autopilot_ledger_rows < 1 or other_ledger_rows < 1):
         raise ValueError('SOURCE_BRANCH_OR_GENERATION_MISMATCH')
     return {'branch_id': branch, 'relations': relations, 'functions': functions,
             'reconcile_functions': reconcile, 'database_bytes': size,
             'autopilot_relation_bytes': contour_size,
             'other_schema_relations': other_relations,
-            'full_neon_database_export_allowed': False}
+            'autopilot_ledger_rows': autopilot_ledger_rows,
+            'other_ledger_rows': other_ledger_rows,
+            'full_neon_database_export_allowed': False,
+            'full_ledger_table_export_allowed': False}
 
 
 def main():
