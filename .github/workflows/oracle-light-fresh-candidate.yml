@@ -135,13 +135,13 @@ jobs:
           CREATE EXTENSION pgcrypto;
           CREATE EXTENSION btree_gist;
           SQL
+          pg_image='postgres@sha256:0377e72c5289ed2f98cf61b1a9c2db9eb9d300317fe14244492fbc94343b3d04'
+          pg_local=(docker run --rm --network host -e PGPASSWORD -v "$PWD:/backup:ro" "$pg_image")
           for dump in autopilot-fresh.dump ledger-fresh.dump health-fresh.dump; do
-            pg_restore -h 127.0.0.1 -p 5432 -U postgres -d recovery --role=neondb_owner \
-              --no-owner --single-transaction --exit-on-error "$dump"
+            "${pg_local[@]}" pg_restore -h 127.0.0.1 -p 5432 -U postgres -d recovery --role=neondb_owner \
+              --no-owner --single-transaction --exit-on-error "/backup/$dump"
           done
           "${psql_base[@]}" -f ops/oracle_autopilot_snapshot_manifest.sql > reference-manifest.json
-          pg_image='postgres@sha256:0377e72c5289ed2f98cf61b1a9c2db9eb9d300317fe14244492fbc94343b3d04'
-          pg_local=(docker run --rm --network host -e PGPASSWORD -v "$PWD:/backup" "$pg_image")
           "${pg_local[@]}" pg_dump -h 127.0.0.1 -p 5432 -U postgres -d recovery \
             --schema-only --no-owner --schema=autopilot --schema=autopilot_reconcile > schema-core.sql
           "${pg_local[@]}" pg_dump -h 127.0.0.1 -p 5432 -U postgres -d recovery \

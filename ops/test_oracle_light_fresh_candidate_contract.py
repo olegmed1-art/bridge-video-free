@@ -19,6 +19,10 @@ def main():
     connection = (ROOT / "ops/oracle_autopilot_dump_connection.py").read_text()
     assert "sslrootcert=/secrets/ca-certificates.crt" in connection
     assert "postgres@sha256:0377e72c5289ed2f98cf61b1a9c2db9eb9d300317fe14244492fbc94343b3d04" in workflow
+    assert '"${pg_local[@]}" pg_restore' in workflow
+    assert '--exit-on-error "/backup/$dump"' in workflow
+    assert '-v "$PWD:/backup:ro" "$pg_image"' in workflow
+    assert "\n            pg_restore -h 127.0.0.1" not in workflow
     assert "ALLOW_CONNECTIONS false CONNECTION LIMIT 0" in restore
     assert "SOURCE_TARGET_MANIFEST_MISMATCH" in restore
     assert "failure_fence" in restore and "UNSAFE_STATE" in restore
