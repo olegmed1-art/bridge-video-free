@@ -2,10 +2,10 @@ name: Oracle Light autopilot routing lease
 
 on:
   pull_request:
-    paths: ['.github/workflows/oracle-light-route-lease.yml', 'ops/oracle_light_route_install.py', 'ops/oracle_light_route_lease.py', 'ops/oracle_light_route_probe.py', 'ops/github_autopilot_db_route.py', 'ops/test_oracle_light_route_lease.py', 'ops/test_autopilot_github_db_route.py']
+    paths: ['.github/workflows/oracle-light-route-lease.yml', 'ops/oracle_light_route_install.py', 'ops/oracle_light_route_lease.py', 'ops/oracle_light_route_probe.py', 'ops/github_autopilot_db_route.py', 'ops/test_oracle_light_route_lease.py', 'ops/test_autopilot_github_db_route.py', 'ops/test_autopilot_cutover_routing_inventory.py', '.github/workflows/autopilot-chatgpt-role-callback.yml', '.github/workflows/autopilot-codex-event-callback.yml', '.github/workflows/autopilot-paused-reconcile.yml', '.github/workflows/autopilot-mailbox-pre-rotation.yml', '.github/workflows/database-health-monitor.yml']
   push:
     branches: [main]
-    paths: ['.github/workflows/oracle-light-route-lease.yml', 'ops/oracle_light_route_install.py', 'ops/oracle_light_route_lease.py', 'ops/oracle_light_route_probe.py', 'ops/github_autopilot_db_route.py', 'ops/test_oracle_light_route_lease.py', 'ops/test_autopilot_github_db_route.py']
+    paths: ['.github/workflows/oracle-light-route-lease.yml', 'ops/oracle_light_route_install.py', 'ops/oracle_light_route_lease.py', 'ops/oracle_light_route_probe.py', 'ops/github_autopilot_db_route.py', 'ops/test_oracle_light_route_lease.py', 'ops/test_autopilot_github_db_route.py', 'ops/test_autopilot_cutover_routing_inventory.py', '.github/workflows/autopilot-chatgpt-role-callback.yml', '.github/workflows/autopilot-codex-event-callback.yml', '.github/workflows/autopilot-paused-reconcile.yml', '.github/workflows/autopilot-mailbox-pre-rotation.yml', '.github/workflows/database-health-monitor.yml']
   workflow_dispatch:
 
 permissions:
@@ -25,6 +25,7 @@ jobs:
       - run: python -m py_compile ops/oracle_light_route_install.py ops/oracle_light_route_lease.py ops/oracle_light_route_probe.py ops/github_autopilot_db_route.py
       - run: python ops/test_oracle_light_route_lease.py
       - run: python ops/test_autopilot_github_db_route.py
+      - run: python ops/test_autopilot_cutover_routing_inventory.py
       - name: Validate shell syntax
         run: |
           ruby -ryaml -e 'd=YAML.load_file(ARGV[0]); d.fetch("jobs").each_value { |j| j.fetch("steps").each { |s| next unless s["run"]; IO.popen(["bash", "-n"], "w") { |p| p.write(s["run"]) }; abort "invalid shell" unless $?.success? } }' .github/workflows/oracle-light-route-lease.yml
