@@ -158,11 +158,13 @@ jobs:
           from ops.oracle_light_fresh_candidate_restore import schema_digest_texts
           path=Path('reference-manifest.json')
           data=json.loads(path.read_text())
-          data['schema_sha256']=schema_digest_texts([
+          schema_texts=[
               Path('schema-core.sql').read_text(),
               Path('schema-ledger.sql').read_text(),
               Path('schema-health.sql').read_text(),
-          ])
+          ]
+          data['schema_sha256']=schema_digest_texts(schema_texts)
+          data['schema_parts_sha256']=[schema_digest_texts([text]) for text in schema_texts]
           assert data['scope']=='AUTOPILOT_ONLY'
           assert data['entries']['functions'][0]==97
           assert data['entries']['security_definer_superowner'][0]==0

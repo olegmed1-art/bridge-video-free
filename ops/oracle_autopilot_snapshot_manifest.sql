@@ -103,7 +103,7 @@ WHERE nspname NOT IN ('pg_catalog','information_schema','public','autopilot','au
 
 INSERT INTO snapshot_manifest
 SELECT 'health_view',count(*),
-       md5(coalesce(string_agg(md5(to_jsonb(v)::text),'' ORDER BY md5(to_jsonb(v)::text)),''))
+       md5(coalesce(string_agg(signal_key::text,E'\n' ORDER BY signal_key::text),''))
 FROM public.autopilot_operational_health_signal v;
 
 INSERT INTO snapshot_manifest

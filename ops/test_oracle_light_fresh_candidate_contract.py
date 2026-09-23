@@ -50,6 +50,10 @@ def main():
     assert "failure_fence" in restore and "UNSAFE_STATE" in restore
     assert "pg_policy" not in manifest  # covered by canonical schema-only digest
     assert "unexpected_schemas" in manifest
+    assert "string_agg(signal_key::text" in manifest
+    assert "to_jsonb(v)::text" not in manifest
+    assert "schema_parts_sha256" in workflow and "schema_parts_sha256" in restore
+    assert '"SCHEMA_CORE", "SCHEMA_LEDGER", "SCHEMA_HEALTH"' in restore
     print("oracle_light_fresh_candidate_contract=PASS")
 
 
