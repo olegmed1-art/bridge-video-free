@@ -29,6 +29,10 @@ def main():
     assert "\n            pg_restore -h 127.0.0.1" not in workflow
     assert "ALLOW_CONNECTIONS false CONNECTION LIMIT 0" in restore
     assert "SOURCE_TARGET_MANIFEST_MISMATCH" in restore
+    assert "copy_stream_to_container(source, remote_dump)" in restore
+    assert '"docker", "cp"' not in restore
+    assert 'set -C; cat > "$1"' in restore
+    assert '"postgres:600"' in restore
     assert "failure_fence" in restore and "UNSAFE_STATE" in restore
     assert "pg_policy" not in manifest  # covered by canonical schema-only digest
     assert "unexpected_schemas" in manifest
