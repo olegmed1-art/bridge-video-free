@@ -6,6 +6,9 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import socket
+import ssl
+import struct
 import subprocess
 import sys
 
@@ -31,6 +34,21 @@ def inspect_certificate(path: Path, now: datetime, warning_days: int) -> dict:
             'remaining_seconds': remaining}
 
 
+def verify_live_certificate(directory: Path) -> None:
+    """Authenticate PostgreSQL on loopback and compare its active leaf to disk."""
+    ca_path = directory / 'ca.crt'
+    server_path = directory / 'tls/server.crt'
+    context = ssl.create_default_context(cafile=str(ca_path))
+    expected = ssl.PEM_cert_to_DER_cert(server_path.read_text())
+    with socket.create_connection(('127.0.0.1', 55432), timeout=10) as connection:
+        connection.sendall(struct.pack('!II', 8, 80877103))
+        if connection.recv(1) != b'S':
+            raise ValueError('PostgreSQL did not accept TLS')
+        with context.wrap_socket(connection, server_hostname='localhost') as secure:
+            if secure.getpeercert(binary_form=True) != expected:
+                raise ValueError('active PostgreSQL certificate differs from disk')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--directory', type=Path, default=DEFAULT_DIRECTORY)
@@ -43,7 +61,8 @@ def main() -> int:
     try:
         for name, relative in [('server', 'tls/server.crt'), ('ca', 'ca.crt')]:
             certificates[name] = inspect_certificate(args.directory / relative, now, args.warning_days)
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+        verify_live_certificate(args.directory)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError, ssl.SSLError) as exc:
         print(json.dumps({'status': 'UNKNOWN', 'error_type': type(exc).__name__,
                           'scope': 'light_postgres_certificate_expiry'}))
         return 2
@@ -51,7 +70,7 @@ def main() -> int:
               else 'WARNING' if any(c['status'] == 'WARNING' for c in certificates.values())
               else 'OK')
     print(json.dumps({'status': status, 'checked_at': now.isoformat(),
-                      'certificates': certificates,
+                      'certificates': certificates, 'live_tls': 'VERIFIED',
                       'scope': 'light_postgres_certificate_expiry'}, sort_keys=True))
     return {'OK': 0, 'WARNING': 1, 'CRITICAL': 2}[status]
 
