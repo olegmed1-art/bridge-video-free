@@ -1,0 +1,32 @@
+name: Oracle Autopilot production backup contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-autopilot-production-backup-ci.yml'
+      - 'ops/oracle_autopilot_production_backup.py'
+      - 'ops/test_oracle_autopilot_production_backup.py'
+      - 'ops/oracle_light_candidate_restore.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/oracle-autopilot-production-backup-ci.yml'
+      - 'ops/oracle_autopilot_production_backup.py'
+      - 'ops/test_oracle_autopilot_production_backup.py'
+      - 'ops/oracle_light_candidate_restore.py'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'psycopg[binary]>=3.2,<4'
+      - run: python -m unittest -v ops.test_oracle_autopilot_production_backup
+      - run: python -m py_compile ops/oracle_autopilot_production_backup.py
