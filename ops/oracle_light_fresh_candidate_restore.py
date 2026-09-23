@@ -43,15 +43,24 @@ def sql(database, statement):
 
 def copy_stream_to_container(source, destination, expected_size):
     source.seek(0)
-    subprocess.run(
+    completed = subprocess.run(
         ("docker", "exec", "-i", "--user", "postgres", CONTAINER,
          "sh", "-ceu",
          'umask 077; set -C; cat > "$1"; test -f "$1"; test ! -L "$1"; '
-         'test "$(stat -c "%U:%a" "$1")" = "postgres:600"; '
-         'test "$(stat -c "%s" "$1")" = "$2"',
-         "sh", destination, str(expected_size)),
-        stdin=source, check=True, capture_output=True, timeout=300,
+         'test "$(stat -c "%U:%a" "$1")" = "postgres:600"; stat -c "%s" "$1"',
+         "sh", destination),
+        stdin=source, check=False, capture_output=True, timeout=300,
     )
+    if completed.returncode != 0:
+        raise RuntimeError(f"CONTAINER_STREAM_WRITE_FAILED:rc={completed.returncode}")
+    actual_text = completed.stdout.decode("ascii", errors="strict").strip()
+    if not actual_text.isdecimal():
+        raise RuntimeError("CONTAINER_STREAM_SIZE_REDACTED")
+    actual_size = int(actual_text)
+    if actual_size != expected_size:
+        raise RuntimeError(
+            f"CONTAINER_STREAM_SIZE_MISMATCH:expected={expected_size}:actual={actual_size}"
+        )
 
 def restore_dump(database, dump_path):
     completed = subprocess.run(
