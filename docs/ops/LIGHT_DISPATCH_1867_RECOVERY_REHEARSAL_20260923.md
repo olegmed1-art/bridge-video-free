@@ -57,3 +57,50 @@ own successful experiment. It performs no broker request or GitHub send.
 This evidence validates the candidate state transition and SQL one-send guard.
 It does not prove deployed broker compatibility, production recovery, actual
 delivery, ACK or task completion.
+
+## Durable journal candidate — subsequent isolated test
+
+`ops/light_dispatch_1867_journal_candidate.sql` was installed only on the same
+disposable child. SHA256:
+`f5d922bf0b6fae269ad04bbbe07e74089062f03e3a91304ecb1dfc566426f5df`.
+Its installer and callable procedure both refuse any other branch. This is a
+reviewable candidate, not a production-enabled recovery route.
+
+The owner-only procedure records complete task/outbox/step/work before and after
+images in an append-only journal, plus one task audit event per action. APPLY
+adopts the existing PR through the existing publication RPC; ROLLBACK compares
+the complete live state with the recorded post-apply state before restoring the
+original business fields. Normal `updated_at` changes and the planner's terminal
+decision audit are retained. It does not disable triggers or erase history.
+
+Executed database checks:
+
+- APPLY: WAITING_EXTERNAL / PUBLISHED, attempts 5.
+- Second APPLY: `RECOVERY_CANDIDATE_ACTION_ALREADY_USED`.
+- ROLLBACK with synthetic send intent: `RECOVERY_CANDIDATE_RECEIPT_EXISTS`;
+  the negative test transaction rolled back its synthetic intent.
+- ROLLBACK after row drift: `RECOVERY_CANDIDATE_ROLLBACK_DRIFT`;
+  the negative test transaction rolled back the introduced drift.
+- Clean ROLLBACK: FAILED_CLOSED / FAILED_CLOSED, attempts 5.
+- Every task/outbox/step/work field except audit timestamp `updated_at` matched
+  its original archived value after rollback.
+- Journal entries 2, administrative task events 2, send intents 0.
+- Total task count stayed 525; no repair or duplicate task was created.
+- Journal UPDATE rejected with `AUTOPILOT_APPEND_ONLY`.
+- Runtime EXECUTE on recovery procedure: false; runtime journal write: false.
+
+The two actions can be inspected or reproduced on a fresh isolated copy with:
+
+```sql
+SELECT autopilot.light_dispatch_1867_recover(
+ 'APPLY', '{"scope":"ISOLATED_REHEARSAL"}'::jsonb);
+SELECT autopilot.light_dispatch_1867_recover(
+ 'ROLLBACK', '{"scope":"ISOLATED_REHEARSAL"}'::jsonb);
+```
+
+The tested child has already consumed both actions; repeating either must fail.
+Production enablement still requires a separate reviewed administrative wrapper
+that binds fresh broker health, installed held worker, GitHub resource readback
+and database route to the operation. Do not remove the child-branch guard merely
+to run this candidate in production. The Vercel administrative release blocker
+remains unresolved.
