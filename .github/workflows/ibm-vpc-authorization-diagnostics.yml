@@ -2,6 +2,9 @@ name: IBM VPC authorization diagnostics
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/ibm-vpc-authorization-diagnostics.yml'
 
 permissions:
   contents: read
