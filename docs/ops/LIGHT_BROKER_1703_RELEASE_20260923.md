@@ -28,6 +28,21 @@ deployment must be READY and its authenticated `/healthz` must show
 and `provenance_sha256=441e25b065f31159d1f9b1f33e50fd7545933102917109b4cf94df1789e9998b`.
 Keep the access token and protection bypass value out of logs.
 
+Capture authenticated health from the new deployment into a local JSON file,
+then generate a candidate manifest with the executable gate:
+
+```sh
+python ops/verify_light_broker_1703_release.py --health-json /secure/broker-health.json --broker-url "$NEW_BROKER_URL" > /secure/broker-release.candidate.json
+```
+
+The verifier performs no network requests or mutations. It rejects missing
+fields, legacy mailboxes, wrong source/digests, unsafe capabilities and untrusted
+URL shapes. The administrator must independently verify the captured response
+belongs to that exact READY deployment. A generated candidate is not evidence
+of deployment or task completion. Keep this PR open until the verified new URL
+can be pinned atomically with `release.py`; changing only `release.py` on main
+would make the existing rollout manifest fail its source equality check.
+
 After the readback, update `ops/autopilot/broker-release.json` to the new
 deployment URL and these four digests, and pass the rollout contract CI. Deploy
 that release and the guarded worker to the held Light service through the
