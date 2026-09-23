@@ -1,5 +1,7 @@
 # Light broker mailbox 1703 release gate
 
+> Update: broker deployment is now READY and verified in [handoff 5803536604](https://github.com/olegmed1-art/bridge-video-free/pull/1769#issuecomment-5803536604). The new URL and digests are pinned in this PR. The compatible stopped-HOLD workflow and rollback are now implemented in [LIGHT_STOPPED_HOLD_UPGRADE_20260923.md](LIGHT_STOPPED_HOLD_UPGRADE_20260923.md). Historical blockers and design notes below describe the preceding preparation stage; use the new runbook for the next administrative operation. The implementation uses a release-local non-secret EnvironmentFile and one atomic drop-in, preserving the original secret environment file.
+
 The worker is HOLD. The single dispatch `322dd440-30b9-49d2-8e1a-f5ecc1d2b99b`
 already created draft PR #1867, but the worker rejected the broker's legacy 1150
 mailbox response. The task and outbox are FAILED_CLOSED. Do not run the ordinary
