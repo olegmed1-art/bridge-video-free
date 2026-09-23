@@ -29,7 +29,6 @@ COMPLETENESS_FIELDS = (
     "lease_snapshot_complete",
     "worker_snapshot_complete",
     "storage_snapshot_complete",
-    "disk_snapshot_complete",
 )
 
 
@@ -69,11 +68,12 @@ def decide(
         if not _is_int(value) or value < 0:
             return {"decision": "HOLD", "reason": f"{field}_invalid"}
 
-    if observation.get("disk_headroom_safe") is not True:
-        return {"decision": "HOLD", "reason": "disk_headroom_not_proven"}
-
     work_exists = any(observation[field] > 0 for field in COUNT_FIELDS)
     if work_exists:
+        if observation.get("disk_snapshot_complete") is not True:
+            return {"decision": "HOLD", "reason": "disk_snapshot_complete_not_proven"}
+        if observation.get("disk_headroom_safe") is not True:
+            return {"decision": "HOLD", "reason": "disk_headroom_not_proven"}
         if observation["eligible_pending_jobs"] + observation["running_jobs"] == 0:
             return {"decision": "HOLD", "reason": "orphan_lease_or_host_work"}
         if state == "stopped":
