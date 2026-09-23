@@ -27,6 +27,12 @@ timestamped observation and emits exactly one intent:
 Default idle grace is 10 minutes and must remain configurable. The controller must reset
 `idle_since_epoch` as soon as any work, lease, spool item, or maintenance lease appears.
 
+## Queue integration finding
+
+The current resident dispatcher in `oracle_autopilot/worker.py` claims the general Autopilot task queue; its task contract in `oracle_autopilot/contract.py` contains smoke, read-only GitHub/IBF, draft-repair, and role-dispatch tasks, but no Video/Books/Knowledge heavy-compute task kind. The IBM controller must therefore consume an explicit, separately admitted heavy-work lane or outbox. It must not start IBM merely because any Autopilot task is READY.
+
+The current Light runtime preflight also pins its checked database identity to Neon/`neondb`. Before connecting the heavy-work lane, reconcile this with the Autopilot database migration target and use the actual authoritative production queue. The lifecycle decision core stays independent of whether that queue is Neon or Oracle PostgreSQL.
+
 ## Required production observation sources
 
 Before enabling lifecycle actions, the Light Oracle controller must build a single
