@@ -77,3 +77,23 @@ ACK or terminal receipt. Preserve task `f05c605f-f664-4ff7-9927-a039f000a929`,
 dispatch `322dd440-30b9-49d2-8e1a-f5ecc1d2b99b`, PR #1867 and pinned target
 SHA `2586929313ab40326d64353b513ff86e5ae3350c`. The separate production recovery
 wrapper and controlled one-send observation remain subsequent gates.
+
+## First administrative attempt and parser correction
+
+Run https://github.com/olegmed1-art/bridge-video-free/actions/runs/35926558250
+at main `105f1a552d97103af241397edb18ccc4e3c56ade` passed the contract job and
+pre-switch read-only compatibility probe, then rejected the loaded environment
+file representation with `ENVIRONMENT_FILES_DRIFT`. Automatic rollback logged
+`PREVIOUS_STOPPED_HOLD`, PID 0. Independent host readback confirmed the original
+3244f4d4 release, inactive/dead, PID 0 and `NeedDaemonReload=no`.
+
+The systemd v255 primary source (`src/systemctl/systemctl-show.c`,
+`EnvironmentFiles` array branch) prints one property line per file. The reused
+single-value dictionary parser discarded the first file. The corrected updater
+uses its own strict property parser, preserves every file in order, and compares
+an exact tuple including `ignore_errors=no`. It rejects missing, reversed,
+duplicate, optional and foreign files; duplicate scalar or unknown properties
+also fail closed. Existing historical workflows and their parsers are untouched.
+
+Local corrected contract: 54 tests PASS. The original failed attempt is not an
+installed compatibility success and must not be used to authorize activation.

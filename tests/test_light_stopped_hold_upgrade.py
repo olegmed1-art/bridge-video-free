@@ -16,7 +16,7 @@ def harness(tmp_path, monkeypatch, fault=None):
         WorkingDirectory=str(old),User='school-autopilot',Group='school-autopilot',
         FragmentPath=str(h['UNIT_PATH']),DropInPaths=str(drop),NRestarts='0',InvocationID='',
         Environment='AUTOPILOT_ADMISSION_MODE=HOLD',
-        EnvironmentFiles=str(h['ENV_PATH'])+' (ignore_errors=no)',
+        EnvironmentFiles=(str(h['ENV_PATH'])+' (ignore_errors=no)',),
         ExecStart='{ path=/venv/python ; argv[]=/venv/python -m oracle_autopilot.worker_v17 ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }')
     original=state.copy()
     h['read_owned']=lambda path,mode:path.read_bytes()
@@ -26,8 +26,8 @@ def harness(tmp_path, monkeypatch, fault=None):
         calls.append(args)
         upgraded=drop.read_bytes()!=old_drop
         state.update(WorkingDirectory=str(new if upgraded else old),
-            EnvironmentFiles=str(h['ENV_PATH'])+' (ignore_errors=no)'+
-                (' '+str(new/target.EXTRA_ENV)+' (ignore_errors=no)' if upgraded else ''))
+            EnvironmentFiles=(str(h['ENV_PATH'])+' (ignore_errors=no)',)+
+                ((str(new/target.EXTRA_ENV)+' (ignore_errors=no)',) if upgraded else ()))
         if upgraded and fault=='reload': raise RuntimeError('reload failure')
         if upgraded and fault=='loaded_env': state['EnvironmentFiles']='wrong'
         if upgraded and fault=='restart_count': state['NRestarts']='1'
@@ -108,3 +108,43 @@ def test_generated_override_contains_only_non_secret_pins():
     release['broker_url']='https://untrusted.example/'
     with pytest.raises(target.Blocked,match='BROKER_RELEASE_DRIFT'):
         target.release_pins(release,verifier)
+
+
+@pytest.mark.parametrize('files', [
+    ('/etc/secrets (ignore_errors=no)',),
+    ('/etc/secrets (ignore_errors=no)', '/release/broker.env (ignore_errors=no)'),
+])
+def test_systemd_repeated_environment_files_preserve_order(monkeypatch, files):
+    from types import SimpleNamespace
+    output = ''.join(key + '=value\n' for key in target.SERVICE_KEYS if key != 'EnvironmentFiles')
+    output += ''.join('EnvironmentFiles=' + value + '\n' for value in files)
+    monkeypatch.setattr(target.subprocess, 'run', lambda *a, **k: SimpleNamespace(stdout=output))
+    assert target.service_state('unit')['EnvironmentFiles'] == files
+
+
+@pytest.mark.parametrize('change', ['missing', 'reversed', 'duplicate', 'ignored', 'foreign'])
+def test_environment_file_contract_rejects_drift(tmp_path, monkeypatch, change):
+    h,s,new,env,before,old_drop,stable,calls=harness(tmp_path,monkeypatch)
+    state={**before, 'WorkingDirectory': str(new)}
+    files=[str(h['ENV_PATH'])+' (ignore_errors=no)', str(new/target.EXTRA_ENV)+' (ignore_errors=no)']
+    if change=='missing': files=files[1:]
+    if change=='reversed': files.reverse()
+    if change=='duplicate': files.append(files[-1])
+    if change=='ignored': files[0]=files[0].replace('=no','=yes')
+    if change=='foreign': files.append('/foreign (ignore_errors=no)')
+    state['EnvironmentFiles']=tuple(files)
+    with pytest.raises(target.Blocked,match='ENVIRONMENT_FILES_DRIFT'):
+        target.validate_stopped(state,h,new,True)
+
+
+@pytest.mark.parametrize('suffix,guard', [
+    ('MainPID=0\n','SERVICE_PROPERTY_DUPLICATE'),
+    ('garbage\n','SERVICE_PROPERTY_INVALID'),
+    ('Unknown=value\n','SERVICE_PROPERTY_INVALID'),
+])
+def test_systemd_parser_rejects_ambiguous_properties(monkeypatch,suffix,guard):
+    from types import SimpleNamespace
+    output=''.join(key+'=value\n' for key in target.SERVICE_KEYS)+suffix
+    monkeypatch.setattr(target.subprocess,'run',lambda *a,**k:SimpleNamespace(stdout=output))
+    with pytest.raises(target.Blocked,match=guard):
+        target.service_state('unit')

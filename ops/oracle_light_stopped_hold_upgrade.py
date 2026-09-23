@@ -73,6 +73,31 @@ def desired_drop(release):
             str(release / EXTRA_ENV) + '\n').encode()
 
 
+SERVICE_KEYS = ('ActiveState', 'SubState', 'MainPID', 'NRestarts', 'InvocationID',
+    'WorkingDirectory', 'User', 'Group', 'DropInPaths', 'FragmentPath',
+    'ExecStart', 'EnvironmentFiles', 'Environment', 'NeedDaemonReload')
+
+
+def service_state(unit):
+    output = subprocess.run(['systemctl', 'show', unit,
+        *['--property=' + key for key in SERVICE_KEYS]], check=True,
+        capture_output=True, text=True, timeout=10).stdout
+    state = {'EnvironmentFiles': []}
+    # systemd v255 emits one EnvironmentFiles= line per array element.
+    # A dict comprehension silently discards all but the last file.
+    for line in output.splitlines():
+        key, separator, value = line.partition('=')
+        require(separator and key in SERVICE_KEYS, 'SERVICE_PROPERTY_INVALID')
+        if key == 'EnvironmentFiles':
+            state[key].append(value)
+        else:
+            require(key not in state, 'SERVICE_PROPERTY_DUPLICATE')
+            state[key] = value
+    require(set(state) == set(SERVICE_KEYS), 'SERVICE_PROPERTY_MISSING')
+    state['EnvironmentFiles'] = tuple(state['EnvironmentFiles'])
+    return state
+
+
 def validate_stopped(state, h, release, overridden=False):
     require(state['ActiveState'] == 'inactive' and state['SubState'] == 'dead'
             and state['MainPID'] == '0' and state['NeedDaemonReload'] == 'no', 'NOT_STOPPED')
@@ -83,9 +108,9 @@ def validate_stopped(state, h, release, overridden=False):
     require(state['Environment'].split().count('AUTOPILOT_ADMISSION_MODE=HOLD') == 1
             and not any(v.startswith('AUTOPILOT_ADMISSION_MODE=') and v != 'AUTOPILOT_ADMISSION_MODE=HOLD'
                         for v in state['Environment'].split()), 'HOLD_DRIFT')
-    expected_env = str(h['ENV_PATH']) + ' (ignore_errors=no)'
+    expected_env = (str(h['ENV_PATH']) + ' (ignore_errors=no)',)
     if overridden:
-        expected_env += ' ' + str(release / EXTRA_ENV) + ' (ignore_errors=no)'
+        expected_env += (str(release / EXTRA_ENV) + ' (ignore_errors=no)',)
     require(state['EnvironmentFiles'] == expected_env, 'ENVIRONMENT_FILES_DRIFT')
     require('path=' + h['PYTHON'] + ' ;' in state['ExecStart'] and
             'argv[]=' + h['PYTHON'] + ' -m oracle_autopilot.worker_v17 ;' in state['ExecStart'],
@@ -178,6 +203,7 @@ def switch(h, staging, release, env, before, old_drop, stable):
 def install(packet):
     loaded = helpers(packet['helpers'])
     h, staging, candidate = loaded['held'], loaded['stage'], loaded['candidate']
+    h['service'] = lambda: service_state(h['UNIT'])
     require(os.geteuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic', 'HOST_IDENTITY')
     h['validate_bundle'](packet['old_bundle'])
     h['verify_release'](packet['old_bundle'])
