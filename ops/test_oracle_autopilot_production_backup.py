@@ -72,6 +72,7 @@ class BackupFailureTests(unittest.TestCase):
             calls = []
             rows = iter([
                 ('snap-1', 'autopilot', 180000, '17', __import__('datetime').datetime.now(__import__('datetime').timezone.utc), '127.0.0.1', 55432),
+                (0,),
                 [('autopilot_callback_login',), ('autopilot_light_worker_login',),
                  ('bridge_school_worker_principal',), ('neondb_owner',)],
                 (False, False, False, False, False),
@@ -105,6 +106,34 @@ class BackupFailureTests(unittest.TestCase):
         self.assertTrue(connection.autocommit)
         self.assertEqual(Cursor.calls[0], 'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ')
         self.assertEqual(result[1], 'snap-1')
+
+    def test_unexpected_application_relation_blocks_full_database_dump(self):
+        import sys
+        class Cursor:
+            rows = iter([
+                ('snap', 'autopilot', 180000, '17', __import__('datetime').datetime.now(__import__('datetime').timezone.utc), '127.0.0.1', 55432),
+                (1,),
+            ])
+            def execute(self, sql, *args):
+                pass
+            def fetchone(self):
+                return next(self.rows)
+        class Connection:
+            autocommit = False
+            closed = False
+            def cursor(self):
+                return Cursor()
+            def close(self):
+                self.closed = True
+        connection = Connection()
+        class Psycopg:
+            @staticmethod
+            def connect(*args, **kwargs):
+                return connection
+        with patch.dict(sys.modules, {'psycopg': Psycopg}):
+            with self.assertRaisesRegex(ValueError, 'UNEXPECTED_DATABASE_RELATIONS'):
+                backup.source_snapshot('sensitive')
+        self.assertTrue(connection.closed)
 
     def test_partial_upload_never_downloads_or_confirms(self):
         class Client:
