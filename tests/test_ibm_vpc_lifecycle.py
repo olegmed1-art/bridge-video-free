@@ -82,7 +82,9 @@ class IBMVPCLifecycleDecisionTests(unittest.TestCase):
 
     def test_failed_or_disk_unknown_never_authorizes_mutation(self):
         self.assertEqual("HOLD", decide(observation(vpc_status="failed"), now_epoch=1000)["decision"])
-        self.assertEqual("HOLD", decide(observation(disk_headroom_safe=False), now_epoch=1000)["decision"])
+        self.assertEqual("HOLD", decide(observation(eligible_pending_jobs=1, disk_headroom_safe=False), now_epoch=1000)["decision"])
+        idle = decide(observation(vpc_status="running", idle_since_epoch=100), now_epoch=1000)
+        self.assertEqual("STOP", idle["decision"])
 
     def test_module_is_decision_only_and_has_no_power_api_calls(self):
         import inspect
