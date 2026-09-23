@@ -31,7 +31,7 @@ Default idle grace is 10 minutes and must remain configurable. The controller mu
 
 The current resident dispatcher in `oracle_autopilot/worker.py` claims the general Autopilot task queue; its task contract in `oracle_autopilot/contract.py` contains smoke, read-only GitHub/IBF, draft-repair, and role-dispatch tasks, but no Video/Books/Knowledge heavy-compute task kind. The IBM controller must therefore consume an explicit, separately admitted heavy-work lane or outbox. It must not start IBM merely because any Autopilot task is READY.
 
-The current Light runtime preflight also pins its checked database identity to Neon/`neondb`. Before connecting the heavy-work lane, reconcile this with the Autopilot database migration target and use the actual authoritative production queue. The lifecycle decision core stays independent of whether that queue is Neon or Oracle PostgreSQL.
+The current Light runtime preflight still requires Neon/`neondb`, while `oracle_autopilot/database_target.py` has an opt-in PostgreSQL path. The production runtime has not yet been shown using that path. Reconcile the deployed queue target before connecting the heavy-work lane; keep the lifecycle decision core independent of whether the authoritative queue is Neon or Oracle PostgreSQL.
 
 ### First queue lane: Universal Video
 
