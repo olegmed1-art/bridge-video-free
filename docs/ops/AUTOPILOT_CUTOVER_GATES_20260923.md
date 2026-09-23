@@ -11,7 +11,7 @@ Neon project `misty-poetry-18012774` returned two distinct current branches:
 | Production | `br-wispy-lab-b1rq54of` | `ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech` | 64 | 93 | 3 | 66 MB |
 | Shadow | `br-still-tooth-b1ilkfcj` | `ep-floral-field-b1pjs2of.c-5.eu-central-1.aws.neon.tech` | 14 | 26 | 3 | 688 MB |
 
-Production has four `autopilot_reconcile` functions; shadow has none. The
+Production has four `autopilot_reconcile` functions; shadow has none. The source databases also contain school and other schemas: production `public` has 161 relations (~37 MB), shadow `public` has 160 (~37 MB). The production `autopilot` schema is ~6.8 MB and shadow `autopilot` is ~631 MB. A full Neon database dump is out of scope and must be rejected; export only reviewed Autopilot schemas and specific dependent public objects/ledger rows, from one held snapshot per branch. The
 read-only connector queries identified branches and schema generations, not
 source credentials, a consistent export, target data, or a recovery point.
 `ops/oracle_autopilot_dual_source_preflight.py` is a protected-runtime
