@@ -33,6 +33,10 @@ def main():
     assert '"docker", "cp"' not in restore
     assert 'set -C; cat > "$1"' in restore
     assert '"postgres:600"' in restore
+    assert "PG_RESTORE_FAILED_{category}" in restore
+    assert "hashlib.sha256(diagnostic).hexdigest()" in restore
+    assert "completed.stderr or completed.stdout" in restore
+    assert "PG_RESTORE_FAILED:{detail}" not in restore
     assert "failure_fence" in restore and "UNSAFE_STATE" in restore
     assert "pg_policy" not in manifest  # covered by canonical schema-only digest
     assert "unexpected_schemas" in manifest
