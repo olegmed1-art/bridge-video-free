@@ -101,7 +101,10 @@ def schema_digest_texts(texts):
     for text in texts:
         normalized = "\n".join(
             line for line in text.splitlines()
-            if not line.startswith("\\restrict ") and not line.startswith("\\unrestrict ")
+            if not line.startswith("\\restrict ")
+            and not line.startswith("\\unrestrict ")
+            and not line.startswith("-- Dumped from database version ")
+            and not line.startswith("-- Dumped by pg_dump version ")
         ) + "\n"
         digest.update(normalized.encode("utf-8"))
         digest.update(b"\0")
