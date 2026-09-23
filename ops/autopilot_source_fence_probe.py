@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import psycopg
 
@@ -44,10 +44,12 @@ def validate_dsn(raw: str) -> str:
         parsed.hostname != SOURCE_HOST or parsed.port not in {None,5432} or
         parsed.username != 'neondb_owner' or not parsed.password or
         parsed.path != '/neondb' or parsed.fragment or
-        query.get('sslmode') not in (['require'],['verify-full']) or
+        query.get('sslmode') != ['verify-full'] or
         query.get('channel_binding') != ['require'] or
         set(query) - {'sslmode','channel_binding','connect_timeout','application_name'} or
         any(len(values) != 1 for values in query.values())):
+        raise ValueError('SOURCE_DSN_INVALID')
+    if any(ord(c) < 32 or ord(c) == 127 for c in unquote(parsed.password)):
         raise ValueError('SOURCE_DSN_INVALID')
     return raw
 
