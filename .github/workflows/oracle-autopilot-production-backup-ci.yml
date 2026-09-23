@@ -28,5 +28,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install 'psycopg[binary]>=3.2,<4'
-      - run: python -m unittest -v ops.test_oracle_autopilot_production_backup
+      # The route and receipt fixtures must be owned by root to exercise the
+      # production ownership checks on this disposable CI runner.
+      - run: sudo "$(command -v python)" -m unittest -v ops.test_oracle_autopilot_production_backup
       - run: python -m py_compile ops/oracle_autopilot_production_backup.py
