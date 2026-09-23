@@ -41,14 +41,15 @@ def sql(database, statement):
                "psql", "-XAtq", "-p", PORT, "-U", "postgres", "-d", database,
                "-v", "ON_ERROR_STOP=1", input_text=statement)
 
-def copy_stream_to_container(source, destination):
+def copy_stream_to_container(source, destination, expected_size):
     source.seek(0)
     subprocess.run(
         ("docker", "exec", "-i", "--user", "postgres", CONTAINER,
          "sh", "-ceu",
          'umask 077; set -C; cat > "$1"; test -f "$1"; test ! -L "$1"; '
-         'test "$(stat -c "%U:%a" "$1")" = "postgres:600"',
-         "sh", destination),
+         'test "$(stat -c "%U:%a" "$1")" = "postgres:600"; '
+         'test "$(stat -c "%s" "$1")" = "$2"',
+         "sh", destination, str(expected_size)),
         stdin=source, check=True, capture_output=True, timeout=300,
     )
 
@@ -68,6 +69,13 @@ def restore_dump(database, dump_path):
             (b"does not exist", "MISSING_OBJECT"),
             (b"unsupported version", "UNSUPPORTED_VERSION"),
             (b"input file appears", "INVALID_INPUT"),
+            (b"valid archive", "INVALID_ARCHIVE"),
+            (b"end of file", "INPUT_TRUNCATED"),
+            (b"could not read from input file", "INPUT_READ_FAILED"),
+            (b"could not open input file", "INPUT_OPEN_FAILED"),
+            (b"no such file or directory", "INPUT_PATH_MISSING"),
+            (b"compression", "COMPRESSION_FAILED"),
+            (b"connection to server", "CONNECTION_FAILED"),
             (b"could not execute query", "QUERY_FAILED"),
         )
         category = next((name for marker, name in categories if marker in lowered), "REDACTED")
@@ -193,7 +201,7 @@ def main():
         for index, source in enumerate(dump_sources):
             remote_dump = f"/tmp/{database}-{index}.dump"
             container_temp.append(remote_dump)
-            copy_stream_to_container(source, remote_dump)
+            copy_stream_to_container(source, remote_dump, sizes[index])
             restore_dump(database, remote_dump)
     except Exception:
         if database_created:
