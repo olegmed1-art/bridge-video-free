@@ -92,6 +92,7 @@ def _approved_health_payload() -> dict[str, object]:
         "bounded_draft_executor_enabled": True,
         "bounded_project_head_enabled": True,
         "bounded_role_dispatch_enabled": True,
+        "role_dispatch_mailbox_pr": 1703,
         "raw_installation_token_exposed": False,
         "merge_endpoint_enabled": False,
         "ref_update_delete_enabled": False,
@@ -521,6 +522,8 @@ def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch)
         "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
     )
     role_url = draft_url.replace("/draft-repair", "/role-dispatch")
+    health_payload = _approved_health_payload()
+    posted = []
 
     class Response:
         status = 200
@@ -540,8 +543,9 @@ def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch)
             if request.get_method() == "GET":
                 return Response(
                     draft_url.replace("/v1/github/draft-repair", "/healthz"),
-                    _approved_health_payload(),
+                    health_payload,
                 )
+            posted.append(request)
             return Response(role_url, response_payload)
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
@@ -555,6 +559,11 @@ def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch)
         },
         clear=True,
     ):
+        health_payload["role_dispatch_mailbox_pr"] = 1150
+        with pytest.raises(AutopilotContractError, match="RELEASE_UNAPPROVED"):
+            _publish_role_dispatch(request_payload)
+        assert not posted
+        health_payload["role_dispatch_mailbox_pr"] = 1703
         for mailbox_pr in (1685, 1703):
             response_payload["mailbox_pull_request"] = mailbox_pr
             result = _publish_role_dispatch(request_payload)
