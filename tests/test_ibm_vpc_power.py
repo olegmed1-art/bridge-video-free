@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 import urllib.error
 from io import BytesIO, StringIO
@@ -49,6 +50,16 @@ class IbmVpcActionTests(unittest.TestCase):
                 self.assertEqual(after, self.submit(action).status)
                 calls = [call.args[0] for call in request.call_args_list]
                 self.assertEqual(["GET", "POST", "GET"], [c.method for c in calls])
+                for call_request in calls:
+                    self.assertTrue(
+                        call_request.get_header("User-agent").startswith(
+                            "bridge-video-free/ibm-vpc-power "
+                        )
+                    )
+                    self.assertRegex(
+                        call_request.get_header("X-request-id"),
+                        re.compile(r"^[0-9a-f-]{36}$"),
+                    )
                 self.assertEqual({"type": action}, json.loads(calls[1].data))
                 self.assertIn(f"/instances/{INSTANCE_ID}/actions?", calls[1].full_url)
 
@@ -123,6 +134,13 @@ class IbmVpcActionTests(unittest.TestCase):
 
 
 class IbmVpcPowerContractTests(unittest.TestCase):
+    def test_iam_request_uses_identifiable_client_headers(self):
+        with mock.patch("ops.ibm_vpc_power._request_json", return_value={"access_token": "a" * 32}) as send:
+            obtain_token("valid-looking-key")
+        request = send.call_args.args[0]
+        self.assertEqual("POST", request.method)
+        self.assertTrue(request.get_header("User-agent").startswith("bridge-video-free/ibm-vpc-power "))
+        self.assertRegex(request.get_header("X-request-id"), r"^[0-9a-f-]{36}$")
     def test_cloudflare_denial_is_distinguished_from_iam_without_disclosure(self):
         for code in (1010, "1010"):
             body = json.dumps({"cloudflare_error": True, "error_code": code,
