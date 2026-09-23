@@ -17,7 +17,7 @@ private `AUTOPILOT_BACKUP_BUCKET`; a digest-pinned
 access to all database objects plus TEMP permission but no table write permissions,
 and OCI permission to PUT, HEAD and GET objects
 in this bucket. Never print the DSN or bundle it into the receipt.
-The DSN must target `127.0.0.1:55432/autopilot`. A root-owned live route lock
+The DSN must target `127.0.0.1:55432/autopilot`. Before a full database dump, the source check rejects application relations outside the `autopilot` and `autopilot_reconcile` schemas and the two reviewed public support relations; extension-owned relations are excluded. This also rejects an accidentally combined shadow database. Any legitimate new relation needs explicit review and an updated manifest contract before backup activation. A root-owned live route lock
 is held from before snapshot export until after restore verification; the route
 must remain `postgresql`, `epoch >= 1` throughout. The receipt is issued after
 the lock is released and its final state checked.
