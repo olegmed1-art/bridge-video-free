@@ -26,8 +26,11 @@ The operation exports a repeatable-read MVCC snapshot, calculates a source
 data, function and ACL manifest within that transaction, imports that snapshot
 into `pg_dump`, writes a private object with a create-only condition, retrieves
 the object, checks bytes and SHA256, restores the retrieved dump in an isolated
-PostgreSQL 18 container, and independently recalculates the manifest. Receipt
-format is `PRODUCTION_AUTOPILOT_BACKUP_V1`; `PASS` requires all checks.
+PostgreSQL 18 container, and independently recalculates the manifest. Function
+owners and sequence definitions/owners are compared separately and hashed in
+the receipt. Sequence *values* can advance outside an MVCC snapshot; final
+cutover must compare them after fencing writes. Receipt format is
+`PRODUCTION_AUTOPILOT_BACKUP_V1`; `PASS` requires all checks.
 Failure exits nonzero and must trigger an operations alert. No partial result
 authorizes cutover. The container is temporary, has no network, and never
 mounts the production data directory.
@@ -43,9 +46,10 @@ mounts the production data directory.
   and wire job failure or missed run to an acknowledged alert. Confirm at least
   one real run and its independent restore. This repository change does not
   install a timer or declare a successful production backup.
-- Configure Object Storage lifecycle retention (recommended 30 daily objects
-  plus monthly archive), object access controls and recovery credentials in
-  OCI; verify lifecycle and budget before activating. Do not delete historical
+- Configure bounded Object Storage lifecycle retention (the existing storage
+  plan suggests seven daily and four weekly copies within an 8 GiB cap),
+  object access controls and recovery credentials in OCI; measure production
+  and shadow sizes and verify lifecycle and budget before activating. Do not delete historical
   backups to meet a budget. Confirm a separate backup reader can download the
   object when Light Oracle is unavailable.
 - Cutover gate must independently verify the trusted successful workflow run
