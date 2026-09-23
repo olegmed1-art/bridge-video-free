@@ -611,6 +611,17 @@ class OracleStopAuthorizerTests(unittest.TestCase):
             self.assertEqual(parsed.state, "BUSY")
             self.assertEqual(guard.parse_proof(proof).state, "IDLE")
 
+    def test_short_read_cannot_hide_trailing_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proof = Path(tmp) / "proof"
+            valid = _proof_text("IDLE").encode()
+            proof.write_bytes(valid + b"UNVALIDATED_TRAILING_OUTPUT\n")
+            with mock.patch.object(
+                guard.os, "read", side_effect=[valid, b"UNVALIDATED_TRAILING_OUTPUT\n", b""]
+            ):
+                with self.assertRaisesRegex(guard.ProofError, "proof_line_count_invalid"):
+                    guard.parse_proof(proof)
+
     def test_missing_line_forbids_stop(self) -> None:
         partial = "\n".join(_proof_text("IDLE").splitlines()[:-1]) + "\n"
         self.assert_forbidden(

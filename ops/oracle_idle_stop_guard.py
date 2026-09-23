@@ -55,7 +55,13 @@ def _read_exact_lines(path: Path) -> list[str]:
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ProofError("proof_not_regular_file")
-        raw = os.read(fd, MAX_PROOF_BYTES + 1)
+        parts = bytearray()
+        while len(parts) <= MAX_PROOF_BYTES:
+            chunk = os.read(fd, MAX_PROOF_BYTES + 1 - len(parts))
+            if not chunk:
+                break
+            parts.extend(chunk)
+        raw = bytes(parts)
     except OSError as exc:
         raise ProofError("proof_missing_or_unreadable") from exc
     finally:
