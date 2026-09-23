@@ -254,7 +254,36 @@ def main():
     ]
     actual_manifest["schema_sha256"] = schema_digest_texts(schema_texts)
     if actual_manifest != expected_manifest:
-        raise ValueError("SOURCE_TARGET_MANIFEST_MISMATCH")
+        expected_entries = expected_manifest.get("entries", {})
+        actual_entries = actual_manifest.get("entries", {})
+        differing = {
+            key for key in set(expected_entries) | set(actual_entries)
+            if expected_entries.get(key) != actual_entries.get(key)
+        }
+        categories = set()
+        fixed = {
+            "functions": "FUNCTIONS", "objects": "OBJECTS", "schemas": "SCHEMAS",
+            "extensions": "EXTENSIONS", "unexpected_schemas": "UNEXPECTED_SCHEMAS",
+            "health_view": "HEALTH_VIEW",
+            "security_definer_superowner": "SECURITY_DEFINER",
+        }
+        for key in differing:
+            if key.startswith("data:"):
+                categories.add("DATA")
+            elif key.startswith("sequence:"):
+                categories.add("SEQUENCES")
+            else:
+                categories.add(fixed.get(key, "OTHER_ENTRY"))
+        if actual_manifest.get("schema_sha256") != expected_manifest.get("schema_sha256"):
+            categories.add("SCHEMA_DIGEST")
+        if actual_manifest.get("format") != expected_manifest.get("format"):
+            categories.add("FORMAT")
+        if actual_manifest.get("scope") != expected_manifest.get("scope"):
+            categories.add("SCOPE")
+        raise ValueError(
+            "SOURCE_TARGET_MANIFEST_MISMATCH:categories=" + ",".join(sorted(categories))
+            + f":entry_count={len(differing)}"
+        )
     sql("postgres", f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='{database}';")
     sql("postgres", f"ALTER DATABASE {qdb} ALLOW_CONNECTIONS false;")
     owner = json.loads(sql("postgres",

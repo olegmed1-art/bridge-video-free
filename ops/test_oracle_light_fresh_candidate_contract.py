@@ -29,6 +29,10 @@ def main():
     assert "\n            pg_restore -h 127.0.0.1" not in workflow
     assert "ALLOW_CONNECTIONS false CONNECTION LIMIT 0" in restore
     assert "SOURCE_TARGET_MANIFEST_MISMATCH" in restore
+    assert 'categories.add("DATA")' in restore
+    assert 'categories.add("SEQUENCES")' in restore
+    assert 'categories.add("SCHEMA_DIGEST")' in restore
+    assert "entry_count={len(differing)}" in restore
     assert "copy_stream_to_container(source, remote_dump, sizes[index])" in restore
     assert '"docker", "cp"' not in restore
     assert 'set -C; cat > "$1"' in restore
