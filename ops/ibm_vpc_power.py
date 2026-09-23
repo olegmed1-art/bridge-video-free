@@ -181,7 +181,7 @@ def parse_instance(value: dict, *, expected_id: str, expected_name: str) -> Inst
         raise BoundedClientError("instance_id_mismatch")
     if name != expected_name:
         raise BoundedClientError("instance_name_mismatch")
-    if status not in ALLOWED_STATES:
+    if not isinstance(status, str) or status not in ALLOWED_STATES:
         raise BoundedClientError("instance_status_unknown")
     return Instance(instance_id=instance_id, name=name, status=status)
 

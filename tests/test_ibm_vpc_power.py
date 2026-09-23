@@ -89,7 +89,8 @@ class IbmVpcActionTests(unittest.TestCase):
 
     def test_accepted_action_with_failed_followup_is_not_resubmitted(self):
         for followup in (BoundedClientError("provider_http_403"),
-                         {**self.instance(), "id": "02c7_wrong"}):
+                         {**self.instance(), "id": "02c7_wrong"},
+                         {**self.instance(), "status": []}):
             with self.subTest(followup=followup), mock.patch(
                 "ops.ibm_vpc_power._request_json", side_effect=[
                     self.instance(), {"type": "start", "status": "pending"}, followup,
