@@ -50,10 +50,12 @@ dispatch-bound terminal comment with CALLBACK_ACCEPTED. Check for zero repair
 follow-ups and duplicate commands. A BLOCKED result proves transport only.
 Do not replay or resend an ambiguous/expired dispatch.
 
-Before any publication, recovery is: stop the unit, restore HOLD, and, while
-the function and queue are locked and exactly equal to the recorded baseline,
-reinstall only the original 0355 function patch from its saved backup. Preserve
-the ledger and backup. If publication has happened, stop admissions and keep
+Before any publication, recovery is: stop the unit, restore HOLD, and execute
+`psql -X -v ON_ERROR_STOP=1 -f ops/autopilot_light_0355_refence.sql` using the
+same authorized database identity. This script requires the one untouched
+READY canary and no outbox for it, then reinstalls exactly the original 0355
+patch from its saved backup. Preserve the ledger and backup. If publication has
+happened, do not run this pre-publication script: stop admissions and keep
 all outbox, intent and receipt evidence; diagnose without resetting them.
 The old release can be restored under HOLD only after verifying its mailbox
 incompatibility remains fenced. Any drift or unavailable administrator blocks
