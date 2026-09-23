@@ -47,7 +47,7 @@ def test_sql_failure_deletes_only_created_child(monkeypatch, tmp_path):
             return {'branch':{'id':'br-test-child','parent_id':module.PRODUCTION},
                     'endpoints':[{'type':'read_write','host':'ep-test.aws.neon.tech'}]}
         if path.startswith('/connection_uri?'):
-            return {'uri':'postgresql://neondb_owner:pw@ep-test.aws.neon.tech/neondb?sslmode=require'}
+            return {'uri':'postgresql://neondb_owner:test-password@ep-test.aws.neon.tech/neondb?sslmode=require'}
         if path == '/branches/br-test-child' and method == 'DELETE':
             return {}
         raise AssertionError((method,path))
