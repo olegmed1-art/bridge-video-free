@@ -52,6 +52,30 @@ def copy_stream_to_container(source, destination):
         stdin=source, check=True, capture_output=True, timeout=300,
     )
 
+def restore_dump(database, dump_path):
+    completed = subprocess.run(
+        ("docker", "exec", "--user", "postgres", CONTAINER, "pg_restore",
+         "-p", PORT, "-U", "postgres", "-d", database, "--role=neondb_owner",
+         "--no-owner", "--single-transaction", "--exit-on-error", dump_path),
+        check=False, capture_output=True, text=True, timeout=300,
+    )
+    if completed.returncode != 0:
+        diagnostic = (completed.stderr or completed.stdout or "").encode("utf-8", errors="replace")
+        lowered = diagnostic.lower()
+        categories = (
+            (b"permission denied", "PERMISSION_DENIED"),
+            (b"already exists", "ALREADY_EXISTS"),
+            (b"does not exist", "MISSING_OBJECT"),
+            (b"unsupported version", "UNSUPPORTED_VERSION"),
+            (b"input file appears", "INVALID_INPUT"),
+            (b"could not execute query", "QUERY_FAILED"),
+        )
+        category = next((name for marker, name in categories if marker in lowered), "REDACTED")
+        raise RuntimeError(
+            f"PG_RESTORE_FAILED_{category}:rc={completed.returncode}:bytes={len(diagnostic)}:"
+            f"sha256={hashlib.sha256(diagnostic).hexdigest()}"
+        )
+
 def ident(value):
     return '"' + value.replace('"', '""') + '"'
 
@@ -170,9 +194,7 @@ def main():
             remote_dump = f"/tmp/{database}-{index}.dump"
             container_temp.append(remote_dump)
             copy_stream_to_container(source, remote_dump)
-            run("docker", "exec", "--user", "postgres", CONTAINER, "pg_restore",
-                "-p", PORT, "-U", "postgres", "-d", database, "--role=neondb_owner",
-                "--no-owner", "--single-transaction", "--exit-on-error", remote_dump)
+            restore_dump(database, remote_dump)
     except Exception:
         if database_created:
             sql("postgres", f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='{database}';")
