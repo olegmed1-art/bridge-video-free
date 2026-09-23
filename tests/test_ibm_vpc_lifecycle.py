@@ -1,6 +1,6 @@
 import unittest
 
-from ops.ibm_vpc_lifecycle import SCHEMA, decide
+from ops.ibm_vpc_lifecycle import ObservationError, SCHEMA, decide, video_queue_work_counts
 
 
 def observation(**overrides):
@@ -27,6 +27,30 @@ def observation(**overrides):
 
 
 class IBMVPCLifecycleDecisionTests(unittest.TestCase):
+
+    def test_video_pending_canary_does_not_wake_ibm(self):
+        counts = video_queue_work_counts({"PENDING_CANARY": 1})
+        self.assertEqual({"eligible_pending_jobs": 0, "running_jobs": 0}, counts)
+        result = decide(observation(**counts), now_epoch=1000)
+        self.assertEqual("IDLE_STOPPED", result["decision"])
+
+    def test_video_queued_and_leased_jobs_are_compute_work(self):
+        queued = video_queue_work_counts({"QUEUED": 2})
+        leased = video_queue_work_counts({"LEASED": 1})
+        self.assertEqual({"eligible_pending_jobs": 2, "running_jobs": 0}, queued)
+        self.assertEqual({"eligible_pending_jobs": 0, "running_jobs": 1}, leased)
+        result = decide(
+            observation(vpc_status="running", **leased),
+            now_epoch=1000,
+        )
+        self.assertEqual("KEEP_RUNNING", result["decision"])
+
+    def test_video_queue_unknown_status_or_invalid_count_fails_closed(self):
+        with self.assertRaises(ObservationError):
+            video_queue_work_counts({"FUTURE_STATUS": 1})
+        with self.assertRaises(ObservationError):
+            video_queue_work_counts({"QUEUED": True})
+
     def test_admitted_job_starts_stopped_vm(self):
         result = decide(observation(eligible_pending_jobs=1), now_epoch=1000)
         self.assertEqual({"decision": "START", "reason": "admitted_heavy_work"}, result)
