@@ -75,6 +75,7 @@ jobs:
           }
           trap cleanup_source EXIT
           NEON_DATABASE_URL="$DATABASE_URL" python -m ops.oracle_autopilot_dump_connection "$secrets_dir"
+          install -m 0444 /etc/ssl/certs/ca-certificates.crt "$secrets_dir/ca-certificates.crt"
           NEON_DATABASE_URL="$DATABASE_URL" python -m ops.oracle_autopilot_snapshot_keeper \
             "$secrets_dir/snapshot" "$secrets_dir/done" &
           keeper_pid=$!
