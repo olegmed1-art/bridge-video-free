@@ -16,6 +16,7 @@ WITH candidate AS (
   UNION ALL SELECT dispatch_id FROM autopilot.role_dispatch_callback_receipt
   UNION ALL SELECT dispatch_id FROM autopilot.codex_command_send_intent
   UNION ALL SELECT dispatch_id FROM autopilot.codex_publication_permit
+  UNION ALL SELECT dispatch_id FROM autopilot.native_cli_receipt
  ) r WHERE dispatch_id='322dd440-30b9-49d2-8e1a-f5ecc1d2b99b'
 ), conflicts AS (
  SELECT count(*) AS n FROM autopilot.role_dispatch_outbox
