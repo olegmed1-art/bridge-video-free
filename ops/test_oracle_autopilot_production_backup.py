@@ -79,6 +79,7 @@ class BackupFailureTests(unittest.TestCase):
                 (0,),
                 ({'effective_acl': [1, 'x']},),
                 ([['autopilot', 'f', '', 'neondb_owner', True]],),
+                ([['autopilot', 'queue_id_seq', 'neondb_owner', 'bigint', 1, 1, 1, 9223372036854775807, 1, False]],),
                 [],
             ])
             def execute(self, sql, *args):
@@ -223,43 +224,54 @@ class BackupFailureTests(unittest.TestCase):
             path = Path(directory) / 'archive.dump'
             path.write_bytes(b'PGDMP')
             with self.assertRaisesRegex(ValueError, 'RESTORE_IMAGE_MUST_BE_PINNED'):
-                backup.drill(path, {}, [], [], [])
+                backup.drill(path, {}, [], [], [], [])
 
     def test_restore_detects_acl_or_row_manifest_drift(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
             'AUTOPILOT_RESTORE_IMAGE': 'postgres@sha256:' + 'a' * 64,
         }), patch.object(backup.os, 'geteuid', return_value=0), \
              patch.object(backup.os, 'chown'), \
-             patch.object(backup, 'execute', return_value=b'{"effective_acl":[1,"different"]}\n[]\n'):
+             patch.object(backup, 'execute', return_value=b'{"effective_acl":[1,"different"]}\n[]\n[]\n'):
             path = Path(directory) / 'archive.dump'
             path.write_bytes(b'PGDMP')
             with self.assertRaisesRegex(ValueError, 'RESTORE_MANIFEST_MISMATCH'):
-                backup.drill(path, {'effective_acl': [1, 'source']}, [], {'autopilot_callback_login'}, [])
+                backup.drill(path, {'effective_acl': [1, 'source']}, [], [], {'autopilot_callback_login'}, [])
 
     def test_restore_detects_security_definer_owner_drift(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
             'AUTOPILOT_RESTORE_IMAGE': 'postgres@sha256:' + 'a' * 64,
         }), patch.object(backup.os, 'geteuid', return_value=0), \
              patch.object(backup.os, 'chown'), \
-             patch.object(backup, 'execute', return_value=b'{}\n[["autopilot","f","","postgres",true]]\n'):
+             patch.object(backup, 'execute', return_value=b'{}\n[["autopilot","f","","postgres",true]]\n[]\n'):
             path = Path(directory) / 'archive.dump'
             path.write_bytes(b'PGDMP')
             with self.assertRaisesRegex(ValueError, 'RESTORE_OWNERSHIP_MISMATCH'):
                 backup.drill(path, {}, [['autopilot', 'f', '', 'neondb_owner', True]],
-                             {'neondb_owner'}, [])
+                             [], {'neondb_owner'}, [])
+
+    def test_restore_detects_sequence_structure_drift(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            'AUTOPILOT_RESTORE_IMAGE': 'postgres@sha256:' + 'a' * 64,
+        }), patch.object(backup.os, 'geteuid', return_value=0), \
+             patch.object(backup.os, 'chown'), \
+             patch.object(backup, 'execute', return_value=b'{}\n[]\n[]\n'):
+            path = Path(directory) / 'archive.dump'
+            path.write_bytes(b'PGDMP')
+            with self.assertRaisesRegex(ValueError, 'RESTORE_SEQUENCE_STRUCTURE_MISMATCH'):
+                backup.drill(path, {}, [], [['autopilot', 'id_seq']], {'neondb_owner'}, [])
 
     def test_restore_never_uses_production_network_or_data_volume(self):
         captured = []
         def fake_run(argv, **kwargs):
             captured.extend(argv)
-            return b'{"effective_acl":[1,"source"]}\n[]\n'
+            return b'{"effective_acl":[1,"source"]}\n[]\n[]\n'
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
             'AUTOPILOT_RESTORE_IMAGE': 'postgres@sha256:' + 'a' * 64,
         }), patch.object(backup.os, 'geteuid', return_value=0), \
              patch.object(backup.os, 'chown'), patch.object(backup, 'execute', side_effect=fake_run):
             path = Path(directory) / 'archive.dump'
             path.write_bytes(b'PGDMP')
-            backup.drill(path, {'effective_acl': [1, 'source']}, [], {'autopilot_callback_login'}, [])
+            backup.drill(path, {'effective_acl': [1, 'source']}, [], [], {'autopilot_callback_login'}, [])
             self.assertEqual(path.stat().st_mode & 0o777, 0o640)
             self.assertEqual(path.parent.stat().st_mode & 0o777, 0o710)
             self.assertIn('none', captured)
