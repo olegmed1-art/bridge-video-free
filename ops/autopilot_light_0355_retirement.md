@@ -15,8 +15,11 @@ route to Oracle PostgreSQL, or change any dispatch/receipt row.
    pull-request `contract` job is insufficient. Save the run URL, installed
    release `3244f4d4b17ce99e58c342f01e4715436a09622b`, service UID,
    invocation ID, queue inventory, fence digest, broker pins and manifest.
-   Resolve `NeedDaemonReload=yes` using the authorized systemd path, then
-   repeat this live preflight; do not infer effective config from files alone.
+   If `NeedDaemonReload=yes`, an authorized host administrator runs
+   `sudo systemctl daemon-reload` on `autopilot-lite-vnic`, without restarting
+   the worker. Verify the loaded WorkingDirectory, HOLD environment, PID and
+   invocation ID are unchanged, then repeat this live preflight and require
+   `need_daemon_reload=no`. Do not infer effective config from files alone.
 3. An authorized administrator stops only
    `school-autopilot-production-light.service`. Confirm `ActiveState=inactive`
    and `MainPID=0`; keep the HOLD drop-in and the known-good release untouched.
