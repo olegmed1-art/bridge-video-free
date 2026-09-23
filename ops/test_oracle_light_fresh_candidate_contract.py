@@ -34,6 +34,9 @@ def main():
     assert 'set -C; cat > "$1"' in restore
     assert '"postgres:600"' in restore
     assert 'stat -c "%s" "$1"' in restore
+    assert "CONTAINER_STREAM_SIZE_MISMATCH:expected=" in restore
+    assert 'completed.stdout.decode("ascii", errors="strict")' in restore
+    assert "actual_text.isdecimal()" in restore
     assert '"INPUT_TRUNCATED"' in restore and '"INPUT_OPEN_FAILED"' in restore
     assert "PG_RESTORE_FAILED_{category}" in restore
     assert "hashlib.sha256(diagnostic).hexdigest()" in restore
