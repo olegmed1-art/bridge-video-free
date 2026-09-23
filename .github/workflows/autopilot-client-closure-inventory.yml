@@ -1,0 +1,38 @@
+name: Autopilot client closure inventory
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'ops/github_autopilot_db_route.py'
+      - 'ops/autopilot_client_closure_inventory.py'
+      - 'ops/test_autopilot_client_closure_inventory.py'
+      - '.github/workflows/autopilot-client-closure-inventory.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - 'ops/github_autopilot_db_route.py'
+      - 'ops/autopilot_client_closure_inventory.py'
+      - 'ops/test_autopilot_client_closure_inventory.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - run: python ops/autopilot_client_closure_inventory.py
+      - run: python ops/test_autopilot_client_closure_inventory.py
+      - name: Keep static check distinct from cutover authorization
+        run: |
+          if python ops/autopilot_client_closure_inventory.py --cutover > /dev/null; then
+            echo 'static inventory incorrectly authorized live cutover' >&2
+            exit 1
+          fi
