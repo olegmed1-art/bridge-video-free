@@ -55,12 +55,14 @@ class DualSourceTests(unittest.TestCase):
             def connect(cls, **kwargs):
                 return Connection(cls.row)
         import sys
-        good = (gate.PROJECT, gate.SOURCES['shadow'][1], 'neondb', 180006, 14, 26, 0, 100)
+        good = (gate.PROJECT, gate.SOURCES['shadow'][1], 'neondb', 180006, 14, 26, 0, 100, 80, 160)
         with patch.dict(sys.modules, {'psycopg': Psycopg}):
             Psycopg.row = good
             self.assertEqual(gate.inspect('shadow', {})['relations'], 14)
+            self.assertFalse(gate.inspect('shadow', {})['full_neon_database_export_allowed'])
             for row in ((good[0], gate.SOURCES['production'][1], *good[2:]),
-                        (*good[:6], 4, good[7])):
+                        (*good[:6], 4, *good[7:]),
+                        (*good[:-1], 0)):
                 Psycopg.row = row
                 with self.assertRaisesRegex(ValueError, 'SOURCE_BRANCH_OR_GENERATION_MISMATCH'):
                     gate.inspect('shadow', {})
