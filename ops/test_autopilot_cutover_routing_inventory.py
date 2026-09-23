@@ -11,6 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / '.github' / 'workflows'
 ROUTES = {
+    'autopilot-reconcile-diagnostic.yml': {'diagnostics'},
     'autopilot-chatgpt-role-callback.yml': {'role-callback'},
     'autopilot-codex-event-callback.yml': {'codex-ack', 'codex-terminal', 'codex-publication'},
     'autopilot-paused-reconcile.yml': {'diagnostics', 'reconcile', 'next-step'},
