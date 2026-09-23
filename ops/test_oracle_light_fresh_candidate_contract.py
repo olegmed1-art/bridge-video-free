@@ -37,6 +37,7 @@ def main():
     assert "CONTAINER_STREAM_SIZE_MISMATCH:expected=" in restore
     assert 'completed.stdout.decode("ascii", errors="strict")' in restore
     assert "actual_text.isdecimal()" in restore
+    assert 'os.fdopen(fd, "rb", buffering=0, closefd=True)' in restore
     assert '"INPUT_TRUNCATED"' in restore and '"INPUT_OPEN_FAILED"' in restore
     assert "PG_RESTORE_FAILED_{category}" in restore
     assert "hashlib.sha256(diagnostic).hexdigest()" in restore

@@ -127,7 +127,7 @@ def main():
             raise ValueError("DUMP_PATH_FENCE")
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(dump, flags)
-        source = os.fdopen(fd, "rb", closefd=True)
+        source = os.fdopen(fd, "rb", buffering=0, closefd=True)
         stat = os.fstat(source.fileno())
         lst = os.lstat(dump)
         if (not stat_module.S_ISREG(stat.st_mode) or (stat.st_dev,stat.st_ino) != (lst.st_dev,lst.st_ino)
