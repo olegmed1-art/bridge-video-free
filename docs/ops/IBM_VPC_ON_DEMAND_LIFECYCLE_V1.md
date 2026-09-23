@@ -35,7 +35,27 @@ The current Light runtime preflight still requires Neon/`neondb`, while `oracle_
 
 ### First queue lane: Universal Video
 
-Migration `0056_universal_video_queue.sql` defines the read-only `video_queue.job_status` view. For the first integration, only `QUEUED` jobs may request IBM start and `LEASED` jobs count as active work. `PENDING_CANARY` is intentionally not runnable until the canary gate explicitly releases it; it must not wake IBM. `REVIEW_READY`, `AMBIGUOUS`, and `FAILED` are terminal and do not require compute. Unknown future statuses fail closed. The controller must query aggregated counts through a read-only principal; it must never claim or mutate video jobs.
+Migrations `0056`–`0058` define the queue claim and canary/terminal gates. The ordinary
+`video_queue.job_status` view intentionally omits retry deadlines and lease expiry, so
+its raw `QUEUED`/`LEASED` totals cannot safely drive power decisions. Draft PR #1851
+proposes an aggregate-only `video_queue.compute_readiness` view with runnable-now,
+active-lease, future-retry, exhausted-lease, blocked-state, and malformed-state counts.
+It is not deployed and must pass review before any consumer uses it.
+
+`video_queue_readiness_observation_fields()` is a pure adapter for complete synthetic
+row sets from that view. It requires an explicit allowlist of worker profile/revision
+tuples. Runnable-now rows (including expired leases still eligible for retry) become
+pending work; unexpired leases remain active. A future retry is preserved as
+`next_queue_wake_epoch`; if IBM is stopped, the decision is `WAIT_FOR_RETRY` with that
+timestamp, never `START` before the deadline. Exhausted leases, blocked nonterminal
+jobs, unknown states, invalid lease shapes, and active work for an unsupported worker
+tuple produce `HOLD`. `PENDING_CANARY` is counted but does not wake IBM. An unavailable,
+empty, partial, duplicate, stale, malformed, or internally inconsistent snapshot is
+incomplete and cannot prove idle. The eventual query must retrieve every row from one
+snapshot and combine the oldest source timestamp into the top-level observation.
+The adapter never connects to a database, claims jobs, or calls IBM APIs.
+
+Books and Knowledge/Canon do not yet have a confirmed equivalent durable queue contract in the inspected Autopilot task types. They remain out of automatic IBM admission until their exact sources, statuses, and leases are identified and tested.
 
 Books and Knowledge/Canon do not yet have a confirmed equivalent durable queue contract in the inspected Autopilot task types. They remain out of automatic IBM admission until their exact sources, statuses, and leases are identified and tested.
 
