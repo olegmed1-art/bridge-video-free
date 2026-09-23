@@ -41,6 +41,17 @@ def sql(database, statement):
                "psql", "-XAtq", "-p", PORT, "-U", "postgres", "-d", database,
                "-v", "ON_ERROR_STOP=1", input_text=statement)
 
+def copy_stream_to_container(source, destination):
+    source.seek(0)
+    subprocess.run(
+        ("docker", "exec", "-i", "--user", "postgres", CONTAINER,
+         "sh", "-ceu",
+         'umask 077; set -C; cat > "$1"; test -f "$1"; test ! -L "$1"; '
+         'test "$(stat -c "%U:%a" "$1")" = "postgres:600"',
+         "sh", destination),
+        stdin=source, check=True, capture_output=True, timeout=300,
+    )
+
 def ident(value):
     return '"' + value.replace('"', '""') + '"'
 
@@ -158,9 +169,7 @@ def main():
         for index, source in enumerate(dump_sources):
             remote_dump = f"/tmp/{database}-{index}.dump"
             container_temp.append(remote_dump)
-            fd_path = f"/proc/{os.getpid()}/fd/{source.fileno()}"
-            run("docker", "cp", "-L", fd_path, f"{CONTAINER}:{remote_dump}")
-            run("docker", "exec", CONTAINER, "chown", "999:999", remote_dump)
+            copy_stream_to_container(source, remote_dump)
             run("docker", "exec", "--user", "postgres", CONTAINER, "pg_restore",
                 "-p", PORT, "-U", "postgres", "-d", database, "--role=neondb_owner",
                 "--no-owner", "--single-transaction", "--exit-on-error", remote_dump)
