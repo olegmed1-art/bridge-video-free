@@ -39,6 +39,14 @@ class BoundedClientError(RuntimeError):
     """A stable, non-secret provider or target validation failure."""
 
 
+class ActionOutcomeError(BoundedClientError):
+    """A submitted action must be reconciled, never blindly submitted again."""
+
+    def __init__(self, reason: str, *, result: str = "UNKNOWN") -> None:
+        super().__init__(reason)
+        self.result = result
+
+
 def _safe_provider_error_detail(exc: urllib.error.HTTPError) -> tuple[str, str, str]:
     """Return only a bounded machine code and coarse body shape.
 
@@ -60,6 +68,14 @@ def _safe_provider_error_detail(exc: urllib.error.HTTPError) -> tuple[str, str, 
         return "", "html" if stripped.startswith((b"<!doctype html", b"<html")) else "text", "unknown"
     if not isinstance(value, dict):
         return "", "json_other", "unknown"
+    # Recognize the observed edge denial without echoing arbitrary fields or
+    # incorrectly diagnosing a VPC IAM permission failure.
+    if (
+        value.get("cloudflare_error") is True
+        and value.get("error_code") in (1010, "1010")
+        and value.get("error_name") == "browser_signature_banned"
+    ):
+        return "cloudflare_1010", "json_object", "edge_access_denied"
     errors = value.get("errors")
     if isinstance(errors, list):
         shape = "json_errors"
@@ -211,8 +227,26 @@ def create_action(
         },
         method="POST",
     )
-    response = _request_json(request)
-    return parse_instance(response, expected_id=instance_id, expected_name=name)
+    try:
+        response = _request_json(request)
+    except BoundedClientError as exc:
+        # A timeout or malformed response does not prove the command was not
+        # accepted. Leave reconciliation to the caller; do not retry the POST.
+        raise ActionOutcomeError(f"vpc_action_submission_{exc}") from exc
+    # POST returns InstanceAction: its id and status belong to the action,
+    # not the instance. Deprecated action status may be omitted by the API.
+    if response.get("type") != action or response.get("status") not in (
+        None, "pending", "running", "completed", "failed"
+    ):
+        raise ActionOutcomeError("vpc_action_response_invalid")
+    if response.get("status") == "failed":
+        raise ActionOutcomeError("vpc_action_reported_failed", result="FAILED")
+    try:
+        return read_instance(token, region=region, instance_id=instance_id, name=name)
+    except BoundedClientError as exc:
+        raise ActionOutcomeError(
+            f"vpc_action_followup_{exc}", result="ACCEPTED_UNVERIFIED"
+        ) from exc
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -241,10 +275,14 @@ def main(argv: list[str] | None = None) -> int:
                 action=args.action,
                 authorization=args.mutation_authorization,
             )
+    except ActionOutcomeError as exc:
+        print(f"IBM_VPC_POWER_RESULT={exc.result} reason={exc}", file=sys.stderr)
+        print("IBM_VPC_POWER_RECONCILE_REQUIRED=YES", file=sys.stderr)
+        return 4
     except BoundedClientError as exc:
         print(f"IBM_VPC_POWER_RESULT=REFUSED reason={exc}", file=sys.stderr)
         return 3
-    print("IBM_VPC_POWER_RESULT=PASS")
+    print("IBM_VPC_POWER_RESULT=" + ("PASS" if args.action == "status" else "ACCEPTED"))
     print(f"IBM_VPC_INSTANCE_ID={instance.instance_id}")
     print(f"IBM_VPC_INSTANCE_NAME={instance.name}")
     print(f"IBM_VPC_INSTANCE_STATUS={instance.status}")
