@@ -22,3 +22,21 @@ Validation: search of repository references to the workflow; focused idle
 guard tests and exact-head CI. Rollback: restore the workflow only after
 verifying that its target instance, fingerprint and workloads are current;
 never point this historical guard at Light Oracle by changing only an IP.
+
+## Remaining legacy Action state — 2026-09-23
+
+The separate `Oracle idle guard exact install` workflow still exists on the
+historical `autopilot/oracle-idle-stop-guard-627-v2` branch and targets the
+same retired IP. Deleting its file from `main` would not disable branch push
+runs. Its GitHub Actions workflow was therefore **disabled manually** in the
+repository Actions UI; the page displayed `Workflow disabled successfully`
+and `This workflow was disabled manually`. Its run history and branch remain.
+Re-enabling it requires a fresh review of the target host and workloads.
+
+At main `36cad3a878904ac12f4568800c7c0d01e5054b35`, 75 workflow files
+still contain the old IP as text. None has a `schedule` trigger. The 28 with
+`push` targeting `main` have path filters for specific request or workflow
+files; they are not unfiltered every-commit triggers. These are historical
+references, not evidence that heavy Oracle is running or that Light Oracle
+uses its guard. This inventory does not claim that manual or request-file
+triggers have been retired.
