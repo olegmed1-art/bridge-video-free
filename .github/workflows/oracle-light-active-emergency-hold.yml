@@ -1,0 +1,69 @@
+name: Oracle Light active emergency hold
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-light-active-emergency-hold.yml'
+      - 'ops/oracle_light_active_emergency_hold.py'
+      - 'tests/test_oracle_light_active_emergency_hold.py'
+  workflow_dispatch:
+    inputs:
+      main_sha:
+        description: 'Exact current main SHA'
+        required: true
+        type: string
+      invocation_id:
+        description: 'Exact ACTIVE invocation ID'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-light-backup-mutation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python -m unittest -q tests.test_oracle_light_active_emergency_hold
+
+  hold:
+    needs: contract
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    environment: database-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Stop exact ACTIVE invocation and restore HOLD
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN: ${{ inputs.main_sha }}
+          INVOCATION: ${{ inputs.invocation_id }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          [[ "$EXPECTED_MAIN" =~ ^[0-9a-f]{40}$ && "$INVOCATION" =~ ^[a-f0-9]{32}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_MAIN" ]]
+          [[ "$(gh api repos/olegmed1-art/bridge-video-free/git/ref/heads/main --jq .object.sha)" == "$EXPECTED_MAIN" ]]
+          unset GH_TOKEN
+          git diff --exit-code HEAD --
+          [[ -n "${SSH_PRIVATE_KEY:-}" ]]
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$work/key"
+          unset SSH_PRIVATE_KEY
+          ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ConnectionAttempts=1 ubuntu@92.5.47.149 "sudo -n /usr/bin/python3 - $INVOCATION" < ops/oracle_light_active_emergency_hold.py
