@@ -22,6 +22,7 @@ def main():
     assert '"${pg_local[@]}" pg_restore' in workflow
     assert '--exit-on-error "/backup/$dump"' in workflow
     assert '-v "$PWD:/backup:ro" "$pg_image"' in workflow
+    assert "ALTER DATABASE recovery OWNER TO neondb_owner;" in workflow
     assert "\n            pg_restore -h 127.0.0.1" not in workflow
     assert "ALLOW_CONNECTIONS false CONNECTION LIMIT 0" in restore
     assert "SOURCE_TARGET_MANIFEST_MISMATCH" in restore

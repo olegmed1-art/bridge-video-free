@@ -134,6 +134,7 @@ jobs:
           CREATE ROLE bridge_school_health_principal NOLOGIN;
           CREATE EXTENSION pgcrypto;
           CREATE EXTENSION btree_gist;
+          ALTER DATABASE recovery OWNER TO neondb_owner;
           SQL
           pg_image='postgres@sha256:0377e72c5289ed2f98cf61b1a9c2db9eb9d300317fe14244492fbc94343b3d04'
           pg_local=(docker run --rm --network host -e PGPASSWORD -v "$PWD:/backup:ro" "$pg_image")
