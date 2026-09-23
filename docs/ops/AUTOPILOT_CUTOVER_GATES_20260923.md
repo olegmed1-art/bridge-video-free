@@ -2,6 +2,22 @@
 
 Status: BLOCKED. The last observed route is `backend=neon, epoch=0`. This document authorizes no route change, source fence, deletion or new spend. Both PR #1852 and PR #1855 are draft. School knowledge remains on Neon.
 
+## Fresh Neon source inventory (read-only, 2026-09-23 18:01–18:02 UTC)
+
+Neon project `misty-poetry-18012774` returned two distinct current branches:
+
+| Contour | Branch ID | Direct endpoint | Autopilot relations | Functions | Sequences | Database size |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| Production | `br-wispy-lab-b1rq54of` | `ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech` | 64 | 93 | 3 | 66 MB |
+| Shadow | `br-still-tooth-b1ilkfcj` | `ep-floral-field-b1pjs2of.c-5.eu-central-1.aws.neon.tech` | 14 | 26 | 3 | 688 MB |
+
+Production has four `autopilot_reconcile` functions; shadow has none. The
+read-only connector queries identified branches and schema generations, not
+source credentials, a consistent export, target data, or a recovery point.
+`ops/oracle_autopilot_dual_source_preflight.py` is a protected-runtime
+identity check for two separate owner DSNs. It fails on a branch or generation
+mismatch and emits no secrets. It has not been run with production credentials.
+
 ## Client closure
 
 Pin current main and inspect live DSNs (without printing credentials) before each production mutation. The known resident services are `school-autopilot-production-light`, `school-autopilot-shadow`, and `school-autopilot-online-observer`. The continuous GitHub workflow definitions include role callback, codex event callback, paused reconcile, and mailbox pre-rotation. The shared database health workflow must split its school checks from its Autopilot check. Legacy branch/manual workflows, source owner and old credentials must be fenced at the database, even if route leases appear healthy. Compare this list against the live process table, GitHub runs and the pinned inventory; any unclassified writer blocks cutover.
