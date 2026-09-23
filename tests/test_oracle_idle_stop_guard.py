@@ -6,7 +6,10 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
+
+from ops import oracle_idle_stop_guard as guard
 
 ROOT = Path(__file__).resolve().parents[1]
 CLASSIFIER = ROOT / "ops" / "oracle_idle_state.sh"
@@ -589,6 +592,24 @@ class OracleStopAuthorizerTests(unittest.TestCase):
                         check=False, capture_output=True, text=True, timeout=3,
                     )
                     self.assert_forbidden(result, reason)
+
+    def test_replacing_path_after_open_cannot_replace_busy_with_idle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proof = Path(tmp) / "proof"
+            replacement = Path(tmp) / "replacement"
+            proof.write_text(_proof_text("BUSY"), encoding="utf-8")
+            replacement.write_text(_proof_text("IDLE"), encoding="utf-8")
+            original_open = os.open
+
+            def replace_after_open(path, flags):
+                fd = original_open(path, flags)
+                os.replace(replacement, proof)
+                return fd
+
+            with mock.patch.object(guard.os, "open", side_effect=replace_after_open):
+                parsed = guard.parse_proof(proof)
+            self.assertEqual(parsed.state, "BUSY")
+            self.assertEqual(guard.parse_proof(proof).state, "IDLE")
 
     def test_missing_line_forbids_stop(self) -> None:
         partial = "\n".join(_proof_text("IDLE").splitlines()[:-1]) + "\n"
