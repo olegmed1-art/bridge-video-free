@@ -19,6 +19,8 @@ TARGETS = {
     'role-callback': ('AUTOPILOT_CALLBACK_DATABASE_URL','autopilot_callback_login','oracle_autopilot.github_role_callback',()),
     'codex-ack': ('AUTOPILOT_CALLBACK_DATABASE_URL','autopilot_callback_login','oracle_autopilot.github_codex_callback',('ack',)),
     'codex-terminal': ('AUTOPILOT_CALLBACK_DATABASE_URL','autopilot_callback_login','oracle_autopilot.github_codex_callback',('terminal',)),
+    'codex-terminal-readback': ('AUTOPILOT_CALLBACK_DATABASE_URL','autopilot_callback_login','oracle_autopilot.codex_terminal_readback',(os.environ.get('READBACK_PR',''),os.environ.get('READBACK_COMMENT_ID',''))),
+    'codex-terminal-sweep': ('AUTOPILOT_CALLBACK_DATABASE_URL','autopilot_callback_login','oracle_autopilot.codex_terminal_sweep',()),
     'codex-publication': ('AUTOPILOT_CALLBACK_DATABASE_URL','autopilot_callback_login','oracle_autopilot.github_codex_publication',()),
     'diagnostics': ('DATABASE_URL','bridge_school_worker_principal','oracle_autopilot.reconcile_diagnostics',()),
     'reconcile': ('DATABASE_URL','bridge_school_worker_principal','oracle_autopilot.paused_reconcile',()),
@@ -153,7 +155,7 @@ def execute_under_lease(ssh, selection, environment, work):
             child = subprocess.Popen([sys.executable,'-m',module,*args],env=child_env,start_new_session=True)
             start = heartbeat = time.monotonic()
             while child.poll() is None:
-                if lease.poll() is not None or time.monotonic()-start>240:
+                if lease.poll() is not None or time.monotonic()-start>(480 if selection=='codex-terminal-sweep' else 240):
                     raise RuntimeError('route_lease_lost_or_consumer_timeout')
                 if time.monotonic()-heartbeat>3:
                     lease.stdin.write(b'.')

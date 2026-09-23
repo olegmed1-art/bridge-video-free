@@ -142,6 +142,8 @@ jobs:
         run: |
           set -euo pipefail
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0372_autopilot_codex_terminal_readback_candidates.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0371_autopilot_provider_retry_budget.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -f database/rollbacks/0370_autopilot_codex_send_intent.sql
@@ -176,7 +178,12 @@ jobs:
         run: PYTHONPATH=. python database/tests/test_codex_send_concurrency.py
 
       - name: Verify owner command rendering and delivery contract
-        run: python -m pytest -q tests/test_oracle_autopilot_bridge_prompt.py tests/test_oracle_autopilot_github_codex_callback.py
+        run: |
+          python -m pytest -q \
+            tests/test_oracle_autopilot_bridge_prompt.py \
+            tests/test_oracle_autopilot_github_codex_callback.py \
+            tests/test_oracle_autopilot_codex_terminal_readback.py \
+            tests/test_oracle_autopilot_codex_terminal_sweep.py
 
       - name: Prove concurrent bidding activation exclusion
         run: python database/tests/test_bidding_activation_concurrency.py

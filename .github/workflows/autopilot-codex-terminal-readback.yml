@@ -1,0 +1,56 @@
+name: Autopilot Codex bounded terminal readback
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Original PR containing the Codex terminal comment
+        required: true
+        type: string
+      comment_id:
+        description: Original GitHub comment ID, not an invented callback
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: autopilot-codex-terminal-readback-${{ inputs.comment_id }}
+  cancel-in-progress: false
+
+jobs:
+  recover-one:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      vars.AUTOPILOT_CODEX_READBACK_ENABLED == 'true' &&
+      github.event.repository.id == 1330085090 &&
+      github.actor == 'olegmed1-art'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout immutable default-branch receiver
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned callback dependency
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+      - name: Re-read one original comment and use existing terminal RPC
+        env:
+          AUTOPILOT_CALLBACK_DATABASE_URL: ${{ secrets.AUTOPILOT_CALLBACK_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          READBACK_PR: ${{ inputs.pr_number }}
+          READBACK_COMMENT_ID: ${{ inputs.comment_id }}
+        run: |
+          set -euo pipefail
+          test -n "${AUTOPILOT_CALLBACK_DATABASE_URL:-}"
+          test -n "${GITHUB_TOKEN:-}"
+          python -m ops.github_autopilot_db_route codex-terminal-readback
