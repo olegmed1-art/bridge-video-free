@@ -12,9 +12,11 @@ class SourceFenceProbe(unittest.TestCase):
                         valid.replace('neondb_owner','autopilot_callback_login'),
                         valid.replace('/neondb','/other'),
                         valid.replace('sslmode=verify-full','sslmode=disable'),
+                        valid.replace('sslmode=verify-full','sslmode=require'),
                         valid.replace('channel_binding=require','channel_binding=disable'),
                         valid+'&host=attacker.invalid', valid+'&sslmode=disable',
-                        valid+'#fragment', valid+'\n'):
+                        valid+'#fragment', valid+'\n',
+                        valid.replace('synthetic-password','synthetic%0Apassword')):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 probe.validate_dsn(invalid)
 
