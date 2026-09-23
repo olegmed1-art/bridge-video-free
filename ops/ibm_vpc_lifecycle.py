@@ -32,6 +32,37 @@ COMPLETENESS_FIELDS = (
 )
 
 
+
+VIDEO_QUEUE_STATUSES = frozenset(
+    {"PENDING_CANARY", "QUEUED", "LEASED", "REVIEW_READY", "AMBIGUOUS", "FAILED"}
+)
+
+
+class ObservationError(ValueError):
+    """A queue observation cannot safely drive a lifecycle decision."""
+
+
+def video_queue_work_counts(status_counts: dict[str, Any]) -> dict[str, int]:
+    """Map Universal Video status counts to executable work.
+
+    PENDING_CANARY is deliberately excluded: it is not runnable until a
+    separate canary gate changes it to QUEUED. LEASED remains active work.
+    """
+    if not isinstance(status_counts, dict):
+        raise ObservationError("video_queue_counts_invalid")
+    counts: dict[str, int] = {}
+    for status, value in status_counts.items():
+        if status not in VIDEO_QUEUE_STATUSES:
+            raise ObservationError("video_queue_status_unknown")
+        if not _is_int(value) or value < 0:
+            raise ObservationError("video_queue_count_invalid")
+        counts[status] = value
+    return {
+        "eligible_pending_jobs": counts.get("QUEUED", 0),
+        "running_jobs": counts.get("LEASED", 0),
+    }
+
+
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
