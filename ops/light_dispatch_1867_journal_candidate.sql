@@ -34,6 +34,54 @@ CREATE FUNCTION autopilot.light_dispatch_1867_snapshot() RETURNS jsonb
  AND w.work_item_id='714feeda-d4c4-48b1-8d07-26427d343a7b'
 $$;
 
+-- Pure predicate: explicit JSON nulls must be present; numbers cannot be strings.
+-- The predicate is also exercised on JSON copies by the read-only regression.
+CREATE FUNCTION autopilot.light_dispatch_1867_input_valid(v jsonb) RETURNS boolean
+ LANGUAGE sql IMMUTABLE SECURITY INVOKER SET search_path=pg_catalog AS $$
+ SELECT COALESCE(v @> '{
+  "task": {
+   "task_id":"f05c605f-f664-4ff7-9927-a039f000a929",
+   "status":"FAILED_CLOSED","attempts":1,
+   "terminal_reason_code":"ROLE_DISPATCH_DELIVERY_EXHAUSTED",
+   "goal_json":{"expected_head_sha":"2586929313ab40326d64353b513ff86e5ae3350c"},
+   "safe_summary_json":{"result_code":"ROLE_DISPATCH_RESPONSE_INVALID"}
+  },
+  "outbox": {
+   "dispatch_id":"322dd440-30b9-49d2-8e1a-f5ecc1d2b99b",
+   "task_id":"f05c605f-f664-4ff7-9927-a039f000a929",
+   "step_attempt_id":"7e45dcdd-ee49-4c38-930c-14e36a70a255",
+   "status":"FAILED_CLOSED","attempts":5,"max_attempts":5,
+   "claim_epoch":5,"claim_owner":null,"claim_until":null,
+   "mailbox_pr":1703,"delivery_contract_version":3,
+   "repository":"olegmed1-art/bridge-video-free","role":"AUTOPILOT",
+   "target_pr":1769,"mode":"READ_ONLY","dispatch_epoch":1,
+   "expected_head_sha":"2586929313ab40326d64353b513ff86e5ae3350c",
+   "task_fingerprint":"6c67171ad333f5ca6b19bc7faac712fbf98440aaec639191a4c46a9f2182add0",
+   "last_error_code":"ROLE_DISPATCH_RESPONSE_INVALID",
+   "prepared_by":"oracle-autopilot-light-1","repair_attempt":0,
+   "executor_id":null,"prior_task_id":null,"origin_task_id":null,
+   "target_chat_id":null,"target_chat_name":null,
+   "blocked_result_code":null,"blocked_summary":null,
+   "sent_at":null,"published_at":null,"delivered_at":null,
+   "github_dispatch_comment_id":null,"dispatch_body_sha256":null,
+   "codex_command_pr":null,"codex_command_comment_id":null,
+   "codex_ack_reaction_id":null,"codex_ack_at":null,
+   "callback_deadline_at":null,"delivery_deadline_at":null
+  },
+  "step": {
+   "step_attempt_id":"7e45dcdd-ee49-4c38-930c-14e36a70a255",
+   "status":"FAILED_CLOSED","error_code":"ROLE_DISPATCH_DELIVERY_EXHAUSTED"
+  },
+  "work": {
+   "work_item_id":"714feeda-d4c4-48b1-8d07-26427d343a7b",
+   "state":"BLOCKED","last_task_id":"f05c605f-f664-4ff7-9927-a039f000a929",
+   "hold_reason":null,"result_code":"ROLE_DISPATCH_RESPONSE_INVALID"
+  }
+ }'::jsonb AND v#>>'{task,safe_summary_json,status}' IS NULL,false)
+$$;
+REVOKE ALL ON FUNCTION autopilot.light_dispatch_1867_input_valid(jsonb) FROM PUBLIC,
+ autopilot_runtime,autopilot_runtime_principal,autopilot_callback,bridge_school_worker;
+
 CREATE FUNCTION autopilot.light_dispatch_1867_recover(p_action text,p_evidence jsonb)
  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path=pg_catalog AS $$
 DECLARE
@@ -77,22 +125,13 @@ BEGIN
  current_image:=autopilot.light_dispatch_1867_snapshot();
  IF current_image IS NULL THEN RAISE EXCEPTION 'RECOVERY_CANDIDATE_LINEAGE_MISSING'; END IF;
  IF p_action='APPLY' THEN
-  IF current_image#>>'{task,status}' IS DISTINCT FROM 'FAILED_CLOSED'
-   OR current_image#>>'{task,attempts}' IS DISTINCT FROM '1'
-   OR current_image#>>'{task,goal_json,expected_head_sha}' IS DISTINCT FROM '2586929313ab40326d64353b513ff86e5ae3350c'
-   OR current_image#>>'{task,safe_summary_json,result_code}' IS DISTINCT FROM 'ROLE_DISPATCH_RESPONSE_INVALID'
-   OR current_image#>>'{task,safe_summary_json,status}' IS NOT NULL
-   OR current_image#>>'{outbox,status}' IS DISTINCT FROM 'FAILED_CLOSED'
-   OR current_image#>>'{outbox,attempts}' IS DISTINCT FROM '5'
-   OR current_image#>>'{outbox,claim_epoch}' IS DISTINCT FROM '5'
-   OR current_image#>>'{outbox,github_dispatch_comment_id}' IS NOT NULL
-   OR current_image#>>'{outbox,sent_at}' IS NOT NULL
-   OR current_image#>>'{outbox,codex_command_comment_id}' IS NOT NULL
-   OR current_image#>>'{outbox,codex_ack_at}' IS NOT NULL
-   OR current_image#>>'{work,state}' IS DISTINCT FROM 'BLOCKED'
-   OR current_image#>>'{work,last_task_id}' IS DISTINCT FROM tid::text
-   OR current_image#>>'{work,hold_reason}' IS NOT NULL THEN
+  IF NOT autopilot.light_dispatch_1867_input_valid(current_image) THEN
    RAISE EXCEPTION 'RECOVERY_CANDIDATE_STATE_DRIFT';
+  END IF;
+  IF EXISTS(SELECT FROM autopilot.role_dispatch_outbox
+    WHERE repository='olegmed1-art/bridge-video-free' AND target_pr=1769
+    AND dispatch_id<>did AND status NOT IN ('CALLBACK_ACCEPTED','FAILED_CLOSED')) THEN
+   RAISE EXCEPTION 'RECOVERY_CANDIDATE_CONFLICTING_DISPATCH';
   END IF;
   UPDATE autopilot.project_work_item SET state='ACTIVE',result_code=NULL,
    result_summary=NULL,not_before=now(),updated_at=now() WHERE work_item_id=wid;
