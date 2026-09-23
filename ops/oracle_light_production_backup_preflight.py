@@ -51,11 +51,17 @@ def service_state(unit: str) -> dict:
     raw = Path(f'/proc/{pid}/environ').read_bytes()
     env = dict(item.decode().split('=', 1) for item in raw.split(b'\0') if b'=' in item)
     parsed = urlsplit(env.get('AUTOPILOT_DATABASE_URL', ''))
-    query = parse_qs(parsed.query, keep_blank_values=True)
+    query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
     if parsed.scheme not in {'postgres', 'postgresql'} or not parsed.password or parsed.fragment:
         raise ValueError('invalid service connection URI')
-    if set(query) - {'sslmode', 'channel_binding', 'sslrootcert'} or query.get('sslmode') != ['verify-full'] or query.get('channel_binding') != ['require']:
+    if (set(query) - {'sslmode', 'channel_binding', 'sslrootcert', 'connect_timeout', 'application_name'}
+            or any(len(values) != 1 for values in query.values())
+            or query.get('sslmode') != ['verify-full'] or query.get('channel_binding') != ['require']):
         raise ValueError('unpinned service connection URI')
+    if (env.get('AUTOPILOT_PG_HOST') != parsed.hostname
+            or env.get('AUTOPILOT_PG_DATABASE') != unquote(parsed.path.lstrip('/'))
+            or env.get('AUTOPILOT_PG_PORT') != str(parsed.port)):
+        raise ValueError('service target does not match pinned configuration')
     return {'backend': env.get('AUTOPILOT_DB_BACKEND', 'neon'),
             'host': parsed.hostname, 'port': parsed.port,
             'database': unquote(parsed.path.lstrip('/'))}
