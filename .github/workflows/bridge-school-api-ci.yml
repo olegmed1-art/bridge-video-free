@@ -5,6 +5,9 @@ on:
     paths:
       - 'bridge_school_api/**'
       - 'tests/test_api_dsn_contract.py'
+      - 'tests/test_runtime_app_incident_probe.py'
+      - 'tests/test_api_health_contract.py'
+      - 'tests/test_api_response_headers.py'
       - 'tests/test_ai_api_routes.py'
       - 'tests/test_ai_final_decision_contract.py'
       - 'tests/test_ai_policy_contract.py'
@@ -20,6 +23,9 @@ on:
     paths:
       - 'bridge_school_api/**'
       - 'tests/test_api_dsn_contract.py'
+      - 'tests/test_runtime_app_incident_probe.py'
+      - 'tests/test_api_health_contract.py'
+      - 'tests/test_api_response_headers.py'
       - 'tests/test_ai_api_routes.py'
       - 'tests/test_ai_final_decision_contract.py'
       - 'tests/test_ai_policy_contract.py'
@@ -55,6 +61,11 @@ jobs:
         run: python -m compileall -q bridge_school_api
       - name: Verify database DSN security contract
         run: PYTHONPATH=. python tests/test_api_dsn_contract.py
+      - name: Verify secret-safe incident diagnostics and health responses
+        run: |
+          PYTHONPATH=. python -m unittest discover -s tests -p test_runtime_app_incident_probe.py -v
+          PYTHONPATH=. python tests/test_api_health_contract.py
+          PYTHONPATH=. python tests/test_api_response_headers.py
       - name: Verify AI decision and policy contracts
         run: >-
           PYTHONPATH=. pytest -q
