@@ -243,7 +243,9 @@ def target(github: GitHub, command: CodexCommand) -> tuple[str, str]:
             and base_repo.get("full_name") == REPOSITORY, "PUBLICATION_TARGET_INVALID")
     require(isinstance(branch, str)
             and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}", branch) is not None
-            and not branch.startswith(("autopilot/dispatch/", "autopilot/mailbox"))
+            # GraphQL accepts qualified refs; reject them so it cannot resolve
+            # a different branch than the literal name checked through REST.
+            and not branch.startswith(("refs/", "autopilot/dispatch/", "autopilot/mailbox"))
             and branch != base.get("ref") and branch != repo.get("default_branch")
             and all(part not in {"", ".", ".."} for part in branch.split("/")),
             "PUBLICATION_BRANCH_DENIED")
