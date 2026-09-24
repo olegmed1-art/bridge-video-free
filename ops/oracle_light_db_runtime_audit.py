@@ -83,6 +83,14 @@ def live_credential_matches_disk(dsn, path=LIGHT_ENV_FILE):
     return hmac.compare_digest(found[0].encode('utf-8'), dsn.encode('utf-8'))
 
 
+def environment_source_layout(output):
+    """Reduce systemd's file list to non-secret facts; never echo an unknown path."""
+    entries = output.splitlines()
+    expected = f'EnvironmentFiles={LIGHT_ENV_FILE} (ignore_errors=no)'
+    return {'entries': len(entries), 'expected_primary': expected in entries,
+            'unknown_entries': sum(entry != expected for entry in entries)}
+
+
 def verify_production_login(dsn):
     account = pwd.getpwnam('school-autopilot')
     def drop_to_service():
@@ -140,8 +148,11 @@ def main():
             source = subprocess.run(['/usr/bin/systemctl', 'show', unit,
                                      '-p', 'EnvironmentFiles'],
                                     check=True, capture_output=True, text=True,
-                                    timeout=15).stdout.strip()
-            if source != f'EnvironmentFiles={LIGHT_ENV_FILE} (ignore_errors=no)':
+                                    timeout=15).stdout
+            layout = environment_source_layout(source)
+            if layout != {'entries': 1, 'expected_primary': True,
+                          'unknown_entries': 0}:
+                print(json.dumps({'audit': 'ENV_SOURCE_LAYOUT', **layout}), flush=True)
                 raise AuditFailure('ENV_SOURCE_DRIFT')
             matches = live_credential_matches_disk(dsn)
             print(json.dumps({'audit': 'SOURCE_ATTESTED',
