@@ -137,6 +137,12 @@ def test_missing_authoritative_provenance_permit_never_writes():
 @pytest.mark.parametrize("setting,value,code", [
     ("fork", True, "TARGET_INVALID"), ("protected", True, "BRANCH_UNVERIFIED"),
     ("branch", "main", "BRANCH_DENIED"), ("branch", "autopilot/dispatch/id", "BRANCH_DENIED"),
+    ("branch", "autopilot/mailbox-v5", "BRANCH_DENIED"),
+    ("branch", "refs/heads/main", "BRANCH_DENIED"),
+    ("branch", "refs/heads/autopilot/mailbox-v5", "BRANCH_DENIED"),
+    ("branch", "refs/heads/autopilot/dispatch/id", "BRANCH_DENIED"),
+    ("branch", "refs/heads/fix/bounded-repair", "BRANCH_DENIED"),
+    ("branch", "refs/tags/release", "BRANCH_DENIED"),
     ("tree_mode", "120000", "FILE_READBACK_FAILED"),
     ("parent_mode", "120000", "PARENT_NOT_TREE"),
     ("race", True, "GITHUB_REJECTED"),
@@ -158,6 +164,40 @@ def test_security_and_cas_rejections_do_not_write(setting, value, code):
     "setup.py", "sitecustomize.py", "tests/х.py", "tests/*.py"])
 def test_sensitive_paths_denied(path):
     assert not pub.safe_path(path)
+
+
+@pytest.mark.parametrize("path", [
+    "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md",
+    "ops/governance/portfolio.json",
+    "ops/governance/validate_governance.py",
+    "ops/oracle_universal_video_container_install.sh",
+    "ops/oracle_light_resume.py",
+    "ops/future_admin_helper.sh",
+    "autopilot_phase3b/policy.py",
+    "autopilot_service/app.py",
+    "scripts/vercel_ignore_build.sh",
+    "database/admin.sql",
+    "unreviewed/new_runtime.py",
+])
+def test_governance_and_operational_control_paths_are_denied(path):
+    # Exact task assignment is not authority to modify an administrative surface.
+    assert not pub.safe_path(path)
+
+
+def test_exact_assignment_application_paths_and_nonprivileged_branch_are_allowed():
+    for path in (
+        "bridge_school_api/l1_canonical_runtime_v2.py",
+        "docs/research/bidding-engine/canon-ingestion/natural-system-v1/BLOCK_INVENTORY.json",
+        "tests/test_bidding_canon_ingestion_contract.py",
+    ):
+        assert pub.safe_path(path)
+
+    data = fixture()
+    github, cursor = FakeGitHub(*data), FakeCursor()
+    github.branch = "bidding/content-intake-snapshot"
+    result = pub.publish(github, cursor, data[-1])
+    assert result["status"] == "PUBLISHED"
+    assert len(github.writes) == 1
 
 
 def test_strict_json_rejects_duplicates_and_mixed_result():
@@ -292,3 +332,21 @@ def test_main_reports_partial_outcomes_without_exposing_exception(monkeypatch, c
     output = capsys.readouterr().out
     assert "fake-private-dsn" not in output
     assert json.loads(output)["status"] == expected
+
+
+@pytest.mark.parametrize("path", [
+    "ops/oracle_universal_video_container_install.sh",
+    "ops/governance/portfolio.json",
+    "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md",
+])
+def test_exact_assignment_cannot_authorize_control_plane_publication(path):
+    owner, command, payload, event = fixture()
+    owner["comment"]["body"] = owner["comment"]["body"].replace("tests/test_example.py", path)
+    payload["files"][0]["path"] = path
+    event["comment"]["body"] = pub.MARKER + "\n" + json.dumps(payload)
+    github = FakeGitHub(owner, command, payload, event)
+    cursor = FakeCursor()
+    with pytest.raises(pub.CallbackContractError):
+        pub.publish(github, cursor, event)
+    assert github.writes == []
+    assert cursor.calls == []

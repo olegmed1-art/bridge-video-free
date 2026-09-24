@@ -52,19 +52,48 @@ def strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def safe_path(path: Any) -> bool:
-    # Exact paths only, no glob, Unicode alias, dot component, symlink or config.
-    if not isinstance(path, str) or not re.fullmatch(r"[A-Za-z0-9_/-]+\.(?:py|sql|md)", path):
+    # Exact existing files only: no glob, Unicode alias or dot component. The
+    # assignment supplies a second, exact expected_changed_files allowlist.
+    if not isinstance(path, str) or not re.fullmatch(
+        r"[A-Za-z0-9_./-]+\.(?:py|sql|md|json|sh)", path
+    ):
         return False
     if len(path) > 200 or any(part in {"", ".", ".."} for part in path.split("/")):
         return False
-    if path.endswith("AGENTS.md") or re.search(r"(?i)(secret|credential|token|password)", path):
+    if path.endswith("AGENTS.md") or re.search(
+        r"(?i)(secret|credential|token|password)", path
+    ):
         return False
-    # No self-modification of the privileged receiver, orchestration, governance,
-    # build/install hooks, Canon, or migration history. Publication only modifies
-    # existing files, so allowing database/migrations/** could rewrite applied SQL.
-    return (path.startswith(("tests/", "database/tests/", "docs/evidence/"))
-            or ("/" not in path and path.endswith(".py")
-                and path not in {"setup.py", "conftest.py", "sitecustomize.py", "usercustomize.py"}))
+    # Deny self-modification and privileged control/config surfaces. Repository
+    # application, test and research-data files remain eligible
+    # only when named exactly by the authenticated task assignment.
+    denied_prefixes = (
+        ".codex/",
+        ".github/",
+        "autopilot_token_broker_service/",
+        "database/migrations/",
+        "database/rollbacks/",
+        "deploy/",
+        "docs/canon/",
+        "docs/governance/",
+        "oracle_autopilot/",
+        "ops/",
+    )
+    if path.startswith(denied_prefixes):
+        return False
+    # Unknown directory families stay denied, including alternate Autopilot
+    # runtimes, build scripts and database administration outside migrations.
+    return (
+        path.startswith(("tests/", "database/tests/", "docs/evidence/",
+                         "bridge_school_api/", "docs/research/", "bidding/"))
+        or (
+            "/" not in path
+            and
+            path.endswith(".py")
+            and path
+            not in {"setup.py", "conftest.py", "sitecustomize.py", "usercustomize.py"}
+        )
+    )
 
 
 def blob_sha(content: str) -> str:
@@ -212,8 +241,11 @@ def target(github: GitHub, command: CodexCommand) -> tuple[str, str]:
             and not pr.get("merged") and repo.get("id") == REPOSITORY_ID
             and repo.get("full_name") == REPOSITORY and base_repo.get("id") == REPOSITORY_ID
             and base_repo.get("full_name") == REPOSITORY, "PUBLICATION_TARGET_INVALID")
-    require(isinstance(branch, str) and re.fullmatch(r"(?:autopilot|codex|fix)/[A-Za-z0-9_/-]+", branch) is not None
-            and not branch.startswith("autopilot/dispatch/")
+    require(isinstance(branch, str)
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}", branch) is not None
+            # GraphQL accepts qualified refs; reject them so it cannot resolve
+            # a different branch than the literal name checked through REST.
+            and not branch.startswith(("refs/", "autopilot/dispatch/", "autopilot/mailbox"))
             and branch != base.get("ref") and branch != repo.get("default_branch")
             and all(part not in {"", ".", ".."} for part in branch.split("/")),
             "PUBLICATION_BRANCH_DENIED")
