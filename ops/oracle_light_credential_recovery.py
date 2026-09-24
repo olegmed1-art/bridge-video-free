@@ -171,6 +171,43 @@ def atomic(path, content, mode, suffix):
 def run(*args):
     subprocess.run(['systemctl',*args],check=True,capture_output=True,timeout=45)
 
+
+def transition(old_drop, hold_drop, original, replacement, new):
+    # Every mutation is covered. A failure must prove stopped/HOLD or
+    # report containment unverified; never print a secret-bearing error.
+    try:
+        run('stop',UNIT)
+        stopped = service()
+        require(stopped['ActiveState']=='inactive' and stopped['MainPID']=='0','STOP_FAILED')
+        atomic(DROP,hold_drop,0o644,'hold')
+        run('daemon-reload')
+        validate_state(service(),'HOLD',False)
+        atomic(ENV,replacement,0o600,'env')
+        require(read_file(ENV,0o600)==replacement,'ENV_WRITE_FAILED')
+        check_login(env_values(replacement)['AUTOPILOT_DATABASE_URL'])
+        run('start',UNIT)
+        after=service()
+        validate_state(after,'HOLD',True)
+        observed=Path('/proc/'+after['MainPID']+'/environ').read_bytes()
+        actual=dict(value.split(b'=',1) for value in observed.split(b'\0') if b'=' in value)
+        require(actual.get(b'AUTOPILOT_DATABASE_URL')==new.encode() and
+                actual.get(b'AUTOPILOT_ADMISSION_MODE')==b'HOLD','POST_START_DRIFT')
+        check_login(new)
+    except BaseException:
+        try:
+            run('stop',UNIT)
+            current_drop=read_file(DROP,0o644,4096)
+            require(current_drop in (old_drop,hold_drop),'DROP_CHANGED_DURING_RECOVERY')
+            if current_drop==old_drop:
+                atomic(DROP,hold_drop,0o644,'contain')
+            run('daemon-reload')
+            validate_state(service(),'HOLD',False)
+            if read_file(ENV,0o600) == replacement:
+                atomic(ENV,original,0o600,'rollback')
+        except BaseException:
+            raise Blocked('CONTAINMENT_UNVERIFIED') from None
+        raise
+
 def main(packet):
     require(os.geteuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic','HOST_IDENTITY')
     require(set(packet) == {'password','invocation'} and
@@ -201,40 +238,7 @@ def main(packet):
         check_login(new)
         require(service()==before and read_file(ENV,0o600)==original and
                 read_file(DROP,0o644,4096)==old_drop, 'PRE_WRITE_DRIFT')
-        # Every mutation is covered. A failure must prove stopped/HOLD or
-        # report containment unverified; never print a secret-bearing error.
-        try:
-            run('stop',UNIT)
-            stopped = service()
-            require(stopped['ActiveState']=='inactive' and stopped['MainPID']=='0','STOP_FAILED')
-            atomic(DROP,hold_drop,0o644,'hold')
-            run('daemon-reload')
-            validate_state(service(),'HOLD',False)
-            atomic(ENV,replacement,0o600,'env')
-            require(read_file(ENV,0o600)==replacement,'ENV_WRITE_FAILED')
-            check_login(env_values(replacement)['AUTOPILOT_DATABASE_URL'])
-            run('start',UNIT)
-            after=service()
-            validate_state(after,'HOLD',True)
-            observed=Path('/proc/'+after['MainPID']+'/environ').read_bytes()
-            actual=dict(value.split(b'=',1) for value in observed.split(b'\0') if b'=' in value)
-            require(actual.get(b'AUTOPILOT_DATABASE_URL')==new.encode() and
-                    actual.get(b'AUTOPILOT_ADMISSION_MODE')==b'HOLD','POST_START_DRIFT')
-            check_login(new)
-        except BaseException:
-            try:
-                run('stop',UNIT)
-                current_drop=read_file(DROP,0o644,4096)
-                require(current_drop in (old_drop,hold_drop),'DROP_CHANGED_DURING_RECOVERY')
-                if current_drop==old_drop:
-                    atomic(DROP,hold_drop,0o644,'contain')
-                run('daemon-reload')
-                validate_state(service(),'HOLD',False)
-                if read_file(ENV,0o600) == replacement:
-                    atomic(ENV,original,0o600,'rollback')
-            except BaseException:
-                raise Blocked('CONTAINMENT_UNVERIFIED') from None
-            raise
+        transition(old_drop,hold_drop,original,replacement,new)
         print(json.dumps({'recovery':'PASS','admission':'HOLD','light_active':True,
                           'database_login':'READ_ONLY_PASS','queue_nonterminal':0}))
 
