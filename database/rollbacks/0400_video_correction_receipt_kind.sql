@@ -18,7 +18,7 @@ BEGIN
   END IF;
   IF strpos(pg_get_functiondef(
        'bidding.validate_video_correction_review_receipt()'::regprocedure),
-       'jsonb_object_length(NEW.receipt_payload)<>9')=0 THEN
+       '(SELECT count(*) FROM jsonb_object_keys(NEW.receipt_payload))<>9')=0 THEN
     RAISE EXCEPTION 'VIDEO_CORRECTION_KIND_ROLLBACK_GUARD_DRIFT';
   END IF;
   SELECT definition INTO previous_definition
