@@ -186,6 +186,38 @@ def test_logic_cues_require_token_boundaries_and_use_adjacent_clauses():
     assert explanation["logic_relations"][1]["left_clause"] == "Баланс есть"
 
 
+def test_overlapping_purpose_cue_requires_source_bound_verified_teacher_speech():
+    text = "Мы делаем трансфер для того чтобы передать право выбора партнёру."
+    quality = {"canon_candidates": [{
+        "canon_observation_id": "rule-purpose", "classification": "RULE_PARAPHRASE_MATCH",
+        "evidence_refs": ["segment-purpose"],
+    }], "authority": {"canon_activation": "DENY"}}
+    master = {"job_id": "job-purpose", "transcript": [{
+        "segment_id": "segment-purpose", "speaker_role": "teacher",
+        "speaker_role_confidence": 0.96, "text": text,
+    }]}
+
+    result = build_extended_extraction(master, quality)
+    explanations = [row["payload"] for row in result["candidate_records"]
+                    if row["candidate_type"] == "EXPLANATION_CANDIDATE"]
+    assert len(explanations) == 1
+    assert explanations[0]["evidence_refs"] == ["segment-purpose"]
+    assert explanations[0]["statement"] == text
+    assert explanations[0]["logic_relations"] == [{
+        "relation_type": "PURPOSE", "cue": "для того чтобы",
+        "left_clause": "Мы делаем трансфер",
+        "right_clause": "передать право выбора партнёру",
+    }]
+
+    master["transcript"][0]["speaker_role"] = "student"
+    assert not any(row["candidate_type"] == "EXPLANATION_CANDIDATE"
+                   for row in build_extended_extraction(master, quality)["candidate_records"])
+    master["transcript"][0]["speaker_role"] = "teacher"
+    quality["canon_candidates"][0]["evidence_refs"] = ["other-segment"]
+    assert not any(row["candidate_type"] == "EXPLANATION_CANDIDATE"
+                   for row in build_extended_extraction(master, quality)["candidate_records"])
+
+
 def test_unbound_explicit_explanation_becomes_gap_and_does_not_hide_missing_why():
     master = {"job_id": "job", "explanation_observations": [{
         "stable_key": "why:rule-7", "rule_stable_key": "rule-7",
