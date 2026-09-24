@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "kind": "AUTOPILOT_SMOKE_V1",
+  "version": 1,
+  "description": "Synthetic no-production-write durable wait/resume acceptance for School Autopilot Controller v1.",
+  "risk_class": "LOW",
+  "governance_mode": "ASSURED",
+  "allowed_executors": ["vercel", "github"],
+  "allowed_transitions": [
+    {"from": "QUEUED", "to": "RUNNING", "event": "TASK_CLAIMED"},
+    {"from": "RUNNING", "to": "WAITING_EXTERNAL", "event": "GITHUB_SMOKE_DISPATCHED"},
+    {"from": "WAITING_EXTERNAL", "to": "RUNNING", "event": "GITHUB_SMOKE_CALLBACK_VERIFIED"},
+    {"from": "RUNNING", "to": "SUCCEEDED", "event": "SMOKE_ACCEPTANCE_PASSED"},
+    {"from": "RUNNING", "to": "FAILED_CLOSED", "event": "SMOKE_ACCEPTANCE_FAILED"},
+    {"from": "WAITING_EXTERNAL", "to": "DEADLINE_STOP", "event": "WAIT_DEADLINE_EXCEEDED"}
+  ],
+  "approval_policy": {
+    "required_for": [],
+    "approval_ttl_seconds": 3600,
+    "scope_digest_required": true
+  },
+  "retry_policy": {
+    "max_external_attempts": 3,
+    "max_model_turns": 0,
+    "backoff": "exponential"
+  },
+  "budget_policy": {
+    "per_task_limit_usd": 0.05,
+    "critical_model_requires_risk_gate": true
+  },
+  "acceptance_criteria": [
+    "same durable workflow resumes after verified callback",
+    "duplicate callback is rejected without duplicate effect",
+    "no OpenAI model call occurs",
+    "no production data or routing is modified",
+    "task and append-only event records remain queryable",
+    "timeout and bounded retry paths are observable",
+    "AUTOPILOT_ENABLED=false prevents new execution"
+  ],
+  "rollback": {
+    "kill_switch_safe": true,
+    "instructions": [
+      "set AUTOPILOT_ENABLED=false",
+      "stop claiming new synthetic tasks",
+      "retain task, event and evidence metadata",
+      "revoke callback signing secret if compromise is suspected"
+    ]
+  }
+}
