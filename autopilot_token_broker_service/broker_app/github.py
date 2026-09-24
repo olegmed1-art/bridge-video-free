@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from broker_app.policy import (
     ALLOWED_PATH_PATTERNS,
     DraftRepairRequest,
+    ProjectHeadRequest,
     ROLE_PATTERN,
     RoleDispatchRequest,
 )
@@ -43,11 +44,12 @@ ROLE_DISPATCH_TOKEN_PERMISSIONS = {
     "contents": "write",
     "pull_requests": "write",
 }
+PROJECT_HEAD_TOKEN_PERMISSIONS = {"pull_requests": "read"}
 TOKEN_RESPONSE_LIMIT_BYTES = 32_768
 API_RESPONSE_LIMIT_BYTES = 65_536
 HTTP_TIMEOUT_SECONDS = 15
 BROKER_POLICY_VERSION = "physical-no-merge-v2"
-ROLE_DISPATCH_MAILBOX_PR = 1150
+ROLE_DISPATCH_MAILBOX_PR = 1703
 ROLE_DISPATCH_BOT_LOGIN = "bridge-school-oracle-autopilot[bot]"
 
 _SHA = r"[0-9a-f]{40}"
@@ -89,6 +91,11 @@ def broker_policy_sha256() -> str:
         "sha_pattern": _SHA,
         "token_permissions": TOKEN_PERMISSIONS,
         "role_dispatch_token_permissions": ROLE_DISPATCH_TOKEN_PERMISSIONS,
+        "project_head_token_permissions": PROJECT_HEAD_TOKEN_PERMISSIONS,
+        "project_head_path_pattern": (
+            rf"{re.escape(REPOSITORY_API_PATH)}/pulls/[1-9][0-9]{{0,5}}|"
+            rf"{re.escape(REPOSITORY_API_PATH)}/pulls/1000000"
+        ),
         "role_dispatch_mailbox_pr": ROLE_DISPATCH_MAILBOX_PR,
         "role_dispatch_bot_login": ROLE_DISPATCH_BOT_LOGIN,
         "role_dispatch_branch_pattern": _ROLE_DISPATCH_BRANCH,
@@ -116,6 +123,10 @@ class BrokerRetryableError(RuntimeError):
 
 class DraftRepairConflictError(RuntimeError):
     """Fresh GitHub state no longer matches exact request preconditions."""
+
+
+class ProjectHeadNotFoundError(RuntimeError):
+    """The exact requested pull request does not exist."""
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -304,7 +315,11 @@ def issue_installation_token(
 ) -> InstallationCredential:
     """Mint one repository- and permission-scoped internal credential."""
 
-    if dict(permissions) not in (TOKEN_PERMISSIONS, ROLE_DISPATCH_TOKEN_PERMISSIONS):
+    if dict(permissions) not in (
+        TOKEN_PERMISSIONS,
+        ROLE_DISPATCH_TOKEN_PERMISSIONS,
+        PROJECT_HEAD_TOKEN_PERMISSIONS,
+    ):
         raise BrokerConfigurationError("GITHUB_TOKEN_PERMISSIONS_INVALID")
 
     app_jwt = build_app_jwt(config, now_epoch=now_epoch)
@@ -375,6 +390,12 @@ def _authorize_github_operation(*, method: str, path: str) -> None:
     if method == "GET" and re.fullmatch(
         rf"{re.escape(REPOSITORY_API_PATH)}/git/commits/{_SHA}", clean_path
     ) and not parsed.query:
+        return
+    if method == "GET" and not parsed.query and re.fullmatch(
+        rf"{re.escape(REPOSITORY_API_PATH)}/pulls/"
+        rf"(?:[1-9][0-9]{{0,5}}|1000000)",
+        clean_path,
+    ):
         return
     if method == "GET" and clean_path.startswith(contents_prefix):
         query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
@@ -827,6 +848,60 @@ def execute_bounded_draft_repair(
         "merge_allowed": False,
         "production_mutation": False,
         "operation_count": 8 + 2 * len(request.changes),
+    }
+
+
+def execute_bounded_project_head(
+    config: BrokerConfig,
+    request: ProjectHeadRequest,
+    *,
+    now_epoch: int,
+    opener: Any | None = None,
+) -> dict[str, object]:
+    """Read one exact PR head through a least-privilege installation token."""
+
+    credential = issue_installation_token(
+        config,
+        now_epoch=now_epoch,
+        opener=opener,
+        permissions=PROJECT_HEAD_TOKEN_PERMISSIONS,
+    )
+    payload = _api_json(
+        credential,
+        method="GET",
+        path=f"{REPOSITORY_API_PATH}/pulls/{request.pr_number}",
+        expected_status=200,
+        opener=opener,
+        not_found_ok=True,
+    )
+    if payload is None:
+        raise ProjectHeadNotFoundError("GITHUB_PROJECT_HEAD_NOT_FOUND")
+    if not isinstance(payload, dict):
+        raise BrokerContractError("GITHUB_PROJECT_HEAD_RESPONSE_INVALID")
+    head = payload.get("head")
+    state = payload.get("state")
+    expected_html_url = (
+        f"https://github.com/{REPOSITORY_FULL_NAME}/pull/{request.pr_number}"
+    )
+    if (
+        payload.get("number") != request.pr_number
+        or payload.get("html_url") != expected_html_url
+        or state not in {"open", "closed"}
+        or not isinstance(head, dict)
+    ):
+        raise BrokerContractError("GITHUB_PROJECT_HEAD_RESPONSE_INVALID")
+    head_sha = _sha(
+        head.get("sha"), error="GITHUB_PROJECT_HEAD_RESPONSE_INVALID"
+    )
+    return {
+        "repository": REPOSITORY_FULL_NAME,
+        "pr_number": request.pr_number,
+        "open": state == "open",
+        "head_sha": head_sha,
+        "http_method": "GET",
+        "token_exposed": False,
+        "production_mutation": False,
+        "operation_count": 2,
     }
 
 

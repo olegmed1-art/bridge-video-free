@@ -9,6 +9,10 @@ on:
       - 'database/**'
       - 'tests/fixtures/asr_block_11_r25_11.json'
       - 'tests/test_meta_asr_gate_r25_12.py'
+      - 'run_drive_3_1_free_oidc.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'bridge_runtime_hardening_r26.py'
+      - '.github/workflows/bridge-video-3.1-free.yml'
       - '.github/workflows/video-r25-12-meta-gate.yml'
   push:
     branches:
@@ -59,29 +63,112 @@ jobs:
             fi
             if [ "$META_CANDIDATE_CHANGED" = "true" ] && \
                printf '%s\n' "$CHANGED_FILES" | grep -Eq \
-                 '^(\.github/workflows/bridge-video-3\.1-free\.yml|run_drive_3_1_free_generic\.py)$'; then
+                 '^(\.github/workflows/bridge-video-3\.1-free\.yml|run_drive_3_1_free_oidc\.py|run_drive_3_1_free_generic\.py|bridge_runtime_hardening_r26\.py)$'; then
               echo 'META implementation/test candidate must not modify the production workflow/runtime adapter.' >&2
               exit 1
             fi
           fi
           python - <<'PY'
+          import hashlib
           from pathlib import Path
           import re
+          import yaml
 
           workflow = Path('.github/workflows/bridge-video-3.1-free.yml').read_text(encoding='utf-8')
-          adapter = Path('run_drive_3_1_free_generic.py').read_text(encoding='utf-8')
-          match = re.search(
-              r'BRIDGE_REQUESTED_ALGORITHM_REVISION:\s*["\']3\.1-free-r([0-9]+(?:\.[0-9]+)*)["\']',
-              workflow,
+
+          class UniqueKeyLoader(yaml.BaseLoader):
+              pass
+
+          def construct_unique_mapping(loader, node, deep=False):
+              mapping = {}
+              for key_node, value_node in node.value:
+                  key = loader.construct_object(key_node, deep=deep)
+                  if key in mapping:
+                      raise yaml.constructor.ConstructorError(
+                          'while constructing a mapping', node.start_mark,
+                          f'duplicate key: {key!r}', key_node.start_mark,
+                      )
+                  mapping[key] = loader.construct_object(value_node, deep=deep)
+              return mapping
+
+          UniqueKeyLoader.add_constructor(
+              yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+              construct_unique_mapping,
           )
-          if not match:
-              raise SystemExit('production algorithm revision is missing or malformed')
-          revision = match.group(1)
-          expected_module = f"bridge_runtime_hardening_r{revision.replace('.', '_')}"
-          expected_import = f'import {expected_module} as hardening'
-          if expected_import not in adapter:
-              raise SystemExit(
-                  f'production workflow/runtime mismatch: revision r{revision} expects {expected_module}'
-              )
-          print(f'Production baseline preserved and internally consistent: r{revision}')
+          try:
+              workflow_doc = yaml.load(workflow, Loader=UniqueKeyLoader)
+              production_job = workflow_doc['jobs']['free-guard-and-worker']
+              requested_revision = production_job['env']['BRIDGE_REQUESTED_ALGORITHM_REVISION']
+          except (KeyError, TypeError, yaml.YAMLError) as exc:
+              raise SystemExit(f'production workflow contract is missing or ambiguous: {exc}') from exc
+          if not isinstance(requested_revision, str) or not re.fullmatch(
+              r'3\.1-free-r[0-9]+(?:\.[0-9]+)*', requested_revision
+          ):
+              raise SystemExit('effective production algorithm revision is malformed')
+
+          entrypoint_command_count = sum(
+              1
+              for step in production_job.get('steps', [])
+              for line in step.get('run', '').splitlines()
+              if re.fullmatch(r'\s*python\s+run_drive_3_1_free_oidc\.py\s*', line)
+          )
+          if entrypoint_command_count != 1:
+              raise SystemExit('production workflow must invoke the pinned OIDC entrypoint exactly once')
+
+          contracts = {
+              '3.1-free-r26.3': {
+                  'runtime_module': 'bridge_runtime_hardening_r26',
+                  'entrypoint_sha256': 'fbd5b28d995f09dd3327bb7bc50bff70bbfe2cc4b1b72eb9cc011ca85449c8d3',
+                  'adapter_sha256': 'c105673f51596db3a7c77fbd0e6e6cc7ab595ffa8b468bfa05a33c7895ce74cf',
+                  'runtime_sha256': '954a0cae740658dbbbe3bf489977ca505978e3af1eec8d6b91168f3e4cc229f4',
+                  'recognizer_sha256': {
+                      'bridge_vision/bridgit_rank_layout.py': '509463ebe40f93d3a62b884b7624eab1e0ad1257ebeb525971aeea5e5882793c',
+                      'bridge_vision/bridgit_gold_profile.py': '6b3d99cc959c168b71e12de9446aa5a0a1fb37c782cd63fd2b4d11b9f8877221',
+                      'bridge_vision/gambler_reference_authority.py': '1d1f3d35b5b9b426528927783eccfcfcb7f2238b90dffc3dd4ea6e44d77aa600',
+                      'bridge_vision/gambler_classic_reference.py': '5da10df6784cb0bd35de00a0b6a80836646a5f51df5bf433b806e87757eedb9b',
+                      'bridge_vision/bridgit_gambler_rank_layout.py': '6a9c1f9b442e0604d6e499bc97781db96a6ec61aabed2c9e4a3b5a7b6cde37b0',
+                      'bridge_vision/bridgit_primary_video.py': 'a7283453f995c24979e7380512ba80c36e7b7a71b115432088bf728201d7d83d',
+                      'bridge_vision/bridgit_primary_production.py': '8a7bfc0e619e47b2f9b3a01d8d73361f22e77808873f581f72cb9a6994379c74',
+                  },
+              },
+          }
+          contract = contracts.get(requested_revision)
+          if contract is None:
+              raise SystemExit(f'production revision lacks an exact evidence contract: {requested_revision}')
+
+          entrypoint_path = Path('run_drive_3_1_free_oidc.py')
+          entrypoint_sha256 = hashlib.sha256(entrypoint_path.read_bytes()).hexdigest()
+          if entrypoint_sha256 != contract['entrypoint_sha256']:
+              raise SystemExit(f'production OIDC entrypoint drift: {entrypoint_sha256}')
+
+          adapter_path = Path('run_drive_3_1_free_generic.py')
+          adapter_bytes = adapter_path.read_bytes()
+          adapter_sha256 = hashlib.sha256(adapter_bytes).hexdigest()
+          if adapter_sha256 != contract['adapter_sha256']:
+              raise SystemExit(f'production adapter drift: {adapter_sha256}')
+          adapter = adapter_bytes.decode('utf-8')
+          runtime_module = contract['runtime_module']
+          if adapter.count(f'import {runtime_module} as hardening') != 1:
+              raise SystemExit('production adapter runtime import does not match the exact contract')
+
+          runtime_path = Path(f'{runtime_module}.py')
+          if not runtime_path.is_file():
+              raise SystemExit(f'production runtime module is missing: {runtime_module}')
+          runtime_bytes = runtime_path.read_bytes()
+          runtime_sha256 = hashlib.sha256(runtime_bytes).hexdigest()
+          if runtime_sha256 != contract['runtime_sha256']:
+              raise SystemExit(f'production runtime drift: {runtime_sha256}')
+          runtime = runtime_bytes.decode('utf-8')
+          if runtime.count(f'REVISION = "{requested_revision}"') != 1:
+              raise SystemExit('production runtime revision does not match the exact contract')
+          for recognizer_path, expected_sha256 in contract['recognizer_sha256'].items():
+              observed_sha256 = hashlib.sha256(Path(recognizer_path).read_bytes()).hexdigest()
+              if observed_sha256 != expected_sha256:
+                  raise SystemExit(
+                      f'production recognizer drift: {recognizer_path} {observed_sha256}'
+                  )
+          print(
+              'Production baseline preserved and internally consistent: '
+              f'{requested_revision} via {runtime_module}'
+          )
           PY

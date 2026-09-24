@@ -1,0 +1,48 @@
+{
+  "schema": "bridge-primary-recognizer-production-promotion-v1",
+  "revision": "3.1-free-r26.2",
+  "promotion_scope": "PRODUCTION_RUNTIME",
+  "promotion_state": "READY_FOR_PRODUCTION_PROMOTION",
+  "algorithm_version_id": "bec25891-6456-488e-95e6-712db860b4dd",
+  "algorithm_version_no": 19,
+  "algorithm_code_commit": "6d0dce63fb90d72a361dac880989b5ad090c02e8",
+  "baseline_evidence": "ops/r262-production-baseline.json",
+  "production_evidence": {
+    "workflow_run_id": 35112375563,
+    "workflow_job_id": 104849130258,
+    "workflow_conclusion": "success",
+    "control_video": "Диана 29.mp4",
+    "control_timestamp": "01:55:35",
+    "recognized_cards": 52,
+    "unique_cards": 52,
+    "cards_per_seat": 13,
+    "exact_reference_match": true
+  },
+  "ci_evidence": {
+    "baseline_pr": 1626,
+    "baseline_merge_commit": "2189f1014bedaee69c3304b7e90670a3a1785d46",
+    "authoritative_ci": "success",
+    "universal_video_analyzer_ci": "success",
+    "secret_gate": "success"
+  },
+  "runtime_contract": {
+    "primary_status": "VISUAL_PRIMARY_RECOGNIZED",
+    "reconstruction_rule": "VISUAL_ONLY; NO_DECK_COMPLEMENT",
+    "derive_fourth_hand": false,
+    "deck_complement": false,
+    "hidden_hand_inference": false,
+    "unknown_hidden_cards_remain_unknown": true
+  },
+  "promotion_boundary": {
+    "canonical_promotion_allowed": false,
+    "school_canon_write_allowed": false,
+    "world_write_allowed": false,
+    "oracle_container_cutover_included": false,
+    "active_compute_route": "github_actions_legacy"
+  },
+  "rollback": {
+    "database_action": "set algorithm_version.status back to observed",
+    "runtime_action": "retain github_actions_legacy r26.2 runtime; no route switch is part of this promotion"
+  },
+  "note": "This receipt promotes the already deployed r26.2 primary recognizer from observed to active production-governance status. It does not claim independent holdout accuracy, Canon promotion, hidden-hand reconstruction, or Oracle feature parity."
+}

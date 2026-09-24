@@ -34,6 +34,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from .contract import (
+    ROLE_DISPATCH_MAILBOX_PR,
     AutopilotContractError,
     AutopilotRetryableError,
     ClaimedTask,
@@ -41,6 +42,8 @@ from .contract import (
     claimed_task_from_row,
     validate_task_contract,
 )
+from .database_target import backend, validate_pinned_dsn
+from .parallel_work_intake import canonical_manifest_text, manifest_sha256
 
 CHANNEL = "autopilot_ready"
 RUNTIME_MODE = "SHADOW"
@@ -48,6 +51,10 @@ LOGGER = logging.getLogger("oracle_autopilot")
 GITHUB_API_HOST = "api.github.com"
 GITHUB_REPOSITORY = "olegmed1-art/bridge-video-free"
 ROLE_DISPATCH_BOT_LOGIN = "bridge-school-oracle-autopilot[bot]"
+# The pinned broker release predates mailbox-v4 rotation and reports retained
+# mailbox #1685 as release metadata. Dispatch PR creation is repository-wide;
+# accept only that pinned retained value or the current active mailbox.
+ROLE_DISPATCH_BROKER_MAILBOX_PRS = frozenset({1685, ROLE_DISPATCH_MAILBOX_PR})
 GITHUB_RESPONSE_LIMIT_BYTES = 1_048_576
 GITHUB_CHECK_RUN_LIMIT = 100
 GITHUB_FAILED_CHECK_LIMIT = 5
@@ -83,11 +90,15 @@ GITHUB_HARD_FAILURES = frozenset(
 TOKEN_BROKER_RESPONSE_LIMIT_BYTES = 32_768
 TOKEN_BROKER_REQUEST_LIMIT_BYTES = 65_536
 TOKEN_BROKER_PATH = "/v1/github/draft-repair"
+PROJECT_HEAD_BROKER_PATH = "/v1/github/project-head"
 ROLE_DISPATCH_BROKER_PATH = "/v1/github/role-dispatch"
 TOKEN_BROKER_HEALTH_PATH = "/healthz"
 TOKEN_BROKER_HOST_PATTERN = re.compile(
     r"bridge-school-autopilot-[a-z0-9]+-olegmed1-4368s-projects\.vercel\.app"
 )
+_PARALLEL_WORK_MANIFEST_REGISTERED = False
+_PARALLEL_WORK_MANIFEST_RETRY_AT = 0.0
+QUEUE_BATCH_SIZE = 6
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -142,6 +153,20 @@ def load_role_dispatch_broker_config() -> TokenBrokerConfig:
     base = _load_token_broker_config("AUTOPILOT_TOKEN_BROKER_URL", TOKEN_BROKER_PATH)
     return TokenBrokerConfig(
         url=f"https://{base.host}{ROLE_DISPATCH_BROKER_PATH}",
+        host=base.host,
+        secret=base.secret,
+        vercel_bypass_secret=base.vercel_bypass_secret,
+        expected_source_sha=base.expected_source_sha,
+        expected_artifact_sha256=base.expected_artifact_sha256,
+        expected_policy_sha256=base.expected_policy_sha256,
+        expected_provenance_sha256=base.expected_provenance_sha256,
+    )
+
+
+def load_project_head_broker_config() -> TokenBrokerConfig:
+    base = _load_token_broker_config("AUTOPILOT_TOKEN_BROKER_URL", TOKEN_BROKER_PATH)
+    return TokenBrokerConfig(
+        url=f"https://{base.host}{PROJECT_HEAD_BROKER_PATH}",
         host=base.host,
         secret=base.secret,
         vercel_bypass_secret=base.vercel_bypass_secret,
@@ -215,6 +240,12 @@ def _load_token_broker_config(url_env: str, expected_path: str) -> TokenBrokerCo
 
 
 def validate_neon_direct_dsn(raw: str) -> str:
+    # Keep the established function name for existing callers and Neon deployments.
+    if backend() == "postgresql":
+        try:
+            return validate_pinned_dsn(raw, expected_user=os.getenv("AUTOPILOT_EXPECTED_DB_USER", ""))
+        except ValueError:
+            raise RuntimeError("autopilot PostgreSQL target is invalid") from None
     value = raw.strip()
     parsed = urllib.parse.urlsplit(value)
     if parsed.scheme not in {"postgresql", "postgres"}:
@@ -277,7 +308,21 @@ def _connect(dsn: str, *, autocommit: bool = False):
     )
 
 
+def admission_mode() -> str:
+    """A deliberate rollout hold cannot silently become active on a typo."""
+    value = os.environ.get("AUTOPILOT_ADMISSION_MODE", "ACTIVE")
+    if value not in {"ACTIVE", "HOLD"}:
+        raise RuntimeError("AUTOPILOT_ADMISSION_MODE_INVALID")
+    return value
+
+
+def require_active_admission() -> None:
+    if admission_mode() != "ACTIVE":
+        raise RuntimeError("AUTOPILOT_ADMISSION_HELD")
+
+
 def _rpc_one(config: WorkerConfig, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
+    require_active_admission()
     with _connect(config.dsn) as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         row = cur.fetchone()
@@ -300,9 +345,7 @@ def claim_one(config: WorkerConfig) -> ClaimedTask | None:
     )
     if not row:
         return None
-    task = claimed_task_from_row(row)
-    validate_task_contract(task)
-    return task
+    return claimed_task_from_row(row)
 
 
 def heartbeat_task(config: WorkerConfig, task: ClaimedTask) -> bool:
@@ -456,30 +499,89 @@ def fetch_github_pr_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
 
 
 def fetch_github_project_head(repository: str, pr_number: int) -> dict[str, Any]:
-    """Resolve the current public head for one registered project-work item."""
+    """Resolve one PR head through the pinned least-privilege GitHub App broker."""
 
     if repository != GITHUB_REPOSITORY or type(pr_number) is not int:
         raise AutopilotContractError("PROJECT_WORK_TARGET_INVALID")
     if not 1 <= pr_number <= 1_000_000:
         raise AutopilotContractError("PROJECT_WORK_TARGET_INVALID")
-    url = f"https://{GITHUB_API_HOST}/repos/{repository}/pulls/{pr_number}"
-    payload = _github_get_json(url, not_found_code="PROJECT_WORK_TARGET_NOT_FOUND")
-    if not isinstance(payload, dict):
-        raise AutopilotContractError("GITHUB_API_JSON_INVALID")
+    config = load_project_head_broker_config()
+    request_payload = {"repository": repository, "pr_number": pr_number}
+    encoded = json.dumps(
+        request_payload, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        config.url,
+        data=encoded,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {config.secret}",
+            "Content-Type": "application/json",
+            "User-Agent": "bridge-school-autopilot-oracle/1.7",
+            "X-Vercel-Protection-Bypass": config.vercel_bypass_secret,
+        },
+    )
+    opener = urllib.request.build_opener(_RejectBrokerRedirects())
+    _require_approved_broker_release(config=config, opener=opener)
+    try:
+        with opener.open(request, timeout=30) as response:
+            if response.status != 200 or response.geturl() != config.url:
+                raise AutopilotContractError("PROJECT_HEAD_BROKER_RESPONSE_INVALID")
+            raw = response.read(TOKEN_BROKER_RESPONSE_LIMIT_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise AutopilotContractError("PROJECT_WORK_TARGET_NOT_FOUND") from exc
+        if exc.code in {408, 425, 429} or 500 <= exc.code <= 599:
+            raise AutopilotRetryableError(
+                "PROJECT_HEAD_BROKER_TRANSIENT_ERROR"
+            ) from exc
+        raise AutopilotContractError("PROJECT_HEAD_BROKER_HTTP_ERROR") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise AutopilotRetryableError("PROJECT_HEAD_BROKER_TRANSIENT_ERROR") from exc
+    if len(raw) > TOKEN_BROKER_RESPONSE_LIMIT_BYTES:
+        raise AutopilotContractError("PROJECT_HEAD_BROKER_RESPONSE_TOO_LARGE")
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AutopilotContractError("PROJECT_HEAD_BROKER_RESPONSE_INVALID") from exc
 
-    head = payload.get("head")
-    head_sha = head.get("sha") if isinstance(head, dict) else None
-    state = payload.get("state")
-    expected_html_url = f"https://github.com/{repository}/pull/{pr_number}"
+    expected_keys = {
+        "repository",
+        "pr_number",
+        "open",
+        "head_sha",
+        "http_method",
+        "token_exposed",
+        "production_mutation",
+        "operation_count",
+        "broker_policy_version",
+        "broker_source_sha",
+        "broker_artifact_sha256",
+        "broker_policy_sha256",
+        "broker_provenance_sha256",
+    }
+    head_sha = payload.get("head_sha") if isinstance(payload, dict) else None
     if (
-        payload.get("number") != pr_number
-        or payload.get("html_url") != expected_html_url
-        or state not in {"open", "closed"}
+        not isinstance(payload, dict)
+        or set(payload) != expected_keys
+        or payload.get("repository") != repository
+        or payload.get("pr_number") != pr_number
+        or type(payload.get("open")) is not bool
         or not isinstance(head_sha, str)
         or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None
+        or payload.get("http_method") != "GET"
+        or payload.get("token_exposed") is not False
+        or payload.get("production_mutation") is not False
+        or payload.get("operation_count") != 2
+        or payload.get("broker_policy_version") != "physical-no-merge-v2"
+        or payload.get("broker_source_sha") != config.expected_source_sha
+        or payload.get("broker_artifact_sha256") != config.expected_artifact_sha256
+        or payload.get("broker_policy_sha256") != config.expected_policy_sha256
+        or payload.get("broker_provenance_sha256")
+        != config.expected_provenance_sha256
     ):
-        raise AutopilotContractError("PROJECT_WORK_TARGET_RESPONSE_INVALID")
-    return {"head_sha": head_sha, "open": state == "open"}
+        raise AutopilotContractError("PROJECT_HEAD_BROKER_RESPONSE_INVALID")
+    return {"head_sha": head_sha, "open": payload["open"]}
 
 
 def fetch_github_ci_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
@@ -742,7 +844,7 @@ def _validate_token_broker_result(
 def _require_approved_broker_release(
     *, config: TokenBrokerConfig, opener: Any
 ) -> None:
-    """Verify the deployed release before sending any mutating broker request."""
+    """Verify the deployed release before sending any broker request."""
 
     health_url = f"https://{config.host}{TOKEN_BROKER_HEALTH_PATH}"
     request = urllib.request.Request(
@@ -782,7 +884,9 @@ def _require_approved_broker_release(
         "production_mutations_enabled": False,
         "github_token_broker_enabled": True,
         "bounded_draft_executor_enabled": True,
+        "bounded_project_head_enabled": True,
         "bounded_role_dispatch_enabled": True,
+        "role_dispatch_mailbox_pr": ROLE_DISPATCH_MAILBOX_PR,
         "raw_installation_token_exposed": False,
         "merge_endpoint_enabled": False,
         "ref_update_delete_enabled": False,
@@ -942,7 +1046,7 @@ def _publish_role_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         or set(result) != expected_keys
         or any(result.get(key) != value for key, value in public_envelope.items())
         or result.get("repository") != GITHUB_REPOSITORY
-        or result.get("mailbox_pull_request") != 1150
+        or result.get("mailbox_pull_request") not in ROLE_DISPATCH_BROKER_MAILBOX_PRS
         or result.get("status") not in {"created", "existing"}
         or type(result.get("replayed")) is not bool
         or type(pull_number) is not int
@@ -1126,14 +1230,17 @@ def process_one(config: WorkerConfig) -> bool:
     task = claim_one(config)
     if task is None:
         return False
-    LOGGER.info(
-        "task_claimed task_id=%s kind=%s lease_epoch=%s attempt=%s",
-        task.task_id,
-        task.goal_type,
-        task.lease_epoch,
-        task.attempts,
-    )
     try:
+        # Validate after the lease is materialized so every permanent contract
+        # failure is recorded through fail_task instead of escaping the loop.
+        validate_task_contract(task)
+        LOGGER.info(
+            "task_claimed task_id=%s kind=%s lease_epoch=%s attempt=%s",
+            task.task_id,
+            task.goal_type,
+            task.lease_epoch,
+            task.attempts,
+        )
         with keep_lease_alive(config, task):
             execute_task(config, task)
         LOGGER.info("task_transitioned task_id=%s kind=%s", task.task_id, task.goal_type)
@@ -1177,7 +1284,7 @@ def wait_for_wakeup(listener, timeout_seconds: float) -> None:
 
 def drain_ready(config: WorkerConfig) -> int:
     processed = 0
-    while process_one(config):
+    while processed < QUEUE_BATCH_SIZE and process_one(config):
         processed += 1
     return processed
 
@@ -1259,10 +1366,64 @@ def process_project_work(config: WorkerConfig) -> bool:
 
 
 def drain_project_work(config: WorkerConfig) -> int:
+    global _PARALLEL_WORK_MANIFEST_RETRY_AT
+    if time.monotonic() >= _PARALLEL_WORK_MANIFEST_RETRY_AT:
+        try:
+            reconcile_parallel_work_intake(config)
+        except (psycopg.Error, AutopilotContractError) as exc:
+            # A failed new intake must not starve already admitted work. Never
+            # log the database exception text: it may contain connection data.
+            _PARALLEL_WORK_MANIFEST_RETRY_AT = time.monotonic() + 60
+            LOGGER.error("parallel_work_manifest_failed error_type=%s", type(exc).__name__)
     processed = 0
-    while process_project_work(config):
+    while processed < QUEUE_BATCH_SIZE and process_project_work(config):
         processed += 1
     return processed
+
+
+def reconcile_parallel_work_intake(config: WorkerConfig) -> int:
+    """Register the reviewed independent-work manifest once per release.
+
+    The database RPC revalidates the complete manifest and is the durable
+    idempotency boundary.  The process-local flag only avoids redundant reads
+    after a successful receipt; rolling workers safely tolerate migration 0365
+    not being installed yet.
+    """
+
+    global _PARALLEL_WORK_MANIFEST_REGISTERED
+    if _PARALLEL_WORK_MANIFEST_REGISTERED:
+        return 0
+    try:
+        row = _rpc_one(
+            config,
+            "SELECT * FROM autopilot.register_parallel_work_manifest(%s, %s)",
+            (canonical_manifest_text(), manifest_sha256()),
+        )
+    except psycopg.errors.UndefinedFunction:
+        return 0
+    if not row:
+        raise AutopilotContractError("AUTOPILOT_PARALLEL_MANIFEST_RECEIPT_MISSING")
+    registered_count = row.get("registered_count")
+    item_count = len(json.loads(canonical_manifest_text())["items"])
+    if (
+        row.get("manifest_sha256") != manifest_sha256()
+        or type(row.get("item_count")) is not int
+        or row["item_count"] != item_count
+        or type(registered_count) is not int
+        or not 0 <= registered_count <= item_count
+        or type(row.get("replayed")) is not bool
+    ):
+        raise AutopilotContractError("AUTOPILOT_PARALLEL_MANIFEST_RECEIPT_INVALID")
+    _PARALLEL_WORK_MANIFEST_REGISTERED = True
+    LOGGER.info(
+        "parallel_work_manifest_reconciled "
+        "sha256=%s items=%s registered=%s replayed=%s",
+        row.get("manifest_sha256"),
+        row.get("item_count"),
+        registered_count,
+        row.get("replayed"),
+    )
+    return registered_count
 
 
 def _dispatch_body(payload: dict[str, Any]) -> str:
@@ -1332,22 +1493,22 @@ def process_role_dispatch_outbox(config: WorkerConfig) -> bool:
         body_sha256 = hashlib.sha256(_dispatch_body(row).encode("utf-8")).hexdigest()
         marked = _rpc_one(
             config,
-            "SELECT autopilot.mark_role_dispatch_sent(%s::uuid, %s, %s, %s, %s) AS marked",
+            "SELECT autopilot.mark_role_dispatch_published(%s::uuid, %s, %s, %s, %s) AS marked",
             (
                 dispatch_id,
                 config.worker_id,
                 claim_epoch,
-                # Migration 0322 named this generic delivery-resource slot
-                # after the original comment transport.  Preserve the SQL
-                # contract by storing the replacement draft PR number here.
+                # This is only the GitHub discovery resource.  Contract v3
+                # keeps it PUBLISHED until the pinned Codex bot acknowledges
+                # an owner-authenticated @codex command on the exact target PR.
                 result["dispatch_pull_request"],
                 body_sha256,
             ),
         )
         if not marked or not marked["marked"]:
-            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_SENT_FENCED")
+            raise AutopilotContractError("AUTOPILOT_ROLE_DISPATCH_PUBLISHED_FENCED")
         LOGGER.info(
-            "role_dispatch_sent dispatch_id=%s role=%s pull_request=%s",
+            "role_dispatch_published dispatch_id=%s role=%s pull_request=%s",
             dispatch_id,
             row["role"],
             result["dispatch_pull_request"],
@@ -1391,12 +1552,52 @@ def drain_role_dispatch_outbox(config: WorkerConfig) -> int:
         (),
     )
     processed = 0
-    while process_role_dispatch_outbox(config):
+    while processed < QUEUE_BATCH_SIZE and process_role_dispatch_outbox(config):
         processed += 1
     return processed + int(expired["reconciled"] if expired else 0)
 
 
+def drain_cycle(config: WorkerConfig) -> int:
+    """Visit every bounded lane, even when an earlier lane remains busy."""
+    require_active_admission()
+    return sum((
+        drain_ready(config),
+        drain_role_dispatch_outbox(config),
+        drain_project_work(config),
+    ))
+
+
+def run_held(config: WorkerConfig) -> None:
+    """Attest connectivity while all queue/planner/publication lanes remain off.
+
+    The systemd rollout hold must be removed in a separate reviewed activation.
+    Database reconnects and NOTIFY events never promote this process to ACTIVE.
+    """
+    LOGGER.info("worker_admission_held worker_id=%s mailbox_pr=%s", config.worker_id,
+                ROLE_DISPATCH_MAILBOX_PR)
+    while True:
+        try:
+            with psycopg.connect(config.dsn, autocommit=True, connect_timeout=10,
+                    application_name="school-autopilot-runtime-hold",
+                    options="-c statement_timeout=5000 -c default_transaction_read_only=on") as listener:
+                require = listener.execute("SHOW default_transaction_read_only").fetchone()
+                if not require or require[0] != "on":
+                    raise RuntimeError("AUTOPILOT_HOLD_READONLY_REQUIRED")
+                listener.execute(f"LISTEN {CHANNEL}")
+                LOGGER.info("worker_hold_connected worker_id=%s", config.worker_id)
+                while True:
+                    wait_for_wakeup(listener, config.recovery_poll_seconds)
+        except KeyboardInterrupt:
+            return
+        except psycopg.Error as exc:
+            LOGGER.warning("held_listener_reconnect error_type=%s", type(exc).__name__)
+            time.sleep(2)
+
+
 def run_forever(config: WorkerConfig) -> None:
+    if admission_mode() == "HOLD":
+        run_held(config)
+        return
     LOGGER.info(
         "worker_started worker_id=%s mode=%s recovery_poll_seconds=%s",
         config.worker_id,
@@ -1410,11 +1611,7 @@ def run_forever(config: WorkerConfig) -> None:
                 while True:
                     # Drain every ready transition without sleeping. The polling
                     # timeout is reached only when no runnable task exists.
-                    if (
-                        drain_ready(config)
-                        or drain_role_dispatch_outbox(config)
-                        or drain_project_work(config)
-                    ):
+                    if drain_cycle(config):
                         continue
                     wait_for_wakeup(listener, config.recovery_poll_seconds)
         except KeyboardInterrupt:

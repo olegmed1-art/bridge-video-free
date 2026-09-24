@@ -25,12 +25,14 @@ continues with the next dependency-eligible item.
 
 ## Algorithm
 
-1. If any role audit, repair, or verification is nonterminal, wait. This keeps
-   role execution sequential and prevents repair races.
+1. Admit at most six role tasks concurrently: five normal slots and one P0-only
+   reserve. Per-target exact-head fencing still prevents repair races.
 2. Select a `READY` dependency-eligible item by priority. If none exists,
    consider a previously `BLOCKED` item whose observation delay expired.
-3. Fetch the target PR through a credential-free, bounded GitHub `GET` and
-   validate repository, PR identity, state, and the 40-character head SHA.
+3. Fetch the target PR through the pinned broker's bounded read-only GitHub App
+   token and validate repository, PR identity, state, and the 40-character head
+   SHA. The installation token never leaves the broker; the resident receives
+   only the head, open/closed state, and pinned release provenance.
 4. For an open new head, materialize exactly one `READ_ONLY` role task bound to
    that head. Task keys and dispatch epochs are deterministic per generation.
 5. A technical `BLOCKED` result enters the existing bounded path: one `REPAIR`,
@@ -58,10 +60,28 @@ continues with the next dependency-eligible item.
 
 No idle outcome disables the resident service or its webhook executor.
 
+## Delivery proof
+
+GitHub is only the discovery transport. Creating or reusing a draft dispatch
+pull request records `PUBLISHED`; it can never record `SENT`. A dispatch reaches
+`SENT` only after an owner-authenticated `@codex` command on the exact target PR
+receives an `eyes` reaction from the pinned Codex Connector bot identity. The
+callback independently rechecks that the target PR is open on `main` and still
+has the bound head SHA. A dispatch PR or GitHub comment by itself is never
+delivery.
+
+Codex Cloud creates one isolated task/chat per accepted command. Its terminal
+comment must come from the same pinned GitHub App, repeat the exact dispatch,
+epoch, role, fingerprint, target PR and current head, and have a prior retained
+ACK. The callback is idempotent and writes one terminal receipt and retained
+evidence before the next durable item is woken. Chat registry rows remain only
+for v1/v2 compatibility and dashboards; they are not a v3 admission gate.
+
 ## Safety and recovery
 
-- no model call, merge, deployment, secret access, infrastructure change, or
-  paid action is available to the planner;
+- no model call, merge, deployment, infrastructure change, or paid action is
+  available to the planner; its only GitHub read goes through the attested
+  broker and cannot exhaust the 60-request anonymous API quota;
 - all target work is bound to the current public head before dispatch;
 - probe leases are fenced and expire;
 - runtime roles cannot read or write planner tables directly;

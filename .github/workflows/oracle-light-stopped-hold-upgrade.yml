@@ -1,0 +1,88 @@
+name: Oracle Light stopped HOLD upgrade
+
+on:
+  pull_request:
+    paths: ['.github/workflows/oracle-light-stopped-hold-upgrade.yml', 'ops/oracle_light_stopped_hold_upgrade.py', 'tests/test_light_stopped_hold_upgrade.py', 'oracle_autopilot/light_recovery_probe.py', 'ops/autopilot/broker-release.json']
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: 'Reviewed exact current main SHA to install in HOLD'
+        required: true
+        type: string
+      operation:
+        description: 'Both operations require PID 0 and preserve HOLD'
+        required: true
+        default: upgrade
+        type: choice
+        options: [upgrade, rollback]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-light-backup-mutation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Test stopped HOLD upgrade and injected rollback failures
+        run: |
+          python -m pip install pytest "psycopg[binary]>=3.2,<4"
+          python -m pytest -q tests/test_light_stopped_hold_upgrade.py tests/test_light_recovery_probe.py tests/test_light_broker_1703_release.py
+      - name: Validate shell syntax
+        run: |
+          ruby -ryaml -e 'd=YAML.load_file(ARGV[0]); d.fetch("jobs").each_value { |j| j.fetch("steps").each { |s| next unless s["run"]; IO.popen(["bash", "-n"], "w") { |p| p.write(s["run"]) }; abort "invalid shell" unless $?.success? } }' .github/workflows/oracle-light-stopped-hold-upgrade.yml
+
+  probe:
+    needs: contract
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Install reviewed candidate while service stays stopped
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SOURCE_REVISION: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          OPERATION: ${{ inputs.operation }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          if [[ -z "${SSH_PRIVATE_KEY:-}" ]]; then
+            echo 'LIGHT_SSH_KEY=ABSENT'
+            exit 1
+          fi
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$work/key"
+          unset SSH_PRIVATE_KEY
+          if ! ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null; then
+            echo 'LIGHT_SSH_KEY=INVALID_OR_ENCRYPTED'
+            exit 1
+          fi
+          echo 'LIGHT_SSH_KEY=VALID'
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          echo 'LIGHT_SSH_HOST=VERIFIED_AGAINST_OWNER_ACCEPTED_FINGERPRINT'
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_REVISION" ]]
+          git diff --exit-code HEAD --
+          [[ "$(gh api repos/olegmed1-art/bridge-video-free/git/ref/heads/main --jq .object.sha)" == "$SOURCE_REVISION" ]]
+          git fetch --no-tags --depth=1 origin 3244f4d4b17ce99e58c342f01e4715436a09622b
+          unset GH_TOKEN
+          [[ "$OPERATION" == upgrade || "$OPERATION" == rollback ]]
+          python ops/oracle_light_stopped_hold_upgrade.py bundle "$SOURCE_REVISION" "$OPERATION" > "$work/preflight.py"
+          if ! ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 ubuntu@92.5.47.149 'sudo -n /usr/bin/python3 -' < "$work/preflight.py" > "$work/result" 2> "$work/error"; then
+            cat "$work/result"
+            echo 'LIGHT_STOPPED_HOLD_UPGRADE=FAILED'
+            if grep -q 'Permission denied' "$work/error"; then echo 'LIGHT_SSH_FAILURE=AUTHORIZATION'; else echo 'LIGHT_SSH_FAILURE=TRANSPORT_OR_REMOTE_COMMAND'; fi
+            exit 1
+          fi
+          cat "$work/result"

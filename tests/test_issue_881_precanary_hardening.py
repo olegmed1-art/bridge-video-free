@@ -736,6 +736,62 @@ def test_owner_baseline_is_exclusive_strict_and_round_trips(tmp_path: Path) -> N
         QUEUE._write_baseline(baseline, expected)
 
 
+def test_precanary_whitespace_check_covers_the_complete_pr_range(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            check=check,
+            capture_output=True,
+            text=True,
+        )
+
+    git("init", "--quiet")
+    git("config", "user.name", "Issue 881 test")
+    git("config", "user.email", "issue-881-test@example.invalid")
+    (repo / "base.txt").write_text("clean base\n", encoding="utf-8")
+    git("add", "base.txt")
+    git("commit", "--quiet", "-m", "base")
+    base_sha = git("rev-parse", "HEAD").stdout.strip()
+
+    (repo / "earlier.txt").write_text("trailing whitespace   \n", encoding="utf-8")
+    git("add", "earlier.txt")
+    git("commit", "--quiet", "-m", "earlier bad commit")
+
+    (repo / "final.txt").write_text("clean final commit\n", encoding="utf-8")
+    git("add", "final.txt")
+    git("commit", "--quiet", "-m", "clean final commit")
+    head_sha = git("rev-parse", "HEAD").stdout.strip()
+
+    old_last_commit_check = git(
+        "diff", "--check", f"{head_sha}^", head_sha, check=False
+    )
+    assert old_last_commit_check.returncode == 0
+
+    merge_base = git("merge-base", base_sha, head_sha).stdout.strip()
+    assert merge_base == base_sha
+    complete_pr_check = git(
+        "diff", "--check", merge_base, head_sha, check=False
+    )
+    assert complete_pr_check.returncode != 0
+    assert "trailing whitespace" in (
+        complete_pr_check.stdout + complete_pr_check.stderr
+    )
+
+    workflow = (
+        ROOT / ".github/workflows/issue-881-precanary-evidence.yml"
+    ).read_text(encoding="utf-8")
+    assert "EXACT_BASE_SHA: ${{ github.event.pull_request.base.sha }}" in workflow
+    assert 'merge_base="$(git merge-base "$EXACT_BASE_SHA" "$EXACT_SHA")"' in workflow
+    assert 'git diff --check "$merge_base" "$EXACT_SHA"' in workflow
+    assert 'git diff --check "$EXACT_SHA^" "$EXACT_SHA"' not in workflow
+
+
 def test_workflow_hardening_is_machine_enforced_before_host_mutation() -> None:
     workflow = (
         ROOT / ".github/workflows/issue-881-authoritative-external-evidence.yml"
@@ -1444,16 +1500,13 @@ def test_every_owner_triggered_oracle_mutator_uses_the_protected_shared_fence() 
                 if direct_mutation.search(payload)
             )
     assert owner_mutators == {
-        ".github/workflows/oracle-ben-dds3-health-monitor.yml",
         ".github/workflows/oracle-dds3-pilot10k-operator.yml",
-        ".github/workflows/oracle-instance-power.yml",
         ".github/workflows/oracle-operational-safety-gate.yml",
         ".github/workflows/oracle-operator-commands.yml",
         ".github/workflows/oracle-operator-v2.yml",
         ".github/workflows/oracle-operator-v3.yml",
         ".github/workflows/oracle-autopilot-rollout.yml",
         ".github/workflows/oracle-universal-video-activation.yml",
-        ".github/workflows/oracle-universal-video-job.yml",
         ".github/workflows/oracle-universal-video-queue-credential-install.yml",
         ".github/workflows/oracle-universal-video-sidecar-repair.yml",
     }
@@ -1582,7 +1635,6 @@ def test_every_code_triggered_oracle_host_mutator_uses_shared_fence_and_provenan
         ".github/workflows/oracle-universal-video-container-missing-image-recover.yml",
         ".github/workflows/oracle-universal-video-container-promote.yml",
         ".github/workflows/oracle-universal-video-evidence-export.yml",
-        ".github/workflows/oracle-universal-video-job.yml",
         ".github/workflows/oracle-universal-video-sidecar-repair.yml",
     }
     assert mutation_payloads == {
@@ -1694,8 +1746,8 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
             indirect[reference] = payload
             pending.update(repository_shell_references(payload) - set(indirect))
         referenced_payloads.update(indirect)
-    assert len(shared_workflows) == 69
-    assert len(referenced_payloads) == 55
+    assert len(shared_workflows) == 66
+    assert len(referenced_payloads) == 56
     assert "ops/universal_video_spool_repair.sh" in referenced_payloads
     assert "ops/universal_video_evidence_export_entrypoint.sh" in referenced_payloads
     for relative in shared_workflows | referenced_payloads:
@@ -1854,8 +1906,6 @@ def test_every_live_instance_command_creator_uses_the_common_actions_fence() -> 
         ".github/workflows/oracle-diana11-002-delivery.yml",
         ".github/workflows/oracle-diana11-002-job.yml",
         ".github/workflows/oracle-diana11-delivery.yml",
-        ".github/workflows/oracle-fleet-status.yml",
-        ".github/workflows/oracle-instance-power.yml",
         ".github/workflows/oracle-universal-video-admin.yml",
         ".github/workflows/oracle-universal-video-evidence-export.yml",
     }
@@ -2376,3 +2426,10 @@ cleanup
     assert readiness < remask < stop
     assert not any(action.startswith("unexpected-restore:") for action in actions)
     assert "container_service" in completed.stderr
+
+
+def test_retired_heavy_oracle_controllers_are_not_executable_workflows():
+    for name in ("oracle-instance-power.yml", "oracle-instance-auto-power.yml",
+                 "oracle-fleet-status.yml", "oracle-universal-video-job.yml",
+                 "oracle-ben-dds3-health-monitor.yml"):
+        assert not (ROOT / ".github/workflows" / name).exists(), name

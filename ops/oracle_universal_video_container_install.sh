@@ -201,7 +201,7 @@ if [[ "$ACTIVATE" == 1 ]]; then
     || die 'protected video queue credential is too large'
   [[ "$(stat -c '%g' "$queue_dsn_file")" == "$(id -g "$USER_NAME")" ]] \
     || die 'protected video queue credential group is not the container runtime group'
-  runuser -u "$USER_NAME" -- /usr/bin/python3 \
+  runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" \
     "$SOURCE_DIR/ops/validate_video_queue_dsn.py" "$queue_dsn_file" >/dev/null \
     || die 'protected video queue credential content invalid'
   log 'Protected video queue credential validated for activation'

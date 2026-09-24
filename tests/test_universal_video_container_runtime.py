@@ -312,7 +312,7 @@ def test_container_queue_credential_is_validated_as_the_exact_runtime_identity()
     gate = installer[credential_gate:service_activation]
     assert '[[ "$(stat -c \'%g\' "$queue_dsn_file")" == "$(id -g "$USER_NAME")" ]]' in gate
     assert (
-        'runuser -u "$USER_NAME" -- /usr/bin/python3 \\\n'
+        'runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" \\\n'
         '    "$SOURCE_DIR/ops/validate_video_queue_dsn.py" "$queue_dsn_file" >/dev/null'
     ) in gate
     assert '  python3 "$SOURCE_DIR/ops/validate_video_queue_dsn.py"' not in gate

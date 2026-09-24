@@ -1,6 +1,26 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+-- Migration 0328 requires a registered existing-chat target before planner
+-- work is claimable. These transaction-local rows are fixtures only and are
+-- removed by the ROLLBACK at the end of this test.
+INSERT INTO autopilot.role_chat_registry(
+    role_id, chat_id, chat_name, chat_url, executor_id
+) VALUES
+    (
+        'RECOGNIZER', '00000000-0000-4000-8000-000000000324',
+        'SQL RECOGNIZER TARGET',
+        'https://chatgpt.com/g/sql-test/c/00000000-0000-4000-8000-000000000324',
+        'chat:sql-recognizer-324'
+    ),
+    (
+        'VIDEO', '00000000-0000-4000-8000-000000000325',
+        'SQL VIDEO TARGET',
+        'https://chatgpt.com/g/sql-test/c/00000000-0000-4000-8000-000000000325',
+        'chat:sql-video-324'
+    )
+ON CONFLICT (role_id) DO NOTHING;
+
 DO $$
 DECLARE
     blocker_item uuid;
@@ -11,6 +31,7 @@ DECLARE
     independent_task uuid;
     dependent_task uuid;
     changed_head_task uuid;
+    has_planner_v2 boolean;
     probe record;
     materialized record;
 BEGIN
@@ -20,6 +41,20 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'AUTOPILOT_PROJECT_PLANNER_MIGRATION_MISSING';
     END IF;
+    SELECT EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema='autopilot'
+           AND table_name='project_work_item'
+           AND column_name='hold_reason'
+    )
+    AND strpos(
+        pg_get_functiondef(
+          'autopilot.materialize_project_work_probe(uuid,text,bigint,boolean,text)'::regprocedure
+        ),
+        'PLANNER_LOOP_GUARD_V2'
+    ) > 0
+    INTO has_planner_v2;
 
     SELECT work_item_id INTO blocker_item
       FROM autopilot.register_project_work_item(
@@ -55,8 +90,8 @@ BEGIN
         RAISE EXCEPTION 'AUTOPILOT_PROJECT_TASK_NOT_MATERIALIZED';
     END IF;
 
-    -- A technical failure produces exactly one repair and keeps the global
-    -- lane serialized while that repair is runnable.
+    -- A technical failure produces exactly one repair.  The six-worker policy
+    -- must still admit an unrelated dependency-free lane while it is runnable.
     UPDATE autopilot.task
        SET status = 'FAILED_CLOSED',
            terminal_reason_code = 'TECHNICAL_TEST_FAILURE',
@@ -80,8 +115,17 @@ BEGIN
     END IF;
     SELECT * INTO probe
       FROM autopilot.claim_project_work_probe('sql-project-worker-2', 60);
-    IF FOUND THEN
-        RAISE EXCEPTION 'AUTOPILOT_PROJECT_FANNED_OUT_DURING_REPAIR';
+    IF NOT FOUND OR probe.work_item_id <> independent_item THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_INDEPENDENT_WORK_NOT_PARALLELIZED';
+    END IF;
+    SELECT * INTO materialized
+      FROM autopilot.materialize_project_work_probe(
+          probe.work_item_id, 'sql-project-worker-2', probe.lease_epoch,
+          true, repeat('b', 40)
+      );
+    independent_task := materialized.task_id;
+    IF independent_task IS NULL OR materialized.created IS NOT true THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_PARALLEL_TASK_NOT_MATERIALIZED';
     END IF;
 
     -- An owner-only repair result is retained, but it releases the planner to
@@ -102,17 +146,6 @@ BEGIN
         RAISE EXCEPTION 'AUTOPILOT_PROJECT_BLOCKER_NOT_RETAINED';
     END IF;
 
-    SELECT * INTO probe
-      FROM autopilot.claim_project_work_probe('sql-project-worker-3', 60);
-    IF probe.work_item_id <> independent_item THEN
-        RAISE EXCEPTION 'AUTOPILOT_PROJECT_INDEPENDENT_WORK_NOT_SELECTED';
-    END IF;
-    SELECT * INTO materialized
-      FROM autopilot.materialize_project_work_probe(
-          probe.work_item_id, 'sql-project-worker-3', probe.lease_epoch,
-          true, repeat('b', 40)
-      );
-    independent_task := materialized.task_id;
     UPDATE autopilot.task
        SET status = 'DONE', terminal_reason_code = 'KNOWLEDGE_READY',
            safe_summary_json = jsonb_build_object(
@@ -147,40 +180,82 @@ BEGIN
            ), completed_at = now()
      WHERE task_id = dependent_task;
 
-    -- The unchanged blocked head is never redelivered.  A genuinely changed
-    -- head reactivates the same lane with a new exact-head task.
+    IF has_planner_v2 THEN
+    -- Planner V2: unchanged blocked work becomes an explicit no-progress hold.
     UPDATE autopilot.project_work_item
        SET not_before = now() WHERE work_item_id = blocker_item;
     SELECT * INTO probe
       FROM autopilot.claim_project_work_probe('sql-project-worker-5', 60);
+    IF NOT FOUND OR probe.work_item_id <> blocker_item THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_BLOCKER_NOT_CLAIMED_FOR_HOLD';
+    END IF;
     SELECT * INTO materialized
       FROM autopilot.materialize_project_work_probe(
           probe.work_item_id, 'sql-project-worker-5', probe.lease_epoch,
           true, repeat('a', 40)
       );
-    IF materialized.task_id IS NOT NULL
-       OR materialized.created IS NOT false
-       OR (SELECT count(*) FROM autopilot.project_work_task
-            WHERE work_item_id = blocker_item AND run_kind = 'AUDIT') <> 1 THEN
-        RAISE EXCEPTION 'AUTOPILOT_PROJECT_UNCHANGED_HEAD_REDISPATCHED';
+    IF materialized.task_id IS NOT NULL OR materialized.created IS NOT false
+       OR materialized.resulting_state <> 'PAUSED' THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_MATERIALIZATION_INVALID';
+    END IF;
+    IF (SELECT state FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 'PAUSED' THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_STATE_INVALID';
+    END IF;
+    IF (SELECT to_jsonb(w)->>'hold_reason' FROM autopilot.project_work_item w WHERE work_item_id=blocker_item) <> 'NO_PROGRESS_NO_RETRY' THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_REASON_INVALID';
+    END IF;
+    IF (SELECT generation FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 1 THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_GENERATION_CHANGED';
+    END IF;
+    IF (SELECT count(*) FROM autopilot.project_work_task
+         WHERE work_item_id=blocker_item AND run_kind='AUDIT') <> 1 THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_NO_PROGRESS_AUDIT_DUPLICATED';
     END IF;
 
-    UPDATE autopilot.project_work_item
-       SET not_before = now() WHERE work_item_id = blocker_item;
     SELECT * INTO probe
       FROM autopilot.claim_project_work_probe('sql-project-worker-6', 60);
+    IF FOUND AND probe.work_item_id = blocker_item THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_PAUSED_BLOCKER_RECLAIMED';
+    END IF;
+
+    -- Meaningful target progress requires an explicit resume/reconcile transition.
+    EXECUTE 'UPDATE autopilot.project_work_item SET state=''READY'', hold_reason=NULL, hold_until=NULL, not_before=now() WHERE work_item_id=$1'
+       USING blocker_item;
+    SELECT * INTO probe
+      FROM autopilot.claim_project_work_probe('sql-project-worker-7', 60);
+    IF NOT FOUND OR probe.work_item_id <> blocker_item THEN
+        RAISE EXCEPTION 'AUTOPILOT_PROJECT_EXPLICIT_RESUME_NOT_CLAIMED';
+    END IF;
     SELECT * INTO materialized
       FROM autopilot.materialize_project_work_probe(
-          probe.work_item_id, 'sql-project-worker-6', probe.lease_epoch,
+          probe.work_item_id, 'sql-project-worker-7', probe.lease_epoch,
           true, repeat('d', 40)
       );
     changed_head_task := materialized.task_id;
     IF changed_head_task IS NULL
-       OR (SELECT goal_json->>'expected_head_sha' FROM autopilot.task
-            WHERE task_id = changed_head_task) <> repeat('d', 40)
-       OR (SELECT generation FROM autopilot.project_work_item
-            WHERE work_item_id = blocker_item) <> 2 THEN
+       OR (SELECT goal_json->>'expected_head_sha' FROM autopilot.task WHERE task_id=changed_head_task) <> repeat('d',40)
+       OR (SELECT generation FROM autopilot.project_work_item WHERE work_item_id=blocker_item) <> 2 THEN
         RAISE EXCEPTION 'AUTOPILOT_PROJECT_CHANGED_HEAD_NOT_REACTIVATED';
+    END IF;
+
+    ELSE
+    -- Legacy baseline (without 0347): unchanged blocked head is retained,
+    -- while a changed head may reactivate the lane.
+    UPDATE autopilot.project_work_item SET not_before=now() WHERE work_item_id=blocker_item;
+    SELECT * INTO probe FROM autopilot.claim_project_work_probe('sql-project-worker-5',60);
+    SELECT * INTO materialized FROM autopilot.materialize_project_work_probe(
+      probe.work_item_id,'sql-project-worker-5',probe.lease_epoch,true,repeat('a',40));
+    IF materialized.task_id IS NOT NULL OR materialized.created IS NOT false THEN
+      RAISE EXCEPTION 'AUTOPILOT_PROJECT_UNCHANGED_HEAD_REDISPATCHED';
+    END IF;
+    UPDATE autopilot.project_work_item SET not_before=now() WHERE work_item_id=blocker_item;
+    SELECT * INTO probe FROM autopilot.claim_project_work_probe('sql-project-worker-6',60);
+    SELECT * INTO materialized FROM autopilot.materialize_project_work_probe(
+      probe.work_item_id,'sql-project-worker-6',probe.lease_epoch,true,repeat('d',40));
+    changed_head_task:=materialized.task_id;
+    IF changed_head_task IS NULL THEN
+      RAISE EXCEPTION 'AUTOPILOT_PROJECT_CHANGED_HEAD_NOT_REACTIVATED';
+    END IF;
     END IF;
 
     IF has_table_privilege(

@@ -8,7 +8,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_TEST = ROOT / "tests" / "test_oracle_idle_stop_guard.py"
-INSTANCE_POWER = ROOT / ".github" / "workflows" / "oracle-instance-power.yml"
+INSTANCE_POWER = ROOT / "tests" / "fixtures" / "retired_oracle" / "oracle-instance-power.yml"
 
 spec = importlib.util.spec_from_file_location("oracle_idle_base_tests", BASE_TEST)
 if spec is None or spec.loader is None:

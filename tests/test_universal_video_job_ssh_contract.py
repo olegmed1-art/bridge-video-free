@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-job.yml").read_text(
+WORKFLOW = (ROOT / "tests/fixtures/retired_oracle/oracle-universal-video-job.yml").read_text(
     encoding="utf-8"
 )
 OPERATOR_INSTALL = (ROOT / "ops/install_universal_video_operator.sh").read_text(
@@ -180,3 +180,8 @@ def test_submit_intake_does_not_depend_on_legacy_host_venv() -> None:
     assert 'base64 --decode >"$tmp"' not in submit
     assert "UV_INTAKE_EXECUTION_FAILED" in submit
     assert "intake_reject" in submit
+
+
+def test_retired_heavy_oracle_job_remains_non_executable():
+    assert not (ROOT / ".github/workflows/oracle-universal-video-job.yml").exists()
+    assert not (ROOT / ".github/workflows/oracle-instance-power-auto.yml").exists()
