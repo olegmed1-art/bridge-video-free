@@ -1,5 +1,8 @@
 """Credential probe contracts: no secret on argv/stdout and fail closed."""
 import json
+import os
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -13,6 +16,12 @@ class LightLoginAuditTests(unittest.TestCase):
                                  return_value=SimpleNamespace(pw_gid=1001, pw_uid=1001))
         self.role.start()
         self.addCleanup(self.role.stop)
+
+    def trust_temporary_file_owner(self):
+        real_fstat = os.fstat
+        self.enterContext(patch.object(audit.os, 'fstat',
+            side_effect=lambda fd: os.stat_result(
+                (*real_fstat(fd)[:4], 0, *real_fstat(fd)[5:]))))
 
     @patch.object(audit.subprocess, 'run')
     def test_connect_uses_service_uid_and_read_only_session_without_argv_secret(self, run):
@@ -38,6 +47,30 @@ class LightLoginAuditTests(unittest.TestCase):
             audit.verify_production_login(secret)
         self.assertEqual(str(result.exception), 'AUTHENTICATION_FAILED')
         self.assertNotIn('secret-example', str(result.exception))
+
+    def test_live_secret_source_reports_only_match_or_drift(self):
+        self.trust_temporary_file_owner()
+        secret = 'postgresql://role:secret-example@host/neondb?sslmode=require'
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'light.env'
+            path.write_text('AUTOPILOT_DATABASE_URL="' + secret + '"\n')
+            os.chmod(path, 0o600)
+            self.assertTrue(audit.live_credential_matches_disk(secret, path))
+            self.assertFalse(audit.live_credential_matches_disk(secret + 'x', path))
+            self.assertFalse(audit.live_credential_matches_disk('different', path))
+
+    def test_duplicate_or_insecure_source_fails_closed(self):
+        self.trust_temporary_file_owner()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'light.env'
+            path.write_text('AUTOPILOT_DATABASE_URL=private\nAUTOPILOT_DATABASE_URL=private\n')
+            os.chmod(path, 0o600)
+            with self.assertRaisesRegex(audit.AuditFailure, 'ENV_FILE_INVALID'):
+                audit.live_credential_matches_disk('private', path)
+            path.write_text('AUTOPILOT_DATABASE_URL=private\n')
+            os.chmod(path, 0o644)
+            with self.assertRaisesRegex(audit.AuditFailure, 'ENV_FILE_UNTRUSTED'):
+                audit.live_credential_matches_disk('private', path)
 
 
 if __name__ == '__main__':
