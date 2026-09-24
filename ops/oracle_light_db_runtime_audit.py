@@ -90,14 +90,21 @@ def live_credential_matches_disk(dsn, path=LIGHT_ENV_FILE):
     return hmac.compare_digest(found[0].encode('utf-8'), dsn.encode('utf-8'))
 
 
-def environment_source_layout(output):
+def environment_source_layout(output, working_directory=''):
     """Reduce systemd's file list to non-secret facts; never echo an unknown path."""
     entries = output.splitlines()
     expected = f'EnvironmentFiles={LIGHT_ENV_FILE} (ignore_errors=no)'
     pin = f'EnvironmentFiles={PIN_ENV_FILE} (ignore_errors=no)'
+    release_pattern = (r'EnvironmentFiles=/opt/bridge-school/'
+                       r'school-autopilot-production-light/releases/[a-f0-9]{40}/'
+                       r'ops/autopilot/broker-hold\.env \(ignore_errors=no\)')
+    workdir_pin = f'EnvironmentFiles={working_directory}/ops/autopilot/broker-hold.env (ignore_errors=no)'
+    extra = [entry for entry in entries if entry not in (expected, pin)]
     return {'entries': len(entries), 'expected_primary': expected in entries,
             'expected_pin': pin in entries,
-            'unknown_entries': sum(entry not in (expected, pin) for entry in entries)}
+            'unknown_entries': len(extra),
+            'unknown_is_release_pin': len(extra) == 1 and bool(re.fullmatch(release_pattern, extra[0])),
+            'unknown_matches_workdir_pin': len(extra) == 1 and extra[0] == workdir_pin}
 
 
 def verify_broker_pin_file(path=PIN_ENV_FILE):
@@ -185,11 +192,15 @@ def main():
                                      '-p', 'EnvironmentFiles'],
                                     check=True, capture_output=True, text=True,
                                     timeout=15).stdout
-            layout = environment_source_layout(source)
+            layout = environment_source_layout(source, props['WorkingDirectory'])
             acceptable = ({'entries': 1, 'expected_primary': True,
-                           'expected_pin': False, 'unknown_entries': 0},
+                           'expected_pin': False, 'unknown_entries': 0,
+                           'unknown_is_release_pin': False,
+                           'unknown_matches_workdir_pin': False},
                           {'entries': 2, 'expected_primary': True,
-                           'expected_pin': True, 'unknown_entries': 0})
+                           'expected_pin': True, 'unknown_entries': 0,
+                           'unknown_is_release_pin': False,
+                           'unknown_matches_workdir_pin': False})
             if layout not in acceptable:
                 print(json.dumps({'audit': 'ENV_SOURCE_LAYOUT', **layout}), flush=True)
                 raise AuditFailure('ENV_SOURCE_DRIFT')

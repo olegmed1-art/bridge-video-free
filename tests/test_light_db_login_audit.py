@@ -78,7 +78,9 @@ class LightLoginAuditTests(unittest.TestCase):
         layout = audit.environment_source_layout(output)
         self.assertEqual(layout, {'entries': 2, 'expected_primary': True,
                                   'expected_pin': False,
-                                  'unknown_entries': 1})
+                                  'unknown_entries': 1,
+                                  'unknown_is_release_pin': False,
+                                  'unknown_matches_workdir_pin': False})
         self.assertNotIn('/arbitrary/', json.dumps(layout))
 
     def test_known_broker_pin_file_has_no_database_override(self):
@@ -87,7 +89,9 @@ class LightLoginAuditTests(unittest.TestCase):
                   f'EnvironmentFiles={audit.PIN_ENV_FILE} (ignore_errors=no)\n')
         self.assertEqual(audit.environment_source_layout(source),
                          {'entries': 2, 'expected_primary': True,
-                          'expected_pin': True, 'unknown_entries': 0})
+                          'expected_pin': True, 'unknown_entries': 0,
+                          'unknown_is_release_pin': False,
+                          'unknown_matches_workdir_pin': False})
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'broker-hold.env'
             path.write_text(''.join(key + '=example\n' for key in sorted(audit.PIN_KEYS)))
@@ -96,6 +100,16 @@ class LightLoginAuditTests(unittest.TestCase):
             path.write_text(path.read_text() + 'AUTOPILOT_DATABASE_URL=override\n')
             with self.assertRaisesRegex(audit.AuditFailure, 'PIN_FILE_INVALID'):
                 audit.verify_broker_pin_file(path)
+
+    def test_other_release_pin_is_classified_without_revision_or_path_leak(self):
+        other_release = ('/opt/bridge-school/school-autopilot-production-light/'
+                         'releases/' + 'a' * 40)
+        source = (f'EnvironmentFiles={audit.LIGHT_ENV_FILE} (ignore_errors=no)\n'
+                  f'EnvironmentFiles={other_release}/ops/autopilot/broker-hold.env (ignore_errors=no)\n')
+        layout = audit.environment_source_layout(source, other_release)
+        self.assertTrue(layout['unknown_is_release_pin'])
+        self.assertTrue(layout['unknown_matches_workdir_pin'])
+        self.assertNotIn(other_release, json.dumps(layout))
 
 
 if __name__ == '__main__':
