@@ -126,7 +126,8 @@ def verify_broker_pin_file(path=PIN_ENV_FILE):
                     'mode': format(stat.S_IMODE(info.st_mode), '04o'),
                     'within_size_limit': info.st_size <= 4096}
         if not (metadata['regular'] and metadata['root_owned']
-                and metadata['mode'] == '0644' and metadata['within_size_limit']):
+                and metadata['mode'] in ('0444', '0644')
+                and metadata['within_size_limit']):
             print(json.dumps(metadata), flush=True)
             raise AuditFailure('PIN_FILE_UNTRUSTED')
         raw = file.read(4097)
