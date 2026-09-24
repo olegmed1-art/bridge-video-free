@@ -1,0 +1,9 @@
+{
+  "request_id": "issue840-speaker-role-production-activation-20260829-01",
+  "mode": "activate",
+  "git_ref": "a5c37aab5623726e6562767f371fc9786b426c31",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}

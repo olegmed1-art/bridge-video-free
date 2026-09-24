@@ -1,0 +1,63 @@
+name: Autopilot paused evidence reconciliation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '37 * * * *'
+  workflow_run:
+    workflows:
+      - 'Issue 881 Exact Canary Contract CI'
+      - 'Issue 881 Current-Main Authoritative CI'
+      - 'Bridge School Database CI'
+      - 'Autopilot publication security CI'
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
+concurrency:
+  group: autopilot-paused-evidence-reconciliation
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install bounded reconciliation dependencies
+        run: python -m pip install 'psycopg[binary]==3.3.4'
+
+      - name: Verify connection, bounded RPC access, and check-runs
+        id: preflight
+        env:
+          DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: python -m ops.github_autopilot_db_route diagnostics
+
+      - name: Reconcile at most three paused items from fresh evidence
+        env:
+          DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: python -m ops.github_autopilot_db_route reconcile
+
+      - name: Admit bounded read-only next steps
+        if: ${{ !cancelled() && steps.preflight.outcome == 'success' }}
+        env:
+          DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: python -m ops.github_autopilot_db_route next-step

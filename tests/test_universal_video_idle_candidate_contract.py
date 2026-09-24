@@ -3,9 +3,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CANDIDATE = ROOT / ".github/workflows/oracle-instance-idle-candidate.yml"
-VIDEO = ROOT / ".github/workflows/oracle-universal-video-job.yml"
-POWER = ROOT / ".github/workflows/oracle-instance-power.yml"
-AUTO = ROOT / ".github/workflows/oracle-instance-power-auto.yml"
+VIDEO = ROOT / "tests/fixtures/retired_oracle/oracle-universal-video-job.yml"
+POWER = ROOT / "tests/fixtures/retired_oracle/oracle-instance-power.yml"
+AUTO = ROOT / "tests/fixtures/retired_oracle/oracle-instance-power-auto.yml"
 EPOCH_PROBE = ROOT / ".github/workflows/oracle-epoch-readonly-probe.yml"
 
 
@@ -24,6 +24,8 @@ def test_idle_candidate_waits_and_fails_closed_before_bounded_stop():
     assert "cancel-in-progress: true" in text
     assert "sleep 600" in text
     assert "assistant_lab.oracle_idle_snapshot()" in text
+    assert "video_queue.job_status" in text
+    assert "video_jobs" in text
     assert "oracle-universal-video-job.yml/runs?per_page=100" in text
     assert '{"queued","in_progress","waiting","requested","pending"}' in text
     assert "active == 0 && uv_active == 0" in text
@@ -41,14 +43,38 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
     assert "options: [status, start, stop]" in text
     assert "idle_source_run_id:" in text
     assert "actions: read" in text
-    assert "group: oracle-instance-workload-mutation" in text
+    # Every authorized status/start/stop is serialized; unrelated issue
+    # comments cannot occupy the production fence before the job condition.
+    assert "contains(fromJSON('[\"status\",\"start\",\"stop\"]'), inputs.action)" in text
+    assert "github.actor == github.repository_owner" in text
+    assert "&& 'oracle-instance-workload-mutation' ||" in text
+    assert "oracle-instance-power-noop-{0}" in text
     assert "Revalidate automatic stop epoch" in text
+    assert "gh api --paginate --slurp" in text
+    assert "final_epoch_state" in text
+    assert "len(runs)==total" in text
     assert 'row.get("status")!="completed"' in text
     assert 'r.get("event")!="pull_request"' in text
     assert "steps.epoch.outputs.epoch_state == 'CURRENT'" in text
     assert "Refuse stale automatic stop" in text
-    assert "steps.idle.outputs.idle_state == 'IDLE'" in text
+    assert "steps.idle.outputs.stop_authorized == 'YES'" in text
+    assert "steps.idle.outputs.idle_state == 'IDLE'" not in text
     assert "Stop exact instance only with IDLE proof" in text
+    stop_step = text.index("Stop exact instance only with IDLE proof")
+    final_probe = text.index(
+        "bridge-school-oracle-final-idle-proof-${GITHUB_RUN_ID}", stop_step
+    )
+    final_authorizer = text.index("--proof \"$proof\"", final_probe)
+    post_probe_epoch = text.index("post_probe_epoch_state=", final_authorizer)
+    second_paginated = text.index("gh api --paginate --slurp", post_probe_epoch)
+    second_authorizer = text.index("--proof \"$proof\"", second_paginated)
+    stop_action = text.index("--action STOP", second_authorizer)
+    final_epoch = text.index("final_epoch_state=", stop_step)
+    paginated = text.index("gh api --paginate --slurp", final_epoch)
+    assert (
+        stop_step < final_epoch < paginated < final_probe < final_authorizer
+        < post_probe_epoch < second_paginated < second_authorizer < stop_action
+    )
     assert "controller: manual only" in text
 
 
@@ -57,7 +83,8 @@ def test_video_and_power_mutations_share_a_non_cancelling_lock():
     power = POWER.read_text(encoding="utf-8")
     assert "'oracle-instance-workload-mutation'" in video
     assert "oracle-universal-video-pr-{0}" in video
-    assert "group: oracle-instance-workload-mutation" in power
+    assert "'oracle-instance-workload-mutation'" in power
+    assert "oracle-instance-power-noop-{0}" in power
     for text in (video, power):
         assert "cancel-in-progress: false" in text
 

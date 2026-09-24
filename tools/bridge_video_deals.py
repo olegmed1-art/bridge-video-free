@@ -17,9 +17,12 @@ def reconstruct_job(job_dir: Path) -> dict[str, object]:
     output = root / "bridge_deals.json"
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
-        "status": "REVIEW" if result["review_frame_count"] else "COMPLETED",
+        "status": result["status"],
         "deal_count": result["deal_count"],
+        "verified_full_board_count": result["verified_full_board_count"],
+        "review_deal_count": result["review_deal_count"],
         "review_frame_count": result["review_frame_count"],
+        "canonical_promotion_allowed": False,
         "output": output.name,
     }
 

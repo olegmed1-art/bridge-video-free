@@ -103,8 +103,13 @@ def _hypothesis_score(diagnostics: Mapping[str, Any]) -> float:
     minor_seg = min(0.25, float(diagnostics.get("minor_segment_ratio") or 0.0))
     minor_dur = min(0.25, float(diagnostics.get("minor_duration_ratio") or 0.0))
     transitions = min(1.0, float(diagnostics.get("speaker_transitions") or 0) / 30.0)
-    coverage = min(1.0, float(diagnostics.get("segments_labeled") or 0) / 100.0)
-    return round(3.0 * minor_seg + 2.0 * minor_dur + transitions + coverage - penalty, 6)
+    segment_coverage = diagnostics.get("segment_coverage")
+    duration_coverage = diagnostics.get("speech_duration_coverage")
+    if segment_coverage is None or duration_coverage is None:
+        coverage = min(1.0, float(diagnostics.get("segments_labeled") or 0) / 100.0)
+    else:
+        coverage = min(float(segment_coverage), float(duration_coverage))
+    return round(3.0 * minor_seg + 2.0 * minor_dur + transitions + 2.0 * coverage - penalty, 6)
 
 
 def _normalize_rows(matrix):
@@ -165,9 +170,126 @@ def _cluster_embeddings_two(embeddings) -> tuple[list[int], dict[str, Any]]:
     }
 
 
+def _cluster_embeddings_k(embeddings, clusters: int) -> tuple[list[int], dict[str, Any]]:
+    """Deterministic cosine k-means used by the open-set count selector."""
+    import numpy as np
+
+    x = _normalize_rows(embeddings)
+    if x.ndim != 2 or clusters < 1 or x.shape[0] < clusters * 8:
+        raise RuntimeError("insufficient embeddings for candidate speaker count")
+    center = _normalize_rows([x.mean(axis=0)])[0]
+    seeds = [int(np.argmin(x @ center))]
+    while len(seeds) < clusters:
+        similarity = x @ x[seeds].T
+        nearest = np.max(similarity, axis=1)
+        for seed in seeds:
+            nearest[seed] = 1.0
+        seeds.append(int(np.argmin(nearest)))
+    centroids = _normalize_rows(x[seeds])
+    labels = np.full(len(x), -1, dtype=int)
+    for _ in range(30):
+        similarities = x @ centroids.T
+        new_labels = np.argmax(similarities, axis=1)
+        if np.array_equal(labels, new_labels):
+            break
+        labels = new_labels
+        if len(set(labels.tolist())) != clusters:
+            raise RuntimeError("candidate clustering contains an empty cluster")
+        centroids = _normalize_rows(
+            [x[labels == cluster].mean(axis=0) for cluster in range(clusters)]
+        )
+    similarities = x @ centroids.T
+    own = similarities[np.arange(len(x)), labels]
+    if clusters == 1:
+        margins = np.ones(len(x), dtype="float32")
+        max_centroid_similarity = None
+    else:
+        masked = similarities.copy()
+        masked[np.arange(len(x)), labels] = -2.0
+        margins = own - np.max(masked, axis=1)
+        pairs = centroids @ centroids.T
+        pairs[np.eye(clusters, dtype=bool)] = -2.0
+        max_centroid_similarity = float(np.max(pairs))
+    counts = Counter(int(value) for value in labels)
+    minimum = min(counts.values())
+    median_margin = float(np.median(margins))
+    q25_margin = float(np.quantile(margins, 0.25))
+    valid = clusters == 1 or (
+        minimum >= 8
+        and max_centroid_similarity is not None
+        and max_centroid_similarity <= 0.88
+        and median_margin >= 0.06
+        and q25_margin >= 0.015
+    )
+    score = (
+        0.0
+        if clusters == 1
+        else median_margin
+        + q25_margin
+        + 0.15 * minimum / len(x)
+        - 0.035 * max(0, clusters - 2)
+    )
+    return labels.tolist(), {
+        "candidate_count": clusters,
+        "cluster_counts": {str(k): int(v) for k, v in sorted(counts.items())},
+        "maximum_centroid_cosine_similarity": (
+            None if max_centroid_similarity is None else round(max_centroid_similarity, 4)
+        ),
+        "median_cosine_margin": round(median_margin, 4),
+        "q25_cosine_margin": round(q25_margin, 4),
+        "minimum_cluster_segments": int(minimum),
+        "candidate_valid": bool(valid),
+        "selection_score": round(float(score), 6),
+    }
+
+
+def _cluster_embeddings_open_set(
+    embeddings, *, max_speakers: int = 4
+) -> tuple[list[int], dict[str, Any]]:
+    """Compare 1..N acoustic hypotheses and prove a bounded speaker count."""
+    import numpy as np
+
+    x = _normalize_rows(embeddings)
+    upper = min(int(max_speakers), int(x.shape[0] // 8))
+    if upper < 2:
+        raise RuntimeError("insufficient embeddings for open-set speaker count")
+    candidates = []
+    labels_by_count = {}
+    for count in range(1, upper + 1):
+        labels, report = _cluster_embeddings_k(x, count)
+        candidates.append(report)
+        labels_by_count[count] = labels
+    valid = [item for item in candidates if item["candidate_count"] > 1 and item["candidate_valid"]]
+    if not valid:
+        raise RuntimeError("no separated open-set speaker-count hypothesis")
+    ranked = sorted(valid, key=lambda item: (-item["selection_score"], item["candidate_count"]))
+    selected = ranked[0]
+    selected_count = int(selected["candidate_count"])
+    runner_up = ranked[1] if len(ranked) > 1 else None
+    margin = selected["selection_score"] - (runner_up["selection_score"] if runner_up else 0.0)
+    # Higher-count solutions must win materially; this prevents one voice from
+    # being split into several cosmetically tighter clusters.
+    if runner_up and selected_count > int(runner_up["candidate_count"]) and margin < 0.08:
+        selected = runner_up
+        selected_count = int(selected["candidate_count"])
+        margin = float(ranked[0]["selection_score"] - selected["selection_score"])
+    proof = {
+        "mode": "OPEN_SET",
+        "candidate_counts": candidates,
+        "selected_count": selected_count,
+        "selection_margin": round(float(margin), 6),
+        "collapse_check": "PASS",
+        "fragmentation_check": "PASS",
+        "mixing_check": "PASS",
+    }
+    return labels_by_count[selected_count], proof
+
+
 __all__ = [
     "_collapse_diagnostics",
     "_cluster_embeddings_two",
+    "_cluster_embeddings_k",
+    "_cluster_embeddings_open_set",
     "_hypothesis_score",
     "_normalize_rows",
 ]

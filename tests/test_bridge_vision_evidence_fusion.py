@@ -27,25 +27,26 @@ def declaration(
     }
 
 
-def test_teacher_named_card_completes_third_hand_then_derives_fourth():
+def test_teacher_named_card_only_corroborates_existing_visual_card():
     visual = {
         "N": [f"{rank}S" for rank in RANKS],
         "E": [f"{rank}H" for rank in RANKS],
-        "S": [f"{rank}D" for rank in RANKS[:-1]],
+        "S": [f"{rank}D" for rank in RANKS],
     }
     result = fuse_card_evidence(visual, [declaration("2D", "S")])
 
     assert result["status"] == "PASS"
     assert result["accepted_declarations"][0]["card"] == "2D"
-    assert len(result["deal"]["hands"]["W"]["cards"]) == 13
-    assert result["deal"]["derivations"][0]["provenance_class"] == "DERIVED"
+    assert result["accepted_declarations"][0]["accepted_as_observation"] is False
+    assert result["deal"]["hands"]["W"] == {"cards": [], "unknown_count": 13}
+    assert result["deal"]["derivations"] == []
     spoken = next(
         row for row in result["observed_card_evidence"] if row["seat"] == "S" and row["card"] == "2D"
     )
-    assert spoken["evidence"][0]["source"] == "TEACHER_SPEECH"
+    assert [item["source"] for item in spoken["evidence"]] == ["VISUAL", "TEACHER_SPEECH"]
 
 
-def test_teacher_names_exposed_card_from_hidden_hand_and_other_twelve_are_derived():
+def test_teacher_names_hidden_card_but_no_visual_card_is_created():
     visual = {
         "N": [f"{rank}S" for rank in RANKS],
         "E": [f"{rank}H" for rank in RANKS],
@@ -53,10 +54,10 @@ def test_teacher_names_exposed_card_from_hidden_hand_and_other_twelve_are_derive
     }
     result = fuse_card_evidence(visual, [declaration("AC", "W")])
 
-    derivation = result["deal"]["derivations"][0]
-    assert derivation["observed_cards_preserved"] == ["AC"]
-    assert len(derivation["computed_cards"]) == 12
-    assert result["deal"]["card_provenance"]["W"]["observed_cards"] == ["AC"]
+    assert result["status"] == "REVIEW"
+    assert result["deal"]["hands"]["W"] == {"cards": [], "unknown_count": 13}
+    assert result["accepted_declarations"] == []
+    assert result["rejected_declarations"][0]["reason"] == "NO_VISUAL_CARD_EVIDENCE"
 
 
 def test_low_confidence_or_unverified_speaker_never_becomes_card_fact():
@@ -102,7 +103,7 @@ def test_speech_visual_cross_seat_conflict_fails_closed():
     assert result["canonical_promotion_allowed"] is False
 
 
-def test_rank_only_teacher_claim_resolves_only_from_complete_canonical_hand():
+def test_rank_only_teacher_claim_does_not_resolve_from_deck_complement():
     visual = {
         "N": [f"{rank}S" for rank in RANKS],
         "E": [f"{rank}H" for rank in RANKS],
@@ -110,14 +111,10 @@ def test_rank_only_teacher_claim_resolves_only_from_complete_canonical_hand():
     }
     result = fuse_card_evidence(visual, [declaration("A", "W")])
 
-    assert result["status"] == "PASS"
-    assert result["resolved_partial_declarations"][0]["resolved_card"] == "AC"
-    assert result["constraint_evidence"][0]["resolution"] == "UNIQUE_WITHIN_CANONICAL_HAND"
-    assert result["deal"]["card_provenance"]["W"]["derived_cards"] == [f"{rank}C" for rank in RANKS]
-    assert not any(
-        row["seat"] == "W" and row["card"] == "AC"
-        for row in result["observed_card_evidence"]
-    )
+    assert result["status"] == "REVIEW"
+    assert result["resolved_partial_declarations"] == []
+    assert result["unresolved_partial_declarations"][0]["candidate_cards"] == []
+    assert result["deal"]["hands"]["W"] == {"cards": [], "unknown_count": 13}
 
 
 def test_suit_only_teacher_claim_remains_ambiguous_without_exact_card():
@@ -139,24 +136,25 @@ def test_partial_teacher_claim_conflicting_with_complete_hand_fails_closed():
     assert result["conflicts"][0]["reason"] == "PARTIAL_CARD_CONTRADICTS_COMPLETE_HAND"
 
 
-def test_exact_teacher_claim_cannot_overfill_a_complete_hand():
+def test_exact_teacher_claim_without_visual_match_stays_review_even_for_complete_hand():
     visual = {"N": [f"{rank}S" for rank in RANKS]}
     result = fuse_card_evidence(visual, [declaration("AC", "N")])
 
-    assert result["status"] == "CONFLICT"
-    assert result["deal"] is None
-    assert result["conflicts"][0]["reason"] == "EXACT_CARD_CONTRADICTS_COMPLETE_HAND"
+    assert result["status"] == "REVIEW"
+    assert result["deal"]["hands"]["N"]["cards"] == [f"{rank}S" for rank in RANKS]
+    assert result["rejected_declarations"][0]["reason"] == "NO_VISUAL_CARD_EVIDENCE"
 
 
-def test_partial_rank_and_suit_fields_become_exact_card_declaration():
+def test_partial_rank_and_suit_fields_do_not_create_exact_card():
     claim = declaration(None, "E")
     claim.pop("card")
     claim.update({"rank": "10", "suit": "♥"})
     result = fuse_card_evidence({}, [claim])
 
-    assert result["status"] == "PASS"
-    assert result["accepted_declarations"][0]["card"] == "TH"
-    assert result["deal"]["hands"]["E"]["cards"] == ["TH"]
+    assert result["status"] == "REVIEW"
+    assert result["accepted_declarations"] == []
+    assert result["rejected_declarations"][0]["card"] == "TH"
+    assert result["deal"]["hands"]["E"]["cards"] == []
 
 
 def test_exact_student_declaration_is_retained_but_never_becomes_observation():
@@ -267,6 +265,7 @@ def test_teacher_speech_and_layout_corroboration_remains_attributable():
         layout_suggestions=[layout],
     )
 
-    assert result["status"] == "PASS"
-    assert result["deal"]["hands"]["W"]["cards"] == ["QD"]
-    assert result["speech_layout_corroborations"][0]["speech_source"] == "TEACHER_SPEECH"
+    assert result["status"] == "REVIEW"
+    assert result["deal"]["hands"]["W"]["cards"] == []
+    assert result["speech_layout_corroborations"][0]["speech_source"] == "TEACHER_SPEECH_SUGGESTION"
+    assert result["speech_layout_corroborations"][0]["accepted_as_observation"] is False

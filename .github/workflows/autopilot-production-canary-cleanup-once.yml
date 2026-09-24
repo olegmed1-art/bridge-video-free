@@ -1,0 +1,283 @@
+name: Autopilot production canary cleanup once
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/autopilot-production-canary-cleanup-once.yml'
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - '.github/workflows/autopilot-production-canary-cleanup-once.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate exact fail-closed cleanup boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow='.github/workflows/autopilot-production-canary-cleanup-once.yml'
+          ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" "$workflow"
+          WORKFLOW="$workflow" python - <<'PY'
+          import os
+          from pathlib import Path
+
+          text = Path(os.environ['WORKFLOW']).read_text(encoding='utf-8')
+          required = (
+              'group: oracle-instance-workload-mutation',
+              'environment: database-production',
+              'EXPECTED_BRANCH_ID: br-wispy-lab-b1rq54of',
+              'EXPECTED_SHADOW_REVISION: 9064044d4c5b85803c6778060dff4843111ab888',
+              'systemctl disable --now school-autopilot-production-canary.service',
+              'ALTER ROLE autopilot_prod_canary_login NOLOGIN',
+              'AUTOPILOT_PRODUCTION_CANARY_CLEANUP_PASS',
+              'ORACLE_INSTANCE_STOP_REQUESTED=NO',
+          )
+          for item in required:
+              assert item in text, item
+          forbidden = (
+              'systemctl ' + 'stop school-autopilot-shadow.service',
+              'systemctl ' + 'restart school-autopilot-shadow.service',
+              'systemctl ' + 'disable school-autopilot-shadow.service',
+              'systemctl ' + 'disable --now school-autopilot-shadow.service',
+              'systemctl ' + 'start school-autopilot-shadow.service',
+              'oci compute instance ' + 'action',
+              'DROP ' + 'ROLE',
+              'DROP ' + 'SCHEMA',
+              'DELETE ' + 'FROM autopilot.',
+              'UPDATE ' + 'autopilot.',
+              'INSERT ' + 'INTO autopilot.',
+          )
+          for item in forbidden:
+              assert item not in text, item
+          assert text.count('ALTER ROLE autopilot_prod_canary_login NOLOGIN') == 3
+          assert text.count('systemctl disable --now school-autopilot-production-canary.service') == 3
+          PY
+
+  cleanup:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: database-production
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_PROJECT_ID: misty-poetry-18012774
+      EXPECTED_BRANCH_ID: br-wispy-lab-b1rq54of
+      EXPECTED_SHADOW_REVISION: 9064044d4c5b85803c6778060dff4843111ab888
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client >/dev/null
+
+      - name: Verify exact production target and clean queue
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$DATABASE_URL" ]]
+          readarray -t state < <(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT current_setting('neon.project_id', true);
+          SELECT current_setting('neon.branch_id', true);
+          SELECT count(*) FROM pg_roles
+           WHERE rolname='autopilot_prod_canary_login'
+             AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole
+             AND NOT rolreplication AND NOT rolbypassrls
+             AND rolconnlimit=2;
+          SELECT count(*) FROM pg_auth_members m
+            JOIN pg_roles member ON member.oid=m.member
+            JOIN pg_roles granted ON granted.oid=m.roleid
+           WHERE member.rolname='autopilot_prod_canary_login'
+             AND granted.rolname='autopilot_runtime';
+          SELECT count(*) FROM pg_auth_members m
+            JOIN pg_roles member ON member.oid=m.member
+            JOIN pg_roles granted ON granted.oid=m.roleid
+           WHERE member.rolname='autopilot_prod_canary_login'
+             AND granted.rolname<>'autopilot_runtime';
+          SELECT count(*) FROM autopilot.task
+           WHERE status NOT IN ('OWNER_REQUIRED','FAILED_CLOSED','BUDGET_STOP','DONE','CANCELLED');
+          SELECT count(*) FROM autopilot.task
+           WHERE status='RUNNING' AND lease_until <= now();
+          SELECT count(*) FROM autopilot.task
+           WHERE task_key='production-canary-20260901-06'
+             AND goal_type='AUTOPILOT_SMOKE_V1'
+             AND status='DONE' AND attempts=1
+             AND terminal_reason_code='ACCEPTANCE_EVIDENCE_RETAINED'
+             AND model_turn_cap=0
+             AND cost_cap_microusd=0
+             AND cost_reserved_microusd=0
+             AND cost_actual_microusd=0
+             AND safe_summary_json->>'model_calls'='0'
+             AND safe_summary_json->>'production_mutation'='false';
+          SELECT count(*) FROM public.operational_health_issue WHERE severity='critical';
+          SQL
+          )
+          [[ "${state[0]}" == "$EXPECTED_PROJECT_ID" ]]
+          [[ "${state[1]}" == "$EXPECTED_BRANCH_ID" ]]
+          [[ "${state[2]}" == 1 ]]
+          [[ "${state[3]}" == 1 ]]
+          [[ "${state[4]}" == 0 ]]
+          [[ "${state[5]}" == 0 ]]
+          [[ "${state[6]}" == 0 ]]
+          [[ "${state[7]}" == 1 ]]
+          [[ "${state[8]}" == 0 ]]
+          echo 'AUTOPILOT_PRODUCTION_CANARY_CLEANUP_PREFLIGHT_PASS'
+
+      - name: Verify pinned Oracle identity and SSH access
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/oracle-autopilot-cleanup-known-hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/oracle-autopilot-cleanup-known-hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Stop and disable only production canary service
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env EXPECTED_SHADOW_REVISION='$EXPECTED_SHADOW_REVISION' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          shadow=school-autopilot-shadow.service
+          canary=school-autopilot-production-canary.service
+          root=/opt/bridge-school/school-autopilot
+          [[ "$(cat "$root/current/SOURCE_REVISION")" == "$EXPECTED_SHADOW_REVISION" ]]
+          [[ "$(systemctl is-active "$shadow")" == active ]]
+          [[ "$(systemctl is-enabled "$shadow")" == enabled ]]
+          shadow_pid_before="$(systemctl show -p MainPID --value "$shadow")"
+          shadow_restarts_before="$(systemctl show -p NRestarts --value "$shadow")"
+          [[ "$shadow_pid_before" =~ ^[1-9][0-9]*$ ]]
+          [[ "$shadow_restarts_before" == 0 ]]
+          systemctl cat "$shadow" | grep -Fx 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' >/dev/null
+          systemctl disable --now school-autopilot-production-canary.service
+          [[ "$(systemctl is-active "$canary" 2>/dev/null || true)" == inactive ]]
+          [[ "$(systemctl is-enabled "$canary" 2>/dev/null || true)" == disabled ]]
+          [[ "$(systemctl is-active "$shadow")" == active ]]
+          [[ "$(systemctl is-enabled "$shadow")" == enabled ]]
+          [[ "$(systemctl show -p MainPID --value "$shadow")" == "$shadow_pid_before" ]]
+          [[ "$(systemctl show -p NRestarts --value "$shadow")" == "$shadow_restarts_before" ]]
+          echo 'AUTOPILOT_PRODUCTION_CANARY_SERVICE_DISABLED=YES'
+          echo 'AUTOPILOT_SHADOW_SERVICE_UNCHANGED=YES'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          REMOTE
+
+      - name: Revoke production canary login and verify no session remains
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER ROLE autopilot_prod_canary_login NOLOGIN;
+          SQL
+          for _ in $(seq 1 15); do
+            connections="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \
+              "SELECT count(*) FROM pg_stat_activity WHERE usename='autopilot_prod_canary_login';")"
+            [[ "$connections" == 0 ]] && break
+            sleep 1
+          done
+          readarray -t post < <(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT count(*) FROM pg_roles
+           WHERE rolname='autopilot_prod_canary_login' AND NOT rolcanlogin
+             AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole
+             AND NOT rolreplication AND NOT rolbypassrls AND rolconnlimit=2;
+          SELECT count(*) FROM pg_stat_activity WHERE usename='autopilot_prod_canary_login';
+          SELECT count(*) FROM autopilot.task
+           WHERE status NOT IN ('OWNER_REQUIRED','FAILED_CLOSED','BUDGET_STOP','DONE','CANCELLED');
+          SELECT count(*) FROM autopilot.task WHERE status='RUNNING' AND lease_until <= now();
+          SELECT count(*) FROM public.operational_health_issue WHERE severity='critical';
+          SQL
+          )
+          [[ "${post[0]}" == 1 ]]
+          [[ "${post[1]}" == 0 ]]
+          [[ "${post[2]}" == 0 ]]
+          [[ "${post[3]}" == 0 ]]
+          [[ "${post[4]}" == 0 ]]
+          echo 'AUTOPILOT_PRODUCTION_CANARY_LOGIN_DISABLED=YES'
+          echo 'AUTOPILOT_PRODUCTION_CANARY_CONNECTIONS=0'
+
+      - name: Verify Oracle and shadow non-regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env EXPECTED_SHADOW_REVISION='$EXPECTED_SHADOW_REVISION' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          shadow=school-autopilot-shadow.service
+          canary=school-autopilot-production-canary.service
+          root=/opt/bridge-school/school-autopilot
+          [[ "$(cat "$root/current/SOURCE_REVISION")" == "$EXPECTED_SHADOW_REVISION" ]]
+          [[ "$(systemctl is-active "$shadow")" == active ]]
+          [[ "$(systemctl is-enabled "$shadow")" == enabled ]]
+          [[ "$(systemctl show -p NRestarts --value "$shadow")" == 0 ]]
+          [[ "$(systemctl is-active "$canary" 2>/dev/null || true)" == inactive ]]
+          [[ "$(systemctl is-enabled "$canary" 2>/dev/null || true)" == disabled ]]
+          echo 'AUTOPILOT_SHADOW_POST_CLEANUP_PASS'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          REMOTE
+          READY_JSON="$(curl -fsS --retry 3 --retry-delay 3 --max-time 20 "https://$ORACLE_HOST/readyz")" \
+            python - <<'PY'
+          import json
+          import os
+
+          payload = json.loads(os.environ['READY_JSON'])
+          assert payload.get('status') == 'ready', payload
+          assert payload.get('engine') == 'DDS3', payload
+          assert payload.get('fallback_used') is False, payload
+          print('AUTOPILOT_PRODUCTION_CANARY_CLEANUP_DDS3_PASS')
+          PY
+          echo 'AUTOPILOT_PRODUCTION_CANARY_CLEANUP_PASS'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'

@@ -25,7 +25,8 @@ read -r expected_source_commit < "$PIN_PATH"
 [[ "$expected_source_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'exporter source pin invalid'
 [[ "$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)" == "$expected_source_commit" ]] \
   || fail 'exporter source pin mismatch'
-systemctl is-active --quiet universal-video.service || fail 'universal-video.service is not active'
+systemctl is-active --quiet universal-video-container.service || fail 'universal-video-container.service is not active'
+systemctl is-active --quiet universal-video.service && fail 'legacy universal-video.service is still active'
 running="$(find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit)" \
   || fail 'running job guard unavailable'
 [[ -z "$running" ]] || fail 'universal-video has a running job'

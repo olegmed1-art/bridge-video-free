@@ -1,0 +1,85 @@
+name: Oracle Light 0355 admin boundary
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-light-0355-admin.yml'
+      - 'ops/oracle_light_0355_admin.py'
+      - 'tests/test_oracle_light_0355_admin.py'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'stop before SQL or activate after reviewed SQL'
+        required: true
+        type: choice
+        options: [stop, activate]
+      main_sha:
+        description: 'Exact reviewed current main SHA'
+        required: true
+        type: string
+      preflight_run:
+        description: 'Passing live installed HOLD preflight run ID'
+        required: true
+        type: string
+      invocation_id:
+        description: 'Preflight invocation for stop; 32 zeros for activate'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: oracle-light-backup-mutation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python -m unittest -q tests.test_oracle_light_0355_admin
+
+  admin:
+    needs: contract
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    environment: database-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify pinned preflight and perform single host operation
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN: ${{ inputs.main_sha }}
+          PREFLIGHT_RUN: ${{ inputs.preflight_run }}
+          ACTION: ${{ inputs.action }}
+          INVOCATION: ${{ inputs.invocation_id }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          [[ "$ACTION" == stop || "$ACTION" == activate ]]
+          [[ "$EXPECTED_MAIN" =~ ^[0-9a-f]{40}$ && "$PREFLIGHT_RUN" =~ ^[0-9]{8,12}$ && "$INVOCATION" =~ ^[a-f0-9]{32}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_MAIN" ]]
+          [[ "$(gh api repos/olegmed1-art/bridge-video-free/git/ref/heads/main --jq .object.sha)" == "$EXPECTED_MAIN" ]]
+          [[ "$(gh api repos/olegmed1-art/bridge-video-free/actions/runs/$PREFLIGHT_RUN --jq .conclusion)" == success ]]
+          [[ "$(gh api repos/olegmed1-art/bridge-video-free/actions/runs/$PREFLIGHT_RUN --jq .path)" == '.github/workflows/oracle-light-held-runtime-preflight.yml' ]]
+          [[ "$(gh api repos/olegmed1-art/bridge-video-free/actions/runs/$PREFLIGHT_RUN --jq .head_sha)" == "$EXPECTED_MAIN" ]]
+          git diff --exit-code HEAD --
+          unset GH_TOKEN
+          [[ -n "${SSH_PRIVATE_KEY:-}" ]]
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$work/key"
+          unset SSH_PRIVATE_KEY
+          ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ConnectionAttempts=1 ubuntu@92.5.47.149 "sudo -n /usr/bin/python3 - $ACTION $INVOCATION" < ops/oracle_light_0355_admin.py

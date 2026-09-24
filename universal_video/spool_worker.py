@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import stat
 import time
 from pathlib import Path
@@ -19,13 +20,16 @@ from .drive_stage import DriveStageError, remove_staged_job, stage_drive_job
 from .finops_observation import build_video_finops_observation, directory_bytes
 from .result_conformance import ResultConformanceError, verify_result
 from .runner import run_job
-from .runtime_preflight import VideoRuntimeUnavailable, validate_video_runtime
+from .runtime_preflight import VideoRuntimeUnavailable, validate_staged_video, validate_video_runtime
 from .server_review import ServerReviewError, build_server_review
+from .workload_lock import shared_workload_lock
 
 
 ERROR_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
 ERROR_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.]{0,119}$")
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+PRECANARY_STARTUP_PROBE_ENV = "UNIVERSAL_VIDEO_PRECANARY_STARTUP_PROBE"
+PRECANARY_SPOOL_ROOT = Path("/tmp/issue881/spool")
 RUNTIME_ATTESTATION_FIELDS = frozenset({
     "schema", "job_id", "request_commit", "requested_runtime_commit",
     "installed_runtime_commit", "observed_job_runtime_commit", "profile",
@@ -153,13 +157,54 @@ def _runtime_attestation(
     }
 
 
-def write_resident_status(spool_root: Path, status_path: Path) -> dict[str, Any]:
+def _process_start_ticks(process_id: int) -> int:
+    """Return Linux boot-relative start ticks for one exact process."""
+
+    stat_path = Path("/proc/self/stat") if process_id == os.getpid() else Path(f"/proc/{process_id}/stat")
+    raw = stat_path.read_text(encoding="utf-8")
+    tail = raw.rsplit(")", 1)
+    if len(tail) != 2:
+        raise RuntimeError("resident process stat is malformed")
+    fields = tail[1].split()
+    if len(fields) <= 19:
+        raise RuntimeError("resident process stat is incomplete")
+    value = int(fields[19])
+    if value <= 0:
+        raise RuntimeError("resident process start ticks are invalid")
+    return value
+
+
+def write_resident_status(
+    spool_root: Path,
+    status_path: Path,
+    *,
+    resident_id: str | None = None,
+    process_id: int | None = None,
+    process_started_at_unix: float | None = None,
+    process_start_ticks: int | None = None,
+    process_nonce: str | None = None,
+) -> dict[str, Any]:
     """Publish a fresh v2 status from resident-owned spool receipts."""
 
     paths = _dirs(spool_root)
     installed_runtime = os.getenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "").strip().lower()
     if not HEX40_RE.fullmatch(installed_runtime):
         raise RuntimeError("installed runtime commit is unavailable")
+    resident = (resident_id or os.getenv("UNIVERSAL_VIDEO_RESIDENT_ID", "")).strip().lower()
+    if resident not in {"source", "container"}:
+        raise RuntimeError("resident identity is unavailable")
+    pid = os.getpid() if process_id is None else process_id
+    started_at = time.time() if process_started_at_unix is None else process_started_at_unix
+    start_ticks = _process_start_ticks(pid) if process_start_ticks is None else process_start_ticks
+    nonce = secrets.token_hex(16) if process_nonce is None else process_nonce
+    if type(pid) is not int or pid <= 0:
+        raise RuntimeError("resident process id is invalid")
+    if isinstance(started_at, bool) or not isinstance(started_at, (int, float)):
+        raise RuntimeError("resident process start is invalid")
+    if type(start_ticks) is not int or start_ticks <= 0:
+        raise RuntimeError("resident process start ticks are invalid")
+    if not re.fullmatch(r"^[0-9a-f]{32}$", nonce):
+        raise RuntimeError("resident process nonce is invalid")
     active_jobs = sorted(path.stem for path in paths["running"].glob("*.json"))[:32]
     candidates: list[tuple[float, dict[str, Any]]] = []
     for path in paths["done"].glob("*.json"):
@@ -185,6 +230,11 @@ def write_resident_status(spool_root: Path, status_path: Path) -> dict[str, Any]
         "active_jobs": active_jobs,
         "observed_at_unix": time.time(),
         "installed_runtime_commit": installed_runtime,
+        "resident_id": resident,
+        "process_id": pid,
+        "process_started_at_unix": float(started_at),
+        "process_start_ticks": start_ticks,
+        "process_nonce": nonce,
         "job_attestations": attestations,
     }
     status_path.parent.mkdir(parents=True, exist_ok=True)
@@ -318,7 +368,7 @@ def recover_orphaned_jobs(spool_root: Path) -> dict[str, int]:
     }
 
 
-def process_one(spool_root: Path) -> bool:
+def _process_one_locked(spool_root: Path) -> bool:
     paths = _dirs(spool_root)
     candidates: list[tuple[float, str, Path]] = []
     for path in paths["inbox"].glob("*.json"):
@@ -355,6 +405,7 @@ def process_one(spool_root: Path) -> bool:
 
     started = time.monotonic()
     payload: dict | None = None
+    intake_identity: dict | None = None
     staged_job_dir: Path | None = None
     media_root = Path(os.getenv("UNIVERSAL_VIDEO_MEDIA_ROOT", "/opt/bridge-school/universal-video/media"))
     try:
@@ -362,11 +413,21 @@ def process_one(spool_root: Path) -> bool:
         if not valid:
             raise RuntimeError(reason or "invalid claimed spool payload")
         payload = json.loads(claimed.read_text(encoding="utf-8"))
-        validate_video_runtime()
         intake_job = validate_job(payload)
+        intake_identity = {
+            "job_id": intake_job.job_id,
+            "profile": intake_job.profile,
+            "job_hash": canonical_job_hash(intake_job),
+            "source": {
+                "kind": str(intake_job.source.get("kind") or ""),
+                "file_id": str(intake_job.source.get("file_id") or ""),
+            },
+        }
+        validate_video_runtime()
         if intake_job.source.get("kind") == "google_drive":
             _write_progress(paths, intake_job.job_id, "DOWNLOADING_FROM_DRIVE")
             payload, staged_job_dir = stage_drive_job(intake_job, payload, media_root)
+            validate_staged_video(Path(str((payload.get("source") or {}).get("path") or "")))
             _write_progress(paths, intake_job.job_id, "SOURCE_READY_ON_ORACLE")
         validated_job = validate_from_env(payload)
         _write_progress(paths, validated_job.job_id, "PROCESSING")
@@ -466,6 +527,8 @@ def process_one(spool_root: Path) -> bool:
                 error_class=type(exc).__name__,
             ),
         }
+        if intake_identity is not None:
+            failure.update(intake_identity)
         _atomic_write_json(paths["failed"] / source.name, failure)
         if isinstance(payload, dict):
             failed_job_id = str(payload.get("job_id") or "")
@@ -486,27 +549,76 @@ def process_one(spool_root: Path) -> bool:
     return True
 
 
+def process_one(spool_root: Path) -> bool:
+    """Process at most one local job while honoring the attestation fence."""
+
+    with shared_workload_lock(spool_root):
+        return _process_one_locked(spool_root)
+
+
 def run_forever(spool_root: Path, poll_seconds: float) -> None:
-    recovery = recover_orphaned_jobs(spool_root)
-    if any(recovery.values()):
-        print(json.dumps({"event": "spool_recovery", **recovery}, sort_keys=True), flush=True)
     status_path = Path(
         os.getenv(
             "UNIVERSAL_VIDEO_STATUS_PATH",
             "/run/bridge-school/universal-video-status.json",
         )
     )
+    resident_id = os.getenv("UNIVERSAL_VIDEO_RESIDENT_ID", "").strip().lower()
+    process_id = os.getpid()
+    process_started_at_unix = time.time()
+    process_start_ticks = _process_start_ticks(process_id)
+    process_nonce = secrets.token_hex(16)
+    status_identity = {
+        "resident_id": resident_id,
+        "process_id": process_id,
+        "process_started_at_unix": process_started_at_unix,
+        "process_start_ticks": process_start_ticks,
+        "process_nonce": process_nonce,
+    }
+    # Both resident implementations share this spool. Serialize startup
+    # recovery on the common fence before either process advertises readiness.
+    with shared_workload_lock(spool_root, exclusive=True):
+        recovery = recover_orphaned_jobs(spool_root)
+        if any(recovery.values()):
+            print(json.dumps({"event": "spool_recovery", **recovery}, sort_keys=True), flush=True)
+    # Publish resident readiness before accepting a potentially long queued job.
+    write_resident_status(spool_root, status_path, **status_identity)
     while True:
         processed = process_one(spool_root)
-        write_resident_status(spool_root, status_path)
+        queue_configured = bool(
+            os.getenv("BRIDGE_VIDEO_QUEUE_DATABASE_URL", "").strip()
+            or os.getenv("BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE", "").strip()
+            or os.getenv("BRIDGE_WORKER_DATABASE_URL", "").strip()
+        )
+        if not processed and queue_configured:
+            from .neon_worker import process_one_neon
+
+            processed = process_one_neon()
+        write_resident_status(spool_root, status_path, **status_identity)
         if processed:
             continue
+        time.sleep(poll_seconds)
+
+
+def _run_precanary_startup_probe(spool_root: Path, poll_seconds: float) -> None:
+    """Publish startup identity without recovering or polling any job."""
+
+    if spool_root != PRECANARY_SPOOL_ROOT:
+        raise RuntimeError("pre-canary startup probe spool is not isolated")
+    paths = _dirs(spool_root)
+    if any(any(path.iterdir()) for path in paths.values()):
+        raise RuntimeError("pre-canary startup probe spool is not empty")
+    write_resident_status(spool_root, Path(os.environ["UNIVERSAL_VIDEO_STATUS_PATH"]))
+    while True:
         time.sleep(poll_seconds)
 
 
 def main() -> None:
     root = Path(os.getenv("UNIVERSAL_VIDEO_SPOOL_ROOT", "/opt/bridge-school/universal-video/spool"))
     poll = max(1.0, float(os.getenv("UNIVERSAL_VIDEO_POLL_SECONDS", "2")))
+    if os.getenv(PRECANARY_STARTUP_PROBE_ENV, "") == "1":
+        _run_precanary_startup_probe(root, poll)
+        return
     run_forever(root, poll)
 
 

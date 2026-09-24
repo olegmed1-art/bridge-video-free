@@ -18,7 +18,14 @@ permissions:
   issues: write
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('uv-sidecar-repair-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  group: >-
+    ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+        'oracle-instance-workload-mutation' ||
+        github.event_name == 'issue_comment' &&
+        github.event.comment.user.login == 'olegmed1-art' &&
+        github.event.comment.body == '/oracle uv-sidecar-repair' &&
+        'oracle-instance-workload-mutation' ||
+        format('uv-sidecar-repair-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -46,7 +53,7 @@ jobs:
           PY
 
   repair:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'issue_comment' && github.event.comment.user.login == 'olegmed1-art' && github.event.comment.body == '/oracle uv-sidecar-repair') }}
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'issue_comment' && github.event.comment.user.login == 'olegmed1-art' && github.event.comment.body == '/oracle uv-sidecar-repair') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:

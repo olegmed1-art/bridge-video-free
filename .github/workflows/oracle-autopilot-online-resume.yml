@@ -1,0 +1,428 @@
+name: Oracle Autopilot online resume
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-autopilot-online-resume.yml'
+      - 'database/migrations/0312_autopilot_deployment_resume.sql'
+      - 'database/rollbacks/0312_autopilot_deployment_resume.sql'
+      - 'database/tests/312_autopilot_deployment_resume.sql'
+      - 'tests/test_oracle_autopilot_online_resume.py'
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - 'ops/oracle-autopilot-online-resume-requests/*.json'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Validate one-shot resume contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'pytest==8.4.2'
+          python -m pytest -q tests/test_oracle_autopilot_online_resume.py
+
+  resume:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    concurrency:
+      group: oracle-instance-workload-mutation
+      cancel-in-progress: false
+    environment: database-production
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      EXPECTED_DEPLOYED_REVISION: 9064044d4c5b85803c6778060dff4843111ab888
+      EXPECTED_STAGING_RUN_ID: '33586404964'
+      EXPECTED_ACTIVATION_RUN_ID: '33586501046'
+      EXPECTED_TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj
+      EXPECTED_PRODUCTION_BRANCH_ID: br-wispy-lab-b1rq54of
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate exact one-shot resume request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | sort -u)
+          [[ ${#changed[@]} -eq 1 ]] || { echo 'resume commit must change exactly one file' >&2; exit 1; }
+          [[ "${changed[0]}" =~ ^ops/oracle-autopilot-online-resume-requests/[^/]+\.json$ ]] \
+            || { echo 'unexpected resume request path' >&2; exit 1; }
+          REQUEST_FILE="${changed[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+
+          request = json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(request) == {
+              'request_id', 'action', 'target_host', 'source_revision',
+              'deployment_revision', 'staging_run_id', 'activation_run_id',
+              'deployment_canary_task_id', 'resume_key',
+              'resume_receipt_proof_sha256', 'activation_scope',
+              'expected_circuit_code', 'temp_branch_id',
+              'production_branch_id', 'max_tasks_per_hour',
+              'no_instance_stop', 'no_worker_restart',
+              'no_observer_restart', 'production_mutation',
+          }
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', request['request_id'])
+          assert request['action'] == 'resume_online_pilot'
+          assert request['target_host'] == os.environ['ORACLE_HOST']
+          assert re.fullmatch(r'[0-9a-f]{40}', request['source_revision'])
+          assert request['deployment_revision'] == os.environ['EXPECTED_DEPLOYED_REVISION']
+          assert str(request['staging_run_id']) == os.environ['EXPECTED_STAGING_RUN_ID']
+          assert str(request['activation_run_id']) == os.environ['EXPECTED_ACTIVATION_RUN_ID']
+          assert re.fullmatch(
+              r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+              request['deployment_canary_task_id'],
+          )
+          assert request['resume_key'] == 'online-stale-running-deployment-resume-20260902-v1'
+          assert re.fullmatch(r'[0-9a-f]{64}', request['resume_receipt_proof_sha256'])
+          assert request['activation_scope'] == 'SHADOW_ONLY'
+          assert request['expected_circuit_code'] == 'ONLINE_STALE_RUNNING'
+          assert request['temp_branch_id'] == os.environ['EXPECTED_TEMP_BRANCH_ID']
+          assert request['production_branch_id'] == os.environ['EXPECTED_PRODUCTION_BRANCH_ID']
+          assert request['temp_branch_id'] != request['production_branch_id']
+          assert request['max_tasks_per_hour'] == 720
+          assert request['no_instance_stop'] is True
+          assert request['no_worker_restart'] is True
+          assert request['no_observer_restart'] is True
+          assert request['production_mutation'] is False
+          for key in (
+              'request_id', 'source_revision', 'deployment_canary_task_id',
+              'resume_receipt_proof_sha256',
+          ):
+              print(f'{key}={request[key]}')
+          PY
+          source_revision="$(python -c \
+            'import json,sys; print(json.load(open(sys.argv[1]))["source_revision"])' \
+            "${changed[0]}")"
+          [[ "$(git rev-parse "$GITHUB_SHA^")" == "$source_revision" ]] \
+            || { echo 'resume source must be the request parent' >&2; exit 1; }
+
+      - name: Verify pinned Oracle identity and SSH access
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/oracle-autopilot-resume-known-hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Archive local circuit marker and observe first resumed PASS
+        id: resume
+        shell: bash
+        env:
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          SOURCE_REVISION: ${{ steps.request.outputs.source_revision }}
+          DEPLOYMENT_CANARY_TASK_ID: ${{ steps.request.outputs.deployment_canary_task_id }}
+          RESUME_PROOF_SHA256: ${{ steps.request.outputs.resume_receipt_proof_sha256 }}
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env REQUEST_ID='$REQUEST_ID' SOURCE_REVISION='$SOURCE_REVISION' EXPECTED_DEPLOYED_REVISION='$EXPECTED_DEPLOYED_REVISION' EXPECTED_STAGING_RUN_ID='$EXPECTED_STAGING_RUN_ID' EXPECTED_ACTIVATION_RUN_ID='$EXPECTED_ACTIVATION_RUN_ID' EXPECTED_TEMP_BRANCH_ID='$EXPECTED_TEMP_BRANCH_ID' EXPECTED_PRODUCTION_BRANCH_ID='$EXPECTED_PRODUCTION_BRANCH_ID' DEPLOYMENT_CANARY_TASK_ID='$DEPLOYMENT_CANARY_TASK_ID' RESUME_PROOF_SHA256='$RESUME_PROOF_SHA256' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          worker=school-autopilot-shadow.service
+          observer=school-autopilot-online-observer.service
+          state_dir=/var/lib/school-autopilot-online-observer
+          marker="$state_dir/circuit-open.json"
+          archive_dir="$state_dir/resumed"
+          archive="$archive_dir/$REQUEST_ID-$RESUME_PROOF_SHA256.json"
+
+          [[ "$EXPECTED_TEMP_BRANCH_ID" != "$EXPECTED_PRODUCTION_BRANCH_ID" ]]
+          [[ "$(systemctl is-active "$worker")" == active ]]
+          [[ "$(systemctl is-enabled "$worker")" == enabled ]]
+          [[ "$(systemctl is-active "$observer")" == active ]]
+          [[ "$(systemctl is-enabled "$observer")" == enabled ]]
+          worker_pid_before="$(systemctl show -p MainPID --value "$worker")"
+          worker_restarts_before="$(systemctl show -p NRestarts --value "$worker")"
+          observer_pid_before="$(systemctl show -p MainPID --value "$observer")"
+          observer_restarts_before="$(systemctl show -p NRestarts --value "$observer")"
+          [[ "$worker_pid_before" =~ ^[1-9][0-9]*$ ]]
+          [[ "$observer_pid_before" =~ ^[1-9][0-9]*$ ]]
+          [[ "$(readlink -f /opt/bridge-school/school-autopilot/current)" == \
+             "/opt/bridge-school/school-autopilot/releases/$EXPECTED_DEPLOYED_REVISION" ]]
+          [[ -f "$marker" && ! -L "$marker" ]]
+          [[ "$(stat -c '%U:%G:%a' "$marker")" == 'school-autopilot:school-autopilot:600' ]]
+          MARKER="$marker" EXPECTED_CIRCUIT_CODE=ONLINE_STALE_RUNNING \
+            python3 - <<'PY'
+          import json
+          import os
+
+          payload = json.load(open(os.environ['MARKER'], encoding='utf-8'))
+          assert payload['circuit_open'] is True, payload
+          assert payload['finding_code'] == os.environ['EXPECTED_CIRCUIT_CODE'], payload
+          PY
+
+          baseline="$(OBSERVER_PID="$observer_pid_before" \
+            /opt/bridge-school/school-autopilot/.venv/bin/python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          import psycopg
+          from psycopg.rows import dict_row
+
+          pattern = re.compile(
+              r'^[A-Z0-9_]*(?:DATABASE_URL|POSTGRES_URL|DIRECT_URL|NEON_DSN|DATABASE_DSN)[A-Z0-9_]*$'
+          )
+          entries = Path(f"/proc/{os.environ['OBSERVER_PID']}/environ").read_bytes().split(b'\0')
+          candidates = set()
+          for entry in entries:
+              if b'=' not in entry:
+                  continue
+              key_bytes, value_bytes = entry.split(b'=', 1)
+              key = key_bytes.decode('ascii', errors='ignore')
+              if pattern.fullmatch(key) and value_bytes.startswith((b'postgres://', b'postgresql://')):
+                  candidates.add(value_bytes.decode('utf-8', errors='strict'))
+          assert 1 <= len(candidates) <= 16
+          valid = []
+          for dsn in candidates:
+              try:
+                  with psycopg.connect(
+                      dsn,
+                      autocommit=True,
+                      connect_timeout=10,
+                      application_name='autopilot-online-resume-preflight',
+                      row_factory=dict_row,
+                  ) as conn:
+                      with conn.cursor() as cur:
+                          cur.execute(
+                              "SELECT current_user AS db_user, "
+                              "current_setting('neon.project_id', true) AS project_id, "
+                              "current_setting('neon.branch_id', true) AS branch_id"
+                          )
+                          identity = cur.fetchone()
+                          if identity != {
+                              'db_user': 'autopilot_runtime_login',
+                              'project_id': 'misty-poetry-18012774',
+                              'branch_id': os.environ['EXPECTED_TEMP_BRANCH_ID'],
+                          }:
+                              continue
+                          cur.execute('SELECT * FROM autopilot.online_resume_status()')
+                          valid.append(cur.fetchone())
+              except psycopg.Error:
+                  continue
+          assert len(valid) == 1
+          row = valid[0]
+          assert row['resume_status'] == 'RESUMED_SHADOW_ONLY', row
+          assert row['deployment_revision_sha'] == os.environ['EXPECTED_DEPLOYED_REVISION'], row
+          assert row['staging_run_id'] == int(os.environ['EXPECTED_STAGING_RUN_ID']), row
+          assert row['activation_run_id'] == int(os.environ['EXPECTED_ACTIVATION_RUN_ID']), row
+          assert str(row['deployment_canary_task_id']) == os.environ['DEPLOYMENT_CANARY_TASK_ID'], row
+          assert row['receipt_proof_sha256'] == os.environ['RESUME_PROOF_SHA256'], row
+          assert row['circuit_open'] is False, row
+          assert row['circuit_reason_code'] is None, row
+          assert row['active_task_count'] == 0, row
+          assert row['stale_running_count'] == 0, row
+          assert row['nonzero_cost_task_count'] == 0, row
+          assert row['unsafe_terminal_task_count'] == 0, row
+          print(f"{row['created_count']}|{row['pass_count']}|{row['finding_count']}")
+          PY
+          )"
+          IFS='|' read -r created_before pass_before findings_before <<<"$baseline"
+          [[ "$created_before" =~ ^[0-9]+$ && "$pass_before" =~ ^[0-9]+$ ]]
+          [[ "$findings_before" == 1 ]]
+
+          install -d -m 0750 -o school-autopilot -g school-autopilot "$archive_dir"
+          [[ ! -e "$archive" ]]
+          resume_pass=0
+          restore_marker() {
+            rc=$?
+            trap - EXIT
+            if [[ "$resume_pass" != 1 && ! -e "$marker" && -f "$archive" ]]; then
+              mv -- "$archive" "$marker"
+            fi
+            exit "$rc"
+          }
+          trap restore_marker EXIT
+          mv -- "$marker" "$archive"
+
+          OBSERVER_PID="$observer_pid_before" CREATED_BEFORE="$created_before" PASS_BEFORE="$pass_before" \
+            /opt/bridge-school/school-autopilot/.venv/bin/python - <<'PY'
+          import os
+          import re
+          import time
+          from pathlib import Path
+
+          import psycopg
+          from psycopg.rows import dict_row
+
+          created_before = int(os.environ['CREATED_BEFORE'])
+          pass_before = int(os.environ['PASS_BEFORE'])
+          pattern = re.compile(
+              r'^[A-Z0-9_]*(?:DATABASE_URL|POSTGRES_URL|DIRECT_URL|NEON_DSN|DATABASE_DSN)[A-Z0-9_]*$'
+          )
+          entries = Path(f"/proc/{os.environ['OBSERVER_PID']}/environ").read_bytes().split(b'\0')
+          candidates = set()
+          for entry in entries:
+              if b'=' not in entry:
+                  continue
+              key_bytes, value_bytes = entry.split(b'=', 1)
+              key = key_bytes.decode('ascii', errors='ignore')
+              if pattern.fullmatch(key) and value_bytes.startswith((b'postgres://', b'postgresql://')):
+                  candidates.add(value_bytes.decode('utf-8', errors='strict'))
+          selected = None
+          for dsn in candidates:
+              try:
+                  conn = psycopg.connect(
+                      dsn,
+                      autocommit=True,
+                      connect_timeout=10,
+                      application_name='autopilot-online-resume-observer',
+                      row_factory=dict_row,
+                  )
+                  with conn.cursor() as cur:
+                      cur.execute(
+                          "SELECT current_user AS db_user, "
+                          "current_setting('neon.project_id', true) AS project_id, "
+                          "current_setting('neon.branch_id', true) AS branch_id"
+                      )
+                      identity = cur.fetchone()
+                  if identity == {
+                      'db_user': 'autopilot_runtime_login',
+                      'project_id': 'misty-poetry-18012774',
+                      'branch_id': os.environ['EXPECTED_TEMP_BRANCH_ID'],
+                  }:
+                      assert selected is None
+                      selected = conn
+                  else:
+                      conn.close()
+              except psycopg.Error:
+                  continue
+          assert selected is not None
+          deadline = time.monotonic() + 90
+          with selected as conn:
+              while time.monotonic() < deadline:
+                  with conn.cursor() as cur:
+                      cur.execute('SELECT * FROM autopilot.online_resume_status()')
+                      row = cur.fetchone()
+                  assert row['circuit_open'] is False, row
+                  assert row['stale_running_count'] == 0, row
+                  assert row['active_task_count'] <= 1, row
+                  assert row['nonzero_cost_task_count'] == 0, row
+                  assert row['unsafe_terminal_task_count'] == 0, row
+                  assert row['finding_count'] == 1, row
+                  if (
+                      row['created_count'] >= created_before + 1
+                      and row['pass_count'] >= pass_before + 1
+                  ):
+                      print(f"AUTOPILOT_RESUME_CREATED_COUNT={row['created_count']}")
+                      print(f"AUTOPILOT_RESUME_PASS_COUNT={row['pass_count']}")
+                      print(f"AUTOPILOT_RESUME_ACTIVE_COUNT={row['active_task_count']}")
+                      break
+                  time.sleep(1)
+              else:
+                  raise RuntimeError('AUTOPILOT_RESUME_FIRST_PASS_TIMEOUT')
+          PY
+
+          HEARTBEAT="$state_dir/heartbeat.json" python3 - <<'PY'
+          import json
+          import os
+          from datetime import UTC, datetime, timedelta
+
+          payload = json.load(open(os.environ['HEARTBEAT'], encoding='utf-8'))
+          updated = datetime.fromisoformat(payload['updated_at'].replace('Z', '+00:00'))
+          assert updated >= datetime.now(UTC) - timedelta(seconds=30), payload
+          assert payload['runtime_mode'] == 'SHADOW_ONLY', payload
+          assert payload['action'] in {
+              'CREATED', 'MONITORING', 'QUEUE_BUSY',
+              'INTERVAL_HOLD', 'RATE_HOLD',
+          }, payload
+          assert payload['circuit_open'] is False, payload
+          assert payload['finding_count'] == 1, payload
+          PY
+
+          [[ ! -e "$marker" && -f "$archive" ]]
+          [[ "$(systemctl show -p MainPID --value "$worker")" == "$worker_pid_before" ]]
+          [[ "$(systemctl show -p NRestarts --value "$worker")" == "$worker_restarts_before" ]]
+          [[ "$(systemctl show -p MainPID --value "$observer")" == "$observer_pid_before" ]]
+          [[ "$(systemctl show -p NRestarts --value "$observer")" == "$observer_restarts_before" ]]
+          resume_pass=1
+          trap - EXIT
+          echo 'AUTOPILOT_ONLINE_RESUME_PASS'
+          echo 'AUTOPILOT_RUNTIME_MODE=SHADOW_ONLY'
+          echo 'AUTOPILOT_WORKER_RESTARTED=NO'
+          echo 'AUTOPILOT_OBSERVER_RESTARTED=NO'
+          echo 'AUTOPILOT_PRODUCTION_MUTATIONS=NO'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          REMOTE
+
+      - name: Verify DDS3 non-regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          READY_JSON="$(curl -fsS --retry 3 --retry-delay 3 --max-time 20 "https://$ORACLE_HOST/readyz")" \
+            python - <<'PY'
+          import json
+          import os
+
+          payload = json.loads(os.environ['READY_JSON'])
+          assert payload.get('status') == 'ready', payload
+          assert payload.get('engine') == 'DDS3', payload
+          assert payload.get('fallback_used') is False, payload
+          print('AUTOPILOT_ONLINE_RESUME_DDS3_NONREGRESSION_PASS')
+          PY
+
+      - name: Publish safe resume summary
+        if: ${{ always() }}
+        shell: bash
+        env:
+          RESUME_OUTCOME: ${{ steps.resume.outcome }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+        run: |
+          {
+            echo '### Oracle Autopilot online resume'
+            echo "- request: ${REQUEST_ID:-unresolved}"
+            echo "- resume: ${RESUME_OUTCOME:-not-run}"
+            echo '- runtime: `SHADOW_ONLY`'
+            echo '- local marker: archived only after DB receipt PASS'
+            echo '- worker restarted: `NO`'
+            echo '- observer restarted: `NO`'
+            echo '- Oracle instance stop requested: `NO`'
+            echo '- production mutations: `NO`'
+            echo '- model calls / task cost: `0`'
+          } >> "$GITHUB_STEP_SUMMARY"

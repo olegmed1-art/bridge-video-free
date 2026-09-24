@@ -113,3 +113,28 @@ def test_installer_quiesces_worker_before_root_base_migration():
     exact_name = "install_universal_video_" + "dia" + "na11_operator.sh"
     exact_installer = (ROOT / "ops" / exact_name).read_text(encoding="utf-8")
     assert 'PYTHONDONTWRITEBYTECODE=1 "$RUNTIME_PYTHON"' not in exact_installer
+
+
+def test_installer_provisions_and_smoke_checks_minimal_speaker_runtime():
+    installer = (ROOT / "ops/oracle_universal_video_install.sh").read_text(encoding="utf-8")
+    requirements = (ROOT / "requirements-universal-video-speaker.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert '-r "$SOURCE_DIR/requirements-universal-video-speaker.txt"' in installer
+    assert "from universal_video.speaker_structure import run_speaker_structure" in installer
+    assert "import numpy" in installer
+    assert "numpy==2.3.2" in requirements
+    assert "sherpa-onnx" not in requirements
+
+
+def test_installer_root_provisions_worker_readable_workload_lock_before_activation():
+    installer = (ROOT / "ops/oracle_universal_video_install.sh").read_text(encoding="utf-8")
+
+    provision = installer.index('WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"')
+    metadata = installer.index("root:$GROUP_NAME:640:1", provision)
+    readable = installer.index('runuser -u "$USER_NAME" -- test -r "$WORKLOAD_LOCK"', metadata)
+    activation = installer.index('systemctl enable "$SERVICE_NAME"', readable)
+    assert provision < metadata < readable < activation
+    assert '[[ -f "$WORKLOAD_LOCK" && ! -L "$WORKLOAD_LOCK" ]]' in installer
+    assert 'unsafe workload lock link count' in installer

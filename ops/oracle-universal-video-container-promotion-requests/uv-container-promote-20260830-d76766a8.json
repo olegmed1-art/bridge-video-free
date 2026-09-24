@@ -1,0 +1,6 @@
+{
+  "request_id": "uv-container-promote-20260830-d76766a8",
+  "expected_commit": "d76766a89a1f266e8f8115ce190f08adaabd2843",
+  "evidence_run_id": 33300984893,
+  "image_digest": "sha256:00e779f9f1807292bdd2d8d96ae945d8f7f3ec8272258bf5a397f49b8417849b"
+}

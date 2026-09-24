@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bridge-school.example/schemas/evolutionary-course-learning-module-v1.schema.json",
+  "title": "Evolutionary Course learning module v1",
+  "type": "object",
+  "required": ["schema", "module_id", "module_version", "primary_skill_id", "prerequisite_skill_ids", "explanations", "demonstrations", "exercises", "typical_errors", "mastery_criteria_source", "remedial_path", "review_state", "authority"],
+  "properties": {
+    "schema": {"const": "evolutionary-course-learning-module-v1"},
+    "module_id": {"type": "string"},
+    "module_version": {"type": "string"},
+    "primary_skill_id": {"type": "string", "pattern": "^candidate\\.skill\\."},
+    "prerequisite_skill_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "explanations": {"type": "array", "minItems": 1},
+    "demonstrations": {"type": "array"},
+    "exercises": {"type": "object", "required": ["RECOGNITION", "SUPPORTED", "INDEPENDENT", "TRANSFER"]},
+    "typical_errors": {"type": "array"},
+    "mastery_criteria_source": {"type": "object"},
+    "remedial_path": {"type": "array"},
+    "review_state": {"enum": ["DRAFT", "REVIEW_REQUIRED"]},
+    "authority": {"type": "object"}
+  },
+  "additionalProperties": false
+}

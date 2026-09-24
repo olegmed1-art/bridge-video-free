@@ -1,0 +1,26 @@
+{
+  "request_id": "diana14-video31-container-e2e-20260830-02",
+  "issue": 634,
+  "job": {
+    "job_id": "diana14-video31-container-e2e-20260830-02",
+    "profile": "bridge_lesson",
+    "source": {
+      "kind": "google_drive",
+      "file_id": "1Hs9rItDk1tsU0nL7vl7A1HF9NHgBU8dr",
+      "name": "Диана 14.mp4"
+    },
+    "project": "Школа спортивного бриджа",
+    "metadata": {
+      "human_requested": true,
+      "purpose": "Video 3.1 FREE container end-to-end evidence for Диана 14 after operator-sync repair",
+      "requested_runtime_commit": "66b4c397d1c2bd06592d02f359df8241aabc57c3",
+      "prior_request_id": "diana14-video31-container-e2e-20260830-01",
+      "prior_failure_code": "UV_SUBMIT_COMMAND_FAILED"
+    },
+    "options": {
+      "chunk_seconds": 600,
+      "max_source_bytes": 2147483648,
+      "max_duration_seconds": 43200
+    }
+  }
+}

@@ -1,6 +1,10 @@
 {
   "schema": "bridge-decision-dependencies-v1",
   "dependencies": {
+    "cv2": {
+      "kind": "infrastructure",
+      "policy": "OpenCV provides deterministic local image decode, registration, template matching and pixel geometry only; no remote model or hidden-information source is allowed, and recognizer outputs remain subject to evidence and fail-closed gates."
+    },
     "faster_whisper": {
       "kind": "model",
       "policy": "Allowed only as raw ASR base. Bridge semantics, corrections and canonical facts must be produced by school-owned post-processing and evidence rules."
@@ -13,13 +17,25 @@
       "kind": "infrastructure",
       "policy": "Authentication and Google Drive transport only; must not make bridge-content decisions."
     },
-    "requests": {
+    "numpy": {
       "kind": "infrastructure",
-      "policy": "HTTP transport only; must not make bridge-content decisions."
+      "policy": "NumPy provides deterministic local array, numeric and linear-algebra operations only; it must not supply external bridge knowledge, hidden cards or canonical promotion authority."
+    },
+    "psycopg": {
+      "kind": "infrastructure",
+      "policy": "PostgreSQL queue transport, atomic leasing and receipt persistence only; must not make bridge-content or canonical decisions."
     },
     "reportlab": {
       "kind": "infrastructure",
       "policy": "PDF presentation only; it must render supplied evidence classes without creating card, auction, reconstruction or canon decisions."
+    },
+    "requests": {
+      "kind": "infrastructure",
+      "policy": "HTTP transport only; must not make bridge-content decisions."
+    },
+    "sherpa_onnx": {
+      "kind": "model",
+      "policy": "Offline speaker segmentation and anonymous embedding inference only. The Oracle container disables the unpinned NeMo compatibility path and uses only the two exact checksum-pinned artifacts; sherpa-onnx must not assign real-person identity or make bridge-content or canonical decisions."
     }
   }
 }

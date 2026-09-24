@@ -23,6 +23,7 @@ from .db import DatabaseConfigurationError, EXPECTED_PRINCIPAL, connect
 from .dds3 import DDSUnavailable, solve_table
 from .dds3.readiness import engine_readiness
 from .dds3.remote import RemoteDDS3Config, compute_remote, remote_engine_readiness
+from .knowledge import router as knowledge_router
 
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
 ASSISTANT_LAB_DISPATCHER = "vercel-capability-v1"
@@ -59,6 +60,9 @@ def require_api_token(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="missing bearer token")
     if not secrets.compare_digest(authorization[len(prefix):], configured):
         raise HTTPException(status_code=403, detail="invalid bearer token")
+
+
+app.include_router(knowledge_router, dependencies=[Depends(require_api_token)])
 
 
 class DDS3TableRequest(BaseModel):

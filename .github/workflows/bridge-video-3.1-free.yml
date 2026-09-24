@@ -7,6 +7,15 @@ on:
         description: "Opaque deterministic job id"
         required: true
         type: string
+      algorithm_revision:
+        description: "Bounded manual validation revision; push-triggered production remains r26.3"
+        required: false
+        default: "3.1-free-r26.3"
+        type: choice
+        options:
+          - "3.1-free-r26.3"
+          - "3.1-free-r26.4"
+          - "3.1-free-r26.5"
       output_folder_id:
         description: "Optional Drive folder for derived outputs; source video is never moved"
         required: false
@@ -51,7 +60,7 @@ jobs:
       BRIDGE_LARGER_RUNNER: "false"
       BRIDGE_PAID_CLOUD: "false"
       BRIDGE_BILLING_FALLBACK: "false"
-      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.16"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r26.3"
       BRIDGE_DIARIZATION_ENABLED: "true"
       PYTHONUNBUFFERED: "1"
       WHISPER_MODEL: small
@@ -62,6 +71,20 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
+
+      - name: Select bounded manual validation revision
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.algorithm_revision == '3.1-free-r26.4' }}
+        shell: bash
+        run: echo 'BRIDGE_REQUESTED_ALGORITHM_REVISION=3.1-free-r26.4' >> "$GITHUB_ENV"
+
+      - name: Select bounded ASR reconstruction validation revision
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.algorithm_revision == '3.1-free-r26.5' }}
+        shell: bash
+        run: echo 'BRIDGE_REQUESTED_ALGORITHM_REVISION=3.1-free-r26.5' >> "$GITHUB_ENV"
+
+      - name: Enforce single active production compute route
+        shell: bash
+        run: python ops/validate_universal_video_runtime_routing.py --require-active github_actions_legacy
 
       - name: Resolve job and Diana longitudinal context
         shell: bash
@@ -81,6 +104,7 @@ jobs:
           LESSON_DATE_CANDIDATE=""
           LESSON_DATE_SOURCE=""
           LESSON_DATE_EVIDENCE_JSON=""
+          REQUESTED_ALGORITHM_REVISION=""
           PERSIST_DATABASE="false"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             JOB_ID="$INPUT_JOB_ID"
@@ -102,6 +126,7 @@ jobs:
             LESSON_DATE_CANDIDATE="$(sed -n 's/^LESSON_DATE_CANDIDATE=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
             LESSON_DATE_SOURCE="$(sed -n 's/^LESSON_DATE_SOURCE=//p' "$REQUEST_FILE" | tail -n 1)"
             LESSON_DATE_EVIDENCE_JSON="$(sed -n 's/^LESSON_DATE_EVIDENCE_JSON=//p' "$REQUEST_FILE" | tail -n 1)"
+            REQUESTED_ALGORITHM_REVISION="$(sed -n 's/^ALGORITHM_REVISION=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
             PERSIST_DATABASE="$(sed -n 's/^PERSIST_DATABASE=//p' "$REQUEST_FILE" | tail -n 1 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
             PERSIST_DATABASE="${PERSIST_DATABASE:-false}"
             if [ -z "$JOB_ID" ]; then
@@ -113,6 +138,13 @@ jobs:
             *[!0-9a-f]*) echo "invalid opaque job id" >&2; exit 2 ;;
           esac
           test "${#JOB_ID}" -eq 32
+          if [ -n "$REQUESTED_ALGORITHM_REVISION" ]; then
+            case "$REQUESTED_ALGORITHM_REVISION" in
+              3.1-free-r26.4|3.1-free-r26.5) ;;
+              *) echo "unsupported run-request algorithm revision" >&2; exit 2 ;;
+            esac
+            echo "BRIDGE_REQUESTED_ALGORITHM_REVISION=$REQUESTED_ALGORITHM_REVISION" >> "$GITHUB_ENV"
+          fi
           for ID_VALUE in "$OUTPUT_FOLDER_ID" "$WORK_FOLDER_ID" "$ORIGINAL_SOURCE_DRIVE_ID"; do
             if [ -n "$ID_VALUE" ]; then
               case "$ID_VALUE" in
@@ -256,7 +288,13 @@ jobs:
           trap cleanup_heartbeat EXIT
 
           set +e
-          python run_drive_3_1_free_oidc.py
+          if [ "$BRIDGE_REQUESTED_ALGORITHM_REVISION" = "3.1-free-r26.5" ]; then
+            python run_drive_3_1_free_oidc_r265.py
+          elif [ "$BRIDGE_REQUESTED_ALGORITHM_REVISION" = "3.1-free-r26.4" ]; then
+            python run_drive_3_1_free_oidc_r264.py
+          else
+            python run_drive_3_1_free_oidc.py
+          fi
           RC=$?
           set -e
           cleanup_heartbeat
@@ -355,6 +393,6 @@ jobs:
       # TECHNICAL_READY, CONTENT_EXTRACTED and METHODOLOGY_READY/PARTIAL are separate receipts.
       # Candidate database writes go only to the staging layer and never activate canon/profile/course.
       # Durable Neon checkpoints are technical observations only and carry no promotion authority.
-      # Monitor v1 Drive receipts remain an independent external execution witness.
+      # Monitor v1 Drive receipts remain an indepent external execution witness.
       # Speaker diarization v3 runs locally with collapse detection/repair; no gated model token is required.
       # User media/transcripts are never uploaded as GitHub workflow artifacts.

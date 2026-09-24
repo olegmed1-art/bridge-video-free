@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = ROOT / ".github/workflows/oracle-universal-video-job.yml"
+WORKFLOW = ROOT / "tests/fixtures/retired_oracle/oracle-universal-video-job.yml"
 
 
 def test_spool_operations_use_exact_installed_bounded_ssh_surface():

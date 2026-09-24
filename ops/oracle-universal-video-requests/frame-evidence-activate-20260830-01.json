@@ -1,0 +1,9 @@
+{
+  "request_id": "frame-evidence-activate-20260830-01",
+  "mode": "activate",
+  "git_ref": "2d050d3851f8544579b4993a09c31049dc10497b",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}

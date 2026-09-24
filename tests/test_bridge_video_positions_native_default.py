@@ -14,6 +14,22 @@ def test_video_positions_uses_native_engine_and_keeps_legacy_off(tmp_path: Path)
             "job_id": "job-1",
             "source_fingerprint": "src-1",
             "frames": [{"time": 12.5, "file": "frame.jpg", "sha256": "a" * 64}],
+            "frame_evidence": {
+                "schema": "universal-video-frame-evidence-v1",
+                "strategy": "anchor-neighbors-v1",
+                "regions": {
+                    "N": {"x": 0.15, "y": 0.0, "width": 0.7, "height": 0.3},
+                    "E": {"x": 0.7, "y": 0.15, "width": 0.3, "height": 0.7},
+                    "S": {"x": 0.15, "y": 0.7, "width": 0.7, "height": 0.3},
+                    "W": {"x": 0.0, "y": 0.15, "width": 0.3, "height": 0.7},
+                    "CENTER": {"x": 0.25, "y": 0.25, "width": 0.5, "height": 0.5},
+                },
+                "bundles": [{
+                    "bundle_id": "evidence-0001",
+                    "anchor_time": 12.5,
+                    "members": [{"role": "CENTER", "time": 12.5, "offset_seconds": 0, "file": "frame.jpg"}],
+                }],
+            },
         }),
         encoding="utf-8",
     )
@@ -32,3 +48,8 @@ def test_video_positions_uses_native_engine_and_keeps_legacy_off(tmp_path: Path)
     assert record["engine_version"] == "bridge-vision-native-v2"
     assert record["deal"]["hands"]["E"]["cards"] == []
     assert record["deal"]["hands"]["W"]["cards"] == []
+    assert record["frame_evidence"]["memberships"][0]["bundle_id"] == "evidence-0001"
+    assert record["frame_evidence"]["memberships"][0]["role"] == "CENTER"
+    assert record["frame_evidence"]["crop_regions"]["N"]["width"] == 0.7
+    assert summary["frame_evidence_bundle_count"] == 1
+    assert summary["canonical_promotion_allowed"] is False

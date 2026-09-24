@@ -76,18 +76,27 @@ jobs:
               values = tuple(map(int, row))
               if min(values) < 0:
                   raise RuntimeError('invalid idle snapshot')
-              print(','.join(map(str, values)))
+              cur.execute("SELECT to_regclass('video_queue.job_status') IS NOT NULL")
+              if cur.fetchone()[0]:
+                  cur.execute(
+                      "SELECT count(*) FROM video_queue.job_status "
+                      "WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')"
+                  )
+                  video_jobs = int(cur.fetchone()[0])
+              else:
+                  video_jobs = 0
+              print(','.join(map(str, (*values, video_jobs))))
           PY
           )"
-          IFS=, read -r jobs research control <<< "$snapshot"
-          active=$((jobs + research + control))
+          IFS=, read -r jobs research control video_jobs <<< "$snapshot"
+          active=$((jobs + research + control + video_jobs))
 
           uv_active="$(gh api \
             -H 'Accept: application/vnd.github+json' \
             "/repos/$GITHUB_REPOSITORY/actions/workflows/oracle-universal-video-job.yml/runs?per_page=100" \
             | SOURCE_RUN_ID="$SOURCE_RUN_ID" python -c 'import json,os,sys; source=int(os.environ["SOURCE_RUN_ID"]); active={"queued","in_progress","waiting","requested","pending"}; print(sum(1 for run in json.load(sys.stdin).get("workflow_runs",[]) if int(run.get("id",0)) != source and run.get("status") in active))')"
           [[ "$uv_active" =~ ^[0-9]+$ ]]
-          printf 'idle candidate: jobs=%s research=%s control=%s uv_active=%s\n' "$jobs" "$research" "$control" "$uv_active"
+          printf 'idle candidate: jobs=%s research=%s control=%s video_jobs=%s uv_active=%s\n' "$jobs" "$research" "$control" "$video_jobs" "$uv_active"
 
           if (( active == 0 && uv_active == 0 )); then
             echo 'stop_allowed=true' >> "$GITHUB_OUTPUT"

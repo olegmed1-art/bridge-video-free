@@ -1,0 +1,259 @@
+name: Issue 881 Authoritative External Pre-Canary Evidence
+run-name: issue881-precanary/${{ inputs.exact_sha }}/receipt-${{ inputs.approval_receipt_id }}/recover-${{ inputs.recover_container_from_run || 'none' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      exact_sha:
+        description: Exact current main commit to attest after reviewed merge
+        required: true
+        type: string
+      director_go:
+        description: Explicit Director GO for the bounded external pre-canary run
+        required: true
+        type: boolean
+      approval_receipt_id:
+        description: Fresh unedited owner comment on Issue 881 containing the exact one-shot receipt
+        required: true
+        type: string
+      approval_nonce:
+        description: Unique lowercase 64-hex nonce bound by the one-shot receipt
+        required: true
+        type: string
+      recover_container_from_run:
+        description: Optional initial state-bearing failed run whose recorded active container state must be restored
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  exact-external-precanary:
+    if: ${{ inputs.director_go && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      EXACT_SHA: ${{ inputs.exact_sha }}
+      APPROVAL_RECEIPT_ID: ${{ inputs.approval_receipt_id }}
+      APPROVAL_NONCE: ${{ inputs.approval_nonce }}
+      RECOVER_CONTAINER_FROM_RUN: ${{ inputs.recover_container_from_run }}
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      HOST_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.EXACT_SHA }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate exact authoritative head
+        run: |
+          set -euo pipefail
+          [[ "$EXACT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$APPROVAL_RECEIPT_ID" =~ ^[1-9][0-9]{8,19}$ ]]
+          [[ "$APPROVAL_NONCE" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]
+          test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          [[ -z "$RECOVER_CONTAINER_FROM_RUN" || "$RECOVER_CONTAINER_FROM_RUN" =~ ^[0-9]{8,20}$ ]]
+          grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
+          bash -n ops/issue_881_external_precanary_workflow.sh
+          bash -n ops/issue_881_process_video_dispatch_gate.sh
+          bash -n ops/oracle_universal_video_precanary_attest.sh
+          bash -n ops/oracle_universal_video_container_install.sh
+          python3 -m py_compile ops/issue_881_codex_review_gate.py \
+            ops/issue_881_precanary_one_shot.py \
+            ops/issue_881_precanary_queue_proof.py
+          grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS' ops/oracle_universal_video_precanary_attest.sh
+          grep -F '"$image_id" "$@"' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'UNIVERSAL_VIDEO_IMAGE=$image_id' ops/oracle_universal_video_container_install.sh
+          grep -F '"$image_id" true' ops/oracle_universal_video_container_install.sh
+          git show "$EXACT_SHA:ops/oracle_universal_video_run_command.sh" > "$RUNNER_TEMP/prepare.sh"
+          chmod 0700 "$RUNNER_TEMP/prepare.sh"
+          cp ops/oracle_universal_video_precanary_attest.sh "$RUNNER_TEMP/attest.sh"
+          chmod 0700 "$RUNNER_TEMP/attest.sh"
+          : > "$RUNNER_TEMP/issue-881-authoritative-external-evidence.txt"
+
+      - name: Validate fresh one-shot Director receipt
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/issues/comments/$APPROVAL_RECEIPT_ID" \
+            > "$RUNNER_TEMP/precanary-approval-comment.json"
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/runs?event=workflow_dispatch&per_page=100" \
+            > "$RUNNER_TEMP/precanary-workflow-runs.json"
+          if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
+            recovery_source_head="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$RECOVER_CONTAINER_FROM_RUN" \
+              --jq '.head_sha')"
+            [[ "$recovery_source_head" =~ ^[0-9a-f]{40}$ ]]
+            if [[ "$recovery_source_head" != "$EXACT_SHA" ]]; then
+              recovery_main_advance_count="$(git rev-list --first-parent --count \
+                "$recovery_source_head..$EXACT_SHA")"
+              [[ "$recovery_main_advance_count" =~ ^([1-9]|1[0-2])$ ]] \
+                || { echo 'Cross-SHA recovery exceeds the bounded main advance' >&2; exit 1; }
+              [[ "$(git rev-parse "$EXACT_SHA~$recovery_main_advance_count")" == \
+                    "$recovery_source_head" ]] \
+                || { echo 'Cross-SHA recovery source is not on the bounded first-parent path' >&2; exit 1; }
+              mapfile -t recovery_changed_paths < <(
+                git diff --name-only --diff-filter=ACDMRT \
+                  "$recovery_source_head" "$EXACT_SHA"
+              )
+              [[ "${#recovery_changed_paths[@]}" -gt 0 ]]
+              for recovery_changed_path in "${recovery_changed_paths[@]}"; do
+                case "$recovery_changed_path" in
+                  .github/workflows/issue-881-authoritative-external-evidence.yml|\
+                  .github/workflows/issue-881-precanary-evidence.yml|\
+                  ops/issue_881_codex_review_gate.py|\
+                  ops/issue_881_external_precanary_workflow.sh|\
+                  ops/issue_881_precanary_one_shot.py|\
+                  ops/oracle_universal_video_precanary_attest.sh|\
+                  tests/test_issue_881_precanary_hardening.py|\
+                  tests/test_universal_video_issue_881_readiness.py) ;;
+                  *)
+                    echo "Cross-SHA recovery includes an unapproved path: $recovery_changed_path" >&2
+                    exit 1
+                    ;;
+                esac
+              done
+            fi
+          fi
+          python3 ops/issue_881_precanary_one_shot.py verify \
+            --comment-json "$RUNNER_TEMP/precanary-approval-comment.json" \
+            --runs-json "$RUNNER_TEMP/precanary-workflow-runs.json" \
+            --exact-sha "$EXACT_SHA" \
+            --approval-nonce "$APPROVAL_NONCE" \
+            --recover-container-from-run "$RECOVER_CONTAINER_FROM_RUN" \
+            --receipt-id "$APPROVAL_RECEIPT_ID" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --current-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            | tee "$RUNNER_TEMP/precanary-one-shot-marker.txt"
+
+      - name: Verify Oracle is already running
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q oci-cli
+          u="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          f="$(printf '%s\n' "$OCI_FINGERPRINT" | sed -nE 's/^[[:space:]]*(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})[[:space:]]*$/\2/p' | head -n1)"
+          t="$(printf '%s\n' "$OCI_TENANCY" | sed -nE 's/^[[:space:]]*(tenancy=)?(ocid1\.tenancy\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          [[ -n "$u" && -n "$f" && -n "$t" ]]
+          install -d -m 0700 "$RUNNER_TEMP/oci"
+          printf '%s\n' "$OCI_KEY" > "$RUNNER_TEMP/oci/key.pem"
+          chmod 0600 "$RUNNER_TEMP/oci/key.pem"
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s\n' \
+            "$u" "$f" "$t" "$OCI_REGION" "$RUNNER_TEMP/oci/key.pem" > "$RUNNER_TEMP/oci/config"
+          chmod 0600 "$RUNNER_TEMP/oci/config"
+          state="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get \
+            --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+          case "$state" in
+            RUNNING) ;;
+            STOPPED)
+              echo 'Oracle instance is STOPPED; owner restoration and a new explicit Director GO are required' >&2
+              exit 1
+              ;;
+            *)
+              echo "Oracle instance state is unsafe or unknown: $state" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Prepare pinned SSH credential
+        id: ssh
+        run: |
+          set -euo pipefail
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Capture pristine production queue owner baseline
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --no-input -q 'psycopg[binary]==3.3.4'
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_SHA"
+          python3 ops/issue_881_precanary_queue_proof.py owner-before \
+            --output "$RUNNER_TEMP/issue-881-owner-baseline.json" \
+            | tee "$RUNNER_TEMP/issue-881-owner-before-marker.txt"
+
+      - name: Build exact image and attest metadata only under one fence
+        id: external_precanary
+        env:
+          SSH_KEY_FILE: ${{ steps.ssh.outputs.key }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: bash ops/issue_881_external_precanary_workflow.sh
+
+      - name: Verify owner proof preceded resident release
+        if: always()
+        env:
+          EXTERNAL_OUTCOME: ${{ steps.external_precanary.outcome }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/issue-881-authoritative-external-evidence.txt"
+          marker_file="$RUNNER_TEMP/issue-881-owner-after-marker.txt"
+          dispatch_state_file="$RUNNER_TEMP/issue-881-process-video-workflow-state"
+          dispatch_restore_file="$RUNNER_TEMP/issue-881-process-video-restore.txt"
+          expected='UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER project=misty-poetry-18012774 branch=br-wispy-lab-b1rq54of database=neondb principal=neondb_owner schema=true function=true batches=0 jobs=0 events=0 max_event_id=NULL sequence_last_value=1 sequence_is_called=false claimable=0 leased=0 unchanged=true result=PASS'
+          if [[ -e "$dispatch_state_file" || -L "$dispatch_state_file" ]]; then
+            [[ -f "$dispatch_state_file" && ! -L "$dispatch_state_file" ]]
+            [[ -f "$dispatch_restore_file" && ! -L "$dispatch_restore_file" \
+              && "$(stat -c '%a:%h' "$dispatch_restore_file")" == '600:1' ]]
+            dispatch_restore="$(cat "$dispatch_restore_file")"
+            [[ "$dispatch_restore" =~ ^PROCESS_VIDEO_DISPATCH_RESTORE\ initial_state=(active|disabled_manually)\ final_state=(active|disabled_manually)\ result=PASS$ ]]
+            [[ "${BASH_REMATCH[1]}" == "${BASH_REMATCH[2]}" ]]
+            [[ "$(grep -Fxc "$dispatch_restore" "$evidence")" == 1 ]]
+          fi
+          if [[ "$EXTERNAL_OUTCOME" != success ]]; then
+            echo 'UNIVERSAL_VIDEO_PRECANARY_POSTRESTORE_OWNER result=FAILED reason=owner_release_not_proved' \
+              | tee -a "$evidence" "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          [[ -f "$marker_file" && ! -L "$marker_file" \
+            && "$(stat -c '%a:%h' "$marker_file")" == '600:1' ]]
+          postrestore_marker="$(cat "$marker_file")"
+          [[ "$postrestore_marker" == "$expected" ]]
+          [[ "$(grep -Fxc "$expected" "$evidence")" == 1 ]]
+          [[ "$(grep -Fxc 'UNIVERSAL_VIDEO_PRECANARY_OWNER_RELEASE worker_fenced=true owner_snapshot=unchanged result=PASS' "$evidence")" == 1 ]]
+          [[ "$(grep -Fxc 'UNIVERSAL_VIDEO_PRECANARY_DB_ENQUEUE_FENCE tables=batch,job,job_event lock=SHARE owner_release=observed final_snapshot=unchanged result=PASS' "$evidence")" == 1 ]]
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" = "$EXACT_SHA"
+          printf '%s\n' "$postrestore_marker" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: issue-881-authoritative-external-${{ env.EXACT_SHA }}
+          path: ${{ runner.temp }}/issue-881-authoritative-external-evidence.txt
+          if-no-files-found: error
+          retention-days: 14

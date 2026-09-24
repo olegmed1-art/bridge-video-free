@@ -23,6 +23,8 @@ def test_export_entrypoint_is_fixed_root_owned_and_argument_free():
     assert 'mv -f "$request_tmp" "$REQUEST_PATH"' in ENTRY
     assert "runuser -u universal-video" in ENTRY
     assert "universal_video_resident_evidence_export.py" in ENTRY
+    assert "systemctl is-active --quiet universal-video-container.service" in ENTRY
+    assert "legacy universal-video.service is still active" in ENTRY
     assert "eval " not in ENTRY
     assert "bash -c" not in ENTRY
     assert "sh -c" not in ENTRY

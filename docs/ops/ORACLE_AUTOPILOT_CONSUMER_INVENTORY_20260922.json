@@ -1,0 +1,402 @@
+{
+  "source_commit": "2588ee0a26e1b0842bb5f749e6afb4366c076563",
+  "scope": "Known autopilot workflow consumers plus relevant isolated CI; source database fencing is mandatory because historical branches and manual owner tools exist.",
+  "production_switch_completed": false,
+  "workflows": [
+    {
+      "path": ".github/workflows/database-ci.yml",
+      "sha256": "f86c10937f74fa8e71a9bdf72a6ec7e0c2aa2a6b6d77ea93221d0796a1196a7e",
+      "classification": "isolated_ci",
+      "events": [
+        "pull_request",
+        "push"
+      ],
+      "push_branches": [
+        "main"
+      ],
+      "jobs": [
+        "postgres-18-ci"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-production-canary-cleanup-once.yml",
+      "sha256": "ac43671c15685ac8f533d1707470150b9468afe4b21f1d570bf37dc0c659b043",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "pull_request",
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "contract",
+        "cleanup"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-chatgpt-role-callback.yml",
+      "sha256": "eb71e5af2ba29cb255ba82464e3531cd1a8982c527fc7dd6edd2d77d7ac9bf48",
+      "classification": "continuous_autopilot_consumer",
+      "events": [
+        "issue_comment"
+      ],
+      "push_branches": [],
+      "jobs": [
+        "ingest"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-publication-security-ci.yml",
+      "sha256": "39e41a2f3e00a987821150c9786f4cdf869493bd0efef05383bea7fa3ce077d7",
+      "classification": "isolated_ci",
+      "events": [
+        "pull_request"
+      ],
+      "push_branches": [],
+      "jobs": [
+        "focused-python",
+        "postgresql18-publication-chain"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-paused-reconcile.yml",
+      "sha256": "98f5f170bbb4f3c99b6fa199d9893bcc69f3009d4d975fb5639e55bbbf558b52",
+      "classification": "continuous_autopilot_consumer",
+      "events": [
+        "workflow_dispatch",
+        "schedule",
+        "workflow_run"
+      ],
+      "push_branches": [],
+      "jobs": [
+        "reconcile"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-uv-idle-latest-register.yml",
+      "sha256": "44cd64779b2671be97ef0de7a81d9e0facd4ab8c8f95272f2da47420bf9076df",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "register"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-codex-event-callback.yml",
+      "sha256": "88d057b362237a322dc8669ecb1a76ef91f9bbc84b42a5b51c4052d044da2585",
+      "classification": "continuous_autopilot_consumer",
+      "events": [
+        "issue_comment"
+      ],
+      "push_branches": [],
+      "jobs": [
+        "acknowledge",
+        "terminal",
+        "publish"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-reconcile-diagnostic.yml",
+      "sha256": "5758be824abb7a0d139d6ed3b5dd99ce5d425b9bbbf7669605190d8ba66fdce4",
+      "classification": "manual_readonly",
+      "events": [
+        "workflow_dispatch"
+      ],
+      "push_branches": [],
+      "jobs": [
+        "diagnose"
+      ]
+    },
+    {
+      "path": ".github/workflows/oracle-autopilot-rollout.yml",
+      "sha256": "f4a56376d39377b743d0c8f5a0c049f26709f40231b9de5c1c20089fd7f0ca22",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "pull_request",
+        "issue_comment"
+      ],
+      "push_branches": [],
+      "jobs": [
+        "contract",
+        "rollout"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-temp-neon-0306-ibf-acceptance.yml",
+      "sha256": "0c48cdaba54cbeabead026df52ab8a85f359035d89b14e77fdb18ddaa67fd1be",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "accept"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-temp-neon-owner-preflight-once.yml",
+      "sha256": "1b2fb889874c5fd64a6068589e5ea521516f986eab58d49a4f234dc4b0de48c0",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "apply-and-accept"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-mailbox-pre-rotation.yml",
+      "sha256": "ba2999f15a00177067b97482fccde09965d65374badea7d5956ebf0036834268",
+      "classification": "continuous_autopilot_consumer",
+      "events": [
+        "workflow_dispatch",
+        "schedule"
+      ],
+      "push_branches": [],
+      "jobs": [
+        "prepare"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-uv-p1-register-v3.yml",
+      "sha256": "a28583ee1d7aabeb6e0743cc75a49b88559f69f243dfd956cfcc796de0e18a38",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "register"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-readonly-github-schema-once.yml",
+      "sha256": "35935b0b80d2f5de927d5e964a089ffab99e098bafccaa7b2b63659cdec23caa",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "workflow_dispatch"
+      ],
+      "push_branches": [],
+      "jobs": [
+        "apply-readonly-github-schema"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-runtime-role-hardening.yml",
+      "sha256": "c6e01eb688216c1ac5560e0901a5b3c0860c14d8e97a9156738079a2a3590a96",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "pull_request",
+        "issue_comment"
+      ],
+      "push_branches": [],
+      "jobs": [
+        "contract",
+        "harden"
+      ]
+    },
+    {
+      "path": ".github/workflows/oracle-autopilot-staging.yml",
+      "sha256": "4a0794438c8d626dcfc90fe64a5b27ab3773f736176325537774271af2cb9dc0",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "pull_request",
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "contract",
+        "stage"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-role-dispatch-sql-ci.yml",
+      "sha256": "aaaac4dd4342e10738b86ba5c8f4e66f83be1dc9e2191b34e22865abf45b53a3",
+      "classification": "isolated_ci",
+      "events": [
+        "pull_request",
+        "push"
+      ],
+      "push_branches": [
+        "main"
+      ],
+      "jobs": [
+        "live-0302-fails-closed",
+        "current-main-baseline",
+        "migration-0336-roundtrip"
+      ]
+    },
+    {
+      "path": ".github/workflows/oracle-autopilot-production-canary.yml",
+      "sha256": "51194f892540dd836951642bfa86c10c3c39b2716f5da0a848415f4aaa6212f2",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "pull_request",
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "contract",
+        "canary"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-temp-neon-0308-structured-artifact-once.yml",
+      "sha256": "c8ae5fdeb043a4d0ed575662f1906f091fe76d4023f6715fe791222231224e18",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "pull_request",
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "contract",
+        "apply-temporary-only"
+      ]
+    },
+    {
+      "path": ".github/workflows/oracle-idle-host-inventory.yml",
+      "sha256": "22e53d7e9686fa1c0dbe7c1de22aca0347dbff437410438958987a420874d16f",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "push"
+      ],
+      "push_branches": [
+        "autopilot/oracle-idle-stop-guard-627-v2"
+      ],
+      "jobs": [
+        "inventory"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-oracle-runtime-diagnostics-once.yml",
+      "sha256": "55454c016699091dddd4a18ddd2452c756ac3fff76742ec5b01a02d19ca6c032",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "diagnose"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-uv-p1-register.yml",
+      "sha256": "37420d581c50259355a26846ff5abbc4c5ea2845f7831ef0ec14043453f953f5",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "register"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-uv-p1-register-v2.yml",
+      "sha256": "a590b93739a6bdc2dced733693f1d5ecdde001966b6e2a8bc28558a083468025",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "register"
+      ]
+    },
+    {
+      "path": ".github/workflows/oracle-autopilot-shadow-activation.yml",
+      "sha256": "928d3c226e7bb9938bb558e54bd4258163a67c9115745dbb7abbc846f84880ca",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "pull_request",
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "contract",
+        "activate"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-uv-p1-oracle-monitor.yml",
+      "sha256": "2d380d31a1e7d4ed146d6255ffd19f9411748f9890caa7984b1e7538f658d885",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "monitor"
+      ]
+    },
+    {
+      "path": ".github/workflows/autopilot-oracle-queue-credential-diagnostics-once.yml",
+      "sha256": "47ec603a8bef666ccc30693402946d2ffc0ecc3ab58b35b50332322e015f7359",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "diagnose"
+      ]
+    },
+    {
+      "path": ".github/workflows/oracle-autopilot-online-resume.yml",
+      "sha256": "a6da92ccca118533ef86c341fefb84dd812f558f7ec5dd6c008d3c3271265ba3",
+      "classification": "legacy_or_operator_only_requires_cutover_fence",
+      "events": [
+        "pull_request",
+        "push"
+      ],
+      "push_branches": [
+        "codex/oracle-autopilot-lite-shadow"
+      ],
+      "jobs": [
+        "contract",
+        "resume"
+      ]
+    }
+  ],
+  "systemd_services": [
+    "school-autopilot-production-light.service",
+    "school-autopilot-shadow.service",
+    "school-autopilot-online-observer.service"
+  ],
+  "neon_school_knowledge": "retain",
+  "legacy_neon_branches": "retain; complete archive transfer not independently verified"
+}

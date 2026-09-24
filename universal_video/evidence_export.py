@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import re
 import stat
 import time
@@ -37,7 +36,9 @@ ALLOWED_REQUEST_FIELDS = frozenset({
 })
 ALLOWED_STATUS_FIELDS = frozenset({
     "schema", "instance_state", "active_jobs", "observed_at_unix",
-    "installed_runtime_commit", "job_attestations",
+    "installed_runtime_commit", "resident_id", "process_id",
+    "process_started_at_unix", "process_start_ticks", "process_nonce",
+    "job_attestations",
 })
 ALLOWED_ATTESTATION_FIELDS = frozenset({
     "schema", "job_id", "request_commit", "requested_runtime_commit",
@@ -148,6 +149,24 @@ def _validate_status(status: dict[str, Any], *, now: float) -> dict[str, Any]:
     if not math.isfinite(observed_number) or observed_number > now + 2 or now - observed_number > MAX_STATUS_AGE_SECONDS:
         raise EvidenceExportError("resident status is stale")
     installed = _hex(status.get("installed_runtime_commit"), width=40, field="installed_runtime_commit")
+    resident_id = str(status.get("resident_id") or "")
+    if resident_id not in {"source", "container"}:
+        raise EvidenceExportError("invalid resident identity")
+    process_id = status.get("process_id")
+    if type(process_id) is not int or process_id <= 0:
+        raise EvidenceExportError("invalid resident process id")
+    process_started = status.get("process_started_at_unix")
+    if isinstance(process_started, bool) or not isinstance(process_started, (int, float)):
+        raise EvidenceExportError("invalid resident process start")
+    process_started_number = float(process_started)
+    if not math.isfinite(process_started_number) or process_started_number > observed_number:
+        raise EvidenceExportError("invalid resident process start")
+    process_start_ticks = status.get("process_start_ticks")
+    if type(process_start_ticks) is not int or process_start_ticks <= 0:
+        raise EvidenceExportError("invalid resident process start ticks")
+    process_nonce = str(status.get("process_nonce") or "")
+    if not re.fullmatch(r"^[0-9a-f]{32}$", process_nonce):
+        raise EvidenceExportError("invalid resident process nonce")
     raw = status.get("job_attestations")
     if not isinstance(raw, list) or len(raw) > 32 or any(not isinstance(item, dict) for item in raw):
         raise EvidenceExportError("invalid job attestations")
@@ -185,6 +204,11 @@ def _validate_status(status: dict[str, Any], *, now: float) -> dict[str, Any]:
         "schema": STATUS_SCHEMA,
         "observed_at_unix": observed_number,
         "installed_runtime_commit": installed,
+        "resident_id": resident_id,
+        "process_id": process_id,
+        "process_started_at_unix": process_started_number,
+        "process_start_ticks": process_start_ticks,
+        "process_nonce": process_nonce,
         "job_attestations": list(raw),
     }
 
@@ -244,31 +268,86 @@ def _contains_promotion_true(value: Any) -> bool:
     return False
 
 
-def _speaker_summary(rows: list[dict[str, Any]], deferred: list[str]) -> dict[str, Any]:
+def _speaker_summary(
+    rows: list[dict[str, Any]],
+    deferred: list[str],
+    *,
+    result_dir: Path,
+    artifacts_by_name: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     labels = [str(row.get("speaker")) for row in rows if row.get("speaker") not in (None, "")]
-    roles = [str(row.get("speaker_role") or row.get("speaker_role_candidate")) for row in rows if row.get("speaker_role") or row.get("speaker_role_candidate")]
+    roles = sorted(
+        {
+            str(row.get("speaker_role_candidate"))
+            for row in rows
+            if row.get("speaker_role_candidate") in {"teacher", "student"}
+        }
+    )
+    report_path = result_dir / "speaker_diarization.json"
+    report_artifact = artifacts_by_name.get("speaker_diarization.json")
+    report = None
+    artifacts: list[dict[str, Any]] = []
+    if report_path.exists() != (report_artifact is not None):
+        raise EvidenceExportError("speaker report inventory mismatch")
+    if report_path.exists() and report_artifact is not None:
+        before_sha, before_size = _sha256(report_path, max_bytes=1024 * 1024)
+        if (
+            before_sha != report_artifact["sha256"]
+            or before_size != report_artifact["size_bytes"]
+        ):
+            raise EvidenceExportError("speaker report changed before export")
+        report = _read_regular_json(report_path, max_bytes=1024 * 1024)
+        after_sha, after_size = _sha256(report_path, max_bytes=1024 * 1024)
+        if (after_sha, after_size) != (before_sha, before_size):
+            raise EvidenceExportError("speaker report changed during export")
+        artifacts.append(
+            {
+                "locator": "speaker_diarization.json",
+                "sha256": before_sha,
+                "size_bytes": before_size,
+            }
+        )
     if not labels:
-        return {
+        summary = {
             "status": "UNAVAILABLE",
-            "reason": "SPEAKER_LABELS_MISSING" if "speaker_structure" in deferred else "SPEAKER_EVIDENCE_MISSING",
-            "speaker_count": None,
+            "stage_status": report.get("status") if report else "DEFERRED",
+            "reason": (
+                str(report.get("reason"))
+                if report
+                else "SPEAKER_LABELS_MISSING" if "speaker_structure" in deferred else "SPEAKER_EVIDENCE_MISSING"
+            ),
+            "speaker_count": 0,
             "labeled_segments": 0,
             "unlabeled_segments": len(rows),
-            "collapse": "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
+            "collapse": "GATE_REJECTED" if report else "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
             "fragmentation": "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
             "teacher_student_attribution": "UNAVAILABLE",
+            "artifacts": artifacts,
         }
-    return {
+        if report and "label_coverage" in report:
+            summary["label_coverage"] = report["label_coverage"]
+            summary["speech_duration_coverage"] = report.get("speech_duration_coverage")
+            summary["minimum_label_coverage"] = report.get("minimum_label_coverage")
+        return summary
+    summary = {
         "status": "OBSERVED_ANONYMOUS_LABELS",
+        "stage_status": report.get("status") if report else "UNKNOWN",
+        "quality_gate": report.get("quality_gate") if report else "UNAVAILABLE",
         "speaker_count": len(set(labels)),
         "speaker_labels": sorted(set(labels)),
         "labeled_segments": len(labels),
         "unlabeled_segments": len(rows) - len(labels),
-        "collapse": "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
+        "collapse": "GATE_PASS",
         "fragmentation": "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
         "teacher_student_attribution": "SUGGESTION_ONLY" if roles else "UNAVAILABLE",
-        "role_candidates": sorted(set(roles)),
+        "role_candidates": roles,
+        "artifacts": artifacts,
     }
+    if report and "label_coverage" in report:
+        summary["label_coverage"] = report["label_coverage"]
+        summary["speech_duration_coverage"] = report.get("speech_duration_coverage")
+        summary["minimum_label_coverage"] = report.get("minimum_label_coverage")
+    return summary
 
 
 def _card_summary(result_dir: Path, deferred: list[str]) -> dict[str, Any]:
@@ -418,7 +497,12 @@ def build_evidence_export(
             "qc_hallucination_blocks": manifest["transcript"]["qc_hallucination_blocks"],
             "artifacts": asr_artifacts,
         },
-        "speakers": _speaker_summary(transcript_rows, deferred),
+        "speakers": _speaker_summary(
+            transcript_rows,
+            deferred,
+            result_dir=result_dir,
+            artifacts_by_name=artifacts_by_name,
+        ),
         "cards": _card_summary(result_dir, deferred),
         "publication_state": "NOT_PUBLISHED",
         "school_canon_changed": False,

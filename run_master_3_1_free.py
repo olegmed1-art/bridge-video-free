@@ -338,14 +338,20 @@ def pdfqc(p,expected_deal_review_pages=0):
             for page in list(d)[-expected_deal_review_pages:]:
                 text=page.get_text()
                 if page.rect.width<=page.rect.height:issues.append('deal-review-not-landscape')
-                for marker in ('3.1 FREE - DEAL REVIEW','Распознано','Достроенный расклад','Торговля','EVIDENCE REVIEW'):
+                for marker in ('3.1 FREE - DEAL REVIEW','Распознано','Проверяемая полнота','Торговля','EVIDENCE REVIEW'):
                     if marker not in text:issues.append('deal-review-marker')
     embedded=set(d.embfile_names()) if hasattr(d,'embfile_names') else set();ok='master_analysis.json' in embedded
     if not ok:issues.append('master-json-not-embedded')
     res={'ok':not issues,'pages':d.page_count,'issues':sorted(set(issues)),'sha256':io.sha(p),'masterEmbedded':ok,'dealReviewPages':int(expected_deal_review_pages)};d.close();return res
 
 def process_job(t):
-    job=os.environ['BRIDGE_JOB_ID'];candidates=io.search(t,"trashed=false and mimeType contains 'video/'");revs=['3.1-free-semantic-r1','3.1-free-semantic-r2','3.1-free-semantic-r3','3.1.3-semantic-r1'];matches=[]
+    job=os.environ['BRIDGE_JOB_ID'];explicit_source=os.environ.get('BRIDGE_ORIGINAL_SOURCE_DRIVE_ID','').strip();revs=['3.1-free-semantic-r1','3.1-free-semantic-r2','3.1-free-semantic-r3','3.1.3-semantic-r1'];matches=[]
+    if explicit_source:
+        candidate=io.meta(t,explicit_source)
+        if not str(candidate.get('mimeType') or '').startswith('video/'):raise RuntimeError('BLOCKED_IDENTITY')
+        if job!=stable_job_id('drive',explicit_source):raise RuntimeError('BLOCKED_IDENTITY')
+        candidates=[candidate]
+    else:candidates=io.search(t,"trashed=false and mimeType contains 'video/'")
     for f in candidates:
         accepted={stable_job_id('drive',f['id'])};accepted.update(legacy_job_id('drive',f['id'],r) for r in revs)
         if job in accepted:matches.append(f)

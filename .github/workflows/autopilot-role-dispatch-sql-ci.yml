@@ -1,0 +1,726 @@
+name: Autopilot role dispatch SQL CI
+
+on:
+  pull_request:
+    paths:
+      - 'database/migrations/0368_autopilot_next_step.sql'
+      - 'database/rollbacks/0368_autopilot_next_step.sql'
+      - 'database/tests/368_autopilot_next_step.sql'
+      - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/tests/322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/migrations/0323_autopilot_failure_continuation.sql'
+      - 'database/rollbacks/0323_autopilot_failure_continuation.sql'
+      - 'database/tests/323_autopilot_failure_continuation.sql'
+      - 'database/migrations/0324_autopilot_project_planner.sql'
+      - 'database/rollbacks/0324_autopilot_project_planner.sql'
+      - 'database/tests/324_autopilot_project_planner.sql'
+      - 'database/migrations/0324a_autopilot_dynamic_role_registry.sql'
+      - 'database/migrations/0325_autopilot_durable_dependency_wakeup.sql'
+      - 'database/migrations/0327_autopilot_delivery_proof.sql'
+      - 'database/rollbacks/0327_autopilot_delivery_proof.sql'
+      - 'database/tests/327_autopilot_delivery_proof.sql'
+      - 'database/migrations/0328_autopilot_chat_target_gate.sql'
+      - 'database/rollbacks/0328_autopilot_chat_target_gate.sql'
+      - 'database/tests/328_autopilot_chat_target_gate.sql'
+      - 'database/migrations/0331_autopilot_six_worker_capacity.sql'
+      - 'database/rollbacks/0331_autopilot_six_worker_capacity.sql'
+      - 'database/tests/331_autopilot_six_worker_capacity.sql'
+      - 'database/tests/331_autopilot_six_worker_capacity_concurrency.sh'
+      - 'database/migrations/0332_autopilot_codex_event_cycle.sql'
+      - 'database/rollbacks/0332_autopilot_codex_event_cycle.sql'
+      - 'database/tests/332_autopilot_codex_event_cycle.sql'
+      - 'database/migrations/0333_autopilot_dispatch_assignment_coherence.sql'
+      - 'database/rollbacks/0333_autopilot_dispatch_assignment_coherence.sql'
+      - 'database/tests/333_autopilot_dispatch_assignment_coherence.sql'
+      - 'database/migrations/0334_autopilot_github_probe_retry.sql'
+      - 'database/rollbacks/0334_autopilot_github_probe_retry.sql'
+      - 'database/tests/334_autopilot_github_probe_retry.sql'
+      - 'database/migrations/0336_autopilot_codex_terminal_implicit_delivery.sql'
+      - 'database/rollbacks/0336_autopilot_codex_terminal_implicit_delivery.sql'
+      - 'database/tests/336_autopilot_codex_terminal_implicit_delivery.sql'
+      - 'database/migrations/0337_autopilot_role_repair_admission.sql'
+      - 'database/rollbacks/0337_autopilot_role_repair_admission.sql'
+      - 'database/tests/337_autopilot_role_repair_admission.sql'
+      - 'database/tests/337a_autopilot_role_repair_callback.sql'
+      - 'database/migrations/0343_autopilot_provider_failure_no_repair.sql'
+      - 'database/rollbacks/0343_autopilot_provider_failure_no_repair.sql'
+      - 'database/tests/343_autopilot_provider_failure_no_repair.sql'
+      - 'database/migrations/0344_autopilot_mailbox_v2_rotation.sql'
+      - 'database/rollbacks/0344_autopilot_mailbox_v2_rotation.sql'
+      - 'database/tests/344_autopilot_mailbox_v2_rotation.sql'
+      - 'database/migrations/0345_autopilot_mailbox_v2_codex_inbound.sql'
+      - 'database/rollbacks/0345_autopilot_mailbox_v2_codex_inbound.sql'
+      - 'database/tests/345_autopilot_mailbox_v2_codex_inbound.sql'
+      - 'database/migrations/0346_autopilot_canary_acceptance_guard.sql'
+      - 'database/rollbacks/0346_autopilot_canary_acceptance_guard.sql'
+      - 'database/tests/346_autopilot_canary_acceptance_guard.sql'
+      - 'database/migrations/0358_autopilot_health_repair_progression.sql'
+      - 'database/rollbacks/0358_autopilot_health_repair_progression.sql'
+      - 'database/tests/358_autopilot_health_repair_progression.sql'
+      - 'database/migrations/0359_autopilot_historical_repair_reopen.sql'
+      - 'database/rollbacks/0359_autopilot_historical_repair_reopen.sql'
+      - 'database/tests/359_autopilot_historical_repair_reopen.sql'
+      - 'database/migrations/0360_autopilot_health_e2e_acl.sql'
+      - 'database/rollbacks/0360_autopilot_health_e2e_acl.sql'
+      - 'database/tests/360_autopilot_health_e2e_acl.sql'
+      - 'database/migrations/0361_autopilot_provider_terminal_classification.sql'
+      - 'database/rollbacks/0361_autopilot_provider_terminal_classification.sql'
+      - 'database/tests/361_autopilot_provider_terminal_classification.sql'
+      - 'database/migrations/0362_autopilot_target_pr_codex_context.sql'
+      - 'database/rollbacks/0362_autopilot_target_pr_codex_context.sql'
+      - 'database/tests/362_autopilot_target_pr_codex_context.sql'
+      - 'database/migrations/0363_autopilot_audit_findings_repair_progression.sql'
+      - 'database/rollbacks/0363_autopilot_audit_findings_repair_progression.sql'
+      - 'database/tests/363_autopilot_audit_findings_repair_progression.sql'
+      - 'database/migrations/0364_autopilot_repair_head_rebind.sql'
+      - 'database/rollbacks/0364_autopilot_repair_head_rebind.sql'
+      - 'database/tests/364_autopilot_repair_head_rebind.sql'
+      - 'oracle_autopilot/github_codex_callback.py'
+      - 'tests/test_oracle_autopilot_github_codex_callback.py'
+      - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
+      - '.github/workflows/autopilot-codex-event-callback.yml'
+      - '.codex/config.toml'
+      - 'oracle_autopilot/worker.py'
+      - 'tests/test_oracle_autopilot_shadow.py'
+      - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'database/migrations/0368_autopilot_next_step.sql'
+      - 'database/rollbacks/0368_autopilot_next_step.sql'
+      - 'database/tests/368_autopilot_next_step.sql'
+      - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/tests/322_autopilot_chatgpt_role_dispatch.sql'
+      - 'database/migrations/0323_autopilot_failure_continuation.sql'
+      - 'database/rollbacks/0323_autopilot_failure_continuation.sql'
+      - 'database/tests/323_autopilot_failure_continuation.sql'
+      - 'database/migrations/0324_autopilot_project_planner.sql'
+      - 'database/rollbacks/0324_autopilot_project_planner.sql'
+      - 'database/tests/324_autopilot_project_planner.sql'
+      - 'database/migrations/0324a_autopilot_dynamic_role_registry.sql'
+      - 'database/migrations/0325_autopilot_durable_dependency_wakeup.sql'
+      - 'database/migrations/0327_autopilot_delivery_proof.sql'
+      - 'database/rollbacks/0327_autopilot_delivery_proof.sql'
+      - 'database/tests/327_autopilot_delivery_proof.sql'
+      - 'database/migrations/0328_autopilot_chat_target_gate.sql'
+      - 'database/rollbacks/0328_autopilot_chat_target_gate.sql'
+      - 'database/tests/328_autopilot_chat_target_gate.sql'
+      - 'database/migrations/0331_autopilot_six_worker_capacity.sql'
+      - 'database/rollbacks/0331_autopilot_six_worker_capacity.sql'
+      - 'database/tests/331_autopilot_six_worker_capacity.sql'
+      - 'database/tests/331_autopilot_six_worker_capacity_concurrency.sh'
+      - 'database/migrations/0332_autopilot_codex_event_cycle.sql'
+      - 'database/rollbacks/0332_autopilot_codex_event_cycle.sql'
+      - 'database/tests/332_autopilot_codex_event_cycle.sql'
+      - 'database/migrations/0333_autopilot_dispatch_assignment_coherence.sql'
+      - 'database/rollbacks/0333_autopilot_dispatch_assignment_coherence.sql'
+      - 'database/tests/333_autopilot_dispatch_assignment_coherence.sql'
+      - 'database/migrations/0334_autopilot_github_probe_retry.sql'
+      - 'database/rollbacks/0334_autopilot_github_probe_retry.sql'
+      - 'database/tests/334_autopilot_github_probe_retry.sql'
+      - 'database/migrations/0336_autopilot_codex_terminal_implicit_delivery.sql'
+      - 'database/rollbacks/0336_autopilot_codex_terminal_implicit_delivery.sql'
+      - 'database/tests/336_autopilot_codex_terminal_implicit_delivery.sql'
+      - 'database/migrations/0337_autopilot_role_repair_admission.sql'
+      - 'database/rollbacks/0337_autopilot_role_repair_admission.sql'
+      - 'database/tests/337_autopilot_role_repair_admission.sql'
+      - 'database/tests/337a_autopilot_role_repair_callback.sql'
+      - 'database/migrations/0343_autopilot_provider_failure_no_repair.sql'
+      - 'database/rollbacks/0343_autopilot_provider_failure_no_repair.sql'
+      - 'database/tests/343_autopilot_provider_failure_no_repair.sql'
+      - 'database/migrations/0344_autopilot_mailbox_v2_rotation.sql'
+      - 'database/rollbacks/0344_autopilot_mailbox_v2_rotation.sql'
+      - 'database/tests/344_autopilot_mailbox_v2_rotation.sql'
+      - 'database/migrations/0345_autopilot_mailbox_v2_codex_inbound.sql'
+      - 'database/rollbacks/0345_autopilot_mailbox_v2_codex_inbound.sql'
+      - 'database/tests/345_autopilot_mailbox_v2_codex_inbound.sql'
+      - 'database/migrations/0346_autopilot_canary_acceptance_guard.sql'
+      - 'database/rollbacks/0346_autopilot_canary_acceptance_guard.sql'
+      - 'database/tests/346_autopilot_canary_acceptance_guard.sql'
+      - 'database/migrations/0358_autopilot_health_repair_progression.sql'
+      - 'database/rollbacks/0358_autopilot_health_repair_progression.sql'
+      - 'database/tests/358_autopilot_health_repair_progression.sql'
+      - 'database/migrations/0359_autopilot_historical_repair_reopen.sql'
+      - 'database/rollbacks/0359_autopilot_historical_repair_reopen.sql'
+      - 'database/tests/359_autopilot_historical_repair_reopen.sql'
+      - 'database/migrations/0360_autopilot_health_e2e_acl.sql'
+      - 'database/rollbacks/0360_autopilot_health_e2e_acl.sql'
+      - 'database/tests/360_autopilot_health_e2e_acl.sql'
+      - 'database/migrations/0361_autopilot_provider_terminal_classification.sql'
+      - 'database/rollbacks/0361_autopilot_provider_terminal_classification.sql'
+      - 'database/tests/361_autopilot_provider_terminal_classification.sql'
+      - 'database/migrations/0362_autopilot_target_pr_codex_context.sql'
+      - 'database/rollbacks/0362_autopilot_target_pr_codex_context.sql'
+      - 'database/tests/362_autopilot_target_pr_codex_context.sql'
+      - 'database/migrations/0363_autopilot_audit_findings_repair_progression.sql'
+      - 'database/rollbacks/0363_autopilot_audit_findings_repair_progression.sql'
+      - 'database/tests/363_autopilot_audit_findings_repair_progression.sql'
+      - 'database/migrations/0364_autopilot_repair_head_rebind.sql'
+      - 'database/rollbacks/0364_autopilot_repair_head_rebind.sql'
+      - 'database/tests/364_autopilot_repair_head_rebind.sql'
+      - 'oracle_autopilot/github_codex_callback.py'
+      - 'tests/test_oracle_autopilot_github_codex_callback.py'
+      - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
+      - '.github/workflows/autopilot-codex-event-callback.yml'
+      - '.codex/config.toml'
+      - 'oracle_autopilot/worker.py'
+      - 'tests/test_oracle_autopilot_shadow.py'
+      - '.github/workflows/autopilot-role-dispatch-sql-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  live-0302-fails-closed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: autopilot_role_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d autopilot_role_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/autopilot_role_ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Prove exact live baseline rejects out-of-order bridge
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE TABLE public.schema_migration (
+            migration_key text PRIMARY KEY,
+            applied_at timestamptz NOT NULL DEFAULT now(),
+            checksum text
+          );
+          SQL
+          for migration in \
+            database/migrations/0300_autopilot_oracle_shadow.sql \
+            database/migrations/0301_autopilot_github_pr_read_only.sql \
+            database/migrations/0302_autopilot_github_ci_read_only.sql; do
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$migration"
+          done
+          if psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+              -f database/migrations/0322_autopilot_chatgpt_role_dispatch.sql \
+              >"$RUNNER_TEMP/0322.out" 2>&1; then
+            echo '0322 unexpectedly accepted the incomplete 0302 baseline' >&2
+            exit 1
+          fi
+          grep -F 'AUTOPILOT_ROLE_DISPATCH_REQUIRES_0321' "$RUNNER_TEMP/0322.out"
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT to_regclass('autopilot.role_dispatch_outbox') IS NULL;")" = t
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM schema_migration WHERE migration_key='0322_autopilot_chatgpt_role_dispatch';")" = 0
+
+  current-main-baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: autopilot_main_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d autopilot_main_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/autopilot_main_ci
+      DATABASE_URL: postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/autopilot_main_ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Bootstrap managed-owner-compatible database
+        run: |
+          set -euo pipefail
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE EXTENSION IF NOT EXISTS btree_gist;
+          CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+          CREATE ROLE bridge_ci_owner LOGIN PASSWORD 'bridge_ci_owner' CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION;
+          ALTER DATABASE autopilot_main_ci OWNER TO bridge_ci_owner;
+          ALTER SCHEMA public OWNER TO bridge_ci_owner;
+          SQL
+
+      - name: Apply current main migration chain, role test, and clean rollback
+        run: |
+          set -euo pipefail
+          chmod +x database/scripts/migrate.sh
+          database/scripts/migrate.sh
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/323_autopilot_failure_continuation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/324_autopilot_project_planner.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/324a_autopilot_dynamic_role_registry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/325_autopilot_durable_dependency_wakeup.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/327_autopilot_delivery_proof.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/328_autopilot_chat_target_gate.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/331_autopilot_six_worker_capacity.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/332_autopilot_codex_event_cycle.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/333_autopilot_dispatch_assignment_coherence.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/334_autopilot_github_probe_retry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/335_autopilot_codex_delivery_window.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/336_autopilot_codex_terminal_implicit_delivery.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/337_autopilot_role_repair_admission.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/337a_autopilot_role_repair_callback.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/343_autopilot_provider_failure_no_repair.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/344_autopilot_mailbox_v2_rotation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/345_autopilot_mailbox_v2_codex_inbound.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/346_autopilot_canary_acceptance_guard.sql
+
+      - name: Prove concurrent six-worker admission
+        run: |
+          set -euo pipefail
+          capacity_database_url='postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/autopilot_capacity_ci'
+          cleanup() {
+            psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+              'DROP DATABASE IF EXISTS autopilot_capacity_ci WITH (FORCE);'
+          }
+          trap cleanup EXIT
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+            'CREATE DATABASE autopilot_capacity_ci WITH TEMPLATE autopilot_main_ci OWNER bridge_ci_owner;'
+          chmod +x database/tests/331_autopilot_six_worker_capacity_concurrency.sh
+          database/tests/331_autopilot_six_worker_capacity_concurrency.sh \
+            "$capacity_database_url"
+          # Verify and unwind the modern upper chain before historical tests.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/370_autopilot_codex_send_intent.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/371_autopilot_provider_retry_budget.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0371_autopilot_provider_retry_budget.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0370_autopilot_codex_send_intent.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0369_autopilot_reconcile_gateway.sql
+          # Production rollback retains send history. Only an empty disposable
+          # CI fixture may remove this table before rebuilding historical 0322.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$ BEGIN
+            IF current_database()<>'autopilot_main_ci' OR session_user<>'bridge_ci_owner'
+               OR EXISTS(SELECT FROM autopilot.codex_command_send_intent) THEN
+              RAISE EXCEPTION 'SEND_INTENT_EMPTY_CI_FIXTURE_REQUIRED';
+            END IF;
+            DROP TABLE autopilot.codex_command_send_intent;
+          END $$;
+          SQL
+
+          # Test the new upgrade/rollback on the complete modern schema. The
+          # historical lower-chain fixture below intentionally rebuilds 0324's
+          # table shape and is NOT a modern-schema reconstruction test (0347
+          # has no rollback). Never run modern tests against that stale fixture.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/368_autopilot_next_step.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0368_autopilot_next_step.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/367_autopilot_reliable_progress.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0367_autopilot_reliable_progress.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0367_autopilot_reliable_progress.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/367_autopilot_reliable_progress.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0368_autopilot_next_step.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/368_autopilot_next_step.sql
+          # A higher migration may legitimately depend on the role-dispatch tables.
+          # If the publication chain is present, roll it back first so this lower-chain
+          # roundtrip never bypasses its evidence-preserving rollback guards.
+          upper_publication_chain_count="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key IN ('0338_autopilot_bounded_publication_permit','0339_autopilot_native_cli_receipts','0340_autopilot_publication_permit_issuer','0343_autopilot_provider_failure_no_repair','0344_autopilot_mailbox_v2_rotation','0345_autopilot_mailbox_v2_codex_inbound','0346_autopilot_canary_acceptance_guard');")"
+          had_mailbox_v3="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0350_autopilot_mailbox_v3_rotation';")"
+          had_paused_reconcile="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0351_autopilot_paused_evidence_reconcile';")"
+          had_operational_safety="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0352_autopilot_operational_safety_signals';")"
+          had_paused_runner="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0353_autopilot_paused_reconcile_runner';")"
+          had_mailbox_v4="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0357_autopilot_mailbox_v4_rotation';")"
+          had_health_repair="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0358_autopilot_health_repair_progression';")"
+          had_historical_repair="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0359_autopilot_historical_repair_reopen';")"
+          had_health_e2e_acl="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0360_autopilot_health_e2e_acl';")"
+          had_provider_terminal="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0361_autopilot_provider_terminal_classification';")"
+          had_target_pr_context="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0362_autopilot_target_pr_codex_context';")"
+          had_audit_findings_repair="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0363_autopilot_audit_findings_repair_progression';")"
+          had_repair_head_rebind="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0364_autopilot_repair_head_rebind';")"
+          # Restore the full upper chain before the lower-chain roundtrip.
+          # Otherwise the ledger claims 0367 while 0353 restores stale code.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0368_autopilot_next_step.sql
+          # Production rollback retains budgets. Only this empty, disposable CI
+          # fixture may remove the receipt table before rebuilding historical 0324.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$ BEGIN
+            IF current_database()<>'autopilot_main_ci' OR session_user<>'bridge_ci_owner'
+               OR EXISTS(SELECT FROM autopilot.project_progress_receipt) THEN
+              RAISE EXCEPTION 'NEXT_STEP_EMPTY_CI_FIXTURE_REQUIRED';
+            END IF;
+            DROP TABLE autopilot.project_progress_receipt;
+          END $$;
+          SQL
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0367_autopilot_reliable_progress.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0366_autopilot_terminal_dispatch_history.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0365_autopilot_parallel_work_intake.sql
+          if [ "$had_repair_head_rebind" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/364_autopilot_repair_head_rebind.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0364_autopilot_repair_head_rebind.sql
+          fi
+          if [ "$had_audit_findings_repair" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/363_autopilot_audit_findings_repair_progression.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0363_autopilot_audit_findings_repair_progression.sql
+          fi
+          if [ "$had_target_pr_context" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/362_autopilot_target_pr_codex_context.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0362_autopilot_target_pr_codex_context.sql
+          fi
+          if [ "$had_provider_terminal" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/361_autopilot_provider_terminal_classification.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0361_autopilot_provider_terminal_classification.sql
+          fi
+          if [ "$had_health_e2e_acl" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0360_autopilot_health_e2e_acl.sql
+          fi
+          if [ "$had_historical_repair" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0359_autopilot_historical_repair_reopen.sql
+          fi
+          if [ "$had_health_repair" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0358_autopilot_health_repair_progression.sql
+          fi
+          if [ "$had_mailbox_v4" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0357_autopilot_mailbox_v4_rotation.sql
+          fi
+          if [ "$had_paused_runner" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0353_autopilot_paused_reconcile_runner.sql
+          fi
+          if [ "$had_operational_safety" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0352_autopilot_operational_safety_signals.sql
+          fi
+          if [ "$had_paused_reconcile" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0351_autopilot_paused_evidence_reconcile.sql
+          fi
+          if [ "$had_mailbox_v3" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0350_autopilot_mailbox_v3_rotation.sql
+          fi
+          if [ "$upper_publication_chain_count" -eq 7 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+              "UPDATE autopilot.project_planner_state SET enabled=false,last_decision_code='SQL_ROUNDTRIP_PAUSED',last_decision_at=clock_timestamp() WHERE singleton;"
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0346_autopilot_canary_acceptance_guard.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0345_autopilot_mailbox_v2_codex_inbound.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0344_autopilot_mailbox_v2_rotation.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0343_autopilot_provider_failure_no_repair.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0340_autopilot_publication_permit_issuer.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0339_autopilot_native_cli_receipts.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0338_autopilot_bounded_publication_permit.sql
+          elif [ "$upper_publication_chain_count" -ne 0 ]; then
+            echo "partial publication migration chain: $upper_publication_chain_count/7" >&2
+            exit 1
+          fi
+
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0337_autopilot_role_repair_admission.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0336_autopilot_codex_terminal_implicit_delivery.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0335_autopilot_codex_delivery_window.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0334_autopilot_github_probe_retry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0333_autopilot_dispatch_assignment_coherence.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0332_autopilot_codex_event_cycle.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0331_autopilot_six_worker_capacity.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0328_autopilot_chat_target_gate.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0327_autopilot_delivery_proof.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0325_autopilot_durable_dependency_wakeup.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0324a_autopilot_dynamic_role_registry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0324_autopilot_project_planner.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0323_autopilot_failure_continuation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0322_autopilot_chatgpt_role_dispatch.sql
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT to_regclass('autopilot.role_dispatch_outbox') IS NULL;")" = t
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM schema_migration WHERE migration_key='0322_autopilot_chatgpt_role_dispatch';")" = 0
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM schema_migration WHERE migration_key='0323_autopilot_failure_continuation';")" = 0
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM schema_migration WHERE migration_key='0324_autopilot_project_planner';")" = 0
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0322_autopilot_chatgpt_role_dispatch.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0323_autopilot_failure_continuation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0324_autopilot_project_planner.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0324a_autopilot_dynamic_role_registry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0325_autopilot_durable_dependency_wakeup.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0327_autopilot_delivery_proof.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0328_autopilot_chat_target_gate.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0331_autopilot_six_worker_capacity.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0332_autopilot_codex_event_cycle.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0333_autopilot_dispatch_assignment_coherence.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0334_autopilot_github_probe_retry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0335_autopilot_codex_delivery_window.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0336_autopilot_codex_terminal_implicit_delivery.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0337_autopilot_role_repair_admission.sql
+          if [ "$upper_publication_chain_count" -eq 7 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0338_autopilot_bounded_publication_permit.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0339_autopilot_native_cli_receipts.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0340_autopilot_publication_permit_issuer.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0343_autopilot_provider_failure_no_repair.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0344_autopilot_mailbox_v2_rotation.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0345_autopilot_mailbox_v2_codex_inbound.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0346_autopilot_canary_acceptance_guard.sql
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+              "UPDATE autopilot.project_planner_state SET enabled=true,last_decision_code='SQL_ROUNDTRIP_RESTORED',last_decision_at=clock_timestamp() WHERE singleton;"
+            test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+              "SELECT count(*) FROM public.schema_migration WHERE migration_key IN ('0338_autopilot_bounded_publication_permit','0339_autopilot_native_cli_receipts','0340_autopilot_publication_permit_issuer','0343_autopilot_provider_failure_no_repair','0344_autopilot_mailbox_v2_rotation','0345_autopilot_mailbox_v2_codex_inbound','0346_autopilot_canary_acceptance_guard');")" = 7
+          fi
+          if [ "$had_mailbox_v3" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0350_autopilot_mailbox_v3_rotation.sql
+          fi
+          if [ "$had_paused_reconcile" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0351_autopilot_paused_evidence_reconcile.sql
+          fi
+          if [ "$had_operational_safety" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0352_autopilot_operational_safety_signals.sql
+          fi
+          if [ "$had_paused_runner" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0353_autopilot_paused_reconcile_runner.sql
+          fi
+          if [ "$had_mailbox_v4" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0357_autopilot_mailbox_v4_rotation.sql
+          fi
+          if [ "$had_health_repair" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0358_autopilot_health_repair_progression.sql
+          fi
+          if [ "$had_historical_repair" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0359_autopilot_historical_repair_reopen.sql
+          fi
+          if [ "$had_health_e2e_acl" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0360_autopilot_health_e2e_acl.sql
+          fi
+          if [ "$had_provider_terminal" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0361_autopilot_provider_terminal_classification.sql
+          fi
+          if [ "$had_target_pr_context" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0362_autopilot_target_pr_codex_context.sql
+          fi
+          if [ "$had_audit_findings_repair" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0363_autopilot_audit_findings_repair_progression.sql
+          fi
+          if [ "$had_repair_head_rebind" -eq 1 ]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0364_autopilot_repair_head_rebind.sql
+          fi
+          # Leave 0365-0371 uninstalled in this legacy-only fixture. Full-chain
+          # reconstruction, all SQL invariants and upper rollback/reapply are
+          # verified independently by database-ci on its current-schema fixture.
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/322_autopilot_chatgpt_role_dispatch.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/323_autopilot_failure_continuation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/324_autopilot_project_planner.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/324a_autopilot_dynamic_role_registry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/325_autopilot_durable_dependency_wakeup.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/327_autopilot_delivery_proof.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/328_autopilot_chat_target_gate.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/331_autopilot_six_worker_capacity.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/332_autopilot_codex_event_cycle.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/333_autopilot_dispatch_assignment_coherence.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/334_autopilot_github_probe_retry.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/335_autopilot_codex_delivery_window.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/336_autopilot_codex_terminal_implicit_delivery.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/337_autopilot_role_repair_admission.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/337a_autopilot_role_repair_callback.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/343_autopilot_provider_failure_no_repair.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/344_autopilot_mailbox_v2_rotation.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/345_autopilot_mailbox_v2_codex_inbound.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/346_autopilot_canary_acceptance_guard.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/358_autopilot_health_repair_progression.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/359_autopilot_historical_repair_reopen.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/360_autopilot_health_e2e_acl.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/361_autopilot_provider_terminal_classification.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/362_autopilot_target_pr_codex_context.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/363_autopilot_audit_findings_repair_progression.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/364_autopilot_repair_head_rebind.sql
+
+  migration-0336-roundtrip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: autopilot_0336_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d autopilot_0336_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/autopilot_0336_ci
+      DATABASE_URL: postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/autopilot_0336_ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Bootstrap managed-owner-compatible database
+        run: |
+          set -euo pipefail
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE EXTENSION IF NOT EXISTS btree_gist;
+          CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+          CREATE ROLE bridge_ci_owner LOGIN PASSWORD 'bridge_ci_owner' CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION;
+          ALTER DATABASE autopilot_0336_ci OWNER TO bridge_ci_owner;
+          ALTER SCHEMA public OWNER TO bridge_ci_owner;
+          SQL
+
+      - name: Apply, test, rollback, reapply, and retest 0336
+        run: |
+          set -euo pipefail
+          chmod +x database/scripts/migrate.sh
+          bounded_migrations="$RUNNER_TEMP/migrations-through-0336"
+          mkdir -p "$bounded_migrations"
+          for migration in database/migrations/*.sql; do
+            migration_name="$(basename "$migration")"
+            sequence="${migration_name:0:4}"
+            if ((10#$sequence <= 336)); then
+              cp -a "$migration" "$bounded_migrations/"
+              parts="${migration%.sql}"
+              if [ -d "$parts" ]; then
+                cp -a "$parts" "$bounded_migrations/"
+              fi
+            fi
+          done
+          MIGRATIONS_DIR="$bounded_migrations" database/scripts/migrate.sh
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -v persist_accepted=true \
+            -f database/tests/336_autopilot_codex_terminal_implicit_delivery.sql
+          before_receipts="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM autopilot.role_dispatch_codex_terminal_receipt;")"
+          before_evidence="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM autopilot.evidence WHERE evidence_class='CHATGPT_ROLE_DISPATCH_RESULT' AND retained;")"
+          before_done="$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM autopilot.task WHERE status='DONE' AND terminal_reason_code='CODEX_CLOUD_RESULT_RETAINED';")"
+          test "$before_receipts" -ge 2
+          test "$before_evidence" -ge 2
+          test "$before_done" -ge 2
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/rollbacks/0336_autopilot_codex_terminal_implicit_delivery.sql
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE migration_key='0336_autopilot_codex_terminal_implicit_delivery';")" = 0
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT to_regclass('autopilot.migration_0336_function_backup') IS NULL;")" = t
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM autopilot.role_dispatch_codex_terminal_receipt;")" = "$before_receipts"
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM autopilot.evidence WHERE evidence_class='CHATGPT_ROLE_DISPATCH_RESULT' AND retained;")" = "$before_evidence"
+          test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM autopilot.task WHERE status='DONE' AND terminal_reason_code='CODEX_CLOUD_RESULT_RETAINED';")" = "$before_done"
+          MIGRATIONS_DIR="$bounded_migrations" database/scripts/migrate.sh
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/tests/336_autopilot_codex_terminal_implicit_delivery.sql

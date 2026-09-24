@@ -10,6 +10,11 @@
     "active_jobs",
     "observed_at_unix",
     "installed_runtime_commit",
+    "resident_id",
+    "process_id",
+    "process_started_at_unix",
+    "process_start_ticks",
+    "process_nonce",
     "job_attestations"
   ],
   "properties": {
@@ -22,6 +27,11 @@
     },
     "observed_at_unix": {"type": "number"},
     "installed_runtime_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "resident_id": {"enum": ["source", "container"]},
+    "process_id": {"type": "integer", "minimum": 1},
+    "process_started_at_unix": {"type": "number"},
+    "process_start_ticks": {"type": "integer", "minimum": 1},
+    "process_nonce": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
     "job_attestations": {
       "type": "array",
       "maxItems": 32,

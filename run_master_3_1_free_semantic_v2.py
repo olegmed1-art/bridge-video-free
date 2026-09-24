@@ -17,7 +17,7 @@ import bridge_worker_3_1_free as core
 import run_master_3_1_free as base
 import run_master_3_1_free_semantic as previous
 from bridge_neon_persistence import persist_completed_drive_job
-from bridge_speaker_diarization import diarize_transcript
+from universal_video.speaker_structure import MIN_TEST_LABEL_COVERAGE, run_speaker_structure
 from diana_longitudinal_quality_v2 import build_quality_layer
 
 REVISION = "3.1-free-r25.7"
@@ -38,16 +38,15 @@ def _enabled(name: str, default: bool = True) -> bool:
 
 def obtain_transcript_with_local_diarization(t, parent, name, video, work, dur, job):
     segments, info, warnings = _previous_obtain_transcript(t, parent, name, video, work, dur, job)
-    labeled = sum(bool(segment.get("speaker")) for segment in segments)
-    if labeled < max(2, int(len(segments) * 0.5)):
-        segments, diarization = diarize_transcript(
-            video,
-            segments,
-            work,
-            enabled=_enabled("BRIDGE_DIARIZATION_ENABLED", True),
-        )
-    else:
-        _, diarization = diarize_transcript(video, segments, work, enabled=True)
+    # Do not preserve unverified Zoom labels.  The adapter always anonymizes
+    # clusters and, for the FREE production route, requires the same open-set
+    # coverage/count/role-proof boundary as the field-tested path.
+    segments, diarization = run_speaker_structure(
+        video,
+        segments,
+        work,
+        min_label_coverage=MIN_TEST_LABEL_COVERAGE,
+    )
     info = dict(info)
     info["speakerDiarization"] = diarization
     if diarization.get("status") not in {
@@ -142,11 +141,13 @@ def upload_json_with_readiness_v2(token, parent, name, payload):
     readiness = quality.get("readiness") or {}
 
     if name.startswith("AI_DONE_"):
-        augmented = dict(payload)
-        augmented["readinessV2"] = readiness
-        augmented["qualityV2Counts"] = quality.get("counts") or {}
-        uploaded = _previous_upload_json(token, parent, name, augmented)
-        pdf_id = ((augmented.get("masterPdf") or {}).get("driveId"))
+        # The base processor returns this same mapping after upload. Mutate it
+        # before upload so terminal evidence compares against the exact bytes
+        # persisted in AI_DONE, rather than the unaugmented pre-upload value.
+        payload["readinessV2"] = readiness
+        payload["qualityV2Counts"] = quality.get("counts") or {}
+        uploaded = _previous_upload_json(token, parent, name, payload)
+        pdf_id = ((payload.get("masterPdf") or {}).get("driveId"))
         if readiness.get("technical_status") == "TECHNICAL_READY":
             _previous_upload_json(
                 token,

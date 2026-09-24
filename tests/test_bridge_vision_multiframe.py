@@ -43,6 +43,9 @@ def test_strong_same_seat_overlap_fuses_and_accumulates_evidence():
     deal = result["deals"][0]
     assert set(deal["deal"]["hands"]["N"]["cards"]) == {"AS", "KS", "QS", "JS", "TS", "9S"}
     assert deal["deal"]["hands"]["S"]["cards"] == ["AH"]
+    assert deal["status"] == "REVIEW"
+    assert deal["validation"]["status"] == "REVIEW"
+    assert result["status"] == "REVIEW"
 
 
 def test_cross_seat_conflict_does_not_merge():
@@ -64,7 +67,7 @@ def test_explicit_board_identity_can_link_without_card_overlap():
     assert result["deals"][0]["explicit_board_key"] == "board_id:17"
 
 
-def test_three_hands_shown_across_frames_derive_only_the_missing_fourth_hand():
+def test_three_hands_shown_across_frames_leave_the_missing_hand_unknown():
     ranks = "AKQJT98765432"
     records = [
         rec({"N": [f"{rank}S" for rank in ranks]}, frame="a.jpg", board_id="same-deal"),
@@ -75,10 +78,14 @@ def test_three_hands_shown_across_frames_derive_only_the_missing_fourth_hand():
     assert result["deal_count"] == 1
     reconstructed = result["deals"][0]
     assert reconstructed["observed_card_count"] == 39
-    assert len(reconstructed["deal"]["hands"]["W"]["cards"]) == 13
-    derivation = reconstructed["deal"]["derivations"][0]
-    assert derivation["provenance_class"] == "DERIVED"
-    assert derivation["confidence"]["source_observation_floor"] is None
+    assert reconstructed["deal"]["hands"]["W"] == {"cards": [], "unknown_count": 13}
+    assert reconstructed["deal"]["derivations"] == []
+    assert reconstructed["status"] == "REVIEW"
+    assert reconstructed["validation"]["seat_counts"] == {"N": 13, "E": 13, "S": 13, "W": 0}
+    assert reconstructed["validation"]["review_reasons"] == ["HAND_W_NOT_13", "TOTAL_NOT_52", "DECK_MISMATCH"]
+    assert result["status"] == "REVIEW"
+    assert result["verified_full_board_count"] == 0
+    assert result["canonical_promotion_allowed"] is False
 
 
 def test_explicit_identity_may_disappear_when_card_evidence_is_strong():
@@ -130,7 +137,10 @@ def test_job_tool_writes_compact_deals_artifact(tmp_path: Path):
         "".join(json.dumps(row) + "\n" for row in records), encoding="utf-8"
     )
     summary = reconstruct_job(tmp_path)
-    assert summary["status"] == "COMPLETED"
+    assert summary["status"] == "REVIEW"
     assert summary["deal_count"] == 1
+    assert summary["verified_full_board_count"] == 0
+    assert summary["review_deal_count"] == 1
+    assert summary["canonical_promotion_allowed"] is False
     artifact = json.loads((tmp_path / "bridge_deals.json").read_text(encoding="utf-8"))
     assert artifact["deal_count"] == 1
