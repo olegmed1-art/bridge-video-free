@@ -42,6 +42,18 @@ def _block(rule_id: str, action: str, reason: str) -> RuleEvaluation:
     return _result(rule_id, "BLOCK", action, reason=reason, specificity=0, scope_rank=0)
 
 
+def _canon_conflict(rule_id: str, reason: str) -> RuleEvaluation:
+    """Return the authority-bound conflict surface with no School action."""
+    return _result(
+        rule_id,
+        "CANON_CONFLICT",
+        action=None,
+        reason=reason,
+        specificity=0,
+        scope_rank=0,
+    )
+
+
 def _hcp(c: dict[str, Any]) -> int:
     if "HCP" in c:
         return int(c["HCP"])
@@ -234,12 +246,15 @@ def evaluate(rule_id: str, context: dict[str, Any], *, system_version: str = SYS
     if rule_id == "RULE-L1-DEFENSE-SIGNAL-GATE":
         return _block(rule_id, "BLOCKED_PENDING_TEACHER", "signaling code undefined") if c.get("derive_signals_from_vague_standard_phrase") else _no(rule_id, "no signal derivation")
     if rule_id == "RULE-L1-RUNTIME-CONFLICT-GATE":
-        return _block(rule_id, "RULE_CONFLICT", "unresolved same-rank conflict")
+        return _canon_conflict(rule_id, "unresolved same-rank conflict")
     return _block(rule_id, "REFERENCE_ONLY_OR_UNIMPLEMENTED", "not executable in L1 runtime v1")
 
 
 def resolve(evaluations: Iterable[RuleEvaluation]) -> RuleEvaluation:
     items = list(evaluations)
+    conflicts = [x for x in items if x.status == "CANON_CONFLICT"]
+    if conflicts:
+        return _canon_conflict(conflicts[0].rule_id, conflicts[0].reason or "canonical conflict")
     matched = [x for x in items if x.matched]
     if not matched:
         blocked = [x for x in items if x.status == "BLOCK"]
@@ -247,7 +262,7 @@ def resolve(evaluations: Iterable[RuleEvaluation]) -> RuleEvaluation:
     key = max((x.specificity, x.scope_rank, x.priority) for x in matched)
     top = [x for x in matched if (x.specificity, x.scope_rank, x.priority) == key]
     if len({repr(x.action) for x in top}) > 1:
-        return _block("RULE-L1-RUNTIME-CONFLICT-GATE", "RULE_CONFLICT", "same-rank rules disagree")
+        return _canon_conflict("RULE-L1-RUNTIME-CONFLICT-GATE", "same-rank rules disagree")
     if len(top) == 1:
         return top[0]
     ev = tuple(dict.fromkeys(e for x in top for e in x.evidence))

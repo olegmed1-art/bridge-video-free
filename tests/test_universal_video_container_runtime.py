@@ -301,6 +301,23 @@ def test_container_activation_requires_a_bounded_protected_queue_credential() ->
     assert "assert " not in gate
 
 
+def test_container_queue_credential_is_validated_as_the_exact_runtime_identity() -> None:
+    root = Path(__file__).resolve().parents[1]
+    installer = (root / "ops/oracle_universal_video_container_install.sh").read_text(
+        encoding="utf-8"
+    )
+
+    credential_gate = installer.index('if [[ "$ACTIVATE" == 1 ]]; then')
+    service_activation = installer.rindex('if [[ "$ACTIVATE" == 1 ]]; then')
+    gate = installer[credential_gate:service_activation]
+    assert '[[ "$(stat -c \'%g\' "$queue_dsn_file")" == "$(id -g "$USER_NAME")" ]]' in gate
+    assert (
+        'runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" \\\n'
+        '    "$SOURCE_DIR/ops/validate_video_queue_dsn.py" "$queue_dsn_file" >/dev/null'
+    ) in gate
+    assert '  python3 "$SOURCE_DIR/ops/validate_video_queue_dsn.py"' not in gate
+
+
 def test_nonactivating_install_cannot_overwrite_resident_queue_configuration() -> None:
     root = Path(__file__).resolve().parents[1]
     installer = (root / "ops/oracle_universal_video_container_install.sh").read_text(
