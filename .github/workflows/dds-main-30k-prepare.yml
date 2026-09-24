@@ -349,7 +349,8 @@ jobs:
           retention-days: 7
 
       - name: Save rebuilt verified DDS3 wheel and Bazel state
-        if: ${{ always() && steps.dds-cache.outputs.cache-hit != 'true' }}
+        # PR candidate code must never write the shared default-branch cache.
+        if: ${{ success() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.dds-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
