@@ -13,7 +13,7 @@ CLASSIFIER = ROOT / "ops" / "oracle_idle_state.sh"
 AUTHORIZER = ROOT / "ops" / "oracle_idle_stop_guard.py"
 SCHEMA = ROOT / "assistant_lab" / "oracle_idle_schema.sql"
 FINALIZER = ROOT / ".github" / "workflows" / "oracle-autopilot-staging-finalize.yml"
-INSTANCE_POWER = ROOT / ".github" / "workflows" / "oracle-instance-power.yml"
+INSTANCE_POWER = ROOT / "tests" / "fixtures" / "retired_oracle" / "oracle-instance-power.yml"
 CANONICAL_IDLE_REASON = (
     "jobs=0,research=0,research_children=0,control=0,"
     "operator_lease=0,autopilot=0,video=0"

@@ -228,10 +228,13 @@ BEGIN
         (4,'AUTOPILOT','BLOCKED','TARGET_PR_OBSOLETE',false,false,false),
         (5,'AUTOPILOT','BLOCKED','OWNER_REQUIRED',false,false,false),
         (6,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,true,false),
-        (7,'AUTOPILOT','SUCCEEDED','READ_ONLY_AUDIT_COMPLETE',false,false,false),
+        -- Completion releases dependents only for an explicitly verified audit.
+        (7,'AUTOPILOT','SUCCEEDED','AUDIT_VERIFIED_NO_REPAIR',false,false,false),
         (8,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',false,false,true),
-        (9,'AUTOPILOT','BLOCKED','CODEX_PROVIDER_GENERIC_FAILURE',false,false,false),
-        (10,'AUTOPILOT','BLOCKED','BOUNDED_REPOSITORY_DEFECT',true,false,false)
+        -- Case 8 intentionally leaves AUTOPILOT WAITING_EXTERNAL.  Distinct
+        -- roles prove the next independent item still uses free role slots.
+        (9,'DATA','BLOCKED','CODEX_PROVIDER_GENERIC_FAILURE',false,false,false),
+        (10,'BOOKS','BLOCKED','BOUNDED_REPOSITORY_DEFECT',true,false,false)
     ) AS cases(id,role_id,terminal_status,result_code,allow_repair,revoke_after_ack,implicit_after_revoke)
     ORDER BY id LOOP
         SELECT work_item_id INTO work_id FROM autopilot.register_universal_work_item(

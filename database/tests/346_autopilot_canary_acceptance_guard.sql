@@ -109,7 +109,7 @@ BEGIN
     SELECT work_item_id INTO ordinary_work_id
       FROM autopilot.register_universal_work_item(
         'sql-ordinary-repair-346-'||run_suffix,
-        'AUTOPILOT','REPOSITORY_AUDIT','Audit one bounded repository concern.',
+        'DATA','REPOSITORY_AUDIT','Audit one bounded repository concern.',
         1150,0,jsonb_build_object(
           'repository','olegmed1-art/bridge-video-free',
           'target_pr',1150,

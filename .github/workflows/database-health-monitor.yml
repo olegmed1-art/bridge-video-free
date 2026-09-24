@@ -21,8 +21,9 @@ permissions:
 
 jobs:
   health:
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -73,5 +74,7 @@ jobs:
 
       - name: Verify least-privilege operational health access
         env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          AUTOPILOT_HEALTH_DATABASE_URL: ${{ secrets.BRIDGE_HEALTH_DATABASE_URL }}
           BRIDGE_HEALTH_DATABASE_URL: ${{ secrets.BRIDGE_HEALTH_DATABASE_URL }}
-        run: python database/runtime_health_preflight.py
+        run: python -m ops.github_autopilot_db_route health

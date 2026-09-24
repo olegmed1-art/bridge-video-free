@@ -34,14 +34,16 @@ import psycopg
 from psycopg.rows import dict_row
 
 from .contract import (
+    ROLE_DISPATCH_MAILBOX_PR,
     AutopilotContractError,
     AutopilotRetryableError,
     ClaimedTask,
-    ROLE_DISPATCH_MAILBOX_PR,
     build_draft_repair_broker_payload,
     claimed_task_from_row,
     validate_task_contract,
 )
+from .database_target import backend, validate_pinned_dsn
+from .parallel_work_intake import canonical_manifest_text, manifest_sha256
 
 CHANNEL = "autopilot_ready"
 RUNTIME_MODE = "SHADOW"
@@ -49,6 +51,10 @@ LOGGER = logging.getLogger("oracle_autopilot")
 GITHUB_API_HOST = "api.github.com"
 GITHUB_REPOSITORY = "olegmed1-art/bridge-video-free"
 ROLE_DISPATCH_BOT_LOGIN = "bridge-school-oracle-autopilot[bot]"
+# The pinned broker release predates mailbox-v4 rotation and reports retained
+# mailbox #1685 as release metadata. Dispatch PR creation is repository-wide;
+# accept only that pinned retained value or the current active mailbox.
+ROLE_DISPATCH_BROKER_MAILBOX_PRS = frozenset({1685, ROLE_DISPATCH_MAILBOX_PR})
 GITHUB_RESPONSE_LIMIT_BYTES = 1_048_576
 GITHUB_CHECK_RUN_LIMIT = 100
 GITHUB_FAILED_CHECK_LIMIT = 5
@@ -90,6 +96,9 @@ TOKEN_BROKER_HEALTH_PATH = "/healthz"
 TOKEN_BROKER_HOST_PATTERN = re.compile(
     r"bridge-school-autopilot-[a-z0-9]+-olegmed1-4368s-projects\.vercel\.app"
 )
+_PARALLEL_WORK_MANIFEST_REGISTERED = False
+_PARALLEL_WORK_MANIFEST_RETRY_AT = 0.0
+QUEUE_BATCH_SIZE = 6
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -231,6 +240,12 @@ def _load_token_broker_config(url_env: str, expected_path: str) -> TokenBrokerCo
 
 
 def validate_neon_direct_dsn(raw: str) -> str:
+    # Keep the established function name for existing callers and Neon deployments.
+    if backend() == "postgresql":
+        try:
+            return validate_pinned_dsn(raw, expected_user=os.getenv("AUTOPILOT_EXPECTED_DB_USER", ""))
+        except ValueError:
+            raise RuntimeError("autopilot PostgreSQL target is invalid") from None
     value = raw.strip()
     parsed = urllib.parse.urlsplit(value)
     if parsed.scheme not in {"postgresql", "postgres"}:
@@ -293,7 +308,21 @@ def _connect(dsn: str, *, autocommit: bool = False):
     )
 
 
+def admission_mode() -> str:
+    """A deliberate rollout hold cannot silently become active on a typo."""
+    value = os.environ.get("AUTOPILOT_ADMISSION_MODE", "ACTIVE")
+    if value not in {"ACTIVE", "HOLD"}:
+        raise RuntimeError("AUTOPILOT_ADMISSION_MODE_INVALID")
+    return value
+
+
+def require_active_admission() -> None:
+    if admission_mode() != "ACTIVE":
+        raise RuntimeError("AUTOPILOT_ADMISSION_HELD")
+
+
 def _rpc_one(config: WorkerConfig, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
+    require_active_admission()
     with _connect(config.dsn) as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         row = cur.fetchone()
@@ -857,6 +886,7 @@ def _require_approved_broker_release(
         "bounded_draft_executor_enabled": True,
         "bounded_project_head_enabled": True,
         "bounded_role_dispatch_enabled": True,
+        "role_dispatch_mailbox_pr": ROLE_DISPATCH_MAILBOX_PR,
         "raw_installation_token_exposed": False,
         "merge_endpoint_enabled": False,
         "ref_update_delete_enabled": False,
@@ -1016,7 +1046,7 @@ def _publish_role_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
         or set(result) != expected_keys
         or any(result.get(key) != value for key, value in public_envelope.items())
         or result.get("repository") != GITHUB_REPOSITORY
-        or result.get("mailbox_pull_request") != ROLE_DISPATCH_MAILBOX_PR
+        or result.get("mailbox_pull_request") not in ROLE_DISPATCH_BROKER_MAILBOX_PRS
         or result.get("status") not in {"created", "existing"}
         or type(result.get("replayed")) is not bool
         or type(pull_number) is not int
@@ -1254,7 +1284,7 @@ def wait_for_wakeup(listener, timeout_seconds: float) -> None:
 
 def drain_ready(config: WorkerConfig) -> int:
     processed = 0
-    while process_one(config):
+    while processed < QUEUE_BATCH_SIZE and process_one(config):
         processed += 1
     return processed
 
@@ -1336,10 +1366,64 @@ def process_project_work(config: WorkerConfig) -> bool:
 
 
 def drain_project_work(config: WorkerConfig) -> int:
+    global _PARALLEL_WORK_MANIFEST_RETRY_AT
+    if time.monotonic() >= _PARALLEL_WORK_MANIFEST_RETRY_AT:
+        try:
+            reconcile_parallel_work_intake(config)
+        except (psycopg.Error, AutopilotContractError) as exc:
+            # A failed new intake must not starve already admitted work. Never
+            # log the database exception text: it may contain connection data.
+            _PARALLEL_WORK_MANIFEST_RETRY_AT = time.monotonic() + 60
+            LOGGER.error("parallel_work_manifest_failed error_type=%s", type(exc).__name__)
     processed = 0
-    while process_project_work(config):
+    while processed < QUEUE_BATCH_SIZE and process_project_work(config):
         processed += 1
     return processed
+
+
+def reconcile_parallel_work_intake(config: WorkerConfig) -> int:
+    """Register the reviewed independent-work manifest once per release.
+
+    The database RPC revalidates the complete manifest and is the durable
+    idempotency boundary.  The process-local flag only avoids redundant reads
+    after a successful receipt; rolling workers safely tolerate migration 0365
+    not being installed yet.
+    """
+
+    global _PARALLEL_WORK_MANIFEST_REGISTERED
+    if _PARALLEL_WORK_MANIFEST_REGISTERED:
+        return 0
+    try:
+        row = _rpc_one(
+            config,
+            "SELECT * FROM autopilot.register_parallel_work_manifest(%s, %s)",
+            (canonical_manifest_text(), manifest_sha256()),
+        )
+    except psycopg.errors.UndefinedFunction:
+        return 0
+    if not row:
+        raise AutopilotContractError("AUTOPILOT_PARALLEL_MANIFEST_RECEIPT_MISSING")
+    registered_count = row.get("registered_count")
+    item_count = len(json.loads(canonical_manifest_text())["items"])
+    if (
+        row.get("manifest_sha256") != manifest_sha256()
+        or type(row.get("item_count")) is not int
+        or row["item_count"] != item_count
+        or type(registered_count) is not int
+        or not 0 <= registered_count <= item_count
+        or type(row.get("replayed")) is not bool
+    ):
+        raise AutopilotContractError("AUTOPILOT_PARALLEL_MANIFEST_RECEIPT_INVALID")
+    _PARALLEL_WORK_MANIFEST_REGISTERED = True
+    LOGGER.info(
+        "parallel_work_manifest_reconciled "
+        "sha256=%s items=%s registered=%s replayed=%s",
+        row.get("manifest_sha256"),
+        row.get("item_count"),
+        registered_count,
+        row.get("replayed"),
+    )
+    return registered_count
 
 
 def _dispatch_body(payload: dict[str, Any]) -> str:
@@ -1468,12 +1552,52 @@ def drain_role_dispatch_outbox(config: WorkerConfig) -> int:
         (),
     )
     processed = 0
-    while process_role_dispatch_outbox(config):
+    while processed < QUEUE_BATCH_SIZE and process_role_dispatch_outbox(config):
         processed += 1
     return processed + int(expired["reconciled"] if expired else 0)
 
 
+def drain_cycle(config: WorkerConfig) -> int:
+    """Visit every bounded lane, even when an earlier lane remains busy."""
+    require_active_admission()
+    return sum((
+        drain_ready(config),
+        drain_role_dispatch_outbox(config),
+        drain_project_work(config),
+    ))
+
+
+def run_held(config: WorkerConfig) -> None:
+    """Attest connectivity while all queue/planner/publication lanes remain off.
+
+    The systemd rollout hold must be removed in a separate reviewed activation.
+    Database reconnects and NOTIFY events never promote this process to ACTIVE.
+    """
+    LOGGER.info("worker_admission_held worker_id=%s mailbox_pr=%s", config.worker_id,
+                ROLE_DISPATCH_MAILBOX_PR)
+    while True:
+        try:
+            with psycopg.connect(config.dsn, autocommit=True, connect_timeout=10,
+                    application_name="school-autopilot-runtime-hold",
+                    options="-c statement_timeout=5000 -c default_transaction_read_only=on") as listener:
+                require = listener.execute("SHOW default_transaction_read_only").fetchone()
+                if not require or require[0] != "on":
+                    raise RuntimeError("AUTOPILOT_HOLD_READONLY_REQUIRED")
+                listener.execute(f"LISTEN {CHANNEL}")
+                LOGGER.info("worker_hold_connected worker_id=%s", config.worker_id)
+                while True:
+                    wait_for_wakeup(listener, config.recovery_poll_seconds)
+        except KeyboardInterrupt:
+            return
+        except psycopg.Error as exc:
+            LOGGER.warning("held_listener_reconnect error_type=%s", type(exc).__name__)
+            time.sleep(2)
+
+
 def run_forever(config: WorkerConfig) -> None:
+    if admission_mode() == "HOLD":
+        run_held(config)
+        return
     LOGGER.info(
         "worker_started worker_id=%s mode=%s recovery_poll_seconds=%s",
         config.worker_id,
@@ -1487,11 +1611,7 @@ def run_forever(config: WorkerConfig) -> None:
                 while True:
                     # Drain every ready transition without sleeping. The polling
                     # timeout is reached only when no runnable task exists.
-                    if (
-                        drain_ready(config)
-                        or drain_role_dispatch_outbox(config)
-                        or drain_project_work(config)
-                    ):
+                    if drain_cycle(config):
                         continue
                     wait_for_wakeup(listener, config.recovery_poll_seconds)
         except KeyboardInterrupt:

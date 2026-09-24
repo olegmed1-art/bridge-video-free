@@ -1,0 +1,164 @@
+name: IBM VPC power read-only probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_oracle:
+        description: 'Also send one authenticated read-only request from Oracle Light'
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - '.github/workflows/ibm-vpc-power-probe.yml'
+      - 'ops/ibm_vpc_power.py'
+      - 'tests/test_ibm_vpc_power.py'
+      - 'ops/ibm_vpc_oracle_probe.py'
+      - 'tests/test_ibm_vpc_oracle_probe.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ibm-vpc-power-controller
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate bounded client contract
+        run: |
+          set -euo pipefail
+          python -m unittest -v tests.test_ibm_vpc_power tests.test_ibm_vpc_oracle_probe
+          python -m py_compile ops/ibm_vpc_power.py ops/ibm_vpc_oracle_probe.py
+
+  oracle-probe:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_oracle }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Read exact IBM instance state directly from Oracle Light
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+          ORACLE_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          probe_dir=$(mktemp -d)
+          trap 'rm -rf "$probe_dir"' EXIT
+          test -n "${ORACLE_SSH_PRIVATE_KEY:-}"
+          printf '%s\n' "$ORACLE_SSH_PRIVATE_KEY" | tr -d '\r' > "$probe_dir/key"
+          unset ORACLE_SSH_PRIVATE_KEY
+          ssh-keygen -y -f "$probe_dir/key" > /dev/null
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 \
+            'SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go' "$probe_dir/known_hosts"
+          python3 ops/ibm_vpc_oracle_probe.py \
+            --ssh-key "$probe_dir/key" --known-hosts "$probe_dir/known_hosts"
+
+  probe:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+      IBM_EXPECTED_SERVICE_ID: ServiceId-e08e417c-dd54-49ec-9159-4df0b147c837
+      IBM_VPC_REGION: eu-de
+      IBM_VPC_INSTANCE_ID: 02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2
+      IBM_VPC_INSTANCE_NAME: bridge-school-compute-ibm
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Verify secret presence without disclosure
+        run: |
+          set -euo pipefail
+          test -n "${IBM_CLOUD_API_KEY:-}"
+          echo 'IBM_CLOUD_API_KEY_PRESENT=YES'
+      - name: Verify API key identity without disclosure
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          body = urllib.parse.urlencode({
+              "grant_type": "urn:ibm:params:oauth:grant-type:apikey",
+              "apikey": os.environ["IBM_CLOUD_API_KEY"],
+          }).encode("ascii")
+          request = urllib.request.Request(
+              "https://iam.cloud.ibm.com/identity/token",
+              data=body,
+              headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=20) as response:
+              token = json.load(response).get("access_token", "")
+
+          parts = token.split(".")
+          if len(parts) < 2:
+              print("IBM_IAM_IDENTITY_RESULT=REFUSED reason=token_not_jwt")
+              raise SystemExit(4)
+          payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+          expected = os.environ["IBM_EXPECTED_SERVICE_ID"]
+          matched = expected in json.dumps(payload, separators=(",", ":"))
+          print("IBM_IAM_EXPECTED_SERVICE_ID_MATCH=" + ("YES" if matched else "NO"))
+          print("IBM_IAM_CLAIM_KEYS=" + ",".join(sorted(payload)))
+          if not matched:
+              raise SystemExit(4)
+
+          account_claim = payload.get("account", {})
+          account_id = account_claim.get("bss", "") if isinstance(account_claim, dict) else ""
+          account_id = account_id or payload.get("account_id", "")
+          iam_id = payload.get("iam_id", "") or payload.get("id", "")
+          if not account_id or not iam_id:
+              print("IBM_IAM_POLICY_READ=REFUSED reason=identity_claims_missing")
+              raise SystemExit(4)
+
+          query = urllib.parse.urlencode({"account_id": account_id, "iam_id": iam_id})
+          policy_request = urllib.request.Request(
+              "https://iam.cloud.ibm.com/v1/policies?" + query,
+              headers={"Accept": "application/json", "Authorization": "Bearer " + token},
+          )
+          try:
+              with urllib.request.urlopen(policy_request, timeout=20) as response:
+                  policies = json.load(response).get("policies", [])
+          except urllib.error.HTTPError as exc:
+              print(f"IBM_IAM_POLICY_READ=HTTP_{exc.code}")
+          else:
+              print("IBM_IAM_POLICY_COUNT=" + str(len(policies)))
+              for index, policy in enumerate(policies, start=1):
+                  roles = sorted(role.get("display_name") or role.get("role_id", "").rsplit(":", 1)[-1] for role in policy.get("roles", []))
+                  attributes = {}
+                  for resource in policy.get("resources", []):
+                      for attribute in resource.get("attributes", []):
+                          name = attribute.get("name", "")
+                          value = attribute.get("value", "")
+                          if name in {"serviceName", "resourceType"}:
+                              attributes[name] = value
+                          elif name == "instanceId":
+                              attributes[name] = "MATCH" if value == os.environ["IBM_VPC_INSTANCE_ID"] else "MISMATCH"
+                          elif name == "accountId":
+                              attributes[name] = "PRESENT"
+                  safe_attrs = ",".join(f"{key}={attributes[key]}" for key in sorted(attributes))
+                  print(f"IBM_IAM_POLICY_{index}=roles:{'+'.join(roles) or 'NONE'} attrs:{safe_attrs or 'NONE'}")
+          PY
+      - name: Read exact IBM instance state
+        run: |
+          set -euo pipefail
+          python3 ops/ibm_vpc_power.py status \
+            --region "$IBM_VPC_REGION" \
+            --instance-id "$IBM_VPC_INSTANCE_ID" \
+            --instance-name "$IBM_VPC_INSTANCE_NAME"

@@ -1,0 +1,206 @@
+name: Oracle Light fresh autopilot candidate
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-light-fresh-candidate.yml'
+      - 'ops/oracle_light_fresh_candidate_restore.py'
+      - 'ops/oracle_autopilot_dump_connection.py'
+      - 'ops/oracle_autopilot_snapshot_keeper.py'
+      - 'ops/oracle_autopilot_snapshot_manifest.sql'
+      - 'ops/test_oracle_light_fresh_candidate_contract.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-light-database-mutation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python -m py_compile ops/oracle_light_fresh_candidate_restore.py ops/oracle_autopilot_dump_connection.py ops/oracle_autopilot_snapshot_keeper.py
+      - run: python -m ops.test_oracle_light_fresh_candidate_contract
+      - run: ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/oracle-light-fresh-candidate.yml
+
+  copy:
+    needs: contract
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: database-production
+    services:
+      postgres:
+        image: postgres@sha256:0377e72c5289ed2f98cf61b1a9c2db9eb9d300317fe14244492fbc94343b3d04
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: recovery-only
+          POSTGRES_DB: recovery
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d recovery"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Create consistent scoped Postgres 18 dump
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          test -n "${DATABASE_URL:-}"
+          test -n "${SSH_PRIVATE_KEY:-}"
+          python -m pip install --disable-pip-version-check -q 'psycopg[binary]==3.3.4'
+          secrets_dir="$(mktemp -d)"
+          keeper_pid=''
+          cleanup_source() {
+            touch "$secrets_dir/done" 2>/dev/null || true
+            if test -n "$keeper_pid"; then
+              wait "$keeper_pid" 2>/dev/null || true
+            fi
+            rm -rf "$secrets_dir"
+          }
+          trap cleanup_source EXIT
+          NEON_DATABASE_URL="$DATABASE_URL" python -m ops.oracle_autopilot_dump_connection "$secrets_dir"
+          install -m 0444 /etc/ssl/certs/ca-certificates.crt "$secrets_dir/ca-certificates.crt"
+          NEON_DATABASE_URL="$DATABASE_URL" python -m ops.oracle_autopilot_snapshot_keeper \
+            "$secrets_dir/snapshot" "$secrets_dir/done" &
+          keeper_pid=$!
+          for _ in {1..100}; do
+            test -s "$secrets_dir/snapshot" && break
+            kill -0 "$keeper_pid"
+            sleep 0.2
+          done
+          test -s "$secrets_dir/snapshot"
+          snapshot="$(tr -d '\r\n' < "$secrets_dir/snapshot")"
+          [[ "$snapshot" =~ ^[0-9A-Fa-f]+-[0-9A-Fa-f]+-[0-9]+$ ]]
+          unset DATABASE_URL
+          pg_image='postgres@sha256:0377e72c5289ed2f98cf61b1a9c2db9eb9d300317fe14244492fbc94343b3d04'
+          pg=(docker run --rm --user "$(id -u):$(id -g)" -e PGSERVICE=autopilot_source
+              -e PGSERVICEFILE=/secrets/pg_service.conf -e PGPASSFILE=/secrets/.pgpass
+              -v "$secrets_dir:/secrets:ro" -v "$PWD:/backup" "$pg_image")
+          "${pg[@]}" pg_dump "service=autopilot_source" --format=custom --compress=9 --no-owner \
+              --snapshot="$snapshot" \
+              --schema=autopilot --schema=autopilot_reconcile \
+              --file=/backup/autopilot-fresh.dump
+          "${pg[@]}" pg_dump "service=autopilot_source" --format=custom --compress=9 --no-owner --snapshot="$snapshot" \
+              --table=public.schema_migration --file=/backup/ledger-fresh.dump
+          "${pg[@]}" pg_dump "service=autopilot_source" --format=custom --compress=9 --no-owner --snapshot="$snapshot" \
+              --table=public.autopilot_operational_health_signal --file=/backup/health-fresh.dump
+          for dump in autopilot-fresh.dump ledger-fresh.dump health-fresh.dump; do
+            test -s "$dump"
+            test "$(head -c 5 "$dump")" = PGDMP
+          done
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/backup:ro" "$pg_image" \
+            pg_restore -l /backup/autopilot-fresh.dump > dump.list
+          ! grep -Eq 'assistant_lab|school_knowledge' dump.list
+          grep -Eq 'SCHEMA .* autopilot ' dump.list
+          grep -Eq 'SCHEMA .* autopilot_reconcile ' dump.list
+          touch "$secrets_dir/done"
+          wait "$keeper_pid"
+          keeper_pid=''
+      - name: Restore snapshot locally and create exact reference manifest
+        shell: bash
+        env:
+          PGPASSWORD: recovery-only
+        run: |
+          set -Eeuo pipefail
+          psql_base=(psql -h 127.0.0.1 -p 5432 -U postgres -d recovery -XAtv ON_ERROR_STOP=1)
+          "${psql_base[@]}" <<'SQL'
+          CREATE ROLE neondb_owner NOLOGIN;
+          CREATE ROLE autopilot_runtime NOLOGIN;
+          CREATE ROLE autopilot_runtime_principal NOLOGIN;
+          CREATE ROLE autopilot_callback NOLOGIN;
+          CREATE ROLE autopilot_callback_login NOLOGIN;
+          CREATE ROLE autopilot_light_worker_login NOLOGIN;
+          CREATE ROLE bridge_school_reader NOLOGIN;
+          CREATE ROLE bridge_school_app NOLOGIN;
+          CREATE ROLE bridge_school_worker NOLOGIN;
+          CREATE ROLE bridge_school_worker_principal NOLOGIN;
+          CREATE ROLE bridge_school_health NOLOGIN;
+          CREATE ROLE bridge_school_health_principal NOLOGIN;
+          CREATE EXTENSION pgcrypto;
+          CREATE EXTENSION btree_gist;
+          ALTER DATABASE recovery OWNER TO neondb_owner;
+          SQL
+          pg_image='postgres@sha256:0377e72c5289ed2f98cf61b1a9c2db9eb9d300317fe14244492fbc94343b3d04'
+          pg_local=(docker run --rm --network host -e PGPASSWORD -v "$PWD:/backup:ro" "$pg_image")
+          for dump in autopilot-fresh.dump ledger-fresh.dump health-fresh.dump; do
+            "${pg_local[@]}" pg_restore -h 127.0.0.1 -p 5432 -U postgres -d recovery --role=neondb_owner \
+              --no-owner --single-transaction --exit-on-error "/backup/$dump"
+          done
+          "${pg_local[@]}" psql -h 127.0.0.1 -p 5432 -U postgres -d recovery \
+            -XAtqv ON_ERROR_STOP=1 -f /backup/ops/oracle_autopilot_snapshot_manifest.sql \
+            > reference-manifest.json
+          test -s reference-manifest.json
+          "${pg_local[@]}" pg_dump -h 127.0.0.1 -p 5432 -U postgres -d recovery \
+            --schema-only --no-owner --schema=autopilot --schema=autopilot_reconcile > schema-core.sql
+          "${pg_local[@]}" pg_dump -h 127.0.0.1 -p 5432 -U postgres -d recovery \
+            --schema-only --no-owner --table=public.schema_migration > schema-ledger.sql
+          "${pg_local[@]}" pg_dump -h 127.0.0.1 -p 5432 -U postgres -d recovery \
+            --schema-only --no-owner --table=public.autopilot_operational_health_signal > schema-health.sql
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from ops.oracle_light_fresh_candidate_restore import schema_digest_texts
+          path=Path('reference-manifest.json')
+          data=json.loads(path.read_text())
+          schema_texts=[
+              Path('schema-core.sql').read_text(),
+              Path('schema-ledger.sql').read_text(),
+              Path('schema-health.sql').read_text(),
+          ]
+          data['schema_sha256']=schema_digest_texts(schema_texts)
+          data['schema_parts_sha256']=[schema_digest_texts([text]) for text in schema_texts]
+          assert data['scope']=='AUTOPILOT_ONLY'
+          assert data['entries']['functions'][0]==97
+          assert data['entries']['security_definer_superowner'][0]==0
+          assert data['entries']['unexpected_schemas'][0]==0
+          path.write_text(json.dumps(data,sort_keys=True))
+          PY
+          rm -f schema-core.sql schema-ledger.sql schema-health.sql
+      - name: Transfer and restore as fenced candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"; rm -f autopilot-fresh.dump ledger-fresh.dump health-fresh.dump dump.list reference-manifest.json' EXIT
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$work/key"
+          unset SSH_PRIVATE_KEY DATABASE_URL
+          ssh-keygen -y -P '' -f "$work/key" > "$work/public"
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          ssh_opts=(-F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15)
+          candidate="autopilot_candidate_fresh_${GITHUB_RUN_ID}"
+          remotes=()
+          cleanup_transfer() {
+            for remote in "${remotes[@]}"; do
+              ssh "${ssh_opts[@]}" ubuntu@92.5.47.149 "rm -f -- '$remote'" >/dev/null 2>&1 || true
+            done
+            rm -rf "$work"
+            rm -f autopilot-fresh.dump ledger-fresh.dump health-fresh.dump dump.list reference-manifest.json
+          }
+          trap cleanup_transfer EXIT
+          for local in autopilot-fresh.dump ledger-fresh.dump health-fresh.dump reference-manifest.json ops/oracle_autopilot_snapshot_manifest.sql; do
+            base="${local##*/}"
+            remote="/home/ubuntu/autopilot-db-migration-20260922/${candidate}-$base"
+            remotes+=("$remote")
+            ssh "${ssh_opts[@]}" ubuntu@92.5.47.149 "umask 077; set -C; cat > '$remote'" < "$local"
+          done
+          ssh "${ssh_opts[@]}" ubuntu@92.5.47.149 \
+            "python3 - '${remotes[0]}' '${remotes[1]}' '${remotes[2]}' '${remotes[3]}' '${remotes[4]}' '$candidate'" \
+            < ops/oracle_light_fresh_candidate_restore.py
+          echo FRESH_CANDIDATE_RESTORED_WITHOUT_CUTOVER
