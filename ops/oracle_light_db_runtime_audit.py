@@ -120,8 +120,14 @@ def verify_broker_pin_file(path=PIN_ENV_FILE):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd, 'rb') as file:
         info = os.fstat(file.fileno())
-        if not (stat.S_ISREG(info.st_mode) and info.st_uid == 0
-                and stat.S_IMODE(info.st_mode) == 0o644 and info.st_size <= 4096):
+        metadata = {'audit': 'PIN_FILE_METADATA',
+                    'regular': stat.S_ISREG(info.st_mode),
+                    'root_owned': info.st_uid == 0,
+                    'mode': format(stat.S_IMODE(info.st_mode), '04o'),
+                    'within_size_limit': info.st_size <= 4096}
+        if not (metadata['regular'] and metadata['root_owned']
+                and metadata['mode'] == '0644' and metadata['within_size_limit']):
+            print(json.dumps(metadata), flush=True)
             raise AuditFailure('PIN_FILE_UNTRUSTED')
         raw = file.read(4097)
         if len(raw) > 4096:
