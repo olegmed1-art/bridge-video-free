@@ -1,51 +1,65 @@
-"""Offline regression tests for per-upload temporary file isolation."""
+"""Offline upload regressions: no JSON filesystem storage or shared state."""
 import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import run_drive_3_1_free as drive
 
 
 class UploadJSONTests(unittest.TestCase):
-    def test_overlapping_uploads_keep_same_name_and_separate_payloads(self):
-        paths = []
-        def upload(token, parent, path, mime):
-            path = Path(path)
-            paths.append(path)
-            self.assertEqual(path.name, 'result.json')
-            self.assertEqual(mime, 'application/json')
-            if len(paths) == 1:
-                drive.upload_json(token, parent, 'result.json', {'value': 'inner'})
-                self.assertEqual(json.loads(path.read_text()), {'value': 'outer'})
+    def test_overlapping_uploads_preserve_payload_and_drive_contract(self):
+        bodies = []
+        def post(url, *, headers, data, timeout):
+            bodies.append(data)
+            self.assertEqual(timeout, 180)
+            self.assertEqual(headers['Authorization'], 'Bearer synthetic')
+            self.assertIn('uploadType=multipart', url)
+            self.assertIn(b'"name": "result.json"', data)
+            self.assertIn(b'"parents": ["parent"]', data)
+            self.assertIn(b'Content-Type: application/json', data)
+            if len(bodies) == 1:
+                drive.upload_json('synthetic', 'parent', 'result.json', {'value': 'inner'})
+                self.assertIn('наружный'.encode(), data)
+                self.assertNotIn(b'inner', data)
             else:
-                self.assertEqual(json.loads(path.read_text()), {'value': 'inner'})
-            return {'id': 'synthetic'}
-        with tempfile.TemporaryDirectory() as root:
-            with patch.object(tempfile, 'tempdir', root), patch.object(drive, 'upload_file', upload):
-                drive.upload_json('synthetic', 'parent', 'result.json', {'value': 'outer'})
-            self.assertEqual(list(Path(root).iterdir()), [])
-        self.assertNotEqual(paths[0].parent, paths[1].parent)
+                self.assertIn(b'inner', data)
+            response = Mock()
+            response.json.return_value = {'id': 'synthetic'}
+            return response
+        with patch.object(drive.requests, 'post', side_effect=post):
+            with patch.object(Path, 'write_text', side_effect=AssertionError('disk write')):
+                with patch.object(tempfile, 'TemporaryDirectory', side_effect=AssertionError('tempfile')):
+                    self.assertEqual(drive.upload_json('synthetic', 'parent', 'result.json', {'value': 'наружный'}), {'id': 'synthetic'})
+        self.assertEqual(len(bodies), 2)
 
-    def test_failure_cleans_private_workspace(self):
-        paths = []
-        def fail(token, parent, path, mime):
-            paths.append(Path(path))
-            self.assertEqual(Path(path).parent.stat().st_mode & 0o777, 0o700)
-            raise RuntimeError('synthetic upload failure')
-        with patch.object(drive, 'upload_file', fail):
-            with self.assertRaises(RuntimeError):
-                drive.upload_json('synthetic', 'parent', 'result.json', {})
-        self.assertFalse(paths[0].exists())
-        self.assertFalse(paths[0].parent.exists())
+    def test_failure_leaves_no_json_on_disk(self):
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(tempfile, 'tempdir', root):
+                with patch.object(drive.requests, 'post', side_effect=RuntimeError('synthetic failure')):
+                    with self.assertRaises(RuntimeError):
+                        drive.upload_json('synthetic', 'parent', 'result.json', {})
+            self.assertEqual(list(Path(root).iterdir()), [])
 
     def test_invalid_names_are_rejected_before_upload(self):
-        with patch.object(drive, 'upload_file') as upload:
+        with patch.object(drive.requests, 'post') as upload:
             for name in ['', '.', '..', '../outside.json', '/tmp/outside.json', 'sub/file.json']:
                 with self.subTest(name=name), self.assertRaises(ValueError):
                     drive.upload_json('synthetic', 'parent', name, {})
             upload.assert_not_called()
+
+    def test_file_upload_preserves_binary_bytes(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'report.pdf'
+            path.write_bytes(b'%PDF-\x00\xff')
+            response = Mock()
+            response.json.return_value = {'id': 'pdf'}
+            with patch.object(drive.requests, 'post', return_value=response) as post:
+                self.assertEqual(drive.upload_file('synthetic', 'parent', path, 'application/pdf'), {'id': 'pdf'})
+            self.assertIn(b'%PDF-\x00\xff', post.call_args.kwargs['data'])
+            self.assertIn(b'"name": "report.pdf"', post.call_args.kwargs['data'])
+            response.raise_for_status.assert_called_once()
 
 
 if __name__ == '__main__':
