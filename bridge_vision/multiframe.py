@@ -119,6 +119,9 @@ def _frame_identity(record: Mapping[str, Any]) -> str:
         if value is not None and str(value).strip():
             return f"{key}:{str(value).strip()}"
     pairs = sorted(_pairs(record))
+    board_key = _explicit_board_key(record)
+    if board_key is not None:
+        return "board_pairs:" + repr((board_key, pairs))
     return "pairs:" + repr(pairs)
 
 
