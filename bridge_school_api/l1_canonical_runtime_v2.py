@@ -109,20 +109,21 @@ def resolve_registered_with_world_fallback(
     evaluations: Iterable[RuleEvaluation],
     world_lookup: Callable[[], RuleEvaluation],
 ) -> RuleEvaluation:
-    """Cross the production WORLD boundary only for an exact Canon gap.
+    """Resolve School results without crossing an unverified WORLD boundary.
 
-    A registered Canon conflict is a terminal authority result: it carries no
-    School action and must never be converted into a WORLD lookup.
+    This iterable API supplies no trusted catalog identity, query completeness,
+    scope or provenance. An empty iterable therefore cannot prove a Canon gap.
+    Retain the callback parameter for compatibility, but never invoke it until
+    a separately reviewed catalog adapter and research-only result contract exist.
     """
     items = tuple(evaluations)
     if not items:
         result = _result(
             "SCHOOL-CANON-CATALOG",
-            "CANON_GAP",
-            reason="trusted active Canon catalog has no applicable candidate",
+            "BLOCK",
+            "CANON_CATALOG_UNVERIFIED",
+            reason="empty evaluations do not establish a verified Canon catalog gap",
         )
     else:
         result = resolve_registered(items)
-    if result.status == "CANON_GAP":
-        return world_lookup()
     return result

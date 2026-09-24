@@ -254,7 +254,8 @@ def test_explicit_runtime_conflict_gate_has_no_school_answer():
     assert result.action is None
 
 
-def test_only_explicit_empty_catalog_gap_can_cross_world_boundary():
+@pytest.mark.parametrize("empty", [[], (), iter(())])
+def test_unverified_empty_catalog_never_crosses_world_boundary(empty):
     world = type(evaluate("RULE-L1-OPEN-1H", {"HCP": 13, "H": 5, "S": 4}))(
         "WORLD-1", "MATCH", "WORLD_FALLBACK:1H", 0, 0, 0
     )
@@ -264,9 +265,21 @@ def test_only_explicit_empty_catalog_gap_can_cross_world_boundary():
         calls.append("called")
         return world
 
-    result = resolve_registered_with_world_fallback([], lookup)
-    assert result is world
-    assert calls == ["called"]
+    result = resolve_registered_with_world_fallback(empty, lookup)
+    assert result.status == "BLOCK"
+    assert result.action == "CANON_CATALOG_UNVERIFIED"
+    assert result is not world
+    assert calls == []
+
+
+def test_school_match_is_preserved_without_world_lookup():
+    school = evaluate_registered("RULE-L1-OPEN-1H", {"HCP": 13, "H": 5, "S": 4})
+    assert school.matched
+
+    def forbidden():
+        raise AssertionError("WORLD must not replace a School answer")
+
+    assert resolve_registered_with_world_fallback([school], forbidden) is school
 
 
 @pytest.mark.parametrize(

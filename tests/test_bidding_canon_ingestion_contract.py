@@ -37,7 +37,42 @@ def test_block_inventory_is_not_activated() -> None:
     assert inventory["block_count"] == len(inventory["blocks"]) == 34
     assert inventory["inventory_status"] == "complete_at_heading_level"
     assert {block["activation_status"] for block in inventory["blocks"]} == {"not_created"}
-    assert {block["transcription_status"] for block in inventory["blocks"]} == {"pending_verified"}
+    transcribed = {"NSV1-P1-R1-C1", "NSV1-P1-R1-C2"}
+    for block in inventory["blocks"]:
+        expected = "transcribed_verified" if block["block_id"] in transcribed else "pending_verified"
+        assert block["transcription_status"] == expected
+
+
+def test_block_ledger_matches_snapshot_and_candidate_provenance() -> None:
+    ledger = _load_json("BLOCK_INVENTORY.json")
+    snapshot = json.loads(Path(
+        "docs/research/bidding-engine/content-intake/content-intake-snapshot.json"
+    ).read_text(encoding="utf-8"))
+    lane = next(item for item in snapshot["lanes"] if item["lane_id"] == "SCHOOL_CANON_BIDDING")
+    inventory = lane["inventory"]
+    blocks = {block["block_id"]: block for block in ledger["blocks"]}
+    assert len(blocks) == len(ledger["blocks"]) == inventory["visual_blocks_total"] == 34
+    candidate_sets = [json.loads(path.read_text(encoding="utf-8"))
+                      for path in sorted((ROOT / "candidates").glob("*.candidates.json"))]
+    by_block = {item["source_block_id"]: item for item in candidate_sets}
+    transcribed = {key for key, block in blocks.items()
+                   if block["transcription_status"] == "transcribed_verified"}
+    assert len(by_block) == len(candidate_sets) == inventory["blocks_with_git_transcription"] == 2
+    assert set(by_block) == transcribed == {"NSV1-P1-R1-C1", "NSV1-P1-R1-C2"}
+    assert sum(block["transcription_status"] == "pending_verified" for block in blocks.values()) == inventory["blocks_pending_semantic_transcription"] == 32
+    assert sum(len(item["candidates"]) for item in candidate_sets) == inventory["candidate_rules_total"] == 33
+    assert {entry["block_id"] for entry in inventory["candidate_rules_by_block"]} == transcribed
+    for entry in inventory["candidate_rules_by_block"]:
+        candidate_set = by_block[entry["block_id"]]
+        assert len(candidate_set["candidates"]) == entry["count"]
+        assert candidate_set["source_key"] == ledger["source_key"] == lane["source"]["source_key"]
+        assert candidate_set["set_status"] == entry["status"] == "transcribed_not_activated"
+        assert candidate_set["authority_class"] == "school_canon_candidate"
+        assert candidate_set["external_knowledge_used"] is False
+        assert all(c["activation_status"] == "not_eligible" and not c.get("runtime_rule_id")
+                   for c in candidate_set["candidates"])
+    assert inventory["production_active_rules"] == inventory["production_executable_candidates"] == 0
+    assert all(block["activation_status"] == "not_created" for block in blocks.values())
 
 
 def test_opening_candidates_match_verified_source_decomposition() -> None:
