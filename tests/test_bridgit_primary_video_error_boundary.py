@@ -7,6 +7,8 @@ import pytest
 
 from bridge_vision import bridgit_primary_video_r264 as primary
 
+ORIGINAL_FULL_GEOMETRY_GATE = primary._full_geometry_gate
+
 
 class FakeCapture:
     def __init__(self):
@@ -92,6 +94,31 @@ def test_unexpected_first_geometry_failure_propagates(video_pass):
     run, capture, monkeypatch = video_pass
     monkeypatch.setattr(primary, "_full_geometry_gate", lambda *_args: (_ for _ in ()).throw(RuntimeError("geometry bug")))
     with pytest.raises(RuntimeError, match="geometry bug"):
+        run()
+    assert capture.released
+
+
+def test_unproven_padded_frame_registration_is_an_observation_rejection(video_pass):
+    run, capture, monkeypatch = video_pass
+    import numpy as np
+
+    padded = np.zeros((1090, 1920, 3), dtype=np.uint8)
+    monkeypatch.setattr(primary, "_frame_at", lambda *_args: padded)
+    monkeypatch.setattr(primary, "_full_geometry_gate", ORIGINAL_FULL_GEOMETRY_GATE)
+    monkeypatch.setattr(primary, "horizontal_geometry_detail", lambda *_args: ({suit: 0 for suit in primary.rank_layout.SUITS}, {}, None))
+    monkeypatch.setattr("bridge_vision.bridgit_primary_compat.horizontal_geometry_detail", lambda *_args: ({suit: 0 for suit in primary.rank_layout.SUITS}, {}, None))
+    result = run()
+    assert result["rejections"] == {"full_geometry_not_proven": 3}
+    assert capture.released
+
+
+def test_unexpected_padded_registration_failure_propagates(video_pass):
+    run, capture, monkeypatch = video_pass
+    padded = SimpleNamespace(shape=(1090, 1920))
+    monkeypatch.setattr(primary, "_frame_at", lambda *_args: padded)
+    monkeypatch.setattr(primary, "_full_geometry_gate", ORIGINAL_FULL_GEOMETRY_GATE)
+    monkeypatch.setattr(primary, "register_same_width_vertical_padding", lambda *_args: (_ for _ in ()).throw(RuntimeError("registration bug")))
+    with pytest.raises(RuntimeError, match="registration bug"):
         run()
     assert capture.released
 
