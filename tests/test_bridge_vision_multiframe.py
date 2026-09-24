@@ -151,6 +151,40 @@ def test_duplicate_frame_evidence_is_not_counted_twice():
     assert result["review_frames"][0]["reason"] == "DUPLICATE_FRAME_EVIDENCE"
 
 
+def test_fallback_frame_identity_keeps_distinct_explicit_boards():
+    first = rec({"N": ["AS"]}, frame="a.jpg", board_id="board-A")
+    second = rec({"N": ["AS"]}, frame="b.jpg", board_id="board-B")
+    for record in (first, second):
+        record.pop("frame_sha256")
+        record.pop("frame_file")
+
+    result = reconstruct_deals([first, second]).to_dict()
+
+    assert result["deal_count"] == 2
+    assert not result["review_frames"]
+    assert len({deal["deal_id"] for deal in result["deals"]}) == 2
+
+
+def test_fallback_frame_identity_still_deduplicates_same_board_and_cards():
+    first = rec({"N": ["AS"]}, frame="a.jpg", board_id="board-A")
+    for key in ("frame_sha256", "frame_file"):
+        first.pop(key)
+    result = reconstruct_deals([first, dict(first)]).to_dict()
+
+    assert result["deal_count"] == 1
+    assert result["review_frames"][0]["reason"] == "DUPLICATE_FRAME_EVIDENCE"
+
+
+def test_fallback_frame_identity_without_board_key_remains_conservative():
+    first = rec({"N": ["AS", "KS", "QS", "JS"]}, frame="a.jpg")
+    for key in ("frame_sha256", "frame_file"):
+        first.pop(key)
+    result = reconstruct_deals([first, dict(first)]).to_dict()
+
+    assert result["deal_count"] == 1
+    assert result["review_frames"][0]["reason"] == "DUPLICATE_FRAME_EVIDENCE"
+
+
 def test_job_tool_writes_compact_deals_artifact(tmp_path: Path):
     records = [
         rec({"N": ["AS", "KS", "QS", "JS"]}, frame="a.jpg"),
