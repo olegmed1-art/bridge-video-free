@@ -50,13 +50,13 @@ class LightLoginAuditTests(unittest.TestCase):
 
     def test_live_secret_source_reports_only_match_or_drift(self):
         self.trust_temporary_file_owner()
-        secret = 'postgresql://role:secret-example@host/neondb?sslmode=require'
+        dsn = 'postgresql://role@host/neondb?sslmode=require'
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'light.env'
-            path.write_text('AUTOPILOT_DATABASE_URL="' + secret + '"\n')
+            path.write_text('AUTOPILOT_DATABASE_URL="' + dsn + '"\n')
             os.chmod(path, 0o600)
-            self.assertTrue(audit.live_credential_matches_disk(secret, path))
-            self.assertFalse(audit.live_credential_matches_disk(secret + 'x', path))
+            self.assertTrue(audit.live_credential_matches_disk(dsn, path))
+            self.assertFalse(audit.live_credential_matches_disk(dsn + 'x', path))
             self.assertFalse(audit.live_credential_matches_disk('different', path))
 
     def test_duplicate_or_insecure_source_fails_closed(self):
