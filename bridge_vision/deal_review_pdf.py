@@ -315,25 +315,26 @@ def _draw_screenshot(canvas: Any, *, x: float, y: float, width: float, height: f
     try:
         image = ImageReader(str(frame))
         source_width, source_height = image.getSize()
-        scale = min(image_width / source_width, image_height / source_height)
-        draw_width, draw_height = source_width * scale, source_height * scale
-        canvas.drawImage(
-            image,
-            image_x + (image_width - draw_width) / 2,
-            image_y + (image_height - draw_height) / 2,
-            width=draw_width,
-            height=draw_height,
-            preserveAspectRatio=True,
-            mask="auto",
-        )
-        return True
-    except Exception:
+        image.getRGBData()
+    except (OSError, ValueError):
         canvas.setFillColor(HexColor("#E8EBF0"))
         canvas.rect(image_x, image_y, image_width, image_height, fill=1, stroke=0)
         canvas.setFillColor(HexColor("#667085"))
         canvas.setFont("DealReviewSans", 8)
         canvas.drawCentredString(x + width / 2, y + height / 2, "Файл подтвержден, но изображение не декодируется")
         return False
+    scale = min(image_width / source_width, image_height / source_height)
+    draw_width, draw_height = source_width * scale, source_height * scale
+    canvas.drawImage(
+        image,
+        image_x + (image_width - draw_width) / 2,
+        image_y + (image_height - draw_height) / 2,
+        width=draw_width,
+        height=draw_height,
+        preserveAspectRatio=True,
+        mask="auto",
+    )
+    return True
 
 
 def _draw_auction(canvas: Any, *, x: float, y: float, width: float, height: float, auction: Mapping[str, Any]) -> None:
