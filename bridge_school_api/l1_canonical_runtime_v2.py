@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from .l1_canonical_registry import (
     ACTIVE_DOMAIN_RULE_IDS,
@@ -103,3 +103,27 @@ def resolve_registered(
 ) -> RuleEvaluation:
     """Use the existing deterministic specificity/scope/priority resolver."""
     return resolve(evaluations)
+
+
+def resolve_registered_with_world_fallback(
+    evaluations: Iterable[RuleEvaluation],
+    world_lookup: Callable[[], RuleEvaluation],
+) -> RuleEvaluation:
+    """Resolve School results without crossing an unverified WORLD boundary.
+
+    This iterable API supplies no trusted catalog identity, query completeness,
+    scope or provenance. An empty iterable therefore cannot prove a Canon gap.
+    Retain the callback parameter for compatibility, but never invoke it until
+    a separately reviewed catalog adapter and research-only result contract exist.
+    """
+    items = tuple(evaluations)
+    if not items:
+        result = _result(
+            "SCHOOL-CANON-CATALOG",
+            "BLOCK",
+            "CANON_CATALOG_UNVERIFIED",
+            reason="empty evaluations do not establish a verified Canon catalog gap",
+        )
+    else:
+        result = resolve_registered(items)
+    return result
