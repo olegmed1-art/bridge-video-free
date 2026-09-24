@@ -14,6 +14,9 @@ on:
       - '.github/workflows/dds3-module.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   golden:
     runs-on: ubuntu-latest
