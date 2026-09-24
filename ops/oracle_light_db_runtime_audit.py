@@ -107,6 +107,14 @@ def environment_source_layout(output, working_directory=''):
             'unknown_matches_workdir_pin': len(extra) == 1 and extra[0] == workdir_pin}
 
 
+def release_broker_pin_path(working_directory):
+    """Bind the broker-only env file to one immutable release directory."""
+    if not re.fullmatch(r'/opt/bridge-school/school-autopilot-production-light/'
+                        r'releases/[a-f0-9]{40}', working_directory):
+        raise AuditFailure('RELEASE_DIRECTORY_DRIFT')
+    return Path(working_directory) / 'ops/autopilot/broker-hold.env'
+
+
 def verify_broker_pin_file(path=PIN_ENV_FILE):
     """A recognized second EnvironmentFile must contain broker pins only."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
@@ -200,12 +208,18 @@ def main():
                           {'entries': 2, 'expected_primary': True,
                            'expected_pin': True, 'unknown_entries': 0,
                            'unknown_is_release_pin': False,
-                           'unknown_matches_workdir_pin': False})
+                           'unknown_matches_workdir_pin': False},
+                          {'entries': 2, 'expected_primary': True,
+                           'expected_pin': False, 'unknown_entries': 1,
+                           'unknown_is_release_pin': True,
+                           'unknown_matches_workdir_pin': True})
             if layout not in acceptable:
                 print(json.dumps({'audit': 'ENV_SOURCE_LAYOUT', **layout}), flush=True)
                 raise AuditFailure('ENV_SOURCE_DRIFT')
             if layout['expected_pin']:
                 verify_broker_pin_file()
+            elif layout['unknown_matches_workdir_pin']:
+                verify_broker_pin_file(release_broker_pin_path(props['WorkingDirectory']))
             matches = live_credential_matches_disk(dsn)
             print(json.dumps({'audit': 'SOURCE_ATTESTED',
                               'live_credential_matches_disk': matches}), flush=True)
