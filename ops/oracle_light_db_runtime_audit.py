@@ -19,13 +19,32 @@ def safe_identifier(value):
 
 # The child receives the live DSN only in its environment. Its args and output
 # contain no password, host, or connection error message.
-READ_ONLY_LOGIN = """import json, os, psycopg
-with psycopg.connect(os.environ['AUDIT_DATABASE_URL'], autocommit=True,
-                     connect_timeout=10,
-                     options='-c statement_timeout=5000 -c default_transaction_read_only=on') as conn:
-    row = conn.execute("SELECT current_user, current_database(), current_setting('transaction_read_only')").fetchone()
+READ_ONLY_LOGIN = """import json, os, sys
+try:
+    import psycopg
+except Exception:
+    print(json.dumps({'error_code': 'DRIVER_UNAVAILABLE'}))
+    sys.exit(2)
+try:
+    with psycopg.connect(os.environ['AUDIT_DATABASE_URL'], autocommit=True,
+                         connect_timeout=10,
+                         options='-c statement_timeout=5000 -c default_transaction_read_only=on') as conn:
+        row = conn.execute("SELECT current_user, current_database(), current_setting('transaction_read_only')").fetchone()
+except Exception as exc:
+    if type(exc).__name__ == 'OperationalError':
+        code = ('AUTHENTICATION_FAILED' if getattr(exc, 'sqlstate', None) == '28P01'
+                or 'password authentication failed' in str(exc).lower()
+                else 'CONNECT_FAILED')
+    else:
+        code = 'QUERY_FAILED'
+    print(json.dumps({'error_code': code}))
+    sys.exit(2)
 print(json.dumps({'user': row[0], 'database': row[1], 'read_only': row[2]}))
 """
+
+
+class AuditFailure(RuntimeError):
+    pass
 
 
 def verify_production_login(dsn):
@@ -40,10 +59,22 @@ def verify_production_login(dsn):
              'PYTHONDONTWRITEBYTECODE': '1'},
         cwd='/', preexec_fn=drop_to_service, capture_output=True, text=True,
         timeout=25, check=False)
-    assert child.returncode == 0 and len(child.stdout) < 512
-    assert json.loads(child.stdout) == {
-        'user': 'autopilot_light_worker_login',
-        'database': 'neondb', 'read_only': 'on'}
+    if len(child.stdout) >= 512:
+        raise AuditFailure('LOGIN_OUTPUT_INVALID')
+    try:
+        proof = json.loads(child.stdout)
+    except ValueError:
+        raise AuditFailure('LOGIN_OUTPUT_INVALID') from None
+    if child.returncode != 0:
+        codes = {'DRIVER_UNAVAILABLE', 'AUTHENTICATION_FAILED', 'CONNECT_FAILED',
+                 'QUERY_FAILED'}
+        if (isinstance(proof, dict) and set(proof) == {'error_code'}
+                and proof['error_code'] in codes):
+            raise AuditFailure(proof['error_code'])
+        raise AuditFailure('LOGIN_CHILD_FAILED')
+    if proof != {'user': 'autopilot_light_worker_login',
+                 'database': 'neondb', 'read_only': 'on'}:
+        raise AuditFailure('LOGIN_IDENTITY_MISMATCH')
 
 def main():
     result = []
@@ -80,5 +111,7 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as exc:
-        print(json.dumps({'audit': 'INCOMPLETE', 'error_type': type(exc).__name__}))
+        print(json.dumps({'audit': 'INCOMPLETE', 'error_code': str(exc)}
+                         if isinstance(exc, AuditFailure)
+                         else {'audit': 'INCOMPLETE', 'error_type': type(exc).__name__}))
         sys.exit(2)

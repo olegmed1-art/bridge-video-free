@@ -31,10 +31,12 @@ class LightLoginAuditTests(unittest.TestCase):
     @patch.object(audit.subprocess, 'run')
     def test_rejected_connection_does_not_expose_provider_error(self, run):
         secret = 'postgresql://role:secret-example@host/neondb'
-        run.return_value = SimpleNamespace(returncode=2, stdout='',
-                                           stderr='password=secret-example rejected')
-        with self.assertRaises(AssertionError) as result:
+        run.return_value = SimpleNamespace(
+            returncode=2, stdout='{"error_code":"AUTHENTICATION_FAILED"}',
+            stderr='password=secret-example rejected')
+        with self.assertRaises(audit.AuditFailure) as result:
             audit.verify_production_login(secret)
+        self.assertEqual(str(result.exception), 'AUTHENTICATION_FAILED')
         self.assertNotIn('secret-example', str(result.exception))
 
 
