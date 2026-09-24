@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from unittest.mock import patch
 
 import pytest
+from bridge_contracts.video_deal import canonicalize_video_deal as original_canonicalize_video_deal
 
 from bridge_vision.deal_evidence import (
     DEAL_EVIDENCE_SCHEMA,
@@ -140,6 +142,8 @@ def test_non_iterable_evidence_inputs_fail_closed():
             recognizer_version=VERSION,
             required_visual_frames=1,
         )
+
+
     tiny = observation("N", "AH")
     tiny["region"]["width"] = 1.0001e-8
     with pytest.raises(DealEvidenceError, match="region size"):
@@ -158,6 +162,28 @@ def test_non_iterable_evidence_inputs_fail_closed():
     )
     with pytest.raises(DealEvidenceError, match="region size"):
         build_deal_evidence_report([two_quantum_region], recognizer_version=VERSION)
+
+
+def test_invalid_visual_card_is_input_error():
+    with pytest.raises(DealEvidenceError, match="invalid card"):
+        build_deal_evidence_report([observation("N", "INVALID")], recognizer_version=VERSION)
+
+
+def test_unexpected_card_canonicalizer_failure_propagates():
+    with patch("bridge_vision.deal_evidence.canonicalize_video_deal", side_effect=ValueError("synthetic canonicalizer failure")):
+        with pytest.raises(ValueError, match="synthetic canonicalizer failure"):
+            build_deal_evidence_report([observation("N", "AH")], recognizer_version=VERSION)
+
+
+def test_unexpected_final_observed_deal_failure_propagates():
+    def broken_final_deal(payload):
+        if len(payload["hands"]) == 1:
+            return original_canonicalize_video_deal(payload)
+        raise ValueError("synthetic final deal failure")
+
+    with patch("bridge_vision.deal_evidence.canonicalize_video_deal", side_effect=broken_final_deal):
+        with pytest.raises(ValueError, match="synthetic final deal failure"):
+            build_deal_evidence_report([observation("N", "AH")], recognizer_version=VERSION)
 
 
 def test_one_frame_is_visual_but_not_temporal_consensus():
