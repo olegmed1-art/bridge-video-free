@@ -28,6 +28,10 @@ jobs:
         run: bash -n ops/oracle_dds3_oidc_jwks_repair.sh
       - name: Build pinned DDS3 container
         run: docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
+      - name: Verify DDS3 CLI runs without root
+        run: |
+          test "$(docker run --rm --entrypoint id bridge-school-dds3 -u)" = 65532
+          test "$(docker run --rm --entrypoint id bridge-school-dds3 -g)" = 65532
       - name: Golden deterministic run
         shell: bash
         run: |
