@@ -7,8 +7,15 @@ on:
       - algorithm/3.1-free-r5-asr-oauth-hardening
     paths:
       - 'bridge_runtime_hardening_r5.py'
+      - 'run_drive_3_1_free.py'
+      - 'tests/test_drive_json_upload.py'
       - 'run_drive_3_1_free_generic.py'
       - 'tests/test_r5_runtime_hardening.py'
+      - '.github/workflows/video-r5-hardening-selftest.yml'
+  pull_request:
+    paths:
+      - 'run_drive_3_1_free.py'
+      - 'tests/test_drive_json_upload.py'
       - '.github/workflows/video-r5-hardening-selftest.yml'
   workflow_dispatch:
 
@@ -27,3 +34,5 @@ jobs:
         run: python -m pip install --disable-pip-version-check requests google-auth psycopg[binary]
       - name: Run r5 hardening selftest
         run: PYTHONPATH=. python tests/test_r5_runtime_hardening.py
+      - name: Verify isolated JSON upload temporary files
+        run: PYTHONPATH=. python tests/test_drive_json_upload.py
