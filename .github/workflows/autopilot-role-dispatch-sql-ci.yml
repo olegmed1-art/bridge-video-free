@@ -3,6 +3,9 @@ name: Autopilot role dispatch SQL CI
 on:
   pull_request:
     paths:
+      - 'database/migrations/0372_autopilot_audit_pass_alias.sql'
+      - 'database/rollbacks/0372_autopilot_audit_pass_alias.sql'
+      - 'database/tests/372_autopilot_audit_pass_alias.sql'
       - 'database/migrations/0368_autopilot_next_step.sql'
       - 'database/rollbacks/0368_autopilot_next_step.sql'
       - 'database/tests/368_autopilot_next_step.sql'
@@ -87,6 +90,9 @@ on:
   push:
     branches: [main]
     paths:
+      - 'database/migrations/0372_autopilot_audit_pass_alias.sql'
+      - 'database/rollbacks/0372_autopilot_audit_pass_alias.sql'
+      - 'database/tests/372_autopilot_audit_pass_alias.sql'
       - 'database/migrations/0368_autopilot_next_step.sql'
       - 'database/rollbacks/0368_autopilot_next_step.sql'
       - 'database/tests/368_autopilot_next_step.sql'
@@ -338,6 +344,8 @@ jobs:
           # Verify and unwind the modern upper chain before historical tests.
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/370_autopilot_codex_send_intent.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/371_autopilot_provider_retry_budget.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/372_autopilot_audit_pass_alias.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0372_autopilot_audit_pass_alias.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0371_autopilot_provider_retry_budget.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0370_autopilot_codex_send_intent.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0369_autopilot_reconcile_gateway.sql
