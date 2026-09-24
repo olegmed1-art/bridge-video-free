@@ -7,17 +7,22 @@ methodology, persistence, or publication route.
 from __future__ import annotations
 
 import hashlib
+import zipfile
 from pathlib import Path
 from typing import Any, Callable
 
-from bridge_vision.bridgit_gold_profile import build_autonomous_gold_profile
-from bridge_vision.bridgit_primary_video_r264 import recognize_video_primary
-from bridge_vision.gambler_classic_reference import MAX_SPRITE_BYTES
+from bridge_vision.bridgit_gold_profile import BridgitGoldProfileError, build_autonomous_gold_profile
+from bridge_vision.bridgit_primary_video_r264 import PrimaryVideoInputError, recognize_video_primary
+from bridge_vision.gambler_classic_reference import GamblerClassicReferenceError, MAX_SPRITE_BYTES
 from bridge_vision.gambler_reference_authority import PINNED_GAMBLER_CLASSIC_SPRITE_SHA256
 
 _STATE: dict[str, Any] = {"deals": [], "shots": [], "qc": {"status": "NOT_RUN"}}
 _INSTALLED_BASE_IDS: set[int] = set()
 VISUAL_ONLY_RECONSTRUCTION_RULE = "VISUAL_ONLY; NO_DECK_COMPLEMENT"
+
+
+class PrimaryInputUnavailable(RuntimeError):
+    """Required validated recognizer material is missing or unusable."""
 
 
 def _q(value: object) -> str:
@@ -33,10 +38,10 @@ def _prepare_profile_seed(base, token: str, work: Path):
             base.io.download(token, item["id"], target)
             reference, profile_path, payload = build_autonomous_gold_profile(target, work / f"bridgit-gold-v2-{index}")
             return reference, profile_path, payload, item
-        except Exception as exc:
+        except (BridgitGoldProfileError, zipfile.BadZipFile) as exc:
             failures.append(type(exc).__name__)
             target.unlink(missing_ok=True)
-    raise RuntimeError("CARD_PRIMARY_GOLD_PROFILE_UNAVAILABLE:" + ",".join(failures[:8]))
+    raise PrimaryInputUnavailable("CARD_PRIMARY_GOLD_PROFILE_UNAVAILABLE:" + ",".join(failures[:8]))
 
 
 def _prepare_assets(base, token: str, work: Path) -> Path:
@@ -78,7 +83,7 @@ def _prepare_assets(base, token: str, work: Path) -> Path:
             return asset_root
         for path in asset_root.glob("*"):
             path.unlink(missing_ok=True)
-    raise RuntimeError("CARD_PRIMARY_GAMBLER_ASSETS_UNAVAILABLE:" + ",".join(failures[:16]))
+    raise PrimaryInputUnavailable("CARD_PRIMARY_GAMBLER_ASSETS_UNAVAILABLE:" + ",".join(failures[:16]))
 
 
 def _run_primary(base, token: str, video: Path, work: Path, job: str):
@@ -91,7 +96,8 @@ def _run_primary(base, token: str, video: Path, work: Path, job: str):
             verified_card_width_px=109.0, verified_card_height_px=147.0,
             scan_ms=1000, attempt_gap_ms=15000, max_deals=64,
         )
-    except Exception as exc:
+    except (PrimaryInputUnavailable, BridgitGoldProfileError, zipfile.BadZipFile,
+            PrimaryVideoInputError, GamblerClassicReferenceError) as exc:
         return [], [], {"status": "UNAVAILABLE", "reason": type(exc).__name__, "detail": str(exc)[:160]}
     deals, shots = [], []
     for item in result.get("deals") or []:

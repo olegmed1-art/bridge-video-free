@@ -9,6 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import math
 import re
 from typing import Any, Mapping
 
@@ -48,9 +49,9 @@ def _seconds(value: Any, label: str) -> float:
         _fail(f"invalid {label}")
     try:
         result = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         _fail(f"invalid {label}")
-    if result < 0:
+    if not math.isfinite(result) or result < 0:
         _fail(f"invalid {label}")
     return result
 

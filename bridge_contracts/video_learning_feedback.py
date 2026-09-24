@@ -10,7 +10,7 @@ import json
 from typing import Any, Callable, Mapping
 
 
-SCHEMA = "video-analyzer-learning-feedback-v2"
+SCHEMA = "video-analyzer-learning-feedback-v3"
 _KINDS = {"ASR", "SPEAKER", "CARD", "AUCTION", "EXTRACTION", "PEDAGOGY"}
 
 
@@ -61,7 +61,7 @@ def build_learning_feedback(
     receipts: dict[str, Mapping[str, Any]] = {}
     for receipt in raw_receipts:
         fields = {
-            "correction_id", "reviewer_ref", "source_sha256", "input_ref",
+            "correction_id", "kind", "reviewer_ref", "source_sha256", "input_ref",
             "corrected_value_sha256", "evidence_refs", "status", "receipt_sha256",
         }
         if not isinstance(receipt, Mapping) or set(receipt) != fields:
@@ -104,6 +104,7 @@ def build_learning_feedback(
             raise VideoLearningFeedbackError("verified correction review receipt required")
         if (
             _sha(receipt.get("source_sha256")) != source_sha
+            or receipt.get("kind") != kind
             or receipt.get("input_ref") != input_ref
             or receipt.get("reviewer_ref") != reviewer_ref
             or _sha(receipt.get("corrected_value_sha256")) != corrected_value_sha

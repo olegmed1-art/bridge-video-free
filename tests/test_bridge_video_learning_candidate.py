@@ -155,3 +155,20 @@ def test_confirmed_bridge_claim_requires_local_evidence():
     candidate["bridge_context"]["board"]["source_refs"] = ["d" * 64]
     with pytest.raises(LearningCandidateError, match="outside candidate"):
         validate_learning_candidate(candidate)
+
+
+@pytest.mark.parametrize("field,section,value", [
+    ("end", "observed_episode", float("nan")),
+    ("distance_to_midpoint_seconds", "frame_evidence", float("nan")),
+    ("distance_to_midpoint_seconds", "frame_evidence", float("inf")),
+    ("distance_to_midpoint_seconds", "frame_evidence", "NaN"),
+])
+def test_nonfinite_timestamps_cannot_seal_source_bound_evidence(field, section, value):
+    candidate = _candidate()
+    target = (candidate["observed_episode"] if section == "observed_episode"
+              else candidate["frame_evidence"][0])
+    target[field] = value
+    with pytest.raises(LearningCandidateError, match="invalid"):
+        validate_learning_candidate(candidate)
+    with pytest.raises(LearningCandidateError, match="invalid"):
+        canonical_sha256(candidate)

@@ -16,6 +16,7 @@ from typing import Any, Mapping, Sequence
 
 from bridge_contracts.video_deal_r264 import canonicalize_video_deal
 from bridge_vision import bridgit_rank_layout_r264 as rank_layout
+from bridge_vision.bridgit_rank_layout import BridgitRankLayoutError as PaddedRegistrationError
 from bridge_vision.bridgit_gambler_rank_layout_r264 import (
     derive_original_asset_reference,
     recognize_frames_with_original_gambler_deck,
@@ -43,6 +44,10 @@ MAX_TEMPORAL_PAIR_GAP_MS = 10_000
 
 class PrimaryVideoRecognitionError(ValueError):
     """The bounded primary-video pass cannot continue safely."""
+
+
+class PrimaryVideoInputError(PrimaryVideoRecognitionError):
+    """A required source video or pinned visual reference is unusable."""
 
 
 def _runtime_version() -> str:
@@ -81,7 +86,7 @@ def resolve_original_gambler_asset(
                 selected, expected_sha256=expected_sha, expected_variant=variant
             )
         except GamblerClassicReferenceError as exc:
-            raise PrimaryVideoRecognitionError(
+            raise PrimaryVideoInputError(
                 f"pinned Gambler classic variant {variant} failed integrity validation"
             ) from exc
         if any(
@@ -90,11 +95,11 @@ def resolve_original_gambler_asset(
             and _sha256_file(path) != sprite.sprite_sha256
             for path in candidates
         ):
-            raise PrimaryVideoRecognitionError(
+            raise PrimaryVideoInputError(
                 f"conflicting Gambler classic variant {variant} assets"
             )
         return variant, selected, expected_sha
-    raise PrimaryVideoRecognitionError("no pinned Gambler classic sprite is available")
+    raise PrimaryVideoInputError("no pinned Gambler classic sprite is available")
 
 
 def _sha256_file(path: Path) -> str:
@@ -127,7 +132,10 @@ def _registered_candidate(image: Any, profile: rank_layout.BridgitRankLayoutProf
     if (width, height) == (profile.width, profile.height):
         return image
     if width == profile.width and profile.height < height <= profile.height + MAX_VERTICAL_PADDING_PX:
-        registered, _ = register_same_width_vertical_padding(image, profile)
+        try:
+            registered, _ = register_same_width_vertical_padding(image, profile)
+        except PaddedRegistrationError:
+            return None
         return registered
     return None
 
@@ -247,14 +255,14 @@ def recognize_video_primary(
             )
         )
     elif gambler_sprite_path is None or gambler_sprite_sha256 is None:
-        raise PrimaryVideoRecognitionError(
+        raise PrimaryVideoInputError(
             "Gambler asset root or explicit pinned sprite is required"
         )
     else:
         try:
             selected_variant = variant_for_pinned_sprite_sha256(gambler_sprite_sha256)
         except GamblerReferenceAuthorityError as exc:
-            raise PrimaryVideoRecognitionError(
+            raise PrimaryVideoInputError(
                 "explicit Gambler sprite hash is not pinned"
             ) from exc
     assert gambler_sprite_path is not None
@@ -267,9 +275,9 @@ def recognize_video_primary(
     cv2, _ = rank_layout._pixel_runtime()
     reference = cv2.imread(str(reference_frame), cv2.IMREAD_COLOR)
     if reference is None:
-        raise PrimaryVideoRecognitionError("reference frame cannot be decoded")
+        raise PrimaryVideoInputError("reference frame cannot be decoded")
     if tuple(reference.shape[:2]) != (profile.height, profile.width):
-        raise PrimaryVideoRecognitionError("reference dimensions do not match profile")
+        raise PrimaryVideoInputError("reference dimensions do not match profile")
     derived_reference = derive_original_asset_reference(
         reference,
         profile,
@@ -281,14 +289,14 @@ def recognize_video_primary(
 
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
-        raise PrimaryVideoRecognitionError("video decoder could not open source")
+        raise PrimaryVideoInputError("video decoder could not open source")
     fps = float(capture.get(cv2.CAP_PROP_FPS))
     frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
     if fps <= 0 or frame_count <= 0:
         capture.release()
-        raise PrimaryVideoRecognitionError("video metadata is invalid")
+        raise PrimaryVideoInputError("video metadata is invalid")
     if width != profile.width or not (
         profile.height <= height <= profile.height + MAX_VERTICAL_PADDING_PX
     ):
@@ -320,21 +328,17 @@ def recognize_video_primary(
                 timestamp_ms += scan_ms
                 continue
             try:
-                event = selector.observe(frame_signature(first, event_regions), timestamp_ms)
-            except Exception:
+                signature = frame_signature(first, event_regions)
+            except ValueError:
                 rejections["event_signature_rejected"] += 1
                 timestamp_ms += scan_ms
                 continue
+            event = selector.observe(signature, timestamp_ms)
             if event is None:
                 timestamp_ms += scan_ms
                 continue
             event_counts[event.reason] += 1
-            try:
-                first_geometry = _full_geometry_gate(first, bank, profile)
-            except Exception:
-                rejections["geometry_exception"] += 1
-                timestamp_ms += scan_ms
-                continue
+            first_geometry = _full_geometry_gate(first, bank, profile)
             if first_geometry is None:
                 rejections["full_geometry_not_proven"] += 1
                 timestamp_ms += scan_ms
@@ -365,10 +369,7 @@ def recognize_video_primary(
                     rejections["retry_decode"] += 1
                     timestamp_ms += scan_ms
                     continue
-                try:
-                    second_geometry = _full_geometry_gate(second, bank, profile)
-                except Exception:
-                    second_geometry = None
+                second_geometry = _full_geometry_gate(second, bank, profile)
                 if second_geometry != first_geometry:
                     # Visibility may legitimately change between frames. Keep a
                     # bounded observation so a later frame with the same visible
@@ -558,6 +559,7 @@ __all__ = [
     "PRIMARY_VIDEO_VERSION",
     "PRIMARY_VIDEO_TEMPORAL_COMPLEMENT_VERSION",
     "PrimaryVideoRecognitionError",
+    "PrimaryVideoInputError",
     "recognize_video_primary",
     "resolve_original_gambler_asset",
 ]
