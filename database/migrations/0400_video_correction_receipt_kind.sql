@@ -55,7 +55,7 @@ BEGIN
     IF v_decoded<>(NEW.receipt_payload-'receipt_sha256')
        OR v_computed<>NEW.receipt_sha256
        OR NEW.receipt_payload->>'receipt_sha256'<>NEW.receipt_sha256
-       OR jsonb_object_length(NEW.receipt_payload)<>9
+       OR (SELECT count(*) FROM jsonb_object_keys(NEW.receipt_payload))<>9
        OR NOT (NEW.receipt_payload ?& ARRAY[
          'correction_id','kind','reviewer_ref','source_sha256','input_ref',
          'corrected_value_sha256','evidence_refs','status','receipt_sha256'
