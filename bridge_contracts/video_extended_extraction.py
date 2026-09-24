@@ -81,11 +81,13 @@ def _logic_relations(text: str) -> list[dict[str, str]]:
                 for match in pattern.finditer(low)
             )
     matches.sort(key=lambda row: (row[0], -(row[1] - row[0])))
-    # Prefer the longest cue when alternatives begin at the same character.
-    matches = [
-        row for index, row in enumerate(matches)
-        if index == 0 or row[0] != matches[index - 1][0]
-    ]
+    # Prefer the outer cue also when a shorter one begins inside it
+    # (e.g. "чтобы" inside "для того чтобы").
+    non_overlapping: list[tuple[int, int, str, str]] = []
+    for row in matches:
+        if not non_overlapping or row[0] >= non_overlapping[-1][1]:
+            non_overlapping.append(row)
+    matches = non_overlapping
     relations: list[dict[str, str]] = []
     for index, (start, end, relation_type, cue) in enumerate(matches):
         left_start = matches[index - 1][1] if index else 0
@@ -186,7 +188,6 @@ def _automatic_explanations(
             except (TypeError, ValueError):
                 confidence = 0.0
             text = re.sub(r"\s+", " ", str(segment.get("text") or "")).strip()
-            low = text.casefold()
             relations = _logic_relations(text)
             if role != "teacher" or confidence < 0.8 or not text or not relations:
                 continue

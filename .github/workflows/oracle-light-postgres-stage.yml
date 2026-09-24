@@ -2,11 +2,16 @@ name: Oracle Light local PostgreSQL staging
 
 on:
   pull_request:
-    paths: ['.github/workflows/oracle-light-postgres-stage.yml', 'ops/oracle_light_postgres_stage.py']
+    paths: ['ops/test_oracle_light_postgres_stage.py', 'ops/test_oracle_light_tls.py', '.github/workflows/oracle-light-postgres-stage.yml', 'ops/oracle_light_postgres_stage.py']
   push:
     branches: [main]
-    paths: ['.github/workflows/oracle-light-postgres-stage.yml', 'ops/oracle_light_postgres_stage.py']
+    paths: ['ops/test_oracle_light_postgres_stage.py', 'ops/test_oracle_light_tls.py', '.github/workflows/oracle-light-postgres-stage.yml', 'ops/oracle_light_postgres_stage.py']
   workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact reviewed main commit for this administrative operation
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -24,16 +29,24 @@ jobs:
           persist-credentials: false
       - run: python -m py_compile ops/oracle_light_postgres_stage.py
       - run: python ops/test_oracle_light_postgres_stage.py
+      - run: python ops/test_oracle_light_tls.py
       - name: Validate shell syntax
         run: |
           ruby -ryaml -e 'd=YAML.load_file(ARGV[0]); d.fetch("jobs").each_value { |j| j.fetch("steps").each { |s| next unless s["run"]; IO.popen(["bash", "-n"], "w") { |p| p.write(s["run"]) }; abort "invalid shell" unless $?.success? } }' .github/workflows/oracle-light-postgres-stage.yml
 
   stage:
     needs: contract
-    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Require the exact reviewed administrative revision
+        env:
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED_MAIN_SHA" = "$GITHUB_SHA"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false

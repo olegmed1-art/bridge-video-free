@@ -5,10 +5,10 @@ on:
     - cron: '19 5 * * *'
   push:
     branches: [main]
-    paths: ['.github/workflows/oracle-light-pg-certificate-health.yml', 'ops/oracle_light_pg_certificate_check.py']
+    paths: ['ops/test_oracle_light_tls.py', '.github/workflows/oracle-light-pg-certificate-health.yml', 'ops/oracle_light_pg_certificate_check.py']
   workflow_dispatch:
   pull_request:
-    paths: ['.github/workflows/oracle-light-pg-certificate-health.yml', 'ops/oracle_light_pg_certificate_check.py']
+    paths: ['ops/test_oracle_light_tls.py', '.github/workflows/oracle-light-pg-certificate-health.yml', 'ops/oracle_light_pg_certificate_check.py']
 
 permissions:
   contents: read
@@ -25,6 +25,7 @@ jobs:
         with:
           persist-credentials: false
       - run: python -m py_compile ops/oracle_light_pg_certificate_check.py
+      - run: python ops/test_oracle_light_tls.py
       - name: Validate shell syntax
         run: |
           ruby -ryaml -e 'd=YAML.load_file(ARGV[0]); d.fetch("jobs").each_value { |j| j.fetch("steps").each { |s| next unless s["run"]; IO.popen(["bash", "-n"], "w") { |p| p.write(s["run"]) }; abort "invalid shell" unless $?.success? } }' .github/workflows/oracle-light-pg-certificate-health.yml

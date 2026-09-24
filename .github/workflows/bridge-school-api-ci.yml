@@ -69,6 +69,10 @@ jobs:
         run: python -c "from app import app; assert app.title == 'Bridge School API'"
       - name: Build API container
         run: docker build -f Dockerfile.api -t bridge-school-api:ci .
+      - name: Verify API container identity and application import
+        run: >-
+          docker run --rm --network none bridge-school-api:ci
+          python -c "import os; from bridge_school_api.main import app; assert os.getuid() == 65532 and os.getgid() == 65532 and app.title == 'Bridge School API'"
 
   production-smoke:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

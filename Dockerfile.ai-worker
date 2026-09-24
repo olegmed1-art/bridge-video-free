@@ -2,4 +2,5 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY bridge_ai_compute_worker.py /app/bridge_ai_compute_worker.py
 ENV PYTHONUNBUFFERED=1
+USER 65532:65532
 CMD ["python", "/app/bridge_ai_compute_worker.py"]
