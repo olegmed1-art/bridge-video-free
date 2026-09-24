@@ -99,6 +99,9 @@ class LightLoginAuditTests(unittest.TestCase):
             path.write_text(''.join(key + '=example\n' for key in sorted(audit.PIN_KEYS)))
             os.chmod(path, 0o644)
             audit.verify_broker_pin_file(path)
+            os.chmod(path, 0o444)
+            audit.verify_broker_pin_file(path)
+            os.chmod(path, 0o644)
             path.write_text(path.read_text() + 'AUTOPILOT_DATABASE_URL=override\n')
             with self.assertRaisesRegex(audit.AuditFailure, 'PIN_FILE_INVALID'):
                 audit.verify_broker_pin_file(path)
