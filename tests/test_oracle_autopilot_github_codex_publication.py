@@ -168,6 +168,11 @@ def test_sensitive_paths_denied(path):
     "ops/oracle_universal_video_container_install.sh",
     "ops/oracle_light_resume.py",
     "ops/future_admin_helper.sh",
+    "autopilot_phase3b/policy.py",
+    "autopilot_service/app.py",
+    "scripts/vercel_ignore_build.sh",
+    "database/admin.sql",
+    "unreviewed/new_runtime.py",
 ])
 def test_governance_and_operational_control_paths_are_denied(path):
     # Exact task assignment is not authority to modify an administrative surface.

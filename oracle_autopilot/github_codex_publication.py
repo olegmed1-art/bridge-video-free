@@ -81,9 +81,14 @@ def safe_path(path: Any) -> bool:
     )
     if path.startswith(denied_prefixes):
         return False
+    # Unknown directory families stay denied, including alternate Autopilot
+    # runtimes, build scripts and database administration outside migrations.
     return (
-        "/" in path
+        path.startswith(("tests/", "database/tests/", "docs/evidence/",
+                         "bridge_school_api/", "docs/research/", "bidding/"))
         or (
+            "/" not in path
+            and
             path.endswith(".py")
             and path
             not in {"setup.py", "conftest.py", "sitecustomize.py", "usercustomize.py"}
