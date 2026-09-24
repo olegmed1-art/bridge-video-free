@@ -141,6 +141,51 @@ def test_conflict_never_auto_promotes():
         build_ai_canon_promotion(candidate, _bundle(_candidate()))
 
 
+@pytest.mark.parametrize("field, value", [
+    ("status", "NOT_APPROVED"),
+    ("authorized_source_sha256", "0" * 64),
+    ("authorized_video_file_id", "other-video"),
+    ("authorized_teacher_ids", ["teacher:other"]),
+    ("approved_semantic_scopes", ["other-scope"]),
+    ("authorization_evidence_sha256", None),
+    ("decision_ref", "   "),
+])
+def test_rehashed_candidate_cannot_lose_source_authorization(field, value):
+    candidate = _candidate()
+    candidate["payload"]["source_authorization"][field] = value
+    candidate["payload_hash"] = hashlib.sha256(json.dumps(
+        candidate["payload"], ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    with pytest.raises(VideoCanonAIPromotionError, match="source authorization"):
+        build_ai_canon_promotion(candidate, _bundle(candidate))
+
+
+@pytest.mark.parametrize("field", ["source_sha256", "video_file_id"])
+def test_rehashed_candidate_cannot_omit_both_sides_of_source_binding(field):
+    candidate = _candidate()
+    candidate["payload"]["source"].pop(field)
+    candidate["payload"]["source_authorization"].pop("authorized_" + field)
+    candidate["payload_hash"] = hashlib.sha256(json.dumps(
+        candidate["payload"], ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    with pytest.raises(VideoCanonAIPromotionError, match=field):
+        build_ai_canon_promotion(candidate, _bundle(candidate))
+
+
+def test_rehashed_candidate_cannot_omit_speaker_on_both_sides():
+    candidate = _candidate()
+    candidate["payload"]["teacher_assertion"].pop("speaker_id")
+    candidate["payload"]["source_authorization"]["authorized_teacher_ids"] = [None]
+    candidate["payload_hash"] = hashlib.sha256(json.dumps(
+        candidate["payload"], ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    with pytest.raises(VideoCanonAIPromotionError, match="teacher speaker_id"):
+        build_ai_canon_promotion(candidate, _bundle(candidate))
+
+
 def test_rollback_target_requires_exact_database_identity():
     candidate = _candidate()
     bundle = _bundle(candidate)

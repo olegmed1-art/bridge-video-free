@@ -126,9 +126,30 @@ def build_ai_canon_promotion(
         _fail("promotion policy mismatch")
     if _sha(verification_bundle.get("candidate_payload_hash"), "candidate_payload_hash") != candidate_hash:
         _fail("verification is not bound to candidate")
-    authorization = payload.get("source_authorization") or {}
+    authorization = payload.get("source_authorization")
+    source = payload.get("source")
+    assertion = payload.get("teacher_assertion")
+    if not all(isinstance(value, Mapping) for value in (authorization, source, assertion)):
+        _fail("source authorization binding missing")
+    if authorization.get("status") != "APPROVED":
+        _fail("source authorization is not approved")
     if authorization.get("policy_version") != POLICY:
         _fail("source authorization policy mismatch")
+    if (
+        _sha(source.get("source_sha256"), "source_sha256")
+        != _sha(authorization.get("authorized_source_sha256"), "authorized_source_sha256")
+        or _text(source.get("video_file_id"), "video_file_id")
+        != _text(authorization.get("authorized_video_file_id"), "authorized_video_file_id")
+        or not isinstance(authorization.get("authorized_teacher_ids"), list)
+        or _text(assertion.get("speaker_id"), "teacher speaker_id")
+        not in authorization["authorized_teacher_ids"]
+        or not isinstance(authorization.get("approved_semantic_scopes"), list)
+        or _text(payload.get("semantic_scope"), "semantic scope")
+        not in authorization["approved_semantic_scopes"]
+        or not str(authorization.get("decision_ref") or "").strip()
+        or not _SHA256.fullmatch(str(authorization.get("authorization_evidence_sha256") or ""))
+    ):
+        _fail("source authorization binding mismatch")
 
     canon_snapshot_sha = _sha(
         verification_bundle.get("canon_snapshot_sha256"), "canon_snapshot_sha256"
