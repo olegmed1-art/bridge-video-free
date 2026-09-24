@@ -195,7 +195,7 @@ def verify() -> dict[str, object]:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = set(pyproject["project"]["dependencies"])
     if dependencies != {
-        "cryptography==46.0.0",
+        "cryptography==50.0.1",
         "fastapi==0.141.1",
         "pydantic>=2.12,<3",
         "uvicorn[standard]==0.52.2",
