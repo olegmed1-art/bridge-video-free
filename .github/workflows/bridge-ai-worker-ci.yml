@@ -39,3 +39,7 @@ jobs:
         run: PYTHONPATH=. pytest -q tests/test_ai_worker_contract.py
       - name: Build worker container
         run: docker build -f Dockerfile.ai-worker -t bridge-ai-worker:ci .
+      - name: Verify worker container identity and import
+        run: >-
+          docker run --rm --network none bridge-ai-worker:ci
+          python -c "import os, bridge_ai_compute_worker; assert os.getuid() == 65532 and os.getgid() == 65532"
