@@ -1,15 +1,19 @@
 """Fixed root-readable DB routing inspection, never emitting a DSN or password."""
 import json
+import hmac
 import os
 import pwd
 from pathlib import Path
 import re
+import shlex
+import stat
 import subprocess
 import sys
 from urllib.parse import urlsplit, unquote
 
 UNITS = ('school-autopilot-production-light.service', 'school-autopilot-shadow.service',
          'school-autopilot-online-observer.service')
+LIGHT_ENV_FILE = Path('/etc/school-autopilot-production-light.env')
 
 
 def safe_identifier(value):
@@ -45,6 +49,38 @@ print(json.dumps({'user': row[0], 'database': row[1], 'read_only': row[2]}))
 
 class AuditFailure(RuntimeError):
     pass
+
+
+def live_credential_matches_disk(dsn, path=LIGHT_ENV_FILE):
+    """Attest the current systemd secret source without printing its contents."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as file:
+        metadata = os.fstat(file.fileno())
+        if not (stat.S_ISREG(metadata.st_mode) and metadata.st_uid == 0
+                and stat.S_IMODE(metadata.st_mode) == 0o600
+                and metadata.st_size <= 262144):
+            raise AuditFailure('ENV_FILE_UNTRUSTED')
+        raw = file.read(262145)
+        if len(raw) > 262144:
+            raise AuditFailure('ENV_FILE_UNTRUSTED')
+    found = []
+    for line in raw.decode().splitlines():
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        key, separator, value = line.partition('=')
+        if not separator or not re.fullmatch(r'[A-Z][A-Z0-9_]*', key):
+            raise AuditFailure('ENV_FILE_INVALID')
+        try:
+            tokens = shlex.split(value, comments=False, posix=True)
+        except ValueError:
+            raise AuditFailure('ENV_FILE_INVALID') from None
+        if len(tokens) != 1:
+            raise AuditFailure('ENV_FILE_INVALID')
+        if key == 'AUTOPILOT_DATABASE_URL':
+            found.append(tokens[0])
+    if len(found) != 1:
+        raise AuditFailure('ENV_FILE_INVALID')
+    return hmac.compare_digest(found[0].encode('utf-8'), dsn.encode('utf-8'))
 
 
 def verify_production_login(dsn):
@@ -101,6 +137,17 @@ def main():
             assert service['db_host'] == 'ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech'
             assert service['db_name'] == 'neondb'
             assert service['db_user'] == 'autopilot_light_worker_login'
+            source = subprocess.run(['/usr/bin/systemctl', 'show', unit,
+                                     '-p', 'EnvironmentFiles'],
+                                    check=True, capture_output=True, text=True,
+                                    timeout=15).stdout.strip()
+            if source != f'EnvironmentFiles={LIGHT_ENV_FILE} (ignore_errors=no)':
+                raise AuditFailure('ENV_SOURCE_DRIFT')
+            matches = live_credential_matches_disk(dsn)
+            print(json.dumps({'audit': 'SOURCE_ATTESTED',
+                              'live_credential_matches_disk': matches}), flush=True)
+            if not matches:
+                raise AuditFailure('LIVE_ENV_DRIFT')
             verify_production_login(dsn)
             service['db_login_verified_read_only'] = True
         result.append(service)
