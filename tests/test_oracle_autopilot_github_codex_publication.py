@@ -161,11 +161,23 @@ def test_sensitive_paths_denied(path):
     assert not pub.safe_path(path)
 
 
+@pytest.mark.parametrize("path", [
+    "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md",
+    "ops/governance/portfolio.json",
+    "ops/governance/validate_governance.py",
+    "ops/oracle_universal_video_container_install.sh",
+    "ops/oracle_light_resume.py",
+    "ops/future_admin_helper.sh",
+])
+def test_governance_and_operational_control_paths_are_denied(path):
+    # Exact task assignment is not authority to modify an administrative surface.
+    assert not pub.safe_path(path)
+
+
 def test_exact_assignment_application_paths_and_nonprivileged_branch_are_allowed():
     for path in (
         "bridge_school_api/l1_canonical_runtime_v2.py",
         "docs/research/bidding-engine/canon-ingestion/natural-system-v1/BLOCK_INVENTORY.json",
-        "ops/oracle_universal_video_container_install.sh",
         "tests/test_bidding_canon_ingestion_contract.py",
     ):
         assert pub.safe_path(path)
@@ -310,3 +322,21 @@ def test_main_reports_partial_outcomes_without_exposing_exception(monkeypatch, c
     output = capsys.readouterr().out
     assert "fake-private-dsn" not in output
     assert json.loads(output)["status"] == expected
+
+
+@pytest.mark.parametrize("path", [
+    "ops/oracle_universal_video_container_install.sh",
+    "ops/governance/portfolio.json",
+    "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md",
+])
+def test_exact_assignment_cannot_authorize_control_plane_publication(path):
+    owner, command, payload, event = fixture()
+    owner["comment"]["body"] = owner["comment"]["body"].replace("tests/test_example.py", path)
+    payload["files"][0]["path"] = path
+    event["comment"]["body"] = pub.MARKER + "\n" + json.dumps(payload)
+    github = FakeGitHub(owner, command, payload, event)
+    cursor = FakeCursor()
+    with pytest.raises(pub.CallbackContractError):
+        pub.publish(github, cursor, event)
+    assert github.writes == []
+    assert cursor.calls == []

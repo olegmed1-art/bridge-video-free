@@ -65,7 +65,7 @@ def safe_path(path: Any) -> bool:
     ):
         return False
     # Deny self-modification and privileged control/config surfaces. Repository
-    # application, test, research-data and bounded helper files remain eligible
+    # application, test and research-data files remain eligible
     # only when named exactly by the authenticated task assignment.
     denied_prefixes = (
         ".codex/",
@@ -75,15 +75,9 @@ def safe_path(path: Any) -> bool:
         "database/rollbacks/",
         "deploy/",
         "docs/canon/",
+        "docs/governance/",
         "oracle_autopilot/",
-        "ops/autopilot/",
-        "ops/oracle-autopilot-activation-requests/",
-        "ops/oracle-autopilot-diagnostic-requests/",
-        "ops/oracle-autopilot-finalize-requests/",
-        "ops/oracle-autopilot-online-observer-requests/",
-        "ops/oracle-autopilot-online-resume-requests/",
-        "ops/oracle-autopilot-production-canary-requests/",
-        "ops/oracle-autopilot-staging-requests/",
+        "ops/",
     )
     if path.startswith(denied_prefixes):
         return False
