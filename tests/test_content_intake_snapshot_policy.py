@@ -14,18 +14,17 @@ def _lane(data: dict, lane_id: str) -> dict:
     return next(lane for lane in data["lanes"] if lane["lane_id"] == lane_id)
 
 
-def test_mutable_catalog_identity_fails_closed() -> None:
+def test_retained_catalog_identity_does_not_authorize_staging() -> None:
     data = _snapshot()
     identity = data["catalog_snapshot_identity"]
-    assert identity["verification_status"] == "UNVERIFIED_IMMUTABLE_EXPORT_UNAVAILABLE"
-    assert identity["immutable_export_revision"] is None
-    assert identity["immutable_export_sha256"] is None
-    assert identity["counts_authoritative"] is False
+    assert identity["verification_status"] == "VERIFIED_RETAINED_REVISION_TEXT"
+    assert identity["immutable_export_revision"] == "639"
+    assert len(identity["immutable_export_sha256"]) == 64
+    assert identity["counts_authoritative"] is True
     assert identity["staging_or_activation_authorized"] is False
-
     for lane_id in identity["dependent_lanes"]:
         lane = _lane(data, lane_id)
-        assert lane["catalog_counts_verification"] == "UNVERIFIED_IMMUTABLE_EXPORT_UNAVAILABLE"
+        assert lane["catalog_counts_verification"] == "VERIFIED_RETAINED_REVISION_TEXT"
         assert lane["metadata_staging_allowed"] is False
 
 
@@ -67,11 +66,11 @@ def test_world_promotion_and_canon_conflict_fail_closed() -> None:
     } <= requirements
 
 
-def test_no_batch_from_unverified_catalog_can_activate() -> None:
+def test_verified_catalog_does_not_bypass_lane_review_or_activate() -> None:
     data = _snapshot()
     batches = {batch["batch_id"]: batch for batch in data["intake_batches"]}
     for batch_id in ("L1-001", "LEARN-001", "WORLD-001"):
         batch = batches[batch_id]
-        assert batch["readiness"] == "blocked_until_catalog_snapshot_immutable_identity_verified"
+        assert batch["readiness"] == "blocked_until_lane_provenance_and_scope_review"
         assert batch["metadata_staging_allowed"] is False
         assert batch["activation_allowed"] is False

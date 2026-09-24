@@ -1,0 +1,46 @@
+name: Repository audit reports
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['**/*.py', '**/requirements*.txt', '**/pyproject.toml', '**/uv.lock', '**/Dockerfile*', '.github/workflows/repository-audit.yml', 'ops/audit/**']
+  schedule:
+    - cron: '23 5 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reports:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Install pinned scanners (no project dependencies)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m pip install ruff==0.16.8
+          curl --fail --location --retry 2 --max-time 120 \
+            https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz \
+            -o "$RUNNER_TEMP/trivy.tar.gz"
+          echo "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a  $RUNNER_TEMP/trivy.tar.gz" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/audit-bin"
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP/audit-bin" trivy
+          echo "$RUNNER_TEMP/audit-bin" >> "$GITHUB_PATH"
+      - name: Collect reports without fixes
+        run: python ops/audit/collect.py
+      - name: Preserve reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: repository-audit-${{ github.run_id }}
+          path: audit-reports/
+          retention-days: 7
+          if-no-files-found: warn

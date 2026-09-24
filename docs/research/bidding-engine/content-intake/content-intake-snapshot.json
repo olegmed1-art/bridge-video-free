@@ -1,5 +1,5 @@
 {
-  "snapshot_version": "1.1",
+  "snapshot_version": "1.2",
   "observed_at": "2026-08-29",
   "scope": "school_knowledge_database_content_intake",
   "governance_mode": "ASSURED",
@@ -88,9 +88,9 @@
         "title": "Каталог базы знаний школы бриджа",
         "drive_spreadsheet_id": "1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo",
         "sheet_count": 26,
-        "immutable_export_revision": null,
-        "immutable_export_sha256": null,
-        "identity_verification": "FAIL_CLOSED_UNVERIFIED"
+        "immutable_export_revision": "639",
+        "immutable_export_sha256": "38d3d8112b43225d13e6f6f138806216e40b0320c28d7097e90be233fefb7656",
+        "identity_verification": "VERIFIED_RETAINED_REVISION_TEXT"
       },
       "datasets": {
         "skills": 121,
@@ -136,8 +136,13 @@
       },
       "skills_exact_status_confirmed_l1": 70,
       "blocking_reason": "Drive status labels do not replace exact provenance to the currently approved PDF; source conflicts are present",
-      "catalog_counts_verification": "UNVERIFIED_IMMUTABLE_EXPORT_UNAVAILABLE",
-      "metadata_staging_allowed": false
+      "catalog_counts_verification": "VERIFIED_RETAINED_REVISION_TEXT",
+      "metadata_staging_allowed": false,
+      "catalog_snapshot_binding": {
+        "drive_spreadsheet_id": "1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo",
+        "revision": "639",
+        "sha256": "38d3d8112b43225d13e6f6f138806216e40b0320c28d7097e90be233fefb7656"
+      }
     },
     {
       "lane_id": "LEARNING_CONTENT",
@@ -179,8 +184,13 @@
           "fail_closed_if_reversal_missing_or_unbound": true
         }
       },
-      "catalog_counts_verification": "UNVERIFIED_IMMUTABLE_EXPORT_UNAVAILABLE",
-      "metadata_staging_allowed": false
+      "catalog_counts_verification": "VERIFIED_RETAINED_REVISION_TEXT",
+      "metadata_staging_allowed": false,
+      "catalog_snapshot_binding": {
+        "drive_spreadsheet_id": "1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo",
+        "revision": "639",
+        "sha256": "38d3d8112b43225d13e6f6f138806216e40b0320c28d7097e90be233fefb7656"
+      }
     },
     {
       "lane_id": "WORLD_EXTERNAL",
@@ -230,8 +240,13 @@
         "on_canon_conflict": "RETURN_CANON_CONFLICT_NO_ACTION_NO_SCHOOL_ANSWER_WORLD_NOT_CALLED",
         "silent_promotion_allowed": false
       },
-      "catalog_counts_verification": "UNVERIFIED_IMMUTABLE_EXPORT_UNAVAILABLE",
-      "metadata_staging_allowed": false
+      "catalog_counts_verification": "VERIFIED_RETAINED_REVISION_TEXT",
+      "metadata_staging_allowed": false,
+      "catalog_snapshot_binding": {
+        "drive_spreadsheet_id": "1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo",
+        "revision": "639",
+        "sha256": "38d3d8112b43225d13e6f6f138806216e40b0320c28d7097e90be233fefb7656"
+      }
     }
   ],
   "intake_batches": [
@@ -250,27 +265,27 @@
     {
       "batch_id": "L1-001",
       "content": "121_skills_175_atoms_591_rules",
-      "readiness": "blocked_until_catalog_snapshot_immutable_identity_verified",
+      "readiness": "blocked_until_lane_provenance_and_scope_review",
       "activation_allowed": false,
       "metadata_staging_allowed": false
     },
     {
       "batch_id": "LEARN-001",
       "content": "exercises_deals_paths_mastery_and_gap_map",
-      "readiness": "blocked_until_catalog_snapshot_immutable_identity_verified",
+      "readiness": "blocked_until_lane_provenance_and_scope_review",
       "activation_allowed": false,
       "metadata_staging_allowed": false
     },
     {
       "batch_id": "WORLD-001",
       "content": "external_sources_authors_audit_queue_and_robot_research",
-      "readiness": "blocked_until_catalog_snapshot_immutable_identity_verified",
+      "readiness": "blocked_until_lane_provenance_and_scope_review",
       "activation_allowed": false,
       "metadata_staging_allowed": false
     }
   ],
   "global_blockers": [
-    "drive_catalog_snapshot_has_no_immutable_export_revision_or_sha256",
+    "catalog_identity_verified_but_lane_provenance_and_scope_review_still_required",
     "32_of_34_approved_pdf_blocks_not_semantically_transcribed",
     "legacy_l1_provenance_incomplete_or_conflicting",
     "bidding_schema_not_applied_in_production",
@@ -278,7 +293,7 @@
     "i2_assurance_required_before_activation"
   ],
   "next_actions": [
-    "capture_exact_drive_catalog_export_revision_and_sha256_then_reconcile_all_reported_counts",
+    "verify_retained_revision_639_bytes_and_lane_bindings_before_any_catalog_use",
     "stage_SC_001_without_activation",
     "transcribe_SC_002_page_block_line_with_explicit_gaps",
     "reconcile_L1_001_against_approved_pdf_anchors",
@@ -289,17 +304,131 @@
   "catalog_snapshot_identity": {
     "drive_spreadsheet_id": "1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo",
     "observed_at": "2026-08-29",
-    "immutable_export_revision": null,
-    "immutable_export_sha256": null,
-    "verification_status": "UNVERIFIED_IMMUTABLE_EXPORT_UNAVAILABLE",
-    "counts_authoritative": false,
+    "immutable_export_revision": "639",
+    "immutable_export_sha256": "38d3d8112b43225d13e6f6f138806216e40b0320c28d7097e90be233fefb7656",
+    "verification_status": "VERIFIED_RETAINED_REVISION_TEXT",
+    "counts_authoritative": true,
     "dependent_lanes": [
       "LEGACY_L1_DRIVE",
       "LEARNING_CONTENT",
       "WORLD_EXTERNAL"
     ],
     "staging_or_activation_authorized": false,
-    "failure_mode": "FAIL_CLOSED_UNTIL_EXACT_EXPORT_REVISION_AND_SHA256_ARE_RECORDED_AND_MATCHED"
+    "failure_mode": "FAIL_CLOSED_UNTIL_EXACT_EXPORT_REVISION_AND_SHA256_ARE_RECORDED_AND_MATCHED",
+    "export_format": "connector-csv-sections-utf8-v1",
+    "revision_modified_at": "2026-08-28T05:44:56.328Z",
+    "verified_at": "2026-09-24",
+    "retained_file_name": "catalog-revision-639.txt",
+    "retained_library_file_id": "libfile_1d1ab12687d481918578aaddbb7d870d",
+    "export_bytes": 2022197,
+    "digest_scope": "Retained connector-rendered UTF-8 CSV sections, not original XLSX bytes; section separator U+000C; terminal LF retained.",
+    "count_scope": "Nonblank source rows excluding connector index column and header; historical inventory only.",
+    "sections": [
+      {
+        "sheet": "Источники",
+        "header_sha256": "e5a3605fc56ebd95b5fd6b3400bdbcfe7653f75a99922a2a6b256cddfb69765a"
+      },
+      {
+        "sheet": "Раздачи",
+        "header_sha256": "e2126d316a68b49ef2900f3a5a436ff2203a4d142fe40ad64a0ec39518c9fcfa"
+      },
+      {
+        "sheet": "Карта пробелов",
+        "header_sha256": "5ac200a5e7ee13e419f0b112c58524e8c976f6b1f36d35508557545e4eae8c9d"
+      },
+      {
+        "sheet": "Справочники",
+        "header_sha256": "37ab56732a75fccc0791d3b49192250eccffc3b12ceabb22e013fc4d27d6457f"
+      },
+      {
+        "sheet": "Авторы",
+        "header_sha256": "7ada61e54d8f0b1785356079ce212ef4bdd9ec705d0551d6fbcf7b1b9b9792a1"
+      },
+      {
+        "sheet": "Аудит bridgeclub.ru",
+        "header_sha256": "bef3021b65ff93238ed230e6a7078c0258c418cf8520f15850844326c85fd424"
+      },
+      {
+        "sheet": "Очередь материалов",
+        "header_sha256": "00194f35b2677391bcbf858571fc5847de6e20153a9ae0337ef4461afb238853"
+      },
+      {
+        "sheet": "Индекс упражнений",
+        "header_sha256": "f0c8a4d123eee0c886e35a03d9c15ef16756fe9646e72f44b445d40d2774ee66"
+      },
+      {
+        "sheet": "Учебная траектория",
+        "header_sha256": "480e07ca48612e8d245084d9628ba5c5e7c37cd458ba47a07b7a85f06a524bb7"
+      },
+      {
+        "sheet": "Шкала освоения навыков",
+        "header_sha256": "06c92c0827ad10a83580e88cc9dcce3cc97f284d8079a6f264d7946850591a0b"
+      },
+      {
+        "sheet": "Навыки",
+        "header_sha256": "187608010f6c575f3a3d8d7ef0d1a111cd990835a60657c1ec2a80a5f37e68a0"
+      },
+      {
+        "sheet": "Очередь Mastery 4",
+        "header_sha256": "e9db963ab6823de530d97b388896bea2f1711f5af9c37995cf4b79cb5a5e9ab5"
+      },
+      {
+        "sheet": "AI — Позиции решений",
+        "header_sha256": "41e905f883da4936cfd1bf700580700804401cb6193fd6d8296902297b553d5a"
+      },
+      {
+        "sheet": "AI — Атомы знаний",
+        "header_sha256": "1da38c6c11c016281e5ec80a0e4a2a441881e39e698a98b0e93e7200ff1f6d91"
+      },
+      {
+        "sheet": "AI — Правила системы",
+        "header_sha256": "e16cb5d085398694900305f4c9369508deb27d1dde8fca12634988c9d25eee23"
+      },
+      {
+        "sheet": "AI — Teacher решения",
+        "header_sha256": "3515f60499ef676279f8d5c7662a12ee2e7034e27760fb8ead7113e616123261"
+      },
+      {
+        "sheet": "AI — Кандидаты",
+        "header_sha256": "c057b37d4bfe7cdd93a909557e979e06f889d4fcaa29b25c22cb448124ec30d8"
+      },
+      {
+        "sheet": "AI — Search результаты",
+        "header_sha256": "08b9f6b0d96610b913aab4024e7a880818f48211a719f96e142ba26c162b4ebf"
+      },
+      {
+        "sheet": "AI — Решения",
+        "header_sha256": "dfc62c7112e9cf823af66eb3aba0314bd1e5f499cab4726d83403e5d5ce7b94a"
+      },
+      {
+        "sheet": "AI — Канон-кандидаты",
+        "header_sha256": "b3f78500fa79acf84ca61d0acea66101b8440fd6bd1401acf6bee276f6815c82"
+      },
+      {
+        "sheet": "AI — Версии систем торговли",
+        "header_sha256": "8624b7945e8f5127676ae56c3535702e05f79fef04433724ecb0423270a16e66"
+      },
+      {
+        "sheet": "AI — Сравнение L1↔турнирная",
+        "header_sha256": "1c607d5bb6ff783d95b9a88ee6d220c38aa3e4b52c93b610defc3ed08eeab2e5"
+      },
+      {
+        "sheet": "AI — Лестница усложнения торговли",
+        "header_sha256": "6ea247da85cc5fb038bc425ec36be67d6cb529172801214ce0b677cf370f32e9"
+      },
+      {
+        "sheet": "AI — Кандидатные системы торговли",
+        "header_sha256": "2b2badfba62c93f89c502a90f3069f529ff9fb2310fca23df9c593c3a6fa3d88"
+      },
+      {
+        "sheet": "AI — L1 Regression",
+        "header_sha256": "722519f3808d12a56ece6710c6b7a72b9cd788bfa5ef6f5e6fc67799e9f1d896"
+      },
+      {
+        "sheet": "AI — L1 Integrity",
+        "header_sha256": "ad47e5756e82d9379d6e1bd6b2ee8899f27081eb419934ae44172769dd8fa678"
+      }
+    ]
   },
   "policy_regression_contract": {
     "executable_test": "tests/test_content_intake_snapshot_policy.py",
