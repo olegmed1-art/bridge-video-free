@@ -10,6 +10,7 @@ To prevent repeated sequence collisions between parallel Bridge School workstrea
 - `0400–0499`: **Video pipeline and evidence contracts**. New files in this range start with `video_` after the numeric prefix.
 - `090–099` SQL tests: **Club / Member / Identity / Auth** regression tests only, with the same allowed name prefixes.
 - `300–399` SQL tests: **School Autopilot / durable workflow orchestration** regression tests only, with `autopilot_` or `workflow_` after the numeric prefix.
+- `400–499` SQL tests: **Video pipeline and evidence contracts** regression tests only, with `video_` after the numeric prefix.
 - Other future ranges must be reserved here before first use if a parallel workstream needs collision-free numbering.
 
 The GitHub workflow `migration-namespace-guard.yml` enforces these reservations on pull requests and pushes to `main`. This reservation is organizational only; it does not promote migrations to production. Production remains controlled by the separate manual `database-production` workflow and its explicit `MIGRATE` confirmation gate.
