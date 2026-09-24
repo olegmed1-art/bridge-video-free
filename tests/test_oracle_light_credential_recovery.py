@@ -34,6 +34,57 @@ class RecoveryContract(unittest.TestCase):
             with self.assertRaises(remote.Blocked):
                 remote.replace_dsn(raw,bad)
 
+    def test_failures_contain_hold_and_rollback(self):
+        # Inject failures at every mutation boundary; no path may report a
+        # successful recovery or leave the installed admission ACTIVE.
+        for boundary in ('first_stop','hold_write','daemon_reload','post_start'):
+            with self.subTest(boundary=boundary):
+                state={'active':True,'drop':b'ACTIVE','env':b'old','failure_used':False}
+                def run(command,*args):
+                    if command=='stop':
+                        if boundary=='first_stop' and not state['failure_used']:
+                            state['failure_used']=True
+                            raise RuntimeError('injected')
+                        state['active']=False
+                    elif command=='daemon-reload' and boundary=='daemon_reload' and not state['failure_used']:
+                        state['failure_used']=True
+                        raise RuntimeError('injected')
+                    elif command=='start':
+                        state['active']=True
+                def atomic(path,content,mode,suffix):
+                    if suffix=='hold' and boundary=='hold_write' and not state['failure_used']:
+                        state['failure_used']=True
+                        raise RuntimeError('injected')
+                    state['drop' if path==remote.DROP else 'env']=content
+                def service():
+                    return {'ActiveState':'active' if state['active'] else 'inactive',
+                            'MainPID':'123' if state['active'] else '0'}
+                def validate(st,mode,active):
+                    self.assertEqual(st['ActiveState']=='active',active)
+                    self.assertEqual(state['drop'],b'HOLD')
+                    if active and boundary=='post_start':
+                        raise RuntimeError('post-start verification failed')
+                def read_file(path,*args):
+                    return state['drop' if path==remote.DROP else 'env']
+                with patch.object(remote,'run',side_effect=run),patch.object(remote,'atomic',side_effect=atomic), \
+                     patch.object(remote,'service',side_effect=service), \
+                     patch.object(remote,'validate_state',side_effect=validate), \
+                     patch.object(remote,'read_file',side_effect=read_file), \
+                     patch.object(remote,'check_login',return_value=None), \
+                     patch.object(remote,'env_values',return_value={'AUTOPILOT_DATABASE_URL':'candidate'}):
+                    with self.assertRaises(Exception):
+                        remote.transition(b'ACTIVE',b'HOLD',b'old',b'new','candidate')
+                self.assertFalse(state['active'])
+                self.assertEqual(state['drop'],b'HOLD')
+                self.assertEqual(state['env'],b'old')
+
+    def test_unverified_containment_is_distinct(self):
+        def failed_stop(*args):
+            raise RuntimeError('systemctl unavailable')
+        with patch.object(remote,'run',side_effect=failed_stop):
+            with self.assertRaisesRegex(remote.Blocked,'CONTAINMENT_UNVERIFIED'):
+                remote.transition(b'ACTIVE',b'HOLD',b'old',b'new','candidate')
+
     def test_runner_neon_412_never_ssh_mutation(self):
         from urllib.error import HTTPError
         with patch.dict('os.environ',{'NEON_API_KEY':'test'}),patch.object(runner,'urlopen',side_effect=HTTPError('url',412,'',None,None)):
