@@ -2,10 +2,10 @@ name: Oracle Light local PostgreSQL staging
 
 on:
   pull_request:
-    paths: ['ops/test_oracle_light_tls.py', '.github/workflows/oracle-light-postgres-stage.yml', 'ops/oracle_light_postgres_stage.py']
+    paths: ['ops/test_oracle_light_postgres_stage.py', 'ops/test_oracle_light_tls.py', '.github/workflows/oracle-light-postgres-stage.yml', 'ops/oracle_light_postgres_stage.py']
   push:
     branches: [main]
-    paths: ['ops/test_oracle_light_tls.py', '.github/workflows/oracle-light-postgres-stage.yml', 'ops/oracle_light_postgres_stage.py']
+    paths: ['ops/test_oracle_light_postgres_stage.py', 'ops/test_oracle_light_tls.py', '.github/workflows/oracle-light-postgres-stage.yml', 'ops/oracle_light_postgres_stage.py']
   workflow_dispatch:
     inputs:
       expected_main_sha:

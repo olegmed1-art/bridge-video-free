@@ -33,11 +33,14 @@ def run(*args, timeout=60):
 
 
 def write_new(path, content, mode=0o600, owner=0):
-    assert not path.is_symlink()
-    with path.open('x') as file:
+    # Create privately regardless of the caller's umask. O_EXCL rejects an
+    # existing file or symlink atomically; descriptor operations cannot be
+    # redirected by replacing the path after creation.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    with os.fdopen(os.open(path, flags, 0o600), 'w', encoding='utf-8') as file:
+        os.fchown(file.fileno(), owner, owner)
+        os.fchmod(file.fileno(), mode)
         file.write(content)
-    path.chmod(mode)
-    os.chown(path, owner, owner)
 
 
 def config():
