@@ -26,4 +26,5 @@ COPY --from=build /src/dds/dds_position_worker ./dds_position_worker
 ENV LD_LIBRARY_PATH=/opt/bridge-school-dds3
 ENV DDS3_CLI=/opt/bridge-school-dds3/dds_pbn_cli
 ENV DDS3_POSITION_WORKER=/opt/bridge-school-dds3/dds_position_worker
+USER 65532:65532
 ENTRYPOINT ["/opt/bridge-school-dds3/dds_pbn_cli"]
