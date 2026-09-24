@@ -9,8 +9,8 @@
     "Each block requires verified line transcription before candidate rules are generated."
   ],
   "blocks": [
-    {"block_id":"NSV1-P1-R1-C1","page":1,"grid":"row1-col1","kind":"opening_definitions","auction":[],"actor_role":"opener","heading":"Открытия","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
-    {"block_id":"NSV1-P1-R1-C2","page":1,"grid":"row1-col2","kind":"first_responses","auction":["1C"],"actor_role":"responder","heading":"Открытие 1♣. Первые ответы","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R1-C1","page":1,"grid":"row1-col1","kind":"opening_definitions","auction":[],"actor_role":"opener","heading":"Открытия","status":"inventoried","transcription_status":"transcribed_verified","activation_status":"not_created"},
+    {"block_id":"NSV1-P1-R1-C2","page":1,"grid":"row1-col2","kind":"first_responses","auction":["1C"],"actor_role":"responder","heading":"Открытие 1♣. Первые ответы","status":"inventoried","transcription_status":"transcribed_verified","activation_status":"not_created"},
     {"block_id":"NSV1-P1-R1-C3","page":1,"grid":"row1-col3","kind":"opener_rebid","auction":["1C","1D"],"actor_role":"opener","heading":"1♣ - 1♦","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
     {"block_id":"NSV1-P1-R1-C4","page":1,"grid":"row1-col4","kind":"responder_rebid","auction":["1C","1D","1H"],"actor_role":"responder","heading":"1♣ - 1♦ - 1♥","status":"inventoried","transcription_status":"pending_verified","activation_status":"not_created"},
 
