@@ -91,3 +91,33 @@ BEGIN
  END IF;
 END $test$;
 ROLLBACK;
+
+-- Verify restoration and reapply on the ephemeral CI database.
+CREATE TEMP TABLE audit_alias_before AS
+SELECT definition, patched_definition,
+ (SELECT count(*) FROM autopilot.task) AS tasks,
+ (SELECT count(*) FROM autopilot.project_work_item) AS work_items,
+ (SELECT count(*) FROM autopilot.role_dispatch_outbox) AS dispatches
+FROM autopilot.migration_0372_function_backup;
+\ir ../rollbacks/0372_autopilot_audit_pass_alias.sql
+DO $$
+BEGIN
+ IF pg_get_functiondef('autopilot.on_project_work_task_terminal()'::regprocedure)
+      IS DISTINCT FROM (SELECT definition FROM audit_alias_before)
+    OR EXISTS(SELECT FROM schema_migration WHERE migration_key='0372_autopilot_audit_pass_alias')
+    OR NOT EXISTS(SELECT FROM schema_migration WHERE migration_key='0371_autopilot_provider_retry_budget') THEN
+   RAISE EXCEPTION 'AUDIT_PASS_ALIAS_ROLLBACK_INVALID';
+ END IF;
+END $$;
+\ir ../migrations/0372_autopilot_audit_pass_alias.sql
+DO $$
+BEGIN
+ IF pg_get_functiondef('autopilot.on_project_work_task_terminal()'::regprocedure)
+      IS DISTINCT FROM (SELECT patched_definition FROM audit_alias_before)
+    OR (SELECT tasks FROM audit_alias_before)<>(SELECT count(*) FROM autopilot.task)
+    OR (SELECT work_items FROM audit_alias_before)<>(SELECT count(*) FROM autopilot.project_work_item)
+    OR (SELECT dispatches FROM audit_alias_before)<>(SELECT count(*) FROM autopilot.role_dispatch_outbox) THEN
+   RAISE EXCEPTION 'AUDIT_PASS_ALIAS_REAPPLY_INVALID';
+ END IF;
+END $$;
+DROP TABLE audit_alias_before;
