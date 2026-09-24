@@ -35,6 +35,10 @@ jobs:
       - name: Build pinned DDS3 runtime image
         run: |
           docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:test .
+      - name: Verify runtime user and OCR temporary files
+        run: >-
+          docker run --rm --network none --entrypoint python bridge-school-dds3-runtime:test
+          -c "import os; from PIL import Image; import pytesseract; assert os.getuid() == 65532 and os.getgid() == 65532; assert isinstance(pytesseract.image_to_string(Image.new('RGB', (100, 40), 'white')), str)"
       - name: Start runtime
         run: |
           docker run -d --rm --name dds3-runtime -p 18080:8080 -e DDS3_RUNTIME_TOKEN=ci-secret bridge-school-dds3-runtime:test

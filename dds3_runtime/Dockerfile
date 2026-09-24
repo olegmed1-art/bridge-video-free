@@ -17,4 +17,5 @@ ENV DDS3_POSITION_WORKER=/usr/local/bin/dds_position_worker
 ENV LD_LIBRARY_PATH=/opt/bridge-school-dds3
 ENV PORT=8080
 EXPOSE 8080
+USER 65532:65532
 CMD ["sh","-c","uvicorn dds3_runtime.app:app --host 0.0.0.0 --port ${PORT}"]
