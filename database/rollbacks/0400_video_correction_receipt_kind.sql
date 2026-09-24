@@ -3,6 +3,9 @@
 -- have already been recorded; append-only evidence must never be removed.
 BEGIN;
 SELECT pg_advisory_xact_lock(hashtextextended('video-correction-review-receipt-kind-v3',0));
+-- Conflicts with INSERT's ROW EXCLUSIVE lock until COMMIT, so a new receipt
+-- cannot arrive after the guard scan but before the prior trigger is restored.
+LOCK TABLE bidding.video_correction_review_receipt IN SHARE MODE;
 DO $rollback$
 DECLARE previous_definition text;
 BEGIN
