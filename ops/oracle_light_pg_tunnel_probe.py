@@ -12,6 +12,16 @@ import time
 CA_SHA256 = '1ee37914846a8f85aff90523937ed6dde63517f239782e782190eb5038799212'
 
 
+def verified_tls_context(cafile):
+    """Keep CA/hostname verification and require TLS 1.2 or newer.
+
+    Kept local because administrators also execute this script over SSH stdin.
+    """
+    context = ssl.create_default_context(cafile=str(cafile))
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
 def options(work):
     return ['ssh', '-F', '/dev/null', '-i', str(work / 'key'), '-o', 'BatchMode=yes',
             '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=yes',
@@ -50,7 +60,7 @@ def main(work):
         with listening(process, 55432) as sock:
             sock.sendall(struct.pack('!II', 8, 80877103))
             assert sock.recv(1) == b'S', 'postgresql_ssl_not_accepted'
-            context = ssl.create_default_context(cafile=str(work / 'ca.crt'))
+            context = verified_tls_context(work / 'ca.crt')
             with context.wrap_socket(sock, server_hostname='127.0.0.1') as secured:
                 assert secured.getpeercert(), 'tls_certificate_missing'
     finally:
