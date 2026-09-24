@@ -110,6 +110,10 @@ class LightLoginAuditTests(unittest.TestCase):
         self.assertTrue(layout['unknown_is_release_pin'])
         self.assertTrue(layout['unknown_matches_workdir_pin'])
         self.assertNotIn(other_release, json.dumps(layout))
+        self.assertEqual(audit.release_broker_pin_path(other_release),
+                         Path(other_release) / 'ops/autopilot/broker-hold.env')
+        with self.assertRaisesRegex(audit.AuditFailure, 'RELEASE_DIRECTORY_DRIFT'):
+            audit.release_broker_pin_path('/etc/untrusted')
 
 
 if __name__ == '__main__':
