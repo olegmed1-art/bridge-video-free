@@ -17,7 +17,8 @@ DECLARE source text; patched text;
  anchor text := '''AUDIT_VERIFIED_NO_REPAIR'',''EXACT_HEAD_AUDIT_PASSED'',''AUDIT_PASSED''';
 BEGIN
  source:=pg_get_functiondef('autopilot.on_project_work_task_terminal()'::regprocedure);
- IF (length(source)-length(replace(source,anchor,'')))/length(anchor) <> 1
+ -- 0368 guards both work completion and the planner decision code.
+ IF (length(source)-length(replace(source,anchor,'')))/length(anchor) <> 2
     OR position('NEXT_STEP_TERMINAL_FENCE' in source)=0
     OR position('NEW.safe_summary_json->>''status''=''SUCCEEDED''' in source)=0 THEN
    RAISE EXCEPTION 'AUDIT_PASS_ALIAS_SOURCE_DRIFT';
