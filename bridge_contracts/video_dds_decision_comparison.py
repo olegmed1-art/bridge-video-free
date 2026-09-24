@@ -23,6 +23,7 @@ _PUBLIC_CONTEXT = {
 }
 _CALL = re.compile(r"^(?:P|PASS|X|XX|DBL|RDBL|[1-7](?:C|D|H|S|NT))$", re.IGNORECASE)
 _CARD = re.compile(r"^(?:[2-9TJQKA][CDHS])$", re.IGNORECASE)
+_DDS_MOVE_CARD = re.compile(r"^[CDHS][2-9TJQKA]$", re.IGNORECASE | re.ASCII)
 _CONTRACT = re.compile(r"^[1-7](?:C|D|H|S|NT)(?:X|XX)?$", re.IGNORECASE)
 _SEAT = {"N", "E", "S", "W"}
 _VULNERABILITY = {"NONE", "NS", "EW", "BOTH", "ALL"}
@@ -230,11 +231,15 @@ def build_offline_dds_comparison(
     if not isinstance(moves, list) or not moves:
         raise VideoDDSComparisonError("DDS result has no moves")
     selected_action = _text(decision.get("selected_action"), "selected_action").upper()
+    if not _DDS_MOVE_CARD.fullmatch(selected_action):
+        raise VideoDDSComparisonError("selected player action is not a card")
     alternatives: list[dict[str, Any]] = []
     for move in moves:
         if not isinstance(move, Mapping):
             raise VideoDDSComparisonError("DDS move invalid")
         action = _text(move.get("card"), "DDS move card").upper()
+        if not _DDS_MOVE_CARD.fullmatch(action):
+            raise VideoDDSComparisonError("DDS move card invalid")
         value = move.get("tricks")
         if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 13:
             raise VideoDDSComparisonError("DDS move tricks invalid")
