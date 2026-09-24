@@ -16,6 +16,7 @@ from typing import Any, Mapping, Sequence
 
 from bridge_contracts.video_deal_r264 import canonicalize_video_deal
 from bridge_vision import bridgit_rank_layout_r264 as rank_layout
+from bridge_vision.bridgit_rank_layout import BridgitRankLayoutError as PaddedRegistrationError
 from bridge_vision.bridgit_gambler_rank_layout_r264 import (
     derive_original_asset_reference,
     recognize_frames_with_original_gambler_deck,
@@ -127,7 +128,10 @@ def _registered_candidate(image: Any, profile: rank_layout.BridgitRankLayoutProf
     if (width, height) == (profile.width, profile.height):
         return image
     if width == profile.width and profile.height < height <= profile.height + MAX_VERTICAL_PADDING_PX:
-        registered, _ = register_same_width_vertical_padding(image, profile)
+        try:
+            registered, _ = register_same_width_vertical_padding(image, profile)
+        except PaddedRegistrationError:
+            return None
         return registered
     return None
 
