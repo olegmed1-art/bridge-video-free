@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -47,6 +48,19 @@ def test_cross_seat_duplicate_fails_closed():
             card("AS", 490, 50),
             card("AS", 900, 490),
         ]))
+
+
+def test_invalid_card_is_rejected_without_promoting_it_to_evidence():
+    hands, evidence = observations_from_backend(payload([card("not-a-card", 490, 50)]))
+    assert hands == {}
+    assert evidence["accepted"] == []
+    assert evidence["rejected"] == [{"index": 0, "reason": "INVALID_CARD"}]
+
+
+def test_unexpected_normalization_failure_is_not_hidden_as_invalid_card():
+    with patch("bridge_vision.native_cards.canonicalize_video_deal", side_effect=RuntimeError("broken normalizer")):
+        with pytest.raises(RuntimeError, match="broken normalizer"):
+            observations_from_backend(payload([card("AS", 490, 50)]))
 
 
 def test_detector_returns_bridge_vision_candidate_shape():
