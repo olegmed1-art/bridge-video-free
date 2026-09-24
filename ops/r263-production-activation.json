@@ -1,0 +1,52 @@
+{
+  "schema": "bridge-primary-recognizer-production-activation-v1",
+  "revision": "3.1-free-r26.3",
+  "activation_state": "ACTIVE_READBACK_CONFIRMED",
+  "activated_at": "2026-09-20T16:38:10.725549Z",
+  "promotion_pr": 1715,
+  "promotion_commit": "c5a6dc18108cf805e1b93457ab59ff835fa19e27",
+  "validation_run_id": 35516293326,
+  "validation_job_id": 106092690049,
+  "neon": {
+    "project_id": "misty-poetry-18012774",
+    "default_branch_id": "br-wispy-lab-b1rq54of",
+    "default_branch_name": "production",
+    "default": true,
+    "primary": true,
+    "protected": true
+  },
+  "current_revision": {
+    "algorithm_version_id": "01a0bbb1-bdaf-7c53-be73-7c0b4975f40b",
+    "version_no": 20,
+    "version_label": "3.1-free-r26.3",
+    "status": "active",
+    "effective_to": null,
+    "production_allowed": true,
+    "production_promotion_state": "ACTIVE",
+    "recognizer_profile": "AUTONOMOUS_HASH_GEOMETRY_V1",
+    "human_verification_required": false,
+    "active_compute_route": "github_actions_legacy",
+    "deck_complement": false,
+    "hidden_hand_inference": false,
+    "canonical_promotion_allowed": false,
+    "school_canon_write_allowed": false,
+    "world_write_allowed": false,
+    "rollback_revision": "3.1-free-r26.2"
+  },
+  "previous_revision": {
+    "algorithm_version_id": "bec25891-6456-488e-95e6-712db860b4dd",
+    "version_no": 19,
+    "version_label": "3.1-free-r26.2",
+    "status": "observed",
+    "effective_to": "2026-09-20T16:38:10.725549Z",
+    "production_allowed": false,
+    "production_promotion_state": "SUPERSEDED_ROLLBACK_AVAILABLE",
+    "rollback_history_retained": true
+  },
+  "repository_readback": {
+    "main_at_activation_evidence": "7b8ad175a07f7523f5904295d611b2bbb716c865",
+    "workflow_requested_revision": "3.1-free-r26.3",
+    "canonical_gate": "BLOCKED_HOLDOUT"
+  },
+  "note": "Post-mutation readback of the live Neon default production branch. This receipt records production activation only; it does not claim canonical holdout success or Oracle cutover."
+}

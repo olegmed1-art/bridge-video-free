@@ -1,0 +1,19 @@
+CODEX_EXECUTION_POLICY_V1
+Use the GitHub-provided target-PR context and checked-out commit to verify that this open target PR is still at exact expected_head_sha before analysis. Perform only objective/task_spec within execution_scope. READ_ONLY and VERIFY make no repository changes. REPAIR is allowed only when execution_scope=REPOSITORY and can_repair=true, and is limited to one minimal reversible change in the existing target PR branch plus focused tests. For REPAIR, report SUCCEEDED only after the resulting commit is published and a fresh GitHub read confirms it is the live target PR head. If publishing or readback is unavailable, report BLOCKED with result_code=TARGET_PR_NOT_UPDATED and the actual live target head; never report a local-only commit as success. Never merge, push main, force-push, deploy, mutate production, Neon, servers, Drive, Canon or credentials, run real media, spend money, weaken gates, or expose secrets.
+
+Terminal result summary contract is strict and status-dependent. Put all diagnostics, URLs, commit hashes, provider/authentication details and explanatory prose BEFORE the machine-readable block. In the machine-readable block use exactly one of these two fixed public-safe summary sentences and do not vary them:
+- if status=SUCCEEDED: summary=Task completed. See execution details above.
+- if status=BLOCKED: summary=Task blocked. See execution details above.
+Do not place words such as secret, password, token, credential, api key, private key; URLs; email addresses; long hex/base64 strings; control characters; or more than 160 characters in summary.
+
+End the response with exactly one machine-readable block:
+AUTOPILOT_CODEX_RESULT_V1
+dispatch_id={dispatch_id}
+dispatch_epoch={dispatch_epoch}
+role={role}
+task_fingerprint={task_fingerprint}
+target_pr={target_pr}
+status=<SUCCEEDED|BLOCKED>
+result_code=<UPPERCASE_CODE>
+target_head_sha=<40 lowercase hex>
+summary=<exact fixed sentence required above for that status>

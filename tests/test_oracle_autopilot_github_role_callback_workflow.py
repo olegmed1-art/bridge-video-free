@@ -11,7 +11,7 @@ def test_callback_workflow_is_event_driven_and_fixed_to_mailbox_identity():
     assert "types: [created]" in WORKFLOW
     assert "schedule:" not in WORKFLOW
     for fixed_gate in (
-        "github.event.issue.number == 1150",
+        "contains(fromJSON('[1150,1637,1685,1703]'), github.event.issue.number)",
         "github.event.repository.id == 1330085090",
         "github.event.comment.user.id == 315099490",
         "github.event.comment.performed_via_github_app.id == 1144995",
@@ -25,4 +25,4 @@ def test_callback_workflow_uses_dedicated_secret_and_immutable_workflow_code():
     assert "secrets.NEON_DATABASE_URL" not in WORKFLOW
     assert "ref: ${{ github.workflow_sha }}" in WORKFLOW
     assert "persist-credentials: false" in WORKFLOW
-    assert "python -m oracle_autopilot.github_role_callback" in WORKFLOW
+    assert "python -m ops.github_autopilot_db_route role-callback" in WORKFLOW

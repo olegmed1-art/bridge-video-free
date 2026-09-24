@@ -103,6 +103,9 @@ jobs:
                       'autopilot.claim_project_work_probe(text,integer)', 'EXECUTE'
                   ) AND has_function_privilege(
                       'autopilot_runtime_principal',
+                      'autopilot.register_parallel_work_manifest(text,text)', 'EXECUTE'
+                  ) AND has_function_privilege(
+                      'autopilot_runtime_principal',
                       'autopilot.materialize_project_work_probe(uuid,text,bigint,boolean,text)',
                       'EXECUTE'
                   ) AND has_function_privilege(
@@ -175,6 +178,9 @@ jobs:
                  ) OR NOT has_function_privilege(
                     'autopilot_runtime_worker_login',
                     'autopilot.claim_project_work_probe(text,integer)', 'EXECUTE'
+                 ) OR NOT has_function_privilege(
+                    'autopilot_runtime_worker_login',
+                    'autopilot.register_parallel_work_manifest(text,text)', 'EXECUTE'
                  ) THEN
                   RAISE EXCEPTION 'AUTOPILOT_SUCCESSOR_LOGIN_LEAST_PRIVILEGE_FAILED';
               END IF;
@@ -380,9 +386,12 @@ jobs:
                          has_table_privilege(current_user, 'autopilot.task', 'SELECT'),
                          has_table_privilege(current_user, 'autopilot.project_work_item', 'SELECT'),
                          has_function_privilege(current_user, 'autopilot.claim_next_task(text,integer)', 'EXECUTE'),
-                         has_function_privilege(current_user, 'autopilot.claim_project_work_probe(text,integer)', 'EXECUTE')
+                         has_function_privilege(current_user, 'autopilot.claim_project_work_probe(text,integer)', 'EXECUTE'),
+                         has_function_privilege(current_user, 'autopilot.register_parallel_work_manifest(text,text)', 'EXECUTE')
               """).fetchone()
-          assert row == ('autopilot_runtime_worker_login', False, False, True, True), row
+          assert row == (
+              'autopilot_runtime_worker_login', False, False, True, True, True,
+          ), row
           print('AUTOPILOT_SUCCESSOR_LOGIN_LIVE=PASS')
           PY
           journal="$(journalctl -u "$service" --since '-2 minutes' --no-pager -o cat)"

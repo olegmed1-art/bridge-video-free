@@ -19,10 +19,13 @@ from typing import Any
 
 import psycopg
 
+from .database_target import backend, validate_pinned_dsn
+
 
 REPOSITORY = "olegmed1-art/bridge-video-free"
 REPOSITORY_ID = 1_330_085_090
-MAILBOX_PR = 1150
+ACTIVE_MAILBOX_PR = 1703
+RETAINED_MAILBOX_PRS = frozenset({1150, 1637, 1685, ACTIVE_MAILBOX_PR})
 ACTOR_LOGIN = "olegmed1-art"
 ACTOR_ID = 315_099_490
 APP_SLUG = "chatgpt-codex-connector"
@@ -68,6 +71,7 @@ class CallbackContractError(RuntimeError):
 @dataclass(frozen=True)
 class RoleCallback:
     provider_event_id: str
+    mailbox_pr: int
     dispatch_id: str
     dispatch_epoch: int
     role: str
@@ -87,6 +91,7 @@ class RoleCallback:
 @dataclass(frozen=True)
 class DeliveryProof:
     provider_event_id: str
+    mailbox_pr: int
     dispatch_id: str
     dispatch_epoch: int
     role: str
@@ -101,6 +106,11 @@ class DeliveryProof:
 
 
 def validate_callback_dsn(raw: str) -> str:
+    try:
+        if backend() == "postgresql":
+            return validate_pinned_dsn(raw, expected_user="autopilot_callback_login")
+    except ValueError:
+        raise CallbackContractError("CALLBACK_DSN_INVALID") from None
     value = raw.strip()
     parsed = urllib.parse.urlsplit(value)
     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
@@ -188,13 +198,16 @@ def parse_issue_comment_event(event: object) -> RoleCallback | DeliveryProof:
     ):
         raise CallbackContractError("CALLBACK_REPOSITORY_INVALID")
     pull = issue.get("pull_request")
+    mailbox_pr = issue.get("number")
     if (
-        issue.get("number") != MAILBOX_PR
+        isinstance(mailbox_pr, bool)
+        or not isinstance(mailbox_pr, int)
+        or mailbox_pr not in RETAINED_MAILBOX_PRS
         or not isinstance(pull, dict)
         or pull.get("url")
-        != f"https://api.github.com/repos/{REPOSITORY}/pulls/{MAILBOX_PR}"
+        != f"https://api.github.com/repos/{REPOSITORY}/pulls/{mailbox_pr}"
         or comment.get("issue_url")
-        != f"https://api.github.com/repos/{REPOSITORY}/issues/{MAILBOX_PR}"
+        != f"https://api.github.com/repos/{REPOSITORY}/issues/{mailbox_pr}"
     ):
         raise CallbackContractError("CALLBACK_MAILBOX_INVALID")
     if (
@@ -238,6 +251,7 @@ def parse_issue_comment_event(event: object) -> RoleCallback | DeliveryProof:
             raise CallbackContractError("CALLBACK_UI_PROOF_INVALID")
         return DeliveryProof(
             provider_event_id=f"github-comment:{comment_id}",
+            mailbox_pr=mailbox_pr,
             dispatch_id=values["dispatch_id"],
             dispatch_epoch=int(values["dispatch_epoch"]),
             role=values["role"],
@@ -271,6 +285,7 @@ def parse_issue_comment_event(event: object) -> RoleCallback | DeliveryProof:
 
     return RoleCallback(
         provider_event_id=f"github-comment:{comment_id}",
+        mailbox_pr=mailbox_pr,
         dispatch_id=values["dispatch_id"],
         dispatch_epoch=int(values["dispatch_epoch"]),
         role=values["role"],
@@ -311,7 +326,7 @@ def ingest_callback(dsn: str, callback: RoleCallback) -> tuple[bool, str]:
                 callback.payload_fingerprint,
                 True,
                 REPOSITORY,
-                MAILBOX_PR,
+                callback.mailbox_pr,
                 ACTOR_LOGIN,
                 ACTOR_ID,
                 "OWNER",
@@ -366,7 +381,7 @@ def ingest_delivery_proof(dsn: str, proof: DeliveryProof) -> tuple[bool, str]:
                 proof.payload_fingerprint,
                 True,
                 REPOSITORY,
-                MAILBOX_PR,
+                proof.mailbox_pr,
                 ACTOR_LOGIN,
                 ACTOR_ID,
                 "OWNER",

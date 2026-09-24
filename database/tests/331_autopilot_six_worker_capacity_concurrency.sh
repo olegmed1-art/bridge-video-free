@@ -9,6 +9,10 @@ psql "$database_url" -X -v ON_ERROR_STOP=1 <<'SQL'
 DO $$
 DECLARE
     i integer;
+    worker_roles text[] := ARRAY[
+        'RECOGNIZER','AUTOPILOT','VIDEO','VIDEO_QUEUE',
+        'KNOWLEDGE','QA','SECURITY'
+    ];
 BEGIN
     IF EXISTS (
         SELECT 1 FROM autopilot.task
@@ -26,7 +30,7 @@ BEGIN
     FOR i IN 1..7 LOOP
         PERFORM * FROM autopilot.register_universal_work_item(
             'sql-six-worker-concurrent-' || i,
-            'AUTOPILOT',
+            worker_roles[i],
             'SIX_WORKER_CONCURRENCY_TEST',
             'Prove concurrent admission remains bounded at six.',
             1700 + i,

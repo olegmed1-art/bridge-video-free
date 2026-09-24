@@ -82,4 +82,5 @@ def test_rollout_requires_isolated_runtime_login_and_project_planner_rpcs() -> N
     assert "AUTOPILOT_EXPECTED_DB_USER" in workflow
     assert "autopilot.claim_role_dispatch_outbox_v2(text,integer)" in workflow
     assert "autopilot.claim_project_work_probe(text,integer)" in workflow
+    assert "autopilot.register_parallel_work_manifest(text,text)" in workflow
     assert "has_table_privilege(current_user, 'autopilot.project_work_item', 'SELECT')" in workflow

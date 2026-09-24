@@ -38,6 +38,7 @@ from oracle_autopilot.worker import (
     load_project_head_broker_config,
     load_role_dispatch_broker_config,
     load_token_broker_config,
+    process_one,
     validate_neon_direct_dsn,
 )
 
@@ -91,6 +92,7 @@ def _approved_health_payload() -> dict[str, object]:
         "bounded_draft_executor_enabled": True,
         "bounded_project_head_enabled": True,
         "bounded_role_dispatch_enabled": True,
+        "role_dispatch_mailbox_pr": 1703,
         "raw_installation_token_exposed": False,
         "merge_endpoint_enabled": False,
         "ref_update_delete_enabled": False,
@@ -218,6 +220,62 @@ def test_only_allowlisted_task_kinds_are_claimed():
         claimed_task_from_row(row)
 
 
+def test_claim_contract_failure_is_failed_closed_without_worker_restart(
+    monkeypatch,
+):
+    row = {
+        "task_id": "00000000-0000-4000-8000-000000000002",
+        "goal_type": "CHATGPT_ROLE_DISPATCH_V1",
+        "goal_json": {
+            "repository": "olegmed1-art/bridge-video-free",
+            "mailbox_pr": 1637,
+            "role": "QA_AUDITOR",
+            "target_pr": 1150,
+            "expected_head_sha": "a" * 40,
+            "dispatch_epoch": 1,
+            "successor_task_key": None,
+            "successor_role": None,
+            "successor_target_pr": None,
+            "successor_expected_head_sha": None,
+        },
+        "current_step_key": "github.chatgpt.role.dispatch",
+        "step_cursor": 0,
+        "lease_epoch": 7,
+        "attempts": 1,
+        "max_attempts": 3,
+        "cost_cap_microusd": 0,
+        "cost_reserved_microusd": 0,
+    }
+    calls = []
+
+    def fake_rpc(_config, sql, params):
+        calls.append((sql, params))
+        if "claim_next_task" in sql:
+            return row
+        if "fail_task" in sql:
+            return {"resulting_state": "FAILED_CLOSED"}
+        raise AssertionError(f"unexpected RPC: {sql}")
+
+    monkeypatch.setattr("oracle_autopilot.worker.reconcile_stale", lambda _config: (0, 0))
+    monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker.execute_task",
+        lambda *_args: pytest.fail("invalid task must not execute"),
+    )
+
+    config = WorkerConfig(dsn=DIRECT_DSN, worker_id="test-worker")
+    assert process_one(config) is True
+    assert len(calls) == 2
+    assert "claim_next_task" in calls[0][0]
+    assert calls[1][1] == (
+        row["task_id"],
+        "test-worker",
+        7,
+        "AUTOPILOT_ROLE_DISPATCH_MAILBOX_INVALID",
+        False,
+    )
+
+
 def test_wait_task_requires_exact_state_and_correlation():
     valid = _task(
         goal_type="EXTERNAL_WAIT_SHADOW_V1",
@@ -291,7 +349,7 @@ def test_github_ci_task_is_exactly_bounded():
 def test_chatgpt_role_dispatch_task_is_public_and_exactly_bounded():
     valid_goal = {
         "repository": "olegmed1-art/bridge-video-free",
-        "mailbox_pr": 1150,
+        "mailbox_pr": 1703,
         "role": "VIDEO",
         "target_pr": 1125,
         "expected_head_sha": "a" * 40,
@@ -328,7 +386,7 @@ def test_chatgpt_role_dispatch_task_is_public_and_exactly_bounded():
 def test_chatgpt_role_followup_is_one_bounded_repair_or_verification():
     base_goal = {
         "repository": "olegmed1-art/bridge-video-free",
-        "mailbox_pr": 1150,
+        "mailbox_pr": 1703,
         "role": "RECOGNIZER",
         "target_pr": 1106,
         "expected_head_sha": "a" * 40,
@@ -431,7 +489,7 @@ def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch)
     response_payload = {
         "status": "created",
         "repository": "olegmed1-art/bridge-video-free",
-        "mailbox_pull_request": 1150,
+        "mailbox_pull_request": 1703,
         "dispatch_id": dispatch_id,
         "dispatch_epoch": 1,
         "role": "VIDEO",
@@ -464,6 +522,8 @@ def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch)
         "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
     )
     role_url = draft_url.replace("/draft-repair", "/role-dispatch")
+    health_payload = _approved_health_payload()
+    posted = []
 
     class Response:
         status = 200
@@ -483,8 +543,9 @@ def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch)
             if request.get_method() == "GET":
                 return Response(
                     draft_url.replace("/v1/github/draft-repair", "/healthz"),
-                    _approved_health_payload(),
+                    health_payload,
                 )
+            posted.append(request)
             return Response(role_url, response_payload)
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
@@ -498,8 +559,19 @@ def test_role_dispatch_broker_response_pins_draft_pr_and_bot_author(monkeypatch)
         },
         clear=True,
     ):
-        result = _publish_role_dispatch(request_payload)
-        assert result["dispatch_pull_request"] == 1152
+        health_payload["role_dispatch_mailbox_pr"] = 1150
+        with pytest.raises(AutopilotContractError, match="RELEASE_UNAPPROVED"):
+            _publish_role_dispatch(request_payload)
+        assert not posted
+        health_payload["role_dispatch_mailbox_pr"] = 1703
+        for mailbox_pr in (1685, 1703):
+            response_payload["mailbox_pull_request"] = mailbox_pr
+            result = _publish_role_dispatch(request_payload)
+            assert result["dispatch_pull_request"] == 1152
+        response_payload["mailbox_pull_request"] = 1637
+        with pytest.raises(AutopilotContractError, match="RESPONSE_INVALID"):
+            _publish_role_dispatch(request_payload)
+        response_payload["mailbox_pull_request"] = 1703
         response_payload["dispatch_author_login"] = "different-valid-app[bot]"
         with pytest.raises(AutopilotContractError, match="RESPONSE_INVALID"):
             _publish_role_dispatch(request_payload)
@@ -509,7 +581,7 @@ def test_github_publish_never_marks_chatgpt_dispatch_sent(monkeypatch):
     claimed = {
         "dispatch_id": "462b8120-9039-4395-bbfb-2b4fbabdc486",
         "repository": "olegmed1-art/bridge-video-free",
-        "mailbox_pr": 1150,
+        "mailbox_pr": 1703,
         "role": "VIDEO",
         "target_pr": 1125,
         "expected_head_sha": "a" * 40,
@@ -562,7 +634,7 @@ def test_role_dispatch_outbox_rolls_forward_safely_before_migration_0323(monkeyp
     legacy_claim = {
         "dispatch_id": "462b8120-9039-4395-bbfb-2b4fbabdc486",
         "repository": "olegmed1-art/bridge-video-free",
-        "mailbox_pr": 1150,
+        "mailbox_pr": 1703,
         "role": "KNOWLEDGE",
         "target_pr": 1129,
         "expected_head_sha": "a" * 40,
@@ -1419,6 +1491,9 @@ def test_project_planner_materializes_one_exact_head_task(monkeypatch):
 
     monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
     monkeypatch.setattr(
+        "oracle_autopilot.worker.reconcile_parallel_work_intake", lambda _config: 0
+    )
+    monkeypatch.setattr(
         "oracle_autopilot.worker.fetch_github_project_head",
         lambda _repository, _target_pr: {"head_sha": "b" * 40, "open": True},
     )
@@ -1457,6 +1532,9 @@ def test_project_planner_retries_transient_probe_and_rolls_forward(monkeypatch):
         return None
 
     monkeypatch.setattr("oracle_autopilot.worker._rpc_one", fake_rpc)
+    monkeypatch.setattr(
+        "oracle_autopilot.worker.reconcile_parallel_work_intake", lambda _config: 0
+    )
     monkeypatch.setattr(
         "oracle_autopilot.worker.fetch_github_project_head",
         lambda _repository, _target_pr: (_ for _ in ()).throw(
@@ -1571,9 +1649,10 @@ def test_shadow_diagnostics_are_read_only_and_secret_free():
         assert forbidden not in workflow
 
 
-def test_oracle_power_workflow_has_no_automatic_trigger():
+def test_retired_oracle_power_workflow_stays_inactive():
+    assert not os.path.exists(".github/workflows/oracle-instance-power.yml")
     workflow = open(
-        ".github/workflows/oracle-instance-power.yml", encoding="utf-8"
+        "tests/fixtures/retired_oracle/oracle-instance-power.yml", encoding="utf-8"
     ).read()
     assert "\n  schedule:" not in workflow
     assert "\n  push:" not in workflow

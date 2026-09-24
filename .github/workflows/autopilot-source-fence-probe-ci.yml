@@ -1,0 +1,44 @@
+name: Autopilot source fence read-only probe CI
+
+on:
+  pull_request:
+    paths:
+      - 'ops/autopilot_source_fence_probe.py'
+      - 'ops/test_autopilot_source_fence_probe.py'
+      - 'ops/test_autopilot_source_fence_sql.py'
+      - '.github/workflows/autopilot-source-fence-probe-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/autopilot_source_fence_probe.py'
+      - 'ops/test_autopilot_source_fence_probe.py'
+      - 'ops/test_autopilot_source_fence_sql.py'
+      - '.github/workflows/autopilot-source-fence-probe-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-postgres-18:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: isolated-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    env:
+      TEST_POSTGRES_URL: postgresql://postgres:isolated-test-only@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+      - run: python -m unittest ops.test_autopilot_source_fence_probe ops.test_autopilot_source_fence_sql -v

@@ -1,0 +1,51 @@
+{
+  "schema": "bridge-primary-recognizer-production-promotion-v1",
+  "revision": "3.1-free-r26.3",
+  "promotion_scope": "PRODUCTION_RUNTIME",
+  "promotion_state": "READY_FOR_PRODUCTION_PROMOTION",
+  "receipt_base_commit": "20a921e3f935e4d7c4ba2b5b10be9c162b89ca03",
+  "algorithm_version_id": "01a0bbb1-bdaf-7c53-be73-7c0b4975f40b",
+  "algorithm_version_no": 20,
+  "algorithm_code_commit": "9487791cf1d3958338ec4f56d35aee8df11389b9",
+  "validation_evidence": "ops/r263-production-validation.json",
+  "production_evidence": {
+    "workflow_run_id": 35516293326,
+    "workflow_job_id": 106092690049,
+    "workflow_conclusion": "success",
+    "control_video": "Диана 29.mp4",
+    "control_timestamp": "01:55:35",
+    "recognized_cards": 52,
+    "unique_cards": 52,
+    "cards_per_seat": 13,
+    "exact_reference_match": true,
+    "false_complete_deals": 0,
+    "duplicate_complete_deals": 0
+  },
+  "runtime_contract": {
+    "recognizer_profile": "AUTONOMOUS_HASH_GEOMETRY_V1",
+    "human_verification_required": false,
+    "sprite_binding": "PINNED_SHA256_ONLY",
+    "primary_status": "VISUAL_PRIMARY_RECOGNIZED",
+    "reconstruction_rule": "VISUAL_ONLY; NO_DECK_COMPLEMENT",
+    "derive_fourth_hand": false,
+    "deck_complement": false,
+    "hidden_hand_inference": false,
+    "unknown_hidden_cards_remain_unknown": true
+  },
+  "promotion_boundary": {
+    "canonical_promotion_allowed": false,
+    "school_canon_write_allowed": false,
+    "world_write_allowed": false,
+    "independent_holdout_passed": false,
+    "oracle_container_cutover_included": false,
+    "active_compute_route": "github_actions_legacy"
+  },
+  "supersession": {
+    "previous_revision": "3.1-free-r26.2",
+    "previous_algorithm_version_id": "bec25891-6456-488e-95e6-712db860b4dd",
+    "previous_revision_target_state": "observed",
+    "previous_production_allowed": false,
+    "rollback_history_retained": true
+  },
+  "note": "Promote r26.3 only after this receipt is merged with green CI. Canonical promotion remains independently blocked; this receipt does not claim Oracle parity, secondary-recognizer recovery, an eight-variant ensemble, or an independent holdout pass."
+}

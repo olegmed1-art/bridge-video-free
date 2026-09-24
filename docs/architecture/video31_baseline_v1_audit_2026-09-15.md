@@ -1,8 +1,8 @@
 # VIDEO_BASELINE_V1 pre-implementation audit
 
-Date: 2026-09-15  
-Governance mode: `STANDARD`  
-Base revision: `de0421b3a169f54c33fe4927bc8928e418ddb895`  
+Date: 2026-09-15
+Governance mode: `STANDARD`
+Base revision: `de0421b3a169f54c33fe4927bc8928e418ddb895`
 Status: `AUDITED / IMPLEMENTATION_NOT_STARTED`
 
 ## Decision

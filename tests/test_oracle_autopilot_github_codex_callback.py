@@ -10,9 +10,11 @@ from oracle_autopilot.github_codex_callback import (
     CODEX_BOT_ID,
     CODEX_BOT_LOGIN,
     CallbackContractError,
+    GENERIC_FAILURE_BODY,
     fetch_codex_ack,
     parse_command_event,
     parse_terminal_event,
+    resolve_generic_failure_terminal,
     verify_pr_head,
 )
 
@@ -84,6 +86,18 @@ def _event(body: str = COMMAND_BODY) -> dict[str, object]:
     }
 
 
+def _event_on_pr(event: dict[str, object], pr_number: int) -> dict[str, object]:
+    relocated = copy.deepcopy(event)
+    relocated["issue"]["number"] = pr_number  # type: ignore[index]
+    relocated["issue"]["pull_request"]["url"] = (  # type: ignore[index]
+        f"https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/{pr_number}"
+    )
+    relocated["comment"]["issue_url"] = (  # type: ignore[index]
+        f"https://api.github.com/repos/olegmed1-art/bridge-video-free/issues/{pr_number}"
+    )
+    return relocated
+
+
 def _terminal_event() -> dict[str, object]:
     event = _event(TERMINAL_BODY)
     comment = event["comment"]
@@ -101,6 +115,31 @@ def test_parses_owner_app_command_on_exact_target_pr():
     assert command.execution_scope == "REPOSITORY"
     assert command.can_repair is True
     assert command.task_spec == {"fixture": "codex-event-cycle"}
+
+
+def test_parses_owner_app_command_on_active_mailbox():
+    command = parse_command_event(_event_on_pr(_event(), 1637))
+    assert command.command_pr == 1637
+    assert command.target_pr == 1150
+    assert command.dispatch_pr == 1429
+
+
+def test_parses_owner_app_command_on_exact_dispatch_pr():
+    command = parse_command_event(_event_on_pr(_event(), 1429))
+    assert command.command_pr == command.dispatch_pr == 1429
+    assert command.target_pr == 1150
+
+
+def test_parses_historical_command_on_nonretained_exact_target_pr():
+    body = COMMAND_BODY.replace("target_pr=1150", "target_pr=1641", 1)
+    command = parse_command_event(_event_on_pr(_event(body), 1641))
+    assert command.command_pr == command.target_pr == 1641
+    assert command.dispatch_pr == 1429
+
+
+def test_command_rejects_unretained_non_dispatch_pr():
+    with pytest.raises(CallbackContractError, match="COMMAND_PR_INVALID"):
+        parse_command_event(_event_on_pr(_event(), 1641))
 
 
 def test_explicit_task_command_preserves_legacy_dispatch_binding():
@@ -192,7 +231,7 @@ def test_terminal_rejects_unsafe_public_summary(unsafe_summary):
 
 
 class _Response:
-    def __init__(self, url: str, values: list[dict[str, object]]) -> None:
+    def __init__(self, url: str, values: object) -> None:
         self.status = 200
         self._url = url
         self._body = io.BytesIO(json.dumps(values).encode())
@@ -208,6 +247,115 @@ class _Response:
 
     def read(self, limit: int) -> bytes:
         return self._body.read(limit)
+
+
+def _generic_failure_event() -> dict[str, object]:
+    event = _terminal_event()
+    comment = event["comment"]
+    comment["id"] = 5_669_745_749  # type: ignore[index]
+    comment["created_at"] = "2026-09-14T19:38:00Z"  # type: ignore[index]
+    comment["updated_at"] = "2026-09-14T19:38:00Z"  # type: ignore[index]
+    comment["body"] = GENERIC_FAILURE_BODY  # type: ignore[index]
+    return event
+
+
+def _generic_failure_opener(event, command_event=None):
+    command_event = command_event or _event(
+        COMMAND_BODY.replace("@codex\n", "@codex execute this task\n", 1)
+    )
+    command = copy.deepcopy(command_event["comment"])
+    command["updated_at"] = command["created_at"]
+    failure = copy.deepcopy(event["comment"])
+
+    event_pr = event["issue"]["number"]
+
+    def opener(request, timeout):
+        assert timeout == 10
+        if f"/issues/{event_pr}/comments?" in request.full_url:
+            return _Response(request.full_url, [command, failure])
+        if request.full_url.endswith(f"/issues/comments/{command['id']}"):
+            return _Response(request.full_url, command)
+        if request.full_url.endswith(f"/issues/comments/{failure['id']}"):
+            return _Response(request.full_url, failure)
+        raise AssertionError(request.full_url)
+
+    return opener
+
+
+def test_generic_failure_binds_to_immediately_prior_exact_owner_command():
+    event = _generic_failure_event()
+    terminal = resolve_generic_failure_terminal(
+        event, "test-token", opener=_generic_failure_opener(event)
+    )
+    assert terminal.dispatch_id == "6275443a-5868-4c1f-9406-c0d72b8068bd"
+    assert terminal.status == "BLOCKED"
+    assert terminal.result_code == "CODEX_PROVIDER_GENERIC_FAILURE"
+    assert terminal.target_head_sha == "2ceb48716988ec9cbd01be438a0ebf8b46836667"
+    assert terminal.delivery_id == "github-codex-result:5669745749"
+
+
+def test_generic_failure_binds_to_active_mailbox_command():
+    event = _event_on_pr(_generic_failure_event(), 1637)
+    command_event = _event_on_pr(
+        _event(COMMAND_BODY.replace("@codex\n", "@codex execute this task\n", 1)),
+        1637,
+    )
+    terminal = resolve_generic_failure_terminal(
+        event,
+        "test-token",
+        opener=_generic_failure_opener(event, command_event),
+    )
+    assert terminal.event_pr == 1637
+    assert terminal.target_pr == 1150
+    assert terminal.result_code == "CODEX_PROVIDER_GENERIC_FAILURE"
+
+
+def test_generic_failure_accepts_provider_latency_within_ten_minute_window():
+    event = _generic_failure_event()
+    event["comment"]["created_at"] = "2026-09-14T19:45:32Z"  # type: ignore[index]
+    event["comment"]["updated_at"] = "2026-09-14T19:45:32Z"  # type: ignore[index]
+    terminal = resolve_generic_failure_terminal(
+        event, "test-token", opener=_generic_failure_opener(event)
+    )
+    assert terminal.status == "BLOCKED"
+    assert terminal.result_code == "CODEX_PROVIDER_GENERIC_FAILURE"
+
+
+def test_generic_failure_rejects_intervening_comment():
+    event = _generic_failure_event()
+    command = copy.deepcopy(_event(COMMAND_BODY)["comment"])
+    command["updated_at"] = command["created_at"]
+    intervening = copy.deepcopy(command)
+    intervening["id"] = 5_669_745_748
+    intervening["created_at"] = "2026-09-14T19:37:50Z"
+    intervening["updated_at"] = intervening["created_at"]
+    intervening["body"] = "unrelated owner comment"
+    failure = copy.deepcopy(event["comment"])
+
+    def opener(request, _timeout):
+        if "/issues/1150/comments?" in request.full_url:
+            return _Response(request.full_url, [command, intervening, failure])
+        raise AssertionError(request.full_url)
+
+    with pytest.raises(CallbackContractError, match="COMMAND_BODY_INVALID"):
+        resolve_generic_failure_terminal(event, "test-token", opener=opener)
+
+
+def test_generic_failure_rejects_edited_or_late_comment():
+    edited = _generic_failure_event()
+    edited["comment"]["updated_at"] = "2026-09-14T19:38:01Z"  # type: ignore[index]
+    with pytest.raises(CallbackContractError, match="GENERIC_FAILURE_TIME_INVALID"):
+        resolve_generic_failure_terminal(
+            edited, "test-token", opener=_generic_failure_opener(edited)
+        )
+
+    late = _generic_failure_event()
+    late["comment"]["created_at"] = "2026-09-14T19:48:00Z"  # type: ignore[index]
+    late["comment"]["updated_at"] = "2026-09-14T19:48:00Z"  # type: ignore[index]
+    with pytest.raises(CallbackContractError, match="GENERIC_FAILURE_ADJACENCY_INVALID"):
+        resolve_generic_failure_terminal(
+            late, "test-token", opener=_generic_failure_opener(late)
+        )
 
 
 def test_ack_polls_until_exact_codex_bot_eyes_reaction():

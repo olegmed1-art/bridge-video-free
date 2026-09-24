@@ -1,0 +1,25 @@
+name: Autopilot reconciliation read-only diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: read
+
+jobs:
+  diagnose:
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python -m pip install 'psycopg[binary]==3.3.4'
+      - name: Probe existing runner connection and read-only SQL
+        env:
+          DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: python -m ops.github_autopilot_db_route diagnostics
