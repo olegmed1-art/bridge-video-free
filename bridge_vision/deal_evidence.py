@@ -14,7 +14,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
+from bridge_contracts.video_deal import BridgeVideoDealContractError, SEATS, canonicalize_video_deal
 
 DEAL_EVIDENCE_SCHEMA = "bridge-video-deal-evidence/v1"
 PROVENANCE_SOURCES = (
@@ -42,7 +42,7 @@ class DealEvidenceError(ValueError):
 def _normalise_card(value: Any) -> str:
     try:
         deal = canonicalize_video_deal({"hands": {"N": [value]}}).to_dict()
-    except (TypeError, ValueError) as exc:
+    except BridgeVideoDealContractError as exc:
         raise DealEvidenceError("invalid card") from exc
     return deal["hands"]["N"]["cards"][0]
 
@@ -518,7 +518,7 @@ def build_deal_evidence_report(
     if not any(item["type"] == "HAND_EXCEEDS_13_CARDS" for item in conflicts):
         try:
             observed_deal = canonicalize_video_deal({"hands": seat_cards}).to_dict()
-        except ValueError:
+        except BridgeVideoDealContractError:
             review_reasons.append("canonical_observed_deal_invalid")
 
     all_records = list(accepted_by_card.values())
