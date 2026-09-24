@@ -18,6 +18,16 @@ UNIT = Path('/etc/systemd/system/bridge-autopilot-postgres.service')
 LABEL = 'bridge-autopilot-pg-stage-v1'
 
 
+def verified_tls_context(cafile):
+    """Keep CA/hostname verification and require TLS 1.2 or newer.
+
+    Kept local because administrators also execute this script over SSH stdin.
+    """
+    context = ssl.create_default_context(cafile=str(cafile))
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
 def run(*args, timeout=60):
     return subprocess.run(args, check=True, capture_output=True, text=True, timeout=timeout).stdout.strip()
 
@@ -177,7 +187,7 @@ def main():
     check=run('docker','exec','--user','postgres',NAME,'psql','-XAt','-p','55432','-U','postgres','-d','postgres',
               '-c',"SELECT current_setting('ssl'),current_setting('server_version_num'),current_setting('data_checksums');")
     assert check.startswith('on|18') and check.endswith('|on')
-    context=ssl.create_default_context(cafile=str(CONF/'ca.crt'))
+    context=verified_tls_context(CONF/'ca.crt')
     with socket.create_connection(('127.0.0.1',55432),timeout=10) as connection:
         connection.sendall(struct.pack('!II',8,80877103))
         assert connection.recv(1)==b'S'
