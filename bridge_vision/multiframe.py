@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Any, Iterable, Mapping
+from urllib.parse import quote
 
 from bridge_contracts.video_deal import FULL_DECK, SEATS, canonicalize_video_deal
 
@@ -108,7 +109,7 @@ def _explicit_board_key(record: Mapping[str, Any]) -> str | None:
     board_number = record.get("board_number")
     scope = record.get("board_scope") or record.get("source_deal_scope")
     if board_number is not None and str(board_number).strip() and scope is not None and str(scope).strip():
-        return f"board_number:{str(scope).strip()}:{str(board_number).strip()}"
+        return f"board_number:{quote(str(scope).strip(), safe='')}:{quote(str(board_number).strip(), safe='')}"
     return None
 
 
