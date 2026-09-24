@@ -320,21 +320,17 @@ def recognize_video_primary(
                 timestamp_ms += scan_ms
                 continue
             try:
-                event = selector.observe(frame_signature(first, event_regions), timestamp_ms)
-            except Exception:
+                signature = frame_signature(first, event_regions)
+            except ValueError:
                 rejections["event_signature_rejected"] += 1
                 timestamp_ms += scan_ms
                 continue
+            event = selector.observe(signature, timestamp_ms)
             if event is None:
                 timestamp_ms += scan_ms
                 continue
             event_counts[event.reason] += 1
-            try:
-                first_geometry = _full_geometry_gate(first, bank, profile)
-            except Exception:
-                rejections["geometry_exception"] += 1
-                timestamp_ms += scan_ms
-                continue
+            first_geometry = _full_geometry_gate(first, bank, profile)
             if first_geometry is None:
                 rejections["full_geometry_not_proven"] += 1
                 timestamp_ms += scan_ms
@@ -365,10 +361,7 @@ def recognize_video_primary(
                     rejections["retry_decode"] += 1
                     timestamp_ms += scan_ms
                     continue
-                try:
-                    second_geometry = _full_geometry_gate(second, bank, profile)
-                except Exception:
-                    second_geometry = None
+                second_geometry = _full_geometry_gate(second, bank, profile)
                 if second_geometry != first_geometry:
                     # Visibility may legitimately change between frames. Keep a
                     # bounded observation so a later frame with the same visible
