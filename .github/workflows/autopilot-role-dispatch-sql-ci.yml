@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'database/migrations/0368_autopilot_next_step.sql'
+      - 'database/migrations/0372_autopilot_codex_terminal_readback_candidates.sql'
+      - 'database/rollbacks/0372_autopilot_codex_terminal_readback_candidates.sql'
+      - 'database/tests/372_autopilot_codex_terminal_readback_candidates.sql'
       - 'database/rollbacks/0368_autopilot_next_step.sql'
       - 'database/tests/368_autopilot_next_step.sql'
       - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
@@ -77,6 +80,13 @@ on:
       - 'database/rollbacks/0364_autopilot_repair_head_rebind.sql'
       - 'database/tests/364_autopilot_repair_head_rebind.sql'
       - 'oracle_autopilot/github_codex_callback.py'
+      - 'oracle_autopilot/codex_terminal_readback.py'
+      - 'oracle_autopilot/codex_terminal_sweep.py'
+      - 'ops/github_autopilot_db_route.py'
+      - 'tests/test_oracle_autopilot_codex_terminal_readback.py'
+      - 'tests/test_oracle_autopilot_codex_terminal_sweep.py'
+      - '.github/workflows/autopilot-codex-terminal-readback.yml'
+      - '.github/workflows/autopilot-codex-terminal-sweep.yml'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
       - '.github/workflows/autopilot-codex-event-callback.yml'
@@ -88,6 +98,9 @@ on:
     branches: [main]
     paths:
       - 'database/migrations/0368_autopilot_next_step.sql'
+      - 'database/migrations/0372_autopilot_codex_terminal_readback_candidates.sql'
+      - 'database/rollbacks/0372_autopilot_codex_terminal_readback_candidates.sql'
+      - 'database/tests/372_autopilot_codex_terminal_readback_candidates.sql'
       - 'database/rollbacks/0368_autopilot_next_step.sql'
       - 'database/tests/368_autopilot_next_step.sql'
       - 'database/migrations/0322_autopilot_chatgpt_role_dispatch.sql'
@@ -161,6 +174,13 @@ on:
       - 'database/rollbacks/0364_autopilot_repair_head_rebind.sql'
       - 'database/tests/364_autopilot_repair_head_rebind.sql'
       - 'oracle_autopilot/github_codex_callback.py'
+      - 'oracle_autopilot/codex_terminal_readback.py'
+      - 'oracle_autopilot/codex_terminal_sweep.py'
+      - 'ops/github_autopilot_db_route.py'
+      - 'tests/test_oracle_autopilot_codex_terminal_readback.py'
+      - 'tests/test_oracle_autopilot_codex_terminal_sweep.py'
+      - '.github/workflows/autopilot-codex-terminal-readback.yml'
+      - '.github/workflows/autopilot-codex-terminal-sweep.yml'
       - 'tests/test_oracle_autopilot_github_codex_callback.py'
       - 'tests/test_oracle_autopilot_github_codex_callback_workflow.py'
       - '.github/workflows/autopilot-codex-event-callback.yml'
@@ -338,6 +358,8 @@ jobs:
           # Verify and unwind the modern upper chain before historical tests.
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/370_autopilot_codex_send_intent.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/371_autopilot_provider_retry_budget.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/tests/372_autopilot_codex_terminal_readback_candidates.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0372_autopilot_codex_terminal_readback_candidates.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0371_autopilot_provider_retry_budget.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0370_autopilot_codex_send_intent.sql
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/rollbacks/0369_autopilot_reconcile_gateway.sql

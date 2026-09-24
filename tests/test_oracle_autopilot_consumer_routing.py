@@ -11,6 +11,10 @@ EXPECTED = {
     'autopilot-reconcile-diagnostic.yml': ['diagnostics'],
     'database-health-monitor.yml': ['health'],
 }
+RECOVERY = {
+    'autopilot-codex-terminal-readback.yml': ['codex-terminal-readback'],
+    'autopilot-codex-terminal-sweep.yml': ['codex-terminal-sweep'],
+}
 
 
 def test_all_known_continuous_and_manual_read_consumers_are_leased():
@@ -22,6 +26,14 @@ def test_all_known_continuous_and_manual_read_consumers_are_leased():
         assert "github.ref == 'refs/heads/main'" in text
         assert 'secrets.ORACLE_SSH_PRIVATE_KEY' in text
         assert 'timeout-minutes: 20' in text
+        covered.update(actual)
+    for name,selectors in RECOVERY.items():
+        text=(Path('.github/workflows')/name).read_text()
+        actual=re.findall(r'python -m ops\.github_autopilot_db_route ([a-z-]+)',text)
+        assert actual==selectors
+        assert "github.ref == 'refs/heads/main'" in text
+        assert 'secrets.ORACLE_SSH_PRIVATE_KEY' in text
+        assert 'timeout-minutes: 12' in text
         covered.update(actual)
     assert covered==set(TARGETS)
 
@@ -41,6 +53,6 @@ def test_continuous_receivers_do_not_bypass_the_route_wrapper():
                'python -m oracle_autopilot.github_codex_publication',
                'python -m oracle_autopilot.paused_reconcile',
                'python -m oracle_autopilot.next_step_reconcile']
-    for name in EXPECTED:
+    for name in (*EXPECTED,*RECOVERY):
         text=(Path('.github/workflows')/name).read_text()
         assert not any(command in text for command in forbidden)
