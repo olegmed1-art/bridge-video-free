@@ -169,6 +169,34 @@ def test_rejects_missing_or_invalid_pinned_dds_rerun():
         )
 
 
+def test_untrusted_dds_move_cannot_emit_a_hand_as_an_action():
+    leaked_hand = "N:AKQJ.T98.765.432"
+    observation = _observation()
+    observation["decision"]["selected_action"] = leaked_hand
+    result = _dds_result()
+    result["moves"][0]["card"] = leaked_hand
+    with pytest.raises(VideoDDSComparisonError, match="selected player action is not a card"):
+        build_offline_dds_comparison(
+            observation, _board_evidence(), _logic_evidence(),
+            dds_request_executor=_executor(result),
+        )
+
+    observation["decision"]["selected_action"] = "SA"
+    result["moves"][0]["card"] = "SK"
+    with pytest.raises(VideoDDSComparisonError, match="DDS move card invalid"):
+        build_offline_dds_comparison(
+            observation, _board_evidence(), _logic_evidence(),
+            dds_request_executor=_executor(result),
+        )
+
+    result["moves"][0]["card"] = leaked_hand
+    with pytest.raises(VideoDDSComparisonError, match="DDS move card invalid"):
+        build_offline_dds_comparison(
+            observation, _board_evidence(), _logic_evidence(),
+            dds_request_executor=_executor(result),
+        )
+
+
 def test_extended_analysis_stages_valid_dds_comparison_and_gaps_invalid_one():
     master = {"job_id": "job-dds", "dds_decision_evaluations": [_observation()]}
     quality = {
