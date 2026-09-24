@@ -77,8 +77,25 @@ class LightLoginAuditTests(unittest.TestCase):
                   'EnvironmentFiles=/arbitrary/dont-display-this (ignore_errors=no)\n')
         layout = audit.environment_source_layout(output)
         self.assertEqual(layout, {'entries': 2, 'expected_primary': True,
+                                  'expected_pin': False,
                                   'unknown_entries': 1})
         self.assertNotIn('/arbitrary/', json.dumps(layout))
+
+    def test_known_broker_pin_file_has_no_database_override(self):
+        self.trust_temporary_file_owner()
+        source = (f'EnvironmentFiles={audit.LIGHT_ENV_FILE} (ignore_errors=no)\n'
+                  f'EnvironmentFiles={audit.PIN_ENV_FILE} (ignore_errors=no)\n')
+        self.assertEqual(audit.environment_source_layout(source),
+                         {'entries': 2, 'expected_primary': True,
+                          'expected_pin': True, 'unknown_entries': 0})
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'broker-hold.env'
+            path.write_text(''.join(key + '=example\n' for key in sorted(audit.PIN_KEYS)))
+            os.chmod(path, 0o644)
+            audit.verify_broker_pin_file(path)
+            path.write_text(path.read_text() + 'AUTOPILOT_DATABASE_URL=override\n')
+            with self.assertRaisesRegex(audit.AuditFailure, 'PIN_FILE_INVALID'):
+                audit.verify_broker_pin_file(path)
 
 
 if __name__ == '__main__':
