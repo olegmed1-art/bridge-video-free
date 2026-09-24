@@ -21,6 +21,7 @@ def _quality(master=None):
     correction = master["human_corrections"][0]
     receipt = {
         "correction_id": correction["correction_id"],
+        "kind": correction["kind"],
         "reviewer_ref": correction["reviewer_ref"],
         "source_sha256": master["source"]["sha256"],
         "input_ref": correction["input_ref"],
@@ -95,6 +96,30 @@ def test_rejects_forged_review_receipt_and_versions_changed_content():
         correction_receipt_resolver=_resolver(changed_quality),
     )["training_examples"][0]
     assert first["training_example_id"] != second["training_example_id"]
+
+
+def test_reviewed_kind_cannot_be_relabelled_with_the_same_receipt():
+    master = _master()
+    quality = _quality(master)
+    resolver = _resolver(quality)
+    master["human_corrections"][0]["kind"] = "SPEAKER"
+    with pytest.raises(VideoLearningFeedbackError, match="receipt binding mismatch"):
+        build_learning_feedback(master, quality, correction_receipt_resolver=resolver)
+
+    master["human_corrections"][0]["kind"] = "ASR"
+    assert build_learning_feedback(
+        master, quality, correction_receipt_resolver=resolver
+    )["training_examples"][0]["kind"] == "ASR"
+
+
+def test_legacy_receipt_without_reviewed_kind_fails_closed():
+    master = _master()
+    quality = _quality(master)
+    quality["correction_review_receipts"][0].pop("kind")
+    with pytest.raises(VideoLearningFeedbackError, match="receipt fields mismatch"):
+        build_learning_feedback(
+            master, quality, correction_receipt_resolver=_resolver(quality)
+        )
 
 
 def test_holdout_metric_direction_is_enforced():
