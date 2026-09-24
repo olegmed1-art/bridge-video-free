@@ -72,6 +72,14 @@ class LightLoginAuditTests(unittest.TestCase):
             with self.assertRaisesRegex(audit.AuditFailure, 'ENV_FILE_UNTRUSTED'):
                 audit.live_credential_matches_disk('private', path)
 
+    def test_unrecognized_systemd_source_is_counted_without_path_leak(self):
+        output = ('EnvironmentFiles=/etc/school-autopilot-production-light.env (ignore_errors=no)\n'
+                  'EnvironmentFiles=/arbitrary/dont-display-this (ignore_errors=no)\n')
+        layout = audit.environment_source_layout(output)
+        self.assertEqual(layout, {'entries': 2, 'expected_primary': True,
+                                  'unknown_entries': 1})
+        self.assertNotIn('/arbitrary/', json.dumps(layout))
+
 
 if __name__ == '__main__':
     unittest.main()
