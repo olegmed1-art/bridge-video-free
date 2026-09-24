@@ -11,6 +11,7 @@ on:
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_health_contract.py'
       - 'tests/test_api_response_headers.py'
+      - 'tests/test_dds3_error_boundary.py'
       - 'tests/test_dds3_remote.py'
       - 'tests/test_vercel_oidc_context.py'
       - 'scripts/process_drive_video.py'
@@ -32,6 +33,7 @@ on:
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_health_contract.py'
       - 'tests/test_api_response_headers.py'
+      - 'tests/test_dds3_error_boundary.py'
       - 'tests/test_dds3_remote.py'
       - 'tests/test_vercel_oidc_context.py'
       - 'scripts/process_drive_video.py'
@@ -77,6 +79,8 @@ jobs:
         run: PYTHONPATH=. python tests/test_api_health_contract.py
       - name: Verify protected API response headers
         run: PYTHONPATH=. python tests/test_api_response_headers.py
+      - name: Verify DDS3 exception response boundary
+        run: PYTHONPATH=. python tests/test_dds3_error_boundary.py
       - name: Verify remote DDS3 fail-closed transport contract
         run: PYTHONPATH=. python tests/test_dds3_remote.py
       - name: Verify Vercel deployment OIDC context contract
