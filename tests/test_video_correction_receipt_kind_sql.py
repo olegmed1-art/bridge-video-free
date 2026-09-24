@@ -34,6 +34,7 @@ def test_rollback_restores_exact_previous_guard_and_never_erases_receipts():
     assert "pg_get_functiondef(" in FORWARD
     assert "migration_0400_correction_receipt_guard_backup" in FORWARD
     assert "WHERE receipt_payload ? 'kind'" in ROLLBACK
+    assert ROLLBACK.index("LOCK TABLE bidding.video_correction_review_receipt IN SHARE MODE") < ROLLBACK.index("WHERE receipt_payload ? 'kind'")
     assert "ROLLBACK_REFUSED_NEW_RECEIPTS" in ROLLBACK
     assert "EXECUTE previous_definition" in ROLLBACK
     assert "DELETE FROM bidding.video_correction_review_receipt" not in ROLLBACK
