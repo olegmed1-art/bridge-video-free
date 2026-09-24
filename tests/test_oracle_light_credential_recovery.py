@@ -8,19 +8,19 @@ from ops import oracle_light_neon_recovery_runner as runner
 class RecoveryContract(unittest.TestCase):
     def test_replaces_only_one_credential_and_preserves_unrelated_values(self):
         old = (b'# pinned comment\nAUTOPILOT_DB_BACKEND=neon\n'
-               b'AUTOPILOT_DATABASE_URL=postgresql://autopilot_light_worker_login:old@'
+               b'AUTOPILOT_DATABASE_URL=postgresql://autopilot_light_worker_login:test_old_password@'
                b'ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech/neondb?sslmode=require\n'
                b'AUTOPILOT_WORKER_ID=oracle-autopilot-light-1\n')
         previous, candidate, written = remote.replace_dsn(old,'new+secret/!')
-        self.assertIn('old@', previous)
-        self.assertNotIn('old@', candidate)
+        self.assertIn('test_old_password@', previous)
+        self.assertNotIn('test_old_password@', candidate)
         self.assertEqual(remote.env_values(written)['AUTOPILOT_DATABASE_URL'], candidate)
         self.assertEqual(written.splitlines()[0],old.splitlines()[0])
         self.assertEqual(written.splitlines()[-1],old.splitlines()[-1])
         self.assertNotIn(b'new+secret/!',written) # percent-encoded secret
 
     def test_refuses_wrong_role_host_and_duplicate_assignment(self):
-        raw=('AUTOPILOT_DATABASE_URL=postgresql://autopilot_light_worker_login:old@'
+        raw=('AUTOPILOT_DATABASE_URL=postgresql://autopilot_light_worker_login:test_old_password@'
              'ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech/neondb\n').encode()
         for bad in (raw.replace(b'autopilot_light_worker_login',b'neondb_owner'),
                     raw.replace(b'ep-noisy-pine-',b'ep-wrong-pine-'),raw+raw):
@@ -28,9 +28,9 @@ class RecoveryContract(unittest.TestCase):
                 remote.replace_dsn(bad,'new')
 
     def test_rejects_password_with_newline_and_unchanged_password(self):
-        raw=('AUTOPILOT_DATABASE_URL=postgresql://autopilot_light_worker_login:old@'
+        raw=('AUTOPILOT_DATABASE_URL=postgresql://autopilot_light_worker_login:test_old_password@'
              'ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech/neondb\n').encode()
-        for bad in ('bad\ncredential','old'):
+        for bad in ('bad\ncredential','test_old_password'):
             with self.assertRaises(remote.Blocked):
                 remote.replace_dsn(raw,bad)
 
