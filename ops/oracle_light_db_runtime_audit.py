@@ -14,6 +14,13 @@ from urllib.parse import urlsplit, unquote
 UNITS = ('school-autopilot-production-light.service', 'school-autopilot-shadow.service',
          'school-autopilot-online-observer.service')
 LIGHT_ENV_FILE = Path('/etc/school-autopilot-production-light.env')
+PIN_ENV_FILE = Path('/opt/bridge-school/school-autopilot-production-light/releases/'
+                    '3244f4d4b17ce99e58c342f01e4715436a09622b/ops/autopilot/broker-hold.env')
+PIN_KEYS = frozenset({'AUTOPILOT_TOKEN_BROKER_URL',
+    'AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA',
+    'AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256',
+    'AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256',
+    'AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256'})
 
 
 def safe_identifier(value):
@@ -87,8 +94,37 @@ def environment_source_layout(output):
     """Reduce systemd's file list to non-secret facts; never echo an unknown path."""
     entries = output.splitlines()
     expected = f'EnvironmentFiles={LIGHT_ENV_FILE} (ignore_errors=no)'
+    pin = f'EnvironmentFiles={PIN_ENV_FILE} (ignore_errors=no)'
     return {'entries': len(entries), 'expected_primary': expected in entries,
-            'unknown_entries': sum(entry != expected for entry in entries)}
+            'expected_pin': pin in entries,
+            'unknown_entries': sum(entry not in (expected, pin) for entry in entries)}
+
+
+def verify_broker_pin_file(path=PIN_ENV_FILE):
+    """A recognized second EnvironmentFile must contain broker pins only."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as file:
+        info = os.fstat(file.fileno())
+        if not (stat.S_ISREG(info.st_mode) and info.st_uid == 0
+                and stat.S_IMODE(info.st_mode) == 0o644 and info.st_size <= 4096):
+            raise AuditFailure('PIN_FILE_UNTRUSTED')
+        raw = file.read(4097)
+        if len(raw) > 4096:
+            raise AuditFailure('PIN_FILE_UNTRUSTED')
+    keys = []
+    for line in raw.decode().splitlines():
+        key, separator, value = line.partition('=')
+        if not separator or key not in PIN_KEYS:
+            raise AuditFailure('PIN_FILE_INVALID')
+        try:
+            tokens = shlex.split(value, comments=False, posix=True)
+        except ValueError:
+            raise AuditFailure('PIN_FILE_INVALID') from None
+        if len(tokens) != 1:
+            raise AuditFailure('PIN_FILE_INVALID')
+        keys.append(key)
+    if len(keys) != len(PIN_KEYS) or set(keys) != PIN_KEYS:
+        raise AuditFailure('PIN_FILE_INVALID')
 
 
 def verify_production_login(dsn):
@@ -150,10 +186,15 @@ def main():
                                     check=True, capture_output=True, text=True,
                                     timeout=15).stdout
             layout = environment_source_layout(source)
-            if layout != {'entries': 1, 'expected_primary': True,
-                          'unknown_entries': 0}:
+            acceptable = ({'entries': 1, 'expected_primary': True,
+                           'expected_pin': False, 'unknown_entries': 0},
+                          {'entries': 2, 'expected_primary': True,
+                           'expected_pin': True, 'unknown_entries': 0})
+            if layout not in acceptable:
                 print(json.dumps({'audit': 'ENV_SOURCE_LAYOUT', **layout}), flush=True)
                 raise AuditFailure('ENV_SOURCE_DRIFT')
+            if layout['expected_pin']:
+                verify_broker_pin_file()
             matches = live_credential_matches_disk(dsn)
             print(json.dumps({'audit': 'SOURCE_ATTESTED',
                               'live_credential_matches_disk': matches}), flush=True)
