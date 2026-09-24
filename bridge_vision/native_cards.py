@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from bridge_contracts.video_deal import canonicalize_video_deal
+from bridge_contracts.video_deal import BridgeVideoDealContractError, canonicalize_video_deal
 
 CARD_DETECTOR_VERSION = "bridge-native-cards-v1"
 RawBackend = Callable[[Path], Mapping[str, Any]]
@@ -130,7 +130,7 @@ def observations_from_backend(
         box = _box(raw.get("box"), f"cards[{index}].box")
         try:
             card = _normalise_card(raw.get("card"))
-        except Exception as exc:
+        except BridgeVideoDealContractError:
             rejected.append({"index": index, "reason": "INVALID_CARD"})
             continue
         if confidence < min_card_confidence:
