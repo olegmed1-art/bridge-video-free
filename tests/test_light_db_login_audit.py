@@ -1,5 +1,7 @@
 """Credential probe contracts: no secret on argv/stdout and fail closed."""
 import json
+import contextlib
+import io
 import os
 from pathlib import Path
 import tempfile
@@ -114,6 +116,23 @@ class LightLoginAuditTests(unittest.TestCase):
                          Path(other_release) / 'ops/autopilot/broker-hold.env')
         with self.assertRaisesRegex(audit.AuditFailure, 'RELEASE_DIRECTORY_DRIFT'):
             audit.release_broker_pin_path('/etc/untrusted')
+
+    def test_pin_file_metadata_diagnostic_has_no_path_or_values(self):
+        self.trust_temporary_file_owner()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'dont-print-path.env'
+            path.write_text('EXAMPLE_KEY=dont-print-value\n')
+            os.chmod(path, 0o600)
+            result = io.StringIO()
+            with contextlib.redirect_stdout(result):
+                with self.assertRaisesRegex(audit.AuditFailure, 'PIN_FILE_UNTRUSTED'):
+                    audit.verify_broker_pin_file(path)
+            self.assertEqual(json.loads(result.getvalue()),
+                             {'audit': 'PIN_FILE_METADATA', 'regular': True,
+                              'root_owned': True, 'mode': '0600',
+                              'within_size_limit': True})
+            self.assertNotIn('dont-print-value', result.getvalue())
+            self.assertNotIn('dont-print-path', result.getvalue())
 
 
 if __name__ == '__main__':
