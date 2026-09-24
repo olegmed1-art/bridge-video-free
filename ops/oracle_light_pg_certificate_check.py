@@ -16,6 +16,16 @@ import sys
 DEFAULT_DIRECTORY = Path('/etc/bridge-autopilot-postgres')
 
 
+def verified_tls_context(cafile):
+    """Keep CA/hostname verification and require TLS 1.2 or newer.
+
+    Kept local because administrators also execute this script over SSH stdin.
+    """
+    context = ssl.create_default_context(cafile=str(cafile))
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
 def inspect_certificate(path: Path, now: datetime, warning_days: int) -> dict:
     if path.is_symlink() or not path.is_file():
         raise ValueError('certificate missing or symlinked')
@@ -38,7 +48,7 @@ def verify_live_certificate(directory: Path) -> None:
     """Authenticate PostgreSQL on loopback and compare its active leaf to disk."""
     ca_path = directory / 'ca.crt'
     server_path = directory / 'tls/server.crt'
-    context = ssl.create_default_context(cafile=str(ca_path))
+    context = verified_tls_context(ca_path)
     expected = ssl.PEM_cert_to_DER_cert(server_path.read_text())
     with socket.create_connection(('127.0.0.1', 55432), timeout=10) as connection:
         connection.sendall(struct.pack('!II', 8, 80877103))
