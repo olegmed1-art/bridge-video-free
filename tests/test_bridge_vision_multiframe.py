@@ -118,6 +118,29 @@ def test_scoped_board_number_is_strong_identity():
     assert result["deals"][0]["explicit_board_key"] == "board_number:session-a:1"
 
 
+def test_scoped_board_identity_does_not_collide_across_component_boundaries():
+    records = [
+        rec({"N": ["AS"]}, frame="c.jpg", board_number="2", board_scope="session:1"),
+        rec({"S": ["KH"]}, frame="d.jpg", board_number="1:2", board_scope="session"),
+    ]
+    result = reconstruct_deals(records).to_dict()
+
+    assert result["deal_count"] == 2
+    assert len({deal["explicit_board_key"] for deal in result["deals"]}) == 2
+    assert [deal["frame_indices"] for deal in result["deals"]] == [[0], [1]]
+
+
+def test_scoped_board_identity_escapes_percent_as_well_as_colon():
+    records = [
+        rec({"N": ["AS"]}, frame="e.jpg", board_number="2", board_scope="session%3A1"),
+        rec({"S": ["KH"]}, frame="f.jpg", board_number="2", board_scope="session:1"),
+    ]
+    result = reconstruct_deals(records).to_dict()
+
+    assert result["deal_count"] == 2
+    assert len({deal["explicit_board_key"] for deal in result["deals"]}) == 2
+
+
 def test_duplicate_frame_evidence_is_not_counted_twice():
     first = rec({"N": ["AS", "KS", "QS", "JS"]}, frame="a.jpg")
     duplicate = dict(first)
