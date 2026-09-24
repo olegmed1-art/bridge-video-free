@@ -57,6 +57,18 @@ jobs:
             esac
           done
 
+          for path in database/migrations/04??_*.sql; do
+            base="$(basename "$path" .sql)"
+            suffix="${base#*_}"
+            case "$suffix" in
+              video_*) ;;
+              *)
+                echo "Reserved migration range 0400-0499 is Video only: $path" >&2
+                exit 1
+                ;;
+            esac
+          done
+
           for path in database/tests/09?_*.sql; do
             base="$(basename "$path" .sql)"
             suffix="${base#*_}"
