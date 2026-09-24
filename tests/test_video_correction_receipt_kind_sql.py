@@ -17,7 +17,10 @@ def _guard(source: str) -> str:
 
 def test_new_receipt_guard_preserves_all_prior_database_trust_checks():
     old = _guard(OLD)
-    expected = old.replace("jsonb_object_length(NEW.receipt_payload)<>8", "jsonb_object_length(NEW.receipt_payload)<>9")
+    expected = old.replace(
+        "jsonb_object_length(NEW.receipt_payload)<>8",
+        "(SELECT count(*) FROM jsonb_object_keys(NEW.receipt_payload))<>9",
+    )
     expected = expected.replace("'correction_id','reviewer_ref'", "'correction_id','kind','reviewer_ref'")
     kinds = ",".join(f"'{kind}'" for kind in ("ASR", "SPEAKER", "CARD", "AUCTION", "EXTRACTION", "PEDAGOGY"))
     assert set(kinds.replace("'", "").split(",")) == _KINDS
