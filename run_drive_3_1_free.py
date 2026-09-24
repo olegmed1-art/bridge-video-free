@@ -57,10 +57,12 @@ def upload_file(t,parent,path,mime):
     body=(f'--{b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+json.dumps(m)+f'\r\n--{b}\r\nContent-Type: {mime}\r\n\r\n').encode()+Path(path).read_bytes()+f'\r\n--{b}--\r\n'.encode()
     r=requests.post(UPLOAD+'?uploadType=multipart&fields=id,name,size,parents',headers={**hdr(t),'Content-Type':f'multipart/related; boundary={b}'},data=body,timeout=180); r.raise_for_status(); return r.json()
 def upload_json(t,parent,name,obj):
-    p=Path(tempfile.mkstemp(suffix='.json')[1]); p.write_text(json.dumps(obj,ensure_ascii=False,indent=2),encoding='utf-8')
-    try: p2=p.with_name(name); p.rename(p2); return upload_file(t,parent,p2,'application/json')
-    finally:
-        for x in [p,p.with_name(name)]: x.unlink(missing_ok=True)
+    if not name or name in {'.', '..'} or Path(name).name != name:
+        raise ValueError('upload name must be a filename')
+    with tempfile.TemporaryDirectory(prefix='bridge-json-') as directory:
+        path = Path(directory) / name
+        path.write_text(json.dumps(obj,ensure_ascii=False,indent=2),encoding='utf-8')
+        return upload_file(t,parent,path,'application/json')
 def add_perm(t,fid,p):
     body={'type':p.get('type'),'role':p.get('role')}
     if p.get('emailAddress'): body['emailAddress']=p['emailAddress']
