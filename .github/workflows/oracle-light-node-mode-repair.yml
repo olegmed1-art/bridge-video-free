@@ -38,7 +38,7 @@ jobs:
         with:
           persist-credentials: false
       - run: |
-          python -m unittest discover -s tests -p 'test_oracle_light_node_mode_repair*.py' -v
+          sudo -H python3 -m unittest discover -s tests -p 'test_oracle_light_node_mode_repair*.py' -v
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' .github/workflows/oracle-light-node-mode-repair.yml
 
   operate:
