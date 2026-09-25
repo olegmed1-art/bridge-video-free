@@ -1,8 +1,8 @@
 """Native receipt QueuePort over parameterized PostgreSQL RPCs.
 
-Pass the existing worker's single-RPC connection function. Migration 0339 is
-owner-only until native runtime activation is separately reviewed; there is no
-credential fallback, broad table query, or legacy GitHub proof conversion here.
+Pass a single-RPC connection function under a separately reviewed dedicated
+login. Migrations 0339 and 0373 must both be present; reserve and begin use
+the exact one-canary wrappers. No credential fallback or legacy proof conversion.
 """
 from .codex_cli_bridge import canonical, validate_request, SHA
 
@@ -18,7 +18,7 @@ class NativeQueue:
         return row['payload']
 
     def reserve(self, dispatch_id, assignment, branch):
-        return self._one('SELECT autopilot.native_cli_reserve(%s::uuid,%s::jsonb,%s) AS payload',
+        return self._one('SELECT autopilot.native_cli_reserve_canary(%s::uuid,%s::jsonb,%s) AS payload',
                          (dispatch_id, canonical(assignment), branch))
 
     def snapshot(self, dispatch_id):
@@ -30,7 +30,7 @@ class NativeQueue:
                   (canonical(request), task_id, prompt_sha256))
 
     def begin_submission(self, request):
-        result = self._one('SELECT autopilot.native_cli_begin(%s::jsonb) AS payload',
+        result = self._one('SELECT autopilot.native_cli_begin_canary(%s::jsonb) AS payload',
                            (canonical(request),))
         if type(result) is not bool:
             raise ValueError('NATIVE_QUEUE_BEGIN_INVALID')
@@ -42,7 +42,7 @@ class NativeQueue:
                   (canonical(request), task_id, canonical(receipt)))
 
     def current(self, request):
-        result = self._one('SELECT autopilot.native_cli_current(%s::jsonb) AS payload',
+        result = self._one('SELECT autopilot.native_cli_canary_current(%s::jsonb) AS payload',
                            (canonical(request),))
         if type(result) is not bool:
             raise ValueError('NATIVE_QUEUE_AUTHORITY_INVALID')
