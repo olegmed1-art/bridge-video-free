@@ -73,7 +73,7 @@ def failure_code(exc):
                'MODE_UNEXPECTED','PRE_WRITE_DRIFT','POST_MODE_DRIFT','POST_WRITE_DRIFT',
                'GROUP_NOT_PRIVATE','BUNDLE_TOO_LARGE','BUNDLE_KEYS','MODE',
                'LIVE_HOLD_DRIFT','DIAGNOSTIC_FAILED','DIAGNOSTIC_DRIFT','CAUSE_DRIFT',
-               'EXPECTED_MODE','RUNTIME_OUTSIDE_NVM','INVENTORY_TOO_LARGE'}
+               'EXPECTED_MODE','RUNTIME_OUTSIDE_NVM','INVENTORY_TOO_LARGE','TARGET_SCOPE'}
     allowed.update('UNSAFE_ANCESTOR_' + str(i) for i in range(6))
     value = exc.args[0] if exc.args else None
     if isinstance(exc, (RuntimeError, ValueError)) and isinstance(value, str) and value in allowed:
@@ -162,12 +162,16 @@ def main():
     if bundle['mode'] == 'inspect':
         preflight()
         user = pwd.getpwnam('ubuntu')
-        chain = repair['DirectoryChain'](repair['PATH'], user.pw_uid, user.pw_gid)
+        chain = repair['DirectoryChain'](repair['PATH'], user.pw_uid, user.pw_gid,
+                                         targets=repair['TARGETS'])
         try:
-            mode = repair['stat'].S_IMODE(os.fstat(chain.fd).st_mode)
+            modes = [repair['stat'].S_IMODE(os.fstat(chain.fds[i]).st_mode)
+                     for i in chain.indices]
             chain.validate()
-            print(json.dumps({'audit':'NVM_MODE_INSPECT','mode':format(mode,'04o'),
-                              'proposed_mode':format(mode & ~0o020,'04o')}), flush=True)
+            repair['require'](modes == [0o775] * 4, 'MODE_UNEXPECTED')
+            print(json.dumps({'audit':'NVM_MODE_INSPECT','mode':'0775',
+                              'proposed_mode':'0755',
+                              'paths':[str(p) for p in repair['TARGETS']]}), flush=True)
         finally:
             chain.close()
         live()
