@@ -17,7 +17,7 @@ on:
         required: true
         type: choice
         default: inspect
-        options: [inspect, repair]
+        options: [inspect, repair, inventory]
       expected_mode:
         description: Four octal digits from fresh inspection; required for repair
         required: false
