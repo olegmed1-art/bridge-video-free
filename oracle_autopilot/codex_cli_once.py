@@ -67,14 +67,14 @@ def read_pr(number, token, opener=None):
     return pr
 
 
-def require_live_active():
+def require_live_hold():
     """Local unit readback is independent of the caller's environment.
 
     This is defense in depth; an atomic database-side canary admission is
     still required before this draft is enabled or merged.
     """
-    if os.environ.get('AUTOPILOT_ADMISSION_MODE') != 'ACTIVE':
-        raise ValueError('AUTOPILOT_ADMISSION_HELD')
+    if os.environ.get('AUTOPILOT_ADMISSION_MODE') != 'HOLD':
+        raise ValueError('NATIVE_SERVICE_MUST_REMAIN_HELD')
     if os.uname().nodename != LIGHT_HOST:
         raise ValueError('NATIVE_HOST_IDENTITY_INVALID')
     status = subprocess.run(['systemctl', 'show', LIGHT_UNIT,
@@ -84,14 +84,14 @@ def require_live_active():
     admission = [item for item in fields.get('Environment', '').split()
                  if item.startswith('AUTOPILOT_ADMISSION_MODE=')]
     if (fields.get('ActiveState') != 'active' or fields.get('SubState') != 'running'
-            or admission != ['AUTOPILOT_ADMISSION_MODE=ACTIVE']):
-        raise ValueError('AUTOPILOT_ADMISSION_HELD')
+            or admission != ['AUTOPILOT_ADMISSION_MODE=HOLD']):
+        raise ValueError('NATIVE_SERVICE_MUST_REMAIN_HELD')
 
 
 def one_step(dispatch_id, dsn, token, profile):
     if not bridge.UUID.fullmatch(dispatch_id):
         raise ValueError('NATIVE_DISPATCH_ID_INVALID')
-    require_live_active()
+    require_live_hold()
     username = 'school-autopilot' if profile == 'service' else 'ubuntu'
     if profile not in ('ubuntu', 'service') or os.geteuid() != pwd.getpwnam(username).pw_uid:
         raise ValueError('NATIVE_PROFILE_IDENTITY_INVALID')
@@ -112,12 +112,26 @@ def one_step(dispatch_id, dsn, token, profile):
 
     class CheckedQueue(NativeQueue):
         def begin_submission(self, request):
-            require_live_active()
+            require_live_hold()
             return super().begin_submission(request)
 
     queue = CheckedQueue(rpc)
     authority = NativeAuthority(queue, lambda number: read_pr(number, token))
-    return advance(dispatch_id, queue, authority)
+
+    class CheckedProvider:
+        lookup = staticmethod(bridge.lookup)
+        collect = staticmethod(bridge.collect)
+
+        @staticmethod
+        def submit(request):
+            # SQL begin has already recorded the irreversible one-shot intent.
+            # On failed recheck leave UNKNOWN; never attempt a second create.
+            require_live_hold()
+            if not queue.current(request):
+                raise ValueError('NATIVE_CANARY_REVOKED')
+            return bridge.submit(request)
+
+    return advance(dispatch_id, queue, authority, CheckedProvider)
 
 
 def main():
