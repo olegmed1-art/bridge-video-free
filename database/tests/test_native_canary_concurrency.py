@@ -93,10 +93,12 @@ def main():
     password = secrets.token_urlsafe(32)
     with psycopg.connect(admin, autocommit=True) as root:
         root.execute(sql.SQL('CREATE DATABASE {} TEMPLATE bridge_school_ci').format(sql.Identifier(CLONE)))
+    role_created = False
     try:
         with psycopg.connect(admin, autocommit=True) as root:
             root.execute(sql.SQL('CREATE ROLE {} LOGIN PASSWORD {}').format(
                 sql.Identifier(ROLE), sql.Literal(password)))
+            role_created = True
         limited = make_conninfo(cloned, user=ROLE, password=password)
         dispatch, assignment = fixture(cloned)
         grant_limited_role(cloned)
@@ -145,9 +147,13 @@ def main():
                                       (Jsonb(request),)).fetchone()[0] is False
         print('native one-shot restricted-login parallel begin: PASS')
     finally:
-        with psycopg.connect(admin, autocommit=True) as root:
-            root.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(CLONE)))
-            root.execute(sql.SQL('DROP ROLE IF EXISTS {}').format(sql.Identifier(ROLE)))
+        try:
+            with psycopg.connect(admin, autocommit=True) as root:
+                root.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(CLONE)))
+        finally:
+            if role_created:
+                with psycopg.connect(admin, autocommit=True) as root:
+                    root.execute(sql.SQL('DROP ROLE {}').format(sql.Identifier(ROLE)))
 
 
 if __name__ == '__main__':
