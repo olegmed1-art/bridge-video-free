@@ -102,8 +102,8 @@ DO $$ DECLARE f jsonb:=current_setting('native_ci.fixture')::jsonb; BEGIN
 END $$;
 RESET SESSION AUTHORIZATION;
 DO $$ DECLARE f jsonb:=current_setting('native_ci.fixture')::jsonb; BEGIN
- IF (SELECT owner_name FROM autopilot.native_cli_receipt WHERE dispatch_id=(f->>'id')::uuid)<>'native_ci_runtime'
- OR (SELECT status FROM autopilot.task WHERE task_id=(f->>'task_id')::uuid)<>'DONE'
+ IF (SELECT owner_name FROM autopilot.native_cli_receipt WHERE dispatch_id=(f->>'id')::uuid) IS DISTINCT FROM 'native_ci_runtime'
+ OR (SELECT status FROM autopilot.task WHERE task_id=(f->>'task_id')::uuid) IS DISTINCT FROM 'DONE'
  OR (SELECT count(*) FROM autopilot.evidence WHERE external_ref='codex-cli:task_e_runtime_acl339')<>1 THEN
   RAISE EXCEPTION 'TEST_RUNTIME_LIFECYCLE_NOT_ATOMIC';
  END IF;
