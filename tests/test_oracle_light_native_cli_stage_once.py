@@ -195,3 +195,43 @@ class StageTests(unittest.TestCase):
 
 if __name__=='__main__':
     unittest.main()
+
+class NpmConfigurationTests(unittest.TestCase):
+    def test_separate_private_empty_configs_and_no_inherited_env(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            with patch.dict(os.environ,{'OPENAI_API_KEY':'test-secret','NPM_TOKEN':'test-secret'}):
+                env=stage.npm_environment(root)
+            paths=[Path(env['npm_config_'+kind+'config']) for kind in ('user','global')]
+            self.assertNotEqual(paths[0].stat().st_ino,paths[1].stat().st_ino)
+            for path in paths:
+                self.assertEqual(path.parent,root)
+                self.assertEqual(path.read_bytes(),b'')
+                self.assertEqual(path.stat().st_mode & 0o777,0o600)
+            self.assertNotIn('OPENAI_API_KEY',env)
+            self.assertNotIn('NPM_TOKEN',env)
+
+    def test_existing_config_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            (root/'user.npmrc').write_text('preserve')
+            with self.assertRaises(FileExistsError):
+                stage.npm_environment(root)
+            self.assertEqual((root/'user.npmrc').read_text(),'preserve')
+
+    def test_real_npm_loads_distinct_configs_without_network(self):
+        import shutil
+        npm=shutil.which('npm')
+        if npm is None:
+            self.skipTest('npm not installed')
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            env=stage.npm_environment(root)
+            env['PATH']=str(Path(npm).parent)+':/usr/bin:/bin'
+            old=dict(env,npm_config_userconfig='/dev/null',npm_config_globalconfig='/dev/null')
+            failed=stage.subprocess.run([npm,'--version'],env=old,cwd='/',capture_output=True,text=True,timeout=15)
+            self.assertNotEqual(failed.returncode,0)
+            self.assertIn('double-loading config',failed.stdout+failed.stderr)
+            passed=stage.subprocess.run([npm,'--version'],env=env,cwd='/',capture_output=True,text=True,timeout=15)
+            self.assertEqual(passed.returncode,0)
+            self.assertRegex(passed.stdout.strip(),r'^\d+\.\d+\.\d+')

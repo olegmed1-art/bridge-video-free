@@ -193,6 +193,19 @@ def diagnose():
             'installation_action':'NONE'}
 
 
+def npm_environment(stage):
+    # npm rejects loading one file as both user and global configuration.
+    # Separate private empty files also prevent inherited user/global settings.
+    configs = {}
+    for kind in ('user', 'global'):
+        path = stage / (kind + '.npmrc')
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
+        configs['npm_config_' + kind + 'config'] = str(path)
+    return {'HOME':str(HOME),'PATH':str(NODE.parent)+':/usr/bin:/bin',
+            'LANG':'C.UTF-8','npm_config_cache':str(stage/'cache'), **configs}
+
+
 def install():
     require_host()
     uid=os.geteuid()
@@ -208,9 +221,7 @@ def install():
     stage=Path(tempfile.mkdtemp(prefix='.codex-stage-',dir=PARENT))
     try:
         destination=stage/'package'
-        env={'HOME':str(HOME),'PATH':str(NODE.parent)+':/usr/bin:/bin',
-             'LANG':'C.UTF-8','npm_config_userconfig':'/dev/null',
-             'npm_config_globalconfig':'/dev/null','npm_config_cache':str(stage/'cache')}
+        env=npm_environment(stage)
         run=subprocess.run([str(NPM),'install','--prefix',str(destination),
                             '--ignore-scripts','--no-audit','--no-fund',
                             '--registry=https://registry.npmjs.org',
