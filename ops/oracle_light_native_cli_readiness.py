@@ -20,6 +20,8 @@ def profile_status(name, binary, home, codex_home):
     if not binary.is_file() or not os.access(binary, os.X_OK):
         return 'CLI_ABSENT'
     user = pwd.getpwnam(name)
+    path = ('/home/ubuntu/.nvm/versions/node/v22.23.2/bin:/usr/local/bin:/usr/bin:/bin'
+            if name == 'ubuntu' else '/usr/local/bin:/usr/bin:/bin')
 
     def drop_privileges():
         os.setgroups([])
@@ -30,13 +32,13 @@ def profile_status(name, binary, home, codex_home):
         result = subprocess.run(
             [str(binary), '-c', 'forced_login_method="chatgpt"', 'login', 'status'],
             cwd='/', env={'HOME': str(home), 'CODEX_HOME': str(codex_home),
-                          'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8'},
+                          'PATH': path, 'LANG': 'C.UTF-8'},
             preexec_fn=drop_privileges, capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.TimeoutExpired):
         return 'CLI_STATUS_UNKNOWN'
     # Never print CLI output: it may contain account or credential material.
     return ('CLI_AUTH_READY' if result.returncode == 0 and
-            'Logged in using ChatGPT' in result.stdout.splitlines()
+            'Logged in using ChatGPT' in (result.stdout + '\n' + result.stderr).splitlines()
             else 'CLI_AUTH_REQUIRED')
 
 
