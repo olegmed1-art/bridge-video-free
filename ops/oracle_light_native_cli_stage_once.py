@@ -181,14 +181,17 @@ def install():
             'service_restart':False,'database_writes':False}
 
 
+def entry(argv):
+    if argv==['--diagnose']:
+        return diagnose()
+    if not argv:
+        return install()
+    raise ValueError('ARGUMENT_INVALID')
+
+
 if __name__=='__main__':
     try:
-        if sys.argv[1:]==['--diagnose']:
-            print(json.dumps(diagnose(),sort_keys=True))
-        elif len(sys.argv)==1:
-            print(json.dumps(install(),sort_keys=True))
-        else:
-            raise ValueError('ARGUMENT_INVALID')
+        print(json.dumps(entry(sys.argv[1:]),sort_keys=True))
     except BaseException:
         print(json.dumps({'audit':'BLOCKED','code':'CLI_STAGE_FAILED'}))
         sys.exit(2)
