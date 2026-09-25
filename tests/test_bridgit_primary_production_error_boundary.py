@@ -8,7 +8,7 @@ import zipfile
 import pytest
 
 from bridge_vision import bridgit_primary_production_r264 as production
-from bridge_vision.bridgit_gold_profile import BridgitGoldProfileError, BridgitGoldProfileOutputError
+from bridge_vision.bridgit_gold_profile_r264 import BridgitGoldProfileError, BridgitGoldProfileOutputError
 from bridge_vision.bridgit_primary_video_r264 import PrimaryVideoInputError, PrimaryVideoRecognitionError
 
 
