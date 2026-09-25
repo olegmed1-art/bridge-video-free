@@ -10,6 +10,19 @@ from ops import oracle_light_native_cli_readiness as probe
 
 
 class ReadinessTests(unittest.TestCase):
+    def test_light_profile_matches_bridge_without_ubuntu_credentials(self):
+        from oracle_autopilot import codex_cli_bridge as bridge
+        try:
+            bridge.configure_profile('light')
+            name, binary, home, codex_home = probe.PROFILES[1]
+            self.assertEqual(name, 'school-autopilot')
+            self.assertEqual(binary, bridge.CLI)
+            self.assertEqual(str(home), bridge.child_environment()['HOME'])
+            self.assertEqual(str(codex_home), bridge.child_environment()['CODEX_HOME'])
+            self.assertNotIn('/home/ubuntu', str(codex_home))
+        finally:
+            bridge.configure_profile('ubuntu')
+
     def test_absent_cli_never_executes(self):
         with patch.object(Path, 'is_file', return_value=False), patch.object(
                 probe.subprocess, 'run') as run:

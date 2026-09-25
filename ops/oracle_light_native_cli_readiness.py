@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 UNIT = 'school-autopilot-production-light.service'
-SERVICE_ROOT = Path('/opt/bridge-school/school-autopilot')
+SERVICE_ROOT = Path('/opt/bridge-school/school-autopilot-production-light')
 PROFILES = (
     ('ubuntu', Path('/home/ubuntu/.local/share/slavik-codex/node_modules/.bin/codex'),
      Path('/home/ubuntu'), Path('/home/ubuntu/.codex')),
