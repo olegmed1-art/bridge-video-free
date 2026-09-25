@@ -58,11 +58,31 @@ BEGIN
   RAISE EXCEPTION 'CANARY_RESERVATION_REPLAY_CHANGED';
  END IF;
  request:=reservation->'request';
- IF NOT autopilot.native_cli_canary_current(request)
- OR NOT autopilot.native_cli_begin_canary(request)
- OR autopilot.native_cli_begin_canary(request) THEN
-  RAISE EXCEPTION 'CANARY_BEGIN_NOT_ONE_SHOT';
+ UPDATE autopilot.native_cli_single_canary_permit SET revoked=true WHERE dispatch_id=id;
+ IF autopilot.native_cli_canary_current(request) THEN
+  RAISE EXCEPTION 'CANARY_REVOKED_BEFORE_SUBMIT_RETAINED_AUTHORITY';
  END IF;
+ conflict:=false;
+ BEGIN
+  PERFORM autopilot.native_cli_begin_canary(request);
+ EXCEPTION WHEN raise_exception THEN
+  IF SQLERRM IS DISTINCT FROM 'NATIVE_CANARY_PERMIT_INVALID' THEN RAISE; END IF;
+  conflict:=true;
+ END;
+ IF NOT conflict THEN RAISE EXCEPTION 'CANARY_REVOKED_BEFORE_BEGIN_ACCEPTED'; END IF;
+ UPDATE autopilot.native_cli_single_canary_permit SET revoked=false WHERE dispatch_id=id;
+ IF NOT autopilot.native_cli_canary_current(request)
+ OR NOT autopilot.native_cli_begin_canary(request) THEN
+  RAISE EXCEPTION 'CANARY_BEGIN_DENIED';
+ END IF;
+ conflict:=false;
+ BEGIN
+  PERFORM autopilot.native_cli_begin_canary(request);
+ EXCEPTION WHEN raise_exception THEN
+  IF SQLERRM IS DISTINCT FROM 'NATIVE_CANARY_PERMIT_INVALID' THEN RAISE; END IF;
+  conflict:=true;
+ END;
+ IF NOT conflict THEN RAISE EXCEPTION 'CANARY_SECOND_BEGIN_ALLOWED'; END IF;
  PERFORM autopilot.native_cli_ack(request,'task_e_sql373',repeat('c',64));
  UPDATE autopilot.native_cli_single_canary_permit SET revoked=true WHERE dispatch_id=id;
  IF NOT autopilot.native_cli_canary_current(request) THEN
