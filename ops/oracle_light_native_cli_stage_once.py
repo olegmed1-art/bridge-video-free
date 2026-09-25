@@ -6,6 +6,7 @@ is atomic and never replaces an existing installation.
 """
 import json
 import ctypes
+import grp
 import os
 from pathlib import Path
 import pwd
@@ -116,6 +117,21 @@ def verify_package(install):
 
 def diagnose():
     """Read-only fixed-code report for a blocked install; never execute npm."""
+    def group_audit(failure):
+        if failure!={'chain':'source','index':1,'reason':'GROUP_WRITABLE'}:
+            return None
+        try:
+            info=NODE.parent.parent.lstat()
+            user=pwd.getpwnam('ubuntu')
+            group=grp.getgrgid(info.st_gid)
+            accounts={member.pw_name for member in pwd.getpwall()
+                      if member.pw_gid==info.st_gid} | set(group.gr_mem)
+            return {'version_owner_ubuntu':info.st_uid==user.pw_uid,
+                    'version_group_ubuntu_primary':info.st_gid==user.pw_gid,
+                    'group_has_other_accounts':bool(accounts-{'ubuntu'})}
+        except (OSError,KeyError):
+            return {'status':'METADATA_UNAVAILABLE'}
+
     def parent_failure(path,uid):
         try:
             resolved=path.resolve(strict=True)
@@ -155,13 +171,16 @@ def diagnose():
              for name,path in (('home',HOME),('local',HOME/'.local'),('share',PARENT))}
     node=result(lambda: (check_binary(NODE,uid),'SAFE')[1])
     npm=result(lambda: (check_binary(NPM,uid),'SAFE')[1])
+    node_failure=parent_failure(NODE,uid) if node=='UNSAFE_INSTALL_PARENT' else None
+    npm_failure=parent_failure(NPM,uid) if npm=='UNSAFE_INSTALL_PARENT' else None
     return {'audit':'NATIVE_CLI_STAGE_DIAGNOSTIC','guard':guard,
             'parents':parents,
             'target':result(lambda: 'PRESENT' if TARGET.exists() or TARGET.is_symlink()
                             else 'ABSENT'),
             'node':node,'npm':npm,
-            'node_parent_failure':parent_failure(NODE,uid) if node=='UNSAFE_INSTALL_PARENT' else None,
-            'npm_parent_failure':parent_failure(NPM,uid) if npm=='UNSAFE_INSTALL_PARENT' else None,
+            'node_parent_failure':node_failure,
+            'npm_parent_failure':npm_failure,
+            'version_group_audit':group_audit(node_failure) if node_failure==npm_failure else None,
             'installation_action':'NONE'}
 
 
