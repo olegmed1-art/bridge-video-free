@@ -12,6 +12,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(runner.failure_code(RuntimeError('ACL_PRESENT')), 'ACL_PRESENT')
         self.assertEqual(runner.failure_code(RuntimeError('secret-value')), 'NVM_REPAIR_RUNNER_FAILED')
         self.assertEqual(runner.failure_code(OSError(13, 'secret-path')), 'OS_ERROR_13')
+        self.assertEqual(runner.failure_code(RuntimeError('UNSAFE_ANCESTOR_5')), 'UNSAFE_ANCESTOR_5')
+        self.assertEqual(runner.failure_code(RuntimeError('UNSAFE_ANCESTOR_99')), 'NVM_REPAIR_RUNNER_FAILED')
 
     def bundle(self):
         live = {'audit':'ACTIVE_HOLD_PASS','queue_nonterminal':0,

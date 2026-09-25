@@ -72,7 +72,7 @@ class DirectoryChain:
                 require(stat.S_ISDIR(entry.st_mode) and identity(entry) == identity(info), 'PATH_DRIFT')
             if i < len(self.fds)-1:
                 require(info.st_uid in (0, self.uid) and not info.st_mode & 0o022,
-                        'UNSAFE_ANCESTOR')
+                        'UNSAFE_ANCESTOR_' + str(i))
                 no_acl(fd)
             else:
                 require(info.st_uid == self.uid and info.st_gid == self.gid,
