@@ -48,7 +48,7 @@ BEGIN
  SELECT * INTO o FROM autopilot.role_dispatch_outbox WHERE dispatch_id=p_dispatch_id FOR UPDATE;
  IF o.dispatch_id IS NULL OR o.status IS DISTINCT FROM 'PUBLISHED'
  OR o.delivery_contract_version IS DISTINCT FROM
-    CASE WHEN permit.reserved_at IS NULL THEN 3 ELSE 4 END
+    (CASE WHEN permit.reserved_at IS NULL THEN 3 ELSE 4 END)
  OR o.github_dispatch_comment_id IS NULL
  OR o.target_pr IS DISTINCT FROM permit.target_pr
  OR o.expected_head_sha IS DISTINCT FROM permit.expected_head_sha
