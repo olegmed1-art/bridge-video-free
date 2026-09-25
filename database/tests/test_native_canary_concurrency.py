@@ -57,22 +57,15 @@ def fixture(dsn):
 
 def grant_limited_role(owner_dsn):
     with psycopg.connect(owner_dsn) as connection:
-        connection.execute(sql.SQL('GRANT USAGE ON SCHEMA autopilot TO {}').format(sql.Identifier(ROLE)))
-        for signature in (
-            'native_cli_reserve_canary(uuid,jsonb,text)',
-            'native_cli_snapshot(uuid)',
-            'native_cli_begin_canary(jsonb)',
-            'native_cli_canary_current(jsonb)',
-            'native_cli_ack(jsonb,text,text)',
-            'native_cli_finish(jsonb,text,jsonb)',
-        ):
-            connection.execute(sql.SQL('GRANT EXECUTE ON FUNCTION autopilot.{} TO {}').format(
-                sql.SQL(signature), sql.Identifier(ROLE)))
+        connection.execute(sql.SQL('GRANT autopilot_native_canary TO {} WITH INHERIT TRUE, SET FALSE').format(
+            sql.Identifier(ROLE)))
 
 
 def reserve_as_limited_role(dsn, dispatch, assignment):
     with psycopg.connect(dsn) as connection:
         assert connection.execute('SELECT session_user').fetchone()[0] == ROLE
+        assert connection.execute('SELECT pg_has_role(%s,%s,%s)',
+                                  (ROLE, 'autopilot_native_canary', 'USAGE')).fetchone()[0] is True
         for signature in ('native_cli_reserve(uuid,jsonb,text)', 'native_cli_begin(jsonb)'):
             assert connection.execute('SELECT has_function_privilege(%s,%s,%s)',
                                       (ROLE, f'autopilot.{signature}', 'EXECUTE')).fetchone()[0] is False
@@ -153,6 +146,7 @@ def main():
         finally:
             if role_created:
                 with psycopg.connect(admin, autocommit=True) as root:
+                    root.execute(sql.SQL('REVOKE autopilot_native_canary FROM {}').format(sql.Identifier(ROLE)))
                     root.execute(sql.SQL('DROP ROLE {}').format(sql.Identifier(ROLE)))
 
 
