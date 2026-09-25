@@ -74,8 +74,8 @@ def reserve_as_limited_role(dsn, dispatch, assignment):
     with psycopg.connect(dsn) as connection:
         assert connection.execute('SELECT session_user').fetchone()[0] == ROLE
         for signature in ('native_cli_reserve(uuid,jsonb,text)', 'native_cli_begin(jsonb)'):
-            assert connection.execute('SELECT has_function_privilege(%s,%s)',
-                                      (ROLE, f'autopilot.{signature}')).fetchone()[0] is False
+            assert connection.execute('SELECT has_function_privilege(%s,%s,%s)',
+                                      (ROLE, f'autopilot.{signature}', 'EXECUTE')).fetchone()[0] is False
         assert connection.execute('SELECT has_table_privilege(%s,%s,%s)',
                                   (ROLE, 'autopilot.native_cli_receipt', 'INSERT')).fetchone()[0] is False
         reserved = connection.execute('SELECT autopilot.native_cli_reserve_canary(%s,%s,%s)',
