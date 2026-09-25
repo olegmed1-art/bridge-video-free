@@ -202,3 +202,66 @@ def test_unknown_profile_does_not_change_current_profile():
     with pytest.raises(ValueError, match='CLI_PROFILE_INVALID'):
         bridge.configure_profile('../../home/ubuntu')
     assert (bridge.CLI, bridge.STATE, bridge.PROFILE) == old
+
+
+
+# Tagged v0.157.0 format_task_status_lines; exit 1 unless READY.
+def status_frame(label):
+    return f'[{label}] Bounded audit\nbridge-video-free  •  just now\nno diff\n'
+
+
+def test_pinned_error_is_retained_once_without_diff_or_resubmit(request_data, monkeypatch):
+    submitted(request_data, monkeypatch)
+    calls = []
+    def read(args):
+        calls.append(args)
+        assert args == ['cloud', 'status', 'task_e_test123']
+        return response(status_frame('ERROR'), 1)
+    monkeypatch.setattr(bridge, 'run_cli', read)
+    result = bridge.collect(request_data['dispatch_id'])
+    assert result['state'] == 'PROVIDER_TERMINAL_FAILURE'
+    assert result['result_code'] == 'PROVIDER_ERROR'
+    assert result['status_sha256'] == bridge.digest(status_frame('ERROR'))
+    assert bridge.collect(request_data['dispatch_id']) == result
+    assert len(calls) == 1
+
+
+def test_pinned_pending_can_later_become_ready(request_data, monkeypatch):
+    submitted(request_data, monkeypatch)
+    replies = iter([response(status_frame('PENDING'), 1),
+                    response(status_frame('READY')), response(report_patch(request_data))])
+    monkeypatch.setattr(bridge, 'run_cli', lambda args: next(replies))
+    assert bridge.collect(request_data['dispatch_id'])['state'] == 'WAITING_PROVIDER'
+    assert not (bridge.STATE/(request_data['dispatch_id']+'.result.json')).exists()
+    assert bridge.collect(request_data['dispatch_id'])['state'] == 'RESULT_RETRIEVED'
+
+
+@pytest.mark.parametrize('stdout,code,stderr', [
+    ('', 1, 'network unavailable'),
+    ('[ERROR] connection failed\n', 1, ''),
+    (status_frame('ERROR'), 2, ''),
+    (status_frame('ERROR'), -15, ''),
+    (status_frame('ERROR'), 0, ''),
+    (status_frame('ERROR'), 1, 'authentication failed'),
+    (status_frame('READY'), 1, ''),
+    (status_frame('APPLIED'), 1, ''),
+    (status_frame('ERROR') + 'unexpected trailer\n', 1, ''),
+    (status_frame('ERROR').replace('no diff', 'incomplete'), 1, ''),
+    (status_frame('ERROR').replace('[ERROR]', '[ERROR]injected'), 1, ''),
+    ('\x1b[31m' + status_frame('ERROR'), 1, ''),
+])
+def test_nonterminal_or_malformed_failure_never_releases_slot(
+        request_data, monkeypatch, stdout, code, stderr):
+    submitted(request_data, monkeypatch)
+    monkeypatch.setattr(bridge, 'run_cli', lambda args:
+                        subprocess.CompletedProcess([], code, stdout, stderr))
+    assert bridge.collect(request_data['dispatch_id'])['state'] == 'PROVIDER_STATUS_UNKNOWN'
+    assert not (bridge.STATE/(request_data['dispatch_id']+'.result.json')).exists()
+
+
+@pytest.mark.parametrize('summary', ['+2/-0 • 1 file', '+3/-1 • 2 files'])
+def test_pinned_error_with_diff_summary(request_data, monkeypatch, summary):
+    submitted(request_data, monkeypatch)
+    monkeypatch.setattr(bridge, 'run_cli', lambda args:
+                        response(status_frame('ERROR').replace('no diff', summary), 1))
+    assert bridge.collect(request_data['dispatch_id'])['state'] == 'PROVIDER_TERMINAL_FAILURE'

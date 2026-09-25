@@ -248,10 +248,27 @@ def _collect(dispatch_id):
         return {k:v for k,v in record.items() if k!='request'}
     task_id=record['provider_task_id']
     status=run_cli(['cloud','status',task_id])
-    if status.returncode!=0:
-        return {'state':'PROVIDER_STATUS_UNKNOWN','provider_task_id':task_id}
     marker=status.stdout.partition('\n')[0].partition(']')[0]+']'
-    if marker in ('[FAILED]','[CANCELLED]','[CANCELED]'):
+    if status.returncode != 0:
+        # v0.157.0 exits 1 for every non-READY TaskSummary. Require its entire
+        # uncolored frame: network/login failures are not terminal evidence.
+        lines = status.stdout.splitlines()
+        framed = (status.returncode == 1 and not status.stderr.strip()
+                  and len(lines) == 3
+                  and re.fullmatch(r'\[(PENDING|ERROR|APPLIED)\] [^\x00-\x1f\x7f]+', lines[0])
+                  and lines[1].strip()
+                  and (lines[2] == 'no diff' or re.fullmatch(
+                      r'\+[0-9]+/-[0-9]+ • (?:1 file|(?:0|[2-9]|[1-9][0-9]+) files)', lines[2])))
+        if not framed:
+            return {'state':'PROVIDER_STATUS_UNKNOWN','provider_task_id':task_id}
+        if marker == '[PENDING]':
+            return {'state':'WAITING_PROVIDER','provider_task_id':task_id}
+        if marker != '[ERROR]':
+            # APPLIED is unexpected in this read-only delivery path.
+            return {'state':'PROVIDER_STATUS_UNKNOWN','provider_task_id':task_id}
+    elif marker == '[ERROR]':
+        return {'state':'PROVIDER_STATUS_UNKNOWN','provider_task_id':task_id}
+    if marker in ('[ERROR]','[FAILED]','[CANCELLED]','[CANCELED]'):
         return {'state':'PROVIDER_TERMINAL_FAILURE','provider_task_id':task_id,
                 'result_code':'PROVIDER_'+marker[1:-1],
                 'status_sha256':digest(status.stdout)}
