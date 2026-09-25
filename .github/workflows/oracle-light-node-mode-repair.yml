@@ -1,0 +1,90 @@
+name: Oracle Light Node mode repair
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-light-node-mode-repair.yml'
+      - 'ops/oracle_light_node_mode_repair*.py'
+      - 'tests/test_oracle_light_node_mode_repair*.py'
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact reviewed current main SHA
+        required: true
+        type: string
+      mode:
+        description: Inspect first; repair only after independent review of observed mode
+        required: true
+        type: choice
+        default: inspect
+        options: [inspect, repair]
+      expected_mode:
+        description: Four octal digits from fresh inspection; required for repair
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-light-backup-mutation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: |
+          python -m unittest discover -s tests -p 'test_oracle_light_node_mode_repair*.py' -v
+          ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' .github/workflows/oracle-light-node-mode-repair.yml
+
+  operate:
+    needs: contract
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == github.repository_owner &&
+      inputs.expected_main_sha == github.sha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Attest live HOLD and inspect or repair the one directory
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPAIR_MODE: ${{ inputs.mode }}
+          EXPECTED_MODE: ${{ inputs.expected_mode }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          [[ -n "${SSH_PRIVATE_KEY:-}" ]]
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$work/key"
+          unset SSH_PRIVATE_KEY
+          ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          python3 - "$work/payload" <<'PY'
+          import json,os,sys
+          from pathlib import Path
+          bundle={name:Path(path).read_text() for name,path in {
+              'repair':'ops/oracle_light_node_mode_repair.py',
+              'attest':'ops/oracle_light_active_hold_attest.py',
+              'stage':'ops/oracle_light_native_cli_stage_once.py'}.items()}
+          bundle.update(mode=os.environ['REPAIR_MODE'],expected_mode=os.environ['EXPECTED_MODE'])
+          runner=Path('ops/oracle_light_node_mode_repair_runner.py').read_text()
+          # Runner receives the exact reviewed bundle through an in-memory stream.
+          payload='import io,sys\nsys.stdin=io.TextIOWrapper(io.BytesIO('+repr(json.dumps(bundle).encode())+'))\n'+runner
+          Path(sys.argv[1]).write_text(payload)
+          PY
+          [[ "$(gh api repos/olegmed1-art/bridge-video-free/git/ref/heads/main --jq .object.sha)" == "$GITHUB_SHA" ]]
+          unset GH_TOKEN
+          ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ConnectionAttempts=1 ubuntu@92.5.47.149 'sudo -n /usr/bin/python3 -' < "$work/payload"

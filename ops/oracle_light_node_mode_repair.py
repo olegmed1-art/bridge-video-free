@@ -1,99 +1,152 @@
-"""One-inode, one-bit Light NVM permission repair. No CLI install or service change.
+"""One-bit mode repair with descriptor traversal and same-fd rollback.
 
-Run only after separate fresh active HOLD/zero-queue attestation. This program
-does not replace that attestation or authorize a pilot.
+Called only by the reviewed runner, with fresh live pre/post attestations.
+An advisory lock serializes cooperating operators, not hostile same-UID/root
+processes. Those principals are trusted; concurrent NVM maintenance is excluded
+operationally. No claim of a chmod compare-and-swap is made.
 """
 import errno
+import fcntl
 import grp
 import json
 import os
 from pathlib import Path
 import pwd
 import stat
-import sys
 
-PATH = Path("/home/ubuntu/.nvm/versions/node/v22.23.2")
-TARGET = Path("/home/ubuntu/.local/share/slavik-codex")
-UNIT = "school-autopilot-production-light.service"
+PATH = Path('/home/ubuntu/.nvm/versions/node/v22.23.2')
 
 
-def require(ok):
+def require(ok, code):
     if not ok:
-        raise RuntimeError("PRECONDITION_FAILED")
+        raise RuntimeError(code)
 
 
-def audit():
-    require(os.uname().nodename == "autopilot-lite-vnic" and os.uname().machine == "aarch64")
-    ubuntu = pwd.getpwnam("ubuntu")
-    require(os.geteuid() == ubuntu.pw_uid)
-    require(not TARGET.exists() and not TARGET.is_symlink())
-    require(not os.path.lexists(TARGET))
-    # Every component is examined without following a symlink.
-    for part in (Path("/home"), Path("/home/ubuntu"), Path("/home/ubuntu/.nvm"),
-                 Path("/home/ubuntu/.nvm/versions"), Path("/home/ubuntu/.nvm/versions/node")):
-        info = part.lstat()
-        require(stat.S_ISDIR(info.st_mode) and info.st_uid in (0, ubuntu.pw_uid)
-                and not info.st_mode & 0o022)
-    fd = os.open(PATH, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    try:
-        info = os.fstat(fd)
-        require(stat.S_ISDIR(info.st_mode) and info.st_uid == ubuntu.pw_uid
-                and info.st_gid == ubuntu.pw_gid and info.st_mode & 0o020
-                and not info.st_mode & 0o002)
-        group = grp.getgrgid(info.st_gid)
-        accounts = {u.pw_name for u in pwd.getpwall() if u.pw_gid == info.st_gid}
-        require(not (accounts | set(group.gr_mem)) - {"ubuntu"})
-        for kind in ("access", "default"):
-            try:
-                os.getxattr(fd, "system.posix_acl_" + kind)
-            except OSError as exc:
-                require(exc.errno == errno.ENODATA)
+def identity(info):
+    return info.st_dev, info.st_ino, info.st_uid, info.st_gid
+
+
+def metadata(info):
+    return identity(info) + (stat.S_IMODE(info.st_mode), info.st_ctime_ns)
+
+
+def no_acl(fd):
+    for kind in ('access', 'default'):
+        try:
+            os.getxattr(fd, 'system.posix_acl_' + kind)
+        except OSError as exc:
+            require(exc.errno == errno.ENODATA, 'ACL_UNKNOWN')
+        else:
+            raise RuntimeError('ACL_PRESENT')
+
+
+class DirectoryChain:
+    def __init__(self, path, uid, gid):
+        self.fds = []
+        self.names = path.parts[1:]
+        self.uid, self.gid = uid, gid
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        try:
+            self.fds.append(os.open('/', flags))
+            for name in self.names:
+                self.fds.append(os.open(name, flags, dir_fd=self.fds[-1]))
+            self.initial = [os.fstat(fd) for fd in self.fds]
+            self.validate()
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BaseException:
+            self.close()
+            raise
+
+    @property
+    def fd(self):
+        return self.fds[-1]
+
+    def validate(self):
+        # Each directory entry must still refer to its held descriptor.
+        for i, fd in enumerate(self.fds):
+            info = os.fstat(fd)
+            require(stat.S_ISDIR(info.st_mode), 'NOT_DIRECTORY')
+            require(identity(info) == identity(self.initial[i]), 'IDENTITY_DRIFT')
+            if i:
+                entry = os.stat(self.names[i-1], dir_fd=self.fds[i-1], follow_symlinks=False)
+                require(stat.S_ISDIR(entry.st_mode) and identity(entry) == identity(info), 'PATH_DRIFT')
+            if i < len(self.fds)-1:
+                require(info.st_uid in (0, self.uid) and not info.st_mode & 0o022,
+                        'UNSAFE_ANCESTOR')
+                no_acl(fd)
             else:
-                require(False)
-        current = PATH.lstat()
-        require((current.st_dev, current.st_ino) == (info.st_dev, info.st_ino))
-        return fd, info
-    except BaseException:
-        os.close(fd)
-        raise
+                require(info.st_uid == self.uid and info.st_gid == self.gid,
+                        'OWNER_DRIFT')
+                no_acl(fd)
+
+    def close(self):
+        for fd in reversed(self.fds):
+            os.close(fd)
+        self.fds = []
 
 
-def main():
-    require(sys.argv[1:] in (["--check"], ["--apply"]))
-    fd, old = audit()
-    old_mode = stat.S_IMODE(old.st_mode)
-    new_mode = old_mode & ~0o020
+def transaction(path, uid, gid, expected_mode, preflight, postflight, emit):
+    chain = DirectoryChain(path, uid, gid)
+    old = None
+    attempted = False
     try:
-        if sys.argv[1:] == ["--apply"]:
-            os.fchmod(fd, new_mode)
-            after = os.fstat(fd)
-            path = PATH.lstat()
-            require((after.st_dev, after.st_ino, after.st_uid, after.st_gid)
-                    == (old.st_dev, old.st_ino, old.st_uid, old.st_gid))
-            require((path.st_dev, path.st_ino) == (old.st_dev, old.st_ino))
-            require(stat.S_IMODE(after.st_mode) == new_mode)
-        print(json.dumps({"audit": "NVM_MODE_REPAIR",
-                          "action": "APPLIED" if sys.argv[1:] == ["--apply"] else "CHECK_ONLY",
-                          "old_mode": format(old_mode, "04o"),
-                          "new_mode": format(new_mode, "04o"),
-                          "hold_change": False, "cli_install": False}, sort_keys=True))
+        preflight()
+        chain.validate()
+        old = os.fstat(chain.fd)
+        mode = stat.S_IMODE(old.st_mode)
+        require(mode == expected_mode and mode & 0o020 and not mode & 0o7002,
+                'MODE_UNEXPECTED')
+        new_mode = mode & ~0o020
+        emit({'audit': 'NVM_MODE_REPAIR', 'action': 'PREPARED',
+              'old_mode': format(mode, '04o'), 'new_mode': format(new_mode, '04o')})
+        chain.validate()
+        require(metadata(os.fstat(chain.fd)) == metadata(old), 'PRE_WRITE_DRIFT')
+        attempted = True
+        os.fchmod(chain.fd, new_mode)
+        changed = os.fstat(chain.fd)
+        require(identity(changed) == identity(old) and
+                stat.S_IMODE(changed.st_mode) == new_mode, 'POST_MODE_DRIFT')
+        chain.validate()
+        postflight()
+        chain.validate()
+        require(metadata(os.fstat(chain.fd)) == metadata(changed), 'POST_WRITE_DRIFT')
+        emit({'audit': 'NVM_MODE_REPAIR', 'action': 'APPLIED_VERIFIED',
+              'old_mode': format(mode, '04o'), 'new_mode': format(new_mode, '04o')})
     except BaseException:
-        if sys.argv[1:] == ["--apply"]:
-            now = os.fstat(fd)
-            path = PATH.lstat()
-            if ((now.st_dev, now.st_ino, now.st_uid, now.st_gid)
-                    == (old.st_dev, old.st_ino, old.st_uid, old.st_gid)
-                    and (path.st_dev, path.st_ino) == (old.st_dev, old.st_ino)
-                    and stat.S_IMODE(now.st_mode) == new_mode):
-                os.fchmod(fd, old_mode)
+        rollback = 'NOT_NEEDED'
+        if attempted:
+            rollback = 'ROLLBACK_UNCERTAIN'
+            try:
+                now = os.fstat(chain.fd)
+                no_acl(chain.fd)
+                require(identity(now) == identity(old), 'ROLLBACK_IDENTITY_DRIFT')
+                current = stat.S_IMODE(now.st_mode)
+                require(current in (mode, new_mode), 'ROLLBACK_MODE_DRIFT')
+                if current == new_mode:
+                    # Restore the original held inode even if its path vanished.
+                    os.fchmod(chain.fd, mode)
+                require(stat.S_IMODE(os.fstat(chain.fd).st_mode) == mode, 'ROLLBACK_FAILED')
+                rollback = 'ROLLBACK_DONE'
+            except BaseException:
+                pass
+        emit({'audit': 'BLOCKED', 'rollback': rollback,
+              'old_mode': format(stat.S_IMODE(old.st_mode), '04o') if old else None})
         raise
     finally:
-        os.close(fd)
+        chain.close()
 
 
-if __name__ == "__main__":
-    try:
-        main()
-    except BaseException:
-        print(json.dumps({"audit": "BLOCKED", "code": "NVM_MODE_REPAIR_FAILED"}))
-        sys.exit(2)
+def run(expected_mode, preflight, postflight):
+    require(os.geteuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic'
+            and os.uname().machine == 'aarch64', 'HOST_IDENTITY')
+    user = pwd.getpwnam('ubuntu')
+    group = grp.getgrgid(user.pw_gid)
+    accounts = {u.pw_name for u in pwd.getpwall() if u.pw_gid == user.pw_gid}
+    require(not (accounts | set(group.gr_mem)) - {'ubuntu'}, 'GROUP_NOT_PRIVATE')
+    def emit(value):
+        print(json.dumps(value, sort_keys=True), flush=True)
+    transaction(PATH, user.pw_uid, user.pw_gid, expected_mode, preflight, postflight, emit)
+
+
+if __name__ == '__main__':
+    raise SystemExit('USE_REVIEWED_RUNNER')
