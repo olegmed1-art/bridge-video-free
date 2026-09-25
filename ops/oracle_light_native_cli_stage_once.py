@@ -146,7 +146,7 @@ def install():
         rename_no_replace(destination,TARGET)
     finally:
         shutil.rmtree(stage)
-    return {'audit':'NATIVE_CLI_STAGE','status':'INSTALLED_UNAUTHENTICATED',
+    return {'audit':'NATIVE_CLI_STAGE','status':'CLI_STAGED_AUTH_UNVERIFIED',
             'profile':'ubuntu','version':VERSION,'admission':'HOLD',
             'service_restart':False,'database_writes':False}
 
