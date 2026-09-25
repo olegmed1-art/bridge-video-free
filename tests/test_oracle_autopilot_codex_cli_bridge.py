@@ -1,6 +1,7 @@
 """Submission ambiguity and immutable provider evidence; no network calls."""
 from copy import deepcopy
 import subprocess
+import sys
 
 import pytest
 
@@ -128,6 +129,53 @@ def test_read_only_rejects_source_changes(request_data, monkeypatch):
     result = bridge.collect(request_data['dispatch_id'])
     assert result['state'] == 'RESULT_REJECTED'
     assert result['validation_error'] == 'READ_ONLY_SOURCE_CHANGED'
+
+
+def test_repair_patch_requires_exact_existing_allowed_file(request_data):
+    request_data['mode']='REPAIR'
+    request_data['assignment']['can_repair']=True
+    request_data['assignment']['task_spec_json'].update(
+        execution_mode='REPAIR',expected_changed_files=['tools/artifact_manifest_v1.py'])
+    valid=('diff --git a/tools/artifact_manifest_v1.py b/tools/artifact_manifest_v1.py\n'
+           'index 1234567..abcdef0 100644\n'
+           '--- a/tools/artifact_manifest_v1.py\n+++ b/tools/artifact_manifest_v1.py\n'
+           '@@ -1 +1 @@\n-old\n+new\n')
+    patch=report_patch(request_data)
+    assert bridge.validate_result(request_data,patch+valid,'task_example')['changes']==valid
+    for poisoned in (
+        valid.replace('tools/artifact_manifest_v1.py','tools/unrelated.py'),
+        valid.replace('diff --git a/tools/artifact_manifest_v1.py b/tools/artifact_manifest_v1.py',
+                      'diff --git a/tools/artifact_manifest_v1.py b/tools/unrelated.py'),
+        valid.replace('index 1234567..abcdef0 100644\n','new file mode 100644\n'),
+        valid.replace('index 1234567..abcdef0 100644\n','old mode 100644\nnew mode 100755\n'),
+        valid.replace('--- a/tools/artifact_manifest_v1.py','--- /dev/null'),
+        valid.replace('@@ -1 +1 @@\n-old\n+new\n','Binary files differ\n'),
+        valid+'diff --git a/tools/unrelated.py b/tools/unrelated.py\n',
+        valid+valid,
+        valid.replace('-old\n+new\n','+new\n'),
+        valid.replace('@@ -1 +1 @@','@@ -1 +1,2 @@'),
+        valid.replace('@@ -1 +1 @@\n-old\n+new\n',
+                      '@@ -1 +1 @@\n-old\n+new\n@@ -1 +1 @@\n-old\n+new\n'),
+    ):
+        with pytest.raises(ValueError,match='REPAIR_(PATH|DIFF)_INVALID'):
+            bridge.validate_result(request_data,patch+poisoned,'task_example')
+    request_data['assignment']['task_spec_json']['expected_changed_files']=[]
+    with pytest.raises(ValueError,match='REPAIR_ALLOWLIST_INVALID'):
+        bridge.validate_result(request_data,patch+valid,'task_example')
+
+
+def test_collect_cli_never_prints_model_patch_or_report(request_data,monkeypatch,capsys):
+    raw={'state':'RESULT_RETRIEVED','provider_task_id':'task_example',
+         'report_sha256':'a'*64,'patch_sha256':'b'*64,
+         'report':{'summary':'private-model-output'},'changes':'private-source-diff'}
+    monkeypatch.setattr(bridge,'collect',lambda _:raw)
+    monkeypatch.setattr(sys,'argv',['codex_cli_bridge.py','collect',
+                                   '--dispatch-id',request_data['dispatch_id']])
+    bridge.main()
+    printed=capsys.readouterr().out
+    assert 'private-' not in printed
+    assert bridge.parse(printed)=={key:raw[key] for key in (
+        'state','provider_task_id','report_sha256','patch_sha256')}
 
 
 def test_report_hunk_count_and_duplicate_keys(request_data):
