@@ -27,6 +27,24 @@ def test_receipt_values_are_parameters_not_executable_sql():
     assert sql=='SELECT autopilot.native_cli_finish(%s::jsonb,%s,%s::jsonb) AS payload'
 
 
+def test_creation_uses_single_canary_rpcs_only():
+    calls=[]
+    def rpc(sql,args):
+        calls.append(sql)
+        return {'payload': True if 'begin_canary' in sql or 'canary_current' in sql
+                else {'state':'RESERVED'}}
+    queue=NativeQueue(rpc)
+    item=request()
+    queue.reserve(item['dispatch_id'],item['assignment'],item['branch'])
+    assert queue.begin_submission(item)
+    assert queue.current(item)
+    assert calls==[
+        'SELECT autopilot.native_cli_reserve_canary(%s::uuid,%s::jsonb,%s) AS payload',
+        'SELECT autopilot.native_cli_begin_canary(%s::jsonb) AS payload',
+        'SELECT autopilot.native_cli_canary_current(%s::jsonb) AS payload',
+    ]
+
+
 @pytest.mark.parametrize('response',[None,{}, {'payload':None},{'payload':'true'},{'payload':1}])
 def test_unknown_database_authority_is_never_truthy(response):
     queue=NativeQueue(lambda *args:response)
