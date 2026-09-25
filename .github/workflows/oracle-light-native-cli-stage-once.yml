@@ -62,4 +62,20 @@ jobs:
           unset SSH_PRIVATE_KEY
           ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
           bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ConnectionAttempts=1 ubuntu@92.5.47.149 'sudo -n /usr/bin/python3 -' < ops/oracle_light_active_hold_attest.py > "$work/attestation"
+          python3 - "$work/attestation" <<'PY'
+          import json,sys
+          from pathlib import Path
+          path=Path(sys.argv[1])
+          if path.stat().st_size>4096:
+              raise SystemExit('LIVE_HOLD_ATTESTATION_INVALID')
+          result=json.loads(path.read_text())
+          if (result.get('audit')!='ACTIVE_HOLD_PASS' or
+                  result.get('admission')!='HOLD' or
+                  result.get('queue_nonterminal')!=0 or
+                  result.get('same_invocation') is not True or
+                  result.get('database_login')!='READ_ONLY_PASS'):
+              raise SystemExit('LIVE_HOLD_ATTESTATION_INVALID')
+          print('LIVE_HOLD_QUEUE_ZERO_PASS')
+          PY
           ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ConnectionAttempts=1 ubuntu@92.5.47.149 'python3 -' < ops/oracle_light_native_cli_stage_once.py
