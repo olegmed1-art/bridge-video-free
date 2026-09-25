@@ -103,7 +103,7 @@ def main():
         request = reserve_as_limited_role(limited, dispatch, assignment)
         with psycopg.connect(cloned) as connection:
             connection.execute("""UPDATE autopilot.native_cli_single_canary_permit
-                SET expires_at=clock_timestamp()-interval '1 second' WHERE dispatch_id=%s""", (dispatch,))
+                SET expires_at=created_at+interval '1 microsecond' WHERE dispatch_id=%s""", (dispatch,))
         with psycopg.connect(limited) as connection:
             assert connection.execute('SELECT autopilot.native_cli_canary_current(%s)',
                                       (Jsonb(request),)).fetchone()[0] is False
