@@ -1,6 +1,12 @@
 name: Oracle Light active HOLD recovery attest
 
 on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: 'Exact reviewed current main SHA for a read-only HOLD check'
+        required: true
+        type: string
   pull_request:
     paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py']
   push:
@@ -21,7 +27,13 @@ jobs:
 
   attest:
     needs: contract
-    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.actor == github.repository_owner &&
+        inputs.expected_main_sha == github.sha))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
