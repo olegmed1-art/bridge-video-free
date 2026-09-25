@@ -6,6 +6,7 @@ is atomic and never replaces an existing installation.
 """
 import json
 import ctypes
+import errno
 import grp
 import os
 from pathlib import Path
@@ -126,9 +127,17 @@ def diagnose():
             group=grp.getgrgid(info.st_gid)
             accounts={member.pw_name for member in pwd.getpwall()
                       if member.pw_gid==info.st_gid} | set(group.gr_mem)
+            def acl(kind):
+                try:
+                    os.getxattr(NODE.parent.parent,'system.posix_acl_'+kind,
+                                follow_symlinks=False)
+                    return 'PRESENT'
+                except OSError as exc:
+                    return 'ABSENT' if exc.errno==errno.ENODATA else 'UNKNOWN'
             return {'version_owner_ubuntu':info.st_uid==user.pw_uid,
                     'version_group_ubuntu_primary':info.st_gid==user.pw_gid,
-                    'group_has_other_accounts':bool(accounts-{'ubuntu'})}
+                    'group_has_other_accounts':bool(accounts-{'ubuntu'}),
+                    'access_acl':acl('access'),'default_acl':acl('default')}
         except (OSError,KeyError):
             return {'status':'METADATA_UNAVAILABLE'}
 
