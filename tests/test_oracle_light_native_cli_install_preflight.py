@@ -48,7 +48,8 @@ class InstallPreflightTests(unittest.TestCase):
         run.assert_not_called()
 
     def test_output_has_only_allowlisted_states(self):
-        with patch.object(probe,'held'), patch.object(probe,'profile',return_value={
+        with patch.object(probe,'held'), patch.object(
+                probe.os,'uname',return_value=SimpleNamespace(machine='aarch64')), patch.object(probe,'profile',return_value={
                 'node':'ABSENT','npm':'ABSENT','home':'ROOT_OWNED',
                 'credential_directory':'MISSING','install_parent':'REVIEW_REQUIRED'}):
             output=io.StringIO()
@@ -57,6 +58,7 @@ class InstallPreflightTests(unittest.TestCase):
         self.assertNotIn('/home/',output.getvalue())
         self.assertNotIn('token',output.getvalue().lower())
         self.assertIn('"installation_action": "NONE"',output.getvalue())
+        self.assertIn('"architecture": "linux-arm64"',output.getvalue())
 
 
 if __name__ == '__main__':
