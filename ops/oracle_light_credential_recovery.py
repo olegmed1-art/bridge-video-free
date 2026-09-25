@@ -190,8 +190,7 @@ def transition(old_drop, hold_drop, original, replacement, new):
         validate_state(after,'HOLD',True)
         observed=Path('/proc/'+after['MainPID']+'/environ').read_bytes()
         actual=dict(value.split(b'=',1) for value in observed.split(b'\0') if b'=' in value)
-        require(actual.get(b'AUTOPILOT_DATABASE_URL')==new.encode() and
-                actual.get(b'AUTOPILOT_ADMISSION_MODE')==b'HOLD','POST_START_DRIFT')
+        verify_process_environment(actual,new)
         check_login(new)
     except BaseException:
         try:
@@ -208,10 +207,42 @@ def transition(old_drop, hold_drop, original, replacement, new):
             raise Blocked('CONTAINMENT_UNVERIFIED') from None
         raise
 
+def verify_process_environment(actual,new):
+    # Return only fixed codes; process environment and candidate never enter logs.
+    database_ok = actual.get(b'AUTOPILOT_DATABASE_URL') == new.encode()
+    admission_ok = actual.get(b'AUTOPILOT_ADMISSION_MODE') == b'HOLD'
+    require(database_ok or admission_ok, 'POST_START_BOTH_DRIFT')
+    require(database_ok, 'POST_START_DATABASE_DRIFT')
+    require(admission_ok, 'POST_START_ADMISSION_DRIFT')
+
+def transition_stopped(hold_drop, original, replacement, new):
+    try:
+        atomic(ENV,replacement,0o600,'env')
+        require(read_file(ENV,0o600)==replacement,'ENV_WRITE_FAILED')
+        check_login(env_values(replacement)['AUTOPILOT_DATABASE_URL'])
+        run('start',UNIT)
+        after=service()
+        validate_state(after,'HOLD',True)
+        observed=Path('/proc/'+after['MainPID']+'/environ').read_bytes()
+        actual=dict(value.split(b'=',1) for value in observed.split(b'\0') if b'=' in value)
+        verify_process_environment(actual,new)
+        check_login(new)
+    except BaseException:
+        try:
+            run('stop',UNIT)
+            require(read_file(DROP,0o644,4096)==hold_drop,'DROP_CHANGED_DURING_RECOVERY')
+            run('daemon-reload')
+            validate_state(service(),'HOLD',False)
+            if read_file(ENV,0o600) == replacement:
+                atomic(ENV,original,0o600,'rollback')
+            require(read_file(ENV,0o600)==original,'ROLLBACK_UNVERIFIED')
+        except BaseException:
+            raise Blocked('CONTAINMENT_UNVERIFIED') from None
+        raise
+
 def main(packet):
     require(os.geteuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic','HOST_IDENTITY')
-    require(set(packet) == {'password','invocation'} and
-            re.fullmatch('[a-f0-9]{32}', packet['invocation'] or ''), 'INPUT_INVALID')
+    require(set(packet) == {'password','mode'} and packet['mode']=='stopped_hold', 'INPUT_INVALID')
     lock_path = ROUTE / 'route.lock'
     read_file(lock_path,0o644,1048576)
     with open(lock_path,'rb') as lock:
@@ -219,26 +250,20 @@ def main(packet):
         require(json.loads(read_file(ROUTE/'route.json',0o644,4096)) ==
                 {'version':1,'backend':'neon','database':'autopilot','epoch':0},'ROUTE_DRIFT')
         before = service()
-        release = validate_state(before,'ACTIVE',True)
-        require(before['InvocationID'] == packet['invocation'], 'INVOCATION_DRIFT')
+        release = validate_state(before,'HOLD',False)
         require(hashlib.sha256(read_file(BASE,0o644)).hexdigest()==BASE_SHA,'BASE_DRIFT')
-        old_drop = ('[Service]\nWorkingDirectory='+release+'\nEnvironment=AUTOPILOT_ADMISSION_MODE=ACTIVE\n'
+        hold_drop = ('[Service]\nWorkingDirectory='+release+'\nEnvironment=AUTOPILOT_ADMISSION_MODE=HOLD\n'
                     'EnvironmentFile='+release+'/ops/autopilot/broker-hold.env\n').encode()
-        hold_drop = old_drop.replace(b'ADMISSION_MODE=ACTIVE',b'ADMISSION_MODE=HOLD')
-        require(read_file(DROP,0o644,4096)==old_drop,'DROP_DRIFT')
+        require(read_file(DROP,0o644,4096)==hold_drop,'DROP_DRIFT')
         pins = env_values(read_file(Path(release)/'ops/autopilot/broker-hold.env',0o444,4096))
         require(set(pins)==PIN_KEYS,'PIN_DRIFT')
         original = read_file(ENV,0o600)
         old,new,replacement = replace_dsn(original,packet['password'])
-        live = Path('/proc/'+before['MainPID']+'/environ').read_bytes()
-        current = dict(value.split(b'=',1) for value in live.split(b'\0') if b'=' in value)
-        require(current.get(b'AUTOPILOT_DATABASE_URL')==old.encode() and
-                current.get(b'AUTOPILOT_ADMISSION_MODE')==b'ACTIVE', 'LIVE_ENV_DRIFT')
         # Invalid candidate aborts before any service or file mutation.
         check_login(new)
         require(service()==before and read_file(ENV,0o600)==original and
-                read_file(DROP,0o644,4096)==old_drop, 'PRE_WRITE_DRIFT')
-        transition(old_drop,hold_drop,original,replacement,new)
+                read_file(DROP,0o644,4096)==hold_drop, 'PRE_WRITE_DRIFT')
+        transition_stopped(hold_drop,original,replacement,new)
         print(json.dumps({'recovery':'PASS','admission':'HOLD','light_active':True,
                           'database_login':'READ_ONLY_PASS','queue_nonterminal':0}))
 
@@ -253,6 +278,8 @@ if __name__=='__main__':
           'LOGIN_OR_QUEUE_FAILED','UNIT_DRIFT','UNIT_STATE_DRIFT','ENV_SOURCE_DRIFT',
           'ENV_DRIFT','ENV_SYNTAX','DSN_DRIFT','DSN_FORMAT_DRIFT','PASSWORD_INVALID',
           'PASSWORD_UNCHANGED','ENV_REWRITE_DRIFT','FILE_DRIFT','FILE_SYMLINK',
-          'ENV_WRITE_FAILED','POST_START_DRIFT','CONTAINMENT_UNVERIFIED',
+          'ENV_WRITE_FAILED','POST_START_DRIFT','POST_START_BOTH_DRIFT',
+          'POST_START_DATABASE_DRIFT','POST_START_ADMISSION_DRIFT','ROLLBACK_UNVERIFIED',
+          'CONTAINMENT_UNVERIFIED',
           'DROP_CHANGED_DURING_RECOVERY'} else 'UNCLASSIFIED'}))
         sys.exit(2)
