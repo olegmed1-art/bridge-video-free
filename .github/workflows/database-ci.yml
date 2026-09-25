@@ -4,6 +4,12 @@ on:
   pull_request:
     paths:
       - 'database/**'
+      - 'oracle_autopilot/codex_cli_bridge.py'
+      - 'oracle_autopilot/codex_cli_delivery.py'
+      - 'oracle_autopilot/codex_cli_queue.py'
+      - 'tests/test_oracle_autopilot_codex_cli_bridge.py'
+      - 'tests/test_oracle_autopilot_codex_cli_delivery.py'
+      - 'tests/test_oracle_autopilot_codex_cli_queue.py'
       - 'tests/test_worker_dsn_contract.py'
       - 'tests/test_health_dsn_contract.py'
       - '.github/workflows/database-ci.yml'
@@ -14,6 +20,12 @@ on:
     branches: [main]
     paths:
       - 'database/**'
+      - 'oracle_autopilot/codex_cli_bridge.py'
+      - 'oracle_autopilot/codex_cli_delivery.py'
+      - 'oracle_autopilot/codex_cli_queue.py'
+      - 'tests/test_oracle_autopilot_codex_cli_bridge.py'
+      - 'tests/test_oracle_autopilot_codex_cli_delivery.py'
+      - 'tests/test_oracle_autopilot_codex_cli_queue.py'
       - 'tests/test_worker_dsn_contract.py'
       - 'tests/test_health_dsn_contract.py'
       - '.github/workflows/database-ci.yml'
@@ -69,6 +81,13 @@ jobs:
 
       - name: Install runtime DSN test dependency
         run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4' 'pytest==8.4.2'
+
+      - name: Verify native CLI delivery contracts
+        run: |
+          python -m pytest -q \
+            tests/test_oracle_autopilot_codex_cli_bridge.py \
+            tests/test_oracle_autopilot_codex_cli_delivery.py \
+            tests/test_oracle_autopilot_codex_cli_queue.py
 
       - name: Verify bounded Autopilot next steps
         run: |
@@ -250,3 +269,4 @@ jobs:
             "SELECT migration_key, checksum IS NOT NULL AS checksum_recorded FROM schema_migration ORDER BY migration_key;"
           missing="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM schema_migration WHERE checksum IS NULL;")"
           test "$missing" -eq 0
+
