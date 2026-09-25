@@ -148,3 +148,114 @@ class RepairTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class FourDirectoryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(dir=Path.home())
+        self.base = Path(self.tmp.name)
+        self.targets = []
+        path = self.base
+        for name in ('.nvm', 'versions', 'node', 'v22.23.2'):
+            path = path / name
+            path.mkdir()
+            path.chmod(0o775)
+            self.targets.append(path)
+        self.events = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def modes(self):
+        return [stat.S_IMODE(p.stat().st_mode) for p in self.targets]
+
+    def run_repair(self, post=lambda:None, emit=None):
+        repair.transaction(self.targets[-1], os.getuid(), os.getgid(), 0o775,
+                           lambda:None, post, emit or self.events.append,
+                           targets=self.targets)
+
+    def test_production_scope_is_exact(self):
+        self.assertEqual([str(p) for p in repair.TARGETS], [
+            '/home/ubuntu/.nvm', '/home/ubuntu/.nvm/versions',
+            '/home/ubuntu/.nvm/versions/node',
+            '/home/ubuntu/.nvm/versions/node/v22.23.2'])
+
+    def test_success_nonrecursive(self):
+        child = self.targets[-1]/'child'
+        child.mkdir()
+        child.chmod(0o777)
+        self.run_repair()
+        self.assertEqual(self.modes(), [0o755]*4)
+        self.assertEqual(stat.S_IMODE(child.stat().st_mode), 0o777)
+        self.assertEqual(stat.S_IMODE(self.base.stat().st_mode), 0o700)
+        self.assertEqual(self.events[-1]['directory_count'], 4)
+
+    def test_each_partial_change_exception_restores_all(self):
+        real = os.fchmod
+        for position in range(4):
+            for partial in (False, True):
+                calls = []
+                def chmod(fd, mode):
+                    if mode == 0o755:
+                        calls.append(fd)
+                        if len(calls) == position+1:
+                            if partial:
+                                real(fd, mode)
+                            raise OSError('injected')
+                    real(fd, mode)
+                with self.subTest(position=position, partial=partial):
+                    with patch.object(repair.os, 'fchmod', side_effect=chmod):
+                        with self.assertRaises(OSError):
+                            self.run_repair()
+                    self.assertEqual(self.modes(), [0o775]*4)
+                    self.assertEqual(self.events[-1]['rollback'], 'ROLLBACK_DONE')
+
+    def test_post_failure_rolls_back_reverse_order(self):
+        real = os.fchmod
+        changes = []
+        def chmod(fd, mode):
+            changes.append((os.fstat(fd).st_ino, mode))
+            real(fd, mode)
+        def post():
+            raise RuntimeError('post')
+        with patch.object(repair.os, 'fchmod', side_effect=chmod):
+            with self.assertRaises(RuntimeError):
+                self.run_repair(post)
+        self.assertEqual([i for i,m in changes[4:]], list(reversed([i for i,m in changes[:4]])))
+        self.assertEqual(self.modes(), [0o775]*4)
+
+    def test_replaced_parent_restores_only_held_tree(self):
+        moved = self.base/'saved'
+        def post():
+            self.targets[0].rename(moved)
+            self.targets[0].mkdir(mode=0o700)
+        with self.assertRaises(RuntimeError):
+            self.run_repair(post)
+        self.assertEqual(stat.S_IMODE(self.targets[0].stat().st_mode), 0o700)
+        for suffix in ('', 'versions', 'versions/node', 'versions/node/v22.23.2'):
+            self.assertEqual(stat.S_IMODE((moved/suffix).stat().st_mode), 0o775)
+        self.assertEqual(self.events[-1]['rollback'], 'ROLLBACK_DONE')
+
+    def test_unknown_drift_does_not_prevent_other_restores(self):
+        def post():
+            self.targets[2].chmod(0o700)
+            raise RuntimeError('post')
+        with self.assertRaises(RuntimeError):
+            self.run_repair(post)
+        self.assertEqual(self.modes(), [0o775,0o775,0o700,0o775])
+        self.assertEqual(self.events[-1]['rollback'], 'ROLLBACK_UNCERTAIN')
+
+    def test_drift_before_first_write_never_mutates(self):
+        def emit(value):
+            self.events.append(value)
+            if value.get('action') == 'PREPARED':
+                self.targets[1].chmod(0o770)
+        with patch.object(repair.os, 'fchmod', side_effect=AssertionError('unexpected mutation')):
+            with self.assertRaisesRegex(RuntimeError, 'PRE_WRITE_DRIFT'):
+                self.run_repair(emit=emit)
+        self.assertEqual(self.modes(), [0o775,0o770,0o775,0o775])
+
+    def test_unexpected_target_mode_blocks_all_writes(self):
+        self.targets[1].chmod(0o755)
+        with patch.object(repair.os, 'fchmod', side_effect=AssertionError('unexpected mutation')):
+            with self.assertRaisesRegex(RuntimeError, 'MODE_UNEXPECTED'):
+                self.run_repair()

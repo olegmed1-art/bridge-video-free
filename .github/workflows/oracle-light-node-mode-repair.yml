@@ -19,7 +19,7 @@ on:
         default: inspect
         options: [inspect, repair, inventory]
       expected_mode:
-        description: Four octal digits from fresh inspection; required for repair
+        description: Exact 0775 for all four approved directories; required for repair
         required: false
         type: string
 
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-      - name: Attest live HOLD and inspect or repair the one directory
+      - name: Attest live HOLD and inspect or repair the four approved directories
         shell: bash
         env:
           SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}

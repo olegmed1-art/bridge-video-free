@@ -1,7 +1,10 @@
-# Oracle Light single-directory mode repair — 2026-09-25
+# Oracle Light four-directory mode repair — 2026-09-25
 
-Scope: ASSURED recovery, issues #1946 / PR #1947. Keep Light HOLD and task queue
-empty. Only remove group-write from `/home/ubuntu/.nvm/versions/node/v22.23.2`.
+Scope: ASSURED recovery, issue #1946. Keep Light HOLD and task queue empty.
+Director approved expanded scope on 2026-09-25 after inventory run 36158752306
+and independent I2 design review. Exactly four directories change 0775 -> 0755:
+`/home/ubuntu/.nvm`, its `versions`, `versions/node`, and
+`versions/node/v22.23.2` directories. No recursive changes.
 No installer guard change, CLI install, service restart, database write or pilot.
 
 ## Review and execution
@@ -11,7 +14,7 @@ No installer guard change, CLI install, service restart, database write or pilot
 2. Run workflow `Oracle Light Node mode repair`, `mode=inspect`, with the exact
    current main SHA. It verifies the live process, same invocation, HOLD,
    read-only database login, zero nonterminal tasks, exact failure cause and
-   absent CLI target. Save the numeric mode and proposed mode from its output.
+   absent CLI target. Verify all four paths, numeric mode 0775 and proposed mode 0755 in its output.
 3. Independent reviewer must approve that observed mode transition and the
    exact current code. The observed mode must match the input at repair time.
 4. Exclude concurrent NVM maintenance on the host. The Actions concurrency group
@@ -19,7 +22,7 @@ No installer guard change, CLI install, service restart, database write or pilot
    serializes this helper. Neither prevents arbitrary root/ubuntu programs from
    changing metadata; these are trusted principals. This is not an adversarial
    same-UID containment mechanism and chmod is not a compare-and-swap.
-5. Dispatch `mode=repair`, exact current main, and four-digit `expected_mode`.
+5. Dispatch `mode=repair`, exact current main, and `expected_mode=0775`.
    Fresh live checks execute again within that run, immediately before chmod.
    One root process retains every descriptor through postchecks and rollback.
 6. Accept only `APPLIED_VERIFIED`, original diagnostic Node/npm SAFE, absent
@@ -28,9 +31,11 @@ No installer guard change, CLI install, service restart, database write or pilot
 
 ## Rollback
 
-PREPARED logs the original numeric mode before attempting a write. Any failure
-after that attempt restores the same held inode's mode, even if its path was
-renamed/deleted. It does not chmod a replacement inode. Unknown ownership, ACL
+PREPARED logs the original numeric mode and directory count before writing.
+Any failure after an attempted write triggers reverse-order restoration of all
+attempted held inodes, even if paths were renamed/deleted. A failed restoration
+does not prevent attempts to restore the other directories. All four original
+modes and identities must verify before ROLLBACK_DONE. It does not chmod a replacement inode. Unknown ownership, ACL
 or mode drift blocks rollback rather than overwriting a concurrent change.
 `ROLLBACK_DONE` means mode restored; it does not prove service health. The runner
 rechecks live HOLD after failure and separately reports if it cannot verify it.
@@ -47,8 +52,9 @@ explicit decision.
 
 ## Local verification
 
-16 focused tests cover real filesystem parent swaps, symlinks, renamed or
-replaced targets, original-mode rollback, uncertain rollback, ACL refusal,
-prewrite drift and runner HOLD/diagnostic gates. Python compilation and YAML
-parsing also pass. Host execution and numeric mode remain unverified until
-the separate inspection run.
+29 focused tests cover each of four failing chmod positions, calls that change
+mode then raise, reverse rollback, replaced parents, unknown drift with continued
+rollback, nonrecursive scope, symlinks, ACL refusal and live runner gates.
+The four syscalls are not atomic: process/host death can leave a partial removal
+of group-write. Missing or uncertain terminal output requires fresh inventory;
+never infer completion or automatically retry installation.
