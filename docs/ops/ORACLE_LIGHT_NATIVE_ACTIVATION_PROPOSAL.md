@@ -26,6 +26,12 @@ Tracking: #1946. This proposal grants no permissions and activates no worker.
   and its repository binding remain unverified. Source:
   https://github.com/openai/codex/blob/rust-v0.157.0/codex-rs/cloud-tasks/src/lib.rs
   (`run_exec_command`, `resolve_environment_id`, `resolve_query_input`).
+- Tagged upstream `run_status_command` exits 1 for every non-READY status and
+  `task_status_label` emits ERROR. Current bridge returns PROVIDER_STATUS_UNKNOWN
+  immediately for nonzero exit and does not recognize ERROR. Consequently a
+  provider error cannot reach its existing terminal-failure handling. Correct
+  this contract with representative CLI output/exit fixtures before activation;
+  do not turn arbitrary nonzero exit or network errors into terminal evidence.
 - Local baseline tests: 49 passed across bridge, delivery, queue. These use
   substitutes for external dependencies, not a real PostgreSQL receipt lifecycle
   rehearsal, service API check, or cloud task run.
