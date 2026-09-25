@@ -79,7 +79,8 @@ def require_live_hold():
         raise ValueError('NATIVE_HOST_IDENTITY_INVALID')
     status = subprocess.run(['systemctl', 'show', LIGHT_UNIT,
                              '-pActiveState', '-pSubState', '-pEnvironment'],
-                            capture_output=True, text=True, check=True, timeout=15)
+                            capture_output=True, text=True, check=True, timeout=15,
+                            env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
     fields = dict(line.split('=', 1) for line in status.stdout.splitlines() if '=' in line)
     admission = [item for item in fields.get('Environment', '').split()
                  if item.startswith('AUTOPILOT_ADMISSION_MODE=')]
