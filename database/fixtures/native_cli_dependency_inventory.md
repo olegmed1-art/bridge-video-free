@@ -14,7 +14,13 @@ role attributes (without passwords), and visible relevant owner/admin sessions
 (PID and role only, no query text, application names or addresses). The Light
 role is absent in disposable CI, so its role arrays there are empty. Production
 must contain the expected login. Session visibility is incomplete evidence and
-does not prevent a new privileged session from starting.
+does not prevent a new privileged session from starting. `visible_selected_sessions`
+selects only same-database client sessions of superusers, CREATEROLE roles,
+the current user, or direct owners of autopilot functions. It omits, among
+others, roles able to SET ROLE to an owner, function grant-option holders and
+membership ADMIN OPTION holders without CREATEROLE. It cannot establish an
+exclusive maintenance window. The upward runtime membership graph is not a
+complete inventory of all operators or their authority.
 
 It reports five named native dependency families (including overloads), the
 user triggers of seven affected tables and their function fingerprints, plus
@@ -24,7 +30,13 @@ or owners, so independent catalogs can be compared. It intentionally fails to
 establish completeness on its own: PL/pgSQL calls may be dynamic or indirect;
 functions outside autopilot appear with null trigger-function metadata, and
 missing functions/tables or an empty catalog must be treated as missing evidence.
-Compare the inventory with the pinned CI reference, investigate any differences,
+Deparser output (including pg_get_functiondef/pg_get_triggerdef) is version-sensitive.
+Require a reference reconstructed on the same PostgreSQL major version; prefer
+the exact server_version_num and pinned container version. The report supplies
+server_version_num for this check. Across versions, do not treat a mismatch as
+proven source drift or equality as proof of semantic compatibility; reconstruct
+the matching reference and review the source/semantics first.
+Compare the inventory with that pinned CI reference, investigate any differences,
 and review dependency semantics rather than treating a matching digest as
 authority to grant privileges. Owner/ACL/role closure and migration registry
 validation remain separate inputs.

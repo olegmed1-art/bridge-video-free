@@ -52,7 +52,7 @@ SELECT jsonb_build_object(
   'grantor',pg_get_userbyid(m.grantor),'admin',m.admin_option,
   'inherit',m.inherit_option,'set',m.set_option) ORDER BY m.roleid,m.member,m.grantor),'[]')
   FROM pg_auth_members m JOIN role_closure c ON c.oid=m.member),
- 'visible_owner_sessions',(SELECT coalesce(jsonb_agg(jsonb_build_object(
+ 'visible_selected_sessions',(SELECT coalesce(jsonb_agg(jsonb_build_object(
   'pid',a.pid,'role',a.usename,'is_this_session',a.pid=pg_backend_pid()) ORDER BY a.pid),'[]')
   FROM pg_stat_activity a JOIN pg_roles r ON r.rolname=a.usename
   WHERE a.datname=current_database() AND a.backend_type='client backend'
