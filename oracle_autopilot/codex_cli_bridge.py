@@ -126,11 +126,14 @@ def configure_profile(profile):
         STATE = Path('/home/ubuntu/.local/state/slavik-codex-bridge')
 
 
-def child_environment():
+def child_environment(profile=None):
     # The resident worker holds DB/broker secrets. Never inherit its environment
     # into an external provider client, even when no model API key is present.
-    if PROFILE in ('service', 'light'):
-        root = LIGHT_ROOT if PROFILE == 'light' else SERVICE_ROOT
+    if profile is not None and profile != 'light':
+        raise ValueError('EXPLICIT_CLI_PROFILE_INVALID')
+    selected = PROFILE if profile is None else profile
+    if selected in ('service', 'light'):
+        root = LIGHT_ROOT if selected == 'light' else SERVICE_ROOT
         home = str(root / 'runtime')
         codex_home = str(root / 'runtime/codex-home')
         path = '/usr/local/bin:/usr/bin:/bin'
@@ -142,11 +145,15 @@ def child_environment():
             'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
 
 
-def run_cli(arguments, input_text=None, timeout=90):
+def run_cli(arguments, input_text=None, timeout=90, *, profile=None):
     # No API-key fallback. Credentials remain exclusively inside official CLI.
-    return subprocess.run([str(CLI), '-c', 'forced_login_method="chatgpt"', *arguments],
-                          input=input_text, text=True, capture_output=True, timeout=timeout,
-                          env=child_environment())
+    if profile is not None and profile != 'light':
+        raise ValueError('EXPLICIT_CLI_PROFILE_INVALID')
+    return subprocess.run(
+        [str(CLI if profile is None else LIGHT_ROOT / 'runtime-bin/codex'),
+         '-c', 'forced_login_method="chatgpt"', *arguments],
+        input=input_text, text=True, capture_output=True, timeout=timeout,
+        env=child_environment(profile))
 
 
 def health():

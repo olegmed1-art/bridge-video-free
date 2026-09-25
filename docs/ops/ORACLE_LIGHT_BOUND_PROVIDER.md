@@ -12,6 +12,13 @@ Light binary, state directory, HOME and CODEX_HOME, with a scrubbed five-variabl
 child environment and forced ChatGPT authentication. It never changes the shared
 bridge's global profile and never falls back to ubuntu, an API key or a label.
 
+The only subprocess launch remains in codex_cli_bridge.run_cli. Its new optional
+explicit profile accepts only light; None preserves configured legacy behavior.
+There are no caller-supplied executable or environment parameters. The structural
+guard retains its single-site/no-shell requirement and also verifies the bound
+provider's explicit Light delegation. Behavioral tests cover hostile global
+profile/path values, invalid explicit profiles and all three legacy profiles.
+
 The bridge journal functions accept explicit state, binding and runner parameters
 for this provider. The binding has exactly profile/environment_id/repository.
 It is fsynced with SUBMISSION_UNKNOWN and the request before any create call.

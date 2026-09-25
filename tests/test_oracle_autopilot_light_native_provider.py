@@ -21,7 +21,7 @@ def rig(tmp_path, monkeypatch):
             task_spec_json=dict(repository='olegmed1-art/bridge-video-free', target_pr=1546,
                                 expected_head_sha='a'*40, execution_mode='READ_ONLY')))
     target = ProviderTarget('a'*32)
-    monkeypatch.setattr(module, 'LIGHT_ROOT', tmp_path)
+    monkeypatch.setattr(bridge, 'LIGHT_ROOT', tmp_path)
     state_dir = tmp_path / 'runtime/codex-dispatch'
     journal = state_dir / (dispatch+'.json')
     state = dict(calls=[], timeout=False, invalid=False)
@@ -58,7 +58,7 @@ def rig(tmp_path, monkeypatch):
                       +bridge.canonical(report)+'\n')
         return subprocess.CompletedProcess(argv, 0, output, '')
 
-    monkeypatch.setattr(module.subprocess, 'run', run)
+    monkeypatch.setattr(bridge.subprocess, 'run', run)
     return request, target, module.LightProvider(target), state, state_dir, journal
 
 
@@ -204,3 +204,41 @@ def test_malformed_binding_has_no_side_effect(rig, bad):
     with pytest.raises(ValueError, match='PROVIDER_BINDING_INVALID'):
         bridge.submit(req, state_dir=state_dir, binding=bad, runner=lambda *a: pytest.fail('runner'))
     assert not state_dir.exists() and not state['calls']
+
+
+@pytest.mark.parametrize('profile', ['ubuntu', 'service', '', False, True, '/tmp/codex'])
+def test_explicit_profile_rejects_non_light_before_subprocess(monkeypatch, profile):
+    monkeypatch.setattr(bridge.subprocess, 'run', lambda *a, **k: pytest.fail('subprocess'))
+    with pytest.raises(ValueError, match='EXPLICIT_CLI_PROFILE_INVALID'):
+        bridge.run_cli(['login', 'status'], profile=profile)
+    with pytest.raises(ValueError, match='EXPLICIT_CLI_PROFILE_INVALID'):
+        bridge.child_environment(profile)
+
+
+def test_explicit_light_ignores_hostile_globals_without_mutating_them(rig, monkeypatch):
+    req, target, provider, state, _, _ = rig
+    monkeypatch.setattr(bridge, 'PROFILE', 'ubuntu')
+    monkeypatch.setattr(bridge, 'CLI', '/tmp/untrusted-codex')
+    monkeypatch.setenv('CODEX_HOME', '/tmp/other-credentials')
+    before = bridge.PROFILE, bridge.CLI, bridge.STATE
+    assert provider.submit(req, target=target)['state'] == 'SUBMITTED'
+    assert before == (bridge.PROFILE, bridge.CLI, bridge.STATE)
+    assert len(state['calls']) == 1
+
+
+@pytest.mark.parametrize('profile', ['ubuntu', 'service', 'light'])
+def test_none_preserves_each_legacy_profile(monkeypatch, profile):
+    # Restore profile globals after using the existing legacy configurator.
+    for name in ('PROFILE', 'CLI', 'STATE'):
+        monkeypatch.setattr(bridge, name, getattr(bridge, name))
+    bridge.configure_profile(profile)
+    expected_cli = str(bridge.CLI)
+    expected_env = bridge.child_environment()
+    seen = []
+    def run(argv, **kwargs):
+        seen.append(argv)
+        assert argv[0] == expected_cli and kwargs['env'] == expected_env
+        return subprocess.CompletedProcess(argv, 0, '', '')
+    monkeypatch.setattr(bridge.subprocess, 'run', run)
+    bridge.run_cli(['login', 'status'], profile=None)
+    assert len(seen) == 1
