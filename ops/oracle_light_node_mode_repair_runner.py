@@ -12,6 +12,21 @@ import subprocess
 import sys
 
 
+def failure_code(exc):
+    allowed = {'ACL_UNKNOWN','ACL_PRESENT','NOT_DIRECTORY','IDENTITY_DRIFT',
+               'PATH_DRIFT','UNSAFE_ANCESTOR','OWNER_DRIFT','HOST_IDENTITY',
+               'MODE_UNEXPECTED','PRE_WRITE_DRIFT','POST_MODE_DRIFT','POST_WRITE_DRIFT',
+               'GROUP_NOT_PRIVATE','BUNDLE_TOO_LARGE','BUNDLE_KEYS','MODE',
+               'LIVE_HOLD_DRIFT','DIAGNOSTIC_FAILED','DIAGNOSTIC_DRIFT','CAUSE_DRIFT',
+               'EXPECTED_MODE'}
+    value = exc.args[0] if exc.args else None
+    if isinstance(exc, (RuntimeError, ValueError)) and isinstance(value, str) and value in allowed:
+        return value
+    if isinstance(exc, OSError):
+        return 'OS_ERROR_' + str(exc.errno) if isinstance(exc.errno, int) else 'OS_ERROR'
+    return 'NVM_REPAIR_RUNNER_FAILED'
+
+
 def main():
     raw = sys.stdin.buffer.read(131073)
     if len(raw) > 131072:
@@ -114,6 +129,6 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except BaseException:
-        print('{"audit":"BLOCKED","code":"NVM_REPAIR_RUNNER_FAILED"}', flush=True)
+    except BaseException as exc:
+        print(json.dumps({'audit':'BLOCKED','code':failure_code(exc)}), flush=True)
         sys.exit(2)

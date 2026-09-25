@@ -8,6 +8,11 @@ from ops import oracle_light_node_mode_repair_runner as runner
 
 
 class RunnerTests(unittest.TestCase):
+    def test_failure_code_never_includes_raw_exception(self):
+        self.assertEqual(runner.failure_code(RuntimeError('ACL_PRESENT')), 'ACL_PRESENT')
+        self.assertEqual(runner.failure_code(RuntimeError('secret-value')), 'NVM_REPAIR_RUNNER_FAILED')
+        self.assertEqual(runner.failure_code(OSError(13, 'secret-path')), 'OS_ERROR_13')
+
     def bundle(self):
         live = {'audit':'ACTIVE_HOLD_PASS','queue_nonterminal':0,
                 'database_login':'READ_ONLY_PASS','admission':'HOLD','same_invocation':True}
