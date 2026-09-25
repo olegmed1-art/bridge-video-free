@@ -26,6 +26,19 @@ INSERT INTO native_acl_target VALUES
  ('autopilot.native_cli_ack(jsonb,text,text)','autopilot.native_cli_ack(jsonb,text,text)'::regprocedure),
  ('autopilot.native_cli_finish(jsonb,text,jsonb)','autopilot.native_cli_finish(jsonb,text,jsonb)'::regprocedure);
 
+DO $$ DECLARE actual oid[]; expected oid[]; BEGIN
+ SELECT array_agg(p.oid ORDER BY p.oid) INTO actual FROM pg_proc p
+ JOIN pg_namespace n ON n.oid=p.pronamespace
+ WHERE n.nspname='autopilot' AND left(p.proname,11)='native_cli_';
+ SELECT array_agg(id ORDER BY id) INTO expected FROM (
+  SELECT id FROM native_acl_target UNION ALL
+  SELECT 'autopilot.native_cli_authority_locked(uuid,jsonb)'::regprocedure::oid
+ ) exact_functions;
+ IF cardinality(expected)<>7 OR actual IS DISTINCT FROM expected THEN
+  RAISE EXCEPTION 'NATIVE_FUNCTION_SET_DRIFT';
+ END IF;
+END $$;
+
 CREATE FUNCTION pg_temp.native_acl_state() RETURNS jsonb LANGUAGE sql AS $$
  SELECT jsonb_build_object(
   'functions',(SELECT jsonb_agg(jsonb_build_object('id',p.oid,'owner',p.proowner,
@@ -68,8 +81,8 @@ BEGIN
  END LOOP;
  IF EXISTS(SELECT FROM native_acl_target WHERE NOT has_function_privilege('native_acl_login',id,'EXECUTE'))
  OR has_function_privilege('native_acl_login','autopilot.native_cli_authority_locked(uuid,jsonb)','EXECUTE')
- OR has_table_privilege('native_acl_login','autopilot.native_cli_config','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
- OR has_table_privilege('native_acl_login','autopilot.native_cli_receipt','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+ OR has_table_privilege('native_acl_login','autopilot.native_cli_config','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
+ OR has_table_privilege('native_acl_login','autopilot.native_cli_receipt','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
  OR NOT has_schema_privilege('native_acl_login','autopilot','USAGE') THEN
   RAISE EXCEPTION 'POSTCHECK_FAILED';
  END IF;
@@ -137,7 +150,7 @@ END $$;
 SELECT pg_temp.native_acl_rollback();
 
 -- Pure metadata output for comparison with the live owner's observed hashes.
-SELECT 'NATIVE_DEFINITION_SHA256' AS evidence, p.proname,
+SELECT 'NATIVE_DEFINITION_SHA256' AS evidence, p.oid::regprocedure AS signature,
  encode(sha256(convert_to(pg_get_functiondef(p.oid),'UTF8')),'hex') AS definition_sha256
 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
 WHERE n.nspname='autopilot' AND left(p.proname,11)='native_cli_' ORDER BY p.proname;
