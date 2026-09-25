@@ -29,10 +29,11 @@ def fixture(dsn):
         work = connection.execute("""SELECT work_item_id FROM autopilot.register_universal_work_item(
             %s,'AUTOPILOT','REPOSITORY_REPAIR','Concurrent native canary.',%s,0,
             '{}'::jsonb,NULL,'database-test','SQL_TEST')""", ('ci-native-begin-373', mailbox)).fetchone()[0]
-        probe = connection.execute('SELECT lease_epoch FROM autopilot.claim_project_work_probe(%s,60)',
-                                   ('ci-native-probe-373',)).fetchone()[0]
+        probe = connection.execute('SELECT work_item_id,lease_epoch FROM autopilot.claim_project_work_probe(%s,60)',
+                                   ('ci-native-probe-373',)).fetchone()
+        assert probe[0] == work, probe
         task = connection.execute('SELECT task_id FROM autopilot.materialize_project_work_probe(%s,%s,%s,true,%s)',
-                                  (work, 'ci-native-probe-373', probe, 'a' * 40)).fetchone()[0]
+                                  (work, 'ci-native-probe-373', probe[1], 'a' * 40)).fetchone()[0]
         claimed = connection.execute('SELECT task_id,lease_epoch FROM autopilot.claim_next_task(%s,60)',
                                      ('ci-native-worker-373',)).fetchone()
         assert claimed[0] == task
