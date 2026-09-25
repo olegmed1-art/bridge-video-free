@@ -28,12 +28,15 @@ class ActiveHoldContract(unittest.TestCase):
             with self.assertRaisesRegex(attest.Blocked,'LOGIN_OR_QUEUE_FAILED'):
                 attest.login('postgresql://user:private-secret@host/db')
 
-    def test_workflow_requires_main_push_and_no_credential_secret(self):
+    def test_workflow_manual_probe_requires_owner_and_exact_main(self):
         text=Path('.github/workflows/oracle-light-active-hold-attest.yml').read_text()
         self.assertIn('needs: contract',text)
-        self.assertIn("github.ref == 'refs/heads/main' && github.event_name == 'push'",text)
+        self.assertIn("github.ref == 'refs/heads/main'",text)
+        self.assertIn("github.event_name == 'push'",text)
+        self.assertIn("github.event_name == 'workflow_dispatch'",text)
+        self.assertIn('github.actor == github.repository_owner',text)
+        self.assertIn('inputs.expected_main_sha == github.sha',text)
         self.assertNotIn('NEON_API_KEY',text)
-        self.assertNotIn('workflow_dispatch:',text)
 
 
 if __name__=='__main__':
