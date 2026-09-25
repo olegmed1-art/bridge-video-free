@@ -1,5 +1,6 @@
 """Submission ambiguity and immutable provider evidence; no network calls."""
 from copy import deepcopy
+from pathlib import Path
 import subprocess
 
 import pytest
@@ -175,3 +176,29 @@ def test_service_profile_stays_inside_existing_service_paths():
 def test_health_reports_only_auth_state(monkeypatch, text, code, state):
     monkeypatch.setattr(bridge, 'run_cli', lambda *args, **kwargs: response(text, code))
     assert bridge.health() == {'state': state, 'profile': 'ubuntu'}
+
+
+def test_light_profile_matches_production_write_boundary(monkeypatch):
+    monkeypatch.setenv('AUTOPILOT_DATABASE_URL', 'must-not-inherit')
+    monkeypatch.setenv('OPENAI_API_KEY', 'must-not-inherit')
+    monkeypatch.setenv('CODEX_HOME', '/home/ubuntu/.codex')
+    try:
+        bridge.configure_profile('light')
+        root = Path('/opt/bridge-school/school-autopilot-production-light')
+        assert bridge.CLI == root / 'runtime-bin/codex'
+        assert bridge.STATE == root / 'runtime/codex-dispatch'
+        assert bridge.child_environment() == {
+            'HOME': str(root / 'runtime'),
+            'CODEX_HOME': str(root / 'runtime/codex-home'),
+            'PATH': '/usr/local/bin:/usr/bin:/bin',
+            'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
+    finally:
+        bridge.configure_profile('ubuntu')
+
+
+def test_unknown_profile_does_not_change_current_profile():
+    bridge.configure_profile('ubuntu')
+    old = (bridge.CLI, bridge.STATE, bridge.PROFILE)
+    with pytest.raises(ValueError, match='CLI_PROFILE_INVALID'):
+        bridge.configure_profile('../../home/ubuntu')
+    assert (bridge.CLI, bridge.STATE, bridge.PROFILE) == old

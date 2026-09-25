@@ -21,6 +21,7 @@ CLI = Path('/home/ubuntu/.local/share/slavik-codex/node_modules/.bin/codex')
 STATE = Path('/home/ubuntu/.local/state/slavik-codex-bridge')
 PROFILE = 'ubuntu'
 SERVICE_ROOT = Path('/opt/bridge-school/school-autopilot')
+LIGHT_ROOT = Path('/opt/bridge-school/school-autopilot-production-light')
 UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}')
 SHA = re.compile(r'[0-9a-f]{40}')
 TASK_URL = re.compile(r'https://chatgpt\.com/codex/tasks/(task_[A-Za-z0-9_]{1,120})')
@@ -113,12 +114,13 @@ def save(path, value):
 
 def configure_profile(profile):
     global CLI, STATE, PROFILE
-    if profile not in ('ubuntu', 'service'):
+    if profile not in ('ubuntu', 'service', 'light'):
         raise ValueError('CLI_PROFILE_INVALID')
     PROFILE = profile
-    if profile == 'service':
-        CLI = SERVICE_ROOT / 'runtime-bin/codex'
-        STATE = SERVICE_ROOT / 'runtime/codex-dispatch'
+    if profile in ('service', 'light'):
+        root = LIGHT_ROOT if profile == 'light' else SERVICE_ROOT
+        CLI = root / 'runtime-bin/codex'
+        STATE = root / 'runtime/codex-dispatch'
     else:
         CLI = Path('/home/ubuntu/.local/share/slavik-codex/node_modules/.bin/codex')
         STATE = Path('/home/ubuntu/.local/state/slavik-codex-bridge')
@@ -127,9 +129,10 @@ def configure_profile(profile):
 def child_environment():
     # The resident worker holds DB/broker secrets. Never inherit its environment
     # into an external provider client, even when no model API key is present.
-    if PROFILE == 'service':
-        home = str(SERVICE_ROOT / 'runtime')
-        codex_home = str(SERVICE_ROOT / 'runtime/codex-home')
+    if PROFILE in ('service', 'light'):
+        root = LIGHT_ROOT if PROFILE == 'light' else SERVICE_ROOT
+        home = str(root / 'runtime')
+        codex_home = str(root / 'runtime/codex-home')
         path = '/usr/local/bin:/usr/bin:/bin'
     else:
         home = '/home/ubuntu'
@@ -294,7 +297,7 @@ def validate_result(request, patch, task_id):
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('action',choices=('submit','collect','health'))
-    parser.add_argument('--profile',choices=('ubuntu','service'),default='ubuntu')
+    parser.add_argument('--profile',choices=('ubuntu','service','light'),default='ubuntu')
     parser.add_argument('--dispatch-id')
     args=parser.parse_args()
     try:
