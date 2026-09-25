@@ -89,6 +89,13 @@ BEGIN
   RAISE EXCEPTION 'CANARY_SUBMITTED_CANNOT_DRAIN';
  END IF;
 
+ terminal:=jsonb_build_object('status','SUCCEEDED','result_code','VERIFIED',
+  'summary','Scoped native SQL canary.','target_head_sha',repeat('a',40),
+  'provider_evidence_sha256',repeat('d',64));
+ IF autopilot.native_cli_finish(request,'task_e_sql373',terminal)->>'state'<>'TERMINAL' THEN
+  RAISE EXCEPTION 'CANARY_TERMINAL_NOT_RETAINED';
+ END IF;
+
  -- Revocation never replenishes the one-attempt budget.
  other:=pg_temp.canary_fixture('sql-0373-revoked-budget');
  conflict:=false;
@@ -100,12 +107,5 @@ BEGIN
  EXCEPTION WHEN unique_violation THEN conflict:=true;
  END;
  IF NOT conflict THEN RAISE EXCEPTION 'CANARY_REISSUED_AFTER_REVOKE'; END IF;
-
- terminal:=jsonb_build_object('status','SUCCEEDED','result_code','VERIFIED',
-  'summary','Scoped native SQL canary.','target_head_sha',repeat('a',40),
-  'provider_evidence_sha256',repeat('d',64));
- IF autopilot.native_cli_finish(request,'task_e_sql373',terminal)->>'state'<>'TERMINAL' THEN
-  RAISE EXCEPTION 'CANARY_TERMINAL_NOT_RETAINED';
- END IF;
 END $$;
 ROLLBACK;
