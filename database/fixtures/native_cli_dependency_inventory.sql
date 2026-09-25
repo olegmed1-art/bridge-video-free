@@ -38,6 +38,7 @@ SELECT jsonb_build_object(
   'session_role',session_user,'read_only',current_setting('transaction_read_only'),
   'server_version_num',current_setting('server_version_num')),
  'function_count',(SELECT count(*) FROM functions),
+ 'function_fingerprints',(SELECT coalesce(jsonb_agg(to_jsonb(f)-'oid' ORDER BY f.signature COLLATE "C"),'[]') FROM functions f),
  'function_catalog_sha256',(SELECT encode(sha256(convert_to(
   coalesce(string_agg(signature||'='||definition_sha256,E'\n' ORDER BY signature COLLATE "C"),''),'UTF8')),'hex') FROM functions),
  'dependencies',(SELECT coalesce(jsonb_agg(to_jsonb(d)-'oid' ORDER BY d.signature COLLATE "C"),'[]') FROM direct_dependencies d),
