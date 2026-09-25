@@ -90,3 +90,64 @@ def test_caller_cannot_override_live_hold(monkeypatch, unit_env, active):
                                                     f'Environment={unit_env}\n', ''))
     with pytest.raises(ValueError, match='AUTOPILOT_ADMISSION_HELD'):
         once.require_live_active()
+
+
+def active_identity(monkeypatch, checks):
+    monkeypatch.setenv('AUTOPILOT_ADMISSION_MODE', 'ACTIVE')
+    monkeypatch.setattr(once.pwd, 'getpwnam', lambda name: type('User', (), {'pw_uid': 1000})())
+    monkeypatch.setattr(once.os, 'geteuid', lambda: 1000)
+    monkeypatch.setattr(once, 'validate_neon_direct_dsn', lambda dsn: dsn)
+    monkeypatch.setattr(once.bridge, 'configure_profile', lambda profile: None)
+    monkeypatch.setattr(once.bridge, 'health', lambda: {'state': 'CLI_AUTH_READY'})
+
+    def ready():
+        checks.append('unit')
+    monkeypatch.setattr(once, 'require_live_active', ready)
+
+
+def test_active_step_uses_exact_queue_and_authority(monkeypatch):
+    calls = []
+    active_identity(monkeypatch, calls)
+    dispatch = '12345678-1234-4234-8234-123456789012'
+
+    def fake_advance(received, queue, authority):
+        assert received == dispatch
+        assert isinstance(queue, once.NativeQueue)
+        assert isinstance(authority, once.NativeAuthority)
+        calls.append('advance')
+        return {'state': 'WAITING_PROVIDER'}
+
+    monkeypatch.setattr(once, 'advance', fake_advance)
+    assert once.one_step(dispatch, 'dsn', 'token', 'ubuntu') == {'state': 'WAITING_PROVIDER'}
+    assert calls == ['unit', 'advance']
+
+
+def test_hold_race_before_begin_blocks_all_sql_and_provider_calls(monkeypatch):
+    calls = []
+    active_identity(monkeypatch, calls)
+    dispatch = '12345678-1234-4234-8234-123456789012'
+
+    def before_begin():
+        calls.append('unit')
+        if len(calls) == 2:
+            raise ValueError('AUTOPILOT_ADMISSION_HELD')
+
+    monkeypatch.setattr(once, 'require_live_active', before_begin)
+    monkeypatch.setattr(once.psycopg, 'connect', lambda *a, **kw: pytest.fail('DB touched'))
+    monkeypatch.setattr(once, 'advance', lambda received, queue, authority:
+                        queue.begin_submission({'dispatch_id': received}))
+    with pytest.raises(ValueError, match='AUTOPILOT_ADMISSION_HELD'):
+        once.one_step(dispatch, 'dsn', 'token', 'ubuntu')
+    assert calls == ['unit', 'unit']
+
+
+def test_failure_message_never_contains_secret(monkeypatch, capsys):
+    monkeypatch.setattr(once, 'one_step', lambda *args:
+                        (_ for _ in ()).throw(ValueError('token=secret-value')))
+    monkeypatch.setenv('AUTOPILOT_DATABASE_URL', 'secret-dsn')
+    monkeypatch.setenv('GITHUB_TOKEN', 'secret-token')
+    monkeypatch.setattr('sys.argv', ['once', '--dispatch-id', 'id', '--profile', 'ubuntu'])
+    with pytest.raises(SystemExit) as error:
+        once.main()
+    assert error.value.code == 2
+    assert capsys.readouterr().out.strip() == '{"state": "BLOCKED", "code": "NATIVE_STEP_FAILED"}'
