@@ -85,6 +85,59 @@ class RecoveryContract(unittest.TestCase):
             with self.assertRaisesRegex(remote.Blocked,'CONTAINMENT_UNVERIFIED'):
                 remote.transition(b'ACTIVE',b'HOLD',b'old',b'new','candidate')
 
+    def test_post_start_codes_disclose_no_credentials(self):
+        cases = (({},'POST_START_BOTH_DRIFT'),
+                 ({b'AUTOPILOT_ADMISSION_MODE':b'HOLD'},'POST_START_DATABASE_DRIFT'),
+                 ({b'AUTOPILOT_DATABASE_URL':b'candidate'},'POST_START_ADMISSION_DRIFT'))
+        for observed,code in cases:
+            with self.subTest(code=code), self.assertRaisesRegex(remote.Blocked,'^'+code+'$'):
+                remote.verify_process_environment(observed,'candidate')
+        remote.verify_process_environment({b'AUTOPILOT_DATABASE_URL':b'candidate',
+                                           b'AUTOPILOT_ADMISSION_MODE':b'HOLD'},'candidate')
+
+    def test_stopped_recovery_rolls_back_each_mutation_failure(self):
+        for boundary in ('env_write','start','process_env','login'):
+            with self.subTest(boundary=boundary):
+                state={'running':False,'env':b'old','drop':b'HOLD','failed':False,'stop_calls':0,'MainPID':'123'}
+                def run(command,*args):
+                    if command=='start':
+                        if boundary=='start' and not state['failed']:
+                            state['failed']=True
+                            raise RuntimeError('start')
+                        state['running']=True
+                    elif command=='stop':
+                        state['stop_calls']+=1
+                        state['running']=False
+                def atomic(path,content,mode,suffix):
+                    if boundary=='env_write' and suffix=='env' and not state['failed']:
+                        state['failed']=True
+                        raise RuntimeError('write')
+                    state['env']=content
+                def read(path,*args):
+                    return state['env'] if path==remote.ENV else state['drop']
+                def login(*args):
+                    if boundary=='login' and state['running']:
+                        raise RuntimeError('login')
+                def validate(st,mode,active):
+                    self.assertEqual(st['running'],active)
+                    self.assertEqual(mode,'HOLD')
+                def observed(*args):
+                    if boundary=='process_env':
+                        raise remote.Blocked('POST_START_DATABASE_DRIFT')
+                with patch.object(remote,'run',side_effect=run),patch.object(remote,'atomic',side_effect=atomic), \
+                     patch.object(remote,'read_file',side_effect=read),patch.object(remote,'service',side_effect=lambda:state), \
+                     patch.object(remote,'validate_state',side_effect=validate), \
+                     patch.object(remote,'check_login',side_effect=login), \
+                     patch.object(remote,'env_values',return_value={'AUTOPILOT_DATABASE_URL':'candidate'}), \
+                     patch.object(remote,'verify_process_environment',side_effect=observed), \
+                     patch.object(remote.Path,'read_bytes',return_value=b'AUTOPILOT_DATABASE_URL=candidate\0AUTOPILOT_ADMISSION_MODE=HOLD\0'):
+                    with self.assertRaises(Exception):
+                        remote.transition_stopped(b'HOLD',b'old',b'new','candidate')
+                self.assertFalse(state['running'])
+                self.assertEqual(state['env'],b'old')
+                self.assertEqual(state['drop'],b'HOLD')
+                self.assertGreaterEqual(state['stop_calls'],1)
+
     def test_runner_neon_412_never_ssh_mutation(self):
         from urllib.error import HTTPError
         with patch.dict('os.environ',{'NEON_API_KEY':'test'}),patch.object(runner,'urlopen',side_effect=HTTPError('url',412,'',None,None)):
