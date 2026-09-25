@@ -45,7 +45,9 @@ Add direct EXECUTE, without grant option, on exactly:
 Schema USAGE already exists: proposed delta is zero. Keep the private
 `native_cli_authority_locked(uuid,jsonb)` denied. Keep native table privileges,
 PUBLIC privileges, default privileges, memberships, owners, search_path,
-function definitions and database/session read-only settings unchanged.
+function definitions and role/database settings unchanged. Preserve the current
+HOLD listener and read-only audit sessions; this is not proof that every session
+opened by the login is forced read-only by database policy.
 Keep enabled=false, cutover_at unchanged, HOLD, service release/invocation,
 credentials and scheduling unchanged. No native RPC is called for validation.
 
@@ -108,9 +110,15 @@ access. Such a state is outside this pre-task rollback and needs its own review.
 
 ## Remaining pilot gates
 
-The live connection remains read-only: EXECUTE grants do not permit receipt
-writes. A READ_ONLY repository task still needs bookkeeping writes. Any change
-to that database boundary belongs to a separate reviewed activation package.
+The observed HOLD listener and audit sessions are read-only. This does not
+establish a role-level or database-enforced read-only restriction for every
+connection opened by the runtime login. These SECURITY DEFINER functions can
+write receipts, outbox and task state when their predicates are satisfied:
+EXECUTE is a controlled write capability even without direct table privileges.
+The verified disabled configuration and zero receipts keep that capability
+dormant at the observed state. A READ_ONLY repository task still needs writable
+bookkeeping sessions. Opening an adapter session for writes and changing
+enablement/admission belong to a separate reviewed activation package.
 
 Implement/review the serialized one-item production loader: exact existing
 shared-admission dispatch, immutable repository/head/environment target,
