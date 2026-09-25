@@ -1,6 +1,9 @@
 import contextlib
 import io
 import json
+import os
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -8,6 +11,38 @@ from ops import oracle_light_node_mode_repair_runner as runner
 
 
 class RunnerTests(unittest.TestCase):
+    def test_inventory_collects_all_parents_without_chmod(self):
+        with tempfile.TemporaryDirectory() as temp:
+            version = Path(temp)/'version'
+            (version/'bin').mkdir(parents=True)
+            (version/'lib').mkdir()
+            (version/'bin/node').write_text('not executed')
+            (version/'lib/npm-cli.js').write_text('not executed')
+            (version/'bin/npm').symlink_to('../lib/npm-cli.js')
+            version.chmod(0o775)
+            user = SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid())
+            with patch.object(runner.pwd,'getpwnam',return_value=user), \
+                 patch.object(runner.os,'chmod',side_effect=AssertionError('mutation')), \
+                 patch.object(runner.os,'fchmod',side_effect=AssertionError('mutation')):
+                result = runner.path_inventory(version)
+            rows = {r['path']:r for r in result['entries']}
+            self.assertEqual(rows[str(version)]['mode'],'0775')
+            self.assertTrue(rows[str(version)]['group_write'])
+            self.assertIn(str(version/'lib'),rows)
+            self.assertIn('/',rows)
+            self.assertFalse(result['mutation_authorized'])
+
+    def test_inventory_rejects_binary_outside_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            version = Path(temp)/'version'
+            (version/'bin').mkdir(parents=True)
+            outside = Path(temp)/'outside'
+            outside.write_text('not executed')
+            (version/'bin/node').symlink_to(outside)
+            with patch.object(runner.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=0,pw_gid=0)):
+                with self.assertRaisesRegex(ValueError,'RUNTIME_OUTSIDE_NVM'):
+                    runner.path_inventory(version)
+
     def test_failure_code_never_includes_raw_exception(self):
         self.assertEqual(runner.failure_code(RuntimeError('ACL_PRESENT')), 'ACL_PRESENT')
         self.assertEqual(runner.failure_code(RuntimeError('secret-value')), 'NVM_REPAIR_RUNNER_FAILED')
@@ -63,6 +98,16 @@ class RunnerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.execute(bundle, [self.result()])
         self.assertNotIn('TEST_MUTATION', self.output.getvalue())
+
+    def test_inventory_mode_never_calls_repair(self):
+        bundle = self.bundle()
+        bundle['mode'] = 'inventory'
+        bundle['repair'] += "\nPATH = 'fixed'\n"
+        with patch.object(runner, 'path_inventory', return_value={'audit':'NVM_PATH_METADATA_ONLY'}):
+            proc = self.execute(bundle, [self.result()])
+        self.assertEqual(proc.call_count, 1)
+        self.assertNotIn('TEST_MUTATION', self.output.getvalue())
+        self.assertEqual(self.output.getvalue().count('ACTIVE_HOLD_PASS'), 2)
 
     def test_wrong_cause_blocks_before_mutation(self):
         with self.assertRaises(ValueError):
