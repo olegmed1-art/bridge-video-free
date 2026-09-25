@@ -14,7 +14,6 @@ BRANCH = 'br-aged-mud-b1i64914'
 ROLE = 'autopilot_light_worker_login'
 REPO = 'olegmed1-art/bridge-video-free'
 HOST = '92.5.47.149'
-UNIT = 'school-autopilot-production-light.service'
 
 class Blocked(Exception):
     pass
@@ -58,18 +57,13 @@ def retrieve():
 def main(key,known):
     require_main()
     command=ssh_command(key,known)
-    probe=subprocess.run(command+['sudo -n /usr/bin/systemctl show -p InvocationID --value '+UNIT],
-                         capture_output=True,text=True,timeout=30)
-    invocation=probe.stdout.strip()
-    if probe.returncode or not re.fullmatch(r'[a-f0-9]{32}',invocation):
-        raise Blocked('INVOCATION_UNAVAILABLE')
     password=retrieve()
     require_main()  # Last-second primary-source check immediately before host mutation.
     source=Path('ops/oracle_light_credential_recovery.py').read_bytes()
     loader=('import base64;exec(compile(base64.b64decode("'
             +base64.b64encode(source).decode()+'"),"recovery","exec"))')
     remote='sudo -n /usr/bin/python3 -c '+"'"+loader+"'"
-    packet=json.dumps({'password':password,'invocation':invocation})
+    packet=json.dumps({'password':password,'mode':'stopped_hold'})
     result=subprocess.run(command+[remote],input=packet,text=True,capture_output=True,timeout=150)
     # No raw remote output, stderr, or connection exception ever reaches Actions logs.
     try:
@@ -83,7 +77,9 @@ def main(key,known):
           'LOGIN_OR_QUEUE_FAILED','UNIT_DRIFT','UNIT_STATE_DRIFT','ENV_SOURCE_DRIFT',
           'ENV_DRIFT','ENV_SYNTAX','DSN_DRIFT','DSN_FORMAT_DRIFT','PASSWORD_INVALID',
           'PASSWORD_UNCHANGED','ENV_REWRITE_DRIFT','FILE_DRIFT','FILE_SYMLINK',
-          'ENV_WRITE_FAILED','POST_START_DRIFT','CONTAINMENT_UNVERIFIED',
+          'ENV_WRITE_FAILED','POST_START_DRIFT','POST_START_BOTH_DRIFT',
+          'POST_START_DATABASE_DRIFT','POST_START_ADMISSION_DRIFT','ROLLBACK_UNVERIFIED',
+          'CONTAINMENT_UNVERIFIED',
           'DROP_CHANGED_DURING_RECOVERY'}
         code=status.get('code') if isinstance(status,dict) else None
         raise Blocked(code if code in allowed else 'REMOTE_FAILED')
