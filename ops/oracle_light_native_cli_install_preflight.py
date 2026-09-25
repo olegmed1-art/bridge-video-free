@@ -90,10 +90,13 @@ def profile(name, home, codex_home, install_parent):
 
 def main():
     held()
+    machine=os.uname().machine
+    architecture={'x86_64':'linux-x64','aarch64':'linux-arm64'}.get(machine,'UNKNOWN')
     result={name:profile(name,home,codex_home,install_parent)
             for name,home,codex_home,install_parent in PROFILES}
     print(json.dumps({'audit':'NATIVE_CLI_INSTALL_PREFLIGHT','admission':'HOLD',
-                      'profiles':result,'installation_action':'NONE'},sort_keys=True))
+                      'architecture':architecture,'profiles':result,
+                      'installation_action':'NONE'},sort_keys=True))
 
 
 if __name__ == '__main__':
