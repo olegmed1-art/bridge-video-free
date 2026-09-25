@@ -31,8 +31,14 @@ DO $verify$ BEGIN
  IF (SELECT rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole
             OR rolreplication OR rolbypassrls
        FROM pg_roles WHERE rolname='autopilot_native_canary') IS DISTINCT FROM false
- OR EXISTS(SELECT FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid
-           WHERE r.rolname='autopilot_native_canary')
+ -- PostgreSQL 18 grants the non-superuser CREATEROLE creator ADMIN-only
+ -- membership automatically. It confers neither inherited RPCs nor SET ROLE.
+ OR EXISTS(SELECT FROM pg_auth_members m
+           JOIN pg_roles r ON r.oid=m.roleid
+           JOIN pg_roles member ON member.oid=m.member
+           WHERE r.rolname='autopilot_native_canary'
+             AND (member.rolname<>SESSION_USER OR NOT m.admin_option
+                  OR m.inherit_option OR m.set_option))
  OR has_function_privilege('autopilot_native_canary',
       'autopilot.native_cli_reserve(uuid,jsonb,text)','EXECUTE')
  OR has_function_privilege('autopilot_native_canary',
