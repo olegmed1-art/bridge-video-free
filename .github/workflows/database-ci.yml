@@ -172,6 +172,13 @@ jobs:
           set -euo pipefail
           psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/fixtures/native_cli_runtime_acl.sql
 
+      - name: Rehearse native CLI grant delta and rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$ADMIN_DATABASE_URL" = "postgresql://postgres:postgres@localhost:5432/bridge_school_ci"
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/fixtures/native_cli_grant_rollback.sql
+
       - name: Verify parallel intake rollback with registered work
         shell: bash
         run: |
