@@ -1,6 +1,7 @@
 """Concurrent native begin on a disposable local CI database clone."""
 from concurrent.futures import ThreadPoolExecutor
 import os
+import secrets
 import threading
 
 import psycopg
@@ -9,6 +10,8 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
 CLONE = 'bridge_school_ci_native_canary'
+ROLE = 'bridge_ci_native_canary'
+BRANCH = 'codex/ci-native-canary'
 
 
 def local_dsn(name, expected_user):
@@ -49,24 +52,74 @@ def fixture(dsn):
             dispatch_id,target_pr,expected_head_sha,expires_at)
             SELECT dispatch_id,target_pr,expected_head_sha,clock_timestamp()+interval '10 minutes'
             FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s""", (dispatch,))
+    return dispatch, assignment
+
+
+def grant_limited_role(owner_dsn):
+    with psycopg.connect(owner_dsn) as connection:
+        connection.execute(sql.SQL('GRANT USAGE ON SCHEMA autopilot TO {}').format(sql.Identifier(ROLE)))
+        for signature in (
+            'native_cli_reserve_canary(uuid,jsonb,text)',
+            'native_cli_snapshot(uuid)',
+            'native_cli_begin_canary(jsonb)',
+            'native_cli_canary_current(jsonb)',
+            'native_cli_ack(jsonb,text,text)',
+            'native_cli_finish(jsonb,text,jsonb)',
+        ):
+            connection.execute(sql.SQL('GRANT EXECUTE ON FUNCTION autopilot.{} TO {}').format(
+                sql.SQL(signature), sql.Identifier(ROLE)))
+
+
+def reserve_as_limited_role(dsn, dispatch, assignment):
+    with psycopg.connect(dsn) as connection:
+        assert connection.execute('SELECT session_user').fetchone()[0] == ROLE
+        for signature in ('native_cli_reserve(uuid,jsonb,text)', 'native_cli_begin(jsonb)'):
+            assert connection.execute('SELECT has_function_privilege(%s,%s)',
+                                      (ROLE, f'autopilot.{signature}')).fetchone()[0] is False
+        assert connection.execute('SELECT has_table_privilege(%s,%s,%s)',
+                                  (ROLE, 'autopilot.native_cli_receipt', 'INSERT')).fetchone()[0] is False
         reserved = connection.execute('SELECT autopilot.native_cli_reserve_canary(%s,%s,%s)',
-                                      (dispatch, Jsonb(assignment), 'codex/ci-native-canary')).fetchone()[0]
-    assert reserved['state'] == 'RESERVED'
-    return dispatch, reserved['request']
+                                      (dispatch, Jsonb(assignment), BRANCH)).fetchone()[0]
+        assert reserved['state'] == 'RESERVED'
+        assert connection.execute('SELECT autopilot.native_cli_snapshot(%s)',
+                                  (dispatch,)).fetchone()[0] == reserved
+        return reserved['request']
 
 
 def main():
     owner = local_dsn('DATABASE_URL', 'bridge_ci_owner')
     admin = local_dsn('ADMIN_DATABASE_URL', 'postgres')
     cloned = make_conninfo(owner, dbname=CLONE)
+    password = secrets.token_urlsafe(32)
     with psycopg.connect(admin, autocommit=True) as root:
         root.execute(sql.SQL('CREATE DATABASE {} TEMPLATE bridge_school_ci').format(sql.Identifier(CLONE)))
     try:
-        dispatch, request = fixture(cloned)
+        with psycopg.connect(admin, autocommit=True) as root:
+            root.execute(sql.SQL('CREATE ROLE {} LOGIN PASSWORD {}').format(
+                sql.Identifier(ROLE), sql.Literal(password)))
+        limited = make_conninfo(cloned, user=ROLE, password=password)
+        dispatch, assignment = fixture(cloned)
+        grant_limited_role(cloned)
+        request = reserve_as_limited_role(limited, dispatch, assignment)
+        with psycopg.connect(cloned) as connection:
+            connection.execute("""UPDATE autopilot.native_cli_single_canary_permit
+                SET expires_at=clock_timestamp()-interval '1 second' WHERE dispatch_id=%s""", (dispatch,))
+        with psycopg.connect(limited) as connection:
+            assert connection.execute('SELECT autopilot.native_cli_canary_current(%s)',
+                                      (Jsonb(request),)).fetchone()[0] is False
+            try:
+                connection.execute('SELECT autopilot.native_cli_begin_canary(%s)', (Jsonb(request),))
+            except psycopg.errors.RaiseException as error:
+                assert 'NATIVE_CANARY_PERMIT_INVALID' in str(error)
+            else:
+                raise AssertionError('EXPIRED_CANARY_BEGIN_ALLOWED')
+        with psycopg.connect(cloned) as connection:
+            connection.execute("""UPDATE autopilot.native_cli_single_canary_permit
+                SET expires_at=clock_timestamp()+interval '10 minutes' WHERE dispatch_id=%s""", (dispatch,))
         barrier = threading.Barrier(6)
 
         def begin(_):
-            with psycopg.connect(cloned, options='-c statement_timeout=10000') as connection:
+            with psycopg.connect(limited, options='-c statement_timeout=10000') as connection:
                 barrier.wait(timeout=8)
                 try:
                     return connection.execute('SELECT autopilot.native_cli_begin_canary(%s)',
@@ -87,12 +140,14 @@ def main():
             assert state == (True, True), state
             connection.execute('UPDATE autopilot.native_cli_single_canary_permit SET revoked=true WHERE dispatch_id=%s',
                                (dispatch,))
+        with psycopg.connect(limited) as connection:
             assert connection.execute('SELECT autopilot.native_cli_canary_current(%s)',
                                       (Jsonb(request),)).fetchone()[0] is False
-        print('native one-shot parallel begin: PASS')
+        print('native one-shot restricted-login parallel begin: PASS')
     finally:
         with psycopg.connect(admin, autocommit=True) as root:
             root.execute(sql.SQL('DROP DATABASE {} WITH (FORCE)').format(sql.Identifier(CLONE)))
+            root.execute(sql.SQL('DROP ROLE IF EXISTS {}').format(sql.Identifier(ROLE)))
 
 
 if __name__ == '__main__':
