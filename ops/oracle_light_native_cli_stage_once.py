@@ -116,6 +116,24 @@ def verify_package(install):
 
 def diagnose():
     """Read-only fixed-code report for a blocked install; never execute npm."""
+    def parent_failure(path,uid):
+        try:
+            resolved=path.resolve(strict=True)
+            for chain,parents in (('source',path.parents),('resolved',resolved.parents)):
+                for index,parent in enumerate(parents):
+                    if parent==Path('/'):
+                        continue
+                    info=parent.lstat()
+                    reason=('NOT_DIRECTORY' if not stat.S_ISDIR(info.st_mode) else
+                            'OWNER_OTHER' if info.st_uid not in (0,uid) else
+                            'WORLD_WRITABLE' if info.st_mode & 0o002 else
+                            'GROUP_WRITABLE' if info.st_mode & 0o020 else None)
+                    if reason:
+                        return {'chain':chain,'index':index,'reason':reason}
+        except OSError:
+            return {'reason':'METADATA_UNAVAILABLE'}
+        return {'reason':'NO_UNSAFE_PARENT_FOUND'}
+
     def result(check):
         try:
             value=check()
@@ -135,12 +153,15 @@ def diagnose():
     parents={name:result(lambda path=path:
                'SAFE' if check_parent(path,uid) else 'MISSING')
              for name,path in (('home',HOME),('local',HOME/'.local'),('share',PARENT))}
+    node=result(lambda: (check_binary(NODE,uid),'SAFE')[1])
+    npm=result(lambda: (check_binary(NPM,uid),'SAFE')[1])
     return {'audit':'NATIVE_CLI_STAGE_DIAGNOSTIC','guard':guard,
             'parents':parents,
             'target':result(lambda: 'PRESENT' if TARGET.exists() or TARGET.is_symlink()
                             else 'ABSENT'),
-            'node':result(lambda: (check_binary(NODE,uid),'SAFE')[1]),
-            'npm':result(lambda: (check_binary(NPM,uid),'SAFE')[1]),
+            'node':node,'npm':npm,
+            'node_parent_failure':parent_failure(NODE,uid) if node=='UNSAFE_INSTALL_PARENT' else None,
+            'npm_parent_failure':parent_failure(NPM,uid) if npm=='UNSAFE_INSTALL_PARENT' else None,
             'installation_action':'NONE'}
 
 

@@ -130,6 +130,27 @@ class StageTests(unittest.TestCase):
         diagnostic.assert_called_once_with()
         install.assert_not_called()
 
+    def test_diagnose_classifies_first_unsafe_runtime_parent_without_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home=Path(temp)
+            bin_dir=home/'.nvm/versions/node/v22.23.2/bin'
+            bin_dir.mkdir(parents=True)
+            for name in ('node','npm'):
+                runtime=bin_dir/name
+                runtime.write_bytes(b'fixture')
+                runtime.chmod(0o755)
+            bin_dir.chmod(0o775)
+            with patch.multiple(stage,HOME=home,PARENT=home/'.local/share',
+                                TARGET=home/'.local/share/slavik-codex',
+                                NODE=bin_dir/'node',NPM=bin_dir/'npm'), patch.object(
+                                    stage,'require_host'):
+                report=stage.diagnose()
+        self.assertEqual(report['node'],'UNSAFE_INSTALL_PARENT')
+        self.assertEqual(report['node_parent_failure'],
+                         {'chain':'source','index':0,'reason':'GROUP_WRITABLE'})
+        self.assertEqual(report['npm_parent_failure'],report['node_parent_failure'])
+        self.assertNotIn(str(home),str(report))
+
     def test_diagnose_missing_install_parent_does_not_create_it(self):
         with tempfile.TemporaryDirectory() as temp:
             home=Path(temp)
