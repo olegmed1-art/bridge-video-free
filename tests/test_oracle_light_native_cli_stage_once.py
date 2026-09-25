@@ -114,6 +114,38 @@ class StageTests(unittest.TestCase):
             self.assertFalse(source.exists())
             self.assertTrue(target.is_dir())
 
+    def test_diagnose_disk_guard_is_read_only(self):
+        with patch.object(stage,'require_host',side_effect=ValueError('DISK_CAPACITY_LOW')), patch.object(
+                stage,'check_binary') as binary, patch.object(stage.subprocess,'run') as run:
+            result=stage.diagnose()
+        self.assertEqual(result,{'audit':'NATIVE_CLI_STAGE_DIAGNOSTIC',
+                                  'guard':'DISK_CAPACITY_LOW','installation_action':'NONE'})
+        binary.assert_not_called()
+        run.assert_not_called()
+
+    def test_entry_diagnose_never_calls_install(self):
+        with patch.object(stage,'diagnose',return_value={'audit':'READ_ONLY'}) as diagnostic, patch.object(
+                stage,'install') as install:
+            self.assertEqual(stage.entry(['--diagnose']),{'audit':'READ_ONLY'})
+        diagnostic.assert_called_once_with()
+        install.assert_not_called()
+
+    def test_diagnose_missing_install_parent_does_not_create_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home=Path(temp)
+            parent=home/'.local/share'
+            target=parent/'slavik-codex'
+            with patch.multiple(stage,HOME=home,PARENT=parent,TARGET=target), patch.object(
+                    stage,'require_host'), patch.object(stage,'check_binary'), patch.object(
+                    stage.subprocess,'run') as run:
+                result=stage.diagnose()
+            self.assertEqual(result['parents'],{'home':'SAFE','local':'MISSING','share':'MISSING'})
+            self.assertEqual(result['target'],'ABSENT')
+            self.assertEqual(result['node'],'SAFE')
+            self.assertEqual(result['npm'],'SAFE')
+            self.assertFalse((home/'.local').exists())
+            run.assert_not_called()
+
 
 if __name__=='__main__':
     unittest.main()
