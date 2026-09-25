@@ -95,10 +95,41 @@ class RecoveryContract(unittest.TestCase):
         remote.verify_process_environment({b'AUTOPILOT_DATABASE_URL':b'candidate',
                                            b'AUTOPILOT_ADMISSION_MODE':b'HOLD'},'candidate')
 
+    def test_waits_for_same_process_to_exec_before_checking_environment(self):
+        initial={'MainPID':'123','WorkingDirectory':'/opt/test-release','NRestarts':'0'}
+        ready=b'AUTOPILOT_DATABASE_URL=candidate\0AUTOPILOT_ADMISSION_MODE=HOLD\0'
+        with patch.object(remote,'service',side_effect=lambda:dict(initial)), \
+             patch.object(remote.Path,'read_bytes',side_effect=[b'',ready]), \
+             patch.object(remote.Path,'resolve',return_value=remote.Path('/opt/test-release')), \
+             patch.object(remote.time,'sleep') as sleeping:
+            remote.wait_for_held_process(initial,'candidate')
+        sleeping.assert_called_once_with(0.1)
+
+    def test_wait_fails_closed_if_process_changes_before_exec(self):
+        initial={'MainPID':'123','WorkingDirectory':'/opt/test-release'}
+        changed={**initial,'MainPID':'124'}
+        with patch.object(remote,'service',side_effect=[initial,changed]), \
+             patch.object(remote.Path,'read_bytes',return_value=b''), \
+             patch.object(remote.Path,'resolve',return_value=remote.Path('/opt/test-release')), \
+             patch.object(remote.time,'sleep'):
+            with self.assertRaisesRegex(remote.Blocked,'POST_START_PROCESS_CHANGED'):
+                remote.wait_for_held_process(initial,'candidate')
+
+    def test_readiness_timeout_has_fixed_secret_free_code(self):
+        initial={'MainPID':'123','WorkingDirectory':'/opt/test-release'}
+        with patch.object(remote,'service',side_effect=lambda:dict(initial)), \
+             patch.object(remote.Path,'read_bytes',return_value=b''), \
+             patch.object(remote.Path,'resolve',return_value=remote.Path('/opt/test-release')), \
+             patch.object(remote.time,'sleep') as sleeping:
+            with self.assertRaisesRegex(remote.Blocked,'^POST_START_BOTH_DRIFT$'):
+                remote.wait_for_held_process(initial,'candidate')
+        self.assertEqual(sleeping.call_count,50)
+
     def test_stopped_recovery_rolls_back_each_mutation_failure(self):
         for boundary in ('env_write','start','process_env','login'):
             with self.subTest(boundary=boundary):
-                state={'running':False,'env':b'old','drop':b'HOLD','failed':False,'stop_calls':0,'MainPID':'123'}
+                state={'running':False,'env':b'old','drop':b'HOLD','failed':False,'stop_calls':0,
+                       'MainPID':'123','NRestarts':'0'}
                 def run(command,*args):
                     if command=='start':
                         if boundary=='start' and not state['failed']:
@@ -121,7 +152,7 @@ class RecoveryContract(unittest.TestCase):
                 def validate(st,mode,active):
                     self.assertEqual(st['running'],active)
                     self.assertEqual(mode,'HOLD')
-                def observed(*args):
+                def ready(*args):
                     if boundary=='process_env':
                         raise remote.Blocked('POST_START_DATABASE_DRIFT')
                 with patch.object(remote,'run',side_effect=run),patch.object(remote,'atomic',side_effect=atomic), \
@@ -129,8 +160,8 @@ class RecoveryContract(unittest.TestCase):
                      patch.object(remote,'validate_state',side_effect=validate), \
                      patch.object(remote,'check_login',side_effect=login), \
                      patch.object(remote,'env_values',return_value={'AUTOPILOT_DATABASE_URL':'candidate'}), \
-                     patch.object(remote,'verify_process_environment',side_effect=observed), \
-                     patch.object(remote.Path,'read_bytes',return_value=b'AUTOPILOT_DATABASE_URL=candidate\0AUTOPILOT_ADMISSION_MODE=HOLD\0'):
+                     patch.object(remote,'wait_for_held_process',side_effect=ready), \
+                     patch.object(remote.time,'sleep'):
                     with self.assertRaises(Exception):
                         remote.transition_stopped(b'HOLD',b'old',b'new','candidate')
                 self.assertFalse(state['running'])
