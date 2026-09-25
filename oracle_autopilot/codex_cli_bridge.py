@@ -156,32 +156,68 @@ def health():
     return {'state': 'CLI_AUTH_READY' if ready else 'CLI_AUTH_REQUIRED', 'profile': PROFILE}
 
 
-def lookup(request):
+def validate_provider_binding(binding):
+    if binding is None:
+        return
+    if (type(binding) is not dict
+            or set(binding) != {'profile', 'environment_id', 'repository'}
+            or binding['profile'] != 'light'
+            or binding['repository'] != 'olegmed1-art/bridge-video-free'
+            or not isinstance(binding['environment_id'], str)
+            or binding['environment_id'].casefold() == 'bridge-video-free'
+            or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', binding['environment_id'])):
+        raise ValueError('PROVIDER_BINDING_INVALID')
+
+
+def _check_binding(record, binding):
+    # Both directions fail closed: legacy callers cannot consume bound journals,
+    # and a bound provider cannot adopt an old account/environment-less journal.
+    validate_provider_binding(binding)
+    if ((binding is None and 'provider_binding' in record)
+            or (binding is not None and 'provider_binding' not in record)
+            or canonical(record.get('provider_binding')) != canonical(binding)):
+        raise ValueError('PROVIDER_BINDING_CONFLICT')
+
+
+def lookup(request, *, state_dir=None, binding=None):
+    validate_provider_binding(binding)
+    if binding is not None and state_dir is None:
+        raise ValueError('BOUND_PROVIDER_CONTEXT_REQUIRED')
     request = validate_request(request)
-    path = STATE / (request['dispatch_id']+'.json')
+    state_dir = STATE if state_dir is None else state_dir
+    path = state_dir / (request['dispatch_id']+'.json')
     if not path.exists():
         return None
     prior = parse(path.read_text())
-    if prior['request'] != request:
+    _check_binding(prior, binding)
+    if canonical(prior['request']) != canonical(request):
         raise ValueError('DISPATCH_REPLAY_CONFLICT')
     return {k:v for k,v in prior.items() if k != 'request'}
 
 
-def submit(request):
+def submit(request, *, state_dir=None, binding=None, runner=None):
+    validate_provider_binding(binding)
     request = validate_request(request)
-    STATE.mkdir(parents=True, mode=0o700, exist_ok=True)
-    path = STATE / (request['dispatch_id']+'.json')
-    with (STATE / 'submit.lock').open('a') as lock:
+    if binding is not None and (state_dir is None or runner is None):
+        raise ValueError('BOUND_PROVIDER_CONTEXT_REQUIRED')
+    state_dir = STATE if state_dir is None else state_dir
+    runner = run_cli if runner is None else runner
+    environment_id = 'bridge-video-free' if binding is None else binding['environment_id']
+    state_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+    path = state_dir / (request['dispatch_id']+'.json')
+    with (state_dir / 'submit.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        prior = lookup(request)
+        prior = lookup(request, state_dir=state_dir, binding=binding)
         if prior is not None:
             return prior
         prompt = prompt_for(request)
         record = {'request':request,'state':'SUBMISSION_UNKNOWN','prompt_sha256':digest(prompt)}
+        if binding is not None:
+            record['provider_binding'] = parse(canonical(binding))
         # Persist intent BEFORE the first external creation call.
         save(path,record)
         try:
-            process = run_cli(['cloud','exec','--env','bridge-video-free','--branch',request['branch'],
+            process = runner(['cloud','exec','--env',environment_id,'--branch',request['branch'],
                                '--attempts','1','-'],prompt)
             match = TASK_URL.fullmatch(process.stdout.strip()) if process.returncode==0 else None
             if match:
@@ -227,27 +263,45 @@ def extract_report(patch, expected_path):
     return report, patch.replace(block,'',1)
 
 
-def collect(dispatch_id):
+def collect(dispatch_id, *, state_dir=None, binding=None, runner=None):
+    validate_provider_binding(binding)
     if not UUID.fullmatch(dispatch_id):
         raise ValueError('DISPATCH_ID_INVALID')
-    with (STATE/(dispatch_id+'.collect.lock')).open('a') as lock:
+    if binding is not None and (state_dir is None or runner is None):
+        raise ValueError('BOUND_PROVIDER_CONTEXT_REQUIRED')
+    state_dir = STATE if state_dir is None else state_dir
+    with (state_dir/(dispatch_id+'.collect.lock')).open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        result_path=STATE/(dispatch_id+'.result.json')
+        record = parse((state_dir/(dispatch_id+'.json')).read_text())
+        _check_binding(record, binding)
+        request = validate_request(record['request'])
+        if request['dispatch_id'] != dispatch_id:
+            raise ValueError('DISPATCH_REPLAY_CONFLICT')
+        result_path=state_dir/(dispatch_id+'.result.json')
         if result_path.exists():
             return parse(result_path.read_text())
-        result=_collect(dispatch_id)
+        result=_collect(dispatch_id, state_dir=state_dir, binding=binding, runner=runner)
         if result['state'] in ('RESULT_RETRIEVED','PROVIDER_TERMINAL_FAILURE','RESULT_REJECTED'):
             save(result_path,result)
         return result
 
 
-def _collect(dispatch_id):
-    path=STATE/(dispatch_id+'.json')
+def _collect(dispatch_id, *, state_dir=None, binding=None, runner=None):
+    validate_provider_binding(binding)
+    if binding is not None and (state_dir is None or runner is None):
+        raise ValueError('BOUND_PROVIDER_CONTEXT_REQUIRED')
+    state_dir = STATE if state_dir is None else state_dir
+    runner = run_cli if runner is None else runner
+    path=state_dir/(dispatch_id+'.json')
     record=parse(path.read_text())
+    _check_binding(record, binding)
+    request = validate_request(record['request'])
+    if request['dispatch_id'] != dispatch_id:
+        raise ValueError('DISPATCH_REPLAY_CONFLICT')
     if record['state']!='SUBMITTED':
         return {k:v for k,v in record.items() if k!='request'}
     task_id=record['provider_task_id']
-    status=run_cli(['cloud','status',task_id])
+    status=runner(['cloud','status',task_id])
     marker=status.stdout.partition('\n')[0].partition(']')[0]+']'
     if status.returncode != 0:
         # v0.157.0 exits 1 for every non-READY TaskSummary. Require its entire
@@ -275,7 +329,7 @@ def _collect(dispatch_id):
     if marker!='[READY]':
         state='WAITING_PROVIDER' if marker in ('[RUNNING]','[PENDING]','[QUEUED]') else 'PROVIDER_STATUS_UNKNOWN'
         return {'state':state,'provider_task_id':task_id}
-    diff=run_cli(['cloud','diff',task_id,'--attempt','1'])
+    diff=runner(['cloud','diff',task_id,'--attempt','1'])
     if diff.returncode!=0:
         return {'state':'RESULT_UNAVAILABLE','provider_task_id':task_id}
     try:

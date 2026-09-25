@@ -8,10 +8,12 @@ on:
       - 'oracle_autopilot/codex_cli_delivery.py'
       - 'oracle_autopilot/codex_cli_queue.py'
       - 'oracle_autopilot/light_native_adapter.py'
+      - 'oracle_autopilot/light_native_provider.py'
       - 'tests/test_oracle_autopilot_codex_cli_bridge.py'
       - 'tests/test_oracle_autopilot_codex_cli_delivery.py'
       - 'tests/test_oracle_autopilot_codex_cli_queue.py'
       - 'tests/test_oracle_autopilot_light_native_adapter.py'
+      - 'tests/test_oracle_autopilot_light_native_provider.py'
       - 'tests/test_worker_dsn_contract.py'
       - 'tests/test_health_dsn_contract.py'
       - '.github/workflows/database-ci.yml'
@@ -26,10 +28,12 @@ on:
       - 'oracle_autopilot/codex_cli_delivery.py'
       - 'oracle_autopilot/codex_cli_queue.py'
       - 'oracle_autopilot/light_native_adapter.py'
+      - 'oracle_autopilot/light_native_provider.py'
       - 'tests/test_oracle_autopilot_codex_cli_bridge.py'
       - 'tests/test_oracle_autopilot_codex_cli_delivery.py'
       - 'tests/test_oracle_autopilot_codex_cli_queue.py'
       - 'tests/test_oracle_autopilot_light_native_adapter.py'
+      - 'tests/test_oracle_autopilot_light_native_provider.py'
       - 'tests/test_worker_dsn_contract.py'
       - 'tests/test_health_dsn_contract.py'
       - '.github/workflows/database-ci.yml'
@@ -92,7 +96,8 @@ jobs:
             tests/test_oracle_autopilot_codex_cli_bridge.py \
             tests/test_oracle_autopilot_codex_cli_delivery.py \
             tests/test_oracle_autopilot_codex_cli_queue.py \
-            tests/test_oracle_autopilot_light_native_adapter.py
+            tests/test_oracle_autopilot_light_native_adapter.py \
+            tests/test_oracle_autopilot_light_native_provider.py
 
       - name: Verify bounded Autopilot next steps
         run: |
