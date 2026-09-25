@@ -24,12 +24,15 @@ class ReadinessTests(unittest.TestCase):
                 probe.os, 'access', return_value=True), patch.object(
                 probe.pwd, 'getpwnam', return_value=SimpleNamespace(pw_gid=1000, pw_uid=1000)), patch.object(
                 probe.subprocess, 'run', return_value=SimpleNamespace(
-                    returncode=0, stdout='Logged in using ChatGPT\nPRIVATE_ACCOUNT', stderr='PRIVATE_ERROR')):
+                    returncode=0, stdout='PRIVATE_ACCOUNT',
+                    stderr='Logged in using ChatGPT\nPRIVATE_ERROR')) as run:
             with contextlib.redirect_stdout(output):
                 state = probe.profile_status('ubuntu', Path('/cli'), Path('/home/ubuntu'),
                                              Path('/home/ubuntu/.codex'))
         self.assertEqual(state, 'CLI_AUTH_READY')
         self.assertEqual(output.getvalue(), '')
+        self.assertEqual(run.call_args.kwargs['env']['PATH'],
+                         '/home/ubuntu/.nvm/versions/node/v22.23.2/bin:/usr/local/bin:/usr/bin:/bin')
 
     def test_non_hold_prevents_any_cli_call(self):
         output = io.StringIO()
