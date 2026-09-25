@@ -123,6 +123,13 @@ class StageTests(unittest.TestCase):
         binary.assert_not_called()
         run.assert_not_called()
 
+    def test_entry_diagnose_never_calls_install(self):
+        with patch.object(stage,'diagnose',return_value={'audit':'READ_ONLY'}) as diagnostic, patch.object(
+                stage,'install') as install:
+            self.assertEqual(stage.entry(['--diagnose']),{'audit':'READ_ONLY'})
+        diagnostic.assert_called_once_with()
+        install.assert_not_called()
+
     def test_diagnose_missing_install_parent_does_not_create_it(self):
         with tempfile.TemporaryDirectory() as temp:
             home=Path(temp)
