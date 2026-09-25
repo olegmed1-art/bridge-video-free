@@ -26,7 +26,7 @@ class ProviderTarget:
         if (self.profile != 'light'
                 or self.repository != 'olegmed1-art/bridge-video-free'
                 or not isinstance(self.environment_id, str)
-                or self.environment_id == 'bridge-video-free'
+                or self.environment_id.casefold() == 'bridge-video-free'
                 or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', self.environment_id)):
             raise ValueError('LIGHT_PROVIDER_TARGET_INVALID')
 

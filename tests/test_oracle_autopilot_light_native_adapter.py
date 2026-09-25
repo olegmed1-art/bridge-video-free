@@ -232,6 +232,8 @@ def test_caller_and_gate_mutation_do_not_change_captured_request(rig):
 
 @pytest.mark.parametrize('kwargs', [dict(profile='ubuntu'), dict(repository='other/repo'),
                                   dict(environment_id='bridge-video-free'),
+                                  dict(environment_id='BRIDGE-VIDEO-FREE'),
+                                  dict(environment_id='Bridge-Video-Free'),
                                   dict(environment_id=''), dict(environment_id='bad id')])
 def test_invalid_provider_target_rejected(kwargs):
     fields = dict(environment_id='a'*32)
