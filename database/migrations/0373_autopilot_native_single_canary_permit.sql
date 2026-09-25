@@ -102,7 +102,7 @@ END $$;
 -- final read remains possible: SQL begin is the irreversible one-shot boundary.
 -- Submitted tasks may still be collected and closed on their original host.
 CREATE FUNCTION autopilot.native_cli_canary_current(p_request jsonb)
-RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog,autopilot AS $$
+RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog,autopilot AS $$
 DECLARE id uuid; receipt autopilot.native_cli_receipt;
  permit autopilot.native_cli_single_canary_permit;
 BEGIN
