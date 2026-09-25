@@ -8,8 +8,12 @@ BEGIN
  OR (SELECT rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole
             OR rolreplication OR rolbypassrls
        FROM pg_roles WHERE rolname='autopilot_native_canary') IS DISTINCT FROM false
- OR EXISTS(SELECT FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid
-           WHERE r.rolname='autopilot_native_canary') THEN
+ OR EXISTS(SELECT FROM pg_auth_members m
+           JOIN pg_roles r ON r.oid=m.roleid
+           JOIN pg_roles member ON member.oid=m.member
+           WHERE r.rolname='autopilot_native_canary'
+             AND (member.rolname<>SESSION_USER OR NOT m.admin_option
+                  OR m.inherit_option OR m.set_option)) THEN
   RAISE EXCEPTION 'NATIVE_CAPABILITY_NOT_DORMANT';
  END IF;
  FOREACH signature IN ARRAY ARRAY[
