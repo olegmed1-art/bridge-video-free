@@ -114,6 +114,36 @@ def verify_package(install):
         raise ValueError('PACKAGE_NATIVE_INVALID')
 
 
+def diagnose():
+    """Read-only fixed-code report for a blocked install; never execute npm."""
+    def result(check):
+        try:
+            value=check()
+            return value if value in ('SAFE','MISSING','ABSENT','PRESENT') else 'SAFE'
+        except ValueError as exc:
+            allowed={'HOST_OR_IDENTITY_INVALID','NOT_ACTIVE_HOLD','DISK_CAPACITY_LOW',
+                     'UNSAFE_INSTALL_PARENT','RUNTIME_OUTSIDE_NVM','RUNTIME_UNTRUSTED'}
+            return str(exc) if str(exc) in allowed else 'CHECK_FAILED'
+        except OSError:
+            return 'CHECK_FAILED'
+
+    guard=result(lambda: (require_host(), 'SAFE')[1])
+    if guard!='SAFE':
+        return {'audit':'NATIVE_CLI_STAGE_DIAGNOSTIC','guard':guard,
+                'installation_action':'NONE'}
+    uid=os.geteuid()
+    parents={name:result(lambda path=path:
+               'SAFE' if check_parent(path,uid) else 'MISSING')
+             for name,path in (('home',HOME),('local',HOME/'.local'),('share',PARENT))}
+    return {'audit':'NATIVE_CLI_STAGE_DIAGNOSTIC','guard':guard,
+            'parents':parents,
+            'target':result(lambda: 'PRESENT' if TARGET.exists() or TARGET.is_symlink()
+                            else 'ABSENT'),
+            'node':result(lambda: (check_binary(NODE,uid),'SAFE')[1]),
+            'npm':result(lambda: (check_binary(NPM,uid),'SAFE')[1]),
+            'installation_action':'NONE'}
+
+
 def install():
     require_host()
     uid=os.geteuid()
@@ -153,7 +183,12 @@ def install():
 
 if __name__=='__main__':
     try:
-        print(json.dumps(install(),sort_keys=True))
+        if sys.argv[1:]==['--diagnose']:
+            print(json.dumps(diagnose(),sort_keys=True))
+        elif len(sys.argv)==1:
+            print(json.dumps(install(),sort_keys=True))
+        else:
+            raise ValueError('ARGUMENT_INVALID')
     except BaseException:
         print(json.dumps({'audit':'BLOCKED','code':'CLI_STAGE_FAILED'}))
         sys.exit(2)
