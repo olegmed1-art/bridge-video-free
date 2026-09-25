@@ -14,6 +14,7 @@ import shlex
 import stat
 import subprocess
 import sys
+import time
 from urllib.parse import quote, unquote, urlsplit
 
 UNIT = 'school-autopilot-production-light.service'
@@ -49,7 +50,7 @@ def read_file(path, mode, limit=262144):
 
 def service():
     keys = ('ActiveState', 'SubState', 'MainPID', 'InvocationID', 'WorkingDirectory',
-            'User', 'Group', 'Environment', 'EnvironmentFiles', 'ExecStart',
+            'NRestarts', 'User', 'Group', 'Environment', 'EnvironmentFiles', 'ExecStart',
             'FragmentPath', 'DropInPaths', 'NeedDaemonReload')
     raw = subprocess.run(['systemctl', 'show', UNIT, *['-p'+key for key in keys]],
                          capture_output=True, check=True, text=True, timeout=15).stdout
@@ -215,17 +216,41 @@ def verify_process_environment(actual,new):
     require(database_ok, 'POST_START_DATABASE_DRIFT')
     require(admission_ok, 'POST_START_ADMISSION_DRIFT')
 
+def wait_for_held_process(initial,new):
+    # Type=simple reports start after fork and before execve. Observe the
+    # same invocation and PID until its real process environment and cwd load.
+    for attempt in range(51):
+        require(service()==initial, 'POST_START_PROCESS_CHANGED')
+        try:
+            observed=Path('/proc/'+initial['MainPID']+'/environ').read_bytes()
+            actual=dict(value.split(b'=',1) for value in observed.split(b'\0') if b'=' in value)
+            cwd_ok=Path('/proc/'+initial['MainPID']+'/cwd').resolve()==Path(initial['WorkingDirectory'])
+        except OSError:
+            actual={}
+            cwd_ok=False
+        if actual.get(b'AUTOPILOT_DATABASE_URL')==new.encode() and \
+                actual.get(b'AUTOPILOT_ADMISSION_MODE')==b'HOLD' and cwd_ok:
+            require(service()==initial, 'POST_START_PROCESS_CHANGED')
+            return
+        if attempt==50:
+            verify_process_environment(actual,new)
+            require(cwd_ok, 'POST_START_CODE_PATH_DRIFT')
+        time.sleep(0.1)
+
 def transition_stopped(hold_drop, original, replacement, new):
     try:
+        before_restarts=service()['NRestarts']
         atomic(ENV,replacement,0o600,'env')
         require(read_file(ENV,0o600)==replacement,'ENV_WRITE_FAILED')
         check_login(env_values(replacement)['AUTOPILOT_DATABASE_URL'])
         run('start',UNIT)
         after=service()
         validate_state(after,'HOLD',True)
-        observed=Path('/proc/'+after['MainPID']+'/environ').read_bytes()
-        actual=dict(value.split(b'=',1) for value in observed.split(b'\0') if b'=' in value)
-        verify_process_environment(actual,new)
+        require(after['NRestarts']==before_restarts,'POST_START_PROCESS_CHANGED')
+        wait_for_held_process(after,new)
+        for _ in range(10):
+            time.sleep(0.5)
+            require(service()==after,'POST_START_PROCESS_CHANGED')
         check_login(new)
     except BaseException:
         try:
@@ -279,7 +304,8 @@ if __name__=='__main__':
           'ENV_DRIFT','ENV_SYNTAX','DSN_DRIFT','DSN_FORMAT_DRIFT','PASSWORD_INVALID',
           'PASSWORD_UNCHANGED','ENV_REWRITE_DRIFT','FILE_DRIFT','FILE_SYMLINK',
           'ENV_WRITE_FAILED','POST_START_DRIFT','POST_START_BOTH_DRIFT',
-          'POST_START_DATABASE_DRIFT','POST_START_ADMISSION_DRIFT','ROLLBACK_UNVERIFIED',
+          'POST_START_DATABASE_DRIFT','POST_START_ADMISSION_DRIFT',
+          'POST_START_CODE_PATH_DRIFT','POST_START_PROCESS_CHANGED','ROLLBACK_UNVERIFIED',
           'CONTAINMENT_UNVERIFIED',
           'DROP_CHANGED_DURING_RECOVERY'} else 'UNCLASSIFIED'}))
         sys.exit(2)
