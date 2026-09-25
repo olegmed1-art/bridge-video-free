@@ -128,6 +128,9 @@ jobs:
           bash -n database/scripts/migrate.sh
           database/scripts/migrate.sh
 
+      - name: Verify native canary parallel begin on isolated CI clone
+        run: python database/tests/test_native_canary_concurrency.py
+
       - name: Run invariant tests
         shell: bash
         run: |

@@ -160,6 +160,17 @@ def test_only_reviewed_native_cli_adapter_launches_a_child():
         calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
                  and isinstance(n.func, ast.Attribute)
                  and isinstance(n.func.value, ast.Name) and n.func.value.id == 'subprocess']
+        if path.name == 'codex_cli_once.py':
+            assert len(calls) == 1 and calls[0].func.attr == 'run'
+            call = calls[0]
+            assert ast.unparse(call.args[0]) == (
+                "['systemctl', 'show', LIGHT_UNIT, '-pActiveState', '-pSubState', '-pEnvironment']")
+            keywords = {k.arg: k.value for k in call.keywords}
+            assert 'shell' not in keywords
+            assert ast.unparse(keywords['env']) == (
+                "{'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}")
+            assert ast.unparse(keywords['timeout']) == '15'
+            continue
         if path.name != 'codex_cli_bridge.py':
             assert not calls
             continue

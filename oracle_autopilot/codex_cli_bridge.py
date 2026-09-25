@@ -224,6 +224,70 @@ def extract_report(patch, expected_path):
     return report, patch.replace(block,'',1)
 
 
+def validate_repair_changes(changes, allowed):
+    # Cloud output is untrusted. A retrieved patch is never published here, but
+    # even its retained evidence must stay inside the exact assignment scope.
+    if (not isinstance(allowed,list) or not allowed or len(allowed)>16
+            or any(not isinstance(path,str) or not re.fullmatch(r'[A-Za-z0-9_./-]{1,200}',path)
+                   or path.startswith('/') or any(part in ('','.','..') for part in path.split('/'))
+                   for path in allowed) or len(set(allowed))!=len(allowed)):
+        raise ValueError('REPAIR_ALLOWLIST_INVALID')
+    if not changes.strip():
+        raise ValueError('REPAIR_DIFF_EMPTY')
+    if not changes.startswith('diff --git ') or not changes.endswith('\n'):
+        raise ValueError('REPAIR_DIFF_INVALID')
+    blocks=re.split(r'(?=^diff --git )',changes,flags=re.MULTILINE)
+    if blocks[0]:
+        raise ValueError('REPAIR_DIFF_INVALID')
+    seen=set()
+    for block in blocks[1:]:
+        lines=block.splitlines()
+        match=re.fullmatch(r'diff --git a/(.+) b/\1',lines[0])
+        if not match or match[1] not in allowed or match[1] in seen:
+            raise ValueError('REPAIR_PATH_INVALID')
+        path=match[1]
+        seen.add(path)
+        cursor=1
+        if cursor<len(lines) and re.fullmatch(r'index [0-9a-f]{7,40}\.\.[0-9a-f]{7,40}(?: 100644)?',lines[cursor]):
+            cursor+=1
+        if lines[cursor:cursor+2]!=[f'--- a/{path}',f'+++ b/{path}']:
+            raise ValueError('REPAIR_DIFF_INVALID')
+        cursor+=2
+        if cursor==len(lines) or not lines[cursor].startswith('@@ '):
+            raise ValueError('REPAIR_DIFF_INVALID')
+        old_remaining=new_remaining=None
+        old_end=new_end=-1
+        for line in lines[cursor:]:
+            if line.startswith('@@ '):
+                if old_remaining not in (None,0) or new_remaining not in (None,0):
+                    raise ValueError('REPAIR_DIFF_INVALID')
+                header=re.fullmatch(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?:.*)?',line)
+                if not header:
+                    raise ValueError('REPAIR_DIFF_INVALID')
+                old_start,new_start=int(header[1]),int(header[3])
+                old_remaining=int(header[2] or 1)
+                new_remaining=int(header[4] or 1)
+                if old_start<old_end or new_start<new_end:
+                    raise ValueError('REPAIR_DIFF_INVALID')
+                old_end=old_start+old_remaining
+                new_end=new_start+new_remaining
+            elif line=='\\ No newline at end of file':
+                continue
+            elif line.startswith(' '):
+                old_remaining-=1
+                new_remaining-=1
+            elif line.startswith('-'):
+                old_remaining-=1
+            elif line.startswith('+'):
+                new_remaining-=1
+            else:
+                raise ValueError('REPAIR_DIFF_INVALID')
+            if old_remaining<0 or new_remaining<0:
+                raise ValueError('REPAIR_DIFF_INVALID')
+        if old_remaining or new_remaining:
+            raise ValueError('REPAIR_DIFF_INVALID')
+
+
 def collect(dispatch_id):
     if not UUID.fullmatch(dispatch_id):
         raise ValueError('DISPATCH_ID_INVALID')
@@ -286,6 +350,8 @@ def validate_result(request, patch, task_id):
         raise ValueError('REPORT_EVIDENCE_INVALID')
     if request['mode']!='REPAIR' and changes.strip():
         raise ValueError('READ_ONLY_SOURCE_CHANGED')
+    if request['mode']=='REPAIR':
+        validate_repair_changes(changes,request['assignment']['task_spec_json'].get('expected_changed_files'))
     result={'state':'RESULT_RETRIEVED','provider_task_id':task_id,'report':report,
             'report_sha256':digest(canonical(report)),'patch_sha256':digest(patch),'changes':changes}
     return result
@@ -308,6 +374,11 @@ def main():
             result=submit(parse(raw))
         else:
             result=collect(args.dispatch_id)
+        if args.action=='collect' and result.get('state')=='RESULT_RETRIEVED':
+            # Raw model output stays in the mode-0600 journal; CLI stdout is
+            # routinely captured by operators and must not echo source diff.
+            result={key:result[key] for key in (
+                'state','provider_task_id','report_sha256','patch_sha256')}
         print(canonical(result))
     except Exception as error:
         # No raw subprocess/network messages or credential-bearing exceptions.

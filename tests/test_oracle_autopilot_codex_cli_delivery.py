@@ -79,6 +79,10 @@ def rig(tmp_path, monkeypatch):
             output = (f'diff --git a/{path} b/{path}\nnew file mode 100644\n'
                       f'--- /dev/null\n+++ b/{path}\n@@ -0,0 +1 @@\n+'
                       +bridge.canonical(report)+'\n')
+            if request['mode']=='REPAIR':
+                target='tools/artifact_manifest_v1.py'
+                output+=(f'diff --git a/{target} b/{target}\n'
+                         f'--- a/{target}\n+++ b/{target}\n@@ -1 +1 @@\n-old\n+new\n')
         return subprocess.CompletedProcess(args, 0, output, '')
     monkeypatch.setattr(bridge, 'run_cli', run)
     return request, Queue(request), Authority(), calls
@@ -162,6 +166,7 @@ def test_generated_repair_is_never_claimed_as_published(rig):
     request['mode'] = 'REPAIR'
     request['assignment']['can_repair'] = True
     request['assignment']['task_spec_json']['execution_mode'] = 'REPAIR'
+    request['assignment']['task_spec_json']['expected_changed_files'] = ['tools/artifact_manifest_v1.py']
     queue.row['request'] = deepcopy(request)
     result = advance(request['dispatch_id'], queue, authority)
     assert result['terminal']['result_code'] == 'TARGET_PR_NOT_UPDATED'
