@@ -156,6 +156,12 @@ jobs:
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$test_file"
           done
 
+      - name: Rehearse native CLI runtime identity and six RPC grants
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/fixtures/native_cli_runtime_acl.sql
+
       - name: Verify parallel intake rollback with registered work
         shell: bash
         run: |
