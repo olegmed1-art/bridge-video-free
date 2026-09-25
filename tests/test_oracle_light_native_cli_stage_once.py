@@ -151,6 +151,31 @@ class StageTests(unittest.TestCase):
         self.assertEqual(report['npm_parent_failure'],report['node_parent_failure'])
         self.assertNotIn(str(home),str(report))
 
+    def test_group_audit_reports_membership_without_account_names(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home=Path(temp)
+            bin_dir=home/'.nvm/versions/node/v22.23.2/bin'
+            bin_dir.mkdir(parents=True)
+            for name in ('node','npm'):
+                runtime=bin_dir/name
+                runtime.write_bytes(b'fixture')
+                runtime.chmod(0o755)
+            version=bin_dir.parent
+            version.chmod(0o775)
+            account=SimpleNamespace(pw_name='ubuntu',pw_uid=os.geteuid(),pw_gid=version.stat().st_gid)
+            with patch.multiple(stage,HOME=home,PARENT=home/'.local/share',
+                                TARGET=home/'.local/share/slavik-codex',
+                                NODE=bin_dir/'node',NPM=bin_dir/'npm'), patch.object(
+                                    stage,'require_host'), patch.object(
+                                        stage.pwd,'getpwnam',return_value=account), patch.object(
+                                            stage.pwd,'getpwall',return_value=[account]), patch.object(
+                                                stage.grp,'getgrgid',return_value=SimpleNamespace(gr_mem=['ubuntu'])):
+                report=stage.diagnose()
+        self.assertEqual(report['version_group_audit'],
+                         {'version_owner_ubuntu':True,'version_group_ubuntu_primary':True,
+                          'group_has_other_accounts':False,
+                          'access_acl':'ABSENT','default_acl':'ABSENT'})
+
     def test_diagnose_missing_install_parent_does_not_create_it(self):
         with tempfile.TemporaryDirectory() as temp:
             home=Path(temp)
