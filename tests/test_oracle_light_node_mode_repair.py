@@ -101,6 +101,13 @@ class RepairTests(unittest.TestCase):
             self.run_repair(mode=0o770)
         self.assertEqual(self.mode(), 0o775)
 
+    def test_unsafe_ancestor_index_is_reported_without_change(self):
+        self.base.chmod(0o775)
+        index = len(self.base.parts)-1
+        with self.assertRaisesRegex(RuntimeError, '^UNSAFE_ANCESTOR_'+str(index)+'$'):
+            self.run_repair()
+        self.assertEqual(self.mode(), 0o775)
+
     def test_prewrite_drift_blocks(self):
         def emit(event):
             self.events.append(event)

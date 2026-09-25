@@ -19,6 +19,7 @@ def failure_code(exc):
                'GROUP_NOT_PRIVATE','BUNDLE_TOO_LARGE','BUNDLE_KEYS','MODE',
                'LIVE_HOLD_DRIFT','DIAGNOSTIC_FAILED','DIAGNOSTIC_DRIFT','CAUSE_DRIFT',
                'EXPECTED_MODE'}
+    allowed.update('UNSAFE_ANCESTOR_' + str(i) for i in range(6))
     value = exc.args[0] if exc.args else None
     if isinstance(exc, (RuntimeError, ValueError)) and isinstance(value, str) and value in allowed:
         return value
