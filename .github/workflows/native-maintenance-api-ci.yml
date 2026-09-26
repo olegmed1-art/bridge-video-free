@@ -1,0 +1,46 @@
+name: Native maintenance workflow API
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-maintenance-api-ci.yml'
+      - 'ops/native_maintenance_workflow_api.py'
+      - 'ops/native_maintenance_workflow_pause.py'
+      - 'tests/test_native_maintenance_workflow_api.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/native-maintenance-api-ci.yml'
+      - 'ops/native_maintenance_workflow_api.py'
+      - 'ops/native_maintenance_workflow_pause.py'
+      - 'tests/test_native_maintenance_workflow_api.py'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python -m unittest discover -s tests -p 'test_native_maintenance_workflow_*.py' -v
+
+  observe:
+    needs: contract
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'olegmed1-art/bridge-video-free' && github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Read actual workflow states without disabling or enabling anything
+        env:
+          GH_WORKFLOW_READ_TOKEN: ${{ github.token }}
+        run: python -m ops.native_maintenance_workflow_api
