@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from ops import native_maintenance_owner_attest as subject
 
-URI = ('postgresql://neondb_owner:CI-only@' + subject.EXPECTED_TARGET['neon']['host']
+URI = ('postgresql://neondb_owner:synthetic-test-password@' + subject.EXPECTED_TARGET['neon']['host']
        + '/neondb?sslmode=require&channel_binding=require')
 
 
@@ -54,7 +54,7 @@ class OwnerAttestTests(unittest.TestCase):
             checks['prepare'].assert_not_called()
             checks['change'].assert_not_called()
             self.assertFalse(report['snapshot_approved'])
-            self.assertNotIn('CI-only', str(report))
+            self.assertNotIn('synthetic-test-password', str(report))
         self.assertTrue(connect.call_args.kwargs['autocommit'])
         self.assertEqual(len(conn.execute.call_args_list), 4)
 
