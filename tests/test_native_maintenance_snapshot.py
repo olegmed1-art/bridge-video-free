@@ -87,6 +87,23 @@ class SnapshotTests(unittest.TestCase):
                 snapshot.restore(payload, expected_digest, scope, parent)
             self.assertEqual(list(parent.iterdir()), [])
 
+    def test_oversize_valid_journal_rejected_before_restore_output(self):
+        data = self.capture()
+        value = json.loads(data)
+        rows = value['journals']['operation']
+        previous = digest(json.loads(rows[-1]))
+        for _ in range(18):
+            record = {'previous': previous, 'event': {'payload': 'x' * 250000}}
+            rows.append(encoded(record).decode())
+            previous = digest(record)
+        data = encoded(value)
+        self.assertLess(len(data), snapshot.MAX_BYTES)
+        parent = Path(self.tmp.name) / 'empty'
+        parent.mkdir(mode=0o700)
+        with self.assertRaisesRegex(Refused, 'JOURNAL_BYTES'):
+            snapshot.restore(data, hashlib.sha256(data).hexdigest(), self.ex.scope_digest, parent)
+        self.assertEqual(list(parent.iterdir()), [])
+
     def test_no_overwrite_and_uncertain_restore_retains_remnants(self):
         data = self.capture()
         parent = Path(self.tmp.name) / 'recovery'

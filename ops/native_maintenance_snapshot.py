@@ -55,8 +55,11 @@ def _parse(data):
         require(type(rows[name]) is list and 0 < len(rows[name]) <= 1024, 'SNAPSHOT_COUNT')
         records[name] = []
         previous = None
+        total_bytes = 0
         for raw in rows[name]:
             require(type(raw) is str and len(raw.encode()) <= 262144, 'SNAPSHOT_RECORD_SIZE')
+            total_bytes += len(raw.encode())
+            require(total_bytes <= MAX_BYTES // 4, 'SNAPSHOT_JOURNAL_BYTES')
             record = json.loads(raw, object_pairs_hook=unique)
             require(type(record) is dict and set(record) == {'previous', 'event'}
                     and record['previous'] == previous and encoded(record).decode() == raw,
@@ -147,6 +150,13 @@ latest-version selection or automatic cleanup. Interrupted output blocks retry.
             finally:
                 os.close(child)
         require(capture(root / 'operation', root / 'pause') == data, 'SNAPSHOT_RESTORE_VERIFY')
+        # Persist lock entries created by the verification reopen as well.
+        for name in NAMES:
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
+            try:
+                os.fsync(child)
+            finally:
+                os.close(child)
         _write(root_fd, 'RECOVERY_ONLY', encoded({'archive_digest': expected_digest,
                                                 'scope_digest': expected_scope,
                                                 'requires_independent_reconciliation': True}))
