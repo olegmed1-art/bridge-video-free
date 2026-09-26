@@ -29,10 +29,10 @@ key is exported to RDC or scratch; no new execution channel is installed.
 
 The old database audit checked role, database name, read-only mode and empty
 queue, but not the actual Neon branch behind the endpoint. Strengthen the
-existing child to require verify-full TLS with GSS disabled, exact actual host
+existing child to require verify-full TLS using the system CA store with GSS disabled, exact actual host
 and port, and all three server pg_settings identities with expected context,
 configuration-file source, matching reset value and no pending restart. A
-binding failure stops before reading task_status. Credentials and raw database
+binding or role/database/read-only failure stops before reading task_status. Credentials and raw database
 errors remain absent from the output. The worker's DSN and process are unchanged;
 the audit connection uses stricter transport verification.
 
