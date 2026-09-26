@@ -69,7 +69,8 @@ No record replacement/deletion API. A corrupt or incomplete tail blocks resume.
 Trusted operator storage and its backup are deployment prerequisites; fsync is
 not a claim that a CI runner's disk survives runner deletion.
 """
-    def __init__(self, root):
+    def __init__(self, root, *, max_bytes=1024 * 262144):
+        require(type(max_bytes) is int and 0 < max_bytes <= 1024 * 262144, 'JOURNAL_BYTE_LIMIT')
         self.fd = None
         self.lock = None
         self.records = []
@@ -86,15 +87,19 @@ not a claim that a CI runner's disk survives runner deletion.
             require(all(name == 'lock' or re.fullmatch(r'[0-9]{6}\.json', name) for name in names), 'JOURNAL_EXTRA_FILE')
             files = sorted(name for name in names if name != 'lock')
             require(len(files) <= 1024, 'JOURNAL_TOO_LONG')
+            total_bytes = 0
             for index, name in enumerate(files):
                 require(name == f'{index:06d}.json', 'JOURNAL_GAP')
                 handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.fd)
                 try:
                     self._regular(handle)
-                    data = os.read(handle, 262145)
+                    require(os.fstat(handle).st_size <= min(262144, max_bytes - total_bytes),
+                            'JOURNAL_BYTE_LIMIT')
+                    data = os.read(handle, min(262145, max_bytes - total_bytes + 1))
                 finally:
                     os.close(handle)
-                require(len(data) <= 262144, 'JOURNAL_RECORD_SIZE')
+                total_bytes += len(data)
+                require(len(data) <= 262144 and total_bytes <= max_bytes, 'JOURNAL_RECORD_SIZE')
                 record = json.loads(data, object_pairs_hook=unique)
                 require(set(record) == {'previous', 'event'} and record['previous'] == self.tail, 'JOURNAL_CHAIN')
                 self.records.append(record)
@@ -168,7 +173,7 @@ administrators and rerun-capable actors. No implementation/default is supplied.
 release.assert_reconciled(plan_digest) must additionally establish remote/DB
 completion, including lingering sessions, before any workflow is enabled.
 """
-    def __init__(self, plan, approved_digest, api, journal, coordination):
+    def __init__(self, plan, approved_digest, api, journal, coordination, *, operation_scope_digest=None):
         validate_plan(plan)
         require(digest(plan) == approved_digest, 'PLAN_DIGEST_MISMATCH')
         self.plan = json.loads(encoded(plan))
@@ -176,12 +181,17 @@ completion, including lingering sessions, before any workflow is enabled.
         self.api, self.journal, self.coordination = api, journal, coordination
         self.failed = False
         require(callable(getattr(coordination, 'assert_scope', None)), 'COORDINATION_REQUIRED')
+        initial = {'kind': 'PLAN', 'digest': approved_digest, 'plan': self.plan}
+        if operation_scope_digest is not None:
+            require(type(operation_scope_digest) is str
+                    and re.fullmatch('[0-9a-f]{64}', operation_scope_digest), 'OPERATION_SCOPE_DIGEST')
+            initial['operation_scope_digest'] = operation_scope_digest
         if not journal.records:
             coordination.assert_scope(approved_digest)
-            journal.append({'kind': 'PLAN', 'digest': approved_digest, 'plan': self.plan})
+            journal.append(initial)
         self.states = {row['id']: {'phase': 'original', 'observed': row} for row in self.plan['workflows']}
         first = journal.records[0]['event']
-        require(first == {'kind': 'PLAN', 'digest': approved_digest, 'plan': self.plan}, 'JOURNAL_PLAN_MISMATCH')
+        require(first == initial, 'JOURNAL_PLAN_MISMATCH')
         for record in journal.records[1:]:
             self._transition(record['event'])
 
