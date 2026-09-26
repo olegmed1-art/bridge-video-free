@@ -3,13 +3,87 @@ import unittest
 import contextlib
 import io
 import sys
+import tempfile
+import os
+import subprocess
 from types import SimpleNamespace
 from pathlib import Path
+from pathlib import PurePosixPath
 from unittest.mock import patch
 from ops import oracle_light_active_hold_attest as attest
 
 
 class ActiveHoldContract(unittest.TestCase):
+    def test_fifo_input_refuses_without_blocking(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'fifo'
+            os.mkfifo(path,0o644)
+            probe=subprocess.run([sys.executable,'-c',
+                'from pathlib import Path; from ops import oracle_light_active_hold_attest as a; '
+                'a.read(Path(__import__("sys").argv[1]),0o644,4096)',str(path)],
+                capture_output=True,text=True,timeout=5)
+            self.assertNotEqual(probe.returncode,0)
+            self.assertIn('FILE_DRIFT',probe.stderr)
+
+    def parent_audit(self, change_after=None, extra_env=b''):
+        release='/opt/bridge-school/school-autopilot-production-light/releases/'+'b'*40
+        dsn='postgresql://autopilot_light_worker_login:private-secret@'+attest.HOST+'/neondb'
+        drop=('[Service]\nWorkingDirectory='+release+'\nEnvironment=AUTOPILOT_ADMISSION_MODE=HOLD\n'
+              'EnvironmentFile='+release+'/ops/autopilot/broker-hold.env\n').encode()
+        pins_path=release+'/ops/autopilot/broker-hold.env'
+        files={str(attest.BASE):b'unit',str(attest.DROP):drop,
+               str(attest.ENV):('AUTOPILOT_DATABASE_URL='+dsn+'\n').encode()+extra_env,
+               str(attest.ROUTE/'route.json'):json.dumps(
+                   dict(version=1,backend='neon',database='autopilot',epoch=0)).encode(),
+               pins_path:('\n'.join(key+'=pinned' for key in sorted(attest.PIN_KEYS))+'\n').encode()}
+        before=dict(WorkingDirectory=release,ActiveState='active',SubState='running',MainPID='123',
+                    InvocationID='a'*32,User='school-autopilot',Group='school-autopilot',
+                    FragmentPath=str(attest.BASE),DropInPaths=str(attest.DROP),NeedDaemonReload='no',
+                    Environment='AUTOPILOT_ADMISSION_MODE=HOLD',
+                    ExecStart='python -m oracle_autopilot.worker_v17 ;',
+                    EnvironmentFiles=[str(attest.ENV)+' (ignore_errors=no)',pins_path+' (ignore_errors=no)'])
+        class FakePath(PurePosixPath):
+            def read_bytes(self):
+                return ('AUTOPILOT_DATABASE_URL='+dsn+'\0AUTOPILOT_ADMISSION_MODE=HOLD\0').encode()
+            def resolve(self): return FakePath(release)
+            def stat(self): return SimpleNamespace(st_uid=1000)
+        reads={}
+        def read(path, mode, limit):
+            name=str(path)
+            reads[name]=reads.get(name,0)+1
+            value=files[name]
+            if change_after==name and reads[name]>1:
+                value+=b'changed'
+            return value
+        after=dict(before)
+        if change_after=='invocation': after['InvocationID']='d'*32
+        with patch.object(attest.os,'geteuid',return_value=0), \
+             patch.object(attest.os,'uname',return_value=SimpleNamespace(nodename='autopilot-lite-vnic')), \
+             patch.object(attest,'service',side_effect=[before,after]), \
+             patch.object(attest,'read',side_effect=read), \
+             patch.object(attest,'BASE_SHA',attest.hashlib.sha256(b'unit').hexdigest()), \
+             patch.object(attest,'Path',FakePath), \
+             patch.object(attest.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=1000)), \
+             patch.object(attest,'login') as login:
+            result=attest.attest()
+            login.assert_called_once_with(dsn)
+            return result
+
+    def test_full_parent_returns_stable_private_identity(self):
+        first=self.parent_audit()
+        self.assertEqual(first,self.parent_audit())
+        self.assertEqual(first.pid,123)
+        self.assertNotEqual(first,self.parent_audit(extra_env=b'EXTRA_SETTING=changed\n'))
+        self.assertNotIn('private-secret',repr(first))
+
+    def test_parent_detects_drift_during_login(self):
+        pins='/opt/bridge-school/school-autopilot-production-light/releases/'+'b'*40+'/ops/autopilot/broker-hold.env'
+        for changed in ('invocation',str(attest.ENV),str(attest.DROP),
+                        str(attest.ROUTE/'route.json'),pins):
+            with self.subTest(changed=changed):
+                with self.assertRaisesRegex(attest.Blocked,'POST_CHECK_DRIFT'):
+                    self.parent_audit(change_after=changed)
+
     def run_child(self, tags, host=attest.HOST, count=0,
                   identity=('autopilot_light_worker_login','neondb','on')):
         queries=[]
