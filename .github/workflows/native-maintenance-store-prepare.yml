@@ -17,8 +17,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: oracle-light-backup-mutation
+  group: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && inputs.expected_main_sha == github.sha && 'oracle-light-backup-mutation' || format('native-store-noop-{0}', github.run_id) }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   contract:
