@@ -20,7 +20,7 @@ the service, so PrivateTmp does not break its paths.
 
 ## Evidence
 
-CI and the pinned Oracle SSH workflow run two harmless fixed probes before the
+CI and the pinned Oracle SSH workflow run three harmless fixed probes before the
 live HOLD audit. Each starts a parent with a TERM-ignoring child that calls
 setsid. The observer records actual unit identity and cgroup inode, verifies the
 child's separate session and same cgroup, then signals only that unit's main:
@@ -28,8 +28,10 @@ child's separate session and same cgroup, then signals only that unit's main:
 - SIGKILL main: require failed Result=signal and main status 9.
 - SIGSTOP main: the separate probe-only 3-second RuntimeMax expires; require
   failed Result=timeout. No Python heartbeat or cleanup can run while stopped.
+- Kill the external systemd-run launcher after stopping main: PID1 must still
+  enforce that same runtime limit and clean up the service's descendants.
 
-Both require the previously observed cgroup to report populated 0 or to have
+All require the previously observed cgroup to report populated 0 or to have
 been removed, then clean up only their own unit. Failure results are read before
 reset-failed. A real-systemd CI test additionally exercises the entire wrapped
 transport's cancellation and successful fixture-audit paths. Local environments
