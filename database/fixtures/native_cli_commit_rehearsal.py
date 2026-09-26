@@ -42,6 +42,8 @@ def snapshot(conn):
       SELECT jsonb_build_object(
         'functions',(SELECT jsonb_agg(jsonb_build_object(
           'oid',p.oid,'owner',p.proowner,'acl',p.proacl::text,
+          'acl_entries',(SELECT jsonb_agg(to_jsonb(a) ORDER BY a.grantee,a.grantor,a.privilege_type,a.is_grantable)
+            FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a),
           'definition',pg_get_functiondef(p.oid)) ORDER BY p.oid)
           FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
           WHERE n.nspname='autopilot' AND left(p.proname,11)='native_cli_'),
@@ -100,6 +102,27 @@ def apply(conn, before, fail_after=False):
         after = snapshot(conn)
         unchanged = {k: v for k, v in after.items() if k != 'functions'}
         require(unchanged == {k: v for k, v in before.items() if k != 'functions'}, "NON_ACL_CHANGE")
+        recipient = conn.execute("SELECT %s::regrole::oid", (LOGIN,)).fetchone()[0]
+        targets = {conn.execute("SELECT %s::regprocedure::oid", (signature,)).fetchone()[0]
+                   for signature in FUNCTIONS}
+        helper_id = conn.execute("SELECT %s::regprocedure::oid", (HELPER,)).fetchone()[0]
+        require({f['oid'] for f in before['functions']} == targets | {helper_id},
+                "NATIVE_FUNCTION_SET_DRIFT")
+        prior = {f['oid']: f for f in before['functions']}
+        require(set(prior) == {f['oid'] for f in after['functions']}, "FUNCTION_SET_CHANGED")
+        for function in after['functions']:
+            old = prior[function['oid']]
+            if function['oid'] == helper_id:
+                require(function == old, "HELPER_CHANGED")
+                continue
+            require({k: v for k, v in function.items() if k not in ('acl', 'acl_entries')}
+                    == {k: v for k, v in old.items() if k not in ('acl', 'acl_entries')},
+                    "FUNCTION_METADATA_CHANGED")
+            expected = old['acl_entries'] + [dict(grantor=old['owner'], grantee=recipient,
+                                                 privilege_type='EXECUTE', is_grantable=False)]
+            key = lambda a: (a['grantee'], a['grantor'], a['privilege_type'], a['is_grantable'])
+            require(sorted(function['acl_entries'], key=key) == sorted(expected, key=key),
+                    "UNEXPECTED_FUNCTION_ACL_DELTA")
         if fail_after:
             raise RuntimeError("INJECTED_POSTCHECK_FAILURE")
         return after
