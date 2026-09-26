@@ -195,6 +195,9 @@ jobs:
       - name: Rehearse native grants across commits and connections
         run: python database/fixtures/native_cli_commit_rehearsal.py
 
+      - name: Rehearse manifest-bound native permission engine
+        run: PYTHONPATH=. python database/fixtures/native_cli_permission_engine_rehearsal.py
+
       - name: Inventory native CLI dependencies without mutations
         shell: bash
         run: |
