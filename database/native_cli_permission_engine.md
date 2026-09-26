@@ -69,8 +69,17 @@ of both the snapshot digest and private manifest; a copied catalog on a differen
 branch cannot satisfy the same target merely by preserving database/role names.
 Every identity check (including fresh-connection inspect) verifies libpq's actual
 host and port, single configured host, sslmode=verify-full and gssencmode=disable.
-Startup options and explicit hostaddr are refused. Pooler endpoints are excluded.
+Startup options are refused. Pooler endpoints are excluded.
 Connection parameters are inspected in memory and never logged.
+
+Psycopg 3.3.4 resolves DNS into hostaddr before passing parameters to libpq
+(source: https://github.com/psycopg/psycopg/blob/3.3.4/psycopg/psycopg/_conninfo_attempts.py).
+Therefore post-connect get_parameters cannot prove whether hostaddr originally
+came from DNS or caller input. The engine accepts a driver address matching the
+actual connected IP; hostname authentication rests on verify-full with GSS
+disabled, and branch identity on the server settings below. It does not claim
+pre-connect DSN/hostaddr provenance. Any future caller policy banning explicit
+hostaddr must enforce that before opening the connection.
 
 The same SQL connection reads pg_catalog.pg_settings for exactly neon.project_id,
 neon.branch_id and neon.endpoint_id. Values must match the target. Project and
@@ -92,8 +101,8 @@ was performed for this addition.
 
 Unbound targets are accepted only for the exact existing localhost:5432
 bridge_school_ci / postgres / bridge_ci_owner / native_commit_login regression
-fixture, with actual loopback hostaddr and no configured address/startup-option
-override. The trusted local CI host must not proxy localhost to an external server.
+fixture, with actual loopback hostaddr, matching driver address and no startup
+options. The trusted local CI host must not proxy localhost to an external server.
 This is a test allowance, not production authorization. Manifest format
 remains version 1 but old targets lack the binding field and are rejected; prepare
 a new independently reviewed manifest instead of editing an old one.
