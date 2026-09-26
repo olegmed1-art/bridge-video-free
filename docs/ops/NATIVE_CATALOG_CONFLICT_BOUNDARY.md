@@ -15,8 +15,8 @@ The prior broad inventory of credential candidates does not prove that every
 candidate must be stopped. Replacing that inventory with a smaller critical
 writer set is reasonable only after proving which interleavings matter.
 
-Table DML is already excluded by the separate write fence across COMMIT and
-fresh inspection. Privileged updates to native RPC definitions, helper/callee
+Conflicting DML on ordinary autopilot tables included in the separate write
+fence is excluded across COMMIT and fresh inspection. Privileged updates to native RPC definitions, helper/callee
 definitions, effective recipient authority and configuration dependencies are
 a different class. Metadata drift detection does not prevent a newly granted
 capability from being used before the drift is detected. Restoring metadata
@@ -33,6 +33,7 @@ For each of the six functions, an independent privileged connection attempts:
 an ACL grant, ALTER FUNCTION settings, an owner change, and CREATE OR REPLACE
 with a harmless body comment. The test requires actual bounded lock refusal;
 the outer grant transaction is rolled back and the original manifest verified.
+These conflicts are tested before COMMIT, not after those row locks release.
 The contender is a superuser to avoid mistaking missing permission for a
 conflicting lock; the grant engine remains a non-superuser owner.
 
