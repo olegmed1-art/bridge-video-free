@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterable
@@ -67,14 +68,25 @@ def selected_modules(manifest: dict, suite: str) -> tuple[list[str], list[str]]:
     return sorted(mapped), sorted(suite_ids)
 
 
+def coverage_threshold(thresholds: dict, key: str, maximum: float) -> float:
+    raw = thresholds.get(key, 0.0)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise CoverageError(f"Invalid coverage threshold: {key}") from exc
+    if isinstance(raw, bool) or not math.isfinite(value) or not 0 <= value <= maximum:
+        raise CoverageError(f"Invalid coverage threshold: {key}")
+    return value
+
+
 def make_report(root: Path, manifest_path: Path, fragments: Path, suite: str) -> dict:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     modules, suite_ids = selected_modules(manifest, suite)
     covered_lines, covered_arcs, fragment_files = load_fragments(fragments)
     thresholds = manifest.get("coverage", {}).get("runtime_coverage", {}).get(suite, {})
-    minimum_overall = float(thresholds.get("minimum_overall_percent", 0.0))
-    minimum_module = float(thresholds.get("minimum_module_percent", 0.0))
-    minimum_execution_ratio = float(thresholds.get("minimum_module_execution_ratio", 0.0))
+    minimum_overall = coverage_threshold(thresholds, "minimum_overall_percent", 100)
+    minimum_module = coverage_threshold(thresholds, "minimum_module_percent", 100)
+    minimum_execution_ratio = coverage_threshold(thresholds, "minimum_module_execution_ratio", 1)
 
     module_reports = {}
     total_executable = 0
