@@ -28,6 +28,8 @@ FILES = (
     'ops/oracle_light_active_hold_attest.py',
     'ops/native_permission_hold_guard.py',
     'ops/native_maintenance_executor.py',
+    'ops/native_maintenance_coordination.py',
+    'ops/native_maintenance_lifetime.py',
     'ops/native_maintenance_workflow_api.py',
     'ops/native_maintenance_workflow_pause.py',
     'ops/native_maintenance_run_guard.py',

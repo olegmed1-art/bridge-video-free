@@ -19,6 +19,7 @@ from ops import native_maintenance_executor as executor
 from ops import native_maintenance_checkpoint as checkpoint
 from ops import native_maintenance_snapshot as recovery
 from ops import native_maintenance_workflow_api as api
+from ops.native_maintenance_coordination import OwnedConnections
 from ops.native_maintenance_workflow_pause import Journal, Refused, digest
 
 SOURCE = 'a' * 40
@@ -36,10 +37,14 @@ class CIAuthority:
     """Not a runtime authority. All infrastructure coordination is simulated."""
     source = SOURCE
     run_id, attempt, job_id = 11, 1, 22
+    connections = None
     def assert_running(self): pass
     def assert_alive(self): pass
     def assert_held(self, scope): pass
-    def assert_drained(self, scope): pass
+    def assert_drained(self, scope):
+        # Real connection/backend drain; only non-DB infrastructure is simulated.
+        engine.check(self.connections is not None, 'CI_DRAIN_REGISTRY_REQUIRED')
+        self.connections.assert_drained()
 
 
 class CIMemoryStore:
@@ -90,7 +95,11 @@ def main():
         engine.check(conn.execute('SELECT count(*) FROM pg_roles WHERE rolname IN (%s,%s)',
                                  (LOGIN, PARENT)).fetchone()[0] == 0, 'CI_ROLES_EXIST')
         original = snapshot(conn)
+        added_stats = not conn.execute(
+            "SELECT pg_has_role('bridge_ci_owner','pg_read_all_stats','MEMBER')").fetchone()[0]
         with conn.transaction():
+            if added_stats:
+                conn.execute('GRANT pg_read_all_stats TO bridge_ci_owner')
             conn.execute(f'CREATE ROLE {PARENT} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE')
             conn.execute(f'CREATE ROLE {LOGIN} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT')
             conn.execute(f'GRANT {PARENT} TO {LOGIN}')
@@ -116,6 +125,8 @@ def main():
                                              ('apply', True), ('rollback', False)]]
             for index, (staged, operation, lost) in enumerate(cases):
                 remote, authority, store = CIRemote(), CIAuthority(), CIMemoryStore()
+                registry = OwnedConnections(owned, TARGET)
+                authority.connections = registry
                 paths = [base / f'{index}-pause', base / f'{index}-operation']
                 for path in paths:
                     path.mkdir(mode=0o700)
@@ -154,6 +165,15 @@ def main():
                         stack.enter_context(patch.object(engine, 'change', side_effect=change))
                         sql = stack.enter_context(patch.object(executor, 'permission_session', side_effect=perform))
                         ex = build()
+                        # A real unregistered owner backend must refuse, even idle.
+                        with owned():
+                            try:
+                                registry.assert_drained()
+                            except Refused:
+                                pass
+                            else:
+                                raise AssertionError('CI_FOREIGN_OWNER_BACKEND_ACCEPTED')
+                        registry.assert_drained()
                         if staged:
                             ex.prepare()
                             engine.check(sql.call_count == 0, 'CI_PREPARE_CALLED_SQL')
@@ -167,13 +187,13 @@ def main():
                         dispatch = ex.execute_prepared if staged else ex.execute
                         if lost:
                             try:
-                                dispatch(owned, route_root=route)
+                                dispatch(registry.open, route_root=route)
                             except executor.ExecutionError as exc:
                                 engine.check(exc.outcome == 'UNKNOWN', 'CI_LOST_RETURN_CLASSIFICATION')
                             else:
                                 raise AssertionError('CI_LOST_RETURN_ACCEPTED')
                         else:
-                            engine.check(dispatch(owned, route_root=route) == expected, 'CI_RESULT')
+                            engine.check(dispatch(registry.open, route_root=route) == expected, 'CI_RESULT')
                         observed(expected)
                         engine.check(remote.puts == ['disable'], 'CI_AUTO_RESTORE')
                         for journal in journals:
@@ -196,7 +216,7 @@ def main():
                         authority.job_id += 1
                         ex = build()
                         try:
-                            (ex.execute_prepared if staged else ex.execute)(owned, route_root=route)
+                            (ex.execute_prepared if staged else ex.execute)(registry.open, route_root=route)
                         except Refused:
                             pass
                         else:
@@ -228,8 +248,11 @@ def main():
                 conn.execute(f'REVOKE {PARENT} FROM {LOGIN} RESTRICT')
                 conn.execute(f'DROP ROLE {LOGIN}')
                 conn.execute(f'DROP ROLE {PARENT}')
+                if added_stats:
+                    conn.execute('REVOKE pg_read_all_stats FROM bridge_ci_owner')
             engine.check(snapshot(conn) == original, 'CI_EXECUTOR_CLEANUP_MISMATCH')
     print('NATIVE_MAINTENANCE_EXECUTOR_PG18_PASS')
+    print('NATIVE_MAINTENANCE_OWNED_BACKEND_DRAIN_PG18_PASS')
 
 
 if __name__ == '__main__':
