@@ -40,7 +40,7 @@ def reject(action, code):
 
 def binding_contract():
     """Synthetic driver metadata tests; not a live Neon/TLS integration test."""
-    local_params = dict(host='localhost')
+    local_params = dict(host='localhost', hostaddr='127.0.0.1')
     local_info = SimpleNamespace(host='localhost', hostaddr='127.0.0.1', port=5432,
                                  get_parameters=lambda: local_params)
     local = SimpleNamespace(info=local_info, execute=lambda *args: SimpleNamespace(
@@ -57,11 +57,11 @@ def binding_contract():
         local_params['host'] = 'localhost'
     binding = engine.NeonBinding('test-project', 'br-test', 'ep-test',
                                  'ep-test.c-5.eu-central-1.aws.neon.tech')
-    params = dict(host=binding.host, sslmode='verify-full', gssencmode='disable')
+    params = dict(host=binding.host, hostaddr='192.0.2.10', sslmode='verify-full', gssencmode='disable')
     rows = [('neon.project_id', binding.project_id, 'postmaster', 'configuration file', binding.project_id, False),
             ('neon.branch_id', binding.branch_id, 'postmaster', 'configuration file', binding.branch_id, False),
             ('neon.endpoint_id', binding.endpoint_id, 'superuser', 'configuration file', binding.endpoint_id, False)]
-    fake = SimpleNamespace(info=SimpleNamespace(host=binding.host, port=5432,
+    fake = SimpleNamespace(info=SimpleNamespace(host=binding.host, hostaddr='192.0.2.10', port=5432,
                            get_parameters=lambda: params),
                            execute=lambda *args: SimpleNamespace(fetchall=lambda: rows))
     engine.neon_identity(fake, binding)
