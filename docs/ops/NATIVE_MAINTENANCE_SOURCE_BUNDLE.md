@@ -3,9 +3,9 @@
 Change: 2026-09-26. Governance: ASSURED preparation. Production maintenance
 remains disabled by the existing default external guard.
 
-`ops/native_maintenance_bundle.py` packages the fixed sixteen-file import closure
+`ops/native_maintenance_bundle.py` packages the fixed seventeen-file import closure
 for the composed maintenance session, journalled executor, workflow API/pause,
-run binding, live HOLD guard and disposable rehearsals.
+run binding, live HOLD guard, journal-store preparation and disposable rehearsals.
 It reads blobs from an exact 40-character Git commit with replacement
 objects disabled; dirty checkout files are not inputs. Git environment overrides
 are removed. Only ordinary blob modes 100644/100755 are accepted.
@@ -55,8 +55,9 @@ This package does not establish GitHub concurrency ownership, operator coordinat
 supervised mutation lifetime, durable approval/journals or owner-credential delivery.
 A subprocess timeout in the disposable fixture is
 not remote cancellation assurance or a claim that descendants have drained.
-No production entrypoint, secret access, grants, service change or native task is
-added. Subsequent transport work must bind these separate requirements before
+No permission-execution entrypoint, secret access, grants, service change or native
+task is added. A separate reviewed store-preparation dispatch can create the fixed
+root-owned journal directory under HOLD; see `NATIVE_MAINTENANCE_STORE.md`. Subsequent transport work must bind these separate requirements before
 calling the guarded maintenance session.
 
 The decoder requires its exact file set. Older eleven-file payloads must use
@@ -65,3 +66,4 @@ expanded decoder. Expected digests must be recomputed and independently accepted
 for the new source. No fallback decoder or omitted-dependency mode is provided.
 
 Rollback is a source revert; this change has no production data migration.
+
