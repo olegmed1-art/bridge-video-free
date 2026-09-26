@@ -103,9 +103,13 @@ def identity(conn, target):
           == (target.database, target.session_owner, target.owner), 'TARGET_IDENTITY_MISMATCH')
     if target.neon is None:
         # The only unbound target is the existing disposable regression fixture.
+        params = conn.info.get_parameters()
         check((target.database, target.session_owner, target.owner, target.recipient)
               == ('bridge_school_ci', 'postgres', 'bridge_ci_owner', 'native_commit_login')
-              and conn.info.host == 'localhost' and conn.info.port == 5432,
+              and conn.info.host == 'localhost' and conn.info.port == 5432
+              and conn.info.hostaddr in ('127.0.0.1', '::1')
+              and params.get('host') == 'localhost'
+              and not params.get('hostaddr') and not params.get('options'),
               'NEON_BINDING_REQUIRED')
         return
     neon_identity(conn, target.neon)
