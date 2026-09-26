@@ -42,6 +42,64 @@ class FakeAPI:
         raise AssertionError('UNEXPECTED_API_PATH')
 
 
+class CheckpointAPI(FakeAPI):
+    def __init__(self):
+        super().__init__()
+        profile = guard.CheckpointRunBinding
+        self.run.update(path=profile.workflow, event='workflow_dispatch')
+        raw = (Path(__file__).resolve().parents[1] / profile.workflow).read_bytes()
+        self.file.update(path=profile.workflow, size=len(raw), content=base64.b64encode(raw).decode())
+        self.jobs['jobs'][0]['name'] = 'probe'
+        self.jobs['jobs'].append({**self.jobs['jobs'][0], 'id': 455, 'name': 'contract',
+                                  'status': 'completed', 'conclusion': 'success'})
+        self.jobs['total_count'] = 2
+
+    def get(self, path):
+        if path == '/contents/' + guard.CheckpointRunBinding.workflow + '?ref=' + self.source:
+            self.calls.append(path)
+            return copy.deepcopy(self.file)
+        return super().get(path)
+
+
+class CheckpointBindingTests(unittest.TestCase):
+    def test_fixed_two_job_contract_and_exact_blob(self):
+        api = CheckpointAPI()
+        binding = guard.CheckpointRunBinding(api.source, 123, 2, api)
+        binding.assert_running()
+        self.assertEqual(binding.job_id, 456)
+        self.assertEqual(hashlib.sha256(base64.b64decode(api.file['content'])).hexdigest(),
+                         binding.workflow_sha256)
+        # A valid relay profile cannot satisfy the production/window profile.
+        with self.assertRaises(Exception):
+            guard.RunBinding(api.source, 123, 2, api).assert_running()
+
+    def test_prerequisite_attempt_source_status_duplicate_and_event_drift(self):
+        for fault in ('failed_contract', 'missing_contract', 'extra_job', 'same_id',
+                      'old_contract_attempt', 'old_contract_source', 'cancelled', 'push'):
+            with self.subTest(fault=fault):
+                api = CheckpointAPI()
+                if fault == 'failed_contract':
+                    api.jobs['jobs'][1]['conclusion'] = 'failure'
+                elif fault == 'missing_contract':
+                    api.jobs['jobs'].pop()
+                elif fault == 'extra_job':
+                    api.jobs['jobs'].append(dict(api.jobs['jobs'][1]))
+                elif fault == 'same_id':
+                    api.jobs['jobs'][1]['id'] = 456
+                elif fault == 'old_contract_attempt':
+                    api.jobs['jobs'][1]['run_attempt'] = 1
+                elif fault == 'old_contract_source':
+                    api.jobs['jobs'][1]['head_sha'] = 'b' * 40
+                elif fault == 'cancelled':
+                    api.jobs['jobs'][0].update(status='completed', conclusion='cancelled')
+                else:
+                    api.run['event'] = 'push'
+                binding = guard.CheckpointRunBinding(api.source, 123, 2, api)
+                with self.assertRaises(Exception):
+                    binding.assert_running()
+                self.assertTrue(binding.failed)
+
+
 class RunBindingTests(unittest.TestCase):
     def setUp(self):
         self.api = FakeAPI()

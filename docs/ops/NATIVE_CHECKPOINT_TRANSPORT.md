@@ -81,6 +81,17 @@ rehearsal. Actual run/job binding, scoped operator/drain implementations, accept
 source/manifests and the full executor's network timing remain deployment work.
 Live success must be recorded separately at its exact merged source SHA.
 
+The relay now uses a separate fixed `CheckpointRunBinding` profile for this exact
+manual workflow blob and its two jobs. Before each real OCI PUT and after it,
+GitHub must report the exact owner, source, attempt, successful contract job and
+still-running probe job. The single-job maintenance-window profile remains
+separate and does not accept a relay run. Both profiles retain the absolute
+60-second bound with no renewal. The relay starts its authenticated lease before
+SSH and checks it again after the terminal host frame; `run_elapsed_ms` includes
+those authenticated observations. Inventory/setup and independent readback after
+the closed SSH channel remain outside the live lease. This is still a synthetic
+checkpoint rehearsal, not a permission session or full operator/drain assembly.
+
 The initial corrected live run 36266537099 at 5477d5f4b660a5461e4dd27507c36e6ccfdab2b2
 passed 21 RPC requests in 44775 ms (host 41635 ms), with exact restoration and unchanged
 HOLD. That version performed two source GETs for every read RPC as well as its

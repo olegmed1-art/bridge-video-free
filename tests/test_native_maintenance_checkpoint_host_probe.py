@@ -19,17 +19,18 @@ class AssemblyTests(unittest.TestCase):
     def test_mutation_guard_checks_deadline_before_and_after_source_observation(self):
         from unittest.mock import Mock
         channel = Mock()
-        with patch.object(runner, 'guard') as fresh:
-            runner.mutation_guard(channel)
+        run = Mock(assert_running=Mock())
+        with patch.object(run, 'assert_running') as fresh:
+            runner.mutation_guard(channel, run)
         self.assertEqual(channel.alive.call_count, 2)
         fresh.assert_called_once_with()
         channel.alive.side_effect = [None, RuntimeError('expired')]
-        with patch.object(runner, 'guard') as fresh, self.assertRaises(RuntimeError):
-            runner.mutation_guard(channel)
+        with patch.object(run, 'assert_running') as fresh, self.assertRaises(RuntimeError):
+            runner.mutation_guard(channel, run)
         fresh.assert_called_once_with()
         channel.alive.side_effect = RuntimeError('already expired')
-        with patch.object(runner, 'guard') as fresh, self.assertRaises(RuntimeError):
-            runner.mutation_guard(channel)
+        with patch.object(run, 'assert_running') as fresh, self.assertRaises(RuntimeError):
+            runner.mutation_guard(channel, run)
         fresh.assert_not_called()
 
     def test_extracted_source_resolves_host_identity_without_checkout(self):

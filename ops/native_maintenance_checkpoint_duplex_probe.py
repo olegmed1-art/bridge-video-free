@@ -14,6 +14,7 @@ from ops import native_maintenance_checkpoint_oci as adapter
 from ops import native_maintenance_checkpoint_transport as rpc
 from ops.native_maintenance_checkpoint_host_probe import identity
 from ops.native_maintenance_readonly_transport import stop_group
+from ops.native_maintenance_run_guard import API, CheckpointRunBinding
 from ops.native_maintenance_store_runner import HOST, loader, source_check
 from ops.native_maintenance_workflow_pause import require
 from ops.oci_light_access_audit import scalar
@@ -26,10 +27,10 @@ def guard():
     source_check(os.environ.get('EXPECTED_MAIN'))
 
 
-def mutation_guard(channel):
-    """Fresh authenticated source at every OCI PUT boundary, within pipe lease."""
+def mutation_guard(channel, run):
+    """Fresh authenticated source/run/job at each PUT boundary within both leases."""
     channel.alive()
-    guard()
+    run.assert_running()
     channel.alive()
 
 
@@ -102,12 +103,15 @@ def main():
                shlex.join(['sudo', '-n', '/usr/bin/python3', '-I', '-B', '-S', '-c', code])]
     PHASE = 'supervised_duplex'
     guard()
+    run_started = time.monotonic()
+    run = CheckpointRunBinding(source, run_id, attempt, API(os.environ.get('GH_TOKEN')))
+    run.assert_running()
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.DEVNULL, env={'PATH': '/usr/bin:/bin'}, start_new_session=True)
     started = time.monotonic()
     try:
         channel = rpc.Channel(process.stdout.fileno(), process.stdin.fileno(), binding, seconds=60)
-        store = adapter.OCIJournalStore(client, namespace, lambda: mutation_guard(channel))
+        store = adapter.OCIJournalStore(client, namespace, lambda: mutation_guard(channel, run))
         # Read RPCs retain fixed binding/scope, private-bucket checks and deadline.
         # Fresh source observations bracket every individual real OCI PUT in the
         # store, including registration and head writes inside one compare_head.
@@ -122,6 +126,9 @@ def main():
             server.accept(record)
         channel.alive()
         elapsed_ms = int((time.monotonic() - started) * 1000)
+        run.assert_running()
+        channel.alive()
+        run_elapsed_ms = int((time.monotonic() - run_started) * 1000)
         # Closing stdin forbids new requests; SSH must finish with the supervisor.
         process.stdin.close()
         require(process.wait(timeout=15) == 0, 'DUPLEX_HOST_EXIT')
@@ -142,6 +149,8 @@ def main():
                          scope_digest=scope, accepted_head_digest=record['head_digest'],
                          elapsed_ms=elapsed_ms, host_elapsed_ms=record['elapsed_ms'],
                          rpc_requests=server.sequence, archive_bytes=len(archive), hold_unchanged=True,
+                         authenticated_run_id=run.run_id, authenticated_job_id=run.job_id,
+                         run_elapsed_ms=run_elapsed_ms,
                          production_mutations=False, production_journal_backup=False,
                          full_executor_rehearsal=False, deleted_objects=0), sort_keys=True))
 
