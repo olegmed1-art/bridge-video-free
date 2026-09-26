@@ -78,8 +78,10 @@ try:
  import psycopg
  with psycopg.connect(os.environ['AUDIT_DATABASE_URL'],autocommit=True,connect_timeout=10,
    options='-c statement_timeout=5000 -c default_transaction_read_only=on',
-   sslmode='verify-full',gssencmode='disable') as conn:
+   sslmode='verify-full',sslrootcert='system',gssencmode='disable') as conn:
   row=conn.execute("SELECT current_user,current_database(),current_setting('transaction_read_only')").fetchone()
+  if row!=('autopilot_light_worker_login','neondb','on'):
+   raise RuntimeError('DATABASE_SESSION_MISMATCH')
   expected={
    'neon.project_id':('misty-poetry-18012774','postmaster'),
    'neon.branch_id':('br-aged-mud-b1i64914','postmaster'),
@@ -172,4 +174,3 @@ if __name__=='__main__':
             'PIN_DRIFT','ROUTE_DRIFT','ENV_DRIFT','DSN_DRIFT','LIVE_ENV_DRIFT','LIVE_PROCESS_DRIFT',
             'LOGIN_OR_QUEUE_FAILED','POST_CHECK_DRIFT'} else 'UNCLASSIFIED'}))
         sys.exit(2)
-
