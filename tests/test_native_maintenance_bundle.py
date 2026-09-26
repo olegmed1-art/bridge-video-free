@@ -46,8 +46,11 @@ class BundleTests(unittest.TestCase):
             self.obj['files'][path] = 'YQ=='
             self.refused()
             del self.obj['files'][path]
-        del self.obj['files'][bundle.FILES[0]]
-        self.refused()
+        for path in bundle.FILES:
+            with self.subTest(missing=path):
+                value = self.obj['files'].pop(path)
+                self.refused()
+                self.obj['files'][path] = value
 
     def test_duplicate_keys_and_noncanonical_json(self):
         payload = self.payload()

@@ -1,4 +1,4 @@
-"""CI-only execution of the existing PG session rehearsal from verified source."""
+"""CI-only PG session and executor rehearsals from verified source."""
 import os
 from pathlib import Path
 import subprocess
@@ -28,7 +28,6 @@ def main():
         command = '''
 import importlib
 from pathlib import Path
-import runpy
 import sys
 root = Path.cwd().resolve()
 for path in sys.argv[1:]:
@@ -38,6 +37,13 @@ for path in sys.argv[1:]:
 from database.fixtures.native_maintenance_session_rehearsal import main
 main()
 print('NATIVE_MAINTENANCE_EXTRACTED_SOURCE_PASS')
+from database.fixtures.native_maintenance_executor_rehearsal import main as executor_main
+executor_main()
+for path in sys.argv[1:]:
+    module = importlib.import_module(path[:-3].replace('/', '.'))
+    if Path(module.__file__).resolve() != root / path:
+        raise RuntimeError('BUNDLE_IMPORT_ESCAPED')
+print('NATIVE_MAINTENANCE_EXTRACTED_EXECUTOR_PASS')
 '''
         subprocess.run([sys.executable, '-B', '-c', command, *bundle.FILES],
                        cwd=root, env=env, check=True, timeout=180)
