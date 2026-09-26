@@ -192,6 +192,9 @@ jobs:
           test "$ADMIN_DATABASE_URL" = "postgresql://postgres:postgres@localhost:5432/bridge_school_ci"
           psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/fixtures/native_cli_grant_rollback.sql
 
+      - name: Rehearse native grants across commits and connections
+        run: python database/fixtures/native_cli_commit_rehearsal.py
+
       - name: Inventory native CLI dependencies without mutations
         shell: bash
         run: |
