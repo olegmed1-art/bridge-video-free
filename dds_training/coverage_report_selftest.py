@@ -75,8 +75,8 @@ def main() -> None:
             {**valid_fragment, "arcs": {"module.py": [[1, None]]}},
         ]
         output = root / "report.json"
-        for malformed in malformed_fragments:
-            (fragments / "coverage-1.json").write_text(json.dumps(malformed))
+
+        def assert_error_report() -> None:
             output.write_text(json.dumps(report))
             process = subprocess.run([
                 sys.executable, str(Path(__file__).with_name("coverage_report.py")),
@@ -84,12 +84,24 @@ def main() -> None:
                 "--fragments", str(fragments), "--suite", "fast",
                 "--out", str(output), "--fail-on-error",
             ], capture_output=True, text=True)
-            assert process.returncode == 1, (malformed, process.stdout, process.stderr)
+            assert process.returncode == 1, (process.stdout, process.stderr)
             rejected = json.loads(output.read_text())
-            assert rejected["status"] == "error", (malformed, rejected, process.stderr)
+            assert rejected["status"] == "error", (rejected, process.stderr)
             assert rejected["findings"][0]["code"] == "COVERAGE_REPORT_ERROR", rejected
             assert "Traceback" not in process.stderr, process.stderr
+
+        for malformed in malformed_fragments:
+            (fragments / "coverage-1.json").write_text(json.dumps(malformed))
+            assert_error_report()
         (fragments / "coverage-1.json").write_text(json.dumps(valid_fragment))
+
+        for damaged_path in (manifest_path, fragments / "coverage-1.json", module):
+            original_bytes = damaged_path.read_bytes()
+            damaged_path.write_bytes(b"\xff\xfe")
+            try:
+                assert_error_report()
+            finally:
+                damaged_path.write_bytes(original_bytes)
 
         manifest["coverage"]["runtime_coverage"]["fast"]["minimum_overall_percent"] = 100
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
