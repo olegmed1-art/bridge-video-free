@@ -21,6 +21,15 @@ def parameters(raw):
 
 
 def observe(connect, raw):
+    return _observe(connect, raw, candidate=False)
+
+
+def candidate(connect, raw):
+    """Return private candidate bytes; no self-approval via engine.prepare."""
+    return _observe(connect, raw, candidate=True)
+
+
+def _observe(connect, raw, *, candidate):
     global PHASE
     target = engine.Target(**{**EXPECTED_TARGET,
                              'neon': engine.NeonBinding(**EXPECTED_TARGET['neon'])})
@@ -45,12 +54,15 @@ def observe(connect, raw):
             PHASE = 'existing_privileges'
             engine.privileges(conn, target, False)
             PHASE = 'expected_acl_scope'
-            engine.expected_after(state)  # Validate proposed six-function scope without writing.
+            after = engine.expected_after(state)  # Validate scope without writing.
             snapshot_digest = engine.digest(state)
-    return dict(audit='NATIVE_OWNER_READ_ONLY_PASS', target=asdict(target),
+    report = dict(audit='NATIVE_OWNER_READ_ONLY_PASS', target=asdict(target),
                 snapshot_digest=snapshot_digest, snapshot_approved=False,
                 native_enabled=False, receipts=0, nonterminal_tasks=0,
                 light_native_execute=0, production_mutations=False)
+    if candidate:
+        return report, engine.encode(dict(version=1, target=asdict(target), before=state, after=after))
+    return report
 
 
 def main():

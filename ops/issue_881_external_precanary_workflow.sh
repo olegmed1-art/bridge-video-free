@@ -30,6 +30,7 @@ prior_gate_pr_number=1070
 protected_gate_paths=(
   '.github/workflows/native-maintenance-driver-prepare.yml'
   '.github/workflows/native-maintenance-owner-host.yml'
+  '.github/workflows/native-maintenance-recovery-assets.yml'
   'ops/native_maintenance_driver_runner.py'
   'ops/native_driver_requirements.txt'
   'ops/native_maintenance_bundle.py'
@@ -59,6 +60,8 @@ protected_gate_paths=(
   'ops/oracle_autopilot_source_preflight.py'
   'ops/native_maintenance_owner_host.py'
   'ops/native_maintenance_owner_host_runner.py'
+  'ops/native_maintenance_recovery_assets.py'
+  'ops/native_maintenance_recovery_assets_runner.py'
   '.github/workflows/native-maintenance-window.yml'
   'ops/native_maintenance_run_guard.py'
   '.dockerignore'
