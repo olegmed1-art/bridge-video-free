@@ -93,7 +93,7 @@ def inventory(sources, revision, tree):
 
 
 def git(repo, *args):
-    return subprocess.run(['git', '-C', str(repo), *args], check=True,
+    return subprocess.run(['git', '--no-replace-objects', '-C', str(repo), *args], check=True,
                           capture_output=True, timeout=30).stdout
 
 
