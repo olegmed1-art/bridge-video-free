@@ -8,6 +8,24 @@ DO $$ BEGIN
   RAISE EXCEPTION 'FIXTURE_ROLE_ALREADY_EXISTS';
  END IF;
 END $$;
+\if :{?observed_outbox_guard}
+\else
+\set observed_outbox_guard false
+\endif
+\if :observed_outbox_guard
+-- Observed production difference, reproduced only inside disposable rollback.
+CREATE TRIGGER role_dispatch_outbox_enabled_role
+BEFORE INSERT OR UPDATE OF role ON autopilot.role_dispatch_outbox
+FOR EACH ROW EXECUTE FUNCTION autopilot.enforce_enabled_role();
+DO $ BEGIN
+ IF (SELECT encode(sha256(convert_to(pg_get_triggerdef(oid,false),'UTF8')),'hex')
+     FROM pg_trigger WHERE tgname='role_dispatch_outbox_enabled_role'
+       AND tgrelid='autopilot.role_dispatch_outbox'::regclass)
+    IS DISTINCT FROM '858b8d72318b64233cd8a9bab3ff1b8049b0362bf7f6522cd210a6323b344683' THEN
+  RAISE EXCEPTION 'TEST_OBSERVED_TRIGGER_DEFINITION_MISMATCH';
+ END IF;
+END $;
+\endif
 CREATE ROLE native_ci_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
 CREATE ROLE native_ci_other NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
 GRANT USAGE ON SCHEMA autopilot TO native_ci_runtime,native_ci_other;
@@ -36,6 +54,29 @@ END $$;
 
 
 SELECT set_config('native_ci.fixture',pg_temp.native_fixture('native-runtime-acl-339')::text,true);
+\if :observed_outbox_guard
+DO $ DECLARE f jsonb:=current_setting('native_ci.fixture')::jsonb; BEGIN
+ UPDATE autopilot.role_registry SET enabled=false WHERE role_id='AUTOPILOT';
+ BEGIN
+  UPDATE autopilot.role_dispatch_outbox SET role=role WHERE dispatch_id=(f->>'id')::uuid;
+  RAISE EXCEPTION 'TEST_DISABLED_OUTBOX_ROLE_ALLOWED';
+ EXCEPTION WHEN raise_exception THEN
+  IF SQLERRM<>'AUTOPILOT_ROLE_DISABLED_OR_UNKNOWN' THEN RAISE; END IF;
+ END;
+ UPDATE autopilot.role_registry SET enabled=true WHERE role_id='AUTOPILOT';
+ BEGIN
+  UPDATE autopilot.role_dispatch_outbox SET role='NATIVE_CI_UNKNOWN_ROLE'
+  WHERE dispatch_id=(f->>'id')::uuid;
+  RAISE EXCEPTION 'TEST_UNKNOWN_OUTBOX_ROLE_ALLOWED';
+ EXCEPTION WHEN raise_exception THEN
+  IF SQLERRM<>'AUTOPILOT_ROLE_DISABLED_OR_UNKNOWN' THEN RAISE; END IF;
+ END;
+ IF (SELECT role FROM autopilot.role_dispatch_outbox WHERE dispatch_id=(f->>'id')::uuid)
+    IS DISTINCT FROM 'AUTOPILOT' THEN
+  RAISE EXCEPTION 'TEST_REJECTED_ROLE_UPDATE_LEAK';
+ END IF;
+END $;
+\endif
 RESET ROLE;
 SET LOCAL SESSION AUTHORIZATION native_ci_runtime;
 DO $$ DECLARE f jsonb:=current_setting('native_ci.fixture')::jsonb; BEGIN
@@ -117,3 +158,12 @@ DO $$ BEGIN
  END IF;
 END $$;
 \echo NATIVE_RUNTIME_SIX_RPC_REHEARSAL_PASS
+\if :observed_outbox_guard
+DO $$ BEGIN
+ IF EXISTS(SELECT FROM pg_trigger WHERE tgname='role_dispatch_outbox_enabled_role'
+    AND tgrelid='autopilot.role_dispatch_outbox'::regclass) THEN
+  RAISE EXCEPTION 'TEST_OBSERVED_TRIGGER_ROLLBACK_LEAK';
+ END IF;
+END $$;
+\echo NATIVE_OBSERVED_OUTBOX_GUARD_REHEARSAL_PASS
+\endif
