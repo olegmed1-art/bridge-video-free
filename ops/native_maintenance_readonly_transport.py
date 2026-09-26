@@ -287,7 +287,7 @@ def main():
     bundle.check(proof.returncode == 0 and len(proof.stdout) < 4096, 'LIFETIME_PROBES_FAILED')
     records = [json.loads(line) for line in proof.stdout.splitlines()]
     bundle.check(records == [{'audit': 'NATIVE_LIFETIME_PASS', 'case': case, 'cgroup_empty': True,
-                              'source_sha': source} for case in ('main-kill', 'runtime-max')],
+                              'source_sha': source} for case in ('main-kill', 'runtime-max', 'launcher-kill')],
                  'LIFETIME_PROBE_RESULTS_INVALID')
     for record in records:
         emit(record)
