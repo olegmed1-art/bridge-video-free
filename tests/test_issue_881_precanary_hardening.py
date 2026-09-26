@@ -1746,12 +1746,13 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
             indirect[reference] = payload
             pending.update(repository_shell_references(payload) - set(indirect))
         referenced_payloads.update(indirect)
-    assert len(shared_workflows) == 68
+    assert len(shared_workflows) == 69
     assert '.github/workflows/native-maintenance-window.yml' in shared_workflows
     assert "'ops/native_maintenance_run_guard.py'" in runner
     assert '.github/workflows/native-maintenance-driver-prepare.yml' in shared_workflows
+    assert '.github/workflows/native-maintenance-owner-host.yml' in shared_workflows
     from ops.native_maintenance_bundle import FILES
-    for dependency in (*FILES, 'ops/native_maintenance_driver_runner.py',
+    for dependency in (*FILES, 'ops/native_maintenance_owner_host_runner.py', 'ops/native_maintenance_driver_runner.py',
                        'ops/native_driver_requirements.txt', 'ops/native_maintenance_bundle.py',
                        'ops/native_maintenance_lifetime.py', 'ops/native_maintenance_store_runner.py'):
         assert f"'{dependency}'" in runner

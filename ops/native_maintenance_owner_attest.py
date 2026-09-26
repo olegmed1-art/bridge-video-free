@@ -6,7 +6,6 @@ import os
 from database import native_cli_permission_engine as engine
 from ops.native_permission_hold_guard import EXPECTED_TARGET
 from ops.oracle_autopilot_source_preflight import connection_parameters
-from ops.native_maintenance_store_runner import source_check
 
 PHASE = 'startup'
 
@@ -56,6 +55,7 @@ def observe(connect, raw):
 
 def main():
     global PHASE
+    from ops.native_maintenance_store_runner import source_check
     import psycopg
     engine.check(os.environ.get('GITHUB_TRIGGERING_ACTOR') == 'olegmed1-art', 'RERUN_ACTOR_REFUSED')
     source = os.environ.get('EXPECTED_MAIN')
