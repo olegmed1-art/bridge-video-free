@@ -58,7 +58,7 @@ def route_file(root, backend):
 def fixture_root(root):
     check(root == root.resolve() and root.parent.parent == Path('/tmp')
           and root.parent.name.startswith('native-route-drain-')
-          and root.name in ('protocol', 'normal', 'uncommitted-loss', 'commit-before-loss')
+          and root.name in ('protocol', 'normal', 'uncommitted-loss', 'commit-before-loss', 'wrapper-crash')
           and root.parent.stat().st_uid == 0
           and root.parent.stat().st_mode & 0o777 == 0o700,
           'DISPOSABLE_ROUTE_DIRECTORY_REQUIRED')
@@ -94,6 +94,11 @@ def transport(root):
 
 def consumer(root, mode):
     fixture_root(root)
+    pid = os.getpid()
+    identity = dict(pid=pid, start=process_start(pid), group=os.getpgrp())
+    temporary = root / 'consumer-identity.tmp'
+    temporary.write_text(json.dumps(identity))
+    temporary.replace(root / 'consumer-identity.json')
     with connection() as conn:
         local_connection(conn)
         with conn.transaction():
@@ -174,6 +179,36 @@ def backend_state(conn, pid):
     return conn.execute('SELECT state FROM pg_stat_activity WHERE pid=%s', (pid,)).fetchone()
 
 
+def process_start(pid):
+    # Linux /proc stat field 22, after stripping the parenthesized comm field.
+    return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
+
+
+def cleanup_consumer(root):
+    """Fixture-only cleanup after abrupt wrapper death; never kill DB backends."""
+    identity_file = root / 'consumer-identity.json'
+    if identity_file.exists():
+        identity = json.loads(identity_file.read_text())
+        pid = identity['pid']
+        try:
+            status = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+            check(identity['group'] == pid and os.getpgid(pid) == pid
+                  and status[19] == identity['start'],
+                  'FIXTURE_CONSUMER_IDENTITY_CHANGED')
+            if status[0] != 'Z':
+                arguments = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+                check(b'--consumer' in arguments and str(root).encode() in arguments,
+                      'FIXTURE_CONSUMER_COMMAND_CHANGED')
+                os.killpg(pid, signal.SIGKILL)
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+    if (root / 'backend-pid').exists():
+        pid = int((root / 'backend-pid').read_text())
+        with connection() as observer:
+            local_connection(observer)
+            until(lambda: backend_state(observer, pid) is None, 'CLEANUP_BACKEND_NOT_DRAINED')
+
+
 def scenario(root, mode):
     route_file(root, 'neon')
     process = subprocess.Popen([sys.executable, SCRIPT, '--wrapper', str(root), mode],
@@ -197,6 +232,9 @@ def scenario(root, mode):
                     (root / 'release-consumer').touch()
                     process.wait(timeout=10)
                     check(process.returncode == 0, 'NORMAL_SUPERVISOR_FAILED')
+                elif mode == 'wrapper-crash':
+                    process.kill()
+                    process.wait(timeout=5)
                 else:
                     # Deterministically widen the real supervisor's lease-loss
                     # detection interval; no scheduling-speed assumption.
@@ -220,16 +258,22 @@ def scenario(root, mode):
                     check(backend_state(observer, pid) is not None, 'RACE_NOT_REPRODUCED')
                     if mode == 'uncommitted-loss':
                         check(backend_state(observer, pid) == ('idle in transaction',), 'OPEN_TX_LOST')
-                    os.kill(process.pid, signal.SIGCONT)
-                    stopped = False
-                    process.wait(timeout=10)
+                    if mode == 'wrapper-crash':
+                        cleanup_consumer(root)
+                    else:
+                        os.kill(process.pid, signal.SIGCONT)
+                        stopped = False
+                        process.wait(timeout=10)
                     check(process.returncode != 0, 'LEASE_LOSS_ACCEPTED')
                 until(lambda: backend_state(observer, pid) is None, 'DATABASE_BACKEND_NOT_DRAINED')
                 count = observer.execute(f'SELECT count(*) FROM {TABLE} WHERE scenario=%s', (mode,)).fetchone()[0]
-                check(count == (0 if mode == 'uncommitted-loss' else 1), 'COMMIT_OUTCOME_MISMATCH')
+                check(count == (0 if mode in ('uncommitted-loss', 'wrapper-crash') else 1), 'COMMIT_OUTCOME_MISMATCH')
     finally:
         if stopped:
-            os.kill(process.pid, signal.SIGCONT)
+            try:
+                os.kill(process.pid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
         if process.poll() is None:
             process.terminate()
             try:
@@ -238,6 +282,7 @@ def scenario(root, mode):
                 process.kill()
                 process.wait(timeout=5)
         process.stderr.close()
+        cleanup_consumer(root)
     print('NATIVE_ROUTE_DRAIN_SCENARIO_PASS', mode)
 
 
@@ -256,7 +301,7 @@ def main(protocol=False):
             setup(root)
             protocol_only(root)
             if not protocol:
-                for mode in ('normal', 'uncommitted-loss', 'commit-before-loss'):
+                for mode in ('normal', 'uncommitted-loss', 'commit-before-loss', 'wrapper-crash'):
                     root = base / mode
                     setup(root)
                     scenario(root, mode)
