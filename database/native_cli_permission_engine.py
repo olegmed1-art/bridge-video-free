@@ -109,7 +109,8 @@ def identity(conn, target):
               and conn.info.host == 'localhost' and conn.info.port == 5432
               and conn.info.hostaddr in ('127.0.0.1', '::1')
               and params.get('host') == 'localhost'
-              and not params.get('hostaddr') and not params.get('options'),
+              and params.get('hostaddr', conn.info.hostaddr) == conn.info.hostaddr
+              and not params.get('options'),
               'NEON_BINDING_REQUIRED')
         return
     neon_identity(conn, target.neon)
@@ -128,7 +129,11 @@ def neon_identity(conn, binding):
     # a requirement for this actual connection, not merely a fallback option.
     check(params.get('sslmode') == 'verify-full'
           and params.get('gssencmode') == 'disable', 'NEON_VERIFIED_TLS_REQUIRED')
-    check(not params.get('options') and not params.get('hostaddr'),
+    # Psycopg 3 resolves DNS into hostaddr itself. Post-connect metadata cannot
+    # distinguish that address from caller input: authenticate the hostname via
+    # verify-full and check branch tags instead of claiming input provenance.
+    check(not params.get('options')
+          and params.get('hostaddr', conn.info.hostaddr) == conn.info.hostaddr,
           'NEON_ROUTING_OVERRIDE_REFUSED')
     neon_server_identity(conn, binding)
 
