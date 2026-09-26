@@ -121,7 +121,7 @@ def dds3_table(request: DDS3TableRequest, http_request: Request) -> dict:
             )
         return solve_table(pbn=request.pbn, dealer=request.dealer, vulnerability=request.vulnerability)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="DDS_REQUEST_INVALID") from exc
     except DDSUnavailable as exc:
         logger.error("dds3_request_failed category=dds_unavailable")
         raise HTTPException(status_code=503, detail="DDS_UNAVAILABLE") from exc
