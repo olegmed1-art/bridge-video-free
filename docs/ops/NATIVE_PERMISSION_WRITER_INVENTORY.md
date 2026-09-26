@@ -39,7 +39,8 @@ Install the CI-pinned PyYAML 6.0.3 dependency, then run:
 python ops/native_permission_writer_inventory.py --revision <40-character-commit-SHA>
 ```
 
-The CLI reads committed Git blobs, not mutable working-tree files. It records
+The CLI reads committed Git blobs with Git replacement objects disabled, not
+mutable working-tree files or local replacement refs. It records
 every YAML workflow, its SHA256, trigger specification, workflow/job concurrency,
 job conditions, environments, reusable-workflow references and literal secret
 names. Dynamic/opaque secret references are flagged. It outputs metadata only:
@@ -62,7 +63,7 @@ establish exclusion. The permission engine's default guard remains closed.
 
 ## Verification and remaining work
 
-Tests use a real disposable Git repository to prove dirty-tree independence,
+Tests use a real disposable Git repository to prove dirty-tree/replacement-ref independence,
 whole-tree changes when a called script changes and symlink refusal. Policy cases
 cover nested groups, literal/dynamic/inherited secrets, disabled job conditions,
 duplicate keys and unknown capabilities remaining unreviewed. CI inventories the
