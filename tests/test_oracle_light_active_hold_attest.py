@@ -41,7 +41,10 @@ class ActiveHoldContract(unittest.TestCase):
         self.assertEqual(settings['gssencmode'],'disable')
         self.assertIn('default_transaction_read_only=on',settings['options'])
         self.assertNotIn('private-secret',output.getvalue())
-        return json.loads(output.getvalue()),queries
+        result=json.loads(output.getvalue())
+        if result['ok'] is False:
+            self.assertIn(result['code'],attest.LOGIN_FAILURES)
+        return {'ok':result['ok']},queries
 
     def test_actual_child_rejects_wrong_neon_binding_before_queue_query(self):
         tags=[
@@ -92,6 +95,18 @@ class ActiveHoldContract(unittest.TestCase):
             run.return_value.stdout=json.dumps({'ok':False})
             with self.assertRaisesRegex(attest.Blocked,'LOGIN_OR_QUEUE_FAILED'):
                 attest.login('postgresql://user:private-secret@host/db')
+
+    def test_login_only_propagates_allowlisted_failure_codes(self):
+        with patch.object(attest.pwd,'getpwnam') as user, \
+             patch.object(attest.subprocess,'run') as run:
+            user.return_value.pw_gid=1000
+            user.return_value.pw_uid=1000
+            run.return_value.returncode=2
+            for code in (*attest.LOGIN_FAILURES,'private-secret'):
+                run.return_value.stdout=json.dumps({'ok':False,'code':code})
+                expected=code if code in attest.LOGIN_FAILURES else 'LOGIN_OR_QUEUE_FAILED'
+                with self.assertRaisesRegex(attest.Blocked,expected):
+                    attest.login('postgresql://user:private-secret@host/db')
 
     def test_workflow_manual_probe_requires_owner_and_exact_main(self):
         text=Path('.github/workflows/oracle-light-active-hold-attest.yml').read_text()

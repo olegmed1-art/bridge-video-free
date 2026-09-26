@@ -73,12 +73,21 @@ def service():
     require(set(result)==set(keys),'UNIT_DRIFT')
     return result
 
+LOGIN_FAILURES={'LOGIN_DRIVER_FAILED','LOGIN_CONNECT_FAILED','LOGIN_TLS_FAILED',
+    'LOGIN_AUTH_FAILED','LOGIN_SESSION_FAILED','LOGIN_BINDING_QUERY_FAILED',
+    'LOGIN_BINDING_TAGS_FAILED','LOGIN_BINDING_VALUES_FAILED',
+    'LOGIN_BINDING_PROVENANCE_FAILED','LOGIN_BINDING_HOST_FAILED',
+    'LOGIN_QUEUE_QUERY_FAILED','LOGIN_QUEUE_NOT_EMPTY'}
+
 CHILD='''import json,os,sys
+stage='LOGIN_DRIVER_FAILED'
 try:
  import psycopg
+ stage='LOGIN_CONNECT_FAILED'
  with psycopg.connect(os.environ['AUDIT_DATABASE_URL'],autocommit=True,connect_timeout=10,
    options='-c statement_timeout=5000 -c default_transaction_read_only=on',
    sslmode='verify-full',sslrootcert='system',gssencmode='disable') as conn:
+  stage='LOGIN_SESSION_FAILED'
   row=conn.execute("SELECT current_user,current_database(),current_setting('transaction_read_only')").fetchone()
   if row!=('autopilot_light_worker_login','neondb','on'):
    raise RuntimeError('DATABASE_SESSION_MISMATCH')
@@ -86,19 +95,32 @@ try:
    'neon.project_id':('misty-poetry-18012774','postmaster'),
    'neon.branch_id':('br-aged-mud-b1i64914','postmaster'),
    'neon.endpoint_id':('ep-noisy-pine-b1pe30sf','superuser')}
+  stage='LOGIN_BINDING_QUERY_FAILED'
   tags=conn.execute("SELECT name,setting,context,source,reset_val,pending_restart FROM pg_catalog.pg_settings WHERE name IN ('neon.project_id','neon.branch_id','neon.endpoint_id')").fetchall()
-  binding=(len(tags)==3 and {t[0] for t in tags}==set(expected) and all(
-   (setting,context)==expected[name] and source=='configuration file'
-   and reset==setting and not pending
-   for name,setting,context,source,reset,pending in tags)
-   and conn.info.host=='ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech'
-   and conn.info.port==5432)
-  if not binding:
-   raise RuntimeError('DATABASE_BINDING_MISMATCH')
+  stage='LOGIN_BINDING_TAGS_FAILED'
+  if len(tags)!=3 or {t[0] for t in tags}!=set(expected): raise RuntimeError(stage)
+  stage='LOGIN_BINDING_VALUES_FAILED'
+  if not all((t[1],t[2])==expected[t[0]] for t in tags): raise RuntimeError(stage)
+  stage='LOGIN_BINDING_PROVENANCE_FAILED'
+  if not all(t[3]=='configuration file' and t[4]==t[1] and not t[5] for t in tags):
+   raise RuntimeError(stage)
+  stage='LOGIN_BINDING_HOST_FAILED'
+  if conn.info.host!='ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech' or conn.info.port!=5432:
+   raise RuntimeError(stage)
+  stage='LOGIN_QUEUE_QUERY_FAILED'
   count=conn.execute("SELECT count(*) FROM autopilot.task_status WHERE status IN ('NEW','VALIDATING','READY','RUNNING','WAITING_EXTERNAL','EVALUATING')").fetchone()[0]
- print(json.dumps({'ok':row==('autopilot_light_worker_login','neondb','on') and count==0}))
-except BaseException:
- print(json.dumps({'ok':False}))
+  stage='LOGIN_QUEUE_NOT_EMPTY'
+  if count!=0: raise RuntimeError(stage)
+ print(json.dumps({'ok':True}))
+except BaseException as exc:
+ # Error text stays private. Only fixed categories cross the process boundary.
+ if stage=='LOGIN_CONNECT_FAILED':
+  detail=str(exc).lower()
+  if 'ssl' in detail or 'certificate' in detail or 'tls' in detail:
+   stage='LOGIN_TLS_FAILED'
+  elif getattr(exc,'sqlstate',None)=='28P01' or 'password authentication failed' in detail:
+   stage='LOGIN_AUTH_FAILED'
+ print(json.dumps({'ok':False,'code':stage}))
  sys.exit(2)
 '''
 
@@ -113,6 +135,8 @@ def login(dsn):
         preexec_fn=identity,capture_output=True,text=True,timeout=30)
     try: result=json.loads(child.stdout) if len(child.stdout)<128 else {}
     except ValueError: result={}
+    if isinstance(result,dict) and result.get('ok') is False and result.get('code') in LOGIN_FAILURES:
+        raise Blocked(result['code'])
     require(child.returncode==0 and result=={'ok':True},'LOGIN_OR_QUEUE_FAILED')
 
 def main():
@@ -172,5 +196,5 @@ if __name__=='__main__':
         print(json.dumps({'audit':'BLOCKED','code':code if code in {
             'HOST_IDENTITY','FILE_DRIFT','ENV_SYNTAX','UNIT_DRIFT','BASE_DRIFT','DROP_DRIFT',
             'PIN_DRIFT','ROUTE_DRIFT','ENV_DRIFT','DSN_DRIFT','LIVE_ENV_DRIFT','LIVE_PROCESS_DRIFT',
-            'LOGIN_OR_QUEUE_FAILED','POST_CHECK_DRIFT'} else 'UNCLASSIFIED'}))
+            'LOGIN_OR_QUEUE_FAILED','POST_CHECK_DRIFT'} | LOGIN_FAILURES else 'UNCLASSIFIED'}))
         sys.exit(2)
