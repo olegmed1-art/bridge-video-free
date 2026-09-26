@@ -14,9 +14,41 @@ BUCKET = 'bridge-light-autopilot-backups'
 TAG = 'bridge-light-autopilot-backups-v1'
 PREFIX = 'native-journal/checkpoint-v1/'
 LIMIT = 8 * 1024**3
+ASSETS_PREFIX = 'native-journal/recovery-assets-v1/'
 
 
 class OCIJournalStore:
+    def read_assets(self, expected_digest, source, source_digest, manifest_digest, baseline_digest):
+        from ops import native_maintenance_recovery_assets as assets
+        try:
+            assets.binding(source, source_digest, manifest_digest, baseline_digest)
+            require(snapshot._hex(expected_digest), 'ASSETS_DIGEST')
+            self.assert_private()
+            result = self._read(ASSETS_PREFIX + source + '/' + expected_digest + '.json', assets.MAX_BYTES)
+            require(result is not None, 'ASSETS_MISSING')
+            assets.decode(result[0], expected_digest, source, source_digest, manifest_digest, baseline_digest)
+            self.assert_private()
+            return result[0]
+        except BaseException:
+            self.failed = True
+            raise
+
+    def put_assets(self, data, expected_digest, source, source_digest, manifest_digest, baseline_digest):
+        from ops import native_maintenance_recovery_assets as assets
+        try:
+            assets.decode(data, expected_digest, source, source_digest, manifest_digest, baseline_digest)
+            self.assert_private()
+            path = ASSETS_PREFIX + source + '/' + expected_digest + '.json'
+            existing = self._read(path, assets.MAX_BYTES)
+            if existing is not None:
+                require(existing[0] == data, 'ASSETS_IMMUTABLE_CONFLICT')
+                return
+            self._budget(len(data))
+            self._put(path, data)
+        except BaseException:
+            self.failed = True
+            raise
+
     def __init__(self, client, namespace, mutation_guard):
         import oci
         require(type(namespace) is str and re.fullmatch('[A-Za-z0-9_-]{1,128}', namespace),

@@ -15,7 +15,7 @@ from ops.native_maintenance_store_runner import HOST, loader, source_check
 MAX_WIRE = 16 * 1024 * 1024
 
 
-def bootstrap(repo, source, source_digest, wheel_digest, run):
+def bootstrap(repo, source, source_digest, wheel_digest, run, *, candidate=False):
     lifetime = bundle.git(repo, 'show', source + ':ops/native_maintenance_lifetime.py')
     decoder = bundle.git(repo, 'show', source + ':ops/native_maintenance_bundle.py')
     bundle.check(0 < len(lifetime) <= 32768 and 0 < len(decoder) <= 32768, 'DRIVER_BOOTSTRAP_SIZE')
@@ -28,7 +28,8 @@ def bootstrap(repo, source, source_digest, wheel_digest, run):
             + "wheels=base64.b64decode(value['driver'],validate=True)\n"
             + 'bundle.check(hashlib.sha256(wheels).hexdigest()==' + repr(wheel_digest) + ",'OWNER_WHEELS_REFUSED')\n"
             + 'with bundle.extracted(payload,' + repr(source) + ',' + repr(source_digest) + ') as root:\n'
-            + " sys.path.insert(0,str(root))\n from ops.native_maintenance_owner_host import main\n"
+            + " sys.path.insert(0,str(root))\n from ops.native_maintenance_owner_host import "
+            + ('candidate_main as main' if candidate else 'main') + '\n'
             + " main(wheels,value['credential'])\n")
     outer = ('import base64,types\n' + loader('lifetime', lifetime)
              + 'try:\n result=lifetime.managed(' + repr(code) + ','
@@ -36,6 +37,21 @@ def bootstrap(repo, source, source_digest, wheel_digest, run):
              + 'except BaseException:\n result=2\nraise SystemExit(result)\n')
     bundle.check(len(outer.encode()) <= 98304, 'DRIVER_BOOTSTRAP_SIZE')
     return outer
+
+
+def validate_report(value):
+    bundle.check(type(value) is dict and set(value) == {'audit', 'runtime_id', 'snapshot_digest',
+                 'snapshot_approved', 'hold_unchanged', 'native_enabled', 'receipts', 'nonterminal_tasks',
+                 'light_native_execute', 'production_mutations', 'elapsed_ms'}
+                 and value['audit'] == 'NATIVE_OWNER_HOST_READ_ONLY_PASS'
+                 and bundle.identifier(value['runtime_id'], 64)
+                 and bundle.identifier(value['snapshot_digest'], 64)
+                 and value['snapshot_approved'] is False and value['hold_unchanged'] is True
+                 and value['native_enabled'] is False and value['production_mutations'] is False
+                 and all(type(value[k]) is int and value[k] == 0 for k in
+                         ('receipts', 'nonterminal_tasks', 'light_native_execute'))
+                 and type(value['elapsed_ms']) is int and 0 <= value['elapsed_ms'] < 100000,
+                 'OWNER_HOST_RESULT')
 
 
 def main():
@@ -64,18 +80,7 @@ def main():
                             env={'PATH': '/usr/bin:/bin'})
     bundle.check(result.returncode == 0 and len(result.stdout) <= 2048, 'DRIVER_HOST_REFUSED')
     value = json.loads(result.stdout, object_pairs_hook=bundle.unique)
-    bundle.check(type(value) is dict and set(value) == {'audit', 'runtime_id', 'snapshot_digest',
-                 'snapshot_approved', 'hold_unchanged', 'native_enabled', 'receipts', 'nonterminal_tasks',
-                 'light_native_execute', 'production_mutations', 'elapsed_ms'}
-                 and value['audit'] == 'NATIVE_OWNER_HOST_READ_ONLY_PASS'
-                 and bundle.identifier(value['runtime_id'], 64)
-                 and bundle.identifier(value['snapshot_digest'], 64)
-                 and value['snapshot_approved'] is False and value['hold_unchanged'] is True
-                 and value['native_enabled'] is False and value['production_mutations'] is False
-                 and all(type(value[k]) is int and value[k] == 0 for k in
-                         ('receipts', 'nonterminal_tasks', 'light_native_execute'))
-                 and type(value['elapsed_ms']) is int and 0 <= value['elapsed_ms'] < 100000,
-                 'OWNER_HOST_RESULT')
+    validate_report(value)
     source_check(source)
     print(json.dumps(dict(value, source_sha=source), sort_keys=True))
 

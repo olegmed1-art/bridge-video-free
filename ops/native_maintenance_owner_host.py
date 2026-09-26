@@ -1,5 +1,6 @@
 """Owner credential probe on Oracle. Read-only; no grants or manifest approval."""
 from contextlib import contextmanager
+import base64
 import fcntl
 import importlib
 import json
@@ -43,7 +44,7 @@ def verified_runtime(payload):
         os.close(descriptor)
 
 
-def observe(wheels, credential):
+def observe(wheels, credential, *, candidate=False):
     require(os.getuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic', 'OWNER_HOST')
     require(type(credential) is str and 0 < len(credential) <= 8192, 'OWNER_CREDENTIAL_SIZE')
     connection_parameters(credential, 'neondb_owner')  # Reject unrelated credentials before host/DB work.
@@ -63,13 +64,27 @@ def observe(wheels, credential):
         require(all(not name.startswith('psycopg') or
                     (getattr(module, '__file__', None) and Path(module.__file__).resolve().is_relative_to(site))
                     for name, module in tuple(sys.modules.items())), 'OWNER_DRIVER_SUBMODULE_ORIGIN')
-        report = owner.observe(psycopg.connect, credential)
+        if candidate:
+            report, manifest = owner.candidate(psycopg.connect, credential)
+        else:
+            report = owner.observe(psycopg.connect, credential)
     require(attest() == before, 'OWNER_HOLD_CHANGED')
-    return dict(audit='NATIVE_OWNER_HOST_READ_ONLY_PASS', runtime_id=runtime_id,
+    result = dict(audit='NATIVE_OWNER_HOST_READ_ONLY_PASS', runtime_id=runtime_id,
                 snapshot_digest=report['snapshot_digest'], snapshot_approved=False,
                 hold_unchanged=True, native_enabled=False, receipts=0, nonterminal_tasks=0,
                 light_native_execute=0, production_mutations=False,
                 elapsed_ms=int((time.monotonic() - start) * 1000))
+    return (result, manifest) if candidate else result
+
+
+def candidate_main(wheels, credential):
+    """Private SSH response only. The reviewed runner must never print it."""
+    try:
+        report, manifest = observe(wheels, credential, candidate=True)
+        print(json.dumps(dict(report=report, manifest=base64.b64encode(manifest).decode('ascii'))))
+    except BaseException:
+        # No traceback or private data even if serialization or transmission fails.
+        raise SystemExit(2) from None
 
 
 def main(wheels, credential):
