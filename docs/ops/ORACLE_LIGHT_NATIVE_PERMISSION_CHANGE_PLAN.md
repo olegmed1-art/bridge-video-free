@@ -231,3 +231,16 @@ implemented/established. Existing-receipt, wrong-context and interruption
 faults must be covered by that exact runner. None of the rehearsal code is to
 be pointed at production. The one-item provider loader and bounded pilot remain
 separate from this grant-only maintenance window.
+
+
+### Coverage correction after #1968 — 2026-09-26
+
+The full workflow sweep at main `9fe64089ae745399754a5e43a406e20ff08a0c37`
+found 320 workflows and 167 literal infrastructure/database credential-name
+candidates. These are unreviewed capabilities, not proven production writers.
+See [NATIVE_PERMISSION_WRITER_INVENTORY.md](NATIVE_PERMISSION_WRITER_INVENTORY.md)
+and its immutable-Git inventory tool. The two-group design above remains a
+partial proposal, not sufficient maintenance exclusion; resolve the additional
+groups, ungrouped paths and external channels before wiring production apply.
+The transaction engine and Neon binding are implemented in #1967/#1968; their
+default maintenance guard still refuses every change.
