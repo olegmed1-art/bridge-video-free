@@ -9,6 +9,7 @@ on:
       - 'ops/native_permission_route_fence.py'
       - 'ops/native_maintenance_bundle.py'
       - 'ops/native_maintenance_executor.py'
+      - 'ops/native_maintenance_run_guard.py'
       - 'ops/native_maintenance_workflow_api.py'
       - 'ops/native_maintenance_workflow_pause.py'
       - 'ops/native_permission_hold_guard.py'
@@ -40,6 +41,7 @@ on:
       - 'ops/native_permission_route_fence.py'
       - 'ops/native_maintenance_bundle.py'
       - 'ops/native_maintenance_executor.py'
+      - 'ops/native_maintenance_run_guard.py'
       - 'ops/native_maintenance_workflow_api.py'
       - 'ops/native_maintenance_workflow_pause.py'
       - 'ops/native_permission_hold_guard.py'
@@ -240,22 +242,13 @@ jobs:
             PYTHONPATH="$PWD:$(python -m site --user-site)" \
             "$(command -v python)" database/fixtures/native_maintenance_session_rehearsal.py
 
-      - name: Rehearse composed session from verified source package
+      - name: Rehearse session and journalled executor from verified source package
         shell: bash
         run: |
           set -euo pipefail
           sudo -n env ADMIN_DATABASE_URL="$ADMIN_DATABASE_URL" GITHUB_SHA="$GITHUB_SHA" \
             PYTHONPATH="$PWD:$(python -m site --user-site)" \
             "$(command -v python)" database/fixtures/native_maintenance_bundle_rehearsal.py
-
-      - name: Rehearse journalled workflow and permission session composition
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$ADMIN_DATABASE_URL" = "postgresql://postgres:postgres@localhost:5432/bridge_school_ci"
-          sudo -n env ADMIN_DATABASE_URL="$ADMIN_DATABASE_URL" \
-            PYTHONPATH="$PWD:$(python -m site --user-site)" \
-            "$(command -v python)" database/fixtures/native_maintenance_executor_rehearsal.py
 
       - name: Inventory native CLI dependencies without mutations
         shell: bash

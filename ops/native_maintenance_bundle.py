@@ -20,11 +20,16 @@ FILES = (
     'database/fixtures/native_cli_commit_rehearsal.py',
     'database/fixtures/native_route_drain_rehearsal.py',
     'database/fixtures/native_maintenance_session_rehearsal.py',
+    'database/fixtures/native_maintenance_executor_rehearsal.py',
     'ops/oracle_light_route_lease.py',
     'ops/github_autopilot_db_route.py',
     'ops/native_permission_route_fence.py',
     'ops/oracle_light_active_hold_attest.py',
     'ops/native_permission_hold_guard.py',
+    'ops/native_maintenance_executor.py',
+    'ops/native_maintenance_workflow_api.py',
+    'ops/native_maintenance_workflow_pause.py',
+    'ops/native_maintenance_run_guard.py',
 )
 PACKAGE_MARKERS = ('database/__init__.py', 'database/fixtures/__init__.py', 'ops/__init__.py')
 MAX_FILE = 256 * 1024

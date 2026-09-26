@@ -3,9 +3,10 @@
 Change: 2026-09-26. Governance: ASSURED preparation. Production maintenance
 remains disabled by the existing default external guard.
 
-`ops/native_maintenance_bundle.py` packages the fixed eleven-file import closure
-for the composed maintenance session, its disposable rehearsal, and live HOLD
-guard. It reads blobs from an exact 40-character Git commit with replacement
+`ops/native_maintenance_bundle.py` packages the fixed sixteen-file import closure
+for the composed maintenance session, journalled executor, workflow API/pause,
+run binding, live HOLD guard and disposable rehearsals.
+It reads blobs from an exact 40-character Git commit with replacement
 objects disabled; dirty checkout files are not inputs. Git environment overrides
 are removed. Only ordinary blob modes 100644/100755 are accepted.
 
@@ -29,10 +30,15 @@ are outside this directory protection boundary.
 
 Unit tests use real Git objects, replacement refs and a dirty working tree, plus
 malformed payloads, file-mode refusal and extraction failures. Database CI runs
-the existing composed-session rehearsal again from the extracted source. Before
+the composed-session and journalled-executor rehearsals from the extracted source. Before
 execution it asserts every imported allowlisted module's `__file__` is the exact
 extracted path. The rehearsal uses the existing loopback disposable database
 identity checks, actual PostgreSQL grants/revokes, route locks and failure cases.
+The executor rehearsal additionally verifies lost acknowledgement after commit,
+reconstruction without SQL replay, independent DB reconciliation and cleanup.
+Import origins are checked again after both rehearsals. GitHub/run/HOLD/operator/
+lifetime dependencies in the executor fixture remain explicit CI stubs, not
+live maintenance-window evidence. The combined subprocess retains its 180s bound.
 The digest generated in that same CI job proves build/transport consistency;
 it deliberately does not represent independent production approval.
 
@@ -43,12 +49,19 @@ and dependency installation in addition to the verified application sources.
 
 ## Remaining production gates and rollback
 
-This package neither implements SSH transport nor proves GitHub concurrency
-ownership, operator coordination, cancellation/EOF handling, durable approval,
-or owner-credential delivery. A subprocess timeout in the disposable fixture is
+The separately reviewed read-only SSH transport still runs only its fixed HOLD
+audit; packaging the executor does not invoke it or provide a mutation command.
+This package does not establish GitHub concurrency ownership, operator coordination,
+supervised mutation lifetime, durable approval/journals or owner-credential delivery.
+A subprocess timeout in the disposable fixture is
 not remote cancellation assurance or a claim that descendants have drained.
 No production entrypoint, secret access, grants, service change or native task is
 added. Subsequent transport work must bind these separate requirements before
 calling the guarded maintenance session.
+
+The decoder requires its exact file set. Older eleven-file payloads must use
+their original reviewed decoder/source; they are deliberately rejected by this
+expanded decoder. Expected digests must be recomputed and independently accepted
+for the new source. No fallback decoder or omitted-dependency mode is provided.
 
 Rollback is a source revert; this change has no production data migration.
