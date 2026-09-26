@@ -41,8 +41,10 @@ def snapshot(conn):
     return conn.execute("""
       SELECT jsonb_build_object(
         'functions',(SELECT jsonb_agg(jsonb_build_object(
-          'oid',p.oid,'owner',p.proowner,'acl',p.proacl::text,
-          'acl_entries',(SELECT jsonb_agg(to_jsonb(a) ORDER BY a.grantee,a.grantor,a.privilege_type,a.is_grantable)
+          'oid',p.oid::bigint,'owner',p.proowner::bigint,'acl',p.proacl::text,
+          'acl_entries',(SELECT jsonb_agg(jsonb_build_object('grantor',a.grantor::bigint,
+            'grantee',a.grantee::bigint,'privilege_type',a.privilege_type,'is_grantable',a.is_grantable)
+            ORDER BY a.grantee,a.grantor,a.privilege_type,a.is_grantable)
             FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a),
           'definition',pg_get_functiondef(p.oid)) ORDER BY p.oid)
           FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
