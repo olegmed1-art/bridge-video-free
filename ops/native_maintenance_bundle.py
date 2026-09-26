@@ -34,6 +34,8 @@ FILES = (
     'ops/native_maintenance_snapshot.py',
     'ops/native_maintenance_checkpoint.py',
     'ops/native_maintenance_checkpoint_oci.py',
+    'ops/native_maintenance_checkpoint_transport.py',
+    'ops/native_maintenance_checkpoint_host_probe.py',
     'ops/native_maintenance_driver.py',
     'ops/native_maintenance_owner_attest.py',
     'ops/oracle_autopilot_source_preflight.py',
