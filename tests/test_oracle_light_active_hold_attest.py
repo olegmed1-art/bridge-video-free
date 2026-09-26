@@ -10,7 +10,8 @@ from ops import oracle_light_active_hold_attest as attest
 
 
 class ActiveHoldContract(unittest.TestCase):
-    def run_child(self, tags, host=attest.HOST, count=0):
+    def run_child(self, tags, host=attest.HOST, count=0,
+                  identity=('autopilot_light_worker_login','neondb','on')):
         queries=[]
         settings={}
         class Connection:
@@ -23,7 +24,7 @@ class ActiveHoldContract(unittest.TestCase):
                     return SimpleNamespace(fetchall=lambda: tags)
                 return SimpleNamespace(fetchone=lambda:
                     (count,) if 'count(*)' in query else
-                    ('autopilot_light_worker_login','neondb','on'))
+                    identity)
         def connect(*args,**kwargs):
             settings.update(kwargs)
             return Connection()
@@ -36,6 +37,7 @@ class ActiveHoldContract(unittest.TestCase):
             except SystemExit as exc:
                 self.assertEqual(exc.code,2)
         self.assertEqual(settings['sslmode'],'verify-full')
+        self.assertEqual(settings['sslrootcert'],'system')
         self.assertEqual(settings['gssencmode'],'disable')
         self.assertIn('default_transaction_read_only=on',settings['options'])
         self.assertNotIn('private-secret',output.getvalue())
@@ -48,6 +50,12 @@ class ActiveHoldContract(unittest.TestCase):
             ('neon.endpoint_id','ep-noisy-pine-b1pe30sf','superuser','configuration file','ep-noisy-pine-b1pe30sf',False)]
         self.assertEqual(self.run_child(tags)[0],{'ok':True})
         self.assertEqual(self.run_child(tags,count=1)[0],{'ok':False})
+        for identity in (('wrong','neondb','on'),
+                         ('autopilot_light_worker_login','wrong','on'),
+                         ('autopilot_light_worker_login','neondb','off')):
+            result,queries=self.run_child(tags,identity=identity)
+            self.assertEqual(result,{'ok':False})
+            self.assertEqual(len(queries),1)
         variants=[tags[:-1],tags+[tags[0]]]
         for row in range(3):
             for column,value in ((1,'wrong'),(2,'user'),(3,'client'),(4,'wrong'),(5,True)):
