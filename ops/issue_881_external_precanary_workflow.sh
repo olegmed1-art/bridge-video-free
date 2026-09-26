@@ -57,6 +57,7 @@ protected_gate_paths=(
   'ops/native_maintenance_checkpoint_oci.py'
   'ops/native_maintenance_driver.py'
   'ops/native_maintenance_owner_attest.py'
+  'ops/native_maintenance_registry_scope.py'
   'ops/oracle_autopilot_source_preflight.py'
   'ops/native_maintenance_owner_host.py'
   'ops/native_maintenance_owner_host_runner.py'
