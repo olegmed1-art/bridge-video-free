@@ -28,6 +28,8 @@ process_video_gate_armed=0
 root_pr_number=991
 prior_gate_pr_number=1070
 protected_gate_paths=(
+  '.github/workflows/native-maintenance-window.yml'
+  'ops/native_maintenance_run_guard.py'
   '.dockerignore'
   '.github/workflows/issue-881-authoritative-external-evidence.yml'
   '.github/workflows/issue-881-contract-ci.yml'
@@ -398,7 +400,7 @@ collect_active_workflow_run_sweep(){
 
 verify_no_competing_infrastructure_runs(){
   local forward_runs reverse_runs current_forward current_reverse competing_count
-  local path_pattern='^\.github/workflows/(oracle-|issue-881-|autopilot-|database-production\.yml$|database-worker-runtime-smoke\.yml$|process-video\.yml$|video-job-monitor\.yml$|bridge-ai-|research-job-|dds3-runtime-container-proof\.yml$|dds3-production-health-monitor\.yml$|dds-training-|dds-main-)'
+  local path_pattern='^\.github/workflows/(native-maintenance-window\.yml$|oracle-|issue-881-|autopilot-|database-production\.yml$|database-worker-runtime-smoke\.yml$|process-video\.yml$|video-job-monitor\.yml$|bridge-ai-|research-job-|dds3-runtime-container-proof\.yml$|dds3-production-health-monitor\.yml$|dds-training-|dds-main-)'
   forward_runs="$RUNNER_TEMP/precanary-active-runs-forward.json"
   reverse_runs="$RUNNER_TEMP/precanary-active-runs-reverse.json"
 
