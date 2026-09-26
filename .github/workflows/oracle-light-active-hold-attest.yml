@@ -8,10 +8,10 @@ on:
         required: true
         type: string
   pull_request:
-    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py', 'ops/native_permission_hold_guard.py', 'tests/test_native_permission_hold_guard.py']
+    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py', 'ops/native_permission_hold_guard.py', 'tests/test_native_permission_hold_guard.py', 'ops/native_maintenance_bundle.py', 'ops/native_maintenance_readonly_transport.py', 'tests/test_native_maintenance_readonly_transport.py']
   push:
     branches: [main]
-    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py', 'ops/native_permission_hold_guard.py', 'tests/test_native_permission_hold_guard.py']
+    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py', 'ops/native_permission_hold_guard.py', 'tests/test_native_permission_hold_guard.py', 'ops/native_maintenance_bundle.py', 'ops/native_maintenance_readonly_transport.py', 'tests/test_native_maintenance_readonly_transport.py']
 
 permissions:
   contents: read
@@ -24,6 +24,8 @@ jobs:
         with:
           persist-credentials: false
       - run: python -m unittest -q tests.test_oracle_light_active_hold_attest tests.test_native_permission_hold_guard
+      - name: Verify read-only transport with real subprocesses
+        run: sudo -n env PYTHONPATH="$PWD" "$(command -v python)" -m unittest discover -s tests -p 'test_native_maintenance_readonly_transport.py' -v
 
   attest:
     needs: contract
@@ -40,7 +42,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-      - name: Verify live HOLD and read-only Neon login as Light user
+      - name: Verify transport cancellation and live HOLD from exact-source package
         shell: bash
         env:
           SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
@@ -54,4 +56,4 @@ jobs:
           unset SSH_PRIVATE_KEY
           ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
           bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
-          ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ConnectionAttempts=1 ubuntu@92.5.47.149 'sudo -n /usr/bin/python3 -' < ops/oracle_light_active_hold_attest.py
+          PYTHONPATH=. python ops/native_maintenance_readonly_transport.py --key "$work/key" --known-hosts "$work/known_hosts"
