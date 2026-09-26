@@ -52,15 +52,17 @@ independent reconciliation, but may NEVER repeat the original DB session.
 """
     def __init__(self, *, target, operation, manifest_path, manifest_digest,
                  expected_route, approved_hold, workflow_plan, plan_digest,
-                 api_token, pause_journal, operation_journal, run, operator, lifetime):
+                 api_token, pause_journal, operation_journal, run, operator, lifetime, checkpoint):
         require(operation in ('apply', 'rollback'), 'EXECUTOR_OPERATION_INVALID')
         require(digest(workflow_plan) == plan_digest, 'EXECUTOR_PLAN_MISMATCH')
         require(all(callable(getattr(operator, n, None)) for n in ('assert_held', 'assert_drained'))
                 and callable(getattr(lifetime, 'assert_alive', None))
-                and callable(getattr(run, 'assert_running', None)), 'EXECUTOR_RUNTIME_REQUIRED')
+                and callable(getattr(run, 'assert_running', None))
+                and callable(getattr(checkpoint, 'sync', None)), 'EXECUTOR_RUNTIME_REQUIRED')
         require(pause_journal.root.resolve() != operation_journal.root.resolve(), 'SEPARATE_JOURNALS_REQUIRED')
         self.target, self.manifest_path = target, manifest_path
         self.run, self.operator, self.lifetime = run, operator, lifetime
+        self.checkpoint = checkpoint
         self.operation_journal, self.pause_journal = operation_journal, pause_journal
         self.failed, self.phase = False, 'idle'
         self.run.assert_running()
@@ -133,6 +135,13 @@ independent reconciliation, but may NEVER repeat the original DB session.
     def _event(self, kind, outcome):
         self.operation_journal.append({'kind': kind, 'run': self.current_run, 'outcome': outcome})
         self._replay()
+        self._sync_checkpoint()
+
+    def _sync_checkpoint(self):
+        self._assert_window()
+        self.checkpoint.sync(self.scope_digest, self.operation_journal, self.pause_journal)
+        # Remote persistence can consume the lease: recheck before dispatch.
+        self._assert_window()
 
     def _assert_window(self):
         require(not self.failed, 'EXECUTOR_ALREADY_FAILED')
@@ -160,6 +169,9 @@ independent reconciliation, but may NEVER repeat the original DB session.
         require(workflow_id in self.pause.states, 'EXECUTOR_DISPATCH_SCOPE')
         if action == 'enable':
             self.release.assert_reconciled(self.scope_digest, self.release_outcome)
+        self._sync_checkpoint()
+        if action == 'enable':
+            self.release.assert_reconciled(self.scope_digest, self.release_outcome)
 
     def execute(self, connection_factory, *, route_root=None, seconds=30):
         """Exactly one session. Success does not automatically restore workflows."""
@@ -167,6 +179,7 @@ independent reconciliation, but may NEVER repeat the original DB session.
         require(self.state == 'bound' and self.current_run == self.scope['origin_run'], 'EXECUTOR_SESSION_ALREADY_ATTEMPTED')
         expected = 'BEFORE' if self.scope['operation'] == 'rollback' else 'AFTER'
         try:
+            self._sync_checkpoint()  # Publish pristine BOUND/PLAN before any intent.
             self.phase = 'pausing'
             self.pause.pause()
             self.phase = 'session'
@@ -217,6 +230,7 @@ An ambiguous GitHub PUT still requires the pause library's separate recovery.
 
         try:
             release.assert_reconciled(self.scope_digest, outcome)
+            self._sync_checkpoint()
             self._event('RESTORE_INTENT', outcome)
             self.phase = 'restoring'
             self.pause.restore(ReleaseAdapter())

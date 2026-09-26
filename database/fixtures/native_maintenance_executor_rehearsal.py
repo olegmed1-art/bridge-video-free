@@ -16,6 +16,7 @@ from database.fixtures.native_cli_commit_rehearsal import connection, LOGIN, PAR
 from database.fixtures.native_maintenance_session_rehearsal import TARGET, ROUTE, owned, CONNECTIONS
 from database.fixtures.native_route_drain_rehearsal import setup, prove_busy
 from ops import native_maintenance_executor as executor
+from ops import native_maintenance_checkpoint as checkpoint
 from ops import native_maintenance_snapshot as recovery
 from ops import native_maintenance_workflow_api as api
 from ops.native_maintenance_workflow_pause import Journal, Refused, digest
@@ -39,6 +40,27 @@ class CIAuthority:
     def assert_alive(self): pass
     def assert_held(self, scope): pass
     def assert_drained(self, scope): pass
+
+
+class CIMemoryStore:
+    """Real checkpoint protocol over simulated off-VM storage, not an OCI proof."""
+    def __init__(self):
+        self.objects, self.heads, self.revision = {}, {}, 0
+    def assert_private(self): pass  # CI-only private-store authority.
+    def read_head(self, scope): return self.heads.get(scope)
+    def put_archive(self, scope, sha, data):
+        key = (scope, sha)
+        engine.check(key not in self.objects or self.objects[key] == data, 'CI_IMMUTABLE')
+        self.objects[key] = data
+    def read_archive(self, scope, sha, limit):
+        data = self.objects[(scope, sha)]
+        engine.check(len(data) <= limit, 'CI_ARCHIVE_LIMIT')
+        return data
+    def compare_head(self, scope, revision, data):
+        current = self.heads.get(scope)
+        engine.check((current[1] if current else None) == revision, 'CI_HEAD_CONFLICT')
+        self.revision += 1
+        self.heads[scope] = (data, str(self.revision))
 
 
 class CIHoldGuard:
@@ -90,19 +112,22 @@ def main():
             # Four real sessions: apply, rollback, apply with lost return, rollback.
             for index, (operation, lost) in enumerate([('apply', False), ('rollback', False),
                                                       ('apply', True), ('rollback', False)]):
-                remote, authority = CIRemote(), CIAuthority()
+                remote, authority, store = CIRemote(), CIAuthority(), CIMemoryStore()
                 paths = [base / f'{index}-pause', base / f'{index}-operation']
                 for path in paths:
                     path.mkdir(mode=0o700)
                 journals = [Journal(path) for path in paths]
                 expected = 'BEFORE' if operation == 'rollback' else 'AFTER'
                 def build():
+                    # Simulated independent acceptance for this disposable fixture.
+                    accepted = None if not store.heads else checkpoint.sha(next(iter(store.heads.values()))[0])
+                    barrier = checkpoint.JournalCheckpoint(store, accepted_head_digest=accepted)
                     return executor.MaintenanceExecutor(
                         target=TARGET, operation=operation, manifest_path=manifest,
                         manifest_digest=manifest_digest, expected_route=ROUTE, approved_hold=CIHold(),
                         workflow_plan=PLAN, plan_digest=digest(PLAN), api_token='CI-only',
                         pause_journal=journals[0], operation_journal=journals[1],
-                        run=authority, operator=authority, lifetime=authority)
+                        run=authority, operator=authority, lifetime=authority, checkpoint=barrier)
                 actual_change = engine.change
                 def change(*args, **kwargs):
                     prove_busy(route)  # Actual routed client blocked while actual SQL executes.
@@ -110,6 +135,10 @@ def main():
                 def perform(*args, **kwargs):
                     engine.check(journals[1].records[-1]['event']['kind'] == 'SESSION_INTENT', 'CI_INTENT_ORDER')
                     engine.check(remote.row['state'] == 'disabled_manually', 'CI_PAUSE_ORDER')
+                    accepted = checkpoint.sha(store.heads[ex.scope_digest][0])
+                    persisted = checkpoint.accepted_latest(store, ex.scope_digest, accepted)
+                    engine.check('SESSION_INTENT' in recovery._parse(persisted)['journals']['operation'][-1],
+                                 'CI_REMOTE_INTENT_ORDER')
                     result = session.execute(*args, **kwargs)
                     if lost:
                         raise ConnectionError('CI_LOST_RETURN_AFTER_REAL_COMMIT')
@@ -138,7 +167,8 @@ def main():
                             # Recover the pair after a real committed GRANT whose
                             # return was lost. Reopen only the independent copy;
                             # the original uncertainty and records remain intact.
-                            archive = recovery.capture(paths[1], paths[0])
+                            archive = checkpoint.accepted_latest(
+                                store, ex.scope_digest, checkpoint.sha(store.heads[ex.scope_digest][0]))
                             recovery_parent = base / 'recovery'
                             recovery_parent.mkdir(mode=0o700)
                             restored = recovery.restore(archive, hashlib.sha256(archive).hexdigest(),
@@ -167,6 +197,7 @@ def main():
                         engine.check(ex.state == 'restored', 'CI_RESTORE_JOURNAL')
                         if lost:
                             print('NATIVE_MAINTENANCE_SNAPSHOT_REAL_COMMIT_RECOVERY_PASS')
+                            print('NATIVE_MAINTENANCE_CHECKPOINT_REAL_COMMIT_RECOVERY_PASS')
                 finally:
                     for journal in journals:
                         journal.close()
