@@ -221,7 +221,8 @@ class Operator:
         self.failed = False
         self.assert_held(self.scope)
 
-    def assert_held(self, scope):
+    def assert_local(self, scope):
+        """Continuity only: callers still need fresh source/run observations."""
         require(not self.failed, 'COORDINATION_ALREADY_FAILED')
         try:
             require(scope == self.scope, 'COORDINATION_SCOPE_CHANGED')
@@ -230,9 +231,17 @@ class Operator:
             require((self.run.run_id, self.run.attempt, self.run.job_id) == self.run_identity
                     and self.run.source == self.source and not self.run.failed
                     and time.monotonic() < self.run.deadline, 'COORDINATION_RUN_CHANGED')
+            self.run.assert_current()
             self.agreement.assert_held(scope)
+        except BaseException:
+            self.failed = True
+            raise
+
+    def assert_held(self, scope):
+        try:
+            self.assert_local(scope)
             source_matches(self.transport, self.source)
-            self.agreement.assert_held(scope)
+            self.assert_local(scope)
         except BaseException:
             self.failed = True
             raise
@@ -240,10 +249,20 @@ class Operator:
     def assert_drained(self, scope):
         try:
             self.assert_held(scope)
+            self.observe_drained(scope)
+            self.assert_held(scope)
+        except BaseException:
+            self.failed = True
+            raise
+
+    def observe_drained(self, scope):
+        """Read-only drain chain; no independent run/source admission authority."""
+        try:
+            self.assert_local(scope)
             self.workflows.assert_drained()
             self.hosts.assert_drained()
             self.connections.assert_drained()
-            self.assert_held(scope)
+            self.assert_local(scope)
         except BaseException:
             self.failed = True
             raise

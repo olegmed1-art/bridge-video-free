@@ -39,6 +39,46 @@ class SessionWindow:
         ex._assert_window()
 
 
+class ObservedSessionWindow(SessionWindow):
+    """One no-effect observation chain per call; never a cached admission lease."""
+    def __init__(self, executor):
+        from ops.native_maintenance_coordination import Operator
+        from ops.native_maintenance_run_guard import RunBinding
+        require(isinstance(executor.operator, Operator) and isinstance(executor.run, RunBinding)
+                and executor.operator.run is executor.run, 'OBSERVED_ADMISSION_RUNTIME_REQUIRED')
+        super().__init__(executor)
+
+    def local(self):
+        ex = self.executor
+        require(not ex.failed, 'EXECUTOR_ALREADY_FAILED')
+        ex.operation_journal.assert_live()
+        ex.pause_journal.assert_live()
+        ex.lifetime.assert_alive()
+        ex.run.assert_current()
+        require(ex._run_identity() == ex.current_run and ex.run.source == ex.scope['source'],
+                'EXECUTOR_RUN_CHANGED')
+        ex.operator.assert_local(ex.scope_digest)
+
+    def observe_hold(self, target, operation, approved_hold):
+        from ops.oracle_light_active_hold_attest import attest
+        ex = self.executor
+        try:
+            require(asdict(target) == ex.scope['target'] and operation == ex.scope['operation']
+                    and asdict(approved_hold) == ex.scope['hold'], 'EXECUTOR_SESSION_SCOPE_CHANGED')
+            self.local()
+            ex.pause.observe_paused()
+            ex.operator.observe_drained(ex.scope_digest)
+            require(attest() == approved_hold, 'HOLD_IDENTITY_CHANGED')
+            # Detect re-enable during drain/HOLD before the final authenticated
+            # run/source/job observation. Neither read chain can perform effects.
+            ex.pause.observe_paused()
+            ex.run.assert_running()
+            self.local()
+        except BaseException:
+            ex.failed = True
+            raise
+
+
 class MaintenanceExecutor:
     """Compose the real API/pause/HOLD/session components with durable intent.
 
@@ -53,8 +93,10 @@ independent reconciliation, but may NEVER repeat the original DB session.
     def __init__(self, *, target, operation, manifest_path, manifest_digest,
                  expected_route, approved_hold, workflow_plan, plan_digest,
                  api_token, pause_journal, operation_journal, run, operator, lifetime, checkpoint,
-                 staged=False):
+                 staged=False, observed_admission=False):
         require(type(staged) is bool, 'EXECUTOR_MODE_INVALID')
+        require(type(observed_admission) is bool and (not observed_admission or staged),
+                'EXECUTOR_ADMISSION_MODE_INVALID')
         self.staged = staged
         require(operation in ('apply', 'rollback'), 'EXECUTOR_OPERATION_INVALID')
         require(digest(workflow_plan) == plan_digest, 'EXECUTOR_PLAN_MISMATCH')
@@ -78,6 +120,8 @@ independent reconciliation, but may NEVER repeat the original DB session.
         if staged:
             bound['execution_mode'] = 'staged_v1'
             require(callable(getattr(checkpoint, 'accept_resume', None)), 'EXECUTOR_RESUME_REQUIRED')
+        if observed_admission:
+            bound['admission_mode'] = 'observed_v1'
         if operation_journal.records:
             first = operation_journal.records[0]['event']
             require(type(first) is dict and set(first) == {'kind', 'scope'} and first['kind'] == 'BOUND',
@@ -98,7 +142,8 @@ independent reconciliation, but may NEVER repeat the original DB session.
         if not operation_journal.records:
             operation_journal.append({'kind': 'BOUND', 'scope': self.scope})
         self._replay()
-        self.hold = HoldMaintenanceGuard(target, operation, approved_hold, writer_guard=SessionWindow(self))
+        window = ObservedSessionWindow(self) if observed_admission else SessionWindow(self)
+        self.hold = HoldMaintenanceGuard(target, operation, approved_hold, writer_guard=window)
         api = WorkflowAPI(api_token, workflow_plan, plan_digest, mutation_guard=self)
         self.pause = WorkflowPause(workflow_plan, plan_digest, api, pause_journal, self,
                                    operation_scope_digest=self.scope_digest)
