@@ -1,5 +1,6 @@
 """Read-only attestation of the recovered Light worker under HOLD."""
 import hashlib
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -28,12 +29,21 @@ PIN_KEYS = {'AUTOPILOT_TOKEN_BROKER_URL','AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE
 class Blocked(Exception):
     pass
 
+@dataclass(frozen=True, repr=False)
+class HoldIdentity:
+    """Private continuity evidence; never print or publish this record."""
+    hostname: str
+    pid: int
+    invocation_id: str
+    release: str
+    fingerprint: str
+
 def require(ok, code):
     if not ok:
         raise Blocked(code)
 
 def read(path, mode, limit):
-    fd=os.open(path,os.O_RDONLY | os.O_NOFOLLOW)
+    fd=os.open(path,os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd,'rb') as stream:
         info=os.fstat(stream.fileno())
         require(stat.S_ISREG(info.st_mode) and info.st_uid==0 and
@@ -143,7 +153,7 @@ def login(dsn):
         raise Blocked(result['code'])
     require(child.returncode==0 and result=={'ok':True},'LOGIN_OR_QUEUE_FAILED')
 
-def main():
+def attest():
     require(os.geteuid()==0 and os.uname().nodename=='autopilot-lite-vnic','HOST_IDENTITY')
     before=service()
     release=before['WorkingDirectory']
@@ -163,9 +173,11 @@ def main():
     hold=('[Service]\nWorkingDirectory='+release+'\nEnvironment=AUTOPILOT_ADMISSION_MODE=HOLD\n'
           'EnvironmentFile='+release+'/ops/autopilot/broker-hold.env\n').encode()
     require(read(DROP,0o644,4096)==hold,'DROP_DRIFT')
-    require(json.loads(read(ROUTE/'route.json',0o644,4096))==
+    route=read(ROUTE/'route.json',0o644,4096)
+    require(json.loads(route)==
             {'version':1,'backend':'neon','database':'autopilot','epoch':0},'ROUTE_DRIFT')
-    pins=env(read(Path(release)/'ops/autopilot/broker-hold.env',0o444,4096))
+    pins_raw=read(Path(release)/'ops/autopilot/broker-hold.env',0o444,4096)
+    pins=env(pins_raw)
     require(set(pins)==PIN_KEYS,'PIN_DRIFT')
     disk=read(ENV,0o600,262144)
     values=env(disk)
@@ -187,7 +199,21 @@ def main():
     login(dsn)
     require(service()==before and read(ENV,0o600,262144)==disk and
             read(DROP,0o644,4096)==hold and
+            read(ROUTE/'route.json',0o644,4096)==route and
+            read(Path(release)/'ops/autopilot/broker-hold.env',0o444,4096)==pins_raw and
             Path(f'/proc/{pid}/cwd').resolve()==Path(release),'POST_CHECK_DRIFT')
+    # Fingerprints remain private. CLI output contains no environment bytes,
+    # DSN, credential-derived digest or service identity record.
+    fingerprint=hashlib.sha256(json.dumps({
+        'service':before,'environment':hashlib.sha256(disk).hexdigest(),
+        'pins':hashlib.sha256(pins_raw).hexdigest(),
+        'route':hashlib.sha256(route).hexdigest(),
+        'drop':hashlib.sha256(hold).hexdigest(),
+    },sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    return HoldIdentity('autopilot-lite-vnic',pid,before['InvocationID'],release,fingerprint)
+
+def main():
+    attest()
     print(json.dumps({'audit':'ACTIVE_HOLD_PASS','light_active':True,'admission':'HOLD',
                       'live_dsn_matches_root_file':True,'database_login':'READ_ONLY_PASS',
                       'database_binding':'NEON_PROJECT_BRANCH_ENDPOINT_PASS',
