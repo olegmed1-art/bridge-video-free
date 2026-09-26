@@ -2,6 +2,7 @@
 import tempfile
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 from database import native_cli_permission_engine as engine
 from database.fixtures.native_cli_commit_rehearsal import (
@@ -37,8 +38,59 @@ def reject(action, code):
         raise RuntimeError(f'EXPECTED_REJECTION_{code}')
 
 
+def binding_contract():
+    """Synthetic driver metadata tests; not a live Neon/TLS integration test."""
+    binding = engine.NeonBinding('test-project', 'br-test', 'ep-test',
+                                 'ep-test.c-5.eu-central-1.aws.neon.tech')
+    params = dict(host=binding.host, sslmode='verify-full', gssencmode='disable')
+    rows = [('neon.project_id', binding.project_id, 'postmaster', 'configuration file', binding.project_id, False),
+            ('neon.branch_id', binding.branch_id, 'postmaster', 'configuration file', binding.branch_id, False),
+            ('neon.endpoint_id', binding.endpoint_id, 'superuser', 'configuration file', binding.endpoint_id, False)]
+    fake = SimpleNamespace(info=SimpleNamespace(host=binding.host, port=5432,
+                           get_parameters=lambda: params),
+                           execute=lambda *args: SimpleNamespace(fetchall=lambda: rows))
+    engine.neon_identity(fake, binding)
+    for field, value, code in (
+        ('host', 'ep-other.c-5.eu-central-1.aws.neon.tech', 'NEON_CONNECTION_HOST_MISMATCH'),
+        ('sslmode', 'require', 'NEON_VERIFIED_TLS_REQUIRED'),
+        ('gssencmode', 'prefer', 'NEON_VERIFIED_TLS_REQUIRED'),
+        ('options', 'endpoint=ep-other', 'NEON_ROUTING_OVERRIDE_REFUSED'),
+        ('hostaddr', '127.0.0.1', 'NEON_ROUTING_OVERRIDE_REFUSED'),
+    ):
+        original = params.copy()
+        params[field] = value
+        reject(lambda: engine.neon_identity(fake, binding), code)
+        params.clear()
+        params.update(original)
+    for index in range(3):
+        original = rows[index]
+        for column, value in ((1, 'wrong-id'), (2, 'user'), (3, 'session'),
+                              (4, 'wrong-reset'), (5, True)):
+            changed = list(original)
+            changed[column] = value
+            rows[index] = tuple(changed)
+            reject(lambda: engine.neon_identity(fake, binding), 'NEON_SERVER_IDENTITY_MISMATCH')
+        rows[index] = original
+    rows.pop()
+    reject(lambda: engine.neon_identity(fake, binding), 'NEON_SERVER_IDENTITY_MISSING')
+    return binding
+
+
 def main():
+    binding = binding_contract()
     with connection() as conn:
+        # Same real PostgreSQL connection, but no Neon extension: custom GUC
+        # placeholders cannot authenticate a clone as the Neon server.
+        with conn.transaction():
+            for name, value in (('neon.project_id', binding.project_id),
+                                ('neon.branch_id', binding.branch_id),
+                                ('neon.endpoint_id', binding.endpoint_id)):
+                conn.execute('SELECT set_config(%s,%s,true)', (name, value))
+            reject(lambda: engine.neon_server_identity(conn, binding), 'NEON_SERVER_IDENTITY_MISSING')
+        owner(conn)
+        reject(lambda: engine.identity(conn, replace(TARGET, recipient='postgres')), 'NEON_BINDING_REQUIRED')
+        reject(lambda: engine.identity(conn, replace(TARGET, neon=binding)), 'NEON_CONNECTION_HOST_MISMATCH')
+        conn.execute('RESET ROLE')
         engine.check(conn.execute('SELECT count(*) FROM pg_roles WHERE rolname IN (%s,%s)',
                                  (LOGIN, PARENT)).fetchone()[0] == 0, 'FIXTURE_ROLE_EXISTS')
         original = fixture_snapshot(conn)
@@ -121,6 +173,7 @@ def main():
                 conn.execute(f'DROP ROLE {PARENT}')
             engine.check(fixture_snapshot(conn) == original, 'FINAL_CLEANUP_MISMATCH')
     print('NATIVE_PERMISSION_ENGINE_REHEARSAL_PASS')
+    print('NATIVE_PERMISSION_NEON_BINDING_CONTRACT_PASS')
 
 
 if __name__ == '__main__':
