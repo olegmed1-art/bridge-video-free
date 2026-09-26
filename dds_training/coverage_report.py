@@ -208,7 +208,7 @@ def main() -> None:
             Path(args.fragments).resolve(),
             args.suite,
         )
-    except (CoverageError, OSError, json.JSONDecodeError, SyntaxError) as exc:
+    except (CoverageError, OSError, UnicodeDecodeError, json.JSONDecodeError, SyntaxError) as exc:
         report = {
             "schema": "dds-runtime-coverage-report-v1",
             "status": "error",
