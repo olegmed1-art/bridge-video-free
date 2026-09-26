@@ -378,4 +378,3 @@ jobs:
             "SELECT migration_key, checksum IS NOT NULL AS checksum_recorded FROM schema_migration ORDER BY migration_key;"
           missing="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM schema_migration WHERE checksum IS NULL;")"
           test "$missing" -eq 0
-

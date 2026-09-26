@@ -293,4 +293,3 @@ completion, including lingering sessions, before any workflow is enabled.
         except BaseException:
             self.failed = True
             raise
-

@@ -228,4 +228,3 @@ An ambiguous GitHub PUT still requires the pause library's separate recovery.
             raise ExecutionError() from None
         finally:
             self.phase = 'idle'
-
