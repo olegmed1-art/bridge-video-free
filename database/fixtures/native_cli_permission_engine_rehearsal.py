@@ -40,6 +40,21 @@ def reject(action, code):
 
 def binding_contract():
     """Synthetic driver metadata tests; not a live Neon/TLS integration test."""
+    local_params = dict(host='localhost')
+    local_info = SimpleNamespace(host='localhost', hostaddr='127.0.0.1', port=5432,
+                                 get_parameters=lambda: local_params)
+    local = SimpleNamespace(info=local_info, execute=lambda *args: SimpleNamespace(
+        fetchone=lambda: (TARGET.database, TARGET.session_owner, TARGET.owner)))
+    engine.identity(local, TARGET)
+    local_info.hostaddr = '192.0.2.1'
+    reject(lambda: engine.identity(local, TARGET), 'NEON_BINDING_REQUIRED')
+    local_info.hostaddr = '127.0.0.1'
+    for key, value in (('hostaddr', '192.0.2.1'), ('options', 'endpoint=ep-other'),
+                       ('host', 'localhost,other')):
+        local_params[key] = value
+        reject(lambda: engine.identity(local, TARGET), 'NEON_BINDING_REQUIRED')
+        local_params.clear()
+        local_params['host'] = 'localhost'
     binding = engine.NeonBinding('test-project', 'br-test', 'ep-test',
                                  'ep-test.c-5.eu-central-1.aws.neon.tech')
     params = dict(host=binding.host, sslmode='verify-full', gssencmode='disable')
