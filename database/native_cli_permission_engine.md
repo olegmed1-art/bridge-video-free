@@ -92,7 +92,9 @@ was performed for this addition.
 
 Unbound targets are accepted only for the exact existing localhost:5432
 bridge_school_ci / postgres / bridge_ci_owner / native_commit_login regression
-fixture. This is a test allowance, not production authorization. Manifest format
+fixture, with actual loopback hostaddr and no configured address/startup-option
+override. The trusted local CI host must not proxy localhost to an external server.
+This is a test allowance, not production authorization. Manifest format
 remains version 1 but old targets lack the binding field and are rejected; prepare
 a new independently reviewed manifest instead of editing an old one.
 
