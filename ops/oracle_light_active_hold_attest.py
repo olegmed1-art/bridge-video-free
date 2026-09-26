@@ -77,8 +77,24 @@ CHILD='''import json,os,sys
 try:
  import psycopg
  with psycopg.connect(os.environ['AUDIT_DATABASE_URL'],autocommit=True,connect_timeout=10,
-   options='-c statement_timeout=5000 -c default_transaction_read_only=on') as conn:
+   options='-c statement_timeout=5000 -c default_transaction_read_only=on',
+   sslmode='verify-full',sslrootcert='system',gssencmode='disable') as conn:
   row=conn.execute("SELECT current_user,current_database(),current_setting('transaction_read_only')").fetchone()
+  if row!=('autopilot_light_worker_login','neondb','on'):
+   raise RuntimeError('DATABASE_SESSION_MISMATCH')
+  expected={
+   'neon.project_id':('misty-poetry-18012774','postmaster'),
+   'neon.branch_id':('br-aged-mud-b1i64914','postmaster'),
+   'neon.endpoint_id':('ep-noisy-pine-b1pe30sf','superuser')}
+  tags=conn.execute("SELECT name,setting,context,source,reset_val,pending_restart FROM pg_catalog.pg_settings WHERE name IN ('neon.project_id','neon.branch_id','neon.endpoint_id')").fetchall()
+  binding=(len(tags)==3 and {t[0] for t in tags}==set(expected) and all(
+   (setting,context)==expected[name] and source=='configuration file'
+   and reset==setting and not pending
+   for name,setting,context,source,reset,pending in tags)
+   and conn.info.host=='ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech'
+   and conn.info.port==5432)
+  if not binding:
+   raise RuntimeError('DATABASE_BINDING_MISMATCH')
   count=conn.execute("SELECT count(*) FROM autopilot.task_status WHERE status IN ('NEW','VALIDATING','READY','RUNNING','WAITING_EXTERNAL','EVALUATING')").fetchone()[0]
  print(json.dumps({'ok':row==('autopilot_light_worker_login','neondb','on') and count==0}))
 except BaseException:
@@ -146,6 +162,7 @@ def main():
             Path(f'/proc/{pid}/cwd').resolve()==Path(release),'POST_CHECK_DRIFT')
     print(json.dumps({'audit':'ACTIVE_HOLD_PASS','light_active':True,'admission':'HOLD',
                       'live_dsn_matches_root_file':True,'database_login':'READ_ONLY_PASS',
+                      'database_binding':'NEON_PROJECT_BRANCH_ENDPOINT_PASS',
                       'queue_nonterminal':0,'same_invocation':True},sort_keys=True))
 
 if __name__=='__main__':
