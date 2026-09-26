@@ -49,3 +49,19 @@ approved DB/HOLD manifests and explicit uncertain-outcome recovery.
 
 Rollback is a source revert. The live probe performs no state mutation; no
 workflow, service, credential, DB privilege or task needs restoration for it.
+
+## First live observation and compatibility fix
+
+Main run `36232931023`, source
+`c1eb22d92f27eb02e7dbdfe4a79c6e74550c25d8`, successfully read 458 registered
+workflows (457 active, one disabled_manually). This is a point-in-time registry
+observation, not 457 writers or proof of 457 running jobs. Historical registry
+entries can differ from the set of workflow files in current main.
+
+The actual API timestamps included fractional seconds, e.g.
+`2026-08-12T21:15:58.000Z`. The pause plan originally accepted only whole UTC
+seconds and would safely reject those observations. Its schema now also accepts
+one to nine fractional digits before `Z`, preserving the exact string for drift
+checks. A regression uses the observed format; malformed fractions, non-UTC
+offsets, newline suffixes and excessive precision remain refused. No timestamp
+rounding or workflow identity check is relaxed.

@@ -55,7 +55,8 @@ def validate_plan(plan):
         require(type(row['path']) is str and re.fullmatch(r'\.github/workflows/[A-Za-z0-9_-]+\.ya?ml', row['path'])
                 and row['path'] not in paths, 'WORKFLOW_PATH')
         require(row['state'] in ('active', 'disabled_manually', 'disabled_inactivity')
-                and type(row['updated_at']) is str and re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', row['updated_at']),
+                and type(row['updated_at']) is str
+                and re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.[0-9]{1,9})?Z', row['updated_at']),
                 'WORKFLOW_STATE')
         ids.add(row['id'])
         paths.add(row['path'])

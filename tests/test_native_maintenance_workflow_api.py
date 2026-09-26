@@ -152,6 +152,19 @@ class AdapterTests(unittest.TestCase):
             self.client.disable_workflow(7)
         self.assertEqual(sum(m == 'PUT' for m, _ in self.calls), 1)
 
+    def test_live_github_fractional_timestamp_is_preserved_exactly(self):
+        # Observed in read-only main run 36232931023; never round drift markers.
+        self.remote['updated_at'] = '2026-08-12T21:15:58.000Z'
+        actual = self.client.get_workflow(7)
+        self.assertEqual(actual['updated_at'], '2026-08-12T21:15:58.000Z')
+        plan = {**PLAN, 'workflows': [actual]}
+        client = api.WorkflowAPI('token', plan, digest(plan))
+        self.assertEqual(client.plan['workflows'][0]['updated_at'], actual['updated_at'])
+        for invalid in ('2026-08-12T21:15:58.Z', '2026-08-12T21:15:58.000Z\n',
+                        '2026-08-12T21:15:58.000+01:00', '2026-08-12T21:15:58.1234567890Z'):
+            with self.subTest(invalid=invalid), self.assertRaises(Refused):
+                api.validate_plan({**PLAN, 'workflows': [{**ROW, 'updated_at': invalid}]})
+
 
 class InventoryTests(unittest.TestCase):
     def setUp(self):
