@@ -31,7 +31,11 @@ def require(value, code):
 def connection():
     require(os.environ.get("ADMIN_DATABASE_URL") == DSN, "DISPOSABLE_DSN_REQUIRED")
     with psycopg.connect(DSN, autocommit=True, connect_timeout=5,
-                         options="-c statement_timeout=10000 -c lock_timeout=1000") as conn:
+                         options="") as conn:
+        # Keep startup routing options empty; apply the same bounded timeouts
+        # after connecting so the permission engine can reject all overrides.
+        conn.execute("SET statement_timeout='10s'")
+        conn.execute("SET lock_timeout='1s'")
         require(conn.execute("SELECT current_database(),session_user,current_user").fetchone()
                 == ("bridge_school_ci", "postgres", "postgres"), "DISPOSABLE_IDENTITY_REQUIRED")
         yield conn
