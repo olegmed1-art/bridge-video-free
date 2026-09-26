@@ -61,6 +61,12 @@ class API:
 
 
 class RunBinding:
+    workflow = WORKFLOW
+    workflow_sha256 = WORKFLOW_SHA256
+    job_name = JOB
+    job_names = (JOB,)
+    events = ('push', 'workflow_dispatch')
+
     def __init__(self, source, run_id, attempt, api, *, seconds=60):
         check(isinstance(source, str) and re.fullmatch('[0-9a-f]{40}', source), 'SOURCE_INVALID')
         check(type(run_id) is int and run_id > 0 and type(attempt) is int and attempt > 0,
@@ -77,8 +83,8 @@ class RunBinding:
         check(type(run) is dict and type(run.get('id')) is int and run['id'] == self.run_id
               and type(run.get('run_attempt')) is int and run['run_attempt'] == self.attempt,
               'RUN_ATTEMPT_CHANGED')
-        check(run.get('head_sha') == self.source and run.get('path') == WORKFLOW
-              and run.get('head_branch') == 'main' and run.get('event') in ('push', 'workflow_dispatch')
+        check(run.get('head_sha') == self.source and run.get('path') == self.workflow
+              and run.get('head_branch') == 'main' and run.get('event') in self.events
               and run.get('repository', {}).get('full_name') == REPOSITORY
               and run.get('head_repository', {}).get('full_name') == REPOSITORY, 'RUN_SOURCE_CHANGED')
         for principal in ('actor', 'triggering_actor'):
@@ -93,23 +99,32 @@ class RunBinding:
         try:
             check(time.monotonic() < self.deadline, 'RUN_BINDING_EXPIRED')
             self._run()
-            file = self.api.get('/contents/' + WORKFLOW + '?ref=' + self.source)
-            check(type(file) is dict and file.get('type') == 'file' and file.get('path') == WORKFLOW
+            file = self.api.get('/contents/' + self.workflow + '?ref=' + self.source)
+            check(type(file) is dict and file.get('type') == 'file' and file.get('path') == self.workflow
                   and file.get('encoding') == 'base64' and type(file.get('size')) is int
                   and 0 < file['size'] <= 32768, 'WORKFLOW_BLOB_INVALID')
             raw = base64.b64decode(file['content'].replace('\n', ''), validate=True)
-            check(len(raw) == file['size'] and hashlib.sha256(raw).hexdigest() == WORKFLOW_SHA256,
+            check(len(raw) == file['size'] and hashlib.sha256(raw).hexdigest() == self.workflow_sha256,
                   'WORKFLOW_CONTRACT_CHANGED')
             main = self.api.get('/git/ref/heads/main')
             check(main.get('ref') == 'refs/heads/main' and main.get('object', {}).get('type') == 'commit'
                   and main['object']['sha'] == self.source, 'MAIN_CHANGED')
             jobs = self.api.get('/actions/runs/' + str(self.run_id) + '/attempts/' +
                                 str(self.attempt) + '/jobs?per_page=100')
-            # The pinned workflow has precisely one job, no matrix or pagination.
-            check(type(jobs.get('total_count')) is int and jobs['total_count'] == 1
-                  and type(jobs.get('jobs')) is list and len(jobs['jobs']) == 1, 'JOB_SET_CHANGED')
-            job = jobs['jobs'][0]
-            check(type(job.get('id')) is int and job['id'] > 0 and job.get('name') == JOB
+            check(type(jobs.get('total_count')) is int and jobs['total_count'] == len(self.job_names)
+                  and type(jobs.get('jobs')) is list and len(jobs['jobs']) == len(self.job_names)
+                  and all(type(j) is dict for j in jobs['jobs'])
+                  and sorted(j.get('name', '') for j in jobs['jobs']) == sorted(self.job_names),
+                  'JOB_SET_CHANGED')
+            check(all(type(j.get('id')) is int and j['id'] > 0
+                      and type(j.get('run_id')) is int and j['run_id'] == self.run_id
+                      and type(j.get('run_attempt')) is int and j['run_attempt'] == self.attempt
+                      and j.get('head_sha') == self.source for j in jobs['jobs'])
+                  and len({j['id'] for j in jobs['jobs']}) == len(self.job_names), 'JOB_IDENTITY_CHANGED')
+            check(all(j.get('status') == 'completed' and j.get('conclusion') == 'success'
+                      for j in jobs['jobs'] if j['name'] != self.job_name), 'PREREQUISITE_JOB_FAILED')
+            job = next(j for j in jobs['jobs'] if j['name'] == self.job_name)
+            check(type(job.get('id')) is int and job['id'] > 0 and job.get('name') == self.job_name
                   and type(job.get('run_id')) is int and job['run_id'] == self.run_id
                   and type(job.get('run_attempt')) is int and job['run_attempt'] == self.attempt
                   and job.get('head_sha') == self.source, 'JOB_IDENTITY_CHANGED')
@@ -124,6 +139,15 @@ class RunBinding:
         except BaseException:
             self.failed = True
             raise
+
+
+class CheckpointRunBinding(RunBinding):
+    """Fixed synthetic relay workflow only; no permission authority."""
+    workflow = '.github/workflows/native-maintenance-checkpoint-duplex.yml'
+    workflow_sha256 = '8c2902451831debcf33b293ef3d69e22bc823389db75de28c00a0e9453d3a0d6'
+    job_name = 'probe'
+    job_names = ('contract', 'probe')
+    events = ('workflow_dispatch',)
 
 
 def main():
