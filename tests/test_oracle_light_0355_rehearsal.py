@@ -17,6 +17,7 @@ def identity(monkeypatch, tmp_path):
     retire.write_text('retire')
     refence.write_text('refence')
     monkeypatch.setenv('NEON_API_KEY', 'test-key')
+    monkeypatch.setenv('EXPECTED_PARENT', 'br-wispy-lab-b1rq54of')
     monkeypatch.setenv('GITHUB_RUN_ID', '123')
     monkeypatch.setenv('GITHUB_RUN_ATTEMPT', '1')
     monkeypatch.setattr(module.sys, 'argv', ['script', str(retire), str(refence)])
