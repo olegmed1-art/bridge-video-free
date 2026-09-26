@@ -214,6 +214,9 @@ jobs:
             "$(command -v python)" database/fixtures/native_route_drain_rehearsal.py
           sudo -n env PYTHONPATH="$PWD:$(python -m site --user-site)" \
             "$(command -v python)" database/fixtures/native_route_fence_rehearsal.py
+          sudo -n env ADMIN_DATABASE_URL="$ADMIN_DATABASE_URL" \
+            PYTHONPATH="$PWD:$(python -m site --user-site)" \
+            "$(command -v python)" database/fixtures/native_maintenance_session_rehearsal.py
 
       - name: Inventory native CLI dependencies without mutations
         shell: bash
