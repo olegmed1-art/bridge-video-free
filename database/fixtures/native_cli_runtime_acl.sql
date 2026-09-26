@@ -17,14 +17,14 @@ END $$;
 CREATE TRIGGER role_dispatch_outbox_enabled_role
 BEFORE INSERT OR UPDATE OF role ON autopilot.role_dispatch_outbox
 FOR EACH ROW EXECUTE FUNCTION autopilot.enforce_enabled_role();
-DO $ BEGIN
+DO $guard$ BEGIN
  IF (SELECT encode(sha256(convert_to(pg_get_triggerdef(oid,false),'UTF8')),'hex')
      FROM pg_trigger WHERE tgname='role_dispatch_outbox_enabled_role'
        AND tgrelid='autopilot.role_dispatch_outbox'::regclass)
     IS DISTINCT FROM '858b8d72318b64233cd8a9bab3ff1b8049b0362bf7f6522cd210a6323b344683' THEN
   RAISE EXCEPTION 'TEST_OBSERVED_TRIGGER_DEFINITION_MISMATCH';
  END IF;
-END $;
+END $guard$;
 \endif
 CREATE ROLE native_ci_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
 CREATE ROLE native_ci_other NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
@@ -55,7 +55,7 @@ END $$;
 
 SELECT set_config('native_ci.fixture',pg_temp.native_fixture('native-runtime-acl-339')::text,true);
 \if :observed_outbox_guard
-DO $ DECLARE f jsonb:=current_setting('native_ci.fixture')::jsonb; BEGIN
+DO $guard$ DECLARE f jsonb:=current_setting('native_ci.fixture')::jsonb; BEGIN
  UPDATE autopilot.role_registry SET enabled=false WHERE role_id='AUTOPILOT';
  BEGIN
   UPDATE autopilot.role_dispatch_outbox SET role=role WHERE dispatch_id=(f->>'id')::uuid;
@@ -75,7 +75,7 @@ DO $ DECLARE f jsonb:=current_setting('native_ci.fixture')::jsonb; BEGIN
     IS DISTINCT FROM 'AUTOPILOT' THEN
   RAISE EXCEPTION 'TEST_REJECTED_ROLE_UPDATE_LEAK';
  END IF;
-END $;
+END $guard$;
 \endif
 RESET ROLE;
 SET LOCAL SESSION AUTHORIZATION native_ci_runtime;
