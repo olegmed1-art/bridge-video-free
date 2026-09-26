@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -48,6 +50,36 @@ def main() -> None:
         assert report["summary"]["executed_modules"] == 1
         assert report["modules"]["module.py"]["line_percent"] >= 50
         assert report["modules"]["module.py"]["executed_arcs"] == 4
+
+        valid_fragment = json.loads((fragments / "coverage-1.json").read_text())
+        malformed_fragments = [
+            [],
+            {**valid_fragment, "lines": []},
+            {**valid_fragment, "arcs": []},
+            {**valid_fragment, "lines": {"module.py": [True, 2, 3]}},
+            {**valid_fragment, "lines": {"module.py": [1.9, 2, 3]}},
+            {**valid_fragment, "lines": {"module.py": "123"}},
+            {**valid_fragment, "arcs": {"module.py": [[1]]}},
+            {**valid_fragment, "arcs": {"module.py": [[1, 2, 3]]}},
+            {**valid_fragment, "arcs": {"module.py": [[True, 2]]}},
+            {**valid_fragment, "arcs": {"module.py": [[1, None]]}},
+        ]
+        output = root / "report.json"
+        for malformed in malformed_fragments:
+            (fragments / "coverage-1.json").write_text(json.dumps(malformed))
+            output.write_text(json.dumps(report))
+            process = subprocess.run([
+                sys.executable, str(Path(__file__).with_name("coverage_report.py")),
+                "--root", str(root), "--manifest", str(manifest_path),
+                "--fragments", str(fragments), "--suite", "fast",
+                "--out", str(output), "--fail-on-error",
+            ], capture_output=True, text=True)
+            assert process.returncode == 1, (malformed, process.stdout, process.stderr)
+            rejected = json.loads(output.read_text())
+            assert rejected["status"] == "error", (malformed, rejected, process.stderr)
+            assert rejected["findings"][0]["code"] == "COVERAGE_REPORT_ERROR", rejected
+            assert "Traceback" not in process.stderr, process.stderr
+        (fragments / "coverage-1.json").write_text(json.dumps(valid_fragment))
 
         manifest["coverage"]["runtime_coverage"]["fast"]["minimum_overall_percent"] = 100
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
