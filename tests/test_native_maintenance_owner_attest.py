@@ -39,6 +39,19 @@ class OwnerAttestTests(unittest.TestCase):
         ):
             self.assertEqual(subject.failure_reason(RuntimeError(message)), reason)
 
+    def test_broken_exception_stringification_cannot_escape_safe_handler(self):
+        class BrokenError(Exception):
+            def __str__(self):
+                raise RuntimeError('private credential in secondary error')
+        output = io.StringIO()
+        with patch.object(subject, 'main', side_effect=BrokenError()), \
+                contextlib.redirect_stdout(output):
+            with self.assertRaises(SystemExit) as result:
+                subject.entrypoint()
+        self.assertEqual(result.exception.code, 2)
+        self.assertEqual(json.loads(output.getvalue())['reason'], 'unclassified')
+        self.assertNotIn('private', output.getvalue())
+
     def test_rebuilds_direct_verified_connection_without_uri_overrides(self):
         p = subject.parameters(URI + '&options=project%3Dother&hostaddr=127.0.0.1&gssencmode=require')
         self.assertEqual(p['host'], subject.EXPECTED_TARGET['neon']['host'])

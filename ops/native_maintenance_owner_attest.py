@@ -69,7 +69,10 @@ def main():
 
 def failure_reason(exc):
     # Inspect locally, emit only fixed categories; never serialize libpq errors.
-    message = str(exc).lower()
+    try:
+        message = str(exc).lower()
+    except BaseException:
+        return 'unclassified'
     for fragment, reason in (
         ('password authentication failed', 'authentication'),
         ('could not translate host name', 'dns'),
