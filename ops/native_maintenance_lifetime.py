@@ -135,7 +135,7 @@ while True: time.sleep(1)
 
 
 def probe(source, run, kind):
-    check(kind in ('main-kill', 'runtime-max'), 'PROBE_INVALID')
+    check(kind in ('main-kill', 'runtime-max', 'launcher-kill'), 'PROBE_INVALID')
     unit = new_unit(source, run)
     process = None
     try:
@@ -155,6 +155,10 @@ def probe(source, run, kind):
         signal_name = 'SIGKILL' if kind == 'main-kill' else 'SIGSTOP'
         check(ctl('kill', '--kill-whom=main', '--signal=' + signal_name, unit).returncode == 0,
               'PROBE_SIGNAL_FAILED')
+        if kind == 'launcher-kill':
+            # Kill the systemd-run client; PID1 must still enforce the stopped
+            # service's own runtime deadline and reap its cgroup descendants.
+            process.kill()
         process.communicate(timeout=10)
         after = show(unit)
         check(process.returncode != 0 and after.get('InvocationID') == state['InvocationID']
@@ -176,7 +180,7 @@ def probe(source, run, kind):
 def probes(source, run):
     check(os.getuid() == 0 and Path('/run/systemd/system').is_dir()
           and Path('/sys/fs/cgroup/cgroup.controllers').exists(), 'SYSTEMD_CGROUP2_REQUIRED')
-    for kind in ('main-kill', 'runtime-max'):
+    for kind in ('main-kill', 'runtime-max', 'launcher-kill'):
         probe(source, run, kind)
 
 
