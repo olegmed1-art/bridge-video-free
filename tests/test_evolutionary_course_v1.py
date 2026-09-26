@@ -85,6 +85,18 @@ def test_valid_episode_is_canonicalized_and_hash_stable():
     assert len(canonical_sha256(episode)) == 64
 
 
+def test_action_whitespace_does_not_change_canonical_episode_hash():
+    episode = _episode()
+    padded = deepcopy(episode)
+    padded["interaction"]["teacher_actions"][0] = " ASKED_FOR_PLAN "
+    padded["interaction"]["student_actions"][0] = " PROPOSED_PLAN "
+
+    normalized = validate_episode(padded)
+    assert normalized == validate_episode(episode)
+    assert canonical_sha256(padded) == canonical_sha256(episode)
+    assert padded["interaction"]["teacher_actions"][0] == " ASKED_FOR_PLAN "
+
+
 @pytest.mark.parametrize(
     ("path", "value", "match"),
     [
