@@ -8,6 +8,12 @@ on:
       - 'ops/oracle_light_route_lease.py'
       - 'ops/native_permission_route_fence.py'
       - 'ops/native_maintenance_bundle.py'
+      - 'ops/native_maintenance_executor.py'
+      - 'ops/native_maintenance_workflow_api.py'
+      - 'ops/native_maintenance_workflow_pause.py'
+      - 'ops/native_permission_hold_guard.py'
+      - 'ops/oracle_light_active_hold_attest.py'
+      - 'tests/test_native_maintenance_executor.py'
       - 'tests/test_native_maintenance_bundle.py'
       - 'oracle_autopilot/codex_cli_bridge.py'
       - 'oracle_autopilot/codex_cli_delivery.py'
@@ -33,6 +39,12 @@ on:
       - 'ops/oracle_light_route_lease.py'
       - 'ops/native_permission_route_fence.py'
       - 'ops/native_maintenance_bundle.py'
+      - 'ops/native_maintenance_executor.py'
+      - 'ops/native_maintenance_workflow_api.py'
+      - 'ops/native_maintenance_workflow_pause.py'
+      - 'ops/native_permission_hold_guard.py'
+      - 'ops/oracle_light_active_hold_attest.py'
+      - 'tests/test_native_maintenance_executor.py'
       - 'tests/test_native_maintenance_bundle.py'
       - 'oracle_autopilot/codex_cli_bridge.py'
       - 'oracle_autopilot/codex_cli_delivery.py'
@@ -102,6 +114,9 @@ jobs:
 
       - name: Verify native source package integrity
         run: python -m unittest discover -s tests -p 'test_native_maintenance_bundle.py' -v
+
+      - name: Verify maintenance executor recovery contracts
+        run: python -m unittest discover -s tests -p 'test_native_maintenance_executor.py' -v
 
       - name: Verify native CLI delivery contracts
         run: |
@@ -232,6 +247,15 @@ jobs:
           sudo -n env ADMIN_DATABASE_URL="$ADMIN_DATABASE_URL" GITHUB_SHA="$GITHUB_SHA" \
             PYTHONPATH="$PWD:$(python -m site --user-site)" \
             "$(command -v python)" database/fixtures/native_maintenance_bundle_rehearsal.py
+
+      - name: Rehearse journalled workflow and permission session composition
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$ADMIN_DATABASE_URL" = "postgresql://postgres:postgres@localhost:5432/bridge_school_ci"
+          sudo -n env ADMIN_DATABASE_URL="$ADMIN_DATABASE_URL" \
+            PYTHONPATH="$PWD:$(python -m site --user-site)" \
+            "$(command -v python)" database/fixtures/native_maintenance_executor_rehearsal.py
 
       - name: Inventory native CLI dependencies without mutations
         shell: bash
