@@ -10,6 +10,7 @@ import os
 from database import native_cli_permission_engine as engine
 from ops.native_permission_hold_guard import EXPECTED_TARGET
 from ops.native_maintenance_store_runner import source_check
+from ops.native_maintenance_owner_attest import failure_reason
 
 TABLES = ('recovery_checkpoint', 'recovery_verification')
 URI_KEYS = {'host', 'port', 'dbname', 'user', 'password', 'sslmode',
@@ -111,12 +112,16 @@ def observe(connect, raw):
     kwargs = parameters(raw)
     PHASE = 'connection'
     with connect(**kwargs, autocommit=True) as conn:
+        PHASE = 'read_only_configuration'
         conn.read_only = True
+        PHASE = 'transaction_begin'
         with conn.transaction():
+            PHASE = 'transaction_settings'
             conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
             conn.execute("SET LOCAL statement_timeout='5s'")
             conn.execute("SET LOCAL lock_timeout='2s'")
             conn.execute("SET LOCAL search_path='pg_catalog'")
+            PHASE = 'session_identity'
             engine.check(conn.execute("SELECT current_setting('transaction_read_only'),current_database(),current_user,session_user")
                          .fetchone() == ('on', target.database, target.owner, target.session_owner), 'REGISTRY_SESSION')
             PHASE = 'server_identity'
@@ -148,8 +153,9 @@ def main():
 def entrypoint():
     try:
         main()
-    except BaseException:
+    except BaseException as exc:
         print(json.dumps(dict(audit='NATIVE_REGISTRY_RUNTIME_SCOPE_REFUSED', phase=PHASE,
+                              reason=failure_reason(exc),
                               production_mutations=False)))
         raise SystemExit(2) from None
 

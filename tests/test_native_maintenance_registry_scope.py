@@ -107,8 +107,22 @@ class RegistryScopeTests(unittest.TestCase):
             subject.entrypoint()
         self.assertEqual(json.loads(output.getvalue()),
                          dict(audit='NATIVE_REGISTRY_RUNTIME_SCOPE_REFUSED', phase='connection',
-                              production_mutations=False))
+                              reason='unclassified', production_mutations=False))
         self.assertNotIn('private', output.getvalue())
+
+    def test_connection_failure_reports_only_fixed_category(self):
+        for private, expected in [('password authentication failed private URI', 'authentication'),
+                                  ('certificate private URI', 'tls_certificate'),
+                                  ('channel binding private URI', 'channel_binding')]:
+            output = io.StringIO()
+            connect = MagicMock(side_effect=RuntimeError(private))
+            with patch.object(subject, 'main', side_effect=lambda: subject.observe(connect, URI)), \
+                    contextlib.redirect_stdout(output), self.assertRaises(SystemExit):
+                subject.entrypoint()
+            report = json.loads(output.getvalue())
+            self.assertEqual(report['phase'], 'connection')
+            self.assertEqual(report['reason'], expected)
+            self.assertNotIn('private', output.getvalue())
 
 
 if __name__ == '__main__':
