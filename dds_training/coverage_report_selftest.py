@@ -52,6 +52,16 @@ def main() -> None:
         assert report["modules"]["module.py"]["executed_arcs"] == 4
 
         valid_fragment = json.loads((fragments / "coverage-1.json").read_text())
+        mixed_fragment = {
+            **valid_fragment,
+            "arcs": {**valid_fragment["arcs"], "unrelated.py": [[-1, 1], [1, -1]]},
+        }
+        (fragments / "coverage-1.json").write_text(json.dumps(mixed_fragment))
+        scoped_report = make_report(root, manifest_path, fragments, "fast")
+        assert scoped_report["summary"]["executed_arcs"] == sum(
+            row["executed_arcs"] for row in scoped_report["modules"].values()
+        ), scoped_report
+        (fragments / "coverage-1.json").write_text(json.dumps(valid_fragment))
         malformed_fragments = [
             [],
             {**valid_fragment, "lines": []},
