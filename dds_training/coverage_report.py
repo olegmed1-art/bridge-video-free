@@ -62,6 +62,8 @@ def selected_modules(manifest: dict, suite: str) -> tuple[list[str], list[str]]:
     for module, test_ids in coverage.get("module_tests", {}).items():
         if suite_ids.intersection(str(value) for value in test_ids):
             mapped.append(str(module))
+    if not mapped:
+        raise CoverageError(f"No modules are mapped to suite {suite!r}")
     return sorted(mapped), sorted(suite_ids)
 
 
