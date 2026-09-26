@@ -66,4 +66,3 @@ expanded decoder. Expected digests must be recomputed and independently accepted
 for the new source. No fallback decoder or omitted-dependency mode is provided.
 
 Rollback is a source revert; this change has no production data migration.
-
