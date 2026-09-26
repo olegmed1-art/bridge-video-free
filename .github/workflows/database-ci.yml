@@ -7,6 +7,8 @@ on:
       - 'ops/github_autopilot_db_route.py'
       - 'ops/oracle_light_route_lease.py'
       - 'ops/native_permission_route_fence.py'
+      - 'ops/native_maintenance_bundle.py'
+      - 'tests/test_native_maintenance_bundle.py'
       - 'oracle_autopilot/codex_cli_bridge.py'
       - 'oracle_autopilot/codex_cli_delivery.py'
       - 'oracle_autopilot/codex_cli_queue.py'
@@ -30,6 +32,8 @@ on:
       - 'ops/github_autopilot_db_route.py'
       - 'ops/oracle_light_route_lease.py'
       - 'ops/native_permission_route_fence.py'
+      - 'ops/native_maintenance_bundle.py'
+      - 'tests/test_native_maintenance_bundle.py'
       - 'oracle_autopilot/codex_cli_bridge.py'
       - 'oracle_autopilot/codex_cli_delivery.py'
       - 'oracle_autopilot/codex_cli_queue.py'
@@ -95,6 +99,9 @@ jobs:
 
       - name: Install runtime DSN test dependency
         run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4' 'pytest==8.4.2'
+
+      - name: Verify native source package integrity
+        run: python -m unittest discover -s tests -p 'test_native_maintenance_bundle.py' -v
 
       - name: Verify native CLI delivery contracts
         run: |
@@ -217,6 +224,14 @@ jobs:
           sudo -n env ADMIN_DATABASE_URL="$ADMIN_DATABASE_URL" \
             PYTHONPATH="$PWD:$(python -m site --user-site)" \
             "$(command -v python)" database/fixtures/native_maintenance_session_rehearsal.py
+
+      - name: Rehearse composed session from verified source package
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -n env ADMIN_DATABASE_URL="$ADMIN_DATABASE_URL" GITHUB_SHA="$GITHUB_SHA" \
+            PYTHONPATH="$PWD:$(python -m site --user-site)" \
+            "$(command -v python)" database/fixtures/native_maintenance_bundle_rehearsal.py
 
       - name: Inventory native CLI dependencies without mutations
         shell: bash
