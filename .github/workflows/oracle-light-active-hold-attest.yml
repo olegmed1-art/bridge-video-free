@@ -8,10 +8,10 @@ on:
         required: true
         type: string
   pull_request:
-    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py', 'ops/native_permission_hold_guard.py', 'tests/test_native_permission_hold_guard.py', 'ops/native_maintenance_bundle.py', 'ops/native_maintenance_readonly_transport.py', 'tests/test_native_maintenance_readonly_transport.py']
+    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py', 'ops/native_permission_hold_guard.py', 'tests/test_native_permission_hold_guard.py', 'ops/native_maintenance_bundle.py', 'ops/native_maintenance_readonly_transport.py', 'tests/test_native_maintenance_readonly_transport.py', 'ops/native_maintenance_lifetime.py', 'tests/test_native_maintenance_lifetime.py']
   push:
     branches: [main]
-    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py', 'ops/native_permission_hold_guard.py', 'tests/test_native_permission_hold_guard.py', 'ops/native_maintenance_bundle.py', 'ops/native_maintenance_readonly_transport.py', 'tests/test_native_maintenance_readonly_transport.py']
+    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py', 'ops/native_permission_hold_guard.py', 'tests/test_native_permission_hold_guard.py', 'ops/native_maintenance_bundle.py', 'ops/native_maintenance_readonly_transport.py', 'tests/test_native_maintenance_readonly_transport.py', 'ops/native_maintenance_lifetime.py', 'tests/test_native_maintenance_lifetime.py']
 
 permissions:
   contents: read
@@ -25,7 +25,12 @@ jobs:
           persist-credentials: false
       - run: python -m unittest -q tests.test_oracle_light_active_hold_attest tests.test_native_permission_hold_guard
       - name: Verify read-only transport with real subprocesses
-        run: sudo -n env PYTHONPATH="$PWD" "$(command -v python)" -m unittest discover -s tests -p 'test_native_maintenance_readonly_transport.py' -v
+        run: sudo -n env PYTHONPATH="$PWD" "$(command -v python)" -m unittest discover -s tests -p 'test_native_maintenance*.py' -v
+
+      - name: Prove PID1 cleanup after main crash and runtime expiry
+        run: |
+          sudo -n env GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            "$(command -v python)" ops/native_maintenance_lifetime.py --self-test
 
   attest:
     needs: contract
