@@ -30,6 +30,10 @@ Cases:
 - Commit before killing the transport. The supervisor reports failure after
   detecting lost lease, but the committed row remains. A lost lease does not
   prove rollback, and acquiring flock does not by itself reconcile DB outcome.
+- Abruptly kill the wrapper itself. Its separately grouped consumer remains
+  alive; fixture-only cleanup verifies PID, process group, Linux start time and
+  command arguments before killing that consumer and waiting for its backend
+  to disappear. This cleanup is not a production drain implementation.
 
 SIGSTOP is acknowledged through Linux process state before killing transport,
 making the race deterministic instead of relying on scheduler timing. This
@@ -46,7 +50,7 @@ run without PostgreSQL:
 PYTHONPATH=. python database/fixtures/native_route_drain_rehearsal.py --protocol-only
 ```
 
-Successful full evidence must include all three scenario markers and:
+Successful full evidence must include all four scenario markers and:
 
 ```
 NATIVE_ROUTE_FLOCK_ALONE_NOT_TRANSACTION_DRAIN_CONFIRMED
