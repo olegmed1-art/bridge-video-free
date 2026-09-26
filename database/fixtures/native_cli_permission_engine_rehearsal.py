@@ -64,8 +64,13 @@ def binding_contract():
     rows = [('neon.project_id', binding.project_id, 'postmaster', 'configuration file', binding.project_id, False),
             ('neon.branch_id', binding.branch_id, 'postmaster', 'configuration file', binding.branch_id, False),
             ('neon.endpoint_id', binding.endpoint_id, 'superuser', 'configuration file', binding.endpoint_id, False)]
+    class CIMetadata:
+        @property
+        def info(self):
+            return [SimpleNamespace(keyword=k.encode(), val=v.encode()) for k, v in params.items()]
     fake = SimpleNamespace(info=SimpleNamespace(host=binding.host, hostaddr='192.0.2.10', port=5432,
                            get_parameters=lambda: params),
+                           pgconn=CIMetadata(),
                            execute=lambda *args: SimpleNamespace(fetchall=lambda: rows))
     engine.neon_identity(fake, binding)
     for field, value, code in (

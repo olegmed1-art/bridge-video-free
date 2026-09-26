@@ -118,7 +118,13 @@ def identity(conn, target):
 
 def neon_identity(conn, binding):
     """Verify actual routing and server tags, never infer branch from DB name."""
-    params = conn.info.get_parameters()
+    # ConnectionInfo.get_parameters() deliberately omits compiled defaults.
+    # In wheels built without GSS, explicit gssencmode=disable is such a default.
+    # Read effective libpq values, selecting only these nonsecret keys before
+    # decoding any value. Do not copy/log the raw info list: it includes password.
+    allowed = {b'host', b'hostaddr', b'options', b'sslmode', b'gssencmode'}
+    params = {row.keyword.decode('ascii'): row.val.decode('utf-8')
+              for row in conn.pgconn.info if row.keyword in allowed and row.val is not None}
     check(binding.host.startswith(binding.endpoint_id + '.')
           and binding.host.endswith('.aws.neon.tech')
           and binding.endpoint_id.startswith('ep-')

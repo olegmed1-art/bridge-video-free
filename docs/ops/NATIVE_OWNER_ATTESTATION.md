@@ -21,3 +21,13 @@ A passing observation is not an approved manifest, operator exclusion, a host
 credential delivery proof, or a grant permit. Production remains held until the
 separate runtime, off-VM intent durability, writer coordination and pilot admission
 are complete. Rollback is source revert; there is no external mutation to undo.
+
+The first live run refused at the database identity guard. Psycopg's high-level
+`ConnectionInfo.get_parameters()` omits compiled defaults: with the pinned binary
+wheel, `gssencmode=disable` is omitted even when explicitly requested. The Neon
+permission engine now reads the allowlisted nonsecret effective libpq parameters
+from `pgconn.info`. It still requires verify-full and GSS disabled, no routing
+options, exact host and server provenance. Raw connection metadata, including its
+password entry, is never copied or logged. Regression tests use the actual
+installed psycopg filtering code with synthetic libpq metadata and preserve all
+negative routing/TLS cases. Disposable PG18 rehearsals remain required.
