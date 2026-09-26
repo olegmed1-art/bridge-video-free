@@ -175,6 +175,9 @@ billing. Concurrent independent writers still require actual operator exclusion.
         self._call('put_object', self.namespace, BUCKET, path, data, content_length=len(data),
                    content_type='application/json',
                    **({'if_none_match': '*'} if revision is None else {'if_match': revision}))
+        # A completed PUT is not an acknowledgement after authority has changed.
+        # The caller preserves ambiguous remote effects and never retries them.
+        self.guard()
 
     def put_archive(self, scope, digest, data):
         try:

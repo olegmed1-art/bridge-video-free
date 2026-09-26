@@ -111,7 +111,22 @@ class OCIAdapterTests(unittest.TestCase):
         self.assertTrue(all(isinstance(x[2]['retry_strategy'], self.fake_sdk.retry.NoneRetryStrategy) for x in puts))
         self.assertTrue(all(x[2].get('if_none_match') == '*' for x in puts[:-1]))
         self.assertIn('if_match', puts[-1][2])
-        self.assertEqual(self.guard_calls, 5)
+        self.assertEqual(self.guard_calls, 10)
+
+    def test_source_loss_after_put_preserves_effect_and_refuses_ack_or_retry(self):
+        def boundary():
+            self.guard_calls += 1
+            if self.guard_calls == 2:
+                raise Refused('CI_SOURCE_CHANGED_AFTER_PUT')
+        self.store.guard = boundary
+        with self.assertRaisesRegex(Refused, 'SOURCE_CHANGED_AFTER_PUT'):
+            self.fixture.sync()
+        self.assertEqual(len([c for c in self.client.calls if c[0] == 'PUT']), 1)
+        self.assertEqual(len(self.client.objects), 1)  # archive retained, no head
+        self.assertTrue(self.store.failed and self.fixture.cp.failed)
+        with self.assertRaises(Exception):
+            self.fixture.sync()
+        self.assertEqual(len([c for c in self.client.calls if c[0] == 'PUT']), 1)
 
     def test_lost_registration_reply_cannot_rebootstrap(self):
         self.client.lose = 'registered.json'
