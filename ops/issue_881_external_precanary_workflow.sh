@@ -28,6 +28,32 @@ process_video_gate_armed=0
 root_pr_number=991
 prior_gate_pr_number=1070
 protected_gate_paths=(
+  '.github/workflows/native-maintenance-driver-prepare.yml'
+  'ops/native_maintenance_driver_runner.py'
+  'ops/native_driver_requirements.txt'
+  'ops/native_maintenance_bundle.py'
+  'ops/native_maintenance_lifetime.py'
+  'ops/native_maintenance_store_runner.py'
+  'database/native_cli_permission_engine.py'
+  'database/native_cli_write_fence.py'
+  'database/native_cli_maintenance_session.py'
+  'database/fixtures/native_cli_commit_rehearsal.py'
+  'database/fixtures/native_route_drain_rehearsal.py'
+  'database/fixtures/native_maintenance_session_rehearsal.py'
+  'database/fixtures/native_maintenance_executor_rehearsal.py'
+  'ops/oracle_light_route_lease.py'
+  'ops/github_autopilot_db_route.py'
+  'ops/native_permission_route_fence.py'
+  'ops/oracle_light_active_hold_attest.py'
+  'ops/native_permission_hold_guard.py'
+  'ops/native_maintenance_executor.py'
+  'ops/native_maintenance_workflow_api.py'
+  'ops/native_maintenance_workflow_pause.py'
+  'ops/native_maintenance_store.py'
+  'ops/native_maintenance_snapshot.py'
+  'ops/native_maintenance_checkpoint.py'
+  'ops/native_maintenance_checkpoint_oci.py'
+  'ops/native_maintenance_driver.py'
   '.github/workflows/native-maintenance-window.yml'
   'ops/native_maintenance_run_guard.py'
   '.dockerignore'
@@ -400,7 +426,7 @@ collect_active_workflow_run_sweep(){
 
 verify_no_competing_infrastructure_runs(){
   local forward_runs reverse_runs current_forward current_reverse competing_count
-  local path_pattern='^\.github/workflows/(native-maintenance-window\.yml$|oracle-|issue-881-|autopilot-|database-production\.yml$|database-worker-runtime-smoke\.yml$|process-video\.yml$|video-job-monitor\.yml$|bridge-ai-|research-job-|dds3-runtime-container-proof\.yml$|dds3-production-health-monitor\.yml$|dds-training-|dds-main-)'
+  local path_pattern='^\.github/workflows/(native-maintenance-(window|driver-prepare)\.yml$|oracle-|issue-881-|autopilot-|database-production\.yml$|database-worker-runtime-smoke\.yml$|process-video\.yml$|video-job-monitor\.yml$|bridge-ai-|research-job-|dds3-runtime-container-proof\.yml$|dds3-production-health-monitor\.yml$|dds-training-|dds-main-)'
   forward_runs="$RUNNER_TEMP/precanary-active-runs-forward.json"
   reverse_runs="$RUNNER_TEMP/precanary-active-runs-reverse.json"
 
