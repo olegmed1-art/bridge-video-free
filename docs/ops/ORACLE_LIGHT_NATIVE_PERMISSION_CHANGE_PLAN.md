@@ -132,3 +132,102 @@ transition, recovery path and launch decision remain separate gates. Do not
 open the continuous queue as a substitute for a bounded pilot. Re-attest the
 new process after any future restart; an unchanged-invocation check cannot
 prove a restart succeeded. No pilot or HOLD release is authorized by this plan.
+
+## Reconciled preparation and maintenance design — 2026-09-26
+
+Primary source baseline: `8b302b23b262504d9148d76a66f227e12d540a6f`.
+This section updates preparation evidence only. Production apply remains
+unimplemented and unauthorized by this document.
+
+Completed repository work:
+- #1965 merged as `b478e1ec7a1e9d116711ca1c2f063f3c906374ad`: full
+  per-function inventory; identical pre/post-test catalog; all nine live
+  definition differences explained; observed extra outbox trigger successfully
+  rehearsed without changing production. Its installation provenance remains
+  unknown and it must be preserved.
+- #1966 merged as the baseline above: non-superuser owner grants six entries
+  across COMMIT, new backend verification, drift-refusing rollback, explicit
+  revoke across COMMIT, original state restored. Exact-head database evidence:
+  https://github.com/olegmed1-art/bridge-video-free/actions/runs/36213165865
+- That test also demonstrates a privileged ACL writer succeeding while the
+  grant connection holds native table locks. Table locks cannot stand in for
+  the maintenance exclusion.
+
+A fresh read-only catalog observation found all six native RPCs and the helper
+denied to the Light login, native table/column access denied, schema USAGE
+present, and zero nonterminal tasks. Application logins could not SET ROLE to
+the database owner. This is neither complete privileged-operator discovery nor
+an attestation that all SECURITY DEFINER calls are read-only. Managed-provider
+administrative identities remain a platform trust boundary; do not disable or
+alter them as part of this recovery.
+
+### Observed entry points (bounded map, not a complete allowlist)
+
+Paths below refer to `.github/workflows/` at the baseline.
+
+| Entry point | Existing exclusion | Consequence for the proposed window |
+| --- | --- | --- |
+| `database-production.yml` | Authorized manual promotion uses `oracle-instance-workload-mutation` | A future grant workflow must hold this group while grants/postchecks occur. Merely checking no run exists is insufficient. |
+| `autopilot-runtime-role-hardening.yml` | Authorized owner command uses the same group | Same exclusion is needed for role changes. No hardening command is sent by this plan. |
+| `oracle-light-0355-admin.yml` | Separate `oracle-light-backup-mutation` group | The future runner must also exclude this group during the same critical section. |
+| `autopilot-paused-reconcile.yml` | Separate reconciliation group; admission/reconcile steps are currently `if: false` | Preserve those gates; its enabled diagnostics do not establish general operator exclusion. |
+| `autopilot-chatgpt-role-callback.yml` | Per-comment concurrency group | Runtime/callback mutations are outside both groups. Inspect their actual capabilities and lock all affected admission/state tables or defer if quiescence cannot be maintained. |
+| Neon SQL console, connected owner tools, local owner scripts, other chats/operators | Neither GitHub group | Requires explicit operator coordination covering the full window, or a separately reviewed access-control mechanism. A self-issued JSON flag is not proof. |
+
+This map is deliberately incomplete: before apply, scan current workflows and
+other credential consumers, including queued/waiting runs and old workflow
+revisions, and resolve every source with relevant capabilities. Fresh GitHub
+observations during preparation showed no queued run and only CI/code-scanning
+work in progress; they do not reserve a future window.
+
+### Selected design and exact critical section
+
+Use one bounded coordinator for the future apply and immediate postchecks.
+The intended implementation holds the main mutation concurrency group at
+workflow level and the Light mutation group at the applying job level, both
+without cancelling active runs. This two-group design is a proposal pending
+implementation and validation; it does not cover every workflow or direct SQL.
+
+1. Before opening the window, finish the production-specific apply/rollback
+   runner and its fault tests. Inventory every relevant privileged entry point.
+   Obtain the required operator freeze for direct owner channels and record
+   its participants, exact database/branch, reviewed package SHA, start, expiry
+   and scope in the protected operator record. An unaccounted writer means no
+   apply. Do not infer agreement from an idle session snapshot.
+2. Enter the reviewed coordinator's exclusions. Recheck main, run identity,
+   target branch/database, active/waiting runs and live host HOLD. Preserve
+   disabled native config and zero receipts/shared queue. The grant window
+   does not stop/restart the service or release admission.
+3. Capture the complete protected manifest using the owner connection, including
+   the known production trigger and explained function versions. Check actual
+   role closure, ACL grantors/options, owners and schema privileges. Do not
+   silently apply 0372, normalize formatting or remove the extra trigger.
+4. In a READ COMMITTED transaction, acquire bounded locks on the reviewed
+   admission/state relations, re-read the manifest and apply exactly six direct
+   grants. Recheck exact ACL delta and unchanged dependencies/config before
+   COMMIT. Table locks cover conflicting row writes only, while operator
+   exclusion covers privileged function/role/schema changes.
+5. While the same maintenance exclusion is still held, verify through a new
+   connection and perform fresh runtime metadata-only and host HOLD checks.
+   Never call native RPCs to validate production permissions. If no task/receipt
+   exists and the exact post-manifest still matches, the reviewed rollback may
+   revoke only the newly added direct grants. Otherwise contain admission and
+   reconcile; do not erase intervening changes.
+6. Close the window only after retained evidence reports either verified
+   committed grants or verified original-state restoration. Expired/lost
+   coordination before COMMIT means ROLLBACK. Loss after COMMIT means preserve
+   HOLD and inspect actual state; never blind-revoke or auto-resume.
+
+No workflow is disabled, no session is terminated, no credential is rotated,
+and no provider administrative role is changed by this plan. Those would be
+separate material actions, not routine substitutes for missing coordination.
+
+### Remaining implementation boundary
+
+Catalog explanation and isolated cross-commit rollback are complete for the
+tested cases. The production runner, two-group orchestration, complete writer
+coverage, current host attestation, and protected operator freeze are not yet
+implemented/established. Existing-receipt, wrong-context and interruption
+faults must be covered by that exact runner. None of the rehearsal code is to
+be pointed at production. The one-item provider loader and bounded pilot remain
+separate from this grant-only maintenance window.
