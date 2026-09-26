@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'database/**'
+      - 'ops/github_autopilot_db_route.py'
+      - 'ops/oracle_light_route_lease.py'
       - 'oracle_autopilot/codex_cli_bridge.py'
       - 'oracle_autopilot/codex_cli_delivery.py'
       - 'oracle_autopilot/codex_cli_queue.py'
@@ -24,6 +26,8 @@ on:
     branches: [main]
     paths:
       - 'database/**'
+      - 'ops/github_autopilot_db_route.py'
+      - 'ops/oracle_light_route_lease.py'
       - 'oracle_autopilot/codex_cli_bridge.py'
       - 'oracle_autopilot/codex_cli_delivery.py'
       - 'oracle_autopilot/codex_cli_queue.py'
@@ -197,6 +201,15 @@ jobs:
 
       - name: Rehearse manifest-bound native permission engine
         run: PYTHONPATH=. python database/fixtures/native_cli_permission_engine_rehearsal.py
+
+      - name: Rehearse routed consumer drain and lease-loss outcomes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$ADMIN_DATABASE_URL" = "postgresql://postgres:postgres@localhost:5432/bridge_school_ci"
+          sudo -n env ADMIN_DATABASE_URL="$ADMIN_DATABASE_URL" \
+            PYTHONPATH="$PWD:$(python -m site --user-site)" \
+            "$(command -v python)" database/fixtures/native_route_drain_rehearsal.py
 
       - name: Inventory native CLI dependencies without mutations
         shell: bash
