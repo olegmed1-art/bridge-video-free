@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from database import native_cli_permission_engine as engine
+from database.fixtures.native_cli_catalog_conflict_rehearsal import run as run_catalog_conflicts
 from database.fixtures.native_cli_write_fence_rehearsal import run as run_write_fence
 from database.fixtures.native_cli_commit_rehearsal import (
     FUNCTIONS, HELPER, LOGIN, PARENT, connection, snapshot as fixture_snapshot,
@@ -127,6 +128,7 @@ def main():
                 engine.check(not path.exists(), 'REJECTED_PREPARATION_WROTE_MANIFEST')
                 manifest_digest = engine.prepare(conn, TARGET, reference, path)
                 run_write_fence(TARGET, path, manifest_digest, CIGuard)
+                run_catalog_conflicts(TARGET, path, manifest_digest, CIGuard)
                 reject(lambda: engine.change(conn, TARGET, path, manifest_digest, engine.MaintenanceGuard()),
                        'MAINTENANCE_IMPLEMENTATION_REQUIRED')
                 reject(lambda: engine.change(conn, TARGET, path, manifest_digest, CIGuard(fail_at=3)),
