@@ -4,11 +4,11 @@ Preparation only for #1946 and the plan in #1963. This is a transaction componen
 not an enabled production command. No production CLI, workflow dispatch, owner
 credential binding, automatic apply, or real maintenance coordinator is supplied.
 
-The production caller still must verify the exact Neon branch/endpoint, reviewed
-code revision, protected reference provenance, live Light HOLD/process identity,
+The production caller still must obtain fresh authenticated Neon control-plane
+endpoint-to-branch mapping and verify the reviewed code revision, protected reference provenance, live Light HOLD/process identity,
 complete privileged-writer coverage, external operator freeze and both required
-GitHub concurrency groups. Database/session/current-role equality alone cannot
-authenticate a Neon branch. The base MaintenanceGuard refuses every change.
+GitHub concurrency groups. Database/session/current-role equality alone cannot authenticate a Neon branch.
+The engine now also enforces the connection/server binding described below. The base MaintenanceGuard refuses every change.
 The fixture's CIGuard is a test stub, never evidence of production exclusion.
 
 API:
@@ -60,3 +60,56 @@ The fixed localhost fixture guard is reused from #1966, and actual mutations are
 restricted to that disposable PostgreSQL job. The component itself can accept a
 privileged connection, so production callers must not wire it before the above
 requirements are reviewed and met.
+
+## Connection and server identity binding
+
+A Target carries an immutable NeonBinding: independently selected project ID,
+branch ID, endpoint ID and exact direct AWS Neon hostname. These values are part
+of both the snapshot digest and private manifest; a copied catalog on a different
+branch cannot satisfy the same target merely by preserving database/role names.
+Every identity check (including fresh-connection inspect) verifies libpq's actual
+host and port, single configured host, sslmode=verify-full and gssencmode=disable.
+Startup options are refused. Pooler endpoints are excluded.
+Connection parameters are inspected in memory and never logged.
+
+Psycopg 3.3.4 resolves DNS into hostaddr before passing parameters to libpq
+(source: https://github.com/psycopg/psycopg/blob/3.3.4/psycopg/psycopg/_conninfo_attempts.py).
+Therefore post-connect get_parameters cannot prove whether hostaddr originally
+came from DNS or caller input. The engine accepts a driver address matching the
+actual connected IP; hostname authentication rests on verify-full with GSS
+disabled, and branch identity on the server settings below. It does not claim
+pre-connect DSN/hostaddr provenance. Any future caller policy banning explicit
+hostaddr must enforce that before opening the connection.
+
+The same SQL connection reads pg_catalog.pg_settings for exactly neon.project_id,
+neon.branch_id and neon.endpoint_id. Values must match the target. Project and
+branch must have postmaster context; endpoint must have superuser context. All
+three must originate in configuration file, match reset_val and have no pending
+restart. Missing extension settings, session overrides and user-defined custom
+GUC placeholders are refused. This policy is deliberately strict: provider
+changes require a reviewed policy update. Compute ID is not pinned because
+compute replacement does not itself change the authorized branch.
+
+Read-only discovery on 2026-09-26 confirmed these contexts and sources on the
+selected production branch. This is server identity evidence within the managed
+provider trust boundary, not protection against a compromised provider or
+privileged server operator. Fresh authenticated control-plane mapping remains
+required in the future production coordinator, particularly after a restore or
+endpoint rebind; this module does not implement an API client or operator freeze.
+No live positive psycopg TLS integration test or production permission change
+was performed for this addition.
+
+Unbound targets are accepted only for the exact existing localhost:5432
+bridge_school_ci / postgres / bridge_ci_owner / native_commit_login regression
+fixture, with actual loopback hostaddr, matching driver address and no startup
+options. The trusted local CI host must not proxy localhost to an external server.
+This is a test allowance, not production authorization. Manifest format
+remains version 1 but old targets lack the binding field and are rejected; prepare
+a new independently reviewed manifest instead of editing an old one.
+
+Tests cover synthetic valid metadata and mismatched IDs, contexts, setting
+sources/reset values, pending restart, missing settings, routing overrides and
+weaker TLS settings. Actual disposable PostgreSQL also rejects custom Neon GUC
+placeholders, refuses a bound target on localhost, and exercises the complete
+existing grant/commit/inspect/drift/rollback lifecycle. The synthetic positive
+case verifies validation logic only, not Neon connectivity or certificate trust.
