@@ -1,0 +1,29 @@
+name: Native maintenance workflow pause contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-maintenance-pause-ci.yml'
+      - 'ops/native_maintenance_workflow_pause.py'
+      - 'tests/test_native_maintenance_workflow_pause.py'
+      - 'docs/ops/NATIVE_MAINTENANCE_WORKFLOW_PAUSE.md'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/native-maintenance-pause-ci.yml'
+      - 'ops/native_maintenance_workflow_pause.py'
+      - 'tests/test_native_maintenance_workflow_pause.py'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Rehearse durable intent and explicit recovery without production access
+        run: python -m unittest discover -s tests -p test_native_maintenance_workflow_pause.py -v
