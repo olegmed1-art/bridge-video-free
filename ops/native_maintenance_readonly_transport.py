@@ -13,6 +13,7 @@ import sys
 import time
 
 from ops import native_maintenance_bundle as bundle
+from ops import native_maintenance_lifetime as lifetime
 
 MAX_OUTPUT = 8192
 
@@ -173,18 +174,18 @@ def remote(source, digest, mode):
         return 2
 
 
-def bootstrap(repo, source, digest, mode):
+def bootstrap(repo, source, digest, mode, run=None):
     bundle.check(bundle.identifier(source, 40) and bundle.identifier(digest, 64), 'IDENTITY_INVALID')
     bundle.check(mode in ('audit', 'probe'), 'MODE_INVALID')
     modules = {}
-    for name in ('native_maintenance_bundle', 'native_maintenance_readonly_transport'):
+    for name in ('native_maintenance_bundle', 'native_maintenance_lifetime', 'native_maintenance_readonly_transport'):
         path = 'ops/' + name + '.py'
         content = bundle.git(repo, 'show', source + ':' + path)
         bundle.check(0 < len(content) <= 32768, 'BOOTSTRAP_SIZE')
         modules['ops.' + name] = base64.b64encode(content).decode('ascii')
     # Code and expected digest travel in the authenticated, reviewed command;
     # untrusted package bytes travel separately on stdin. No secret in either.
-    return "\n".join([
+    code = "\n".join([
         'import base64,sys,types',
         "sys.modules['ops']=types.ModuleType('ops')",
         'sources=' + repr(modules),
@@ -194,6 +195,11 @@ def bootstrap(repo, source, digest, mode):
         " exec(compile(base64.b64decode(encoded),name,'exec'),module.__dict__)",
         "sys.exit(sys.modules['ops.native_maintenance_readonly_transport'].remote(" +
         repr(source) + ',' + repr(digest) + ',' + repr(mode) + '))'])
+    if run is None:
+        return code  # Local disposable transport tests only.
+    encoded = modules['ops.native_maintenance_lifetime']
+    return (lifetime.loader(encoded) + 'import sys\nsys.exit(lifetime.managed(' +
+            repr(code) + ',' + repr(encoded) + ',' + repr(source) + ',' + repr(run) + '))')
 
 
 def exchange(command, payload, behavior):
@@ -267,14 +273,28 @@ def main():
                  and os.environ.get('GITHUB_REF') == 'refs/heads/main', 'MAIN_JOB_REQUIRED')
     payload = bundle.build(repo, source)
     digest = bundle.digest(payload)
+    run = os.environ.get('GITHUB_RUN_ID', '') + '-' + os.environ.get('GITHUB_RUN_ATTEMPT', '')
+    ssh = ['ssh', '-F', '/dev/null', '-i', args.key, '-o', 'BatchMode=yes',
+           '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=yes',
+           '-o', 'UserKnownHostsFile=' + args.known_hosts, '-o', 'ConnectTimeout=15',
+           '-o', 'ConnectionAttempts=1', '-o', 'ServerAliveInterval=5',
+           '-o', 'ServerAliveCountMax=2', 'ubuntu@92.5.47.149']
+    encoded = base64.b64encode(bundle.git(repo, 'show', source + ':ops/native_maintenance_lifetime.py')).decode()
+    code = lifetime.loader(encoded) + 'lifetime.probes(' + repr(source) + ',' + repr(run) + ')'
+    probe_command = shlex.join(['sudo', '-n', '/usr/bin/python3', '-I', '-B', '-S', '-c', code])
+    proof = subprocess.run([*ssh, probe_command], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=40)
+    bundle.check(proof.returncode == 0 and len(proof.stdout) < 4096, 'LIFETIME_PROBES_FAILED')
+    records = [json.loads(line) for line in proof.stdout.splitlines()]
+    bundle.check(records == [{'audit': 'NATIVE_LIFETIME_PASS', 'case': case, 'cgroup_empty': True,
+                              'source_sha': source} for case in ('main-kill', 'runtime-max')],
+                 'LIFETIME_PROBE_RESULTS_INVALID')
+    for record in records:
+        emit(record)
     for behavior in ('cancel', 'eof', 'heartbeat', 'audit'):
-        code = bootstrap(repo, source, digest, 'audit' if behavior == 'audit' else 'probe')
+        code = bootstrap(repo, source, digest, 'audit' if behavior == 'audit' else 'probe', run)
         remote_command = shlex.join(['sudo', '-n', '/usr/bin/python3', '-I', '-B', '-S', '-c', code])
-        command = ['ssh', '-F', '/dev/null', '-i', args.key, '-o', 'BatchMode=yes',
-                   '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=yes',
-                   '-o', 'UserKnownHostsFile=' + args.known_hosts, '-o', 'ConnectTimeout=15',
-                   '-o', 'ConnectionAttempts=1', '-o', 'ServerAliveInterval=5',
-                   '-o', 'ServerAliveCountMax=2', 'ubuntu@92.5.47.149', remote_command]
+        command = [*ssh, remote_command]
         result = exchange(command, payload, behavior)
         emit({'audit': 'READ_ONLY_TRANSPORT_PASS', 'case': behavior, 'result': result,
               'source_sha': source})
