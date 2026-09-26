@@ -79,3 +79,48 @@ EXECUTE grants. Do not change the registry credential to obtain an exemption.
 Rollback for this code change is a revert before any staged production scope is
 created. Once such a scope exists, retain this reader and its journal format for
 reconciliation; reverting code is not restoration of workflow or database state.
+
+## Runtime coordination implementation
+
+`native_maintenance_coordination` provides the readers for the staged runtime:
+
+- `Agreement` checks a separately accepted record for the exact operation spec,
+  evidence reference, direct-owner/host/workflow-admin/rerun coverage and an
+  explicit window no longer than 30 minutes. Wall-clock rollback, monotonic
+  expiry or changed bytes latch refusal. The code cannot supply the director's
+  missing future commitment by hashing a record it has just invented.
+- `WorkflowDrain` requires zero runs in each of GitHub's five nonterminal states
+  for every workflow in the accepted pause plan. It does not filter by branch,
+  source or creation date, so historical reruns count. A nonzero, malformed or
+  incomplete/paginated response refuses; no page traversal is needed to establish
+  refusal after any unfinished run is found. API status definitions:
+  https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-workflow
+- `OwnedConnections` verifies the target of actual owned connection objects and
+  registers their backend PID plus start time. It never accepts caller-provided
+  PID exclusions or trusts application names. Foreign/invisible backends and
+  prepared transactions refuse.
+- `PriorSupervisors` reads independently accepted unique unit/invocation/cgroup
+  identities and requires completion/empty cgroups. It never stops a process.
+  A cross-run operator cannot omit the original preparation unit evidence.
+- `Operator` binds those components to the exact scope, source and authenticated
+  run. Any observation failure latches refusal. The executor still supplies the
+  route fence, table locks and independent permission postcheck.
+
+A live read-only observation found `pg_read_all_stats=true` for the maintenance
+owner and one idle Light worker connection. The latter is deliberately allowed
+only for the exact recipient `autopilot_light_worker_login`, at most one client
+backend, idle with no transaction or backend xid/xmin, visible identity, unchanged
+approved HOLD and freshly verified disabled native configuration, empty queue and
+zero receipts. An active/transactional/second worker or any other foreign client
+refuses. This is a scoped HOLD exception, not proof that idle connections cannot
+write later; route/database fences and operator coordination remain necessary.
+Stopping the existing service would invalidate its approved HOLD identity and is
+not part of this implementation.
+
+The disposable PG18 executor fixture now uses the actual owned-backend drain for
+both execution modes, including a real foreign owner connection that must refuse.
+It temporarily supplies the CI owner with statistics visibility and restores the
+original role membership afterward. External operator agreement, GitHub and host
+authorities remain explicitly simulated in that fixture. Production still needs
+the reviewed runner to supply accepted agreement/prior-unit/head evidence and
+execute the complete bounded rehearsal before granting rights.
