@@ -46,6 +46,12 @@ pair rejection despite identical plans, active locks, corruption, bounds, privat
 paths, legacy binding refusal and interrupted restore retention. GitHub/host/DB
 coordination in unit tests is explicitly simulated. Database CI also runs the
 existing PG18 executor rehearsal from the verified source bundle.
+The snapshot module is included in that fixed bundle. The extracted PG18 fixture
+also restores a separate copy after a real committed GRANT with a deliberately
+lost return, refuses SQL replay through the restored journals, independently
+observes AFTER and explicitly restores the simulated workflow. Final fixture
+rollback verifies the original ACLs. This remains a disposable database test;
+GitHub/host coordination is simulated and no production journal is exported.
 
 Rollback is source revert before any live maintenance; preserve all archive and
 journal evidence. Reverting cannot undo or reconcile a started operation.

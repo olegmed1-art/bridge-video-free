@@ -6,6 +6,7 @@ proves database/journal composition only; it never authorizes production.
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
+import hashlib
 import tempfile
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ from database.fixtures.native_cli_commit_rehearsal import connection, LOGIN, PAR
 from database.fixtures.native_maintenance_session_rehearsal import TARGET, ROUTE, owned, CONNECTIONS
 from database.fixtures.native_route_drain_rehearsal import setup, prove_busy
 from ops import native_maintenance_executor as executor
+from ops import native_maintenance_snapshot as recovery
 from ops import native_maintenance_workflow_api as api
 from ops.native_maintenance_workflow_pause import Journal, Refused, digest
 
@@ -132,6 +134,18 @@ def main():
                         engine.check(remote.puts == ['disable'], 'CI_AUTO_RESTORE')
                         for journal in journals:
                             journal.close()
+                        if lost:
+                            # Recover the pair after a real committed GRANT whose
+                            # return was lost. Reopen only the independent copy;
+                            # the original uncertainty and records remain intact.
+                            archive = recovery.capture(paths[1], paths[0])
+                            recovery_parent = base / 'recovery'
+                            recovery_parent.mkdir(mode=0o700)
+                            restored = recovery.restore(archive, hashlib.sha256(archive).hexdigest(),
+                                                        ex.scope_digest, recovery_parent)
+                            engine.check(recovery.capture(paths[1], paths[0]) == archive,
+                                         'CI_ORIGINAL_JOURNALS_CHANGED')
+                            paths = [restored / 'pause', restored / 'operation']
                         journals = [Journal(path) for path in paths]
                         authority.run_id += 1
                         authority.job_id += 1
@@ -151,6 +165,8 @@ def main():
                         ex.restore(Release(), expected)
                         engine.check(remote.puts == ['disable', 'enable'], 'CI_RESTORE_COUNT')
                         engine.check(ex.state == 'restored', 'CI_RESTORE_JOURNAL')
+                        if lost:
+                            print('NATIVE_MAINTENANCE_SNAPSHOT_REAL_COMMIT_RECOVERY_PASS')
                 finally:
                     for journal in journals:
                         journal.close()
