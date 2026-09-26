@@ -94,6 +94,16 @@ class RunBinding:
         check(run.get('status') == 'in_progress' and 'conclusion' in run and run['conclusion'] is None,
               'RUN_NOT_RUNNING')
 
+    def assert_current(self):
+        """Local continuity only; never a substitute for authenticated observation."""
+        check(not self.failed, 'RUN_BINDING_ALREADY_FAILED')
+        try:
+            check(self.job_id is not None and time.monotonic() < self.deadline,
+                  'RUN_BINDING_EXPIRED_OR_UNOBSERVED')
+        except BaseException:
+            self.failed = True
+            raise
+
     def assert_running(self):
         check(not self.failed, 'RUN_BINDING_ALREADY_FAILED')
         try:

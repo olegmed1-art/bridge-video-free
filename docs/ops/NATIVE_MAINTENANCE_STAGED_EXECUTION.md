@@ -124,3 +124,43 @@ original role membership afterward. External operator agreement, GitHub and host
 authorities remain explicitly simulated in that fixture. Production still needs
 the reviewed runner to supply accepted agreement/prior-unit/head evidence and
 execute the complete bounded rehearsal before granting rights.
+
+## Consolidated admission observation (opt-in)
+
+Assembly review after #2011 found recursive remote observations: for one planned
+workflow and the permitted idle Light backend, a legacy HOLD assertion issues
+about 64 GitHub GETs and five HOLD attestations. This is a call-graph count, not a
+live measurement. It is not a viable basis for assuming the 60-second run and
+30-second route windows will suffice.
+
+`observed_admission=True` is explicit, staged-only, and binds
+`admission_mode=observed_v1` into the immutable operation scope. It requires the
+actual `Operator` and authenticated `RunBinding` on the same run. The concrete
+`ObservedSessionWindow` replaces recursive authority reads with one no-effect
+observation chain on **every** HOLD guard call:
+
+1. Check local scope, journal locks, supervisor, agreement and fixed run deadline.
+2. Observe the exact paused workflow states, all unfinished workflow runs, prior
+   supervisors and registered/foreign database backends.
+3. Observe the exact approved HOLD, and observe paused workflow states again to
+   catch a re-enable during drain or HOLD inspection.
+4. Obtain a fresh complete authenticated run/workflow/main/job observation, then
+   recheck local agreement, journal, supervisor and deadline continuity.
+
+The database drain retains its two HOLD checks for the idle worker exception.
+There is no cached successful observation, lease renewal, inferred approval or
+SQL dispatch in these read methods. The existing engine/session calls remain
+unchanged, including checks before GRANT/REVOKE, before COMMIT and around fresh
+outcome inspection. Route and database fence checks still follow the external
+observation. OCI publication and workflow mutation guards keep their existing
+ordering. Legacy callers retain their original guard path; a same-named method
+on an arbitrary writer cannot opt into this composite.
+
+Fault tests compose the actual coordinator/run/pause/HOLD classes over explicitly
+simulated external infrastructure. They verify fresh reads on every call, a
+re-enabled workflow during drain, cancellation/main drift after HOLD, agreement
+expiry during final authentication, changed HOLD, foreign backends and subsequent
+route/fence loss. One planned workflow now uses 12 GitHub GETs and three HOLD
+attestations per guard call. These tests neither grant production authority nor
+prove a real timing budget. Complete supervised no-write rehearsal remains a
+production gate; the 60/30/100-second limits have not been increased.

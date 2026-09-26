@@ -258,11 +258,27 @@ completion, including lingering sessions, before any workflow is enabled.
         """Check disabled states only; existing/rerun/remote work is NOT drained."""
         try:
             self._scope()
+            self.observe_paused()
+            self._scope()
+        except BaseException:
+            self.failed = True
+            raise
+
+    def observe_paused(self):
+        """Read-only observation, without claiming coordination or admission.
+
+        A composite guard must supply its own fresh authority after these reads.
+        No result is cached and no write can be dispatched through this method.
+        """
+        try:
+            require(not self.failed, 'PAUSE_ALREADY_FAILED')
+            self.journal.assert_live()
+            require(digest(self.plan) == self.plan_digest, 'PAUSE_PLAN_CHANGED')
             for row in self.plan['workflows']:
                 state = self.states[row['id']]
                 require(state['phase'] == ('paused' if row['state'] == 'active' else 'original'), 'WORKFLOW_NOT_PAUSED')
                 require(self._read(row) == state['observed'], 'WORKFLOW_DRIFT')
-            self._scope()
+            self.journal.assert_live()
         except BaseException:
             self.failed = True
             raise

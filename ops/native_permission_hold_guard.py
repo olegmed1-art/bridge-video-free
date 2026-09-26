@@ -41,10 +41,16 @@ class HoldMaintenanceGuard:
         try:
             hold.require(asdict(target) == self.target and operation == self.operation,
                          'HOLD_SCOPE_CHANGED')
-            self.writer_guard.assert_held(target, operation)
-            actual = hold.attest()
-            hold.require(actual == self.approved_identity, 'HOLD_IDENTITY_CHANGED')
-            self.writer_guard.assert_held(target, operation)
+            # Only the concrete, explicitly selected composite can replace the
+            # legacy bracket. Arbitrary writers with a same-named method cannot.
+            from ops.native_maintenance_executor import ObservedSessionWindow
+            if type(self.writer_guard) is ObservedSessionWindow:
+                self.writer_guard.observe_hold(target, operation, self.approved_identity)
+            else:
+                self.writer_guard.assert_held(target, operation)
+                actual = hold.attest()
+                hold.require(actual == self.approved_identity, 'HOLD_IDENTITY_CHANGED')
+                self.writer_guard.assert_held(target, operation)
         except BaseException:
             # A failed observation cannot be erased by a later successful one.
             self.failed = True
