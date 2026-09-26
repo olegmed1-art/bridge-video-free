@@ -7,16 +7,16 @@ native journal store. This probe first verifies the existing private Object
 Storage channel using fixed, credential-free synthetic Journal records.
 
 The owner/exact-main dispatch creates the synthetic journal on its temporary
-runner, uploads at most64KiB under a dedicated immutable digest key in the existing
+runner, uploads at most 64 KiB under a dedicated immutable digest key in the existing
 managed private bucket, downloads and verifies exact bytes, and reconstructs an
 actual Journal whose subsequent append leaves the original unchanged.
 No connection to Light and no operational journal export occur.
 
 Before an upload, the complete configured home-region inventory and all object
-pages must be available: one compartment, at most100GB allocated volumes, existing
+pages must be available: one compartment, at most 100 GB allocated volumes, existing
 Standard bucket with versioning/auto-tiering disabled, no public access or PARs,
-no replication, fewer than10000 objects including the prospective object, and
-observed total plus incoming bytes below the existing8GiB project budget.
+no replication, at most 10,000 objects including the prospective object, and
+observed total plus incoming bytes below the existing 8 GiB project budget.
 These are fresh observations under the shared managed backup queue, not atomic
 exclusion of independent administrators. No bucket/volume creation, overwrite,
 deletion, retention change or cross-region copy is provided.
