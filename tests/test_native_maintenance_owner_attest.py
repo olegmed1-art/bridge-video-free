@@ -23,8 +23,21 @@ class OwnerAttestTests(unittest.TestCase):
         self.assertEqual(exc.exception.code, 2)
         self.assertEqual(json.loads(output.getvalue()),
                          dict(audit='NATIVE_OWNER_READ_ONLY_REFUSED', phase='connection',
+                              reason='unclassified',
                               production_mutations=False))
         self.assertNotIn('private', output.getvalue())
+
+    def test_connection_error_classification_never_returns_private_message(self):
+        for message, reason in (
+            ('password authentication failed for user private', 'authentication'),
+            ('private password could not translate host name', 'dns'),
+            ('private password certificate refused', 'tls_certificate'),
+            ('private password channel binding refused', 'channel_binding'),
+            ('private password timeout', 'timeout'),
+            ('private password connection refused', 'connection_refused'),
+            ('private password', 'unclassified'),
+        ):
+            self.assertEqual(subject.failure_reason(RuntimeError(message)), reason)
 
     def test_rebuilds_direct_verified_connection_without_uri_overrides(self):
         p = subject.parameters(URI + '&options=project%3Dother&hostaddr=127.0.0.1&gssencmode=require')

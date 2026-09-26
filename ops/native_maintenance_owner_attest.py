@@ -67,12 +67,32 @@ def main():
     print(json.dumps({**report, 'source_sha': source}, sort_keys=True))
 
 
+def failure_reason(exc):
+    # Inspect locally, emit only fixed categories; never serialize libpq errors.
+    message = str(exc).lower()
+    for fragment, reason in (
+        ('password authentication failed', 'authentication'),
+        ('could not translate host name', 'dns'),
+        ('name or service not known', 'dns'),
+        ('certificate', 'tls_certificate'),
+        ('channel binding', 'channel_binding'),
+        ('timeout', 'timeout'),
+        ('connection refused', 'connection_refused'),
+    ):
+        if fragment in message:
+            return reason
+    if isinstance(exc, engine.Refused):
+        return 'database_guard'
+    return 'unclassified'
+
+
 def entrypoint():
     try:
         main()
-    except BaseException:
+    except BaseException as exc:
         # Never print exception text, connection string, snapshot or private data.
         print(json.dumps({'audit': 'NATIVE_OWNER_READ_ONLY_REFUSED', 'phase': PHASE,
+                          'reason': failure_reason(exc),
                           'production_mutations': False}))
         raise SystemExit(2) from None
 
