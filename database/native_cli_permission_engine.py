@@ -261,7 +261,7 @@ def inspect(conn, target, path, manifest_digest):
     return 'BEFORE' if actual == record['before'] else 'AFTER' if actual == record['after'] else 'DRIFT'
 
 
-def change(conn, target, path, manifest_digest, guard, *, rollback=False):
+def change(conn, target, path, manifest_digest, guard, *, rollback=False, database_fence=None):
     check(conn.autocommit, 'AUTOCOMMIT_CONNECTION_REQUIRED')
     record = load_manifest(path, manifest_digest)
     check(record['version'] == 1 and record['target'] == asdict(target), 'MANIFEST_TARGET_MISMATCH')
@@ -273,9 +273,14 @@ def change(conn, target, path, manifest_digest, guard, *, rollback=False):
         conn.execute("SET LOCAL statement_timeout='5s'")
         conn.execute("SET LOCAL lock_timeout='1s'")
         identity(conn, target)
-        for table in LOCK_TABLES:
-            conn.execute(sql.SQL('LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE')
-                         .format(sql.Identifier('autopilot', table)))
+        # Serialize cooperative engine calls even when SHARE locks are compatible.
+        conn.execute('SELECT pg_advisory_xact_lock(1971, 6)')
+        if database_fence is not None:
+            database_fence.protect_transaction(conn, target)
+        else:
+            for table in LOCK_TABLES:
+                conn.execute(sql.SQL('LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE')
+                             .format(sql.Identifier('autopilot', table)))
         actual = snapshot(conn, target)
         dormant(actual)
         check(actual == record['after' if rollback else 'before'], 'ROLLBACK_DRIFT' if rollback else 'BASELINE_DRIFT')
@@ -288,6 +293,13 @@ def change(conn, target, path, manifest_digest, guard, *, rollback=False):
         privileges(conn, target, not rollback)
         check(snapshot(conn, target) == record['before' if rollback else 'after'], 'POSTCHECK_MISMATCH')
         guard.assert_held(target, operation)
+        if database_fence is not None:
+            database_fence.assert_held(target)
+    if database_fence is not None:
+        try:
+            database_fence.assert_held(target)
+        except Exception as exc:
+            raise Refused('COMMITTED_BUT_WRITE_FENCE_POSTCHECK_FAILED') from exc
     # A lost COMMIT response leaves the durable record intact. Call inspect()
     # from a NEW connection; never infer rollback from a client exception.
     return 'BEFORE' if rollback else 'AFTER'
