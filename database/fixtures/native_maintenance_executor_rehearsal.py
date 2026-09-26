@@ -72,9 +72,9 @@ def main():
             conn.execute(f'GRANT {PARENT} TO {LOGIN}')
             conn.execute(f'GRANT USAGE ON SCHEMA autopilot TO {PARENT}')
     try:
-        with tempfile.TemporaryDirectory(prefix='native-executor-ci-') as temporary:
+        with tempfile.TemporaryDirectory(prefix='native-route-drain-', dir='/tmp') as temporary:
             base = Path(temporary)
-            route = base / 'route'
+            route = base / 'protocol'
             setup(route)
             manifest = base / 'manifest.json'
             with owned() as conn:
