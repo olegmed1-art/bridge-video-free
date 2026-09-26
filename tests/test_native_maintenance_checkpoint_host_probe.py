@@ -3,6 +3,9 @@ import contextlib
 import io
 import json
 import os
+import base64
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,6 +16,22 @@ from ops import native_maintenance_checkpoint_duplex_probe as runner
 
 
 class AssemblyTests(unittest.TestCase):
+    def test_extracted_source_resolves_host_identity_without_checkout(self):
+        bundle = runner.bundle
+        root = Path(__file__).resolve().parents[1]
+        source = 'a' * 40
+        payload = bundle.canonical(dict(version=1, source_sha=source, files={
+            name: base64.b64encode((root / name).read_bytes()).decode('ascii')
+            for name in bundle.FILES}))
+        with bundle.extracted(payload, source, bundle.digest(payload)) as extracted:
+            code = ('import sys; sys.path.insert(0,' + repr(str(extracted)) + ');'
+                    'from ops.native_maintenance_checkpoint_host_probe import identity;'
+                    'assert identity(' + repr(source) + ',1,1)[2:] == '
+                    + repr(host.identity(source, 1, 1)[2:]))
+            result = subprocess.run([sys.executable, '-I', '-B', '-S', '-c', code],
+                                    cwd=extracted, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_scope_is_unique_to_exact_source_run_and_attempt(self):
         original = host.identity('a' * 40, 1, 1)
         for args in [('b' * 40, 1, 1), ('a' * 40, 2, 1), ('a' * 40, 1, 2)]:
