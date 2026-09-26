@@ -52,7 +52,10 @@ independent reconciliation, but may NEVER repeat the original DB session.
 """
     def __init__(self, *, target, operation, manifest_path, manifest_digest,
                  expected_route, approved_hold, workflow_plan, plan_digest,
-                 api_token, pause_journal, operation_journal, run, operator, lifetime, checkpoint):
+                 api_token, pause_journal, operation_journal, run, operator, lifetime, checkpoint,
+                 staged=False):
+        require(type(staged) is bool, 'EXECUTOR_MODE_INVALID')
+        self.staged = staged
         require(operation in ('apply', 'rollback'), 'EXECUTOR_OPERATION_INVALID')
         require(digest(workflow_plan) == plan_digest, 'EXECUTOR_PLAN_MISMATCH')
         require(all(callable(getattr(operator, n, None)) for n in ('assert_held', 'assert_drained'))
@@ -72,6 +75,9 @@ independent reconciliation, but may NEVER repeat the original DB session.
         bound = {'version': 1, 'target': asdict(target), 'operation': operation,
                  'manifest_digest': manifest_digest, 'workflow_plan_digest': plan_digest,
                  'source': run.source, 'route': dict(expected_route), 'hold': asdict(approved_hold)}
+        if staged:
+            bound['execution_mode'] = 'staged_v1'
+            require(callable(getattr(checkpoint, 'accept_resume', None)), 'EXECUTOR_RESUME_REQUIRED')
         if operation_journal.records:
             first = operation_journal.records[0]['event']
             require(type(first) is dict and set(first) == {'kind', 'scope'} and first['kind'] == 'BOUND',
@@ -104,25 +110,36 @@ independent reconciliation, but may NEVER repeat the original DB session.
 
     def _replay(self):
         state = 'bound'
+        session_run = None if self.staged else self.scope['origin_run']
         for record in self.operation_journal.records[1:]:
             event = record['event']
             require(type(event) is dict and set(event) == {'kind', 'run', 'outcome'}, 'EXECUTOR_EVENT_SHAPE')
             require(type(event['run']) is dict and set(event['run']) == {'run_id', 'attempt', 'job_id'}
                     and all(type(v) is int and v > 0 for v in event['run'].values()), 'EXECUTOR_EVENT_RUN')
             kind, outcome = event['kind'], event['outcome']
-            if kind == 'SESSION_INTENT':
-                require(state == 'bound' and outcome == 'UNKNOWN'
-                        and event['run'] == self.scope['origin_run'], 'EXECUTOR_SESSION_REPLAY')
+            if kind == 'PREPARED':
+                require(self.staged and state == 'bound' and outcome == 'UNKNOWN'
+                        and event['run'] == self.scope['origin_run'], 'EXECUTOR_PREPARE_REPLAY')
+                state = 'prepared'
+            elif kind == 'SESSION_BOUND':
+                require(self.staged and state == 'prepared' and outcome == 'UNKNOWN'
+                        and event['run']['run_id'] != self.scope['origin_run']['run_id'],
+                        'EXECUTOR_SESSION_BIND_REPLAY')
+                session_run = event['run']
+                state = 'session_bound'
+            elif kind == 'SESSION_INTENT':
+                require(state == ('session_bound' if self.staged else 'bound') and outcome == 'UNKNOWN'
+                        and event['run'] == session_run, 'EXECUTOR_SESSION_REPLAY')
                 state = 'session_unknown'
             elif kind in ('SESSION_RESULT', 'SESSION_ERROR'):
-                require(state == 'session_unknown' and event['run'] == self.scope['origin_run']
+                require(state == 'session_unknown' and event['run'] == session_run
                         and outcome in ('BEFORE', 'AFTER', 'UNKNOWN', 'DRIFT'), 'EXECUTOR_RESULT_REPLAY')
                 if kind == 'SESSION_RESULT':
                     require(outcome == ('BEFORE' if self.scope['operation'] == 'rollback' else 'AFTER'),
                             'EXECUTOR_RESULT_MISMATCH')
                 state = 'session_recorded'
             elif kind == 'RESTORE_INTENT':
-                require(state in ('bound', 'session_unknown', 'session_recorded', 'restoring')
+                require(state in ('bound', 'prepared', 'session_bound', 'session_unknown', 'session_recorded', 'restoring')
                         and outcome in ('BEFORE', 'AFTER'), 'EXECUTOR_RESTORE_REPLAY')
                 state = 'restoring'
             elif kind == 'RESTORED':
@@ -131,17 +148,19 @@ independent reconciliation, but may NEVER repeat the original DB session.
             else:
                 raise ExecutionError()
         self.state = state
+        self.session_run = session_run
 
     def _event(self, kind, outcome):
         self.operation_journal.append({'kind': kind, 'run': self.current_run, 'outcome': outcome})
         self._replay()
-        self._sync_checkpoint()
+        return self._sync_checkpoint()
 
     def _sync_checkpoint(self):
         self._assert_window()
-        self.checkpoint.sync(self.scope_digest, self.operation_journal, self.pause_journal)
+        head = self.checkpoint.sync(self.scope_digest, self.operation_journal, self.pause_journal)
         # Remote persistence can consume the lease: recheck before dispatch.
         self._assert_window()
+        return head
 
     def _assert_window(self):
         require(not self.failed, 'EXECUTOR_ALREADY_FAILED')
@@ -175,6 +194,7 @@ independent reconciliation, but may NEVER repeat the original DB session.
 
     def execute(self, connection_factory, *, route_root=None, seconds=30):
         """Exactly one session. Success does not automatically restore workflows."""
+        require(not self.staged, 'EXECUTOR_USE_STAGED_ENTRYPOINT')
         self._assert_window()
         require(self.state == 'bound' and self.current_run == self.scope['origin_run'], 'EXECUTOR_SESSION_ALREADY_ATTEMPTED')
         expected = 'BEFORE' if self.scope['operation'] == 'rollback' else 'AFTER'
@@ -204,6 +224,67 @@ independent reconciliation, but may NEVER repeat the original DB session.
                     self._event('SESSION_ERROR', 'UNKNOWN')
                 except BaseException:
                     pass  # Durable intent still requires external reconciliation.
+            self.failed = True
+            raise ExecutionError() from None
+        finally:
+            self.phase = 'idle'
+
+    def prepare(self):
+        """Pause only, in the origin run; return the durably accepted head.
+
+        No SQL session or workflow restoration. A failed stage needs separate
+        reconciliation; its in-memory object cannot extend or renew a lease.
+        """
+        require(self.staged and self.state == 'bound'
+                and self.current_run == self.scope['origin_run'], 'EXECUTOR_PREPARE_REFUSED')
+        try:
+            self._sync_checkpoint()
+            self.phase = 'pausing'
+            self.pause.pause()
+            self.hold.assert_held(self.target, self.scope['operation'])
+            return self._event('PREPARED', 'UNKNOWN')
+        except BaseException:
+            self.failed = True
+            raise ExecutionError() from None
+        finally:
+            self.phase = 'idle'
+
+    def execute_prepared(self, connection_factory, *, route_root=None, seconds=30):
+        """Consume one prepared operation in a different authenticated run.
+
+        The accepted remote pair must equal the locked local pair before any
+        append. SESSION_BOUND consumes the dispatch opportunity even if the
+        process dies before SESSION_INTENT. No resume/rebind entrypoint exists.
+        """
+        require(self.staged and self.state == 'prepared'
+                and self.current_run['run_id'] != self.scope['origin_run']['run_id'],
+                'EXECUTOR_PREPARED_SESSION_REFUSED')
+        expected = 'BEFORE' if self.scope['operation'] == 'rollback' else 'AFTER'
+        try:
+            self._assert_window()
+            self.checkpoint.accept_resume(self.scope_digest, self.operation_journal, self.pause_journal)
+            self.hold.assert_held(self.target, self.scope['operation'])
+            self.phase = 'session'
+            self._event('SESSION_BOUND', 'UNKNOWN')
+            self.hold.assert_held(self.target, self.scope['operation'])
+            self._event('SESSION_INTENT', 'UNKNOWN')
+            self.hold.assert_held(self.target, self.scope['operation'])
+            kwargs = dict(external_guard=self.hold, seconds=seconds,
+                          rollback=self.scope['operation'] == 'rollback')
+            if route_root is not None:
+                kwargs['route_root'] = route_root
+            result = permission_session(self.target, self.manifest_path, self.scope['manifest_digest'],
+                                        connection_factory, self.scope['route'], **kwargs)
+            require(result == expected, 'EXECUTOR_UNEXPECTED_RESULT')
+            self.hold.assert_held(self.target, self.scope['operation'])
+            self._event('SESSION_RESULT', result)
+            return result
+        except BaseException:
+            if self.state == 'session_unknown':
+                try:
+                    self._event('SESSION_ERROR', 'UNKNOWN')
+                except BaseException:
+                    pass
             self.failed = True
             raise ExecutionError() from None
         finally:

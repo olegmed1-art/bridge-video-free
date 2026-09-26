@@ -86,6 +86,21 @@ instance. A stale local journal pair may never replace an accepted newer prefix.
         self.scope = self.head = self.archive = None
         self.initialized = self.failed = False
 
+    def accept_resume(self, scope, operation, pause):
+        """Read-only acceptance of an exact pair at a cross-run handoff.
+
+        No local suffix, stale prefix, inferred head or already-used checkpoint
+        object may authorize a fresh staged dispatch. sync() still uses CAS.
+        """
+        require(not self.failed, 'CHECKPOINT_ALREADY_FAILED')
+        try:
+            require(not self.initialized and self.accepted is not None, 'CHECKPOINT_RESUME_ACCEPTANCE')
+            data = accepted_latest(self.store, scope, self.accepted)
+            require(snapshot.capture_locked(operation, pause) == data, 'CHECKPOINT_RESUME_PAIR_CHANGED')
+        except BaseException:
+            self.failed = True
+            raise
+
     def sync(self, scope, operation, pause):
         require(not self.failed, 'CHECKPOINT_ALREADY_FAILED')
         try:

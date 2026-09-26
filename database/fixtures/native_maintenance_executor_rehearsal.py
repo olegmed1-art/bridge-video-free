@@ -109,9 +109,12 @@ def main():
                     engine.check(engine.inspect(conn, TARGET, manifest, manifest_digest) == expected, 'CI_DB_STATE')
                 engine.check(all(c.closed for c in CONNECTIONS), 'CI_CONNECTION_LEAK')
 
-            # Four real sessions: apply, rollback, apply with lost return, rollback.
-            for index, (operation, lost) in enumerate([('apply', False), ('rollback', False),
-                                                      ('apply', True), ('rollback', False)]):
+            # Exercise both legacy and staged paths: apply, rollback, lost return,
+            # independent recovery and rollback, all against disposable PG18.
+            cases = [(staged, operation, lost) for staged in (False, True)
+                     for operation, lost in [('apply', False), ('rollback', False),
+                                             ('apply', True), ('rollback', False)]]
+            for index, (staged, operation, lost) in enumerate(cases):
                 remote, authority, store = CIRemote(), CIAuthority(), CIMemoryStore()
                 paths = [base / f'{index}-pause', base / f'{index}-operation']
                 for path in paths:
@@ -127,7 +130,8 @@ def main():
                         manifest_digest=manifest_digest, expected_route=ROUTE, approved_hold=CIHold(),
                         workflow_plan=PLAN, plan_digest=digest(PLAN), api_token='CI-only',
                         pause_journal=journals[0], operation_journal=journals[1],
-                        run=authority, operator=authority, lifetime=authority, checkpoint=barrier)
+                        run=authority, operator=authority, lifetime=authority, checkpoint=barrier,
+                        staged=staged)
                 actual_change = engine.change
                 def change(*args, **kwargs):
                     prove_busy(route)  # Actual routed client blocked while actual SQL executes.
@@ -150,15 +154,26 @@ def main():
                         stack.enter_context(patch.object(engine, 'change', side_effect=change))
                         sql = stack.enter_context(patch.object(executor, 'permission_session', side_effect=perform))
                         ex = build()
+                        if staged:
+                            ex.prepare()
+                            engine.check(sql.call_count == 0, 'CI_PREPARE_CALLED_SQL')
+                            observed('AFTER' if operation == 'rollback' else 'BEFORE')
+                            for journal in journals:
+                                journal.close()
+                            journals = [Journal(path) for path in paths]
+                            authority.run_id += 1
+                            authority.job_id += 1
+                            ex = build()
+                        dispatch = ex.execute_prepared if staged else ex.execute
                         if lost:
                             try:
-                                ex.execute(owned, route_root=route)
+                                dispatch(owned, route_root=route)
                             except executor.ExecutionError as exc:
                                 engine.check(exc.outcome == 'UNKNOWN', 'CI_LOST_RETURN_CLASSIFICATION')
                             else:
                                 raise AssertionError('CI_LOST_RETURN_ACCEPTED')
                         else:
-                            engine.check(ex.execute(owned, route_root=route) == expected, 'CI_RESULT')
+                            engine.check(dispatch(owned, route_root=route) == expected, 'CI_RESULT')
                         observed(expected)
                         engine.check(remote.puts == ['disable'], 'CI_AUTO_RESTORE')
                         for journal in journals:
@@ -169,7 +184,7 @@ def main():
                             # the original uncertainty and records remain intact.
                             archive = checkpoint.accepted_latest(
                                 store, ex.scope_digest, checkpoint.sha(store.heads[ex.scope_digest][0]))
-                            recovery_parent = base / 'recovery'
+                            recovery_parent = base / f'recovery-{index}'
                             recovery_parent.mkdir(mode=0o700)
                             restored = recovery.restore(archive, hashlib.sha256(archive).hexdigest(),
                                                         ex.scope_digest, recovery_parent)
@@ -181,7 +196,7 @@ def main():
                         authority.job_id += 1
                         ex = build()
                         try:
-                            ex.execute(owned, route_root=route)
+                            (ex.execute_prepared if staged else ex.execute)(owned, route_root=route)
                         except Refused:
                             pass
                         else:
@@ -198,6 +213,8 @@ def main():
                         if lost:
                             print('NATIVE_MAINTENANCE_SNAPSHOT_REAL_COMMIT_RECOVERY_PASS')
                             print('NATIVE_MAINTENANCE_CHECKPOINT_REAL_COMMIT_RECOVERY_PASS')
+                        if staged:
+                            print('NATIVE_MAINTENANCE_STAGED_REAL_SESSION_PASS')
                 finally:
                     for journal in journals:
                         journal.close()
