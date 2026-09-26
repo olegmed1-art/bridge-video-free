@@ -37,11 +37,20 @@ def check(condition, code):
 
 
 @dataclass(frozen=True)
+class NeonBinding:
+    project_id: str
+    branch_id: str
+    endpoint_id: str
+    host: str
+
+
+@dataclass(frozen=True)
 class Target:
     database: str
     session_owner: str
     owner: str
     recipient: str
+    neon: NeonBinding | None = None
 
 
 class MaintenanceGuard:
@@ -92,6 +101,47 @@ def load_manifest(path, expected_digest):
 def identity(conn, target):
     check(conn.execute('SELECT current_database(),session_user,current_user').fetchone()
           == (target.database, target.session_owner, target.owner), 'TARGET_IDENTITY_MISMATCH')
+    if target.neon is None:
+        # The only unbound target is the existing disposable regression fixture.
+        check((target.database, target.session_owner, target.owner, target.recipient)
+              == ('bridge_school_ci', 'postgres', 'bridge_ci_owner', 'native_commit_login')
+              and conn.info.host == 'localhost' and conn.info.port == 5432,
+              'NEON_BINDING_REQUIRED')
+        return
+    neon_identity(conn, target.neon)
+
+
+def neon_identity(conn, binding):
+    """Verify actual routing and server tags, never infer branch from DB name."""
+    params = conn.info.get_parameters()
+    check(binding.host.startswith(binding.endpoint_id + '.')
+          and binding.host.endswith('.aws.neon.tech')
+          and binding.endpoint_id.startswith('ep-')
+          and '-pooler.' not in binding.host, 'NEON_DIRECT_HOST_REQUIRED')
+    check(conn.info.host == binding.host and conn.info.port == 5432
+          and params.get('host') == binding.host, 'NEON_CONNECTION_HOST_MISMATCH')
+    # GSS can take precedence over SSL in libpq. Disabling it makes verify-full
+    # a requirement for this actual connection, not merely a fallback option.
+    check(params.get('sslmode') == 'verify-full'
+          and params.get('gssencmode') == 'disable', 'NEON_VERIFIED_TLS_REQUIRED')
+    check(not params.get('options') and not params.get('hostaddr'),
+          'NEON_ROUTING_OVERRIDE_REFUSED')
+    neon_server_identity(conn, binding)
+
+
+def neon_server_identity(conn, binding):
+    expected = {
+        'neon.project_id': (binding.project_id, 'postmaster'),
+        'neon.branch_id': (binding.branch_id, 'postmaster'),
+        'neon.endpoint_id': (binding.endpoint_id, 'superuser'),
+    }
+    rows = conn.execute("""SELECT name, setting, context, source, reset_val, pending_restart
+      FROM pg_catalog.pg_settings WHERE name = ANY(%s)""", (list(expected),)).fetchall()
+    check(len(rows) == len(expected), 'NEON_SERVER_IDENTITY_MISSING')
+    for name, setting, context, source, reset_val, pending_restart in rows:
+        check((setting, context) == expected[name] and reset_val == setting
+              and source == 'configuration file' and not pending_restart,
+              'NEON_SERVER_IDENTITY_MISMATCH')
 
 
 def snapshot(conn, target):
@@ -192,6 +242,7 @@ def prepare(conn, target, approved_snapshot_digest, path):
 
 
 def inspect(conn, target, path, manifest_digest):
+    check(conn.autocommit, 'AUTOCOMMIT_CONNECTION_REQUIRED')
     record = load_manifest(path, manifest_digest)
     check(record['version'] == 1 and record['target'] == asdict(target), 'MANIFEST_TARGET_MISMATCH')
     with conn.transaction():
