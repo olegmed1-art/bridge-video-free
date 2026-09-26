@@ -32,6 +32,7 @@ FILES = (
     'ops/native_maintenance_run_guard.py',
     'ops/native_maintenance_store.py',
     'ops/native_maintenance_snapshot.py',
+    'ops/native_maintenance_checkpoint.py',
 )
 PACKAGE_MARKERS = ('database/__init__.py', 'database/fixtures/__init__.py', 'ops/__init__.py')
 MAX_FILE = 256 * 1024
