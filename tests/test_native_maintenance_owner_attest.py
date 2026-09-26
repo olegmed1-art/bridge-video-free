@@ -1,5 +1,8 @@
 """No real database credentials: fail-closed read-only owner-path contracts."""
 from contextlib import ExitStack
+import contextlib
+import io
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +13,19 @@ URI = ('postgresql://neondb_owner:synthetic-test-password@' + subject.EXPECTED_T
 
 
 class OwnerAttestTests(unittest.TestCase):
+    def test_failure_reports_only_fixed_phase_and_no_exception(self):
+        output = io.StringIO()
+        with patch.object(subject, 'PHASE', 'connection'), \
+                patch.object(subject, 'main', side_effect=RuntimeError('private credential')), \
+                contextlib.redirect_stdout(output):
+            with self.assertRaises(SystemExit) as exc:
+                subject.entrypoint()
+        self.assertEqual(exc.exception.code, 2)
+        self.assertEqual(json.loads(output.getvalue()),
+                         dict(audit='NATIVE_OWNER_READ_ONLY_REFUSED', phase='connection',
+                              production_mutations=False))
+        self.assertNotIn('private', output.getvalue())
+
     def test_rebuilds_direct_verified_connection_without_uri_overrides(self):
         p = subject.parameters(URI + '&options=project%3Dother&hostaddr=127.0.0.1&gssencmode=require')
         self.assertEqual(p['host'], subject.EXPECTED_TARGET['neon']['host'])
