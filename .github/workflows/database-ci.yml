@@ -157,6 +157,12 @@ jobs:
           bash -n database/scripts/migrate.sh
           database/scripts/migrate.sh
 
+      - name: Inventory migrated catalog before invariant tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/fixtures/native_cli_dependency_inventory.sql
+
       - name: Run invariant tests
         shell: bash
         run: |
