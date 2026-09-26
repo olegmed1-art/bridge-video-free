@@ -56,6 +56,166 @@ class MemoryStore:
         self.fault('after_head')
 
 
+class StagedExecutorTests(unittest.TestCase):
+    """Real journals/checkpoint protocol, explicit simulated external authority."""
+    open_journals = executor_tests.ExecutorTests.open_journals
+    record_kinds = executor_tests.ExecutorTests.record_kinds
+    successful_session = executor_tests.ExecutorTests.successful_session
+
+    def setUp(self):
+        self.store = MemoryStore()
+        self.accepted = None
+        executor_tests.ExecutorTests.setUp(self)
+
+    def build(self, **overrides):
+        return executor_tests.ExecutorTests.build(self, **{
+            'staged': True,
+            'checkpoint': cp.JournalCheckpoint(self.store, accepted_head_digest=self.accepted),
+            **overrides})
+
+    def next_run(self, head):
+        self.pause.close()
+        self.operation.close()
+        self.open_journals()
+        old = self.runtime
+        self.runtime = executor_tests.Runtime()
+        self.runtime.run_id, self.runtime.job_id = old.run_id + 1, old.job_id + 1
+        self.accepted = head
+        self.ex = self.build()
+
+    def head(self):
+        return cp.sha(self.store.read_head(self.ex.scope_digest)[0])
+
+    def test_prepare_apply_restore_across_three_runs(self):
+        with patch.object(executor, 'permission_session', side_effect=self.successful_session) as sql:
+            prepared = self.ex.prepare()
+            sql.assert_not_called()
+            self.assertEqual(self.record_kinds(), ['BOUND', 'PREPARED'])
+            self.assertEqual(self.remote.puts, [(7, 'disable')])
+            self.next_run(prepared)
+            self.assertEqual(self.ex.execute_prepared(None), 'AFTER')
+            self.assertEqual(sql.call_count, 1)
+        self.assertEqual(self.record_kinds(),
+                         ['BOUND', 'PREPARED', 'SESSION_BOUND', 'SESSION_INTENT', 'SESSION_RESULT'])
+        self.assertEqual(self.remote.puts, [(7, 'disable')])
+        self.next_run(self.head())
+        self.ex.restore(executor_tests.Release(self.ex.scope_digest, 'AFTER'), 'AFTER')
+        self.assertEqual(self.remote.puts, [(7, 'disable'), (7, 'enable')])
+
+    def test_same_origin_and_legacy_entrypoint_cannot_dispatch(self):
+        self.ex.prepare()
+        with patch.object(executor, 'permission_session') as sql:
+            with self.assertRaises(Refused):
+                self.ex.execute_prepared(None)
+            with self.assertRaises(Refused):
+                self.ex.execute(None)
+            sql.assert_not_called()
+        with self.assertRaisesRegex(Refused, 'SCOPE_CHANGED'):
+            self.build(staged=False)
+
+    def test_missing_or_wrong_remote_acceptance_blocks_dispatch(self):
+        self.ex.prepare()
+        for accepted in (None, 'e' * 64):
+            self.next_run(accepted)
+            with patch.object(executor, 'permission_session') as sql:
+                with self.assertRaises(executor.ExecutionError):
+                    self.ex.execute_prepared(None)
+                sql.assert_not_called()
+            self.assertEqual(self.record_kinds(), ['BOUND', 'PREPARED'])
+
+    def test_local_prepared_suffix_without_remote_ack_cannot_dispatch(self):
+        original_sync = self.ex.checkpoint.sync
+        def fail_prepared(*args):
+            if self.ex.state == 'prepared':
+                self.store.fail = 'before_head'
+            return original_sync(*args)
+        with patch.object(self.ex.checkpoint, 'sync', side_effect=fail_prepared):
+            with self.assertRaises(executor.ExecutionError):
+                self.ex.prepare()
+        self.store.fail = None
+        self.next_run(self.head())
+        with patch.object(executor, 'permission_session') as sql:
+            with self.assertRaises(executor.ExecutionError):
+                self.ex.execute_prepared(None)
+            sql.assert_not_called()
+        self.assertEqual(self.remote.puts, [(7, 'disable')])
+
+    def test_crash_after_binding_never_rebinds_even_before_intent(self):
+        self.next_run(self.ex.prepare())
+        self.ex.checkpoint.accept_resume(self.ex.scope_digest, self.operation, self.pause)
+        self.ex._event('SESSION_BOUND', 'UNKNOWN')
+        self.next_run(self.head())
+        with patch.object(executor, 'permission_session') as sql:
+            with self.assertRaises(Refused):
+                self.ex.execute_prepared(None)
+            sql.assert_not_called()
+        self.ex.restore(executor_tests.Release(self.ex.scope_digest, 'BEFORE'), 'BEFORE')
+        self.assertEqual(self.remote.puts[-1], (7, 'enable'))
+
+    def test_committed_prepared_with_lost_ack_requires_fresh_reconciliation(self):
+        original_sync = self.ex.checkpoint.sync
+        def lose_prepared(*args):
+            if self.ex.state == 'prepared':
+                self.store.fail = 'after_head'
+            return original_sync(*args)
+        with patch.object(self.ex.checkpoint, 'sync', side_effect=lose_prepared), \
+                patch.object(executor, 'permission_session') as sql:
+            with self.assertRaises(executor.ExecutionError):
+                self.ex.prepare()
+            sql.assert_not_called()
+        self.store.fail = None
+        # CI simulates independently reading and accepting the current head.
+        # That is still insufficient while the old process/backends are undrained.
+        accepted = self.head()
+        self.next_run(accepted)
+        self.runtime.reject = 'drain'
+        with patch.object(executor, 'permission_session') as sql:
+            with self.assertRaises(executor.ExecutionError):
+                self.ex.execute_prepared(None)
+            sql.assert_not_called()
+        self.assertEqual(self.record_kinds(), ['BOUND', 'PREPARED'])
+        # Fresh external reconciliation now proves drain; no old instance/lease
+        # is reused, and the real journal/checkpoint path admits one session.
+        self.next_run(accepted)
+        with patch.object(executor, 'permission_session', side_effect=self.successful_session) as sql:
+            self.assertEqual(self.ex.execute_prepared(None), 'AFTER')
+            self.assertEqual(sql.call_count, 1)
+        self.assertEqual(self.remote.puts, [(7, 'disable')])
+
+    def test_lost_intent_checkpoint_reply_never_calls_sql_or_retries(self):
+        self.next_run(self.ex.prepare())
+        original_sync = self.ex.checkpoint.sync
+        def lose_intent(*args):
+            if self.ex.state == 'session_unknown':
+                self.store.fail = 'after_head'
+            return original_sync(*args)
+        with patch.object(self.ex.checkpoint, 'sync', side_effect=lose_intent), \
+                patch.object(executor, 'permission_session') as sql:
+            with self.assertRaises(executor.ExecutionError):
+                self.ex.execute_prepared(None)
+            sql.assert_not_called()
+        self.store.fail = None
+        self.next_run(self.head())
+        with self.assertRaises(Refused):
+            self.ex.execute_prepared(None)
+        self.assertEqual(self.remote.puts, [(7, 'disable')])
+
+    def test_lost_sql_return_requires_reconciliation_not_replay(self):
+        self.next_run(self.ex.prepare())
+        with patch.object(executor, 'permission_session', side_effect=ConnectionError('private')) as sql:
+            with self.assertRaises(executor.ExecutionError):
+                self.ex.execute_prepared(None)
+            self.assertEqual(sql.call_count, 1)
+        self.next_run(self.head())
+        with self.assertRaises(Refused):
+            self.ex.execute_prepared(None)
+        release = executor_tests.Release(self.ex.scope_digest, 'AFTER')
+        release.reject = True
+        with self.assertRaises(executor.ExecutionError):
+            self.ex.restore(release, 'AFTER')
+        self.assertEqual(self.remote.puts, [(7, 'disable')])
+
+
 class CheckpointTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
