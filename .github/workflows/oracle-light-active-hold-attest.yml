@@ -8,10 +8,10 @@ on:
         required: true
         type: string
   pull_request:
-    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py']
+    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py', 'ops/native_permission_hold_guard.py', 'tests/test_native_permission_hold_guard.py']
   push:
     branches: [main]
-    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py']
+    paths: ['.github/workflows/oracle-light-active-hold-attest.yml', 'ops/oracle_light_active_hold_attest.py', 'tests/test_oracle_light_active_hold_attest.py', 'ops/native_permission_hold_guard.py', 'tests/test_native_permission_hold_guard.py']
 
 permissions:
   contents: read
@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-      - run: python -m unittest -q tests.test_oracle_light_active_hold_attest
+      - run: python -m unittest -q tests.test_oracle_light_active_hold_attest tests.test_native_permission_hold_guard
 
   attest:
     needs: contract
