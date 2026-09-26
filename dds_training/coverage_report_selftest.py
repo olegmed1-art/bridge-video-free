@@ -74,6 +74,20 @@ def main() -> None:
             else:
                 raise AssertionError("An unmapped suite was reported as fully covered")
 
+        manifest["coverage"]["module_tests"] = {"module.py": ["t"]}
+        threshold_keys = ("minimum_overall_percent", "minimum_module_percent", "minimum_module_execution_ratio")
+        for key in threshold_keys:
+            maximum = 1 if key.endswith("ratio") else 100
+            for bad in ("NaN", "Infinity", -1, maximum + 1, True, None, "invalid"):
+                manifest["coverage"]["runtime_coverage"]["fast"] = {key: bad}
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                try:
+                    make_report(root, manifest_path, fragments, "fast")
+                except CoverageError as exc:
+                    assert key in str(exc), exc
+                else:
+                    raise AssertionError(f"Invalid threshold accepted: {key}={bad!r}")
+
         print(json.dumps({
             "ok": True,
             "line_coverage_measured": True,
