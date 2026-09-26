@@ -37,7 +37,7 @@ class ActiveHoldContract(unittest.TestCase):
             except SystemExit as exc:
                 self.assertEqual(exc.code,2)
         self.assertEqual(settings['sslmode'],'verify-full')
-        self.assertEqual(settings['sslrootcert'],'system')
+        self.assertEqual(settings['sslrootcert'],'/etc/ssl/certs/ca-certificates.crt')
         self.assertEqual(settings['gssencmode'],'disable')
         self.assertIn('default_transaction_read_only=on',settings['options'])
         self.assertNotIn('private-secret',output.getvalue())
@@ -88,17 +88,20 @@ class ActiveHoldContract(unittest.TestCase):
 
     def test_bad_login_does_not_output_dsn(self):
         with patch.object(attest.pwd,'getpwnam') as user, \
-             patch.object(attest.subprocess,'run') as run:
+             patch.object(attest.subprocess,'run') as run, \
+             patch.object(attest,'read') as read:
             user.return_value.pw_gid=1000
             user.return_value.pw_uid=1000
             run.return_value.returncode=2
             run.return_value.stdout=json.dumps({'ok':False})
             with self.assertRaisesRegex(attest.Blocked,'LOGIN_OR_QUEUE_FAILED'):
                 attest.login('postgresql://user:private-secret@host/db')
+            read.assert_called_once_with(attest.SYSTEM_CA,0o644,1048576)
 
     def test_login_only_propagates_allowlisted_failure_codes(self):
         with patch.object(attest.pwd,'getpwnam') as user, \
-             patch.object(attest.subprocess,'run') as run:
+             patch.object(attest.subprocess,'run') as run, \
+             patch.object(attest,'read'):
             user.return_value.pw_gid=1000
             user.return_value.pw_uid=1000
             run.return_value.returncode=2
@@ -107,6 +110,13 @@ class ActiveHoldContract(unittest.TestCase):
                 expected=code if code in attest.LOGIN_FAILURES else 'LOGIN_OR_QUEUE_FAILED'
                 with self.assertRaisesRegex(attest.Blocked,expected):
                     attest.login('postgresql://user:private-secret@host/db')
+
+    def test_untrusted_ca_file_stops_before_launching_login(self):
+        with patch.object(attest,'read',side_effect=attest.Blocked('FILE_DRIFT')), \
+             patch.object(attest.subprocess,'run') as run:
+            with self.assertRaisesRegex(attest.Blocked,'FILE_DRIFT'):
+                attest.login('postgresql://user:private-secret@host/db')
+            run.assert_not_called()
 
     def test_workflow_manual_probe_requires_owner_and_exact_main(self):
         text=Path('.github/workflows/oracle-light-active-hold-attest.yml').read_text()

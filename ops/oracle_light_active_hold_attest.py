@@ -19,6 +19,7 @@ ROUTE = Path('/var/lib/bridge-autopilot-tunnel')
 BASE_SHA = 'e8d22d57089b9c43b1d65d78de7e022c2b2124357cf40e98728128d2980ee2b4'
 HOST = 'ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech'
 ROLE = 'autopilot_light_worker_login'
+SYSTEM_CA = Path('/etc/ssl/certs/ca-certificates.crt')
 PIN_KEYS = {'AUTOPILOT_TOKEN_BROKER_URL','AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA',
     'AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256',
     'AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256',
@@ -86,7 +87,7 @@ try:
  stage='LOGIN_CONNECT_FAILED'
  with psycopg.connect(os.environ['AUDIT_DATABASE_URL'],autocommit=True,connect_timeout=10,
    options='-c statement_timeout=5000 -c default_transaction_read_only=on',
-   sslmode='verify-full',sslrootcert='system',gssencmode='disable') as conn:
+   sslmode='verify-full',sslrootcert='/etc/ssl/certs/ca-certificates.crt',gssencmode='disable') as conn:
   stage='LOGIN_SESSION_FAILED'
   row=conn.execute("SELECT current_user,current_database(),current_setting('transaction_read_only')").fetchone()
   if row!=('autopilot_light_worker_login','neondb','on'):
@@ -125,6 +126,9 @@ except BaseException as exc:
 '''
 
 def login(dsn):
+    # Use the installed Ubuntu trust bundle, not the driver's build-time paths.
+    # Never fall back to sslmode=require or to a downloaded unverified CA.
+    read(SYSTEM_CA,0o644,1048576)
     user=pwd.getpwnam('school-autopilot')
     def identity():
         os.setgroups([])
