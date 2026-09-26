@@ -43,8 +43,12 @@ The CLI reads committed Git blobs with Git replacement objects disabled, not
 mutable working-tree files or local replacement refs. It records
 every YAML workflow, its SHA256, trigger specification, workflow/job concurrency,
 job conditions, environments, reusable-workflow references and literal secret
-names. Dynamic/opaque secret references are flagged. It outputs metadata only:
-no secret values, DSNs or run bodies. The full source-tree ID binds downstream
+names. Dynamic/opaque secret references are flagged. It never queries the secret
+store and omits run bodies. Retained event specifications, input defaults,
+conditions and environments are literal repository data: a value already
+embedded there (including a DSN) can appear in the report. Treat the report with
+the same access restrictions as its source; it is not a secret-redaction tool.
+The full source-tree ID binds downstream
 repository code changes even when workflow text is unchanged; this is a pointer
 for review, not an automatic transitive-capability analysis.
 
