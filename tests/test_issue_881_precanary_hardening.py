@@ -1750,6 +1750,7 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
     assert '.github/workflows/native-maintenance-window.yml' in shared_workflows
     assert "'ops/native_maintenance_run_guard.py'" in runner
     assert '.github/workflows/native-maintenance-driver-prepare.yml' in shared_workflows
+    assert '.github/workflows/native-maintenance-owner-host.yml' in shared_workflows
     from ops.native_maintenance_bundle import FILES
     for dependency in (*FILES, 'ops/native_maintenance_driver_runner.py',
                        'ops/native_driver_requirements.txt', 'ops/native_maintenance_bundle.py',

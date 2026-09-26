@@ -29,6 +29,7 @@ root_pr_number=991
 prior_gate_pr_number=1070
 protected_gate_paths=(
   '.github/workflows/native-maintenance-driver-prepare.yml'
+  '.github/workflows/native-maintenance-owner-host.yml'
   'ops/native_maintenance_driver_runner.py'
   'ops/native_driver_requirements.txt'
   'ops/native_maintenance_bundle.py'

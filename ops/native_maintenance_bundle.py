@@ -35,6 +35,9 @@ FILES = (
     'ops/native_maintenance_checkpoint.py',
     'ops/native_maintenance_checkpoint_oci.py',
     'ops/native_maintenance_driver.py',
+    'ops/native_maintenance_owner_attest.py',
+    'ops/oracle_autopilot_source_preflight.py',
+    'ops/native_maintenance_owner_host.py',
 )
 PACKAGE_MARKERS = ('database/__init__.py', 'database/fixtures/__init__.py', 'ops/__init__.py')
 MAX_FILE = 256 * 1024
