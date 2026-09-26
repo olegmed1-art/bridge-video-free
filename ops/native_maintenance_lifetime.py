@@ -160,6 +160,8 @@ def probe(source, run, kind):
             # service's own runtime deadline and reap its cgroup descendants.
             process.kill()
         process.communicate(timeout=10)
+        if kind == 'launcher-kill':
+            check(process.returncode == -9, 'PROBE_LAUNCHER_NOT_SIGKILL')
         after = show(unit)
         check(process.returncode != 0 and after.get('InvocationID') == state['InvocationID']
               and after.get('Result') == ('signal' if kind == 'main-kill' else 'timeout')
