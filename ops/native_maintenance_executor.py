@@ -92,7 +92,8 @@ independent reconciliation, but may NEVER repeat the original DB session.
         self._replay()
         self.hold = HoldMaintenanceGuard(target, operation, approved_hold, writer_guard=SessionWindow(self))
         api = WorkflowAPI(api_token, workflow_plan, plan_digest, mutation_guard=self)
-        self.pause = WorkflowPause(workflow_plan, plan_digest, api, pause_journal, self)
+        self.pause = WorkflowPause(workflow_plan, plan_digest, api, pause_journal, self,
+                                   operation_scope_digest=self.scope_digest)
 
     def _run_identity(self):
         result = {'run_id': self.run.run_id, 'attempt': self.run.attempt, 'job_id': self.run.job_id}
@@ -227,3 +228,4 @@ An ambiguous GitHub PUT still requires the pause library's separate recovery.
             raise ExecutionError() from None
         finally:
             self.phase = 'idle'
+

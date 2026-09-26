@@ -11,6 +11,8 @@ on:
       - 'ops/native_maintenance_executor.py'
       - 'ops/native_maintenance_run_guard.py'
       - 'ops/native_maintenance_store.py'
+      - 'ops/native_maintenance_snapshot.py'
+      - 'tests/test_native_maintenance_snapshot.py'
       - 'ops/native_maintenance_workflow_api.py'
       - 'ops/native_maintenance_workflow_pause.py'
       - 'ops/native_permission_hold_guard.py'
@@ -44,6 +46,8 @@ on:
       - 'ops/native_maintenance_executor.py'
       - 'ops/native_maintenance_run_guard.py'
       - 'ops/native_maintenance_store.py'
+      - 'ops/native_maintenance_snapshot.py'
+      - 'tests/test_native_maintenance_snapshot.py'
       - 'ops/native_maintenance_workflow_api.py'
       - 'ops/native_maintenance_workflow_pause.py'
       - 'ops/native_permission_hold_guard.py'
@@ -121,6 +125,9 @@ jobs:
 
       - name: Verify maintenance executor recovery contracts
         run: python -m unittest discover -s tests -p 'test_native_maintenance_executor.py' -v
+
+      - name: Verify bound journal snapshot recovery
+        run: python -m unittest discover -s tests -p 'test_native_maintenance_snapshot.py' -v
 
       - name: Verify native CLI delivery contracts
         run: |
@@ -371,3 +378,4 @@ jobs:
             "SELECT migration_key, checksum IS NOT NULL AS checksum_recorded FROM schema_migration ORDER BY migration_key;"
           missing="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM schema_migration WHERE checksum IS NULL;")"
           test "$missing" -eq 0
+
