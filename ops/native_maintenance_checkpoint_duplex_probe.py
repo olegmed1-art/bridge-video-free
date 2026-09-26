@@ -26,6 +26,13 @@ def guard():
     source_check(os.environ.get('EXPECTED_MAIN'))
 
 
+def mutation_guard(channel):
+    """Fresh authenticated source at every OCI PUT boundary, within pipe lease."""
+    channel.alive()
+    guard()
+    channel.alive()
+
+
 def bootstrap(repo, source, source_digest, run_id, attempt):
     identity(source, run_id, attempt)
     lifetime = bundle.git(repo, 'show', source + ':ops/native_maintenance_lifetime.py')
@@ -84,7 +91,6 @@ def main():
                                                    retry_strategy=oci.retry.NoneRetryStrategy())
     namespace = client.get_namespace(compartment_id=adapter.TENANCY,
                                     retry_strategy=oci.retry.NoneRetryStrategy()).data
-    store = adapter.OCIJournalStore(client, namespace, guard)
     repo = Path(__file__).resolve().parents[1]
     payload = bundle.build(repo, source)
     code = bootstrap(repo, source, bundle.digest(payload), run_id, attempt)
@@ -101,7 +107,11 @@ def main():
     started = time.monotonic()
     try:
         channel = rpc.Channel(process.stdout.fileno(), process.stdin.fileno(), binding, seconds=60)
-        server = rpc.StoreServer(channel, scope, store, guard)
+        store = adapter.OCIJournalStore(client, namespace, lambda: mutation_guard(channel))
+        # Read RPCs retain fixed binding/scope, private-bucket checks and deadline.
+        # Fresh source observations bracket every individual real OCI PUT in the
+        # store, including registration and head writes inside one compare_head.
+        server = rpc.StoreServer(channel, scope, store, channel.alive)
         channel.send(dict(source=base64.b64encode(payload).decode('ascii')))
         while True:
             record = channel.receive()

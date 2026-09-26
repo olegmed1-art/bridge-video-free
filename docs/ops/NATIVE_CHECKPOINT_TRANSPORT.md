@@ -15,8 +15,10 @@ archive readback and confirmed head before the host can proceed.
 Both endpoints must be assembled by trusted code with the same independently
 accepted source/run binding and exact checkpoint scope. Those hashes are not
 self-authenticating, and a supplied callback is not operator coordination. The
-server guard must verify the actual source, run, lifetime and accepted scope;
-the real store retains its own immediate mutation guard. No generic URL, shell,
+assembled guards must verify the actual source, run, lifetime and accepted scope.
+The RPC guard can enforce the bound local channel lifetime while the real store
+performs fresh authenticated checks before and after every individual mutation.
+Immutable read responses never authorize a subsequent mutation. No generic URL, shell,
 object path, deletion or workflow mutation can be requested through this API.
 
 Frames are canonical JSON with unique keys, strict base64, fixed identity and
@@ -60,7 +62,12 @@ on failure; a scope directory can never be overwritten. No production operation
 journal, database credential or permission session is used.
 
 The runner dispatches only store requests for the precomputed synthetic scope,
-with fresh source guards enclosing each request. A terminal frame must bind that
+with local deadline checks enclosing each request and fresh authenticated source
+checks immediately before and after every actual OCI PUT (including separate
+registration/head writes). Bucket privacy, budget, archive readback and head CAS
+checks remain unchanged; there is no cached authorization across writes. A source
+change after PUT preserves the remote effect but refuses acknowledgement and
+permanently poisons the store. A terminal frame must bind that
 scope/source/session, exact request count, unchanged HOLD and bounded elapsed time.
 The runner closes stdin, requires successful SSH/supervisor exit, then independently
 downloads the recorded latest head and archive. Public output is fixed status,
@@ -73,3 +80,11 @@ This deliberately does not claim a complete production RunBinding/pause/SQL
 rehearsal. Actual run/job binding, scoped operator/drain implementations, accepted
 source/manifests and the full executor's network timing remain deployment work.
 Live success must be recorded separately at its exact merged source SHA.
+
+The initial corrected live run 36266537099 at 5477d5f4b660a5461e4dd27507c36e6ccfdab2b2
+passed 21 RPC requests in 44775 ms (host 41635 ms), with exact restoration and unchanged
+HOLD. That version performed two source GETs for every read RPC as well as its
+write guards. The boundary-guard revision removes those redundant source GETs
+from reads and strengthens each individual PUT with a post-source check. It must
+be measured again; the earlier timing does not establish the new runtime or the
+full executor's 60-second feasibility. No deadline is extended.
