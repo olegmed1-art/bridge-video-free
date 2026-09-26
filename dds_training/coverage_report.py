@@ -41,13 +41,25 @@ def load_fragments(directory: Path) -> tuple[dict[str, set[int]], dict[str, set[
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise CoverageError(f"Cannot read coverage fragment {path}: {exc}") from exc
-        if data.get("schema") != "dds-runtime-coverage-fragment-v1":
+        if not isinstance(data, dict) or data.get("schema") != "dds-runtime-coverage-fragment-v1":
             raise CoverageError(f"Unexpected coverage fragment schema in {path}")
         files.append(path.name)
-        for module, values in data.get("lines", {}).items():
-            lines[module].update(int(value) for value in values)
-        for module, values in data.get("arcs", {}).items():
-            arcs[module].update((int(value[0]), int(value[1])) for value in values)
+        fragment_lines = data.get("lines", {})
+        fragment_arcs = data.get("arcs", {})
+        if not isinstance(fragment_lines, dict) or not isinstance(fragment_arcs, dict):
+            raise CoverageError(f"Invalid coverage line/arc mappings in {path}")
+        for module, values in fragment_lines.items():
+            if not isinstance(values, list) or any(type(value) is not int for value in values):
+                raise CoverageError(f"Invalid coverage lines in {path}")
+            lines[module].update(values)
+        for module, values in fragment_arcs.items():
+            if not isinstance(values, list) or any(
+                not isinstance(value, list) or len(value) != 2
+                or any(type(endpoint) is not int for endpoint in value)
+                for value in values
+            ):
+                raise CoverageError(f"Invalid coverage arcs in {path}")
+            arcs[module].update((value[0], value[1]) for value in values)
     if not files:
         raise CoverageError(f"No runtime coverage fragments found in {directory}")
     return lines, arcs, files
