@@ -1,0 +1,56 @@
+name: Native maintenance owner read-only attestation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-maintenance-owner-attest.yml'
+      - 'ops/native_maintenance_owner_attest.py'
+      - 'ops/oracle_autopilot_source_preflight.py'
+      - 'database/native_cli_permission_engine.py'
+      - 'tests/test_native_maintenance_owner_attest.py'
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact reviewed main for read-only owner-path verification
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+      - run: python -m unittest discover -s tests -p 'test_native_maintenance_owner_attest.py' -v
+
+  attest:
+    needs: contract
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' && github.actor == github.repository_owner &&
+      github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha
+    environment: database-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+      - name: Verify exact production owner path without mutations
+        env:
+          NATIVE_OWNER_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL || secrets.NEON_DATABASE_URL }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
+        run: python -m ops.native_maintenance_owner_attest
