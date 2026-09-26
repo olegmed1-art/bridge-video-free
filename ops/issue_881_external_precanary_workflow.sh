@@ -62,6 +62,7 @@ protected_gate_paths=(
   'ops/native_maintenance_owner_host_runner.py'
   'ops/native_maintenance_recovery_assets.py'
   'ops/native_maintenance_recovery_assets_runner.py'
+  'ops/native_maintenance_checkpoint_transport.py'
   '.github/workflows/native-maintenance-window.yml'
   'ops/native_maintenance_run_guard.py'
   '.dockerignore'
