@@ -1,7 +1,7 @@
 # Synchronous private-pipe checkpoint transport
 
-2026-09-26, ASSURED / I2, tracking #1946. Callable transport boundary only;
-no live SSH assembly, credentials, operator approval, grants or pilot.
+2026-09-26, ASSURED / I2, tracking #1946. Callable transport plus a fixed synthetic
+SSH probe; no production permission assembly, operator approval, grants or pilot.
 
 The Oracle host owns its private journals and `JournalCheckpoint`. The runner
 owns the actual `OCIJournalStore` and OCI credentials. `ProxyStore` exposes only
@@ -42,3 +42,34 @@ through the reviewed interactive SSH and supervisor, and measure the complete
 path within the existing run and route deadlines before any permission change.
 Rollback is code revert before activation. Preserve journals and remote objects
 after any attempted operation; transport errors cannot classify its outcome.
+
+## Fixed supervised live probe
+
+The separate manual owner-only exact-main workflow holds both existing Oracle
+workload and backup mutation groups. It passes verified source into an interactive
+SSH child under the existing independent PID1 supervisor. The bootstrap reads one
+bounded frame, not EOF, leaving stdin/stdout exclusively available for store RPC.
+OCI credentials stay on the runner; its SSH environment contains only PATH.
+
+The child checks actual HOLD before and after. Under the already prepared private
+host store's existing lock and VERSION it creates one digest-named synthetic
+scope with two persistent private journals. It publishes a pristine pair, appends
+a SYNTHETIC_INTENT, publishes the successor, downloads it and reconstructs a
+separate private copy with byte comparison. All host evidence is retained, even
+on failure; a scope directory can never be overwritten. No production operation
+journal, database credential or permission session is used.
+
+The runner dispatches only store requests for the precomputed synthetic scope,
+with fresh source guards enclosing each request. A terminal frame must bind that
+scope/source/session, exact request count, unchanged HOLD and bounded elapsed time.
+The runner closes stdin, requires successful SSH/supervisor exit, then independently
+downloads the recorded latest head and archive. Public output is fixed status,
+hashes, timings and counts. Private request/response bytes and exceptions are not
+logged. A failure stops the SSH group; PID1 remains the independent host bound.
+
+Reported transport duration includes SSH startup through the final host frame;
+inventory/setup and final independent runner readback are outside that interval.
+This deliberately does not claim a complete production RunBinding/pause/SQL
+rehearsal. Actual run/job binding, scoped operator/drain implementations, accepted
+source/manifests and the full executor's network timing remain deployment work.
+Live success must be recorded separately at its exact merged source SHA.
