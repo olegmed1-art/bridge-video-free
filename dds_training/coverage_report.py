@@ -6,7 +6,6 @@ import json
 import math
 from collections import defaultdict
 from pathlib import Path
-from typing import Iterable
 
 
 class CoverageError(RuntimeError):
@@ -182,7 +181,7 @@ def make_report(root: Path, manifest_path: Path, fragments: Path, suite: str) ->
             "line_percent": round(overall, 3),
             "branch_sites": branch_sites_total,
             "observed_branch_sites": branch_sites_observed,
-            "executed_arcs": sum(len(values) for values in covered_arcs.values()),
+            "executed_arcs": sum(row["executed_arcs"] for row in module_reports.values()),
         },
         "modules": module_reports,
         "findings": findings,
