@@ -254,6 +254,9 @@ def validate_submission(raw, accepted_digest, source):
     if value.get('mode') == 'read_only_rehearsal':
         from ops.native_maintenance_stage_rehearsal import request_value
         request_value(raw,accepted_digest,source)
+    elif value.get('mode') == 'grant_request_candidate':
+        from ops.native_maintenance_grant_candidate import request_value
+        request_value(raw,accepted_digest,source)
     else:
         AcceptedRequest(raw,accepted_digest,source)
 

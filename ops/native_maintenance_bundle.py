@@ -32,6 +32,7 @@ FILES = (
     'ops/native_maintenance_stage_request.py',
     'ops/native_maintenance_stage_host.py',
     'ops/native_maintenance_stage_rehearsal.py',
+    'ops/native_maintenance_grant_candidate.py',
     'ops/native_maintenance_supervisor.py',
     'ops/native_maintenance_stage_unit.py',
     'ops/native_maintenance_recovery_assets.py',

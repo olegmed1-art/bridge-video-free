@@ -123,6 +123,42 @@ class OwnedConnections:
                     self.assert_owned(conn, identity, wire_pid)
 
 
+    def diagnostic_groups(self):
+        """Bounded read-only attribution only, never admission or a kill list."""
+        with self.open() as observer:
+            with observer.transaction():
+                observer.execute('SET TRANSACTION READ ONLY')
+                observer.execute("SET LOCAL statement_timeout='3s'")
+                rows=observer.execute("""
+                    SELECT CASE WHEN usename=%s THEN 'light' WHEN usename=%s THEN 'owner' ELSE 'other' END,
+                      CASE WHEN backend_type='client backend' THEN 'client' ELSE 'other' END,
+                      CASE WHEN state='idle' THEN 'idle' WHEN state='active' THEN 'active'
+                           WHEN state LIKE 'idle in transaction%%' THEN 'idle_in_transaction' ELSE 'other' END,
+                      xact_start IS NOT NULL,
+                      CASE WHEN now()-state_change < interval '1 minute' THEN 'lt1m'
+                           WHEN now()-state_change < interval '5 minutes' THEN 'lt5m'
+                           WHEN now()-state_change < interval '10 minutes' THEN 'lt10m' ELSE 'ge10m_or_unknown' END,
+                      count(*)
+                    FROM pg_catalog.pg_stat_activity
+                    WHERE datname=current_database() AND pid<>pg_catalog.pg_backend_pid()
+                      AND backend_type<>'autovacuum worker'
+                    GROUP BY 1,2,3,4,5 ORDER BY 1,2,3,4,5 LIMIT 65
+                    """,(self.target.recipient,self.target.session_owner)).fetchall()
+        groups=[dict(user_class=r[0],backend_class=r[1],state_class=r[2],has_xact=r[3],age=r[4],count=r[5]) for r in rows]
+        validate_diagnostic_groups(groups)
+        return groups
+
+
+def validate_diagnostic_groups(groups):
+    require(type(groups) is list and len(groups)<=64,'DRAIN_DIAGNOSTIC_SHAPE')
+    for row in groups:
+        require(type(row) is dict and set(row)=={'user_class','backend_class','state_class','has_xact','age','count'}
+            and row['user_class'] in ('light','owner','other') and row['backend_class'] in ('client','other')
+            and row['state_class'] in ('idle','active','idle_in_transaction','other')
+            and type(row['has_xact']) is bool and row['age'] in ('lt1m','lt5m','lt10m','ge10m_or_unknown')
+            and type(row['count']) is int and 0<row['count']<=100000,'DRAIN_DIAGNOSTIC_VALUE')
+
+
 
 
 class Operator:

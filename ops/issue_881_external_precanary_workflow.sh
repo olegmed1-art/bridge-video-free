@@ -74,6 +74,8 @@ protected_gate_paths=(
   'ops/native_maintenance_stage_host.py'
   'ops/native_maintenance_stage_rehearsal.py'
   'ops/native_maintenance_stage_launcher.py'
+  'ops/native_maintenance_grant_candidate.py'
+  'tests/test_native_maintenance_grant_candidate.py'
   'ops/native_maintenance_supervisor.py'
   '.github/workflows/native-maintenance-stages.yml'
   '.github/workflows/native-maintenance-stage-rehearsal.yml'

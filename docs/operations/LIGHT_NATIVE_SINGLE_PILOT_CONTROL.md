@@ -79,3 +79,29 @@ The new disposable intake fixture exercises actual admission/native RPCs and
 control restoration on localhost bridge_school_ci only. It is test evidence,
 not a production task or permission receipt. Live pilot acceptance and the
 live permission-stage execution remain separate outstanding requirements.
+
+### Private grant request candidate assembly
+
+The existing read-only stage-rehearsal workflow has an explicit `candidate`
+choice. Its externally accepted input is canonical `grant_request_candidate`
+JSON. It binds source, staged runtime digest, four accepted recovery-asset
+identifiers, the exact workflow plan, stage, accepted scope/head/prior-unit
+references, request ID and Agreement. The fixed root command reads the retained
+release `before.json` and `staged.json`, checks the live HOLD, and constructs the
+private scope without publishing HoldIdentity or credentials.
+
+With `agreement: null`, only a prepare-scope observation is returned; no grant
+request is submitted. This allows scope review before asking for the future
+operator no-write interval. After that interval is explicitly accepted, the
+operator supplies the Agreement bound to that scope. The command creates a
+private request once, verifies local and OCI unit receipts for resumed stages,
+and retains the request off-host. It emits only digests and `approved: false`.
+A separate authenticated stage dispatch must accept that exact resulting
+request digest. Assembly neither executes a grant nor selects an observed
+checkpoint head, outcome, Agreement or omitted prior unit for the operator.
+A lost acknowledgement requires reconciliation, never blind resubmission.
+
+If read-only rehearsal refuses database drain, it may additionally emit bounded
+counts classified as light/owner/other, client/other, transaction state and
+coarse age. It emits no query text, address, application name or PID and has no
+admission authority. The drain rule and nonrenewing time limit stay enforced.

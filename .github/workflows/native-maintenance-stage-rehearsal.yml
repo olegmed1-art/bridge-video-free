@@ -26,6 +26,7 @@ on:
         options:
           - rehearse
           - first_install
+          - candidate
 
 permissions:
   contents: read
