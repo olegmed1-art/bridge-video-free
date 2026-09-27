@@ -180,7 +180,7 @@ class ProvenanceTests(unittest.TestCase):
              ['launcher','stage','key','known','wheels']),patch.object(launcher,'source_guard'), \
              patch.object(launcher.bundle,'build',return_value=b'CI_SOURCE'), \
              patch.object(launcher.driver,'build',return_value=b'CI_WHEELS'), \
-             patch.object(launcher,'API',return_value=api), \
+             patch.object(launcher,'MeasuredAPI',return_value=api), \
              patch.object(launcher,'fetch_request') as fetch, \
              patch.object(launcher,'bootstrap') as bootstrap, \
              patch.object(launcher,'oci_client') as oci:
@@ -378,7 +378,7 @@ class LauncherWiringTests(unittest.TestCase):
             GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='2',GH_TOKEN='CI_TOKEN',REQUEST_STORE_ACTION='first_install')
         with patch.dict(os.environ,env,clear=True),patch.object(sys,'argv',['launcher','rehearsal','key','known','wheels']), \
              patch.object(launcher,'source_guard'),patch.object(launcher.bundle,'build',return_value=b'CI_SOURCE'), \
-             patch.object(launcher.driver,'build',return_value=b'CI_WHEELS'),patch.object(launcher,'API',return_value=api), \
+             patch.object(launcher.driver,'build',return_value=b'CI_WHEELS'),patch.object(launcher,'MeasuredAPI',return_value=api), \
              patch.object(launcher,'bootstrap',return_value='CI_FIRST_INSTALL') as bootstrap, \
              patch.object(launcher.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=b'NATIVE_REQUEST_STORE_PROVISIONED\n')), \
              patch.object(launcher,'fetch_request') as fetch,patch.object(launcher,'oci_client') as oci,patch('builtins.print') as output:
@@ -454,9 +454,9 @@ class LauncherWiringTests(unittest.TestCase):
                 patch.object(launcher.driver,'build',return_value=b'CI_WHEEL'),
                 patch.object(launcher,'bootstrap',return_value='CI_FIXED_CODE'),
                 patch.object(launcher,'fetch_request',return_value=raw),patch.object(launcher,'oci_client',return_value=(Mock(),'namespace')),
-                patch.object(launcher.adapter,'OCIJournalStore',return_value=Mock()),
+                patch.object(launcher,'MeasuredStore',return_value=Mock()),
                 patch.object(launcher,'restore_assets',return_value=manifest),patch.object(launcher,'connection_parameters'),
-                patch.object(launcher,'API',return_value=api),patch.object(launcher,'verify_prior',side_effect=prior),
+                patch.object(launcher,'MeasuredAPI',return_value=api),patch.object(launcher,'verify_prior',side_effect=prior),
                 patch.object(launcher,'retain_request',side_effect=retained),
                 patch.object(launcher.subprocess,'Popen',side_effect=launch),patch.object(launcher.rpc,'Channel',return_value=channel),
                 patch.object(launcher.rpc,'StoreServer',return_value=server),patch.object(unit_transport,'Retainer'),

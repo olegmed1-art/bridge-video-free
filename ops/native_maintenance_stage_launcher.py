@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
+from contextlib import contextmanager
 
 from ops import native_maintenance_bundle as bundle
 from ops import native_maintenance_driver as driver
@@ -27,6 +29,80 @@ from ops.oracle_autopilot_source_preflight import connection_parameters
 
 PHASE = 'startup'
 RUN_STARTED = None
+PROFILE = None
+
+
+class TimingProfile:
+    """Bounded runner observations, never authority or a host-duration estimate.
+
+    Labels are code-owned. Inputs, results and exception text are never retained.
+    Nested/concurrent durations overlap and must not be summed as wall time.
+    """
+    LABELS = frozenset(('github_get', 'oci_read', 'oci_write', 'rpc_wait',
+                       'rpc_store', 'rpc_unit', 'source_check'))
+
+    def __init__(self):
+        self.rows = {}
+        self.exchange_rows = {}
+        self.lock = threading.Lock()
+        self.incomplete = False
+
+    @contextmanager
+    def observe(self, label, *, host_exchange=False):
+        if label not in self.LABELS:
+            raise ValueError('TIMING_LABEL_INVALID')
+        try:
+            start = time.monotonic()
+        except Exception:
+            self.incomplete = True
+            yield
+            return
+        try:
+            yield
+        finally:
+            # Measurement must not mask the original operation's refusal.
+            try:
+                elapsed = max(0, min(1000000, int((time.monotonic()-start)*1000)))
+                with self.lock:
+                    for rows in ([self.rows, self.exchange_rows] if host_exchange else [self.rows]):
+                        row = rows.setdefault(label, {'calls': 0, 'total_ms': 0, 'max_ms': 0})
+                        row['calls'] = min(1000000, row['calls']+1)
+                        row['total_ms'] = min(1000000000, row['total_ms']+elapsed)
+                        row['max_ms'] = max(row['max_ms'], elapsed)
+            except Exception:
+                self.incomplete = True
+
+    def report(self):
+        with self.lock:
+            return {'version': 1, 'runner_only': True, 'overlapping_durations': True,
+                    'incomplete': self.incomplete,
+                    'rpc_budget_seconds': 60,
+                    'operations': {k: dict(v) for k, v in sorted(self.rows.items())},
+                    'host_exchange_operations': {k: dict(v) for k, v in sorted(self.exchange_rows.items())}}
+
+
+@contextmanager
+def measured(label):
+    if PROFILE is None:
+        yield
+    else:
+        with PROFILE.observe(label, host_exchange=PHASE == 'host_exchange'):
+            yield
+
+
+class MeasuredAPI(API):
+    def get(self, suffix):
+        with measured('github_get'):
+            return super().get(suffix)
+
+
+class MeasuredStore(adapter.OCIJournalStore):
+    def _call(self, method, *args, **kwargs):
+        # Preserve the adapter's exact method, arguments, no-retry and guards.
+        with measured('oci_write' if method == 'put_object' else 'oci_read'):
+            return super()._call(method, *args, **kwargs)
+
+
 SAFE_REFUSALS = frozenset(('RUN_BINDING_EXPIRED','RUN_BINDING_ALREADY_FAILED',
     'RUN_BINDING_EXPIRED_OR_UNOBSERVED','RUN_NOT_RUNNING','JOB_NOT_RUNNING','MAIN_CHANGED',
     'WORKFLOW_CONTRACT_CHANGED','RPC_EXPIRED','RPC_TIMEOUT','RPC_EOF','RPC_UNAVAILABLE',
@@ -37,8 +113,14 @@ def failure_code(exc):
     return code if code in SAFE_REFUSALS else ('PROCESS_TIMEOUT' if isinstance(exc,subprocess.TimeoutExpired) else 'REFUSED')
 
 def timing():
-    return dict(binding_elapsed_ms=None if RUN_STARTED is None else int((time.monotonic()-RUN_STARTED)*1000),
-                binding_budget_seconds=100)
+    result = dict(binding_elapsed_ms=None if RUN_STARTED is None else int((time.monotonic()-RUN_STARTED)*1000),
+                  binding_budget_seconds=100)
+    if PROFILE is not None:
+        try:
+            result['timing_profile'] = PROFILE.report()
+        except Exception:
+            result['timing_profile'] = {'version': 1, 'runner_only': True, 'incomplete': True}
+    return result
 REQUEST_PREFIX = 'native-journal/stage-requests-v1/'
 
 
@@ -60,7 +142,8 @@ def context(mode):
 
 
 def source_guard():
-    source_check(os.environ.get('EXPECTED_MAIN'))
+    with measured('source_check'):
+        source_check(os.environ.get('EXPECTED_MAIN'))
 
 
 def bootstrap(repo, source, source_digest, wheel_digest, run_id, attempt, accepted, binding, mode):
@@ -247,7 +330,7 @@ def candidate_step(repo, source, accepted, raw, candidate, run, reader, client, 
             and packet['expected_outcome']==candidate['expected_outcome']
             and [digest(row) for row in packet['prior_units']]==[r['digest'] for r in candidate['prior_units']],
             'CANDIDATE_REQUEST_CHANGED')
-        store=adapter.OCIJournalStore(client,namespace,run.assert_running)
+        store=MeasuredStore(client,namespace,run.assert_running)
         retain_request(store,request_raw,report['request_digest'])
     run.assert_running(); source_guard()
     print(json.dumps({**report,**timing()},sort_keys=True))
@@ -280,7 +363,8 @@ def inspect_step(source,accepted,raw,v,run,reader,source_payload,wheels,args,key
 
 
 def main(mode):
-    global PHASE, RUN_STARTED
+    global PHASE, RUN_STARTED, PROFILE
+    PROFILE = TimingProfile()
     require(len(sys.argv) == 5 and sys.argv[1] == mode, 'LAUNCHER_ARGS')
     cls, source, accepted = context(mode)
     source_guard()
@@ -298,7 +382,7 @@ def main(mode):
     # This is the one nonrenewing run binding for the entire launcher.  Fetch
     # can import an accepted request leaf, so authenticate before that host I/O.
     RUN_STARTED = time.monotonic()
-    run = cls(source,run_id,attempt,API(os.environ['GH_TOKEN']),launcher=True)
+    run = cls(source,run_id,attempt,MeasuredAPI(os.environ['GH_TOKEN']),launcher=True)
     run.assert_running()
     if action == 'first_install':
         PHASE = 'explicit_first_install'
@@ -332,7 +416,7 @@ def main(mode):
     client, namespace = oci_client()
     # Preparatory operations are read-only. No run lease is renewed after start.
     def read_only(): raise RuntimeError('LAUNCHER_READ_ONLY_STORE')
-    reader = adapter.OCIJournalStore(client,namespace,read_only)
+    reader = MeasuredStore(client,namespace,read_only)
     if action == 'inspect':
         os.environ.pop('NATIVE_OWNER_DATABASE_URL',None)
         inspect_step(source,accepted,raw,candidate,run,reader,source_payload,wheels,args,key,known_hosts)
@@ -367,7 +451,7 @@ def main(mode):
         run.assert_running()
         if request is not None: request.assert_current()
     PHASE = 'request_retention'
-    prelaunch = adapter.OCIJournalStore(client,namespace,prelaunch_guard)
+    prelaunch = MeasuredStore(client,namespace,prelaunch_guard)
     retain_request(prelaunch,raw,accepted)
     # Complete command construction before launch; never launch before final auth.
     run.assert_running()
@@ -381,12 +465,13 @@ def main(mode):
             run.assert_running()
             if request is not None: request.assert_current()
             channel.alive()
-        store = adapter.OCIJournalStore(client,namespace,guard)
+        store = MeasuredStore(client,namespace,guard)
         server = rpc.StoreServer(channel,scope,store,channel.alive)
         units = UnitServer(channel,Retainer(store,expected)) if packet is not None else None
         channel.send(frame(source_payload,envelope))
         while True:
-            record = channel.receive()
+            with measured('rpc_wait'):
+                record = channel.receive()
             if record.get('kind') == 'NATIVE_REHEARSAL_DRAIN_DIAGNOSTIC':
                 from ops.native_maintenance_coordination import validate_diagnostic_groups
                 require(packet is None and set(record)=={'kind','binding','request_digest','groups','no_admission_authority'}
@@ -411,8 +496,11 @@ def main(mode):
             require(server.sequence < 128, 'LAUNCHER_REQUEST_LIMIT')
             if record.get('kind') == 'NATIVE_STAGE_UNIT_RETAIN':
                 require(units is not None, 'LAUNCHER_REHEARSAL_UNIT_REFUSED')
-                units.accept(record)
-            else: server.accept(record)
+                with measured('rpc_unit'):
+                    units.accept(record)
+            else:
+                with measured('rpc_store'):
+                    server.accept(record)
         require(record.get('binding') == binding and record.get('request_digest') == accepted
                 and type(record.get('sequence')) is int and record['sequence'] == server.sequence,
                 'LAUNCHER_COMPLETION_BINDING')
@@ -448,7 +536,7 @@ def main(mode):
     PHASE = 'independent_readback_after_exit'
     source_guard()
     # New read-only adapter: does not depend on the now-closed host pipe, cannot PUT.
-    final = adapter.OCIJournalStore(client,namespace,read_only)
+    final = MeasuredStore(client,namespace,read_only)
     checkpoint.accepted_latest(final,scope,head)
     if packet is not None:
         unit = json.loads(read_accepted(final,expected,result['unit_digest']),object_pairs_hook=unique)
