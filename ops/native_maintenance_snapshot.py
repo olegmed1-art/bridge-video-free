@@ -96,15 +96,27 @@ must remain coordinated; advisory locks do not exclude a hostile privileged writ
 """
     with Journal(operation_path, max_bytes=MAX_BYTES // 4) as operation, \
             Journal(pause_path, max_bytes=MAX_BYTES // 4) as pause:
-        require((os.fstat(operation.fd).st_dev, os.fstat(operation.fd).st_ino) !=
-                (os.fstat(pause.fd).st_dev, os.fstat(pause.fd).st_ino), 'SNAPSHOT_SEPARATE_JOURNALS')
-        rows = {name: _read(journal) for name, journal in zip(NAMES, (operation, pause))}
-        binding = _pair({name: journal.records for name, journal in zip(NAMES, (operation, pause))})
-        data = encoded({'version': 1, 'scope_digest': binding, 'journals': rows})
-        _parse(data)
-        require(rows == {name: _read(journal) for name, journal in zip(NAMES, (operation, pause))},
-                'SNAPSHOT_CHANGED_DURING_CAPTURE')
-        return data
+        return capture_locked(operation, pause)
+
+
+def capture_locked(operation, pause):
+    """Capture already-owned exclusive journals synchronously; never unlock them.
+
+The caller must serialize appends for the entire capture and remote acceptance.
+This is not a snapshot of arbitrary paths or a way around another owner's lock.
+"""
+    require(type(operation) is Journal and type(pause) is Journal, 'SNAPSHOT_JOURNAL_OWNER')
+    operation.assert_live()
+    pause.assert_live()
+    require((os.fstat(operation.fd).st_dev, os.fstat(operation.fd).st_ino) !=
+            (os.fstat(pause.fd).st_dev, os.fstat(pause.fd).st_ino), 'SNAPSHOT_SEPARATE_JOURNALS')
+    rows = {name: _read(journal) for name, journal in zip(NAMES, (operation, pause))}
+    binding = _pair({name: journal.records for name, journal in zip(NAMES, (operation, pause))})
+    data = encoded({'version': 1, 'scope_digest': binding, 'journals': rows})
+    _parse(data)
+    require(rows == {name: _read(journal) for name, journal in zip(NAMES, (operation, pause))},
+            'SNAPSHOT_CHANGED_DURING_CAPTURE')
+    return data
 
 
 def _write(directory, name, data):

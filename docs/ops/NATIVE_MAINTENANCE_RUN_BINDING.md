@@ -16,6 +16,15 @@ jobs endpoint must contain precisely the sole named job, executing at the same
 source and attempt; its first authenticated numeric ID is pinned thereafter.
 That observed job identity is not an approval of a database change.
 
+The synthetic checkpoint relay has its own fixed `CheckpointRunBinding` subclass:
+one separately pinned workflow blob, manual dispatch only, exactly the successful
+`contract` job and the running `probe` job at the same source/attempt, distinct
+numeric job IDs. It cannot be accepted by the original single-job profile.
+The relay invokes full authenticated observations before and after each OCI PUT
+and before accepting terminal completion. No workflow path, digest or job name
+can be supplied as a command-line runtime override. Both profiles retain the same
+unrenewable 60-second deadline and sticky failure behavior.
+
 The workflow permits owner main pushes and owner dispatch with exact main input.
 The script checks local workflow/ref/job context as well, but environment fields
 alone cannot authorize a principal. REST failures, redirects, incomplete job sets,

@@ -40,6 +40,10 @@ and permission session. Deployment must supply all of the following:
 - Durable, private, exclusive operator storage for two separate journals. Runner
   temporary disks do not satisfy persistence. Do not publish their contents:
   scope includes the approved private HOLD continuity identity.
+- A mandatory synchronous checkpoint dependency. The executor checkpoints the
+  pristine pair and all operation events, and checkpoints workflow intents before
+  each PUT. See `NATIVE_MAINTENANCE_CHECKPOINT.md`; a callable alone does not prove
+  an off-VM store, retained recovery assets or independent latest-head acceptance.
 - Actual scoped coordination of privileged writers, administrators and rerun
   actors; authoritative closure of the affected workflow/callee writer set.
   `operator.assert_held(scope_digest)` establishes that coordination;

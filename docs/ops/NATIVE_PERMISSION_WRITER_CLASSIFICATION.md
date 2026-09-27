@@ -99,3 +99,29 @@ reviews can detect source drift. The record is provenance, not an executable
 allowlist, current endpoint mapping, complete transitive review or maintenance
 authorization. Re-read changed dependencies and current primary sources before
 any production stage transition.
+
+## Registry runtime observation (2026-09-26 UTC, pending live evidence)
+
+The owner-attestation workflow now includes a separately labelled read-only step
+using the registry writer's actual `NEON_DATABASE_URL` secret from the same
+database-production environment. `native_maintenance_registry_scope` parses the
+original URI with libpq semantics, requires the exact direct/pooler target,
+database and owner, and refuses service, hostaddr, options and other unreviewed
+connection keys plus inherited PG environment overrides. It then preserves that
+selected host while strengthening TLS and forcing a read-only diagnostic session.
+Server project/branch/endpoint and session owner must match the accepted target.
+This is an observation of the selected credential, not a connection to a silently
+substituted fixed host when the original URI names another branch.
+
+Within one read-only transaction it checks both registry relations are ordinary
+heap tables with no user triggers, rules, RLS, inheritance, expression/partial
+indexes, custom column types or index operator classes, non-system expression
+functions/operators, or direct catalog dependencies/FKs into autopilot. Only a
+fixed status, target and catalog digest are published; credentials, URI and
+exception strings never are. Unknown destinations/options/dependencies refuse.
+
+Even PASS explicitly reports `workflow_pause_exempted=false`: future exclusion
+still requires fresh exact-source writer/dependency review and catalog/credential
+continuity in the actual maintenance window. It does not prove operator agreement,
+drain, durable exclusion, permission readiness or a reviewed empty workflow plan.
+Historical source-only conclusions above retain their original scope and date.
