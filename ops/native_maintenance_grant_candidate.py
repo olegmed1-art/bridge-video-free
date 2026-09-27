@@ -111,6 +111,7 @@ def assemble(v, manifest, priors, guard):
         plan_digest=digest(v['plan']),before_digest=before_digest,assets=v['assets'],
         stage=v['stage'],request_digest=None,approved=False,production_mutations=False)
     if v['agreement'] is None:
+        require(hold.attest()==identity,'CANDIDATE_FINAL_HOLD_CHANGED')
         guard.assert_running()
         return report, None
     agreement=Agreement(v['agreement'],digest(v['agreement']),scope)

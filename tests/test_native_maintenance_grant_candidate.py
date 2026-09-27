@@ -29,7 +29,7 @@ class CandidateTests(unittest.TestCase):
     def test_preview_is_observation_only_and_does_not_disclose_hold(self):
         v,manifest,scope=fixture()
         c.request_value(encoded(v),digest(v),SOURCE)
-        with patch.object(c,'staged_hold',return_value=(HOLD,'e'*64)),patch.object(c,'submit_candidate') as submit:
+        with patch.object(c,'staged_hold',return_value=(HOLD,'e'*64)),patch.object(c.hold,'attest',return_value=HOLD),patch.object(c,'submit_candidate') as submit:
             report,raw=c.assemble(v,manifest,[],Mock(spec=['assert_running']))
         assert raw is None and report['request_digest'] is None and report['approved'] is False
         assert report['scope_digest']==digest(scope)
@@ -105,3 +105,45 @@ class CandidateTests(unittest.TestCase):
         validate_diagnostic_groups([row])
         for changed in ({**row,'query':'private SQL'},{**row,'user_class':'raw-user'},{**row,'count':True}):
             with self.assertRaises(Exception):validate_diagnostic_groups([changed])
+
+    def test_resume_uses_exact_accepted_local_and_oci_unit(self):
+        for stage in ('execute','restore'):
+            for fault in (None,'local','missing','scope','unit_digest'):
+                with self.subTest(stage=stage,fault=fault):
+                    self._resume(stage,fault)
+
+    def _resume(self,stage,fault):
+        v,manifest,_=fixture()
+        packet,_=packet_fixture();scope=packet['scope']
+        run=scope['origin_run']
+        unit=dict(version=1,kind='NATIVE_STAGE_UNIT',stage='prepare',source=SOURCE,
+            scope_digest=digest(scope),run=run,supervisor=dict(
+            unit='bridge-native-ro-'+SOURCE[:12]+'-123-2-'+('a'*16)+'.service',
+            invocation='b'*32,cgroup_inode=42))
+        unit_raw=encoded(unit)
+        v.update(stage=stage,scope_digest=digest(scope),agreement=agreement_record(scope),
+            accepted_head_digest='f'*64,expected_outcome='AFTER' if stage=='restore' else None,
+            prior_units=[dict(stage='prepare',run=run,digest=digest(unit))])
+        if fault=='scope':v['scope_digest']='0'*64
+        if fault=='unit_digest':v['prior_units'][0]['digest']='0'*64
+        c.request_value(encoded(v),digest(v),SOURCE)
+        saved=[]
+        def retain(raw):saved.append(raw);return c.bundle.digest(raw)
+        with patch.object(c,'staged_hold',return_value=(HOLD,'e'*64)), \
+             patch.object(c.hold,'attest',return_value=HOLD), \
+             patch.object(c.storage,'private_directory'),patch.object(c.storage,'persistent_mount'), \
+             patch.object(c.hold,'read',side_effect=FileNotFoundError() if fault=='missing' else None,
+                          return_value=b'changed' if fault=='local' else unit_raw), \
+             patch.object(c,'submit_candidate',side_effect=retain) as submit, \
+             patch.object(c,'read_request',side_effect=lambda _:saved[0]):
+            if fault:
+                with self.assertRaises(Exception):c.assemble(v,manifest,[unit_raw],Mock(spec=['assert_running']))
+                submit.assert_not_called()
+            else:
+                report,raw=c.assemble(v,manifest,[unit_raw],Mock(spec=['assert_running']))
+                result=json.loads(raw)
+                assert result['packet']['scope']==scope
+                assert result['packet']['prior_units']==[unit]
+                assert result['packet']['accepted_head_digest']=='f'*64
+                assert result['packet']['expected_outcome']==v['expected_outcome']
+                assert report['approved'] is False
