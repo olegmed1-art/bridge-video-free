@@ -34,6 +34,34 @@ class LifetimeTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 lifetime.command(bad, 'pass', 100)
 
+    def test_stage_profile_is_fixed_and_standalone_legacy_is_unchanged(self):
+        from types import ModuleType
+        # Exactly the bootstrap loading mechanism, without importing ops.
+        raw = Path(lifetime.__file__).read_bytes()
+        isolated = ModuleType('isolated_lifetime')
+        exec(compile(raw, 'isolated_lifetime', 'exec'), isolated.__dict__)
+        unit = 'bridge-native-ro-' + 'a'*12 + '-123-1-' + 'b'*16 + '.service'
+        for method, seconds, timeout in [('managed',100,108), ('managed_stage',140,148)]:
+            with patch.object(isolated.os, 'getuid', return_value=0), \
+                 patch.object(isolated, 'new_unit', return_value=unit), \
+                 patch.object(isolated, 'cleanup') as cleanup, \
+                 patch.object(isolated.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                getattr(isolated, method)('pass', base64.b64encode(raw).decode(), 'a'*40, '123-1')
+                self.assertEqual(run.call_args.kwargs['timeout'], timeout)
+                self.assertIn('--property=RuntimeMaxSec='+str(seconds)+'s', run.call_args.args[0])
+                self.assertIn('lifetime.assert_self('+repr(unit)+','+str(seconds)+')', run.call_args.args[0][-1])
+                cleanup.assert_called_once_with(unit)
+        self.assertIn('--property=RuntimeMaxSec=3s', isolated.command(unit, 'pass', 3))
+        for bad in (True, 140.0, 120, 200):
+            with self.assertRaises(RuntimeError): isolated.command(unit, 'pass', bad)
+            with self.assertRaises(RuntimeError): isolated.identity(unit, bad)
+        from ops.native_maintenance_supervisor import SelfSupervisor, StageSupervisor
+        self.assertEqual(SelfSupervisor.seconds, 100)
+        self.assertEqual(StageSupervisor.seconds, 140)
+        for seconds, wrong in ((140, '1min 40s'), (100, '2min 20s')):
+            with patch.object(isolated, 'show', return_value={**isolated.PROPERTIES, 'RuntimeMaxUSec': wrong}):
+                with self.assertRaisesRegex(RuntimeError, 'RUNTIME_LIMIT_DRIFT'): isolated.identity(unit, seconds)
+
     def test_empty_requires_observed_group_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -44,6 +72,15 @@ class LifetimeTests(unittest.TestCase):
             self.assertTrue(lifetime.empty(root, inode))
             with self.assertRaisesRegex(RuntimeError, 'CGROUP_REPLACED'):
                 lifetime.empty(root, inode + 1)
+
+    @unittest.skipUnless(os.getuid() == 0 and Path('/run/systemd/system').is_dir(), 'real systemd required')
+    def test_real_stage_profile_starts_and_checks_exact_pid1_identity(self):
+        raw = Path(lifetime.__file__).read_bytes()
+        encoded = base64.b64encode(raw).decode()
+        code = lifetime.loader(encoded) + "raise SystemExit(lifetime.managed_stage('print(\"STAGE_PROFILE_OK\",flush=True)'," + repr(encoded) + ",'" + 'a'*40 + "','1-1'))"
+        result = subprocess.run([sys.executable,'-I','-B','-S','-c',code], capture_output=True, timeout=170)
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+        self.assertEqual(result.stdout,b'STAGE_PROFILE_OK\n')
 
     @unittest.skipUnless(os.getuid() == 0 and Path('/run/systemd/system').is_dir(), 'real systemd required')
     def test_real_managed_transport_roundtrip(self):

@@ -1,6 +1,9 @@
 """Fixed production host command. No diagnostic caller may select this command."""
 import os
 
+from ops.native_maintenance_budgets import admit_host
+from ops.native_maintenance_supervisor import StageSupervisor
+
 from ops import native_maintenance_bundle as bundle
 from ops import native_maintenance_checkpoint_transport as rpc
 from ops.native_maintenance_owner_host import loaded_runtime
@@ -39,6 +42,11 @@ def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelo
             return psycopg.connect(**kwargs, autocommit=True)
         expected = dict(source=source, scope_digest=packet.scope_digest, stage=packet.stage,
                         run=runtime.run_identity(run))
+        supervisor = StageSupervisor(source, run)
+        def guard():
+            run.assert_running()
+            packet.assert_bound(run)
+        admit_host(channel, request_digest, supervisor, guard)
         store = rpc.ProxyStore(channel, packet.scope_digest)
         result = runtime.stage(packet, run=run, store=store, connect=connect,
                                api_token=envelope['token'], retain_unit=UnitClient(channel, expected).retain)

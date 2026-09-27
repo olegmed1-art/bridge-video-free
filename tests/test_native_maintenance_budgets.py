@@ -24,7 +24,7 @@ class BudgetTests(unittest.TestCase):
                                             else (root/name).read_bytes())
                 code = ('import sys; sys.path.insert(0, '+repr(directory)+'); '
                         'from ops.native_maintenance_run_guard import StageRunBinding; '
-                        'assert StageRunBinding.duration_limit == 160')
+                        'assert StageRunBinding.duration_limit == 310')
                 result = subprocess.run([sys.executable, '-I', '-c', code],
                                         capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -40,9 +40,9 @@ class BudgetTests(unittest.TestCase):
             with patch.object(rpc.time, 'monotonic', return_value=1065.):
                 self.assertEqual(stage.receive(), {'value': 'buffered'})
                 with self.assertRaises(Exception): legacy.send({'value': 'expired'})
-            self.assertEqual(stage.deadline, 1080.)
+            self.assertEqual(stage.deadline, 1210.)
             self.assertEqual(legacy.deadline, 1060.)
-            with patch.object(rpc.time, 'monotonic', return_value=1080.):
+            with patch.object(rpc.time, 'monotonic', return_value=1210.):
                 with self.assertRaises(Exception): stage.receive()
             with patch.object(rpc.time, 'monotonic', return_value=1001.):
                 with self.assertRaises(Exception): stage.receive()
@@ -51,11 +51,11 @@ class BudgetTests(unittest.TestCase):
             for fd in (a, b, c, d): os.close(fd)
 
     def test_no_arbitrary_extended_budget(self):
-        for seconds in (True, 0, 81, 100, 80.0):
+        for seconds in (True, 0, 211, 300, 210.0):
             with self.subTest(seconds=seconds), self.assertRaises(Exception):
                 rpc.Channel(0, 1, 'a'*64, seconds=seconds)
-        self.assertEqual(budgets.STAGE_PRELAUNCH_REQUIRED_SECONDS, 125)
-        self.assertEqual(budgets.STAGE_LAUNCHER_SECONDS, 160)
+        self.assertEqual(budgets.STAGE_PRELAUNCH_REQUIRED_SECONDS, 270)
+        self.assertEqual(budgets.STAGE_LAUNCHER_SECONDS, 310)
 
 
 if __name__ == '__main__': unittest.main()

@@ -1,5 +1,6 @@
 """Authenticated run/job observations; NOT a complete DB maintenance guard."""
 import base64
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import http.client
@@ -10,7 +11,8 @@ import time
 import ssl
 import threading
 import urllib.request
-from ops.native_maintenance_budgets import STAGE_HOST_SECONDS, STAGE_LAUNCHER_SECONDS
+from ops.native_maintenance_budgets import (STAGE_HOST_SECONDS, STAGE_LAUNCHER_SECONDS,
+    STAGE_WORKFLOW_SECONDS, STAGE_CLOCK_MARGIN_SECONDS, STAGE_CLOCK_DRIFT_SECONDS)
 
 REPOSITORY = 'olegmed1-art/bridge-video-free'
 OWNER = 'olegmed1-art'
@@ -222,6 +224,9 @@ class RunBinding:
             self.failed = True
             raise
 
+    def observe_job_clock(self, job):
+        """Generic profiles keep their existing clock contract."""
+
     def assert_running(self):
         check(not self.failed, 'RUN_BINDING_ALREADY_FAILED')
         try:
@@ -261,6 +266,7 @@ class RunBinding:
                   'JOB_NOT_RUNNING')
             check(self.job_id is None or self.job_id == job['id'], 'JOB_ID_CHANGED')
             self._run()
+            self.observe_job_clock(job)
             check(time.monotonic() < self.deadline, 'RUN_BINDING_EXPIRED')
             # First ID comes from the unique job in the authenticated, exact
             # workflow/attempt. It is an identity observation, not DB approval.
@@ -282,7 +288,7 @@ class CheckpointRunBinding(RunBinding):
 class StageRunBinding(RunBinding):
     """Fixed manual production stage profile; not shared with read-only probes."""
     workflow = '.github/workflows/native-maintenance-stages.yml'
-    workflow_sha256 = 'bd0cb9e09de1caa1ddc9d78fe1327cfad1bee70162dfe67cbbe15c88e5de3813'
+    workflow_sha256 = 'a00cce5aa30beb3a319f382091b9d2cb0234d004b41b8854d356fe887601c9d9'
     job_name = 'stage'
     job_names = ('contract', 'stage')
     events = ('workflow_dispatch',)
@@ -296,6 +302,30 @@ class StageRunBinding(RunBinding):
         super().__init__(source, run_id, attempt, api,
                          seconds=STAGE_LAUNCHER_SECONDS if launcher else STAGE_HOST_SECONDS)
         self.launcher = launcher
+        self.job_started_at = None
+        self.clock_anchor = None
+
+    def observe_job_clock(self, job):
+        if not self.launcher:
+            return
+        started = job.get('started_at')
+        check(type(started) is str and re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', started),
+              'STAGE_JOB_CLOCK_INVALID')
+        origin = datetime.strptime(started, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc).timestamp()
+        monotonic, wall = time.monotonic(), time.time()
+        check(origin <= wall, 'STAGE_JOB_CLOCK_FUTURE')
+        if self.clock_anchor is None:
+            # Project once, subtract a fixed clock margin, and only shorten.
+            # A subsequent API read cannot refresh the accepted job lifetime.
+            self.deadline = min(self.deadline, monotonic + origin + STAGE_WORKFLOW_SECONDS
+                                - wall - STAGE_CLOCK_MARGIN_SECONDS)
+            self.job_started_at = started
+            self.clock_anchor = (monotonic, wall)
+        else:
+            check(started == self.job_started_at, 'STAGE_JOB_CLOCK_CHANGED')
+            initial_monotonic, initial_wall = self.clock_anchor
+            check(abs((wall - initial_wall) - (monotonic - initial_monotonic))
+                  <= STAGE_CLOCK_DRIFT_SECONDS, 'STAGE_JOB_CLOCK_DRIFT')
 
     def assert_running(self):
         try:
@@ -310,7 +340,7 @@ class StageRunBinding(RunBinding):
 class RehearsalRunBinding(StageRunBinding):
     """Separate manual read-only launcher profile; never accepted by stage()."""
     workflow = '.github/workflows/native-maintenance-stage-rehearsal.yml'
-    workflow_sha256 = 'a52f605cba0a18734761baea307d36b00dc6fa32c20e84177cdf94758ef9a766'
+    workflow_sha256 = '4a0b1a2e4f73b4d0667014a36d08f65bfc64b842574555aa00888057c0a69b15'
     job_name = 'rehearsal'
     job_names = ('contract', 'rehearsal')
 

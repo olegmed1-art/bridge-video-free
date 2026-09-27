@@ -26,7 +26,7 @@ from ops.native_maintenance_stage_request import AcceptedRequest, MAX_REQUEST, f
 from ops.native_maintenance_store_runner import HOST, loader, source_check
 from ops.native_maintenance_workflow_pause import require, encoded, digest, unique
 from ops.oracle_autopilot_source_preflight import connection_parameters
-from ops.native_maintenance_budgets import STAGE_LAUNCHER_SECONDS, STAGE_PRELAUNCH_REQUIRED_SECONDS
+from ops.native_maintenance_budgets import STAGE_LAUNCHER_SECONDS, STAGE_PRELAUNCH_REQUIRED_SECONDS, admit_runner
 
 PHASE = 'startup'
 RUN_STARTED = None
@@ -112,7 +112,8 @@ class MeasuredStore(adapter.OCIJournalStore):
             return super()._call(method, *args, **kwargs)
 
 
-SAFE_REFUSALS = frozenset(('RUN_BINDING_EXPIRED','RUN_BINDING_ALREADY_FAILED',
+SAFE_REFUSALS = frozenset(('STAGE_READY_BINDING','STAGE_STARTUP_TOO_SLOW','STAGE_ADMISSION_REUSED',
+    'STAGE_JOB_CLOCK_INVALID','STAGE_JOB_CLOCK_FUTURE','STAGE_JOB_CLOCK_CHANGED','STAGE_JOB_CLOCK_DRIFT','RUN_BINDING_EXPIRED','RUN_BINDING_ALREADY_FAILED',
     'RUN_BINDING_EXPIRED_OR_UNOBSERVED','RUN_NOT_RUNNING','JOB_NOT_RUNNING','MAIN_CHANGED',
     'WORKFLOW_CONTRACT_CHANGED','RPC_EXPIRED','RPC_TIMEOUT','RPC_EOF','RPC_UNAVAILABLE',
     'CANDIDATE_HOST_REFUSED','LAUNCHER_HOST_REFUSED','LAUNCHER_REQUEST_READ',
@@ -198,7 +199,7 @@ def bootstrap(repo, source, source_digest, wheel_digest, run_id, attempt, accept
         code += (' from ops.'+module+' import main\n main('+','.join(map(repr,
             (source,run_id,attempt,accepted,binding,wheel_digest)))+",value['envelope'])\n")
     outer = ('import base64,types\n'+loader('lifetime',lifetime)
-        +'try:\n result=lifetime.managed('+repr(code)+','+repr(base64.b64encode(lifetime).decode())
+        +'try:\n result=lifetime.'+('managed_stage' if mode in ('stage','rehearsal') else 'managed')+'('+repr(code)+','+repr(base64.b64encode(lifetime).decode())
         +','+repr(source)+','+repr(str(run_id)+'-'+str(attempt))+')\n'
         +'except BaseException:\n result=2\nraise SystemExit(result)\n')
     require(len(outer.encode()) <= 98304, 'LAUNCHER_BOOTSTRAP_SIZE')
@@ -501,6 +502,7 @@ def _main(mode, transports):
         server = rpc.StoreServer(channel,scope,store,channel.alive)
         units = UnitServer(channel,Retainer(store,expected)) if packet is not None else None
         channel.send(frame(source_payload,envelope))
+        admit_runner(channel, accepted, guard)
         while True:
             with measured('rpc_wait'):
                 record = channel.receive()

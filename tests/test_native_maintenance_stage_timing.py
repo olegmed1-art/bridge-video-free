@@ -21,7 +21,7 @@ class TimingTests(TestCase):
         self.assertNotIn('private', json.dumps(report))
         self.assertTrue(report['runner_only'])
         self.assertTrue(report['overlapping_durations'])
-        self.assertEqual(report['rpc_budget_seconds'], 80)
+        self.assertEqual(report['rpc_budget_seconds'], 210)
 
     def test_measurement_failure_does_not_mask_operation_refusal(self):
         profile = launcher.TimingProfile()

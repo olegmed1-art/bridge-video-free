@@ -17,7 +17,8 @@ from ops.native_maintenance_checkpoint_host_probe import identity, journals
 from ops.native_maintenance_owner_host import loaded_runtime
 from ops.native_maintenance_stage_request import read_request
 from ops.native_maintenance_run_guard import PersistentAPI as API, RehearsalRunBinding
-from ops.native_maintenance_supervisor import SelfSupervisor
+from ops.native_maintenance_supervisor import StageSupervisor as SelfSupervisor
+from ops.native_maintenance_budgets import admit_host
 from ops.native_maintenance_workflow_pause import digest, encoded, require, unique, validate_plan
 
 
@@ -116,6 +117,7 @@ def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelo
     require(type(envelope['job_id']) is int and run.job_id == envelope['job_id'], 'REHEARSAL_JOB_CHANGED')
     diagnostic['phase'] = 'supervisor'
     supervisor = SelfSupervisor(source, run)
+    admit_host(channel, request_digest, supervisor, run.assert_running)
     supervisor.assert_exclusive()
     from ops import oracle_light_active_hold_attest as hold
     diagnostic['phase'] = 'hold'
