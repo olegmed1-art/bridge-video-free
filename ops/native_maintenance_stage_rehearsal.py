@@ -40,7 +40,35 @@ SAFE_CODES = frozenset(('REFUSED', 'OWNER_DRIVER_ALREADY_IMPORTED', 'OWNER_DRIVE
     'OWNER_DRIVER_VERSION', 'OWNER_DRIVER_SUBMODULE_ORIGIN', 'WORKFLOW_NOT_DRAINED',
     'DATABASE_NOT_DRAINED', 'DATABASE_ACTIVITY_INCOMPLETE', 'DATABASE_PREPARED_TRANSACTION_PRESENT',
     'REHEARSAL_WORKFLOW_CHANGED', 'RUN_BINDING_EXPIRED', 'API_RESPONSE_INCOMPLETE',
-    'RUNTIME_OTHER_SUPERVISOR_ACTIVE', 'RUNTIME_OTHER_CGROUP_ACTIVE', 'RPC_TIMEOUT', 'RPC_EOF'))
+    'RUNTIME_OTHER_SUPERVISOR_ACTIVE', 'RUNTIME_OTHER_CGROUP_ACTIVE', 'RPC_TIMEOUT', 'RPC_EOF',
+    'DRAIN_HOLD_IDENTITY_REQUIRED', 'DRAIN_OWNED_CONNECTION_REQUIRED', 'DRAIN_BACKEND_IDENTITY',
+    'DRAIN_OWNED_BACKEND_LOST', 'DRAIN_OWNED_BACKEND_MISSING', 'DRAIN_HOLD_CHANGED',
+    'CONFIG_NOT_DISABLED', 'RECEIPTS_PRESENT', 'QUEUE_NOT_EMPTY', 'TARGET_IDENTITY_MISMATCH',
+    'NEON_CONNECTION_HOST_MISMATCH', 'NEON_VERIFIED_TLS_REQUIRED', 'NEON_ROUTING_OVERRIDE_REFUSED',
+    'NEON_SERVER_IDENTITY_MISSING', 'NEON_SERVER_IDENTITY_MISMATCH', 'LOGIN_OR_QUEUE_FAILED',
+    'LOGIN_CONNECT_FAILED', 'LOGIN_AUTH_FAILED', 'LOGIN_TLS_FAILED', 'LOGIN_SESSION_FAILED',
+    'LOGIN_QUEUE_QUERY_FAILED', 'LOGIN_QUEUE_NOT_EMPTY', 'POST_CHECK_DRIFT',
+    'HOST_IDENTITY', 'FILE_DRIFT', 'UNIT_DRIFT', 'BASE_DRIFT', 'DROP_DRIFT', 'ROUTE_DRIFT',
+    'PIN_DRIFT', 'ENV_DRIFT', 'DSN_DRIFT', 'LIVE_ENV_DRIFT', 'LIVE_PROCESS_DRIFT',
+    'TIMEOUT_ERROR', 'OS_ERROR', 'KEY_ERROR', 'TYPE_ERROR', 'VALUE_ERROR',
+    'DB_CONNECTION_ERROR', 'DB_PRIVILEGE_ERROR', 'DB_TRANSACTION_ERROR', 'DB_QUERY_ERROR'))
+
+
+def failure_code(exc):
+    code = exc.args[0] if len(exc.args) == 1 and type(exc.args[0]) is str else None
+    if code in SAFE_CODES:
+        return code
+    # SQLSTATE is compared to fixed categories; no server detail is emitted.
+    state = getattr(exc, 'sqlstate', None)
+    if state in ('08000','08001','08003','08004','08006','08007','08P01','28P01'):
+        return 'DB_CONNECTION_ERROR'
+    if state == '42501': return 'DB_PRIVILEGE_ERROR'
+    if state in ('25000','25001','25006','25P01','25P02'): return 'DB_TRANSACTION_ERROR'
+    if state in ('42601','42703','42P01','42883','57014'): return 'DB_QUERY_ERROR'
+    for cls, label in ((TimeoutError,'TIMEOUT_ERROR'), (OSError,'OS_ERROR'),
+                       (KeyError,'KEY_ERROR'), (TypeError,'TYPE_ERROR'), (ValueError,'VALUE_ERROR')):
+        if isinstance(exc, cls): return label
+    return 'REFUSED'
 
 
 def main(source, run_id, attempt, request_digest, binding, wheel_digest, envelope):
@@ -50,8 +78,7 @@ def main(source, run_id, attempt, request_digest, binding, wheel_digest, envelop
     except BaseException as exc:
         # Only fixed vocabulary goes onto the authenticated pipe. Exception text,
         # tracebacks, SQL, URLs and private snapshot values never leave this host.
-        code = exc.args[0] if len(exc.args) == 1 and type(exc.args[0]) is str else None
-        code = code if code in SAFE_CODES else 'REFUSED'
+        code = failure_code(exc)
         channel = diagnostic['channel']
         if channel is not None:
             try:

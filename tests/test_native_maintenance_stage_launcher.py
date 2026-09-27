@@ -461,6 +461,20 @@ class RehearsalDiagnosticTests(unittest.TestCase):
             self.assertEqual(channel.send.call_args.args[0],dict(kind='NATIVE_REHEARSAL_REFUSED',
                 binding='b'*64,request_digest='a'*64,phase='backend_drain',code=expected))
 
+    def test_drain_codes_and_sqlstate_categories_never_expose_details(self):
+        import psycopg
+        cases = [(RuntimeError('DRAIN_BACKEND_IDENTITY'),'DRAIN_BACKEND_IDENTITY'),
+                 (RuntimeError('DRAIN_HOLD_CHANGED'),'DRAIN_HOLD_CHANGED'),
+                 (KeyError('private_column'),'KEY_ERROR'),
+                 (TypeError('private_value'),'TYPE_ERROR'),
+                 (psycopg.errors.InsufficientPrivilege('private SQL and URI'),'DB_PRIVILEGE_ERROR'),
+                 (psycopg.errors.UndefinedTable('private SQL and URI'),'DB_QUERY_ERROR'),
+                 (RuntimeError('postgres://private:password@host'),'REFUSED')]
+        for exc, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(rehearsal.failure_code(exc),expected)
+                self.assertIn(expected,rehearsal.SAFE_CODES)
+
     def test_unavailable_channel_never_prints_original_exception(self):
         repo = Path(__file__).resolve().parents[1]
         code = ("from ops import native_maintenance_stage_rehearsal as r\n"
