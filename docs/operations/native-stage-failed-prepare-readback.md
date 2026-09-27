@@ -94,3 +94,10 @@ add these totals as wall time. RPC waiting includes host work and communication,
 not a measured host-only duration. The profile cannot establish successful
 preparation or grant authority. First use a read-only rehearsal to identify
 measured runner costs; that rehearsal still does not prove full prepare timing.
+
+The workflow API inventory can also be dispatched manually with a required
+`expected_main_sha`. The observation job admits only the exact repository/main
+and owner/triggering-owner, with the input equal to the dispatched SHA. It
+retains read-only Actions/Contents permissions and the existing bounded inventory
+entrypoint. Obtain the restored registry's actual `updated_at` from this report;
+do not guess it or treat the inventory as writer exclusion.
