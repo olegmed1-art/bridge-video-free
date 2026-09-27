@@ -246,7 +246,9 @@ independent reconciliation, but may NEVER repeat the original DB session.
         self._assert_window()
 
     def assert_dispatch(self, plan_digest, action, workflow_id):
-        self.assert_scope(plan_digest)
+        # _sync_checkpoint below supplies the fresh pre/post authority checks.
+        # Keep local scope/phase checks, without an extra identical remote round.
+        require(plan_digest == self.scope['workflow_plan_digest'], 'EXECUTOR_PAUSE_SCOPE')
         require((self.phase == 'pausing' and action == 'disable')
                 or (self.phase == 'restoring' and action == 'enable'), 'EXECUTOR_DISPATCH_PHASE')
         require(workflow_id in self.pause.states, 'EXECUTOR_DISPATCH_SCOPE')
