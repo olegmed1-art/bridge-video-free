@@ -141,6 +141,8 @@ class RuntimeTests(unittest.TestCase):
         self.requests = self.parent/'requests-root'
         self.requests.mkdir(mode=0o700)
         for name in ('requests','claims'): (self.requests/name).mkdir(mode=0o700)
+        (self.requests/'VERSION').write_bytes(requests.VERSION)
+        (self.requests/'VERSION').chmod(0o600)
         self.value, self.manifest = packet_fixture()
         self.api = API()
         # Explicit simulated installed workflow profile; production remains disabled.

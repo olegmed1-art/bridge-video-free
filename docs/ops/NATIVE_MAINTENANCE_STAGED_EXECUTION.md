@@ -274,7 +274,8 @@ all diagnostic profiles.
 
 Private submissions use a separate root-owned 0700 namespace,
 `/var/lib/bridge-native-stage-requests/{requests,claims}`. This does not change the
-existing journal store's inventory schema. `submit_candidate(raw)` creates a
+existing journal store's inventory schema. An exact VERSION marker and both
+private subdirectories must already exist. `submit_candidate(raw)` creates a
 canonical request as `<sha256>.json`, 0600/O_EXCL/fsynced/exact-readback, and never
 approves it. Retain its exact bytes independently before dispatch. The runner
 reads the fixed digest-selected file through pinned SSH; the supervised host
@@ -283,6 +284,33 @@ a durable O_EXCL receipt bound to the run and derived packet. Lost acknowledgeme
 cancellation or expiry after this point consumes the request. Never remove or
 overwrite the claim to retry; reconcile first and obtain a separately accepted
 new request if another stage is appropriate.
+
+When the command service cannot elevate because of its existing NoNewPrivileges
+setting, leave that restriction intact. The operator can stage only the reviewed
+data as ubuntu in `/home/ubuntu/bridge-native-stage-submissions/<sha256>.json`
+(0700 directory, 0600 regular single-link file). The already authorized fixed
+GitHub SSH/sudo bootstrap imports this data only if the exact request leaf is
+absent and the complete root namespace, VERSION and claims ledger are intact.
+It checks owner, modes, bounded size, dirfd/inode continuity, canonical schema,
+the externally supplied digest and pinned source, then performs create-only root
+submission and readback. Existing-root corruption, permissions errors or a digest
+mismatch never cause fallback, overwrite or cleanup. This provides no command
+execution field or new privilege to the command service. A staged or root file
+still confers no stage authority; authentication and the durable claim remain
+mandatory.
+
+The same read-only workflow has a separate explicit `first_install` choice for
+one-time namespace provisioning. It is not a rehearsal request or a recovery
+action. Its accepted digest binds `first_install_intent(source)`: version, pinned
+source, fixed hostname/path and the purpose `first_install_only_not_loss_recovery`.
+The authenticated read-only run is checked before and after the fixed SSH command.
+Root creation is exclusive; an existing or partial root refuses without repair.
+Routine submission/fetch never creates missing directories or replaces a missing
+claims ledger. Any loss after first use requires separate offline recovery and
+must not be treated as a fresh installation merely because a path is absent.
+Before first installation the controller must reconcile prior use and the current
+host, not infer history from absence alone. No SQL, workflow-state or pilot
+change is part of provisioning.
 
 ### Transport, completion and failure
 

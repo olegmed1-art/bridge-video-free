@@ -18,6 +18,14 @@ on:
         description: Independently accepted SHA256 of the private canonical request
         required: true
         type: string
+      request_store_action:
+        description: Explicit first install is never a lost-ledger recovery action
+        required: true
+        default: rehearse
+        type: choice
+        options:
+          - rehearse
+          - first_install
 
 permissions:
   contents: read
@@ -69,6 +77,7 @@ jobs:
           OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
           OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
           ACCEPTED_REQUEST_DIGEST: ${{ inputs.accepted_request_digest }}
+          REQUEST_STORE_ACTION: ${{ inputs.request_store_action }}
           NATIVE_OWNER_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
           SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}

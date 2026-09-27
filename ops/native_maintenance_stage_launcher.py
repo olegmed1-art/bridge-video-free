@@ -20,7 +20,7 @@ from ops import native_maintenance_checkpoint_oci as adapter
 from ops import native_maintenance_checkpoint_transport as rpc
 from ops.native_maintenance_readonly_transport import stop_group
 from ops.native_maintenance_run_guard import API, StageRunBinding, RehearsalRunBinding, REPOSITORY
-from ops.native_maintenance_stage_request import AcceptedRequest, MAX_REQUEST
+from ops.native_maintenance_stage_request import AcceptedRequest, MAX_REQUEST, first_install_intent
 from ops.native_maintenance_store_runner import HOST, loader, source_check
 from ops.native_maintenance_workflow_pause import require, encoded, digest, unique
 from ops.oracle_autopilot_source_preflight import connection_parameters
@@ -51,7 +51,7 @@ def source_guard():
 
 
 def bootstrap(repo, source, source_digest, wheel_digest, run_id, attempt, accepted, binding, mode):
-    require(mode in ('fetch', 'drain', 'stage', 'rehearsal') and bundle.identifier(accepted,64)
+    require(mode in ('fetch', 'drain', 'first_install', 'stage', 'rehearsal') and bundle.identifier(accepted,64)
             and bundle.identifier(source,40) and bundle.identifier(source_digest,64)
             and bundle.identifier(wheel_digest,64) and bundle.identifier(binding,64)
             and type(run_id) is int and run_id > 0 and type(attempt) is int and attempt > 0,
@@ -70,9 +70,14 @@ def bootstrap(repo, source, source_digest, wheel_digest, run_id, attempt, accept
         +'with bundle.extracted(payload,'+repr(source)+','+repr(source_digest)+') as root:\n'
         +' sys.path.insert(0,str(root))\n')
     if mode == 'fetch':
-        code += (" from ops.native_maintenance_stage_request import read_request\n"
+        code += (" from ops.native_maintenance_stage_request import resolve_request\n"
                  +" bundle.check(value['envelope']=={},'LAUNCHER_FETCH_SCHEMA')\n"
-                 +' print(base64.b64encode(read_request('+repr(accepted)+')).decode(),flush=True)\n')
+                 +' print(base64.b64encode(resolve_request('+repr(accepted)+','+repr(source)+')).decode(),flush=True)\n')
+    elif mode == 'first_install':
+        code += (" from ops.native_maintenance_stage_request import first_install\n"
+                 +" bundle.check(value['envelope']=={},'LAUNCHER_PROVISION_SCHEMA')\n"
+                 +' first_install('+repr(source)+','+repr(accepted)+')\n'
+                 +" print('NATIVE_REQUEST_STORE_PROVISIONED',flush=True)\n")
     elif mode == 'drain':
         code += (" from ops.native_maintenance_supervisor import PriorSupervisors\n"
             +" from ops.native_maintenance_workflow_pause import digest\n"
@@ -193,6 +198,26 @@ def main(mode):
     run_id, attempt = int(os.environ['GITHUB_RUN_ID']), int(os.environ['GITHUB_RUN_ATTEMPT'])
     binding = digest(dict(version=1,mode=mode,source=source,request_digest=accepted,run_id=run_id,attempt=attempt))
     args = (repo,source,bundle.digest(source_payload),bundle.digest(wheels),run_id,attempt,accepted,binding)
+    action = os.environ.get('REQUEST_STORE_ACTION','rehearse')
+    require(action in ('rehearse','first_install') and (mode == 'rehearsal' or action == 'rehearse'),
+            'LAUNCHER_PROVISION_MODE')
+    if action == 'first_install':
+        require(bundle.digest(first_install_intent(source)) == accepted, 'LAUNCHER_PROVISION_INTENT')
+        PHASE = 'explicit_first_install'
+        run = cls(source,run_id,attempt,API(os.environ['GH_TOKEN']))
+        run.assert_running()
+        data = encoded(frame(source_payload,{}))
+        command = ssh_command(key,known_hosts,bootstrap(*args,'first_install'))
+        result = subprocess.run(command,input=len(data).to_bytes(4,'big')+data,capture_output=True,
+                                timeout=115,env={'PATH':'/usr/bin:/bin'})
+        require(result.returncode == 0 and result.stdout == b'NATIVE_REQUEST_STORE_PROVISIONED\n',
+                'LAUNCHER_PROVISION_REFUSED')
+        source_guard()
+        run.assert_running()
+        print(json.dumps(dict(audit='NATIVE_REQUEST_STORE_FIRST_INSTALL_PASS',source_sha=source,
+            accepted_intent_digest=accepted,run_id=run_id,attempt=attempt,job_id=run.job_id,
+            production_sql_mutations=False,stage_authority=False),sort_keys=True))
+        return
     PHASE = 'request_readback'
     raw = fetch_request(ssh_command(key,known_hosts,bootstrap(*args,'fetch')),source_payload,accepted)
     request = manifest = packet = None

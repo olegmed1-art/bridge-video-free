@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 from contextlib import ExitStack
+from types import SimpleNamespace
 
 from ops import native_maintenance_stage_request as requests
 from ops import native_maintenance_stage_launcher as launcher
@@ -39,7 +40,7 @@ class ProvenanceTests(unittest.TestCase):
         def git(root, command, ref):
             self.assertEqual(command,'show')
             return (repo/ref.split(':',1)[1]).read_bytes()
-        for mode in ('fetch','stage','rehearsal'):
+        for mode in ('fetch','drain','first_install','stage','rehearsal'):
             with patch.object(launcher.bundle,'git',side_effect=git):
                 code = launcher.bootstrap(repo,SOURCE,'a'*64,'b'*64,123,2,'c'*64,'d'*64,mode)
             compile(code,'outer','exec')
@@ -158,6 +159,10 @@ class ClaimTests(unittest.TestCase):
                      patch.object(requests.storage,'trusted_parent'),
                      patch.object(requests.storage,'persistent_mount',return_value='ext4')):
             item.start(); self.addCleanup(item.stop)
+        self.root.mkdir(mode=0o700)
+        for name in ('requests','claims'): (self.root/name).mkdir(mode=0o700)
+        (self.root/'VERSION').write_bytes(requests.VERSION)
+        (self.root/'VERSION').chmod(0o600)
         value, self.manifest = request_fixture()
         self.raw = encoded(value)
         self.sha = requests.submit_candidate(self.raw)
@@ -181,6 +186,35 @@ class ClaimTests(unittest.TestCase):
         with self.assertRaises(FileExistsError): requests.claim(self.request,self.run)
         saved = json.loads((self.root/'claims'/(self.sha+'.json')).read_bytes())
         self.assertEqual(saved['run'],dict(run_id=123,attempt=2,job_id=456))
+
+    def test_missing_namespace_or_claim_ledger_never_reprovisions_on_fetch_or_submit(self):
+        for name in ('requests','claims','VERSION'):
+            path = self.root/name
+            saved = self.root.parent/('saved-'+name)
+            path.rename(saved)
+            with patch.object(requests,'staged_candidate') as staged:
+                with self.assertRaises(Exception): requests.resolve_request(self.sha,SOURCE)
+                with self.assertRaises(Exception): requests.submit_candidate(self.raw)
+                staged.assert_not_called()
+            self.assertFalse(path.exists())
+            saved.rename(path)
+        with patch.object(requests,'ROOT',self.root.parent/'missing-root'):
+            with self.assertRaises(FileNotFoundError): requests.resolve_request(self.sha,SOURCE)
+            with self.assertRaises(FileNotFoundError): requests.submit_candidate(self.raw)
+            self.assertFalse(requests.ROOT.exists())
+
+    def test_explicit_first_install_is_exclusive_and_never_repairs(self):
+        fresh = self.root.parent/'first-install'
+        with patch.object(requests,'ROOT',fresh), patch.object(requests.os,'uname',return_value=SimpleNamespace(nodename='autopilot-lite-vnic')):
+            accepted = hashlib.sha256(requests.first_install_intent(SOURCE)).hexdigest()
+            with self.assertRaises(Exception): requests.first_install(SOURCE,'0'*64)
+            self.assertFalse(fresh.exists())
+            requests.first_install(SOURCE,accepted)
+            requests.validate_namespace()
+            with self.assertRaises(FileExistsError): requests.first_install(SOURCE,accepted)
+            (fresh/'claims').rmdir()  # Empty disposable fixture; simulate ledger loss.
+            with self.assertRaises(FileExistsError): requests.first_install(SOURCE,accepted)
+            self.assertFalse((fresh/'claims').exists())
 
     def test_lost_post_claim_authority_preserves_receipt_and_refuses_retry(self):
         self.run.assert_running.side_effect = [None,ConnectionError('CI_LOST_AUTH')]
@@ -220,8 +254,104 @@ class StageAdmissionTests(unittest.TestCase):
         self.assertEqual(self.puts,[])
 
 
+@unittest.skipUnless(os.getuid()==0,'staged file ownership needs root in disposable fixture')
+class StagingTests(unittest.TestCase):
+    setUp = ClaimTests.setUp
+
+    def stage(self, raw=None):
+        raw = self.raw if raw is None else raw
+        parent = self.root.parent/'home'
+        parent.mkdir(mode=0o755)
+        home = parent/'ubuntu'; home.mkdir(mode=0o755)
+        try: os.chown(home,1001,1001)
+        except OSError as exc:
+            if exc.errno == 22 and os.environ.get('GITHUB_ACTIONS') != 'true':
+                self.skipTest('local UID namespace has no 1001 mapping; CI sudo must run this case')
+            raise
+        directory = home/requests.STAGING_NAME; directory.mkdir(mode=0o700); os.chown(directory,1001,1001)
+        file = directory/(hashlib.sha256(raw).hexdigest()+'.json')
+        file.write_bytes(raw); file.chmod(0o600); os.chown(file,1001,1001)
+        for item in (patch.object(requests,'STAGING_PARENT',parent),
+                     patch.object(requests.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=1001,pw_dir=str(home)))):
+            item.start(); self.addCleanup(item.stop)
+        return directory,file
+
+    def test_missing_root_imports_only_exact_private_canonical_data(self):
+        self.stage()
+        (self.root/'requests'/(self.sha+'.json')).unlink()  # Disposable fixture only.
+        self.assertEqual(requests.resolve_request(self.sha,SOURCE),self.raw)
+        self.assertEqual(requests.read_request(self.sha),self.raw)
+        self.assertEqual(list((self.root/'claims').iterdir()),[])
+
+    def test_corrupt_existing_root_never_uses_staging_or_overwrites(self):
+        self.stage()
+        file = self.root/'requests'/(self.sha+'.json')
+        file.write_bytes(b'CORRUPTED_FIXTURE')
+        with patch.object(requests,'staged_candidate') as staged, self.assertRaises(Exception):
+            requests.resolve_request(self.sha,SOURCE)
+        staged.assert_not_called()
+        self.assertEqual(file.read_bytes(),b'CORRUPTED_FIXTURE')
+
+    def test_stage_mode_owner_link_digest_and_source_faults_refuse(self):
+        directory,file = self.stage()
+        file.chmod(0o644)
+        with self.assertRaises(Exception): requests.staged_candidate(self.sha,SOURCE)
+        file.chmod(0o600); os.chown(file,0,0)
+        with self.assertRaises(Exception): requests.staged_candidate(self.sha,SOURCE)
+        os.chown(file,1001,1001)
+        directory.chmod(0o755)
+        with self.assertRaises(Exception): requests.staged_candidate(self.sha,SOURCE)
+        directory.chmod(0o700)
+        os.link(file,directory/'extra-link')
+        with self.assertRaises(Exception): requests.staged_candidate(self.sha,SOURCE)
+        (directory/'extra-link').unlink()
+        with self.assertRaises(Exception): requests.staged_candidate(self.sha,'b'*40)
+        file.write_bytes(self.raw+b'\n')
+        with self.assertRaises(Exception): requests.staged_candidate(self.sha,SOURCE)
+
+    def test_separate_readonly_schema_can_be_imported_without_stage_authority(self):
+        value,_ = request_fixture()
+        readonly = encoded(dict(version=1,mode='read_only_rehearsal',source=SOURCE,plan=value['packet']['plan']))
+        self.stage(readonly)
+        sha = hashlib.sha256(readonly).hexdigest()
+        self.assertEqual(requests.resolve_request(sha,SOURCE),readonly)
+        with self.assertRaises(Exception): requests.AcceptedRequest(readonly,sha,SOURCE)
+
+
 class LauncherWiringTests(unittest.TestCase):
     """Real request/derivation/profile parsing; explicit external transport faults."""
+    def test_first_install_is_separate_authenticated_choice_and_never_fetches_or_runs_stage(self):
+        api = API()
+        cls = RehearsalRunBinding
+        workflow = (Path(__file__).resolve().parents[1]/cls.workflow).read_bytes()
+        api.run.update(path=cls.workflow,event='workflow_dispatch')
+        api.file.update(path=cls.workflow,size=len(workflow),content=base64.b64encode(workflow).decode())
+        api.jobs['jobs'][0]['name'] = 'rehearsal'
+        api.jobs['jobs'].append({**api.jobs['jobs'][0],'id':455,'name':'contract','status':'completed','conclusion':'success'})
+        api.jobs['total_count'] = 2
+        old_get = api.get
+        api.get = lambda path: copy.deepcopy(api.file) if path.startswith('/contents/'+cls.workflow) else old_get(path)
+        accepted = hashlib.sha256(requests.first_install_intent(SOURCE)).hexdigest()
+        env = dict(EXPECTED_MAIN=SOURCE,ACCEPTED_REQUEST_DIGEST=accepted,GITHUB_REPOSITORY=launcher.REPOSITORY,
+            GITHUB_REF='refs/heads/main',GITHUB_SHA=SOURCE,GITHUB_EVENT_NAME='workflow_dispatch',
+            GITHUB_ACTOR='olegmed1-art',GITHUB_TRIGGERING_ACTOR='olegmed1-art',GITHUB_JOB='rehearsal',
+            GITHUB_WORKFLOW_REF=launcher.REPOSITORY+'/'+cls.workflow+'@refs/heads/main',GITHUB_WORKFLOW_SHA=SOURCE,
+            GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='2',GH_TOKEN='CI_TOKEN',REQUEST_STORE_ACTION='first_install')
+        with patch.dict(os.environ,env,clear=True),patch.object(sys,'argv',['launcher','rehearsal','key','known','wheels']), \
+             patch.object(launcher,'source_guard'),patch.object(launcher.bundle,'build',return_value=b'CI_SOURCE'), \
+             patch.object(launcher.driver,'build',return_value=b'CI_WHEELS'),patch.object(launcher,'API',return_value=api), \
+             patch.object(launcher,'bootstrap',return_value='CI_FIRST_INSTALL') as bootstrap, \
+             patch.object(launcher.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=b'NATIVE_REQUEST_STORE_PROVISIONED\n')), \
+             patch.object(launcher,'fetch_request') as fetch,patch.object(launcher,'oci_client') as oci,patch('builtins.print') as output:
+            launcher.main('rehearsal')
+            self.assertEqual(bootstrap.call_args.args[-1],'first_install')
+            fetch.assert_not_called();oci.assert_not_called()
+            self.assertEqual(json.loads(output.call_args.args[0])['audit'],'NATIVE_REQUEST_STORE_FIRST_INSTALL_PASS')
+            os.environ['ACCEPTED_REQUEST_DIGEST']='0'*64
+            bootstrap.reset_mock()
+            with self.assertRaises(Exception): launcher.main('rehearsal')
+            bootstrap.assert_not_called()
+
     def exercise(self, fault=None):
         value, manifest = request_fixture()
         raw, accepted = encoded(value),digest(value)

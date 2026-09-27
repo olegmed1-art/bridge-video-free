@@ -185,7 +185,7 @@ class StageRunBinding(RunBinding):
 class RehearsalRunBinding(StageRunBinding):
     """Separate manual read-only launcher profile; never accepted by stage()."""
     workflow = '.github/workflows/native-maintenance-stage-rehearsal.yml'
-    workflow_sha256 = 'be50b4daaa527c08cf7ad02856485fd7b1e075221041bc79c9434e73a59e6830'
+    workflow_sha256 = 'd031dd6ea79eeb4f2d678c3845b354938463e116c121182e4feedf4ded063684'
     job_name = 'rehearsal'
     job_names = ('contract', 'rehearsal')
 
