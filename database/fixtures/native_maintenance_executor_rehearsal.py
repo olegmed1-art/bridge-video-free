@@ -3,7 +3,7 @@
 GitHub, run, lifetime, HOLD and operator coordination are simulated. This fixture
 proves database/journal composition only; it never authorizes production.
 """
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 import hashlib
@@ -16,8 +16,10 @@ from database.fixtures.native_cli_commit_rehearsal import connection, LOGIN, PAR
 from database.fixtures.native_maintenance_session_rehearsal import TARGET, ROUTE, owned, CONNECTIONS
 from database.fixtures.native_route_drain_rehearsal import setup, prove_busy
 from ops import native_maintenance_executor as executor
+from ops import native_maintenance_checkpoint as checkpoint
 from ops import native_maintenance_snapshot as recovery
 from ops import native_maintenance_workflow_api as api
+from ops.native_maintenance_coordination import OwnedConnections
 from ops.native_maintenance_workflow_pause import Journal, Refused, digest
 
 SOURCE = 'a' * 40
@@ -35,10 +37,35 @@ class CIAuthority:
     """Not a runtime authority. All infrastructure coordination is simulated."""
     source = SOURCE
     run_id, attempt, job_id = 11, 1, 22
+    connections = None
     def assert_running(self): pass
     def assert_alive(self): pass
     def assert_held(self, scope): pass
-    def assert_drained(self, scope): pass
+    def assert_drained(self, scope):
+        # Real connection/backend drain; only non-DB infrastructure is simulated.
+        engine.check(self.connections is not None, 'CI_DRAIN_REGISTRY_REQUIRED')
+        self.connections.assert_drained()
+
+
+class CIMemoryStore:
+    """Real checkpoint protocol over simulated off-VM storage, not an OCI proof."""
+    def __init__(self):
+        self.objects, self.heads, self.revision = {}, {}, 0
+    def assert_private(self): pass  # CI-only private-store authority.
+    def read_head(self, scope): return self.heads.get(scope)
+    def put_archive(self, scope, sha, data):
+        key = (scope, sha)
+        engine.check(key not in self.objects or self.objects[key] == data, 'CI_IMMUTABLE')
+        self.objects[key] = data
+    def read_archive(self, scope, sha, limit):
+        data = self.objects[(scope, sha)]
+        engine.check(len(data) <= limit, 'CI_ARCHIVE_LIMIT')
+        return data
+    def compare_head(self, scope, revision, data):
+        current = self.heads.get(scope)
+        engine.check((current[1] if current else None) == revision, 'CI_HEAD_CONFLICT')
+        self.revision += 1
+        self.heads[scope] = (data, str(self.revision))
 
 
 class CIHoldGuard:
@@ -63,17 +90,65 @@ class CIRemote:
         self.row['updated_at'] = '2026-09-26T00:00:01Z' if action == 'disable' else '2026-09-26T00:00:02Z'
 
 
+class CIProxyInfo:
+    """Simulate only Neon's rewritten cancellation PID, preserving libpq metadata."""
+    def __init__(self, info):
+        self.original = info
+        self.backend_pid = info.backend_pid + 1000000
+    def __getattr__(self, name): return getattr(self.original, name)
+
+
+class CIProxyConnection:
+    def __init__(self, conn):
+        self.original = conn
+        self.info = CIProxyInfo(conn.info)
+    def __getattr__(self, name): return getattr(self.original, name)
+
+
+@contextmanager
+def readonly_proxy_connection():
+    with owned() as conn:
+        conn.read_only = True
+        proxy = CIProxyConnection(conn)
+        engine.check(proxy.info.backend_pid != conn.execute('SELECT pg_catalog.pg_backend_pid()').fetchone()[0],
+                     'CI_PROXY_PID_NOT_DIFFERENT')
+        yield proxy
+
+
+def proxy_drain_rehearsal():
+    registry = OwnedConnections(readonly_proxy_connection, TARGET)
+    with registry.open() as conn:
+        registry.assert_drained()
+        with owned():
+            try: registry.assert_drained()
+            except Refused as exc:
+                engine.check(exc.args == ('DATABASE_NOT_DRAINED',), 'CI_PROXY_FOREIGN_REASON')
+            else: raise AssertionError('CI_PROXY_FOREIGN_ADMITTED')
+        conn.info.backend_pid += 1
+        try: registry.assert_drained()
+        except Refused as exc:
+            engine.check(exc.args == ('DRAIN_OWNED_BACKEND_LOST',), 'CI_PROXY_CONTINUITY_REASON')
+        else: raise AssertionError('CI_PROXY_IDENTITY_CHANGE_ADMITTED')
+    engine.check(not registry.live and all(c.closed for c in CONNECTIONS), 'CI_PROXY_CONNECTION_LEAK')
+    print('NATIVE_MAINTENANCE_PROXY_PID_DRAIN_PG18_PASS')
+
+
 def main():
     with connection() as conn:
         engine.check(conn.execute('SELECT count(*) FROM pg_roles WHERE rolname IN (%s,%s)',
                                  (LOGIN, PARENT)).fetchone()[0] == 0, 'CI_ROLES_EXIST')
         original = snapshot(conn)
+        added_stats = not conn.execute(
+            "SELECT pg_has_role('bridge_ci_owner','pg_read_all_stats','MEMBER')").fetchone()[0]
         with conn.transaction():
+            if added_stats:
+                conn.execute('GRANT pg_read_all_stats TO bridge_ci_owner')
             conn.execute(f'CREATE ROLE {PARENT} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE')
             conn.execute(f'CREATE ROLE {LOGIN} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT')
             conn.execute(f'GRANT {PARENT} TO {LOGIN}')
             conn.execute(f'GRANT USAGE ON SCHEMA autopilot TO {PARENT}')
     try:
+        proxy_drain_rehearsal()
         with tempfile.TemporaryDirectory(prefix='native-route-drain-', dir='/tmp') as temporary:
             base = Path(temporary)
             route = base / 'protocol'
@@ -87,22 +162,31 @@ def main():
                     engine.check(engine.inspect(conn, TARGET, manifest, manifest_digest) == expected, 'CI_DB_STATE')
                 engine.check(all(c.closed for c in CONNECTIONS), 'CI_CONNECTION_LEAK')
 
-            # Four real sessions: apply, rollback, apply with lost return, rollback.
-            for index, (operation, lost) in enumerate([('apply', False), ('rollback', False),
-                                                      ('apply', True), ('rollback', False)]):
-                remote, authority = CIRemote(), CIAuthority()
+            # Exercise both legacy and staged paths: apply, rollback, lost return,
+            # independent recovery and rollback, all against disposable PG18.
+            cases = [(staged, operation, lost) for staged in (False, True)
+                     for operation, lost in [('apply', False), ('rollback', False),
+                                             ('apply', True), ('rollback', False)]]
+            for index, (staged, operation, lost) in enumerate(cases):
+                remote, authority, store = CIRemote(), CIAuthority(), CIMemoryStore()
+                registry = OwnedConnections(owned, TARGET)
+                authority.connections = registry
                 paths = [base / f'{index}-pause', base / f'{index}-operation']
                 for path in paths:
                     path.mkdir(mode=0o700)
                 journals = [Journal(path) for path in paths]
                 expected = 'BEFORE' if operation == 'rollback' else 'AFTER'
                 def build():
+                    # Simulated independent acceptance for this disposable fixture.
+                    accepted = None if not store.heads else checkpoint.sha(next(iter(store.heads.values()))[0])
+                    barrier = checkpoint.JournalCheckpoint(store, accepted_head_digest=accepted)
                     return executor.MaintenanceExecutor(
                         target=TARGET, operation=operation, manifest_path=manifest,
                         manifest_digest=manifest_digest, expected_route=ROUTE, approved_hold=CIHold(),
                         workflow_plan=PLAN, plan_digest=digest(PLAN), api_token='CI-only',
                         pause_journal=journals[0], operation_journal=journals[1],
-                        run=authority, operator=authority, lifetime=authority)
+                        run=authority, operator=authority, lifetime=authority, checkpoint=barrier,
+                        staged=staged)
                 actual_change = engine.change
                 def change(*args, **kwargs):
                     prove_busy(route)  # Actual routed client blocked while actual SQL executes.
@@ -110,6 +194,10 @@ def main():
                 def perform(*args, **kwargs):
                     engine.check(journals[1].records[-1]['event']['kind'] == 'SESSION_INTENT', 'CI_INTENT_ORDER')
                     engine.check(remote.row['state'] == 'disabled_manually', 'CI_PAUSE_ORDER')
+                    accepted = checkpoint.sha(store.heads[ex.scope_digest][0])
+                    persisted = checkpoint.accepted_latest(store, ex.scope_digest, accepted)
+                    engine.check('SESSION_INTENT' in recovery._parse(persisted)['journals']['operation'][-1],
+                                 'CI_REMOTE_INTENT_ORDER')
                     result = session.execute(*args, **kwargs)
                     if lost:
                         raise ConnectionError('CI_LOST_RETURN_AFTER_REAL_COMMIT')
@@ -121,15 +209,35 @@ def main():
                         stack.enter_context(patch.object(engine, 'change', side_effect=change))
                         sql = stack.enter_context(patch.object(executor, 'permission_session', side_effect=perform))
                         ex = build()
+                        # A real unregistered owner backend must refuse, even idle.
+                        with owned():
+                            try:
+                                registry.assert_drained()
+                            except Refused:
+                                pass
+                            else:
+                                raise AssertionError('CI_FOREIGN_OWNER_BACKEND_ACCEPTED')
+                        registry.assert_drained()
+                        if staged:
+                            ex.prepare()
+                            engine.check(sql.call_count == 0, 'CI_PREPARE_CALLED_SQL')
+                            observed('AFTER' if operation == 'rollback' else 'BEFORE')
+                            for journal in journals:
+                                journal.close()
+                            journals = [Journal(path) for path in paths]
+                            authority.run_id += 1
+                            authority.job_id += 1
+                            ex = build()
+                        dispatch = ex.execute_prepared if staged else ex.execute
                         if lost:
                             try:
-                                ex.execute(owned, route_root=route)
+                                dispatch(registry.open, route_root=route)
                             except executor.ExecutionError as exc:
                                 engine.check(exc.outcome == 'UNKNOWN', 'CI_LOST_RETURN_CLASSIFICATION')
                             else:
                                 raise AssertionError('CI_LOST_RETURN_ACCEPTED')
                         else:
-                            engine.check(ex.execute(owned, route_root=route) == expected, 'CI_RESULT')
+                            engine.check(dispatch(registry.open, route_root=route) == expected, 'CI_RESULT')
                         observed(expected)
                         engine.check(remote.puts == ['disable'], 'CI_AUTO_RESTORE')
                         for journal in journals:
@@ -138,8 +246,9 @@ def main():
                             # Recover the pair after a real committed GRANT whose
                             # return was lost. Reopen only the independent copy;
                             # the original uncertainty and records remain intact.
-                            archive = recovery.capture(paths[1], paths[0])
-                            recovery_parent = base / 'recovery'
+                            archive = checkpoint.accepted_latest(
+                                store, ex.scope_digest, checkpoint.sha(store.heads[ex.scope_digest][0]))
+                            recovery_parent = base / f'recovery-{index}'
                             recovery_parent.mkdir(mode=0o700)
                             restored = recovery.restore(archive, hashlib.sha256(archive).hexdigest(),
                                                         ex.scope_digest, recovery_parent)
@@ -151,7 +260,7 @@ def main():
                         authority.job_id += 1
                         ex = build()
                         try:
-                            ex.execute(owned, route_root=route)
+                            (ex.execute_prepared if staged else ex.execute)(registry.open, route_root=route)
                         except Refused:
                             pass
                         else:
@@ -167,6 +276,9 @@ def main():
                         engine.check(ex.state == 'restored', 'CI_RESTORE_JOURNAL')
                         if lost:
                             print('NATIVE_MAINTENANCE_SNAPSHOT_REAL_COMMIT_RECOVERY_PASS')
+                            print('NATIVE_MAINTENANCE_CHECKPOINT_REAL_COMMIT_RECOVERY_PASS')
+                        if staged:
+                            print('NATIVE_MAINTENANCE_STAGED_REAL_SESSION_PASS')
                 finally:
                     for journal in journals:
                         journal.close()
@@ -180,8 +292,11 @@ def main():
                 conn.execute(f'REVOKE {PARENT} FROM {LOGIN} RESTRICT')
                 conn.execute(f'DROP ROLE {LOGIN}')
                 conn.execute(f'DROP ROLE {PARENT}')
+                if added_stats:
+                    conn.execute('REVOKE pg_read_all_stats FROM bridge_ci_owner')
             engine.check(snapshot(conn) == original, 'CI_EXECUTOR_CLEANUP_MISMATCH')
     print('NATIVE_MAINTENANCE_EXECUTOR_PG18_PASS')
+    print('NATIVE_MAINTENANCE_OWNED_BACKEND_DRAIN_PG18_PASS')
 
 
 if __name__ == '__main__':

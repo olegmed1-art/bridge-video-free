@@ -46,6 +46,7 @@ class Runtime:
         if kind == self.reject:
             raise Refused('CI_' + kind)
 
+    def sync(self, scope, operation, pause): self.check('checkpoint')
     def assert_running(self): self.check('run')
     def assert_alive(self): self.check('lifetime')
     def assert_held(self, scope):
@@ -114,7 +115,7 @@ class ExecutorTests(unittest.TestCase):
                       manifest_digest='f' * 64, expected_route=ROUTE, approved_hold=HOLD,
                       workflow_plan=PLAN, plan_digest=digest(PLAN), api_token='CI-token',
                       pause_journal=self.pause, operation_journal=self.operation,
-                      run=self.runtime, operator=self.runtime, lifetime=self.runtime)
+                      run=self.runtime, operator=self.runtime, lifetime=self.runtime, checkpoint=self.runtime)
         return executor.MaintenanceExecutor(**{**kwargs, **overrides})
 
     def reopen(self, *, new_run=True):
@@ -247,9 +248,18 @@ class ExecutorTests(unittest.TestCase):
             self.build()
 
     def test_no_missing_operator_lifetime_run_or_shared_journal_defaults(self):
-        for overrides in [dict(operator=None), dict(lifetime=None), dict(run=None), dict(pause_journal=self.operation)]:
+        for overrides in [dict(checkpoint=None), dict(operator=None), dict(lifetime=None), dict(run=None), dict(pause_journal=self.operation)]:
             with self.subTest(overrides=overrides), self.assertRaises(Refused):
                 self.build(**overrides)
+
+    def test_checkpoint_failure_blocks_first_api_mutation(self):
+        self.runtime.reject = 'checkpoint'
+        with patch.object(executor, 'permission_session') as sql:
+            with self.assertRaises(executor.ExecutionError):
+                self.ex.execute(None)
+            sql.assert_not_called()
+        self.assertEqual(self.remote.puts, [])
+        self.assertEqual(self.pause.records[-1]['event']['kind'], 'PLAN')
 
     def test_dispatch_outside_phase_is_refused(self):
         with self.assertRaisesRegex(Refused, 'DISPATCH_PHASE'):
