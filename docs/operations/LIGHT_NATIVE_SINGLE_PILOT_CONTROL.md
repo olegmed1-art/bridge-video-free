@@ -105,3 +105,14 @@ If read-only rehearsal refuses database drain, it may additionally emit bounded
 counts classified as light/owner/other, client/other, transaction state and
 coarse age. It emits no query text, address, application name or PID and has no
 admission authority. The drain rule and nonrenewing time limit stay enforced.
+
+The fixed stage/rehearsal launcher uses one nonrenewing 100-second authenticated
+run binding, constructed before private request import. It covers SSH/OCI
+preparation, the bounded host exchange and independent final readback. The host
+binding and duplex channel remain 60 seconds; SQL admission retains its existing
+shorter bound and PID1 keeps its 100-second cleanup lifetime. A generic caller
+cannot supply 100 seconds to the host constructor. Neither successful checks nor
+request fetch renew the launcher deadline. Safe refusal categories and total
+binding elapsed time distinguish expiry from other transport failures without
+printing exception text. The previous 64-second read-only refusal was consistent
+with outer expiry but did not establish its cause; live verification is required.

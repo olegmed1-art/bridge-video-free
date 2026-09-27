@@ -224,7 +224,7 @@ def stage(packet, *, run, store, connect, api_token, retain_unit):
     launcher. retain_unit sends canonical bytes to the authenticated runner and
     returns their SHA only after private off-VM write+readback. No default exists.
     """
-    require(type(packet) is DerivedStagePacket and type(run) is StageRunBinding
+    require(type(packet) is DerivedStagePacket and type(run) is StageRunBinding and run.launcher is False
             and callable(connect) and callable(retain_unit), 'RUNTIME_COMPONENTS')
     require(os.getuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic', 'RUNTIME_HOST')
     packet.assert_current()

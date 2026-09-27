@@ -61,6 +61,7 @@ class API:
 
 
 class RunBinding:
+    duration_limit = 60
     workflow = WORKFLOW
     workflow_sha256 = WORKFLOW_SHA256
     job_name = JOB
@@ -71,7 +72,7 @@ class RunBinding:
         check(isinstance(source, str) and re.fullmatch('[0-9a-f]{40}', source), 'SOURCE_INVALID')
         check(type(run_id) is int and run_id > 0 and type(attempt) is int and attempt > 0,
               'RUN_ID_INVALID')
-        check(type(seconds) is int and 1 <= seconds <= 60, 'DURATION_INVALID')
+        check(type(seconds) is int and 1 <= seconds <= self.duration_limit, 'DURATION_INVALID')
         self.source, self.run_id, self.attempt = source, run_id, attempt
         self.api = api
         self.deadline = time.monotonic() + seconds
@@ -167,6 +168,15 @@ class StageRunBinding(RunBinding):
     job_name = 'stage'
     job_names = ('contract', 'stage')
     events = ('workflow_dispatch',)
+    duration_limit = 100
+
+    def __init__(self, source, run_id, attempt, api, *, launcher=False):
+        # One deadline from construction, before any request import. The fixed
+        # runner covers SSH/OCI preparation and final readback; host defaults
+        # remain 60 seconds. No caller-selected duration or renewal method.
+        check(type(launcher) is bool, 'LAUNCHER_PROFILE_INVALID')
+        super().__init__(source, run_id, attempt, api, seconds=100 if launcher else 60)
+        self.launcher = launcher
 
     def assert_running(self):
         try:

@@ -540,3 +540,61 @@ class RehearsalDiagnosticTests(unittest.TestCase):
 
 
 if __name__=='__main__': unittest.main()
+
+class LauncherBudgetTests(unittest.TestCase):
+    def api(self):
+        api=API()
+        api.run.update(path=StageRunBinding.workflow,event='workflow_dispatch')
+        raw=(Path(__file__).resolve().parents[1]/StageRunBinding.workflow).read_bytes()
+        api.file.update(path=StageRunBinding.workflow,size=len(raw),content=base64.b64encode(raw).decode())
+        api.jobs['jobs'][0]['name']='stage'
+        api.jobs['jobs'].append({**api.jobs['jobs'][0],'id':455,'name':'contract','status':'completed','conclusion':'success'})
+        api.jobs['total_count']=2
+        return api
+
+    def test_only_fixed_launcher_gets_100_seconds_at_construction(self):
+        from ops.native_maintenance_run_guard import RunBinding
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1000):
+            host=StageRunBinding(SOURCE,123,2,self.api())
+            runner=StageRunBinding(SOURCE,123,2,self.api(),launcher=True)
+            self.assertEqual(host.deadline,1060)
+            self.assertEqual(runner.deadline,1100)
+            with self.assertRaises(Exception):RunBinding(SOURCE,123,2,self.api(),seconds=100)
+            with self.assertRaises(TypeError):StageRunBinding(SOURCE,123,2,self.api(),seconds=100)
+            with self.assertRaises(Exception):StageRunBinding(SOURCE,123,2,self.api(),launcher=1)
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1059):
+            host.assert_running();runner.assert_running()
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1060):
+            with self.assertRaisesRegex(Exception,'EXPIRED'):host.assert_running()
+            runner.assert_running()
+        self.assertEqual(runner.deadline,1100)
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1100):
+            with self.assertRaisesRegex(Exception,'EXPIRED'):runner.assert_running()
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1001):
+            with self.assertRaisesRegex(Exception,'ALREADY_FAILED'):runner.assert_running()
+
+    def test_cancellation_near_either_deadline_latches(self):
+        for launcher_mode,elapsed in ((False,59),(True,99)):
+            api=self.api()
+            with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1000):
+                run=StageRunBinding(SOURCE,123,2,api,launcher=launcher_mode);run.assert_running()
+            api.run.update(status='completed',conclusion='cancelled')
+            with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1000+elapsed):
+                with self.assertRaisesRegex(Exception,'RUN_NOT_RUNNING'):run.assert_running()
+                api.run.update(status='in_progress',conclusion=None)
+                with self.assertRaisesRegex(Exception,'ALREADY_FAILED'):run.assert_running()
+
+    def test_refusal_diagnostics_do_not_echo_arbitrary_errors(self):
+        self.assertEqual(launcher.failure_code(RuntimeError('RUN_BINDING_EXPIRED')),'RUN_BINDING_EXPIRED')
+        self.assertEqual(launcher.failure_code(RuntimeError('postgresql://secret')),'REFUSED')
+        self.assertEqual(launcher.failure_code(subprocess.TimeoutExpired('secret-command',1)),'PROCESS_TIMEOUT')
+
+    def test_extended_launcher_binding_cannot_enter_host_executor(self):
+        value,manifest=request_fixture()
+        request=requests.AcceptedRequest(encoded(value),digest(value),SOURCE)
+        run=StageRunBinding(SOURCE,123,2,self.api(),launcher=True)
+        run.assert_running()
+        packet=runtime.DerivedStagePacket(request,run,manifest)
+        with patch.object(runtime,'SelfSupervisor') as supervisor,self.assertRaisesRegex(Exception,'RUNTIME_COMPONENTS'):
+            runtime.stage(packet,run=run,store=Mock(),connect=Mock(),api_token='CI',retain_unit=Mock())
+        supervisor.assert_not_called()

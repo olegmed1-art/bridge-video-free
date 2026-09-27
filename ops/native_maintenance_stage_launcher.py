@@ -26,6 +26,19 @@ from ops.native_maintenance_workflow_pause import require, encoded, digest, uniq
 from ops.oracle_autopilot_source_preflight import connection_parameters
 
 PHASE = 'startup'
+RUN_STARTED = None
+SAFE_REFUSALS = frozenset(('RUN_BINDING_EXPIRED','RUN_BINDING_ALREADY_FAILED',
+    'RUN_BINDING_EXPIRED_OR_UNOBSERVED','RUN_NOT_RUNNING','JOB_NOT_RUNNING','MAIN_CHANGED',
+    'WORKFLOW_CONTRACT_CHANGED','RPC_EXPIRED','RPC_TIMEOUT','RPC_EOF','RPC_UNAVAILABLE',
+    'CANDIDATE_HOST_REFUSED','LAUNCHER_HOST_REFUSED','LAUNCHER_REQUEST_READ'))
+
+def failure_code(exc):
+    code = exc.args[0] if len(exc.args)==1 and type(exc.args[0]) is str else None
+    return code if code in SAFE_REFUSALS else ('PROCESS_TIMEOUT' if isinstance(exc,subprocess.TimeoutExpired) else 'REFUSED')
+
+def timing():
+    return dict(binding_elapsed_ms=None if RUN_STARTED is None else int((time.monotonic()-RUN_STARTED)*1000),
+                binding_budget_seconds=100)
 REQUEST_PREFIX = 'native-journal/stage-requests-v1/'
 
 
@@ -236,11 +249,11 @@ def candidate_step(repo, source, accepted, raw, candidate, run, reader, client, 
         store=adapter.OCIJournalStore(client,namespace,run.assert_running)
         retain_request(store,request_raw,report['request_digest'])
     run.assert_running(); source_guard()
-    print(json.dumps(report,sort_keys=True))
+    print(json.dumps({**report,**timing()},sort_keys=True))
 
 
 def main(mode):
-    global PHASE
+    global PHASE, RUN_STARTED
     require(len(sys.argv) == 5 and sys.argv[1] == mode, 'LAUNCHER_ARGS')
     cls, source, accepted = context(mode)
     source_guard()
@@ -257,7 +270,8 @@ def main(mode):
         require(bundle.digest(first_install_intent(source)) == accepted, 'LAUNCHER_PROVISION_INTENT')
     # This is the one nonrenewing run binding for the entire launcher.  Fetch
     # can import an accepted request leaf, so authenticate before that host I/O.
-    run = cls(source,run_id,attempt,API(os.environ['GH_TOKEN']))
+    RUN_STARTED = time.monotonic()
+    run = cls(source,run_id,attempt,API(os.environ['GH_TOKEN']),launcher=True)
     run.assert_running()
     if action == 'first_install':
         PHASE = 'explicit_first_install'
@@ -416,13 +430,13 @@ def main(mode):
         independent_readback=True,prior_host_drained=True,elapsed_ms=int((time.monotonic()-started)*1000))
     if packet is not None: report.update(stage=packet.stage,outcome=result['outcome'],unit_digest=result['unit_digest'])
     else: report.update(timing_is_estimate=True,production_mutations=False,snapshot_approved=False)
-    print(json.dumps(report,sort_keys=True))
+    print(json.dumps({**report,**timing()},sort_keys=True))
 
 
 if __name__ == '__main__':
     try:
         require(len(sys.argv) > 1 and sys.argv[1] in ('stage','rehearsal'), 'LAUNCHER_ARGS')
         main(sys.argv[1])
-    except BaseException:
-        print(json.dumps(dict(audit='NATIVE_LAUNCHER_REFUSED',phase=PHASE)))
+    except BaseException as exc:
+        print(json.dumps(dict(audit='NATIVE_LAUNCHER_REFUSED',phase=PHASE,code=failure_code(exc),**timing())))
         raise SystemExit(2) from None
