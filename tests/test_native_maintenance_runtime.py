@@ -22,6 +22,7 @@ from test_native_maintenance_coordination import Database, agreement_record
 from test_native_maintenance_executor import HOLD, SOURCE
 from test_native_maintenance_checkpoint import MemoryStore
 from test_native_maintenance_run_guard import FakeAPI
+from test_native_maintenance_workflow_api import Response
 
 
 class API(FakeAPI, PersistentAPI):
@@ -31,6 +32,8 @@ class API(FakeAPI, PersistentAPI):
 
     def get(self, path):
         self.calls.append(path)
+        if path == '/actions/workflows/7':
+            return {**self.workflow_row, 'url': workflow_api.BASE + path}
         if path.startswith('/actions/workflows/7/runs?'):
             return dict(total_count=0, workflow_runs=[])
         if path == '/actions/runs/' + str(self.run['id']):
@@ -161,13 +164,18 @@ class RuntimeTests(unittest.TestCase):
         self.store = MemoryStore()
         self.receipts, self.puts = [], []
         self.row = copy.deepcopy(self.value['plan']['workflows'][0])
-        def remote(method, path):
-            if path == '/git/ref/heads/main': return self.api.main
-            if method == 'GET': return {**self.row, 'url': workflow_api.BASE+'/actions/workflows/7'}
+        self.api.workflow_row = self.row
+        def remote(request, *, timeout):
+            # Real Transport.request must route all stage GETs through the
+            # borrowed API. Only the original PUT transport is simulated here.
+            self.assertEqual(request.get_method(), 'PUT')
+            self.assertEqual(timeout, 4)
+            path = request.full_url.removeprefix(workflow_api.BASE)
             action = path.rsplit('/', 1)[-1]
             self.puts.append(action)
             self.row.update(state='disabled_manually' if action=='disable' else 'active',
                             updated_at='2026-09-26T00:00:01Z' if action=='disable' else '2026-09-26T00:00:02Z')
+            return Response(b'', request.full_url, 204)
         def supervisor(source, run):
             return NS(record=dict(unit='bridge-native-ro-'+source[:12]+'-'+str(run.run_id)+'-2-'+('c'*16)+'.service',
                                   invocation='d'*32, cgroup_inode=run.run_id), assert_alive=Mock(), assert_exclusive=Mock())
@@ -181,7 +189,7 @@ class RuntimeTests(unittest.TestCase):
                    patch.object(runtime.hold, 'attest', return_value=HOLD),
                    patch.object(runtime.engine, 'identity'),
                    patch.object(runtime.coordination.PriorSupervisors, 'assert_drained'),
-                   patch.object(workflow_api.Transport, 'request', side_effect=remote)]
+                   patch.object(workflow_api.urllib.request, 'build_opener', return_value=NS(open=remote))]
         for item in patches:
             item.start()
             self.addCleanup(item.stop)
@@ -219,6 +227,19 @@ class RuntimeTests(unittest.TestCase):
         for job in self.api.jobs['jobs']:
             job['id'] += 2
             job['run_id'] = self.api.run['id']
+
+    def test_stage_borrows_same_read_api_for_source_and_workflow_observations(self):
+        original = workflow_api.Transport.__init__
+        borrowed = []
+        def capture(transport, token, *, read_api=None):
+            borrowed.append(read_api)
+            original(transport, token, read_api=read_api)
+        with patch.object(workflow_api.Transport, '__init__', new=capture):
+            self.dispatch()
+        self.assertEqual(borrowed, [self.api, self.api])
+        self.assertIn('/actions/workflows/7', self.api.calls)
+        self.assertIn('/git/ref/heads/main', self.api.calls)
+        self.assertEqual(self.puts, ['disable'])
 
     def test_prepare_execute_restore_composes_real_executor_and_separate_release(self):
         with patch.object(executor, 'permission_session', return_value='AFTER') as sql:
