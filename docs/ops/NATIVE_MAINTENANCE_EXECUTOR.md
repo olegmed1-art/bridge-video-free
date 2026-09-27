@@ -63,6 +63,17 @@ fit the actual supervised window. CI does not prove live timing feasibility.
 The exact original source remains required for recovery through this component;
 source drift fails closed and needs separately reviewed operator recovery.
 
+Pause bookkeeping and read-only workflow observations use local continuity:
+both journal locks, supervisor lifetime, the already-observed run's original
+deadline/identity and the scoped operator agreement. They require
+`run.assert_current()` and `operator.assert_local(scope_digest)`; they do not
+authorize a write. Every workflow PUT still has both `assert_dispatch` calls,
+each with fresh authenticated checks before and after its durable checkpoint,
+and a source read between them. OCI mutation guards, SQL admission and release
+reconciliation are unchanged. This removes redundant remote observations from
+the local scope checks without extending a deadline or caching write authority.
+Successful read-only rehearsal remains insufficient proof of production timing.
+
 ## Verification and recovery
 
 Unit contracts exercise persistence-before-session, lost return, session replay,
