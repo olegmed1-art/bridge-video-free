@@ -31,3 +31,36 @@ source invalidates the old execution handoff even if the observed pair is exact.
 Validation: focused unit tests, independent I2 review and required CI before
 merging. Rollback is reverting this diagnostic-only change; it cannot reverse
 or reset an old stage and must not be used for that purpose.
+
+## Observed result and bounded latency correction
+
+Readback run 36311957929 / job 108599569650 succeeded on main
+20c7284160fa0a80b9c473947eed6d50b3ff3c0a at 2026-09-27T10:17:29Z
+in 54,986 ms. It observed the consumed claim and identical local/remote unit
+64cb37c7ac06ef34285310d146060aadb1f209d25dc6e45d78124e3533392d13.
+The operation journal contains BOUND; the pause journal contains PLAN and
+DISABLE_INTENT. Head f4d5bbd66b4f10a24ad8ff6f6740281834a0c7f7f9b592a811db4d2261bc64ec
+retains only the pristine prefix. Relation: local_uncheckpointed_suffix.
+The registry workflow was independently observed active after readback.
+
+Under the reviewed single-writer/CAS dispatch protocol, the disable PUT requires
+a successful intent checkpoint first. That checkpoint was not published, so the
+old prepare did not reach the workflow disable PUT. No execute or pilot was
+launched. Keep this old scope and any orphaned archive untouched as quarantined
+evidence; never adopt its observed head, truncate its local suffix, or retry the
+consumed request. This record supplies no new execution authority.
+
+Each full run observation previously performed five serial GitHub GETs. The
+latency correction preserves the initial and final run GET, all identity/source/
+job predicates and the absolute deadline, while joining the independent middle
+workflow-blob/main/jobs GETs concurrently. Each GET has its own no-proxy,
+no-redirect opener. All started workers are joined even on failure; there is no
+retry, cached authority, or late job-ID promotion.
+
+The dispatch path also removes one redundant full observation immediately before
+its checkpoint, while retaining exact plan/phase/workflow checks and the
+checkpoint's fresh pre/post observations. Both workflow dispatch checks and the
+source check before PUT remain. Host/pipe limits, the outer launch budget, SQL
+bounds, and coordination-window expiry are unchanged. Fault tests and independent
+I2 review are required; a live read-only timing rehearsal still estimates rather
+than proves production prepare duration.

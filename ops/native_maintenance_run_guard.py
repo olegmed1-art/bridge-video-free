@@ -1,5 +1,6 @@
 """Authenticated run/job observations; NOT a complete DB maintenance guard."""
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -42,7 +43,6 @@ class API:
     def __init__(self, token):
         check(isinstance(token, str) and token, 'API_TOKEN_REQUIRED')
         self._token = token
-        self._opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
 
     def get(self, suffix):
         check(suffix.startswith('/') and '\n' not in suffix and '\r' not in suffix, 'API_PATH_INVALID')
@@ -52,12 +52,26 @@ class API:
             'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
             'User-Agent': 'native-maintenance-run-binding', 'Cache-Control': 'no-cache',
         })
-        with self._opener.open(request, timeout=4) as response:
+        # Each GET owns its handlers; concurrent read-only observations share no
+        # mutable urllib opener or response state. No proxy, redirect or retry.
+        opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=4) as response:
             check(response.status == 200 and response.url == url and not response.headers.get('Link'),
                   'API_RESPONSE_INCOMPLETE')
             raw = response.read(MAX_RESPONSE + 1)
         check(len(raw) <= MAX_RESPONSE, 'API_RESPONSE_SIZE')
         return json.loads(raw, object_pairs_hook=unique)
+
+
+def read_observations(api, paths):
+    """Three independent GETs, joined before validation or any stage transition."""
+    check(type(paths) is tuple and len(paths) == 3 and len(set(paths)) == 3,
+          'RUN_OBSERVATION_SET')
+    # Exiting the context joins all started reads, including on failure. Neither
+    # a late result nor an exception creates retries or renews the caller's clock.
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix='native-api-read') as pool:
+        pending = [pool.submit(api.get, path) for path in paths]
+        return tuple(future.result() for future in pending)
 
 
 class RunBinding:
@@ -110,18 +124,19 @@ class RunBinding:
         try:
             check(time.monotonic() < self.deadline, 'RUN_BINDING_EXPIRED')
             self._run()
-            file = self.api.get('/contents/' + self.workflow + '?ref=' + self.source)
+            file, main, jobs = read_observations(self.api, (
+                '/contents/' + self.workflow + '?ref=' + self.source,
+                '/git/ref/heads/main',
+                '/actions/runs/' + str(self.run_id) + '/attempts/' +
+                str(self.attempt) + '/jobs?per_page=100'))
             check(type(file) is dict and file.get('type') == 'file' and file.get('path') == self.workflow
                   and file.get('encoding') == 'base64' and type(file.get('size')) is int
                   and 0 < file['size'] <= 32768, 'WORKFLOW_BLOB_INVALID')
             raw = base64.b64decode(file['content'].replace('\n', ''), validate=True)
             check(len(raw) == file['size'] and hashlib.sha256(raw).hexdigest() == self.workflow_sha256,
                   'WORKFLOW_CONTRACT_CHANGED')
-            main = self.api.get('/git/ref/heads/main')
             check(main.get('ref') == 'refs/heads/main' and main.get('object', {}).get('type') == 'commit'
                   and main['object']['sha'] == self.source, 'MAIN_CHANGED')
-            jobs = self.api.get('/actions/runs/' + str(self.run_id) + '/attempts/' +
-                                str(self.attempt) + '/jobs?per_page=100')
             check(type(jobs.get('total_count')) is int and jobs['total_count'] == len(self.job_names)
                   and type(jobs.get('jobs')) is list and len(jobs['jobs']) == len(self.job_names)
                   and all(type(j) is dict for j in jobs['jobs'])
