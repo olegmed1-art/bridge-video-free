@@ -102,3 +102,24 @@ def test_recovery_proof_must_match_independent_root_unit_and_db(field,value):
     evidence[field]=value
     with pytest.raises(RuntimeError,match='RESTART_UNIT_MISMATCH'):
         owner.verify_restart_unit(evidence,unit,'dispatch','task_e_pilot')
+
+
+def test_owner_child_refuses_changed_prompt_before_cloud_read(monkeypatch,tmp_path):
+    import io
+    import sys
+    from oracle_autopilot import codex_cli_bridge as bridge
+    from test_oracle_autopilot_light_native_adapter import rig
+    request=rig.__wrapped__()[0]
+    monkeypatch.setattr(owner.pwd,'getpwnam',lambda _:SimpleNamespace(pw_gid=123,pw_uid=123))
+    monkeypatch.setattr(bridge,'lookup',lambda *a,**k:dict(state='SUBMITTED',
+        provider_task_id='task_e_pilot',prompt_sha256='0'*64))
+    cloud=Mock(side_effect=AssertionError('Cloud must not be queried'))
+    monkeypatch.setattr(bridge,'_collect',cloud)
+    def child(argv,**kwargs):
+        monkeypatch.setattr(sys,'argv',['-c']+argv[5:])
+        monkeypatch.setattr(sys,'stdin',SimpleNamespace(buffer=io.BytesIO(kwargs['input'])))
+        exec(compile(argv[4],'<owner-child>','exec'),{})
+    monkeypatch.setattr(owner.subprocess,'run',child)
+    with pytest.raises(RuntimeError,match='PILOT_OWNER_PROVIDER_JOURNAL'):
+        owner.fresh_provider_result(tmp_path,request['dispatch_id'],'a'*32,b'{}',request)
+    cloud.assert_not_called()

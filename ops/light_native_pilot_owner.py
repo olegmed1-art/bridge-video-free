@@ -126,7 +126,9 @@ expected=json.loads(sys.stdin.buffer.read(131073))
 binding={'profile':'light','environment_id':sys.argv[3],'repository':'olegmed1-art/bridge-video-free'}
 def runner(args):return bridge.run_cli(args,timeout=20,profile='light')
 journal=bridge.lookup(expected['request'],state_dir=bridge.LIGHT_ROOT/'runtime/codex-dispatch',binding=binding)
-if not journal or journal.get('state')!='SUBMITTED':raise RuntimeError('PILOT_OWNER_PROVIDER_JOURNAL')
+if (not journal or journal.get('state')!='SUBMITTED'
+    or journal.get('prompt_sha256')!=bridge.digest(bridge.prompt_for(expected['request']))):
+    raise RuntimeError('PILOT_OWNER_PROVIDER_JOURNAL')
 value=bridge._collect(sys.argv[2],state_dir=bridge.LIGHT_ROOT/'runtime/codex-dispatch',binding=binding,runner=runner)
 if value.get('provider_task_id')!=journal['provider_task_id']:raise RuntimeError('PILOT_OWNER_PROVIDER_JOURNAL')
 with Claim(bridge.LIGHT_ROOT/'runtime/native-single-pilot',create_lock=False) as claim:
