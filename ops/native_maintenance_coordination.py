@@ -103,18 +103,31 @@ class OwnedConnections:
         self.approved_hold = approved_hold
         self.live = {}
 
+    @staticmethod
+    def backend_identity(conn):
+        # Neon rewrites BackendKeyData for cancellation routing. Obtain the real
+        # server identity only through this already verified connection's SQL.
+        row = conn.execute('SELECT pid,backend_start FROM pg_catalog.pg_stat_activity '
+                           'WHERE pid=pg_backend_pid()').fetchone()
+        require(type(row) is tuple and len(row) == 2 and type(row[0]) is int
+                and row[0] > 0 and isinstance(row[1], datetime), 'DRAIN_BACKEND_IDENTITY')
+        return row
+
+    def assert_owned(self, conn, identity, wire_pid):
+        require(not conn.closed and conn.info.backend_pid == wire_pid,
+                'DRAIN_OWNED_BACKEND_LOST')
+        require(self.backend_identity(conn) == identity, 'DRAIN_OWNED_BACKEND_CHANGED')
+
     @contextmanager
     def open(self):
         with self.connect() as conn:
             require(conn.autocommit and not conn.closed, 'DRAIN_OWNED_CONNECTION_REQUIRED')
             engine.identity(conn, self.target)
-            row = conn.execute('SELECT pid,backend_start FROM pg_catalog.pg_stat_activity '
-                               'WHERE pid=pg_backend_pid()').fetchone()
-            require(type(row) is tuple and len(row) == 2 and type(row[0]) is int
-                    and row[0] == conn.info.backend_pid and isinstance(row[1], datetime)
-                    and id(conn) not in self.live and row not in [r for _, r in self.live.values()],
-                    'DRAIN_BACKEND_IDENTITY')
-            self.live[id(conn)] = (conn, row)
+            row = self.backend_identity(conn)
+            wire_pid = conn.info.backend_pid
+            require(type(wire_pid) is int and id(conn) not in self.live
+                    and row not in [r for _, r, _ in self.live.values()], 'DRAIN_BACKEND_IDENTITY')
+            self.live[id(conn)] = (conn, row, wire_pid)
             try:
                 yield conn
             finally:
@@ -125,8 +138,8 @@ class OwnedConnections:
             # An exact PID+backend_start match prevents PID reuse. Null/invisible
             # foreign statistics refuse; application_name is never an exclusion.
             own = set()
-            for conn, identity in self.live.values():
-                require(not conn.closed and conn.info.backend_pid == identity[0], 'DRAIN_OWNED_BACKEND_LOST')
+            for conn, identity, wire_pid in self.live.values():
+                self.assert_owned(conn, identity, wire_pid)
                 own.add(identity)
             with observer.transaction():
                 observer.execute('SET TRANSACTION READ ONLY')
@@ -155,6 +168,8 @@ class OwnedConnections:
                 require(observer.execute('SELECT count(*) FROM pg_catalog.pg_prepared_xacts '
                                          'WHERE database=current_database()').fetchone() == (0,),
                         'DATABASE_PREPARED_TRANSACTION_PRESENT')
+                for conn, identity, wire_pid in self.live.values():
+                    self.assert_owned(conn, identity, wire_pid)
 
 
 
