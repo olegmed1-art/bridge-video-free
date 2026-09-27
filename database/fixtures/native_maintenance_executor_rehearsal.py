@@ -3,7 +3,7 @@
 GitHub, run, lifetime, HOLD and operator coordination are simulated. This fixture
 proves database/journal composition only; it never authorizes production.
 """
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 import hashlib
@@ -90,6 +90,49 @@ class CIRemote:
         self.row['updated_at'] = '2026-09-26T00:00:01Z' if action == 'disable' else '2026-09-26T00:00:02Z'
 
 
+class CIProxyInfo:
+    """Simulate only Neon's rewritten cancellation PID, preserving libpq metadata."""
+    def __init__(self, info):
+        self.original = info
+        self.backend_pid = info.backend_pid + 1000000
+    def __getattr__(self, name): return getattr(self.original, name)
+
+
+class CIProxyConnection:
+    def __init__(self, conn):
+        self.original = conn
+        self.info = CIProxyInfo(conn.info)
+    def __getattr__(self, name): return getattr(self.original, name)
+
+
+@contextmanager
+def readonly_proxy_connection():
+    with owned() as conn:
+        conn.read_only = True
+        proxy = CIProxyConnection(conn)
+        engine.check(proxy.info.backend_pid != conn.execute('SELECT pg_catalog.pg_backend_pid()').fetchone()[0],
+                     'CI_PROXY_PID_NOT_DIFFERENT')
+        yield proxy
+
+
+def proxy_drain_rehearsal():
+    registry = OwnedConnections(readonly_proxy_connection, TARGET)
+    with registry.open() as conn:
+        registry.assert_drained()
+        with owned():
+            try: registry.assert_drained()
+            except Refused as exc:
+                engine.check(exc.args == ('DATABASE_NOT_DRAINED',), 'CI_PROXY_FOREIGN_REASON')
+            else: raise AssertionError('CI_PROXY_FOREIGN_ADMITTED')
+        conn.info.backend_pid += 1
+        try: registry.assert_drained()
+        except Refused as exc:
+            engine.check(exc.args == ('DRAIN_OWNED_BACKEND_LOST',), 'CI_PROXY_CONTINUITY_REASON')
+        else: raise AssertionError('CI_PROXY_IDENTITY_CHANGE_ADMITTED')
+    engine.check(not registry.live and all(c.closed for c in CONNECTIONS), 'CI_PROXY_CONNECTION_LEAK')
+    print('NATIVE_MAINTENANCE_PROXY_PID_DRAIN_PG18_PASS')
+
+
 def main():
     with connection() as conn:
         engine.check(conn.execute('SELECT count(*) FROM pg_roles WHERE rolname IN (%s,%s)',
@@ -105,6 +148,7 @@ def main():
             conn.execute(f'GRANT {PARENT} TO {LOGIN}')
             conn.execute(f'GRANT USAGE ON SCHEMA autopilot TO {PARENT}')
     try:
+        proxy_drain_rehearsal()
         with tempfile.TemporaryDirectory(prefix='native-route-drain-', dir='/tmp') as temporary:
             base = Path(temporary)
             route = base / 'protocol'

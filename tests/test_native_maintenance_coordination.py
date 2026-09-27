@@ -38,16 +38,18 @@ class Database:
         self.prepared = 0
         self.state = dict(config=[dict(enabled=False)], receipts=0, nonterminal_tasks=0)
         self.drift = None
+        self.wire_offset = 0
+        self.identity_drift = None
 
     @contextmanager
     def connect(self):
         self.next_pid += 1
         pid = self.next_pid
-        conn = NS(autocommit=True, closed=False, info=NS(backend_pid=pid), transaction=nullcontext)
+        conn = NS(autocommit=True, closed=False, info=NS(backend_pid=pid+self.wire_offset), transaction=nullcontext)
         self.active[pid] = conn
         def execute(sql):
-            if 'WHERE pid=pg_backend_pid()' in sql:
-                return NS(fetchone=lambda: (pid, START))
+            if 'WHERE pid=pg_catalog.pg_backend_pid()' in sql:
+                return NS(fetchone=lambda: self.identity_drift(pid) if self.identity_drift else (pid, START))
             if 'backend_type<>' in sql:
                 rows = [(p, START, 'neondb_owner', 'client backend', 'idle', None, None, None) for p in self.active]
                 if self.drift:
@@ -114,6 +116,31 @@ class CoordinationTests(unittest.TestCase):
         self.assertEqual(self.connections.live,{})
         self.assertEqual(self.db.active,{})
         self.assertEqual(self.identity.call_count,3)
+
+    def test_proxy_cancellation_pid_is_not_server_pid(self):
+        self.db.wire_offset = 1000000
+        with self.connections.open() as conn:
+            self.assertNotEqual(conn.info.backend_pid,next(iter(self.db.active)))
+            self.connections.assert_drained()
+            conn.info.backend_pid += 1
+            with self.assertRaisesRegex(Refused,'DRAIN_OWNED_BACKEND_LOST'):
+                self.connections.assert_drained()
+
+    def test_server_identity_change_before_or_after_activity_scan_refuses(self):
+        for changed in (lambda pid:(pid+1000,START),
+                        lambda pid:(pid,datetime(2025,1,1,tzinfo=timezone.utc))):
+            self.db.identity_drift = None
+            with self.connections.open():
+                self.db.identity_drift = changed
+                with self.assertRaisesRegex(Refused,'DRAIN_OWNED_BACKEND_CHANGED'):
+                    self.connections.assert_drained()
+        self.db.identity_drift = None
+        def during_scan(rows):
+            self.db.identity_drift = lambda pid:(pid+1000,START)
+            return rows
+        self.db.drift = during_scan
+        with self.assertRaisesRegex(Refused,'DRAIN_OWNED_BACKEND_CHANGED'):
+            self.connections.assert_drained()
 
     def test_only_one_idle_light_without_transaction_is_permitted(self):
         idle=(99,START,'autopilot_light_worker_login','client backend','idle',None,None,None)

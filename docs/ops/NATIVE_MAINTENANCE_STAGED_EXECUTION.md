@@ -379,3 +379,28 @@ a failed outcome and its existing cleanup. It neither retries nor extends a
 lease. Runner request retention and host exchange have distinct phase labels.
 After reconciliation, a new-source diagnostic request may run; never redispatch
 an uncertain production request. Production StageRunBinding remains disabled.
+
+
+### Neon proxy cancellation identity
+
+Primary Neon source at `fa504217c61bbcaf5c512d75830564541f917f8f` explicitly
+assigns a random client cancellation PID in `proxy/src/cancellation.rs` and
+substitutes it for the server's BackendKeyData in `proxy/src/proxy/mod.rs`:
+https://github.com/neondatabase/neon/blob/fa504217c61bbcaf5c512d75830564541f917f8f/proxy/src/cancellation.rs
+https://github.com/neondatabase/neon/blob/fa504217c61bbcaf5c512d75830564541f917f8f/proxy/src/proxy/mod.rs
+
+Comparing `conn.info.backend_pid` with SQL `pg_backend_pid()` was therefore an
+invalid ownership check for Neon. The generic backend-drain refusal is consistent
+with this defect; the failed run did not expose its exact exception code.
+
+OwnedConnections now obtains `(pid, backend_start)` from pg_stat_activity on the
+exact already TLS/branch/owner-verified connection, constrained by
+`pid=pg_backend_pid()`. It re-queries that pair before and after each activity
+scan and requires the pair in the scan. The original proxy PID is retained as a
+separate connection continuity check, never interpreted as the server PID.
+Foreign connections, invisible/missing identities, PID/start changes, HOLD drift
+and prepared transactions still refuse. No caller-supplied PID is accepted.
+
+The disposable PG18 fixture simulates only rewritten libpq PID metadata while
+running real read-only SQL, nested owned connections and foreign-backend refusal.
+The live rehearsal must still establish timing; no timeout is extended.
