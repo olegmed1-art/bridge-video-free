@@ -164,3 +164,51 @@ route/fence loss. One planned workflow now uses 12 GitHub GETs and three HOLD
 attestations per guard call. These tests neither grant production authority nor
 prove a real timing budget. Complete supervised no-write rehearsal remains a
 production gate; the 60/30/100-second limits have not been increased.
+
+## Host stage composition
+
+`native_maintenance_runtime.stage` now composes the actual executor, operator,
+owned connections, checkpoint barrier and a separately reconciled workflow
+release. `operation_scope` is shared with the executor so the operator's scope
+cannot be assembled from a different interpretation of the inputs.
+
+The input is canonical private packet bytes whose digest was independently
+accepted by the trusted controller. It binds the stage, immutable operation
+scope, workflow plan, manifest baseline, current agreement, all prior unit
+records, accepted remote checkpoint head and (for restore) expected DB outcome.
+The packet parser proves consistency, **not the provenance of acceptance**. A
+future launcher must obtain that acceptance outside the host operation; it must
+not promote a newly observed candidate by computing its own digest.
+
+Each stage verifies its PID1 unit/invocation/cgroup and rejects any other active
+or populated `bridge-native-ro-*` supervisor, including one from another scope.
+Under the pre-existing persistent store lock it preserves the exact manifest and
+journal pair. Prior unit files must equal the independently accepted prior set;
+missing or omitted uncertain stages require separate reconciliation. It retains
+one private, create-only, fsynced unit record per run/attempt, outside BOUND/PLAN,
+then requires synchronous off-VM write plus exact-readback acknowledgement before
+constructing the executor. A lost acknowledgement leaves the local record intact
+and prevents dispatch. It is never retried automatically.
+
+Prepare pauses only; execute consumes the prepared operation once; restore
+independently inspects the database, drains prior processes/backends and checks
+HOLD before each workflow enable. No `finally` path restores workflow admission.
+A successful host return explicitly says `host_exited=false`: only the runner
+can observe supervisor exit and independently accept the remote head afterward.
+
+This is a dormant host core, not an installed production entrypoint.
+`StageRunBinding` has no installed workflow hash and refuses every real run.
+The runtime rejects both the legacy window and the synthetic checkpoint profile.
+The tests install an explicitly fake profile locally; they cannot authorize
+production. The fixed manual workflow, SSH/driver/credential launcher, honest
+private OCI unit-record retention/ACK, independent packet/head acceptance and
+complete no-write timing rehearsal are still required before enabling this core.
+There is no production CLI or automatic acceptance callback.
+
+Tests exercise the actual composed classes with real private journals and
+explicitly simulated GitHub/host/SQL/remote-store authorities. They cover the
+three-stage path, lost/wrong unit ACK, omitted uncertain execution unit, missing
+local evidence, stale remote head, DB drift, global orphan exclusion and rejection
+of diagnostic profiles. These are wiring/failure-order tests, not live timing or
+production permission evidence. Revert before use removes a dormant component;
+after any future use, preserve its unit records and reader for reconciliation.

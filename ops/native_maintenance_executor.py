@@ -25,6 +25,27 @@ def permission_session(*args, **kwargs):
     return execute(*args, **kwargs)
 
 
+def operation_scope(*, target, operation, manifest_digest, plan_digest, source,
+                    expected_route, approved_hold, origin_run=None,
+                    staged=False, observed_admission=False):
+    """Canonical identity only; constructing it supplies no approval."""
+    require(type(staged) is bool and type(observed_admission) is bool
+            and (not observed_admission or staged), 'EXECUTOR_MODE_INVALID')
+    require(operation in ('apply', 'rollback'), 'EXECUTOR_OPERATION_INVALID')
+    bound = dict(version=1, target=asdict(target), operation=operation,
+                 manifest_digest=manifest_digest, workflow_plan_digest=plan_digest,
+                 source=source, route=dict(expected_route), hold=asdict(approved_hold))
+    if staged:
+        bound['execution_mode'] = 'staged_v1'
+    if observed_admission:
+        bound['admission_mode'] = 'observed_v1'
+    if origin_run is not None:
+        require(type(origin_run) is dict and set(origin_run) == {'run_id', 'attempt', 'job_id'}
+                and all(type(v) is int and v > 0 for v in origin_run.values()), 'EXECUTOR_RUN_IDENTITY')
+        bound['origin_run'] = dict(origin_run)
+    return json.loads(json.dumps(bound))
+
+
 class SessionWindow:
     def __init__(self, executor):
         self.executor = executor
@@ -114,14 +135,12 @@ independent reconciliation, but may NEVER repeat the original DB session.
         self.lifetime.assert_alive()
         self.current_run = self._run_identity()
         require(run.source == workflow_plan['source'], 'EXECUTOR_SOURCE_MISMATCH')
-        bound = {'version': 1, 'target': asdict(target), 'operation': operation,
-                 'manifest_digest': manifest_digest, 'workflow_plan_digest': plan_digest,
-                 'source': run.source, 'route': dict(expected_route), 'hold': asdict(approved_hold)}
+        bound = operation_scope(target=target, operation=operation, manifest_digest=manifest_digest,
+                                plan_digest=plan_digest, source=run.source, expected_route=expected_route,
+                                approved_hold=approved_hold, staged=staged,
+                                observed_admission=observed_admission)
         if staged:
-            bound['execution_mode'] = 'staged_v1'
             require(callable(getattr(checkpoint, 'accept_resume', None)), 'EXECUTOR_RESUME_REQUIRED')
-        if observed_admission:
-            bound['admission_mode'] = 'observed_v1'
         if operation_journal.records:
             first = operation_journal.records[0]['event']
             require(type(first) is dict and set(first) == {'kind', 'scope'} and first['kind'] == 'BOUND',
