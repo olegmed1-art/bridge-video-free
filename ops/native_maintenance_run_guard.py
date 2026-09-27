@@ -160,6 +160,28 @@ class CheckpointRunBinding(RunBinding):
     events = ('workflow_dispatch',)
 
 
+class StageRunBinding(RunBinding):
+    """Reserved effectful profile; disabled until a fixed launcher is reviewed.
+
+    Neither the old window nor a successful read-only probe grants stage
+    authority. Installing a workflow requires a separate source-reviewed hash.
+    """
+    workflow = '.github/workflows/native-maintenance-stages.yml'
+    workflow_sha256 = None
+    job_name = 'stage'
+    job_names = ('contract', 'stage')
+    events = ('workflow_dispatch',)
+
+    def assert_running(self):
+        try:
+            check(type(self.workflow_sha256) is str
+                  and re.fullmatch('[0-9a-f]{64}', self.workflow_sha256), 'STAGE_PROFILE_NOT_INSTALLED')
+            super().assert_running()
+        except BaseException:
+            self.failed = True
+            raise
+
+
 def main():
     env = os.environ
     source = env.get('GITHUB_SHA')

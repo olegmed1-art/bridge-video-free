@@ -9,9 +9,11 @@ on:
       - 'ops/native_permission_route_fence.py'
       - 'ops/native_maintenance_bundle.py'
       - 'ops/native_maintenance_executor.py'
+      - 'ops/native_maintenance_runtime.py'
       - 'ops/native_maintenance_coordination.py'
       - 'tests/test_native_maintenance_coordination.py'
       - 'tests/test_native_maintenance_admission.py'
+      - 'tests/test_native_maintenance_runtime.py'
       - 'ops/native_maintenance_run_guard.py'
       - 'ops/native_maintenance_store.py'
       - 'ops/native_maintenance_snapshot.py'
@@ -47,9 +49,11 @@ on:
       - 'ops/native_permission_route_fence.py'
       - 'ops/native_maintenance_bundle.py'
       - 'ops/native_maintenance_executor.py'
+      - 'ops/native_maintenance_runtime.py'
       - 'ops/native_maintenance_coordination.py'
       - 'tests/test_native_maintenance_coordination.py'
       - 'tests/test_native_maintenance_admission.py'
+      - 'tests/test_native_maintenance_runtime.py'
       - 'ops/native_maintenance_run_guard.py'
       - 'ops/native_maintenance_store.py'
       - 'ops/native_maintenance_snapshot.py'
@@ -132,6 +136,8 @@ jobs:
       - name: Verify maintenance executor recovery contracts
         run: python -m unittest discover -s tests -p 'test_native_maintenance_executor.py' -v
 
+      - name: Verify root-owned staged host assembly
+        run: sudo -n env PYTHONPATH="$PWD" "$(command -v python)" -m unittest discover -s tests -p 'test_native_maintenance_runtime.py' -v
       - name: Verify consolidated admission observations
         run: python -m unittest discover -s tests -p 'test_native_maintenance_admission.py' -v
       - name: Verify maintenance coordination and drain contracts
