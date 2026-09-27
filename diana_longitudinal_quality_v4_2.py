@@ -100,8 +100,11 @@ def build_quality_layer(
     ]
     existing_ids = {str(item.get("deal_id") or "") for item in raw_deals}
     for deal in visual_deals:
-        if str(deal.get("deal_id") or "") not in existing_ids:
+        deal_id = str(deal.get("deal_id") or "")
+        if deal_id not in existing_ids:
             raw_deals.append(deal)
+            if deal_id:
+                existing_ids.add(deal_id)
     working["deals"] = raw_deals
 
     quality = deepcopy(v41.build_quality_layer(working, lesson_identity))
