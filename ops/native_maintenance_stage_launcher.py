@@ -51,7 +51,7 @@ def source_guard():
 
 
 def bootstrap(repo, source, source_digest, wheel_digest, run_id, attempt, accepted, binding, mode):
-    require(mode in ('fetch', 'drain', 'first_install', 'stage', 'rehearsal') and bundle.identifier(accepted,64)
+    require(mode in ('fetch', 'drain', 'first_install', 'candidate', 'stage', 'rehearsal') and bundle.identifier(accepted,64)
             and bundle.identifier(source,40) and bundle.identifier(source_digest,64)
             and bundle.identifier(wheel_digest,64) and bundle.identifier(binding,64)
             and type(run_id) is int and run_id > 0 and type(attempt) is int and attempt > 0,
@@ -78,6 +78,9 @@ def bootstrap(repo, source, source_digest, wheel_digest, run_id, attempt, accept
                  +" bundle.check(value['envelope']=={},'LAUNCHER_PROVISION_SCHEMA')\n"
                  +' first_install('+repr(source)+','+repr(accepted)+')\n'
                  +" print('NATIVE_REQUEST_STORE_PROVISIONED',flush=True)\n")
+    elif mode == 'candidate':
+        code += (" from ops.native_maintenance_grant_candidate import main\n"
+                 + ' main('+','.join(map(repr,(source,run_id,attempt,accepted,wheel_digest)))+",value['envelope'])\n")
     elif mode == 'drain':
         code += (" from ops.native_maintenance_supervisor import PriorSupervisors\n"
             +" from ops.native_maintenance_workflow_pause import digest\n"
@@ -187,6 +190,55 @@ def verify_prior(store, packet):
         checkpoint.accepted_latest(store,packet.scope_digest,packet.value['accepted_head_digest'])
 
 
+def candidate_step(repo, source, accepted, raw, candidate, run, reader, client, namespace,
+                   source_payload, wheels, args, key, known_hosts):
+    """Private candidate return over SSH; public output contains digests only."""
+    from types import SimpleNamespace
+    from ops.native_maintenance_stage_unit import read_accepted
+    manifest = restore_assets(reader,SimpleNamespace(source=source,value=candidate),source_payload)
+    units=[]
+    for ref in candidate['prior_units']:
+        expected=dict(source=source,scope_digest=candidate['scope_digest'],stage=ref['stage'],run=ref['run'])
+        units.append(base64.b64encode(read_accepted(reader,expected,ref['digest'])).decode())
+    envelope=dict(request=base64.b64encode(raw).decode(),manifest=base64.b64encode(manifest).decode(),
+                  units=units,token=os.environ['GH_TOKEN'],job_id=run.job_id,driver=base64.b64encode(wheels).decode())
+    data=encoded(frame(source_payload,envelope))
+    run.assert_running(); source_guard()
+    result=subprocess.run(ssh_command(key,known_hosts,bootstrap(*args,'candidate')),
+        input=len(data).to_bytes(4,'big')+data,capture_output=True,timeout=115,env={'PATH':'/usr/bin:/bin'})
+    require(result.returncode==0 and 0<len(result.stdout)<=512*1024,'CANDIDATE_HOST_REFUSED')
+    value=json.loads(result.stdout,object_pairs_hook=unique)
+    require(type(value) is dict and set(value)=={'report','request'},'CANDIDATE_HOST_SCHEMA')
+    report=value['report']
+    require(type(report) is dict and set(report)=={'audit','source','scope_digest','plan_digest','before_digest',
+        'assets','stage','request_digest','approved','production_mutations'}
+        and report['audit']=='NATIVE_GRANT_REQUEST_CANDIDATE' and report['source']==source
+        and report['assets']==candidate['assets'] and report['plan_digest']==digest(candidate['plan'])
+        and report['stage']==candidate['stage'] and report['approved'] is False
+        and report['production_mutations'] is False
+        and all(bundle.identifier(report[k],64) for k in ('scope_digest','plan_digest','before_digest'))
+        and (candidate['scope_digest'] is None or report['scope_digest']==candidate['scope_digest']),
+        'CANDIDATE_HOST_REPORT')
+    run.assert_running(); source_guard()
+    if candidate['agreement'] is None:
+        require(value['request'] is None and report['request_digest'] is None,'CANDIDATE_PREVIEW_MUTATED')
+    else:
+        request_raw=base64.b64decode(value['request'],validate=True)
+        request=AcceptedRequest(request_raw,report['request_digest'],source)
+        packet=request.value['packet']
+        require(request.value['request_id']==candidate['request_id'] and request.value['assets']==candidate['assets']
+            and packet['stage']==candidate['stage'] and digest(packet['scope'])==report['scope_digest']
+            and packet['plan']==candidate['plan'] and packet['agreement']==candidate['agreement']
+            and packet['accepted_head_digest']==candidate['accepted_head_digest']
+            and packet['expected_outcome']==candidate['expected_outcome']
+            and [digest(row) for row in packet['prior_units']]==[r['digest'] for r in candidate['prior_units']],
+            'CANDIDATE_REQUEST_CHANGED')
+        store=adapter.OCIJournalStore(client,namespace,run.assert_running)
+        retain_request(store,request_raw,report['request_digest'])
+    run.assert_running(); source_guard()
+    print(json.dumps(report,sort_keys=True))
+
+
 def main(mode):
     global PHASE
     require(len(sys.argv) == 5 and sys.argv[1] == mode, 'LAUNCHER_ARGS')
@@ -199,7 +251,7 @@ def main(mode):
     binding = digest(dict(version=1,mode=mode,source=source,request_digest=accepted,run_id=run_id,attempt=attempt))
     args = (repo,source,bundle.digest(source_payload),bundle.digest(wheels),run_id,attempt,accepted,binding)
     action = os.environ.get('REQUEST_STORE_ACTION','rehearse')
-    require(action in ('rehearse','first_install') and (mode == 'rehearsal' or action == 'rehearse'),
+    require(action in ('rehearse','first_install','candidate') and (mode == 'rehearsal' or action == 'rehearse'),
             'LAUNCHER_PROVISION_MODE')
     if action == 'first_install':
         require(bundle.digest(first_install_intent(source)) == accepted, 'LAUNCHER_PROVISION_INTENT')
@@ -226,6 +278,9 @@ def main(mode):
     request = manifest = packet = None
     if mode == 'stage':
         request = AcceptedRequest(raw,accepted,source)
+    elif action == 'candidate':
+        from ops.native_maintenance_grant_candidate import request_value
+        candidate = request_value(raw,accepted,source)
     else:
         from ops.native_maintenance_stage_rehearsal import request_value
         request_value(raw,accepted,source)
@@ -234,6 +289,9 @@ def main(mode):
     # Preparatory operations are read-only. No run lease is renewed after start.
     def read_only(): raise RuntimeError('LAUNCHER_READ_ONLY_STORE')
     reader = adapter.OCIJournalStore(client,namespace,read_only)
+    if action == 'candidate':
+        candidate_step(repo,source,accepted,raw,candidate,run,reader,client,namespace,source_payload,wheels,args,key,known_hosts)
+        return
     if request is not None:
         manifest = restore_assets(reader,request,source_payload)
     credential = os.environ.pop('NATIVE_OWNER_DATABASE_URL','')
@@ -281,6 +339,15 @@ def main(mode):
         channel.send(frame(source_payload,envelope))
         while True:
             record = channel.receive()
+            if record.get('kind') == 'NATIVE_REHEARSAL_DRAIN_DIAGNOSTIC':
+                from ops.native_maintenance_coordination import validate_diagnostic_groups
+                require(packet is None and set(record)=={'kind','binding','request_digest','groups','no_admission_authority'}
+                    and record['binding']==binding and record['request_digest']==accepted
+                    and record['no_admission_authority'] is True,'LAUNCHER_DIAGNOSTIC_SCHEMA')
+                validate_diagnostic_groups(record['groups'])
+                print(json.dumps(dict(audit='NATIVE_DRAIN_DIAGNOSTIC',groups=record['groups'],
+                    no_admission_authority=True),sort_keys=True),flush=True)
+                continue
             if record.get('kind') == 'NATIVE_REHEARSAL_REFUSED':
                 from ops.native_maintenance_stage_rehearsal import PHASES, SAFE_CODES
                 require(packet is None and set(record) == {

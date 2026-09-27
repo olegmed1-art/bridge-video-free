@@ -132,6 +132,17 @@ def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelo
             except BaseException:
                 conn.close()
                 raise
+        def assert_drained():
+            try:
+                connections.assert_drained()
+            except BaseException:
+                try:
+                    groups=connections.diagnostic_groups()
+                    channel.send(dict(kind='NATIVE_REHEARSAL_DRAIN_DIAGNOSTIC',binding=binding,
+                        request_digest=request_digest,groups=groups,no_admission_authority=True))
+                except BaseException:
+                    pass
+                raise
         # Real read-only identity/snapshot and owned-backend drain. No Agreement.
         diagnostic['phase'] = 'owner_snapshot'
         report = owner.observe(psycopg.connect, envelope['credential'])
@@ -144,7 +155,7 @@ def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelo
         diagnostic['phase'] = 'workflow_drain'
         WorkflowDrain(run.api, plan, digest(plan)).assert_drained()
         diagnostic['phase'] = 'backend_drain'
-        connections.assert_drained()
+        assert_drained()
         diagnostic['phase'] = 'hold_recheck'
         require(hold.attest() == before, 'REHEARSAL_HOLD_CHANGED')
         run.assert_running()
@@ -165,7 +176,7 @@ def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelo
             require(snapshot.capture(restored/'operation', restored/'pause') == data,
                     'REHEARSAL_RESTORE')
         diagnostic['phase'] = 'backend_drain'
-        connections.assert_drained()
+        assert_drained()
         diagnostic['phase'] = 'final_drain'
         require(hold.attest() == before, 'REHEARSAL_FINAL_HOLD')
         supervisor.assert_alive()

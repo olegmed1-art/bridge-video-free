@@ -40,7 +40,7 @@ class ProvenanceTests(unittest.TestCase):
         def git(root, command, ref):
             self.assertEqual(command,'show')
             return (repo/ref.split(':',1)[1]).read_bytes()
-        for mode in ('fetch','drain','first_install','stage','rehearsal'):
+        for mode in ('fetch','drain','first_install','candidate','stage','rehearsal'):
             with patch.object(launcher.bundle,'git',side_effect=git):
                 code = launcher.bootstrap(repo,SOURCE,'a'*64,'b'*64,123,2,'c'*64,'d'*64,mode)
             compile(code,'outer','exec')
