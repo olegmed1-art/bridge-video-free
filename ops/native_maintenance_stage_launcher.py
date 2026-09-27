@@ -258,10 +258,12 @@ def main(mode):
     def prelaunch_guard():
         run.assert_running()
         if request is not None: request.assert_current()
+    PHASE = 'request_retention'
     prelaunch = adapter.OCIJournalStore(client,namespace,prelaunch_guard)
     retain_request(prelaunch,raw,accepted)
     # Complete command construction before launch; never launch before final auth.
     run.assert_running()
+    PHASE = 'host_exchange'
     process = subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
         env={'PATH':'/usr/bin:/bin'},start_new_session=True)
     try:
@@ -277,6 +279,16 @@ def main(mode):
         channel.send(frame(source_payload,envelope))
         while True:
             record = channel.receive()
+            if record.get('kind') == 'NATIVE_REHEARSAL_REFUSED':
+                from ops.native_maintenance_stage_rehearsal import PHASES, SAFE_CODES
+                require(packet is None and set(record) == {
+                    'kind','binding','request_digest','phase','code'}
+                    and record['binding'] == binding and record['request_digest'] == accepted
+                    and type(record['phase']) is str and record['phase'] in PHASES
+                    and type(record['code']) is str and record['code'] in SAFE_CODES,
+                    'LAUNCHER_REFUSAL_SCHEMA')
+                PHASE = 'host_' + record['phase'] + ':' + record['code']
+                raise RuntimeError('LAUNCHER_HOST_REFUSED')
             if record.get('kind') in ('NATIVE_STAGE_COMPLETE','NATIVE_REHEARSAL_COMPLETE'):
                 break
             require(server.sequence < 128, 'LAUNCHER_REQUEST_LIMIT')

@@ -380,6 +380,9 @@ class LauncherWiringTests(unittest.TestCase):
                       unit_digest=digest(unit),host_exited=False)
         completion = dict(kind='NATIVE_STAGE_COMPLETE',binding=binding,request_digest=accepted,result=result,sequence=0)
         if fault == 'binding': completion['binding']='0'*64
+        if fault == 'rehearsal_refusal':
+            completion = dict(kind='NATIVE_REHEARSAL_REFUSED',binding=binding,request_digest=accepted,
+                              phase='owner_snapshot',code='REFUSED')
         process = Mock(returncode=0)
         process.stdin.closed = False
         process.wait.return_value = 1 if fault == 'host_exit' else 0
@@ -440,8 +443,44 @@ class LauncherWiringTests(unittest.TestCase):
 
     def test_completion_needs_backup_exit_independent_reads_and_final_live_run(self):
         self.exercise()
-        for fault in ('prior','backup','binding','host_exit','head','drain','cancel_final'):
+        for fault in ('prior','backup','binding','host_exit','head','drain','cancel_final','rehearsal_refusal'):
             with self.subTest(fault=fault): self.exercise(fault)
+
+
+class RehearsalDiagnosticTests(unittest.TestCase):
+    def test_secret_exception_is_redacted_and_failure_stays_failure(self):
+        for message, expected in (('postgres://private:password@host', 'REFUSED'),
+                                  ('DATABASE_NOT_DRAINED', 'DATABASE_NOT_DRAINED')):
+            channel = Mock()
+            def failed(*args):
+                args[-1].update(channel=channel,phase='backend_drain')
+                raise RuntimeError(message)
+            with patch.object(rehearsal,'_main',side_effect=failed), self.assertRaises(SystemExit) as failure:
+                rehearsal.main(SOURCE,123,2,'a'*64,'b'*64,'c'*64,{})
+            self.assertEqual(failure.exception.code,2)
+            self.assertEqual(channel.send.call_args.args[0],dict(kind='NATIVE_REHEARSAL_REFUSED',
+                binding='b'*64,request_digest='a'*64,phase='backend_drain',code=expected))
+
+    def test_unavailable_channel_never_prints_original_exception(self):
+        repo = Path(__file__).resolve().parents[1]
+        code = ("from ops import native_maintenance_stage_rehearsal as r\n"
+                "def fail(*args): raise RuntimeError('postgres://private:password@host')\n"
+                "r._main=fail\nr.main('a'*40,1,1,'b'*64,'c'*64,'d'*64,{})")
+        result = subprocess.run([sys.executable,'-c',code],cwd=repo,capture_output=True)
+        self.assertEqual(result.returncode,2)
+        self.assertEqual(result.stdout,b'')
+        self.assertEqual(result.stderr,b'')
+
+    def test_failed_channel_is_not_reopened_or_retried(self):
+        channel = Mock()
+        channel.send.side_effect = TimeoutError('private detail')
+        def failed(*args):
+            args[-1].update(channel=channel,phase='checkpoint')
+            raise RuntimeError('RPC_TIMEOUT')
+        with patch.object(rehearsal,'_main',side_effect=failed), self.assertRaises(SystemExit) as failure:
+            rehearsal.main(SOURCE,123,2,'a'*64,'b'*64,'c'*64,{})
+        self.assertEqual(failure.exception.code,2)
+        self.assertEqual(channel.send.call_count,1)
 
 
 if __name__=='__main__': unittest.main()
