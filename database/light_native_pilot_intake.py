@@ -92,6 +92,16 @@ class Plan:
                 and all(type(spec.get(key)) is int and spec[key] == 0
                         for key in ('cost_cap_microusd','max_repair_attempts')),
                 'PILOT_INTAKE_SCOPE')
+        focus_keys={'focus_path','focus_paths','required_checks','preserve',
+                    'verification_kind','expected_changed_files'}
+        base_keys={'assignment_schema','repository','target_pr','expected_head_sha',
+                   'execution_mode','exact_head_binding','cost_cap_microusd','max_repair_attempts',*FALSE_FLAGS}
+        require(set(spec)<=base_keys|focus_keys,'PILOT_INTAKE_UNSUPPORTED_SPEC')
+        focus={key:spec[key] for key in focus_keys if key in spec}
+        focus.update(work_key=value['work_key'],source_task_kind='REPOSITORY_AUDIT')
+        require(all(item is not None for item in focus.values())
+                and len(json.dumps(focus,ensure_ascii=False).encode())<=2048,
+                'PILOT_INTAKE_FOCUS_TOO_LARGE')
         self.raw,self.digest,self.value = raw,accepted_digest,value
         self.scope = {'version':1,'operation':'native_single_pilot',
                       'source':value['source'],'target':EXPECTED_TARGET,
@@ -155,6 +165,9 @@ def prepare(conn, plan, agreement, baseline_raw, accepted_baseline_sha256, snaps
         agreement.assert_held(plan.scope_digest)
         config = one(conn, 'SELECT to_jsonb(c) FROM autopilot.native_cli_config c WHERE singleton FOR UPDATE')
         role = one(conn, "SELECT to_jsonb(r) FROM autopilot.role_registry r WHERE role_id='AUTOPILOT' FOR UPDATE")
+        mailbox=one(conn,"SELECT to_jsonb(m) FROM autopilot.role_dispatch_mailbox_registry m WHERE lifecycle='ACTIVE' FOR SHARE")
+        require(type(mailbox) is dict and type(mailbox.get('mailbox_pr')) is int
+                and 1<=mailbox['mailbox_pr']<=1000000,'PILOT_INTAKE_ACTIVE_MAILBOX')
         require(config['enabled'] is False and role['enabled'] is True
                 and role['execution_scope'] == 'REPOSITORY', 'PILOT_INTAKE_CONFIG_DRIFT')
         counts = conn.execute('''SELECT
@@ -206,7 +219,7 @@ def prepare(conn, plan, agreement, baseline_raw, accepted_baseline_sha256, snaps
         require(type(goal) is dict and set(goal)=={'repository','mailbox_pr','role',
             'target_pr','expected_head_sha','dispatch_epoch','successor_task_key',
             'successor_role','successor_target_pr','successor_expected_head_sha'}
-            and goal['repository']==plan.value['repository'] and goal['mailbox_pr']==1637
+            and goal['repository']==plan.value['repository'] and goal['mailbox_pr']==mailbox['mailbox_pr']
             and goal['role']=='AUTOPILOT' and goal['target_pr']==plan.value['target_pr']
             and goal['dispatch_epoch']==1
             and goal['expected_head_sha']==observed_head_sha
@@ -235,7 +248,9 @@ def prepare(conn, plan, agreement, baseline_raw, accepted_baseline_sha256, snaps
                 and assignment['execution_scope'] == 'REPOSITORY'
                 and assignment['can_repair'] is False
                 and assignment['task_kind'] == 'REPOSITORY_AUDIT'
-                and assignment['task_spec_json'] == plan.value['task_spec_json'],
+                and assignment['task_spec_json'] == dict(plan.value['task_spec_json'],
+                    mailbox_pr=mailbox['mailbox_pr'],role='AUTOPILOT',
+                    work_key=plan.value['work_key'],source_task_kind='REPOSITORY_AUDIT',repair_attempt=0),
                 'PILOT_INTAKE_ASSIGNMENT_DRIFT')
         require(asdict(hold.service_hold_identity()) == asdict(prior),
                 'PILOT_INTAKE_SERVICE_CHANGED')

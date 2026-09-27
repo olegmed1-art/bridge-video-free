@@ -80,6 +80,8 @@ class FakeConn:
             self.committed=True;self.events.append('COMMIT')
     def execute(self,sql,args=()):
         self.events.append(sql)
+        if 'role_dispatch_mailbox_registry m' in sql:
+            return Row(({'mailbox_pr':1685 if self.fault=='mailbox_drift' else 1703},))
         if 'UPDATE autopilot.native_cli_config SET enabled=true' in sql:
             self.config['enabled']=True
             return Row(None)
@@ -106,7 +108,7 @@ class FakeConn:
             return Row(({'task_id':TASK,'created':True,'resulting_state':'ACTIVE'},))
         if 'claim_next_task' in sql:
             self.goal={'repository':'olegmed1-art/bridge-video-free',
-                'mailbox_pr':1637,'role':'AUTOPILOT','target_pr':1150,
+                'mailbox_pr':1703,'role':'AUTOPILOT','target_pr':1150,
                 'expected_head_sha':HEAD,'dispatch_epoch':1,
                 'successor_task_key':None,'successor_role':None,
                 'successor_target_pr':None,'successor_expected_head_sha':None}
@@ -124,7 +126,8 @@ class FakeConn:
         if 'get_dispatch_assignment' in sql:
             return Row(({'dispatch_id':DISPATCH,'task_id':TASK,'role':'AUTOPILOT','execution_scope':'REPOSITORY',
                          'can_repair':False,'task_kind':'REPOSITORY_AUDIT',
-                         'task_spec_json':self.spec},))
+                         'task_spec_json':dict(self.spec,mailbox_pr=1703,role='AUTOPILOT',
+                             work_key='native-pilot-one',source_task_kind='REPOSITORY_AUDIT',repair_attempt=0)},))
         if 'role_dispatch_outbox o' in sql:
             if self.terminal_stage:
                 return Row(({'task_id':TASK,'status':'CALLBACK_ACCEPTED',
@@ -348,3 +351,15 @@ def test_known_blocked_terminal_may_restore_controls_without_pilot_success(tmp_p
     raw=target.encoded(envelope);accepted=hashlib.sha256(raw).hexdigest()
     observed=target.restore_controls_after_terminal(conn,plan,receipt,raw,accepted,path)
     assert observed['success'] is False and observed['controls_restored'] is True
+
+
+def test_task_mailbox_must_match_locked_active_registry(tmp_path,monkeypatch):
+    plan,agreement,prior,baseline_raw,accepted_baseline=fixture()
+    gates(monkeypatch,prior)
+    conn=FakeConn(fault='mailbox_drift');conn.spec=plan.value['task_spec_json']
+    with pytest.raises(RuntimeError,match='GOAL_DRIFT'):
+        target.prepare(conn,plan,agreement,baseline_raw,accepted_baseline,
+            tmp_path/'before.json',target_open=True,observed_head_sha=HEAD,
+            observed_branch=plan.value['branch'])
+    assert conn.rolled_back and not conn.committed
+    assert not any('prepare_role_dispatch' in event for event in conn.events)
