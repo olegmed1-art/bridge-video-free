@@ -21,7 +21,7 @@ from ops.native_maintenance_supervisor import PriorSupervisors
 from ops import oracle_light_active_hold_attest as hold
 
 NONTERMINAL = ('queued', 'in_progress', 'waiting', 'pending', 'requested')
-COVERAGE = ['direct_owner_sql', 'host_administration', 'workflow_administration', 'workflow_reruns']
+COVERAGE = ['direct_owner_sql', 'host_administration', 'workflow_administration', 'workflow_reruns', 'main_pushes']
 
 
 class Agreement:

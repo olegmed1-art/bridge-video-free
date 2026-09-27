@@ -28,6 +28,8 @@ process_video_gate_armed=0
 root_pr_number=991
 prior_gate_pr_number=1070
 protected_gate_paths=(
+  'ops/light_native_pilot_release.py'
+  '.github/workflows/light-native-pilot-stage.yml'
   '.github/workflows/native-maintenance-driver-prepare.yml'
   '.github/workflows/native-maintenance-owner-host.yml'
   '.github/workflows/native-maintenance-recovery-assets.yml'
