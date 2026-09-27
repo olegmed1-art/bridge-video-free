@@ -64,7 +64,7 @@ def source_guard():
 
 
 def bootstrap(repo, source, source_digest, wheel_digest, run_id, attempt, accepted, binding, mode):
-    require(mode in ('fetch', 'drain', 'first_install', 'candidate', 'stage', 'rehearsal') and bundle.identifier(accepted,64)
+    require(mode in ('fetch', 'drain', 'first_install', 'candidate', 'inspect', 'stage', 'rehearsal') and bundle.identifier(accepted,64)
             and bundle.identifier(source,40) and bundle.identifier(source_digest,64)
             and bundle.identifier(wheel_digest,64) and bundle.identifier(binding,64)
             and type(run_id) is int and run_id > 0 and type(attempt) is int and attempt > 0,
@@ -91,8 +91,9 @@ def bootstrap(repo, source, source_digest, wheel_digest, run_id, attempt, accept
                  +" bundle.check(value['envelope']=={},'LAUNCHER_PROVISION_SCHEMA')\n"
                  +' first_install('+repr(source)+','+repr(accepted)+')\n'
                  +" print('NATIVE_REQUEST_STORE_PROVISIONED',flush=True)\n")
-    elif mode == 'candidate':
-        code += (" from ops.native_maintenance_grant_candidate import main\n"
+    elif mode in ('candidate','inspect'):
+        module='native_maintenance_grant_candidate' if mode=='candidate' else 'native_maintenance_stage_inspect'
+        code += (" from ops."+module+" import main\n"
                  + ' main('+','.join(map(repr,(source,run_id,attempt,accepted,wheel_digest)))+",value['envelope'])\n")
     elif mode == 'drain':
         code += (" from ops.native_maintenance_supervisor import PriorSupervisors\n"
@@ -252,6 +253,32 @@ def candidate_step(repo, source, accepted, raw, candidate, run, reader, client, 
     print(json.dumps({**report,**timing()},sort_keys=True))
 
 
+def inspect_step(source,accepted,raw,v,run,reader,source_payload,wheels,args,key,known_hosts):
+    from ops import native_maintenance_stage_inspect as inspection
+    inspection.failed_run(run.api,v)
+    envelope=dict(request=base64.b64encode(raw).decode(),token=os.environ['GH_TOKEN'],
+                  job_id=run.job_id,driver=base64.b64encode(wheels).decode())
+    data=encoded(frame(source_payload,envelope))
+    command=ssh_command(key,known_hosts,bootstrap(*args,'inspect'))
+    def read_local():
+        run.assert_running();source_guard()
+        result=subprocess.run(command,input=len(data).to_bytes(4,'big')+data,capture_output=True,
+            timeout=115,env={'PATH':'/usr/bin:/bin'})
+        require(result.returncode==0 and 0<len(result.stdout)<=inspection.LIMIT+1,'INSPECT_HOST_REFUSED')
+        value=json.loads(result.stdout,object_pairs_hook=unique)
+        require(encoded(value)+b'\n'==result.stdout,'INSPECT_HOST_CANONICAL')
+        run.assert_running();source_guard()
+        return value
+    observed=read_local()
+    report=inspection.compare(observed,reader,v)
+    require(read_local()==observed,'INSPECT_LOCAL_CHANGED')
+    # Observe again after the second local read; no inferred head is accepted.
+    require(inspection.compare(observed,reader,v)==report,'INSPECT_REMOTE_CHANGED')
+    inspection.failed_run(run.api,v);run.assert_running();source_guard()
+    print(json.dumps(dict(report,source=source,failed_source=v['failed_source'],
+        failed_request_digest=v['failed_request_digest'],failed_run=v['failed_run'],**timing()),sort_keys=True))
+
+
 def main(mode):
     global PHASE, RUN_STARTED
     require(len(sys.argv) == 5 and sys.argv[1] == mode, 'LAUNCHER_ARGS')
@@ -264,7 +291,7 @@ def main(mode):
     binding = digest(dict(version=1,mode=mode,source=source,request_digest=accepted,run_id=run_id,attempt=attempt))
     args = (repo,source,bundle.digest(source_payload),bundle.digest(wheels),run_id,attempt,accepted,binding)
     action = os.environ.get('REQUEST_STORE_ACTION','rehearse')
-    require(action in ('rehearse','first_install','candidate') and (mode == 'rehearsal' or action == 'rehearse'),
+    require(action in ('rehearse','first_install','candidate','inspect') and (mode == 'rehearsal' or action == 'rehearse'),
             'LAUNCHER_PROVISION_MODE')
     if action == 'first_install':
         require(bundle.digest(first_install_intent(source)) == accepted, 'LAUNCHER_PROVISION_INTENT')
@@ -292,8 +319,11 @@ def main(mode):
     request = manifest = packet = None
     if mode == 'stage':
         request = AcceptedRequest(raw,accepted,source)
-    elif action == 'candidate':
-        from ops.native_maintenance_grant_candidate import request_value
+    elif action in ('candidate','inspect'):
+        if action=='candidate':
+            from ops.native_maintenance_grant_candidate import request_value
+        else:
+            from ops.native_maintenance_stage_inspect import input_value as request_value
         candidate = request_value(raw,accepted,source)
     else:
         from ops.native_maintenance_stage_rehearsal import request_value
@@ -303,6 +333,10 @@ def main(mode):
     # Preparatory operations are read-only. No run lease is renewed after start.
     def read_only(): raise RuntimeError('LAUNCHER_READ_ONLY_STORE')
     reader = adapter.OCIJournalStore(client,namespace,read_only)
+    if action == 'inspect':
+        os.environ.pop('NATIVE_OWNER_DATABASE_URL',None)
+        inspect_step(source,accepted,raw,candidate,run,reader,source_payload,wheels,args,key,known_hosts)
+        return
     if action == 'candidate':
         candidate_step(repo,source,accepted,raw,candidate,run,reader,client,namespace,source_payload,wheels,args,key,known_hosts)
         return

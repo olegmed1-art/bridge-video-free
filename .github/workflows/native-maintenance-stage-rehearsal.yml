@@ -27,6 +27,7 @@ on:
           - rehearse
           - first_install
           - candidate
+          - inspect
 
 permissions:
   contents: read

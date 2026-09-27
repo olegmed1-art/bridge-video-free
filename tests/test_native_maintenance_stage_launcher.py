@@ -40,7 +40,7 @@ class ProvenanceTests(unittest.TestCase):
         def git(root, command, ref):
             self.assertEqual(command,'show')
             return (repo/ref.split(':',1)[1]).read_bytes()
-        for mode in ('fetch','drain','first_install','candidate','stage','rehearsal'):
+        for mode in ('fetch','drain','first_install','candidate','inspect','stage','rehearsal'):
             with patch.object(launcher.bundle,'git',side_effect=git):
                 code = launcher.bootstrap(repo,SOURCE,'a'*64,'b'*64,123,2,'c'*64,'d'*64,mode)
             compile(code,'outer','exec')
@@ -53,7 +53,7 @@ class ProvenanceTests(unittest.TestCase):
             else: self.assertNotIn('native_maintenance_stage_host',inner)
             if mode == 'rehearsal': self.assertIn('from ops.native_maintenance_stage_rehearsal import main',inner)
         code = ('import sys;sys.path.insert(0,sys.argv[1]);'
-                'import ops.native_maintenance_stage_host,ops.native_maintenance_stage_rehearsal;'
+                'import ops.native_maintenance_stage_host,ops.native_maintenance_stage_rehearsal,ops.native_maintenance_stage_inspect;'
                 'assert "psycopg" not in sys.modules;'
                 'assert "ops.native_maintenance_runtime" not in sys.modules')
         result = subprocess.run([sys.executable,'-I','-B','-S','-c',code,str(repo)],capture_output=True)

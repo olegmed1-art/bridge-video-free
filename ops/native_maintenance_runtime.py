@@ -4,7 +4,9 @@ The fixed launcher must verify the source bundle/driver, supply independently
 accepted packet bytes and retain_unit: a synchronous private off-VM create-only
 write + exact readback. Its digest ACK is mandatory before executor construction.
 No callback/default here fabricates that acceptance. The launcher remains a
-separate reviewed dependency; this module must not be called from diagnostic code.
+separate reviewed dependency. Diagnostics may use only the pure unit_record
+schema validator; they must not call stage, locked_scope, packet construction,
+executor or database/session assembly.
 """
 from contextlib import contextmanager
 from dataclasses import asdict
