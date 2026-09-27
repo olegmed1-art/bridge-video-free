@@ -404,3 +404,24 @@ and prepared transactions still refuse. No caller-supplied PID is accepted.
 The disposable PG18 fixture simulates only rewritten libpq PID metadata while
 running real read-only SQL, nested owned connections and foreign-backend refusal.
 The live rehearsal must still establish timing; no timeout is extended.
+
+### Short-lived reconciliation diagnostics
+
+Read-only rehearsal `36295882188` at `5704cedd1fa39ce87d82f8f96119f15bc0fbdb80`
+refused with `host_backend_drain:DATABASE_NOT_DRAINED`. A subsequent activity
+read found the held Light client and an idle, transaction-free worker-principal
+backend labelled `autopilot-reconcile-diagnostic`. CI-completion events repeatedly
+ran `autopilot-paused-reconcile.yml`; its enabled diagnostic used the pooled Neon
+endpoint, retaining a server backend after the Python connection closed.
+
+The diagnostic now uses the existing fixed direct-source connection parser for
+Neon, with verify-full TLS, channel binding, GSS disabled and read-only startup.
+The original URI and its routing options are not passed to libpq. The separately
+pinned Oracle route remains unchanged. Both paths set read-only before the first
+statement and close their actual connection on success, refusal or exception.
+The shared reconciliation writer continues to use its existing routing protocol.
+This correction does not exempt idle pool sessions from the maintenance drain.
+
+Issue #1946 records the independently reviewed, bounded diagnostic-only pause
+and its exact workflow state. It is not a production writer-exclusion plan or
+approval of SQL changes. No foreign backend was terminated and HOLD remains.

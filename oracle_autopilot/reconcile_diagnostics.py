@@ -9,7 +9,7 @@ import psycopg
 
 from database.runtime_worker_preflight import EXPECTED_HOST, EXPECTED_PRINCIPAL
 from .reconcile_db import normalize_dsn
-from .database_target import expected_database
+from .database_target import backend, expected_database
 from .paused_reconcile import github
 
 
@@ -43,7 +43,19 @@ def probe(dsn, label, *, startup_options=False, gateway=False):
     if startup_options:
         kwargs['options'] = '-c statement_timeout=10000 -c lock_timeout=3000'
     try:
-        with psycopg.connect(dsn, **kwargs) as conn:
+        args = (dsn,)
+        if backend() == 'neon':
+            # This short-lived diagnostic needs no transaction pool. A pooled
+            # server backend survives client exit and obstructs maintenance
+            # drain even after this workflow has completed. Reuse the existing
+            # fixed direct-source parser; never forward URI routing options.
+            from ops.oracle_autopilot_source_preflight import connection_parameters
+            kwargs = connection_parameters(dsn, EXPECTED_PRINCIPAL)
+            kwargs.update(autocommit=True, gssencmode='disable',
+                          application_name='autopilot-reconcile-diagnostic')
+            args = ()
+        with psycopg.connect(*args, **kwargs) as conn:
+            conn.read_only = True
             stage = 'read_only_transaction'
             with conn.transaction():
                 conn.execute('SET TRANSACTION READ ONLY')
