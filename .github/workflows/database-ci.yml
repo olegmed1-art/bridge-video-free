@@ -137,7 +137,9 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_native_maintenance_executor.py' -v
 
       - name: Verify root-owned staged host assembly
-        run: sudo -n env PYTHONPATH="$PWD" "$(command -v python)" -m unittest discover -s tests -p 'test_native_maintenance_runtime.py' -v
+        run: |
+          runtime_test_site="$(python -c 'from pathlib import Path; import psycopg; print(Path(psycopg.__file__).resolve().parent.parent)')"
+          sudo -n env PYTHONPATH="$PWD:$runtime_test_site" "$(command -v python)" -m unittest discover -s tests -p 'test_native_maintenance_runtime.py' -v
       - name: Verify consolidated admission observations
         run: python -m unittest discover -s tests -p 'test_native_maintenance_admission.py' -v
       - name: Verify maintenance coordination and drain contracts
