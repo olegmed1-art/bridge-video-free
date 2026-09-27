@@ -21,7 +21,7 @@ from ops import native_maintenance_checkpoint as checkpoint
 from ops import native_maintenance_checkpoint_oci as adapter
 from ops import native_maintenance_checkpoint_transport as rpc
 from ops.native_maintenance_readonly_transport import stop_group
-from ops.native_maintenance_run_guard import API, StageRunBinding, RehearsalRunBinding, REPOSITORY
+from ops.native_maintenance_run_guard import PersistentAPI as API, StageRunBinding, RehearsalRunBinding, REPOSITORY
 from ops.native_maintenance_stage_request import AcceptedRequest, MAX_REQUEST, first_install_intent
 from ops.native_maintenance_store_runner import HOST, loader, source_check
 from ops.native_maintenance_workflow_pause import require, encoded, digest, unique
@@ -375,6 +375,17 @@ def inspect_step(source,accepted,raw,v,run,reader,source_payload,wheels,args,key
 
 
 def main(mode):
+    transports = []
+    try:
+        return _main(mode, transports)
+    finally:
+        for transport in transports:
+            close = getattr(transport, 'close', None)
+            if callable(close):
+                close()
+
+
+def _main(mode, transports):
     global PHASE, RUN_STARTED, PROFILE
     PROFILE = TimingProfile()
     require(len(sys.argv) == 5 and sys.argv[1] == mode, 'LAUNCHER_ARGS')
@@ -394,7 +405,9 @@ def main(mode):
     # This is the one nonrenewing run binding for the entire launcher.  Fetch
     # can import an accepted request leaf, so authenticate before that host I/O.
     RUN_STARTED = time.monotonic()
-    run = cls(source,run_id,attempt,MeasuredAPI(os.environ['GH_TOKEN']),launcher=True)
+    api = MeasuredAPI(os.environ['GH_TOKEN'])
+    transports.append(api)
+    run = cls(source,run_id,attempt,api,launcher=True)
     run.assert_running()
     if action == 'first_install':
         PHASE = 'explicit_first_install'

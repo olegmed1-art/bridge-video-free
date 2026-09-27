@@ -16,7 +16,7 @@ from ops import native_maintenance_snapshot as snapshot
 from ops.native_maintenance_checkpoint_host_probe import identity, journals
 from ops.native_maintenance_owner_host import loaded_runtime
 from ops.native_maintenance_stage_request import read_request
-from ops.native_maintenance_run_guard import API, RehearsalRunBinding
+from ops.native_maintenance_run_guard import PersistentAPI as API, RehearsalRunBinding
 from ops.native_maintenance_supervisor import SelfSupervisor
 from ops.native_maintenance_workflow_pause import digest, encoded, require, unique, validate_plan
 
@@ -77,7 +77,7 @@ def failure_code(exc):
 
 
 def main(source, run_id, attempt, request_digest, binding, wheel_digest, envelope):
-    diagnostic = dict(phase='request', channel=None)
+    diagnostic = dict(phase='request', channel=None, api=None)
     try:
         return _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelope, diagnostic)
     except BaseException as exc:
@@ -92,6 +92,9 @@ def main(source, run_id, attempt, request_digest, binding, wheel_digest, envelop
             except BaseException:
                 pass  # A failed pipe is never reopened or granted a fresh deadline.
         raise SystemExit(2) from None
+    finally:
+        if diagnostic['api'] is not None:
+            diagnostic['api'].close()
 
 
 def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelope, diagnostic):
@@ -106,7 +109,9 @@ def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelo
     started = time.monotonic()
     channel = rpc.Channel(0, 1, binding)
     diagnostic.update(channel=channel, phase='run_authentication')
-    run = RehearsalRunBinding(source, run_id, attempt, API(envelope['token']))
+    api = API(envelope['token'])
+    diagnostic['api'] = api
+    run = RehearsalRunBinding(source, run_id, attempt, api)
     run.assert_running()
     require(type(envelope['job_id']) is int and run.job_id == envelope['job_id'], 'REHEARSAL_JOB_CHANGED')
     diagnostic['phase'] = 'supervisor'

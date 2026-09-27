@@ -131,3 +131,30 @@ pre/post-write authority checks and conditional-write/readback order remain.
 still overlaps other counters. A fresh read-only rehearsal after exact-head CI
 and independent I2 review must measure benefit before preparing another
 coordination package. Rollback is a revert to the prior sequential launcher.
+
+
+## Preserve authority order while reusing transport
+
+PR2032 merged as 47a8bd8. Rehearsal36328269201 / job108645195092 passed:
+67,557 ms binding and 51,962 ms host. RPC store service improved from 26,408 to
+21,666 ms; 28 privacy groups took 4,125 ms. GitHub GET summed durations rose
+from 12,616 to 17,657 ms, so host improvement was only 1,703 ms. These separate
+runs and overlapping metrics do not establish reliable full-prepare margin.
+
+Independent I2 rejected batching the initial run observation with the middle
+reads: the initial temporal bracket must remain. The next correction retains
+all observations and their ordering and changes transport only. Stage launcher
+and stage/rehearsal host opt into four fixed HTTPS lanes with verified TLS to
+api.github.com:443, fresh GETs/headers and no proxy, redirect, cache or retry.
+Each lane owns a connection under a lock; stable path classes retain reuse
+across successive short worker pools. Drain/diagnostic reads use the default
+lane. The existing sequential API remains available to other consumers.
+
+A stale socket, timeout, non-200, pagination, malformed/truncated/oversized JSON
+or duplicate key refuses and poisons the entire API. A failed GET is never
+resent. Only a later distinct GET may reconnect after a clean server close.
+All started observation workers still join; cleanup closes connections on host
+or launcher completion. The four-second socket bounds and existing run/RPC
+lifetimes remain unchanged. Tests exercise the actual stdlib HTTP parser over
+controlled sockets. Another exact-main read-only measurement is required;
+connection reuse does not itself prove prepare capacity or grant authority.
