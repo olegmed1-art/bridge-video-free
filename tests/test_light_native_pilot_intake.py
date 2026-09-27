@@ -284,7 +284,7 @@ def test_terminal_exact_readback_and_conditional_control_restore(tmp_path,monkey
         'branch':plan.value['branch'],'reservation_id':'44444444-4444-4444-8444-444444444444',
         'expected_head_sha':HEAD,'mode':'READ_ONLY','target_pr':1150,
         'task_fingerprint':'c'*64}
-    conn.result={'status':'SUCCEEDED','result_code':'VERIFIED',
+    conn.result={'status':'SUCCEEDED','result_code':'AUDIT_PASSED',
                  'summary':'Exact fixture passed.','target_head_sha':HEAD,
                  'provider_evidence_sha256':'d'*64}
     envelope={'version':1,'plan_sha256':plan.digest,'dispatch_id':DISPATCH,
@@ -317,7 +317,7 @@ def test_unknown_terminal_or_changed_controls_never_restores(tmp_path,monkeypatc
                          'reservation_id':'44444444-4444-4444-8444-444444444444',
                          'expected_head_sha':HEAD,'mode':'READ_ONLY','target_pr':1150,
                          'task_fingerprint':'c'*64},
-              'result':{'status':'SUCCEEDED','result_code':'VERIFIED',
+              'result':{'status':'SUCCEEDED','result_code':'AUDIT_PASSED',
                         'summary':'Fixture.','target_head_sha':HEAD,
                         'provider_evidence_sha256':'d'*64}}
     raw=target.encoded(envelope);accepted=hashlib.sha256(raw).hexdigest()

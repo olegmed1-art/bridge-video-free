@@ -108,13 +108,21 @@ def main():
                 provider_task='task_e_disposable_intake_pg18'
                 conn.execute('SELECT autopilot.native_cli_ack(%s::jsonb,%s,%s)',
                     (intake.encoded(request).decode(),provider_task,'b'*64))
-                terminal={'status':'SUCCEEDED','result_code':'VERIFIED',
+                terminal={'status':'SUCCEEDED','result_code':'AUDIT_PASSED',
                           'summary':'Disposable intake finished.',
                           'target_head_sha':plan.value['expected_head_sha'],
                           'provider_evidence_sha256':'d'*64}
                 conn.execute('SELECT autopilot.native_cli_finish(%s::jsonb,%s,%s::jsonb)',
                     (intake.encoded(request).decode(),provider_task,
                      intake.encoded(terminal).decode()))
+                print('DISPOSABLE_TERMINAL_STATES',conn.execute(
+                    '''SELECT n.state,n.owner_name,t.status,w.state,o.status,o.delivery_contract_version
+                       FROM autopilot.native_cli_receipt n
+                       JOIN autopilot.role_dispatch_outbox o USING(dispatch_id)
+                       JOIN autopilot.task t USING(task_id)
+                       JOIN autopilot.project_work_task m USING(task_id)
+                       JOIN autopilot.project_work_item w USING(work_item_id)
+                       WHERE n.dispatch_id=%s::uuid''',(result['dispatch_id'],)).fetchone())
                 envelope={'version':1,'plan_sha256':plan.digest,
                     'dispatch_id':result['dispatch_id'],'task_id':result['task_id'],
                     'provider_task_id':provider_task,'request':request,'result':terminal}
