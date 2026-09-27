@@ -46,7 +46,8 @@ class ProvenanceTests(unittest.TestCase):
             compile(code,'outer','exec')
             tree = ast.parse(code)
             call = next(n for n in ast.walk(tree) if isinstance(n,ast.Call)
-                        and isinstance(n.func,ast.Attribute) and n.func.attr == 'managed')
+                        and isinstance(n.func,ast.Attribute) and n.func.attr in ('managed','managed_stage'))
+            self.assertEqual(call.func.attr, 'managed_stage' if mode in ('stage','rehearsal') else 'managed')
             inner = call.args[0].value
             compile(inner,'supervised','exec')
             if mode == 'stage': self.assertIn('from ops.native_maintenance_stage_host import main',inner)
@@ -426,19 +427,22 @@ class LauncherWiringTests(unittest.TestCase):
         process.stdin.closed = False
         process.wait.return_value = 1 if fault == 'host_exit' else 0
         channel = Mock()
-        channel.receive.return_value = completion
+        channel.binding = binding
+        channel.deadline = 1210.
+        channel.receive.side_effect = [dict(kind='NATIVE_STAGE_READY', binding=binding, request_digest=accepted), completion]
         server = Mock(sequence=0)
         units = Mock()
         units.retainer.used = True
         events = []
         clock = [1000.]
+        wall_start = launcher.time.time()
         def retained(*args):
             events.append('backup')
-            if fault == 'slow_prelaunch': clock[0] = 1036.
+            if fault == 'slow_prelaunch': clock[0] = 1041.
             if fault == 'backup': raise ConnectionError('CI_LOST_BACKUP_ACK')
         def launch(*args,**kwargs):
             events.append('launch')
-            if fault == 'late_completion': clock[0] = 1160.
+            if fault == 'late_completion': clock[0] = 1310.
             return process
         def exit_checked(*args):
             events.append('drained')
@@ -455,6 +459,7 @@ class LauncherWiringTests(unittest.TestCase):
             for patcher in (
                 patch.dict(os.environ,env,clear=True),patch.object(sys,'argv',['launcher','stage','key','known','wheels']),
                 patch.object(launcher.time,'monotonic',side_effect=lambda: clock[0]),
+                patch.object(launcher.time,'time',side_effect=lambda: wall_start + clock[0] - 1000.),
                 patch.object(StageRunBinding,'workflow_sha256',hashlib.sha256(workflow).hexdigest()),
                 patch.object(launcher,'source_guard'),patch.object(launcher.bundle,'build',return_value=b'CI_SOURCE'),
                 patch.object(launcher.driver,'build',return_value=b'CI_WHEEL'),
@@ -480,7 +485,7 @@ class LauncherWiringTests(unittest.TestCase):
                 report = json.loads(output.call_args.args[0])
                 self.assertTrue(report['host_exited'] and report['prior_host_drained'] and report['independent_readback'])
                 self.assertEqual(events,['backup','launch','head','drained'])
-                sent = channel.send.call_args.args[0]
+                sent = channel.send.call_args_list[0].args[0]
                 self.assertEqual(sent['envelope']['credential'],'CI_PRIVATE_OWNER_URI')
                 self.assertEqual(sent['envelope']['token'],'CI_PRIVATE_TOKEN')
             if fault in ('prior','backup','slow_prelaunch'): self.assertNotIn('launch',events)
@@ -563,24 +568,24 @@ class LauncherBudgetTests(unittest.TestCase):
         with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1000):
             host=StageRunBinding(SOURCE,123,2,self.api())
             runner=StageRunBinding(SOURCE,123,2,self.api(),launcher=True)
-            self.assertEqual(host.deadline,1080)
-            self.assertEqual(runner.deadline,1160)
+            self.assertEqual(host.deadline,1120)
+            self.assertEqual(runner.deadline,1310)
             with self.assertRaises(Exception):RunBinding(SOURCE,123,2,self.api(),seconds=100)
             with self.assertRaises(TypeError):StageRunBinding(SOURCE,123,2,self.api(),seconds=100)
             with self.assertRaises(Exception):StageRunBinding(SOURCE,123,2,self.api(),launcher=1)
-        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1079):
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1119):
             host.assert_running();runner.assert_running()
-        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1080):
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1120):
             with self.assertRaisesRegex(Exception,'EXPIRED'):host.assert_running()
             runner.assert_running()
-        self.assertEqual(runner.deadline,1160)
-        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1160):
+        self.assertEqual(runner.deadline,1310)
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1310):
             with self.assertRaisesRegex(Exception,'EXPIRED'):runner.assert_running()
         with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1001):
             with self.assertRaisesRegex(Exception,'ALREADY_FAILED'):runner.assert_running()
 
     def test_cancellation_near_either_deadline_latches(self):
-        for launcher_mode,elapsed in ((False,79),(True,159)):
+        for launcher_mode,elapsed in ((False,119),(True,309)):
             api=self.api()
             with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1000):
                 run=StageRunBinding(SOURCE,123,2,api,launcher=launcher_mode);run.assert_running()
@@ -604,3 +609,48 @@ class LauncherBudgetTests(unittest.TestCase):
         with patch.object(runtime,'SelfSupervisor') as supervisor,self.assertRaisesRegex(Exception,'RUNTIME_COMPONENTS'):
             runtime.stage(packet,run=run,store=Mock(),connect=Mock(),api_token='CI',retain_unit=Mock())
         supervisor.assert_not_called()
+
+    def clock_api(self, age=200):
+        from datetime import datetime, timezone
+        api = self.api()
+        api.jobs['jobs'][0]['started_at'] = datetime.fromtimestamp(2_000_000_000-age, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        return api
+
+    def test_authenticated_job_age_only_shortens_and_never_renews_launcher(self):
+        api = self.clock_api()
+        with patch.object(launcher.time, 'monotonic', return_value=1000.), patch.object(launcher.time, 'time', return_value=2_000_000_000.):
+            run = StageRunBinding(SOURCE,123,2,api,launcher=True)
+            run.assert_running()
+            self.assertEqual(run.deadline,1250.)  # 480 - 200 - 30, already < prelaunch 270.
+            self.assertLess(run.deadline-1000., launcher.STAGE_PRELAUNCH_REQUIRED_SECONDS)
+        with patch.object(launcher.time, 'monotonic', return_value=1010.), patch.object(launcher.time, 'time', return_value=2_000_000_010.):
+            run.assert_running()
+            self.assertEqual(run.deadline,1250.)
+
+    def test_job_start_missing_future_old_or_changed_refuses_and_latches(self):
+        for value, code in [(None,'INVALID'),('bad','INVALID'),('2033-05-18T03:33:21Z','FUTURE')]:
+            api=self.clock_api()
+            api.jobs['jobs'][0]['started_at']=value
+            with patch.object(launcher.time,'monotonic',return_value=1000.), patch.object(launcher.time,'time',return_value=2_000_000_000.):
+                run=StageRunBinding(SOURCE,123,2,api,launcher=True)
+                with self.assertRaisesRegex(Exception,code): run.assert_running()
+                self.assertTrue(run.failed)
+        api=self.clock_api(451)
+        with patch.object(launcher.time,'monotonic',return_value=1000.), patch.object(launcher.time,'time',return_value=2_000_000_000.):
+            run=StageRunBinding(SOURCE,123,2,api,launcher=True)
+            with self.assertRaisesRegex(Exception,'EXPIRED'): run.assert_running()
+        api=self.clock_api()
+        with patch.object(launcher.time,'monotonic',return_value=1000.), patch.object(launcher.time,'time',return_value=2_000_000_000.):
+            run=StageRunBinding(SOURCE,123,2,api,launcher=True);run.assert_running()
+            api.jobs['jobs'][0]['started_at']=self.clock_api(199).jobs['jobs'][0]['started_at']
+            with self.assertRaisesRegex(Exception,'CLOCK_CHANGED'):run.assert_running()
+            self.assertEqual(run.deadline,1250.)
+
+    def test_wall_clock_jump_in_either_direction_cannot_extend_job_lifetime(self):
+        for advance in (4.,16.):
+            with patch.object(launcher.time,'monotonic',return_value=1000.), patch.object(launcher.time,'time',return_value=2_000_000_000.):
+                run=StageRunBinding(SOURCE,123,2,self.clock_api(),launcher=True);run.assert_running()
+            with patch.object(launcher.time,'monotonic',return_value=1010.), patch.object(launcher.time,'time',return_value=2_000_000_000.+advance):
+                with self.assertRaisesRegex(Exception,'CLOCK_DRIFT'):run.assert_running()
+                self.assertEqual(run.deadline,1250.)
+                self.assertTrue(run.failed)

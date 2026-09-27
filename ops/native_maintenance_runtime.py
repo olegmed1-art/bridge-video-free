@@ -25,7 +25,7 @@ from ops import native_maintenance_store as storage
 from ops import oracle_light_active_hold_attest as hold
 from ops.native_maintenance_executor import MaintenanceExecutor, operation_scope
 from ops.native_maintenance_run_guard import StageRunBinding
-from ops.native_maintenance_supervisor import SelfSupervisor
+from ops.native_maintenance_supervisor import StageSupervisor as SelfSupervisor
 from ops.native_maintenance_workflow_api import Transport
 from ops.native_maintenance_workflow_pause import Journal, digest, encoded, require, unique, validate_plan
 

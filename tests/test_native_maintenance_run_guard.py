@@ -1,5 +1,6 @@
 import base64
 import copy
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
@@ -29,7 +30,8 @@ class FakeAPI:
         self.main = {'ref': 'refs/heads/main', 'object': {'type': 'commit', 'sha': self.source}}
         self.jobs = {'total_count': 1, 'jobs': [{'id': 456, 'name': guard.JOB,
                     'run_id': 123, 'run_attempt': 2, 'head_sha': self.source,
-                    'status': 'in_progress', 'conclusion': None}]}
+                    'status': 'in_progress', 'conclusion': None,
+                    'started_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}]}
 
     def get(self, path):
         self.calls.append(path)

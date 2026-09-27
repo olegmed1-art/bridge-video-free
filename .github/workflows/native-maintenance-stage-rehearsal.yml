@@ -61,7 +61,7 @@ jobs:
       github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha
     environment: database-production
     runs-on: ubuntu-24.04
-    timeout-minutes: 6
+    timeout-minutes: 8
     concurrency:
       group: oracle-light-backup-mutation
       cancel-in-progress: false
