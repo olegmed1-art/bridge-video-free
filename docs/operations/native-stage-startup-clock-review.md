@@ -1,6 +1,7 @@
 # Native stage startup and clock alignment — 2026-09-27
 
-Status: implementation candidate; no new production window or restore accepted.
+Status: PR #2040 merged; follow-up closes delayed-Popen admission gap.
+No new production window or restore accepted.
 Base: `7997b62d250bf48abda29553ec3b47a132d50758` (PR #2039).
 ASSURED / I2 required for the exact reviewed tree before promotion.
 
@@ -37,7 +38,11 @@ constant increase alone cannot establish nesting across those start offsets.
 
 The verified host sends a binding/request-specific READY only after its exact
 140-second PID1 identity is checked. The runner authenticates its original run
-again and requires at least 170 seconds still available before sending START.
+again and requires at least 170 seconds still available before sending START
+on BOTH the original RPC clock and the original job-clamped launcher clock
+minus the 60-second completion reserve. This second comparison is essential:
+Popen runs between prelaunch admission and channel construction and can consume
+time before the RPC clock starts. Neither clock is reset or extended.
 The host checks START, supervisor and its original authorization again before
 entering the production runtime. The claim and production operations remain
 inside that runtime, after this exchange. A late startup, wrong binding or
@@ -100,3 +105,11 @@ A successful complete restore in a fresh, explicitly accepted owner window
 is still required to establish operational recovery. Roll back by reverting
 this patch and retaining journals/evidence; rollback does not authorize reuse
 of an old request or window.
+
+
+Follow-up review: a delayed Popen counterexample was found after PR #2040's
+successful read-only rehearsal. Positive launcher lifetime alone was insufficient
+for START admission. The follow-up checks both original deadlines together and
+tests a fresh 210-second channel with an insufficient old launcher/job deadline,
+including the real launcher assembly: no START is sent. The d09b011 v6 packet
+is superseded upon the next merge and must not be used for a full-stage request.

@@ -443,6 +443,9 @@ class LauncherWiringTests(unittest.TestCase):
         def launch(*args,**kwargs):
             events.append('launch')
             if fault == 'late_completion': clock[0] = 1310.
+            if fault == 'slow_popen':
+                clock[0] = 1100.
+                channel.deadline = 1310.
             return process
         def exit_checked(*args):
             events.append('drained')
@@ -489,11 +492,13 @@ class LauncherWiringTests(unittest.TestCase):
                 self.assertEqual(sent['envelope']['credential'],'CI_PRIVATE_OWNER_URI')
                 self.assertEqual(sent['envelope']['token'],'CI_PRIVATE_TOKEN')
             if fault in ('prior','backup','slow_prelaunch'): self.assertNotIn('launch',events)
-            if fault in ('binding','host_exit'): self.assertNotIn('head',events)
+            if fault in ('binding','host_exit','slow_popen'): self.assertNotIn('head',events)
+            if fault == 'slow_popen':
+                self.assertEqual(channel.send.call_count,1)  # envelope only; never START
 
     def test_completion_needs_backup_exit_independent_reads_and_final_live_run(self):
         self.exercise()
-        for fault in ('prior','backup','binding','host_exit','head','drain','cancel_final','rehearsal_refusal','slow_prelaunch','late_completion'):
+        for fault in ('prior','backup','binding','host_exit','head','drain','cancel_final','rehearsal_refusal','slow_prelaunch','late_completion','slow_popen'):
             with self.subTest(fault=fault): self.exercise(fault)
 
 

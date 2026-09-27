@@ -501,8 +501,11 @@ def _main(mode, transports):
         store = MeasuredStore(client,namespace,guard)
         server = rpc.StoreServer(channel,scope,store,channel.alive)
         units = UnitServer(channel,Retainer(store,expected)) if packet is not None else None
+        def startup_guard():
+            guard()
+            return run.deadline
         channel.send(frame(source_payload,envelope))
-        admit_runner(channel, accepted, guard)
+        admit_runner(channel, accepted, startup_guard)
         while True:
             with measured('rpc_wait'):
                 record = channel.receive()
