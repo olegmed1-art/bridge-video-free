@@ -5,11 +5,16 @@ from ops import native_maintenance_bundle as bundle
 from ops import native_maintenance_checkpoint_transport as rpc
 from ops.native_maintenance_owner_host import loaded_runtime
 from ops.native_maintenance_stage_request import AcceptedRequest, read_request
-from ops.native_maintenance_run_guard import API, StageRunBinding
+from ops.native_maintenance_run_guard import PersistentAPI as API, StageRunBinding
 from ops.native_maintenance_workflow_pause import require
 
 
 def main(source, run_id, attempt, request_digest, binding, wheel_digest, envelope):
+    with API(envelope['token']) as api:
+        return _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelope, api)
+
+
+def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelope, api):
     require(os.getuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic', 'STAGE_HOST')
     require(type(envelope) is dict and set(envelope) == {
         'driver', 'credential', 'token', 'request', 'manifest', 'job_id'}, 'STAGE_ENVELOPE')
@@ -25,7 +30,7 @@ def main(source, run_id, attempt, request_digest, binding, wheel_digest, envelop
         from ops.native_maintenance_stage_unit import UnitClient
         from ops.native_maintenance_owner_attest import parameters
         manifest = rpc.unpack(envelope['manifest'], 4*1024*1024)
-        run = StageRunBinding(source, run_id, attempt, API(envelope['token']))
+        run = StageRunBinding(source, run_id, attempt, api)
         run.assert_running()
         require(type(envelope['job_id']) is int and run.job_id == envelope['job_id'], 'STAGE_JOB_CHANGED')
         packet = runtime.DerivedStagePacket(request, run, manifest)

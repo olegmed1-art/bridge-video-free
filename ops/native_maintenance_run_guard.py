@@ -2,10 +2,13 @@
 import base64
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import http.client
 import json
 import os
 import re
 import time
+import ssl
+import threading
 import urllib.request
 
 REPOSITORY = 'olegmed1-art/bridge-video-free'
@@ -61,6 +64,105 @@ class API:
             raw = response.read(MAX_RESPONSE + 1)
         check(len(raw) <= MAX_RESPONSE, 'API_RESPONSE_SIZE')
         return json.loads(raw, object_pairs_hook=unique)
+
+
+class PersistentAPI(API):
+    """Bounded stage-process transport; every GET is fresh and sent once.
+
+    Four stable lanes survive the per-observation worker pool. A broken or stale
+    connection fails this API; it is never transparently retried. Reconnection
+    after a clean server close belongs only to the next distinct GET.
+    """
+    def __init__(self, token):
+        super().__init__(token)
+        self._context = ssl.create_default_context()
+        self._locks = tuple(threading.Lock() for _ in range(4))
+        self._connections = [None] * 4
+        self.failed = False
+
+    @staticmethod
+    def _lane(suffix):
+        if suffix.startswith('/contents/'):
+            return 1
+        if suffix == '/git/ref/heads/main':
+            return 2
+        if re.fullmatch(r'/actions/runs/[0-9]+/attempts/[0-9]+/jobs\?per_page=100', suffix):
+            return 3
+        return 0  # Run observations, workflow drain and diagnostic reads.
+
+    def get(self, suffix):
+        check(not self.failed, 'API_TRANSPORT_FAILED')
+        acquired = False
+        lane = None
+        response = None
+        try:
+            check(type(suffix) is str and suffix.startswith('/')
+                  and all(32 < ord(c) < 127 for c in suffix), 'API_PATH_INVALID')
+            lane = self._lane(suffix)
+            acquired = self._locks[lane].acquire(timeout=4)
+            check(acquired, 'API_LANE_TIMEOUT')
+            check(not self.failed, 'API_TRANSPORT_FAILED')
+            connection = self._connections[lane]
+            if connection is None:
+                connection = http.client.HTTPSConnection('api.github.com', port=443,
+                    timeout=4, context=self._context)
+                self._connections[lane] = connection
+            connection.request('GET', '/repos/' + REPOSITORY + suffix, headers={
+                'Authorization': 'Bearer ' + self._token,
+                'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
+                'User-Agent': 'native-maintenance-run-binding', 'Cache-Control': 'no-cache',
+            })
+            response = connection.getresponse()
+            check(response.status == 200 and not response.getheader('Link'), 'API_RESPONSE_INCOMPLETE')
+            length = response.length
+            raw = response.read(MAX_RESPONSE + 1)
+            check(len(raw) <= MAX_RESPONSE, 'API_RESPONSE_SIZE')
+            check(length is None or len(raw) == length, 'API_RESPONSE_TRUNCATED')
+            check(response.isclosed(), 'API_RESPONSE_UNCONSUMED')
+            value = json.loads(raw, object_pairs_hook=unique)
+            check(not self.failed, 'API_TRANSPORT_FAILED')
+            if response.will_close:
+                connection.close()
+                self._connections[lane] = None
+            response.close()
+            response = None
+            return value
+        except BaseException:
+            self.failed = True
+            if acquired and self._connections[lane] is not None:
+                try:
+                    self._connections[lane].close()
+                except Exception:
+                    pass  # Preserve the original transport or validation failure.
+                self._connections[lane] = None
+            raise
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    self.failed = True
+            if acquired:
+                self._locks[lane].release()
+
+    def close(self):
+        # Call only after joined reads. Never acquire other lanes while a lane
+        # is held by get(), so a concurrent refusal cannot deadlock cleanup.
+        self.failed = True
+        for lane, lock in enumerate(self._locks):
+            with lock:
+                connection, self._connections[lane] = self._connections[lane], None
+                if connection is not None:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
 
 
 def read_observations(api, paths):
