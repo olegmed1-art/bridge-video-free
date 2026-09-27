@@ -153,7 +153,7 @@ def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelo
         report = owner.observe(psycopg.connect, envelope['credential'])
         connections = OwnedConnections(connect, target, approved_hold=before)
         plan = request['plan']
-        workflows = WorkflowAPI(envelope['token'], plan, digest(plan))
+        workflows = WorkflowAPI(envelope['token'], plan, digest(plan), read_api=run.api)
         diagnostic['phase'] = 'workflow_state'
         for row in plan['workflows']:
             require(workflows.get_workflow(row['id']) == row, 'REHEARSAL_WORKFLOW_CHANGED')

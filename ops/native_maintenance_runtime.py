@@ -249,7 +249,7 @@ def stage(packet, *, run, store, connect, api_token, retain_unit):
     operator = coordination.Operator(scope=packet.scope, agreement=packet.agreement,
         workflows=coordination.WorkflowDrain(run.api, packet.plan, digest(packet.plan)),
         prior_hosts=coordination.PriorSupervisors(prior, digest(prior)), connections=connections,
-        source_transport=Transport(api_token), run=run)
+        source_transport=Transport(api_token, read_api=run.api), run=run)
     with locked_scope(packet) as (manifest, operation, pause, units):
         if packet.stage != 'prepare':
             require(operation.records and operation.records[0]['event'] == dict(kind='BOUND', scope=packet.scope),
@@ -274,7 +274,7 @@ def stage(packet, *, run, store, connect, api_token, retain_unit):
             expected_route=packet.scope['route'], approved_hold=packet.hold, workflow_plan=packet.plan,
             plan_digest=digest(packet.plan), api_token=api_token, pause_journal=pause,
             operation_journal=operation, run=run, operator=operator, lifetime=supervisor, checkpoint=barrier,
-            staged=True, observed_admission=True)
+            staged=True, observed_admission=True, read_api=run.api)
         require(ex.scope == packet.scope, 'RUNTIME_EXECUTOR_SCOPE')
         if packet.stage == 'prepare':
             head = ex.prepare()

@@ -114,7 +114,7 @@ independent reconciliation, but may NEVER repeat the original DB session.
     def __init__(self, *, target, operation, manifest_path, manifest_digest,
                  expected_route, approved_hold, workflow_plan, plan_digest,
                  api_token, pause_journal, operation_journal, run, operator, lifetime, checkpoint,
-                 staged=False, observed_admission=False):
+                 staged=False, observed_admission=False, read_api=None):
         require(type(staged) is bool, 'EXECUTOR_MODE_INVALID')
         require(type(observed_admission) is bool and (not observed_admission or staged),
                 'EXECUTOR_ADMISSION_MODE_INVALID')
@@ -163,7 +163,7 @@ independent reconciliation, but may NEVER repeat the original DB session.
         self._replay()
         window = ObservedSessionWindow(self) if observed_admission else SessionWindow(self)
         self.hold = HoldMaintenanceGuard(target, operation, approved_hold, writer_guard=window)
-        api = WorkflowAPI(api_token, workflow_plan, plan_digest, mutation_guard=self)
+        api = WorkflowAPI(api_token, workflow_plan, plan_digest, mutation_guard=self, read_api=read_api)
         self.pause = WorkflowPause(workflow_plan, plan_digest, api, pause_journal, self,
                                    operation_scope_digest=self.scope_digest)
 
