@@ -15,6 +15,7 @@ import tempfile
 
 FILES = (
     'ops/native_maintenance_bundle.py',
+    'ops/native_maintenance_budgets.py',
     'database/native_cli_permission_engine.py',
     'database/native_cli_write_fence.py',
     'database/native_cli_maintenance_session.py',

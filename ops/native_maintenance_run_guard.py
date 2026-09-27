@@ -10,6 +10,7 @@ import time
 import ssl
 import threading
 import urllib.request
+from ops.native_maintenance_budgets import STAGE_HOST_SECONDS, STAGE_LAUNCHER_SECONDS
 
 REPOSITORY = 'olegmed1-art/bridge-video-free'
 OWNER = 'olegmed1-art'
@@ -285,14 +286,15 @@ class StageRunBinding(RunBinding):
     job_name = 'stage'
     job_names = ('contract', 'stage')
     events = ('workflow_dispatch',)
-    duration_limit = 100
+    duration_limit = STAGE_LAUNCHER_SECONDS
 
     def __init__(self, source, run_id, attempt, api, *, launcher=False):
         # One deadline from construction, before any request import. The fixed
         # runner covers SSH/OCI preparation and final readback; host defaults
-        # remain 60 seconds. No caller-selected duration or renewal method.
+        # use their own fixed budget. No caller-selected duration or renewal.
         check(type(launcher) is bool, 'LAUNCHER_PROFILE_INVALID')
-        super().__init__(source, run_id, attempt, api, seconds=100 if launcher else 60)
+        super().__init__(source, run_id, attempt, api,
+                         seconds=STAGE_LAUNCHER_SECONDS if launcher else STAGE_HOST_SECONDS)
         self.launcher = launcher
 
     def assert_running(self):

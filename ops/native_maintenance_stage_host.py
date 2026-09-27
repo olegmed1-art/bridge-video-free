@@ -23,7 +23,7 @@ def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelo
     request = AcceptedRequest(raw, request_digest, source)
     wheels = rpc.unpack(envelope['driver'], 10*1024*1024)
     require(bundle.digest(wheels) == wheel_digest, 'STAGE_DRIVER_DIGEST')
-    channel = rpc.Channel(0, 1, binding)
+    channel = rpc.Channel(0, 1, binding, seconds=rpc.STAGE_RPC_SECONDS)
     with loaded_runtime(wheels) as (psycopg, _):
         # Import permission machinery only after source and driver verification.
         from ops import native_maintenance_runtime as runtime
