@@ -15,6 +15,7 @@ import time
 from ops import native_maintenance_checkpoint as checkpoint
 from ops import native_maintenance_snapshot as snapshot
 from ops.native_maintenance_workflow_pause import encoded, require, unique
+from ops.native_maintenance_budgets import STAGE_RPC_SECONDS
 
 MAX_FRAME = 23 * 1024 * 1024
 METHODS = {'assert_private', 'read_head', 'read_archive', 'put_archive', 'compare_head'}
@@ -52,7 +53,7 @@ This bounds pipe operations, not downstream API calls; the independent superviso
 and the runner's own lifetime remain required. Any protocol/timeout error latches.
 """
     def __init__(self, reader, writer, binding, *, seconds=60):
-        require(snapshot._hex(binding) and type(seconds) is int and 1 <= seconds <= 60,
+        require(snapshot._hex(binding) and type(seconds) is int and 1 <= seconds <= STAGE_RPC_SECONDS,
                 'RPC_BINDING_OR_LIFETIME')
         require(type(reader) is int and reader >= 0 and type(writer) is int and writer >= 0
                 and reader != writer, 'RPC_DESCRIPTORS')

@@ -107,7 +107,7 @@ def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelo
     wheels = rpc.unpack(envelope['driver'], 10*1024*1024)
     require(bundle.digest(wheels) == wheel_digest, 'REHEARSAL_DRIVER_DIGEST')
     started = time.monotonic()
-    channel = rpc.Channel(0, 1, binding)
+    channel = rpc.Channel(0, 1, binding, seconds=rpc.STAGE_RPC_SECONDS)
     diagnostic.update(channel=channel, phase='run_authentication')
     api = API(envelope['token'])
     diagnostic['api'] = api

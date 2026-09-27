@@ -108,6 +108,7 @@ protected_gate_paths=(
   '.github/workflows/native-maintenance-checkpoint-duplex.yml'
   '.github/workflows/native-maintenance-window.yml'
   'ops/native_maintenance_run_guard.py'
+  'ops/native_maintenance_budgets.py'
   '.dockerignore'
   '.github/workflows/issue-881-authoritative-external-evidence.yml'
   '.github/workflows/issue-881-contract-ci.yml'

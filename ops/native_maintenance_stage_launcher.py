@@ -26,6 +26,7 @@ from ops.native_maintenance_stage_request import AcceptedRequest, MAX_REQUEST, f
 from ops.native_maintenance_store_runner import HOST, loader, source_check
 from ops.native_maintenance_workflow_pause import require, encoded, digest, unique
 from ops.oracle_autopilot_source_preflight import connection_parameters
+from ops.native_maintenance_budgets import STAGE_LAUNCHER_SECONDS, STAGE_PRELAUNCH_REQUIRED_SECONDS
 
 PHASE = 'startup'
 RUN_STARTED = None
@@ -76,7 +77,7 @@ class TimingProfile:
         with self.lock:
             return {'version': 1, 'runner_only': True, 'overlapping_durations': True,
                     'incomplete': self.incomplete,
-                    'rpc_budget_seconds': 60,
+                    'rpc_budget_seconds': rpc.STAGE_RPC_SECONDS,
                     'operations': {k: dict(v) for k, v in sorted(self.rows.items())},
                     'host_exchange_operations': {k: dict(v) for k, v in sorted(self.exchange_rows.items())}}
 
@@ -114,7 +115,8 @@ class MeasuredStore(adapter.OCIJournalStore):
 SAFE_REFUSALS = frozenset(('RUN_BINDING_EXPIRED','RUN_BINDING_ALREADY_FAILED',
     'RUN_BINDING_EXPIRED_OR_UNOBSERVED','RUN_NOT_RUNNING','JOB_NOT_RUNNING','MAIN_CHANGED',
     'WORKFLOW_CONTRACT_CHANGED','RPC_EXPIRED','RPC_TIMEOUT','RPC_EOF','RPC_UNAVAILABLE',
-    'CANDIDATE_HOST_REFUSED','LAUNCHER_HOST_REFUSED','LAUNCHER_REQUEST_READ'))
+    'CANDIDATE_HOST_REFUSED','LAUNCHER_HOST_REFUSED','LAUNCHER_REQUEST_READ',
+    'LAUNCHER_INSUFFICIENT_REMAINING'))
 
 def failure_code(exc):
     code = exc.args[0] if len(exc.args)==1 and type(exc.args[0]) is str else None
@@ -122,7 +124,7 @@ def failure_code(exc):
 
 def timing():
     result = dict(binding_elapsed_ms=None if RUN_STARTED is None else int((time.monotonic()-RUN_STARTED)*1000),
-                  binding_budget_seconds=100)
+                  binding_budget_seconds=STAGE_LAUNCHER_SECONDS)
     if PROFILE is not None:
         try:
             result['timing_profile'] = PROFILE.report()
@@ -480,11 +482,16 @@ def _main(mode, transports):
     retain_request(prelaunch,raw,accepted)
     # Complete command construction before launch; never launch before final auth.
     run.assert_running()
+    # Reject slow preparation before creating a host process or consuming a claim.
+    # This does not renew the already-running absolute launcher deadline.
+    require(run.deadline - time.monotonic() >= STAGE_PRELAUNCH_REQUIRED_SECONDS,
+            'LAUNCHER_INSUFFICIENT_REMAINING')
     PHASE = 'host_exchange'
     process = subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
         env={'PATH':'/usr/bin:/bin'},start_new_session=True)
     try:
-        channel = rpc.Channel(process.stdout.fileno(),process.stdin.fileno(),binding)
+        channel = rpc.Channel(process.stdout.fileno(),process.stdin.fileno(),binding,
+                              seconds=rpc.STAGE_RPC_SECONDS)
         def guard():
             channel.alive()
             run.assert_running()
@@ -546,7 +553,7 @@ def _main(mode, transports):
                 'elapsed_ms','snapshot_digest','timing_is_estimate','production_mutations','snapshot_approved','supervisor'}
                 and record['kind'] == 'NATIVE_REHEARSAL_COMPLETE' and record['scope_digest'] == scope
                 and bundle.identifier(record['head_digest'],64) and bundle.identifier(record['snapshot_digest'],64)
-                and type(record['elapsed_ms']) is int and 0 <= record['elapsed_ms'] < 60000
+                and type(record['elapsed_ms']) is int and 0 <= record['elapsed_ms'] < rpc.STAGE_RPC_SECONDS * 1000
                 and record['timing_is_estimate'] is True and record['production_mutations'] is False
                 and record['snapshot_approved'] is False, 'LAUNCHER_REHEARSAL_RESULT')
             head = record['head_digest']

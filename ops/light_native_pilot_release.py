@@ -29,6 +29,7 @@ SUPERVISOR_HELPERS = ('ops/light_native_service_controller.py',
 OWNER_HELPERS = ('ops/light_native_pilot_owner.py', 'ops/light_native_pilot_run_guard.py', 'ops/native_maintenance_owner_host.py',
                  'ops/native_maintenance_owner_attest.py', 'ops/native_maintenance_driver.py',
                  'ops/native_maintenance_store.py', 'ops/native_maintenance_run_guard.py',
+                 'ops/native_maintenance_budgets.py',
                  'ops/native_maintenance_lifetime.py', 'ops/oracle_autopilot_source_preflight.py',
                  'ops/native_permission_hold_guard.py')
 EXTRA = ('database/__init__.py', 'database/native_cli_permission_engine.py',
