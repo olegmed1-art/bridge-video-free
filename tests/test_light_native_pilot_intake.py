@@ -106,7 +106,7 @@ class FakeConn:
             return Row(({'task_id':TASK,'created':True,'resulting_state':'ACTIVE'},))
         if 'claim_next_task' in sql:
             self.goal={'repository':'olegmed1-art/bridge-video-free',
-                'mailbox_pr':1150,'role':'AUTOPILOT','target_pr':1150,
+                'mailbox_pr':1637,'role':'AUTOPILOT','target_pr':1150,
                 'expected_head_sha':HEAD,'dispatch_epoch':1,
                 'successor_task_key':None,'successor_role':None,
                 'successor_target_pr':None,'successor_expected_head_sha':None}

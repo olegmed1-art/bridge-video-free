@@ -206,7 +206,7 @@ def prepare(conn, plan, agreement, baseline_raw, accepted_baseline_sha256, snaps
         require(type(goal) is dict and set(goal)=={'repository','mailbox_pr','role',
             'target_pr','expected_head_sha','dispatch_epoch','successor_task_key',
             'successor_role','successor_target_pr','successor_expected_head_sha'}
-            and goal['repository']==plan.value['repository'] and goal['mailbox_pr']==1150
+            and goal['repository']==plan.value['repository'] and goal['mailbox_pr']==1637
             and goal['role']=='AUTOPILOT' and goal['target_pr']==plan.value['target_pr']
             and goal['dispatch_epoch']==1
             and goal['expected_head_sha']==observed_head_sha

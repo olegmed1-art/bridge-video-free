@@ -1746,7 +1746,7 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
             indirect[reference] = payload
             pending.update(repository_shell_references(payload) - set(indirect))
         referenced_payloads.update(indirect)
-    assert len(shared_workflows) == 73
+    assert len(shared_workflows) == 75
     assert '.github/workflows/native-maintenance-window.yml' in shared_workflows
     assert "'ops/native_maintenance_run_guard.py'" in runner
     assert '.github/workflows/native-maintenance-driver-prepare.yml' in shared_workflows

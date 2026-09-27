@@ -203,9 +203,12 @@ def main(mode):
             'LAUNCHER_PROVISION_MODE')
     if action == 'first_install':
         require(bundle.digest(first_install_intent(source)) == accepted, 'LAUNCHER_PROVISION_INTENT')
+    # This is the one nonrenewing run binding for the entire launcher.  Fetch
+    # can import an accepted request leaf, so authenticate before that host I/O.
+    run = cls(source,run_id,attempt,API(os.environ['GH_TOKEN']))
+    run.assert_running()
+    if action == 'first_install':
         PHASE = 'explicit_first_install'
-        run = cls(source,run_id,attempt,API(os.environ['GH_TOKEN']))
-        run.assert_running()
         data = encoded(frame(source_payload,{}))
         command = ssh_command(key,known_hosts,bootstrap(*args,'first_install'))
         result = subprocess.run(command,input=len(data).to_bytes(4,'big')+data,capture_output=True,
@@ -240,7 +243,6 @@ def main(mode):
     source_guard()
     PHASE = 'authenticated_stage'
     started = time.monotonic()
-    run = cls(source,run_id,attempt,API(token))
     run.assert_running()
     if request is not None:
         from ops.native_maintenance_runtime import DerivedStagePacket, run_identity

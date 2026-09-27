@@ -47,8 +47,9 @@ Private permit/request bytes remain on the host: prepare-retained loads only
 the accepted permit digest from the fixed intake directory, and launch-retained
 uses the separately accepted request digest. Cleanup is permitted after window expiry and never resubmits work.
 The live effective systemd properties and whole-path recovery must still be
-verified before production activation. Permission-stage production binding is
-not enabled by this change.
+verified before production activation. The fixed permission-stage workflow profile is pinned to its reviewed bytes;
+that capability alone authorizes no grant without the accepted manifest,
+recovery evidence and finite owner window.
 
 Local verification includes isolated stdlib imports, immutable request/package
 binding, nonrenewing agreements, queue-zero baseline handoff, no-effect launch
@@ -77,4 +78,4 @@ any later activation. No queue, task, receipt or journal is deleted.
 The new disposable intake fixture exercises actual admission/native RPCs and
 control restoration on localhost bridge_school_ci only. It is test evidence,
 not a production task or permission receipt. Live pilot acceptance and the
-permission-stage production profile remain separate outstanding requirements.
+live permission-stage execution remain separate outstanding requirements.

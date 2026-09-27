@@ -141,12 +141,51 @@ class ProvenanceTests(unittest.TestCase):
                 self.assertEqual(launcher.context(mode),(cls,SOURCE,'f'*64))
                 with self.assertRaises(Exception): launcher.context('rehearsal' if mode=='stage' else 'stage')
             raw = (Path(__file__).resolve().parents[1]/cls.workflow).read_bytes()
-            # During draft assembly both profiles deliberately remain disabled.
-            if cls.workflow_sha256 is not None:
-                self.assertEqual(hashlib.sha256(raw).hexdigest(),cls.workflow_sha256)
+            self.assertEqual(hashlib.sha256(raw).hexdigest(),cls.workflow_sha256)
             self.assertIn(b'persist-credentials: false',raw)
             self.assertIn(b'queue: max',raw)
             if mode == 'rehearsal': self.assertNotIn(b'actions: write',raw)
+
+    def test_stage_profile_accepts_only_fixed_manual_run_and_jobs(self):
+        api=API()
+        api.run.update(path=StageRunBinding.workflow,event='workflow_dispatch')
+        raw=(Path(__file__).resolve().parents[1]/StageRunBinding.workflow).read_bytes()
+        api.file.update(path=StageRunBinding.workflow,size=len(raw),
+                        content=base64.b64encode(raw).decode())
+        api.jobs['jobs'][0]['name']='stage'
+        api.jobs['jobs'].append({**api.jobs['jobs'][0],'id':455,'name':'contract',
+                                 'status':'completed','conclusion':'success'})
+        api.jobs['total_count']=2
+        stage=StageRunBinding(SOURCE,123,2,api)
+        stage.assert_running()
+        self.assertEqual(stage.job_id,456)
+        api.run['event']='push'
+        with self.assertRaises(Exception):stage.assert_running()
+        self.assertTrue(stage.failed)
+        api.run['event']='workflow_dispatch'
+        with self.assertRaisesRegex(Exception,'ALREADY_FAILED'):stage.assert_running()
+        api.jobs['jobs'][0]['name']='rehearsal'
+        with self.assertRaises(Exception):StageRunBinding(SOURCE,123,2,api).assert_running()
+
+    def test_stage_authentication_precedes_root_request_fetch(self):
+        env=dict(EXPECTED_MAIN=SOURCE,ACCEPTED_REQUEST_DIGEST='f'*64,
+            GITHUB_REPOSITORY=launcher.REPOSITORY,GITHUB_REF='refs/heads/main',
+            GITHUB_SHA=SOURCE,GITHUB_EVENT_NAME='workflow_dispatch',
+            GITHUB_ACTOR='olegmed1-art',GITHUB_TRIGGERING_ACTOR='olegmed1-art',
+            GITHUB_JOB='stage',GITHUB_WORKFLOW_REF=launcher.REPOSITORY+'/'+
+            StageRunBinding.workflow+'@refs/heads/main',GITHUB_WORKFLOW_SHA=SOURCE,
+            GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='2',GH_TOKEN='CI')
+        api=Mock();api.get.side_effect=ConnectionError('CANCELLED')
+        with patch.dict(os.environ,env,clear=True),patch.object(sys,'argv',
+             ['launcher','stage','key','known','wheels']),patch.object(launcher,'source_guard'), \
+             patch.object(launcher.bundle,'build',return_value=b'CI_SOURCE'), \
+             patch.object(launcher.driver,'build',return_value=b'CI_WHEELS'), \
+             patch.object(launcher,'API',return_value=api), \
+             patch.object(launcher,'fetch_request') as fetch, \
+             patch.object(launcher,'bootstrap') as bootstrap, \
+             patch.object(launcher,'oci_client') as oci:
+            with self.assertRaises(ConnectionError):launcher.main('stage')
+            fetch.assert_not_called();bootstrap.assert_not_called();oci.assert_not_called()
 
 
 @unittest.skipUnless(os.getuid()==0,'private persistent storage needs root')
