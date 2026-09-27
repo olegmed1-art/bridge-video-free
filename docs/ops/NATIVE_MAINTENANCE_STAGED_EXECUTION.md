@@ -361,3 +361,21 @@ accepted `operation:"rollback"` scope and a new prepare/execute/restore sequence
 Neither code revert nor request deletion is database rollback. HOLD remains in
 force throughout this launcher; service activation and the one authorized
 read-only pilot require their own reconciled subsequent steps.
+
+
+### Live rehearsal refusal and diagnostics (2026-09-27)
+
+PR #2015 merged at `97386e13eb6ad1000cea2a5e4541b3b548520a46` after
+265 root CI tests and real PG18 checks. Explicit first install succeeded in run
+`36294082103`. Read-only rehearsal run `36294201346` then refused at the broad
+`authenticated_stage` phase, about 30 seconds after the command started. The host
+supervisor exited with status 1 and no native supervisors remained. This is not
+a timing PASS, snapshot acceptance, or a production permission change.
+
+The diagnostic patch reports only a fixed phase and allowlisted refusal code
+through the existing bound pipe, never raw exceptions, credentials, SQL, URLs or
+snapshot values. The runner accepts that frame only for rehearsal and preserves
+a failed outcome and its existing cleanup. It neither retries nor extends a
+lease. Runner request retention and host exchange have distinct phase labels.
+After reconciliation, a new-source diagnostic request may run; never redispatch
+an uncertain production request. Production StageRunBinding remains disabled.
