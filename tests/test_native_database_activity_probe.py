@@ -12,7 +12,8 @@ OBSERVER = (1, START)
 
 
 def row(pid=42, start=START, role='owner'):
-    return (pid, start, role, 'client', 'idle', False, False, False, 'lt10m')
+    return (pid, start, role, 'client', 'idle', False, False, False, 'lt10m',
+            'owner_attest', 'different')
 
 
 class Connection:
@@ -61,6 +62,14 @@ class ActivityTests(unittest.TestCase):
         self.assertNotIn('pid', serialized)
         self.assertTrue(report['no_admission_authority'])
         self.assertFalse(report['origin_attribution'])
+        self.assertEqual(report['persistent_after'][0]['application_family_hint'], 'owner_attest')
+        self.assertTrue(report['hints_are_caller_controlled_or_shared'])
+
+    def test_raw_application_names_or_addresses_refuse(self):
+        for index, value in ((9, 'private-arbitrary-name'), (10, '192.0.2.1')):
+            bad = list(row()); bad[index] = value
+            with self.assertRaises(Exception):
+                probe.validate_rows([tuple(bad)], OBSERVER)
 
     def test_refuses_invisible_malformed_duplicate_own_and_excess_activity(self):
         bad = list(row()); bad[4] = None

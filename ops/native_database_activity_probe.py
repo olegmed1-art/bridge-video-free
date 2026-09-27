@@ -27,14 +27,17 @@ def validate_rows(rows, observer):
     engine.check(type(rows) is list and len(rows) <= LIMIT, 'ACTIVITY_LIMIT')
     result = {}
     for row in rows:
-        engine.check(type(row) is tuple and len(row) == 9
+        engine.check(type(row) is tuple and len(row) == 11
                      and type(row[0]) is int and row[0] > 0
                      and isinstance(row[1], datetime)
                      and row[2] in ('light', 'owner', 'other')
                      and row[3] in ('client', 'other')
                      and row[4] in ('idle', 'active', 'idle_in_transaction', 'other')
                      and all(type(value) is bool for value in row[5:8])
-                     and row[8] in ('lt1m', 'lt5m', 'lt10m', 'ge10m_or_unknown'),
+                     and row[8] in ('lt1m', 'lt5m', 'lt10m', 'ge10m_or_unknown')
+                     and row[9] in ('owner_attest', 'registry_scope', 'registry_writer',
+                                    'activity_probe', 'other_or_empty')
+                     and row[10] in ('same_as_observer', 'different', 'local_or_unknown'),
                      'ACTIVITY_SHAPE')
         key = row[:2]
         engine.check(key != observer and key not in result, 'ACTIVITY_IDENTITY')
@@ -61,7 +64,19 @@ def snapshot(conn, observer):
               CASE WHEN now()-state_change < interval '1 minute' THEN 'lt1m'
                    WHEN now()-state_change < interval '5 minutes' THEN 'lt5m'
                    WHEN now()-state_change < interval '10 minutes' THEN 'lt10m'
-                   ELSE 'ge10m_or_unknown' END
+                   ELSE 'ge10m_or_unknown' END,
+              CASE application_name
+                   WHEN 'native-maintenance-owner-attest' THEN 'owner_attest'
+                   WHEN 'native-registry-scope-read-only' THEN 'registry_scope'
+                   WHEN 'bridge-school-recovery-registry' THEN 'registry_writer'
+                   WHEN 'native-database-activity-read-only' THEN 'activity_probe'
+                   ELSE 'other_or_empty' END,
+              CASE WHEN client_addr IS NULL OR
+                        (SELECT client_addr FROM pg_catalog.pg_stat_activity
+                         WHERE pid=pg_catalog.pg_backend_pid()) IS NULL THEN 'local_or_unknown'
+                   WHEN client_addr=(SELECT client_addr FROM pg_catalog.pg_stat_activity
+                                     WHERE pid=pg_catalog.pg_backend_pid()) THEN 'same_as_observer'
+                   ELSE 'different' END
             FROM pg_catalog.pg_stat_activity
             WHERE datname=current_database() AND pid<>pg_catalog.pg_backend_pid()
               AND backend_type<>'autovacuum worker'
@@ -72,7 +87,8 @@ def snapshot(conn, observer):
 
 
 def groups(sample):
-    keys = ('user_class', 'backend_class', 'state_class', 'has_xact', 'has_xid', 'has_xmin', 'age')
+    keys = ('user_class', 'backend_class', 'state_class', 'has_xact', 'has_xid', 'has_xmin',
+            'age', 'application_family_hint', 'client_relation_hint')
     return [dict(zip(keys, values), count=count)
             for values, count in sorted(Counter(sample.values()).items())]
 
@@ -83,13 +99,16 @@ def summarize(before, after):
                 persistent=len(common), appeared=len(after.keys() - before.keys()),
                 disappeared=len(before.keys() - after.keys()),
                 persistent_owner=sum(before[k][0] == after[k][0] == 'owner' for k in common),
+                persistent_after=groups({k: after[k] for k in common}),
                 no_admission_authority=True, production_mutations=False,
-                origin_attribution=False, sample_interval_seconds=INTERVAL_SECONDS)
+                origin_attribution=False, hints_are_caller_controlled_or_shared=True,
+                sample_interval_seconds=INTERVAL_SECONDS)
 
 
 def observe(connect, raw):
     global PHASE
     kwargs = owner.parameters(raw)
+    kwargs['application_name'] = 'native-database-activity-read-only'
     target = engine.Target(**{**EXPECTED_TARGET, 'neon': engine.NeonBinding(**EXPECTED_TARGET['neon'])})
     PHASE = 'connection'
     with connect(**kwargs, autocommit=True) as conn:
