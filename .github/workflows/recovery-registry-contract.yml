@@ -1,0 +1,25 @@
+name: Recovery registry credential contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/recovery-registry-contract.yml'
+      - '.github/workflows/recovery-registry-population.yml'
+      - '.github/workflows/native-maintenance-owner-attest.yml'
+      - 'ops/recovery_registry_preflight.py'
+      - 'ops/native_maintenance_registry_scope.py'
+      - 'tests/test_recovery_registry_preflight.py'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python -m pip install --disable-pip-version-check -q 'psycopg[binary]==3.3.4'
+      - run: PYTHONPATH=.:tests python -m unittest -q test_recovery_registry_preflight test_native_maintenance_registry_scope
