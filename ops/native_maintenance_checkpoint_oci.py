@@ -4,6 +4,8 @@ No deletes, bucket changes, automatic retries or public links. A separately
 trusted runtime supplies the scoped OCI client and a fresh mutation guard.
 """
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from ops import native_maintenance_checkpoint as checkpoint
 from ops import native_maintenance_snapshot as snapshot
@@ -15,6 +17,38 @@ TAG = 'bridge-light-autopilot-backups-v1'
 PREFIX = 'native-journal/checkpoint-v1/'
 LIMIT = 8 * 1024**3
 ASSETS_PREFIX = 'native-journal/recovery-assets-v1/'
+_ABSENT_LIFECYCLE = object()
+
+
+class IsolatedPrivacyClient:
+    """Explicit launcher opt-in: one SDK client/session/signer per fixed read.
+
+    The general client retains all other calls. Per-lane locks prevent
+    accidental overlapping use across stores; no responses are cached.
+    """
+    METHODS = ('get_bucket', 'list_preauthenticated_requests',
+               'list_replication_policies', 'get_object_lifecycle_policy')
+
+    def __init__(self, general, readers):
+        require(type(readers) is tuple and len(readers) == 4, 'OCI_PRIVACY_CLIENTS')
+        clients = (general,) + readers
+        for values in (clients, tuple(c.base_client for c in clients),
+                       tuple(c.base_client.session for c in clients),
+                       tuple(c.base_client.signer for c in clients)):
+            require(all(v is not None for v in values) and len({id(v) for v in values}) == 5,
+                    'OCI_PRIVACY_CLIENT_ISOLATION')
+        self.general = general
+        self.readers = dict(zip(self.METHODS, readers))
+        self.locks = {method: threading.Lock() for method in self.METHODS}
+        self.group_lock = threading.Lock()
+
+    def __getattr__(self, method):
+        return getattr(self.general, method)
+
+    def privacy_read(self, method, *args, **kwargs):
+        require(method in self.METHODS, 'OCI_PRIVACY_METHOD')
+        with self.locks[method]:
+            return getattr(self.readers[method], method)(*args, **kwargs)
 
 
 class OCIJournalStore:
@@ -67,22 +101,50 @@ class OCIJournalStore:
         require(snapshot._hex(scope), 'CHECKPOINT_SCOPE')
         return PREFIX + scope + '/' + suffix
 
-    def assert_private(self):
-        detail = self._call('get_bucket', self.namespace, BUCKET, fields=['autoTiering']).data
-        require(detail.compartment_id == TENANCY and detail.freeform_tags.get('managed_by') == TAG
-                and detail.public_access_type == 'NoPublicAccess' and detail.storage_tier == 'Standard'
-                and detail.versioning == 'Disabled' and detail.auto_tiering == 'Disabled'
-                and not detail.is_read_only and not detail.kms_key_id, 'CHECKPOINT_BUCKET_REFUSED')
-        for method in ('list_preauthenticated_requests', 'list_replication_policies'):
-            response = self._call(method, self.namespace, BUCKET, limit=1)
-            require(not response.data and not response.headers.get('opc-next-page'), 'CHECKPOINT_PUBLIC_OR_REPLICATED')
-        try:
-            lifecycle = self._call('get_object_lifecycle_policy', self.namespace, BUCKET).data
-        except self.service_error as exc:
-            if exc.status != 404:
-                raise
+    def _privacy_call(self, method, *args, **kwargs):
+        require(not self.failed, 'OCI_CHECKPOINT_ALREADY_FAILED')
+        return self.client.privacy_read(method, *args, retry_strategy=self.no_retry, **kwargs)
+
+    def _privacy_read(self, method):
+        call = self._privacy_call if isinstance(self.client, IsolatedPrivacyClient) else self._call
+        if method == 'get_object_lifecycle_policy':
+            try:
+                return call(method, self.namespace, BUCKET).data
+            except self.service_error as exc:
+                if exc.status != 404:
+                    raise
+                return _ABSENT_LIFECYCLE
+        return call(method, self.namespace, BUCKET,
+                          **({'fields': ['autoTiering']} if method == 'get_bucket' else {'limit': 1}))
+
+    def _privacy_result(self, method, response):
+        if method == 'get_bucket':
+            detail = response.data
+            require(detail.compartment_id == TENANCY and detail.freeform_tags.get('managed_by') == TAG
+                    and detail.public_access_type == 'NoPublicAccess' and detail.storage_tier == 'Standard'
+                    and detail.versioning == 'Disabled' and detail.auto_tiering == 'Disabled'
+                    and not detail.is_read_only and not detail.kms_key_id, 'CHECKPOINT_BUCKET_REFUSED')
+        elif method == 'get_object_lifecycle_policy':
+            if response is not _ABSENT_LIFECYCLE:
+                require(not response.items, 'CHECKPOINT_LIFECYCLE_REFUSED')
         else:
-            require(not lifecycle.items, 'CHECKPOINT_LIFECYCLE_REFUSED')
+            require(not response.data and not response.headers.get('opc-next-page'), 'CHECKPOINT_PUBLIC_OR_REPLICATED')
+
+    def assert_private(self):
+        methods = IsolatedPrivacyClient.METHODS
+        if not isinstance(self.client, IsolatedPrivacyClient):
+            # Existing consumers remain sequential, including early refusals.
+            for method in methods:
+                self._privacy_result(method, self._privacy_read(method))
+            return
+        # Every invocation starts fresh. Context exit joins every started worker,
+        # even on submit/read/validation failure, before any caller can continue.
+        with self.client.group_lock:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futures = [pool.submit(self._privacy_read, method) for method in methods]
+                responses = [future.result() for future in futures]
+            for method, response in zip(methods, responses):
+                self._privacy_result(method, response)
 
     def _budget(self, size, objects=1):
         """Exact root-compartment inventory; runtime must prove compartment closure.

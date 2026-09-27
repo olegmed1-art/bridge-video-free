@@ -101,3 +101,33 @@ and owner/triggering-owner, with the input equal to the dispatched SHA. It
 retains read-only Actions/Contents permissions and the existing bounded inventory
 entrypoint. Obtain the restored registry's actual `updated_at` from this report;
 do not guess it or treat the inventory as writer exclusion.
+
+
+## Measured read service correction
+
+Read-only rehearsal 36326264660 / job 108639559199 on d38d55e2 passed:
+66,001 ms outer binding, 53,665 ms host elapsed against a 60-second RPC
+lifetime. Within host exchange, runner counters recorded 160 OCI read calls
+(18,538 ms), five writes (678 ms), and 55 GitHub GETs (12,616 ms). Durations
+overlap, OCI calls exclude streamed object-body consumption, and the rehearsal
+does not exercise production unit retention. This is not full prepare margin.
+
+The next correction executes the four independent privacy observations in each
+existing `assert_private` boundary concurrently. Launcher opt-in constructs five
+SDK clients: one general and one for each fixed read, with distinct base clients,
+HTTP sessions and signers. SDK 2.186.0 wheel source confirms fresh Signer and
+Session construction; the facade also checks distinct identities. Per-read locks
+and a group lock prevent overlapping reuse. Dedicated dispatch is restricted to
+the privacy group; budget reads and other calls retain the general client.
+Concurrent read errors can change refusal precedence, but every invalid result
+still prevents effects. Other consumers retain the original
+sequential path. All started readers are joined before returning or refusing,
+including submission failure. No response caching, retries, writes in workers,
+new deadlines, budget shortcuts or skipped privacy checks are introduced.
+Lifecycle 404 alone means absent policy; malformed data still refuses. Original
+pre/post-write authority checks and conditional-write/readback order remain.
+
+`oci_privacy` reports wall duration of each complete privacy group. Its time
+still overlaps other counters. A fresh read-only rehearsal after exact-head CI
+and independent I2 review must measure benefit before preparing another
+coordination package. Rollback is a revert to the prior sequential launcher.
