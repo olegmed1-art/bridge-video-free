@@ -80,6 +80,8 @@ protected_gate_paths=(
   'ops/native_maintenance_stage_host.py'
   'ops/native_maintenance_stage_rehearsal.py'
   'ops/native_maintenance_stage_launcher.py'
+  'ops/native_maintenance_stage_inspect.py'
+  'tests/test_native_maintenance_stage_inspect.py'
   'ops/native_maintenance_grant_candidate.py'
   'tests/test_native_maintenance_grant_candidate.py'
   'ops/native_maintenance_supervisor.py'

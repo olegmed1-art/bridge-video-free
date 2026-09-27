@@ -69,7 +69,8 @@ No record replacement/deletion API. A corrupt or incomplete tail blocks resume.
 Trusted operator storage and its backup are deployment prerequisites; fsync is
 not a claim that a CI runner's disk survives runner deletion.
 """
-    def __init__(self, root, *, max_bytes=1024 * 262144):
+    def __init__(self, root, *, max_bytes=1024 * 262144, create_lock=True):
+        require(type(create_lock) is bool, 'JOURNAL_LOCK_MODE')
         require(type(max_bytes) is int and 0 < max_bytes <= 1024 * 262144, 'JOURNAL_BYTE_LIMIT')
         self.fd = None
         self.lock = None
@@ -80,7 +81,7 @@ not a claim that a CI runner's disk survives runner deletion.
         try:
             info = os.fstat(self.fd)
             require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700, 'PRIVATE_DIRECTORY_REQUIRED')
-            self.lock = os.open('lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=self.fd)
+            self.lock = os.open('lock', os.O_RDWR | (os.O_CREAT if create_lock else 0) | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=self.fd)
             self._regular(self.lock)
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             names = os.listdir(self.fd)

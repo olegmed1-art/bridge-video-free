@@ -36,6 +36,7 @@ on:
       - 'ops/native_maintenance_stage_host.py'
       - 'ops/native_maintenance_stage_rehearsal.py'
       - 'ops/native_maintenance_stage_launcher.py'
+      - 'ops/native_maintenance_stage_inspect.py'
       - 'ops/native_maintenance_grant_candidate.py'
       - 'tests/test_native_maintenance_grant_candidate.py'
       - 'ops/native_maintenance_supervisor.py'
@@ -45,6 +46,7 @@ on:
       - 'tests/test_native_maintenance_runtime.py'
       - 'tests/test_native_maintenance_stage_unit.py'
       - 'tests/test_native_maintenance_stage_launcher.py'
+      - 'tests/test_native_maintenance_stage_inspect.py'
       - 'ops/native_maintenance_run_guard.py'
       - 'ops/native_maintenance_store.py'
       - 'ops/native_maintenance_snapshot.py'
@@ -107,6 +109,7 @@ on:
       - 'ops/native_maintenance_stage_host.py'
       - 'ops/native_maintenance_stage_rehearsal.py'
       - 'ops/native_maintenance_stage_launcher.py'
+      - 'ops/native_maintenance_stage_inspect.py'
       - 'ops/native_maintenance_grant_candidate.py'
       - 'tests/test_native_maintenance_grant_candidate.py'
       - 'ops/native_maintenance_supervisor.py'
@@ -116,6 +119,7 @@ on:
       - 'tests/test_native_maintenance_runtime.py'
       - 'tests/test_native_maintenance_stage_unit.py'
       - 'tests/test_native_maintenance_stage_launcher.py'
+      - 'tests/test_native_maintenance_stage_inspect.py'
       - 'ops/native_maintenance_run_guard.py'
       - 'ops/native_maintenance_store.py'
       - 'ops/native_maintenance_snapshot.py'
@@ -205,6 +209,7 @@ jobs:
           runtime_test_site="$(python -c 'from pathlib import Path; import psycopg; print(Path(psycopg.__file__).resolve().parent.parent)')"
           sudo -n env PYTHONPATH="$PWD:$runtime_test_site" "$(command -v python)" -m unittest discover -s tests -p 'test_native_maintenance_runtime.py' -v
           sudo -n env PYTHONPATH="$PWD:$runtime_test_site" "$(command -v python)" -m unittest discover -s tests -p 'test_native_maintenance_stage_launcher.py' -v
+          sudo -n env PYTHONPATH="$PWD:$runtime_test_site" "$(command -v python)" -m unittest discover -s tests -p 'test_native_maintenance_stage_inspect.py' -v
           python -m unittest discover -s tests -p 'test_native_maintenance_grant_candidate.py' -v
       - name: Verify stage-only native pilot release and root boundaries
         run: |
