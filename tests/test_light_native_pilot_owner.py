@@ -88,3 +88,38 @@ def test_unaccepted_record_cannot_be_used(monkeypatch):
     monkeypatch.setattr(owner.control,'read',lambda _:b'{"changed":true}')
     with pytest.raises(RuntimeError,match='RECORD_NOT_ACCEPTED'):
         owner.accepted_record('permit.json','a'*64)
+
+
+@pytest.mark.parametrize('field,value', [('pid',124),('pid',True),('invocation_id','f'*32),
+    ('dispatch_id','other'),('provider_task_id','task_e_other'),('kind','CRASH_RECOVERY'),
+    ('resumed_sha256','missing'),('version',True)])
+def test_recovery_proof_must_match_independent_root_unit_and_db(field,value):
+    evidence=dict(version=1,kind='CONTROLLED_IMAGE_RESTART',dispatch_id='dispatch',
+        provider_task_id='task_e_pilot',pid=123,invocation_id='e'*32,
+        start_sha256='a'*64,intent_sha256='b'*64,resumed_sha256='c'*64)
+    unit=dict(MainPID='123',InvocationID='e'*32)
+    owner.verify_restart_unit(evidence,unit,'dispatch','task_e_pilot')
+    evidence[field]=value
+    with pytest.raises(RuntimeError,match='RESTART_UNIT_MISMATCH'):
+        owner.verify_restart_unit(evidence,unit,'dispatch','task_e_pilot')
+
+
+def test_owner_child_refuses_changed_prompt_before_cloud_read(monkeypatch,tmp_path):
+    import io
+    import sys
+    from oracle_autopilot import codex_cli_bridge as bridge
+    from test_oracle_autopilot_light_native_adapter import rig
+    request=rig.__wrapped__()[0]
+    monkeypatch.setattr(owner.pwd,'getpwnam',lambda _:SimpleNamespace(pw_gid=123,pw_uid=123))
+    monkeypatch.setattr(bridge,'lookup',lambda *a,**k:dict(state='SUBMITTED',
+        provider_task_id='task_e_pilot',prompt_sha256='0'*64))
+    cloud=Mock(side_effect=AssertionError('Cloud must not be queried'))
+    monkeypatch.setattr(bridge,'_collect',cloud)
+    def child(argv,**kwargs):
+        monkeypatch.setattr(sys,'argv',['-c']+argv[5:])
+        monkeypatch.setattr(sys,'stdin',SimpleNamespace(buffer=io.BytesIO(kwargs['input'])))
+        exec(compile(argv[4],'<owner-child>','exec'),{})
+    monkeypatch.setattr(owner.subprocess,'run',child)
+    with pytest.raises(RuntimeError,match='PILOT_OWNER_PROVIDER_JOURNAL'):
+        owner.fresh_provider_result(tmp_path,request['dispatch_id'],'a'*32,b'{}',request)
+    cloud.assert_not_called()

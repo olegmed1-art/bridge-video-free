@@ -51,3 +51,38 @@ def test_admission_reads_live_control_each_time(monkeypatch):
     state[0] = b'PILOT\n'
     monkeypatch.setenv('AUTOPILOT_ADMISSION_MODE', 'HOLD')
     assert not loader.admitted()
+
+
+def test_controlled_exec_closes_both_contexts_and_uses_fixed_gate(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from oracle_autopilot.light_native_restart import RestartImage
+    from ops.light_native_service_plan import pilot_argv
+    events=[]
+    class Context:
+        def __init__(self,name):self.name=name
+        def __enter__(self):events.append('open-'+self.name);return self
+        def __exit__(self,*args):events.append('close-'+self.name)
+    class Session:
+        def __init__(self,*args,**kwargs):pass
+        def reserve(self):events.append('reserve')
+        def step(self):raise RestartImage()
+    permit=SimpleNamespace(target='target',check=lambda:events.append('permit-check'))
+    monkeypatch.setattr(loader,'release_source',lambda:'c'*40)
+    monkeypatch.setattr(loader,'admitted',lambda:True)
+    monkeypatch.setattr(loader,'root_bytes',lambda *args:b'a'*64)
+    monkeypatch.setattr(loader,'Permit',lambda *args:permit)
+    monkeypatch.setattr(loader,'LightProvider',lambda *args:object())
+    monkeypatch.setattr(loader,'Claim',lambda *args:Context('claim'))
+    monkeypatch.setattr(loader,'runtime_parameters',lambda *args:{})
+    monkeypatch.setattr(loader,'runtime_identity',lambda *args:None)
+    monkeypatch.setattr(loader,'RestartingProvider',lambda *args:SimpleNamespace(attach=lambda s:None))
+    monkeypatch.setattr(loader,'Session',Session)
+    monkeypatch.setitem(sys.modules,'psycopg',SimpleNamespace(connect=lambda **kwargs:Context('db')))
+    def execv(binary,argv):
+        assert events[-3:]==['close-db','close-claim','permit-check']
+        assert [binary]+argv==[pilot_argv('c'*40)[0]]+pilot_argv('c'*40)
+        raise OSError('simulated exec failure')
+    monkeypatch.setattr(loader.os,'execv',execv)
+    with pytest.raises(OSError,match='simulated exec failure'):loader.execute()
+    assert events.count('reserve')==1
