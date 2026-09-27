@@ -21,10 +21,17 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Transport:
-    def __init__(self, token):
+    def __init__(self, token, *, read_api=None):
         require(type(token) is str and 0 < len(token) <= 4096
                 and not any(c.isspace() for c in token), 'WORKFLOW_API_TOKEN_REQUIRED')
+        if read_api is not None:
+            from ops.native_maintenance_run_guard import PersistentAPI
+            require(isinstance(read_api, PersistentAPI) and read_api._token == token,
+                    'WORKFLOW_READ_TRANSPORT_REQUIRED')
         self._token = token
+        # Borrow only the authenticated stage's GET transport. Its owner closes
+        # all lanes after joined run observations. PUT never uses this transport.
+        self._read_api = read_api
         self._opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
 
     def request(self, method, suffix):
@@ -33,6 +40,13 @@ class Transport:
                or re.fullmatch(r'/actions/workflows\?per_page=100&page=[1-9][0-9]?', suffix))
         put = re.fullmatch(r'/actions/workflows/[1-9][0-9]{0,19}/(?:enable|disable)', suffix)
         require((method == 'GET' and get) or (method == 'PUT' and put), 'WORKFLOW_API_PATH_REFUSED')
+        if method == 'GET' and self._read_api is not None and not suffix.startswith('/actions/workflows?'):
+            try:
+                # Keep the caller's exact observation order and every fresh GET.
+                # A stale socket poisons the shared API; never fall back or retry.
+                return self._read_api.get(suffix)
+            except Exception:
+                raise Refused('WORKFLOW_API_REQUEST_FAILED') from None
         url = BASE + suffix
         request = urllib.request.Request(url, method=method, headers={
             'Authorization': 'Bearer ' + self._token,
@@ -84,13 +98,13 @@ the independently approved live operation, not an environment flag. This class
 does not implement that guard. A successful HTTP write is still followed by the
 pause library's observed-state journal; lost responses are never retried here.
 """
-    def __init__(self, token, plan, approved_digest, *, mutation_guard=None):
+    def __init__(self, token, plan, approved_digest, *, mutation_guard=None, read_api=None):
         validate_plan(plan)
         require(digest(plan) == approved_digest, 'WORKFLOW_PLAN_DIGEST_MISMATCH')
         self.plan = json.loads(json.dumps(plan))
         self.plan_digest = approved_digest
         self.workflows = {r['id']: r for r in self.plan['workflows']}
-        self.transport = Transport(token)
+        self.transport = Transport(token, read_api=read_api)
         self.mutation_guard = mutation_guard
         self.failed = False
 

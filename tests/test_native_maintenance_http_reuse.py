@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from ops import native_maintenance_run_guard as guard
+from ops import native_maintenance_workflow_api as workflow
 
 
 def response(body=b'{"ok":true}', status=200, extra=b'', length=None):
@@ -162,3 +163,83 @@ class HTTPReuseTests(unittest.TestCase):
                 self.api.get('/actions/runs/123')
         self.assertTrue(self.api.failed)
         self.assertEqual(len(self.wire), 2)
+
+    def test_workflow_gets_borrow_lanes_but_keep_fresh_results_and_order(self):
+        transport = workflow.Transport('synthetic-token', read_api=self.api)
+        paths = ('/git/ref/heads/main', '/actions/workflows/7') * 3
+        counter = iter(response(json.dumps({'observation': n}).encode()) for n in range(6))
+        self.next_response = lambda: next(counter)
+        with patch.object(transport._opener, 'open') as fallback:
+            values = [transport.request('GET', path) for path in paths]
+            fallback.assert_not_called()
+        self.assertEqual(values, [{'observation': n} for n in range(6)])
+        self.assertEqual(len(self.sockets), 2)
+        self.assertEqual([raw.split(b' ')[1].decode() for raw in self.wire],
+                         ['/repos/' + workflow.REPOSITORY + path for path in paths])
+        self.assertFalse(self.api.failed)
+        self.api.close()
+        self.assertTrue(all(sock.closed for sock in self.sockets))
+
+    def test_workflow_read_failure_is_redacted_and_never_falls_back(self):
+        transport = workflow.Transport('synthetic-token', read_api=self.api)
+        transport.request('GET', '/git/ref/heads/main')
+        self.next_response = lambda: OSError('private-detail')
+        with patch.object(transport._opener, 'open') as fallback:
+            for _ in range(2):
+                with self.assertRaises(workflow.Refused) as caught:
+                    transport.request('GET', '/git/ref/heads/main')
+                self.assertEqual(str(caught.exception), 'WORKFLOW_API_REQUEST_FAILED')
+                self.assertTrue(caught.exception.__suppress_context__)
+            fallback.assert_not_called()
+        self.assertTrue(self.api.failed)
+        self.assertEqual(len(self.wire), 2)
+
+    def test_workflow_transport_rejects_wrong_token_type_and_paths(self):
+        for api, token in [(self.api, 'other-token'), (object(), 'synthetic-token')]:
+            with self.assertRaisesRegex(workflow.Refused, 'READ_TRANSPORT_REQUIRED'):
+                workflow.Transport(token, read_api=api)
+        transport = workflow.Transport('synthetic-token', read_api=self.api)
+        with patch.object(transport._opener, 'open') as fallback:
+            for method, path in [('POST', '/actions/workflows/7'),
+                                 ('GET', '/actions/runs/123'), ('GET', '//evil.invalid'),
+                                 ('GET', '/actions/workflows/7?token=x')]:
+                with self.assertRaises(workflow.Refused):
+                    transport.request(method, path)
+            fallback.assert_not_called()
+        self.assertEqual(self.wire, [])
+
+    def test_workflow_put_and_inventory_keep_original_transport(self):
+        from test_native_maintenance_workflow_api import Response
+        transport = workflow.Transport('synthetic-token', read_api=self.api)
+        path = '/actions/workflows/7/enable'
+        with patch.object(transport._opener, 'open',
+                          return_value=Response(b'', workflow.BASE + path, 204)) as opened:
+            self.assertIsNone(transport.request('PUT', path))
+            self.assertEqual(opened.call_count, 1)
+            self.assertEqual(opened.call_args.args[0].get_method(), 'PUT')
+        path = '/actions/workflows?per_page=100&page=1'
+        with patch.object(transport._opener, 'open',
+                          return_value=Response(b'{}', workflow.BASE + path,
+                                                headers={'Link': 'next'})) as opened:
+            self.assertEqual(transport.request('GET', path), {})
+            self.assertEqual(opened.call_count, 1)
+        self.assertEqual(self.wire, [])
+
+    def test_workflow_adapter_still_refuses_source_and_identity_drift_before_put(self):
+        from test_native_maintenance_workflow_api import PLAN, ROW, Guard
+        from ops.native_maintenance_workflow_pause import digest
+        client = workflow.WorkflowAPI('synthetic-token', PLAN, digest(PLAN),
+                                      mutation_guard=Guard(), read_api=self.api)
+        self.next_response = lambda: response(json.dumps({**ROW, 'id': 8,
+            'url': workflow.BASE + '/actions/workflows/8'}).encode())
+        with self.assertRaisesRegex(workflow.Refused, 'IDENTITY_CHANGED'):
+            client.get_workflow(7)
+        client = workflow.WorkflowAPI('synthetic-token', PLAN, digest(PLAN),
+                                      mutation_guard=Guard(), read_api=self.api)
+        self.next_response = lambda: response(json.dumps({'ref': 'refs/heads/main',
+            'object': {'type': 'commit', 'sha': 'b'*40}}).encode())
+        with patch.object(client.transport._opener, 'open') as write:
+            with self.assertRaisesRegex(workflow.Refused, 'SOURCE_CHANGED'):
+                client.enable_workflow(7)
+            write.assert_not_called()
+        self.assertTrue(client.failed)

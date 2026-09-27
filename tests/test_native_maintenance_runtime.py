@@ -15,7 +15,7 @@ from ops import native_maintenance_runtime as runtime
 from ops import native_maintenance_stage_request as requests
 from ops import native_maintenance_executor as executor
 from ops import native_maintenance_workflow_api as workflow_api
-from ops.native_maintenance_run_guard import RunBinding, StageRunBinding, CheckpointRunBinding
+from ops.native_maintenance_run_guard import RunBinding, StageRunBinding, CheckpointRunBinding, PersistentAPI
 from ops.native_maintenance_workflow_pause import digest, encoded
 from test_native_maintenance_recovery_assets import fixture
 from test_native_maintenance_coordination import Database, agreement_record
@@ -24,7 +24,11 @@ from test_native_maintenance_checkpoint import MemoryStore
 from test_native_maintenance_run_guard import FakeAPI
 
 
-class API(FakeAPI):
+class API(FakeAPI, PersistentAPI):
+    def __init__(self):
+        FakeAPI.__init__(self)
+        PersistentAPI.__init__(self, 'CI-only')
+
     def get(self, path):
         self.calls.append(path)
         if path.startswith('/actions/workflows/7/runs?'):
@@ -145,6 +149,7 @@ class RuntimeTests(unittest.TestCase):
         (self.requests/'VERSION').chmod(0o600)
         self.value, self.manifest = packet_fixture()
         self.api = API()
+        self.addCleanup(self.api.close)
         # Explicit simulated installed workflow profile; production remains disabled.
         self.api.run.update(path=StageRunBinding.workflow, event='workflow_dispatch')
         self.api.file['path'] = StageRunBinding.workflow
