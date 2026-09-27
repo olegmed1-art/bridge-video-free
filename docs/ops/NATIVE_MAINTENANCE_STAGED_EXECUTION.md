@@ -237,3 +237,127 @@ bucket and independent accepted-digest readback. The future fixed launcher still
 must wire both endpoints to the authenticated run/packet, supply dependencies,
 verify supervised exit and demonstrate complete live timing. No production
 entrypoint or workflow hash is enabled by this component.
+
+## Fixed launcher assembly (2026-09-27)
+
+This section supersedes the earlier missing-launcher inventory. The two fixed
+manual workflow files invoke `native_maintenance_stage_launcher.py` with distinct
+`stage` and `rehearsal` commands. Rehearsal has `actions:read`; only the stage job
+has `actions:write`. Both require owner/manual/current-main context, the exact
+workflow hash and both existing Oracle concurrency groups. The read-only profile is pinned to its exact workflow bytes. The production
+profile remains uninstalled until live rehearsal establishes the timing budget;
+adding the fixed production workflow does not enable it.
+
+### Independent acceptance and prepare's new run identity
+
+The owner/manual dispatch provides `expected_main_sha` and
+`accepted_request_digest`. The latter must identify separately reviewed canonical
+private bytes; neither submission nor a successful observation accepts a request.
+The request format is exactly:
+
+- `version:1`, a 32-hex `request_id`, and the 40-hex `source`;
+- `assets`: accepted source-bundle, manifest, baseline and recovery-envelope
+  SHA256 values (`source_digest`, `manifest_digest`, `baseline_digest`,
+  `envelope_digest`);
+- `packet`: the exact stage, scope, plan, baseline, director agreement, prior unit
+  records, accepted checkpoint head and expected restore outcome described above.
+
+Only prepare omits `scope.origin_run`, because its authenticated job ID does not
+exist before dispatch. `AcceptedRequest` preserves the independently accepted
+bytes. `DerivedStagePacket` inserts exactly the authenticated new run/attempt/job
+for prepare and changes nothing else. Its calculated hash is transport integrity,
+not director approval. The host independently authenticates that job and repeats
+the derivation. Execute/restore preserve the already accepted origin, prior unit
+records and remote head; the runner verifies them against OCI but cannot fill in
+omissions or select a new head. `stage()` rejects a direct self-hashed packet and
+all diagnostic profiles.
+
+Private submissions use a separate root-owned 0700 namespace,
+`/var/lib/bridge-native-stage-requests/{requests,claims}`. This does not change the
+existing journal store's inventory schema. An exact VERSION marker and both
+private subdirectories must already exist. `submit_candidate(raw)` creates a
+canonical request as `<sha256>.json`, 0600/O_EXCL/fsynced/exact-readback, and never
+approves it. Retain its exact bytes independently before dispatch. The runner
+reads the fixed digest-selected file through pinned SSH; the supervised host
+reads it again. Before any stage effect, `stage()` itself claims that digest with
+a durable O_EXCL receipt bound to the run and derived packet. Lost acknowledgement,
+cancellation or expiry after this point consumes the request. Never remove or
+overwrite the claim to retry; reconcile first and obtain a separately accepted
+new request if another stage is appropriate.
+
+When the command service cannot elevate because of its existing NoNewPrivileges
+setting, leave that restriction intact. The operator can stage only the reviewed
+data as ubuntu in `/home/ubuntu/bridge-native-stage-submissions/<sha256>.json`
+(0700 directory, 0600 regular single-link file). The already authorized fixed
+GitHub SSH/sudo bootstrap imports this data only if the exact request leaf is
+absent and the complete root namespace, VERSION and claims ledger are intact.
+It checks owner, modes, bounded size, dirfd/inode continuity, canonical schema,
+the externally supplied digest and pinned source, then performs create-only root
+submission and readback. Existing-root corruption, permissions errors or a digest
+mismatch never cause fallback, overwrite or cleanup. This provides no command
+execution field or new privilege to the command service. A staged or root file
+still confers no stage authority; authentication and the durable claim remain
+mandatory.
+
+The same read-only workflow has a separate explicit `first_install` choice for
+one-time namespace provisioning. It is not a rehearsal request or a recovery
+action. Its accepted digest binds `first_install_intent(source)`: version, pinned
+source, fixed hostname/path and the purpose `first_install_only_not_loss_recovery`.
+The authenticated read-only run is checked before and after the fixed SSH command.
+Root creation is exclusive; an existing or partial root refuses without repair.
+Routine submission/fetch never creates missing directories or replaces a missing
+claims ledger. Any loss after first use requires separate offline recovery and
+must not be treated as a fresh installation merely because a path is absent.
+Before first installation the controller must reconcile prior use and the current
+host, not infer history from absence alone. No SQL, workflow-state or pilot
+change is part of provisioning.
+
+### Transport, completion and failure
+
+The runner restores the accepted source/manifest recovery envelope and compares
+the restored source to the bundle built from the exact reviewed Git commit. It
+keeps an exact private create-only request copy under
+`native-journal/stage-requests-v1/` with readback before launching the stage. The
+shared bootstrap runs byte-verified source under PID1, verifies the existing
+private ARM64 driver, and delivers the owner URI and run token only through SSH
+stdin. OCI credentials stay on the runner. Unit retention and journal RPC use the
+same bounded channel, accepted scope and real private OCI adapter.
+
+Completion requires the terminal frame, supervised SSH exit, a new read-only OCI
+readback of the exact head/unit record, and a separate source-pinned read-only
+host inspection of that exact unit/invocation/cgroup. A final fresh run/source
+check must still fit the original 60-second lease. No lease is renewed. Failure
+at any point produces refusal; it does not imply that preceding SQL was rolled
+back. No exception handler dispatches another stage, grants rights, enables a
+workflow, releases HOLD, restarts Light or starts a pilot.
+
+The read-only request is a different schema: exactly `version:1`,
+`mode:"read_only_rehearsal"`, `source` and the reviewed `plan`. It contains no
+agreement or permission packet. The separate host module performs real owner
+READ ONLY identity/snapshot, HOLD, workflow GET/drain and owned-backend drain,
+then retains/restores only synthetic-scope journals through the shared transport.
+It never calls the permission executor or workflow pause/restore. Its private
+supervisor observation is checked after exit but is not a production unit record.
+Timing is explicitly an estimate: workflow PUTs, permission SQL and direct-admin
+exclusion are not measured by this rehearsal. A passing rehearsal cannot approve
+a baseline or replace the director's scoped future no-write commitment.
+
+### Promotion and rollback
+
+Before production prepare, retain and independently review the final-source
+manifest/assets, exact HOLD/route and full workflow plan (including registry
+population), all request bytes, and the apply/rollback paths. Complete the live
+read-only rehearsal. Only then obtain the bounded direct-owner/host/workflow-admin
+no-write window for the concrete operation. Prepare, execute and restore are
+separate accepted manual dispatches; no automated chaining is supplied.
+
+Before any stage claim, code rollback is a revert. After a claim or journal
+exists, retain the exact source, private request, claims, unit records and OCI
+archives. For ambiguous execution, first inspect actual DB BEFORE/AFTER state,
+remote/local journal equality and prior host/backend drain. Restore workflows
+only via a separately accepted restore request for that observed outcome. If the
+six grants must be revoked, use the same retained manifest with an independently
+accepted `operation:"rollback"` scope and a new prepare/execute/restore sequence.
+Neither code revert nor request deletion is database rollback. HOLD remains in
+force throughout this launcher; service activation and the one authorized
+read-only pilot require their own reconciled subsequent steps.

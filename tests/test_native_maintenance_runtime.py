@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from ops import native_maintenance_runtime as runtime
+from ops import native_maintenance_stage_request as requests
 from ops import native_maintenance_executor as executor
 from ops import native_maintenance_workflow_api as workflow_api
 from ops.native_maintenance_run_guard import RunBinding, StageRunBinding, CheckpointRunBinding
@@ -59,7 +60,7 @@ class PacketTests(unittest.TestCase):
         packet = runtime.AcceptedPacket(raw, runtime.checkpoint.sha(raw), manifest)
         api = FakeAPI()
         stage = StageRunBinding(SOURCE, 123, 2, api)
-        with self.assertRaisesRegex(Exception, 'STAGE_PROFILE_NOT_INSTALLED'):
+        with patch.object(StageRunBinding, 'workflow_sha256', None), self.assertRaisesRegex(Exception, 'STAGE_PROFILE_NOT_INSTALLED'):
             stage.assert_running()
         self.assertTrue(stage.failed)
         self.assertEqual(api.calls, [])
@@ -137,6 +138,11 @@ class RuntimeTests(unittest.TestCase):
             path = root/name
             path.write_bytes(data)
             path.chmod(0o600)
+        self.requests = self.parent/'requests-root'
+        self.requests.mkdir(mode=0o700)
+        for name in ('requests','claims'): (self.requests/name).mkdir(mode=0o700)
+        (self.requests/'VERSION').write_bytes(requests.VERSION)
+        (self.requests/'VERSION').chmod(0o600)
         self.value, self.manifest = packet_fixture()
         self.api = API()
         # Explicit simulated installed workflow profile; production remains disabled.
@@ -162,6 +168,7 @@ class RuntimeTests(unittest.TestCase):
                                   invocation='d'*32, cgroup_inode=run.run_id), assert_alive=Mock(), assert_exclusive=Mock())
         patches = [patch.object(StageRunBinding, 'workflow_sha256', hashlib.sha256(base64.b64decode(self.api.file['content'])).hexdigest()),
                    patch.object(runtime.storage, 'PARENT', self.parent),
+                   patch.object(requests, 'ROOT', self.requests),
                    patch.object(runtime.storage, 'persistent_mount', return_value='ext4'),
                    patch.object(runtime.storage, 'trusted_parent'),
                    patch.object(runtime.os, 'uname', return_value=NS(nodename='autopilot-lite-vnic')),
@@ -184,7 +191,20 @@ class RuntimeTests(unittest.TestCase):
 
     def dispatch(self, retain=None):
         run = StageRunBinding(SOURCE, self.api.run['id'], 2, self.api)
-        return runtime.stage(self.packet(), run=run, store=self.store, connect=self.db.connect,
+        run.assert_running()
+        value = copy.deepcopy(self.value)
+        if value['stage'] == 'prepare': value['scope'].pop('origin_run')
+        req_value = dict(version=1,request_id='e'*32,source=SOURCE,packet=value,assets=dict(
+            source_digest='a'*64,manifest_digest=value['scope']['manifest_digest'],
+            baseline_digest=value['baseline_digest'],envelope_digest='b'*64))
+        raw = encoded(req_value)
+        path = self.requests/'requests'/(runtime.checkpoint.sha(raw)+'.json')
+        if not path.exists():
+            path.write_bytes(raw)
+            path.chmod(0o600)
+        request = requests.AcceptedRequest(raw,runtime.checkpoint.sha(raw),SOURCE)
+        packet = runtime.DerivedStagePacket(request,run,self.manifest)
+        return runtime.stage(packet, run=run, store=self.store, connect=self.db.connect,
                              api_token='CI-only', retain_unit=retain or self.retain)
 
     def next_stage(self, stage, head, outcome=None):

@@ -17,6 +17,7 @@ from ops import native_maintenance_lifetime as lifetime
 from ops.native_maintenance_workflow_pause import digest, require, validate_plan
 from ops.native_maintenance_workflow_api import source_matches
 from ops.native_maintenance_run_guard import RunBinding
+from ops.native_maintenance_supervisor import PriorSupervisors
 from ops import oracle_light_active_hold_attest as hold
 
 NONTERMINAL = ('queued', 'in_progress', 'waiting', 'pending', 'requested')
@@ -156,39 +157,6 @@ class OwnedConnections:
                         'DATABASE_PREPARED_TRANSACTION_PRESENT')
 
 
-class PriorSupervisors:
-    """Inspect previously recorded unique units/cgroups without stopping them."""
-    def __init__(self, records, accepted_digest):
-        require(type(records) is list and len(records) <= 16
-                and digest(records) == accepted_digest, 'DRAIN_PRIOR_HOST_NOT_ACCEPTED')
-        self.records = json.loads(json.dumps(records))
-        self.accepted = accepted_digest
-        names = set()
-        for record in self.records:
-            require(type(record) is dict and set(record) == {'unit', 'invocation', 'cgroup_inode'}
-                    and re.fullmatch(lifetime.UNIT, record['unit'])
-                    and re.fullmatch('[0-9a-f]{32}', record['invocation'])
-                    and type(record['cgroup_inode']) is int and record['cgroup_inode'] > 0
-                    and record['unit'] not in names, 'DRAIN_PRIOR_HOST_IDENTITY')
-            names.add(record['unit'])
-
-    def assert_drained(self):
-        require(digest(self.records) == self.accepted, 'DRAIN_PRIOR_HOST_CHANGED')
-        current = Path('/proc/self/cgroup').read_text().strip()
-        for record in self.records:
-            unit = record['unit']
-            require(current != '0::/system.slice/' + unit, 'DRAIN_CANNOT_EXCLUDE_SELF')
-            result = lifetime.ctl('show', unit, '--property=LoadState,ActiveState,MainPID,InvocationID')
-            require(len(result.stdout) < 16384, 'DRAIN_PRIOR_HOST_RESPONSE')
-            fields = dict(line.split('=', 1) for line in result.stdout.decode().splitlines() if '=' in line)
-            if fields.get('LoadState') == 'not-found':
-                require(not Path('/sys/fs/cgroup/system.slice', unit).exists(), 'DRAIN_PRIOR_CGROUP_PRESENT')
-            else:
-                require(result.returncode == 0 and fields.get('LoadState') == 'loaded'
-                        and fields.get('ActiveState') in ('inactive', 'failed') and fields.get('MainPID') == '0'
-                        and fields.get('InvocationID') == record['invocation'], 'DRAIN_PRIOR_HOST_ACTIVE')
-                require(lifetime.empty(Path('/sys/fs/cgroup/system.slice', unit), record['cgroup_inode']),
-                        'DRAIN_PRIOR_CGROUP_ACTIVE')
 
 
 class Operator:

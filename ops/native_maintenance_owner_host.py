@@ -44,12 +44,9 @@ def verified_runtime(payload):
         os.close(descriptor)
 
 
-def observe(wheels, credential, *, candidate=False):
-    require(os.getuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic', 'OWNER_HOST')
-    require(type(credential) is str and 0 < len(credential) <= 8192, 'OWNER_CREDENTIAL_SIZE')
-    connection_parameters(credential, 'neondb_owner')  # Reject unrelated credentials before host/DB work.
-    start = time.monotonic()
-    before = attest()
+@contextmanager
+def loaded_runtime(wheels):
+    """Load only the byte-verified private driver, retaining its lifetime lock."""
     with verified_runtime(wheels) as (root, runtime_id):
         site = root / 'site'
         require(all(name not in sys.modules for name in ('psycopg', 'psycopg_binary', 'typing_extensions')),
@@ -60,10 +57,20 @@ def observe(wheels, credential, *, candidate=False):
         require(all(Path(m.__file__).resolve().is_relative_to(site) for m in modules), 'OWNER_DRIVER_ORIGIN')
         psycopg = modules[0]
         require(psycopg.__version__ == '3.3.4' and psycopg.pq.__impl__ == 'binary', 'OWNER_DRIVER_VERSION')
-        from ops import native_maintenance_owner_attest as owner
         require(all(not name.startswith('psycopg') or
                     (getattr(module, '__file__', None) and Path(module.__file__).resolve().is_relative_to(site))
                     for name, module in tuple(sys.modules.items())), 'OWNER_DRIVER_SUBMODULE_ORIGIN')
+        yield psycopg, runtime_id
+
+
+def observe(wheels, credential, *, candidate=False):
+    require(os.getuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic', 'OWNER_HOST')
+    require(type(credential) is str and 0 < len(credential) <= 8192, 'OWNER_CREDENTIAL_SIZE')
+    connection_parameters(credential, 'neondb_owner')  # Reject unrelated credentials before host/DB work.
+    start = time.monotonic()
+    before = attest()
+    with loaded_runtime(wheels) as (psycopg, runtime_id):
+        from ops import native_maintenance_owner_attest as owner
         if candidate:
             report, manifest = owner.candidate(psycopg.connect, credential)
         else:
