@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 import unittest
+from copy import deepcopy
 
 import diana_longitudinal_quality_v4_2 as v42
 from bridge_school_api.dds3.service import DDS_UPSTREAM
@@ -58,6 +59,36 @@ def base_master() -> dict:
 
 
 class DianaLongitudinalQualityV42Tests(unittest.TestCase):
+    def test_repeated_visual_deal_id_is_counted_once(self):
+        master = base_master()
+        master['report_visual_board_deals'].append(
+            deepcopy(master['report_visual_board_deals'][0])
+        )
+        original = deepcopy(master)
+
+        quality = build_quality_layer(master)
+
+        self.assertEqual(len(quality['deal_reconstructions']), 1)
+        self.assertEqual(quality['counts']['report_visual_partial_boards_v4_2'], 1)
+        self.assertEqual(master, original)
+
+    def test_existing_deal_takes_precedence_and_distinct_visual_ids_survive(self):
+        master = base_master()
+        existing = deepcopy(master['report_visual_board_deals'][0])
+        existing['evidence'] = ['original-frame']
+        master['deals'] = [existing]
+        other = deepcopy(master['report_visual_board_deals'][0])
+        other['deal_id'] = 'visualdeal_other'
+        master['report_visual_board_deals'].extend([other, deepcopy(other)])
+
+        quality = build_quality_layer(master)
+
+        deals = quality['deal_reconstructions']
+        self.assertEqual([row['deal_candidate_id'] for row in deals],
+                         ['visualdeal_test', 'visualdeal_other'])
+        self.assertEqual(deals[0]['evidence_refs'], ['original-frame'])
+        self.assertEqual(quality['counts']['report_visual_partial_boards_v4_2'], 2)
+
     def test_visual_evidence_creates_partial_not_full_board(self):
         quality = build_quality_layer(base_master(), {'lesson_id': 'lesson-test', 'lesson_number': 5})
         counts = quality['counts']
