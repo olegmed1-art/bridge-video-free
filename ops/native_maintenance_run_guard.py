@@ -182,6 +182,14 @@ class StageRunBinding(RunBinding):
             raise
 
 
+class RehearsalRunBinding(StageRunBinding):
+    """Separate manual read-only launcher profile; never accepted by stage()."""
+    workflow = '.github/workflows/native-maintenance-stage-rehearsal.yml'
+    workflow_sha256 = 'be50b4daaa527c08cf7ad02856485fd7b1e075221041bc79c9434e73a59e6830'
+    job_name = 'rehearsal'
+    job_names = ('contract', 'rehearsal')
+
+
 def main():
     env = os.environ
     source = env.get('GITHUB_SHA')

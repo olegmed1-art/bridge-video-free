@@ -23,6 +23,7 @@ from ops import native_maintenance_store as storage
 from ops import oracle_light_active_hold_attest as hold
 from ops.native_maintenance_executor import MaintenanceExecutor, operation_scope
 from ops.native_maintenance_run_guard import StageRunBinding
+from ops.native_maintenance_supervisor import SelfSupervisor
 from ops.native_maintenance_workflow_api import Transport
 from ops.native_maintenance_workflow_pause import Journal, digest, encoded, require, unique, validate_plan
 
@@ -54,8 +55,8 @@ def unit_record(value):
     return value
 
 
-class AcceptedPacket:
-    """Exact bytes accepted outside this host run; a digest is not self-approval."""
+class Packet:
+    """Structural/integrity validation only; subclasses supply acceptance provenance."""
     def __init__(self, raw, accepted_digest, manifest):
         require(type(raw) is bytes and 0 < len(raw) <= 262144
                 and type(accepted_digest) is str
@@ -112,58 +113,29 @@ class AcceptedPacket:
         self.agreement.assert_held(self.scope_digest)
 
 
-class SelfSupervisor:
-    def __init__(self, source, run):
-        group = Path('/proc/self/cgroup').read_text().strip()
-        require(group.startswith('0::/system.slice/'), 'RUNTIME_SELF_CGROUP')
-        self.unit = group.removeprefix('0::/system.slice/')
-        require(self.unit.startswith('bridge-native-ro-' + source[:12] + '-'
-                                    + str(run.run_id) + '-' + str(run.attempt) + '-'), 'RUNTIME_SELF_RUN')
-        lifetime.assert_self(self.unit)
-        state, _, inode = lifetime.identity(self.unit, 100)
-        self.record = dict(unit=self.unit, invocation=state['InvocationID'], cgroup_inode=inode)
-        self.failed = False
+class AcceptedPacket(Packet):
+    """Exact packet bytes accepted outside this host run; not a derived approval."""
 
-    def assert_alive(self):
-        require(not self.failed, 'RUNTIME_SUPERVISOR_FAILED')
-        try:
-            lifetime.assert_self(self.unit)
-            state, _, inode = lifetime.identity(self.unit, 100)
-            require(self.record == dict(unit=self.unit, invocation=state['InvocationID'], cgroup_inode=inode),
-                    'RUNTIME_SUPERVISOR_CHANGED')
-        except BaseException:
-            self.failed = True
-            raise
 
-    def assert_exclusive(self):
-        """Reject orphaned supervisors from ANY scope; never stop another unit."""
-        self.assert_alive()
-        result = lifetime.ctl('list-units', 'bridge-native-ro-*', '--all', '--plain', '--no-legend', '--no-pager')
-        require(result.returncode == 0 and len(result.stdout) <= 65536, 'RUNTIME_UNIT_INVENTORY')
-        names = []
-        for line in result.stdout.decode('ascii').splitlines():
-            fields = line.split()
-            require(len(fields) >= 4 and re.fullmatch(lifetime.UNIT, fields[0]), 'RUNTIME_UNIT_INVENTORY_ROW')
-            names.append(fields[0])
-        require(self.unit in names and len(names) <= 128 and len(names) == len(set(names)),
-                'RUNTIME_UNIT_INVENTORY_INCOMPLETE')
-        groups = list(Path('/sys/fs/cgroup/system.slice').iterdir())
-        require(len(groups) <= 4096, 'RUNTIME_CGROUP_INVENTORY_SIZE')
-        matching = [group for group in groups if group.name.startswith('bridge-native-ro-')]
-        require(len(matching) <= 128 and self.unit in {group.name for group in matching}
-                and all(re.fullmatch(lifetime.UNIT, group.name) and group.name in names
-                        for group in matching), 'RUNTIME_UNLISTED_CGROUP')
-        for name in names:
-            if name == self.unit:
-                continue
-            state = lifetime.show(name)
-            require(state.get('ActiveState') in ('inactive', 'failed') and state.get('MainPID') == '0',
-                    'RUNTIME_OTHER_SUPERVISOR_ACTIVE')
-            group = Path('/sys/fs/cgroup/system.slice', name)
-            if group.exists():
-                require(group.is_dir() and 'populated 0' in (group/'cgroup.events').read_text(),
-                        'RUNTIME_OTHER_CGROUP_ACTIVE')
-        self.assert_alive()
+class DerivedStagePacket(Packet):
+    """Deterministic projection of an externally accepted request and observed run.
+
+    The generated packet digest binds transport bytes only. Every scope field
+    except prepare's origin identity comes from AcceptedRequest; the host repeats
+    that derivation with its own authenticated run before any stage operation.
+    """
+    def __init__(self, request, run, manifest):
+        from ops.native_maintenance_stage_request import AcceptedRequest
+        require(type(request) is AcceptedRequest and type(run) is StageRunBinding,
+                'RUNTIME_DERIVATION_COMPONENTS')
+        raw = request.packet_bytes(run)
+        super().__init__(raw, checkpoint.sha(raw), manifest)
+        self.request = request
+
+    def assert_bound(self, run):
+        require(self.request.packet_bytes(run) == self.raw, 'RUNTIME_DERIVATION_CHANGED')
+        self.assert_current()
+
 
 
 def read_private(directory, name, limit):
@@ -252,11 +224,12 @@ def stage(packet, *, run, store, connect, api_token, retain_unit):
     launcher. retain_unit sends canonical bytes to the authenticated runner and
     returns their SHA only after private off-VM write+readback. No default exists.
     """
-    require(type(packet) is AcceptedPacket and type(run) is StageRunBinding
+    require(type(packet) is DerivedStagePacket and type(run) is StageRunBinding
             and callable(connect) and callable(retain_unit), 'RUNTIME_COMPONENTS')
     require(os.getuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic', 'RUNTIME_HOST')
     packet.assert_current()
     run.assert_running()
+    packet.assert_bound(run)
     current = run_identity(run)
     require(run.source == packet.scope['source'] and all(row['run']['run_id'] != run.run_id for row in packet.prior),
             'RUNTIME_RUN_REUSED')
@@ -265,6 +238,8 @@ def stage(packet, *, run, store, connect, api_token, retain_unit):
             'RUNTIME_STAGE_RUN')
     supervisor = SelfSupervisor(run.source, run)
     supervisor.assert_exclusive()
+    from ops.native_maintenance_stage_request import claim
+    claim(packet.request, run)
     own = unit_record(dict(version=1, kind='NATIVE_STAGE_UNIT', stage=packet.stage, source=run.source,
                            scope_digest=packet.scope_digest, run=current, supervisor=supervisor.record))
     connections = coordination.OwnedConnections(connect, packet.target, approved_hold=packet.hold)
