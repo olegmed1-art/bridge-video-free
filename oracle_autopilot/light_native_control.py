@@ -33,4 +33,3 @@ def root_bytes(path, limit, *, private=True):
             return data
     finally:
         os.close(fd)
-

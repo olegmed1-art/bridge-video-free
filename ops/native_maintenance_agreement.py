@@ -55,4 +55,3 @@ class Agreement:
         except BaseException:
             self.failed = True
             raise
-

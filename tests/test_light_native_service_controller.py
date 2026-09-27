@@ -197,6 +197,7 @@ def test_launch_persists_intent_before_start_and_never_retries(tmp_path, monkeyp
     events = []
     monkeypatch.setattr(target, 'ledger', lambda *_:(request,prior_value,{},'f'*64,scope))
     monkeypatch.setattr(target.os, 'uname', lambda:SimpleNamespace(nodename='autopilot-lite-vnic'))
+    monkeypatch.setattr(target.os, 'geteuid', lambda:0)
     monkeypatch.setattr(target.switch, 'unchanged_files', lambda *a:events.append('protected'))
     monkeypatch.setattr(target.hold, 'service_hold_identity',
                         lambda:hold.ServiceHoldIdentity(**asdict(prior_value)))
@@ -216,6 +217,7 @@ def test_launch_persists_intent_before_start_and_never_retries(tmp_path, monkeyp
 def test_restore_denies_before_ledger_and_never_checks_expired_agreement(monkeypatch):
     events = []
     monkeypatch.setattr(target.os, 'uname', lambda:SimpleNamespace(nodename='autopilot-lite-vnic'))
+    monkeypatch.setattr(target.os, 'geteuid', lambda:0)
     monkeypatch.setattr(target.switch, 'deny_admission', lambda:events.append('deny'))
     def bad_ledger(_):
         events.append('ledger')
@@ -232,6 +234,7 @@ def test_repeated_restore_with_receipt_never_reopens_backend(monkeypatch,tmp_pat
     identity = prior()
     scope = tmp_path
     monkeypatch.setattr(target.os, 'uname', lambda:SimpleNamespace(nodename='autopilot-lite-vnic'))
+    monkeypatch.setattr(target.os, 'geteuid', lambda:0)
     monkeypatch.setattr(target, 'ledger', lambda *_:(request,identity,{},'f'*64,scope))
     monkeypatch.setattr(target.switch, 'deny_admission', lambda:None)
     monkeypatch.setattr(target, 'restored_receipt', lambda *a:{'version':1})
@@ -246,6 +249,7 @@ def test_run_writes_one_shot_latch_before_any_host_effect(monkeypatch,tmp_path):
                               'scope':{},'dispatch_id':'dispatch'},agreement=lambda:object())
     prior_value = prior()
     monkeypatch.setattr(target.os, 'uname', lambda:SimpleNamespace(nodename='autopilot-lite-vnic'))
+    monkeypatch.setattr(target.os, 'geteuid', lambda:0)
     monkeypatch.setattr(target, 'ledger', lambda *_:(request,prior_value,{},'f'*64,tmp_path))
     expected = target.canonical({'request_sha256':'a'*64,'source':SOURCE,
                                   'unit':target.plan.SUPERVISOR_UNIT})
