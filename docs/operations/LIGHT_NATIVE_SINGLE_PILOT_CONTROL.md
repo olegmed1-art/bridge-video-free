@@ -41,8 +41,11 @@ The operational sequence is deliberately split around real task creation:
    Unknown provider/DB outcomes retain the ledger and remain quarantined.
 
 `ops.light_native_pilot_control` generates fixed SSH bootstrap data for baseline,
-launch, observe and restore. It does not create approvals or an execution
-workflow. Cleanup is permitted after window expiry and never resubmits work.
+launch, observe and restore. The fixed manual owner and control workflows
+require accepted source/package/payload digests. They do not create approvals.
+Private permit/request bytes remain on the host: prepare-retained loads only
+the accepted permit digest from the fixed intake directory, and launch-retained
+uses the separately accepted request digest. Cleanup is permitted after window expiry and never resubmits work.
 The live effective systemd properties and whole-path recovery must still be
 verified before production activation. Permission-stage production binding is
 not enabled by this change.
@@ -52,3 +55,26 @@ binding, nonrenewing agreements, queue-zero baseline handoff, no-effect launch
 gating, lost acknowledgements, configuration/process drift and restoration
 readback. CI additionally exercises root-owned filesystem metadata and the
 existing disposable PG18 native delivery regression.
+
+The owner intake performs the existing shared register, probe, materialize,
+claim, prepare-dispatch and claim-outbox RPCs in one transaction. Any unexpected
+queue selection rolls back the transaction; it does not clear or bypass the
+historical queue. Original native configuration and AUTOPILOT repair policy are
+retained before the first mutation. Authenticated workflow/run/job checks apply
+at effect boundaries and before commit, in addition to the finite owner window.
+Broker publication is one attempt with durable intent; uncertain outcomes are
+reconciled using actual GitHub evidence, never blindly retried. Public workflow
+output contains only digests and selected identifiers, not private records.
+
+After service restoration, a fresh Cloud status/diff must match the terminal
+DB evidence. Conditional control restoration verifies the exact terminal,
+unchanged goal and absence of successors, then restores only the saved native
+configuration and repair policy. UNKNOWN leaves the ledger in place. A known
+BLOCKED result is not success: its work item may be scheduled again, so the
+persistent service stays HOLD until that specific lane is reconciled before
+any later activation. No queue, task, receipt or journal is deleted.
+
+The new disposable intake fixture exercises actual admission/native RPCs and
+control restoration on localhost bridge_school_ci only. It is test evidence,
+not a production task or permission receipt. Live pilot acceptance and the
+permission-stage production profile remain separate outstanding requirements.

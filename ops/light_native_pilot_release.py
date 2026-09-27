@@ -26,14 +26,19 @@ CLOUD_ENVIRONMENT_ID = '6a97d5069f708191a28ed2b86f7fe5f1'
 SUPERVISOR_HELPERS = ('ops/light_native_service_controller.py',
                      'ops/light_native_service_plan.py', 'ops/light_native_service_switch.py',
                      'ops/native_maintenance_agreement.py', 'ops/native_maintenance_workflow_pause.py')
+OWNER_HELPERS = ('ops/light_native_pilot_owner.py', 'ops/light_native_pilot_run_guard.py', 'ops/native_maintenance_owner_host.py',
+                 'ops/native_maintenance_owner_attest.py', 'ops/native_maintenance_driver.py',
+                 'ops/native_maintenance_store.py', 'ops/native_maintenance_run_guard.py',
+                 'ops/native_maintenance_lifetime.py', 'ops/oracle_autopilot_source_preflight.py',
+                 'ops/native_permission_hold_guard.py')
 EXTRA = ('database/__init__.py', 'database/native_cli_permission_engine.py',
          'ops/__init__.py', 'ops/native_permission_hold_guard.py',
          'ops/oracle_light_active_hold_attest.py', 'ops/oracle_autopilot_source_preflight.py',
          'ops/native_maintenance_bundle.py', 'ops/oracle_light_runtime_hold_install.py',
-         'ops/light_native_pilot_release.py') + SUPERVISOR_HELPERS
+         'ops/light_native_pilot_release.py', 'database/light_native_pilot_intake.py') + SUPERVISOR_HELPERS + OWNER_HELPERS
 HELPERS = ('ops/__init__.py', 'ops/native_maintenance_bundle.py',
            'ops/oracle_light_active_hold_attest.py', 'ops/oracle_light_runtime_hold_install.py',
-           'ops/light_native_pilot_release.py') + SUPERVISOR_HELPERS
+           'ops/light_native_pilot_release.py') + SUPERVISOR_HELPERS + OWNER_HELPERS
 MARKERS = ('database/__init__.py', 'ops/__init__.py')
 
 

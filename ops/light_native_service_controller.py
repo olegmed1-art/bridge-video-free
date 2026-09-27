@@ -26,7 +26,7 @@ from ops.native_maintenance_agreement import Agreement
 
 require = plan.require
 CLAIM = plan.LIGHT / 'runtime/native-single-pilot'
-PACKAGE_HELPERS = release.SUPERVISOR_HELPERS
+PACKAGE_HELPERS = tuple(name for name in release.HELPERS if name not in release.MARKERS)
 REQUEST_KEYS = {'version', 'source', 'package_sha256', 'permit_b64',
                 'permit_sha256', 'agreement', 'accepted_agreement_sha256',
                 'scope', 'duration_seconds', 'dispatch_id', 'baseline_sha256'}
