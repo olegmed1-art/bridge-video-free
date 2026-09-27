@@ -39,7 +39,7 @@ class TimingProfile:
     Nested/concurrent durations overlap and must not be summed as wall time.
     """
     LABELS = frozenset(('github_get', 'oci_read', 'oci_write', 'rpc_wait',
-                       'rpc_store', 'rpc_unit', 'source_check'))
+                       'rpc_store', 'rpc_unit', 'source_check', 'oci_privacy'))
 
     def __init__(self):
         self.rows = {}
@@ -97,6 +97,14 @@ class MeasuredAPI(API):
 
 
 class MeasuredStore(adapter.OCIJournalStore):
+    def _privacy_call(self, method, *args, **kwargs):
+        with measured('oci_read'):
+            return super()._privacy_call(method, *args, **kwargs)
+
+    def assert_private(self):
+        with measured('oci_privacy'):
+            return super().assert_private()
+
     def _call(self, method, *args, **kwargs):
         # Preserve the adapter's exact method, arguments, no-retry and guards.
         with measured('oci_write' if method == 'put_object' else 'oci_read'):
@@ -241,7 +249,11 @@ def oci_client():
         ('user','OCI_USER'),('tenancy','OCI_TENANCY'),('fingerprint','OCI_FINGERPRINT'),('region','OCI_REGION'))}
     require(config['tenancy'] == adapter.TENANCY and config['region'] == 'eu-frankfurt-1', 'LAUNCHER_OCI_TARGET')
     config['key_content'] = os.environ['OCI_KEY'].replace('\\r','').replace('\\n','\n')
-    client = oci.object_storage.ObjectStorageClient(config,timeout=(5,10),retry_strategy=oci.retry.NoneRetryStrategy())
+    def isolated_client():
+        return oci.object_storage.ObjectStorageClient(dict(config), timeout=(5,10),
+            retry_strategy=oci.retry.NoneRetryStrategy())
+    client = adapter.IsolatedPrivacyClient(isolated_client(),
+        tuple(isolated_client() for _ in range(4)))
     namespace = client.get_namespace(compartment_id=adapter.TENANCY,retry_strategy=oci.retry.NoneRetryStrategy()).data
     return client, namespace
 
