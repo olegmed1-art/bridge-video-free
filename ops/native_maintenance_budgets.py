@@ -37,9 +37,11 @@ def admit_runner(channel, request_digest, guard):
         channel.stage_admission_started = True
         require(channel.receive() == startup_record('NATIVE_STAGE_READY', channel, request_digest),
                 'STAGE_READY_BINDING')
-        guard()
+        launcher_deadline = guard()  # trusted assembly returns its freshly checked original deadline
+        require(type(launcher_deadline) in (int, float), 'STAGE_LAUNCHER_CLOCK_REQUIRED')
         channel.alive()
-        require(channel.deadline - time.monotonic() >= STAGE_READY_REQUIRED_SECONDS,
+        require(min(channel.deadline, launcher_deadline - STAGE_COMPLETION_RESERVE_SECONDS)
+                - time.monotonic() >= STAGE_READY_REQUIRED_SECONDS,
                 'STAGE_STARTUP_TOO_SLOW')
         channel.send(startup_record('NATIVE_STAGE_START', channel, request_digest))
     except BaseException:

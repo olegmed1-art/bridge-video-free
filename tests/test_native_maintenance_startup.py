@@ -27,7 +27,7 @@ class StartupTests(unittest.TestCase):
     def test_latest_admission_fits_whole_supervisor_and_cleanup_without_renewal(self):
         with patch.object(budgets.time, 'monotonic', return_value=1040.):
             self.ready()
-            budgets.admit_runner(self.runner, self.digest, Mock())
+            budgets.admit_runner(self.runner, self.digest, Mock(return_value=1310.))
             self.assertEqual(self.host.receive(), budgets.startup_record('NATIVE_STAGE_START', self.host, self.digest))
         self.assertEqual(self.runner.deadline, 1210.)
         # Even if PID1 started only immediately before READY, its cap, kill,
@@ -37,7 +37,7 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(self.runner.deadline - (1040. + tail), 12.)
         with patch.object(budgets.time, 'monotonic', return_value=1041.):
             with self.assertRaisesRegex(Exception, 'ADMISSION_REUSED'):
-                budgets.admit_runner(self.runner, self.digest, Mock())
+                budgets.admit_runner(self.runner, self.digest, Mock(return_value=1310.))
         self.assertTrue(self.runner.failed)
 
     def test_late_ready_or_slow_authorization_never_sends_start(self):
@@ -48,6 +48,7 @@ class StartupTests(unittest.TestCase):
                 clock = [1000. + delay]
                 def guard():
                     if slow_guard: clock[0] = 1040.001
+                    return 1310.
                 with patch.object(budgets.time, 'monotonic', side_effect=lambda: clock[0]):
                     self.ready()
                     with patch.object(self.runner, 'send', wraps=self.runner.send) as send:
@@ -56,6 +57,20 @@ class StartupTests(unittest.TestCase):
                         send.assert_not_called()
                 self.assertTrue(self.runner.failed)
                 self.assertEqual(self.runner.deadline, 1210.)
+
+    def test_slow_popen_fresh_channel_cannot_outlive_original_launcher_or_job(self):
+        # Popen returns late. Its new channel has the full 210s, but only the
+        # ORIGINAL job-clamped launcher deadline can authorize START.
+        with patch.object(budgets.time, 'monotonic', return_value=1100.):
+            self.runner.deadline = 1310.  # New channel constructed at 1100.
+            self.host.deadline = 1310.
+            self.ready()
+            with patch.object(self.runner, 'send', wraps=self.runner.send) as send:
+                with self.assertRaisesRegex(Exception, 'STARTUP_TOO_SLOW'):
+                    budgets.admit_runner(self.runner, self.digest, Mock(return_value=1310.))
+                send.assert_not_called()
+        self.assertEqual(self.runner.deadline,1310.)
+        self.assertTrue(self.runner.failed)
 
     def test_ready_binding_and_unexpected_early_rpc_are_refused(self):
         for record in [dict(kind='NATIVE_STAGE_READY', binding='c'*64, request_digest=self.digest),
@@ -68,7 +83,7 @@ class StartupTests(unittest.TestCase):
                 self.host.send(record)
                 with patch.object(self.runner, 'send') as send:
                     with self.assertRaisesRegex(Exception, 'READY_BINDING'):
-                        budgets.admit_runner(self.runner, self.digest, Mock())
+                        budgets.admit_runner(self.runner, self.digest, Mock(return_value=1310.))
                     send.assert_not_called()
 
     def test_host_start_checks_supervisor_and_original_run_after_wait(self):
