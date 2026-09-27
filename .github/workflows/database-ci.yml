@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'database/**'
+      - 'oracle_autopilot/light_native_*.py'
       - 'ops/github_autopilot_db_route.py'
       - 'ops/oracle_light_route_lease.py'
       - 'ops/native_permission_route_fence.py'
@@ -52,6 +53,7 @@ on:
     branches: [main]
     paths:
       - 'database/**'
+      - 'oracle_autopilot/light_native_*.py'
       - 'ops/github_autopilot_db_route.py'
       - 'ops/oracle_light_route_lease.py'
       - 'ops/native_permission_route_fence.py'
@@ -416,3 +418,6 @@ jobs:
             "SELECT migration_key, checksum IS NOT NULL AS checksum_recorded FROM schema_migration ORDER BY migration_key;"
           missing="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM schema_migration WHERE checksum IS NULL;")"
           test "$missing" -eq 0
+
+      - name: Rehearse one native pilot using real shared admission and RPCs
+        run: PYTHONPATH=. python database/fixtures/light_native_single_pilot_rehearsal.py
