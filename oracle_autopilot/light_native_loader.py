@@ -41,7 +41,7 @@ def root_bytes(path, limit, *, private=True):
             row = os.fstat(stream.fileno())
             require(stat.S_ISREG(row.st_mode) and row.st_uid == 0 and row.st_nlink == 1
                     and (stat.S_IMODE(row.st_mode) == 0o640 and row.st_gid == os.getgid()
-                         if private else stat.S_IMODE(row.st_mode) in (0o600, 0o640, 0o644))
+                         if private else stat.S_IMODE(row.st_mode) in (0o444, 0o600, 0o640, 0o644))
                     and row.st_size <= limit, 'PILOT_CONTROL_FILE')
             data = stream.read(limit + 1)
             require(len(data) <= limit, 'PILOT_CONTROL_SIZE')

@@ -24,6 +24,9 @@ def test_root_control_rejects_symlinks_writable_files_and_parents(tmp_path):
         path.parent.chmod(0o777)
         with pytest.raises(RuntimeError, match='CONTROL_PARENT'): loader.root_bytes(path, 16)
         path.parent.chmod(0o700)
+        path.chmod(0o444)
+        assert loader.root_bytes(path, 16, private=False) == b'PILOT\n'
+        with pytest.raises(RuntimeError, match='CONTROL_FILE'): loader.root_bytes(path, 16)
 
 
 def test_runtime_dsn_reconstructed_without_injected_options():
