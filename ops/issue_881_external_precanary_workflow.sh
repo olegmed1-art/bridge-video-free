@@ -28,6 +28,13 @@ process_video_gate_armed=0
 root_pr_number=991
 prior_gate_pr_number=1070
 protected_gate_paths=(
+  'ops/light_native_pilot_control.py'
+  'oracle_autopilot/light_native_control.py'
+  'oracle_autopilot/light_native_launch_gate.py'
+  'ops/light_native_service_controller.py'
+  'ops/light_native_service_plan.py'
+  'ops/light_native_service_switch.py'
+  'ops/native_maintenance_agreement.py'
   'ops/light_native_pilot_release.py'
   '.github/workflows/light-native-pilot-stage.yml'
   '.github/workflows/native-maintenance-driver-prepare.yml'

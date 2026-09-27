@@ -36,6 +36,7 @@ FILES = (
     'ops/native_maintenance_stage_unit.py',
     'ops/native_maintenance_recovery_assets.py',
     'ops/native_maintenance_coordination.py',
+    'ops/native_maintenance_agreement.py',
     'ops/native_maintenance_lifetime.py',
     'ops/native_maintenance_workflow_api.py',
     'ops/native_maintenance_workflow_pause.py',

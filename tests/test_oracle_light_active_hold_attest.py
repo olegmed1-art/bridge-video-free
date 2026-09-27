@@ -25,7 +25,7 @@ class ActiveHoldContract(unittest.TestCase):
             self.assertNotEqual(probe.returncode,0)
             self.assertIn('FILE_DRIFT',probe.stderr)
 
-    def parent_audit(self, change_after=None, extra_env=b''):
+    def parent_audit(self, change_after=None, extra_env=b'', service_only=False):
         release='/opt/bridge-school/school-autopilot-production-light/releases/'+'b'*40
         dsn='postgresql://autopilot_light_worker_login:private-secret@'+attest.HOST+'/neondb'
         drop=('[Service]\nWorkingDirectory='+release+'\nEnvironment=AUTOPILOT_ADMISSION_MODE=HOLD\n'
@@ -65,9 +65,18 @@ class ActiveHoldContract(unittest.TestCase):
              patch.object(attest,'Path',FakePath), \
              patch.object(attest.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=1000)), \
              patch.object(attest,'login') as login:
-            result=attest.attest()
-            login.assert_called_once_with(dsn)
+            result=attest.service_hold_identity() if service_only else attest.attest()
+            if service_only:
+                login.assert_not_called()
+            else:
+                login.assert_called_once_with(dsn)
             return result
+
+    def test_restore_identity_is_distinct_and_does_not_claim_queue_evidence(self):
+        result=self.parent_audit(service_only=True)
+        self.assertIs(type(result),attest.ServiceHoldIdentity)
+        self.assertNotIsInstance(result,attest.HoldIdentity)
+        self.assertEqual(vars(result),vars(self.parent_audit()))
 
     def test_full_parent_returns_stable_private_identity(self):
         first=self.parent_audit()
