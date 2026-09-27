@@ -108,7 +108,7 @@ class OwnedConnections:
         # Neon rewrites BackendKeyData for cancellation routing. Obtain the real
         # server identity only through this already verified connection's SQL.
         row = conn.execute('SELECT pid,backend_start FROM pg_catalog.pg_stat_activity '
-                           'WHERE pid=pg_backend_pid()').fetchone()
+                           'WHERE pid=pg_catalog.pg_backend_pid()').fetchone()
         require(type(row) is tuple and len(row) == 2 and type(row[0]) is int
                 and row[0] > 0 and isinstance(row[1], datetime), 'DRAIN_BACKEND_IDENTITY')
         return row

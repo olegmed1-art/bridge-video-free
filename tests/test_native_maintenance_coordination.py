@@ -48,7 +48,7 @@ class Database:
         conn = NS(autocommit=True, closed=False, info=NS(backend_pid=pid+self.wire_offset), transaction=nullcontext)
         self.active[pid] = conn
         def execute(sql):
-            if 'WHERE pid=pg_backend_pid()' in sql:
+            if 'WHERE pid=pg_catalog.pg_backend_pid()' in sql:
                 return NS(fetchone=lambda: self.identity_drift(pid) if self.identity_drift else (pid, START))
             if 'backend_type<>' in sql:
                 rows = [(p, START, 'neondb_owner', 'client backend', 'idle', None, None, None) for p in self.active]

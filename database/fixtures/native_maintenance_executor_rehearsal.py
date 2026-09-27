@@ -110,7 +110,7 @@ def readonly_proxy_connection():
     with owned() as conn:
         conn.read_only = True
         proxy = CIProxyConnection(conn)
-        engine.check(proxy.info.backend_pid != conn.execute('SELECT pg_backend_pid()').fetchone()[0],
+        engine.check(proxy.info.backend_pid != conn.execute('SELECT pg_catalog.pg_backend_pid()').fetchone()[0],
                      'CI_PROXY_PID_NOT_DIFFERENT')
         yield proxy
 
