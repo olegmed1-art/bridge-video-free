@@ -17,12 +17,17 @@ from oracle_autopilot import light_native_preflight as preflight
 
 def main():
     with connection() as conn:
+        # This is the final test in an ephemeral database. Earlier concurrency
+        # fixtures deliberately commit work; clear only disposable task state
+        # so the shared queue can select this fixture deterministically.
+        conn.execute('TRUNCATE autopilot.project_work_item,autopilot.task CASCADE')
+        conn.execute('UPDATE autopilot.project_planner_state SET enabled=true')
         # Reuse the shared-admission fixture rather than inserting a fake native
         # reservation. Its synthetic publication ID is disposable SQL data only.
         source = Path('database/tests/339_autopilot_native_cli_receipts.sql').read_text()
         fixture = source[source.index('CREATE FUNCTION pg_temp.native_fixture'):source.index('CREATE FUNCTION pg_temp.native_reject')]
         conn.execute(fixture)
-        conn.execute("UPDATE autopilot.role_registry SET can_repair=false WHERE role_id='AUTOPILOT'")
+        conn.execute("UPDATE autopilot.role_registry SET enabled=true,can_repair=false WHERE role_id='AUTOPILOT'")
         conn.execute("UPDATE autopilot.native_cli_config SET enabled=true,cutover_at=clock_timestamp()-interval '1 hour'")
         row = conn.execute("SELECT pg_temp.native_fixture('single-pilot-pg18')").fetchone()[0]
         outbox = conn.execute('SELECT to_jsonb(o) FROM autopilot.role_dispatch_outbox o WHERE dispatch_id=%s::uuid',
