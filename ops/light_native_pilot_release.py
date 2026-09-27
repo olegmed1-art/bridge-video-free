@@ -22,12 +22,18 @@ from ops import oracle_light_runtime_hold_install as staging
 
 ROOT = Path('/var/lib/bridge-light-native-release')
 PYTHON = '/opt/bridge-school/school-autopilot/.venv/bin/python'
+CLOUD_ENVIRONMENT_ID = '6a97d5069f708191a28ed2b86f7fe5f1'
+SUPERVISOR_HELPERS = ('ops/light_native_service_controller.py',
+                     'ops/light_native_service_plan.py', 'ops/light_native_service_switch.py',
+                     'ops/native_maintenance_agreement.py', 'ops/native_maintenance_workflow_pause.py')
 EXTRA = ('database/__init__.py', 'database/native_cli_permission_engine.py',
          'ops/__init__.py', 'ops/native_permission_hold_guard.py',
-         'ops/oracle_light_active_hold_attest.py', 'ops/oracle_autopilot_source_preflight.py')
+         'ops/oracle_light_active_hold_attest.py', 'ops/oracle_autopilot_source_preflight.py',
+         'ops/native_maintenance_bundle.py', 'ops/oracle_light_runtime_hold_install.py',
+         'ops/light_native_pilot_release.py') + SUPERVISOR_HELPERS
 HELPERS = ('ops/__init__.py', 'ops/native_maintenance_bundle.py',
            'ops/oracle_light_active_hold_attest.py', 'ops/oracle_light_runtime_hold_install.py',
-           'ops/light_native_pilot_release.py')
+           'ops/light_native_pilot_release.py') + SUPERVISOR_HELPERS
 MARKERS = ('database/__init__.py', 'ops/__init__.py')
 
 
@@ -211,6 +217,8 @@ def stage(value, revision, accepted):
     staging.require_current_main(revision)
     release = staging.stage(value)
     probe(release)
+    environment = probe_environment(release)
+    retain(directory / 'environment.json', encoded(environment))
     staging.verify_release(release, value)
     require(hold.attest() == before, 'PILOT_RELEASE_HOLD_CHANGED')
     staging.require_current_main(revision)
@@ -218,6 +226,35 @@ def stage(value, revision, accepted):
                                                    hold=asdict(before), readonly_probe=True)))
     return dict(audit='LIGHT_NATIVE_RELEASE_STAGED_UNDER_HOLD', source=revision, bundle_sha256=accepted,
                 service_restarted=False, production_sql_mutations=False, hold_unchanged=True)
+
+
+def probe_environment(candidate):
+    """Read the exact Cloud environment using the actual service CLI profile.
+
+    Listing never submits a task. Raw task contents remain inside the child;
+    this receipt attests access, while repository mapping is checked separately.
+    """
+    user = pwd.getpwnam('school-autopilot')
+    program = '''import hashlib,json,sys
+sys.path.insert(0,sys.argv[1])
+from oracle_autopilot import codex_cli_bridge as bridge
+r=bridge.run_cli(['cloud','list','--env',sys.argv[2],'--limit','1','--json'],timeout=30,profile='light')
+assert r.returncode==0 and 0<len(r.stdout.encode())<=1048576
+value=json.loads(r.stdout)
+assert type(value) in (dict,list)
+print(hashlib.sha256(r.stdout.encode()).hexdigest())
+'''
+    def identity():
+        os.setgroups([]); os.setgid(user.pw_gid); os.setuid(user.pw_uid)
+    result = subprocess.run([PYTHON,'-I','-B','-c',program,str(candidate),CLOUD_ENVIRONMENT_ID],
+        cwd=candidate,env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'},
+        preexec_fn=identity,capture_output=True,timeout=40)
+    output = result.stdout.decode('ascii',errors='replace').strip()
+    require(result.returncode == 0 and source.identifier(output,64), 'PILOT_ENVIRONMENT_ACCESS_REFUSED')
+    return dict(version=1,source=candidate.name,environment_id=CLOUD_ENVIRONMENT_ID,
+                service_user='school-autopilot',
+                command='cloud list --env '+CLOUD_ENVIRONMENT_ID+' --limit 1 --json',
+                output_sha256=output)
 
 
 if __name__ == '__main__':

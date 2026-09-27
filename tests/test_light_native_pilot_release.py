@@ -76,7 +76,7 @@ def test_package_ignores_dirty_worktree_and_acceptance_covers_helpers(tmp_path):
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason='root metadata test')
-@pytest.mark.parametrize('failure', [None, 'main', 'hold', 'probe'])
+@pytest.mark.parametrize('failure', [None, 'main', 'hold', 'probe', 'environment'])
 def test_stage_never_restarts_service_or_edits_config(tmp_path, monkeypatch, failure):
     root = tmp_path / 'records'
     base = tmp_path / 'base.unit'; base.write_bytes(b'original unit'); base.chmod(0o644)
@@ -95,6 +95,8 @@ def test_stage_never_restarts_service_or_edits_config(tmp_path, monkeypatch, fai
     monkeypatch.setattr(target.staging, 'stage', stage)
     monkeypatch.setattr(target.staging, 'verify_release', Mock())
     monkeypatch.setattr(target, 'probe', Mock(side_effect=RuntimeError('probe') if failure == 'probe' else None))
+    monkeypatch.setattr(target, 'probe_environment', Mock(return_value={'test':'environment'},
+        side_effect=RuntimeError('environment') if failure == 'environment' else None))
     # No service commands or hidden subprocess side effects are permitted by stage.
     monkeypatch.setattr(target.subprocess, 'run', Mock(side_effect=AssertionError('unexpected process')))
     item = value()
