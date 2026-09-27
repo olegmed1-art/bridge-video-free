@@ -114,13 +114,14 @@ class Permit:
 
 class Claim:
     """One immutable claim across process restarts; no overwrite/reset API."""
-    def __init__(self, directory):
+    def __init__(self, directory, *, create_lock=True):
+        require(type(create_lock) is bool, 'PILOT_LOCK_MODE')
         self.path = Path(directory)
         self.fd = self.lock = None
         try:
             self.fd = os.open(self.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             self.identity = os.fstat(self.fd)
-            self.lock = os.open('pilot.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+            self.lock = os.open('pilot.lock', os.O_RDWR | (os.O_CREAT if create_lock else 0) | os.O_NOFOLLOW | os.O_NONBLOCK,
                                 0o600, dir_fd=self.fd)
             self.regular(self.lock)
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

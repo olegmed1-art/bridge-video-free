@@ -66,7 +66,12 @@ def pilot_command(source, prior, seconds, *, request_digest):
                 command.append('--property=' + name + '=' + item)
         else:
             command.append('--property=' + name + '=' + value)
-    return command + ['--', PYTHON, '-I', '-B', '-c',
+    return command + ['--'] + pilot_argv(source)
+
+
+def pilot_argv(source):
+    """Same pinned interpreter/gate for initial launch and controlled reentry."""
+    return [PYTHON, '-I', '-B', '-c',
         'import sys;sys.path.insert(0,sys.argv[1]);'
         'from oracle_autopilot.light_native_launch_gate import main;main()', str(source_path(source))]
 

@@ -17,6 +17,7 @@ from ops.oracle_autopilot_source_preflight import connection_parameters
 from . import codex_cli_bridge as bridge
 from .light_native_pilot import Claim, Permit, Session, REPOSITORY, require
 from .light_native_provider import LightProvider
+from .light_native_restart import RestartImage, RestartingProvider
 
 CONTROL = Path('/etc/bridge-school/light-native-pilot')
 RELEASES = bridge.LIGHT_ROOT / 'releases'
@@ -72,17 +73,30 @@ def execute():
     reader = lambda: root_bytes(CONTROL / 'permit.json', 65536)
     permit = Permit(reader(), accepted, reader, source)
     provider = LightProvider(permit.target)
-    # One connection for the entire attempt, with no transparent reconnect.
-    with Claim(CLAIMS) as claim, psycopg.connect(**runtime_parameters(
-            os.environ.get('AUTOPILOT_DATABASE_URL', ''))) as conn:
-        runtime_identity(conn)
-        session = Session(permit, claim, conn, read_pr, provider, admission=admitted)
-        session.reserve()
-        while True:
-            result = session.step()
-            if result['state'] == 'DONE':
-                return result
-            time.sleep(10)
+    try:
+        # Reentry opens a fresh connection; retained identity forbids a new task.
+        with Claim(CLAIMS) as claim, psycopg.connect(**runtime_parameters(
+                os.environ.get('AUTOPILOT_DATABASE_URL', ''))) as conn:
+            runtime_identity(conn)
+            restarting = RestartingProvider(provider, permit, claim)
+            session = Session(permit, claim, conn, read_pr, restarting, admission=admitted)
+            session.reserve()
+            restarting.attach(session)
+            while True:
+                result = session.step()
+                if result['state'] == 'DONE':
+                    return result
+                time.sleep(10)
+    except RestartImage:
+        # Context managers have closed DB/advisory and file locks. exec preserves
+        # PID, systemd invocation and RuntimeMax; it does not renew admission.
+        permit.check()
+        require(admitted() and release_source() == source, 'PILOT_RESTART_NOT_ADMITTED')
+        from ops.light_native_service_plan import pilot_argv
+        argv = pilot_argv(source)
+        print('{"audit":"LIGHT_NATIVE_CONTROLLED_IMAGE_RESTART"}', flush=True)
+        os.execv(argv[0], argv)
+        raise RuntimeError('PILOT_EXEC_RETURNED')
 
 
 def main():

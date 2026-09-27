@@ -116,3 +116,29 @@ request fetch renew the launcher deadline. Safe refusal categories and total
 binding elapsed time distinguish expiry from other transport failures without
 printing exception text. The previous 64-second read-only refusal was consistent
 with outer expiry but did not establish its cause; live verification is required.
+
+
+### Controlled executor image restart (G6)
+
+The single pilot now starts only from a fresh local claim and RESERVED DB receipt.
+Before the first provider collection, the loader verifies the committed SUBMITTED
+ACK against the bound provider journal (same dispatch, request, task ID and prompt).
+It fsyncs a create-only private restart intent, closes the DB connection and claim
+lock, and execs the exact pinned interpreter and launch gate. No second systemd
+unit, provider task, permission window or retry is created.
+
+Reentry must retain the same PID and systemd invocation, a different Python image
+nonce, the original permit bytes and monotonic deadline, and the exact DB/journal
+binding. A create-only resume record precedes collection. Missing, changed or
+unsafe records, a second reentry, expired authority or exec failure quarantine.
+The controller's RuntimeMax and final HOLD restoration continue unchanged.
+
+Owner terminal acceptance freshly reads Cloud and DB results and requires the
+private startup/intent/resume chain to match the root-retained unit PID/invocation.
+A root-retained restart receipt is linked to the terminal digest. Logs alone do
+not establish recovery. This tests controlled fresh-memory recovery at a durable
+ACK checkpoint; it does not establish arbitrary host, unit or crash recovery.
+
+Validation includes actual os.execv in an isolated child with durable fake DB and
+provider ports, proving one creation, one terminal acceptance and the same PID
+across fresh Python images. The real Cloud pilot is still required for G6 PASS.

@@ -88,3 +88,17 @@ def test_unaccepted_record_cannot_be_used(monkeypatch):
     monkeypatch.setattr(owner.control,'read',lambda _:b'{"changed":true}')
     with pytest.raises(RuntimeError,match='RECORD_NOT_ACCEPTED'):
         owner.accepted_record('permit.json','a'*64)
+
+
+@pytest.mark.parametrize('field,value', [('pid',124),('pid',True),('invocation_id','f'*32),
+    ('dispatch_id','other'),('provider_task_id','task_e_other'),('kind','CRASH_RECOVERY'),
+    ('resumed_sha256','missing'),('version',True)])
+def test_recovery_proof_must_match_independent_root_unit_and_db(field,value):
+    evidence=dict(version=1,kind='CONTROLLED_IMAGE_RESTART',dispatch_id='dispatch',
+        provider_task_id='task_e_pilot',pid=123,invocation_id='e'*32,
+        start_sha256='a'*64,intent_sha256='b'*64,resumed_sha256='c'*64)
+    unit=dict(MainPID='123',InvocationID='e'*32)
+    owner.verify_restart_unit(evidence,unit,'dispatch','task_e_pilot')
+    evidence[field]=value
+    with pytest.raises(RuntimeError,match='RESTART_UNIT_MISMATCH'):
+        owner.verify_restart_unit(evidence,unit,'dispatch','task_e_pilot')

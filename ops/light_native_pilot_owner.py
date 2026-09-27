@@ -111,7 +111,7 @@ def discovery(api, published, receipt):
         dispatch_body_sha256=hashlib.sha256(expected.encode()).hexdigest())
 
 
-def fresh_provider_result(candidate, dispatch_id, environment_id):
+def fresh_provider_result(candidate, dispatch_id, environment_id, permit_raw, request):
     """Fresh Cloud status/diff read; no cached terminal, submission or DB RPC."""
     user=pwd.getpwnam('school-autopilot')
     def identity():
@@ -119,19 +119,47 @@ def fresh_provider_result(candidate, dispatch_id, environment_id):
     program='''import json,sys
 sys.path.insert(0,sys.argv[1])
 from oracle_autopilot import codex_cli_bridge as bridge
+from oracle_autopilot.light_native_pilot import Claim
+from oracle_autopilot.light_native_restart import proof
+import base64
+expected=json.loads(sys.stdin.buffer.read(131073))
 binding={'profile':'light','environment_id':sys.argv[3],'repository':'olegmed1-art/bridge-video-free'}
 def runner(args):return bridge.run_cli(args,timeout=20,profile='light')
+journal=bridge.lookup(expected['request'],state_dir=bridge.LIGHT_ROOT/'runtime/codex-dispatch',binding=binding)
+if not journal or journal.get('state')!='SUBMITTED':raise RuntimeError('PILOT_OWNER_PROVIDER_JOURNAL')
 value=bridge._collect(sys.argv[2],state_dir=bridge.LIGHT_ROOT/'runtime/codex-dispatch',binding=binding,runner=runner)
-print(bridge.canonical(value))
+if value.get('provider_task_id')!=journal['provider_task_id']:raise RuntimeError('PILOT_OWNER_PROVIDER_JOURNAL')
+with Claim(bridge.LIGHT_ROOT/'runtime/native-single-pilot',create_lock=False) as claim:
+    restart=proof(claim,base64.b64decode(expected['permit_b64'],validate=True),
+                  expected['request'],value['provider_task_id'])
+print(bridge.canonical({'provider':value,'restart':restart}))
 '''
     result=subprocess.run([release.PYTHON,'-I','-B','-c',program,str(candidate),dispatch_id,environment_id],
         cwd=candidate,env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'},
-        preexec_fn=identity,capture_output=True,timeout=45)
+        preexec_fn=identity,capture_output=True,timeout=45,
+        input=release.encoded(dict(permit_b64=base64.b64encode(permit_raw).decode(),request=request)))
     require(result.returncode==0 and len(result.stdout)<=65536,'PILOT_OWNER_PROVIDER_READBACK')
-    value=json.loads(result.stdout)
+    result_value=json.loads(result.stdout)
+    require(type(result_value) is dict and set(result_value)=={'provider','restart'},
+            'PILOT_OWNER_PROVIDER_READBACK')
+    value=result_value['provider']
     require(value.get('state')=='RESULT_RETRIEVED' and type(value.get('changes')) is str and not value['changes'].strip(),
             'PILOT_OWNER_PROVIDER_NOT_VERIFIED')
-    return value
+    return value,result_value['restart']
+
+
+def verify_restart_unit(restart, pilot_unit, dispatch_id, provider_id):
+    require(type(restart) is dict and set(restart)=={'version','kind','dispatch_id',
+            'provider_task_id','pid','invocation_id','start_sha256','intent_sha256','resumed_sha256'}
+            and type(restart['version']) is int and restart['version']==1
+            and restart['kind']=='CONTROLLED_IMAGE_RESTART'
+            and type(restart['pid']) is int and restart['pid']==int(pilot_unit['MainPID'])
+            and restart['invocation_id']==pilot_unit['InvocationID']
+            and restart['dispatch_id']==dispatch_id
+            and restart['provider_task_id']==provider_id
+            and all(type(restart[k]) is str and control.SHA256.fullmatch(restart[k])
+                    for k in ('start_sha256','intent_sha256','resumed_sha256')),
+            'PILOT_OWNER_RESTART_UNIT_MISMATCH')
 
 
 def step(wheels, credential, token, package_raw, payload_raw, accepted_payload, run_guard):
@@ -168,7 +196,7 @@ def step(wheels, credential, token, package_raw, payload_raw, accepted_payload, 
             control.directory(ROOT,0,0,0o700)
             return {name:control.digest(control.read(ROOT/name)) for name in
                 ('intake.json','broker.json','discovery.json','publication.json','permit.json',
-                 'terminal.json','controls-restored.json')
+                 'terminal.json','restart.json','controls-restored.json')
                 if (ROOT/name).exists()}
         if value['action'] in ('terminal','restore-controls'):
             # Cleanup/readback can outlive the accepted execution window, but
@@ -183,12 +211,16 @@ def step(wheels, credential, token, package_raw, payload_raw, accepted_payload, 
             require(receipt['plan_sha256']==plan.digest,'PILOT_OWNER_RECEIPT_SCOPE')
             if value['action']=='terminal':
                 observed_target(API(token),plan)
-                provider=fresh_provider_result(candidate,receipt['dispatch_id'],release.CLOUD_ENVIRONMENT_ID)
                 with psycopg.connect(**parameters(credential),autocommit=True) as conn:
                     conn.read_only=True
                     intake.engine.identity(conn,intake.target())
                     native=intake.one(conn,'SELECT to_jsonb(n) FROM autopilot.native_cli_receipt n '
                         'WHERE dispatch_id=%s::uuid',(receipt['dispatch_id'],))
+                    provider,restart=fresh_provider_result(candidate,receipt['dispatch_id'],
+                        release.CLOUD_ENVIRONMENT_ID,base64.b64decode(request.value['permit_b64'],validate=True),
+                        native['request'])
+                    pilot_unit=control.strict_json(control.read(directory/'pilot-unit.json',4096),4096)
+                    verify_restart_unit(restart,pilot_unit,receipt['dispatch_id'],native['provider_task_id'])
                     from oracle_autopilot import codex_cli_bridge as bridge
                     require(native['state']=='TERMINAL'
                             and native['provider_task_id']==provider['provider_task_id']
@@ -201,9 +233,12 @@ def step(wheels, credential, token, package_raw, payload_raw, accepted_payload, 
                         request=native['request'],result=native['terminal'])
                     raw=release.encoded(terminal)
                     intake.observe_terminal(conn,plan,receipt,raw,control.digest(raw))
+                recovery_raw=release.encoded(dict(terminal_sha256=control.digest(raw),**restart))
+                control.retained(ROOT/'restart.json',recovery_raw)
                 control.retained(ROOT/'terminal.json',raw)
                 return {'audit':'LIGHT_NATIVE_TERMINAL_CANDIDATE','record_sha256':control.digest(raw),
-                        'independently_accepted':False}
+                        'independently_accepted':False,'controlled_restart_verified':True,
+                        'restart_sha256':control.digest(recovery_raw)}
             terminal=accepted_record('terminal.json',value['accepted_terminal_sha256'])
             control.retained(ROOT/'control-restore-intent.json',payload_raw)
             with psycopg.connect(**parameters(credential),autocommit=True) as conn:
