@@ -161,13 +161,9 @@ class CheckpointRunBinding(RunBinding):
 
 
 class StageRunBinding(RunBinding):
-    """Reserved effectful profile; disabled until a fixed launcher is reviewed.
-
-    Neither the old window nor a successful read-only probe grants stage
-    authority. Installing a workflow requires a separate source-reviewed hash.
-    """
+    """Fixed manual production stage profile; not shared with read-only probes."""
     workflow = '.github/workflows/native-maintenance-stages.yml'
-    workflow_sha256 = None
+    workflow_sha256 = 'bd0cb9e09de1caa1ddc9d78fe1327cfad1bee70162dfe67cbbe15c88e5de3813'
     job_name = 'stage'
     job_names = ('contract', 'stage')
     events = ('workflow_dispatch',)

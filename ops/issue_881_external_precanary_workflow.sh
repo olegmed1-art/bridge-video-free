@@ -28,6 +28,16 @@ process_video_gate_armed=0
 root_pr_number=991
 prior_gate_pr_number=1070
 protected_gate_paths=(
+  '.github/workflows/light-native-pilot-owner.yml'
+  '.github/workflows/light-native-pilot-control.yml'
+  'ops/light_native_pilot_owner.py'
+  'ops/light_native_pilot_owner_runner.py'
+  'ops/light_native_pilot_run_guard.py'
+  'database/light_native_pilot_intake.py'
+  'database/fixtures/light_native_pilot_intake_rehearsal.py'
+  'tests/test_light_native_pilot_owner.py'
+  'tests/test_light_native_pilot_run_guard.py'
+  'tests/test_light_native_pilot_intake.py'
   'ops/light_native_pilot_control.py'
   'oracle_autopilot/light_native_control.py'
   'oracle_autopilot/light_native_launch_gate.py'

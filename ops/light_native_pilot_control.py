@@ -16,7 +16,7 @@ require = release.require
 
 
 def program(package_raw, source, accepted_package, action, payload, accepted_payload):
-    require(action in ('baseline','launch','observe','restore'), 'PILOT_CONTROL_ACTION')
+    require(action in ('baseline','launch','prepare-retained','launch-retained','observe','restore'), 'PILOT_CONTROL_ACTION')
     require(release.source.identifier(source,40)
             and release.source.identifier(accepted_package,64)
             and hashlib.sha256(package_raw).hexdigest()==accepted_package,
@@ -29,6 +29,15 @@ def program(package_raw, source, accepted_package, action, payload, accepted_pay
     require(type(value) is dict and release.encoded(value)==payload,'PILOT_CONTROL_CANONICAL')
     if action=='baseline':
         require(set(value)=={'agreement','accepted_agreement_sha256','scope'},'PILOT_CONTROL_BASELINE')
+    elif action=='prepare-retained':
+        require(set(value)=={'request','accepted_permit_sha256'}
+                and type(value['request']) is dict
+                and 'permit_b64' not in value['request']
+                and value['request'].get('source')==source
+                and value['request'].get('package_sha256')==accepted_package
+                and value['request'].get('permit_sha256')==value['accepted_permit_sha256']
+                and release.source.identifier(value['accepted_permit_sha256'],64),
+                'PILOT_CONTROL_RETAINED_REQUEST')
     elif action=='launch':
         require(value.get('source')==source and value.get('package_sha256')==accepted_package,
                 'PILOT_CONTROL_REQUEST')
@@ -59,6 +68,16 @@ try:
   action=%r
   if action=='baseline':
    result=controller.prepare_baseline(%r,%r,package_raw,value['agreement'],value['accepted_agreement_sha256'],value['scope'])
+  elif action=='prepare-retained':
+   permit=controller.read(controller.plan.ROOT/'intake'/'permit.json',262144)
+   assert controller.digest(permit)==value['accepted_permit_sha256']
+   request=dict(value['request'],permit_b64=base64.b64encode(permit).decode())
+   request_raw=json.dumps(request,sort_keys=True,separators=(',',':')).encode()
+   request_sha=controller.digest(request_raw)
+   controller.prepare(request_raw,request_sha,package_raw)
+   result={'audit':'LIGHT_NATIVE_REQUEST_PREPARED','request_sha256':request_sha,'pilot_submitted':False}
+  elif action=='launch-retained':
+   result=controller.launch(value['request_sha256'])
   elif action=='launch':
    controller.prepare(payload,%r,package_raw)
    result=controller.launch(%r)

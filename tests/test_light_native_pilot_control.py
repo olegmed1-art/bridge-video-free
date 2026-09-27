@@ -34,3 +34,20 @@ def test_cleanup_payload_cannot_select_commands_or_paths():
         with pytest.raises(RuntimeError,match='PILOT_CONTROL_REQUEST'):
             generate(action,{'request_sha256':'../other'})
         compile(generate(action,{'request_sha256':'c'*64}),'cleanup','exec')
+
+
+def test_retained_permit_is_loaded_only_from_fixed_private_path():
+    payload={'request':{'source':'a'*40,'package_sha256':hashlib.sha256(b'{}').hexdigest(),
+                        'permit_sha256':'c'*64},'accepted_permit_sha256':'c'*64}
+    code=generate('prepare-retained',payload)
+    compile(code,'retained','exec')
+    assert "controller.plan.ROOT/'intake'/'permit.json'" in code
+    assert "controller.digest(permit)==value['accepted_permit_sha256']" in code
+    payload['request']['permit_b64']='caller supplied'
+    with pytest.raises(RuntimeError,match='RETAINED_REQUEST'):generate('prepare-retained',payload)
+
+
+def test_launch_retained_accepts_only_digest():
+    compile(generate('launch-retained',{'request_sha256':'c'*64}),'launch','exec')
+    with pytest.raises(RuntimeError,match='PILOT_CONTROL_REQUEST'):
+        generate('launch-retained',{'request_sha256':'c'*64,'path':'/tmp/request'})

@@ -4,6 +4,13 @@ on:
   pull_request:
     paths:
       - 'database/**'
+      - 'ops/light_native_pilot_owner*.py'
+      - 'ops/light_native_pilot_run_guard.py'
+      - 'database/light_native_pilot_intake.py'
+      - 'database/fixtures/light_native_pilot_intake_rehearsal.py'
+      - 'tests/test_light_native_pilot_owner.py'
+      - 'tests/test_light_native_pilot_intake.py'
+      - 'tests/test_light_native_pilot_run_guard.py'
       - 'ops/light_native_pilot_release.py'
       - 'ops/light_native_pilot_control.py'
       - 'tests/test_light_native_pilot_control.py'
@@ -66,6 +73,13 @@ on:
     branches: [main]
     paths:
       - 'database/**'
+      - 'ops/light_native_pilot_owner*.py'
+      - 'ops/light_native_pilot_run_guard.py'
+      - 'database/light_native_pilot_intake.py'
+      - 'database/fixtures/light_native_pilot_intake_rehearsal.py'
+      - 'tests/test_light_native_pilot_owner.py'
+      - 'tests/test_light_native_pilot_intake.py'
+      - 'tests/test_light_native_pilot_run_guard.py'
       - 'ops/light_native_pilot_release.py'
       - 'ops/light_native_pilot_control.py'
       - 'tests/test_light_native_pilot_control.py'
@@ -451,3 +465,6 @@ jobs:
 
       - name: Rehearse one native pilot using real shared admission and RPCs
         run: PYTHONPATH=. python database/fixtures/light_native_single_pilot_rehearsal.py
+
+      - name: Rehearse exact native pilot intake and conditional control restoration
+        run: PYTHONPATH=. python database/fixtures/light_native_pilot_intake_rehearsal.py
