@@ -64,3 +64,40 @@ source check before PUT remain. Host/pipe limits, the outer launch budget, SQL
 bounds, and coordination-window expiry are unchanged. Fault tests and independent
 I2 review are required; a live read-only timing rehearsal still estimates rather
 than proves production prepare duration.
+
+## Later failure and diagnostic scope
+
+Prepare run 36324504208 / job 108634592818 on source
+6bc70f5cd82841f22381e7cb5cc40fb16eaa5e94 failed at 14:04:59 UTC with
+RPC_UNAVAILABLE after 76,717 ms of the outer binding. Readback run
+36324735524 / job 108635245946 found a local PREPARED record, but the
+remote checkpoint did not include the whole local suffix. This does not
+authorize resume. No execute/grants or pilot followed. The registry workflow
+was restored separately after independent review and no-writer checks; all
+attempt records remain quarantined. See issue1946 comment5856597337.
+
+The RPC channel has its own absolute 60-second lifetime, distinct from the
+100-second outer binding. The new `timing_profile` is diagnostic only. It
+records bounded, fixed-label runner call counts, total milliseconds and maximum
+milliseconds for GitHub GETs, OCI reads/writes, source checks, and RPC waiting,
+store service and unit retention. It never records arguments, URLs, responses,
+credentials or exception text. Failed calls contribute their elapsed time;
+measurement failures mark the profile incomplete without replacing the original
+operation or its exception. Existing calls, checks, order, retry policy and
+deadlines are unchanged.
+
+`operations` covers the whole runner; `host_exchange_operations` separately
+counts calls that start inside the RPC phase, excluding prelaunch asset work
+and final independent readback. Durations overlap: GitHub and OCI calls can be
+inside RPC servicing, and independent GitHub reads run concurrently. Do not
+add these totals as wall time. RPC waiting includes host work and communication,
+not a measured host-only duration. The profile cannot establish successful
+preparation or grant authority. First use a read-only rehearsal to identify
+measured runner costs; that rehearsal still does not prove full prepare timing.
+
+The workflow API inventory can also be dispatched manually with a required
+`expected_main_sha`. The observation job admits only the exact repository/main
+and owner/triggering-owner, with the input equal to the dispatched SHA. It
+retains read-only Actions/Contents permissions and the existing bounded inventory
+entrypoint. Obtain the restored registry's actual `updated_at` from this report;
+do not guess it or treat the inventory as writer exclusion.
