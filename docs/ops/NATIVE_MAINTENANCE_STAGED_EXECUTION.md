@@ -212,3 +212,28 @@ local evidence, stale remote head, DB drift, global orphan exclusion and rejecti
 of diagnostic profiles. These are wiring/failure-order tests, not live timing or
 production permission evidence. Revert before use removes a dormant component;
 after any future use, preserve its unit records and reader for reconciliation.
+
+### Private off-VM unit acknowledgement
+
+`native_maintenance_stage_unit` supplies the previously missing retention
+component. The host `UnitClient` sends one canonical unit record over the existing
+bounded authenticated duplex channel. The runner `UnitServer` checks channel and
+operation bindings and uses `Retainer` with the actual `OCIJournalStore` adapter.
+Records use a distinct `native-journal/stage-units-v1/<scope>/<run>-<attempt>.json`
+prefix in the already approved private bucket.
+
+Retention requires private-bucket policy, the existing object budget, create-only
+PUT with no automatic retry, exact readback and fresh authority before ACK. An
+existing record, even identical, refuses a new retention attempt. A committed PUT
+with a lost response or lost pipe ACK remains for separate read-only reconciliation
+through `read_accepted` with an independently accepted digest. A bad request or
+acknowledgement poisons its channel; retention/readback failure poisons the store.
+The record never approves the operation packet or proves that the host has exited.
+
+Eleven fault tests use actual OS pipes and the actual store adapter over an
+explicit simulated OCI client. They cover retained data with lost PUT/ACK return,
+post-readback authority loss, wrong channel/scope/digest, existing record, public
+bucket and independent accepted-digest readback. The future fixed launcher still
+must wire both endpoints to the authenticated run/packet, supply dependencies,
+verify supervised exit and demonstrate complete live timing. No production
+entrypoint or workflow hash is enabled by this component.
