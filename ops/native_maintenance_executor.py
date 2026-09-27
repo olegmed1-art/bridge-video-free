@@ -121,9 +121,9 @@ independent reconciliation, but may NEVER repeat the original DB session.
         self.staged = staged
         require(operation in ('apply', 'rollback'), 'EXECUTOR_OPERATION_INVALID')
         require(digest(workflow_plan) == plan_digest, 'EXECUTOR_PLAN_MISMATCH')
-        require(all(callable(getattr(operator, n, None)) for n in ('assert_held', 'assert_drained'))
+        require(all(callable(getattr(operator, n, None)) for n in ('assert_local', 'assert_held', 'assert_drained'))
                 and callable(getattr(lifetime, 'assert_alive', None))
-                and callable(getattr(run, 'assert_running', None))
+                and all(callable(getattr(run, n, None)) for n in ('assert_current', 'assert_running'))
                 and callable(getattr(checkpoint, 'sync', None)), 'EXECUTOR_RUNTIME_REQUIRED')
         require(pause_journal.root.resolve() != operation_journal.root.resolve(), 'SEPARATE_JOURNALS_REQUIRED')
         self.target, self.manifest_path = target, manifest_path
@@ -243,7 +243,22 @@ independent reconciliation, but may NEVER repeat the original DB session.
 
     def assert_scope(self, plan_digest):
         require(plan_digest == self.scope['workflow_plan_digest'], 'EXECUTOR_PAUSE_SCOPE')
-        self._assert_window()
+        # Local pause bookkeeping/read observations do not admit an effect.
+        # WorkflowAPI still brackets every PUT with assert_dispatch, whose
+        # checkpoint has fresh authenticated pre/post authority observations.
+        require(not self.failed, 'EXECUTOR_ALREADY_FAILED')
+        try:
+            self.operation_journal.assert_live()
+            self.pause_journal.assert_live()
+            self.lifetime.assert_alive()
+            self.run.assert_current()
+            require(self._run_identity() == self.current_run and self.run.source == self.scope['source'],
+                    'EXECUTOR_RUN_CHANGED')
+            self.operator.assert_local(self.scope_digest)
+            self.lifetime.assert_alive()
+        except BaseException:
+            self.failed = True
+            raise
 
     def assert_dispatch(self, plan_digest, action, workflow_id):
         # _sync_checkpoint below supplies the fresh pre/post authority checks.

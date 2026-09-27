@@ -48,6 +48,8 @@ class Runtime:
 
     def sync(self, scope, operation, pause): self.check('checkpoint')
     def assert_running(self): self.check('run')
+    def assert_current(self): self.check('local_run')
+    def assert_local(self, scope): self.check('local_owner')
     def assert_alive(self): self.check('lifetime')
     def assert_held(self, scope):
         self.check('owner')
@@ -273,6 +275,26 @@ class ExecutorTests(unittest.TestCase):
              patch.object(self.ex.checkpoint, 'sync', side_effect=lambda *_: events.append('checkpoint')):
             self.ex.assert_dispatch(digest(PLAN), 'disable', 7)
         self.assertEqual(events, ['guard', 'checkpoint', 'guard'])
+        self.assertEqual(self.remote.puts, [])
+
+    def test_local_scope_does_not_authorize_cancelled_run_to_dispatch(self):
+        self.runtime.reject = 'run'
+        self.ex.assert_scope(digest(PLAN))
+        self.ex.phase = 'pausing'
+        with self.assertRaisesRegex(Refused, 'CI_run'):
+            self.ex.pause.api.disable_workflow(7)
+        self.assertEqual(self.remote.puts, [])
+
+    def test_local_scope_failure_latches_before_remote_effect(self):
+        for condition in ('local_run', 'local_owner', 'lifetime'):
+            with self.subTest(condition=condition):
+                self.runtime.reject = condition
+                with self.assertRaises(Refused):
+                    self.ex.assert_scope(digest(PLAN))
+                self.runtime.reject = None
+                with self.assertRaisesRegex(Refused, 'ALREADY_FAILED'):
+                    self.ex.assert_scope(digest(PLAN))
+                self.reopen(new_run=False)
         self.assertEqual(self.remote.puts, [])
 
     def test_dispatch_wrong_plan_refuses_before_checkpoint_or_put(self):
