@@ -6,6 +6,7 @@ and elapsed time are estimates, not writer exclusion or permission acceptance.
 """
 import json
 import os
+import sys
 import time
 
 from ops import native_maintenance_bundle as bundle
@@ -51,7 +52,8 @@ SAFE_CODES = frozenset(('REFUSED', 'OWNER_DRIVER_ALREADY_IMPORTED', 'OWNER_DRIVE
     'HOST_IDENTITY', 'FILE_DRIFT', 'UNIT_DRIFT', 'BASE_DRIFT', 'DROP_DRIFT', 'ROUTE_DRIFT',
     'PIN_DRIFT', 'ENV_DRIFT', 'DSN_DRIFT', 'LIVE_ENV_DRIFT', 'LIVE_PROCESS_DRIFT',
     'TIMEOUT_ERROR', 'OS_ERROR', 'KEY_ERROR', 'TYPE_ERROR', 'VALUE_ERROR',
-    'DB_CONNECTION_ERROR', 'DB_PRIVILEGE_ERROR', 'DB_TRANSACTION_ERROR', 'DB_QUERY_ERROR'))
+    'DB_CONNECTION_ERROR', 'DB_PRIVILEGE_ERROR', 'DB_TRANSACTION_ERROR', 'DB_QUERY_ERROR',
+    'DB_DRIVER_ERROR'))
 
 
 def failure_code(exc):
@@ -65,6 +67,8 @@ def failure_code(exc):
     if state == '42501': return 'DB_PRIVILEGE_ERROR'
     if state in ('25000','25001','25006','25P01','25P02'): return 'DB_TRANSACTION_ERROR'
     if state in ('42601','42703','42P01','42883','57014'): return 'DB_QUERY_ERROR'
+    driver = sys.modules.get('psycopg')
+    if driver is not None and isinstance(exc, driver.Error): return 'DB_DRIVER_ERROR'
     for cls, label in ((TimeoutError,'TIMEOUT_ERROR'), (OSError,'OS_ERROR'),
                        (KeyError,'KEY_ERROR'), (TypeError,'TYPE_ERROR'), (ValueError,'VALUE_ERROR')):
         if isinstance(exc, cls): return label

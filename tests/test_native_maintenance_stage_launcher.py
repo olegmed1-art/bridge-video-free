@@ -469,6 +469,9 @@ class RehearsalDiagnosticTests(unittest.TestCase):
                  (TypeError('private_value'),'TYPE_ERROR'),
                  (psycopg.errors.InsufficientPrivilege('private SQL and URI'),'DB_PRIVILEGE_ERROR'),
                  (psycopg.errors.UndefinedTable('private SQL and URI'),'DB_QUERY_ERROR'),
+                 (psycopg.OperationalError('private URI'),'DB_DRIVER_ERROR'),
+                 (psycopg.ProgrammingError('private SQL'),'DB_DRIVER_ERROR'),
+                 (psycopg.InterfaceError('private host'),'DB_DRIVER_ERROR'),
                  (RuntimeError('postgres://private:password@host'),'REFUSED')]
         for exc, expected in cases:
             with self.subTest(expected=expected):
