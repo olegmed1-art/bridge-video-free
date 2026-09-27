@@ -1,6 +1,10 @@
 schema_version: 1
 updated_at_utc: "2026-08-28T06:24:00Z"
 policy: docs/TECHNICAL_GOVERNANCE.md
+observation_scope: historical_2026_08_28_snapshot_with_documentary_corrections
+last_reconciled_at_utc: "2026-09-27T06:04:48Z"
+reconciliation_scope: "Restriction audit only; component health, backups and runtime not re-attested"
+restriction_audit: docs/governance/RESTRICTIONS_AUDIT_2026-09-27.md
 whole_school_recovery:
   target_status: RECOVERY_PROVEN_V1
   current_status: PARTIAL
@@ -18,10 +22,15 @@ components:
     evidence_status: partial
     branch_protection_evidence:
       observed_at_utc: "2026-08-27T16:47:00Z"
-      main_protected: false
+      main_protected: null
+      prior_main_protected: false
+      current_status: unknown_requires_fresh_ruleset_read
+      superseding_receipt: https://github.com/olegmed1-art/bridge-video-free/issues/1015#issuecomment-5493973313
+      superseding_receipt_date: "2026-09-01"
+      superseding_receipt_result: active_ruleset_protection_reported
       database_production_protection: not_observed
       source: github_branch_api
-      status: owner_action_required
+      status: historical_observation_superseded
 
   neon:
     role: canonical_durable_state
@@ -253,6 +262,8 @@ work_queue:
   policy:
     canonical_governance_issue: 523
     wip_limit: 1
+    wip_limit_scope: historical_reliability_queue_not_global_autopilot_capacity
+    later_capacity_evidence: https://github.com/olegmed1-art/bridge-video-free/pull/1738#issuecomment-5762018954
     duplicate_rule: update_existing_tracker_before_creating_new_issue
   active: []
   queued:
@@ -308,9 +319,10 @@ work_queue:
       tracking_issue: 523
     - id: github_main_protection
       priority: P1
-      status: owner_action_required
+      status: historical_blocker_superseded_current_settings_unknown
       tracking_issue: 523
-      evidence: main_branch_api_reported_protected_false
+      evidence: https://github.com/olegmed1-art/bridge-video-free/issues/1015#issuecomment-5493973313
+      note: "Do not request owner action based solely on the superseded August snapshot"
     - id: independent_external_health_alert
       priority: P2
       status: queued
