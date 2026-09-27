@@ -1,0 +1,51 @@
+name: Native database activity read-only probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact reviewed main for bounded database activity observation
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - '.github/workflows/native-database-activity-probe.yml'
+      - 'ops/native_database_activity_probe.py'
+      - 'ops/native_maintenance_owner_attest.py'
+      - 'tests/test_native_database_activity_probe.py'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python -m pip install --disable-pip-version-check -q 'psycopg[binary]==3.3.4'
+      - run: PYTHONPATH=.:tests python -m unittest -q test_native_database_activity_probe test_native_maintenance_owner_attest
+
+  probe:
+    needs: contract
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' && github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha
+    environment: database-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python -m pip install --disable-pip-version-check -q 'psycopg[binary]==3.3.4'
+      - name: Observe two bounded activity snapshots without admission or termination
+        env:
+          NATIVE_OWNER_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
+        run: python -m ops.native_database_activity_probe
