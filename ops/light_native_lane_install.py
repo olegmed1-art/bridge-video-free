@@ -116,15 +116,8 @@ def stopped():
         require(events.get('populated') == '0', 'LANE_INSTALL_CGROUP_POPULATED')
 
 
-def verify_config(source, gid):
+def verify_unit(source):
     root_parent(UNIT_FILE.parent)
-    root_parent(CONTROL)
-    require(hold.read(UNIT_FILE, 0o644, 8192) == render(source), 'LANE_INSTALL_UNIT_CHANGED')
-    require(hold.read(CONTROL/'admission', 0o640, 16) == b'HOLD\n'
-            and (CONTROL/'admission').lstat().st_gid == gid
-            and set(os.listdir(CONTROL)) == {'admission','jobs'}
-            and not os.listdir(CONTROL/'jobs'), 'LANE_INSTALL_ADMISSION_CHANGED')
-    root_parent(CONTROL/'jobs')
     fields = {**plan.HARDENING, 'ReadWritePaths': str(STATE), 'PrivateNetwork': 'yes',
         'Environment': 'PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 AUTOPILOT_ADMISSION_MODE=HOLD',
         'EnvironmentFiles': '', 'WorkingDirectory': str(plan.source_path(source)),
@@ -140,8 +133,17 @@ def verify_config(source, gid):
             and command.count('{') == command.count('}') == 1, 'LANE_INSTALL_EXECUTION')
 
 
-def verify_running(source, user):
-    verify_config(source, user.pw_gid)
+def verify_config(source, gid):
+    verify_unit(source)
+    root_parent(CONTROL)
+    require(hold.read(UNIT_FILE, 0o644, 8192) == render(source), 'LANE_INSTALL_UNIT_CHANGED')
+    require(hold.read(CONTROL/'admission', 0o640, 16) == b'HOLD\n'
+            and (CONTROL/'admission').lstat().st_gid == gid
+            and set(os.listdir(CONTROL)) == {'admission','jobs'}
+            and not os.listdir(CONTROL/'jobs'), 'LANE_INSTALL_ADMISSION_CHANGED')
+    root_parent(CONTROL/'jobs')
+
+def verify_hold_process(source, user):
     row = show(UNIT, ['ActiveState','SubState','MainPID','NRestarts','InvocationID'])
     require(row['ActiveState'] == 'active' and row['SubState'] == 'running'
             and row['NRestarts'] == '0' and row['MainPID'].isdigit()
@@ -159,15 +161,21 @@ def verify_running(source, user):
             b'PYTHONDONTWRITEBYTECODE',b'PYTHONUNBUFFERED',b'AUTOPILOT_ADMISSION_MODE'}
     require(all(key in safe or key.startswith(b'LC_') for key in environment)
             and environment.get(b'AUTOPILOT_ADMISSION_MODE') == b'HOLD', 'LANE_INSTALL_PROCESS_ENVIRONMENT')
-    info = STATE.lstat()
-    require(stat.S_ISDIR(info.st_mode) and info.st_uid == user.pw_uid
-            and stat.S_IMODE(info.st_mode) == 0o700 and set(os.listdir(STATE)) == {'pilot.lock'},
-            'LANE_INSTALL_STATE_CHANGED')
     records = switch.command('/usr/bin/journalctl', '--no-pager', '-o', 'cat', '-n', '20',
                              '_SYSTEMD_INVOCATION_ID='+row['InvocationID'])
     expected = '{"audit":"LIGHT_NATIVE_LANE","state":"HOLD"}'
     require(records.splitlines() == [expected], 'LANE_INSTALL_HOLD_NOT_OBSERVED')
     require(show(UNIT, list(row)) == row, 'LANE_INSTALL_PROCESS_CHANGED')
+    return row
+
+
+def verify_running(source, user):
+    verify_config(source, user.pw_gid)
+    row = verify_hold_process(source, user)
+    info = STATE.lstat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == user.pw_uid
+            and stat.S_IMODE(info.st_mode) == 0o700 and set(os.listdir(STATE)) == {'pilot.lock'},
+            'LANE_INSTALL_STATE_CHANGED')
     return row
 
 

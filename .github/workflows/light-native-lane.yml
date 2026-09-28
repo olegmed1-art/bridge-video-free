@@ -8,12 +8,14 @@ on:
       - 'oracle_autopilot/codex_cli_*.py'
       - 'ops/light_native_lane_owner.py'
       - 'ops/light_native_lane_feed.py'
+      - 'ops/light_native_lane_execution.py'
       - 'ops/light_native_lane_install.py'
       - 'ops/light_native_pilot_release.py'
       - 'database/light_native_pilot_intake.py'
       - 'tests/test_oracle_autopilot_light_native_*.py'
       - 'tests/test_light_native_lane_owner.py'
       - 'tests/test_light_native_lane_feed.py'
+      - 'tests/test_light_native_lane_execution.py'
   push:
     branches: [main]
     paths:
@@ -22,12 +24,14 @@ on:
       - 'oracle_autopilot/codex_cli_*.py'
       - 'ops/light_native_lane_owner.py'
       - 'ops/light_native_lane_feed.py'
+      - 'ops/light_native_lane_execution.py'
       - 'ops/light_native_lane_install.py'
       - 'ops/light_native_pilot_release.py'
       - 'database/light_native_pilot_intake.py'
       - 'tests/test_oracle_autopilot_light_native_*.py'
       - 'tests/test_light_native_lane_owner.py'
       - 'tests/test_light_native_lane_feed.py'
+      - 'tests/test_light_native_lane_execution.py'
 
 permissions:
   contents: read
@@ -49,13 +53,14 @@ jobs:
           tests/test_oracle_autopilot_light_native_lane.py
           tests/test_light_native_lane_owner.py
           tests/test_light_native_lane_feed.py
+          tests/test_light_native_lane_execution.py
           tests/test_light_native_lane_install.py
           tests/test_oracle_autopilot_light_native_pilot.py
           tests/test_oracle_autopilot_light_native_adapter.py
           tests/test_oracle_autopilot_codex_cli_delivery.py
           tests/test_light_native_pilot_intake.py
-      - name: Exercise first-feed root filesystem publication and failures
+      - name: Exercise first-feed publication and bounded execution failures
         shell: bash
         run: |
           runtime_test_site="$(python -c 'from pathlib import Path; import pytest; print(Path(pytest.__file__).resolve().parent.parent)')"
-          sudo -n env PYTHONPATH="$PWD:$runtime_test_site" "$(command -v python)" -m pytest -q tests/test_light_native_lane_feed.py
+          sudo -n env PYTHONPATH="$PWD:$runtime_test_site" "$(command -v python)" -m pytest -q tests/test_light_native_lane_feed.py tests/test_light_native_lane_execution.py
