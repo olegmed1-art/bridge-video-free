@@ -49,7 +49,8 @@ def reconcile(package, payload, accepted, wheels, credential, token, guard):
         guard.assert_running()
         result = controller.restore(REQUEST)
         guard.assert_running()
-        controller.restored_receipt(request, prior, protected, protected_digest, directory)
+        switch.require(controller.restored_receipt(request, prior, protected, protected_digest, directory) is not None,
+                       "PILOT_CLEANUP_RESTORE_RECEIPT")
         return dict(result, incident='SYSTEMD_REPEATED_ENVIRONMENT_FILES', pilot_resubmitted=False)
     finally:
         switch.show = original
