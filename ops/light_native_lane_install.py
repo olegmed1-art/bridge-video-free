@@ -224,8 +224,13 @@ def operation(bundle, source, action, *, controller_source=None):
     if action != 'install-hold':
         root_parent(LEDGER)
         receipt = json.loads(hold.read(LEDGER/'before.json',0o600,262144))
-        require(receipt == dict(version=1,source=source,bundle_sha256=bundle['sha256'],
-                                legacy_hold=asdict(prior),prior_native='absent'), 'LANE_INSTALL_PRIOR_CHANGED')
+        expected = dict(version=1,source=source,bundle_sha256=bundle['sha256'],
+                        legacy_hold=asdict(prior),prior_native='absent')
+        if receipt != expected:
+            same_identity = {**expected, 'legacy_hold': {**asdict(prior),
+                'fingerprint': receipt.get('legacy_hold',{}).get('fingerprint')}}
+            require(receipt != same_identity, 'LANE_INSTALL_LEGACY_FINGERPRINT_CHANGED')
+            require(False, 'LANE_INSTALL_PRIOR_CHANGED')
         release.staging.verify_release(plan.source_path(source), bundle)
         verify_config(source,user.pw_gid)
         if action in ('complete-hold','inspect-hold'):
@@ -313,7 +318,7 @@ try:
   from ops.light_native_lane_install import operation
   print(json.dumps(operation(candidate['runtime'],candidate['source'],%r,controller_source=obj['source']),sort_keys=True))
 except BaseException as error:
- allowed={'LANE_INSTALL_PRIOR_CHANGED','LANE_INSTALL_REENTRY_LEDGER',
+ allowed={'LANE_INSTALL_LEGACY_FINGERPRINT_CHANGED','LANE_INSTALL_PRIOR_CHANGED','LANE_INSTALL_REENTRY_LEDGER',
   'LANE_INSTALL_REENTRY_ALREADY_STARTED','LANE_INSTALL_REENTRY_STATE',
   'LANE_INSTALL_PARENT','LANE_INSTALL_UNIT_CHANGED','LANE_INSTALL_ADMISSION_CHANGED',
   'LANE_INSTALL_LOADED_CONFIG','LANE_INSTALL_EXECUTION','LANE_INSTALL_UNIT_FIELDS',

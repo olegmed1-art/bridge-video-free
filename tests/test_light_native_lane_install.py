@@ -164,7 +164,7 @@ def test_show_proves_empty_environment_array_from_typed_dbus(monkeypatch):
 
 
 @pytest.mark.skipif(os.geteuid()!=0,reason='real root-owned retained state')
-@pytest.mark.parametrize('fault',[None,'journal','started','ledger','source','start-failure'])
+@pytest.mark.parametrize('fault',[None,'journal','started','ledger','source','start-failure','fingerprint'])
 def test_explicit_reentry_preserves_original_source_and_refuses_uncertain_state(tmp_path,monkeypatch,fault):
     events=installation(tmp_path,monkeypatch,None)
     monkeypatch.setattr(target,'verify_config',Mock(side_effect=RuntimeError('missing property')))
@@ -185,10 +185,16 @@ def test_explicit_reentry_preserves_original_source_and_refuses_uncertain_state(
     elif fault=='started':row['InvocationID']='b'*32
     elif fault=='ledger':(target.LEDGER/'installed.json').write_text('{}')
     elif fault=='source':monkeypatch.setattr(target,'RETAINED_SOURCE','c'*40)
+    elif fault=='fingerprint':
+        import json
+        changed=json.loads(before);changed['legacy_hold']['fingerprint']='changed'
+        before=target.release.encoded(changed)
+        (target.LEDGER/'before.json').write_bytes(before)
     elif fault=='start-failure':monkeypatch.setattr(target,'await_hold',Mock(side_effect=RuntimeError('injected')))
     events.clear()
     if fault:
-        with pytest.raises(RuntimeError):target.operation(bundle,SOURCE,'complete-hold',controller_source='d'*40)
+        with pytest.raises(RuntimeError,match='LEGACY_FINGERPRINT_CHANGED' if fault=='fingerprint' else None):
+            target.operation(bundle,SOURCE,'complete-hold',controller_source='d'*40)
         if fault!='start-failure':assert not any('start' in event for event in events)
         else:assert events[-2:]==[('/usr/bin/systemctl','stop',target.UNIT),'drained']
     else:
