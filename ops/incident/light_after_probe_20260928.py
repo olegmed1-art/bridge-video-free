@@ -34,7 +34,8 @@ CODES = frozenset(('PROBE_SOURCE', 'PROBE_ISOLATION', 'PROBE_INPUT', 'PROBE_HOST
     'TARGET_IDENTITY_MISMATCH', 'NEON_CONNECTION_HOST_MISMATCH',
     'NEON_VERIFIED_TLS_REQUIRED', 'NEON_ROUTING_OVERRIDE_REFUSED',
     'NEON_SERVER_IDENTITY_MISSING', 'NEON_SERVER_IDENTITY_MISMATCH',
-    'OWNER_DRIVER_ORIGIN', 'OWNER_DRIVER_VERSION', 'OWNER_DRIVER_SUBMODULE_ORIGIN'))
+    'RUNTIME_OTHER_SUPERVISOR_ACTIVE', 'RUNTIME_OTHER_CGROUP_ACTIVE',
+    'RUNTIME_UNLISTED_CGROUP', 'RUNTIME_SELF_RUN', 'OWNER_DRIVER_ORIGIN', 'OWNER_DRIVER_VERSION', 'OWNER_DRIVER_SUBMODULE_ORIGIN'))
 
 
 def require(ok, code):
@@ -156,11 +157,13 @@ def observe(connect, credential, token, root):
         source_origins(root)
 
 
-def execute(payload, wheels, envelope):
+def execute(payload, wheels, envelope, supervised_run):
     global PHASE
     require(set(envelope) == {'credential', 'token'} and
             all(type(envelope[k]) is str and 0 < len(envelope[k]) <= limit
                 for k, limit in (('credential', 8192), ('token', 4096))), 'PROBE_INPUT')
+    require(type(supervised_run) is tuple and len(supervised_run) == 2
+            and all(type(n) is int and n > 0 for n in supervised_run), 'PROBE_INPUT')
     PHASE = 'source_bundle'
     with source_runtime(payload) as root:
         from ops.native_maintenance_owner_host import loaded_runtime
@@ -168,7 +171,16 @@ def execute(payload, wheels, envelope):
         # Original decode pins every wheel hash and verifies the installed tree.
         # No install, repair, pip, GRANT, claim or stage call is exposed here.
         with loaded_runtime(wheels) as (driver, _):
+            from ops.native_maintenance_supervisor import StageSupervisor
+            PHASE = 'supervisor'
+            # Real diagnostic run identity, used only for the PID1/cgroup check.
+            # This is not a RunBinding and cannot admit a maintenance stage.
+            identity = types.SimpleNamespace(run_id=supervised_run[0], attempt=supervised_run[1])
+            supervisor = StageSupervisor(SOURCE, identity)
+            supervisor.assert_exclusive()
             observe(driver.connect, envelope['credential'], envelope['token'], root)
+            PHASE = 'supervisor_final'
+            supervisor.assert_exclusive()
         source_origins(root)
     PHASE = 'complete'
 
@@ -189,13 +201,15 @@ def entrypoint():
         parser = argparse.ArgumentParser()
         parser.add_argument('--source-bundle', required=True)
         parser.add_argument('--driver-bundle', required=True)
+        parser.add_argument('--run-id', required=True, type=int)
+        parser.add_argument('--attempt', required=True, type=int)
         args = parser.parse_args()
         with open(args.source_bundle, 'rb') as stream:
             payload = stream.read(2 * 1024 * 1024 + 1)
         with open(args.driver_bundle, 'rb') as stream:
             wheels = stream.read(10 * 1024 * 1024 + 1)
         envelope = json.loads(sys.stdin.buffer.read(16385))
-        execute(payload, wheels, envelope)
+        execute(payload, wheels, envelope, (args.run_id, args.attempt))
         result.update(status='PASS', phase=PHASE)
         status = 0
     except BaseException as exc:

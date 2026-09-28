@@ -49,17 +49,23 @@ claim tail, эксклюзивный stage supervisor или runtime journal loc
 объясняет исторический RPC_EOF и не разрешает новую попытку restore. Существующий
 post-inspect уже подтвердил целостность журналов и prior units; они не чинятся.
 
-Ни один исходный workflow, launcher, bundle или runtime не изменён. Слияние
-ветки в main для запуска не требуется и при текущем scope не предлагается:
+Исторические launcher, bundle и runtime не изменены. Только в диагностической
+ветке существующий зарегистрированный workflow native-maintenance-owner-host.yml
+заменён отдельным manual branch-only read-only job. Его версия в main остаётся
+прежней. Слияние ветки в main для запуска не требуется и не предлагается:
 исторический source guard по-прежнему должен видеть main=8bbc1d6.
 
 ## Перед возможным отдельным запуском
 
-Исполняющий канал пока не подключён и не проверен. Нельзя запускать скрипт через
+Исполняющий канал подготовлен в отдельной ветке и проверен offline/CI;
+его live запуск ещё не выполнен и не разрешён данным этапом подготовки. Нельзя запускать скрипт через
 обход no-new-privileges RDC, менять его защиту или переносить секреты в аргументы,
-файлы проекта, отчёт либо журналы. Нужен отдельно проверенный разрешённый канал
-на Oracle с root, независимым пределом времени/очисткой всего дерева процессов
-и закрытым stdin. Сам скрипт дополнительно ограничивает время SIGALRM 180 сек.
+файлы проекта, отчёт либо журналы. Канал использует прежний pinned SSH host key, secrets существующего environment
+database-production, sudo только через штатный SSH и закрытый stdin. RDC и его
+защита не меняются. Ни один секрет не входит в remote command или артефакт. Runner использует неизменённый original lifetime.managed_stage: PID1 ограничивает
+жизнь transient service 140 сек, KillMode=control-group, Restart=no. Внутренний
+SIGALRM — 120 сек, SSH timeout — 170 сек. Standalone CLI имеет SIGALRM 180 сек
+и также требует реальную matching managed_stage unit identity.
 Не считать SIGALRM заменой внешнего ограничения процесса.
 
 Интерфейс для такого будущего канала: Python 3.12 ARM64 с флагами `-I -B -S`,
@@ -82,5 +88,38 @@ Offline tests: оригинальный bundle и digest, изолированн
 подмене bundle/загруженном чужом ops, обязательный read-only до исходных запросов,
 закрытие сессии при отказе, сокрытие секретных exception text, fail-closed порядок
 workflow/prior-host/backend/snapshot, отсутствие live доступа без isolation.
-Внешние наблюдения в тесте порядка заменены заглушками; это не live attestation.
+14 offline tests PASS, включая дополнительные проверки manual branch context,
+live run/jobs/main guard, привязки/формата отчёта, bounded bootstrap и его реального
+изолированного subprocess отказа без секретов. Внешние наблюдения в тесте порядка
+заменены заглушками; это не live attestation.
 Полное ARM64 driver/Oracle исполнение локально не проверялось.
+
+
+## Подготовленный канал: manual dispatch только из диагностической ветки
+
+Файл workflow уже зарегистрирован в main, но при будущей явно разрешённой
+workflow_dispatch выбирается ref `fix/light-after-readonly-probe-20260928`.
+Pull request запускает только contract job без secrets; production probe job
+жёстко требует workflow_dispatch, точную ветку, owner/triggering owner и принятую
+версию кода. Автоматического production запуска после commit/PR нет.
+
+Используется единственное существующее input-поле `expected_main_sha`.
+**Только в этой ветке** его описание и смысл — полный независимо принятый SHA
+диагностического commit (ACCEPTED_PROBE_SHA). Это сохраняет совместимость schema
+зарегистрированного workflow. Он обязан совпасть с GITHUB_SHA/WORKFLOW_SHA и
+GitHub API run head_sha. Для проверки настоящего main отдельно передаётся
+константа EXPECTED_MAIN=8bbc1d61010ef70c3fca02b5151ac86fce02a144. Никакой общий
+source guard не ослаблен. Не передавать SHA диагностической ветки как новый main.
+
+Runner повторно проверяет authenticated API run/jobs/main до и после SSH.
+Результат привязан к commit/run/attempt/helper digest. Две прежние concurrency
+группы исключают параллельные maintenance workflows; на самом host оригинальный
+StageSupervisor проверяет собственную PID1 unit и отсутствие другого native
+supervisor до и после наблюдений. Identity здесь — фактические run_id/attempt
+диагностики, не RunBinding и не разрешение maintenance stage.
+
+Подготовка создаёт/меняет только файлы отдельной ветки. Будущий запуск создаст
+и удалит собственную временную systemd unit; production worker не перезапускается,
+не меняется, HOLD не снимается. Это ограниченное обратимое host-действие, которое
+надо явно включить в разрешение на один diagnostic dispatch. Restore и новое
+30-минутное окно в это разрешение не входят.

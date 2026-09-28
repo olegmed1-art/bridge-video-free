@@ -1,47 +1,47 @@
-name: Native maintenance owner host read-only attestation
+name: Light AFTER incident read-only diagnostic (branch only)
 
 on:
   pull_request:
     paths:
       - '.github/workflows/native-maintenance-owner-host.yml'
-      - 'ops/native_maintenance_driver*.py'
-      - 'ops/native_maintenance_owner_host*.py'
-      - 'ops/native_maintenance_owner_attest.py'
-      - 'ops/oracle_autopilot_source_preflight.py'
-      - 'ops/native_driver_requirements.txt'
-      - 'ops/native_maintenance_bundle.py'
-      - 'tests/test_native_maintenance_owner_host*.py'
+      - 'ops/incident/light_after_probe*_20260928.py'
+      - 'tests/test_light_after_probe*_20260928.py'
   workflow_dispatch:
     inputs:
       expected_main_sha:
-        description: Exact reviewed main for owner host read-only verification under HOLD
+        description: 'Legacy input name: exact reviewed DIAGNOSTIC branch commit; main stays pinned to 8bbc1d6'
         required: true
         type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && inputs.expected_main_sha == github.sha && 'oracle-instance-workload-mutation' || format('native-owner-host-noop-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/fix/light-after-readonly-probe-20260928' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && inputs.expected_main_sha == github.sha && 'oracle-instance-workload-mutation' || format('light-after-probe-noop-{0}', github.run_id) }}
   cancel-in-progress: false
   queue: max
 
 jobs:
   contract:
     runs-on: ubuntu-24.04
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-      - run: sudo -n env PYTHONPATH="$PWD" "$(command -v python)" -m unittest discover -s tests -p 'test_native_maintenance_owner_host*.py' -v
+          fetch-depth: 0
+      - name: Offline incident helper and transport safety tests
+        run: python -m unittest -q tests.test_light_after_probe_20260928 tests.test_light_after_probe_runner_20260928
 
-  attest:
+  probe:
     needs: contract
     if: >-
+      github.event_name == 'workflow_dispatch' &&
       github.repository == 'olegmed1-art/bridge-video-free' &&
-      github.ref == 'refs/heads/main' && github.actor == github.repository_owner &&
-      github.triggering_actor == github.repository_owner &&
-      github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha
+      github.ref == 'refs/heads/fix/light-after-readonly-probe-20260928' &&
+      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
+      inputs.expected_main_sha == github.sha
     environment: database-production
     runs-on: ubuntu-24.04
     timeout-minutes: 6
@@ -53,12 +53,14 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-      - name: Verify owner DB identity from pinned Oracle runtime under HOLD
+          fetch-depth: 0
+      - name: Observe fixed AFTER gates on Oracle without a restore request
         env:
           NATIVE_OWNER_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
           SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}
-          EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
+          EXPECTED_MAIN: 8bbc1d61010ef70c3fca02b5151ac86fce02a144
+          ACCEPTED_PROBE_SHA: ${{ inputs.expected_main_sha }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -75,4 +77,4 @@ jobs:
           unset SSH_PRIVATE_KEY
           ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
           bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
-          PYTHONPATH=. python ops/native_maintenance_owner_host_runner.py "$work/key" "$work/known_hosts" "$work/wheels"
+          PYTHONPATH=. python ops/incident/light_after_probe_runner_20260928.py "$work/key" "$work/known_hosts" "$work/wheels"
