@@ -91,7 +91,7 @@ def host(tmp_path,monkeypatch):
 @pytest.mark.skipif(os.geteuid()!=0,reason='root-owned admission')
 def test_one_dispatch_requires_armed_supervisor_and_cleanup_stops_before_readback(host):
     events,value,state,root=host
-    result=target.run_once(DIGEST,lambda permit:True)
+    result=target.run_once(DIGEST,lambda permit:True,live_guard=lambda:None)
     assert result['state']=='READBACK_REQUIRED'
     assert events.index('armed') < events.index(('/usr/bin/systemctl','stop',target.install.UNIT))
     assert events.index('original-drained') < next(i for i,x in enumerate(events) if isinstance(x,tuple) and x[0]=='/usr/bin/systemd-run')
@@ -127,7 +127,7 @@ def test_supervised_failure_never_grants_run_and_restoration_preserves_evidence(
         monkeypatch.setattr(target,'journal',lambda invocation:['{"audit":"LIGHT_NATIVE_LANE_QUARANTINED"}'])
         monkeypatch.setattr(target.time,'sleep',lambda seconds:None)
     else:value['expires_at']=int(time.time())-1
-    with pytest.raises(RuntimeError):target.run_once(DIGEST,gate)
+    with pytest.raises(RuntimeError):target.run_once(DIGEST,gate,live_guard=lambda:None)
     assert b'RUN\n' not in events
     result=target.restore(DIGEST)
     assert result['state'] in ('ORIGINAL_HOLD','STOPPED_HOLD')
@@ -202,3 +202,21 @@ def test_restore_requires_permanent_control_pid_and_descendants_drained(host,mon
     with pytest.raises(RuntimeError,match='CGROUP_POPULATED'):target.restore(DIGEST)
     assert (target.install.CONTROL/'admission').read_bytes()==b'HOLD\n'
     assert not (root/'stopped-hold.json').exists()
+
+@pytest.mark.skipif(os.geteuid()!=0,reason='root-owned admission')
+def test_live_authority_poll_is_bounded_while_local_checks_continue(host,monkeypatch):
+    events,value,state,root=host
+    clock=[0.0];checks=[];local=[]
+    monkeypatch.setattr(target.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(target.time,'sleep',lambda seconds:clock.__setitem__(0,clock[0]+seconds))
+    def journal(invocation):
+        local.append(clock[0])
+        if b'RUN\n' not in events:return ['{"audit":"LIGHT_NATIVE_LANE","state":"HOLD"}']
+        if clock[0]>=64:return ['{"audit":"LIGHT_NATIVE_LANE_QUARANTINED"}']
+        return []
+    monkeypatch.setattr(target,'journal',journal)
+    def authority():checks.append(clock[0])
+    target.run_once(DIGEST,lambda permit:True,live_guard=authority)
+    assert [t for t in checks if t>0]==[16,32,48,64]
+    assert len(local)>30
+    assert events.count('main')==3  # Before stop, start, and RUN only.

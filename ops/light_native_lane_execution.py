@@ -64,11 +64,12 @@ def request(request_digest):
     require(hashlib.sha256(raw).hexdigest() == request_digest, 'LANE_EXEC_REQUEST')
     value=parse(raw)
     require(set(value) == {'version','source','controller_source','seconds','expires_at','prior',
-                          'protected','protected_sha256','cursor_sha256','dispatch_id','original','supervisor_sha256'}
+                          'protected','protected_sha256','cursor_sha256','dispatch_id','original','supervisor_sha256','owner_context_sha256'}
             and type(value['version']) is int and value['version'] == 1
             and install.release.source.identifier(value['controller_source'],40)
             and install.release.source.identifier(value['cursor_sha256'],64)
             and install.release.source.identifier(value['supervisor_sha256'],64)
+            and install.release.source.identifier(value['owner_context_sha256'],64)
             and type(value['original']) is dict
             and set(value['original']) == {'ActiveState','SubState','MainPID','InvocationID','NRestarts'}
             and value['original']['ActiveState'] == 'active' and value['original']['SubState'] == 'running'
@@ -205,11 +206,12 @@ def journal(invocation):
                           '_SYSTEMD_INVOCATION_ID='+invocation).splitlines()
 
 
-def run_once(request_digest,fresh_gate):
+def run_once(request_digest,fresh_gate,*,live_guard):
     """fresh_gate is the reviewed controller's live PR/DB/authority check."""
     value,prior,directory=request(request_digest)
     deadline=time.monotonic()+max(0,value['expires_at']-time.time())
     def guard():
+        live_guard()
         require(time.time() < value['expires_at'] and time.monotonic() < deadline, 'LANE_EXEC_EXPIRED')
         arm(request_digest,value,directory)
         install.release.staging.require_current_main(value['controller_source'])
@@ -237,7 +239,8 @@ def run_once(request_digest,fresh_gate):
     require(owned(value,prior,request_digest), 'LANE_EXEC_START_UNKNOWN')
     row=None
     for _ in range(30):
-        guard()
+        arm(request_digest,value,directory)
+        require(time.time() < value['expires_at'] and time.monotonic() < deadline, 'LANE_EXEC_EXPIRED')
         row=process(value)
         if journal(row['InvocationID']) == ['{"audit":"LIGHT_NATIVE_LANE","state":"HOLD"}']:break
         time.sleep(0.5)
@@ -246,12 +249,17 @@ def run_once(request_digest,fresh_gate):
     guard()
     require(process(value) == row, 'LANE_EXEC_PROCESS_CHANGED')
     admission(b'RUN\n')
+    next_remote_check=time.monotonic()+15
     while True:
+        # Authenticated guard includes exact main, workflow, actor and live job.
+        # Local process/admission/deadline checks continue every two seconds.
+        if time.monotonic() >= next_remote_check:
+            live_guard()
+            next_remote_check=time.monotonic()+15
         # Provider effects remain bounded independently by Permit and PID1.
         arm(request_digest,value,directory)
         require(time.time() < value['expires_at'] and time.monotonic() < deadline, 'LANE_EXEC_EXPIRED')
         require(process(value) == row and owned(value,prior,request_digest), 'LANE_EXEC_PROCESS_CHANGED')
-        install.release.staging.require_current_main(value['controller_source'])
         require(asdict(install.hold.service_hold_identity()) == asdict(prior), 'LANE_EXEC_LEGACY_CHANGED')
         switch.unchanged_files(value['protected'],prior,value['protected_sha256'])
         require(install.hold.read(install.CONTROL/'admission',0o640,16) == b'RUN\n', 'LANE_EXEC_ADMISSION')

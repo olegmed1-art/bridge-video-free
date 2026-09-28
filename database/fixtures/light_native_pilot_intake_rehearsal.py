@@ -4,6 +4,8 @@ Run only after the disposable database has all migrations.  This fixture
 clears its own disposable queue and patches host/Neon observation solely to
 the exact localhost CI owner connection; it cannot name a production DSN.
 """
+from contextlib import nullcontext
+from types import SimpleNamespace
 from dataclasses import asdict
 import hashlib
 from pathlib import Path
@@ -15,6 +17,7 @@ from database.fixtures.native_cli_commit_rehearsal import connection, require
 from database import light_native_pilot_intake as intake
 from database import native_cli_permission_engine as engine
 from ops import oracle_light_active_hold_attest as hold
+from ops import light_native_lane_controller as controller
 from ops.native_maintenance_agreement import Agreement, COVERAGE
 from oracle_autopilot.light_native_adapter import FALSE_FLAGS
 
@@ -49,11 +52,12 @@ def sample(label):
     return plan,agreement,prior,baseline_raw,hashlib.sha256(baseline_raw).hexdigest()
 
 
-def main():
+def main(result_code='AUDIT_PASSED'):
     with connection() as conn:
         conn.read_only=False
         require(conn.execute('SELECT current_database(),session_user,current_user').fetchone()
                 == ('bridge_school_ci','postgres','postgres'), 'DISPOSABLE_IDENTITY_REQUIRED')
+        controller.verify_terminal_policy(conn)
         # Earlier CI fixtures intentionally persist queue rows.  Only this
         # disposable database can be cleared, and only under the fixed guard.
         conn.execute('TRUNCATE autopilot.project_work_item,autopilot.task CASCADE')
@@ -92,6 +96,9 @@ def main():
                     WHERE o.dispatch_id=%s::uuid''',(result['dispatch_id'],)).fetchone()
                 require(row==('ACTIVE','WAITING_EXTERNAL','CLAIMED','READ_ONLY',False,True),
                         'DISPOSABLE_INTAKE_DB_STATE')
+                conn.read_only=True
+                controller.committed_intake(conn,plan,result)
+                conn.read_only=False
                 body=intake.dispatch_body(result['dispatch'])
                 body_sha=hashlib.sha256(body.encode()).hexdigest()
                 marked=conn.execute('''SELECT autopilot.mark_role_dispatch_published(
@@ -108,7 +115,7 @@ def main():
                 provider_task='task_e_disposable_intake_pg18'
                 conn.execute('SELECT autopilot.native_cli_ack(%s::jsonb,%s,%s)',
                     (intake.encoded(request).decode(),provider_task,'b'*64))
-                terminal={'status':'SUCCEEDED','result_code':'AUDIT_PASSED',
+                terminal={'status':'SUCCEEDED','result_code':result_code,
                           'summary':'Disposable intake finished.',
                           'target_head_sha':plan.value['expected_head_sha'],
                           'provider_evidence_sha256':'d'*64}
@@ -139,8 +146,45 @@ def main():
                         and conn.execute('SELECT enabled FROM autopilot.native_cli_config').fetchone()==(False,)
                         and conn.execute("SELECT can_repair FROM autopilot.role_registry WHERE role_id='AUTOPILOT'").fetchone()==(True,),
                         'DISPOSABLE_CONTROL_RESTORE')
+                # Actual DB reconciliation after the restore already committed.
+                # No repeat restore SQL is permitted after a lost acknowledgment.
+                driver=SimpleNamespace(connect=lambda **kwargs:nullcontext(conn))
+                guard=SimpleNamespace(assert_running=lambda:None)
+                with patch.object(intake,'restore_controls_after_terminal',
+                                  side_effect=AssertionError('restore SQL repeated')):
+                    reconciled=controller.reconcile_controls(driver,{},plan,result,terminal_raw,Path(directory),guard)
+                    require(reconciled['controls_restored'] is True,'DISPOSABLE_RESTORE_RECONCILE')
+            # Containment deliberately preserves the pending graph, with no
+            # provider execution, publication command, retry or synthetic result.
+            conn.read_only=False
+            conn.execute('TRUNCATE autopilot.project_work_item,autopilot.task CASCADE')
+            plan,agreement,prior,baseline_raw,baseline_digest=sample('native-contain-pg18')
+            with tempfile.TemporaryDirectory() as directory:
+                directory=Path(directory)
+                result=intake.prepare(conn,plan,agreement,baseline_raw,baseline_digest,directory/'before.json',
+                    target_open=True,observed_head_sha=plan.value['expected_head_sha'],
+                    observed_branch=plan.value['branch'],
+                    durable_receipt=lambda row:(directory/'intake.json').write_bytes(intake.encoded(row)))
+                with patch.object(controller,'read',lambda path,*a:path.read_bytes()), \
+                     patch.object(controller,'remember',lambda path,raw:path.write_bytes(raw)), \
+                     patch.object(controller.execution,'stopped',lambda:None), \
+                     patch.object(controller.install,'verify_running',lambda *a:None), \
+                     patch.object(controller.pwd,'getpwnam',lambda *a:None), \
+                     patch.object(controller.install,'LEDGER',directory/'unused-ledger'), \
+                     patch.object(controller.install,'CONTROL',directory/'unused-control'):
+                    contained=controller.contain(driver,{},plan,directory,{},guard)
+                    require(contained['state']=='CONTAINED_UNRESOLVED'
+                            and contained['queue_retry_authorized'] is False,'DISPOSABLE_CONTAINMENT')
+                    require(controller.contain(driver,{},plan,directory,{},guard)==contained,
+                            'DISPOSABLE_CONTAIN_RECONCILE')
+                require(conn.execute('SELECT enabled FROM autopilot.native_cli_config').fetchone()==(False,)
+                        and conn.execute("SELECT can_repair FROM autopilot.role_registry WHERE role_id='AUTOPILOT'").fetchone()==(False,)
+                        and conn.execute('SELECT status FROM autopilot.task WHERE task_id=%s::uuid',
+                                         (result['task_id'],)).fetchone()==('WAITING_EXTERNAL',),
+                        'DISPOSABLE_CONTAIN_PRESERVES_PENDING_GRAPH')
         print('LIGHT_NATIVE_PILOT_INTAKE_REAL_PG18_PASS')
 
 
 if __name__=='__main__':
     main()
+    main('AUDIT_FINDINGS_REPORTED')

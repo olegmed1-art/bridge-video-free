@@ -1,0 +1,87 @@
+"""Pinned SSH delivery of independently accepted first-lane owner phases."""
+import base64
+import json
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+from ops import light_native_lane_controller as controller
+from ops import light_native_pilot_release as release
+from ops import native_maintenance_driver as driver
+from ops.native_maintenance_store_runner import HOST,source_check
+from ops.light_native_lane_run_guard import local_context
+
+
+def bootstrap(source,accepted_controller,accepted_runtime,accepted_payload,wheel_sha,run,attempt):
+    for digest in (accepted_controller,accepted_runtime,accepted_payload,wheel_sha):
+        release.require(release.source.identifier(digest,64),'LANE_OWNER_DIGEST')
+    release.require(release.source.identifier(source,40) and type(run) is int and run>0
+                    and type(attempt) is int and attempt>0,'LANE_OWNER_RUN')
+    return '''import base64,hashlib,json,os,pathlib,sys,tempfile
+try:
+ wire=sys.stdin.buffer.read(24*1024*1024+1)
+ assert len(wire)<=24*1024*1024 and os.geteuid()==0
+ value=json.loads(wire)
+ assert set(value)=={'controller','runtime','payload','driver','credential','token'}
+ decoded={key:base64.b64decode(value[key],validate=True) for key in ('controller','runtime','payload','driver')}
+ for key,digest in %r.items():assert hashlib.sha256(decoded[key]).hexdigest()==digest
+ package=json.loads(decoded['controller'])
+ assert package['source']==%r and package['kind']=='LIGHT_LANE_CONTROLLER' and package['version']==1
+ assert set(package['helpers'])==set(%r)
+ with tempfile.TemporaryDirectory(prefix='light-lane-owner-',dir='/var/tmp') as temp:
+  root=pathlib.Path(temp)
+  for directory in ('ops','database'):(root/directory).mkdir(mode=0o700)
+  for name,text in package['helpers'].items():
+   fd=os.open(root/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+   with os.fdopen(fd,'w') as stream:stream.write(text)
+  sys.path.insert(0,str(root))
+  sys.path.append('/opt/bridge-school/school-autopilot-production-light/releases/f82d58efabf21ba62fd242a4fa02a8e7cfda1d23')
+  from ops.light_native_lane_run_guard import authenticated
+  from ops.light_native_lane_controller import phase
+  guard=authenticated(%r,%d,%d,value['token'])
+  result=phase(decoded['driver'],value['credential'],value['token'],decoded['controller'],decoded['runtime'],decoded['payload'],%r,guard)
+  guard.assert_running()
+  print(json.dumps(result,sort_keys=True))
+except BaseException:
+ print('{"audit":"LIGHT_LANE_OWNER_REFUSED"}')
+ raise SystemExit(2) from None
+''' % (dict(controller=accepted_controller,runtime=accepted_runtime,payload=accepted_payload,driver=wheel_sha),
+       source,tuple(dict.fromkeys((*release.HELPERS,*controller.EXTRA))),source,run,attempt,accepted_payload)
+
+
+def main():
+    release.require(len(sys.argv)==4,'LANE_OWNER_ARGUMENTS')
+    key,known,wheel_directory=sys.argv[1:]
+    source,run,attempt=local_context(os.environ)
+    release.require(source==os.environ['EXPECTED_MAIN'],'LANE_OWNER_MAIN')
+    source_check(source)
+    repo=Path(__file__).resolve().parents[1]
+    raw=controller.package(repo,source)
+    retained=release.package(repo,controller.install.RETAINED_SOURCE)
+    payload=base64.b64decode(os.environ['LANE_PAYLOAD_BASE64'],validate=True)
+    release.require(len(payload)<=262144,'LANE_OWNER_PAYLOAD_SIZE')
+    wheels=driver.build(wheel_directory)
+    digests=[os.environ[name] for name in ('LANE_CONTROLLER_SHA256','LANE_RUNTIME_SHA256','LANE_PAYLOAD_SHA256')]
+    release.require([controller.sha(item) for item in (raw,retained,payload)]==digests,'LANE_OWNER_NOT_ACCEPTED')
+    code=bootstrap(source,*digests,driver.sha(wheels),run,attempt)
+    wire=controller.encoded(dict(controller=base64.b64encode(raw).decode(),runtime=base64.b64encode(retained).decode(),
+        payload=base64.b64encode(payload).decode(),driver=base64.b64encode(wheels).decode(),
+        credential=os.environ.pop('NATIVE_OWNER_DATABASE_URL',''),token=os.environ['GH_TOKEN']))
+    command=['ssh','-F','/dev/null','-i',key,'-o','BatchMode=yes','-o','IdentitiesOnly=yes',
+        '-o','ForwardAgent=no','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+known,
+        '-o','ConnectTimeout=15','-o','ConnectionAttempts=1','-o','ServerAliveInterval=10',
+        '-o','ServerAliveCountMax=2',HOST,shlex.join(['sudo','-n','/usr/bin/python3','-I','-S','-B','-c',code])]
+    source_check(source)
+    result=subprocess.run(command,input=wire,capture_output=True,timeout=1950,env={'PATH':'/usr/bin:/bin'})
+    release.require(result.returncode==0 and len(result.stdout)<=262144,'LANE_OWNER_OUTCOME_UNKNOWN')
+    value=json.loads(result.stdout)
+    source_check(source)
+    print(json.dumps(value,sort_keys=True))
+
+
+if __name__=='__main__':
+    try:main()
+    except BaseException:
+        print('{"audit":"LIGHT_LANE_RUNNER_REFUSED"}')
+        raise SystemExit(2) from None

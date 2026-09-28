@@ -28,6 +28,10 @@ process_video_gate_armed=0
 root_pr_number=991
 prior_gate_pr_number=1070
 protected_gate_paths=(
+  '.github/workflows/light-native-lane-owner.yml'
+  'ops/light_native_lane_controller.py'
+  'ops/light_native_lane_owner_runner.py'
+  'ops/light_native_lane_run_guard.py'
   '.github/workflows/light-native-pilot-owner.yml'
   '.github/workflows/light-native-lane-install.yml'
   '.github/workflows/light-native-lane.yml'
