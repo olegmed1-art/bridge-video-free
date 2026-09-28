@@ -87,7 +87,9 @@ def reconcile(package,payload,accepted,wheels,credential,token,guard):
             switch.require(config==before['native_config'] and all(role.get(k)==v for k,v in before['autopilot_role'].items() if k!='updated_at'),'ZERO_SUBMIT_COMMIT_READBACK')
             switch.require(intake.one(conn,'SELECT to_jsonb(t) FROM autopilot.task t WHERE task_id=%s::uuid',(TASK,))==task
                 and intake.one(conn,'SELECT to_jsonb(o) FROM autopilot.role_dispatch_outbox o WHERE dispatch_id=%s::uuid',(DISPATCH,))==outbox
-                and conn.execute('SELECT count(*) FROM autopilot.native_cli_receipt').fetchone()==(0,),'ZERO_SUBMIT_POSTCOMMIT_TASK')
+                and intake.one(conn,'SELECT to_jsonb(w) FROM autopilot.project_work_item w WHERE work_item_id=%s::uuid',(WORK,))==work
+                and conn.execute('SELECT count(*) FROM autopilot.native_cli_receipt').fetchone()==(0,)
+                and conn.execute("SELECT (SELECT count(*) FROM autopilot.project_work_task WHERE work_item_id=%s::uuid),(SELECT count(*) FROM autopilot.task WHERE goal_json->>'origin_task_id'=%s)",(WORK,TASK)).fetchone()==(1,0),'ZERO_SUBMIT_POSTCOMMIT_TASK')
         host_guard()
         result=dict(audit='LIGHT_ZERO_SUBMIT_CONTROLS_RESTORED',request_sha256=REQUEST,intake_sha256=INTAKE,
             snapshot_sha256=receipt['snapshot_sha256'],native_enabled=config['enabled'],can_repair=role['can_repair'],
