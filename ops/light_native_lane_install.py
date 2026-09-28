@@ -181,9 +181,45 @@ def await_hold(source, user):
     return verify_running(source, user)
 
 
-def rehearse(source, controller_source, prior, user):
+def prove_reload_equivalence(prior, recorded):
+    """Prove the retained fingerprint by one exact accounting reconstruction.
+
+    All configuration and credential hashes remain live and unchanged. Only
+    ExecStart's two reset bookkeeping fields are reconstructed from independent
+    ExecMain properties. No baseline replacement, time search or hash override.
+    """
+    current = hold.service()
+    require(asdict(hold.service_hold_identity()) == asdict(prior), 'LANE_INSTALL_LEGACY_CHANGED')
+    running = switch.show(hold.UNIT,['ExecMainPID','ExecMainStartTimestamp'])
+    require(running['ExecMainPID'] == str(prior.pid)
+            and running['ExecMainStartTimestamp'] not in ('','n/a'), 'LANE_INSTALL_RELOAD_PROCESS')
+    tail = ' ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }'
+    require(current['ExecStart'].endswith(tail), 'LANE_INSTALL_RELOAD_ACCOUNTING')
+    reconstructed = {**current, 'ExecStart': current['ExecStart'][:-len(tail)] +
+        ' ; start_time=['+running['ExecMainStartTimestamp']+'] ; stop_time=[n/a] ; pid='+
+        running['ExecMainPID']+' ; code=(null) ; status=0/0 }'}
+    digest = lambda raw: release.hashlib.sha256(raw).hexdigest()
+    # Exactly the established hold._attest fingerprint formula, with only
+    # the reconstructed service record in place of the live service record.
+    fields = dict(service=reconstructed,
+        environment=digest(hold.read(hold.ENV,0o600,262144)),
+        pins=digest(hold.read(Path(prior.release)/'ops/autopilot/broker-hold.env',0o444,4096)),
+        route=digest(hold.read(hold.ROUTE/'route.json',0o644,4096)),
+        drop=digest(hold.read(hold.DROP,0o644,4096)))
+    require(digest(release.encoded(fields)) == recorded['fingerprint'], 'LANE_INSTALL_RELOAD_NOT_EQUIVALENT')
+    require(hold.service() == current
+            and asdict(hold.service_hold_identity()) == asdict(prior), 'LANE_INSTALL_LEGACY_CHANGED')
+    return dict(version=1,kind='EXACT_EXECSTART_ACCOUNTING_RECONSTRUCTION',
+        legacy_pid=prior.pid,legacy_invocation=prior.invocation_id,
+        original_fingerprint=recorded['fingerprint'],live_fingerprint=prior.fingerprint,
+        evidence_sha256=digest(release.encoded(dict(exec_main=running,exec_start=reconstructed['ExecStart']))))
+
+
+def rehearse(source, controller_source, prior, user, baseline_check=None):
     start_attempted = False
     try:
+        if baseline_check is not None:
+            baseline_check()
         release.staging.require_current_main(controller_source)
         start_attempted = True
         switch.command('/usr/bin/systemctl','start',UNIT)
@@ -191,15 +227,21 @@ def rehearse(source, controller_source, prior, user):
         switch.command('/usr/bin/systemctl','stop',UNIT)
         stopped()
         require(hold.attest() == prior, 'LANE_INSTALL_LEGACY_CHANGED')
+        if baseline_check is not None:
+            baseline_check()
         release.staging.require_current_main(controller_source)
         write_new(LEDGER/'stop-rehearsal.json',release.encoded(dict(version=1,source=source,
             first_invocation=first['InvocationID'],cgroup_empty=True,legacy_unchanged=True)),0o600)
+        if baseline_check is not None:
+            baseline_check()
         release.staging.require_current_main(controller_source)
         start_attempted = True
         switch.command('/usr/bin/systemctl','start',UNIT)
         second = await_hold(source,user)
         require(first['InvocationID'] != second['InvocationID'], 'LANE_INSTALL_REENTRY_NOT_PROVEN')
         require(hold.attest() == prior, 'LANE_INSTALL_LEGACY_CHANGED')
+        if baseline_check is not None:
+            baseline_check()
         release.staging.require_current_main(controller_source)
         write_new(LEDGER/'installed.json',release.encoded(dict(version=1,source=source,
             unit_sha256=release.hashlib.sha256(render(source)).hexdigest(),
@@ -221,6 +263,7 @@ def operation(bundle, source, action, *, controller_source=None):
     release.staging.require_current_main(controller_source)
     prior = hold.attest()
     user = pwd.getpwnam('school-autopilot')
+    reload_proof = None
     if action != 'install-hold':
         root_parent(LEDGER)
         receipt = json.loads(hold.read(LEDGER/'before.json',0o600,262144))
@@ -229,8 +272,8 @@ def operation(bundle, source, action, *, controller_source=None):
         if receipt != expected:
             same_identity = {**expected, 'legacy_hold': {**asdict(prior),
                 'fingerprint': receipt.get('legacy_hold',{}).get('fingerprint')}}
-            require(receipt != same_identity, 'LANE_INSTALL_LEGACY_FINGERPRINT_CHANGED')
-            require(False, 'LANE_INSTALL_PRIOR_CHANGED')
+            require(receipt == same_identity, 'LANE_INSTALL_PRIOR_CHANGED')
+            reload_proof = prove_reload_equivalence(prior,receipt['legacy_hold'])
         release.staging.verify_release(plan.source_path(source), bundle)
         verify_config(source,user.pw_gid)
         if action in ('complete-hold','inspect-hold'):
@@ -245,8 +288,20 @@ def operation(bundle, source, action, *, controller_source=None):
                     'LANE_INSTALL_REENTRY_STATE')
             stopped()
             require(hold.attest() == prior, 'LANE_INSTALL_LEGACY_CHANGED')
-            result = (dict(state='READY_TO_COMPLETE') if action == 'inspect-hold' else
-                      rehearse(source,controller_source,prior,user))
+            def baseline_check():
+                require(hold.attest() == prior, 'LANE_INSTALL_LEGACY_CHANGED')
+                if reload_proof is not None:
+                    require(prove_reload_equivalence(prior,receipt['legacy_hold']) == reload_proof,
+                            'LANE_INSTALL_RELOAD_NOT_EQUIVALENT')
+            if action == 'inspect-hold':
+                result = dict(state='READY_TO_COMPLETE',legacy_reload_equivalent=reload_proof is not None)
+            else:
+                baseline_check()
+                release.staging.require_current_main(controller_source)
+                if reload_proof is not None:
+                    write_new(LEDGER/'legacy-reload-proof.json',release.encoded(dict(
+                        **reload_proof,source=source,controller_source=controller_source)),0o600)
+                result = rehearse(source,controller_source,prior,user,baseline_check)
         elif action == 'stop-hold':
             release.staging.require_current_main(controller_source)
             switch.command('/usr/bin/systemctl','stop',UNIT)
@@ -318,7 +373,7 @@ try:
   from ops.light_native_lane_install import operation
   print(json.dumps(operation(candidate['runtime'],candidate['source'],%r,controller_source=obj['source']),sort_keys=True))
 except BaseException as error:
- allowed={'LANE_INSTALL_LEGACY_FINGERPRINT_CHANGED','LANE_INSTALL_PRIOR_CHANGED','LANE_INSTALL_REENTRY_LEDGER',
+ allowed={'LANE_INSTALL_RELOAD_NOT_EQUIVALENT','LANE_INSTALL_RELOAD_PROCESS','LANE_INSTALL_RELOAD_ACCOUNTING','LANE_INSTALL_LEGACY_FINGERPRINT_CHANGED','LANE_INSTALL_PRIOR_CHANGED','LANE_INSTALL_REENTRY_LEDGER',
   'LANE_INSTALL_REENTRY_ALREADY_STARTED','LANE_INSTALL_REENTRY_STATE',
   'LANE_INSTALL_PARENT','LANE_INSTALL_UNIT_CHANGED','LANE_INSTALL_ADMISSION_CHANGED',
   'LANE_INSTALL_LOADED_CONFIG','LANE_INSTALL_EXECUTION','LANE_INSTALL_UNIT_FIELDS',
