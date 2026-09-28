@@ -47,8 +47,8 @@ def reconcile(package,payload,accepted,wheels,credential,token,guard):
     intent=directory/'zero-submit-controls-intent.json'
     switch.require(not intent.exists() and not intent.is_symlink(),'ZERO_SUBMIT_INTENT_EXISTS')
     from ops.native_maintenance_owner_host import loaded_runtime
-    from ops.native_maintenance_owner_attest import parameters
     with loaded_runtime(wheels) as (psycopg,_):
+        from ops.native_maintenance_owner_attest import parameters
         from database import light_native_pilot_intake as intake
         before=intake.engine.load_manifest(root/'before.json',receipt['snapshot_sha256'])
         switch.require(before['version']==1 and before['plan_sha256']==PLAN
