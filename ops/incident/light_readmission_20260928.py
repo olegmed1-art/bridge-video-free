@@ -655,12 +655,161 @@ def restore_submitted(payload,payload_raw,run_guard,psycopg,parameters,credentia
     control.retained(control.plan.ROOT/'submitted-controls-restored.json',control.canonical(result));return result
 
 
+
+RECOVERY_LOG_SHA='e7e9e10106ab5848673f0a52eddf194fea63d8b4b2550047ee5f72f4eba466d1'
+RECOVERY_REQUEST='da822b23cf92e7ba69c94258692b7c7cadebe84538c4b54a8bdce320c780db46'
+RECOVERY_PROVIDER='task_e_6aba7c5b6d5c8323ad13a01a7499dc41'
+RECOVERY_SNAPSHOT='9248c000274a0c4acf34e27bfd7e40547aaf96089037867ecce3124cf1d72c7d'
+RECOVERY_SCOPE=dict(version=1,operation='finish_existing_task_from_authenticated_cloud_log',source=SOURCE,
+    request_sha256=RECOVERY_REQUEST,provider_task_id=RECOVERY_PROVIDER,log_sha256=RECOVERY_LOG_SHA,
+    native_activation=False,provider_submit=False,temporary_role_binding=True)
+
+
+def recovered_log_evidence(native,raw):
+    import hashlib
+    from oracle_autopilot import codex_cli_bridge as bridge
+    require(control.digest(raw)==RECOVERY_LOG_SHA,'RECOVERY_LOG_CHANGED')
+    require(native['provider_task_id']==RECOVERY_PROVIDER and native['request']['dispatch_id']==DISPATCH,'RECOVERY_PROVIDER_CHANGED')
+    text=raw.decode('utf-8');marker='--- DIFF ---\n'
+    require(text.count(marker)==1 and text.startswith('transport report valid\n--- FINAL HEAD ---\n'+native['request']['expected_head_sha']+'\n'),'RECOVERY_LOG_HEAD')
+    patch=text.split(marker,1)[1]+'\n'
+    result=bridge.validate_result(native['request'],patch,RECOVERY_PROVIDER)
+    require(result['state']=='RESULT_RETRIEVED' and result['report']['status']=='SUCCEEDED' and not result['changes'],'RECOVERY_REPORT_REJECTED')
+    report_line=patch.split('@@ -0,0 +1 @@\n+',1)[1].encode()
+    blob=hashlib.sha1(b'blob '+str(len(report_line)).encode()+b'\0'+report_line).hexdigest()
+    require(blob=='d4fb944edf532d19ec16cfcb1e57115e867da5c6' and 'index 0000000..d4fb944\n' in patch,'RECOVERY_REPORT_BLOB')
+    return dict(version=1,kind='CLOUD_LOG_RECOVERY_V1',source='authenticated_cloud_execution_log',
+        task_url='https://chatgpt.com/codex/cloud/tasks/'+RECOVERY_PROVIDER,provider_task_id=RECOVERY_PROVIDER,
+        log_sha256=RECOVERY_LOG_SHA,patch_sha256=result['patch_sha256'],report_sha256=result['report_sha256'],
+        git_blob_sha1=blob,report=result['report'],changes='',cli_diff_verified=False,
+        cli_diff_stderr_sha256='d9cefd23e6dbb8fdcbcdefa898e6d8bb777e03adeaa12335141e12271ec9626b')
+
+
+def recover_log_terminal(payload,payload_raw,run_guard,psycopg,parameters,credential,intake,owner,api):
+    import subprocess
+    from oracle_autopilot import codex_cli_bridge as bridge
+    from oracle_autopilot.light_native_restart import validate_proof
+    agreement=Agreement(payload['agreement'],payload['accepted_agreement_sha256'],RECOVERY_SCOPE)
+    root,receipt,plan,original=records(intake)
+    require(payload['request_sha256']==RECOVERY_REQUEST,'RECOVERY_REQUEST')
+    request,prior,protected,pdigest,directory=control.ledger(RECOVERY_REQUEST)
+    require(request.value['source']==SOURCE and request.value['scope']==SCOPE,'RECOVERY_SCOPE')
+    stop=control.strict_json(control.read(control.plan.ROOT/'submitted-controls-restored.json'),4096)
+    require(stop['restored_sha256']==RECOVERY_SNAPSHOT and stop['request_sha256']==RECOVERY_REQUEST,'RECOVERY_STOP_PROOF')
+    claim_proof=bounded_evidence_inventory(control.CLAIM);journal_dir=control.plan.LIGHT/'runtime/codex-dispatch';journal_proof=bounded_evidence_inventory(journal_dir)
+    def guard(admission=True):
+        if admission:run_guard.assert_running();release.staging.require_current_main(SOURCE)
+        require(control.restored_receipt(request,prior,protected,pdigest,directory) is not None,'RECOVERY_HOLD')
+        state=switch.show(control.plan.SUPERVISOR_UNIT,['MainPID','ControlPID','ActiveState'])
+        require(state['MainPID']==state['ControlPID']=='0' and state['ActiveState'] in ('inactive','failed'),'RECOVERY_SUPERVISOR')
+        require(bounded_evidence_inventory(control.CLAIM)==claim_proof and bounded_evidence_inventory(journal_dir)==journal_proof,'RECOVERY_EVIDENCE_CHANGED')
+    def admit():
+        guard();agreement.assert_held(control.digest(control.canonical(RECOVERY_SCOPE)));owner.observed_target(api,plan)
+    admit()
+    with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+        conn.read_only=True;intake.engine.identity(conn,intake.target());observed=submitted_snapshot(conn,intake)
+    require(control.digest(control.canonical(observed))==RECOVERY_SNAPSHOT,'RECOVERY_STATE_CHANGED')
+    native=observed['native'];before=observed['rows']
+    require(native['state']=='SUBMITTED' and native['terminal'] is None and native['owner_name']=='autopilot_light_worker_login'
+        and before['config']==original['native_config'] and before['config']['enabled'] is False and before['role']['can_repair'] is True,'RECOVERY_PRECONDITION')
+    log_raw=base64.b64decode(payload['recovered_log_b64'],validate=True);evidence=recovered_log_evidence(native,log_raw)
+    journal=bridge.lookup(native['request'],state_dir=journal_dir,binding=dict(profile='light',environment_id=release.CLOUD_ENVIRONMENT_ID,repository='olegmed1-art/bridge-video-free'))
+    require(journal is not None and journal['state']=='SUBMITTED' and journal['provider_task_id']==RECOVERY_PROVIDER
+        and journal['prompt_sha256']==native['prompt_sha256']==bridge.digest(bridge.prompt_for(native['request'])),'RECOVERY_JOURNAL')
+    values=[control.strict_json((control.CLAIM/name).read_bytes(),8192) for name in ('image-start.json','image-restart.json','image-resumed.json')]
+    restart=validate_proof(*values,request.permit,native['request'],RECOVERY_PROVIDER)
+    owner.verify_restart_unit(restart,control.strict_json(control.read(directory/'pilot-unit.json',4096),4096),DISPATCH,RECOVERY_PROVIDER)
+    terminal=dict(status=evidence['report']['status'],result_code=evidence['report']['result_code'],summary=evidence['report']['summary'],
+        target_head_sha=native['request']['expected_head_sha'],provider_evidence_sha256=control.digest(control.canonical(evidence)))
+    control.retained(control.plan.ROOT/'log-recovery-intent.json',payload_raw)
+    control.retained(control.plan.ROOT/'recovered-cloud-execution-log.txt',log_raw)
+    control.retained(control.plan.ROOT/'recovered-cloud-evidence.json',control.canonical(evidence))
+    control.retained(control.plan.ROOT/'log-recovery-before.json',control.canonical(observed))
+    role_applied=None;child_return=None
+    try:
+        with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+            conn.read_only=False
+            with conn.transaction():
+                conn.execute('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');conn.execute("SET LOCAL statement_timeout='5s'");conn.execute("SET LOCAL lock_timeout='5s'")
+                intake.engine.identity(conn,intake.target())
+                for sql,args in [('SELECT dispatch_id FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s::uuid FOR UPDATE',(DISPATCH,)),('SELECT dispatch_id FROM autopilot.native_cli_receipt WHERE dispatch_id=%s::uuid FOR UPDATE',(DISPATCH,)),('SELECT task_id FROM autopilot.task WHERE task_id=%s::uuid FOR UPDATE',(TASK,)),("SELECT role_id FROM autopilot.role_registry WHERE role_id='AUTOPILOT' FOR UPDATE",None)]:conn.execute(sql,args)
+                require(submitted_snapshot(conn,intake)==observed,'RECOVERY_CONCURRENT');admit()
+                require(conn.execute("UPDATE autopilot.role_registry SET can_repair=false WHERE role_id='AUTOPILOT'").rowcount==1,'RECOVERY_ROLE_COUNT')
+                role_applied=intake.one(conn,"SELECT to_jsonb(r) FROM autopilot.role_registry r WHERE role_id='AUTOPILOT'")
+                require(role_applied['can_repair'] is False and all(role_applied[k]==v for k,v in before['role'].items() if k not in ('can_repair','updated_at')),'RECOVERY_ROLE_DRIFT')
+                require(conn.execute('SELECT autopilot.native_cli_authority_locked(%s::uuid,%s::jsonb)',(DISPATCH,control.canonical(native['request']['assignment']).decode())).fetchone()==(True,),'RECOVERY_AUTHORITY')
+                control.retained(control.plan.ROOT/'log-recovery-role-applied.json',control.canonical(role_applied))
+        with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+            conn.read_only=True;intake.engine.identity(conn,intake.target())
+            active=submitted_snapshot(conn,intake)
+            require(active==dict(observed,rows=dict(before,role=role_applied)),'RECOVERY_ROLE_COMMIT')
+        admit();require(agreement.end-time.time()>70,'RECOVERY_WINDOW_SHORT')
+        user=pwd.getpwnam('school-autopilot')
+        def identity():os.setgroups([]);os.setgid(user.pw_gid);os.setuid(user.pw_uid)
+        environment=hold.env(hold.read(hold.ENV,0o600,262144))
+        candidate=control.plan.source_path(SOURCE)
+        try:
+            result=subprocess.run([release.PYTHON,'-I','-B','-c',RECOVERY_FINISH_PROGRAM,str(candidate)],cwd=candidate,
+                env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1','AUTOPILOT_DATABASE_URL':environment['AUTOPILOT_DATABASE_URL']},
+                preexec_fn=identity,capture_output=True,timeout=45,
+                input=control.canonical(dict(request=native['request'],provider_task_id=RECOVERY_PROVIDER,terminal=terminal)))
+            child_return=result.returncode
+        except subprocess.TimeoutExpired:child_return='UNKNOWN'
+    finally:
+        # Restoration must run even after a lost COMMIT acknowledgement or expired window.
+        with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+            conn.read_only=False
+            with conn.transaction():
+                conn.execute('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');conn.execute("SET LOCAL statement_timeout='5s'")
+                intake.engine.identity(conn,intake.target())
+                role=intake.one(conn,"SELECT to_jsonb(r) FROM autopilot.role_registry r WHERE role_id='AUTOPILOT' FOR UPDATE")
+                require(role==before['role'] or (role_applied is not None and role==role_applied),'RECOVERY_RESTORE_ROLE_DRIFT')
+                guard(admission=False)
+                if role!=before['role']:
+                    require(conn.execute("UPDATE autopilot.role_registry SET can_repair=%s WHERE role_id='AUTOPILOT'",(before['role']['can_repair'],)).rowcount==1,'RECOVERY_RESTORE_ROLE_COUNT')
+                restored_role=intake.one(conn,"SELECT to_jsonb(r) FROM autopilot.role_registry r WHERE role_id='AUTOPILOT'")
+                require(all(restored_role[k]==v for k,v in before['role'].items() if k!='updated_at'),'RECOVERY_RESTORE_ROLE_READBACK')
+        with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+            conn.read_only=True;intake.engine.identity(conn,intake.target());final=submitted_snapshot(conn,intake)
+            require(final['rows']['role']==restored_role and final['rows']['config']==before['config']
+                and final['rows']['outbox']['delivery_deadline_at']==before['outbox']['delivery_deadline_at']
+                and final['fence']==observed['fence'],'RECOVERY_RESTORED_CONTROLS')
+        guard(admission=False);control.retained(control.plan.ROOT/'log-recovery-controls-restored.json',control.canonical(dict(role=restored_role,native_state=final['native']['state'],child_return=child_return)))
+    require(final['native']['state']=='TERMINAL' and final['native']['terminal']==terminal,'RECOVERY_TERMINAL_NOT_COMMITTED')
+    record=dict(version=1,plan_sha256=PLAN,dispatch_id=DISPATCH,task_id=TASK,provider_task_id=RECOVERY_PROVIDER,request=native['request'],result=terminal)
+    raw=control.canonical(record)
+    with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+        conn.read_only=True;intake.engine.identity(conn,intake.target());intake.observe_terminal(conn,plan,receipt,raw,control.digest(raw))
+    guard();control.retained(control.plan.ROOT/'intake'/'recovered-terminal.json',raw)
+    result=dict(audit='LIGHT_CLOUD_LOG_TASK_RECOVERED',task_id=TASK,provider_task_id=RECOVERY_PROVIDER,
+        terminal_sha256=control.digest(raw),evidence_sha256=terminal['provider_evidence_sha256'],task_done=True,
+        controls_restored=True,provider_submitted=False,service_restarted=False,native_transport_verified=False)
+    control.retained(control.plan.ROOT/'log-recovery-completed.json',control.canonical(result));return result
+
+
+RECOVERY_FINISH_PROGRAM = r"""import sys,os,json,hashlib
+sys.path.insert(0,sys.argv[1])
+import psycopg
+from oracle_autopilot.light_native_loader import runtime_parameters,runtime_identity
+v=json.loads(sys.stdin.buffer.read(131073))
+with psycopg.connect(**runtime_parameters(os.environ['AUTOPILOT_DATABASE_URL']),autocommit=True) as conn:
+ runtime_identity(conn)
+ conn.execute("SET statement_timeout='20s'")
+ definition=conn.execute("SELECT pg_get_functiondef('autopilot.native_cli_finish(jsonb,text,jsonb)'::regprocedure)").fetchone()[0]
+ assert hashlib.sha256(definition.encode()).hexdigest()=='8b3882bf0955a7aab1c0f76cc9c5a8269452b7d1aa0f6f99f8d7feaf2b7deb26'
+ result=conn.execute('SELECT autopilot.native_cli_finish(%s::jsonb,%s,%s::jsonb)',
+  (json.dumps(v['request'],sort_keys=True,separators=(',',':')),v['provider_task_id'],json.dumps(v['terminal'],sort_keys=True,separators=(',',':')))).fetchone()[0]
+ assert result['state']=='TERMINAL' and result['request']==v['request'] and result['provider_task_id']==v['provider_task_id'] and result['terminal']==v['terminal']
+print('LIGHT_EXISTING_NATIVE_FINISH_CONFIRMED')
+"""
+
+
 def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new_raw):
     require(control.digest(old_raw)==OLD_PACKAGE and control.digest(new_raw)==PACKAGE,'REENTRY_PACKAGES')
     require(control.digest(payload_raw)==accepted,'REENTRY_PAYLOAD')
     payload=control.strict_json(payload_raw,4096)
     action=payload.get('action')
-    shapes={'prepare-continuation':{'action','agreement','accepted_agreement_sha256'},
+    shapes={'recover-log-terminal':{'action','request_sha256','recovered_log_b64','agreement','accepted_agreement_sha256'},'prepare-continuation':{'action','agreement','accepted_agreement_sha256'},
         'authorize':{'action','agreement','accepted_agreement_sha256','baseline_sha256'},
         'restore-submitted':{'action','request_sha256','submitted_sha256'},'terminal':{'action','request_sha256'},'inspect-provider':{'action','request_sha256'},'inspect-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-unreserved':{'action','baseline_sha256','request_sha256','claim_inventory_sha256'},'restore-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-controls':{'action','request_sha256','terminal_sha256'}}
     require(action in shapes and set(payload)==shapes[action],'REENTRY_ACTION')
@@ -677,6 +826,11 @@ def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new
         api=API(token)
         if action=='prepare-continuation':return prepare_continuation(package,payload,agreement,run_guard,psycopg,parameters,credential,intake,api,owner)
         if action=='authorize':return authorize(payload,payload_raw,agreement,run_guard,psycopg,parameters,credential,intake,api,owner)
+        if action=='recover-log-terminal':
+            package=control.strict_json(new_raw,16*1024*1024)
+            release.validate(package['runtime'],SOURCE,package['runtime']['sha256'])
+            release.staging.verify_release(control.plan.source_path(SOURCE),package['runtime'])
+            return recover_log_terminal(payload,payload_raw,run_guard,psycopg,parameters,credential,intake,owner,api)
         if action=='restore-submitted':return restore_submitted(payload,payload_raw,run_guard,psycopg,parameters,credential,intake,owner)
         if action=='inspect-provider':return inspect_provider(payload,run_guard,psycopg,parameters,credential,intake)
         if action=='inspect-zero-submit':return inspect_zero_submit(payload,run_guard,psycopg,parameters,credential,intake)

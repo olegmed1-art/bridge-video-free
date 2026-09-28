@@ -31,7 +31,7 @@ def test_archive_refuses_links(tmp_path):
     with pytest.raises(RuntimeError,match='REENTRY_INVENTORY_TYPE'):target.inventory(source)
 
 
-@pytest.mark.parametrize('action',['prepare-continuation','authorize','terminal','restore-controls','restore-zero-submit','inspect-zero-submit','restore-unreserved','inspect-provider','restore-submitted'])
+@pytest.mark.parametrize('action',['prepare-continuation','authorize','terminal','restore-controls','restore-zero-submit','inspect-zero-submit','restore-unreserved','inspect-provider','restore-submitted','recover-log-terminal'])
 def test_runner_bootstrap_selects_exact_old_or_new_namespace(monkeypatch,action):
     payload=json.dumps({'action':action}).encode()
     selected=runner.PACKAGE if action=='prepare-continuation' else target.PACKAGE
@@ -497,3 +497,145 @@ def test_submitted_cleanup_keeps_provider_and_task_evidence(tmp_path,monkeypatch
         assert writes==['config','role','deadline']
         assert target.submitted_restoration_matches(observed,state,before)
     assert state['native']==observed['native'] and state['fence']==observed['fence']
+
+
+RECOVERED_LOG = b'transport report valid\n--- FINAL HEAD ---\naa286f693bc903fd2b93c555d9da898652fbdb26\n--- STATUS ---\n A slavik_result_9289ad56-f0aa-4683-be0c-101ec820d412.json\n--- DIFF STAT ---\n slavik_result_9289ad56-f0aa-4683-be0c-101ec820d412.json | 1 +\n 1 file changed, 1 insertion(+)\n--- DIFF ---\ndiff --git a/slavik_result_9289ad56-f0aa-4683-be0c-101ec820d412.json b/slavik_result_9289ad56-f0aa-4683-be0c-101ec820d412.json\nnew file mode 100644\nindex 0000000..d4fb944\n--- /dev/null\n+++ b/slavik_result_9289ad56-f0aa-4683-be0c-101ec820d412.json\n@@ -0,0 +1 @@\n+{"dispatch_id":"9289ad56-f0aa-4683-be0c-101ec820d412","expected_head_sha":"aa286f693bc903fd2b93c555d9da898652fbdb26","target_pr":2025,"task_fingerprint":"6f6fbcba356fb7353fc7aade0a508643716b3aaa9c314cb9831c05770747a6d0","status":"SUCCEEDED","result_code":"AUDIT_PASSED","summary":"Exact-head bounded audit passed all 87 selected tests and guard review; no repair is needed.","evidence":["git rev-parse HEAD = aa286f693bc903fd2b93c555d9da898652fbdb26.","Required pytest command passed: 87 passed in 0.74s.","oracle_autopilot/light_native_launch_gate.py fails closed on malformed admission and imports the loader only after PILOT.","oracle_autopilot/light_native_adapter.py checks admission before each RPC, PR read, and provider call.","Adapter validation binds immutable request, exact head, repository, target PR, Light profile, zero cost/repair attempts, and false effect flags.","Focused tests cover HOLD boundaries, replay safety, binding changes, unsafe flags, provider target aliases, and READ_ONLY/VERIFY-only execution."]}'
+RECOVERED_NATIVE = {'request': {'assignment': {'can_repair': False, 'dispatch_id': '9289ad56-f0aa-4683-be0c-101ec820d412', 'execution_scope': 'REPOSITORY', 'executor_id': 'chat:6aa6a4c0-4858-83eb-872c-4bc3451edc83', 'objective': 'Perform a READ_ONLY AUTOPILOT audit of open PR #2025 at exact head aa286f693bc903fd2b93c555d9da898652fbdb26. Investigate only the bounded focus in task_spec_json, report evidence and the smallest repair scope if needed, and make no changes.', 'role': 'AUTOPILOT', 'target_chat_id': '6aa6a4c0-4858-83eb-872c-4bc3451edc83', 'target_chat_name': 'Autopilot role executor', 'target_chat_url': 'https://chatgpt.com/c/6aa6a4c0-4858-83eb-872c-4bc3451edc83', 'task_id': 'd8595f4c-4c02-43d0-9de7-9f377a7aa0c4', 'task_kind': 'REPOSITORY_AUDIT', 'task_spec_json': {'assignment_schema': 'SLAVIK_DISPATCH_ASSIGNMENT_V1', 'canon_mutation': False, 'cost_cap_microusd': 0, 'deploy': False, 'exact_head_binding': True, 'execution_mode': 'READ_ONLY', 'expected_changed_files': [], 'expected_head_sha': 'aa286f693bc903fd2b93c555d9da898652fbdb26', 'external_mutation': False, 'focus_paths': ['oracle_autopilot/light_native_launch_gate.py', 'oracle_autopilot/light_native_adapter.py', 'tests/test_oracle_autopilot_light_native_launch_gate.py', 'tests/test_oracle_autopilot_light_native_adapter.py'], 'mailbox_pr': 1703, 'max_repair_attempts': 0, 'media_execution': False, 'merge': False, 'neon_mutation': False, 'paid_action': False, 'preserve': 'Every original file; no installs, repairs, commits, pushes or production access. Only trusted disposable native transport report permitted.', 'production_mutation': False, 'repair_attempt': 0, 'repository': 'olegmed1-art/bridge-video-free', 'repository_mutation': False, 'required_checks': ['git rev-parse HEAD must equal aa286f693bc903fd2b93c555d9da898652fbdb26', 'PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_oracle_autopilot_light_native_launch_gate.py tests/test_oracle_autopilot_light_native_adapter.py'], 'role': 'AUTOPILOT', 'server_mutation': False, 'source_task_kind': 'REPOSITORY_AUDIT', 'target_pr': 2025, 'verification_kind': 'AUDIT_PASSED only if exact head, all 87 selected tests and guard review pass; otherwise truthful BLOCKED.', 'work_key': 'light-native-audit-20260928-8bbc-pilot'}}, 'branch': 'fix/light-native-acceptance-audit', 'dispatch_id': '9289ad56-f0aa-4683-be0c-101ec820d412', 'expected_head_sha': 'aa286f693bc903fd2b93c555d9da898652fbdb26', 'mode': 'READ_ONLY', 'reservation_id': '644442b3-ac84-4463-804d-93d4e690ed5b', 'target_pr': 2025, 'task_fingerprint': '6f6fbcba356fb7353fc7aade0a508643716b3aaa9c314cb9831c05770747a6d0'}, 'provider_task_id': 'task_e_6aba7c5b6d5c8323ad13a01a7499dc41'}
+
+@pytest.mark.parametrize('fault',[None,'bytes','provider','head','dispatch'])
+def test_actual_cloud_log_provenance_and_binding(fault):
+    import copy
+    native=copy.deepcopy(RECOVERED_NATIVE);raw=RECOVERED_LOG
+    if fault=='bytes':raw+=b'\n'
+    if fault=='provider':native['provider_task_id']='task_e_other'
+    if fault=='head':native['request']['expected_head_sha']='0'*40
+    if fault=='dispatch':native['request']['dispatch_id']='different'
+    if fault:
+        with pytest.raises(RuntimeError):target.recovered_log_evidence(native,raw)
+    else:
+        evidence=target.recovered_log_evidence(native,raw)
+        assert evidence['kind']=='CLOUD_LOG_RECOVERY_V1' and evidence['cli_diff_verified'] is False
+        assert evidence['report_sha256']=='2b427a1f6eda67879ec7ee75ba5fe328ae6195d418e45620ee16f51385e51cfa'
+        assert evidence['patch_sha256']=='14c0316be5bdc007b6fffeb7c66450d4fa46ca1584b54efa08dfac1081998ec4'
+        assert evidence['changes']=='' and evidence['report']['result_code']=='AUDIT_PASSED'
+
+
+@pytest.mark.skipif(os.geteuid()!=0,reason='root retention')
+@pytest.mark.parametrize('fault',[None,'snapshot','precommit','lost_commit_ack','child_failed','timeout','finish_lost_ack','role_drift','guard_expired'])
+def test_log_recovery_restores_controls_and_never_resubmits(tmp_path,monkeypatch,fault):
+    import copy, subprocess
+    from contextlib import contextmanager
+    from oracle_autopilot import codex_cli_bridge as bridge,light_native_restart
+    c=target.control;root=tmp_path/'root';root.mkdir(mode=0o700);(root/'intake').mkdir(mode=0o700)
+    claim=tmp_path/'claim';claim.mkdir(mode=0o700)
+    monkeypatch.setattr(c.plan,'ROOT',root);monkeypatch.setattr(c,'CLAIM',claim);monkeypatch.setattr(c.plan,'LIGHT',tmp_path/'light')
+    request=SimpleNamespace(value=dict(source=target.SOURCE,scope=target.SCOPE),permit=b'permit')
+    monkeypatch.setattr(c,'ledger',lambda *a:(request,None,None,None,root))
+    monkeypatch.setattr(c,'restored_receipt',lambda *a:{'restored':True})
+    for name in ('image-start.json','image-restart.json','image-resumed.json'):(claim/name).write_bytes(b'{}')
+    c.retained(root/'pilot-unit.json',b'{}')
+    before=dict(config={'enabled':False,'cutover_at':'original'},role={'can_repair':True,'updated_at':'original','other':'preserved'},outbox={'delivery_deadline_at':'original','status':'SENT'})
+    native=dict(copy.deepcopy(RECOVERED_NATIVE),state='SUBMITTED',terminal=None,owner_name='autopilot_light_worker_login',prompt_sha256=bridge.digest('prompt'))
+    observed=dict(rows=before,native=native,fence={'consumed':True});state=copy.deepcopy(observed)
+    sha=c.digest(c.canonical(observed));monkeypatch.setattr(target,'RECOVERY_SNAPSHOT',sha)
+    c.retained(root/'submitted-controls-restored.json',c.canonical(dict(restored_sha256=sha,request_sha256=target.RECOVERY_REQUEST)))
+    monkeypatch.setattr(target,'records',lambda *a:(root,{},None,dict(native_config=before['config'])))
+    monkeypatch.setattr(target,'bounded_evidence_inventory',lambda *a:{'preserved':True})
+    monkeypatch.setattr(target.release.staging,'require_current_main',lambda *a:None)
+    monkeypatch.setattr(target.switch,'show',lambda *a:dict(MainPID='0',ControlPID='0',ActiveState='failed'))
+    monkeypatch.setattr(bridge,'prompt_for',lambda *a:'prompt')
+    monkeypatch.setattr(bridge,'lookup',lambda *a,**kw:dict(state='SUBMITTED',provider_task_id=target.RECOVERY_PROVIDER,prompt_sha256=bridge.digest('prompt')))
+    monkeypatch.setattr(light_native_restart,'validate_proof',lambda *a:{'verified':True})
+    monkeypatch.setattr(target,'Agreement',lambda *a:SimpleNamespace(assert_held=lambda *a:None,end=target.time.time()+600))
+    monkeypatch.setattr(target.pwd,'getpwnam',lambda *a:SimpleNamespace(pw_uid=1000,pw_gid=1000))
+    saved_read=target.hold.read
+    monkeypatch.setattr(target.hold,'read',lambda path,*a:b'worker-env' if path==target.hold.ENV else saved_read(path,*a))
+    monkeypatch.setattr(target.hold,'env',lambda *a:{'AUTOPILOT_DATABASE_URL':'worker-only'})
+    writes=[];calls=[];transactions=[0];expired=[False]
+    class Conn:
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        @contextmanager
+        def transaction(self):
+            transactions[0]+=1;ordinal=transactions[0];old=copy.deepcopy(state)
+            try:
+                yield
+                if fault=='precommit' and ordinal==1:raise RuntimeError('precommit')
+            except BaseException:state.clear();state.update(old);raise
+            if fault=='lost_commit_ack' and ordinal==1:raise RuntimeError('unknown commit')
+        def execute(self,sql,params=None):
+            if sql.startswith('UPDATE'):
+                assert sql.startswith('UPDATE autopilot.role_registry')
+                value=False if 'can_repair=false' in sql else params[0]
+                writes.append(value);state['rows']['role'].update(can_repair=value,updated_at='applied' if not value else 'restored')
+            return SimpleNamespace(rowcount=1,fetchone=lambda:(True,))
+    monkeypatch.setattr(target,'submitted_snapshot',lambda *a:copy.deepcopy(state))
+    def child(args,**kw):
+        calls.append(kw)
+        assert args[4]==target.RECOVERY_FINISH_PROGRAM
+        assert kw['env']['AUTOPILOT_DATABASE_URL']=='worker-only' and len(kw['env'])==3
+        assert state['rows']['role']['can_repair'] is False
+        v=json.loads(kw['input']);assert v['provider_task_id']==target.RECOVERY_PROVIDER
+        if fault=='role_drift':state['rows']['role']['other']='foreign';return SimpleNamespace(returncode=1)
+        if fault=='child_failed':return SimpleNamespace(returncode=1)
+        if fault=='timeout':raise subprocess.TimeoutExpired(args,45)
+        if fault=='guard_expired':expired[0]=True;raise subprocess.TimeoutExpired(args,45)
+        state['native'].update(state='TERMINAL',terminal=v['terminal'])
+        state['rows']['outbox']['status']='CALLBACK_ACCEPTED'
+        if fault=='finish_lost_ack':raise subprocess.TimeoutExpired(args,45)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(subprocess,'run',child)
+    terminal_checks=[]
+    def check_terminal(*a):
+        assert state['rows']['role']['can_repair'] is True and state['native']['state']=='TERMINAL'
+        terminal_checks.append(True)
+    intake=SimpleNamespace(engine=SimpleNamespace(identity=lambda *a:None),target=lambda:None,
+        one=lambda *a:copy.deepcopy(state['rows']['role']),observe_terminal=check_terminal)
+    if fault=='snapshot':state['native']['provider_task_id']='changed'
+    payload=dict(request_sha256=target.RECOVERY_REQUEST,recovered_log_b64=base64.b64encode(RECOVERED_LOG).decode(),agreement={},accepted_agreement_sha256='test')
+    def run_check():
+        if expired[0]:raise RuntimeError('runner expired')
+    args=(payload,b'accepted',SimpleNamespace(assert_running=run_check),SimpleNamespace(connect=lambda **kw:Conn()),lambda _: {},'owner-credential',intake,SimpleNamespace(verify_restart_unit=lambda *a:None,observed_target=lambda *a:None),None)
+    if fault not in (None,'finish_lost_ack'):
+        with pytest.raises(RuntimeError):target.recover_log_terminal(*args)
+        assert not (root/'log-recovery-completed.json').exists()
+    else:
+        result=target.recover_log_terminal(*args)
+        assert result['task_done'] is True and result['native_transport_verified'] is False
+        assert terminal_checks==[True]
+    if fault in ('snapshot','precommit','lost_commit_ack'):assert not calls
+    if fault=='role_drift':assert state['rows']['role']['other']=='foreign' and writes==[False]
+    else:assert state['rows']['role']['can_repair'] is True
+    assert state['rows']['config']==before['config'] and state['fence']==observed['fence']
+    assert state['rows']['outbox']['delivery_deadline_at']=='original'
+    assert len(calls)<=1
+
+@pytest.mark.parametrize('fault',[None,'function_drift','receipt_drift'])
+def test_finish_child_uses_only_original_finish_rpc(monkeypatch,capsys,fault):
+    import io,sys
+    from oracle_autopilot import light_native_loader
+    calls=[];value={'request':RECOVERED_NATIVE['request'],'provider_task_id':target.RECOVERY_PROVIDER,'terminal':{'status':'SUCCEEDED'}}
+    class Conn:
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def execute(self,sql,args=None):
+            calls.append(sql)
+            if sql.startswith('SELECT pg_get_functiondef'):return SimpleNamespace(fetchone=lambda:('reviewed definition',))
+            if sql.startswith('SELECT autopilot.native_cli_finish'):
+                assert json.loads(args[0])==value['request'] and args[1]==value['provider_task_id'] and json.loads(args[2])==value['terminal']
+                return SimpleNamespace(fetchone=lambda:({**value,'state':'SUBMITTED' if fault=='receipt_drift' else 'TERMINAL'},))
+    monkeypatch.setattr(sys,'stdin',SimpleNamespace(buffer=io.BytesIO(json.dumps(value).encode())))
+    monkeypatch.setattr(sys,'argv',['program','/reviewed/candidate']);monkeypatch.setenv('AUTOPILOT_DATABASE_URL','worker-only')
+    monkeypatch.setattr(sys,'path',list(sys.path))
+    monkeypatch.setitem(sys.modules,'psycopg',SimpleNamespace(connect=lambda **kw:Conn()))
+    monkeypatch.setattr(light_native_loader,'runtime_parameters',lambda raw: {'dsn':raw} if raw=='worker-only' else pytest.fail('wrong credential'))
+    monkeypatch.setattr(light_native_loader,'runtime_identity',lambda conn:None)
+    monkeypatch.setattr(hashlib,'sha256',lambda *a:SimpleNamespace(hexdigest=lambda:'bad' if fault=='function_drift' else '8b3882bf0955a7aab1c0f76cc9c5a8269452b7d1aa0f6f99f8d7feaf2b7deb26'))
+    if fault:
+        with pytest.raises(AssertionError):exec(target.RECOVERY_FINISH_PROGRAM,{})
+        assert capsys.readouterr().out==''
+    else:
+        exec(target.RECOVERY_FINISH_PROGRAM,{})
+        assert capsys.readouterr().out=='LIGHT_EXISTING_NATIVE_FINISH_CONFIRMED\n'
+    assert sum(s.startswith('SELECT autopilot.native_cli_finish') for s in calls)==(0 if fault=='function_drift' else 1)
+    assert len(calls)==(2 if fault=='function_drift' else 3)
