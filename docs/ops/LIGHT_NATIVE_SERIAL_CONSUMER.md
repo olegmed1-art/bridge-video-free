@@ -98,3 +98,26 @@ second submit after crash/unknown, durable HOLD quarantine, source/cursor
 binding, corrupted/orphan evidence refusal and terminal restart. Owner tests
 exercise existing transactional intake readback and reject Cloud/DB drift.
 These are local/CI contracts, not claims of live multi-task production.
+
+
+## Dormant installation and owner acceptance storage
+
+`light-native-lane-install.yml` accepts only exact current main, the reviewed
+package digest, and `install-hold`, `observe-hold` or `stop-hold`. Installation
+stages immutable source using the existing read-only DB/profile preflight and
+creates a separate native service with both environment HOLD and root HOLD.
+The unit has no credentials, no network, no boot enable and no auto-restart.
+It attests actual process uid/cwd/argv/environment, source, hardening, and a
+fresh invocation-specific HOLD audit. An active but quarantined process fails.
+A stop/empty-cgroup/restart rehearsal proves dormant reentry, retaining private
+before/stop/installed receipts. Interrupted installation is never replayed or
+cleared; a started unit is stopped on failure. Legacy HOLD is not restarted.
+
+This is a dormant installation, not production activation. Activation needs a
+separate reviewed unit update, finite owner feed and live DB/control agreement.
+`retain_acceptance` now reads exact host intent/terminal/permit bytes, reruns
+fresh Cloud/DB verification and stores a create-only root0640 acceptance. A retry
+reruns primary verification and requires identical retained bytes. It never
+writes current, RUN, a new permit, or a task. The authenticated owner controller
+must still bind its original retained Plan/receipt and immutable release before
+calling it. No owner-feed issuer or acceptance CLI is exposed by this change.

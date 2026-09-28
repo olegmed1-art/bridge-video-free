@@ -29,6 +29,14 @@ root_pr_number=991
 prior_gate_pr_number=1070
 protected_gate_paths=(
   '.github/workflows/light-native-pilot-owner.yml'
+  '.github/workflows/light-native-lane-install.yml'
+  '.github/workflows/light-native-lane.yml'
+  'ops/light_native_lane_install.py'
+  'ops/light_native_lane_owner.py'
+  'oracle_autopilot/light_native_lane.py'
+  'tests/test_light_native_lane_install.py'
+  'tests/test_light_native_lane_owner.py'
+  'tests/test_oracle_autopilot_light_native_lane.py'
   '.github/workflows/light-native-pilot-control.yml'
   'ops/light_native_pilot_owner.py'
   'ops/light_native_pilot_owner_runner.py'

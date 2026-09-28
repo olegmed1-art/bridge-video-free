@@ -132,3 +132,46 @@ def _collect(dispatch_id,*,state_dir,binding,runner):
         result = owner.fresh_provider_result(source, {'dispatch_id':DISPATCH}, 'a'*32)
         assert result['calls'] == ['status', 'diff']
     assert seen == [True]
+
+
+@pytest.mark.skipif(__import__('os').geteuid()!=0,reason='real root acceptance file')
+@pytest.mark.parametrize('fault',[None,'provider','changed','symlink','conflict'])
+def test_writer_uses_on_host_bytes_fresh_verifier_and_create_only(tmp_path,monkeypatch,fault):
+    import os
+    from types import SimpleNamespace
+    from ops import light_native_lane_install as install
+    conn, plan, receipt, intent, terminal, permit, provider, calls = setup(tmp_path,monkeypatch)
+    state=tmp_path/'state';state.mkdir(mode=0o700)
+    control=tmp_path/'control';job=control/'jobs'/receipt['dispatch_id'];job.mkdir(parents=True)
+    monkeypatch.setattr(lane,'STATE',state)
+    monkeypatch.setattr(lane,'CONTROL',control)
+    monkeypatch.setattr(owner.pwd,'getpwnam',lambda name:SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid()))
+    monkeypatch.setattr(install,'root_parent',lambda path:None)
+    for name,raw in [('00000000-intent.json',intent),('00000000-terminal.json',terminal)]:
+        (state/name).write_bytes(raw);(state/name).chmod(0o600)
+    (job/'permit.json').write_bytes(permit);(job/'permit.json').chmod(0o640)
+    accepted=job/'accepted-terminal.json'
+    if fault=='provider':provider['state']='RUNNING'
+    elif fault=='symlink':
+        (state/'00000000-terminal.json').unlink()
+        (state/'00000000-terminal.json').symlink_to(state/'00000000-intent.json')
+    elif fault=='conflict':accepted.write_bytes(b'{}');accepted.chmod(0o640)
+    elif fault=='changed':
+        verify=owner.verify_terminal
+        def drifting(*args):
+            result=verify(*args)
+            (state/'00000000-terminal.json').write_bytes(b'{}')
+            return result
+        monkeypatch.setattr(owner,'verify_terminal',drifting)
+    if fault:
+        with pytest.raises((RuntimeError,OSError)):
+            owner.retain_acceptance(conn,plan,receipt,0)
+        assert not accepted.exists() or accepted.read_bytes()==b'{}'
+    else:
+        result=owner.retain_acceptance(conn,plan,receipt,0)
+        assert result['state']=='ACCEPTED'
+        inode=accepted.stat().st_ino
+        assert accepted.stat().st_mode & 0o777 == 0o640
+        assert owner.retain_acceptance(conn,plan,receipt,0)==result
+        assert accepted.stat().st_ino==inode and calls==['fresh_provider','fresh_provider']
+    assert not (control/'current.json').exists() and not (control/'admission').exists()
