@@ -23,12 +23,14 @@ def request_value(raw, accepted, source):
     require(type(raw) is bytes and 0 < len(raw) <= 262144 and bundle.digest(raw) == accepted,
             'CANDIDATE_INPUT_DIGEST')
     v = json.loads(raw, object_pairs_hook=unique)
-    require(type(v) is dict and set(v) == {'version','mode','source','runtime_digest','assets','plan',
+    require(type(v) is dict and set(v) - {'operation'} == {'version','mode','source','runtime_digest','assets','plan',
         'stage','scope_digest','prior_units','accepted_head_digest','expected_outcome','agreement','request_id'}
         and v['version'] == 1 and type(v['version']) is int and v['mode'] == 'grant_request_candidate'
         and v['source'] == source and bundle.identifier(source,40)
         and bundle.identifier(v['runtime_digest'],64) and bundle.identifier(v['request_id'],32)
         and encoded(v) == raw, 'CANDIDATE_INPUT_SCHEMA')
+    require(type(v.get('operation','apply')) is str
+            and v.get('operation','apply') in ('apply','rollback'), 'CANDIDATE_OPERATION')
     validate_plan(v['plan'])
     require(v['plan']['source'] == source and v['stage'] in ('prepare','execute','restore'),
             'CANDIDATE_SOURCE_STAGE')
@@ -90,7 +92,7 @@ def assemble(v, manifest, priors, guard):
     origin=None
     if v['stage']!='prepare':
         origin=next(r['run'] for r in v['prior_units'] if r['stage']=='prepare')
-    scope=operation_scope(target=target,operation='apply',manifest_digest=v['assets']['manifest_digest'],
+    scope=operation_scope(target=target,operation=v.get('operation','apply'),manifest_digest=v['assets']['manifest_digest'],
         plan_digest=digest(v['plan']),source=v['source'],expected_route=dict(version=1,backend='neon',database='autopilot',epoch=0),
         approved_hold=identity,origin_run=origin,staged=True,observed_admission=True)
     scope_digest=digest(scope)

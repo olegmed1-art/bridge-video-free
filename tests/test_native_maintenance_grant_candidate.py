@@ -38,8 +38,14 @@ class CandidateTests(unittest.TestCase):
 
 
     def test_exact_agreement_creates_candidate_but_never_claims_or_executes(self):
+        for operation in (None,'apply','rollback'):
+            with self.subTest(operation=operation):self._prepare(operation)
+
+    def _prepare(self,operation):
         v,manifest,scope=fixture()
+        if operation is not None:v['operation']=scope['operation']=operation
         v.update(scope_digest=digest(scope),agreement=agreement_record(scope))
+        c.request_value(encoded(v),digest(v),SOURCE)
         saved=[]
         def retain(raw): saved.append(raw);return c.bundle.digest(raw)
         with patch.object(c,'staged_hold',return_value=(HOLD,'e'*64)), \
@@ -84,6 +90,25 @@ class CandidateTests(unittest.TestCase):
         for field,value in [('source','f'*40),('scope_digest','wrong'),('prior_units',[{}]),('stage','rollback'),('assets',{}),('approved',True),('accepted_head_digest','a'*64)]:
             self._reject(field,value)
 
+    def test_operation_is_closed_and_bound_to_accepted_bytes(self):
+        for value in (None, True, 1, [], {}, '', 'restore', 'APPLY'):
+            with self.subTest(value=value):self._reject('operation',value)
+        v,_,_=fixture();accepted=digest(v);v['operation']='rollback'
+        with self.assertRaises(Exception):c.request_value(encoded(v),accepted,SOURCE)
+
+    def test_rollback_preview_is_private_and_cannot_reuse_apply_agreement(self):
+        v,manifest,scope=fixture();v['operation']='rollback'
+        c.request_value(encoded(v),digest(v),SOURCE)
+        rollback_scope={**scope,'operation':'rollback'}
+        with patch.object(c,'staged_hold',return_value=(HOLD,'e'*64)), \
+             patch.object(c.hold,'attest',return_value=HOLD),patch.object(c,'submit_candidate') as submit:
+            report,raw=c.assemble(v,manifest,[],Mock(spec=['assert_running']))
+            assert raw is None and report['scope_digest']==digest(rollback_scope)
+            assert 'hold' not in report and HOLD.fingerprint not in json.dumps(report)
+            v.update(scope_digest=digest(rollback_scope),agreement=agreement_record(scope))
+            with self.assertRaises(Exception):c.assemble(v,manifest,[],Mock(spec=['assert_running']))
+        submit.assert_not_called()
+
     def _reject(self,field,value):
         v,_,_=fixture();v[field]=value
         with self.assertRaises(Exception):c.request_value(encoded(v),digest(v),SOURCE)
@@ -107,22 +132,26 @@ class CandidateTests(unittest.TestCase):
             with self.assertRaises(Exception):validate_diagnostic_groups([changed])
 
     def test_resume_uses_exact_accepted_local_and_oci_unit(self):
-        for stage in ('execute','restore'):
-            for fault in (None,'local','missing','scope','unit_digest'):
-                with self.subTest(stage=stage,fault=fault):
-                    self._resume(stage,fault)
+        for operation in (None,'apply','rollback'):
+            for stage in ('execute','restore'):
+                for fault in (None,'local','missing','scope','unit_digest','other_operation'):
+                    with self.subTest(operation=operation,stage=stage,fault=fault):
+                        self._resume(stage,fault,operation)
 
-    def _resume(self,stage,fault):
+    def _resume(self,stage,fault,operation=None):
         v,manifest,_=fixture()
         packet,_=packet_fixture();scope=packet['scope']
+        if operation is not None:v['operation']=scope['operation']=operation
         run=scope['origin_run']
         unit=dict(version=1,kind='NATIVE_STAGE_UNIT',stage='prepare',source=SOURCE,
             scope_digest=digest(scope),run=run,supervisor=dict(
             unit='bridge-native-ro-'+SOURCE[:12]+'-123-2-'+('a'*16)+'.service',
             invocation='b'*32,cgroup_inode=42))
+        if fault=='other_operation':
+            unit['scope_digest']=digest({**scope,'operation':'apply' if operation=='rollback' else 'rollback'})
         unit_raw=encoded(unit)
         v.update(stage=stage,scope_digest=digest(scope),agreement=agreement_record(scope),
-            accepted_head_digest='f'*64,expected_outcome='AFTER' if stage=='restore' else None,
+            accepted_head_digest='f'*64,expected_outcome=('BEFORE' if operation=='rollback' else 'AFTER') if stage=='restore' else None,
             prior_units=[dict(stage='prepare',run=run,digest=digest(unit))])
         if fault=='scope':v['scope_digest']='0'*64
         if fault=='unit_digest':v['prior_units'][0]['digest']='0'*64
