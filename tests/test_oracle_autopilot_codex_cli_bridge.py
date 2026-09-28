@@ -2,6 +2,7 @@
 from copy import deepcopy
 from pathlib import Path
 import subprocess
+import shlex
 
 import pytest
 
@@ -42,6 +43,66 @@ def report_patch(request_data, **updates):
     return (f'diff --git a/{path} b/{path}\nnew file mode 100644\n'
             f'index 0000000..1234567\n--- /dev/null\n+++ b/{path}\n'
             '@@ -0,0 +1 @@\n+'+bridge.canonical(report)+'\n')
+
+
+@pytest.mark.parametrize('mode', ['READ_ONLY', 'VERIFY'])
+def test_committed_report_round_trip_preserves_assignment_head(request_data, tmp_path, mode):
+    """Execute the prompt's commit command in real Git, then use the stock validator.
+
+    This verifies local Git/collector compatibility, not model obedience or Cloud capture.
+    """
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(repo), *args], text=True).strip()
+    git('init', '-q')
+    git('config', 'user.name', 'Test')
+    git('config', 'user.email', 'test@example.invalid')
+    (repo / 'source.txt').write_text('original\n')
+    git('add', '--', 'source.txt')
+    git('commit', '-qm', 'base')
+    base = git('rev-parse', 'HEAD')
+    request_data['mode'] = mode
+    request_data['expected_head_sha'] = base
+    request_data['assignment']['task_spec_json'].update(
+        expected_head_sha=base, execution_mode=mode)
+    report, _ = bridge.extract_report(report_patch(request_data), bridge.report_path(request_data))
+    path = bridge.report_path(request_data)
+    (repo / path).write_text(bridge.canonical(report) + '\n')
+    # The transport command must neither run repo hooks nor require signing credentials.
+    hook = repo / '.git/hooks/pre-commit'
+    hook.write_text('#!/bin/sh\nprintf bad > hook-ran\nexit 1\n')
+    hook.chmod(0o755)
+    git('config', 'commit.gpgsign', 'true')
+    git('add', '--', path)
+    command = bridge.prompt_for(request_data).split('```sh\n', 1)[1].split('\n```', 1)[0]
+    subprocess.run(shlex.split(command), cwd=repo, check=True, capture_output=True)
+    assert git('rev-parse', 'HEAD^') == base
+    assert git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD') == path
+    assert git('status', '--porcelain') == ''
+    assert (repo / 'source.txt').read_text() == 'original\n'
+    assert not (repo / 'hook-ran').exists()
+    patch = subprocess.check_output(
+        ['git', '-C', str(repo), 'diff', '--full-index', base, 'HEAD'], text=True)
+    result = bridge.validate_result(request_data, patch, 'task_e_test123')
+    assert result['state'] == 'RESULT_RETRIEVED'
+    assert result['changes'] == ''
+    assert result['report']['expected_head_sha'] == base
+    # A committed source edit remains forbidden by the independent collector.
+    (repo / 'source.txt').write_text('changed\n')
+    git('-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false',
+        'commit', '-qam', 'untrusted source edit')
+    changed_patch = subprocess.check_output(
+        ['git', '-C', str(repo), 'diff', '--full-index', base, 'HEAD'], text=True)
+    with pytest.raises(ValueError, match='READ_ONLY_SOURCE_CHANGED'):
+        bridge.validate_result(request_data, changed_patch, 'task_e_test123')
+
+
+def test_repair_transport_does_not_gain_local_commit_permission(request_data):
+    request_data['mode'] = 'REPAIR'
+    instructions = bridge.report_transport_instructions(request_data)
+    assert instructions == 'Use git add -N for this report so the cloud diff contains it. '
+    assert '```sh' not in bridge.prompt_for(request_data)
 
 
 def test_submit_saves_intent_before_call_and_never_duplicates(request_data, monkeypatch):
