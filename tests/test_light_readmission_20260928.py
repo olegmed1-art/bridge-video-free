@@ -31,7 +31,7 @@ def test_archive_refuses_links(tmp_path):
     with pytest.raises(RuntimeError,match='REENTRY_INVENTORY_TYPE'):target.inventory(source)
 
 
-@pytest.mark.parametrize('action',['prepare-continuation','authorize','terminal','restore-controls','restore-zero-submit','inspect-zero-submit','restore-unreserved','inspect-provider'])
+@pytest.mark.parametrize('action',['prepare-continuation','authorize','terminal','restore-controls','restore-zero-submit','inspect-zero-submit','restore-unreserved','inspect-provider','restore-submitted'])
 def test_runner_bootstrap_selects_exact_old_or_new_namespace(monkeypatch,action):
     payload=json.dumps({'action':action}).encode()
     selected=runner.PACKAGE if action=='prepare-continuation' else target.PACKAGE
@@ -409,23 +409,91 @@ def test_terminal_cleanup_restores_deadline_preserves_terminal_and_fence(tmp_pat
 def test_provider_inspection_executes_only_bound_reads(monkeypatch,capsys,marker,state):
     import io,sys
     from oracle_autopilot import codex_cli_bridge as bridge
-    expected={'request':{'dispatch_id':target.DISPATCH},'provider_task_id':'task_e_bound'}
+    expected={'request':{'dispatch_id':target.DISPATCH},'provider_task_id':'task_e_1234567890abcdef'}
     monkeypatch.setattr(sys,'argv',['probe',str(REPO),target.DISPATCH,'environment'])
     monkeypatch.setattr(sys,'stdin',SimpleNamespace(buffer=io.BytesIO(json.dumps(expected).encode())))
     monkeypatch.setattr(bridge,'prompt_for',lambda request:'prompt')
-    monkeypatch.setattr(bridge,'lookup',lambda *a,**kw:dict(state='SUBMITTED',provider_task_id='task_e_bound',prompt_sha256=bridge.digest('prompt')))
+    monkeypatch.setattr(bridge,'lookup',lambda *a,**kw:dict(state='SUBMITTED',provider_task_id='task_e_1234567890abcdef',prompt_sha256=bridge.digest('prompt')))
     calls=[]
     def run(args,**kw):
         calls.append(args)
         return SimpleNamespace(returncode=0 if marker=='[READY]' else 1,stdout=marker+' safe title\nprivate body',stderr='private error')
     monkeypatch.setattr(bridge,'run_cli',run)
     def collect(dispatch_id,**kw):
-        kw['runner'](['cloud','status','task_e_bound'])
-        if marker=='[READY]':kw['runner'](['cloud','diff','task_e_bound','--attempt','1'])
-        return {'state':state,'provider_task_id':'task_e_bound'}
+        kw['runner'](['cloud','status','task_e_1234567890abcdef'])
+        if marker=='[READY]':kw['runner'](['cloud','diff','task_e_1234567890abcdef','--attempt','1'])
+        return {'state':state,'provider_task_id':'task_e_1234567890abcdef'}
     monkeypatch.setattr(bridge,'_collect',collect)
     exec(compile(target.INSPECT_PROVIDER_PROGRAM,'<provider-inspection>','exec'),{})
     raw=capsys.readouterr().out;value=json.loads(raw)
     assert value['state']==state and value['cli'][0]['marker']==marker
     assert 'private body' not in raw and 'private error' not in raw
-    assert calls==[['cloud','status','task_e_bound']]+([['cloud','diff','task_e_bound','--attempt','1']] if marker=='[READY]' else [])
+    assert calls==[['cloud','status','task_e_1234567890abcdef']]+([['cloud','diff','task_e_1234567890abcdef','--attempt','1']] if marker=='[READY]' else [])
+
+
+@pytest.mark.skipif(os.geteuid()!=0,reason='root retention')
+@pytest.mark.parametrize('fault',[None,'snapshot','concurrent','update_drift','lost_commit_ack','readback'])
+def test_submitted_cleanup_keeps_provider_and_task_evidence(tmp_path,monkeypatch,fault):
+    import copy
+    from contextlib import contextmanager
+    from oracle_autopilot import codex_cli_bridge as bridge,light_native_restart
+    c=target.control;root=tmp_path/'root';root.mkdir(mode=0o700);claim=tmp_path/'claim';claim.mkdir(mode=0o700)
+    monkeypatch.setattr(c.plan,'ROOT',root);monkeypatch.setattr(c,'CLAIM',claim)
+    monkeypatch.setattr(c.plan,'LIGHT',tmp_path/'light')
+    dispatch={'dispatch_id':target.DISPATCH}
+    request=SimpleNamespace(value=dict(source=target.SOURCE,scope=target.SCOPE,baseline_sha256='baseline'),permit_value={'dispatch':dispatch},permit=b'permit')
+    monkeypatch.setattr(c,'ledger',lambda *a:(request,None,None,None,root))
+    monkeypatch.setattr(c,'restored_receipt',lambda *a:{'restored':True})
+    for name in ('image-start.json','image-restart.json','image-resumed.json'):(claim/name).write_bytes(b'{}')
+    c.retained(root/'pilot-unit.json',b'{}')
+    before=dict(config={'enabled':False,'cutover_at':'old'},role={'can_repair':True,'updated_at':'old'},outbox={'delivery_deadline_at':'old'})
+    applied=dict(config={'enabled':True,'cutover_at':'accepted'},role={'can_repair':False,'updated_at':'applied'},outbox={'delivery_deadline_at':'window'})
+    observed=dict(rows=dict(applied,task={'status':'WAITING_EXTERNAL'},work={'state':'ACTIVE'},counts=[1,1,1,0,1]),native=dict(state='SUBMITTED',terminal=None,completed_at=None,owner_name='autopilot_light_worker_login',submitted_at='submitted',submission_started_at='started',dispatch_id=target.DISPATCH,request=dict(dispatch,reservation_id='reservation'),provider_task_id='task_e_1234567890abcdef',prompt_sha256=bridge.digest('prompt')),fence={'consumed':True})
+    observed['rows']=copy.deepcopy(observed['rows']);observed['rows']['outbox'].update(status='SENT',delivery_contract_version=4,provider='preserve')
+    for name,value in [('reapply-before',before),('reapply-applied',applied),('reapply-committed',dict(before_sha256=c.digest(c.canonical(before)),applied_sha256=c.digest(c.canonical(applied)),baseline_sha256='baseline',fence_sha256=c.digest(c.canonical(observed['fence']))))]:c.retained(root/(name+'.json'),c.canonical(value))
+    monkeypatch.setattr(target,'records',lambda *a:(root,{},None,dict(native_config=before['config'],autopilot_role=before['role'])))
+    monkeypatch.setattr(target,'bounded_evidence_inventory',lambda *a:{'preserved':True})
+    monkeypatch.setattr(target.release.staging,'require_current_main',lambda *a:None)
+    monkeypatch.setattr(target.switch,'show',lambda *a:dict(MainPID='0',ControlPID='0',ActiveState='failed'))
+    monkeypatch.setattr(bridge,'prompt_for',lambda *a:'prompt')
+    monkeypatch.setattr(bridge,'lookup',lambda *a,**kw:dict(state='SUBMITTED',provider_task_id='task_e_1234567890abcdef',prompt_sha256=bridge.digest('prompt')))
+    monkeypatch.setattr(light_native_restart,'validate_proof',lambda *a:{'verified':True})
+    state=copy.deepcopy(observed);connections=[];writes=[];in_transaction=[False]
+    class Conn:
+        def __enter__(self):connections.append(self);return self
+        def __exit__(self,*a):pass
+        @contextmanager
+        def transaction(self):
+            old=copy.deepcopy(state);in_transaction[0]=True
+            try:yield
+            except BaseException:state.clear();state.update(old);raise
+            finally:in_transaction[0]=False
+            if fault=='lost_commit_ack':raise RuntimeError('unknown commit')
+        def execute(self,sql,params=None):
+            if sql.startswith('UPDATE autopilot.native_cli_config'):
+                writes.append('config');state['rows']['config'].update(enabled=params[0],cutover_at=params[1])
+            if sql.startswith('UPDATE autopilot.role_registry'):
+                writes.append('role');state['rows']['role']['can_repair']=params[0]
+            if sql.startswith('UPDATE autopilot.role_dispatch_outbox'):
+                writes.append('deadline');state['rows']['outbox']['delivery_deadline_at']=params[0]
+                if fault=='update_drift':state['native']['provider_task_id']='changed'
+            return SimpleNamespace(rowcount=1)
+    def snapshot(*a):
+        result=copy.deepcopy(state)
+        if (fault=='concurrent' and in_transaction[0]) or (fault=='readback' and len(connections)>2):result['native']['provider_task_id']='changed'
+        return result
+    monkeypatch.setattr(target,'submitted_snapshot',snapshot)
+    intake=SimpleNamespace(engine=SimpleNamespace(identity=lambda *a:None),target=lambda:None)
+    payload=dict(request_sha256='accepted',submitted_sha256='bad' if fault=='snapshot' else c.digest(c.canonical(observed)))
+    args=(payload,b'accepted',SimpleNamespace(assert_running=lambda:None),SimpleNamespace(connect=lambda **kw:Conn()),lambda _: {},'credential',intake,SimpleNamespace(verify_restart_unit=lambda *a:None))
+    if fault:
+        with pytest.raises(RuntimeError):target.restore_submitted(*args)
+        assert not (root/'submitted-controls-restored.json').exists()
+        if fault not in ('lost_commit_ack','readback'):assert state==observed
+        if fault in ('snapshot','concurrent'):assert writes==[]
+    else:
+        result=target.restore_submitted(*args)
+        assert result['terminal_verified'] is False and result['normal_success_finish_requires_new_role_binding'] is True
+        assert writes==['config','role','deadline']
+        assert target.submitted_restoration_matches(observed,state,before)
+    assert state['native']==observed['native'] and state['fence']==observed['fence']

@@ -563,6 +563,98 @@ print(json.dumps(dict(state=value['state'],cli=observations),sort_keys=True))
 """
 
 
+
+def bounded_evidence_inventory(path):
+    entries=list(path.iterdir())
+    require(len(entries)<=32 and all(p.is_file() and not p.is_symlink() and p.stat().st_size<=262144 for p in entries),'READMISSION_EVIDENCE_SIZE')
+    return inventory(path)
+
+
+def submitted_snapshot(conn,intake):
+    return dict(rows=db_rows(conn,intake),
+        native=intake.one(conn,'SELECT to_jsonb(n) FROM autopilot.native_cli_receipt n WHERE dispatch_id=%s::uuid',(DISPATCH,)),
+        fence=intake.one(conn,'SELECT to_jsonb(i) FROM autopilot.codex_command_send_intent i WHERE dispatch_id=%s::uuid',(DISPATCH,)))
+
+
+def submitted_restoration_matches(observed,restored,before):
+    """Only the three explicitly accepted controls may change."""
+    old=observed['rows'];new=restored['rows']
+    return (restored['native']==observed['native'] and restored['fence']==observed['fence']
+        and all(new[k]==old[k] for k in ('task','work','counts'))
+        and new['config']==before['config']
+        and new['role']['can_repair']==before['role']['can_repair']
+        and all(new['role'][k]==v for k,v in old['role'].items() if k not in ('can_repair','updated_at'))
+        and new['outbox']['delivery_deadline_at']==before['outbox']['delivery_deadline_at']
+        and all(new['outbox'][k]==v for k,v in old['outbox'].items() if k not in ('delivery_deadline_at','updated_at')))
+
+
+def restore_submitted(payload,payload_raw,run_guard,psycopg,parameters,credential,intake,owner):
+    from oracle_autopilot import codex_cli_bridge as bridge
+    from oracle_autopilot.light_native_restart import validate_proof
+    root,receipt,plan,original=records(intake)
+    request,prior,protected,pdigest,directory=control.ledger(payload['request_sha256'])
+    require(request.value['source']==SOURCE and request.value['scope']==SCOPE,'READMISSION_STOP_SCOPE')
+    committed=control.strict_json(control.read(control.plan.ROOT/'reapply-committed.json'),4096)
+    before_raw=control.read(control.plan.ROOT/'reapply-before.json');applied_raw=control.read(control.plan.ROOT/'reapply-applied.json')
+    require(control.digest(before_raw)==committed['before_sha256'] and control.digest(applied_raw)==committed['applied_sha256']
+        and committed['baseline_sha256']==request.value['baseline_sha256'],'READMISSION_STOP_PROOF')
+    before=control.strict_json(before_raw,262144);applied=control.strict_json(applied_raw,262144)
+    require(before['config']==original['native_config'] and all(before['role'][k]==v for k,v in original['autopilot_role'].items() if k!='updated_at'),'READMISSION_STOP_ORIGINAL')
+    claim_proof=bounded_evidence_inventory(control.CLAIM);journal_dir=control.plan.LIGHT/'runtime/codex-dispatch';journal_proof=bounded_evidence_inventory(journal_dir)
+    def guard():
+        run_guard.assert_running();release.staging.require_current_main(SOURCE)
+        require(control.restored_receipt(request,prior,protected,pdigest,directory) is not None,'READMISSION_STOP_HOLD')
+        state=switch.show(control.plan.SUPERVISOR_UNIT,['MainPID','ControlPID','ActiveState'])
+        require(state['MainPID']==state['ControlPID']=='0' and state['ActiveState'] in ('inactive','failed'),'READMISSION_STOP_SUPERVISOR')
+        require(bounded_evidence_inventory(control.CLAIM)==claim_proof and bounded_evidence_inventory(journal_dir)==journal_proof,'READMISSION_STOP_EVIDENCE_CHANGED')
+    guard()
+    with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+        conn.read_only=True;intake.engine.identity(conn,intake.target());observed=submitted_snapshot(conn,intake)
+    require(control.digest(control.canonical(observed))==payload['submitted_sha256'],'READMISSION_STOP_SNAPSHOT')
+    native=observed['native'];rows=observed['rows']
+    require(native['state']=='SUBMITTED' and native['terminal'] is None and native['completed_at'] is None
+        and native['owner_name']=='autopilot_light_worker_login' and native['submitted_at'] is not None and native['submission_started_at'] is not None
+        and bridge.TASK_URL.fullmatch('https://chatgpt.com/codex/tasks/'+native['provider_task_id'])
+        and control.SHA256.fullmatch(native['prompt_sha256'])
+        and native['dispatch_id']==DISPATCH and {k:v for k,v in native['request'].items() if k!='reservation_id'}==request.permit_value['dispatch']
+        and rows['config']==applied['config'] and rows['role']==applied['role']
+        and rows['outbox']['delivery_deadline_at']==applied['outbox']['delivery_deadline_at']
+        and rows['outbox']['status']=='SENT' and rows['outbox']['delivery_contract_version']==4
+        and rows['task']['status']=='WAITING_EXTERNAL' and rows['work']['state']=='ACTIVE'
+        and rows['counts']==[1,1,1,0,1]
+        and control.digest(control.canonical(observed['fence']))==committed['fence_sha256'],'READMISSION_STOP_BINDING')
+    journal=bridge.lookup(native['request'],state_dir=journal_dir,binding=dict(profile='light',environment_id=release.CLOUD_ENVIRONMENT_ID,repository='olegmed1-art/bridge-video-free'))
+    require(journal is not None and journal['state']=='SUBMITTED' and journal['provider_task_id']==native['provider_task_id']
+        and journal['prompt_sha256']==native['prompt_sha256']==bridge.digest(bridge.prompt_for(native['request'])),'READMISSION_STOP_JOURNAL')
+    values=[control.strict_json((control.CLAIM/name).read_bytes(),8192) for name in ('image-start.json','image-restart.json','image-resumed.json')]
+    restart=validate_proof(*values,request.permit,native['request'],native['provider_task_id'])
+    unit=control.strict_json(control.read(directory/'pilot-unit.json',4096),4096)
+    owner.verify_restart_unit(restart,unit,DISPATCH,native['provider_task_id']);guard()
+    control.retained(control.plan.ROOT/'submitted-stop-intent.json',payload_raw)
+    control.retained(control.plan.ROOT/'submitted-stop-before.json',control.canonical(observed))
+    with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+        conn.read_only=False
+        with conn.transaction():
+            conn.execute('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');conn.execute("SET LOCAL statement_timeout='5s'");conn.execute("SET LOCAL lock_timeout='5s'")
+            intake.engine.identity(conn,intake.target())
+            for sql,args in [('SELECT dispatch_id FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s::uuid FOR UPDATE',(DISPATCH,)),('SELECT task_id FROM autopilot.task WHERE task_id=%s::uuid FOR UPDATE',(TASK,)),('SELECT work_item_id FROM autopilot.project_work_item WHERE work_item_id=%s::uuid FOR UPDATE',(WORK,)),('SELECT dispatch_id FROM autopilot.native_cli_receipt WHERE dispatch_id=%s::uuid FOR UPDATE',(DISPATCH,)),('SELECT singleton FROM autopilot.native_cli_config WHERE singleton FOR UPDATE',None),("SELECT role_id FROM autopilot.role_registry WHERE role_id='AUTOPILOT' FOR UPDATE",None)]:conn.execute(sql,args)
+            require(submitted_snapshot(conn,intake)==observed,'READMISSION_STOP_CONCURRENT');guard()
+            a=conn.execute('UPDATE autopilot.native_cli_config SET enabled=%s,cutover_at=%s WHERE singleton',(before['config']['enabled'],before['config']['cutover_at']))
+            b=conn.execute("UPDATE autopilot.role_registry SET can_repair=%s WHERE role_id='AUTOPILOT'",(before['role']['can_repair'],))
+            d=conn.execute('UPDATE autopilot.role_dispatch_outbox SET delivery_deadline_at=%s::timestamptz,updated_at=transaction_timestamp() WHERE dispatch_id=%s::uuid',(before['outbox']['delivery_deadline_at'],DISPATCH))
+            require(a.rowcount==b.rowcount==d.rowcount==1,'READMISSION_STOP_UPDATE_COUNT')
+            restored=submitted_snapshot(conn,intake)
+            require(submitted_restoration_matches(observed,restored,before),'READMISSION_STOP_READBACK');guard()
+    with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+        conn.read_only=True;intake.engine.identity(conn,intake.target())
+        require(submitted_snapshot(conn,intake)==restored,'READMISSION_STOP_COMMIT_READBACK')
+    guard();result=dict(audit='LIGHT_READMISSION_SUBMITTED_CONTROLS_RESTORED',request_sha256=payload['request_sha256'],
+        submitted_sha256=payload['submitted_sha256'],restored_sha256=control.digest(control.canonical(restored)),
+        native_state='SUBMITTED',terminal_verified=False,normal_success_finish_requires_new_role_binding=True,
+        native_enabled=False,can_repair=True,original_deadline_restored=True,provider_task_preserved=True,pilot_resubmitted=False)
+    control.retained(control.plan.ROOT/'submitted-controls-restored.json',control.canonical(result));return result
+
+
 def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new_raw):
     require(control.digest(old_raw)==OLD_PACKAGE and control.digest(new_raw)==PACKAGE,'REENTRY_PACKAGES')
     require(control.digest(payload_raw)==accepted,'REENTRY_PAYLOAD')
@@ -570,7 +662,7 @@ def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new
     action=payload.get('action')
     shapes={'prepare-continuation':{'action','agreement','accepted_agreement_sha256'},
         'authorize':{'action','agreement','accepted_agreement_sha256','baseline_sha256'},
-        'terminal':{'action','request_sha256'},'inspect-provider':{'action','request_sha256'},'inspect-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-unreserved':{'action','baseline_sha256','request_sha256','claim_inventory_sha256'},'restore-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-controls':{'action','request_sha256','terminal_sha256'}}
+        'restore-submitted':{'action','request_sha256','submitted_sha256'},'terminal':{'action','request_sha256'},'inspect-provider':{'action','request_sha256'},'inspect-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-unreserved':{'action','baseline_sha256','request_sha256','claim_inventory_sha256'},'restore-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-controls':{'action','request_sha256','terminal_sha256'}}
     require(action in shapes and set(payload)==shapes[action],'REENTRY_ACTION')
     package=control.verified_package(old_raw,OLD_SOURCE,OLD_PACKAGE) if action=='prepare-continuation' else control.verified_package(new_raw,SOURCE,PACKAGE)
     if action=='prepare-continuation':
@@ -585,6 +677,7 @@ def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new
         api=API(token)
         if action=='prepare-continuation':return prepare_continuation(package,payload,agreement,run_guard,psycopg,parameters,credential,intake,api,owner)
         if action=='authorize':return authorize(payload,payload_raw,agreement,run_guard,psycopg,parameters,credential,intake,api,owner)
+        if action=='restore-submitted':return restore_submitted(payload,payload_raw,run_guard,psycopg,parameters,credential,intake,owner)
         if action=='inspect-provider':return inspect_provider(payload,run_guard,psycopg,parameters,credential,intake)
         if action=='inspect-zero-submit':return inspect_zero_submit(payload,run_guard,psycopg,parameters,credential,intake)
         if action in ('restore-zero-submit','restore-unreserved'):return restore_zero_submit(payload,payload_raw,run_guard,psycopg,parameters,credential,intake)
