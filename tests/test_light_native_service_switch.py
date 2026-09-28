@@ -210,3 +210,74 @@ def test_pid1_attestation_failure_keeps_gate_closed(monkeypatch):
         target.run_once(**args)
     assert any(type(c) is tuple and c[0]=='/usr/bin/systemd-run' for c in calls)
     assert 'activate_admission' not in calls
+
+
+def systemd_execution_rows():
+    """The multi-row EnvironmentFiles shape observed on Oracle, 2026-09-28."""
+    args=target.plan.pilot_argv('f'*40)
+    return [
+        ('ExecStart','{ path='+target.plan.PYTHON+' ; argv[]='+' '.join(args)+
+         ' ; ignore_errors=no ; start_time=n/a ; stop_time=n/a ; pid=1 ; code=(null) ; status=0/0 }'),
+        ('Environment','PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 AUTOPILOT_ADMISSION_MODE=PILOT'),
+        ('EnvironmentFiles',str(hold.ENV)+' (ignore_errors=no)'),
+        ('EnvironmentFiles',prior().release+'/ops/autopilot/broker-hold.env (ignore_errors=no)'),
+        ('RuntimeMaxUSec','2min'),
+    ]
+
+
+@pytest.mark.parametrize('fault',[None,'reordered','missing','extra','duplicate_file',
+    'optional_file','duplicate_scalar','missing_scalar','unknown_field','malformed'])
+def test_raw_systemd_execution_attestation(fault,monkeypatch):
+    rows=systemd_execution_rows()
+    if fault=='reordered':rows[2],rows[3]=rows[3],rows[2]
+    if fault=='missing':rows.pop(3)
+    if fault=='extra':rows.insert(4,('EnvironmentFiles','/unexpected (ignore_errors=no)'))
+    if fault=='duplicate_file':rows.insert(4,rows[3])
+    if fault=='optional_file':rows[3]=(rows[3][0],rows[3][1].replace('no','yes'))
+    if fault=='duplicate_scalar':rows.append(rows[0])
+    if fault=='missing_scalar':rows.pop(0)
+    if fault=='unknown_field':rows.append(('Unexpected','value'))
+    raw='\n'.join(k+'='+v for k,v in rows)
+    if fault=='malformed':raw+='\nmalformed'
+    monkeypatch.setattr(target,'command',lambda *a,**kw:raw)
+    if fault:
+        with pytest.raises(RuntimeError):
+            target.attest_pilot_execution('f'*40,prior(),120,'e'*64)
+    else:
+        target.attest_pilot_execution('f'*40,prior(),120,'e'*64)
+
+
+def test_repeated_scalar_properties_still_refuse(monkeypatch):
+    monkeypatch.setattr(target,'command',lambda *a:'MainPID=1\nMainPID=1')
+    with pytest.raises(RuntimeError,match='PILOT_HOST_UNIT_FIELDS'):
+        target.show(target.plan.PILOT_UNIT,['MainPID'])
+
+
+def test_restore_passes_raw_environment_files_before_stopping_owned_pilot(monkeypatch):
+    calls=[]
+    candidate=target.plan.source_path('f'*40)
+    restored=hold.ServiceHoldIdentity(**{**asdict(prior()),'pid':456,'invocation_id':'d'*32})
+    ownership=dict(LoadState='loaded',InvocationID='expected',WorkingDirectory=str(candidate),
+                   Description='Bridge native pilot '+'e'*64)
+    persistent=dict(MainPID='456',InvocationID='d'*32,NRestarts='0')
+    def command(*args,**kwargs):
+        calls.append(args)
+        if args[:2]==('/usr/bin/systemctl','show'):
+            fields=[arg.removeprefix('--property=') for arg in args[3:]]
+            if 'EnvironmentFiles' in fields:
+                return '\n'.join(k+'='+v for k,v in systemd_execution_rows())
+            state=ownership if args[2]==target.plan.PILOT_UNIT else persistent
+            return '\n'.join(k+'='+state[k] for k in fields)
+        return ''
+    monkeypatch.setattr(target,'command',command)
+    for name in ('deny_admission','attest_hardening','no_processes',
+                 'empty_runtime_backends','unchanged_files'):
+        monkeypatch.setattr(target,name,lambda *a,**kw:None)
+    monkeypatch.setattr(hold,'service_hold_identity',lambda:restored)
+    assert target.restore(prior(),{},candidate,pilot_invocation='expected',
+        protected_digest='d'*64,request_digest='e'*64,pilot_seconds=120)==restored
+    stop=('/usr/bin/systemctl','stop',target.plan.PILOT_UNIT)
+    start=('/usr/bin/systemctl','start',hold.UNIT)
+    assert calls.count(stop)==calls.count(start)==1
+    assert calls.index(stop)<calls.index(start)
+    assert any('--property=EnvironmentFiles' in call for call in calls[:calls.index(stop)])
