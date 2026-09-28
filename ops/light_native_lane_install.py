@@ -83,16 +83,24 @@ def write_new(path, raw, mode, gid=0):
 
 
 def show(unit, fields):
-    # systemctl omits empty properties by default. Require all requested fields,
-    # including an explicitly empty EnvironmentFiles; never infer from absence.
-    output = switch.command('/usr/bin/systemctl','show','--all',unit,
-                            *['--property='+key for key in fields])
+    # systemd 255 omits the empty EnvironmentFiles array even with --all.
+    # Read that typed property directly; never infer emptiness from omission.
+    require(unit == UNIT, 'LANE_INSTALL_UNIT_SCOPE')
+    selected = [key for key in fields if key != 'EnvironmentFiles']
+    output = (switch.command('/usr/bin/systemctl','show','--all',unit,
+                             *['--property='+key for key in selected]) if selected else '')
     result = {}
     for line in output.splitlines():
         key, sep, value = line.partition('=')
-        require(sep and key in fields and key not in result, 'LANE_INSTALL_UNIT_FIELDS')
+        require(sep and key in selected and key not in result, 'LANE_INSTALL_UNIT_FIELDS')
         result[key] = value
-    require(set(result) == set(fields), 'LANE_INSTALL_UNIT_FIELDS')
+    require(set(result) == set(selected), 'LANE_INSTALL_UNIT_FIELDS')
+    if 'EnvironmentFiles' in fields:
+        value = switch.command('/usr/bin/busctl','get-property','org.freedesktop.systemd1',
+            '/org/freedesktop/systemd1/unit/school_2dautopilot_2dnative_2dlight_2eservice',
+            'org.freedesktop.systemd1.Service','EnvironmentFiles')
+        require(value == 'a(sb) 0', 'LANE_INSTALL_ENVIRONMENT_FILES')
+        result['EnvironmentFiles'] = ''
     return result
 
 

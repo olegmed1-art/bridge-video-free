@@ -145,16 +145,22 @@ def test_active_process_is_not_enough_for_verified_hold(tmp_path,monkeypatch,fau
     else:assert target.verify_running(SOURCE,user)==row
 
 
-def test_show_explicitly_requests_empty_properties_and_never_infers_missing(monkeypatch):
+def test_show_proves_empty_environment_array_from_typed_dbus(monkeypatch):
     seen=[]
     def command(*args):
         seen.append(args)
-        return 'EnvironmentFiles=\nUnitFileState=static'
+        if args[0]=='/usr/bin/busctl':return 'a(sb) 0'
+        return 'UnitFileState=static'
     monkeypatch.setattr(target.switch,'command',command)
     assert target.show(target.UNIT,['EnvironmentFiles','UnitFileState']) == dict(EnvironmentFiles='',UnitFileState='static')
-    assert '--all' in seen[0]
-    monkeypatch.setattr(target.switch,'command',lambda *args:'UnitFileState=static')
-    with pytest.raises(RuntimeError,match='UNIT_FIELDS'):target.show(target.UNIT,['EnvironmentFiles','UnitFileState'])
+    assert '--all' in seen[0] and '--property=EnvironmentFiles' not in seen[0]
+    assert seen[1][-2:]==('org.freedesktop.systemd1.Service','EnvironmentFiles')
+    monkeypatch.setattr(target.switch,'command',lambda *args:'')
+    with pytest.raises(RuntimeError,match='UNIT_FIELDS'):target.show(target.UNIT,['UnitFileState'])
+    for response in ('', 'a(sb) 1 "/unexpected.env" false', 'as 0'):
+        monkeypatch.setattr(target.switch,'command',lambda *args:response)
+        with pytest.raises(RuntimeError,match='ENVIRONMENT_FILES'):
+            target.show(target.UNIT,['EnvironmentFiles'])
 
 
 @pytest.mark.skipif(os.geteuid()!=0,reason='real root-owned retained state')
