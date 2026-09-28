@@ -92,7 +92,7 @@ def test_reentry_namespace_faults_preserve_all_evidence(tmp_path,monkeypatch,fai
         assert target.inventory(archive if archive.exists() else source)==proof
 
 
-@pytest.mark.parametrize('action',['prepare-continuation','authorize','terminal','restore-controls','restore-zero-submit'])
+@pytest.mark.parametrize('action',['prepare-continuation','authorize','terminal','restore-controls','restore-zero-submit','inspect-zero-submit'])
 def test_runner_bootstrap_selects_exact_old_or_new_namespace(monkeypatch,action):
     payload=json.dumps({'action':action}).encode()
     selected=runner.PACKAGE if action=='prepare-continuation' else target.PACKAGE

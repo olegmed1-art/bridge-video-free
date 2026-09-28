@@ -405,6 +405,29 @@ def restore_zero_submit(payload,payload_raw,run_guard,psycopg,parameters,credent
     control.retained(control.plan.ROOT/'zero-submit-controls-restored.json',control.canonical(result));return result
 
 
+def inspect_zero_submit(payload,run_guard,psycopg,parameters,credential,intake):
+    root,receipt,plan,original=records(intake)
+    request,prior,protected,protected_digest,directory=control.ledger(payload['request_sha256'])
+    require(request.value['source']==SOURCE and request.value['scope']==SCOPE
+        and request.value['baseline_sha256']==payload['baseline_sha256'],'REENTRY_INSPECT_SCOPE')
+    run_guard.assert_running()
+    require(control.restored_receipt(request,prior,protected,protected_digest,directory) is not None,'REENTRY_INSPECT_HOLD')
+    state=switch.show(control.plan.SUPERVISOR_UNIT,['MainPID','ControlPID','ActiveState'])
+    require(state['MainPID']==state['ControlPID']=='0' and state['ActiveState'] in ('inactive','failed'),'REENTRY_INSPECT_SUPERVISOR')
+    entries=list(control.CLAIM.iterdir())
+    require(len(entries)<=8 and all(p.is_file() and not p.is_symlink() and p.stat().st_size<=65536 for p in entries),'REENTRY_INSPECT_CLAIM_SIZE')
+    claim=inventory(control.CLAIM)
+    applied=control.strict_json(control.read(control.plan.ROOT/'reapply-applied.json'),262144)
+    rows=observe(psycopg,parameters,credential,intake,receipt,applied['config'],applied['role'])
+    journal=control.plan.LIGHT/'runtime/codex-dispatch'/(DISPATCH+'.json')
+    return dict(audit='LIGHT_FIXED_ZERO_SUBMIT_INSPECTION',request_sha256=payload['request_sha256'],
+        claim_inventory=claim,claim_inventory_sha256=control.digest(control.canonical(claim)),
+        provider_journal_exists=journal.exists() or journal.is_symlink(),database_matches_applied=rows==applied,
+        native_receipts=rows['counts'][0],claim_request_exists=(control.CLAIM/'request.json').exists(),
+        permit_matches=(control.CLAIM/'permit.json').exists() and (control.CLAIM/'permit.json').read_bytes()==request.permit,
+        production_mutations=False)
+
+
 def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new_raw):
     require(control.digest(old_raw)==OLD_PACKAGE and control.digest(new_raw)==PACKAGE,'REENTRY_PACKAGES')
     require(control.digest(payload_raw)==accepted,'REENTRY_PAYLOAD')
@@ -412,7 +435,7 @@ def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new
     action=payload.get('action')
     shapes={'prepare-continuation':{'action','agreement','accepted_agreement_sha256'},
         'authorize':{'action','agreement','accepted_agreement_sha256','baseline_sha256'},
-        'terminal':{'action','request_sha256'},'restore-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-controls':{'action','request_sha256','terminal_sha256'}}
+        'terminal':{'action','request_sha256'},'inspect-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-controls':{'action','request_sha256','terminal_sha256'}}
     require(action in shapes and set(payload)==shapes[action],'REENTRY_ACTION')
     package=control.verified_package(old_raw,OLD_SOURCE,OLD_PACKAGE) if action=='prepare-continuation' else control.verified_package(new_raw,SOURCE,PACKAGE)
     if action=='prepare-continuation':
@@ -427,6 +450,7 @@ def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new
         api=API(token)
         if action=='prepare-continuation':return prepare_continuation(package,payload,agreement,run_guard,psycopg,parameters,credential,intake,api,owner)
         if action=='authorize':return authorize(payload,payload_raw,agreement,run_guard,psycopg,parameters,credential,intake,api,owner)
+        if action=='inspect-zero-submit':return inspect_zero_submit(payload,run_guard,psycopg,parameters,credential,intake)
         if action=='restore-zero-submit':return restore_zero_submit(payload,payload_raw,run_guard,psycopg,parameters,credential,intake)
         if action=='terminal':return terminal(payload,run_guard,psycopg,parameters,credential,intake,owner,api)
         return restore_controls(payload,payload_raw,run_guard,psycopg,parameters,credential,intake)
