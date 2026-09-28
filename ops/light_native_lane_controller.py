@@ -147,6 +147,11 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
             guard(plan,prior,value,run_guard,agreement)
             pr=owner.observed_target(API(token),plan)
             # These shared parents are fixed, root-only and not user data.
+            # Fail read-only prerequisites before retaining any preparation state.
+            with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+                conn.read_only=True
+                intake.engine.privileges(conn,intake.target(),True)
+                verify_terminal_policy(conn)
             for path in (ROOT,ROOT/'controllers'):
                 if not path.exists():install.fresh_directory(path,0o700)
                 install.root_parent(path)
@@ -550,6 +555,8 @@ def committed_intake(conn,plan,receipt):
 
 def verify_terminal_policy(conn):
     """Read-only deployed trigger check before admitting a substantive audit."""
+    require(conn.execute("SELECT to_regclass('autopilot.migration_0372_function_backup') IS NOT NULL").fetchone()==(True,),
+            'LANE_OWNER_TERMINAL_POLICY_MISSING')
     require(conn.execute("""SELECT EXISTS(
       SELECT FROM public.schema_migration WHERE migration_key='0372_autopilot_audit_pass_alias')
       AND EXISTS(SELECT FROM autopilot.migration_0372_function_backup

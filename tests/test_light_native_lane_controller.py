@@ -44,7 +44,7 @@ def test_bootstrap_rejects_unaccepted_bytes_before_import_or_effects():
                             credential='never-log-private-password',token='never-log-private-token'))
     result=subprocess.run([sys.executable,'-I','-S','-B','-c',code],input=wire,capture_output=True,timeout=10)
     assert result.returncode==2
-    assert result.stdout==b'{"audit":"LIGHT_LANE_OWNER_REFUSED"}\n'
+    assert json.loads(result.stdout)==dict(audit='LIGHT_LANE_OWNER_REFUSED',reason='UNCLASSIFIED')
     assert not result.stderr and b'private' not in result.stdout
 
 
@@ -302,3 +302,42 @@ def test_late_execute_refuses_before_staging_feed(phase_context,monkeypatch):
     monkeypatch.setattr(target.time,'time',lambda:9999999500)
     with pytest.raises(RuntimeError,match='EXECUTION_WINDOW'):call()
     assert 'feed' not in events and 'launch' not in events
+
+
+def test_missing_terminal_migration_refuses_without_querying_absent_table():
+    queries=[]
+    def query(sql):
+        queries.append(sql)
+        return SimpleNamespace(fetchone=lambda:(False,))
+    with pytest.raises(RuntimeError,match='TERMINAL_POLICY_MISSING'):
+        target.verify_terminal_policy(SimpleNamespace(execute=query))
+    assert len(queries)==1 and 'to_regclass' in queries[0]
+
+
+def test_diagnostics_never_forward_credentials_or_arbitrary_remote_text():
+    secret='postgres://owner:private-password@host/db token=private-token'
+    assert runner.failure(RuntimeError(secret))['reason']=='UNCLASSIFIED'
+    for raw in (secret.encode(),json.dumps({'audit':'LIGHT_LANE_OWNER_REFUSED','reason':secret}).encode(),
+                json.dumps({'audit':'LIGHT_LANE_OWNER_REFUSED','reason':'UNCLASSIFIED','extra':secret}).encode()):
+        assert secret not in json.dumps(runner.remote_failure(raw))
+    safe=dict(audit='LIGHT_LANE_OWNER_REFUSED',reason='LANE_OWNER_TERMINAL_POLICY_MISSING')
+    assert runner.remote_failure(json.dumps(safe).encode())==safe
+
+
+def test_prepare_policy_failure_precedes_root_records(phase_context,monkeypatch):
+    value,events,call,directory=phase_context
+    value['action']='prepare'
+    from ops import light_native_pilot_owner as owner
+    prior=target.install.hold.HoldIdentity('autopilot-lite-vnic',123,'a'*32,'/prior','b'*64)
+    monkeypatch.setattr(target.install.hold,'attest',lambda:prior)
+    monkeypatch.setattr(target.install,'verify_running',lambda *a:None)
+    monkeypatch.setattr(target.pwd,'getpwnam',lambda *a:None)
+    monkeypatch.setattr(owner,'observed_target',lambda *a:{'head':{'sha':'a'*40,'ref':'branch'}})
+    from database import light_native_pilot_intake as intake
+    monkeypatch.setattr(intake.engine,'privileges',lambda *a:None)
+    def refuse(*a):raise RuntimeError('LANE_OWNER_TERMINAL_POLICY_MISSING')
+    monkeypatch.setattr(target,'verify_terminal_policy',refuse)
+    monkeypatch.setattr(target,'bootstrap_helpers',lambda *a:pytest.fail('must not retain helper state'))
+    before=set(directory.iterdir())
+    with pytest.raises(RuntimeError,match='TERMINAL_POLICY_MISSING'):call()
+    assert set(directory.iterdir())==before
