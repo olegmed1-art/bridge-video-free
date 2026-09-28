@@ -363,3 +363,33 @@ def test_task_mailbox_must_match_locked_active_registry(tmp_path,monkeypatch):
             observed_branch=plan.value['branch'])
     assert conn.rolled_back and not conn.committed
     assert not any('prepare_role_dispatch' in event for event in conn.events)
+
+@pytest.mark.parametrize('lost_ack',[False,True])
+def test_durable_intake_receipt_precedes_commit_ack(tmp_path,monkeypatch,lost_ack):
+    plan,agreement,prior,raw,accepted=fixture();gates(monkeypatch,prior)
+    class LostAck(FakeConn):
+        @contextmanager
+        def transaction(self):
+            with super().transaction():yield
+            if lost_ack:raise OSError('commit response lost')
+    conn=LostAck();conn.spec=plan.value['task_spec_json'];retained=[]
+    def durable(value):
+        assert not conn.committed
+        assert any('pg_advisory_xact_lock' in s for s in conn.events)
+        retained.append(value)
+    def run():return target.prepare(conn,plan,agreement,raw,accepted,tmp_path/'before.json',
+        target_open=True,observed_head_sha=HEAD,observed_branch=plan.value['branch'],durable_receipt=durable)
+    if lost_ack:
+        with pytest.raises(OSError):run()
+    else:assert run()==retained[0]
+    assert conn.committed and len(retained)==1 and retained[0]['task_id']==TASK
+
+
+def test_failure_to_persist_receipt_rolls_back_intake(tmp_path,monkeypatch):
+    plan,agreement,prior,raw,accepted=fixture();gates(monkeypatch,prior)
+    conn=FakeConn();conn.spec=plan.value['task_spec_json']
+    def disk_failure(value):raise OSError('fsync failed')
+    with pytest.raises(OSError):
+        target.prepare(conn,plan,agreement,raw,accepted,tmp_path/'before.json',
+            target_open=True,observed_head_sha=HEAD,observed_branch=plan.value['branch'],durable_receipt=disk_failure)
+    assert conn.rolled_back and not conn.committed

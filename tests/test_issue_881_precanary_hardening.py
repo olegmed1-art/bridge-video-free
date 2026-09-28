@@ -1746,7 +1746,7 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
             indirect[reference] = payload
             pending.update(repository_shell_references(payload) - set(indirect))
         referenced_payloads.update(indirect)
-    assert len(shared_workflows) == 76
+    assert len(shared_workflows) == 77
     assert '.github/workflows/light-native-lane-install.yml' in shared_workflows
     for dependency in ('ops/light_native_lane_install.py', 'ops/light_native_lane_owner.py',
                        'oracle_autopilot/light_native_lane.py'):

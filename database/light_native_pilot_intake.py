@@ -140,7 +140,7 @@ def one(conn, statement, params=()):
 
 
 def prepare(conn, plan, agreement, baseline_raw, accepted_baseline_sha256, snapshot_path,
-            *, target_open, observed_head_sha, observed_branch, effect_guard=None):
+            *, target_open, observed_head_sha, observed_branch, effect_guard=None, durable_receipt=None):
     """Return a private dispatch receipt; any unexpected selection rolls back.
 
     snapshot_path must be a new leaf under a private, durable owner directory.
@@ -161,6 +161,7 @@ def prepare(conn, plan, agreement, baseline_raw, accepted_baseline_sha256, snaps
     with conn.transaction():
         conn.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
         conn.execute("SET LOCAL statement_timeout='10s'")
+        conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('light-lane:'+plan.digest,))
         engine.identity(conn, target())
         agreement.assert_held(plan.scope_digest)
         config = one(conn, 'SELECT to_jsonb(c) FROM autopilot.native_cli_config c WHERE singleton FOR UPDATE')
@@ -257,14 +258,19 @@ def prepare(conn, plan, agreement, baseline_raw, accepted_baseline_sha256, snaps
         switch.unchanged_files(protected,prior,protected_digest)
         agreement.assert_held(plan.scope_digest)
         if effect_guard is not None: effect_guard()
-    # This is a DB commit acknowledgement, not GitHub publication or pilot authority.
-    return {'plan_sha256':plan.digest,'snapshot_sha256':snapshot_digest,
-            'work_item_id':work['work_item_id'],'task_id':task['task_id'],
-            'goal_json_sha256':goal_digest,
-            'dispatch_id':dispatch['dispatch_id'],'claim_epoch':publication['claim_epoch'],
-            'dispatch':publication,'assignment':assignment,
-            'applied_config':applied_config,'applied_role':applied_role,
-            'published':False,'pilot_authorized':False}
+        receipt = {'plan_sha256':plan.digest,'snapshot_sha256':snapshot_digest,
+                'work_item_id':work['work_item_id'],'task_id':task['task_id'],
+                'goal_json_sha256':goal_digest,
+                'dispatch_id':dispatch['dispatch_id'],'claim_epoch':publication['claim_epoch'],
+                'dispatch':publication,'assignment':assignment,
+                'applied_config':applied_config,'applied_role':applied_role,
+                'published':False,'pilot_authorized':False}
+        # Save the exact prospective result before COMMIT. A lost ACK must be
+        # reconciled under the same advisory lock, never by rerunning intake.
+        if durable_receipt is not None: durable_receipt(receipt)
+        if effect_guard is not None: effect_guard()
+    return receipt
+
 
 
 def dispatch_body(dispatch):
