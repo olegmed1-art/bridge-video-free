@@ -159,6 +159,18 @@ def failure_code(exc):
         return 'TRANSPORT_TIMEOUT'
     if isinstance(exc, (ConnectionError, http.client.HTTPException)):
         return 'TRANSPORT_FAILURE'
+    # OCI ServiceError is not a built-in ConnectionError. Publish only a fixed
+    # status category; its message, headers and request details stay private.
+    # Keep OCI optional for offline callers and failures before SDK loading.
+    try:
+        from oci.exceptions import ServiceError
+    except ImportError:
+        return 'REFUSED'
+    if isinstance(exc, ServiceError):
+        status = getattr(exc, 'status', None)
+        if type(status) is int and status in (400, 401, 403, 404, 409, 412, 429, 500, 502, 503, 504):
+            return 'OCI_SERVICE_' + str(status)
+        return 'OCI_SERVICE_FAILURE'
     return 'REFUSED'
 
 def timing():
@@ -381,6 +393,7 @@ def candidate_step(repo, source, accepted, raw, candidate, run, reader, client, 
             and packet['plan']==candidate['plan'] and packet['agreement']==candidate['agreement']
             and packet['accepted_head_digest']==candidate['accepted_head_digest']
             and packet['expected_outcome']==candidate['expected_outcome']
+            and packet.get('recovery_pair_digest')==candidate.get('recovery_pair_digest')
             and [digest(row) for row in packet['prior_units']]==[r['digest'] for r in candidate['prior_units']],
             'CANDIDATE_REQUEST_CHANGED')
         store=MeasuredStore(client,namespace,run.assert_running)

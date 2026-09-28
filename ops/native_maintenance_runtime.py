@@ -65,11 +65,15 @@ class Packet:
                 and re.fullmatch('[0-9a-f]{64}', accepted_digest)
                 and checkpoint.sha(raw) == accepted_digest, 'RUNTIME_PACKET_NOT_ACCEPTED')
         value = json.loads(raw, object_pairs_hook=unique)
-        require(type(value) is dict and set(value) == {
+        require(type(value) is dict and set(value) - {'recovery_pair_digest'} == {
             'version', 'stage', 'scope', 'plan', 'baseline_digest', 'agreement',
             'prior_units', 'accepted_head_digest', 'expected_outcome'}
             and type(value['version']) is int and value['version'] == 1
             and value['stage'] in STAGES and encoded(value) == raw, 'RUNTIME_PACKET_SCHEMA')
+        require('recovery_pair_digest' not in value or
+                (value['stage'] == 'restore' and type(value['recovery_pair_digest']) is str
+                 and re.fullmatch('[0-9a-f]{64}', value['recovery_pair_digest'])),
+                'RUNTIME_RECOVERY_PAIR')
         self.value, self.raw, self.accepted = value, raw, accepted_digest
         self.stage, self.scope, self.plan = value['stage'], value['scope'], value['plan']
         validate_plan(self.plan)
@@ -267,7 +271,7 @@ def stage(packet, *, run, store, connect, api_token, retain_unit):
         supervisor.assert_alive()
         run.assert_running()
         barrier = checkpoint.JournalCheckpoint(store, accepted_head_digest=packet.value['accepted_head_digest'])
-        if packet.stage == 'restore':
+        if packet.stage == 'restore' and 'recovery_pair_digest' not in packet.value:
             barrier.accept_resume(packet.scope_digest, operation, pause)
         ex = MaintenanceExecutor(target=packet.target, operation=packet.scope['operation'],
             manifest_path=manifest, manifest_digest=packet.scope['manifest_digest'],
@@ -297,7 +301,20 @@ def stage(packet, *, run, store, connect, api_token, retain_unit):
                     run.assert_running()
                     supervisor.assert_alive()
                     packet.assert_current()
-            ex.restore(Release(), outcome)
+            release = Release()
+            if 'recovery_pair_digest' in packet.value:
+                # The old run is already drained, and the accepted local pair
+                # contains only a consumed session suffix. This publishes that
+                # evidence via one CAS; it never invokes execute_prepared().
+                recovered_head=checkpoint.publish_reconciled_session_suffix(store,packet.scope_digest,
+                    operation,pause,accepted_head_digest=packet.value['accepted_head_digest'],
+                    accepted_pair_digest=packet.value['recovery_pair_digest'],
+                    observed_outcome=outcome,reconciler=release)
+                barrier = checkpoint.JournalCheckpoint(store,
+                    accepted_head_digest=recovered_head)
+                barrier.accept_resume(packet.scope_digest,operation,pause)
+                ex.checkpoint = barrier
+            ex.restore(release, outcome)
             head = checkpoint.sha(barrier.head[0])
         packet.assert_current()
         supervisor.assert_alive()

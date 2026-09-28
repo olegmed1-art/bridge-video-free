@@ -61,6 +61,22 @@ def test_terminal_marker_requests_independent_readback():
     assert plan.classify_journal('{"audit":"LIGHT_NATIVE_SINGLE_PILOT_QUARANTINED"}','dispatch')=={'state':'QUARANTINED'}
 
 
+@pytest.mark.parametrize('task_id',[
+    'task_abc123', 'task_e_exact', 'task_'+'a'*120,
+    'task_', 'task_e_bad-id', 'task_'+'a'*121, 'task_abc\n',
+])
+def test_terminal_identifier_matches_provider_contract(task_id):
+    from oracle_autopilot.codex_cli_bridge import TASK_URL
+    item=marker()
+    item['provider_task_id']=task_id
+    accepted=TASK_URL.fullmatch('https://chatgpt.com/codex/tasks/'+task_id)
+    if accepted:
+        assert plan.classify_journal(json.dumps(item),'dispatch')['state']=='READBACK_REQUIRED'
+    else:
+        with pytest.raises(RuntimeError,match='PILOT_SERVICE_TERMINAL_MARKER'):
+            plan.classify_journal(json.dumps(item),'dispatch')
+
+
 @pytest.mark.parametrize('damage',['different_dispatch','duplicate','quarantine','extra','bad_task'])
 def test_ambiguous_or_wrong_markers_refuse(damage):
     item=marker()

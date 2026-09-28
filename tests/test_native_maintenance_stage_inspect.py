@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from ops import native_maintenance_checkpoint as checkpoint
 from ops import native_maintenance_snapshot as snapshot
@@ -153,6 +154,51 @@ class InspectTests(unittest.TestCase):
         raw = encoded(dict(version=1, scope_digest=binding, journals=rows))
         snapshot._parse(raw)
         return binding, rows, raw
+
+    def unit(self, scope, stage, ref):
+        return dict(version=1, kind='NATIVE_STAGE_UNIT',source=SOURCE,
+                    scope_digest=scope,stage=stage,run=ref,
+                    supervisor=dict(unit='bridge-native-ro-'+SOURCE[:12]+'-'+str(ref['run_id'])+'-'+str(ref['attempt'])+'-'+('c'*16)+'.service',
+                                    invocation='d'*32,cgroup_inode=123))
+
+    def test_failed_execute_preserves_origin_and_accepts_only_bound_prior_units(self):
+        value,_=request_fixture()
+        origin=dict(run_id=100,attempt=1,job_id=200)
+        packet=value['packet']
+        packet['scope']['origin_run']=origin
+        packet['stage']='execute'
+        packet['prior_units']=[self.unit(digest(packet['scope']),'prepare',origin)]
+        request=SimpleNamespace(value=value,source=SOURCE)
+        derived=inspect.inspection_packet(request,self.ref)
+        self.assertEqual(derived['scope']['origin_run'],origin)
+        self.assertEqual(derived,packet)
+        for damage in ('source','scope','missing_origin','failed_run'):
+            bad=copy.deepcopy(value)
+            unit=bad['packet']['prior_units'][0]
+            if damage=='source':unit['source']='f'*40
+            if damage=='scope':unit['scope_digest']='f'*64
+            if damage=='missing_origin':bad['packet']['prior_units']=[]
+            if damage=='failed_run':unit['run']=self.ref
+            with self.subTest(damage=damage), self.assertRaises(Exception):
+                inspect.inspection_packet(SimpleNamespace(value=bad,source=SOURCE),self.ref)
+
+    def test_execute_readback_reports_all_units_without_accepting_any(self):
+        scope,rows,raw=self.pair()
+        prior=self.unit(scope,'prepare',dict(run_id=100,attempt=1,job_id=200))
+        failed=self.unit(scope,'execute',self.ref)
+        observed=dict(scope_digest=scope,claimed=True,scope_present=True,
+                      manifest_digest='e'*64,units=[prior,failed],journals=rows,failed_stage='execute')
+        store=Store()
+        for unit in (prior,failed):
+            store.objects[stage_unit.path(unit)]=encoded(unit)
+        result=inspect.compare(observed,store,self.input)
+        self.assertEqual({u['stage'] for u in result['units']},{'prepare','execute'})
+        self.assertTrue(all(u['local_present'] and u['remote_present'] for u in result['units']))
+        self.assertEqual(result['local_pair_digest'],checkpoint.sha(raw))
+        self.assertFalse(result['resume_authorized'])
+        observed['units'].append(failed)
+        with self.assertRaisesRegex(Exception,'INSPECT_DUPLICATE_UNIT'):
+            inspect.compare(observed,store,self.input)
 
     def test_no_head_reports_observation_without_implicit_acceptance(self):
         scope, rows, raw = self.pair()

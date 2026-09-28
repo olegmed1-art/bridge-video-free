@@ -63,6 +63,34 @@ terminal receipt, original task/role, successor/repair rows and provider journal
 Service `ActiveState=active` alone is not completion evidence. Logs contain fixed
 audit codes, IDs, and a digest, never model result text or raw exceptions.
 
+## Lost Cloud creation response
+
+`SUBMISSION_UNKNOWN` is containment, not proof that no Cloud task exists.
+For the first pilot, use this bounded operator procedure:
+
+1. Keep admission at HOLD and retain the original permit, reservation, dispatch
+   ID, provider journal, prompt digest and launch time. Do not remove the claim,
+   edit its state, call `submit` again, or start a replacement dispatch.
+2. Read the reservation using the original worker identity and inspect the
+   original provider journal. If the journal already has a `SUBMITTED` receipt,
+   compare its task ID, request, target environment/repository and prompt digest
+   with the reservation. A lost DB ACK is different from a lost creation receipt.
+3. Inspect provider-side task details in the same authenticated Cloud environment.
+   A similar title, matching time or an empty task list alone is insufficient.
+   Bind any candidate to the exact repository, branch/head and original request
+   (including its dispatch/reservation identity). Retain the primary evidence.
+4. If exactly one task cannot be established, leave the reservation quarantined
+   and report the pilot as incomplete. Do not infer cancellation or free its slot.
+   If one task is established, record its actual running/terminal state before
+   deciding any follow-up. Stopping the local worker does not cancel Cloud work.
+5. Resume only through a separately reviewed recovery attempt with current
+   authority. The current loader does not adopt a discovered task into an UNKNOWN
+   journal; identifying that task is **not** permission to rewrite the receipt.
+   Until such an attempt exists, keep HOLD and report the unresolved boundary.
+
+This procedure does not promise automatic recovery from an unknown creation.
+It prevents the first pilot from creating duplicates or reporting a false success.
+
 ## Rollback boundary
 
 Before activation the controller needs an independently reviewed, exact-source

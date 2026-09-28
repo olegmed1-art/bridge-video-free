@@ -26,6 +26,16 @@ def fixture():
 
 class CandidateTests(unittest.TestCase):
 
+    def test_recovery_pair_requires_restore_and_exact_accepted_bytes(self):
+        v,_,_=fixture()
+        for stage in ('prepare','execute'):
+            v['stage']=stage;v['recovery_pair_digest']='a'*64
+            with self.assertRaisesRegex(Exception,'CANDIDATE_RECOVERY_PAIR'):
+                c.request_value(encoded(v),digest(v),SOURCE)
+        v['stage']='restore';v['recovery_pair_digest']='invalid'
+        with self.assertRaisesRegex(Exception,'CANDIDATE_RECOVERY_PAIR'):
+            c.request_value(encoded(v),digest(v),SOURCE)
+
     def test_preview_is_observation_only_and_does_not_disclose_hold(self):
         v,manifest,scope=fixture()
         c.request_value(encoded(v),digest(v),SOURCE)

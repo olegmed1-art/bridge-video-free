@@ -143,7 +143,7 @@ class StagedExecutorTests(unittest.TestCase):
     def test_crash_after_binding_never_rebinds_even_before_intent(self):
         self.next_run(self.ex.prepare())
         self.ex.checkpoint.accept_resume(self.ex.scope_digest, self.operation, self.pause)
-        self.ex._event('SESSION_BOUND', 'UNKNOWN')
+        self.operation.append({'kind': 'SESSION_BOUND', 'run': self.ex.current_run, 'outcome': 'UNKNOWN'})
         self.next_run(self.head())
         with patch.object(executor, 'permission_session') as sql:
             with self.assertRaises(Refused):
@@ -214,6 +214,55 @@ class StagedExecutorTests(unittest.TestCase):
         with self.assertRaises(executor.ExecutionError):
             self.ex.restore(release, 'AFTER')
         self.assertEqual(self.remote.puts, [(7, 'disable')])
+
+    def test_committed_result_with_unpublished_local_suffix_recovers_for_restore_only(self):
+        self.next_run(self.ex.prepare())
+        original_sync = self.ex.checkpoint.sync
+        def lose_result(*args):
+            if self.ex.state == 'session_recorded':
+                self.store.fail = 'before_head'
+            return original_sync(*args)
+        with patch.object(self.ex.checkpoint, 'sync', side_effect=lose_result), \
+                patch.object(executor, 'permission_session', side_effect=self.successful_session) as sql:
+            with self.assertRaises(executor.ExecutionError):
+                self.ex.execute_prepared(None)
+            self.assertEqual(sql.call_count, 1)
+        self.store.fail = None
+        accepted = self.head()
+        pair = cp.sha(snapshot.capture_locked(self.operation, self.pause))
+        self.next_run(accepted)
+        release = executor_tests.Release(self.ex.scope_digest, 'AFTER')
+        with patch.object(executor, 'permission_session') as sql:
+            with self.assertRaisesRegex(Refused, 'RECOVERY_PAIR_CHANGED'):
+                cp.publish_reconciled_session_suffix(self.store, self.ex.scope_digest,
+                    self.operation, self.pause, accepted_head_digest=accepted,
+                    accepted_pair_digest='f'*64, observed_outcome='AFTER', reconciler=release)
+            release.reject = True
+            with self.assertRaises(Exception):
+                cp.publish_reconciled_session_suffix(self.store, self.ex.scope_digest,
+                    self.operation, self.pause, accepted_head_digest=accepted,
+                    accepted_pair_digest=pair, observed_outcome='AFTER', reconciler=release)
+            release.reject = False
+            recovered = cp.publish_reconciled_session_suffix(self.store, self.ex.scope_digest,
+                self.operation, self.pause, accepted_head_digest=accepted,
+                accepted_pair_digest=pair, observed_outcome='AFTER', reconciler=release)
+            self.assertNotEqual(recovered, accepted)
+            self.next_run(recovered)
+            self.ex.restore(executor_tests.Release(self.ex.scope_digest, 'AFTER'), 'AFTER')
+            sql.assert_not_called()
+        self.assertEqual(self.remote.puts, [(7, 'disable'), (7, 'enable')])
+
+    def test_recovery_refuses_pause_suffix(self):
+        self.next_run(self.ex.prepare())
+        accepted = self.head()
+        self.operation.append({'kind': 'SESSION_BOUND', 'run': self.ex.current_run, 'outcome': 'UNKNOWN'})
+        self.pause.append({'kind': 'UNRECONCILED_PAUSE_EFFECT'})
+        pair = cp.sha(snapshot.capture_locked(self.operation, self.pause))
+        with self.assertRaisesRegex(Refused, 'SESSION_SUFFIX_REQUIRED'):
+            cp.publish_reconciled_session_suffix(self.store, self.ex.scope_digest,
+                self.operation, self.pause, accepted_head_digest=accepted,
+                accepted_pair_digest=pair, observed_outcome='BEFORE',
+                reconciler=executor_tests.Release(self.ex.scope_digest, 'BEFORE'))
 
 
 class CheckpointTests(unittest.TestCase):

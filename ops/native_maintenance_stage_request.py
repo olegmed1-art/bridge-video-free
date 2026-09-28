@@ -82,13 +82,16 @@ class AcceptedRequest:
         require(type(assets) is dict and set(assets) == {
             'source_digest', 'manifest_digest', 'baseline_digest', 'envelope_digest'}
             and all(bundle.identifier(v, 64) for v in assets.values()), 'REQUEST_ASSETS')
-        require(type(packet) is dict and set(packet) == {
+        require(type(packet) is dict and set(packet) - {'recovery_pair_digest'} == {
             'version', 'stage', 'scope', 'plan', 'baseline_digest', 'agreement',
             'prior_units', 'accepted_head_digest', 'expected_outcome'}
             and packet['stage'] in ('prepare', 'execute', 'restore')
             and type(packet['scope']) is dict and packet['scope'].get('source') == source
             and packet['scope'].get('manifest_digest') == assets['manifest_digest']
             and packet['baseline_digest'] == assets['baseline_digest'], 'REQUEST_PACKET')
+        require('recovery_pair_digest' not in packet or
+                (packet['stage'] == 'restore' and bundle.identifier(packet['recovery_pair_digest'], 64)),
+                'REQUEST_RECOVERY_PAIR')
         require(('origin_run' not in packet['scope']) if packet['stage'] == 'prepare'
                 else ('origin_run' in packet['scope']), 'REQUEST_ORIGIN')
         self.raw, self.accepted, self.source, self.value = raw, accepted_digest, source, value

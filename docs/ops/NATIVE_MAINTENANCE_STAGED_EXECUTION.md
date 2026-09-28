@@ -48,6 +48,30 @@ If the remote head still precedes PREPARED, the local suffix cannot authorize
 dispatch. An ambiguous SESSION_BOUND/SESSION_INTENT is different: it consumes
 the opportunity, so a recovered bound/intended session is never dispatched.
 
+For a failed execute run with an intact local scope, a separately accepted
+`restore` request may carry `recovery_pair_digest` as well as the independently
+accepted **current remote** `accepted_head_digest`. The read-only failed-stage
+inspection reports the local pair digest and the local/remote relation; its
+report does not approve either digest. The operator must independently accept
+the exact local pair and current remote head, include every locally recorded
+stage unit, and independently establish prior host/backend drain and the
+database's exact BEFORE or AFTER state under the same scoped HOLD. During that
+restore run, the runtime checks both accepted digests, exact remote-prefix and
+local journal equality, a consumed staged session sequence, and no uncheckpointed
+pause-journal changes. It rechecks the database, HOLD and drain immediately
+before and after one conditional checkpoint publication. Only then does it
+continue the normal restore checks; it never calls the permission session.
+Unknown publication results require new read-only reconciliation and new
+acceptance, not replay of the failed restore request.
+
+This bounded path covers a local suffix of `SESSION_BOUND`, `SESSION_INTENT`,
+`SESSION_RESULT` or `SESSION_ERROR` after an acknowledged `PREPARED` head. It
+does not repair a missing/corrupt local journal or claims ledger, a stale or
+forked remote head, a local-only PREPARED event, or an uncheckpointed workflow
+disable/enable or restore suffix. Those remain blocked for separate offline
+recovery. An already acknowledged exact pair continues through ordinary restore
+without the optional field.
+
 Once `SESSION_BOUND` is appended, no entrypoint can rebind or resume the session,
 even if the process stopped before `SESSION_INTENT`. Once intent exists, an
 unknown return never implies rollback. Separate reconciliation/restore remains
