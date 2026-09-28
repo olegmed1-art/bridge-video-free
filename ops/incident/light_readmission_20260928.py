@@ -509,6 +509,60 @@ def inspect_zero_submit(payload,run_guard,psycopg,parameters,credential,intake):
         production_mutations=False)
 
 
+
+def inspect_provider(payload,run_guard,psycopg,parameters,credential,intake):
+    """Read existing Cloud status/diff only; no claim, collection cache or DB RPC."""
+    import subprocess
+    request,prior,protected,pdigest,directory=control.ledger(payload['request_sha256'])
+    require(request.value['source']==SOURCE and request.value['scope']==SCOPE,'READMISSION_INSPECT_SCOPE')
+    def guard():
+        run_guard.assert_running();release.staging.require_current_main(SOURCE)
+        switch.unchanged_files(protected,prior,pdigest)
+    guard()
+    with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+        conn.read_only=True;intake.engine.identity(conn,intake.target())
+        native=intake.one(conn,'SELECT to_jsonb(n) FROM autopilot.native_cli_receipt n WHERE dispatch_id=%s::uuid',(DISPATCH,))
+    require(native['state'] in ('SUBMITTED','TERMINAL') and native['request']['dispatch_id']==DISPATCH
+        and {k:v for k,v in native['request'].items() if k!='reservation_id'}==request.permit_value['dispatch'], 'READMISSION_INSPECT_NATIVE')
+    user=pwd.getpwnam('school-autopilot')
+    def identity():
+        os.setgroups([]);os.setgid(user.pw_gid);os.setuid(user.pw_uid)
+    candidate=control.plan.source_path(SOURCE)
+    result=subprocess.run([release.PYTHON,'-I','-B','-c',INSPECT_PROVIDER_PROGRAM,str(candidate),DISPATCH,release.CLOUD_ENVIRONMENT_ID],
+        cwd=candidate,env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'},preexec_fn=identity,
+        capture_output=True,timeout=65,input=control.canonical(dict(request=native['request'],provider_task_id=native['provider_task_id'])))
+    require(result.returncode==0 and len(result.stdout)<=8192,'READMISSION_INSPECT_PROVIDER')
+    diagnostic=json.loads(result.stdout);guard()
+    return dict(audit='LIGHT_READMISSION_PROVIDER_INSPECTION',request_sha256=payload['request_sha256'],
+        native_state=native['state'],provider_task_id=native['provider_task_id'],diagnostic=diagnostic,production_mutations=False)
+
+
+INSPECT_PROVIDER_PROGRAM = r"""import json,sys,re
+sys.path.insert(0,sys.argv[1])
+from oracle_autopilot import codex_cli_bridge as bridge
+expected=json.loads(sys.stdin.buffer.read(131073))
+binding={'profile':'light','environment_id':sys.argv[3],'repository':'olegmed1-art/bridge-video-free'}
+state_dir=bridge.LIGHT_ROOT/'runtime/codex-dispatch'
+journal=bridge.lookup(expected['request'],state_dir=state_dir,binding=binding)
+assert journal and journal['state']=='SUBMITTED' and journal['provider_task_id']==expected['provider_task_id']
+assert journal['prompt_sha256']==bridge.digest(bridge.prompt_for(expected['request']))
+observations=[]
+def runner(args):
+    assert args in (['cloud','status',expected['provider_task_id']],['cloud','diff',expected['provider_task_id'],'--attempt','1'])
+    result=bridge.run_cli(args,timeout=25,profile='light')
+    marker=result.stdout.partition('\n')[0].partition(']')[0]+']'
+    observations.append(dict(operation=args[1],returncode=result.returncode,
+        marker=marker if marker in ('[READY]','[PENDING]','[RUNNING]','[QUEUED]','[ERROR]','[APPLIED]') else 'UNRECOGNIZED',
+        stdout_bytes=len(result.stdout.encode()),stderr_bytes=len(result.stderr.encode()),
+        stdout_sha256=bridge.digest(result.stdout),stderr_sha256=bridge.digest(result.stderr)))
+    return result
+value=bridge._collect(sys.argv[2],state_dir=state_dir,binding=binding,runner=runner)
+assert value.get('provider_task_id')==expected['provider_task_id']
+assert re.fullmatch('[A-Z][A-Z_]{1,64}',value['state'])
+print(json.dumps(dict(state=value['state'],cli=observations),sort_keys=True))
+"""
+
+
 def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new_raw):
     require(control.digest(old_raw)==OLD_PACKAGE and control.digest(new_raw)==PACKAGE,'REENTRY_PACKAGES')
     require(control.digest(payload_raw)==accepted,'REENTRY_PAYLOAD')
@@ -516,7 +570,7 @@ def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new
     action=payload.get('action')
     shapes={'prepare-continuation':{'action','agreement','accepted_agreement_sha256'},
         'authorize':{'action','agreement','accepted_agreement_sha256','baseline_sha256'},
-        'terminal':{'action','request_sha256'},'inspect-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-unreserved':{'action','baseline_sha256','request_sha256','claim_inventory_sha256'},'restore-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-controls':{'action','request_sha256','terminal_sha256'}}
+        'terminal':{'action','request_sha256'},'inspect-provider':{'action','request_sha256'},'inspect-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-unreserved':{'action','baseline_sha256','request_sha256','claim_inventory_sha256'},'restore-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-controls':{'action','request_sha256','terminal_sha256'}}
     require(action in shapes and set(payload)==shapes[action],'REENTRY_ACTION')
     package=control.verified_package(old_raw,OLD_SOURCE,OLD_PACKAGE) if action=='prepare-continuation' else control.verified_package(new_raw,SOURCE,PACKAGE)
     if action=='prepare-continuation':
@@ -531,6 +585,7 @@ def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new
         api=API(token)
         if action=='prepare-continuation':return prepare_continuation(package,payload,agreement,run_guard,psycopg,parameters,credential,intake,api,owner)
         if action=='authorize':return authorize(payload,payload_raw,agreement,run_guard,psycopg,parameters,credential,intake,api,owner)
+        if action=='inspect-provider':return inspect_provider(payload,run_guard,psycopg,parameters,credential,intake)
         if action=='inspect-zero-submit':return inspect_zero_submit(payload,run_guard,psycopg,parameters,credential,intake)
         if action in ('restore-zero-submit','restore-unreserved'):return restore_zero_submit(payload,payload_raw,run_guard,psycopg,parameters,credential,intake)
         if action=='terminal':return terminal(payload,run_guard,psycopg,parameters,credential,intake,owner,api)

@@ -31,7 +31,7 @@ def test_archive_refuses_links(tmp_path):
     with pytest.raises(RuntimeError,match='REENTRY_INVENTORY_TYPE'):target.inventory(source)
 
 
-@pytest.mark.parametrize('action',['prepare-continuation','authorize','terminal','restore-controls','restore-zero-submit','inspect-zero-submit','restore-unreserved'])
+@pytest.mark.parametrize('action',['prepare-continuation','authorize','terminal','restore-controls','restore-zero-submit','inspect-zero-submit','restore-unreserved','inspect-provider'])
 def test_runner_bootstrap_selects_exact_old_or_new_namespace(monkeypatch,action):
     payload=json.dumps({'action':action}).encode()
     selected=runner.PACKAGE if action=='prepare-continuation' else target.PACKAGE
@@ -403,3 +403,29 @@ def test_terminal_cleanup_restores_deadline_preserves_terminal_and_fence(tmp_pat
         assert state['config']==before['config'] and state['role']['can_repair'] is True
         assert state['outbox']==dict(initial['outbox'],delivery_deadline_at='original',updated_at='restored')
     assert c.strict_json(c.read(root/'legacy-send-fence.json'),65536)==fence
+
+
+@pytest.mark.parametrize('marker,state',[('[PENDING]','WAITING_PROVIDER'),('[APPLIED]','PROVIDER_STATUS_UNKNOWN'),('[READY]','RESULT_RETRIEVED')])
+def test_provider_inspection_executes_only_bound_reads(monkeypatch,capsys,marker,state):
+    import io,sys
+    from oracle_autopilot import codex_cli_bridge as bridge
+    expected={'request':{'dispatch_id':target.DISPATCH},'provider_task_id':'task_e_bound'}
+    monkeypatch.setattr(sys,'argv',['probe',str(REPO),target.DISPATCH,'environment'])
+    monkeypatch.setattr(sys,'stdin',SimpleNamespace(buffer=io.BytesIO(json.dumps(expected).encode())))
+    monkeypatch.setattr(bridge,'prompt_for',lambda request:'prompt')
+    monkeypatch.setattr(bridge,'lookup',lambda *a,**kw:dict(state='SUBMITTED',provider_task_id='task_e_bound',prompt_sha256=bridge.digest('prompt')))
+    calls=[]
+    def run(args,**kw):
+        calls.append(args)
+        return SimpleNamespace(returncode=0 if marker=='[READY]' else 1,stdout=marker+' safe title\nprivate body',stderr='private error')
+    monkeypatch.setattr(bridge,'run_cli',run)
+    def collect(dispatch_id,**kw):
+        kw['runner'](['cloud','status','task_e_bound'])
+        if marker=='[READY]':kw['runner'](['cloud','diff','task_e_bound','--attempt','1'])
+        return {'state':state,'provider_task_id':'task_e_bound'}
+    monkeypatch.setattr(bridge,'_collect',collect)
+    exec(compile(target.INSPECT_PROVIDER_PROGRAM,'<provider-inspection>','exec'),{})
+    raw=capsys.readouterr().out;value=json.loads(raw)
+    assert value['state']==state and value['cli'][0]['marker']==marker
+    assert 'private body' not in raw and 'private error' not in raw
+    assert calls==[['cloud','status','task_e_bound']]+([['cloud','diff','task_e_bound','--attempt','1']] if marker=='[READY]' else [])
