@@ -792,7 +792,7 @@ sys.path.insert(0,sys.argv[1])
 import psycopg
 from oracle_autopilot.light_native_loader import runtime_parameters,runtime_identity
 v=json.loads(sys.stdin.buffer.read(131073))
-with psycopg.connect(**runtime_parameters(os.environ['AUTOPILOT_DATABASE_URL']),autocommit=True) as conn:
+with psycopg.connect(**runtime_parameters(os.environ['AUTOPILOT_DATABASE_URL'])) as conn:
  runtime_identity(conn)
  conn.execute("SET statement_timeout='20s'")
  definition=conn.execute("SELECT pg_get_functiondef('autopilot.native_cli_finish(jsonb,text,jsonb)'::regprocedure)").fetchone()[0]

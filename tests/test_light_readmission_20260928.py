@@ -628,7 +628,7 @@ def test_finish_child_uses_only_original_finish_rpc(monkeypatch,capsys,fault):
     monkeypatch.setattr(sys,'argv',['program','/reviewed/candidate']);monkeypatch.setenv('AUTOPILOT_DATABASE_URL','worker-only')
     monkeypatch.setattr(sys,'path',list(sys.path))
     monkeypatch.setitem(sys.modules,'psycopg',SimpleNamespace(connect=lambda **kw:Conn()))
-    monkeypatch.setattr(light_native_loader,'runtime_parameters',lambda raw: {'dsn':raw} if raw=='worker-only' else pytest.fail('wrong credential'))
+    monkeypatch.setattr(light_native_loader,'runtime_parameters',lambda raw: {'dsn':raw,'autocommit':True} if raw=='worker-only' else pytest.fail('wrong credential'))
     monkeypatch.setattr(light_native_loader,'runtime_identity',lambda conn:None)
     monkeypatch.setattr(hashlib,'sha256',lambda *a:SimpleNamespace(hexdigest=lambda:'bad' if fault=='function_drift' else '8b3882bf0955a7aab1c0f76cc9c5a8269452b7d1aa0f6f99f8d7feaf2b7deb26'))
     if fault:
