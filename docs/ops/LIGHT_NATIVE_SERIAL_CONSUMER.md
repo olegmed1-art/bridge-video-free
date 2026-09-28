@@ -135,3 +135,15 @@ no prior invocation/PID and empty cgroup, before the dormant rehearsal. It does
 not restage, overwrite the unit, or clear prior evidence. Retained observe/stop
 use the same old runtime with fresh current-controller source checks. Any
 already-started or partially rehearsed installation refuses completion replay.
+
+Read-only inspection subsequently identified exact legacy fingerprint drift.
+A retained completion may now prove one narrow equivalence: rebuild only the
+reset ExecStart accounting start_time and pid from current ExecMain properties,
+then apply the original canonical fingerprint formula to every live service
+field and live ENV/pins/route/drop hash. The rebuilt SHA must exactly equal the
+original private retained fingerprint. No baseline is replaced, no credential
+hash is ignored, and there is no timestamp search. Inspect emits only the
+boolean result without writing. Completion retains a create-only private proof
+and repeats full live attestation plus the same proof before each start and
+receipt write. Any mismatch still refuses and preserves the original evidence.
+This proof must succeed on the actual host before a completion is dispatched.

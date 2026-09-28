@@ -190,10 +190,11 @@ def test_explicit_reentry_preserves_original_source_and_refuses_uncertain_state(
         changed=json.loads(before);changed['legacy_hold']['fingerprint']='changed'
         before=target.release.encoded(changed)
         (target.LEDGER/'before.json').write_bytes(before)
+        monkeypatch.setattr(target,'prove_reload_equivalence',Mock(side_effect=RuntimeError('LANE_INSTALL_RELOAD_NOT_EQUIVALENT')))
     elif fault=='start-failure':monkeypatch.setattr(target,'await_hold',Mock(side_effect=RuntimeError('injected')))
     events.clear()
     if fault:
-        with pytest.raises(RuntimeError,match='LEGACY_FINGERPRINT_CHANGED' if fault=='fingerprint' else None):
+        with pytest.raises(RuntimeError,match='RELOAD_NOT_EQUIVALENT' if fault=='fingerprint' else None):
             target.operation(bundle,SOURCE,'complete-hold',controller_source='d'*40)
         if fault!='start-failure':assert not any('start' in event for event in events)
         else:assert events[-2:]==[('/usr/bin/systemctl','stop',target.UNIT),'drained']
@@ -237,3 +238,62 @@ def test_refusal_diagnostics_never_emit_arbitrary_exception_text(tmp_path,capsys
         output=capsys.readouterr().out
         assert 'private-secret' not in output
         assert json.loads(output)['code']==('LANE_INSTALL_PRIOR_CHANGED' if code.startswith('LANE_') else 'UNCLASSIFIED')
+
+
+@pytest.mark.parametrize('fault',[None,'credential','command','timestamp','pid','metadata'])
+def test_reload_proof_requires_exact_original_hash_with_only_two_accounting_fields(monkeypatch,fault):
+    from dataclasses import asdict
+    prior=target.hold.HoldIdentity('autopilot-lite-vnic',123,'a'*32,'/release','live-fingerprint')
+    tail=' ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }'
+    command='{ path=/python ; argv[]=/python -m worker ; ignore_errors=no'
+    current={'ExecStart':command+tail,'InvocationID':'a'*32,'MainPID':'123','Environment':'HOLD'}
+    running={'ExecMainPID':'123','ExecMainStartTimestamp':'Mon 2026-09-28 17:38:55 UTC'}
+    original={**current,'ExecStart':command+' ; start_time=['+running['ExecMainStartTimestamp']+'] ; stop_time=[n/a] ; pid=123 ; code=(null) ; status=0/0 }'}
+    digest=lambda raw:hashlib.sha256(raw).hexdigest()
+    fields=dict(service=original,environment=digest(b'env'),pins=digest(b'pins'),route=digest(b'route'),drop=digest(b'drop'))
+    recorded={**asdict(prior),'fingerprint':digest(target.release.encoded(fields))}
+    values={target.hold.ENV:b'env',Path(prior.release)/'ops/autopilot/broker-hold.env':b'pins',
+            target.hold.ROUTE/'route.json':b'route',target.hold.DROP:b'drop'}
+    monkeypatch.setattr(target.hold,'service',lambda:dict(current))
+    monkeypatch.setattr(target.hold,'service_hold_identity',lambda:prior)
+    monkeypatch.setattr(target.hold,'read',lambda path,*args:values[path])
+    monkeypatch.setattr(target.switch,'show',lambda *args:running)
+    if fault=='credential':values[target.hold.ENV]=b'changed secret'
+    elif fault=='command':current['ExecStart']=current['ExecStart'].replace('-m worker','-m other')
+    elif fault=='timestamp':running['ExecMainStartTimestamp']='Mon 2026-09-28 17:38:56 UTC'
+    elif fault=='pid':running['ExecMainPID']='124'
+    elif fault=='metadata':current['Environment']='ACTIVE'
+    if fault:
+        with pytest.raises(RuntimeError):target.prove_reload_equivalence(prior,recorded)
+    else:
+        proof=target.prove_reload_equivalence(prior,recorded)
+        assert proof['original_fingerprint']==recorded['fingerprint']
+        assert proof['live_fingerprint']==prior.fingerprint
+        assert proof['kind']=='EXACT_EXECSTART_ACCOUNTING_RECONSTRUCTION'
+
+
+@pytest.mark.skipif(os.geteuid()!=0,reason='real root-owned retained state')
+def test_reload_equivalent_inspect_writes_nothing_and_completion_rechecks_proof(tmp_path,monkeypatch):
+    import json
+    events=installation(tmp_path,monkeypatch,None)
+    monkeypatch.setattr(target,'verify_config',Mock(side_effect=RuntimeError('first attempt refused')))
+    bundle=value()
+    with pytest.raises(RuntimeError):target.operation(bundle,SOURCE,'install-hold')
+    before=json.loads((target.LEDGER/'before.json').read_bytes())
+    before['legacy_hold']['fingerprint']='original-fingerprint'
+    (target.LEDGER/'before.json').write_bytes(target.release.encoded(before))
+    monkeypatch.setattr(target,'verify_config',lambda *args:None)
+    monkeypatch.setattr(target.release.staging,'verify_release',lambda *args:None)
+    monkeypatch.setattr(target,'RETAINED_SOURCE',SOURCE)
+    monkeypatch.setattr(target,'show',lambda *args:dict(InvocationID='',ExecMainPID='0',MainPID='0',ControlPID='0',ActiveState='inactive'))
+    proof=Mock(return_value=dict(version=1,kind='fixture',evidence_sha256='f'*64))
+    monkeypatch.setattr(target,'prove_reload_equivalence',proof)
+    events.clear()
+    result=target.operation(bundle,SOURCE,'inspect-hold',controller_source='d'*40)
+    assert result['legacy_reload_equivalent'] is True and events==['drained']
+    assert set(os.listdir(target.LEDGER))=={'before.json'}
+    count=proof.call_count
+    result=target.operation(bundle,SOURCE,'complete-hold',controller_source='d'*40)
+    assert result['state']=='HOLD' and proof.call_count>=count+5
+    assert (target.LEDGER/'legacy-reload-proof.json').stat().st_mode & 0o777==0o600
+    assert json.loads((target.LEDGER/'before.json').read_bytes())==before
