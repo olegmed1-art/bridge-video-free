@@ -604,6 +604,47 @@ class LauncherBudgetTests(unittest.TestCase):
         self.assertEqual(launcher.failure_code(RuntimeError('RUN_BINDING_EXPIRED')),'RUN_BINDING_EXPIRED')
         self.assertEqual(launcher.failure_code(RuntimeError('postgresql://secret')),'REFUSED')
         self.assertEqual(launcher.failure_code(subprocess.TimeoutExpired('secret-command',1)),'PROCESS_TIMEOUT')
+        for code in ('API_RESPONSE_INCOMPLETE', 'CHECKPOINT_BUDGET_REFUSED', 'RPC_ARCHIVE_BINDING'):
+            self.assertEqual(launcher.failure_code(RuntimeError(code)), code)
+            self.assertEqual(launcher.failure_code(RuntimeError(code + ': private payload')), 'REFUSED')
+        self.assertEqual(launcher.failure_code(TimeoutError('private endpoint')), 'TRANSPORT_TIMEOUT')
+        self.assertEqual(launcher.failure_code(launcher.http.client.RemoteDisconnected('private endpoint')),
+                         'TRANSPORT_FAILURE')
+
+    def test_validated_rpc_refusal_preserves_poison_and_redacts_payload(self):
+        scope, binding = 'a'*64, 'b'*64
+        channel = SimpleNamespace(binding=binding, alive=Mock(), send=Mock(), failed=False)
+        store = Mock()
+        failure = RuntimeError('CHECKPOINT_CAS_CONFLICT')
+        store.compare_head.side_effect = failure
+        server = launcher.ObservedStoreServer(channel, scope, store, Mock())
+        head = encoded(dict(version=1, scope_digest=scope, sequence=1, previous=None, archive_digest='c'*64))
+        record = dict(version=1, binding=binding, scope=scope, sequence=1,
+                      method='compare_head', args=[None, launcher.rpc.pack(head)])
+        with patch.object(launcher, 'REFUSAL_RPC', None):
+            with self.assertRaises(RuntimeError) as caught:
+                server.accept(record)
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(launcher.REFUSAL_RPC, dict(operation='compare_head', sequence=1))
+            self.assertTrue(server.failed)
+            self.assertTrue(channel.failed)
+            channel.send.assert_not_called()
+            with self.assertRaisesRegex(Exception, 'RPC_SERVER_UNAVAILABLE'):
+                server.accept(record)
+            store.compare_head.assert_called_once()
+
+    def test_invalid_rpc_fields_never_enter_refusal_context(self):
+        channel = SimpleNamespace(binding='b'*64, alive=Mock(), send=Mock(), failed=False)
+        store = Mock()
+        server = launcher.ObservedStoreServer(channel, 'a'*64, store, Mock())
+        with patch.object(launcher, 'REFUSAL_RPC', None):
+            with self.assertRaisesRegex(Exception, 'RPC_REQUEST_IDENTITY'):
+                server.accept(dict(version=1, binding='b'*64, scope='a'*64, sequence='private',
+                                   method='private endpoint', args=['private payload']))
+            self.assertIsNone(launcher.REFUSAL_RPC)
+            self.assertTrue(server.failed)
+            channel.send.assert_not_called()
+            self.assertEqual(store.mock_calls, [])
 
     def test_extended_launcher_binding_cannot_enter_host_executor(self):
         value,manifest=request_fixture()

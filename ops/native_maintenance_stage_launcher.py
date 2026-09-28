@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import threading
+import http.client
 from contextlib import contextmanager
 
 from ops import native_maintenance_bundle as bundle
@@ -31,6 +32,20 @@ from ops.native_maintenance_budgets import STAGE_LAUNCHER_SECONDS, STAGE_PRELAUN
 PHASE = 'startup'
 RUN_STARTED = None
 PROFILE = None
+REFUSAL_RPC = None
+
+
+class ObservedStoreServer(rpc.StoreServer):
+    """Remember only validated RPC metadata if its dispatch refuses."""
+    def _dispatch(self, method, args):
+        global REFUSAL_RPC
+        try:
+            return super()._dispatch(method, args)
+        except BaseException:
+            # StoreServer.accept validates both fields before calling _dispatch.
+            if type(method) is str and method in rpc.METHODS and type(self.sequence) is int and 1 <= self.sequence <= 128:
+                REFUSAL_RPC = dict(operation=method, sequence=self.sequence)
+            raise
 
 
 class TimingProfile:
@@ -117,11 +132,34 @@ SAFE_REFUSALS = frozenset(('STAGE_READY_BINDING','STAGE_STARTUP_TOO_SLOW','STAGE
     'RUN_BINDING_EXPIRED_OR_UNOBSERVED','RUN_NOT_RUNNING','JOB_NOT_RUNNING','MAIN_CHANGED',
     'WORKFLOW_CONTRACT_CHANGED','RPC_EXPIRED','RPC_TIMEOUT','RPC_EOF','RPC_UNAVAILABLE',
     'CANDIDATE_HOST_REFUSED','LAUNCHER_HOST_REFUSED','LAUNCHER_REQUEST_READ',
-    'LAUNCHER_INSUFFICIENT_REMAINING'))
+    'LAUNCHER_INSUFFICIENT_REMAINING',
+    'API_TRANSPORT_FAILED','API_LANE_TIMEOUT','API_RESPONSE_INCOMPLETE',
+    'API_RESPONSE_SIZE','API_RESPONSE_TRUNCATED','API_RESPONSE_UNCONSUMED',
+    'WORKFLOW_BLOB_INVALID','JOB_SET_CHANGED','JOB_IDENTITY_CHANGED',
+    'PREREQUISITE_JOB_FAILED','JOB_ID_CHANGED',
+    'RPC_ARCHIVE_BINDING','RPC_ARGUMENTS','RPC_REVISION','RPC_REQUEST_IDENTITY',
+    'RPC_ARCHIVE_RESPONSE','RPC_HEAD_REVISION','RPC_BYTES_SIZE','RPC_ENCODING',
+    'CHECKPOINT_ARCHIVE_INVALID','CHECKPOINT_ARCHIVE_MISSING_OR_CORRUPT',
+    'CHECKPOINT_BUCKET_REFUSED','CHECKPOINT_BUDGET_INCOMPLETE','CHECKPOINT_BUDGET_REFUSED',
+    'CHECKPOINT_CAS_CONFLICT','CHECKPOINT_DOWNLOAD_OVERSIZE','CHECKPOINT_DOWNLOAD_SIZE',
+    'CHECKPOINT_DOWNLOAD_TRUNCATED','CHECKPOINT_DOWNLOAD_TYPE','CHECKPOINT_DUPLICATE_BUCKET',
+    'CHECKPOINT_ETAG','CHECKPOINT_HEAD_NOT_SUCCESSOR','CHECKPOINT_IMMUTABLE_CONFLICT',
+    'CHECKPOINT_INITIAL_SEQUENCE','CHECKPOINT_LIFECYCLE_REFUSED','CHECKPOINT_OBJECT_INVALID',
+    'CHECKPOINT_PAGINATION_LOOP','CHECKPOINT_PUBLIC_OR_REPLICATED','CHECKPOINT_REGISTRATION_ACK',
+    'CHECKPOINT_REGISTRATION_CHANGED','CHECKPOINT_REGISTRY_HEAD_INCOMPLETE',
+    'CHECKPOINT_HEAD_INVALID','OCI_CHECKPOINT_ALREADY_FAILED'))
 
 def failure_code(exc):
     code = exc.args[0] if len(exc.args)==1 and type(exc.args[0]) is str else None
-    return code if code in SAFE_REFUSALS else ('PROCESS_TIMEOUT' if isinstance(exc,subprocess.TimeoutExpired) else 'REFUSED')
+    if code in SAFE_REFUSALS:
+        return code
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return 'PROCESS_TIMEOUT'
+    if isinstance(exc, TimeoutError):
+        return 'TRANSPORT_TIMEOUT'
+    if isinstance(exc, (ConnectionError, http.client.HTTPException)):
+        return 'TRANSPORT_FAILURE'
+    return 'REFUSED'
 
 def timing():
     result = dict(binding_elapsed_ms=None if RUN_STARTED is None else int((time.monotonic()-RUN_STARTED)*1000),
@@ -389,8 +427,9 @@ def main(mode):
 
 
 def _main(mode, transports):
-    global PHASE, RUN_STARTED, PROFILE
+    global PHASE, RUN_STARTED, PROFILE, REFUSAL_RPC
     PROFILE = TimingProfile()
+    REFUSAL_RPC = None
     require(len(sys.argv) == 5 and sys.argv[1] == mode, 'LAUNCHER_ARGS')
     cls, source, accepted = context(mode)
     source_guard()
@@ -499,7 +538,7 @@ def _main(mode, transports):
             if request is not None: request.assert_current()
             channel.alive()
         store = MeasuredStore(client,namespace,guard)
-        server = rpc.StoreServer(channel,scope,store,channel.alive)
+        server = ObservedStoreServer(channel,scope,store,channel.alive)
         units = UnitServer(channel,Retainer(store,expected)) if packet is not None else None
         def startup_guard():
             guard()
@@ -597,5 +636,6 @@ if __name__ == '__main__':
         require(len(sys.argv) > 1 and sys.argv[1] in ('stage','rehearsal'), 'LAUNCHER_ARGS')
         main(sys.argv[1])
     except BaseException as exc:
-        print(json.dumps(dict(audit='NATIVE_LAUNCHER_REFUSED',phase=PHASE,code=failure_code(exc),**timing())))
+        print(json.dumps(dict(audit='NATIVE_LAUNCHER_REFUSED',phase=PHASE,code=failure_code(exc),
+                              rpc=REFUSAL_RPC,**timing())))
         raise SystemExit(2) from None
