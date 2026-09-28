@@ -110,7 +110,7 @@ def validate_report(raw, returncode, binding):
     bundle.check(type(value) is dict and all(type(value.get(k)) is type(v) and value[k] == v
                   for k, v in expected.items()), 'PROBE_REPORT_BINDING')
     phases = {'input','source_bundle','driver','request','source_and_failed_run','hold',
-              'workflow_drain','prior_host_drain','owner_backend_drain','after_snapshot','continuity','supervisor','supervisor_final','complete'}
+              'journal_gate','workflow_drain','prior_host_drain','owner_backend_drain','after_snapshot','continuity','supervisor','supervisor_final','complete'}
     if value.get('status') == 'PASS':
         bundle.check(set(value) == keys and value['phase'] == 'complete' and returncode == 0,
                      'PROBE_REPORT_PASS')

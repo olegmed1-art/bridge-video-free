@@ -1,6 +1,7 @@
 """Offline safety/compatibility tests; never connect to Oracle, GitHub or Neon."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -162,7 +163,8 @@ with p.source_runtime(raw) as root:
                 modules[names[9]].EXPECTED_TARGET = target
                 conn = Connection()
                 conn.transaction = lambda: nullcontext()
-                with patch.dict(sys.modules, modules), patch.object(probe, 'source_origins'):
+                with patch.dict(sys.modules, modules), patch.object(probe, 'source_origins'), \
+                        patch.object(probe, 'observed_journals', return_value=nullcontext()):
                     if failing:
                         with self.assertRaisesRegex(RuntimeError, '^synthetic$'):
                             probe.observe(lambda **_: conn, 'secret', 'token', ROOT)
@@ -171,6 +173,74 @@ with p.source_runtime(raw) as root:
                 self.assertEqual(probe.PHASE, expected_phase)
                 sequence = ['workflow', 'prior', 'backend', 'snapshot']
                 self.assertEqual(events, sequence if failing is None else sequence[:sequence.index(failing)+1])
+
+    def test_recorded_runs_require_exact_identity(self):
+        origin = dict(run_id=1, attempt=1, job_id=10)
+        execute = dict(run_id=2, attempt=1, job_id=20)
+        scope = {'origin_run': origin}
+        priors = [{'run': origin}, {'run': execute}]
+        journal = types.SimpleNamespace(records=[{'event': dict(kind='BOUND', scope=scope)},
+            {'event': dict(kind='PREPARED', run=origin)},
+            {'event': dict(kind='SESSION_RESULT', run=execute)}])
+        probe.recorded_hosts(journal, scope, priors)
+        journal.records[-1]['event']['run'] = {**execute, 'job_id': 21}
+        with self.assertRaisesRegex(RuntimeError, '^RUNTIME_RECORDED_HOST_OMITTED$'):
+            probe.recorded_hosts(journal, scope, priors)
+        journal.records[0]['event']['scope'] = {'changed': True}
+        with self.assertRaisesRegex(RuntimeError, '^RUNTIME_BOUND_JOURNAL$'):
+            probe.recorded_hosts(journal, scope, priors)
+
+    def test_journal_observation_never_creates_or_changes_files(self):
+        from ops import native_maintenance_store as storage
+        from ops import native_maintenance_snapshot as snapshot
+        from ops import native_maintenance_stage_inspect as inspector
+        from ops.native_maintenance_workflow_pause import Journal, encoded
+        origin = dict(run_id=1, attempt=1, job_id=10)
+        other = dict(run_id=2, attempt=1, job_id=20)
+        scope = {'origin_run': origin}
+        packet = dict(stage='restore', scope=scope, prior_units=[{'run': origin}, {'run': other}])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'store'; root.mkdir(mode=0o700)
+            base = root / probe.SCOPE; base.mkdir(mode=0o700)
+            for name in ('operation', 'pause', 'units'):
+                (base / name).mkdir(mode=0o700)
+            for path, raw in ((root / 'VERSION', storage.VERSION), (root / 'lock', b''),
+                              (base / 'manifest.json', b'manifest')):
+                path.write_bytes(raw); path.chmod(0o600)
+            for row in packet['prior_units']:
+                path = base / 'units' / (str(row['run']['run_id']) + '-1.json')
+                path.write_bytes(encoded(row)); path.chmod(0o600)
+            with Journal(base / 'operation') as op:
+                op.append(dict(kind='BOUND', scope=scope))
+                op.append(dict(kind='SESSION_RESULT', run=other))
+            with Journal(base / 'pause'):
+                pass
+            def inventory():
+                return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            # Local fixture is not a production trusted mount. Retain real Journal
+            # opening/flocking/validation, substitute only storage trust and pair parsing.
+            with patch.object(storage, 'PARENT', Path(tmp)), patch.object(storage, 'NAME', 'store'), \
+                    patch.object(storage, 'trusted_parent'), patch.object(storage, 'persistent_mount'), \
+                    patch.object(storage, 'private_directory', side_effect=lambda p: p.lstat()), \
+                    patch.object(storage, 'open_file', side_effect=lambda fd,n,f: os.open(n,f|os.O_NOFOLLOW,dir_fd=fd)), \
+                    patch.object(inspector, 'private_read', side_effect=lambda p,n: p.read_bytes()), \
+                    patch.object(probe, 'MANIFEST', probe.digest(b'manifest')), \
+                    patch.object(probe, 'PAIR', probe.digest(b'pair')), \
+                    patch.object(snapshot, 'capture_locked', return_value=b'pair'):
+                before = inventory()
+                with probe.observed_journals(packet):
+                    self.assertEqual(inventory(), before)
+                self.assertEqual(inventory(), before)
+                (base / 'pause' / 'lock').unlink()
+                before = inventory()
+                with self.assertRaises(FileNotFoundError):
+                    with probe.observed_journals(packet):
+                        self.fail('missing lock accepted')
+                self.assertEqual(inventory(), before)
+                self.assertFalse((base / 'pause' / 'lock').exists())
+                # First journal lock is released even when second journal fails.
+                with Journal(base / 'operation', create_lock=False):
+                    pass
 
     def test_cli_requires_isolation_before_any_live_access(self):
         result = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True,

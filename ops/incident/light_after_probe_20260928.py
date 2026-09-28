@@ -6,6 +6,7 @@ file does not supply that transport or authorize its own execution. See runbook.
 import argparse
 import base64
 from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -20,8 +21,11 @@ REQUEST = '01112f4599bd21c72e29dc5f890d9d538d39fa7976e17c26b674b258a40f043a'
 SCOPE = 'c0795e9e1533c3baf554a0d785b303180d8bf6771d07e6d98e5f67f0b96ef542'
 AFTER = '51e06db1da9d9b768e50cb18de89a75fce0ded7b33a034bb3852c6ecb8f38d12'
 FAILED_RUN = dict(run_id=36388443245, attempt=1, job_id=108818853655)
+MANIFEST = '91a9d04575ad5ec0923a9eedfc7881c698040377c6be351fe5acb61fc3a61706'
+PAIR = '9d427c665d3248b6b8d8ee730e8acf2a5539ae65499576c8075f2e35b59ec99a'
 PHASE = 'input'
-CODES = frozenset(('PROBE_SOURCE', 'PROBE_ISOLATION', 'PROBE_INPUT', 'PROBE_HOST',
+CODES = frozenset(('PROBE_STORE', 'PROBE_MANIFEST', 'PROBE_PRIORS', 'PROBE_PAIR',
+    'RUNTIME_BOUND_JOURNAL', 'RUNTIME_RECORDED_HOST_OMITTED', 'PROBE_SOURCE', 'PROBE_ISOLATION', 'PROBE_INPUT', 'PROBE_HOST',
     'PROBE_REQUEST', 'PROBE_HOLD', 'PROBE_AFTER', 'PROBE_READ_ONLY', 'PROBE_TIMEOUT',
     'WORKFLOW_SOURCE_CHANGED', 'WORKFLOW_NOT_DRAINED', 'INSPECT_FAILED_RUN',
     'INSPECT_FAILED_JOB', 'DATABASE_NOT_DRAINED', 'DATABASE_ACTIVITY_INCOMPLETE',
@@ -98,6 +102,66 @@ def readonly_connection(connect, kwargs):
         yield conn
 
 
+
+def recorded_hosts(operation, scope, priors):
+    require(operation.records and operation.records[0]['event'] ==
+            dict(kind='BOUND', scope=scope), 'RUNTIME_BOUND_JOURNAL')
+    identities = [scope['origin_run']] + [row['event']['run'] for row in operation.records[1:]]
+    require(all(any(prior['run'] == identity for prior in priors) for identity in identities),
+            'RUNTIME_RECORDED_HOST_OMITTED')
+
+
+@contextmanager
+def observed_journals(packet):
+    """Inspector-style reads only; never runtime.locked_scope or a stage packet."""
+    from ops import native_maintenance_store as storage
+    from ops import native_maintenance_snapshot as snapshot
+    from ops.native_maintenance_stage_inspect import private_read
+    from ops.native_maintenance_workflow_pause import Journal, encoded, unique
+
+    require(packet['stage'] == 'restore', 'PROBE_REQUEST')
+    root = storage.PARENT / storage.NAME
+    storage.trusted_parent(root.parent)
+    info = storage.private_directory(root)
+    storage.persistent_mount(root)
+    parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    lock = None
+    try:
+        require((os.fstat(parent).st_dev, os.fstat(parent).st_ino) ==
+                (info.st_dev, info.st_ino), 'PROBE_STORE')
+        lock = storage.open_file(parent, 'lock', os.O_RDWR)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        require(private_read(root / 'VERSION', 256) == storage.VERSION, 'PROBE_STORE')
+        base = root / SCOPE
+        base_info = storage.private_directory(base)
+        require(set(os.listdir(base)) == {'operation', 'pause', 'units', 'manifest.json'},
+                'PROBE_STORE')
+        require(digest(private_read(base / 'manifest.json', 4 * 1024 * 1024)) == MANIFEST,
+                'PROBE_MANIFEST')
+        units = base / 'units'
+        units_info = storage.private_directory(units)
+        expected = {str(r['run']['run_id']) + '-' + str(r['run']['attempt']) + '.json': r
+                    for r in packet['prior_units']}
+        require(len(expected) == len(packet['prior_units']) == 2
+                and set(os.listdir(units)) == set(expected), 'PROBE_PRIORS')
+        for name, row in expected.items():
+            raw = private_read(units / name, 4096)
+            require(raw == encoded(row) and json.loads(raw, object_pairs_hook=unique) == row,
+                    'PROBE_PRIORS')
+        with Journal(base / 'operation', create_lock=False) as operation, \
+                Journal(base / 'pause', create_lock=False) as pause:
+            recorded_hosts(operation, packet['scope'], packet['prior_units'])
+            require(digest(snapshot.capture_locked(operation, pause)) == PAIR, 'PROBE_PAIR')
+            yield
+            require(digest(snapshot.capture_locked(operation, pause)) == PAIR, 'PROBE_PAIR')
+        for path, before in ((root, info), (base, base_info), (units, units_info)):
+            after = storage.private_directory(path)
+            require((after.st_dev, after.st_ino) == (before.st_dev, before.st_ino), 'PROBE_STORE')
+    finally:
+        if lock is not None:
+            os.close(lock)
+        os.close(parent)
+
 def observe(connect, credential, token, root):
     global PHASE
     from database import native_cli_permission_engine as engine
@@ -126,7 +190,8 @@ def observe(connect, credential, token, root):
     def connect_ro():
         return readonly_connection(connect, kwargs)
     evidence = dict(failed_run=FAILED_RUN, failed_source=SOURCE)
-    with PersistentAPI(token) as api:
+    PHASE = 'journal_gate'
+    with observed_journals(packet), PersistentAPI(token) as api:
         transport = Transport(token, read_api=api)
         PHASE = 'source_and_failed_run'
         source_matches(transport, SOURCE)
