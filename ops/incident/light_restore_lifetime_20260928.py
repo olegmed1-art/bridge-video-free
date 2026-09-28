@@ -60,6 +60,7 @@ def command(unit, code):
     require(re.fullmatch(UNIT, unit) and type(code) is str and 0 < len(code.encode()) <= 120000,
             'INCIDENT_UNIT_COMMAND')
     return ['/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--unit=' + unit,
+            '--description=Light incident restore AFTER',
             '--service-type=exec', '--expand-environment=no',
             '--property=ExitType=main', '--property=KillMode=control-group',
             '--property=SendSIGKILL=yes', '--property=TimeoutStopSec=2s',
@@ -145,15 +146,15 @@ class Supervisor:
         self.assert_alive()
         result = ctl('list-units', 'bridge-native-ro-*', '--all', '--plain', '--no-legend', '--no-pager')
         require(result.returncode == 0 and len(result.stdout) <= 65536,
-                'INCIDENT_UNIT_INVENTORY')
+                'INCIDENT_UNIT_INVENTORY_QUERY')
         names = []
         for line in result.stdout.decode('ascii').splitlines():
             fields = line.split()
             require(len(fields) >= 4 and re.fullmatch(UNIT, fields[0]),
-                    'INCIDENT_UNIT_INVENTORY')
+                    'INCIDENT_UNIT_INVENTORY_ROW')
             names.append(fields[0])
         require(self.unit in names and len(names) <= 128 and len(names) == len(set(names)),
-                'INCIDENT_UNIT_INVENTORY')
+                'INCIDENT_UNIT_INVENTORY_INCOMPLETE')
         groups = list(Path('/sys/fs/cgroup/system.slice').iterdir())
         require(len(groups) <= 4096, 'INCIDENT_CGROUP_INVENTORY')
         matching = [group for group in groups if group.name.startswith('bridge-native-ro-')]

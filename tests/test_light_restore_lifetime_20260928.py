@@ -2,6 +2,7 @@
 import os
 import subprocess
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from ops.incident import light_restore_lifetime_20260928 as life
@@ -16,6 +17,8 @@ class LifetimeTests(unittest.TestCase):
         self.assertIn('--property=Restart=no', command)
         self.assertIn('--property=KillMode=control-group', command)
         self.assertIn('--property=NoNewPrivileges=yes', command)
+        self.assertIn('--description=Light incident restore AFTER', command)
+        self.assertEqual(sum(arg.startswith('--description=') for arg in command), 1)
         self.assertEqual(command[-6:], ['/usr/bin/python3', '-I', '-B', '-S', '-c', 'print(1)'])
         with self.assertRaisesRegex(RuntimeError, 'INCIDENT_UNIT_COMMAND'):
             life.command(unit, '')
@@ -66,6 +69,22 @@ class LifetimeTests(unittest.TestCase):
         with patch.object(life, 'show', return_value=state):
             with self.assertRaisesRegex(RuntimeError, 'INCIDENT_UNIT_PROFILE'):
                 life.identity(unit)
+
+    def test_inventory_refusals_distinguish_query_row_and_missing_self(self):
+        unit = 'bridge-native-ro-' + 'a' * 12 + '-123-1-' + 'b' * 16 + '.service'
+        supervisor = object.__new__(life.Supervisor)
+        supervisor.unit = unit
+        cases = (
+            (SimpleNamespace(returncode=0, stdout=b'x' * 65537), 'INCIDENT_UNIT_INVENTORY_QUERY'),
+            (SimpleNamespace(returncode=0, stdout=b'bad-row\n'), 'INCIDENT_UNIT_INVENTORY_ROW'),
+            (SimpleNamespace(returncode=0, stdout=b''), 'INCIDENT_UNIT_INVENTORY_INCOMPLETE'),
+        )
+        with patch.object(life.Supervisor, 'assert_alive'), patch.object(life, 'ctl') as ctl:
+            for response, code in cases:
+                with self.subTest(code=code):
+                    ctl.return_value = response
+                    with self.assertRaisesRegex(RuntimeError, '^' + code + '$'):
+                        supervisor.assert_exclusive()
 
 
 if __name__ == '__main__':
