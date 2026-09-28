@@ -215,7 +215,7 @@ def rehearse(source, controller_source, prior, user):
 def operation(bundle, source, action, *, controller_source=None):
     controller_source = controller_source or source
     require(os.geteuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic', 'LANE_INSTALL_HOST')
-    require(action in ('install-hold','observe-hold','stop-hold','complete-hold'), 'LANE_INSTALL_ACTION')
+    require(action in ('install-hold','observe-hold','stop-hold','complete-hold','inspect-hold'), 'LANE_INSTALL_ACTION')
     release.validate(bundle, source, bundle['sha256'])
     require(action != 'install-hold' or controller_source == source, 'LANE_INSTALL_CONTROLLER_SOURCE')
     release.staging.require_current_main(controller_source)
@@ -224,11 +224,16 @@ def operation(bundle, source, action, *, controller_source=None):
     if action != 'install-hold':
         root_parent(LEDGER)
         receipt = json.loads(hold.read(LEDGER/'before.json',0o600,262144))
-        require(receipt == dict(version=1,source=source,bundle_sha256=bundle['sha256'],
-                                legacy_hold=asdict(prior),prior_native='absent'), 'LANE_INSTALL_PRIOR_CHANGED')
+        expected = dict(version=1,source=source,bundle_sha256=bundle['sha256'],
+                        legacy_hold=asdict(prior),prior_native='absent')
+        if receipt != expected:
+            same_identity = {**expected, 'legacy_hold': {**asdict(prior),
+                'fingerprint': receipt.get('legacy_hold',{}).get('fingerprint')}}
+            require(receipt != same_identity, 'LANE_INSTALL_LEGACY_FINGERPRINT_CHANGED')
+            require(False, 'LANE_INSTALL_PRIOR_CHANGED')
         release.staging.verify_release(plan.source_path(source), bundle)
         verify_config(source,user.pw_gid)
-        if action == 'complete-hold':
+        if action in ('complete-hold','inspect-hold'):
             require(source == RETAINED_SOURCE and set(os.listdir(LEDGER)) == {'before.json'},
                     'LANE_INSTALL_REENTRY_LEDGER')
             require(show(UNIT,['InvocationID','ExecMainPID','MainPID','ControlPID','ActiveState']) ==
@@ -240,7 +245,8 @@ def operation(bundle, source, action, *, controller_source=None):
                     'LANE_INSTALL_REENTRY_STATE')
             stopped()
             require(hold.attest() == prior, 'LANE_INSTALL_LEGACY_CHANGED')
-            result = rehearse(source,controller_source,prior,user)
+            result = (dict(state='READY_TO_COMPLETE') if action == 'inspect-hold' else
+                      rehearse(source,controller_source,prior,user))
         elif action == 'stop-hold':
             release.staging.require_current_main(controller_source)
             switch.command('/usr/bin/systemctl','stop',UNIT)
@@ -278,7 +284,7 @@ def operation(bundle, source, action, *, controller_source=None):
 
 
 def program(raw, source, accepted, action, retained_raw=None, retained_accepted=''):
-    retained = action in ('complete-retained-hold','observe-retained-hold','stop-retained-hold')
+    retained = action in ('complete-retained-hold','observe-retained-hold','stop-retained-hold','inspect-retained-hold')
     require(retained or action in ('install-hold','observe-hold','stop-hold'), 'LANE_INSTALL_ACTION')
     require(release.source.identifier(source,40) and release.source.identifier(accepted,64)
             and release.hashlib.sha256(raw).hexdigest() == accepted, 'LANE_INSTALL_PACKAGE_NOT_ACCEPTED')
@@ -311,8 +317,22 @@ try:
   sys.path.insert(0,str(root))
   from ops.light_native_lane_install import operation
   print(json.dumps(operation(candidate['runtime'],candidate['source'],%r,controller_source=obj['source']),sort_keys=True))
-except BaseException:
- print('{"audit":"LIGHT_NATIVE_LANE_INSTALL_REFUSED"}')
+except BaseException as error:
+ allowed={'LANE_INSTALL_LEGACY_FINGERPRINT_CHANGED','LANE_INSTALL_PRIOR_CHANGED','LANE_INSTALL_REENTRY_LEDGER',
+  'LANE_INSTALL_REENTRY_ALREADY_STARTED','LANE_INSTALL_REENTRY_STATE',
+  'LANE_INSTALL_PARENT','LANE_INSTALL_UNIT_CHANGED','LANE_INSTALL_ADMISSION_CHANGED',
+  'LANE_INSTALL_LOADED_CONFIG','LANE_INSTALL_EXECUTION','LANE_INSTALL_UNIT_FIELDS',
+  'LANE_INSTALL_ENVIRONMENT_FILES','LANE_INSTALL_PROCESS_REMAINS',
+  'LANE_INSTALL_CGROUP','LANE_INSTALL_CGROUP_POPULATED',
+  'RELEASE_INVENTORY_DRIFT','RELEASE_OWNER_OR_LINK','RELEASE_DIRECTORY_MODE',
+  'RELEASE_FILE_DRIFT','CURRENT_MAIN_CHANGED','UNIT_DRIFT','POST_CHECK_DRIFT',
+  'LOGIN_QUEUE_NOT_EMPTY','LOGIN_CONNECT_FAILED','LOGIN_AUTH_FAILED',
+  'LANE_INSTALL_NOT_RUNNING','LANE_INSTALL_PROCESS_IDENTITY',
+  'LANE_INSTALL_PROCESS_COMMAND','LANE_INSTALL_PROCESS_ENVIRONMENT',
+  'LANE_INSTALL_STATE_CHANGED','LANE_INSTALL_HOLD_NOT_OBSERVED',
+  'LANE_INSTALL_LEGACY_CHANGED'}
+ code=str(error) if str(error) in allowed else 'UNCLASSIFIED'
+ print(json.dumps({'audit':'LIGHT_NATIVE_LANE_INSTALL_REFUSED','code':code}))
  sys.exit(2)
 ''' % (base64.b64encode(raw).decode(),accepted,source,release.HELPERS,
        base64.b64encode(retained_raw or b'').decode(),retained_accepted,RETAINED_SOURCE,
