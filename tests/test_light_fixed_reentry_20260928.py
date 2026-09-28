@@ -128,7 +128,7 @@ def test_authorize_transaction_and_unknown_ack(tmp_path,monkeypatch,fault):
     (stage/target.SOURCE/'environment.json').write_bytes(b'{}');(stage/target.SOURCE/'environment.json').chmod(0o600)
     monkeypatch.setattr(target.release,'ROOT',stage)
     initial=dict(config={'enabled':False,'cutover_at':None,'unchanged':'yes'},role={'can_repair':True,'updated_at':'before'},
-        task={'unchanged':'task'},outbox={'unchanged':'outbox'},work={'unchanged':'work'},counts=[0,1,1,0,1])
+        task={'unchanged':'task'},outbox={'unchanged':'outbox','published_at':'2026-09-28T10:36:36+00:00','delivery_deadline_at':'2099-01-01T00:00:00+00:00'},work={'unchanged':'work'},counts=[0,1,1,0,1])
     state=copy.deepcopy(initial);writes=[];acl_calls=[]
     class Conn:
         def __enter__(self):return self
@@ -142,7 +142,7 @@ def test_authorize_transaction_and_unknown_ack(tmp_path,monkeypatch,fault):
             if fault=='lost_commit_ack':raise RuntimeError('lost commit acknowledgement')
         def execute(self,sql,params=None):
             if sql.startswith('UPDATE autopilot.native_cli_config'):
-                writes.append('config');state['config'].update(enabled=True,cutover_at='new')
+                writes.append('config');state['config'].update(enabled=True,cutover_at=params[0])
                 if fault=='apply_drift':state['config']['unchanged']='changed'
             if sql.startswith('UPDATE autopilot.role_registry'):
                 writes.append('role');state['role'].update(can_repair=False,updated_at='after')
@@ -153,7 +153,7 @@ def test_authorize_transaction_and_unknown_ack(tmp_path,monkeypatch,fault):
         if fault=='acl' and len(acl_calls)==2:raise RuntimeError('ACL drift')
     engine=SimpleNamespace(identity=lambda *a:None,privileges=privileges)
     intake=SimpleNamespace(engine=engine,target=lambda:None)
-    receipt=dict(goal_json_sha256='goal',dispatch=dict(dispatch_id=target.DISPATCH,expected_head_sha='a'*40,
+    receipt=dict(applied_config=dict(initial['config'],enabled=True,cutover_at='2026-09-28T10:30:00+00:00'),goal_json_sha256='goal',dispatch=dict(dispatch_id=target.DISPATCH,expected_head_sha='a'*40,
         mode='READ_ONLY',target_pr=2025,task_fingerprint='f'*64),assignment={'preserved':True})
     plan=SimpleNamespace(value={'branch':'fix/audit'})
     before={'native_config':initial['config'],'autopilot_role':initial['role']}
@@ -287,3 +287,22 @@ def test_unreserved_claim_is_preserved_and_exact(tmp_path,monkeypatch,fault):
     else:
         target.verify_unreserved_claim(request,directory,accepted)
         assert target.inventory(claim)==proof
+
+
+@pytest.mark.parametrize('fault',[None,'late_cutover','expired','short_deadline','config_drift'])
+def test_continuation_preflight_enforces_actual_reserve_dates(monkeypatch,fault):
+    from datetime import datetime
+    now=datetime.fromisoformat('2026-09-28T13:41:57+00:00').timestamp()
+    monkeypatch.setattr(target.time,'time',lambda:now)
+    original={'enabled':True,'cutover_at':'2026-09-28T10:30:00+00:00','singleton':True}
+    rows={'config':{'enabled':False,'cutover_at':'2026-09-17T08:06:55+00:00','singleton':True},
+        'outbox':{'published_at':'2026-09-28T10:36:36+00:00','delivery_deadline_at':'2026-09-28T14:30:00+00:00'}}
+    if fault=='late_cutover':original['cutover_at']='2026-09-28T13:41:57+00:00'
+    if fault=='expired':rows['outbox']['delivery_deadline_at']='2026-09-28T11:06:36+00:00'
+    if fault=='short_deadline':rows['outbox']['delivery_deadline_at']='2026-09-28T13:42:00+00:00'
+    if fault=='config_drift':original['singleton']=False
+    if fault:
+        with pytest.raises(RuntimeError):target.continuation_admission_config({'applied_config':original},rows,now+1200)
+    else:
+        result=target.continuation_admission_config({'applied_config':original},rows,now+1200)
+        assert result==original  # Preserve the intake boundary rather than assigning now.

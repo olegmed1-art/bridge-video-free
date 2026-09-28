@@ -1,6 +1,7 @@
 """Fixed zero-submit continuation; historical Plan/intake remain immutable."""
 import base64
 from dataclasses import asdict
+from datetime import datetime
 import json
 import math
 import re
@@ -213,6 +214,24 @@ def ready(payload,agreement,run_guard):
     return baseline
 
 
+def continuation_admission_config(receipt,rows,window_end):
+    """Keep the accepted intake boundary; never renew an outbox deadline."""
+    original=receipt['applied_config']
+    require(original['enabled'] is True
+        and {k:v for k,v in original.items() if k not in ('enabled','cutover_at')}
+            =={k:v for k,v in rows['config'].items() if k not in ('enabled','cutover_at')},'REENTRY_HISTORICAL_CONFIG')
+    def timestamp(value):
+        require(type(value) is str,'REENTRY_ADMISSION_TIME')
+        parsed=datetime.fromisoformat(value)
+        require(parsed.tzinfo is not None,'REENTRY_ADMISSION_TIME')
+        return parsed.timestamp()
+    cutoff=timestamp(original['cutover_at'])
+    published=timestamp(rows['outbox']['published_at'])
+    deadline=timestamp(rows['outbox']['delivery_deadline_at'])
+    require(cutoff<=published<=time.time() and deadline>max(time.time(),window_end),'REENTRY_NATIVE_RESERVATION_EXPIRED')
+    return original
+
+
 def authorize(payload,payload_raw,agreement,run_guard,psycopg,parameters,credential,intake,api,owner):
     root,receipt,plan,before=records(intake)
     baseline=ready(payload,agreement,run_guard)
@@ -221,6 +240,7 @@ def authorize(payload,payload_raw,agreement,run_guard,psycopg,parameters,credent
     require(owner.discovery(api,control.strict_json(control.read(root/'broker.json'),65536),receipt)
         ==control.strict_json(control.read(root/'discovery.json'),65536),'REENTRY_DISCOVERY')
     observed=observe(psycopg,parameters,credential,intake,receipt,before['native_config'],before['autopilot_role'])
+    expected_config=continuation_admission_config(receipt,observed,agreement.end)
     with psycopg.connect(**parameters(credential),autocommit=True) as conn:
         conn.read_only=True;intake.engine.identity(conn,intake.target())
         intake.engine.privileges(conn,intake.target(),True)
@@ -239,12 +259,12 @@ def authorize(payload,payload_raw,agreement,run_guard,psycopg,parameters,credent
             conn.execute('SELECT dispatch_id FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s::uuid FOR UPDATE',(DISPATCH,))
             locked=db_rows(conn,intake);require(locked==observed,'REENTRY_CONCURRENT_DB')
             intake.engine.privileges(conn,intake.target(),True)
-            guard()
-            a=conn.execute('UPDATE autopilot.native_cli_config SET enabled=true,cutover_at=transaction_timestamp() WHERE singleton')
+            guard();require(continuation_admission_config(receipt,locked,agreement.end)==expected_config,'REENTRY_CUTOVER_CHANGED')
+            a=conn.execute('UPDATE autopilot.native_cli_config SET enabled=true,cutover_at=%s WHERE singleton',(expected_config['cutover_at'],))
             b=conn.execute("UPDATE autopilot.role_registry SET can_repair=false WHERE role_id='AUTOPILOT'")
             require(a.rowcount==b.rowcount==1,'REENTRY_UPDATE_COUNT')
             applied=db_rows(conn,intake)
-            require(applied['config']['enabled'] is True and applied['role']['can_repair'] is False
+            require(applied['config']==expected_config and applied['role']['can_repair'] is False
                 and all(applied['config'].get(k)==v for k,v in observed['config'].items() if k not in ('enabled','cutover_at'))
                 and all(applied['role'].get(k)==v for k,v in observed['role'].items() if k not in ('can_repair','updated_at'))
                 and all(applied[k]==observed[k] for k in ('task','outbox','work','counts')),'REENTRY_APPLY_DRIFT')
