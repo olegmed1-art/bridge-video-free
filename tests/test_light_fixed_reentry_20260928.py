@@ -92,7 +92,7 @@ def test_reentry_namespace_faults_preserve_all_evidence(tmp_path,monkeypatch,fai
         assert target.inventory(archive if archive.exists() else source)==proof
 
 
-@pytest.mark.parametrize('action',['prepare-continuation','authorize','terminal','restore-controls','restore-zero-submit','inspect-zero-submit'])
+@pytest.mark.parametrize('action',['prepare-continuation','authorize','terminal','restore-controls','restore-zero-submit','inspect-zero-submit','restore-unreserved'])
 def test_runner_bootstrap_selects_exact_old_or_new_namespace(monkeypatch,action):
     payload=json.dumps({'action':action}).encode()
     selected=runner.PACKAGE if action=='prepare-continuation' else target.PACKAGE
@@ -259,3 +259,31 @@ def test_zero_submit_fallback_preserves_task_and_restores_controls(tmp_path,monk
         assert writes==['config','role'] and state['config']==before['config']
         assert state['role']['can_repair'] is True
     assert state['outbox']==before['outbox'] and state['work']==before['work']
+
+
+@pytest.mark.skipif(os.geteuid()!=0,reason='root metadata')
+@pytest.mark.parametrize('fault',[None,'request','wrong_invocation','changed_inode','wrong_permit'])
+def test_unreserved_claim_is_preserved_and_exact(tmp_path,monkeypatch,fault):
+    c=target.control;claim=tmp_path/'claim';claim.mkdir(mode=0o700)
+    directory=tmp_path/'request';directory.mkdir(mode=0o700)
+    monkeypatch.setattr(c,'CLAIM',claim)
+    monkeypatch.setattr(target.pwd,'getpwnam',lambda name:SimpleNamespace(pw_uid=0,pw_gid=0))
+    permit=c.canonical(dict(issued_at=100,expires_at=200))
+    start=dict(version=1,source=target.SOURCE,permit_sha256=c.digest(permit),pid=123,
+        invocation_id='a'*32,image_id='b'*64,deadline=1000,last_wall=150)
+    for name,raw in [('pilot.lock',b''),('permit.json',permit),('image-start.json',c.canonical(start))]:
+        (claim/name).write_bytes(raw);(claim/name).chmod(0o600)
+    unit=dict(MainPID='123',InvocationID='a'*32)
+    if fault=='wrong_invocation':unit['InvocationID']='c'*32
+    c.retained(directory/'pilot-unit.json',c.canonical(unit))
+    proof=target.inventory(claim);accepted=c.digest(c.canonical(proof))
+    if fault=='request':(claim/'request.json').write_bytes(b'{}')
+    if fault=='changed_inode':
+        replacement=tmp_path/'replacement';replacement.write_bytes(b'');replacement.chmod(0o600);replacement.replace(claim/'pilot.lock')
+    if fault=='wrong_permit':permit=b'{}'
+    request=SimpleNamespace(permit=permit)
+    if fault:
+        with pytest.raises(RuntimeError):target.verify_unreserved_claim(request,directory,accepted)
+    else:
+        target.verify_unreserved_claim(request,directory,accepted)
+        assert target.inventory(claim)==proof

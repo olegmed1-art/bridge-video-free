@@ -2,6 +2,8 @@
 import base64
 from dataclasses import asdict
 import json
+import math
+import re
 import os
 from pathlib import Path
 import pwd
@@ -339,6 +341,30 @@ def restore_controls(payload,payload_raw,run_guard,psycopg,parameters,credential
 
 
 
+def verify_unreserved_claim(request,directory,accepted):
+    path=control.CLAIM;service=pwd.getpwnam('school-autopilot')
+    require(set(p.name for p in path.iterdir())=={'pilot.lock','image-start.json','permit.json'},'REENTRY_UNRESERVED_FILES')
+    require(all(p.stat().st_size<=65536 for p in path.iterdir()),'REENTRY_UNRESERVED_SIZE')
+    proof=inventory(path)
+    require(control.digest(control.canonical(proof))==accepted,'REENTRY_UNRESERVED_INVENTORY')
+    require(proof['.']['uid']==service.pw_uid and proof['.']['gid']==service.pw_gid and proof['.']['mode']==0o700
+        and all(v['uid']==service.pw_uid and v['gid']==service.pw_gid and v['mode']==0o600 and v['kind']=='file'
+            for k,v in proof.items() if k!='.'),'REENTRY_UNRESERVED_OWNERSHIP')
+    require((path/'pilot.lock').read_bytes()==b'' and (path/'permit.json').read_bytes()==request.permit,'REENTRY_UNRESERVED_PERMIT')
+    start=control.strict_json((path/'image-start.json').read_bytes(),8192)
+    unit=control.strict_json(control.read(directory/'pilot-unit.json',4096),4096)
+    permit=control.strict_json(request.permit,65536)
+    require(set(start)=={'version','source','permit_sha256','pid','invocation_id','image_id','deadline','last_wall'}
+        and type(start['version']) is int and start['version']==1 and start['source']==SOURCE
+        and start['permit_sha256']==control.digest(request.permit)
+        and type(start['pid']) is int and start['pid']>0 and str(start['pid'])==unit['MainPID']
+        and start['invocation_id']==unit['InvocationID'] and re.fullmatch('[0-9a-f]{32}',start['invocation_id'])
+        and re.fullmatch('[0-9a-f]{64}',start['image_id'])
+        and all(type(start[k]) in (int,float) and math.isfinite(start[k]) and start[k]>0 for k in ('deadline','last_wall'))
+        and permit['issued_at']<=start['last_wall']<permit['expires_at'],'REENTRY_UNRESERVED_IMAGE')
+    require(inventory(path)==proof,'REENTRY_UNRESERVED_CHANGED')
+
+
 def restore_zero_submit(payload,payload_raw,run_guard,psycopg,parameters,credential,intake):
     root,receipt,plan,original=records(intake)
     baseline_raw=control.read(control.plan.ROOT/'baseline.json')
@@ -377,7 +403,10 @@ def restore_zero_submit(payload,payload_raw,run_guard,psycopg,parameters,credent
         require(state['MainPID']==state['ControlPID']=='0' and state['ActiveState'] in ('inactive','failed'),'REENTRY_ZERO_SUPERVISOR')
         absent(control.plan.LIGHT/'runtime/codex-dispatch'/(DISPATCH+'.json'))
         if switch.CONTROL.exists():require(hold.read(switch.CONTROL/'admission',0o640,16)==b'HOLD\n','REENTRY_ZERO_ADMISSION')
-        if control.CLAIM.exists():require(list(control.CLAIM.iterdir())==[],'REENTRY_ZERO_CLAIM')
+        if payload.get('action')=='restore-unreserved':
+            require(bool(request_digest),'REENTRY_UNRESERVED_REQUEST')
+            verify_unreserved_claim(request,directory,payload['claim_inventory_sha256'])
+        elif control.CLAIM.exists():require(list(control.CLAIM.iterdir())==[],'REENTRY_ZERO_CLAIM')
     guard()
     control.retained(control.plan.ROOT/'zero-submit-restore-intent.json',payload_raw)
     with psycopg.connect(**parameters(credential),autocommit=True) as conn:
@@ -399,7 +428,7 @@ def restore_zero_submit(payload,payload_raw,run_guard,psycopg,parameters,credent
         conn.read_only=True;intake.engine.identity(conn,intake.target())
         rows=db_rows(conn,intake);require(rows==restored,'REENTRY_ZERO_READBACK')
         check_zero(rows,receipt,before['config'],before['role'])
-    guard();result=dict(audit='LIGHT_FIXED_ZERO_SUBMIT_CONTROLS_RESTORED',controls_restored=True,
+    guard();result=dict(audit='LIGHT_FIXED_UNRESERVED_CONTROLS_RESTORED' if payload.get('action')=='restore-unreserved' else 'LIGHT_FIXED_ZERO_SUBMIT_CONTROLS_RESTORED',controls_restored=True,
         native_enabled=rows['config']['enabled'],can_repair=rows['role']['can_repair'],native_receipts=0,
         task_preserved=True,pilot_resubmitted=False)
     control.retained(control.plan.ROOT/'zero-submit-controls-restored.json',control.canonical(result));return result
@@ -435,7 +464,7 @@ def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new
     action=payload.get('action')
     shapes={'prepare-continuation':{'action','agreement','accepted_agreement_sha256'},
         'authorize':{'action','agreement','accepted_agreement_sha256','baseline_sha256'},
-        'terminal':{'action','request_sha256'},'inspect-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-controls':{'action','request_sha256','terminal_sha256'}}
+        'terminal':{'action','request_sha256'},'inspect-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-unreserved':{'action','baseline_sha256','request_sha256','claim_inventory_sha256'},'restore-zero-submit':{'action','baseline_sha256','request_sha256'},'restore-controls':{'action','request_sha256','terminal_sha256'}}
     require(action in shapes and set(payload)==shapes[action],'REENTRY_ACTION')
     package=control.verified_package(old_raw,OLD_SOURCE,OLD_PACKAGE) if action=='prepare-continuation' else control.verified_package(new_raw,SOURCE,PACKAGE)
     if action=='prepare-continuation':
@@ -451,6 +480,6 @@ def reconcile(old_raw,payload_raw,accepted,wheels,credential,token,run_guard,new
         if action=='prepare-continuation':return prepare_continuation(package,payload,agreement,run_guard,psycopg,parameters,credential,intake,api,owner)
         if action=='authorize':return authorize(payload,payload_raw,agreement,run_guard,psycopg,parameters,credential,intake,api,owner)
         if action=='inspect-zero-submit':return inspect_zero_submit(payload,run_guard,psycopg,parameters,credential,intake)
-        if action=='restore-zero-submit':return restore_zero_submit(payload,payload_raw,run_guard,psycopg,parameters,credential,intake)
+        if action in ('restore-zero-submit','restore-unreserved'):return restore_zero_submit(payload,payload_raw,run_guard,psycopg,parameters,credential,intake)
         if action=='terminal':return terminal(payload,run_guard,psycopg,parameters,credential,intake,owner,api)
         return restore_controls(payload,payload_raw,run_guard,psycopg,parameters,credential,intake)
