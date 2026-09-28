@@ -1,11 +1,11 @@
-name: Light fixed same-task continuation
+name: Light bounded native readmission
 
 on:
   pull_request:
     paths:
       - '.github/workflows/light-native-pilot-owner.yml'
-      - 'ops/incident/light_fixed_reentry*20260928.py'
-      - 'tests/test_light_fixed_reentry_20260928.py'
+      - 'ops/incident/light_readmission*20260928.py'
+      - 'tests/test_light_readmission_20260928.py'
       - 'ops/light_native_pilot_owner*.py'
       - 'database/light_native_pilot_intake.py'
       - 'tests/test_light_native_pilot_owner*.py'
@@ -58,7 +58,7 @@ jobs:
       - run: |
           python -m venv "$RUNNER_TEMP/continuation-ci"
           "$RUNNER_TEMP/continuation-ci/bin/python" -m pip install 'pytest==8.4.2' 'psycopg[binary]==3.3.4'
-          sudo -- "$RUNNER_TEMP/continuation-ci/bin/python" -m pytest -q tests/test_light_fixed_reentry_20260928.py
+          sudo -- "$RUNNER_TEMP/continuation-ci/bin/python" -m pytest -q tests/test_light_readmission_20260928.py
 
   step:
     needs: contract
@@ -104,4 +104,4 @@ jobs:
           unset SSH_PRIVATE_KEY
           ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
           bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
-          PYTHONPATH=. python ops/incident/light_fixed_reentry_runner_20260928.py "$work/key" "$work/known_hosts" "$work/wheels"
+          PYTHONPATH=. python ops/incident/light_readmission_runner_20260928.py "$work/key" "$work/known_hosts" "$work/wheels"
