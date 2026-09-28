@@ -81,7 +81,7 @@ def test_launch_retains_no_credential_and_waits_for_cleanup_receipt(tmp_path,mon
     now=1000
     monkeypatch.setattr(target.time,'time',lambda:now)
     retain=target.retain
-    retain(directory/'permit.json',target.encoded({'expires_at':1300}))
+    retain(directory/'permit.json',target.encoded({'expires_at':1900}))
     row=dict(ActiveState='active',SubState='running',MainPID='123',InvocationID='a'*32,NRestarts='0')
     monkeypatch.setattr(install,'verify_hold_process',lambda *a:row)
     monkeypatch.setattr(target.pwd,'getpwnam',lambda name:SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid()))
@@ -95,7 +95,7 @@ def test_launch_retains_no_credential_and_waits_for_cleanup_receipt(tmp_path,mon
         request=target.parse(target.read(root/digest/'request.json'))
         context=target.read(root/digest/'owner-context.json',request['owner_context_sha256'])
         assert target.sha(target.read(root/digest/'supervisor.py'))==request['supervisor_sha256']
-        assert request['expires_at']==1270 and request['seconds']==270
+        assert request['expires_at']==1420 and request['seconds']==420
         assert target.parse(context)['run_id']==123
         retain(root/digest/'stopped-hold.json',target.encoded(dict(state='STOPPED_HOLD')))
         calls.append('cleanup-complete')
@@ -293,3 +293,10 @@ def test_containment_intent_blocks_later_publication(phase_context):
     value,events,call,directory=phase_context;(directory/'contain-intent.json').write_bytes(b'{}')
     with pytest.raises(RuntimeError,match='CONTAINMENT_PENDING'):call()
     assert 'broker' not in events
+
+
+def test_late_execute_refuses_before_staging_feed(phase_context,monkeypatch):
+    value,events,call,_=phase_context;value['action']='execute'
+    monkeypatch.setattr(target.time,'time',lambda:9999999500)
+    with pytest.raises(RuntimeError,match='EXECUTION_WINDOW'):call()
+    assert 'feed' not in events and 'launch' not in events

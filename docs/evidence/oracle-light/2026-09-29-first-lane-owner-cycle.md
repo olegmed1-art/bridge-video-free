@@ -10,7 +10,8 @@ main, its running owner job, the retained f82 runtime, exact plan and prior phas
 records. Controller helpers have a separate package; the historical runtime
 package remains a5e2c6557576280caa9fc8106779c1465f3f9cfed88442848fd7fa35ee0ebdd4.
 
-Execution is capped at 420 seconds. Authenticated workflow/main checks run at a
+Execution is fixed at 420 seconds; feed publication requires at least 600 seconds
+remaining in the accepted window. Late launch refuses before staging the feed. Authenticated workflow/main checks run at a
 15-second cadence during RUN; local process/admission/deadline checks remain at
 two seconds. The startup HOLD wait does not poll remote APIs every half-second. PID1 cleanup denies admission and drains the
 transient process independently of SSH. Original native HOLD restart follows

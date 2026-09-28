@@ -234,7 +234,7 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
             return dict(audit='LIGHT_LANE_OWNER',phase='permit',record_sha256=sha(permit),
                         dispatch_id=receipt['dispatch_id'],expires_at=expires)
         permit=read(directory/'permit.json',value['accepted_permit_sha256'],65536)
-        require(parse(permit)['expires_at']-time.time() >= 180,'LANE_OWNER_EXECUTION_WINDOW')
+        require(parse(permit)['expires_at']-time.time() >= 600,'LANE_OWNER_EXECUTION_WINDOW')
         from ops.light_native_lane_feed import publish_first
         guard(plan,prior,value,run_guard,agreement)
         with psycopg.connect(**parameters(credential),autocommit=True) as conn:
@@ -248,8 +248,9 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
 
 
 def launch(wheels,credential,token,plan,directory,value,prior,baseline,feed_result,run_guard):
-    remaining=min(FIRST_EXECUTION_SECONDS,int(parse(read(directory/'permit.json'))['expires_at']-time.time())-30)
-    require(60<=remaining<=1800,'LANE_OWNER_EXECUTION_WINDOW')
+    remaining=FIRST_EXECUTION_SECONDS
+    require(parse(read(directory/'permit.json'))['expires_at']-time.time() >= remaining+30,
+            'LANE_OWNER_EXECUTION_WINDOW')
     script=supervisor_source(value['source'])
     context=encoded(dict(owner_plan_sha256=plan.digest,controller_sha256=value['accepted_controller_sha256'],
         wheels_sha256=sha(wheels),run_id=run_guard.run_id,attempt=run_guard.attempt))
