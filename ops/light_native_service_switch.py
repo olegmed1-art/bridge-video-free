@@ -35,8 +35,14 @@ def show(unit, fields):
     result = {}
     for line in output.splitlines():
         key, sep, value = line.partition('=')
-        require(sep and key in fields and key not in result, 'PILOT_HOST_UNIT_FIELDS')
-        result[key] = value
+        require(sep and key in fields, 'PILOT_HOST_UNIT_FIELDS')
+        # systemd emits one EnvironmentFiles row per file. Preserve its order;
+        # attest_pilot_execution still compares the complete exact file list.
+        if key == 'EnvironmentFiles' and key in result:
+            result[key] += ' ' + value
+        else:
+            require(key not in result, 'PILOT_HOST_UNIT_FIELDS')
+            result[key] = value
     require(set(result) == set(fields), 'PILOT_HOST_UNIT_FIELDS')
     return result
 
