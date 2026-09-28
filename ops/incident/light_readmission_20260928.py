@@ -145,7 +145,11 @@ def prepare_continuation(package,payload,agreement,run_guard,psycopg,parameters,
         native_enabled=False,can_repair=True,native_receipts=0,task_preserved=True,pilot_resubmitted=False),'READMISSION_OLD_CONTROLS')
     verify_unreserved_claim(old_request,old_directory,CLAIM_SHA)
     control.stage_observation(SOURCE,package)
-    prior=hold.service_hold_identity();require(asdict(prior)==restored['restored'],'READMISSION_HOLD')
+    current_service=hold.service_hold_identity()
+    require(asdict(current_service)==restored['restored'],'READMISSION_HOLD')
+    observe(psycopg,parameters,credential,intake,receipt,before['native_config'],before['autopilot_role'])
+    # Controller metadata shape only; owned-task evidence below never asserts queue-zero.
+    prior=hold.HoldIdentity(**asdict(current_service))
     protected=switch.protect_snapshot(prior)
     baseline=dict(version=1,source=SOURCE,package_sha256=PACKAGE,agreement_sha256=agreement.accepted,
         scope_sha256=control.digest(control.canonical(SCOPE)),prior=asdict(prior),protected=protected,

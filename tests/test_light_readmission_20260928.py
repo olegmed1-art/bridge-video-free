@@ -297,7 +297,7 @@ def test_reentry_namespace_faults_preserve_all_evidence(tmp_path,monkeypatch,fai
     monkeypatch.setattr(c,'ledger',lambda digest:(old_request,prior,{},'d'*64,old_directory))
     monkeypatch.setattr(c,'restored_receipt',lambda *a:{'restored':asdict(prior)})
     monkeypatch.setattr(c,'stage_observation',lambda *a:prior)
-    monkeypatch.setattr(h,'service_hold_identity',lambda:prior)
+    monkeypatch.setattr(h,'service_hold_identity',lambda:h.ServiceHoldIdentity(**asdict(prior)))
     monkeypatch.setattr(target,'verify_unreserved_claim',lambda *a:None)
     stage_root=tmp_path/'stages';stage_root.mkdir(mode=0o700);stage=stage_root/target.SOURCE;stage.mkdir(mode=0o700)
     (stage/'old-proof').write_bytes(b'preserve previous stage');(stage/'old-proof').chmod(0o600)
@@ -306,7 +306,11 @@ def test_reentry_namespace_faults_preserve_all_evidence(tmp_path,monkeypatch,fai
     monkeypatch.setattr(target.release,'probe_environment',lambda *a:{'fresh':'environment'})
     for name in ('BASE','DROP'):
         path=tmp_path/name;path.write_bytes(b'original unit configuration');path.chmod(0o644);monkeypatch.setattr(h,name,path)
-    monkeypatch.setattr(s,'protect_snapshot',lambda *a:{})
+    def protect(value):
+        assert type(value) is h.HoldIdentity
+        assert asdict(value)==asdict(h.service_hold_identity())
+        return {}
+    monkeypatch.setattr(s,'protect_snapshot',protect)
     monkeypatch.setattr(target,'baseline_guard',lambda *a,**kw:prior)
     monkeypatch.setattr(target,'observe',lambda *a:{})
     monkeypatch.setattr(target,'records',lambda *a:(intake,{},SimpleNamespace(),{'native_config':{},'autopilot_role':{}}))
