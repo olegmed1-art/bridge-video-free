@@ -192,6 +192,10 @@ def test_explicit_reentry_preserves_original_source_and_refuses_uncertain_state(
         if fault!='start-failure':assert not any('start' in event for event in events)
         else:assert events[-2:]==[('/usr/bin/systemctl','stop',target.UNIT),'drained']
     else:
+        inspected=target.operation(bundle,SOURCE,'inspect-hold',controller_source='d'*40)
+        assert inspected['state']=='READY_TO_COMPLETE'
+        assert events==['drained']
+        events.clear()
         result=target.operation(bundle,SOURCE,'complete-hold',controller_source='d'*40)
         assert result['state']=='HOLD' and result['source']==SOURCE
         assert events.count(('/usr/bin/systemctl','start',target.UNIT))==2
@@ -212,3 +216,18 @@ def test_retained_program_requires_independent_original_package_acceptance(tmp_p
     compile(script,'retained-bootstrap','exec')
     with pytest.raises(RuntimeError):target.program(raw,revision,digest,'complete-retained-hold',raw,'f'*64)
     with pytest.raises(RuntimeError):target.program(raw,revision,digest,'install-hold',raw,digest)
+
+
+def test_refusal_diagnostics_never_emit_arbitrary_exception_text(tmp_path,capsys):
+    import ast,json
+    from types import SimpleNamespace
+    revision=committed_tree(tmp_path)
+    raw=target.release.package(tmp_path,revision)
+    script=target.program(raw,revision,hashlib.sha256(raw).hexdigest(),'install-hold')
+    handler=ast.parse(script).body[1].handlers[0]
+    diagnostic=compile(ast.Module(body=handler.body,type_ignores=[]),'handler','exec')
+    for code in ('LANE_INSTALL_PRIOR_CHANGED','password=private-secret'):
+        exec(diagnostic,{'error':RuntimeError(code),'json':json,'sys':SimpleNamespace(exit=lambda code:None)})
+        output=capsys.readouterr().out
+        assert 'private-secret' not in output
+        assert json.loads(output)['code']==('LANE_INSTALL_PRIOR_CHANGED' if code.startswith('LANE_') else 'UNCLASSIFIED')
