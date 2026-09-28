@@ -232,7 +232,9 @@ def phase_context(tmp_path,monkeypatch):
     monkeypatch.setattr(target,'retain',lambda path,raw:path.write_bytes(raw))
     plan=SimpleNamespace(digest='a'*64,raw=b'plan',scope={},scope_digest='b'*64)
     monkeypatch.setattr(target,'scope',lambda value:(plan,tmp_path))
-    retained=target.encoded(dict(source=target.install.RETAINED_SOURCE,runtime=dict(sha256='c'*64)))
+    retained=target.release.encoded(dict(source=target.install.RETAINED_SOURCE,
+        runtime=dict(sha256='c'*64,source_comment='retained Unicode \u2192 exact bytes')))
+    assert retained!=target.encoded(json.loads(retained))
     value=dict(version=1,action='publish',source='d'*40,accepted_controller_sha256='e'*64,
         accepted_runtime_sha256=target.sha(retained),plan_base64='unused',accepted_plan_sha256=plan.digest,
         agreement={},accepted_agreement_sha256='f'*64,accepted_receipt_sha256='1'*64,

@@ -122,7 +122,11 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
     run_guard.assert_current()
     controller=validate_package(controller_raw,value['source'],value['accepted_controller_sha256'])
     require(sha(retained_raw)==value['accepted_runtime_sha256'],'LANE_OWNER_RUNTIME_PACKAGE')
-    retained=parse(retained_raw)
+    # Historical release packages use ASCII-escaped canonical JSON. Preserve
+    # their exact accepted bytes; the lane record codec uses UTF-8 instead.
+    retained=json.loads(retained_raw)
+    require(type(retained) is dict and release.encoded(retained)==retained_raw,
+            'LANE_OWNER_RUNTIME_PACKAGE_ENCODING')
     require(retained['source']==install.RETAINED_SOURCE,'LANE_OWNER_RUNTIME_PACKAGE')
     release.validate(retained['runtime'],retained['source'],retained['runtime']['sha256'])
     candidate=execution.plan.source_path(retained['source'])
