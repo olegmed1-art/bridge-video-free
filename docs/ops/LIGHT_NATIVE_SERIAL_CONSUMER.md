@@ -121,3 +121,15 @@ reruns primary verification and requires identical retained bytes. It never
 writes current, RUN, a new permit, or a task. The authenticated owner controller
 must still bind its original retained Plan/receipt and immutable release before
 calling it. No owner-feed issuer or acceptance CLI is exposed by this change.
+
+
+The first live install of source f82d58e retained the unit and state but refused
+before any service start: systemctl omitted the empty EnvironmentFiles property.
+The installer now explicitly requests `show --all`; missing properties still
+fail closed. `complete-retained-hold` accepts separately hashed current helper
+and original f82d58e packages. It verifies the original root before record,
+immutable runtime, exact original unit/control and pristine empty state, plus
+no prior invocation/PID and empty cgroup, before the dormant rehearsal. It does
+not restage, overwrite the unit, or clear prior evidence. Retained observe/stop
+use the same old runtime with fresh current-controller source checks. Any
+already-started or partially rehearsed installation refuses completion replay.

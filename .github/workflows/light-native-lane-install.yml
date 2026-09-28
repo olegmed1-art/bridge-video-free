@@ -14,11 +14,16 @@ on:
         description: 'Fixed dormant installation operation; never RUN'
         required: true
         type: choice
-        options: [install-hold, observe-hold, stop-hold]
+        options: [install-hold, observe-hold, stop-hold, complete-retained-hold, observe-retained-hold, stop-retained-hold]
 
       accepted_package_sha256:
         description: 'Independently accepted SHA256 covering runtime and installer helpers'
         required: true
+        type: string
+
+      accepted_retained_package_sha256:
+        description: 'For retained f82d58e only: original independently accepted package digest'
+        required: false
         type: string
 
 permissions:
@@ -64,6 +69,7 @@ jobs:
       - name: Install credential-free native HOLD and rehearse stop
         env:
           SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          RETAINED_PACKAGE_SHA256: ${{ inputs.accepted_retained_package_sha256 }}
           LANE_ACTION: ${{ inputs.action }}
           SOURCE_REVISION: ${{ github.sha }}
           ACCEPTED_PACKAGE_SHA256: ${{ inputs.accepted_package_sha256 }}
@@ -91,7 +97,10 @@ jobs:
           git diff --exit-code HEAD --
           [[ "$(gh api repos/olegmed1-art/bridge-video-free/git/ref/heads/main --jq .object.sha)" == "$SOURCE_REVISION" ]]
           unset GH_TOKEN
-          python -m ops.light_native_lane_install "$SOURCE_REVISION" "$ACCEPTED_PACKAGE_SHA256" "$LANE_ACTION" > "$work/preflight.py"
+          if [[ "$LANE_ACTION" == *-retained-* ]]; then
+            git fetch --no-tags --depth=1 origin f82d58efabf21ba62fd242a4fa02a8e7cfda1d23
+          fi
+          python -m ops.light_native_lane_install "$SOURCE_REVISION" "$ACCEPTED_PACKAGE_SHA256" "$LANE_ACTION" "$RETAINED_PACKAGE_SHA256" > "$work/preflight.py"
           if ! ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 ubuntu@92.5.47.149 'sudo -n /usr/bin/python3 -I -S -B -' < "$work/preflight.py" > "$work/result" 2> "$work/error"; then
             cat "$work/result"
             echo 'LIGHT_NATIVE_LANE_INSTALL=FAILED'
