@@ -162,6 +162,7 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
             with psycopg.connect(**parameters(credential),autocommit=True) as conn:
                 conn.read_only=False
                 intake.engine.privileges(conn,intake.target(),True)
+                verify_terminal_policy(conn)
                 receipt=intake.prepare(conn,plan,agreement,baseline,sha(baseline),directory/'before.json',
                     target_open=True,observed_head_sha=pr['head']['sha'],observed_branch=pr['head']['ref'],
                     effect_guard=intake_guard,
@@ -541,3 +542,15 @@ def committed_intake(conn,plan,receipt):
                     ==receipt['goal_json_sha256'],'LANE_OWNER_INTAKE_NOT_COMMITTED')
         require(conn.execute('SELECT count(*) FROM autopilot.native_cli_receipt WHERE dispatch_id=%s::uuid',
                              (receipt['dispatch_id'],)).fetchone()==(0,),'LANE_OWNER_NATIVE_ACTIVITY')
+
+
+def verify_terminal_policy(conn):
+    """Read-only deployed trigger check before admitting a substantive audit."""
+    require(conn.execute("""SELECT EXISTS(
+      SELECT FROM public.schema_migration WHERE migration_key='0372_autopilot_audit_pass_alias')
+      AND EXISTS(SELECT FROM autopilot.migration_0372_function_backup
+        WHERE function_key='autopilot.on_project_work_task_terminal()'
+          AND patched_definition=pg_get_functiondef('autopilot.on_project_work_task_terminal()'::regprocedure)
+          AND position('AUDIT_FINDINGS_REPORTED' in patched_definition)>0
+          AND position('NEXT_STEP_TERMINAL_FENCE' in patched_definition)>0)""").fetchone()==(True,),
+      'LANE_OWNER_TERMINAL_POLICY_CHANGED')

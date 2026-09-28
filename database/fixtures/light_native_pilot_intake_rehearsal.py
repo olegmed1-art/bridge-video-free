@@ -52,11 +52,12 @@ def sample(label):
     return plan,agreement,prior,baseline_raw,hashlib.sha256(baseline_raw).hexdigest()
 
 
-def main():
+def main(result_code='AUDIT_PASSED'):
     with connection() as conn:
         conn.read_only=False
         require(conn.execute('SELECT current_database(),session_user,current_user').fetchone()
                 == ('bridge_school_ci','postgres','postgres'), 'DISPOSABLE_IDENTITY_REQUIRED')
+        controller.verify_terminal_policy(conn)
         # Earlier CI fixtures intentionally persist queue rows.  Only this
         # disposable database can be cleared, and only under the fixed guard.
         conn.execute('TRUNCATE autopilot.project_work_item,autopilot.task CASCADE')
@@ -114,7 +115,7 @@ def main():
                 provider_task='task_e_disposable_intake_pg18'
                 conn.execute('SELECT autopilot.native_cli_ack(%s::jsonb,%s,%s)',
                     (intake.encoded(request).decode(),provider_task,'b'*64))
-                terminal={'status':'SUCCEEDED','result_code':'AUDIT_PASSED',
+                terminal={'status':'SUCCEEDED','result_code':result_code,
                           'summary':'Disposable intake finished.',
                           'target_head_sha':plan.value['expected_head_sha'],
                           'provider_evidence_sha256':'d'*64}
@@ -186,3 +187,4 @@ def main():
 
 if __name__=='__main__':
     main()
+    main('AUDIT_FINDINGS_REPORTED')

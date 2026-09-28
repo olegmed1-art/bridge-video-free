@@ -428,6 +428,10 @@ def _terminal_rows(conn,plan,intake_receipt,evidence):
     goal_hash=hashlib.sha256(json.dumps(task['goal_json'],sort_keys=True,
         separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
     success=evidence['result']['status']=='SUCCEEDED'
+    # 0368 keeps completed audits with findings BLOCKED for explicit disposition.
+    # Provider completion does not imply the work passed or authorize a repair.
+    findings=evidence['result']['result_code']=='AUDIT_FINDINGS_REPORTED'
+    expected_work='DONE' if success and not findings else 'BLOCKED'
     require(receipt['state']=='TERMINAL' and receipt['request']==evidence['request']
             and receipt['provider_task_id']==evidence['provider_task_id']
             and receipt['terminal']==evidence['result']
@@ -439,7 +443,7 @@ def _terminal_rows(conn,plan,intake_receipt,evidence):
                 'successor_role','successor_target_pr','successor_expected_head_sha'))
             and work['work_item_id']==intake_receipt['work_item_id']
             and work['last_task_id']==intake_receipt['task_id']
-            and work['state']==('DONE' if success else 'BLOCKED')
+            and work['state']==expected_work
             and outbox['task_id']==intake_receipt['task_id']
             and outbox['status']=='CALLBACK_ACCEPTED'
             and outbox['delivery_contract_version']==4

@@ -42,3 +42,10 @@ Oracle readback before changes: legacy PID410394/invocation
 b9e107c5bae84f4f9982a0dffacf7a4b and native PID415582/invocation
 e1dd0cc5eb804f68ad3e35731a910112, both active with NRestarts=0.
 No claim of completed live work is made by this source change.
+
+A substantive audit may complete with AUDIT_FINDINGS_REPORTED while its work
+item remains BLOCKED under deployed migration0368/0372. Terminal verification
+accepts that exact outcome without treating findings as a clean audit or
+creating a successor. Before intake the controller verifies the deployed
+terminal trigger against the retained0372 definition. PG18 rehearsal runs
+both AUDIT_PASSED and AUDIT_FINDINGS_REPORTED through control restoration.
