@@ -23,7 +23,7 @@ def request_value(raw, accepted, source):
     require(type(raw) is bytes and 0 < len(raw) <= 262144 and bundle.digest(raw) == accepted,
             'CANDIDATE_INPUT_DIGEST')
     v = json.loads(raw, object_pairs_hook=unique)
-    require(type(v) is dict and set(v) - {'operation'} == {'version','mode','source','runtime_digest','assets','plan',
+    require(type(v) is dict and set(v) - {'operation','recovery_pair_digest'} == {'version','mode','source','runtime_digest','assets','plan',
         'stage','scope_digest','prior_units','accepted_head_digest','expected_outcome','agreement','request_id'}
         and v['version'] == 1 and type(v['version']) is int and v['mode'] == 'grant_request_candidate'
         and v['source'] == source and bundle.identifier(source,40)
@@ -31,6 +31,9 @@ def request_value(raw, accepted, source):
         and encoded(v) == raw, 'CANDIDATE_INPUT_SCHEMA')
     require(type(v.get('operation','apply')) is str
             and v.get('operation','apply') in ('apply','rollback'), 'CANDIDATE_OPERATION')
+    require('recovery_pair_digest' not in v or
+            (v['stage']=='restore' and bundle.identifier(v['recovery_pair_digest'],64)),
+            'CANDIDATE_RECOVERY_PAIR')
     validate_plan(v['plan'])
     require(v['plan']['source'] == source and v['stage'] in ('prepare','execute','restore'),
             'CANDIDATE_SOURCE_STAGE')
@@ -117,10 +120,13 @@ def assemble(v, manifest, priors, guard):
         guard.assert_running()
         return report, None
     agreement=Agreement(v['agreement'],digest(v['agreement']),scope)
-    value=dict(version=1,request_id=v['request_id'],source=v['source'],assets=v['assets'],packet=dict(
+    packet=dict(
         version=1,stage=v['stage'],scope=scope,plan=v['plan'],baseline_digest=v['assets']['baseline_digest'],
         agreement=v['agreement'],prior_units=records,accepted_head_digest=v['accepted_head_digest'],
-        expected_outcome=v['expected_outcome']))
+        expected_outcome=v['expected_outcome'])
+    if 'recovery_pair_digest' in v:
+        packet['recovery_pair_digest']=v['recovery_pair_digest']
+    value=dict(version=1,request_id=v['request_id'],source=v['source'],assets=v['assets'],packet=packet)
     raw=encoded(value); sha=bundle.digest(raw)
     AcceptedRequest(raw,sha,v['source'])
     agreement.assert_held(scope_digest)

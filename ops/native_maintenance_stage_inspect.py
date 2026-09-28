@@ -90,6 +90,28 @@ def private_read(path,limit):
     finally: os.close(parent)
 
 
+def inspection_packet(request, failed_run):
+    """Derive observation scope from retained accepted bytes, never a new claim."""
+    from ops.native_maintenance_runtime import unit_record
+    packet=copy.deepcopy(request.value['packet'])
+    require(packet['stage'] in ('prepare','execute','restore'),'INSPECT_STAGE')
+    if packet['stage']=='prepare':
+        require(not packet['prior_units'],'INSPECT_PREPARE_PRIORS')
+        packet['scope']['origin_run']=failed_run
+    else:
+        require(packet['scope'].get('origin_run')!=failed_run,'INSPECT_ORIGIN_REUSED')
+    scope_digest=digest(packet['scope'])
+    priors=[unit_record(row) for row in packet['prior_units']]
+    require(all(row['source']==request.source and row['scope_digest']==scope_digest
+                and row['run']!=failed_run for row in priors)
+            and len({(r['run']['run_id'],r['run']['attempt']) for r in priors})==len(priors),
+            'INSPECT_PRIOR_BINDING')
+    if packet['stage']!='prepare':
+        require(any(r['stage']=='prepare' and r['run']==packet['scope']['origin_run']
+                    for r in priors),'INSPECT_ORIGIN_MISSING')
+    return packet
+
+
 def local(v,run):
     from ops.native_maintenance_runtime import unit_record
     from ops.native_maintenance_supervisor import SelfSupervisor,PriorSupervisors
@@ -97,9 +119,7 @@ def local(v,run):
     supervisor=SelfSupervisor(run.source,run);supervisor.assert_exclusive()
     raw=read_request(v['failed_request_digest'])
     request=AcceptedRequest(raw,v['failed_request_digest'],v['failed_source'])
-    packet=copy.deepcopy(request.value['packet'])
-    require(packet['stage']=='prepare' and not packet['prior_units'],'INSPECT_PREPARE_ONLY')
-    packet['scope']['origin_run']=v['failed_run']
+    packet=inspection_packet(request,v['failed_run'])
     scope=packet['scope'];sha=digest(scope)
     prior=hold.HoldIdentity(**scope['hold'])
     require(asdict(hold.service_hold_identity())==asdict(prior),'INSPECT_HOLD_CHANGED')
@@ -135,8 +155,10 @@ def local(v,run):
                 require(encoded(unit)==data and unit['source']==v['failed_source']
                     and unit['scope_digest']==sha and name==str(unit['run']['run_id'])+'-'+str(unit['run']['attempt'])+'.json',
                     'INSPECT_UNIT_BINDING')
-                require(unit['run']==v['failed_run'] and unit['stage']=='prepare','INSPECT_UNKNOWN_STAGE')
+                require((unit['run']==v['failed_run'] and unit['stage']==packet['stage'])
+                        or unit in packet['prior_units'],'INSPECT_UNKNOWN_STAGE')
                 units.append(unit)
+            require(all(row in units for row in packet['prior_units']),'INSPECT_MISSING_PRIOR')
             PriorSupervisors([u['supervisor'] for u in units],digest([u['supervisor'] for u in units])).assert_drained()
             with Journal(path/'operation',create_lock=False,max_bytes=LIMIT//4) as op, \
                  Journal(path/'pause',create_lock=False,max_bytes=LIMIT//4) as pause:
@@ -145,7 +167,8 @@ def local(v,run):
                     require(op.records[0]['event']==dict(kind='BOUND',scope=scope),'INSPECT_SCOPE_CHANGED')
                     snapshot._parse(encoded(dict(version=1,scope_digest=sha,journals=journals)))
         result=dict(scope_digest=sha,claimed=claimed,scope_present=present,
-                    manifest_digest=manifest_digest,units=units,journals=journals)
+                    manifest_digest=manifest_digest,units=units,journals=journals,
+                    failed_stage=packet['stage'])
         require(len(encoded(result))<=LIMIT,'INSPECT_SIZE')
         require(read_request(v['failed_request_digest'])==raw and asdict(hold.service_hold_identity())==asdict(prior),'INSPECT_FINAL_CHANGED')
         supervisor.assert_exclusive();failed_run(run.api,v);run.assert_running()
@@ -157,23 +180,38 @@ def local(v,run):
 
 def compare(observed,store,v):
     """Classify observed private bytes; never invokes accepted_latest or a PUT."""
-    require(type(observed) is dict and set(observed)=={'scope_digest','claimed','scope_present',
+    require(type(observed) is dict and set(observed)-{'failed_stage'}=={'scope_digest','claimed','scope_present',
         'manifest_digest','units','journals'} and bundle.identifier(observed['scope_digest'],64),
         'INSPECT_LOCAL_SCHEMA')
     scope=observed['scope_digest'];store.assert_private()
     from ops.native_maintenance_stage_unit import decode, path
-    expected=dict(source=v['failed_source'],scope_digest=scope,stage='prepare',run=v['failed_run'])
-    require(type(observed['units']) is list and len(observed['units'])<=1,'INSPECT_UNIT_COUNT')
-    local_unit=observed['units'][0] if observed['units'] else None
-    if local_unit is not None:decode(encoded(local_unit),expected)
-    remote=store._read(path(expected),4096)
-    remote_unit=None if remote is None else decode(remote[0],expected)
-    require(local_unit is None or remote_unit is None or local_unit==remote_unit,
-            'INSPECT_REMOTE_UNIT_CONFLICT')
-    unit_reports=[dict(stage='prepare',run=v['failed_run'],
-        local_digest=None if local_unit is None else digest(local_unit),
-        remote_digest=None if remote_unit is None else digest(remote_unit),
-        local_present=local_unit is not None,remote_present=remote_unit is not None)]
+    stage=observed.get('failed_stage','prepare')
+    require(stage in ('prepare','execute','restore'),'INSPECT_STAGE')
+    require(type(observed['units']) is list and len(observed['units'])<=16,'INSPECT_UNIT_COUNT')
+    refs=[dict(source=v['failed_source'],scope_digest=scope,stage=stage,run=v['failed_run'])]
+    by_run={}
+    for unit in observed['units']:
+        expected={k:unit[k] for k in ('source','scope_digest','stage','run')}
+        require(expected['source']==v['failed_source'] and expected['scope_digest']==scope,
+                'INSPECT_UNIT_BINDING')
+        decode(encoded(unit),expected)
+        key=(unit['run']['run_id'],unit['run']['attempt'])
+        require(key not in by_run,'INSPECT_DUPLICATE_UNIT');by_run[key]=unit
+        if unit['run']==v['failed_run']:
+            require(unit['stage']==stage,'INSPECT_UNKNOWN_STAGE')
+        else:refs.append(expected)
+    unit_reports=[]
+    for expected in refs:
+        local_unit=by_run.get((expected['run']['run_id'],expected['run']['attempt']))
+        if local_unit is not None:decode(encoded(local_unit),expected)
+        remote=store._read(path(expected),4096)
+        remote_unit=None if remote is None else decode(remote[0],expected)
+        require(local_unit is None or remote_unit is None or local_unit==remote_unit,
+                'INSPECT_REMOTE_UNIT_CONFLICT')
+        unit_reports.append(dict(stage=expected['stage'],run=expected['run'],
+            local_digest=None if local_unit is None else digest(local_unit),
+            remote_digest=None if remote_unit is None else digest(remote_unit),
+            local_present=local_unit is not None,remote_present=remote_unit is not None))
     head=checkpoint.read_head(store,scope);archive=None;local_raw=None
     rows=observed['journals']
     if rows is not None and all(rows[n] for n in snapshot.NAMES):

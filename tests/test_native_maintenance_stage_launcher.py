@@ -633,6 +633,40 @@ class LauncherBudgetTests(unittest.TestCase):
                 server.accept(record)
             store.compare_head.assert_called_once()
 
+    def test_oci_service_refusal_is_sanitized_and_never_acknowledged(self):
+        class ServiceError(Exception):
+            def __init__(self, status):
+                super().__init__('private credential and object path')
+                self.status = status
+
+        sdk = SimpleNamespace(ServiceError=ServiceError)
+        with patch.dict(sys.modules, {'oci.exceptions': sdk}):
+            for status in (401, 403, 409, 412, 429, 500, 503):
+                failure = ServiceError(status)
+                channel = SimpleNamespace(binding='b'*64, alive=Mock(), send=Mock(), failed=False)
+                store = Mock(spec=['assert_private'])
+                store.assert_private.side_effect = failure
+                server = launcher.ObservedStoreServer(channel, 'a'*64, store, Mock())
+                record = dict(version=1, binding='b'*64, scope='a'*64, sequence=1,
+                              method='assert_private', args=[])
+                with patch.object(launcher, 'REFUSAL_RPC', None):
+                    with self.assertRaises(ServiceError) as caught:
+                        server.accept(record)
+                    self.assertIs(caught.exception, failure)
+                    self.assertEqual(launcher.failure_code(caught.exception), 'OCI_SERVICE_' + str(status))
+                    self.assertEqual(launcher.REFUSAL_RPC, dict(operation='assert_private', sequence=1))
+                    self.assertTrue(server.failed)
+                    self.assertTrue(channel.failed)
+                    channel.send.assert_not_called()
+                    with self.assertRaisesRegex(Exception, 'RPC_SERVER_UNAVAILABLE'):
+                        server.accept(record)
+                    store.assert_private.assert_called_once()
+            for status in ('private payload', True, 599, None):
+                self.assertEqual(launcher.failure_code(ServiceError(status)), 'OCI_SERVICE_FAILURE')
+            other = RuntimeError('private payload')
+            other.status = 403
+            self.assertEqual(launcher.failure_code(other), 'REFUSED')
+
     def test_invalid_rpc_fields_never_enter_refusal_context(self):
         channel = SimpleNamespace(binding='b'*64, alive=Mock(), send=Mock(), failed=False)
         store = Mock()

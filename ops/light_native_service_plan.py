@@ -112,7 +112,9 @@ def classify_journal(lines, dispatch_id):
             require(set(obj) == {'audit', 'dispatch_id', 'provider_task_id', 'terminal_sha256'}
                     and obj['dispatch_id'] == dispatch_id
                     and type(obj['provider_task_id']) is str
-                    and re.fullmatch('task_e_[A-Za-z0-9_-]{1,200}', obj['provider_task_id'])
+                    # Match the provider and native_cli_receipt SQL contract.
+                    # This isolated supervisor cannot import the runtime package.
+                    and re.fullmatch('task_[A-Za-z0-9_]{1,120}', obj['provider_task_id'])
                     and type(obj['terminal_sha256']) is str
                     and re.fullmatch('[0-9a-f]{64}', obj['terminal_sha256']), 'PILOT_SERVICE_TERMINAL_MARKER')
             terminal.append(obj)

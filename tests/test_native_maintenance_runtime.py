@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from ops import native_maintenance_runtime as runtime
+from ops import native_maintenance_snapshot as snapshot
 from ops import native_maintenance_stage_request as requests
 from ops import native_maintenance_executor as executor
 from ops import native_maintenance_workflow_api as workflow_api
@@ -61,6 +62,19 @@ def packet_fixture():
 
 
 class PacketTests(unittest.TestCase):
+    def test_recovery_pair_only_accepted_for_restore(self):
+        value, manifest = packet_fixture()
+        for stage in ('prepare', 'execute'):
+            changed = copy.deepcopy(value)
+            changed.update(stage=stage, recovery_pair_digest='a'*64)
+            raw=encoded(changed)
+            with self.assertRaisesRegex(Exception, 'RUNTIME_RECOVERY_PAIR'):
+                runtime.AcceptedPacket(raw,runtime.checkpoint.sha(raw),manifest)
+            request=encoded(dict(version=1,request_id='e'*32,source=SOURCE,
+                assets=dict(source_digest='a'*64,manifest_digest=value['scope']['manifest_digest'],
+                    baseline_digest=value['baseline_digest'],envelope_digest='b'*64),packet=changed))
+            with self.assertRaisesRegex(Exception,'REQUEST_RECOVERY_PAIR'):
+                requests.AcceptedRequest(request,runtime.checkpoint.sha(request),SOURCE)
     def test_stage_profile_is_uninstalled_and_diagnostics_cannot_dispatch(self):
         value, manifest = packet_fixture()
         raw = encoded(value)
@@ -259,6 +273,34 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(restored['host_exited'])
         self.assertEqual(len(self.receipts), 3)
         self.assertEqual(self.db.active, {})
+
+    def test_unpublished_committed_result_recovers_in_restore_without_sql_replay(self):
+        prepared=self.dispatch()
+        self.next_stage('execute',prepared['head_digest'])
+        original=runtime.checkpoint.JournalCheckpoint.sync
+        def fail_result(barrier,*args):
+            if barrier.scope is not None and len(self.receipts)==2:
+                op=args[1]
+                if op.records[-1]['event']['kind']=='SESSION_RESULT':
+                    self.store.fail='before_head'
+            return original(barrier,*args)
+        with patch.object(runtime.checkpoint.JournalCheckpoint,'sync',new=fail_result), \
+             patch.object(executor,'permission_session',return_value='AFTER') as sql:
+            with self.assertRaises(Exception):self.dispatch()
+            self.assertEqual(sql.call_count,1)
+        self.store.fail=None
+        scope=digest(self.value['scope'])
+        base=self.parent/runtime.storage.NAME/scope
+        pair=runtime.checkpoint.sha(snapshot.capture(base/'operation',base/'pause'))
+        accepted=runtime.checkpoint.sha(self.store.heads[scope][0])
+        self.next_stage('restore',accepted,'AFTER')
+        self.value['recovery_pair_digest']=pair
+        with patch.object(runtime.engine,'inspect',return_value='AFTER'), \
+             patch.object(executor,'permission_session') as sql:
+            restored=self.dispatch()
+            sql.assert_not_called()
+        self.assertEqual(restored['outcome'],'AFTER')
+        self.assertEqual(self.puts,['disable','enable'])
 
     def test_lost_unit_ack_preserves_local_record_and_prevents_all_dispatch(self):
         def lost(raw):
