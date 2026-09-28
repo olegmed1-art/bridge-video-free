@@ -26,6 +26,7 @@ CONTROL = Path('/etc/bridge-school/light-native-lane')
 STATE = plan.LIGHT / 'runtime/native-lane'
 LEDGER = Path('/var/lib/bridge-light-native-lane-install')
 PROC = Path('/proc')
+RETAINED_SOURCE = 'f82d58efabf21ba62fd242a4fa02a8e7cfda1d23'
 LAUNCH = 'import sys;sys.path.insert(0,sys.argv[1]);from oracle_autopilot.light_native_lane import main;main()'
 
 
@@ -81,8 +82,30 @@ def write_new(path, raw, mode, gid=0):
     require(hold.read(path, mode, len(raw)+1) == raw, 'LANE_INSTALL_READBACK')
 
 
+def show(unit, fields):
+    # systemd 255 omits the empty EnvironmentFiles array even with --all.
+    # Read that typed property directly; never infer emptiness from omission.
+    require(unit == UNIT, 'LANE_INSTALL_UNIT_SCOPE')
+    selected = [key for key in fields if key != 'EnvironmentFiles']
+    output = (switch.command('/usr/bin/systemctl','show','--all',unit,
+                             *['--property='+key for key in selected]) if selected else '')
+    result = {}
+    for line in output.splitlines():
+        key, sep, value = line.partition('=')
+        require(sep and key in selected and key not in result, 'LANE_INSTALL_UNIT_FIELDS')
+        result[key] = value
+    require(set(result) == set(selected), 'LANE_INSTALL_UNIT_FIELDS')
+    if 'EnvironmentFiles' in fields:
+        value = switch.command('/usr/bin/busctl','get-property','org.freedesktop.systemd1',
+            '/org/freedesktop/systemd1/unit/school_2dautopilot_2dnative_2dlight_2eservice',
+            'org.freedesktop.systemd1.Service','EnvironmentFiles')
+        require(value == 'a(sb) 0', 'LANE_INSTALL_ENVIRONMENT_FILES')
+        result['EnvironmentFiles'] = ''
+    return result
+
+
 def stopped():
-    row = switch.show(UNIT, ['MainPID','ControlPID','ActiveState','ControlGroup'])
+    row = show(UNIT, ['MainPID','ControlPID','ActiveState','ControlGroup'])
     require(row['MainPID'] == row['ControlPID'] == '0'
             and row['ActiveState'] in ('inactive','failed'), 'LANE_INSTALL_PROCESS_REMAINS')
     expected = '/system.slice/'+UNIT
@@ -110,8 +133,8 @@ def verify_config(source, gid):
     fields.pop('CPUQuota'); fields.pop('TimeoutStopSec')
     fields.update(CPUQuotaPerSecUSec='1s', TimeoutStopUSec='30s',
                   MemoryHigh='536870912', MemoryMax='805306368')
-    require(switch.show(UNIT, list(fields)) == fields, 'LANE_INSTALL_LOADED_CONFIG')
-    command = switch.show(UNIT,['ExecStart'])['ExecStart']
+    require(show(UNIT, list(fields)) == fields, 'LANE_INSTALL_LOADED_CONFIG')
+    command = show(UNIT,['ExecStart'])['ExecStart']
     expected = '{ path='+release.PYTHON+' ; argv[]='+release.PYTHON+' -I -B -c '+LAUNCH+' '+str(plan.source_path(source))+' ; ignore_errors=no ;'
     require(command.startswith(expected) and command.endswith(' }')
             and command.count('{') == command.count('}') == 1, 'LANE_INSTALL_EXECUTION')
@@ -119,7 +142,7 @@ def verify_config(source, gid):
 
 def verify_running(source, user):
     verify_config(source, user.pw_gid)
-    row = switch.show(UNIT, ['ActiveState','SubState','MainPID','NRestarts','InvocationID'])
+    row = show(UNIT, ['ActiveState','SubState','MainPID','NRestarts','InvocationID'])
     require(row['ActiveState'] == 'active' and row['SubState'] == 'running'
             and row['NRestarts'] == '0' and row['MainPID'].isdigit()
             and int(row['MainPID']) > 1, 'LANE_INSTALL_NOT_RUNNING')
@@ -144,7 +167,7 @@ def verify_running(source, user):
                              '_SYSTEMD_INVOCATION_ID='+row['InvocationID'])
     expected = '{"audit":"LIGHT_NATIVE_LANE","state":"HOLD"}'
     require(records.splitlines() == [expected], 'LANE_INSTALL_HOLD_NOT_OBSERVED')
-    require(switch.show(UNIT, list(row)) == row, 'LANE_INSTALL_PROCESS_CHANGED')
+    require(show(UNIT, list(row)) == row, 'LANE_INSTALL_PROCESS_CHANGED')
     return row
 
 
@@ -158,11 +181,44 @@ def await_hold(source, user):
     return verify_running(source, user)
 
 
-def operation(bundle, source, action):
+def rehearse(source, controller_source, prior, user):
+    start_attempted = False
+    try:
+        release.staging.require_current_main(controller_source)
+        start_attempted = True
+        switch.command('/usr/bin/systemctl','start',UNIT)
+        first = await_hold(source,user)
+        switch.command('/usr/bin/systemctl','stop',UNIT)
+        stopped()
+        require(hold.attest() == prior, 'LANE_INSTALL_LEGACY_CHANGED')
+        release.staging.require_current_main(controller_source)
+        write_new(LEDGER/'stop-rehearsal.json',release.encoded(dict(version=1,source=source,
+            first_invocation=first['InvocationID'],cgroup_empty=True,legacy_unchanged=True)),0o600)
+        release.staging.require_current_main(controller_source)
+        start_attempted = True
+        switch.command('/usr/bin/systemctl','start',UNIT)
+        second = await_hold(source,user)
+        require(first['InvocationID'] != second['InvocationID'], 'LANE_INSTALL_REENTRY_NOT_PROVEN')
+        require(hold.attest() == prior, 'LANE_INSTALL_LEGACY_CHANGED')
+        release.staging.require_current_main(controller_source)
+        write_new(LEDGER/'installed.json',release.encoded(dict(version=1,source=source,
+            unit_sha256=release.hashlib.sha256(render(source)).hexdigest(),
+            invocation=second['InvocationID'],stop_rehearsal=True)),0o600)
+        return dict(state='HOLD',stop_rehearsal=True,**second)
+    except BaseException:
+        if start_attempted:
+            switch.command('/usr/bin/systemctl','stop',UNIT)
+            stopped()
+        raise
+
+
+def operation(bundle, source, action, *, controller_source=None):
+    controller_source = controller_source or source
     require(os.geteuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic', 'LANE_INSTALL_HOST')
-    require(action in ('install-hold','observe-hold','stop-hold'), 'LANE_INSTALL_ACTION')
+    require(action in ('install-hold','observe-hold','stop-hold','complete-hold'), 'LANE_INSTALL_ACTION')
     release.validate(bundle, source, bundle['sha256'])
-    release.staging.require_current_main(source)
+    require(action != 'install-hold' or controller_source == source, 'LANE_INSTALL_CONTROLLER_SOURCE')
+    release.staging.require_current_main(controller_source)
     prior = hold.attest()
     user = pwd.getpwnam('school-autopilot')
     if action != 'install-hold':
@@ -172,8 +228,21 @@ def operation(bundle, source, action):
                                 legacy_hold=asdict(prior),prior_native='absent'), 'LANE_INSTALL_PRIOR_CHANGED')
         release.staging.verify_release(plan.source_path(source), bundle)
         verify_config(source,user.pw_gid)
-        if action == 'stop-hold':
-            release.staging.require_current_main(source)
+        if action == 'complete-hold':
+            require(source == RETAINED_SOURCE and set(os.listdir(LEDGER)) == {'before.json'},
+                    'LANE_INSTALL_REENTRY_LEDGER')
+            require(show(UNIT,['InvocationID','ExecMainPID','MainPID','ControlPID','ActiveState']) ==
+                    dict(InvocationID='',ExecMainPID='0',MainPID='0',ControlPID='0',ActiveState='inactive'),
+                    'LANE_INSTALL_REENTRY_ALREADY_STARTED')
+            info = STATE.lstat()
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == user.pw_uid
+                    and stat.S_IMODE(info.st_mode) == 0o700 and not os.listdir(STATE),
+                    'LANE_INSTALL_REENTRY_STATE')
+            stopped()
+            require(hold.attest() == prior, 'LANE_INSTALL_LEGACY_CHANGED')
+            result = rehearse(source,controller_source,prior,user)
+        elif action == 'stop-hold':
+            release.staging.require_current_main(controller_source)
             switch.command('/usr/bin/systemctl','stop',UNIT)
             stopped()
             result = {'state':'STOPPED'}
@@ -190,7 +259,6 @@ def operation(bundle, source, action):
         fresh_directory(LEDGER,0o700)
         write_new(LEDGER/'before.json',release.encoded(dict(version=1,source=source,
             bundle_sha256=bundle['sha256'],legacy_hold=asdict(prior),prior_native='absent')),0o600)
-        start_attempted = False
         try:
             fresh_directory(CONTROL,0o750,gid=user.pw_gid)
             fresh_directory(CONTROL/'jobs',0o750,gid=user.pw_gid)
@@ -199,41 +267,28 @@ def operation(bundle, source, action):
             write_new(UNIT_FILE,render(source),0o644)
             switch.command('/usr/bin/systemctl','daemon-reload')
             verify_config(source,user.pw_gid)
-            release.staging.require_current_main(source)
-            start_attempted = True
-            switch.command('/usr/bin/systemctl','start',UNIT)
-            first = await_hold(source,user)
-            switch.command('/usr/bin/systemctl','stop',UNIT)
-            stopped()
-            require(hold.attest() == prior, 'LANE_INSTALL_LEGACY_CHANGED')
-            write_new(LEDGER/'stop-rehearsal.json',release.encoded(dict(version=1,source=source,
-                first_invocation=first['InvocationID'],cgroup_empty=True,legacy_unchanged=True)),0o600)
-            release.staging.require_current_main(source)
-            start_attempted = True
-            switch.command('/usr/bin/systemctl','start',UNIT)
-            second = await_hold(source,user)
-            require(first['InvocationID'] != second['InvocationID'], 'LANE_INSTALL_REENTRY_NOT_PROVEN')
-            require(hold.attest() == prior, 'LANE_INSTALL_LEGACY_CHANGED')
-            write_new(LEDGER/'installed.json',release.encoded(dict(version=1,source=source,
-                unit_sha256=release.hashlib.sha256(render(source)).hexdigest(),
-                invocation=second['InvocationID'],stop_rehearsal=True)),0o600)
-            result = dict(state='HOLD',stop_rehearsal=True,**second)
+            result = rehearse(source,controller_source,prior,user)
         except BaseException:
-            # No deletion/retry of an uncertain install. Stop only our fixed unit.
-            if start_attempted:
-                switch.command('/usr/bin/systemctl','stop',UNIT)
-                stopped()
+            # Preserve any partial installation; rehearsal handles its own stop.
             raise
-    if action != 'install-hold':
+    if action in ('observe-hold','stop-hold'):
         require(hold.attest() == prior, 'LANE_INSTALL_LEGACY_CHANGED')
     return dict(audit='LIGHT_NATIVE_LANE_INSTALL',source=source,action=action,
         legacy_unchanged=True,credentials_installed=False,boot_enabled=False,**result)
 
 
-def program(raw, source, accepted, action):
-    require(action in ('install-hold','observe-hold','stop-hold'), 'LANE_INSTALL_ACTION')
+def program(raw, source, accepted, action, retained_raw=None, retained_accepted=''):
+    retained = action in ('complete-retained-hold','observe-retained-hold','stop-retained-hold')
+    require(retained or action in ('install-hold','observe-hold','stop-hold'), 'LANE_INSTALL_ACTION')
     require(release.source.identifier(source,40) and release.source.identifier(accepted,64)
             and release.hashlib.sha256(raw).hexdigest() == accepted, 'LANE_INSTALL_PACKAGE_NOT_ACCEPTED')
+    if retained:
+        require(type(retained_raw) is bytes and release.source.identifier(retained_accepted,64)
+                and release.hashlib.sha256(retained_raw).hexdigest() == retained_accepted
+                and json.loads(retained_raw)['source'] == RETAINED_SOURCE,
+                'LANE_INSTALL_RETAINED_PACKAGE_NOT_ACCEPTED')
+    else:
+        require(retained_raw is None and retained_accepted == '', 'LANE_INSTALL_UNEXPECTED_RETAINED')
     return '''import base64,hashlib,json,os,pathlib,sys,tempfile
 try:
  raw=base64.b64decode(%r,validate=True)
@@ -241,6 +296,12 @@ try:
  obj=json.loads(raw)
  assert obj['version']==1 and obj['source']==%r and set(obj['helpers'])==set(%r)
  assert os.geteuid()==0
+ retained_raw=base64.b64decode(%r,validate=True)
+ candidate=obj
+ if retained_raw:
+  assert hashlib.sha256(retained_raw).hexdigest()==%r
+  candidate=json.loads(retained_raw)
+  assert candidate['version']==1 and candidate['source']==%r
  with tempfile.TemporaryDirectory(prefix='light-lane-install-',dir='/var/tmp') as temp:
   root=pathlib.Path(temp)
   (root/'ops').mkdir(mode=0o700)
@@ -249,13 +310,18 @@ try:
    with os.fdopen(fd,'w') as stream:stream.write(data)
   sys.path.insert(0,str(root))
   from ops.light_native_lane_install import operation
-  print(json.dumps(operation(obj['runtime'],obj['source'],%r),sort_keys=True))
+  print(json.dumps(operation(candidate['runtime'],candidate['source'],%r,controller_source=obj['source']),sort_keys=True))
 except BaseException:
  print('{"audit":"LIGHT_NATIVE_LANE_INSTALL_REFUSED"}')
  sys.exit(2)
-''' % (base64.b64encode(raw).decode(),accepted,source,release.HELPERS,action)
+''' % (base64.b64encode(raw).decode(),accepted,source,release.HELPERS,
+       base64.b64encode(retained_raw or b'').decode(),retained_accepted,RETAINED_SOURCE,
+       action.replace('-retained',''))
 
 
 if __name__ == '__main__':
-    require(len(sys.argv)==4,'LANE_INSTALL_ARGUMENTS')
-    print(program(release.package(Path.cwd(),sys.argv[1]),*sys.argv[1:]))
+    require(len(sys.argv) in (4,5),'LANE_INSTALL_ARGUMENTS')
+    source,accepted,action = sys.argv[1:4]
+    retained = release.package(Path.cwd(),RETAINED_SOURCE) if '-retained-' in action else None
+    print(program(release.package(Path.cwd(),source),source,accepted,action,retained,
+                  sys.argv[4] if len(sys.argv)==5 else ''))

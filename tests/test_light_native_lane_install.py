@@ -131,7 +131,7 @@ def test_active_process_is_not_enough_for_verified_hold(tmp_path,monkeypatch,fau
     monkeypatch.setattr(target.plan,'source_path',lambda source:candidate)
     monkeypatch.setattr(target,'verify_config',lambda *a:None)
     row=dict(ActiveState='active',SubState='running',MainPID='123',NRestarts='0',InvocationID='a'*32)
-    monkeypatch.setattr(target.switch,'show',lambda *a:row)
+    monkeypatch.setattr(target,'show',lambda *a:row)
     audit='{"audit":"LIGHT_NATIVE_LANE","state":"HOLD"}'
     if fault=='quarantined':audit='{"audit":"LIGHT_NATIVE_LANE_QUARANTINED"}'
     elif fault=='journal-empty':audit=''
@@ -143,3 +143,72 @@ def test_active_process_is_not_enough_for_verified_hold(tmp_path,monkeypatch,fau
     if fault:
         with pytest.raises(RuntimeError):target.verify_running(SOURCE,user)
     else:assert target.verify_running(SOURCE,user)==row
+
+
+def test_show_proves_empty_environment_array_from_typed_dbus(monkeypatch):
+    seen=[]
+    def command(*args):
+        seen.append(args)
+        if args[0]=='/usr/bin/busctl':return 'a(sb) 0'
+        return 'UnitFileState=static'
+    monkeypatch.setattr(target.switch,'command',command)
+    assert target.show(target.UNIT,['EnvironmentFiles','UnitFileState']) == dict(EnvironmentFiles='',UnitFileState='static')
+    assert '--all' in seen[0] and '--property=EnvironmentFiles' not in seen[0]
+    assert seen[1][-2:]==('org.freedesktop.systemd1.Service','EnvironmentFiles')
+    monkeypatch.setattr(target.switch,'command',lambda *args:'')
+    with pytest.raises(RuntimeError,match='UNIT_FIELDS'):target.show(target.UNIT,['UnitFileState'])
+    for response in ('', 'a(sb) 1 "/unexpected.env" false', 'as 0'):
+        monkeypatch.setattr(target.switch,'command',lambda *args:response)
+        with pytest.raises(RuntimeError,match='ENVIRONMENT_FILES'):
+            target.show(target.UNIT,['EnvironmentFiles'])
+
+
+@pytest.mark.skipif(os.geteuid()!=0,reason='real root-owned retained state')
+@pytest.mark.parametrize('fault',[None,'journal','started','ledger','source','start-failure'])
+def test_explicit_reentry_preserves_original_source_and_refuses_uncertain_state(tmp_path,monkeypatch,fault):
+    events=installation(tmp_path,monkeypatch,None)
+    monkeypatch.setattr(target,'verify_config',Mock(side_effect=RuntimeError('missing property')))
+    bundle=value()
+    with pytest.raises(RuntimeError):target.operation(bundle,SOURCE,'install-hold')
+    assert not any('start' in event for event in events)
+    before=target.LEDGER.joinpath('before.json').read_bytes()
+    unit=target.UNIT_FILE.read_bytes()
+    monkeypatch.setattr(target,'verify_config',lambda *args:None)
+    monkeypatch.setattr(target.release.staging,'verify_release',lambda path,item:None)
+    monkeypatch.setattr(target.release,'stage',Mock(side_effect=AssertionError('must not stage')))
+    monkeypatch.setattr(target,'RETAINED_SOURCE',SOURCE)
+    row=dict(InvocationID='',ExecMainPID='0',MainPID='0',ControlPID='0',ActiveState='inactive')
+    monkeypatch.setattr(target,'show',lambda *args:row)
+    mains=[]
+    monkeypatch.setattr(target.release.staging,'require_current_main',lambda source:mains.append(source))
+    if fault=='journal':(target.STATE/'pilot.lock').touch()
+    elif fault=='started':row['InvocationID']='b'*32
+    elif fault=='ledger':(target.LEDGER/'installed.json').write_text('{}')
+    elif fault=='source':monkeypatch.setattr(target,'RETAINED_SOURCE','c'*40)
+    elif fault=='start-failure':monkeypatch.setattr(target,'await_hold',Mock(side_effect=RuntimeError('injected')))
+    events.clear()
+    if fault:
+        with pytest.raises(RuntimeError):target.operation(bundle,SOURCE,'complete-hold',controller_source='d'*40)
+        if fault!='start-failure':assert not any('start' in event for event in events)
+        else:assert events[-2:]==[('/usr/bin/systemctl','stop',target.UNIT),'drained']
+    else:
+        result=target.operation(bundle,SOURCE,'complete-hold',controller_source='d'*40)
+        assert result['state']=='HOLD' and result['source']==SOURCE
+        assert events.count(('/usr/bin/systemctl','start',target.UNIT))==2
+        with pytest.raises(RuntimeError,match='REENTRY_LEDGER'):
+            target.operation(bundle,SOURCE,'complete-hold',controller_source='d'*40)
+    assert set(mains)=={'d'*40}
+    assert target.LEDGER.joinpath('before.json').read_bytes()==before
+    assert target.UNIT_FILE.read_bytes()==unit
+
+
+def test_retained_program_requires_independent_original_package_acceptance(tmp_path,monkeypatch):
+    import json
+    revision=committed_tree(tmp_path)
+    raw=target.release.package(tmp_path,revision)
+    digest=hashlib.sha256(raw).hexdigest()
+    monkeypatch.setattr(target,'RETAINED_SOURCE',revision)
+    script=target.program(raw,revision,digest,'complete-retained-hold',raw,digest)
+    compile(script,'retained-bootstrap','exec')
+    with pytest.raises(RuntimeError):target.program(raw,revision,digest,'complete-retained-hold',raw,'f'*64)
+    with pytest.raises(RuntimeError):target.program(raw,revision,digest,'install-hold',raw,digest)
