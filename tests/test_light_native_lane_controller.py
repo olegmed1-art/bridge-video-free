@@ -385,6 +385,8 @@ from ops import light_native_pilot_owner as owner
 
 @pytest.fixture
 def recovery(tmp_path,monkeypatch):
+    if os.geteuid()!=0:
+        pytest.skip('real root-owned recovery records; exercised by the workflow root-metadata step')
     task='036bda80-b063-4578-a87b-61e9d556d5b2'
     dispatch='6ac74f4e-d3fa-4140-a700-904cc6d408c7'
     work='0ede25b2-02e4-437b-85e0-7eb4882bc3d0'
