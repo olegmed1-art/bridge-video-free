@@ -22,7 +22,7 @@ from ops import light_native_service_switch as switch
 
 ROOT=Path('/var/lib/bridge-light-native-lane-owner')
 FIRST_EXECUTION_SECONDS=420
-EXTRA=('ops/light_native_lane_controller.py','ops/light_native_lane_execution.py',
+EXTRA=('ops/light_native_lane_controller.py','ops/light_native_lane_cycle.py','ops/light_native_lane_execution.py',
        'ops/light_native_lane_feed.py','ops/light_native_lane_owner.py',
        'ops/light_native_lane_run_guard.py','database/__init__.py',
        'database/light_native_pilot_intake.py','database/native_cli_permission_engine.py')
@@ -39,13 +39,15 @@ def package(repo,source):
     return encoded(dict(version=1,kind='LIGHT_LANE_CONTROLLER',source=source,helpers=helpers))
 
 
-def validate_package(raw,source,accepted):
+def validate_package(raw,source,accepted,*,allow_legacy=False):
     require(type(raw) is bytes and len(raw)<3*1024*1024 and sha(raw)==accepted
             and release.source.identifier(source,40),'LANE_OWNER_PACKAGE')
     value=parse(raw)
+    expected=set((*release.HELPERS,*EXTRA))
+    names=set(value.get('helpers',{}))
     require(set(value)=={'version','kind','source','helpers'} and value['version']==1
             and value['kind']=='LIGHT_LANE_CONTROLLER' and value['source']==source
-            and set(value['helpers'])==set((*release.HELPERS,*EXTRA))
+            and (names==expected or allow_legacy and names==expected-{'ops/light_native_lane_cycle.py'})
             and all(type(v) is str for v in value['helpers'].values()),'LANE_OWNER_PACKAGE')
     return value
 
@@ -79,7 +81,7 @@ def bootstrap_helpers(controller):
 
 def verify_helpers(source,accepted):
     root=helpers_root(source)
-    controller=validate_package(read(root/'package.json',accepted,3*1024*1024),source,accepted)
+    controller=validate_package(read(root/'package.json',accepted,3*1024*1024),source,accepted,allow_legacy=True)
     for name,text in controller['helpers'].items():
         require(read(root/name,None,3*1024*1024)==text.encode(),'LANE_OWNER_HELPER_CHANGED')
     return root
@@ -160,11 +162,15 @@ def supervisor_source(source):
             (str(helpers_root(source)),str(execution.plan.source_path(install.RETAINED_SOURCE)))).encode()
 
 
-def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accepted_payload,run_guard):
+def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accepted_payload,run_guard,*,_cycle=None):
     """One authenticated phase; its accepted payload contains no credentials."""
     require(os.geteuid()==0 and os.uname().nodename=='autopilot-lite-vnic'
             and sha(payload_raw)==accepted_payload,'LANE_OWNER_AUTHORITY')
     value=parse(payload_raw)
+    if value.get('action')=='cycle':
+        require(_cycle is None,'LANE_CYCLE_SCOPE')
+        from ops.light_native_lane_cycle import run
+        return run(wheels,credential,token,controller_raw,retained_raw,payload_raw,accepted_payload,run_guard)
     keys={'version','action','source','accepted_controller_sha256','accepted_runtime_sha256',
           'plan_base64','accepted_plan_sha256','agreement','accepted_agreement_sha256',
           'accepted_receipt_sha256','accepted_discovery_sha256','accepted_permit_sha256',
@@ -173,6 +179,8 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
              or set(value)==keys|{'predecessor'} and value['version']==2) and value['action'] in
             ('prepare','publish','permit','execute','terminal','restore','contain','recover'),'LANE_OWNER_PHASE')
     number=sequence(value)
+    from ops.light_native_lane_cycle import authorize_phase
+    authorize_phase(value,_cycle)
     run_guard.assert_current()
     controller=validate_package(controller_raw,value['source'],value['accepted_controller_sha256'])
     require(sha(retained_raw)==value['accepted_runtime_sha256'],'LANE_OWNER_RUNTIME_PACKAGE')
