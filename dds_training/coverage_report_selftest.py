@@ -95,6 +95,36 @@ def main() -> None:
             assert_error_report()
         (fragments / "coverage-1.json").write_text(json.dumps(valid_fragment))
 
+        malformed_manifests = [[], None, {**manifest, "tests": None},
+            {**manifest, "tests": {}}, {**manifest, "tests": [None]},
+            {**manifest, "tests": [{"suite": "fast"}]},
+            {**manifest, "tests": [{"id": [], "suite": "fast"}]},
+            {**manifest, "tests": [{"id": "t", "suite": None}]},
+            {**manifest, "coverage": None}, {**manifest, "coverage": []}]
+        for key in ("module_tests", "runtime_coverage"):
+            for bad in (None, [], "invalid"):
+                malformed_manifests.append({**manifest, "coverage": {**manifest["coverage"], key: bad}})
+        for bad in (None, "t", {"t": True}, [None], [True], [[]], [""]):
+            malformed_manifests.append({**manifest, "coverage": {
+                **manifest["coverage"], "module_tests": {"module.py": bad}}})
+        for bad in (None, [], "invalid"):
+            malformed_manifests.append({**manifest, "coverage": {
+                **manifest["coverage"], "runtime_coverage": {"fast": bad}}})
+        for malformed in malformed_manifests:
+            manifest_path.write_text(json.dumps(malformed), encoding="utf-8")
+            assert_error_report()
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        assert make_report(root, manifest_path, fragments, "fast")["status"] == "ok"
+
+        for numeric_id in (1, 1.5):
+            numeric_manifest = {**manifest, "tests": [{"id": numeric_id, "suite": "fast"}],
+                "coverage": {**manifest["coverage"], "module_tests": {"module.py": [numeric_id]}}}
+            manifest_path.write_text(json.dumps(numeric_manifest), encoding="utf-8")
+            numeric_report = make_report(root, manifest_path, fragments, "fast")
+            assert numeric_report["status"] == "ok", numeric_report
+            assert numeric_report["suite_test_ids"] == [str(numeric_id)], numeric_report
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
         for damaged_path in (manifest_path, fragments / "coverage-1.json", module):
             original_bytes = damaged_path.read_bytes()
             damaged_path.write_bytes(b"\xff\xfe")
