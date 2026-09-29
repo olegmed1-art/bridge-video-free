@@ -395,3 +395,145 @@ def test_failure_to_persist_receipt_rolls_back_intake(tmp_path,monkeypatch):
         target.prepare(conn,plan,agreement,raw,accepted,tmp_path/'before.json',
             target_open=True,observed_head_sha=HEAD,observed_branch=plan.value['branch'],durable_receipt=disk_failure)
     assert conn.rolled_back and not conn.committed
+
+
+# Owner refresh keeps the existing 300-second ceiling and never reclaims.
+@pytest.fixture
+def publication_refresh(monkeypatch):
+    from copy import deepcopy
+    from datetime import datetime,timezone,timedelta
+    plan,_,_,_,_=fixture()
+    now=datetime.now(timezone.utc)
+    agreement_value={'version':1,'owner':'olegmed1-art','operation_digest':plan.scope_digest,
+        'not_before':(now-timedelta(seconds=1)).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'expires_at':(now+timedelta(seconds=1200)).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'coverage':COVERAGE,'evidence':'Independent bounded refresh test.'}
+    agreement=Agreement(agreement_value,target.digest(agreement_value),plan.scope)
+    receipt=dict(plan_sha256=plan.digest,task_id=TASK,dispatch_id=DISPATCH,work_item_id=WORK,
+        claim_epoch=1,applied_config=dict(enabled=True),applied_role=dict(can_repair=False),
+        goal_json_sha256=hashlib.sha256(b'{}').hexdigest(),dispatch=dict(task_fingerprint='fingerprint'))
+    rows=dict(config=dict(enabled=True),role=dict(can_repair=False),active_tasks=[TASK],
+        mapping=[dict(task_id=TASK,run_kind='AUDIT')],successors=0,
+        work=dict(state='ACTIVE',last_task_id=TASK,work_key=plan.value['work_key'],task_spec_json=plan.value['task_spec_json']),
+        task=dict(status='WAITING_EXTERNAL',goal_json={}),step=dict(status='WAITING_EXTERNAL',task_id=TASK),
+        outbox=dict(status='CLAIMED',claim_owner=plan.worker,claim_epoch=1,attempts=1,max_attempts=5,task_id=TASK,
+            expected_head_sha=HEAD,task_fingerprint='fingerprint',mode='READ_ONLY',delivery_contract_version=3,
+            step_attempt_id='step',claim_until=(now+timedelta(seconds=100)).isoformat(),updated_at='old',
+            published_at=None,github_dispatch_comment_id=None,dispatch_body_sha256=None,executor_id=None,
+            codex_ack_at=None,delivered_at=None,completed_at=None))
+    state=SimpleNamespace(rows=rows,now=now,writes=0,expired=False,cas_drift=False,window=True,readback=True,
+                          receipts=0,delta_drift=False,guards=0,snapshots=[],fail_after=False,fail_commit=False)
+    names={'native_cli_config':'config','role_registry':'role','project_work_item':'work','task':'task',
+           'step_attempt':'step','role_dispatch_outbox':'outbox'}
+    class Connection:
+        autocommit=True
+        read_only=False
+        info=SimpleNamespace(transaction_status=TransactionStatus.IDLE)
+        @contextmanager
+        def transaction(self):
+            original=deepcopy(state.rows);start=state.writes
+            try:yield
+            except BaseException:state.rows=original;raise
+            if state.fail_commit and state.writes>start:raise RuntimeError('ACK_LOST')
+        def execute(self,sql,args=()):
+            if sql.startswith('SELECT task_id FROM autopilot.task WHERE status IN'):
+                return SimpleNamespace(fetchall=lambda:[(x,) for x in state.rows['active_tasks']])
+            if sql.startswith('SELECT count(*) FROM autopilot.role_dispatch_outbox WHERE prior_task_id'):
+                return Row((state.rows['successors'],))
+            if sql.startswith('SELECT to_jsonb(x) FROM autopilot.project_work_task'):
+                return SimpleNamespace(fetchall=lambda:[(x,) for x in state.rows['mapping']])
+            if sql.startswith('SELECT to_jsonb(x)'):
+                table=sql.split('FROM autopilot.')[1].split()[0]
+                return Row((deepcopy(state.rows[names[table]]),))
+            if sql.startswith('SELECT count(*) FROM autopilot.native_cli_receipt'):return Row((state.receipts,))
+            if sql.startswith('SELECT moment,'):
+                return Row((state.now,min(state.now+timedelta(seconds=300),datetime.fromtimestamp(args[0],timezone.utc)),state.window))
+            if sql.startswith('UPDATE autopilot.role_dispatch_outbox SET claim_until'):
+                state.writes+=1
+                assert "claim_until>clock_timestamp()" in sql and 'claim_until=%s::timestamptz' in sql
+                assert 'AND attempts=1' in sql and 'AND claim_owner=%s AND claim_epoch=%s' in sql
+                assert args[0]<=state.now+timedelta(seconds=300)
+                assert args[4]==1 and args[5]==TASK and args[6]=='fingerprint'
+                if state.expired or state.cas_drift:return SimpleNamespace(rowcount=0)
+                state.rows['outbox'].update(claim_until=args[0].isoformat(),updated_at=args[1].isoformat())
+                if state.delta_drift:state.rows['outbox']['attempts']=2
+                return SimpleNamespace(rowcount=1)
+            if sql.startswith('SELECT claim_until=%s'):return Row((state.readback,))
+            if sql.startswith('SELECT claim_until>clock_timestamp()'):return Row((not state.expired,))
+            return Row(None)
+    conn=Connection()
+    monkeypatch.setattr(target.engine,'identity',lambda *args:None)
+    def before(row):state.snapshots.append(('before',deepcopy(row)))
+    def after(row):
+        if state.fail_after:raise RuntimeError('DISK_FULL')
+        state.snapshots.append(('after',deepcopy(row)))
+    def guard():state.guards+=1
+    run=lambda:target.refresh_publication_claim(conn,plan,agreement,receipt,effect_guard=guard,
+                                                durable_before=before,durable_after=after)
+    return state,conn,plan,agreement,receipt,run
+
+
+def test_refresh_keeps_claim_identity_attempts_and_300_second_cap(publication_refresh):
+    state,conn,plan,agreement,receipt,run=publication_refresh
+    from datetime import datetime
+    after=run()
+    assert state.writes==1 and state.guards==2
+    assert [row[0] for row in state.snapshots]==['before','after']
+    assert after['outbox']['attempts']==1 and after['outbox']['claim_epoch']==1 and after['outbox']['max_attempts']==5
+    assert (datetime.fromisoformat(after['outbox']['claim_until'])-state.now).total_seconds()==300
+    conn.read_only=True
+    target.assert_publication_claim(conn,plan,agreement,receipt,after)
+    assert state.writes==1
+
+
+@pytest.mark.parametrize('fault',['expired','cas_drift','delta_drift','fail_after'])
+def test_refresh_failure_rolls_back_without_reclaim(publication_refresh,fault):
+    from copy import deepcopy
+    state,conn,plan,agreement,receipt,run=publication_refresh
+    before=deepcopy(state.rows)
+    setattr(state,fault,True)
+    with pytest.raises(RuntimeError):run()
+    assert state.rows==before and state.writes==1
+
+
+@pytest.mark.parametrize('fault',['window','readback'])
+def test_window_and_readback_fail_closed(publication_refresh,fault):
+    from copy import deepcopy
+    state,_,_,_,_,run=publication_refresh
+    before=deepcopy(state.rows);setattr(state,fault,False)
+    with pytest.raises(RuntimeError):run()
+    assert state.rows==before
+
+
+@pytest.mark.parametrize('table,key,value',[
+    ('outbox','status','FAILED_CLOSED'),('outbox','claim_epoch',2),('outbox','attempts',2),
+    ('outbox','claim_owner','other'),('outbox','task_fingerprint','other'),('outbox','published_at','now'),
+    ('outbox','expected_head_sha','c'*40),('task','status','RUNNING'),('task','goal_json',{'foreign':True}),
+    ('role','can_repair',True),('work','state','PAUSED'),('step','task_id','foreign')])
+def test_refresh_rejects_changed_scope_before_update(publication_refresh,table,key,value):
+    state,_,_,_,_,run=publication_refresh
+    state.rows[table][key]=value
+    with pytest.raises(RuntimeError,match='DRIFT'):run()
+    assert state.writes==0
+
+
+def test_refresh_lost_ack_is_read_back_without_second_update(publication_refresh):
+    state,conn,plan,agreement,receipt,run=publication_refresh
+    state.fail_commit=True
+    with pytest.raises(RuntimeError,match='ACK_LOST'):run()
+    expected=state.snapshots[-1][1]
+    conn.read_only=True
+    target.assert_publication_claim(conn,plan,agreement,receipt,expected)
+    assert state.writes==1
+    state.expired=True
+    with pytest.raises(RuntimeError,match='EXPIRED'):
+        target.assert_publication_claim(conn,plan,agreement,receipt,expected)
+    assert state.writes==1
+
+
+@pytest.mark.parametrize('field,value',[('active_tasks',[TASK,'other']),('successors',1),('mapping',[])])
+def test_refresh_preserves_single_task_exclusivity(publication_refresh,field,value):
+    state,_,_,_,_,run=publication_refresh
+    state.rows[field]=value
+    with pytest.raises(RuntimeError,match='DRIFT'):run()
+    assert state.writes==0

@@ -213,3 +213,23 @@ I2 review and fault tests, not a stale test-branch schema or a production rollba
 rehearsal. The task summary deliberately lacks `status=BLOCKED`, which the live
 terminal trigger would otherwise interpret as potential repair authority.
 The lease-lifetime design for future tasks remains a separate unresolved item.
+
+### Bounded publication-claim refresh for future plans
+
+A fresh preparation still claims the outbox for at most 300 seconds. Before
+publishing and before marking independently reviewed discovery, the owner may
+refresh only that same *unexpired* first claim. The locked graph must still
+match the accepted intake, exact owner/epoch/task/head/fingerprint and original
+controls, with no native receipt. The UPDATE repeats its CAS conditions and
+changes only claim_until/updated_at; it cannot reclaim or increment attempts.
+The deadline is capped at DB clock time +300 seconds and the original agreement
+end. At least 660 seconds of the original execution window must remain.
+
+Each phase writes create-only refresh intent and before/expected-after records.
+A lost commit response allows exact readback, never a second extension. An
+intent without after evidence refuses and needs incident reconciliation. A
+fresh read immediately before the 30-second broker call requires more than
+60 seconds of claim lifetime. Existing publication/permit intents refuse phase
+replay before refresh. Expiry still fails closed; this adds no renewal loop,
+issuer, service activation, new DB function/grant or permission expansion.
+The recovered 2026-09-29 failed claim cannot satisfy these conditions.

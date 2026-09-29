@@ -249,6 +249,9 @@ def phase_context(tmp_path,monkeypatch):
     monkeypatch.setattr(owner,'observed_target',lambda *a:events.append('fresh-pr'))
     monkeypatch.setattr(owner,'discovery',lambda *a:{})
     monkeypatch.setattr(owner,'broker_publish',lambda *a:events.append('broker') or {})
+    monkeypatch.setattr(target,'refresh_owner_claim',lambda *a:events.append('claim-refreshed'))
+    from database import light_native_pilot_intake as intake
+    monkeypatch.setattr(intake,'assert_publication_claim',lambda *a,**kw:events.append('lease-readback'))
     monkeypatch.setattr(feed,'publish_first',lambda *a:events.append('feed') or {})
     def launch(*args):
         assert not lock['held'];events.append('launch');return {'launched':True}
@@ -273,7 +276,7 @@ def test_publish_accepts_fresh_committed_graph_after_lost_ack(phase_context,monk
     value,events,call,directory=phase_context
     monkeypatch.setattr(target,'committed_intake',lambda *a:events.append('commit-proven'))
     assert call()['phase']=='publish'
-    assert events.index('commit-proven')<events.index('broker')
+    assert events.index('commit-proven')<events.index('claim-refreshed')<events.index('lease-readback')<events.index('broker')
     assert (directory/'publication-intent.json').exists()
 
 
@@ -558,3 +561,74 @@ def test_post_commit_unexpected_delta_rejected(recovery,table,key,value):
     after=deepcopy(recovery.db.rows);after[table][key]=value
     with pytest.raises(RuntimeError,match='UNEXPECTED_DELTA'):
         target.validate_recovery_delta(original,after,recovery.before,recovery.receipt)
+
+
+@pytest.fixture
+def claim_refresh_records(tmp_path,monkeypatch):
+    if os.geteuid()!=0:pytest.skip('root-owned refresh intent; covered by required root CI step')
+    from database import light_native_pilot_intake as intake
+    state=SimpleNamespace(writes=0,ack_lost=False,no_after=False,readback=0,expired=False)
+    class Connection:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+    driver=SimpleNamespace(connect=lambda **kwargs:Connection())
+    monkeypatch.setattr(target.install,'root_parent',lambda *args:None)
+    monkeypatch.setattr(target,'containment_host',lambda *args:None)
+    def refresh(conn,plan,agreement,receipt,**kw):
+        kw['effect_guard']();kw['durable_before']({'before':True});state.writes+=1
+        if state.no_after:raise RuntimeError('DISK_FULL')
+        kw['durable_after']({'accepted_after':True})
+        if state.ack_lost:raise RuntimeError('ACK_LOST')
+        return {'accepted_after':True}
+    def readback(conn,plan,agreement,receipt,expected,**kw):
+        state.readback+=1
+        assert conn.read_only and expected=={'accepted_after':True} and kw['minimum_seconds']==60
+        if state.expired:raise RuntimeError('EXPIRED')
+    monkeypatch.setattr(intake,'refresh_publication_claim',refresh)
+    monkeypatch.setattr(intake,'assert_publication_claim',readback)
+    value=dict(action='publish',accepted_receipt_sha256='a'*64,accepted_agreement_sha256='b'*64)
+    plan=SimpleNamespace(digest='c'*64,scope_digest='d'*64)
+    agreement=SimpleNamespace(assert_held=lambda *args:None)
+    call=lambda:target.refresh_owner_claim(driver,{},plan,agreement,{},tmp_path,value,SimpleNamespace(assert_running=lambda:None))
+    return state,value,call,tmp_path
+
+
+def test_owner_refresh_lost_ack_reads_record_without_second_extension(claim_refresh_records):
+    state,value,call,directory=claim_refresh_records
+    state.ack_lost=True
+    with pytest.raises(RuntimeError,match='ACK_LOST'):call()
+    assert call()=={'accepted_after':True} and state.writes==1
+    assert (directory/'publish-claim-refresh-intent.json').exists()
+    state.expired=True
+    with pytest.raises(RuntimeError,match='EXPIRED'):call()
+    assert state.writes==1
+
+
+def test_owner_refresh_missing_after_never_retries_sql(claim_refresh_records):
+    state,_,call,_=claim_refresh_records
+    state.no_after=True
+    with pytest.raises(RuntimeError,match='DISK_FULL'):call()
+    with pytest.raises(FileNotFoundError):call()
+    assert state.writes==1
+
+
+def test_owner_refresh_rejects_changed_binding(claim_refresh_records):
+    state,value,call,_=claim_refresh_records
+    call();value['accepted_receipt_sha256']='e'*64
+    with pytest.raises(RuntimeError,match='INTENT_CHANGED'):call()
+    assert state.writes==1
+
+
+def test_uncertain_publication_never_refreshes_or_republishes(phase_context,monkeypatch):
+    value,events,call,directory=phase_context
+    (directory/'publication-intent.json').write_bytes(b'{}')
+    with pytest.raises(RuntimeError,match='PUBLICATION_UNCERTAIN'):call()
+    assert 'claim-refreshed' not in events and 'broker' not in events
+
+
+def test_refresh_refusal_precedes_external_broker(phase_context,monkeypatch):
+    value,events,call,directory=phase_context
+    monkeypatch.setattr(target,'committed_intake',lambda *args:None)
+    monkeypatch.setattr(target,'refresh_owner_claim',lambda *args:(_ for _ in ()).throw(RuntimeError('EXPIRED')))
+    with pytest.raises(RuntimeError,match='EXPIRED'):call()
+    assert 'broker' not in events and not (directory/'publication-intent.json').exists()

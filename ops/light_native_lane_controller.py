@@ -271,13 +271,18 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
         guard(plan,prior,value,run_guard,agreement)
         owner.observed_target(API(token),plan)
         if value['action']=='publish':
+            require(not (directory/'publication-intent.json').exists(),'LANE_OWNER_PUBLICATION_UNCERTAIN')
             with psycopg.connect(**parameters(credential),autocommit=True) as conn:
                 conn.read_only=True
                 if number: verify_previous(conn,value)
                 committed_intake(conn,plan,receipt)
+            lease=refresh_owner_claim(psycopg,parameters(credential),plan,agreement,receipt,directory,value,run_guard)
             retain(directory/'publication-intent.json',payload_raw)
             run_guard.assert_running()
             if number: containment_host(directory,value)
+            with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+                conn.read_only=True
+                intake.assert_publication_claim(conn,plan,agreement,receipt,lease,minimum_seconds=60)
             published=owner.broker_publish(candidate,prior,receipt)
             retain(directory/'broker.json',encoded(published))
             discovered=owner.discovery(API(token),published,receipt)
@@ -288,10 +293,12 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
         published=parse(read(directory/'broker.json'))
         require(owner.discovery(API(token),published,receipt)==discovered,'LANE_OWNER_PUBLICATION_CHANGED')
         if value['action']=='permit':
+            require(not (directory/'permit-intent.json').exists(),'LANE_OWNER_PERMIT_UNCERTAIN')
             if number:
                 with psycopg.connect(**parameters(credential),autocommit=True) as conn:
                     conn.read_only=True
                     verify_previous(conn,value)
+            refresh_owner_claim(psycopg,parameters(credential),plan,agreement,receipt,directory,value,run_guard)
             def permit_guard():
                 run_guard.assert_running()
                 if number: containment_host(directory,value)
@@ -834,6 +841,41 @@ def recover(psycopg,parameters,plan,receipt,directory,value,run_guard,api):
         task_success=False,provider_started=False,queue_retry_authorized=False)
     remember(directory/'recovered.json',encoded(result))
     return result
+
+
+def refresh_owner_claim(psycopg,parameters,plan,agreement,receipt,directory,value,run_guard):
+    """One bounded refresh per accepted phase, with no replay on lost ACK."""
+    from database import light_native_pilot_intake as intake
+    phase=value['action']
+    require(phase in ('publish','permit'),'LANE_OWNER_CLAIM_PHASE')
+    intent=directory/(phase+'-claim-refresh-intent.json')
+    before=directory/(phase+'-claim-refresh-before.json')
+    after=directory/(phase+'-claim-refresh-after.json')
+    binding=encoded(dict(plan_sha256=plan.digest,receipt_sha256=value['accepted_receipt_sha256'],
+        agreement_sha256=value['accepted_agreement_sha256'],action=phase,
+        discovery_sha256=value['accepted_discovery_sha256'] if phase=='permit' else None))
+    def effect_guard():
+        run_guard.assert_running()
+        agreement.assert_held(plan.scope_digest)
+        containment_host(directory,value)
+        require(not (directory/'contain-intent.json').exists(),'LANE_OWNER_CONTAINMENT_PENDING')
+    effect_guard()
+    if intent.exists():
+        require(read(intent)==binding,'LANE_OWNER_CLAIM_INTENT_CHANGED')
+        expected=parse(read(after))
+    else:
+        # A preexisting orphan snapshot is uncertainty, not permission to overwrite.
+        require(not before.exists() and not after.exists(),'LANE_OWNER_CLAIM_OUTCOME_UNKNOWN')
+        retain(intent,binding)
+        with psycopg.connect(**parameters,autocommit=True) as conn:
+            conn.read_only=False
+            expected=intake.refresh_publication_claim(conn,plan,agreement,receipt,effect_guard=effect_guard,
+                durable_before=lambda row:retain(before,encoded(row)),durable_after=lambda row:retain(after,encoded(row)))
+    effect_guard()
+    with psycopg.connect(**parameters,autocommit=True) as conn:
+        conn.read_only=True
+        intake.assert_publication_claim(conn,plan,agreement,receipt,expected,minimum_seconds=60)
+    return expected
 
 
 def committed_intake(conn,plan,receipt):

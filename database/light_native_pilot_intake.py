@@ -286,6 +286,116 @@ def dispatch_body(dispatch):
         'mode=READ_ONLY'))
 
 
+def publication_claim_rows(conn,plan,receipt,*,locked=False):
+    suffix=' FOR UPDATE' if locked else ''
+    result={}
+    for name,table,predicate,args in (
+        ('config','native_cli_config','singleton',()),
+        ('role','role_registry',"role_id='AUTOPILOT'",()),
+        ('work','project_work_item','work_item_id=%s::uuid',(receipt['work_item_id'],)),
+        ('task','task','task_id=%s::uuid',(receipt['task_id'],)),
+        ('outbox','role_dispatch_outbox','dispatch_id=%s::uuid',(receipt['dispatch_id'],))):
+        result[name]=one(conn,f'SELECT to_jsonb(x) FROM autopilot.{table} x WHERE {predicate}'+suffix,args)
+    result['step']=one(conn,'SELECT to_jsonb(x) FROM autopilot.step_attempt x WHERE step_attempt_id=%s::uuid'+suffix,
+                       (result['outbox']['step_attempt_id'],))
+    result['receipts']=conn.execute('SELECT count(*) FROM autopilot.native_cli_receipt WHERE dispatch_id=%s::uuid',
+                                   (receipt['dispatch_id'],)).fetchone()[0]
+    result['active_tasks']=[str(row[0]) for row in conn.execute("SELECT task_id FROM autopilot.task WHERE status IN "
+        "('NEW','VALIDATING','READY','RUNNING','WAITING_EXTERNAL','EVALUATING') ORDER BY task_id").fetchall()]
+    result['mapping']=[row[0] for row in conn.execute('SELECT to_jsonb(x) FROM autopilot.project_work_task x '
+        'WHERE work_item_id=%s::uuid ORDER BY task_id',(receipt['work_item_id'],)).fetchall()]
+    result['successors']=conn.execute('SELECT count(*) FROM autopilot.role_dispatch_outbox WHERE prior_task_id=%s::uuid OR origin_task_id=%s::uuid',
+                                     (receipt['task_id'],receipt['task_id'])).fetchone()[0]
+    o=result['outbox']
+    require(receipt['plan_sha256']==plan.digest and result['config']==receipt['applied_config']
+        and result['role']==receipt['applied_role'] and result['role']['can_repair'] is False
+        and result['work']['state']=='ACTIVE' and result['work']['last_task_id']==receipt['task_id']
+        and result['work']['work_key']==plan.value['work_key']
+        and result['work']['task_spec_json']==plan.value['task_spec_json']
+        and hashlib.sha256(json.dumps(result['task']['goal_json'],sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+            ==receipt['goal_json_sha256']
+        and result['task']['status']==result['step']['status']=='WAITING_EXTERNAL'
+        and result['step']['task_id']==receipt['task_id'] and result['receipts']==0
+        and result['active_tasks']==[receipt['task_id']] and result['successors']==0
+        and len(result['mapping'])==1 and result['mapping'][0]['task_id']==receipt['task_id']
+        and result['mapping'][0]['run_kind']=='AUDIT'
+        and o['status']=='CLAIMED' and o['claim_owner']==plan.worker
+        and o['claim_epoch']==receipt['claim_epoch']==1 and o['attempts']==1
+        and o['task_id']==receipt['task_id'] and o['expected_head_sha']==plan.value['expected_head_sha']
+        and o['task_fingerprint']==receipt['dispatch']['task_fingerprint']
+        and o['mode']=='READ_ONLY' and o['delivery_contract_version']==3
+        and all(o[k] is None for k in ('published_at','github_dispatch_comment_id','dispatch_body_sha256',
+            'executor_id','codex_ack_at','delivered_at','completed_at')),
+        'PILOT_CLAIM_REFRESH_DRIFT')
+    return result
+
+
+def assert_publication_claim(conn,plan,agreement,receipt,expected,*,minimum_seconds=60):
+    """Read-only COMMIT/lease proof, including after an uncertain refresh ACK."""
+    require(conn.autocommit is True and conn.read_only is True,'PILOT_CLAIM_READBACK_AUTHORITY')
+    agreement.assert_held(plan.scope_digest)
+    with conn.transaction():
+        conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+        engine.identity(conn,target())
+        require(publication_claim_rows(conn,plan,receipt)==expected,'PILOT_CLAIM_REFRESH_UNKNOWN')
+        require(conn.execute('SELECT claim_until>clock_timestamp()+make_interval(secs=>%s) '
+            'AND to_timestamp(%s)>clock_timestamp()+interval \'660 seconds\' '
+            'FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s::uuid',
+            (minimum_seconds,agreement.end,receipt['dispatch_id'])).fetchone()==(True,), 'PILOT_CLAIM_REFRESH_EXPIRED')
+    agreement.assert_held(plan.scope_digest)
+
+
+def refresh_publication_claim(conn,plan,agreement,receipt,*,effect_guard,durable_before,durable_after):
+    """Extend an unexpired exact claim once; never reclaim or increment attempts.
+
+    Caller retains a create-only intent and both prospective snapshots. Unknown
+    commit may only be read back, never used as authority to repeat this call.
+    """
+    require(type(plan) is Plan and type(agreement) is Agreement and conn.autocommit is True
+        and conn.read_only is False and conn.info.transaction_status==TransactionStatus.IDLE,
+        'PILOT_CLAIM_REFRESH_AUTHORITY')
+    agreement.assert_held(plan.scope_digest)
+    with conn.transaction():
+        conn.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+        conn.execute("SET LOCAL statement_timeout='5s'")
+        conn.execute("SET LOCAL lock_timeout='5s'")
+        engine.identity(conn,target())
+        conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('autopilot.role-worker-capacity-v1',))
+        conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('light-lane:'+plan.digest,))
+        conn.execute('LOCK TABLE autopilot.native_cli_receipt IN SHARE MODE')
+        for table in ('project_work_task','role_dispatch_outbox','task'):
+            conn.execute('LOCK TABLE autopilot.'+table+' IN SHARE ROW EXCLUSIVE MODE')
+        before=publication_claim_rows(conn,plan,receipt,locked=True)
+        # Fix DB time once; actual CAS also refuses expiry at the UPDATE boundary.
+        timing=conn.execute('SELECT moment,LEAST(moment+interval \'300 seconds\',to_timestamp(%s)), '
+            'to_timestamp(%s)>moment+interval \'660 seconds\' FROM (SELECT clock_timestamp() moment) x',
+            (agreement.end,agreement.end)).fetchone()
+        require(timing is not None and timing[2] is True,'PILOT_CLAIM_REFRESH_WINDOW')
+        durable_before(before)
+        agreement.assert_held(plan.scope_digest)
+        effect_guard()
+        o=before['outbox']
+        changed=conn.execute("UPDATE autopilot.role_dispatch_outbox SET claim_until=%s,updated_at=%s "
+            "WHERE dispatch_id=%s::uuid AND status='CLAIMED' AND claim_owner=%s AND claim_epoch=%s "
+            'AND attempts=1 AND task_id=%s::uuid AND task_fingerprint=%s AND expected_head_sha=%s '
+            "AND mode='READ_ONLY' AND delivery_contract_version=3 AND claim_until=%s::timestamptz "
+            'AND claim_until>clock_timestamp() AND %s>clock_timestamp()+interval \'60 seconds\'',
+            (timing[1],timing[0],receipt['dispatch_id'],plan.worker,receipt['claim_epoch'],receipt['task_id'],
+             o['task_fingerprint'],plan.value['expected_head_sha'],o['claim_until'],timing[1]))
+        require(changed.rowcount==1,'PILOT_CLAIM_REFRESH_EXPIRED')
+        after=publication_claim_rows(conn,plan,receipt,locked=True)
+        require(all(after[k]==before[k] for k in before if k!='outbox')
+            and set(after['outbox'])==set(o)
+            and all(after['outbox'][k]==v for k,v in o.items() if k not in ('claim_until','updated_at')),
+            'PILOT_CLAIM_REFRESH_DELTA')
+        require(conn.execute('SELECT claim_until=%s AND updated_at=%s FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s::uuid',
+            (timing[1],timing[0],receipt['dispatch_id'])).fetchone()==(True,), 'PILOT_CLAIM_REFRESH_READBACK')
+        durable_after(after)
+        agreement.assert_held(plan.scope_digest)
+        effect_guard()
+    return after
+
+
 def mark_reviewed_publication(conn, plan, agreement, intake_receipt,
                               discovery_raw, accepted_discovery_sha256, *, effect_guard=None):
     """Mark only an independently accepted real GitHub discovery observation.
