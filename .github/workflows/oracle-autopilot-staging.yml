@@ -1,5 +1,6 @@
 name: Oracle Autopilot encrypted staging
 
+# RETIRED 2026-09-29: legacy Neon/Oracle shadow entry point; retained as historical evidence only.
 on:
   pull_request:
     paths:
@@ -21,6 +22,7 @@ concurrency:
 
 jobs:
   contract:
+    if: ${{ false }} # retired legacy shadow path
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -40,6 +42,7 @@ jobs:
             deploy/oracle-autopilot/school-autopilot-shadow.service
 
   stage:
+    if: ${{ false }} # retired legacy shadow path
     if: ${{ github.event_name == 'push' }}
     needs: contract
     runs-on: ubuntu-24.04
