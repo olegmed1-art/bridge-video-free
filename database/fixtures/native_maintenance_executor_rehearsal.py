@@ -39,6 +39,8 @@ class CIAuthority:
     run_id, attempt, job_id = 11, 1, 22
     connections = None
     def assert_running(self): pass
+    def assert_current(self): pass
+    def assert_local(self, scope): pass
     def assert_alive(self): pass
     def assert_held(self, scope): pass
     def assert_drained(self, scope):

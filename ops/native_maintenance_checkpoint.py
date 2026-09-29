@@ -101,6 +101,7 @@ instance. A stale local journal pair may never replace an accepted newer prefix.
             self.failed = True
             raise
 
+
     def sync(self, scope, operation, pause):
         require(not self.failed, 'CHECKPOINT_ALREADY_FAILED')
         try:
@@ -151,3 +152,56 @@ instance. A stale local journal pair may never replace an accepted newer prefix.
         except BaseException:
             self.failed = True
             raise
+
+def publish_reconciled_session_suffix(store, scope, operation, pause, *,
+                                      accepted_head_digest, accepted_pair_digest,
+                                      observed_outcome, reconciler):
+    """One separately accepted, consumed-session journal recovery publication.
+
+    This is not an execute/resume admission. The caller must independently accept
+    BOTH digests and supply a live reconciler that observes the database outcome,
+    prior process/backend drain and HOLD. A failed/ambiguous publication is never
+    retried in this invocation; inspect and accept the new remote head separately.
+    Pause/restore suffixes and lost local journals need a different recovery path.
+    """
+    require(snapshot._hex(scope) and snapshot._hex(accepted_head_digest)
+            and snapshot._hex(accepted_pair_digest)
+            and observed_outcome in ('BEFORE', 'AFTER')
+            and callable(getattr(reconciler, 'assert_reconciled', None)),
+            'CHECKPOINT_RECOVERY_ACCEPTANCE')
+    data = snapshot.capture_locked(operation, pause)
+    require(sha(data) == accepted_pair_digest, 'CHECKPOINT_RECOVERY_PAIR_CHANGED')
+    local = snapshot._parse(data)
+    require(local['scope_digest'] == scope, 'CHECKPOINT_RECOVERY_SCOPE')
+    remote_data = accepted_latest(store, scope, accepted_head_digest)
+    remote = snapshot._parse(remote_data)
+    old_op, new_op = remote['journals']['operation'], local['journals']['operation']
+    require(len(new_op) > len(old_op) and new_op[:len(old_op)] == old_op
+            and new_op != old_op and local['journals']['pause'] == remote['journals']['pause'],
+            'CHECKPOINT_RECOVERY_SESSION_SUFFIX_REQUIRED')
+    # The session opportunity has been consumed. Only its existing records may
+    # be advanced; publishing an uncheckpointed pause/restore effect needs a
+    # separate, independently designed reconciliation protocol.
+    events = [json.loads(row, object_pairs_hook=unique)['event'] for row in new_op]
+    kinds = [event.get('kind') for event in events]
+    require(kinds[:2] == ['BOUND', 'PREPARED']
+            and kinds[2:] in (['SESSION_BOUND'],
+                              ['SESSION_BOUND', 'SESSION_INTENT'],
+                              ['SESSION_BOUND', 'SESSION_INTENT', 'SESSION_RESULT'],
+                              ['SESSION_BOUND', 'SESSION_INTENT', 'SESSION_ERROR'])
+            and len(old_op) >= 2
+            and events[0]['scope'].get('execution_mode') == 'staged_v1'
+            and events[0]['scope'].get('operation') in ('apply', 'rollback')
+            and (kinds[-1] != 'SESSION_RESULT' or
+                 events[-1].get('outcome') == observed_outcome ==
+                 ('BEFORE' if events[0]['scope']['operation'] == 'rollback' else 'AFTER')),
+            'CHECKPOINT_RECOVERY_NOT_CONSUMED_SESSION')
+    # This contract is furnished by the trusted recovery controller, never by
+    # the failed executor or an auto-selected checkpoint. Recheck after the CAS.
+    reconciler.assert_reconciled(scope, observed_outcome)
+    checkpoint = JournalCheckpoint(store, accepted_head_digest=accepted_head_digest)
+    result = checkpoint.sync(scope, operation, pause)
+    reconciler.assert_reconciled(scope, observed_outcome)
+    require(sha(snapshot.capture_locked(operation, pause)) == accepted_pair_digest,
+            'CHECKPOINT_RECOVERY_PAIR_CHANGED')
+    return result

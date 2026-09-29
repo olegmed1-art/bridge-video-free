@@ -6,22 +6,24 @@ from ops import native_maintenance_lifetime as lifetime
 from ops.native_maintenance_workflow_pause import require, digest
 
 class SelfSupervisor:
+    seconds = 100
+
     def __init__(self, source, run):
         group = Path('/proc/self/cgroup').read_text().strip()
         require(group.startswith('0::/system.slice/'), 'RUNTIME_SELF_CGROUP')
         self.unit = group.removeprefix('0::/system.slice/')
         require(self.unit.startswith('bridge-native-ro-' + source[:12] + '-'
                                     + str(run.run_id) + '-' + str(run.attempt) + '-'), 'RUNTIME_SELF_RUN')
-        lifetime.assert_self(self.unit)
-        state, _, inode = lifetime.identity(self.unit, 100)
+        lifetime.assert_self(self.unit, self.seconds)
+        state, _, inode = lifetime.identity(self.unit, self.seconds)
         self.record = dict(unit=self.unit, invocation=state['InvocationID'], cgroup_inode=inode)
         self.failed = False
 
     def assert_alive(self):
         require(not self.failed, 'RUNTIME_SUPERVISOR_FAILED')
         try:
-            lifetime.assert_self(self.unit)
-            state, _, inode = lifetime.identity(self.unit, 100)
+            lifetime.assert_self(self.unit, self.seconds)
+            state, _, inode = lifetime.identity(self.unit, self.seconds)
             require(self.record == dict(unit=self.unit, invocation=state['InvocationID'], cgroup_inode=inode),
                     'RUNTIME_SUPERVISOR_CHANGED')
         except BaseException:
@@ -58,6 +60,10 @@ class SelfSupervisor:
                         'RUNTIME_OTHER_CGROUP_ACTIVE')
         self.assert_alive()
 
+
+
+class StageSupervisor(SelfSupervisor):
+    seconds = lifetime.STAGE_RUNTIME_SECONDS
 
 
 class PriorSupervisors:

@@ -16,8 +16,9 @@ from ops import native_maintenance_snapshot as snapshot
 from ops.native_maintenance_checkpoint_host_probe import identity, journals
 from ops.native_maintenance_owner_host import loaded_runtime
 from ops.native_maintenance_stage_request import read_request
-from ops.native_maintenance_run_guard import API, RehearsalRunBinding
-from ops.native_maintenance_supervisor import SelfSupervisor
+from ops.native_maintenance_run_guard import PersistentAPI as API, RehearsalRunBinding
+from ops.native_maintenance_supervisor import StageSupervisor as SelfSupervisor
+from ops.native_maintenance_budgets import admit_host
 from ops.native_maintenance_workflow_pause import digest, encoded, require, unique, validate_plan
 
 
@@ -77,7 +78,7 @@ def failure_code(exc):
 
 
 def main(source, run_id, attempt, request_digest, binding, wheel_digest, envelope):
-    diagnostic = dict(phase='request', channel=None)
+    diagnostic = dict(phase='request', channel=None, api=None)
     try:
         return _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelope, diagnostic)
     except BaseException as exc:
@@ -92,6 +93,9 @@ def main(source, run_id, attempt, request_digest, binding, wheel_digest, envelop
             except BaseException:
                 pass  # A failed pipe is never reopened or granted a fresh deadline.
         raise SystemExit(2) from None
+    finally:
+        if diagnostic['api'] is not None:
+            diagnostic['api'].close()
 
 
 def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelope, diagnostic):
@@ -104,13 +108,16 @@ def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelo
     wheels = rpc.unpack(envelope['driver'], 10*1024*1024)
     require(bundle.digest(wheels) == wheel_digest, 'REHEARSAL_DRIVER_DIGEST')
     started = time.monotonic()
-    channel = rpc.Channel(0, 1, binding)
+    channel = rpc.Channel(0, 1, binding, seconds=rpc.STAGE_RPC_SECONDS)
     diagnostic.update(channel=channel, phase='run_authentication')
-    run = RehearsalRunBinding(source, run_id, attempt, API(envelope['token']))
+    api = API(envelope['token'])
+    diagnostic['api'] = api
+    run = RehearsalRunBinding(source, run_id, attempt, api)
     run.assert_running()
     require(type(envelope['job_id']) is int and run.job_id == envelope['job_id'], 'REHEARSAL_JOB_CHANGED')
     diagnostic['phase'] = 'supervisor'
     supervisor = SelfSupervisor(source, run)
+    admit_host(channel, request_digest, supervisor, run.assert_running)
     supervisor.assert_exclusive()
     from ops import oracle_light_active_hold_attest as hold
     diagnostic['phase'] = 'hold'
@@ -132,19 +139,30 @@ def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelo
             except BaseException:
                 conn.close()
                 raise
+        def assert_drained():
+            try:
+                connections.assert_drained()
+            except BaseException:
+                try:
+                    groups=connections.diagnostic_groups()
+                    channel.send(dict(kind='NATIVE_REHEARSAL_DRAIN_DIAGNOSTIC',binding=binding,
+                        request_digest=request_digest,groups=groups,no_admission_authority=True))
+                except BaseException:
+                    pass
+                raise
         # Real read-only identity/snapshot and owned-backend drain. No Agreement.
         diagnostic['phase'] = 'owner_snapshot'
         report = owner.observe(psycopg.connect, envelope['credential'])
         connections = OwnedConnections(connect, target, approved_hold=before)
         plan = request['plan']
-        workflows = WorkflowAPI(envelope['token'], plan, digest(plan))
+        workflows = WorkflowAPI(envelope['token'], plan, digest(plan), read_api=run.api)
         diagnostic['phase'] = 'workflow_state'
         for row in plan['workflows']:
             require(workflows.get_workflow(row['id']) == row, 'REHEARSAL_WORKFLOW_CHANGED')
         diagnostic['phase'] = 'workflow_drain'
         WorkflowDrain(run.api, plan, digest(plan)).assert_drained()
         diagnostic['phase'] = 'backend_drain'
-        connections.assert_drained()
+        assert_drained()
         diagnostic['phase'] = 'hold_recheck'
         require(hold.attest() == before, 'REHEARSAL_HOLD_CHANGED')
         run.assert_running()
@@ -165,7 +183,7 @@ def _main(source, run_id, attempt, request_digest, binding, wheel_digest, envelo
             require(snapshot.capture(restored/'operation', restored/'pause') == data,
                     'REHEARSAL_RESTORE')
         diagnostic['phase'] = 'backend_drain'
-        connections.assert_drained()
+        assert_drained()
         diagnostic['phase'] = 'final_drain'
         require(hold.attest() == before, 'REHEARSAL_FINAL_HOLD')
         supervisor.assert_alive()

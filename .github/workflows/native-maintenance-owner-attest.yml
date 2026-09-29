@@ -61,7 +61,7 @@ jobs:
         run: python -m ops.native_maintenance_owner_attest
       - name: Observe registry workflow credential and catalog without writes
         env:
-          NATIVE_REGISTRY_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          NATIVE_REGISTRY_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
           GH_TOKEN: ${{ github.token }}
           EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
         run: python -m ops.native_maintenance_registry_scope

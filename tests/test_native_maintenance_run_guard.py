@@ -1,8 +1,11 @@
 import base64
 import copy
+from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -27,7 +30,8 @@ class FakeAPI:
         self.main = {'ref': 'refs/heads/main', 'object': {'type': 'commit', 'sha': self.source}}
         self.jobs = {'total_count': 1, 'jobs': [{'id': 456, 'name': guard.JOB,
                     'run_id': 123, 'run_attempt': 2, 'head_sha': self.source,
-                    'status': 'in_progress', 'conclusion': None}]}
+                    'status': 'in_progress', 'conclusion': None,
+                    'started_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}]}
 
     def get(self, path):
         self.calls.append(path)
@@ -197,6 +201,156 @@ class RunBindingTests(unittest.TestCase):
             json.loads('{"id":1,"id":2}', object_pairs_hook=guard.unique)
         self.api.jobs['jobs'][0]['run_attempt'] = True
         self.refuse_and_latch()
+
+    def test_middle_reads_overlap_but_first_and_final_run_stay_ordered(self):
+        original = self.api.get
+        barrier = threading.Barrier(3)
+        jobs_done, main_done = threading.Event(), threading.Event()
+        lock = threading.Lock()
+        events = []
+        def get(path):
+            kind = ('run' if path == '/actions/runs/123' else
+                    'file' if path.startswith('/contents/') else
+                    'main' if path == '/git/ref/heads/main' else 'jobs')
+            with lock: events.append(('start', kind))
+            if kind != 'run':
+                barrier.wait(timeout=2)
+                if kind == 'main':
+                    self.assertTrue(jobs_done.wait(2))
+                if kind == 'file':
+                    self.assertTrue(main_done.wait(2))
+            value = original(path)
+            with lock: events.append(('end', kind))
+            if kind == 'jobs': jobs_done.set()
+            if kind == 'main': main_done.set()
+            return value
+        with patch.object(self.api, 'get', side_effect=get):
+            self.binding.assert_running()
+        self.assertEqual(self.binding.job_id, 456)
+        self.assertEqual([e for e in events if e == ('start', 'run')], [('start', 'run')]*2)
+        first_run_end = events.index(('end', 'run'))
+        last_run_start = len(events) - 1 - events[::-1].index(('start', 'run'))
+        self.assertLess(first_run_end, min(events.index(('start', k)) for k in ('file','main','jobs')))
+        self.assertGreater(last_run_start, max(events.index(('end', k)) for k in ('file','main','jobs')))
+        self.assertLess(events.index(('end','jobs')), events.index(('end','main')))
+        self.assertLess(events.index(('end','main')), events.index(('end','file')))
+
+    def test_failed_middle_read_joins_other_workers_and_latches(self):
+        original = self.api.get
+        blocked, invalid, release = threading.Event(), threading.Event(), threading.Event()
+        errors = []
+        def get(path):
+            if path.startswith('/contents/'):
+                blocked.set()
+                if not release.wait(2): raise AssertionError('CI_WORKER_NOT_RELEASED')
+            if path == '/git/ref/heads/main':
+                invalid.set()
+                return {'ref': 'refs/heads/main', 'object': {'type': 'commit', 'sha': 'b'*40}}
+            return original(path)
+        def check():
+            try: self.binding.assert_running()
+            except BaseException as exc: errors.append(exc)
+        with patch.object(self.api, 'get', side_effect=get):
+            worker = threading.Thread(target=check)
+            worker.start()
+            self.assertTrue(blocked.wait(1))
+            self.assertTrue(invalid.wait(1))
+            self.assertTrue(worker.is_alive())
+            release.set()
+            worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(self.binding.failed)
+        self.assertIsNone(self.binding.job_id)
+        self.assertEqual(self.api.calls.count('/actions/runs/123'), 1)
+        with self.assertRaisesRegex(guard.Refused, 'ALREADY_FAILED'):
+            self.binding.assert_running()
+
+    def test_worker_exception_joins_started_jobs_without_retry_or_final_run(self):
+        original = self.api.get
+        file_failed, jobs_blocked, release = threading.Event(), threading.Event(), threading.Event()
+        errors, file_calls = [], []
+        def get(path):
+            if path.startswith('/contents/'):
+                file_calls.append(path)
+                file_failed.set()
+                raise OSError('CI_READ_FAILED')
+            if path.endswith('/jobs?per_page=100'):
+                jobs_blocked.set()
+                if not release.wait(2): raise AssertionError('CI_WORKER_NOT_RELEASED')
+            return original(path)
+        def check():
+            try: self.binding.assert_running()
+            except BaseException as exc: errors.append(exc)
+        with patch.object(self.api, 'get', side_effect=get):
+            worker = threading.Thread(target=check)
+            worker.start()
+            self.assertTrue(file_failed.wait(1))
+            self.assertTrue(jobs_blocked.wait(1))
+            self.assertTrue(worker.is_alive())
+            release.set()
+            worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], OSError)
+        self.assertEqual(len(file_calls), 1)
+        self.assertEqual(self.api.calls.count('/actions/runs/123'), 1)
+        self.assertIsNone(self.binding.job_id)
+        self.assertTrue(self.binding.failed)
+
+    def test_deadline_expiry_during_middle_reads_never_promotes_job(self):
+        original = self.api.get
+        blocked, release = threading.Event(), threading.Event()
+        errors = []
+        def get(path):
+            if path.endswith('/jobs?per_page=100'):
+                blocked.set()
+                if not release.wait(2): raise AssertionError('CI_WORKER_NOT_RELEASED')
+            return original(path)
+        def check():
+            try: self.binding.assert_running()
+            except BaseException as exc: errors.append(exc)
+        with patch.object(self.api, 'get', side_effect=get):
+            worker = threading.Thread(target=check)
+            worker.start()
+            self.assertTrue(blocked.wait(1))
+            self.binding.deadline = time.monotonic() - 1
+            release.set()
+            worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(self.binding.failed)
+        self.assertIsNone(self.binding.job_id)
+
+    def test_http_gets_use_separate_no_redirect_openers(self):
+        class Response:
+            status = 200
+            headers = {}
+            def __init__(self, request): self.url = request.full_url
+            def __enter__(self): return self
+            def __exit__(self, *_): pass
+            def read(self, size): return b'{}'
+        class Opener:
+            def open(self, request, timeout):
+                self.requests.append((request.full_url, timeout))
+                return Response(request)
+            def __init__(self): self.requests = []
+        openers = []
+        def build(*handlers):
+            self.assertIsInstance(handlers[0], guard.NoRedirect)
+            self.assertIsInstance(handlers[1], guard.urllib.request.ProxyHandler)
+            self.assertEqual(handlers[1].proxies, {})
+            opener = Opener()
+            openers.append(opener)
+            return opener
+        with patch.object(guard.urllib.request, 'build_opener', side_effect=build):
+            adapter = guard.API('CI-token')
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = [pool.submit(adapter.get, path) for path in
+                           ('/git/ref/heads/main', '/actions/runs/123')]
+                self.assertEqual([r.result() for r in results], [{}, {}])
+        self.assertEqual(len(openers), 2)
+        self.assertEqual([len(o.requests) for o in openers], [1,1])
 
 
 if __name__ == '__main__':

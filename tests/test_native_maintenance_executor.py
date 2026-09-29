@@ -48,6 +48,8 @@ class Runtime:
 
     def sync(self, scope, operation, pause): self.check('checkpoint')
     def assert_running(self): self.check('run')
+    def assert_current(self): self.check('local_run')
+    def assert_local(self, scope): self.check('local_owner')
     def assert_alive(self): self.check('lifetime')
     def assert_held(self, scope):
         self.check('owner')
@@ -264,6 +266,62 @@ class ExecutorTests(unittest.TestCase):
     def test_dispatch_outside_phase_is_refused(self):
         with self.assertRaisesRegex(Refused, 'DISPATCH_PHASE'):
             self.ex.assert_dispatch(digest(PLAN), 'disable', 7)
+        self.assertEqual(self.remote.puts, [])
+
+    def test_dispatch_has_fresh_checkpoint_brackets_without_extra_remote_round(self):
+        events = []
+        self.ex.phase = 'pausing'
+        with patch.object(self.ex, '_assert_window', side_effect=lambda: events.append('guard')), \
+             patch.object(self.ex.checkpoint, 'sync', side_effect=lambda *_: events.append('checkpoint')):
+            self.ex.assert_dispatch(digest(PLAN), 'disable', 7)
+        self.assertEqual(events, ['guard', 'checkpoint', 'guard'])
+        self.assertEqual(self.remote.puts, [])
+
+    def test_local_scope_does_not_authorize_cancelled_run_to_dispatch(self):
+        self.runtime.reject = 'run'
+        self.ex.assert_scope(digest(PLAN))
+        self.ex.phase = 'pausing'
+        with self.assertRaisesRegex(Refused, 'CI_run'):
+            self.ex.pause.api.disable_workflow(7)
+        self.assertEqual(self.remote.puts, [])
+
+    def test_local_scope_failure_latches_before_remote_effect(self):
+        for condition in ('local_run', 'local_owner', 'lifetime'):
+            with self.subTest(condition=condition):
+                self.runtime.reject = condition
+                with self.assertRaises(Refused):
+                    self.ex.assert_scope(digest(PLAN))
+                self.runtime.reject = None
+                with self.assertRaisesRegex(Refused, 'ALREADY_FAILED'):
+                    self.ex.assert_scope(digest(PLAN))
+                self.reopen(new_run=False)
+        self.assertEqual(self.remote.puts, [])
+
+    def test_dispatch_wrong_plan_refuses_before_checkpoint_or_put(self):
+        self.ex.phase = 'pausing'
+        with patch.object(self.ex, '_assert_window') as guard, \
+             patch.object(self.ex.checkpoint, 'sync') as checkpoint:
+            with self.assertRaisesRegex(Refused, 'EXECUTOR_PAUSE_SCOPE'):
+                self.ex.assert_dispatch('0'*64, 'disable', 7)
+        guard.assert_not_called()
+        checkpoint.assert_not_called()
+        self.assertEqual(self.remote.puts, [])
+
+    def test_second_dispatch_postcheck_loss_keeps_intent_and_blocks_put(self):
+        self.ex.phase = 'pausing'
+        self.ex.pause._event('DISABLE_INTENT', PLAN['workflows'][0])
+        checks = []
+        def guard():
+            checks.append('guard')
+            if len(checks) == 4:
+                raise Refused('CI_FINAL_GUARD_LOST')
+        with patch.object(self.ex, '_assert_window', side_effect=guard), \
+             patch.object(self.ex.checkpoint, 'sync') as checkpoint:
+            with self.assertRaisesRegex(Refused, 'CI_FINAL_GUARD_LOST'):
+                self.ex.pause.api.disable_workflow(7)
+        self.assertEqual(len(checks), 4)
+        self.assertEqual(checkpoint.call_count, 2)
+        self.assertEqual(self.pause.records[-1]['event']['kind'], 'DISABLE_INTENT')
         self.assertEqual(self.remote.puts, [])
 
 

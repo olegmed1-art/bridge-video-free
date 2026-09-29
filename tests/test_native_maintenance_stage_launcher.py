@@ -40,20 +40,21 @@ class ProvenanceTests(unittest.TestCase):
         def git(root, command, ref):
             self.assertEqual(command,'show')
             return (repo/ref.split(':',1)[1]).read_bytes()
-        for mode in ('fetch','drain','first_install','stage','rehearsal'):
+        for mode in ('fetch','drain','first_install','candidate','inspect','stage','rehearsal'):
             with patch.object(launcher.bundle,'git',side_effect=git):
                 code = launcher.bootstrap(repo,SOURCE,'a'*64,'b'*64,123,2,'c'*64,'d'*64,mode)
             compile(code,'outer','exec')
             tree = ast.parse(code)
             call = next(n for n in ast.walk(tree) if isinstance(n,ast.Call)
-                        and isinstance(n.func,ast.Attribute) and n.func.attr == 'managed')
+                        and isinstance(n.func,ast.Attribute) and n.func.attr in ('managed','managed_stage'))
+            self.assertEqual(call.func.attr, 'managed_stage' if mode in ('stage','rehearsal') else 'managed')
             inner = call.args[0].value
             compile(inner,'supervised','exec')
             if mode == 'stage': self.assertIn('from ops.native_maintenance_stage_host import main',inner)
             else: self.assertNotIn('native_maintenance_stage_host',inner)
             if mode == 'rehearsal': self.assertIn('from ops.native_maintenance_stage_rehearsal import main',inner)
         code = ('import sys;sys.path.insert(0,sys.argv[1]);'
-                'import ops.native_maintenance_stage_host,ops.native_maintenance_stage_rehearsal;'
+                'import ops.native_maintenance_stage_host,ops.native_maintenance_stage_rehearsal,ops.native_maintenance_stage_inspect;'
                 'assert "psycopg" not in sys.modules;'
                 'assert "ops.native_maintenance_runtime" not in sys.modules')
         result = subprocess.run([sys.executable,'-I','-B','-S','-c',code,str(repo)],capture_output=True)
@@ -141,12 +142,51 @@ class ProvenanceTests(unittest.TestCase):
                 self.assertEqual(launcher.context(mode),(cls,SOURCE,'f'*64))
                 with self.assertRaises(Exception): launcher.context('rehearsal' if mode=='stage' else 'stage')
             raw = (Path(__file__).resolve().parents[1]/cls.workflow).read_bytes()
-            # During draft assembly both profiles deliberately remain disabled.
-            if cls.workflow_sha256 is not None:
-                self.assertEqual(hashlib.sha256(raw).hexdigest(),cls.workflow_sha256)
+            self.assertEqual(hashlib.sha256(raw).hexdigest(),cls.workflow_sha256)
             self.assertIn(b'persist-credentials: false',raw)
             self.assertIn(b'queue: max',raw)
             if mode == 'rehearsal': self.assertNotIn(b'actions: write',raw)
+
+    def test_stage_profile_accepts_only_fixed_manual_run_and_jobs(self):
+        api=API()
+        api.run.update(path=StageRunBinding.workflow,event='workflow_dispatch')
+        raw=(Path(__file__).resolve().parents[1]/StageRunBinding.workflow).read_bytes()
+        api.file.update(path=StageRunBinding.workflow,size=len(raw),
+                        content=base64.b64encode(raw).decode())
+        api.jobs['jobs'][0]['name']='stage'
+        api.jobs['jobs'].append({**api.jobs['jobs'][0],'id':455,'name':'contract',
+                                 'status':'completed','conclusion':'success'})
+        api.jobs['total_count']=2
+        stage=StageRunBinding(SOURCE,123,2,api)
+        stage.assert_running()
+        self.assertEqual(stage.job_id,456)
+        api.run['event']='push'
+        with self.assertRaises(Exception):stage.assert_running()
+        self.assertTrue(stage.failed)
+        api.run['event']='workflow_dispatch'
+        with self.assertRaisesRegex(Exception,'ALREADY_FAILED'):stage.assert_running()
+        api.jobs['jobs'][0]['name']='rehearsal'
+        with self.assertRaises(Exception):StageRunBinding(SOURCE,123,2,api).assert_running()
+
+    def test_stage_authentication_precedes_root_request_fetch(self):
+        env=dict(EXPECTED_MAIN=SOURCE,ACCEPTED_REQUEST_DIGEST='f'*64,
+            GITHUB_REPOSITORY=launcher.REPOSITORY,GITHUB_REF='refs/heads/main',
+            GITHUB_SHA=SOURCE,GITHUB_EVENT_NAME='workflow_dispatch',
+            GITHUB_ACTOR='olegmed1-art',GITHUB_TRIGGERING_ACTOR='olegmed1-art',
+            GITHUB_JOB='stage',GITHUB_WORKFLOW_REF=launcher.REPOSITORY+'/'+
+            StageRunBinding.workflow+'@refs/heads/main',GITHUB_WORKFLOW_SHA=SOURCE,
+            GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='2',GH_TOKEN='CI')
+        api=Mock();api.get.side_effect=ConnectionError('CANCELLED')
+        with patch.dict(os.environ,env,clear=True),patch.object(sys,'argv',
+             ['launcher','stage','key','known','wheels']),patch.object(launcher,'source_guard'), \
+             patch.object(launcher.bundle,'build',return_value=b'CI_SOURCE'), \
+             patch.object(launcher.driver,'build',return_value=b'CI_WHEELS'), \
+             patch.object(launcher,'MeasuredAPI',return_value=api), \
+             patch.object(launcher,'fetch_request') as fetch, \
+             patch.object(launcher,'bootstrap') as bootstrap, \
+             patch.object(launcher,'oci_client') as oci:
+            with self.assertRaises(ConnectionError):launcher.main('stage')
+            fetch.assert_not_called();bootstrap.assert_not_called();oci.assert_not_called()
 
 
 @unittest.skipUnless(os.getuid()==0,'private persistent storage needs root')
@@ -339,7 +379,7 @@ class LauncherWiringTests(unittest.TestCase):
             GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='2',GH_TOKEN='CI_TOKEN',REQUEST_STORE_ACTION='first_install')
         with patch.dict(os.environ,env,clear=True),patch.object(sys,'argv',['launcher','rehearsal','key','known','wheels']), \
              patch.object(launcher,'source_guard'),patch.object(launcher.bundle,'build',return_value=b'CI_SOURCE'), \
-             patch.object(launcher.driver,'build',return_value=b'CI_WHEELS'),patch.object(launcher,'API',return_value=api), \
+             patch.object(launcher.driver,'build',return_value=b'CI_WHEELS'),patch.object(launcher,'MeasuredAPI',return_value=api), \
              patch.object(launcher,'bootstrap',return_value='CI_FIRST_INSTALL') as bootstrap, \
              patch.object(launcher.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=b'NATIVE_REQUEST_STORE_PROVISIONED\n')), \
              patch.object(launcher,'fetch_request') as fetch,patch.object(launcher,'oci_client') as oci,patch('builtins.print') as output:
@@ -387,15 +427,26 @@ class LauncherWiringTests(unittest.TestCase):
         process.stdin.closed = False
         process.wait.return_value = 1 if fault == 'host_exit' else 0
         channel = Mock()
-        channel.receive.return_value = completion
+        channel.binding = binding
+        channel.deadline = 1210.
+        channel.receive.side_effect = [dict(kind='NATIVE_STAGE_READY', binding=binding, request_digest=accepted), completion]
         server = Mock(sequence=0)
         units = Mock()
         units.retainer.used = True
         events = []
+        clock = [1000.]
+        wall_start = launcher.time.time()
         def retained(*args):
             events.append('backup')
+            if fault == 'slow_prelaunch': clock[0] = 1041.
             if fault == 'backup': raise ConnectionError('CI_LOST_BACKUP_ACK')
-        def launch(*args,**kwargs): events.append('launch'); return process
+        def launch(*args,**kwargs):
+            events.append('launch')
+            if fault == 'late_completion': clock[0] = 1310.
+            if fault == 'slow_popen':
+                clock[0] = 1100.
+                channel.deadline = 1310.
+            return process
         def exit_checked(*args):
             events.append('drained')
             if fault == 'drain': raise RuntimeError('CI_POPULATED_CGROUP')
@@ -410,14 +461,16 @@ class LauncherWiringTests(unittest.TestCase):
         with ExitStack() as stack:
             for patcher in (
                 patch.dict(os.environ,env,clear=True),patch.object(sys,'argv',['launcher','stage','key','known','wheels']),
+                patch.object(launcher.time,'monotonic',side_effect=lambda: clock[0]),
+                patch.object(launcher.time,'time',side_effect=lambda: wall_start + clock[0] - 1000.),
                 patch.object(StageRunBinding,'workflow_sha256',hashlib.sha256(workflow).hexdigest()),
                 patch.object(launcher,'source_guard'),patch.object(launcher.bundle,'build',return_value=b'CI_SOURCE'),
                 patch.object(launcher.driver,'build',return_value=b'CI_WHEEL'),
                 patch.object(launcher,'bootstrap',return_value='CI_FIXED_CODE'),
                 patch.object(launcher,'fetch_request',return_value=raw),patch.object(launcher,'oci_client',return_value=(Mock(),'namespace')),
-                patch.object(launcher.adapter,'OCIJournalStore',return_value=Mock()),
+                patch.object(launcher,'MeasuredStore',return_value=Mock()),
                 patch.object(launcher,'restore_assets',return_value=manifest),patch.object(launcher,'connection_parameters'),
-                patch.object(launcher,'API',return_value=api),patch.object(launcher,'verify_prior',side_effect=prior),
+                patch.object(launcher,'MeasuredAPI',return_value=api),patch.object(launcher,'verify_prior',side_effect=prior),
                 patch.object(launcher,'retain_request',side_effect=retained),
                 patch.object(launcher.subprocess,'Popen',side_effect=launch),patch.object(launcher.rpc,'Channel',return_value=channel),
                 patch.object(launcher.rpc,'StoreServer',return_value=server),patch.object(unit_transport,'Retainer'),
@@ -435,15 +488,17 @@ class LauncherWiringTests(unittest.TestCase):
                 report = json.loads(output.call_args.args[0])
                 self.assertTrue(report['host_exited'] and report['prior_host_drained'] and report['independent_readback'])
                 self.assertEqual(events,['backup','launch','head','drained'])
-                sent = channel.send.call_args.args[0]
+                sent = channel.send.call_args_list[0].args[0]
                 self.assertEqual(sent['envelope']['credential'],'CI_PRIVATE_OWNER_URI')
                 self.assertEqual(sent['envelope']['token'],'CI_PRIVATE_TOKEN')
-            if fault in ('prior','backup'): self.assertNotIn('launch',events)
-            if fault in ('binding','host_exit'): self.assertNotIn('head',events)
+            if fault in ('prior','backup','slow_prelaunch'): self.assertNotIn('launch',events)
+            if fault in ('binding','host_exit','slow_popen'): self.assertNotIn('head',events)
+            if fault == 'slow_popen':
+                self.assertEqual(channel.send.call_count,1)  # envelope only; never START
 
     def test_completion_needs_backup_exit_independent_reads_and_final_live_run(self):
         self.exercise()
-        for fault in ('prior','backup','binding','host_exit','head','drain','cancel_final','rehearsal_refusal'):
+        for fault in ('prior','backup','binding','host_exit','head','drain','cancel_final','rehearsal_refusal','slow_prelaunch','late_completion','slow_popen'):
             with self.subTest(fault=fault): self.exercise(fault)
 
 
@@ -501,3 +556,181 @@ class RehearsalDiagnosticTests(unittest.TestCase):
 
 
 if __name__=='__main__': unittest.main()
+
+class LauncherBudgetTests(unittest.TestCase):
+    def api(self):
+        api=API()
+        api.run.update(path=StageRunBinding.workflow,event='workflow_dispatch')
+        raw=(Path(__file__).resolve().parents[1]/StageRunBinding.workflow).read_bytes()
+        api.file.update(path=StageRunBinding.workflow,size=len(raw),content=base64.b64encode(raw).decode())
+        api.jobs['jobs'][0]['name']='stage'
+        api.jobs['jobs'].append({**api.jobs['jobs'][0],'id':455,'name':'contract','status':'completed','conclusion':'success'})
+        api.jobs['total_count']=2
+        return api
+
+    def test_fixed_stage_budgets_do_not_renew(self):
+        from ops.native_maintenance_run_guard import RunBinding
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1000):
+            host=StageRunBinding(SOURCE,123,2,self.api())
+            runner=StageRunBinding(SOURCE,123,2,self.api(),launcher=True)
+            self.assertEqual(host.deadline,1120)
+            self.assertEqual(runner.deadline,1310)
+            with self.assertRaises(Exception):RunBinding(SOURCE,123,2,self.api(),seconds=100)
+            with self.assertRaises(TypeError):StageRunBinding(SOURCE,123,2,self.api(),seconds=100)
+            with self.assertRaises(Exception):StageRunBinding(SOURCE,123,2,self.api(),launcher=1)
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1119):
+            host.assert_running();runner.assert_running()
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1120):
+            with self.assertRaisesRegex(Exception,'EXPIRED'):host.assert_running()
+            runner.assert_running()
+        self.assertEqual(runner.deadline,1310)
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1310):
+            with self.assertRaisesRegex(Exception,'EXPIRED'):runner.assert_running()
+        with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1001):
+            with self.assertRaisesRegex(Exception,'ALREADY_FAILED'):runner.assert_running()
+
+    def test_cancellation_near_either_deadline_latches(self):
+        for launcher_mode,elapsed in ((False,119),(True,309)):
+            api=self.api()
+            with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1000):
+                run=StageRunBinding(SOURCE,123,2,api,launcher=launcher_mode);run.assert_running()
+            api.run.update(status='completed',conclusion='cancelled')
+            with patch('ops.native_maintenance_run_guard.time.monotonic',return_value=1000+elapsed):
+                with self.assertRaisesRegex(Exception,'RUN_NOT_RUNNING'):run.assert_running()
+                api.run.update(status='in_progress',conclusion=None)
+                with self.assertRaisesRegex(Exception,'ALREADY_FAILED'):run.assert_running()
+
+    def test_refusal_diagnostics_do_not_echo_arbitrary_errors(self):
+        self.assertEqual(launcher.failure_code(RuntimeError('RUN_BINDING_EXPIRED')),'RUN_BINDING_EXPIRED')
+        self.assertEqual(launcher.failure_code(RuntimeError('postgresql://secret')),'REFUSED')
+        self.assertEqual(launcher.failure_code(subprocess.TimeoutExpired('secret-command',1)),'PROCESS_TIMEOUT')
+        for code in ('API_RESPONSE_INCOMPLETE', 'CHECKPOINT_BUDGET_REFUSED', 'RPC_ARCHIVE_BINDING'):
+            self.assertEqual(launcher.failure_code(RuntimeError(code)), code)
+            self.assertEqual(launcher.failure_code(RuntimeError(code + ': private payload')), 'REFUSED')
+        self.assertEqual(launcher.failure_code(TimeoutError('private endpoint')), 'TRANSPORT_TIMEOUT')
+        self.assertEqual(launcher.failure_code(launcher.http.client.RemoteDisconnected('private endpoint')),
+                         'TRANSPORT_FAILURE')
+
+    def test_validated_rpc_refusal_preserves_poison_and_redacts_payload(self):
+        scope, binding = 'a'*64, 'b'*64
+        channel = SimpleNamespace(binding=binding, alive=Mock(), send=Mock(), failed=False)
+        store = Mock()
+        failure = RuntimeError('CHECKPOINT_CAS_CONFLICT')
+        store.compare_head.side_effect = failure
+        server = launcher.ObservedStoreServer(channel, scope, store, Mock())
+        head = encoded(dict(version=1, scope_digest=scope, sequence=1, previous=None, archive_digest='c'*64))
+        record = dict(version=1, binding=binding, scope=scope, sequence=1,
+                      method='compare_head', args=[None, launcher.rpc.pack(head)])
+        with patch.object(launcher, 'REFUSAL_RPC', None):
+            with self.assertRaises(RuntimeError) as caught:
+                server.accept(record)
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(launcher.REFUSAL_RPC, dict(operation='compare_head', sequence=1))
+            self.assertTrue(server.failed)
+            self.assertTrue(channel.failed)
+            channel.send.assert_not_called()
+            with self.assertRaisesRegex(Exception, 'RPC_SERVER_UNAVAILABLE'):
+                server.accept(record)
+            store.compare_head.assert_called_once()
+
+    def test_oci_service_refusal_is_sanitized_and_never_acknowledged(self):
+        class ServiceError(Exception):
+            def __init__(self, status):
+                super().__init__('private credential and object path')
+                self.status = status
+
+        sdk = SimpleNamespace(ServiceError=ServiceError)
+        with patch.dict(sys.modules, {'oci.exceptions': sdk}):
+            for status in (401, 403, 409, 412, 429, 500, 503):
+                failure = ServiceError(status)
+                channel = SimpleNamespace(binding='b'*64, alive=Mock(), send=Mock(), failed=False)
+                store = Mock(spec=['assert_private'])
+                store.assert_private.side_effect = failure
+                server = launcher.ObservedStoreServer(channel, 'a'*64, store, Mock())
+                record = dict(version=1, binding='b'*64, scope='a'*64, sequence=1,
+                              method='assert_private', args=[])
+                with patch.object(launcher, 'REFUSAL_RPC', None):
+                    with self.assertRaises(ServiceError) as caught:
+                        server.accept(record)
+                    self.assertIs(caught.exception, failure)
+                    self.assertEqual(launcher.failure_code(caught.exception), 'OCI_SERVICE_' + str(status))
+                    self.assertEqual(launcher.REFUSAL_RPC, dict(operation='assert_private', sequence=1))
+                    self.assertTrue(server.failed)
+                    self.assertTrue(channel.failed)
+                    channel.send.assert_not_called()
+                    with self.assertRaisesRegex(Exception, 'RPC_SERVER_UNAVAILABLE'):
+                        server.accept(record)
+                    store.assert_private.assert_called_once()
+            for status in ('private payload', True, 599, None):
+                self.assertEqual(launcher.failure_code(ServiceError(status)), 'OCI_SERVICE_FAILURE')
+            other = RuntimeError('private payload')
+            other.status = 403
+            self.assertEqual(launcher.failure_code(other), 'REFUSED')
+
+    def test_invalid_rpc_fields_never_enter_refusal_context(self):
+        channel = SimpleNamespace(binding='b'*64, alive=Mock(), send=Mock(), failed=False)
+        store = Mock()
+        server = launcher.ObservedStoreServer(channel, 'a'*64, store, Mock())
+        with patch.object(launcher, 'REFUSAL_RPC', None):
+            with self.assertRaisesRegex(Exception, 'RPC_REQUEST_IDENTITY'):
+                server.accept(dict(version=1, binding='b'*64, scope='a'*64, sequence='private',
+                                   method='private endpoint', args=['private payload']))
+            self.assertIsNone(launcher.REFUSAL_RPC)
+            self.assertTrue(server.failed)
+            channel.send.assert_not_called()
+            self.assertEqual(store.mock_calls, [])
+
+    def test_extended_launcher_binding_cannot_enter_host_executor(self):
+        value,manifest=request_fixture()
+        request=requests.AcceptedRequest(encoded(value),digest(value),SOURCE)
+        run=StageRunBinding(SOURCE,123,2,self.api(),launcher=True)
+        run.assert_running()
+        packet=runtime.DerivedStagePacket(request,run,manifest)
+        with patch.object(runtime,'SelfSupervisor') as supervisor,self.assertRaisesRegex(Exception,'RUNTIME_COMPONENTS'):
+            runtime.stage(packet,run=run,store=Mock(),connect=Mock(),api_token='CI',retain_unit=Mock())
+        supervisor.assert_not_called()
+
+    def clock_api(self, age=200):
+        from datetime import datetime, timezone
+        api = self.api()
+        api.jobs['jobs'][0]['started_at'] = datetime.fromtimestamp(2_000_000_000-age, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        return api
+
+    def test_authenticated_job_age_only_shortens_and_never_renews_launcher(self):
+        api = self.clock_api()
+        with patch.object(launcher.time, 'monotonic', return_value=1000.), patch.object(launcher.time, 'time', return_value=2_000_000_000.):
+            run = StageRunBinding(SOURCE,123,2,api,launcher=True)
+            run.assert_running()
+            self.assertEqual(run.deadline,1250.)  # 480 - 200 - 30, already < prelaunch 270.
+            self.assertLess(run.deadline-1000., launcher.STAGE_PRELAUNCH_REQUIRED_SECONDS)
+        with patch.object(launcher.time, 'monotonic', return_value=1010.), patch.object(launcher.time, 'time', return_value=2_000_000_010.):
+            run.assert_running()
+            self.assertEqual(run.deadline,1250.)
+
+    def test_job_start_missing_future_old_or_changed_refuses_and_latches(self):
+        for value, code in [(None,'INVALID'),('bad','INVALID'),('2033-05-18T03:33:21Z','FUTURE')]:
+            api=self.clock_api()
+            api.jobs['jobs'][0]['started_at']=value
+            with patch.object(launcher.time,'monotonic',return_value=1000.), patch.object(launcher.time,'time',return_value=2_000_000_000.):
+                run=StageRunBinding(SOURCE,123,2,api,launcher=True)
+                with self.assertRaisesRegex(Exception,code): run.assert_running()
+                self.assertTrue(run.failed)
+        api=self.clock_api(451)
+        with patch.object(launcher.time,'monotonic',return_value=1000.), patch.object(launcher.time,'time',return_value=2_000_000_000.):
+            run=StageRunBinding(SOURCE,123,2,api,launcher=True)
+            with self.assertRaisesRegex(Exception,'EXPIRED'): run.assert_running()
+        api=self.clock_api()
+        with patch.object(launcher.time,'monotonic',return_value=1000.), patch.object(launcher.time,'time',return_value=2_000_000_000.):
+            run=StageRunBinding(SOURCE,123,2,api,launcher=True);run.assert_running()
+            api.jobs['jobs'][0]['started_at']=self.clock_api(199).jobs['jobs'][0]['started_at']
+            with self.assertRaisesRegex(Exception,'CLOCK_CHANGED'):run.assert_running()
+            self.assertEqual(run.deadline,1250.)
+
+    def test_wall_clock_jump_in_either_direction_cannot_extend_job_lifetime(self):
+        for advance in (4.,16.):
+            with patch.object(launcher.time,'monotonic',return_value=1000.), patch.object(launcher.time,'time',return_value=2_000_000_000.):
+                run=StageRunBinding(SOURCE,123,2,self.clock_api(),launcher=True);run.assert_running()
+            with patch.object(launcher.time,'monotonic',return_value=1010.), patch.object(launcher.time,'time',return_value=2_000_000_000.+advance):
+                with self.assertRaisesRegex(Exception,'CLOCK_DRIFT'):run.assert_running()
+                self.assertEqual(run.deadline,1250.)
+                self.assertTrue(run.failed)

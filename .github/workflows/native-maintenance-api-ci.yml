@@ -1,6 +1,12 @@
 name: Native maintenance workflow API
 
 on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact current main for read-only workflow registry observation
+        required: true
+        type: string
   pull_request:
     paths:
       - '.github/workflows/native-maintenance-api-ci.yml'
@@ -30,7 +36,13 @@ jobs:
 
   observe:
     needs: contract
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'olegmed1-art/bridge-video-free' && github.actor == github.repository_owner
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha))
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:

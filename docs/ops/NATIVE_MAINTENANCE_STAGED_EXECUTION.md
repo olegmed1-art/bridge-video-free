@@ -48,6 +48,30 @@ If the remote head still precedes PREPARED, the local suffix cannot authorize
 dispatch. An ambiguous SESSION_BOUND/SESSION_INTENT is different: it consumes
 the opportunity, so a recovered bound/intended session is never dispatched.
 
+For a failed execute run with an intact local scope, a separately accepted
+`restore` request may carry `recovery_pair_digest` as well as the independently
+accepted **current remote** `accepted_head_digest`. The read-only failed-stage
+inspection reports the local pair digest and the local/remote relation; its
+report does not approve either digest. The operator must independently accept
+the exact local pair and current remote head, include every locally recorded
+stage unit, and independently establish prior host/backend drain and the
+database's exact BEFORE or AFTER state under the same scoped HOLD. During that
+restore run, the runtime checks both accepted digests, exact remote-prefix and
+local journal equality, a consumed staged session sequence, and no uncheckpointed
+pause-journal changes. It rechecks the database, HOLD and drain immediately
+before and after one conditional checkpoint publication. Only then does it
+continue the normal restore checks; it never calls the permission session.
+Unknown publication results require new read-only reconciliation and new
+acceptance, not replay of the failed restore request.
+
+This bounded path covers a local suffix of `SESSION_BOUND`, `SESSION_INTENT`,
+`SESSION_RESULT` or `SESSION_ERROR` after an acknowledged `PREPARED` head. It
+does not repair a missing/corrupt local journal or claims ledger, a stale or
+forked remote head, a local-only PREPARED event, or an uncheckpointed workflow
+disable/enable or restore suffix. Those remain blocked for separate offline
+recovery. An already acknowledged exact pair continues through ordinary restore
+without the optional field.
+
 Once `SESSION_BOUND` is appended, no entrypoint can rebind or resume the session,
 even if the process stopped before `SESSION_INTENT`. Once intent exists, an
 unknown return never implies rollback. Separate reconciliation/restore remains
@@ -404,3 +428,24 @@ and prepared transactions still refuse. No caller-supplied PID is accepted.
 The disposable PG18 fixture simulates only rewritten libpq PID metadata while
 running real read-only SQL, nested owned connections and foreign-backend refusal.
 The live rehearsal must still establish timing; no timeout is extended.
+
+### Short-lived reconciliation diagnostics
+
+Read-only rehearsal `36295882188` at `5704cedd1fa39ce87d82f8f96119f15bc0fbdb80`
+refused with `host_backend_drain:DATABASE_NOT_DRAINED`. A subsequent activity
+read found the held Light client and an idle, transaction-free worker-principal
+backend labelled `autopilot-reconcile-diagnostic`. CI-completion events repeatedly
+ran `autopilot-paused-reconcile.yml`; its enabled diagnostic used the pooled Neon
+endpoint, retaining a server backend after the Python connection closed.
+
+The diagnostic now uses the existing fixed direct-source connection parser for
+Neon, with verify-full TLS, channel binding, GSS disabled and read-only startup.
+The original URI and its routing options are not passed to libpq. The separately
+pinned Oracle route remains unchanged. Both paths set read-only before the first
+statement and close their actual connection on success, refusal or exception.
+The shared reconciliation writer continues to use its existing routing protocol.
+This correction does not exempt idle pool sessions from the maintenance drain.
+
+Issue #1946 records the independently reviewed, bounded diagnostic-only pause
+and its exact workflow state. It is not a production writer-exclusion plan or
+approval of SQL changes. No foreign backend was terminated and HOLD remains.

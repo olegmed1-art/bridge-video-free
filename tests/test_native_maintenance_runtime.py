@@ -12,21 +12,29 @@ import unittest
 from unittest.mock import Mock, patch
 
 from ops import native_maintenance_runtime as runtime
+from ops import native_maintenance_snapshot as snapshot
 from ops import native_maintenance_stage_request as requests
 from ops import native_maintenance_executor as executor
 from ops import native_maintenance_workflow_api as workflow_api
-from ops.native_maintenance_run_guard import RunBinding, StageRunBinding, CheckpointRunBinding
+from ops.native_maintenance_run_guard import RunBinding, StageRunBinding, CheckpointRunBinding, PersistentAPI
 from ops.native_maintenance_workflow_pause import digest, encoded
 from test_native_maintenance_recovery_assets import fixture
 from test_native_maintenance_coordination import Database, agreement_record
 from test_native_maintenance_executor import HOLD, SOURCE
 from test_native_maintenance_checkpoint import MemoryStore
 from test_native_maintenance_run_guard import FakeAPI
+from test_native_maintenance_workflow_api import Response
 
 
-class API(FakeAPI):
+class API(FakeAPI, PersistentAPI):
+    def __init__(self):
+        FakeAPI.__init__(self)
+        PersistentAPI.__init__(self, 'CI-only')
+
     def get(self, path):
         self.calls.append(path)
+        if path == '/actions/workflows/7':
+            return {**self.workflow_row, 'url': workflow_api.BASE + path}
         if path.startswith('/actions/workflows/7/runs?'):
             return dict(total_count=0, workflow_runs=[])
         if path == '/actions/runs/' + str(self.run['id']):
@@ -54,6 +62,19 @@ def packet_fixture():
 
 
 class PacketTests(unittest.TestCase):
+    def test_recovery_pair_only_accepted_for_restore(self):
+        value, manifest = packet_fixture()
+        for stage in ('prepare', 'execute'):
+            changed = copy.deepcopy(value)
+            changed.update(stage=stage, recovery_pair_digest='a'*64)
+            raw=encoded(changed)
+            with self.assertRaisesRegex(Exception, 'RUNTIME_RECOVERY_PAIR'):
+                runtime.AcceptedPacket(raw,runtime.checkpoint.sha(raw),manifest)
+            request=encoded(dict(version=1,request_id='e'*32,source=SOURCE,
+                assets=dict(source_digest='a'*64,manifest_digest=value['scope']['manifest_digest'],
+                    baseline_digest=value['baseline_digest'],envelope_digest='b'*64),packet=changed))
+            with self.assertRaisesRegex(Exception,'REQUEST_RECOVERY_PAIR'):
+                requests.AcceptedRequest(request,runtime.checkpoint.sha(request),SOURCE)
     def test_stage_profile_is_uninstalled_and_diagnostics_cannot_dispatch(self):
         value, manifest = packet_fixture()
         raw = encoded(value)
@@ -145,6 +166,7 @@ class RuntimeTests(unittest.TestCase):
         (self.requests/'VERSION').chmod(0o600)
         self.value, self.manifest = packet_fixture()
         self.api = API()
+        self.addCleanup(self.api.close)
         # Explicit simulated installed workflow profile; production remains disabled.
         self.api.run.update(path=StageRunBinding.workflow, event='workflow_dispatch')
         self.api.file['path'] = StageRunBinding.workflow
@@ -156,13 +178,18 @@ class RuntimeTests(unittest.TestCase):
         self.store = MemoryStore()
         self.receipts, self.puts = [], []
         self.row = copy.deepcopy(self.value['plan']['workflows'][0])
-        def remote(method, path):
-            if path == '/git/ref/heads/main': return self.api.main
-            if method == 'GET': return {**self.row, 'url': workflow_api.BASE+'/actions/workflows/7'}
+        self.api.workflow_row = self.row
+        def remote(request, *, timeout):
+            # Real Transport.request must route all stage GETs through the
+            # borrowed API. Only the original PUT transport is simulated here.
+            self.assertEqual(request.get_method(), 'PUT')
+            self.assertEqual(timeout, 4)
+            path = request.full_url.removeprefix(workflow_api.BASE)
             action = path.rsplit('/', 1)[-1]
             self.puts.append(action)
             self.row.update(state='disabled_manually' if action=='disable' else 'active',
                             updated_at='2026-09-26T00:00:01Z' if action=='disable' else '2026-09-26T00:00:02Z')
+            return Response(b'', request.full_url, 204)
         def supervisor(source, run):
             return NS(record=dict(unit='bridge-native-ro-'+source[:12]+'-'+str(run.run_id)+'-2-'+('c'*16)+'.service',
                                   invocation='d'*32, cgroup_inode=run.run_id), assert_alive=Mock(), assert_exclusive=Mock())
@@ -176,7 +203,7 @@ class RuntimeTests(unittest.TestCase):
                    patch.object(runtime.hold, 'attest', return_value=HOLD),
                    patch.object(runtime.engine, 'identity'),
                    patch.object(runtime.coordination.PriorSupervisors, 'assert_drained'),
-                   patch.object(workflow_api.Transport, 'request', side_effect=remote)]
+                   patch.object(workflow_api.urllib.request, 'build_opener', return_value=NS(open=remote))]
         for item in patches:
             item.start()
             self.addCleanup(item.stop)
@@ -215,6 +242,19 @@ class RuntimeTests(unittest.TestCase):
             job['id'] += 2
             job['run_id'] = self.api.run['id']
 
+    def test_stage_borrows_same_read_api_for_source_and_workflow_observations(self):
+        original = workflow_api.Transport.__init__
+        borrowed = []
+        def capture(transport, token, *, read_api=None):
+            borrowed.append(read_api)
+            original(transport, token, read_api=read_api)
+        with patch.object(workflow_api.Transport, '__init__', new=capture):
+            self.dispatch()
+        self.assertEqual(borrowed, [self.api, self.api])
+        self.assertIn('/actions/workflows/7', self.api.calls)
+        self.assertIn('/git/ref/heads/main', self.api.calls)
+        self.assertEqual(self.puts, ['disable'])
+
     def test_prepare_execute_restore_composes_real_executor_and_separate_release(self):
         with patch.object(executor, 'permission_session', return_value='AFTER') as sql:
             prepared = self.dispatch()
@@ -233,6 +273,34 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(restored['host_exited'])
         self.assertEqual(len(self.receipts), 3)
         self.assertEqual(self.db.active, {})
+
+    def test_unpublished_committed_result_recovers_in_restore_without_sql_replay(self):
+        prepared=self.dispatch()
+        self.next_stage('execute',prepared['head_digest'])
+        original=runtime.checkpoint.JournalCheckpoint.sync
+        def fail_result(barrier,*args):
+            if barrier.scope is not None and len(self.receipts)==2:
+                op=args[1]
+                if op.records[-1]['event']['kind']=='SESSION_RESULT':
+                    self.store.fail='before_head'
+            return original(barrier,*args)
+        with patch.object(runtime.checkpoint.JournalCheckpoint,'sync',new=fail_result), \
+             patch.object(executor,'permission_session',return_value='AFTER') as sql:
+            with self.assertRaises(Exception):self.dispatch()
+            self.assertEqual(sql.call_count,1)
+        self.store.fail=None
+        scope=digest(self.value['scope'])
+        base=self.parent/runtime.storage.NAME/scope
+        pair=runtime.checkpoint.sha(snapshot.capture(base/'operation',base/'pause'))
+        accepted=runtime.checkpoint.sha(self.store.heads[scope][0])
+        self.next_stage('restore',accepted,'AFTER')
+        self.value['recovery_pair_digest']=pair
+        with patch.object(runtime.engine,'inspect',return_value='AFTER'), \
+             patch.object(executor,'permission_session') as sql:
+            restored=self.dispatch()
+            sql.assert_not_called()
+        self.assertEqual(restored['outcome'],'AFTER')
+        self.assertEqual(self.puts,['disable','enable'])
 
     def test_lost_unit_ack_preserves_local_record_and_prevents_all_dispatch(self):
         def lost(raw):

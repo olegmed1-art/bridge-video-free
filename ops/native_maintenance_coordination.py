@@ -21,56 +21,7 @@ from ops.native_maintenance_supervisor import PriorSupervisors
 from ops import oracle_light_active_hold_attest as hold
 
 NONTERMINAL = ('queued', 'in_progress', 'waiting', 'pending', 'requested')
-COVERAGE = ['direct_owner_sql', 'host_administration', 'workflow_administration', 'workflow_reruns']
-
-
-class Agreement:
-    """Validate independently approved bytes, not their own self-computed hash.
-
-    accepted_digest must come from the separate review/owner acceptance path.
-    No helper in this module mints approvals or extends a supplied window.
-    """
-    def __init__(self, record, accepted_digest, scope):
-        require(type(record) is dict and set(record) == {
-            'version', 'owner', 'operation_digest', 'not_before', 'expires_at', 'coverage', 'evidence'},
-            'COORDINATION_AGREEMENT_SHAPE')
-        require(re.fullmatch('[0-9a-f]{64}', accepted_digest or '')
-                and digest(record) == accepted_digest, 'COORDINATION_AGREEMENT_NOT_ACCEPTED')
-        spec = {k: v for k, v in scope.items() if k != 'origin_run'}
-        require(record['version'] == 1 and type(record['version']) is int
-                and record['owner'] == 'olegmed1-art' and record['coverage'] == COVERAGE
-                and record['operation_digest'] == digest(spec)
-                and type(record['evidence']) is str and 0 < len(record['evidence']) <= 1024,
-                'COORDINATION_AGREEMENT_SCOPE')
-        self.record = json.loads(json.dumps(record))
-        self.accepted = accepted_digest
-        self.scope = digest(scope)
-        self.start, self.end = [self.timestamp(record[k]) for k in ('not_before', 'expires_at')]
-        require(0 < self.end - self.start <= 1800, 'COORDINATION_AGREEMENT_DURATION')
-        now = time.time()
-        require(self.start <= now < self.end, 'COORDINATION_AGREEMENT_NOT_CURRENT')
-        self.deadline = time.monotonic() + self.end - now
-        self.last_wall = now
-        self.failed = False
-
-    @staticmethod
-    def timestamp(value):
-        require(type(value) is str and re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', value),
-                'COORDINATION_AGREEMENT_TIME')
-        return datetime.strptime(value, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc).timestamp()
-
-    def assert_held(self, scope):
-        require(not self.failed, 'COORDINATION_AGREEMENT_ALREADY_FAILED')
-        try:
-            now = time.time()
-            require(scope == self.scope and digest(self.record) == self.accepted,
-                    'COORDINATION_AGREEMENT_CHANGED')
-            require(self.start <= now < self.end and now >= self.last_wall
-                    and time.monotonic() < self.deadline, 'COORDINATION_AGREEMENT_EXPIRED')
-            self.last_wall = now
-        except BaseException:
-            self.failed = True
-            raise
+from ops.native_maintenance_agreement import Agreement, COVERAGE
 
 
 class WorkflowDrain:
@@ -170,6 +121,42 @@ class OwnedConnections:
                         'DATABASE_PREPARED_TRANSACTION_PRESENT')
                 for conn, identity, wire_pid in self.live.values():
                     self.assert_owned(conn, identity, wire_pid)
+
+
+    def diagnostic_groups(self):
+        """Bounded read-only attribution only, never admission or a kill list."""
+        with self.open() as observer:
+            with observer.transaction():
+                observer.execute('SET TRANSACTION READ ONLY')
+                observer.execute("SET LOCAL statement_timeout='3s'")
+                rows=observer.execute("""
+                    SELECT CASE WHEN usename=%s THEN 'light' WHEN usename=%s THEN 'owner' ELSE 'other' END,
+                      CASE WHEN backend_type='client backend' THEN 'client' ELSE 'other' END,
+                      CASE WHEN state='idle' THEN 'idle' WHEN state='active' THEN 'active'
+                           WHEN state LIKE 'idle in transaction%%' THEN 'idle_in_transaction' ELSE 'other' END,
+                      xact_start IS NOT NULL,
+                      CASE WHEN now()-state_change < interval '1 minute' THEN 'lt1m'
+                           WHEN now()-state_change < interval '5 minutes' THEN 'lt5m'
+                           WHEN now()-state_change < interval '10 minutes' THEN 'lt10m' ELSE 'ge10m_or_unknown' END,
+                      count(*)
+                    FROM pg_catalog.pg_stat_activity
+                    WHERE datname=current_database() AND pid<>pg_catalog.pg_backend_pid()
+                      AND backend_type<>'autovacuum worker'
+                    GROUP BY 1,2,3,4,5 ORDER BY 1,2,3,4,5 LIMIT 65
+                    """,(self.target.recipient,self.target.session_owner)).fetchall()
+        groups=[dict(user_class=r[0],backend_class=r[1],state_class=r[2],has_xact=r[3],age=r[4],count=r[5]) for r in rows]
+        validate_diagnostic_groups(groups)
+        return groups
+
+
+def validate_diagnostic_groups(groups):
+    require(type(groups) is list and len(groups)<=64,'DRAIN_DIAGNOSTIC_SHAPE')
+    for row in groups:
+        require(type(row) is dict and set(row)=={'user_class','backend_class','state_class','has_xact','age','count'}
+            and row['user_class'] in ('light','owner','other') and row['backend_class'] in ('client','other')
+            and row['state_class'] in ('idle','active','idle_in_transaction','other')
+            and type(row['has_xact']) is bool and row['age'] in ('lt1m','lt5m','lt10m','ge10m_or_unknown')
+            and type(row['count']) is int and 0<row['count']<=100000,'DRAIN_DIAGNOSTIC_VALUE')
 
 
 

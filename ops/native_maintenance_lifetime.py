@@ -1,4 +1,4 @@
-"""PID1-owned lifetime for the fixed read-only maintenance transport."""
+"""Standalone PID1 profiles for fixed maintenance transports (no ops imports)."""
 import base64
 import json
 import os
@@ -9,6 +9,10 @@ import subprocess
 import sys
 import time
 import uuid
+
+STAGE_RUNTIME_SECONDS = 140
+STAGE_WRAPPER_SECONDS = 148
+RUNTIME_TEXT = {3: '3s', 100: '1min 40s', STAGE_RUNTIME_SECONDS: '2min 20s'}
 
 UNIT = r'bridge-native-ro-[0-9a-f]{12}-[0-9]{1,20}-[0-9]{1,6}-[0-9a-f]{16}\.service'
 PROPERTIES = {
@@ -49,7 +53,7 @@ def new_unit(source, run):
 
 
 def command(unit, code, seconds):
-    check(re.fullmatch(UNIT, unit) and seconds in (3, 100), 'UNIT_COMMAND_INVALID')
+    check(re.fullmatch(UNIT, unit) and type(seconds) is int and seconds in RUNTIME_TEXT, 'UNIT_COMMAND_INVALID')
     return ['/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--unit=' + unit,
             '--service-type=exec', '--expand-environment=no',
             '--property=ExitType=main', '--property=KillMode=control-group',
@@ -61,9 +65,10 @@ def command(unit, code, seconds):
 
 
 def identity(unit, seconds):
+    check(type(seconds) is int and seconds in RUNTIME_TEXT, 'UNIT_PROFILE_INVALID')
     state = show(unit)
     check(all(state.get(key) == value for key, value in PROPERTIES.items()), 'UNIT_PROPERTIES_DRIFT')
-    check(state.get('RuntimeMaxUSec') == ('3s' if seconds == 3 else '1min 40s'), 'RUNTIME_LIMIT_DRIFT')
+    check(state.get('RuntimeMaxUSec') == RUNTIME_TEXT[seconds], 'RUNTIME_LIMIT_DRIFT')
     check(state.get('ActiveState') == 'active' and
           re.fullmatch('[0-9a-f]{32}', state.get('InvocationID', '')) and
           int(state.get('MainPID', '0')) > 0 and
@@ -73,8 +78,8 @@ def identity(unit, seconds):
     return state, group, group.stat().st_ino
 
 
-def assert_self(unit):
-    state, _, _ = identity(unit, 100)
+def assert_self(unit, seconds=100):
+    state, _, _ = identity(unit, seconds)
     check(int(state['MainPID']) == os.getpid() and
           Path('/proc/self/cgroup').read_text().strip() == '0::' + state['ControlGroup'], 'UNIT_SELF_MISMATCH')
 
@@ -102,12 +107,20 @@ def loader(encoded):
 
 
 def managed(code, encoded_self, source, run):
+    return _managed(code, encoded_self, source, run, 100, 108)
+
+
+def managed_stage(code, encoded_self, source, run):
+    return _managed(code, encoded_self, source, run, STAGE_RUNTIME_SECONDS, STAGE_WRAPPER_SECONDS)
+
+
+def _managed(code, encoded_self, source, run, seconds, wrapper_seconds):
     check(os.getuid() == 0, 'ROOT_REQUIRED')
     unit = new_unit(source, run)
-    inner = loader(encoded_self) + 'lifetime.assert_self(' + repr(unit) + ')\n' + code
+    inner = loader(encoded_self) + 'lifetime.assert_self(' + repr(unit) + ',' + repr(seconds) + ')\n' + code
     try:
         # PID1 owns the transient service even if this wrapper/SSH client dies.
-        result = subprocess.run(command(unit, inner, 100), timeout=108,
+        result = subprocess.run(command(unit, inner, seconds), timeout=wrapper_seconds,
                                 env={'PATH': '/usr/bin:/bin'}, close_fds=True)
         return result.returncode
     finally:

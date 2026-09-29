@@ -114,16 +114,16 @@ independent reconciliation, but may NEVER repeat the original DB session.
     def __init__(self, *, target, operation, manifest_path, manifest_digest,
                  expected_route, approved_hold, workflow_plan, plan_digest,
                  api_token, pause_journal, operation_journal, run, operator, lifetime, checkpoint,
-                 staged=False, observed_admission=False):
+                 staged=False, observed_admission=False, read_api=None):
         require(type(staged) is bool, 'EXECUTOR_MODE_INVALID')
         require(type(observed_admission) is bool and (not observed_admission or staged),
                 'EXECUTOR_ADMISSION_MODE_INVALID')
         self.staged = staged
         require(operation in ('apply', 'rollback'), 'EXECUTOR_OPERATION_INVALID')
         require(digest(workflow_plan) == plan_digest, 'EXECUTOR_PLAN_MISMATCH')
-        require(all(callable(getattr(operator, n, None)) for n in ('assert_held', 'assert_drained'))
+        require(all(callable(getattr(operator, n, None)) for n in ('assert_local', 'assert_held', 'assert_drained'))
                 and callable(getattr(lifetime, 'assert_alive', None))
-                and callable(getattr(run, 'assert_running', None))
+                and all(callable(getattr(run, n, None)) for n in ('assert_current', 'assert_running'))
                 and callable(getattr(checkpoint, 'sync', None)), 'EXECUTOR_RUNTIME_REQUIRED')
         require(pause_journal.root.resolve() != operation_journal.root.resolve(), 'SEPARATE_JOURNALS_REQUIRED')
         self.target, self.manifest_path = target, manifest_path
@@ -163,7 +163,7 @@ independent reconciliation, but may NEVER repeat the original DB session.
         self._replay()
         window = ObservedSessionWindow(self) if observed_admission else SessionWindow(self)
         self.hold = HoldMaintenanceGuard(target, operation, approved_hold, writer_guard=window)
-        api = WorkflowAPI(api_token, workflow_plan, plan_digest, mutation_guard=self)
+        api = WorkflowAPI(api_token, workflow_plan, plan_digest, mutation_guard=self, read_api=read_api)
         self.pause = WorkflowPause(workflow_plan, plan_digest, api, pause_journal, self,
                                    operation_scope_digest=self.scope_digest)
 
@@ -243,10 +243,27 @@ independent reconciliation, but may NEVER repeat the original DB session.
 
     def assert_scope(self, plan_digest):
         require(plan_digest == self.scope['workflow_plan_digest'], 'EXECUTOR_PAUSE_SCOPE')
-        self._assert_window()
+        # Local pause bookkeeping/read observations do not admit an effect.
+        # WorkflowAPI still brackets every PUT with assert_dispatch, whose
+        # checkpoint has fresh authenticated pre/post authority observations.
+        require(not self.failed, 'EXECUTOR_ALREADY_FAILED')
+        try:
+            self.operation_journal.assert_live()
+            self.pause_journal.assert_live()
+            self.lifetime.assert_alive()
+            self.run.assert_current()
+            require(self._run_identity() == self.current_run and self.run.source == self.scope['source'],
+                    'EXECUTOR_RUN_CHANGED')
+            self.operator.assert_local(self.scope_digest)
+            self.lifetime.assert_alive()
+        except BaseException:
+            self.failed = True
+            raise
 
     def assert_dispatch(self, plan_digest, action, workflow_id):
-        self.assert_scope(plan_digest)
+        # _sync_checkpoint below supplies the fresh pre/post authority checks.
+        # Keep local scope/phase checks, without an extra identical remote round.
+        require(plan_digest == self.scope['workflow_plan_digest'], 'EXECUTOR_PAUSE_SCOPE')
         require((self.phase == 'pausing' and action == 'disable')
                 or (self.phase == 'restoring' and action == 'enable'), 'EXECUTOR_DISPATCH_PHASE')
         require(workflow_id in self.pause.states, 'EXECUTOR_DISPATCH_SCOPE')

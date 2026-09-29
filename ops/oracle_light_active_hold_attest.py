@@ -38,6 +38,15 @@ class HoldIdentity:
     release: str
     fingerprint: str
 
+@dataclass(frozen=True, repr=False)
+class ServiceHoldIdentity:
+    """Service/config continuity only; never admission or database evidence."""
+    hostname: str
+    pid: int
+    invocation_id: str
+    release: str
+    fingerprint: str
+
 def require(ok, code):
     if not ok:
         raise Blocked(code)
@@ -153,7 +162,7 @@ def login(dsn):
         raise Blocked(result['code'])
     require(child.returncode==0 and result=={'ok':True},'LOGIN_OR_QUEUE_FAILED')
 
-def attest():
+def _attest(*, check_database):
     require(os.geteuid()==0 and os.uname().nodename=='autopilot-lite-vnic','HOST_IDENTITY')
     before=service()
     release=before['WorkingDirectory']
@@ -196,7 +205,8 @@ def attest():
     require(Path(f'/proc/{pid}/cwd').resolve()==Path(release) and
             Path(f'/proc/{pid}').stat().st_uid==pwd.getpwnam('school-autopilot').pw_uid,
             'LIVE_PROCESS_DRIFT')
-    login(dsn)
+    if check_database:
+        login(dsn)
     require(service()==before and read(ENV,0o600,262144)==disk and
             read(DROP,0o644,4096)==hold and
             read(ROUTE/'route.json',0o644,4096)==route and
@@ -210,7 +220,20 @@ def attest():
         'route':hashlib.sha256(route).hexdigest(),
         'drop':hashlib.sha256(hold).hexdigest(),
     },sort_keys=True,separators=(',',':')).encode()).hexdigest()
-    return HoldIdentity('autopilot-lite-vnic',pid,before['InvocationID'],release,fingerprint)
+    identity_type = HoldIdentity if check_database else ServiceHoldIdentity
+    return identity_type('autopilot-lite-vnic',pid,before['InvocationID'],release,fingerprint)
+
+def attest():
+    """Full admission observation, including actual login and empty queue."""
+    return _attest(check_database=True)
+
+def service_hold_identity():
+    """Restore observation: an unfinished pilot can still be held safely.
+
+    The distinct return type cannot satisfy the maintenance admission guard.
+    This does not observe database availability, queue, grants or receipts.
+    """
+    return _attest(check_database=False)
 
 def main():
     attest()
