@@ -233,3 +233,50 @@ fresh read immediately before the 30-second broker call requires more than
 replay before refresh. Expiry still fails closed; this adds no renewal loop,
 issuer, service activation, new DB function/grant or permission expansion.
 The recovered 2026-09-29 failed claim cannot satisfy these conditions.
+
+### One accepted automatic cycle — source candidate, 2026-09-29
+
+The same authenticated owner workflow may receive a separately reviewed
+canonical payload `{version:1, action:"cycle", prepare:<exact version-2 prepare>}`.
+The existing `accepted_payload_sha256` covers the entire object. Its review
+accepts the fixed derivation policy in `light_native_lane_cycle`, including
+bounded preexecution containment, as well as the exact Plan, source packages,
+predecessor and original finite Agreement. It is not the old one-step approval
+silently extended to later phases. All initial receipt/discovery/permit/terminal
+digests must be null; arbitrary actions, overrides or a second Plan are refused.
+
+This executes prepare, publish, permit, execute, terminal and restore once in
+order. Subsequent bindings are computed only from the root-owned create-only
+records of the previous phases. Each phase retains all its existing fresh
+GitHub, database, source, HOLD and provider verification. Public phase output is
+matched to those records before advancing. Findings remain findings even when
+the cycle completes and restores controls.
+
+The cycle has a private create-only intent and per-phase intent/done records.
+A separate cycle flock spans orchestration; it is not the driver flock that
+must be released before the PID1 execution supervisor starts. The unchanged
+GitHub mutation concurrency groups serialize cycles and standalone owner runs.
+Standalone prepare/publish/permit/execute cannot bypass an existing cycle
+intent. Independently accepted cleanup remains available after a failed cycle.
+Retained legacy helper packages can still be byte-verified for cleanup; fresh
+controller packages must contain the new cycle helper.
+
+Any existing cycle directory, including an interrupted empty directory, refuses
+replay. A failure through execute may invoke the already-scoped containment once
+when the original snapshots exist; its original no-feed guard must succeed
+before calling containment, including for execute failures before publication.
+The returned state must match the retained containment record. This leaves an
+unresolved queue item for incident reconciliation, not a retry or an invented
+provider terminal. After feed publication the wrapper never invokes
+preexecution containment or automatically resumes.
+The existing execution supervisor independently restores STOPPED_HOLD on loss
+of the workflow/SSH connection. Failures retain only fixed public incident codes,
+not credentials or exception text. Terminal and restore intentionally remain
+available after Agreement expiry, subject to their original fresh guards.
+
+This removes six manual phase submissions for one admitted task. It does not
+select new tasks, renew authority, add a scheduled workflow, grant permissions,
+persist credentials or activate a permanent service. Live automatic-cycle
+acceptance and the trusted task issuer/monitor/recovery service are still needed
+before claiming continuous autonomous production. The two completed historical
+audits must not be replayed to test this code.

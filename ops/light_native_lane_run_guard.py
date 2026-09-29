@@ -3,7 +3,7 @@ import re
 from ops.native_maintenance_run_guard import API,RunBinding,check,REPOSITORY,OWNER
 
 WORKFLOW='.github/workflows/light-native-lane-owner.yml'
-WORKFLOW_SHA256='bbdc4f2ba64a4882d8fe50b6ed54d9870bc8356a34c43dca6ac00d73adde0a23'
+WORKFLOW_SHA256='dba10a80ba5a7752b9c27fbf17995db3d2b64c96123adae6cf4504ca215b64fd'
 
 
 class LaneRunBinding(RunBinding):
