@@ -1,5 +1,6 @@
 name: Autopilot Universal Video P1 Oracle monitor
 
+# RETIRED 2026-09-29: legacy Neon/Oracle shadow entry point; retained as historical evidence only.
 on:
   push:
     branches: [codex/oracle-autopilot-lite-shadow]
@@ -17,7 +18,7 @@ concurrency:
 
 jobs:
   monitor:
-    if: github.repository == 'olegmed1-art/bridge-video-free'
+    if: ${{ false }} # retired legacy shadow path
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:
