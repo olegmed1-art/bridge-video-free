@@ -1,0 +1,89 @@
+name: Stop old shadow services 20260929
+
+on:
+  push:
+    branches: [ops/stop-old-shadow-20260929]
+    paths: ['.github/workflows/stop-old-shadow-20260929.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  stop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Bounded administrative stop
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+          test -n "${SSH_PRIVATE_KEY:-}"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > "$work/key"
+          unset SSH_PRIVATE_KEY
+          chmod 600 "$work/key"
+          ssh-keygen -y -P '' -f "$work/key" >/dev/null
+          bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
+          ssh -F /dev/null -i "$work/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$work/known_hosts" -o ConnectTimeout=15 ubuntu@92.5.47.149 'sudo -n python3 -' <<'PY'
+          import os, subprocess, time
+          from pathlib import Path
+          from urllib.parse import urlsplit, unquote
+
+          targets={
+            "school-autopilot-shadow.service":"b0d3bb5e9e5b4fb5a9a87f1864743184",
+            "school-autopilot-online-observer.service":"011ca7cc72184e7ea04723fdf81503ef",
+          }
+          protected=(
+            "school-autopilot-production-light.service",
+            "school-autopilot-native-light.service",
+            "bridge-autopilot-postgres.service",
+          )
+          host="ep-floral-field-b1pjs2of.c-5.eu-central-1.aws.neon.tech"
+          props=("ActiveState","MainPID","InvocationID","RequiredBy","BoundBy","ConsistsOf","PropagatesStopTo","ExecStop","ExecStopPost","TriggeredBy","RefuseManualStop","KillMode","NRestarts")
+          def state(u):
+            c=["systemctl","show",u]
+            for p in props:c += ["-p",p]
+            o=subprocess.run(c,check=True,capture_output=True,text=True,timeout=15).stdout
+            return dict(x.split("=",1) for x in o.splitlines() if "=" in x)
+          def req(x,msg):
+            if not x: raise RuntimeError(msg)
+          before={u:state(u) for u in (*targets,*protected)}
+          for u in protected:req(before[u]["ActiveState"]=="active","protected-not-active:"+u)
+          for u,inv in targets.items():
+            s=before[u]
+            req(s["ActiveState"]=="active" and s["InvocationID"]==inv,"target-drift:"+u)
+            req(s["KillMode"]=="control-group" and s["RefuseManualStop"]=="no","stop-policy:"+u)
+            req(not any(s.get(k) for k in ("RequiredBy","BoundBy","ConsistsOf","PropagatesStopTo","ExecStop","ExecStopPost","TriggeredBy")),"dependency-or-hook:"+u)
+            env=Path("/proc/"+s["MainPID"]+"/environ").read_bytes().split(b"\0")
+            urls=[]
+            for item in env:
+              _,sep,val=item.partition(b"=")
+              if sep and val.startswith((b"postgres://",b"postgresql://")): urls.append(urlsplit(val.decode()))
+            req(urls,"no-postgres-url:"+u)
+            req(all(x.hostname==host and x.path=="/neondb" and unquote(x.username or "")=="autopilot_runtime_login" for x in urls),"db-identity-mismatch:"+u)
+            print(u+": shadow identity confirmed")
+          req(all(state(u)==before[u] for u in before),"state-changed-during-preflight")
+          for u in targets:
+            subprocess.run(["systemctl","--no-ask-password","stop",u],check=True,timeout=90)
+            req(all(state(p)==before[p] for p in protected),"protected-changed")
+          time.sleep(5)
+          for u in targets:
+            s=state(u); req(s["ActiveState"]=="inactive" and s["MainPID"]=="0","stop-not-confirmed:"+u)
+            cg=subprocess.run(["systemctl","show","-p","ControlGroup","--value",u],capture_output=True,text=True,check=True).stdout.strip()
+            if cg:
+              procs=Path("/sys/fs/cgroup"+cg+"/cgroup.procs")
+              req(not procs.exists() or not procs.read_text().strip(),"process-remains:"+u)
+          req(all(state(p)==before[p] for p in protected),"protected-final-changed")
+          time.sleep(5)
+          for u in targets:
+            req(state(u)["ActiveState"]=="inactive","restart-loop-returned:"+u)
+          print("STOP_CONFIRMED")
+          print("shadow=inactive observer=inactive processes=none")
+          print("protected=unchanged")
+          PY
