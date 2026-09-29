@@ -1,5 +1,6 @@
 name: Autopilot temporary Neon 0308 structured artifact
 
+# RETIRED 2026-09-29: legacy temporary Neon shadow endpoint; historical evidence only.
 on:
   pull_request:
     paths: ['.github/workflows/autopilot-temp-neon-0308-structured-artifact-once.yml']
@@ -16,6 +17,7 @@ concurrency:
 
 jobs:
   contract:
+    if: ${{ false }} # retired legacy shadow endpoint
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
@@ -40,7 +42,7 @@ jobs:
           PY
 
   apply-temporary-only:
-    if: github.event_name == 'push' && github.repository == 'olegmed1-art/bridge-video-free'
+    if: ${{ false }} # retired legacy shadow endpoint
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 8
