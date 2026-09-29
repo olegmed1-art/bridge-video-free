@@ -1,4 +1,4 @@
-name: Retire Oracle shadow units once
+name: Retire legacy shadow units once
 on:
   workflow_dispatch:
 permissions:
