@@ -280,3 +280,27 @@ persist credentials or activate a permanent service. Live automatic-cycle
 acceptance and the trusted task issuer/monitor/recovery service are still needed
 before claiming continuous autonomous production. The two completed historical
 audits must not be replayed to test this code.
+
+
+#### Isolated phase processes — corrective source candidate
+
+Run 36553800418 refused before intake: parent validation imported the Plan's
+psycopg dependency before loading the verified driver. Reusing the same Python
+process across phases would also violate the driver's no-prior-import guard.
+The cycle parent now remains stdlib-only. It verifies the outer package and
+journals sequencing, while a fresh `/usr/bin/python3 -I -S -B` child validates
+the Plan with the pinned driver, then exits. Each phase and pre-containment
+host check gets a separate child with the same authenticated workflow binding.
+A phase child calls the existing owner phase exactly once and reconstructs its
+limited authority from the accepted root intent and derived immutable records.
+
+Accepted helper bytes are extracted to a private temporary directory for every
+child. Driver bytes and credentials travel only through stdin; neither argv,
+environment, root journals nor public errors contain credentials. Child file
+descriptors are closed, so the parent cycle lock is not inherited. The parent
+never holds the driver lock. Each child has a bounded timeout; unknown output
+stops progression and never authorizes retry. The no-feed containment check is
+read-only in its own driver context and is repeated by the containment phase.
+A fresh isolated-interpreter regression checks parent imports, real Plan
+validation after driver loading, and distinct processes for successive phases.
+The failed historical workflow is not rerun.

@@ -48,7 +48,7 @@ def request_bytes(monkeypatch):
 def test_acceptance_is_exact_and_bounded(request_bytes):
     r=request_bytes
     assert cycle.validated(r.raw,r.digest,r.controller,r.runtime,r.guard)==r.prepare
-    for change in ('extra','derived','window','version','wrong_digest','runtime'):
+    for change in ('extra','derived','version','wrong_digest','runtime'):
         body=owner.parse(r.raw)
         if change=='extra':body['next_task']={}
         if change=='derived':body['prepare']['accepted_receipt_sha256']='f'*64
@@ -120,6 +120,17 @@ def journal(tmp_path,monkeypatch,request_bytes):
         if fault.bad==action:output['record_sha256']='f'*64
         return output
     monkeypatch.setattr(owner,'phase',phase)
+    def isolated(wheels,credential,token,controller,runtime,raw,accepted,guard,*,outer,mode):
+        if mode=='validate':
+            cycle.validate_scope(owner.parse(raw)['prepare'])
+            return dict(audit='LIGHT_LANE_CYCLE_VALIDATED')
+        value=owner.parse(raw)
+        if mode=='containment_check':
+            owner.containment_host(scope,value)
+            return dict(audit='LIGHT_LANE_CYCLE_CONTAINMENT_CHECKED')
+        return owner.phase(wheels,credential,token,controller,runtime,raw,accepted,guard,
+            _cycle=cycle._Authority(r.prepare,outer))
+    monkeypatch.setattr(cycle,'isolated',isolated)
     def run():return cycle.run(b'wheels','private-password','private-token',r.controller,r.runtime,r.raw,r.digest,r.guard)
     return SimpleNamespace(run=run,request=r,scope=scope,calls=calls,fault=fault,path=cycle.location(r.prepare))
 
@@ -244,3 +255,96 @@ def test_new_packages_strict_but_retained_old_helpers_can_be_verified(request_by
     del value['helpers']['ops/light_native_lane_controller.py']
     raw=owner.encoded(value)
     with pytest.raises(RuntimeError):owner.validate_package(raw,r.prepare['source'],owner.sha(raw),allow_legacy=True)
+
+
+def test_scope_window_checked_after_driver_loading(request_bytes):
+    r=request_bytes
+    cycle.validate_scope(r.prepare)
+    value=deepcopy(r.prepare)
+    value['agreement']['expires_at']=value['agreement']['not_before']
+    value['accepted_agreement_sha256']=digest(value['agreement'])
+    with pytest.raises(RuntimeError):cycle.validate_scope(value)
+
+
+def test_parent_validation_is_stdlib_only(request_bytes):
+    from pathlib import Path
+    import subprocess
+    r=request_bytes
+    repo=Path(__file__).resolve().parents[1]
+    script="""import sys,json,base64
+sys.path.insert(0,REPO)
+from ops import light_native_lane_cycle as cycle
+from types import SimpleNamespace
+r=json.loads(sys.stdin.buffer.read())
+cycle.owner.release.staging.require_current_main=lambda source:None
+cycle.validated(*(base64.b64decode(r[k]) if k!='digest' else r[k]
+ for k in ('raw','digest','controller','runtime')),SimpleNamespace(assert_current=lambda:None))
+assert not any(name in sys.modules for name in ('psycopg','psycopg_binary','database.light_native_pilot_intake'))
+""".replace('REPO',repr(str(repo)))
+    wire={k:base64.b64encode(getattr(r,k)).decode() for k in ('raw','controller','runtime')}
+    wire['digest']=r.digest
+    result=subprocess.run(['/usr/bin/python3','-I','-S','-B','-c',script],
+        input=json.dumps(wire).encode(),capture_output=True)
+    assert result.returncode==0,result.stderr.decode()
+
+
+def test_actual_isolated_children_load_driver_once_and_do_not_inherit(journal):
+    from pathlib import Path
+    import psycopg,typing_extensions
+    j=journal;r=j.request
+    repo=Path(__file__).resolve().parents[1]
+    helpers={name:('' if name.endswith('/__init__.py') else (repo/name).read_text())
+        for name in dict.fromkeys((*owner.release.HELPERS,*owner.EXTRA))}
+    # Replace external authentication/driver provisioning only. The real child
+    # bootstrap, canonical wire, scope validation and one-phase call are used.
+    helpers['ops/light_native_lane_cycle.py']+='\n'+"""
+import sys
+from contextlib import contextmanager
+from types import SimpleNamespace
+sys.path.append(REPO)
+from ops import light_native_lane_run_guard as _guard
+from ops import native_maintenance_owner_host as _host
+_guard.authenticated=lambda *args:SimpleNamespace(assert_current=lambda:None,assert_running=lambda:None)
+owner.release.staging.require_current_main=lambda source:None
+@contextmanager
+def _driver(wheels):
+    assert 'psycopg' not in sys.modules
+    sys.path[:0]=SITES
+    import psycopg
+    yield psycopg,{}
+_host.loaded_runtime=_driver
+_original_child=child_main
+def child_main(wire,expected,context):
+    assert sys.flags.isolated and sys.flags.no_site
+    assert 'psycopg' not in sys.modules
+    if wire['mode']=='phase':
+        # Root intent/derived binding has its own real-journal tests.
+        outer=owner.encoded(dict(version=1,action='cycle',prepare={}))
+        owner.read=lambda *args:outer
+        globals()['authorize_phase']=lambda *args:None
+        def phase(*args,**kwargs):
+            with _host.loaded_runtime(args[0]):
+                assert 'psycopg' in sys.modules
+                return dict(audit='CHILD_TEST',pid=os.getpid())
+        owner.phase=phase
+    return _original_child(wire,expected,context)
+""".replace('REPO',repr(str(repo))).replace('SITES',repr(list(dict.fromkeys([str(Path(psycopg.__file__).parents[1]),str(Path(typing_extensions.__file__).parent)]))))
+    package=owner.encoded(dict(version=1,kind='LIGHT_LANE_CONTROLLER',source=r.prepare['source'],helpers=helpers))
+    prepare=dict(r.prepare,accepted_controller_sha256=owner.sha(package))
+    raw=owner.encoded(dict(version=1,action='cycle',prepare=prepare))
+    guard=SimpleNamespace(source=prepare['source'],run_id=1,attempt=1)
+    # journal fixture replaces isolated: explicitly use the production function.
+    invoke=REAL_ISOLATED
+    result=invoke(b'wheels','private-password','private-token',package,r.runtime,raw,owner.sha(raw),guard,
+        outer=owner.sha(raw),mode='validate')
+    assert result==dict(audit='LIGHT_LANE_CYCLE_VALIDATED')
+    pids=[]
+    for action in ('prepare','publish'):
+        payload=owner.encoded(dict(prepare,action=action))
+        result=invoke(b'wheels','private-password','private-token',package,r.runtime,payload,owner.sha(payload),guard,
+            outer=owner.sha(raw),mode='phase')
+        pids.append(result['pid'])
+    assert len(set(pids+[os.getpid()]))==3
+
+
+REAL_ISOLATED=cycle.isolated
