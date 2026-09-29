@@ -40,7 +40,6 @@ jobs:
 
   resume:
     if: ${{ false }} # retired legacy shadow path
-    if: ${{ github.event_name == 'push' }}
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 12
