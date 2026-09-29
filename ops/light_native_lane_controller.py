@@ -93,6 +93,58 @@ def scope(payload):
     return plan,ROOT/plan.digest
 
 
+def sequence(value):
+    predecessor=value.get('predecessor')
+    if predecessor is None:
+        require(value['version']==1,'LANE_OWNER_PREDECESSOR')
+        return 0
+    require(value['version']==2 and type(predecessor) is dict
+            and set(predecessor)=={'plan_sha256','terminal_sha256','sequence'}
+            and type(predecessor['sequence']) is int and 0<=predecessor['sequence']<9999
+            and all(release.source.identifier(predecessor[k],64) for k in ('plan_sha256','terminal_sha256')),
+            'LANE_OWNER_PREDECESSOR')
+    require(predecessor['plan_sha256']!=value['accepted_plan_sha256'],'LANE_OWNER_REUSED_PLAN')
+    return predecessor['sequence']+1
+
+
+def verify_previous(conn,value):
+    """Freshly reconcile the exact retained predecessor; never resubmit it."""
+    from database.light_native_pilot_intake import Plan
+    from ops.light_native_lane_owner import retain_acceptance
+    from ops.light_native_lane_feed import root_record,verify_serial_hold
+    number=sequence(value)
+    require(number>0,'LANE_OWNER_PREDECESSOR')
+    previous=value['predecessor']
+    directory=ROOT/previous['plan_sha256']
+    plan=Plan(read(directory/'plan.json',previous['plan_sha256']),previous['plan_sha256'])
+    receipt=parse(read(directory/'intake.json'))
+    terminal=read(directory/'terminal.json',previous['terminal_sha256'])
+    prepared=parse(read(directory/'prepare.json'))
+    require(sequence(prepared)==number-1 and plan.value['source']==install.RETAINED_SOURCE
+            and prepared['accepted_runtime_sha256']==value['accepted_runtime_sha256'], 'LANE_OWNER_PREDECESSOR')
+    complete=parse(read(directory/'complete.json'))
+    restored=parse(read(directory/'controls-restored.json'))
+    request_digest=parse(read(directory/'execution.json'))['request_sha256']
+    binding=encoded(dict(plan_sha256=plan.digest,request_sha256=request_digest,
+        receipt_sha256=sha(encoded(receipt)),terminal_sha256=sha(terminal)))
+    require(read(directory/'restore-intent.json')==binding and read(directory/'restart-intent.json')==binding
+            and complete.get('controls_restored') is True
+            and {k:v for k,v in complete.items() if k!='native'}==restored,
+            'LANE_OWNER_PREDECESSOR_NOT_RESTORED')
+    cursor=root_record(install.CONTROL/'current.json',4096)
+    before,history=verify_serial_hold(install.RETAINED_SOURCE,cursor)
+    require(len(history)==number and before==complete['native']
+            and parse(cursor)['dispatch_id']==receipt['dispatch_id'], 'LANE_OWNER_PREDECESSOR_CHANGED')
+    # Existing acceptance is required by verify_serial_hold. The helper now
+    # rechecks Cloud/DB and the exact original goal, without creating a task.
+    retain_acceptance(conn,plan,receipt,number-1)
+    from database import light_native_pilot_intake as intake
+    intake.observe_terminal(conn,plan,receipt,terminal,previous['terminal_sha256'])
+    require(verify_serial_hold(install.RETAINED_SOURCE,cursor)==(before,history),
+            'LANE_OWNER_PREDECESSOR_CHANGED')
+    return cursor
+
+
 def guard(plan,prior,payload,run_guard,agreement=None):
     run_guard.assert_running()
     release.staging.require_current_main(payload['source'])
@@ -117,8 +169,10 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
           'plan_base64','accepted_plan_sha256','agreement','accepted_agreement_sha256',
           'accepted_receipt_sha256','accepted_discovery_sha256','accepted_permit_sha256',
           'accepted_terminal_sha256'}
-    require(set(value)==keys and value['version']==1 and value['action'] in
+    require((set(value)==keys and value['version']==1
+             or set(value)==keys|{'predecessor'} and value['version']==2) and value['action'] in
             ('prepare','publish','permit','execute','terminal','restore','contain'),'LANE_OWNER_PHASE')
+    number=sequence(value)
     run_guard.assert_current()
     controller=validate_package(controller_raw,value['source'],value['accepted_controller_sha256'])
     require(sha(retained_raw)==value['accepted_runtime_sha256'],'LANE_OWNER_RUNTIME_PACKAGE')
@@ -143,7 +197,8 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
         if value['action']=='prepare':
             agreement=Agreement(value['agreement'],value['accepted_agreement_sha256'],plan.scope)
             prior=install.hold.attest()
-            install.verify_running(retained['source'],pwd.getpwnam('school-autopilot'))
+            if number==0:
+                install.verify_running(retained['source'],pwd.getpwnam('school-autopilot'))
             guard(plan,prior,value,run_guard,agreement)
             pr=owner.observed_target(API(token),plan)
             # These shared parents are fixed, root-only and not user data.
@@ -152,10 +207,15 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
                 conn.read_only=True
                 intake.engine.privileges(conn,intake.target(),True)
                 verify_terminal_policy(conn)
+                if number:
+                    verify_previous(conn,value)
             for path in (ROOT,ROOT/'controllers'):
                 if not path.exists():install.fresh_directory(path,0o700)
                 install.root_parent(path)
-            bootstrap_helpers(controller)
+            if helpers_root(controller['source']).exists():
+                verify_helpers(controller['source'],value['accepted_controller_sha256'])
+            else:
+                bootstrap_helpers(controller)
             install.fresh_directory(directory,0o700)
             protected=switch.protect_snapshot(prior)
             baseline=encoded(dict(version=1,source=retained['source'],
@@ -168,6 +228,7 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
             def intake_guard():
                 require(not (directory/'contain-intent.json').exists(),'LANE_OWNER_CONTAINMENT_PENDING')
                 run_guard.assert_running()
+                if number: containment_host(directory,value)
             with psycopg.connect(**parameters(credential),autocommit=True) as conn:
                 conn.read_only=False
                 intake.engine.privileges(conn,intake.target(),True)
@@ -188,6 +249,8 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
         # Cleanup may use a NEW authenticated workflow/current controller after
         # main advances; retained runtime, plan and original helper evidence stay bound.
         require(all(value[k]==original[k] for k in stable),'LANE_OWNER_SCOPE_CHANGED')
+        require(value.get('predecessor')==original.get('predecessor')
+                and sequence(value)==sequence(original),'LANE_OWNER_PREDECESSOR_CHANGED')
         baseline=parse(read(directory/'baseline.json'))
         prior=install.hold.HoldIdentity(**baseline['prior'])
         if value['action']=='contain':
@@ -208,9 +271,11 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
         if value['action']=='publish':
             with psycopg.connect(**parameters(credential),autocommit=True) as conn:
                 conn.read_only=True
+                if number: verify_previous(conn,value)
                 committed_intake(conn,plan,receipt)
             retain(directory/'publication-intent.json',payload_raw)
             run_guard.assert_running()
+            if number: containment_host(directory,value)
             published=owner.broker_publish(candidate,prior,receipt)
             retain(directory/'broker.json',encoded(published))
             discovered=owner.discovery(API(token),published,receipt)
@@ -221,11 +286,18 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
         published=parse(read(directory/'broker.json'))
         require(owner.discovery(API(token),published,receipt)==discovered,'LANE_OWNER_PUBLICATION_CHANGED')
         if value['action']=='permit':
+            if number:
+                with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+                    conn.read_only=True
+                    verify_previous(conn,value)
+            def permit_guard():
+                run_guard.assert_running()
+                if number: containment_host(directory,value)
             retain(directory/'permit-intent.json',payload_raw)
             with psycopg.connect(**parameters(credential),autocommit=True) as conn:
                 conn.read_only=False
                 marked=intake.mark_reviewed_publication(conn,plan,agreement,receipt,encoded(discovered),
-                    value['accepted_discovery_sha256'],effect_guard=run_guard.assert_running)
+                    value['accepted_discovery_sha256'],effect_guard=permit_guard)
             retain(directory/'publication.json',encoded(marked))
             dispatch={k:receipt['dispatch'][k] for k in
                 ('dispatch_id','expected_head_sha','mode','target_pr','task_fingerprint')}
@@ -249,9 +321,11 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
         guard(plan,prior,value,run_guard,agreement)
         with psycopg.connect(**parameters(credential),autocommit=True) as conn:
             conn.read_only=True
+            predecessor=verify_previous(conn,value) if number else None
+            options={'previous_cursor':predecessor} if number else {}
             result=publish_first(conn,retained_raw,value['accepted_runtime_sha256'],permit,
                 value['accepted_permit_sha256'],value['source'],lambda n:API(token).get('/pulls/'+str(n)),
-                plan.raw,plan.digest,receipt_raw,value['accepted_receipt_sha256'])
+                plan.raw,plan.digest,receipt_raw,value['accepted_receipt_sha256'],**options)
         launch_args=(wheels,credential,token,plan,directory,value,prior,baseline,result,run_guard)
     # Release the owner-driver flock before the PID1 supervisor acquires it.
     return launch(*launch_args)
@@ -270,6 +344,9 @@ def launch(wheels,credential,token,plan,directory,value,prior,baseline,feed_resu
         cursor_sha256=feed_result['cursor_sha256'],dispatch_id=feed_result['dispatch_id'],
         original=install.verify_hold_process(install.RETAINED_SOURCE,pwd.getpwnam('school-autopilot')),
         supervisor_sha256=sha(script),owner_context_sha256=sha(context)))
+    if value.get('version')==2:
+        body=parse(request);body.update(version=2,sequence=sequence(value))
+        request=encoded(body)
     digest=sha(request)
     if not execution.ROOT.exists():install.fresh_directory(execution.ROOT,0o700)
     target=execution.ROOT/digest
@@ -350,8 +427,9 @@ def finish(psycopg,parameters,plan,receipt,directory,value,run_guard):
     if value['action']=='terminal':
         with psycopg.connect(**parameters,autocommit=True) as conn:
             conn.read_only=True
-            accepted=retain_acceptance(conn,plan,receipt,0)
-            raw=install.STATE/'00000000-terminal.json'
+            number=sequence(value)
+            accepted=retain_acceptance(conn,plan,receipt,number)
+            raw=install.STATE/f'{number:08d}-terminal.json'
             # retain_acceptance has just validated metadata and these exact
             # private service records against fresh Cloud and DB evidence.
             terminal=json.loads(raw.read_bytes())
@@ -437,6 +515,31 @@ def reconcile_controls(psycopg,parameters,plan,receipt,terminal,directory,run_gu
         terminal_sha256=accepted,success=success,controls_restored=True)
 
 
+def containment_host(directory,value):
+    """Contain only before this sequence's publication, preserving old evidence."""
+    from ops.light_native_lane_feed import root_record,verify_serial_hold
+    number=sequence(value)
+    intent='first-feed-intent.json' if number==0 else f'{number:08d}-feed-intent.json'
+    require(not (directory/'execution.json').exists()
+            and not (install.LEDGER/intent).exists(),'LANE_OWNER_FEED_REQUIRES_INCIDENT')
+    execution.stopped()
+    if number==0:
+        require(not (install.CONTROL/'current.json').exists(),'LANE_OWNER_FEED_REQUIRES_INCIDENT')
+        install.verify_running(install.RETAINED_SOURCE,pwd.getpwnam('school-autopilot'))
+        return
+    previous=value['predecessor']
+    prior=ROOT/previous['plan_sha256']
+    read(prior/'terminal.json',previous['terminal_sha256'])
+    receipt=parse(read(prior/'intake.json'))
+    complete=parse(read(prior/'complete.json'))
+    cursor=root_record(install.CONTROL/'current.json',4096)
+    before,history=verify_serial_hold(install.RETAINED_SOURCE,cursor)
+    require(len(history)==number and complete.get('controls_restored') is True
+            and before==complete['native'] and parse(cursor)['dispatch_id']==receipt['dispatch_id']
+            and set(os.listdir(install.CONTROL/'jobs'))=={parse(item[0])['dispatch_id'] for item in history},
+            'LANE_OWNER_FEED_REQUIRES_INCIDENT')
+
+
 def contain(psycopg,parameters,plan,directory,value,run_guard):
     """Freeze a pre-execution intake; queue evidence stays unresolved and intact.
 
@@ -448,11 +551,7 @@ def contain(psycopg,parameters,plan,directory,value,run_guard):
     remember(directory/'contain-intent.json',binding)
     def host_guard():
         run_guard.assert_running()
-        require(not (directory/'execution.json').exists()
-                and not (install.LEDGER/'first-feed-intent.json').exists()
-                and not (install.CONTROL/'current.json').exists(),'LANE_OWNER_FEED_REQUIRES_INCIDENT')
-        execution.stopped()
-        install.verify_running(install.RETAINED_SOURCE,pwd.getpwnam('school-autopilot'))
+        containment_host(directory,value)
     host_guard()
     raw=read(directory/'before.json')
     before=intake.engine.load_manifest(directory/'before.json',sha(raw))

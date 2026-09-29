@@ -341,3 +341,32 @@ def test_prepare_policy_failure_precedes_root_records(phase_context,monkeypatch)
     before=set(directory.iterdir())
     with pytest.raises(RuntimeError,match='TERMINAL_POLICY_MISSING'):call()
     assert set(directory.iterdir())==before
+
+
+@pytest.mark.parametrize('fault', ['version', 'negative', 'boolean', 'limit', 'digest', 'reuse', 'extra'])
+def test_predecessor_schema_rejects_ambiguous_or_reused_sequence(fault):
+    value=dict(version=2, accepted_plan_sha256='a'*64,
+               predecessor=dict(plan_sha256='b'*64, terminal_sha256='c'*64, sequence=0))
+    assert target.sequence(value)==1
+    if fault=='version': value['version']=1
+    elif fault=='negative': value['predecessor']['sequence']=-1
+    elif fault=='boolean': value['predecessor']['sequence']=True
+    elif fault=='limit': value['predecessor']['sequence']=9999
+    elif fault=='digest': value['predecessor']['terminal_sha256']='bad'
+    elif fault=='reuse': value['predecessor']['plan_sha256']='a'*64
+    else: value['predecessor']['extra']=1
+    with pytest.raises(RuntimeError): target.sequence(value)
+    assert target.sequence(dict(version=1))==0
+
+
+@pytest.mark.parametrize('action', ['publish', 'permit', 'execute'])
+def test_successor_drift_blocks_each_stage_before_effect(phase_context, monkeypatch, action):
+    value, events, call, directory = phase_context
+    value.update(version=2, action=action, predecessor=dict(plan_sha256='b'*64, terminal_sha256='c'*64, sequence=0))
+    (directory/'prepare.json').write_bytes(target.encoded(value))
+    def drift(*args): raise RuntimeError('predecessor drift')
+    monkeypatch.setattr(target, 'verify_previous', drift)
+    with pytest.raises(RuntimeError, match='predecessor drift'): call()
+    assert 'broker' not in events and 'feed' not in events
+    assert not (directory/'publication-intent.json').exists()
+    assert not (directory/'permit-intent.json').exists()

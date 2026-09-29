@@ -63,9 +63,11 @@ def request(request_digest):
     raw=install.hold.read(directory/'request.json',0o600,262144)
     require(hashlib.sha256(raw).hexdigest() == request_digest, 'LANE_EXEC_REQUEST')
     value=parse(raw)
-    require(set(value) == {'version','source','controller_source','seconds','expires_at','prior',
-                          'protected','protected_sha256','cursor_sha256','dispatch_id','original','supervisor_sha256','owner_context_sha256'}
-            and type(value['version']) is int and value['version'] == 1
+    fields={'version','source','controller_source','seconds','expires_at','prior',
+            'protected','protected_sha256','cursor_sha256','dispatch_id','original','supervisor_sha256','owner_context_sha256'}
+    require((set(value)==fields and type(value['version']) is int and value['version']==1
+             or set(value)==fields|{'sequence'} and type(value['version']) is int and value['version']==2
+             and type(value['sequence']) is int and 1<=value['sequence']<10000)
             and install.release.source.identifier(value['controller_source'],40)
             and install.release.source.identifier(value['cursor_sha256'],64)
             and install.release.source.identifier(value['supervisor_sha256'],64)
@@ -112,9 +114,11 @@ def feed(value):
         return install.hold.read(path,0o640,limit)
     raw=read(install.CONTROL/'current.json',4096)
     cursor=lane.entry(raw,value['source'])
-    require(lane.digest(raw) == value['cursor_sha256'] and cursor['sequence'] == 0
+    number=value.get('sequence',0)
+    intent='first-feed-intent.json' if number==0 else f'{number:08d}-feed-intent.json'
+    require(lane.digest(raw) == value['cursor_sha256'] and cursor['sequence'] == number
             and cursor['dispatch_id'] == value['dispatch_id']
-            and install.hold.read(install.LEDGER/'first-feed-intent.json',0o600,4096) == raw,
+            and install.hold.read(install.LEDGER/intent,0o600,4096) == raw,
             'LANE_EXEC_FEED_CHANGED')
     path=install.CONTROL/'jobs'/cursor['dispatch_id']/'permit.json'
     permit=lane.Permit(read(path,65536),cursor['permit_sha256'],lambda:read(path,65536),value['source'])
@@ -226,8 +230,17 @@ def run_once(request_digest,fresh_gate,*,live_guard):
             and install.hold.read(install.UNIT_FILE,0o644,8192) == install.render(value['source'])
             and install.hold.read(install.CONTROL/'admission',0o640,16) == b'HOLD\n', 'LANE_EXEC_ORIGINAL_CHANGED')
     state=install.STATE.lstat()
+    number=value.get('sequence',0)
+    if number:
+        from ops.light_native_lane_feed import completed_history,root_record
+        from oracle_autopilot import light_native_lane as lane
+        history=completed_history(value['source'])
+        cursor=lane.entry(root_record(install.CONTROL/'current.json',4096),value['source'])
+        require(len(history)==number and cursor['sequence']==number
+                and cursor['previous_terminal_sha256']==lane.digest(history[-1][1]), 'LANE_EXEC_HISTORY_CHANGED')
     require(stat.S_ISDIR(state.st_mode) and state.st_uid == pwd.getpwnam('school-autopilot').pw_uid
-            and stat.S_IMODE(state.st_mode) == 0o700 and set(os.listdir(install.STATE)) == {'pilot.lock'},
+            and stat.S_IMODE(state.st_mode) == 0o700
+            and (number>0 or set(os.listdir(install.STATE)) == {'pilot.lock'}),
             'LANE_EXEC_NOT_PRISTINE')
     require(install.verify_hold_process(value['source'],pwd.getpwnam('school-autopilot')) == value['original'],
             'LANE_EXEC_ORIGINAL_CHANGED')
