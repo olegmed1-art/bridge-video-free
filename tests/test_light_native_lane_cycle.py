@@ -290,7 +290,7 @@ assert not any(name in sys.modules for name in ('psycopg','psycopg_binary','data
 
 def test_actual_isolated_children_load_driver_once_and_do_not_inherit(journal):
     from pathlib import Path
-    import psycopg
+    import psycopg,typing_extensions
     j=journal;r=j.request
     repo=Path(__file__).resolve().parents[1]
     helpers={name:('' if name.endswith('/__init__.py') else (repo/name).read_text())
@@ -309,7 +309,7 @@ owner.release.staging.require_current_main=lambda source:None
 @contextmanager
 def _driver(wheels):
     assert 'psycopg' not in sys.modules
-    sys.path.insert(0,SITE)
+    sys.path[:0]=SITES
     import psycopg
     yield psycopg,{}
 _host.loaded_runtime=_driver
@@ -328,7 +328,7 @@ def child_main(wire,expected,context):
                 return dict(audit='CHILD_TEST',pid=os.getpid())
         owner.phase=phase
     return _original_child(wire,expected,context)
-""".replace('REPO',repr(str(repo))).replace('SITE',repr(str(Path(psycopg.__file__).parents[1])))
+""".replace('REPO',repr(str(repo))).replace('SITES',repr(list(dict.fromkeys([str(Path(psycopg.__file__).parents[1]),str(Path(typing_extensions.__file__).parent)]))))
     package=owner.encoded(dict(version=1,kind='LIGHT_LANE_CONTROLLER',source=r.prepare['source'],helpers=helpers))
     prepare=dict(r.prepare,accepted_controller_sha256=owner.sha(package))
     raw=owner.encoded(dict(version=1,action='cycle',prepare=prepare))
