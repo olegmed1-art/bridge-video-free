@@ -38,7 +38,7 @@ def sample(label):
     now=int(time.time())
     def iso(epoch):return time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(epoch))
     approval=dict(version=1,owner='olegmed1-art',operation_digest=plan.scope_digest,
-                  not_before=iso(now-1),expires_at=iso(now+600),coverage=COVERAGE,
+                  not_before=iso(now-1),expires_at=iso(now+1200),coverage=COVERAGE,
                   evidence='Disposable PG18 transaction fixture; no production authority.')
     accepted=intake.digest(approval)
     agreement=Agreement(approval,accepted,plan.scope)
@@ -99,6 +99,38 @@ def main(result_code='AUDIT_PASSED'):
                 conn.read_only=True
                 controller.committed_intake(conn,plan,result)
                 conn.read_only=False
+                snapshots=[]
+                refreshed=intake.refresh_publication_claim(conn,plan,agreement,result,
+                    effect_guard=lambda:None,
+                    durable_before=lambda row:snapshots.append(('before',row)),
+                    durable_after=lambda row:snapshots.append(('after',row)))
+                require([name for name,_ in snapshots]==['before','after'], 'DISPOSABLE_REFRESH_RECORDS')
+                require(conn.execute('SELECT claim_epoch=1 AND attempts=1 AND claim_until<=updated_at+interval \'300 seconds\' '
+                    'AND claim_until>clock_timestamp()+interval \'60 seconds\' FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s::uuid',
+                    (result['dispatch_id'],)).fetchone()==(True,), 'DISPOSABLE_REFRESH_CAP')
+                conn.read_only=True
+                intake.assert_publication_claim(conn,plan,agreement,result,refreshed)
+                intake.assert_publication_claim(conn,plan,agreement,result,refreshed)
+                conn.read_only=False
+                # Force expiry only in this guarded disposable database. The
+                # owner helper must refuse it without reclaim or epoch change.
+                conn.execute('UPDATE autopilot.role_dispatch_outbox SET claim_until=clock_timestamp()-interval \'1 second\' '
+                    'WHERE dispatch_id=%s::uuid',(result['dispatch_id'],))
+                expired=intake.publication_claim_rows(conn,plan,result)
+                try:
+                    intake.refresh_publication_claim(conn,plan,agreement,result,effect_guard=lambda:None,
+                        durable_before=lambda row:None,
+                        durable_after=lambda row:require(False,'EXPIRED_REFRESH_WROTE_AFTER'))
+                except RuntimeError as exc:
+                    require(str(exc)=='PILOT_CLAIM_REFRESH_EXPIRED','DISPOSABLE_REFRESH_WRONG_REFUSAL')
+                else:
+                    require(False,'DISPOSABLE_EXPIRED_CLAIM_RENEWED')
+                require(intake.publication_claim_rows(conn,plan,result)==expired,'DISPOSABLE_EXPIRED_REFRESH_MUTATED')
+                # Restore only this fixture's artificial expiry so the existing
+                # native terminal/control-restore rehearsal can proceed.
+                conn.execute('UPDATE autopilot.role_dispatch_outbox SET claim_until=%s::timestamptz '
+                    'WHERE dispatch_id=%s::uuid',(refreshed['outbox']['claim_until'],result['dispatch_id']))
+                print('LIGHT_NATIVE_PUBLICATION_REFRESH_REAL_PG18_PASS')
                 body=intake.dispatch_body(result['dispatch'])
                 body_sha=hashlib.sha256(body.encode()).hexdigest()
                 marked=conn.execute('''SELECT autopilot.mark_role_dispatch_published(
@@ -172,10 +204,10 @@ def main(result_code='AUDIT_PASSED'):
                      patch.object(controller.pwd,'getpwnam',lambda *a:None), \
                      patch.object(controller.install,'LEDGER',directory/'unused-ledger'), \
                      patch.object(controller.install,'CONTROL',directory/'unused-control'):
-                    contained=controller.contain(driver,{},plan,directory,{},guard)
+                    contained=controller.contain(driver,{},plan,directory,{'version':1},guard)
                     require(contained['state']=='CONTAINED_UNRESOLVED'
                             and contained['queue_retry_authorized'] is False,'DISPOSABLE_CONTAINMENT')
-                    require(controller.contain(driver,{},plan,directory,{},guard)==contained,
+                    require(controller.contain(driver,{},plan,directory,{'version':1},guard)==contained,
                             'DISPOSABLE_CONTAIN_RECONCILE')
                 require(conn.execute('SELECT enabled FROM autopilot.native_cli_config').fetchone()==(False,)
                         and conn.execute("SELECT can_repair FROM autopilot.role_registry WHERE role_id='AUTOPILOT'").fetchone()==(False,)
