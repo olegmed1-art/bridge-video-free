@@ -370,3 +370,189 @@ def test_successor_drift_blocks_each_stage_before_effect(phase_context, monkeypa
     assert 'broker' not in events and 'feed' not in events
     assert not (directory/'publication-intent.json').exists()
     assert not (directory/'permit-intent.json').exists()
+
+
+"""Incident recovery: no provider result, replay, scope widening or silent drift."""
+from contextlib import contextmanager
+from copy import deepcopy
+from types import SimpleNamespace
+import json
+import pytest
+from ops import light_native_lane_controller as target
+from database import light_native_pilot_intake as intake
+from ops import light_native_pilot_owner as owner
+
+
+@pytest.fixture
+def recovery(tmp_path,monkeypatch):
+    task='036bda80-b063-4578-a87b-61e9d556d5b2'
+    dispatch='6ac74f4e-d3fa-4140-a700-904cc6d408c7'
+    work='0ede25b2-02e4-437b-85e0-7eb4882bc3d0'
+    receipt=dict(task_id=task,dispatch_id=dispatch,work_item_id=work,claim_epoch=1,
+        snapshot_sha256='a'*64,goal_json_sha256=target.sha(b'{}'),
+        applied_config=dict(enabled=True,cutover_at='new'),applied_role=dict(can_repair=False,updated_at='old'),
+        dispatch=dict(task_fingerprint='fingerprint'))
+    value=dict(version=2,accepted_plan_sha256=target.RECOVERY_PLAN,
+        predecessor=dict(plan_sha256='71706f2ccb9054a0fa955f51cd8289810775253b5ca87b981726b7a7583d6af4',
+            terminal_sha256='517273e66872c271c7eea70e89c7d792419d5df4474c3e63c71fc52a5ac2fa91',sequence=0),
+        accepted_receipt_sha256='c328bdb8660885f588c5ea07c10803726608cc1f3ea1017db420789db351a2e9',
+        accepted_discovery_sha256='5d2133d05579483409993d18bd831a474d95511fc4fb3dd0d04a452200b996fb')
+    plan=SimpleNamespace(digest=target.RECOVERY_PLAN,worker='worker',value=dict(work_key='work',task_spec_json={},target_pr=1993,expected_head_sha='b'*40))
+    before=dict(plan_sha256=plan.digest,target=intake.EXPECTED_TARGET,native_config=dict(enabled=False,cutover_at='old'),
+                autopilot_role=dict(can_repair=True,updated_at='old'))
+    rows=dict(task=dict(task_id=task,status='WAITING_EXTERNAL',attempts=1,max_attempts=3,lease_owner=None,
+        lease_until=None,completed_at=None,terminal_reason_code=None,safe_summary_json={},goal_json={},updated_at='old',
+        cost_actual_microusd=0,cost_reserved_microusd=0,cost_cap_microusd=0),
+        step=dict(task_id=task,step_attempt_id='step',status='WAITING_EXTERNAL',completed_at=None,error_code=None,result_summary_json={}),
+        work=dict(work_item_id=work,work_key='work',state='ACTIVE',last_task_id=task,generation=1,task_spec_json={},
+            hold_reason=None,hold_until=None,probe_lease_owner=None,result_code=None,result_summary=None,completed_at=None,updated_at='old',not_before='old'),
+        outbox=dict(dispatch_id=dispatch,status='CLAIMED',claim_owner='worker',claim_epoch=1,attempts=1,max_attempts=5,
+            task_id=task,mode='READ_ONLY',delivery_contract_version=3,target_pr=1993,expected_head_sha='b'*40,
+            task_fingerprint='fingerprint',claim_until='expired',updated_at='old',last_error_code=None),
+        config=dict(receipt['applied_config'],enabled=False),role=deepcopy(receipt['applied_role']),
+        mapping=[dict(task_id=task,run_kind='AUDIT')],receipts=0,successors=0,counts=[2,2,1,2],event=[],active_tasks=[task],
+        planner=dict(decision_count=7,last_decision_code='OLD',last_work_item_id=None,last_decision_at=None,enabled=False))
+    rows['outbox'].update(dict.fromkeys(('published_at','github_dispatch_comment_id','dispatch_body_sha256','executor_id',
+        'codex_ack_at','delivered_at','completed_at','prior_task_id','origin_task_id','codex_command_pr','codex_command_comment_id','sent_at')))
+    db=SimpleNamespace(rows=rows,writes=0,fail_update=None,fail_commit=False,guards=0,fail_guard=None,readback_drift=False)
+    class Connection:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        @contextmanager
+        def transaction(self):
+            snapshot=deepcopy(db.rows)
+            start=db.writes
+            try:yield
+            except BaseException:
+                db.rows=snapshot
+                raise
+            if db.fail_commit and db.writes>start:raise RuntimeError('COMMIT_ACK_LOST')
+        def execute(self,sql,args=()):
+            if sql.startswith('UPDATE'):
+                db.writes+=1
+                if db.fail_update==db.writes:return SimpleNamespace(rowcount=0)
+                r=db.rows
+                if 'role_dispatch_outbox SET' in sql:
+                    r['outbox'].update(status='FAILED_CLOSED',claim_owner=None,claim_until=None,last_error_code=args[0],completed_at='now',updated_at='now')
+                elif 'step_attempt SET' in sql:
+                    r['step'].update(status='FAILED_CLOSED',error_code=args[0],result_summary_json=json.loads(args[1]),completed_at='now')
+                elif 'autopilot.task SET' in sql:
+                    r['task'].update(status='FAILED_CLOSED',terminal_reason_code=args[0],safe_summary_json=json.loads(args[1]),completed_at='now',updated_at='now')
+                    # Deployed work trigger, not a native terminal receipt.
+                    r['work'].update(state='BLOCKED',not_before='later')
+                    r['active_tasks']=[]
+                    r['planner'].update(decision_count=r['planner']['decision_count']+1,last_decision_code='WORK_ITEM_BLOCKED_CONTINUE',last_work_item_id=work,last_decision_at='now')
+                elif 'project_work_item SET' in sql:
+                    r['work'].update(state='PAUSED',hold_reason='OWNER_HOLD',hold_until=None,result_code=args[0],result_summary=args[1],completed_at=None,updated_at='now')
+                elif 'native_cli_config SET' in sql:r['config'].update(enabled=args[0],cutover_at=args[1])
+                elif 'role_registry SET' in sql:r['role'].update(can_repair=args[0])
+                else:pytest.fail(sql)
+                return SimpleNamespace(rowcount=1)
+            if 'record_event(' in sql:
+                db.rows['event']=[dict(task_id=task,event_type='TASK_FAILED_CLOSED')]
+            if 'claim_until<clock_timestamp' in sql:return SimpleNamespace(fetchone=lambda:(True,))
+    driver=SimpleNamespace(connect=lambda **kwargs:Connection())
+    monkeypatch.setattr(intake.engine,'identity',lambda *args:None)
+    monkeypatch.setattr(intake.engine,'load_manifest',lambda *args:before)
+    monkeypatch.setattr(target,'recovery_rows',lambda conn,receipt,**kwargs:deepcopy(db.rows))
+    monkeypatch.setattr(target,'verify_terminal_policy',lambda conn:None)
+    monkeypatch.setattr(owner,'discovery',lambda *args:{})
+    monkeypatch.setattr(target.install,'root_parent',lambda *args:None)
+    real_read=target.read
+    monkeypatch.setattr(target,'read',lambda path,accepted=None,*args:real_read(path,None,*args))
+    def guard(*args):
+        db.guards+=1
+        if db.guards==db.fail_guard:raise RuntimeError('HOST_CHANGED')
+    monkeypatch.setattr(target,'containment_host',guard)
+    target.retain(tmp_path/'contained.json',target.encoded(dict(audit='LIGHT_LANE_OWNER',phase='contain',
+        state='CONTAINED_UNRESOLVED',plan_sha256=plan.digest,controls_restored=False,task_success=False,queue_retry_authorized=False)))
+    target.retain(tmp_path/'contain-intent.json',target.encoded(dict(plan_sha256=plan.digest,action='CONTAIN_PREEXECUTION')))
+    for name in ('discovery.json','broker.json'):target.retain(tmp_path/name,b'{}')
+    run=lambda:target.recover(driver,{},plan,receipt,tmp_path,value,SimpleNamespace(assert_running=lambda:None),None)
+    return SimpleNamespace(db=db,plan=plan,receipt=receipt,value=value,before=before,directory=tmp_path,run=run)
+
+
+def test_retirement_preserves_attempts_and_never_fabricates_receipt(recovery):
+    original=deepcopy(recovery.db.rows)
+    result=recovery.run()
+    assert result['controls_restored'] and not result['task_success'] and not result['provider_started']
+    assert recovery.db.rows['work']['state']=='PAUSED' and recovery.db.rows['receipts']==0
+    assert recovery.db.rows['outbox']['attempts']==original['outbox']['attempts']==1
+    assert recovery.db.rows['outbox']['claim_epoch']==1 and recovery.db.rows['outbox']['max_attempts']==5
+    assert 'status' not in recovery.db.rows['task']['safe_summary_json']
+    assert recovery.run()==result and recovery.db.writes==6
+
+
+@pytest.mark.parametrize('change',['task','plan','predecessor','discovery','version'])
+def test_other_incidents_are_not_authorized(recovery,change):
+    if change=='task':recovery.receipt['task_id']='other'
+    elif change=='plan':recovery.plan.digest='a'*64
+    elif change=='predecessor':recovery.value['predecessor']['sequence']=1
+    elif change=='discovery':recovery.value['accepted_discovery_sha256']='b'*64
+    else:recovery.value['version']=1
+    with pytest.raises(RuntimeError):recovery.run()
+    assert recovery.db.writes==0
+
+
+@pytest.mark.parametrize('table,key,value',[
+    ('outbox','attempts',2),('outbox','claim_epoch',2),('outbox','executor_id','provider'),
+    ('outbox','published_at','time'),('outbox','status','PUBLISHED'),('task','cost_actual_microusd',1),
+    ('task','status','RUNNING'),('work','generation',2),('work','hold_reason','foreign'),
+    ('role','can_repair',True),('config','enabled',True)])
+def test_changed_graph_refuses_before_intent(recovery,table,key,value):
+    recovery.db.rows[table][key]=value
+    with pytest.raises(RuntimeError):recovery.run()
+    assert recovery.db.writes==0 and not (recovery.directory/'recovery-intent.json').exists()
+
+
+@pytest.mark.parametrize('field,value',[('receipts',1),('successors',1),('mapping',[]),('event',[{}])])
+def test_new_activity_refuses(recovery,field,value):
+    recovery.db.rows[field]=value
+    with pytest.raises(RuntimeError):recovery.run()
+    assert recovery.db.writes==0
+
+
+@pytest.mark.parametrize('write',range(1,7))
+def test_each_missing_update_rolls_back_and_never_blindly_retries(recovery,write):
+    original=deepcopy(recovery.db.rows)
+    recovery.db.fail_update=write
+    with pytest.raises(RuntimeError,match='ROWCOUNT'):recovery.run()
+    assert recovery.db.rows==original
+    count=recovery.db.writes
+    with pytest.raises(FileNotFoundError):recovery.run()
+    assert recovery.db.writes==count
+
+
+@pytest.mark.parametrize('point',[1,2,3])
+def test_host_drift_before_commit_leaves_no_terminal(recovery,point):
+    original=deepcopy(recovery.db.rows)
+    recovery.db.fail_guard=point
+    with pytest.raises(RuntimeError,match='HOST_CHANGED'):recovery.run()
+    assert recovery.db.rows==original
+
+
+def test_lost_commit_ack_classifies_without_sql_replay(recovery):
+    recovery.db.fail_commit=True
+    with pytest.raises(RuntimeError,match='COMMIT_ACK_LOST'):recovery.run()
+    assert recovery.db.rows['task']['status']=='FAILED_CLOSED'
+    assert recovery.run()['controls_restored']
+    assert recovery.db.writes==6
+
+
+def test_unknown_ack_plus_drift_requires_incident_not_retry(recovery):
+    recovery.db.fail_commit=True
+    with pytest.raises(RuntimeError):recovery.run()
+    recovery.db.rows['work']['last_task_id']='foreign'
+    with pytest.raises(RuntimeError,match='OUTCOME_UNKNOWN'):recovery.run()
+    assert recovery.db.writes==6
+
+
+@pytest.mark.parametrize('table,key,value',[
+    ('outbox','attempts',2),('outbox','claim_epoch',2),('outbox','max_attempts',1),
+    ('step','task_id','foreign'),('work','generation',2),('task','cost_actual_microusd',1),('planner','enabled',True)])
+def test_post_commit_unexpected_delta_rejected(recovery,table,key,value):
+    original=deepcopy(recovery.db.rows)
+    recovery.run()
+    after=deepcopy(recovery.db.rows);after[table][key]=value
+    with pytest.raises(RuntimeError,match='UNEXPECTED_DELTA'):
+        target.validate_recovery_delta(original,after,recovery.before,recovery.receipt)
