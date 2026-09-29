@@ -1,5 +1,6 @@
 name: Autopilot Universal Video P1 bounded registration v4
 
+# RETIRED 2026-09-29: legacy temporary Neon shadow endpoint; historical evidence only.
 on:
   push:
     branches: [codex/oracle-autopilot-lite-shadow]
@@ -28,7 +29,7 @@ concurrency:
 
 jobs:
   register:
-    if: github.repository == 'olegmed1-art/bridge-video-free' && github.event_name == 'workflow_dispatch' && inputs.allow_temporary_registration == 'YES'
+    if: ${{ false }} # retired legacy shadow endpoint
     runs-on: ubuntu-latest
     timeout-minutes: 35
     environment: database-production
