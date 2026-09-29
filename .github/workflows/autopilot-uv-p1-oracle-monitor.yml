@@ -19,7 +19,6 @@ concurrency:
 jobs:
   monitor:
     if: ${{ false }} # retired legacy shadow path
-    if: github.repository == 'olegmed1-art/bridge-video-free'
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:
