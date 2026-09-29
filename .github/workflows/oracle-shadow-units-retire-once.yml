@@ -1,0 +1,52 @@
+name: Retire Oracle shadow units once
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+jobs:
+  retire:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: database-production
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Disable inactive legacy units only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          key="$RUNNER_TEMP/id_oracle"
+          if [[ -n "${SSH_KEY_ORACLE:-}" ]]; then printf '%s\n' "$SSH_KEY_ORACLE" > "$key"; else printf '%s\n' "$SSH_KEY_BRIDGE" > "$key"; fi
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          shadow=school-autopilot-shadow.service
+          observer=school-autopilot-online-observer.service
+          [[ "$(systemctl is-active "$shadow" 2>/dev/null || true)" == inactive ]]
+          [[ "$(systemctl is-active "$observer" 2>/dev/null || true)" == inactive ]]
+          for u in school-autopilot-production-light.service school-autopilot-native-light.service bridge-autopilot-postgres.service; do
+            [[ "$(systemctl is-active "$u" 2>/dev/null || true)" == active ]]
+          done
+          systemctl disable "$shadow" "$observer"
+          [[ "$(systemctl is-enabled "$shadow" 2>/dev/null || true)" == disabled ]]
+          [[ "$(systemctl is-enabled "$observer" 2>/dev/null || true)" == disabled ]]
+          [[ "$(systemctl is-active "$shadow" 2>/dev/null || true)" == inactive ]]
+          [[ "$(systemctl is-active "$observer" 2>/dev/null || true)" == inactive ]]
+          for u in school-autopilot-production-light.service school-autopilot-native-light.service bridge-autopilot-postgres.service; do
+            [[ "$(systemctl is-active "$u" 2>/dev/null || true)" == active ]]
+          done
+          echo SHADOW_UNITS_RETIREMENT_PASS
+          REMOTE
