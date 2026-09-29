@@ -1,5 +1,6 @@
 name: Autopilot temp Neon 0306 and IBF acceptance
 
+# RETIRED 2026-09-29: legacy temporary Neon shadow endpoint; historical evidence only.
 on:
   push:
     branches: [codex/oracle-autopilot-lite-shadow]
@@ -14,7 +15,7 @@ concurrency:
 
 jobs:
   accept:
-    if: github.repository == 'olegmed1-art/bridge-video-free'
+    if: ${{ false }} # retired legacy shadow endpoint
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     environment: database-production
