@@ -151,3 +151,109 @@ def test_unrelated_accepted_intake_is_not_a_permit(prepared,field):
     with pytest.raises(RuntimeError,match='PLAN_BINDING'):feed.publish_first(*args)
     assert not (feed.install.CONTROL/'current.json').exists()
     assert not (feed.install.LEDGER/'first-feed-intent.json').exists()
+
+
+@pytest.fixture
+def successor(prepared, monkeypatch, rig, tmp_path):
+    from copy import deepcopy
+    args, value, pr, events = prepared
+    install, lane = feed.install, feed.lane
+    feed.publish_first(*args)
+    cursor = (install.CONTROL/'current.json').read_bytes()
+    request = deepcopy(rig[0])
+    result = dict(state='DONE', dispatch_id=request['dispatch_id'], provider_task_id='task_e_previous',
+                  terminal=dict(status='SUCCEEDED', provider_evidence_sha256='a'*64))
+    terminal = lane.encoded(lane.terminal_record(cursor, request, result))
+    def write(path, raw, mode=0o600):
+        path.write_bytes(raw); path.chmod(mode)
+    write(install.STATE/'00000000-intent.json', cursor)
+    write(install.STATE/'00000000-terminal.json', terminal)
+    claim = install.STATE/('claim-'+request['dispatch_id']); claim.mkdir(mode=0o700)
+    write(claim/'request.json', lane.encoded(request)); write(claim/'permit.json', args[3])
+    write(install.CONTROL/'jobs'/request['dispatch_id']/'accepted-terminal.json',
+          lane.encoded(lane.acceptance_record(cursor, terminal)), 0o640)
+    unit = tmp_path/'unit'; write(unit, install.render(value['source']), 0o644)
+    monkeypatch.setattr(install, 'UNIT_FILE', unit)
+    monkeypatch.setattr(install, 'verify_unit', lambda *a: None)
+    monkeypatch.setattr(install, 'verify_hold_process', lambda *a: install.show(None, None))
+    # A new accepted dispatch and plan, never a replay of the previous identity.
+    old = request['dispatch_id']; new = '12345678-1234-4234-8234-123456789099'
+    for i in (3, 7, 9):
+        args[i] = args[i].replace(old.encode(), new.encode()).replace(b'lane-first-review', b'lane-second-review')
+    permit = lane.parse(args[3])
+    permit['owner_preflight']['dispatch_sha256'] = lane.digest(lane.encoded(permit['dispatch']))
+    args[3] = lane.encoded(permit)
+    plan_digest = lane.digest(args[7])
+    receipt = lane.parse(args[9]); receipt['plan_sha256'] = plan_digest
+    args[9] = lane.encoded(receipt)
+    for i in (3, 7, 9): args[i+1] = lane.digest(args[i])
+    monkeypatch.setattr(feed.preflight, 'observe', lambda *a, **k: lane.parse(args[3])['owner_preflight'])
+    return args, value['source'], cursor, terminal
+
+
+@pytest.mark.skipif(os.geteuid()!=0, reason='real root metadata')
+def test_successor_preserves_history_and_does_not_take_dormant_lock(successor):
+    import fcntl
+    args, source, cursor, terminal = successor
+    with (feed.install.STATE/'pilot.lock').open('rb') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
+        assert feed.completed_history(source) == [(cursor, terminal)]
+        feed.publish_first(*args, previous_cursor=cursor)
+    current = feed.lane.parse((feed.install.CONTROL/'current.json').read_bytes())
+    assert current['sequence'] == 1
+    assert current['previous_terminal_sha256'] == feed.lane.digest(terminal)
+    assert (feed.install.STATE/'00000000-terminal.json').read_bytes() == terminal
+    assert len(list((feed.install.CONTROL/'jobs').iterdir())) == 2
+    with pytest.raises(RuntimeError): feed.publish_first(*args, previous_cursor=cursor)
+
+
+@pytest.mark.skipif(os.geteuid()!=0, reason='real root metadata')
+@pytest.mark.parametrize('fault', ['acceptance', 'terminal', 'claim', 'quarantine', 'hold', 'permit_ack'])
+def test_successor_faults_never_replace_previous_cursor(successor, monkeypatch, fault):
+    args, source, cursor, terminal = successor
+    install = feed.install
+    entry = feed.lane.parse(cursor)
+    if fault == 'acceptance':
+        (install.CONTROL/'jobs'/entry['dispatch_id']/'accepted-terminal.json').unlink()
+    elif fault == 'terminal':
+        (install.STATE/'00000000-terminal.json').write_bytes(terminal.replace(b'SUCCEEDED', b'BLOCKED'))
+    elif fault == 'claim':
+        (install.STATE/('claim-'+entry['dispatch_id'])/'request.json').chmod(0o644)
+    elif fault == 'quarantine': (install.STATE/'quarantine.json').write_text('{}')
+    elif fault == 'hold': (install.CONTROL/'admission').write_bytes(b'RUN\n')
+    else:
+        original = install.write_new
+        def lost(path, *rest):
+            original(path, *rest)
+            if path.name == 'permit.json': raise RuntimeError('lost acknowledgment')
+        monkeypatch.setattr(install, 'write_new', lost)
+    with pytest.raises((RuntimeError, OSError)):
+        feed.publish_first(*args, previous_cursor=cursor)
+    assert (install.CONTROL/'current.json').read_bytes() == cursor
+    if fault == 'permit_ack':
+        assert (install.LEDGER/'00000001-feed-intent.json').exists()
+        with pytest.raises(RuntimeError): feed.publish_first(*args, previous_cursor=cursor)
+
+
+@pytest.mark.skipif(os.geteuid()!=0, reason='real root metadata')
+def test_successor_containment_requires_no_new_publication(successor, monkeypatch, tmp_path):
+    from ops import light_native_lane_controller as controller
+    args, source, cursor, terminal = successor
+    root = tmp_path/'owner'; root.mkdir()
+    monkeypatch.setattr(controller, 'ROOT', root)
+    monkeypatch.setattr(controller.execution, 'stopped', lambda: None)
+    digest = 'a'*64
+    prior = root/digest; prior.mkdir(mode=0o700)
+    envelope = b'prior-terminal-envelope'
+    value = dict(version=2, accepted_plan_sha256='b'*64,
+                 predecessor=dict(plan_sha256=digest, terminal_sha256=controller.sha(envelope), sequence=0))
+    for name, raw in [('terminal.json', envelope),
+                      ('intake.json', controller.encoded(dict(dispatch_id=feed.lane.parse(cursor)['dispatch_id']))),
+                      ('complete.json', controller.encoded(dict(controls_restored=True, native=feed.install.show(None,None))))]:
+        controller.retain(prior/name, raw)
+    current = root/('b'*64); current.mkdir(mode=0o700)
+    controller.containment_host(current, value)
+    intent = feed.install.LEDGER/'00000001-feed-intent.json'; intent.write_bytes(b'uncertain')
+    with pytest.raises(RuntimeError, match='REQUIRES_INCIDENT'):
+        controller.containment_host(current, value)
+    assert (feed.install.CONTROL/'current.json').read_bytes() == cursor

@@ -147,3 +147,35 @@ boolean result without writing. Completion retains a create-only private proof
 and repeats full live attestation plus the same proof before each start and
 receipt write. Any mismatch still refuses and preserves the original evidence.
 This proof must succeed on the actual host before a completion is dispatched.
+
+## Owner handoff for subsequent jobs — 2026-09-29
+
+The owner controller accepts version 2 phase payloads with the existing fields
+plus `predecessor: {plan_sha256, terminal_sha256, sequence}`. Version 1 remains
+sequence zero. The successor uses a distinct accepted Plan and dispatch; its
+sequence is exactly predecessor.sequence + 1. This is an owner-reviewed bounded
+handoff, not an autonomous task issuer or a production activation.
+
+Before prepare, publish, permit and execute, the controller checks retained
+predecessor restore/restart evidence, exact current HOLD invocation, immutable
+terminal history, owner acceptances, and fresh original Cloud/DB terminal.
+The dormant process keeps its flock; owner inspection reads completed records
+without taking that lock. The consumer independently validates its full journal
+and acquires the lock when the bounded transient executor starts.
+
+Publication retains a create-only per-sequence feed intent and permit before
+atomically replacing the exact previous root cursor under HOLD. Historical
+claims, terminals and acceptances remain unchanged. An uncertain publication
+is not retried. Before a new feed intent exists, containment can disable the
+new intake while preserving the previous history; after an intent exists,
+incident reconciliation is required. Existing supervisor bounds, deny/stop
+cleanup, terminal verification and DB-control restoration remain mandatory.
+
+Local tests cover successor publication while the dormant lock is held,
+missing/corrupt acceptance and history, quarantine, RUN admission, lost permit
+acknowledgment, repeated publication, containment, stage drift, and bounded
+successor cleanup. These contracts do not establish live multi-job readiness.
+Deployment still requires an accepted finite next-task agreement, fresh CI and
+independent assurance for its exact controller, a new serial live result and
+verified restoration. Permanent operation additionally needs an accepted task
+issuer, monitoring and recovery ownership; a completed pilot is insufficient.

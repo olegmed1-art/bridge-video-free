@@ -220,3 +220,27 @@ def test_live_authority_poll_is_bounded_while_local_checks_continue(host,monkeyp
     assert [t for t in checks if t>0]==[16,32,48,64]
     assert len(local)>30
     assert events.count('main')==3  # Before stop, start, and RUN only.
+
+
+@pytest.mark.skipif(os.geteuid()!=0, reason='root-owned admission')
+@pytest.mark.parametrize('fault', [None, 'gap', 'terminal'])
+def test_successor_history_precedes_stop_and_retains_bounded_cleanup(host, monkeypatch, fault):
+    from ops import light_native_lane_feed as owner_feed
+    from oracle_autopilot import light_native_lane as lane
+    events, value, state, root = host
+    value['sequence'] = 1
+    terminal = b'accepted-private-terminal'
+    cursor = lane.encoded(dict(version=1, source=SOURCE, sequence=1,
+        dispatch_id='12345678-1234-4234-8234-123456789099', permit_sha256='a'*64,
+        previous_terminal_sha256=lane.digest(terminal) if fault!='terminal' else 'b'*64))
+    monkeypatch.setattr(owner_feed, 'completed_history', lambda source: [] if fault=='gap' else [(b'intent', terminal)])
+    monkeypatch.setattr(owner_feed, 'root_record', lambda *a: cursor)
+    if fault:
+        with pytest.raises(RuntimeError, match='HISTORY_CHANGED'):
+            target.run_once(DIGEST, lambda permit: True, live_guard=lambda: None)
+        assert not any(isinstance(e, tuple) for e in events)
+        assert b'RUN\n' not in events
+    else:
+        assert target.run_once(DIGEST, lambda permit: True, live_guard=lambda: None)['state']=='READBACK_REQUIRED'
+        assert target.restore(DIGEST)['state']=='STOPPED_HOLD'
+        assert not state['transient'] and (target.install.CONTROL/'admission').read_bytes()==b'HOLD\n'
