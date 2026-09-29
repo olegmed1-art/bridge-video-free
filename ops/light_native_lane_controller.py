@@ -171,7 +171,7 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
           'accepted_terminal_sha256'}
     require((set(value)==keys and value['version']==1
              or set(value)==keys|{'predecessor'} and value['version']==2) and value['action'] in
-            ('prepare','publish','permit','execute','terminal','restore','contain'),'LANE_OWNER_PHASE')
+            ('prepare','publish','permit','execute','terminal','restore','contain','recover'),'LANE_OWNER_PHASE')
     number=sequence(value)
     run_guard.assert_current()
     controller=validate_package(controller_raw,value['source'],value['accepted_controller_sha256'])
@@ -244,7 +244,7 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
         original=parse(read(directory/'prepare.json'))
         verify_helpers(original['source'],original['accepted_controller_sha256'])
         stable=('accepted_runtime_sha256','plan_base64','accepted_plan_sha256','agreement','accepted_agreement_sha256')
-        if value['action'] not in ('terminal','restore','contain'):
+        if value['action'] not in ('terminal','restore','contain','recover'):
             stable+=('source','accepted_controller_sha256')
         # Cleanup may use a NEW authenticated workflow/current controller after
         # main advances; retained runtime, plan and original helper evidence stay bound.
@@ -262,6 +262,8 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
         require(receipt['plan_sha256']==plan.digest,'LANE_OWNER_RECEIPT')
         guard(plan,prior,value,run_guard)
         switch.unchanged_files(baseline['protected'],prior,baseline['protected_sha256'])
+        if value['action']=='recover':
+            return recover(psycopg,parameters(credential),plan,receipt,directory,value,run_guard,API(token))
         if value['action'] in ('terminal','restore'):
             return finish(psycopg,parameters(credential),plan,receipt,directory,value,run_guard)
         require(not (directory/'contain-intent.json').exists(),'LANE_OWNER_CONTAINMENT_PENDING')
@@ -612,6 +614,225 @@ def contain(psycopg,parameters,plan,directory,value,run_guard):
     result=dict(audit='LIGHT_LANE_OWNER',phase='contain',state=state,plan_sha256=plan.digest,
         controls_restored=False,task_success=False,queue_retry_authorized=False)
     remember(directory/'contained.json',encoded(result))
+    return result
+
+
+RECOVERY_CODE='NATIVE_PREEXECUTION_PUBLICATION_EXPIRED'
+RECOVERY_PLAN='3748d3ae6288b650182d851d8f161871ca5ff302ca12d8de6b2ace214b8315a3'
+
+
+def recovery_scope(plan,receipt,value):
+    # One reviewed incident, not a general cancellation capability.
+    require(plan.digest==RECOVERY_PLAN and value['version']==2 and sequence(value)==1
+        and value['predecessor']==dict(plan_sha256='71706f2ccb9054a0fa955f51cd8289810775253b5ca87b981726b7a7583d6af4',
+            terminal_sha256='517273e66872c271c7eea70e89c7d792419d5df4474c3e63c71fc52a5ac2fa91',sequence=0)
+        and receipt['task_id']=='036bda80-b063-4578-a87b-61e9d556d5b2'
+        and receipt['dispatch_id']=='6ac74f4e-d3fa-4140-a700-904cc6d408c7'
+        and receipt['work_item_id']=='0ede25b2-02e4-437b-85e0-7eb4882bc3d0'
+        and value['accepted_receipt_sha256']=='c328bdb8660885f588c5ea07c10803726608cc1f3ea1017db420789db351a2e9'
+        and value['accepted_discovery_sha256']=='5d2133d05579483409993d18bd831a474d95511fc4fb3dd0d04a452200b996fb',
+        'LANE_RECOVERY_SCOPE')
+
+
+def recovery_rows(conn,receipt,*,locked=True):
+    """Read under the recovery table locks, including empty activity evidence."""
+    from database.light_native_pilot_intake import one
+    result={}
+    lock=' FOR UPDATE' if locked else ''
+    for name,table,key,identifier in (
+        ('task','task','task_id',receipt['task_id']),
+        ('outbox','role_dispatch_outbox','dispatch_id',receipt['dispatch_id']),
+        ('work','project_work_item','work_item_id',receipt['work_item_id'])):
+        result[name]=one(conn,f'SELECT to_jsonb(x) FROM autopilot.{table} x WHERE {key}=%s::uuid'+lock,
+                         (identifier,))
+    result['step']=one(conn,'SELECT to_jsonb(x) FROM autopilot.step_attempt x WHERE step_attempt_id=%s::uuid'+lock,
+                       (result['outbox']['step_attempt_id'],))
+    result['config']=one(conn,'SELECT to_jsonb(x) FROM autopilot.native_cli_config x WHERE singleton'+lock)
+    result['role']=one(conn,"SELECT to_jsonb(x) FROM autopilot.role_registry x WHERE role_id='AUTOPILOT'"+lock)
+    result['planner']=one(conn,'SELECT to_jsonb(x) FROM autopilot.project_planner_state x WHERE singleton'+lock)
+    result['mapping']=[row[0] for row in conn.execute(
+        'SELECT to_jsonb(x) FROM autopilot.project_work_task x WHERE work_item_id=%s::uuid ORDER BY task_id',
+        (receipt['work_item_id'],)).fetchall()]
+    result['receipts']=conn.execute('SELECT count(*) FROM autopilot.native_cli_receipt WHERE dispatch_id=%s::uuid',
+                                   (receipt['dispatch_id'],)).fetchone()[0]
+    result['successors']=conn.execute('SELECT count(*) FROM autopilot.role_dispatch_outbox WHERE prior_task_id=%s::uuid OR origin_task_id=%s::uuid',
+                                     (receipt['task_id'],receipt['task_id'])).fetchone()[0]
+    # No unrelated task/dispatch/receipt may be created by a terminal trigger.
+    result['counts']=[conn.execute('SELECT count(*) FROM autopilot.'+table).fetchone()[0]
+                      for table in ('task','role_dispatch_outbox','native_cli_receipt','project_work_task')]
+    result['event']=[row[0] for row in conn.execute('SELECT to_jsonb(x) FROM autopilot.task_event x WHERE idempotency_key=%s',
+                        ('native-preexecution-recovery:'+receipt['dispatch_id'],)).fetchall()]
+    result['active_tasks']=[str(row[0]) for row in conn.execute("SELECT task_id FROM autopilot.task WHERE status IN "
+        "('NEW','VALIDATING','READY','RUNNING','WAITING_EXTERNAL','EVALUATING') ORDER BY task_id").fetchall()]
+    return result
+
+
+def validate_recovery_rows(rows,plan,receipt):
+    t,o,w,s=(rows[k] for k in ('task','outbox','work','step'))
+    require(rows['config']==dict(receipt['applied_config'],enabled=False)
+            and rows['role']==receipt['applied_role'] and rows['role']['can_repair'] is False,
+            'LANE_RECOVERY_CONTROLS_CHANGED')
+    require(w['work_key']==plan.value['work_key'] and w['state']=='ACTIVE'
+            and w['last_task_id']==receipt['task_id'] and w['generation']==1
+            and w['task_spec_json']==plan.value['task_spec_json']
+            and w['hold_reason'] is None and w['probe_lease_owner'] is None
+            and len(rows['mapping'])==1 and rows['mapping'][0]['task_id']==receipt['task_id']
+            and rows['mapping'][0]['run_kind']=='AUDIT', 'LANE_RECOVERY_WORK_CHANGED')
+    require(t['status']==s['status']=='WAITING_EXTERNAL' and t['attempts']==1
+            and t['lease_owner'] is None and t['lease_until'] is None
+            and t['completed_at'] is None and t['terminal_reason_code'] is None
+            and t['safe_summary_json']=={} and s['task_id']==receipt['task_id']
+            and s['completed_at'] is None
+            and all(t[k]==0 for k in ('cost_actual_microusd','cost_reserved_microusd','cost_cap_microusd'))
+            and sha(json.dumps(t['goal_json'],sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())
+                ==receipt['goal_json_sha256'], 'LANE_RECOVERY_TASK_CHANGED')
+    require(o['status']=='CLAIMED' and o['claim_owner']==plan.worker
+            and o['claim_epoch']==receipt['claim_epoch']==1 and o['attempts']==1
+            and o['task_id']==receipt['task_id'] and o['mode']=='READ_ONLY'
+            and o['delivery_contract_version']==3 and o['target_pr']==plan.value['target_pr']
+            and o['expected_head_sha']==plan.value['expected_head_sha']
+            and o['task_fingerprint']==receipt['dispatch']['task_fingerprint']
+            and all(o[k] is None for k in ('published_at','github_dispatch_comment_id','dispatch_body_sha256',
+                'executor_id','codex_ack_at','delivered_at','completed_at','prior_task_id','origin_task_id',
+                'codex_command_pr','codex_command_comment_id','sent_at'))
+            and rows['receipts']==0 and rows['successors']==0 and rows['event']==[]
+            and rows['active_tasks']==[receipt['task_id']], 'LANE_RECOVERY_DISPATCH_CHANGED')
+
+
+def validate_recovery_delta(before,after,snapshot,receipt):
+    """Every unlisted field, attempt counter and graph edge must stay identical."""
+    permitted={
+        'outbox':{'status','claim_owner','claim_until','last_error_code','completed_at','updated_at'},
+        'step':{'status','error_code','result_summary_json','completed_at'},
+        'task':{'status','terminal_reason_code','safe_summary_json','completed_at','updated_at'},
+        'planner':{'decision_count','last_decision_code','last_work_item_id','last_decision_at'},
+        'work':{'state','hold_reason','hold_until','result_code','result_summary','completed_at','updated_at','not_before'}}
+    for name,fields in permitted.items():
+        require(set(before[name])==set(after[name]) and all(after[name][k]==v for k,v in before[name].items() if k not in fields),
+                'LANE_RECOVERY_UNEXPECTED_DELTA')
+    require(all(after[k]==before[k] for k in ('counts','mapping','receipts','successors'))
+        and after['receipts']==after['successors']==0
+        and after['config']==snapshot['native_config']
+        and {k:v for k,v in after['role'].items() if k!='updated_at'}==
+            {k:v for k,v in snapshot['autopilot_role'].items() if k!='updated_at'}
+        and after['task']['status']==after['step']['status']==after['outbox']['status']=='FAILED_CLOSED'
+        and after['outbox']['claim_owner'] is None and after['outbox']['claim_until'] is None
+        and after['outbox']['last_error_code']==after['step']['error_code']==after['task']['terminal_reason_code']==RECOVERY_CODE
+        and all(after[k]['completed_at'] is not None for k in ('task','step','outbox'))
+        and 'status' not in after['task']['safe_summary_json']
+        and after['task']['safe_summary_json']['provider_started'] is False
+        and after['task']['safe_summary_json']['queue_retry_authorized'] is False
+        and after['task']['safe_summary_json']['result_code']==RECOVERY_CODE
+        and after['step']['result_summary_json']==after['task']['safe_summary_json']
+        and after['work']['result_code']==RECOVERY_CODE
+        and after['active_tasks']==[]
+        and after['planner']['decision_count']==before['planner']['decision_count']+1
+        and after['planner']['last_decision_code']=='WORK_ITEM_BLOCKED_CONTINUE'
+        and after['planner']['last_work_item_id']==receipt['work_item_id']
+        and after['planner']['last_decision_at'] is not None
+        and len(after['event'])==1 and after['event'][0]['task_id']==receipt['task_id']
+        and after['event'][0]['event_type']=='TASK_FAILED_CLOSED'
+        and after['work']['state']=='PAUSED' and after['work']['hold_reason']=='OWNER_HOLD'
+        and after['work']['hold_until'] is None and after['work']['completed_at'] is None
+        and after['work']['last_task_id']==receipt['task_id'], 'LANE_RECOVERY_READBACK')
+
+
+def recover(psycopg,parameters,plan,receipt,directory,value,run_guard,api):
+    """Retire one contained, expired, never-executed intake without replay.
+
+    Root intent and before/expected-after rows survive lost COMMIT responses.
+    An existing intent permits exact read-only reconciliation, never new SQL.
+    Neither a provider result nor a native receipt is fabricated.
+    """
+    from database import light_native_pilot_intake as intake
+    from ops import light_native_pilot_owner as owner
+    recovery_scope(plan,receipt,value)
+    contained=parse(read(directory/'contained.json'))
+    require(contained==dict(audit='LIGHT_LANE_OWNER',phase='contain',state='CONTAINED_UNRESOLVED',
+        plan_sha256=plan.digest,controls_restored=False,task_success=False,queue_retry_authorized=False),
+        'LANE_RECOVERY_NOT_CONTAINED')
+    require(read(directory/'contain-intent.json')==encoded(dict(plan_sha256=plan.digest,action='CONTAIN_PREEXECUTION'))
+            and not (directory/'publication.json').exists() and not (directory/'permit.json').exists(),
+            'LANE_RECOVERY_PUBLICATION_MARKED')
+    discovery=read(directory/'discovery.json',value['accepted_discovery_sha256'])
+    published=parse(read(directory/'broker.json'))
+    require(owner.discovery(api,published,receipt)==parse(discovery),'LANE_OWNER_PUBLICATION_CHANGED')
+    before=intake.engine.load_manifest(directory/'before.json',receipt['snapshot_sha256'])
+    require(before['plan_sha256']==plan.digest and before['target']==intake.EXPECTED_TARGET
+            and before['native_config']['enabled'] is False, 'LANE_RECOVERY_SNAPSHOT_CHANGED')
+    binding=encoded(dict(plan_sha256=plan.digest,receipt_sha256=sha(encoded(receipt)),
+        discovery_sha256=sha(discovery),contained_sha256=sha(encoded(contained)),action='RECOVER_PREEXECUTION'))
+    pending=(directory/'recovery-intent.json').exists()
+    if pending:require(read(directory/'recovery-intent.json')==binding,'LANE_RECOVERY_INTENT_CHANGED')
+    def host_guard():
+        run_guard.assert_running()
+        containment_host(directory,value)
+    host_guard()
+    with psycopg.connect(**parameters,autocommit=True) as conn:
+        conn.read_only=False
+        with conn.transaction():
+            conn.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+            conn.execute("SET LOCAL statement_timeout='10s'")
+            conn.execute("SET LOCAL lock_timeout='5s'")
+            intake.engine.identity(conn,intake.target())
+            conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('autopilot.role-worker-capacity-v1',))
+            conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('light-lane:'+plan.digest,))
+            # Prevent a receipt, successor or unrelated config edit during CAS/readback.
+            for table in ('native_cli_config','native_cli_receipt','project_planner_state','project_work_item','project_work_task',
+                          'role_dispatch_outbox','role_registry','step_attempt','task'):
+                conn.execute('LOCK TABLE autopilot.'+table+' IN SHARE ROW EXCLUSIVE MODE')
+            rows=recovery_rows(conn,receipt)
+            if pending:
+                expected=parse(read(directory/'recovery-after.json'))
+                require(rows==expected,'LANE_RECOVERY_OUTCOME_UNKNOWN')
+            else:
+                verify_terminal_policy(conn)
+                validate_recovery_rows(rows,plan,receipt)
+                require(conn.execute('SELECT claim_until<clock_timestamp() FROM autopilot.role_dispatch_outbox WHERE dispatch_id=%s::uuid',
+                                     (receipt['dispatch_id'],)).fetchone()==(True,), 'LANE_RECOVERY_CLAIM_NOT_EXPIRED')
+                host_guard()
+                retain(directory/'recovery-before.json',encoded(rows))
+                retain(directory/'recovery-intent.json',binding)
+                summary=dict(result_code=RECOVERY_CODE,provider_started=False,queue_retry_authorized=False,
+                             summary='Publication lease expired before native execution; owner retired intake without retry.')
+                def update(sql,args):
+                    require(conn.execute(sql,args).rowcount==1,'LANE_RECOVERY_ROWCOUNT')
+                update("UPDATE autopilot.role_dispatch_outbox SET status='FAILED_CLOSED',claim_owner=NULL,claim_until=NULL,"
+                    'last_error_code=%s,completed_at=now(),updated_at=now() WHERE dispatch_id=%s::uuid',
+                    (RECOVERY_CODE,receipt['dispatch_id']))
+                update("UPDATE autopilot.step_attempt SET status='FAILED_CLOSED',error_code=%s,result_summary_json=%s::jsonb,"
+                    'completed_at=now() WHERE step_attempt_id=%s::uuid',(RECOVERY_CODE,encoded(summary).decode(),rows['step']['step_attempt_id']))
+                # No status=BLOCKED in safe_summary: it is not a provider terminal and must not authorize repair.
+                update("UPDATE autopilot.task SET status='FAILED_CLOSED',terminal_reason_code=%s,safe_summary_json=%s::jsonb,"
+                    'completed_at=now(),updated_at=now() WHERE task_id=%s::uuid',
+                    (RECOVERY_CODE,encoded(summary).decode(),receipt['task_id']))
+                update("UPDATE autopilot.project_work_item SET state='PAUSED',hold_reason='OWNER_HOLD',hold_until=NULL,"
+                    'result_code=%s,result_summary=%s,completed_at=NULL,updated_at=now() WHERE work_item_id=%s::uuid',
+                    (RECOVERY_CODE,summary['summary'],receipt['work_item_id']))
+                update('UPDATE autopilot.native_cli_config SET enabled=%s,cutover_at=%s WHERE singleton',
+                    (before['native_config']['enabled'],before['native_config']['cutover_at']))
+                update("UPDATE autopilot.role_registry SET can_repair=%s WHERE role_id='AUTOPILOT'",
+                    (before['autopilot_role']['can_repair'],))
+                conn.execute("SELECT autopilot.record_event(%s::uuid,'TASK_FAILED_CLOSED','WAITING_EXTERNAL','FAILED_CLOSED',"
+                    "%s::jsonb,'SYSTEM','NATIVE_OWNER_RECOVERY',%s)",
+                    (receipt['task_id'],encoded(dict(summary,dispatch_id=receipt['dispatch_id'],
+                        plan_sha256=plan.digest,recovery_intent_sha256=sha(binding))).decode(),
+                     'native-preexecution-recovery:'+receipt['dispatch_id']))
+                expected=recovery_rows(conn,receipt)
+                validate_recovery_delta(rows,expected,before,receipt)
+                retain(directory/'recovery-after.json',encoded(expected))
+            host_guard()
+    # Independent post-commit readback; never treat durable prospective data as ACK.
+    with psycopg.connect(**parameters,autocommit=True) as conn:
+        conn.read_only=True
+        with conn.transaction():
+            conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+            require(recovery_rows(conn,receipt,locked=False)==expected,'LANE_RECOVERY_OUTCOME_UNKNOWN')
+    host_guard()
+    result=dict(audit='LIGHT_LANE_OWNER',phase='recover',state='RETIRED_PREEXECUTION',plan_sha256=plan.digest,
+        task_id=receipt['task_id'],dispatch_id=receipt['dispatch_id'],controls_restored=True,
+        task_success=False,provider_started=False,queue_retry_authorized=False)
+    remember(directory/'recovered.json',encoded(result))
     return result
 
 

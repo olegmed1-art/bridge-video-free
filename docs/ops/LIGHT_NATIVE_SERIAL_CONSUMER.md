@@ -179,3 +179,37 @@ Deployment still requires an accepted finite next-task agreement, fresh CI and
 independent assurance for its exact controller, a new serial live result and
 verified restoration. Permanent operation additionally needs an accepted task
 issuer, monitoring and recovery ownership; a completed pilot is insufficient.
+
+### 2026-09-29: contained publication-lease incident
+
+The sequence-1 preparation for plan
+`3748d3ae6288b650182d851d8f161871ca5ff302ca12d8de6b2ace214b8315a3`
+never reached execution. The 300-second outbox claim expired before the reviewed
+permit phase. Containment disabled native admission; it deliberately left the
+queue unresolved and `can_repair=false`.
+
+The `recover` owner action is restricted to that exact plan, predecessor,
+intake/discovery digests, task, dispatch and work item. It requires unchanged
+HOLD/history, no feed/execution or native receipt, expired first claim and the
+retained containment record. It preserves the draft publication as evidence.
+One locked transaction marks the never-executed outbox, step and task
+`FAILED_CLOSED`, records a preexecution event (not a provider result), places
+work in `PAUSED / OWNER_HOLD`, and restores controls from the original snapshot.
+The deployed task trigger also increments the planner decision count and records
+its BLOCKED decision; those four planner fields are captured and checked. Its
+NOTIFY is delivered only after the work is PAUSED at commit. All other captured
+row fields and graph counts must remain unchanged. No retry, native
+receipt, provider terminal, new grant or migration is authorized.
+
+Root recovery intent and before/expected-after rows precede COMMIT. A lost ACK
+permits exact read-only reconciliation, never SQL replay. If an intent exists
+without an expected-after record, or rows differ, recovery refuses: preserve all
+records and obtain a newly reviewed incident-specific recovery after proving
+what committed. Do not remove intent or rerun a failed workflow. Successful
+recovery does not create a completed serial sequence or authorize production.
+
+Validation uses current deployed constraints/trigger definitions, independent
+I2 review and fault tests, not a stale test-branch schema or a production rollback
+rehearsal. The task summary deliberately lacks `status=BLOCKED`, which the live
+terminal trigger would otherwise interpret as potential repair authority.
+The lease-lifetime design for future tasks remains a separate unresolved item.
