@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import math
 from collections import defaultdict
 from pathlib import Path
-from typing import Iterable
 
 
 class CoverageError(RuntimeError):
@@ -40,29 +40,82 @@ def load_fragments(directory: Path) -> tuple[dict[str, set[int]], dict[str, set[
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise CoverageError(f"Cannot read coverage fragment {path}: {exc}") from exc
-        if data.get("schema") != "dds-runtime-coverage-fragment-v1":
+        if not isinstance(data, dict) or data.get("schema") != "dds-runtime-coverage-fragment-v1":
             raise CoverageError(f"Unexpected coverage fragment schema in {path}")
         files.append(path.name)
-        for module, values in data.get("lines", {}).items():
-            lines[module].update(int(value) for value in values)
-        for module, values in data.get("arcs", {}).items():
-            arcs[module].update((int(value[0]), int(value[1])) for value in values)
+        fragment_lines = data.get("lines", {})
+        fragment_arcs = data.get("arcs", {})
+        if not isinstance(fragment_lines, dict) or not isinstance(fragment_arcs, dict):
+            raise CoverageError(f"Invalid coverage line/arc mappings in {path}")
+        for module, values in fragment_lines.items():
+            if not isinstance(values, list) or any(type(value) is not int for value in values):
+                raise CoverageError(f"Invalid coverage lines in {path}")
+            lines[module].update(values)
+        for module, values in fragment_arcs.items():
+            if not isinstance(values, list) or any(
+                not isinstance(value, list) or len(value) != 2
+                or any(type(endpoint) is not int for endpoint in value)
+                for value in values
+            ):
+                raise CoverageError(f"Invalid coverage arcs in {path}")
+            arcs[module].update((value[0], value[1]) for value in values)
     if not files:
         raise CoverageError(f"No runtime coverage fragments found in {directory}")
     return lines, arcs, files
 
 
+def valid_test_id(value: object) -> bool:
+    # Runner and runtime also normalize numeric IDs with str().
+    return ((isinstance(value, str) and bool(value.strip()))
+            or type(value) is int
+            or (type(value) is float and math.isfinite(value)))
+
+
 def selected_modules(manifest: dict, suite: str) -> tuple[list[str], list[str]]:
+    if not isinstance(manifest, dict):
+        raise CoverageError("Coverage manifest must be an object")
     tests = manifest.get("tests", [])
-    suite_ids = {str(row["id"]) for row in tests if row.get("suite") == suite}
+    if not isinstance(tests, list) or any(
+        not isinstance(row, dict)
+        or not valid_test_id(row.get("id"))
+        or not isinstance(row.get("suite"), str) or not row["suite"].strip()
+        for row in tests
+    ):
+        raise CoverageError("Manifest tests must contain valid IDs and nonempty suite strings")
+    suite_ids = {str(row["id"]) for row in tests if row["suite"] == suite}
     if not suite_ids:
         raise CoverageError(f"No tests are registered for suite {suite!r}")
     coverage = manifest.get("coverage", {})
+    if not isinstance(coverage, dict):
+        raise CoverageError("Manifest coverage must be an object")
+    mapping = coverage.get("module_tests", {})
+    if not isinstance(mapping, dict):
+        raise CoverageError("Manifest module_tests must be an object")
+    runtime = coverage.get("runtime_coverage", {})
+    if not isinstance(runtime, dict) or not isinstance(runtime.get(suite, {}), dict):
+        raise CoverageError("Manifest runtime coverage thresholds must be objects")
     mapped = []
-    for module, test_ids in coverage.get("module_tests", {}).items():
+    for module, test_ids in mapping.items():
+        if not isinstance(module, str) or not module.strip() or not isinstance(test_ids, list) or any(
+            not valid_test_id(value) for value in test_ids
+        ):
+            raise CoverageError("Manifest module_tests must map module paths to lists of valid test IDs")
         if suite_ids.intersection(str(value) for value in test_ids):
-            mapped.append(str(module))
+            mapped.append(module)
+    if not mapped:
+        raise CoverageError(f"No modules are mapped to suite {suite!r}")
     return sorted(mapped), sorted(suite_ids)
+
+
+def coverage_threshold(thresholds: dict, key: str, maximum: float) -> float:
+    raw = thresholds.get(key, 0.0)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise CoverageError(f"Invalid coverage threshold: {key}") from exc
+    if isinstance(raw, bool) or not math.isfinite(value) or not 0 <= value <= maximum:
+        raise CoverageError(f"Invalid coverage threshold: {key}")
+    return value
 
 
 def make_report(root: Path, manifest_path: Path, fragments: Path, suite: str) -> dict:
@@ -70,9 +123,9 @@ def make_report(root: Path, manifest_path: Path, fragments: Path, suite: str) ->
     modules, suite_ids = selected_modules(manifest, suite)
     covered_lines, covered_arcs, fragment_files = load_fragments(fragments)
     thresholds = manifest.get("coverage", {}).get("runtime_coverage", {}).get(suite, {})
-    minimum_overall = float(thresholds.get("minimum_overall_percent", 0.0))
-    minimum_module = float(thresholds.get("minimum_module_percent", 0.0))
-    minimum_execution_ratio = float(thresholds.get("minimum_module_execution_ratio", 0.0))
+    minimum_overall = coverage_threshold(thresholds, "minimum_overall_percent", 100)
+    minimum_module = coverage_threshold(thresholds, "minimum_module_percent", 100)
+    minimum_execution_ratio = coverage_threshold(thresholds, "minimum_module_execution_ratio", 1)
 
     module_reports = {}
     total_executable = 0
@@ -156,7 +209,7 @@ def make_report(root: Path, manifest_path: Path, fragments: Path, suite: str) ->
             "line_percent": round(overall, 3),
             "branch_sites": branch_sites_total,
             "observed_branch_sites": branch_sites_observed,
-            "executed_arcs": sum(len(values) for values in covered_arcs.values()),
+            "executed_arcs": sum(row["executed_arcs"] for row in module_reports.values()),
         },
         "modules": module_reports,
         "findings": findings,
@@ -183,7 +236,7 @@ def main() -> None:
             Path(args.fragments).resolve(),
             args.suite,
         )
-    except (CoverageError, OSError, json.JSONDecodeError, SyntaxError) as exc:
+    except (CoverageError, OSError, UnicodeDecodeError, json.JSONDecodeError, SyntaxError) as exc:
         report = {
             "schema": "dds-runtime-coverage-report-v1",
             "status": "error",

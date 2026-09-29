@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
-from coverage_report import make_report
+from coverage_report import CoverageError, make_report
 
 
 def main() -> None:
@@ -49,6 +51,88 @@ def main() -> None:
         assert report["modules"]["module.py"]["line_percent"] >= 50
         assert report["modules"]["module.py"]["executed_arcs"] == 4
 
+        valid_fragment = json.loads((fragments / "coverage-1.json").read_text())
+        mixed_fragment = {
+            **valid_fragment,
+            "arcs": {**valid_fragment["arcs"], "unrelated.py": [[-1, 1], [1, -1]]},
+        }
+        (fragments / "coverage-1.json").write_text(json.dumps(mixed_fragment))
+        scoped_report = make_report(root, manifest_path, fragments, "fast")
+        assert scoped_report["summary"]["executed_arcs"] == sum(
+            row["executed_arcs"] for row in scoped_report["modules"].values()
+        ), scoped_report
+        (fragments / "coverage-1.json").write_text(json.dumps(valid_fragment))
+        malformed_fragments = [
+            [],
+            {**valid_fragment, "lines": []},
+            {**valid_fragment, "arcs": []},
+            {**valid_fragment, "lines": {"module.py": [True, 2, 3]}},
+            {**valid_fragment, "lines": {"module.py": [1.9, 2, 3]}},
+            {**valid_fragment, "lines": {"module.py": "123"}},
+            {**valid_fragment, "arcs": {"module.py": [[1]]}},
+            {**valid_fragment, "arcs": {"module.py": [[1, 2, 3]]}},
+            {**valid_fragment, "arcs": {"module.py": [[True, 2]]}},
+            {**valid_fragment, "arcs": {"module.py": [[1, None]]}},
+        ]
+        output = root / "report.json"
+
+        def assert_error_report() -> None:
+            output.write_text(json.dumps(report))
+            process = subprocess.run([
+                sys.executable, str(Path(__file__).with_name("coverage_report.py")),
+                "--root", str(root), "--manifest", str(manifest_path),
+                "--fragments", str(fragments), "--suite", "fast",
+                "--out", str(output), "--fail-on-error",
+            ], capture_output=True, text=True)
+            assert process.returncode == 1, (process.stdout, process.stderr)
+            rejected = json.loads(output.read_text())
+            assert rejected["status"] == "error", (rejected, process.stderr)
+            assert rejected["findings"][0]["code"] == "COVERAGE_REPORT_ERROR", rejected
+            assert "Traceback" not in process.stderr, process.stderr
+
+        for malformed in malformed_fragments:
+            (fragments / "coverage-1.json").write_text(json.dumps(malformed))
+            assert_error_report()
+        (fragments / "coverage-1.json").write_text(json.dumps(valid_fragment))
+
+        malformed_manifests = [[], None, {**manifest, "tests": None},
+            {**manifest, "tests": {}}, {**manifest, "tests": [None]},
+            {**manifest, "tests": [{"suite": "fast"}]},
+            {**manifest, "tests": [{"id": [], "suite": "fast"}]},
+            {**manifest, "tests": [{"id": "t", "suite": None}]},
+            {**manifest, "coverage": None}, {**manifest, "coverage": []}]
+        for key in ("module_tests", "runtime_coverage"):
+            for bad in (None, [], "invalid"):
+                malformed_manifests.append({**manifest, "coverage": {**manifest["coverage"], key: bad}})
+        for bad in (None, "t", {"t": True}, [None], [True], [[]], [""]):
+            malformed_manifests.append({**manifest, "coverage": {
+                **manifest["coverage"], "module_tests": {"module.py": bad}}})
+        for bad in (None, [], "invalid"):
+            malformed_manifests.append({**manifest, "coverage": {
+                **manifest["coverage"], "runtime_coverage": {"fast": bad}}})
+        for malformed in malformed_manifests:
+            manifest_path.write_text(json.dumps(malformed), encoding="utf-8")
+            assert_error_report()
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        assert make_report(root, manifest_path, fragments, "fast")["status"] == "ok"
+
+        for numeric_id in (1, 1.5):
+            numeric_manifest = {**manifest, "tests": [{"id": numeric_id, "suite": "fast"}],
+                "coverage": {**manifest["coverage"], "module_tests": {"module.py": [numeric_id]}}}
+            manifest_path.write_text(json.dumps(numeric_manifest), encoding="utf-8")
+            numeric_report = make_report(root, manifest_path, fragments, "fast")
+            assert numeric_report["status"] == "ok", numeric_report
+            assert numeric_report["suite_test_ids"] == [str(numeric_id)], numeric_report
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        for damaged_path in (manifest_path, fragments / "coverage-1.json", module):
+            original_bytes = damaged_path.read_bytes()
+            damaged_path.write_bytes(b"\xff\xfe")
+            try:
+                assert_error_report()
+            finally:
+                damaged_path.write_bytes(original_bytes)
+
         manifest["coverage"]["runtime_coverage"]["fast"]["minimum_overall_percent"] = 100
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         blocked = make_report(root, manifest_path, fragments, "fast")
@@ -63,6 +147,30 @@ def main() -> None:
             assert "No runtime coverage fragments" in str(exc)
         else:
             raise AssertionError("Missing coverage fragments were accepted")
+
+        for mapping in ({}, {"module.py": ["other-suite-test"]}):
+            manifest["coverage"]["module_tests"] = mapping
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            try:
+                make_report(root, manifest_path, fragments, "fast")
+            except CoverageError as exc:
+                assert "No modules are mapped" in str(exc), exc
+            else:
+                raise AssertionError("An unmapped suite was reported as fully covered")
+
+        manifest["coverage"]["module_tests"] = {"module.py": ["t"]}
+        threshold_keys = ("minimum_overall_percent", "minimum_module_percent", "minimum_module_execution_ratio")
+        for key in threshold_keys:
+            maximum = 1 if key.endswith("ratio") else 100
+            for bad in ("NaN", "Infinity", -1, maximum + 1, True, None, "invalid"):
+                manifest["coverage"]["runtime_coverage"]["fast"] = {key: bad}
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                try:
+                    make_report(root, manifest_path, fragments, "fast")
+                except CoverageError as exc:
+                    assert key in str(exc), exc
+                else:
+                    raise AssertionError(f"Invalid threshold accepted: {key}={bad!r}")
 
         print(json.dumps({
             "ok": True,
