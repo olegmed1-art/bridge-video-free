@@ -13,12 +13,36 @@ from ops.native_maintenance_store_runner import HOST,source_check
 from ops.light_native_lane_run_guard import local_context
 
 
+# Only fixed codes cross the SSH boundary; never print exception text or stderr.
+FAILURE_REASONS=('UNCLASSIFIED','LANE_OWNER_TERMINAL_POLICY_MISSING',
+                 'LANE_OWNER_TERMINAL_POLICY_CHANGED','LANE_OWNER_OUTCOME_UNKNOWN',
+                 'RPC_PRIVILEGE_MISMATCH','HELPER_ACCESS','NATIVE_TABLE_ACCESS',
+                 'SCHEMA_USAGE_REQUIRED')
+
+def failure(exc):
+    reason=str(exc)
+    return dict(audit='LIGHT_LANE_OWNER_REFUSED',
+                reason=reason if reason in FAILURE_REASONS else 'UNCLASSIFIED')
+
+
+def remote_failure(raw):
+    try:
+        value=json.loads(raw)
+    except (ValueError,UnicodeDecodeError):
+        return failure(RuntimeError('LANE_OWNER_OUTCOME_UNKNOWN'))
+    if (type(value) is dict and set(value)=={'audit','reason'}
+            and value['audit']=='LIGHT_LANE_OWNER_REFUSED'
+            and value['reason'] in FAILURE_REASONS):
+        return value
+    return failure(RuntimeError('LANE_OWNER_OUTCOME_UNKNOWN'))
+
+
 def bootstrap(source,accepted_controller,accepted_runtime,accepted_payload,wheel_sha,run,attempt):
     for digest in (accepted_controller,accepted_runtime,accepted_payload,wheel_sha):
         release.require(release.source.identifier(digest,64),'LANE_OWNER_DIGEST')
     release.require(release.source.identifier(source,40) and type(run) is int and run>0
                     and type(attempt) is int and attempt>0,'LANE_OWNER_RUN')
-    return '''import base64,hashlib,json,os,pathlib,sys,tempfile
+    return 'FAILURE_REASONS='+repr(FAILURE_REASONS)+'\n'+'''import base64,hashlib,json,os,pathlib,sys,tempfile
 try:
  wire=sys.stdin.buffer.read(24*1024*1024+1)
  assert len(wire)<=24*1024*1024 and os.geteuid()==0
@@ -43,8 +67,9 @@ try:
   result=phase(decoded['driver'],value['credential'],value['token'],decoded['controller'],decoded['runtime'],decoded['payload'],%r,guard)
   guard.assert_running()
   print(json.dumps(result,sort_keys=True))
-except BaseException:
- print('{"audit":"LIGHT_LANE_OWNER_REFUSED"}')
+except BaseException as exc:
+ reason=str(exc)
+ print(json.dumps(dict(audit='LIGHT_LANE_OWNER_REFUSED',reason=reason if reason in FAILURE_REASONS else 'UNCLASSIFIED'),sort_keys=True))
  raise SystemExit(2) from None
 ''' % (dict(controller=accepted_controller,runtime=accepted_runtime,payload=accepted_payload,driver=wheel_sha),
        source,tuple(dict.fromkeys((*release.HELPERS,*controller.EXTRA))),source,run,attempt,accepted_payload)
@@ -74,14 +99,19 @@ def main():
         '-o','ServerAliveCountMax=2',HOST,shlex.join(['sudo','-n','/usr/bin/python3','-I','-S','-B','-c',code])]
     source_check(source)
     result=subprocess.run(command,input=wire,capture_output=True,timeout=1950,env={'PATH':'/usr/bin:/bin'})
-    release.require(result.returncode==0 and len(result.stdout)<=262144,'LANE_OWNER_OUTCOME_UNKNOWN')
+    release.require(len(result.stdout)<=262144,'LANE_OWNER_OUTCOME_UNKNOWN')
+    if result.returncode!=0:
+        print(json.dumps(remote_failure(result.stdout),sort_keys=True))
+        return 2
     value=json.loads(result.stdout)
     source_check(source)
     print(json.dumps(value,sort_keys=True))
 
 
 if __name__=='__main__':
-    try:main()
+    try:status=main()
     except BaseException:
         print('{"audit":"LIGHT_LANE_RUNNER_REFUSED"}')
         raise SystemExit(2) from None
+    else:
+        raise SystemExit(status or 0)
