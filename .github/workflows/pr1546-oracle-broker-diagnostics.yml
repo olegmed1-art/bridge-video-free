@@ -1,0 +1,105 @@
+name: PR1546 Oracle broker diagnostics
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/pr1546-oracle-broker-diagnostics.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr1546-oracle-broker-readonly-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Verify pinned Oracle SSH boundary
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/pr1546-oracle-broker-diagnostics"
+          install -d -m 0700 "$work"
+          key="$work/id_oracle"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Reproduce pinned broker read without mutation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          root=/opt/bridge-school/school-autopilot
+          service=school-autopilot-shadow.service
+          [[ -s "$root/autopilot-shadow.env" ]]
+          [[ -s "$root/autopilot-broker.env" ]]
+          [[ -x "$root/.venv/bin/python" ]]
+          [[ -f "$root/current/oracle_autopilot/worker.py" ]]
+
+          echo "SERVICE_ACTIVE=$(systemctl is-active "$service" 2>/dev/null || true)"
+          echo "SERVICE_ENABLED=$(systemctl is-enabled "$service" 2>/dev/null || true)"
+          echo "SOURCE_REVISION=$(cat "$root/current/SOURCE_REVISION")"
+          echo JOURNAL_BEGIN
+          journalctl -u "$service" --since '2026-09-17 08:18:30 UTC' \
+            --until '2026-09-17 08:22:30 UTC' --no-pager -o short-iso \
+            | grep -E 'project_work|broker|listener|transient|failure|error' \
+            | tail -n 120 || true
+          echo JOURNAL_END
+
+          set -a
+          source "$root/autopilot-shadow.env"
+          source "$root/autopilot-broker.env"
+          set +a
+          export PYTHONPATH="$root/current"
+          export AUTOPILOT_EXPECTED_DB_USER=autopilot_runtime_login
+          "$root/.venv/bin/python" - <<'PY'
+          import json
+          import time
+          from oracle_autopilot import worker
+
+          started=time.monotonic()
+          try:
+              result=worker.fetch_github_project_head(
+                  'olegmed1-art/bridge-video-free',1150
+              )
+          except Exception as exc:
+              print('BROKER_PROBE_RESULT=ERROR')
+              print('BROKER_PROBE_ERROR_TYPE='+type(exc).__name__)
+              print('BROKER_PROBE_ERROR_CODE='+str(exc)[:120])
+              raise
+          else:
+              print('BROKER_PROBE_RESULT=PASS')
+              print('BROKER_PROBE_OPEN='+str(result['open']).lower())
+              print('BROKER_PROBE_HEAD_SHA='+result['head_sha'])
+              print('BROKER_PROBE_KEYS='+','.join(sorted(result)))
+          finally:
+              print(f'BROKER_PROBE_SECONDS={time.monotonic()-started:.3f}')
+          PY
+          echo 'SERVER_MUTATION=NO'
+          echo 'SERVICE_RESTARTED=NO'
+          REMOTE
