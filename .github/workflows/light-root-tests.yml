@@ -1,0 +1,113 @@
+name: Isolated Light root source tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      approved_run:
+        description: Owner has explicitly approved this test run and its cost boundary
+        required: true
+        type: boolean
+        default: false
+      expected_sha:
+        description: Exact reviewed 40-character commit SHA, including both patches and this gate
+        required: true
+        type: string
+      python_image:
+        description: Reviewed Docker Official Python 3.12 image, python@sha256 plus 64 hex digits
+        required: true
+        type: string
+        # Docker Hub library/python:3.12.14-slim-bookworm, linux/amd64 manifest.
+        default: python@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-light-root-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  root-tests:
+    if: ${{ inputs.approved_run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Validate reviewed inputs
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          ACTUAL_SHA: ${{ github.sha }}
+          PYTHON_IMAGE: ${{ inputs.python_image }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_SHA" == "$ACTUAL_SHA" ]]
+          [[ "$PYTHON_IMAGE" =~ ^python@sha256:[0-9a-f]{64}$ ]]
+          [[ "$PYTHON_IMAGE" == 'python@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a' ]]
+      - name: Checkout exact reviewed source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: candidate
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Checkout immutable baseline
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: baseline
+          ref: 1440920191e1778fb9a9ba24e6701937a1a7459c
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Prepare dependencies and credential-free source export
+        env:
+          PYTHON_IMAGE: ${{ inputs.python_image }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git -C candidate rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          baseline_sha=1440920191e1778fb9a9ba24e6701937a1a7459c
+          [[ "$(git -C baseline rev-parse HEAD)" == "$baseline_sha" ]]
+          source_dir="$RUNNER_TEMP/light-root-source"
+          build_dir="$RUNNER_TEMP/light-root-image"
+          mkdir -p "$source_dir/candidate" "$source_dir/baseline" "$build_dir"
+          git -C candidate archive HEAD | tar -x -C "$source_dir/candidate"
+          git -C baseline archive "$baseline_sha" \
+            ops/light_native_lane_cycle.py ops/light_native_lane_issuer.py \
+            | tar -x -C "$source_dir/baseline"
+          test ! -e "$source_dir/candidate/.git"
+          test ! -e "$source_dir/baseline/.git"
+          cat > "$build_dir/Dockerfile" <<'DOCKERFILE'
+          ARG PYTHON_IMAGE
+          FROM ${PYTHON_IMAGE}
+          RUN python -c 'import sys; assert sys.version_info[:2] == (3, 12)'
+          RUN ln -sf /usr/local/bin/python3 /usr/bin/python3
+          RUN python -m pip install --no-cache-dir --disable-pip-version-check --only-binary=:all: 'pytest==8.4.2' 'psycopg[binary]==3.3.4'
+          RUN python -c 'import typing_extensions'
+          DOCKERFILE
+          docker build --pull --no-cache --build-arg "PYTHON_IMAGE=$PYTHON_IMAGE" \
+            -t light-root-tests:local "$build_dir"
+          docker image inspect --format '{{.Id}}' light-root-tests:local
+      - name: Real UID 0 tests with no external network or credentials
+        run: |
+          set -euo pipefail
+          docker run --rm --pull=never --user 0:0 --network none \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --pids-limit 256 --memory 2g --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=512m \
+            --tmpfs /var/tmp:rw,nosuid,nodev,mode=1777,size=512m \
+            --tmpfs /work:rw,nosuid,nodev,mode=0755,size=512m \
+            --mount "type=bind,src=$RUNNER_TEMP/light-root-source,dst=/source,readonly" \
+            --entrypoint /bin/sh light-root-tests:local -eu -c '
+              cp -R /source/. /work/
+              cd /work/candidate
+              exec env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp \
+                PYTHONPATH=/work/candidate PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+                PYTHONDONTWRITEBYTECODE=1 \
+                python -B .github/scripts/light_root_gate.py
+            '
