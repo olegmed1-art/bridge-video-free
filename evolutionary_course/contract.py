@@ -286,6 +286,8 @@ def validate_episode(candidate: Mapping[str, Any]) -> dict[str, Any]:
     result["source"]["end_seconds"] = end
     result["learning_task"]["skill_id"] = skill_id
     result["learning_task"]["prerequisite_skill_ids"] = prerequisites
+    result["interaction"]["teacher_actions"] = teacher_actions
+    result["interaction"]["student_actions"] = student_actions
     result["claims"] = normalized_claims
     return result
 
