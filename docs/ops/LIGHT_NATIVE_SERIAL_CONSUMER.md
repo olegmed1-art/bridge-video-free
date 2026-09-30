@@ -304,3 +304,44 @@ read-only in its own driver context and is repeated by the containment phase.
 A fresh isolated-interpreter regression checks parent imports, real Plan
 validation after driver loading, and distinct processes for successive phases.
 The failed historical workflow is not rerun.
+
+### Finite trusted issuer — source candidate, 2026-09-30
+
+The existing authenticated owner workflow accepts a separately reviewed `issue`
+policy. This is explicit delegation to derive new Agreements, not a list of tasks
+silently promoted to approval. The exact canonical policy binds source/controller
+and retained runtime digests, the completed predecessor, 1–8 exact READ_ONLY
+Plans, a nonrenewable interval of at most 24 hours, and `authority` with owner,
+all five coordination coverage lanes, `FINITE_ISSUER_AGREEMENTS` delegation and
+independent acceptance evidence. Acceptance must cover coordination for the
+whole interval; a generic task approval does not satisfy it. No such live policy
+is installed by this source change.
+
+One invocation admits at most one previously unissued catalogue entry, in the
+accepted order. A verified-driver child checks every Plan (including zero spend
+and repair budgets), the new target's current exact GitHub head/branch, the live
+Neon queue, no prior work for the target, restored controls and the prior actual
+Cloud/DB terminal. The issuer derives a fresh Agreement capped by both 30 minutes
+and policy expiry. Existing cycle/phase guards repeat freshness before effects.
+
+Private root-owned policy and per-entry intent/done records are create-only and
+fsynced under a global issuer lock. A subsequent invocation may advance only
+past complete, exactly bound entries; partial writes, holes, altered history or
+lost acknowledgements halt issuance. A new policy cannot sidestep an unresolved
+older issue. A completed cycle with a missing issuer `done` still requires
+incident reconciliation; it is never automatically replayed. History remains
+intact. An exhausted catalogue returns EXHAUSTED without claiming a fresh host
+HOLD attestation or running a cycle.
+
+The policy is passed through the existing authenticated workflow acceptance
+channel. Hashing newly generated cycle/Agreement bytes is authorized only within
+this exact policy derivation. Ordinary cycle/phase acceptance paths and old
+cleanup package verification remain intact. Parent processes stay stdlib-only;
+credentials travel only through existing stdin channels and never into journals.
+
+This executable issuer does not install a timer, persist credentials, activate
+production, issue historical queue work or recover unknown outcomes. Persistent
+monitor/recovery and service acceptance remain separate unfinished conditions.
+Rollback before activation is revert of this source change. Once any issuer has
+run, retain its journals and use explicit incident reconciliation before
+changing the accepted policy or controller; never delete intent to retry.
