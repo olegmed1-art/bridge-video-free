@@ -1,3 +1,6 @@
+import pytest
+
+import bridge_vision.evidence_fusion as evidence_fusion
 from bridge_vision.evidence_fusion import fuse_card_evidence
 
 RANKS = "AKQJT98765432"
@@ -269,3 +272,54 @@ def test_teacher_speech_and_layout_corroboration_remains_attributable():
     assert result["deal"]["hands"]["W"]["cards"] == []
     assert result["speech_layout_corroborations"][0]["speech_source"] == "TEACHER_SPEECH_SUGGESTION"
     assert result["speech_layout_corroborations"][0]["accepted_as_observation"] is False
+
+
+def test_unexpected_card_canonicalizer_failure_is_not_rejected_as_invalid_claim(monkeypatch):
+    original = evidence_fusion.canonicalize_video_deal
+
+    def failing_card(payload):
+        if payload["hands"] == {"N": ["AS"]}:
+            raise ValueError("synthetic canonicalizer fault")
+        return original(payload)
+
+    monkeypatch.setattr(evidence_fusion, "canonicalize_video_deal", failing_card)
+    with pytest.raises(ValueError, match="synthetic canonicalizer fault"):
+        fuse_card_evidence({}, [declaration("AS", "N")])
+
+
+def test_unexpected_layout_canonicalizer_failure_is_not_ignored(monkeypatch):
+    original = evidence_fusion.canonicalize_video_deal
+
+    def failing_card(payload):
+        if payload["hands"] == {"N": ["AS"]}:
+            raise ValueError("synthetic layout canonicalizer fault")
+        return original(payload)
+
+    monkeypatch.setattr(evidence_fusion, "canonicalize_video_deal", failing_card)
+    layout = {
+        "seat": "W",
+        "suggested_card": "AS",
+        "resolution": "LAYOUT_UNIQUE_SUGGESTION",
+        "provenance_class": "LAYOUT_SUGGESTION",
+        "accepted_as_observation": False,
+    }
+    with pytest.raises(ValueError, match="synthetic layout canonicalizer fault"):
+        fuse_card_evidence({}, [], layout_suggestions=[layout])
+
+
+def test_malformed_card_and_layout_are_still_expected_input_rejections():
+    layout = {
+        "seat": "W",
+        "suggested_card": "bad card",
+        "resolution": "LAYOUT_UNIQUE_SUGGESTION",
+        "provenance_class": "LAYOUT_SUGGESTION",
+        "accepted_as_observation": False,
+    }
+    result = fuse_card_evidence(
+        {}, [declaration("bad card", "N")], layout_suggestions=[layout]
+    )
+    assert result["status"] == "REVIEW"
+    assert result["rejected_declarations"] == [
+        {"index": 0, "reason": "INVALID_CARD"}
+    ]
+    assert result["speech_layout_corroborations"] == []
