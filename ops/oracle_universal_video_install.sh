@@ -104,7 +104,7 @@ chmod 0640 "$WORKLOAD_LOCK"
   || die "unexpected workload lock metadata"
 runuser -u "$USER_NAME" -- test -r "$WORKLOAD_LOCK" \
   || die "worker cannot open workload lock"
-for d in inbox running done failed results progress; do
+for d in inbox running done failed results progress attempts; do
   ensure_real_dir "$BASE_DIR/spool/$d" "$USER_NAME" "$GROUP_NAME" 0750
   chown "$USER_NAME:$GROUP_NAME" "$BASE_DIR/spool/$d"
   chmod 0750 "$BASE_DIR/spool/$d"
@@ -120,7 +120,7 @@ runuser -u "$USER_NAME" -- /usr/bin/python3 - "$BASE_DIR/spool" <<'PY'
 import os, sys
 from pathlib import Path
 root = Path(sys.argv[1])
-for leaf in ("inbox", "running", "done", "failed", "results"):
+for leaf in ("inbox", "running", "done", "failed", "results", "attempts"):
     path = root / leaf / f".write-check-{os.getpid()}"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     os.close(fd)

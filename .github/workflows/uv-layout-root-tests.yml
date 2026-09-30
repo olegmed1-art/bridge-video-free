@@ -1,0 +1,71 @@
+name: Isolated UV installer layout tests
+
+on:
+  push:
+    branches: [review/verified-patches-20260930]
+    paths: [.github/workflows/uv-layout-root-tests.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-uv-layout-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  layout-tests:
+    if: "${{ github.event_name == 'push' && github.ref == 'refs/heads/review/verified-patches-20260930' && github.event.before == '2a17917c512540a8b43e401b1ea974d877fb4287' && github.event.head_commit.message == 'fix(uv): provision attempts and authorize one layout test' && github.run_attempt == 1 }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      EXPECTED_SHA: ${{ github.sha }}
+      PYTHON_IMAGE: python@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout exact candidate without retained credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: candidate
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 2
+          submodules: false
+          lfs: false
+      - name: Verify narrow source delta and export
+        run: |
+          set -euo pipefail
+          parent=2a17917c512540a8b43e401b1ea974d877fb4287
+          [[ "$(git -C candidate rev-list --parents -n 1 HEAD)" == "$EXPECTED_SHA $parent" ]]
+          [[ "$(git -C candidate log -1 --format=%B)" == 'fix(uv): provision attempts and authorize one layout test' ]]
+          expected_files=$(cat <<'FILES'
+          .github/workflows/uv-layout-root-tests.yml
+          ops/oracle_universal_video_install.sh
+          ops/oracle_universal_video_spool_guard.sh
+          tests/test_universal_video_spool_security.py
+          tests/test_uv_installer_attempts_layout.py
+          tools/run_uv_installer_layout_tests.py
+          FILES
+          )
+          [[ "$(git -C candidate diff --name-only "$parent" HEAD)" == "$expected_files" ]]
+          mkdir -p "$RUNNER_TEMP/uv-layout-source"
+          git -C candidate archive HEAD | tar -x -C "$RUNNER_TEMP/uv-layout-source"
+          test ! -e "$RUNNER_TEMP/uv-layout-source/.git"
+          docker pull "$PYTHON_IMAGE"
+      - name: Offline real root to worker layout fixtures
+        run: |
+          set -euo pipefail
+          # Capabilities are confined to this disposable test container.
+          # Root provisions/chmods fixture leaves, then children drop UID/GID.
+          docker run --rm --pull=never --user 0:0 --network none --read-only \
+            --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE \
+            --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges:true \
+            --pids-limit 64 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=64m \
+            --tmpfs /var/tmp:rw,nosuid,nodev,mode=1777,size=64m \
+            --mount "type=bind,src=$RUNNER_TEMP/uv-layout-source,dst=/work/candidate,readonly" \
+            --workdir /work/candidate --entrypoint /usr/bin/env "$PYTHON_IMAGE" \
+            -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp \
+            PYTHONDONTWRITEBYTECODE=1 UV_LAYOUT_ISOLATED=1 \
+            python -B tools/run_uv_installer_layout_tests.py
