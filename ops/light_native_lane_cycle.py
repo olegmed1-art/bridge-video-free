@@ -65,11 +65,11 @@ def authorize_phase(value,authority):
 
 
 @contextmanager
-def exclusive(root):
+def exclusive(root, *, create=True):
     """Separate cycle lock; never holds the driver lock needed by supervisor."""
     owner.install.root_parent(root)
     path=root/'cycle.lock'
-    fd=os.open(path,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW|os.O_NONBLOCK,0o600)
+    fd=os.open(path,os.O_RDWR|os.O_NOFOLLOW|os.O_NONBLOCK|(os.O_CREAT if create else 0),0o600)
     try:
         row=os.fstat(fd)
         require(stat.S_ISREG(row.st_mode) and row.st_uid==0 and row.st_nlink==1
@@ -152,6 +152,9 @@ def child_main(wire,expected,context):
     from ops.light_native_lane_run_guard import authenticated
     guard=authenticated(context['source'],context['run_id'],context['attempt'],wire['token'])
     value=owner.parse(decoded['payload'])
+    if wire['mode']=='issuer_monitor':
+        from ops.light_native_lane_issuer import monitor_child
+        return monitor_child(wire,decoded,expected,guard)
     if wire['mode']=='issuer_validate':
         from ops import light_native_lane_issuer as issuer
         policy=issuer.validate(decoded['payload'],expected['payload'],decoded['controller'],decoded['runtime'],guard)

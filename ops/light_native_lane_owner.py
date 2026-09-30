@@ -83,7 +83,7 @@ def verify_terminal(conn, plan, receipt, intent_raw, terminal_raw, permit_raw):
     return lane.encoded(expected)
 
 
-def retain_acceptance(conn, plan, receipt, sequence):
+def retain_acceptance(conn, plan, receipt, sequence, *, readonly=False):
     """Persist fresh acceptance of exact on-host records; never advance/RUN.
 
     The authenticated owner controller supplies its retained Plan/receipt. It
@@ -132,11 +132,14 @@ def retain_acceptance(conn, plan, receipt, sequence):
         current = lane.STATE.lstat()
         require((current.st_dev,current.st_ino) == (state.st_dev,state.st_ino), 'LANE_OWNER_STATE_CHANGED')
         accepted_path = job/'accepted-terminal.json'
-        try:
-            install.write_new(accepted_path,raw,0o640,user.pw_gid)
-        except FileExistsError:
-            # Retry always redoes primary verification; it never trusts a cached ACK.
+        if readonly:
             require(hold.read(accepted_path,0o640,4096) == raw, 'LANE_OWNER_ACCEPTANCE_CONFLICT')
+        else:
+            try:
+                install.write_new(accepted_path,raw,0o640,user.pw_gid)
+            except FileExistsError:
+                # Retry redoes primary verification, never trusts cached ACK.
+                require(hold.read(accepted_path,0o640,4096) == raw, 'LANE_OWNER_ACCEPTANCE_CONFLICT')
         row = accepted_path.lstat()
         require(row.st_nlink == 1 and row.st_gid == user.pw_gid
                 and hold.read(accepted_path,0o640,4096) == raw, 'LANE_OWNER_ACCEPTANCE_CONFLICT')

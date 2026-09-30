@@ -174,4 +174,11 @@ def test_writer_uses_on_host_bytes_fresh_verifier_and_create_only(tmp_path,monke
         assert accepted.stat().st_mode & 0o777 == 0o640
         assert owner.retain_acceptance(conn,plan,receipt,0)==result
         assert accepted.stat().st_ino==inode and calls==['fresh_provider','fresh_provider']
+        def forbidden_write(*args,**kwargs):
+            raise AssertionError('read-only observation attempted write')
+        monkeypatch.setattr(install,'write_new',forbidden_write)
+        assert owner.retain_acceptance(conn,plan,receipt,0,readonly=True)==result
+        accepted.unlink()
+        with pytest.raises(OSError):owner.retain_acceptance(conn,plan,receipt,0,readonly=True)
+        assert not accepted.exists()
     assert not (control/'current.json').exists() and not (control/'admission').exists()

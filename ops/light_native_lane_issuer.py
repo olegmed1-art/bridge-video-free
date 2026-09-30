@@ -89,7 +89,7 @@ def derive(policy, accepted, index, predecessor, start):
     return dict(version=1, action='cycle', prepare=prepare)
 
 
-def progress(directory, policy, accepted):
+def progress(directory, policy, accepted, *, unacknowledged=None):
     """Read all entries, refusing holes, partial writes and unknown outcomes."""
     predecessor = policy['predecessor']
     index = 0
@@ -102,7 +102,9 @@ def progress(directory, policy, accepted):
             continue
         require(number == index, 'LANE_ISSUER_HISTORY')
         owner.install.root_parent(path)
-        require(set(p.name for p in path.iterdir()) == {'intent.json', 'done.json'},
+        names = set(p.name for p in path.iterdir())
+        missing = number == unacknowledged and names == {'intent.json'}
+        require(missing or names == {'intent.json', 'done.json'},
                 'LANE_ISSUER_RECONCILIATION_REQUIRED')
         intent = owner.parse(owner.read(path/'intent.json'))
         require(type(intent) is dict and set(intent) == {'start', 'cycle'}, 'LANE_ISSUER_HISTORY')
@@ -112,7 +114,7 @@ def progress(directory, policy, accepted):
         root = cycle.location(prepare)
         require(owner.read(root/'intent.json') == owner.encoded(expected), 'LANE_ISSUER_HISTORY')
         result = owner.parse(owner.read(root/'complete.json'))
-        require(owner.parse(owner.read(path/'done.json')) == result
+        require((missing or owner.parse(owner.read(path/'done.json')) == result)
                 and result.get('audit') == 'LIGHT_LANE_CYCLE'
                 and result.get('state') == 'COMPLETE_HOLD' and result.get('controls_restored') is True
                 and result.get('plan_sha256') == entry['accepted_plan_sha256']
@@ -213,3 +215,195 @@ def run(wheels, credential, token, controller, runtime, raw, accepted, guard):
         owner.retain(path/'done.json', owner.encoded(result))
         return dict(audit='LIGHT_LANE_ISSUER', state='ISSUED_COMPLETE_HOLD', issued=index+1,
                     remaining=len(policy['plans'])-index-1, cycle=result)
+
+
+MONITOR_KEYS = {'version', 'action', 'source', 'accepted_controller_sha256',
+                'accepted_runtime_sha256', 'policy_sha256', 'index', 'expected_cycle_sha256'}
+
+
+def monitor_request(raw, accepted, controller, runtime, guard):
+    """Current source authority; historical policy need not still issue work."""
+    require(type(raw) is bytes and len(raw) <= 4096 and owner.sha(raw) == accepted,
+            'LANE_ISSUER_NOT_ACCEPTED')
+    value = owner.parse(raw)
+    require(type(value) is dict and set(value) == MONITOR_KEYS
+            and type(value['version']) is int and value['version'] == 1
+            and value['action'] in ('observe-issue', 'reconcile-issue')
+            and owner.release.source.identifier(value['policy_sha256'], 64)
+            and type(value['index']) is int and 0 <= value['index'] < 8
+            and (value['expected_cycle_sha256'] is None and value['action'] == 'observe-issue'
+                 or owner.release.source.identifier(value['expected_cycle_sha256'], 64)),
+            'LANE_ISSUER_SCOPE')
+    owner.validate_package(controller, value['source'], value['accepted_controller_sha256'])
+    require(owner.sha(runtime) == value['accepted_runtime_sha256'], 'LANE_ISSUER_SCOPE')
+    guard.assert_current()
+    owner.release.staging.require_current_main(value['source'])
+    return value
+
+
+def monitor_records(value):
+    """Inspect one latest entry; missing completion can never authorize writes."""
+    policy_id = value['policy_sha256']
+    directory = owner.ROOT/'issuers'/policy_id
+    policy = owner.parse(owner.read(directory/'policy.json', policy_id))
+    require(type(policy) is dict and set(policy) == POLICY_KEYS
+            and policy['action'] == 'issue' and policy['version'] == 1
+            and type(policy['plans']) is list and value['index'] < len(policy['plans'])
+            and policy['accepted_runtime_sha256'] == value['accepted_runtime_sha256'],
+            'LANE_ISSUER_HISTORY')
+    index = value['index']
+    path = directory/f'{index:04d}'
+    owner.install.root_parent(path)
+    names = set(p.name for p in path.iterdir())
+    require(names in ({'intent.json'}, {'intent.json', 'done.json'}), 'LANE_ISSUER_HISTORY')
+    # Prior entries must be complete, selected entry latest, no future journal.
+    require(not any((directory/f'{n:04d}').exists() or (directory/f'{n:04d}').is_symlink()
+                    for n in range(index+1, len(policy['plans']))), 'LANE_ISSUER_HISTORY')
+    intent_raw = owner.read(path/'intent.json')
+    intent = owner.parse(intent_raw)
+    require(type(intent) is dict and set(intent) == {'start', 'cycle'}, 'LANE_ISSUER_HISTORY')
+    prepare = intent['cycle']['prepare']
+    require(prepare['accepted_plan_sha256'] == policy['plans'][index]['accepted_plan_sha256'],
+            'LANE_ISSUER_HISTORY')
+    root = cycle.location(prepare)
+    # Incomplete data is diagnostic only, never an invitation to repeat a phase.
+    if not (root/'complete.json').exists():
+        require(value['action'] == 'observe-issue' and value['expected_cycle_sha256'] is None,
+                'LANE_ISSUER_RECONCILIATION_REQUIRED')
+        return dict(policy=policy, path=path, state='INCOMPLETE_REQUIRES_RECONCILIATION')
+    count, predecessor = progress(directory, policy, policy_id, unacknowledged=index)
+    require(count == index+1, 'LANE_ISSUER_HISTORY')
+    raw = owner.read(root/'complete.json', value['expected_cycle_sha256'])
+    result = owner.parse(raw)
+    for action in cycle.STEPS:
+        require(owner.read(root/(action+'-intent.json')) == owner.encoded(cycle.derive(prepare, action)),
+                'LANE_ISSUER_HISTORY')
+        cycle.checked_result(action, owner.parse(owner.read(root/(action+'-done.json'))), prepare)
+    terminal = owner.parse(owner.read(owner.ROOT/prepare['accepted_plan_sha256']/'terminal.json'))
+    expected_result = dict(audit='LIGHT_LANE_CYCLE', state='COMPLETE_HOLD',
+        plan_sha256=prepare['accepted_plan_sha256'], sequence=owner.sequence(prepare),
+        dispatch_id=terminal['dispatch_id'], task_id=terminal['task_id'],
+        terminal_sha256=owner.sha(owner.encoded(terminal)),
+        result_code=terminal['result']['result_code'], controls_restored=True)
+    require(result == expected_result, 'LANE_ISSUER_HISTORY')
+    # No incidental incident record may be silently disregarded for recovery.
+    require(not (root/'incident.json').exists() and not (root/'incident.json').is_symlink(),
+            'LANE_ISSUER_RECONCILIATION_REQUIRED')
+    return dict(policy=policy, path=path, state='COMPLETE_ACKNOWLEDGED' if 'done.json' in names
+                else 'COMPLETE_ACK_MISSING', result=result, complete_raw=raw,
+                predecessor=predecessor, intent_sha256=owner.sha(intent_raw))
+
+
+def monitor_live(value, record, credential, psycopg, runtime):
+    """Read-only primary-source proof for the original completed job only."""
+    import json
+    from database import light_native_pilot_intake as intake
+    from ops.native_maintenance_owner_attest import parameters
+    retained = json.loads(runtime)
+    require(owner.release.encoded(retained) == runtime
+            and retained['source'] == owner.install.RETAINED_SOURCE, 'LANE_ISSUER_SCOPE')
+    owner.release.validate(retained['runtime'], retained['source'], retained['runtime']['sha256'])
+    owner.release.staging.verify_release(owner.execution.plan.source_path(retained['source']), retained['runtime'])
+    for entry in record['policy']['plans']:
+        intake.Plan(base64.b64decode(entry['plan_base64'], validate=True), entry['accepted_plan_sha256'])
+    previous = record['predecessor']
+    scope = owner.ROOT/previous['plan_sha256']
+    receipt = owner.parse(owner.read(scope/'intake.json'))
+    before = intake.engine.load_manifest(scope/'before.json', receipt['snapshot_sha256'])
+    require(before['version'] == 1 and before['plan_sha256'] == previous['plan_sha256']
+            and before['target'] == intake.EXPECTED_TARGET, 'LANE_ISSUER_HISTORY')
+    # verify_previous inspects the existing completed sequence as predecessor.
+    # This synthetic identifier is never a Plan and is never submitted/intaken.
+    verifier = dict(version=2, predecessor=previous, accepted_plan_sha256=owner.sha(owner.encoded(value)),
+                    accepted_runtime_sha256=value['accepted_runtime_sha256'])
+    with psycopg.connect(**parameters(credential), autocommit=True) as conn:
+        conn.read_only = True
+        intake.engine.identity(conn, intake.target())
+        counts = conn.execute("""SELECT
+          (SELECT count(*) FROM autopilot.task WHERE status NOT IN ('DONE','FAILED_CLOSED')),
+          (SELECT count(*) FROM autopilot.native_cli_receipt WHERE state<>'TERMINAL')""").fetchone()
+        require(counts == (0, 0), 'LANE_ISSUER_QUEUE_OR_DUPLICATE')
+        config = intake.one(conn, 'SELECT to_jsonb(c) FROM autopilot.native_cli_config c WHERE singleton')
+        role = intake.one(conn, "SELECT to_jsonb(r) FROM autopilot.role_registry r WHERE role_id='AUTOPILOT'")
+        baseline = before['autopilot_role']
+        require(config == before['native_config'] and config['enabled'] is False
+                and set(role) == set(baseline)
+                and all(role[k] == v for k, v in baseline.items() if k != 'updated_at'),
+                'LANE_ISSUER_CONTROLS')
+        owner.verify_previous(conn, verifier, readonly=True)
+    return dict(audit='LIGHT_LANE_ISSUER_OBSERVED', state=record['state'],
+                cycle_sha256=owner.sha(record['complete_raw']), intent_sha256=record['intent_sha256'],
+                policy_sha256=value['policy_sha256'], index=value['index'],
+                sequence=previous['sequence'], result_code=record['result']['result_code'])
+
+
+def monitor_child(wire, decoded, expected, guard):
+    value = monitor_request(decoded['payload'], expected['payload'], decoded['controller'], decoded['runtime'], guard)
+    record = monitor_records(value)
+    require(record['state'] != 'INCOMPLETE_REQUIRES_RECONCILIATION', 'LANE_ISSUER_RECONCILIATION_REQUIRED')
+    from ops.native_maintenance_owner_host import loaded_runtime
+    with loaded_runtime(decoded['driver']) as (psycopg, _):
+        result = monitor_live(value, record, wire['credential'], psycopg, decoded['runtime'])
+    require(monitor_records(value) == record, 'LANE_ISSUER_HISTORY')
+    guard.assert_running()
+    return result
+
+
+def monitor(wheels, credential, token, controller, runtime, raw, accepted, guard):
+    require(os.geteuid() == 0 and os.uname().nodename == 'autopilot-lite-vnic', 'LANE_ISSUER_SCOPE')
+    value = monitor_request(raw, accepted, controller, runtime, guard)
+    root = owner.ROOT/'issuers'
+    owner.install.root_parent(root)
+    require((root/'cycle.lock').exists(), 'LANE_ISSUER_HISTORY')
+    with cycle.exclusive(root, create=False):
+        record = monitor_records(value)
+        if record['state'] == 'INCOMPLETE_REQUIRES_RECONCILIATION':
+            return dict(audit='LIGHT_LANE_ISSUER_OBSERVED', state=record['state'],
+                        policy_sha256=value['policy_sha256'], index=value['index'], live_verified=False)
+        proof = cycle.isolated(wheels, credential, token, controller, runtime, raw, accepted,
+                               guard, outer=accepted, mode='issuer_monitor')
+        require(proof == dict(audit='LIGHT_LANE_ISSUER_OBSERVED', state=record['state'],
+            cycle_sha256=owner.sha(record['complete_raw']), intent_sha256=record['intent_sha256'],
+            policy_sha256=value['policy_sha256'], index=value['index'],
+            sequence=record['predecessor']['sequence'], result_code=record['result']['result_code']),
+            'LANE_ISSUER_HISTORY')
+        guard.assert_current()
+        require(monitor_records(value) == record, 'LANE_ISSUER_HISTORY')
+        if value['action'] == 'observe-issue':
+            return dict(**proof, live_verified=True)
+        require(value['expected_cycle_sha256'] == proof['cycle_sha256'], 'LANE_ISSUER_NOT_ACCEPTED')
+        recovery_root = owner.ROOT/'issuer-reconciliations'
+        recovery = recovery_root/accepted
+        if record['state'] == 'COMPLETE_ACKNOWLEDGED':
+            require(owner.read(recovery/'request.json', accepted) == raw, 'LANE_ISSUER_NOT_ACCEPTED')
+            expected_binding = owner.encoded(dict(policy_sha256=value['policy_sha256'], index=value['index'],
+                cycle_sha256=proof['cycle_sha256'], intent_sha256=proof['intent_sha256']))
+            require(owner.read(recovery/'binding.json') == expected_binding, 'LANE_ISSUER_HISTORY')
+            return dict(audit='LIGHT_LANE_ISSUER_RECONCILED', state='COMPLETE_ACKNOWLEDGED',
+                        policy_sha256=value['policy_sha256'], index=value['index'],
+                        cycle_sha256=proof['cycle_sha256'], execution_replayed=False)
+        require(record['state'] == 'COMPLETE_ACK_MISSING', 'LANE_ISSUER_RECONCILIATION_REQUIRED')
+        # Recovery is solely a missing local ACK. No cycle, phase, DB mutation,
+        # provider submission, permit extension or service operation is called.
+        recovery_root = owner.ROOT/'issuer-reconciliations'
+        if not recovery_root.exists():
+            owner.install.fresh_directory(recovery_root, 0o700)
+        recovery = recovery_root/accepted
+        if not recovery.exists():
+            owner.install.fresh_directory(recovery, 0o700)
+        owner.remember(recovery/'request.json', raw)
+        owner.remember(recovery/'binding.json', owner.encoded(dict(
+            policy_sha256=value['policy_sha256'], index=value['index'],
+            cycle_sha256=proof['cycle_sha256'], intent_sha256=proof['intent_sha256'])))
+        guard.assert_running()
+        require(monitor_records(value) == record, 'LANE_ISSUER_HISTORY')
+        fresh = cycle.isolated(wheels, credential, token, controller, runtime, raw, accepted,
+                               guard, outer=accepted, mode='issuer_monitor')
+        require(fresh == proof, 'LANE_ISSUER_HISTORY')
+        guard.assert_running()
+        require(monitor_records(value) == record, 'LANE_ISSUER_HISTORY')
+        owner.remember(record['path']/'done.json', record['complete_raw'])
+        require(monitor_records(value)['state'] == 'COMPLETE_ACKNOWLEDGED', 'LANE_ISSUER_HISTORY')
+        return dict(audit='LIGHT_LANE_ISSUER_RECONCILED', state='COMPLETE_ACKNOWLEDGED',
+                    policy_sha256=value['policy_sha256'], index=value['index'],
+                    cycle_sha256=proof['cycle_sha256'], execution_replayed=False)

@@ -64,7 +64,7 @@ jobs:
         shell: bash
         run: |
           runtime_test_site="$(python -c 'from pathlib import Path; import pytest; print(Path(pytest.__file__).resolve().parent.parent)')"
-          sudo -n env PYTHONPATH="$PWD:$runtime_test_site" "$(command -v python)" -m pytest -q tests/test_light_native_lane_controller.py tests/test_light_native_lane_cycle.py tests/test_light_native_lane_issuer.py tests/test_light_native_lane_execution.py
+          sudo -n env PYTHONPATH="$PWD:$runtime_test_site" "$(command -v python)" -m pytest -q tests/test_light_native_lane_controller.py tests/test_light_native_lane_cycle.py tests/test_light_native_lane_issuer.py tests/test_light_native_lane_execution.py tests/test_light_native_lane_owner.py
 
   step:
     needs: contract
