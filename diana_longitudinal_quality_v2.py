@@ -623,9 +623,9 @@ def methodology_readiness(
         technical_issues.append("SEMANTIC_QC_NOT_PASS")
     pass1 = _low((visual_qc.get("pass1") or {}).get("status") if isinstance(visual_qc.get("pass1"), Mapping) else visual_qc.get("pass1"))
     pass2 = _low((visual_qc.get("pass2") or {}).get("status") if isinstance(visual_qc.get("pass2"), Mapping) else visual_qc.get("pass2"))
-    if pass1 and "complete" not in pass1:
+    if pass1 and pass1 not in {"complete", "visual_pass_1_complete"}:
         technical_issues.append("VISUAL_PASS_1_INCOMPLETE")
-    if pass2 and "complete" not in pass2:
+    if pass2 and pass2 not in {"complete", "visual_pass_2_complete"}:
         technical_issues.append("VISUAL_PASS_2_INCOMPLETE")
     technical_ready = not technical_issues
 
