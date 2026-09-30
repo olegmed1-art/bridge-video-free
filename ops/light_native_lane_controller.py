@@ -111,7 +111,7 @@ def sequence(value):
     return predecessor['sequence']+1
 
 
-def verify_previous(conn,value):
+def verify_previous(conn,value,*,readonly=False):
     """Freshly reconcile the exact retained predecessor; never resubmit it."""
     from database.light_native_pilot_intake import Plan
     from ops.light_native_lane_owner import retain_acceptance
@@ -141,7 +141,8 @@ def verify_previous(conn,value):
             and parse(cursor)['dispatch_id']==receipt['dispatch_id'], 'LANE_OWNER_PREDECESSOR_CHANGED')
     # Existing acceptance is required by verify_serial_hold. The helper now
     # rechecks Cloud/DB and the exact original goal, without creating a task.
-    retain_acceptance(conn,plan,receipt,number-1)
+    if readonly:retain_acceptance(conn,plan,receipt,number-1,readonly=True)
+    else:retain_acceptance(conn,plan,receipt,number-1)
     from database import light_native_pilot_intake as intake
     intake.observe_terminal(conn,plan,receipt,terminal,previous['terminal_sha256'])
     require(verify_serial_hold(install.RETAINED_SOURCE,cursor)==(before,history),
@@ -169,6 +170,10 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
     require(os.geteuid()==0 and os.uname().nodename=='autopilot-lite-vnic'
             and sha(payload_raw)==accepted_payload,'LANE_OWNER_AUTHORITY')
     value=parse(payload_raw)
+    if value.get('action') in ('observe-issue','reconcile-issue'):
+        require(_cycle is None,'LANE_ISSUER_SCOPE')
+        from ops.light_native_lane_issuer import monitor
+        return monitor(wheels,credential,token,controller_raw,retained_raw,payload_raw,accepted_payload,run_guard)
     if value.get('action')=='issue':
         require(_cycle is None,'LANE_ISSUER_SCOPE')
         from ops.light_native_lane_issuer import run

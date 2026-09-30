@@ -345,3 +345,32 @@ monitor/recovery and service acceptance remain separate unfinished conditions.
 Rollback before activation is revert of this source change. Once any issuer has
 run, retain its journals and use explicit incident reconciliation before
 changing the accepted policy or controller; never delete intent to retry.
+
+### Observe and reconcile a lost issuer acknowledgment — source candidate, 2026-09-30
+
+The authenticated owner workflow accepts `observe-issue` or `reconcile-issue`
+with exact current controller/runtime pins, retained policy digest, entry index
+and (mandatory for reconcile) independently accepted cycle-completion digest.
+Historical policy expiry does not block inspection or this narrow cleanup; it
+never authorizes another task or renews the original Agreement.
+
+Observation holds the existing issuer lock without creating it, validates all
+six original phase intents/results and their dispatch/task/sequence/terminal
+bindings, then freshly checks original Cloud/DB evidence, unchanged HOLD history,
+empty queue and exact restored controls through the verified driver. The owner
+acceptance verifier has an explicit read-only mode that never attempts creation.
+Missing completion is reported only as unverified INCOMPLETE_REQUIRES_RECONCILIATION;
+unknown, contradictory or partially written records never authorize recovery.
+
+Reconciliation only supplies a missing `done.json`, byte-for-byte equal to the
+already durable, freshly verified cycle completion. The exact request and binding
+are retained in a separate create-only recovery directory. A lost reply may be
+read back after a new full proof; an existing partial/conflicting ACK is refused.
+No cycle/phase is rerun, no provider task is created, and no DB control, permit or
+service is changed. Subsequent issuance still performs its normal fresh admission.
+
+This is an executable observation/reconciliation path, not a timer or permanent
+monitoring service. It does not recover an incomplete execution or prepublication
+incident. Those cases remain stopped for separately scoped reconciliation. Live
+acceptance and permanent-service activation remain pending; source tests and CI
+must not be reported as deployment.
