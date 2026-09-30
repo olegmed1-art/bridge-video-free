@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 
 PROJECT = 'misty-poetry-18012774'
-PRODUCTION = 'br-cold-moon-a1sgkzfd'
+PRODUCTION = None
 API = f'https://console.neon.tech/api/v2/projects/{PROJECT}'
 TASK = 'f05c605f-f664-4ff7-9927-a039f000a929'
 FENCED_SHA = '655fa30ce165663fb0de1b98bb3bba85237fefc6900a507e4a88edced9b0b11e'
@@ -56,7 +56,10 @@ def snapshot(uri):
 
 
 def main():
+    global PRODUCTION
+    PRODUCTION = os.environ['EXPECTED_PARENT']
     token = os.environ['NEON_API_KEY']
+    require(re.fullmatch(r'br-[a-z0-9-]+', PRODUCTION), 'EXPECTED_PARENT_INVALID')
     retire, refence = map(Path, sys.argv[1:])
     require(len(sys.argv) == 3 and retire.is_file() and refence.is_file(),
             'REVIEWED_SQL_MISSING')
