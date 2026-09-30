@@ -25,6 +25,30 @@ KEYS={'version','action','source','accepted_controller_sha256','accepted_runtime
       'accepted_terminal_sha256','predecessor'}
 require=owner.require
 
+# Diagnostic vocabulary only. Never transport arbitrary exception text, SQL
+# details, stderr or a provider response across the isolated child boundary.
+FAILURE_REASONS=(
+    'UNCLASSIFIED', 'LANE_CYCLE_CHILD_UNKNOWN', 'LANE_CYCLE_CHILD_REFUSED',
+    'LANE_CYCLE_RESULT', 'LANE_OWNER_CONTAINMENT_PENDING',
+    'LANE_OWNER_FEED_REQUIRES_INCIDENT', 'LANE_OWNER_LEGACY_CHANGED',
+    'LANE_FEED_SERIAL_HOLD', 'LANE_FEED_SERIAL_CURSOR',
+    'PILOT_INTAKE_AUTHORITY', 'PILOT_INTAKE_HEAD_CHANGED',
+    'PILOT_INTAKE_SNAPSHOT_EXISTS', 'PILOT_INTAKE_ACTIVE_MAILBOX',
+    'PILOT_INTAKE_CONFIG_DRIFT', 'PILOT_INTAKE_QUEUE_NOT_EMPTY',
+    'PILOT_INTAKE_SNAPSHOT_READBACK', 'PILOT_INTAKE_CONFIG_APPLY_DRIFT',
+    'PILOT_INTAKE_WORK_NOT_NEW', 'PILOT_INTAKE_WRONG_WORK',
+    'PILOT_INTAKE_TASK_NOT_NEW', 'PILOT_INTAKE_WRONG_TASK',
+    'PILOT_INTAKE_GOAL_DRIFT', 'PILOT_INTAKE_WRONG_DISPATCH',
+    'PILOT_INTAKE_WRONG_PUBLICATION', 'PILOT_INTAKE_ASSIGNMENT_DRIFT',
+    'PILOT_INTAKE_SERVICE_CHANGED')
+
+
+def failure_reason(exc):
+    # Do not invoke custom __str__ methods or accept subclasses carrying data.
+    return (exc.args[0] if type(exc) is RuntimeError and len(exc.args)==1
+            and type(exc.args[0]) is str and exc.args[0] in FAILURE_REASONS
+            else 'UNCLASSIFIED')
+
 
 def location(prepare):
     return owner.ROOT/'cycles'/prepare['accepted_plan_sha256']
@@ -189,7 +213,7 @@ def isolated(wheels,credential,token,controller_raw,retained_raw,payload,accepte
     expected={key:owner.sha(raw) for key,raw in blobs.items()}
     require(expected['payload']==accepted,'LANE_CYCLE_SCOPE')
     context=dict(source=guard.source,run_id=guard.run_id,attempt=guard.attempt)
-    code='EXPECTED='+repr(expected)+'\nCONTEXT='+repr(context)+'\n'+'''import base64,hashlib,json,os,pathlib,sys,tempfile
+    code='EXPECTED='+repr(expected)+'\nCONTEXT='+repr(context)+'\nFAILURE_REASONS='+repr(FAILURE_REASONS)+'\n'+'''import base64,hashlib,json,os,pathlib,sys,tempfile
 try:
  raw=sys.stdin.buffer.read(24*1024*1024+1)
  assert len(raw)<=24*1024*1024 and os.geteuid()==0
@@ -209,8 +233,10 @@ try:
   from ops.light_native_lane_cycle import child_main
   result=child_main(wire,EXPECTED,CONTEXT)
   print(json.dumps(result,sort_keys=True,separators=(',',':'),ensure_ascii=False))
-except BaseException:
- print('{"audit":"LIGHT_LANE_CYCLE_CHILD_REFUSED"}')
+except BaseException as exc:
+ reason=(exc.args[0] if type(exc) is RuntimeError and len(exc.args)==1
+         and type(exc.args[0]) is str and exc.args[0] in FAILURE_REASONS else 'UNCLASSIFIED')
+ print(json.dumps(dict(audit='LIGHT_LANE_CYCLE_CHILD_REFUSED',reason=reason),sort_keys=True,separators=(',',':')))
  raise SystemExit(2) from None
 '''
     wire=dict({key:base64.b64encode(raw).decode() for key,raw in blobs.items()},
@@ -222,7 +248,21 @@ except BaseException:
             timeout=750 if action=='execute' else 300,env={'PATH':'/usr/bin:/bin'})
     except (subprocess.TimeoutExpired,OSError):
         raise RuntimeError('LANE_CYCLE_CHILD_UNKNOWN') from None
-    require(result.returncode==0 and len(result.stdout)<=262144,'LANE_CYCLE_CHILD_REFUSED')
+    if result.returncode!=0:
+        # Only the exact bounded refusal protocol may supply a diagnostic code.
+        # Old children, malformed output and unknown exits remain fail closed.
+        reason='LANE_CYCLE_CHILD_REFUSED'
+        if result.returncode==2 and len(result.stdout)<=1024:
+            try:
+                refused=owner.parse(result.stdout.strip())
+                if (type(refused) is dict and set(refused)=={'audit','reason'}
+                        and refused['audit']=='LIGHT_LANE_CYCLE_CHILD_REFUSED'
+                        and type(refused['reason']) is str and refused['reason'] in FAILURE_REASONS):
+                    reason=refused['reason']
+            except BaseException:
+                pass
+        raise RuntimeError(reason) from None
+    require(len(result.stdout)<=262144,'LANE_CYCLE_CHILD_REFUSED')
     try:return owner.parse(result.stdout.strip())
     except BaseException:raise RuntimeError('LANE_CYCLE_CHILD_UNKNOWN') from None
 
@@ -262,10 +302,11 @@ def run(wheels,credential,token,controller_raw,retained_raw,raw,accepted,run_gua
                 result_code=terminal['result']['result_code'],controls_restored=True)
             owner.retain(directory/'complete.json',owner.encoded(result))
             return result
-        except BaseException:
+        except BaseException as exc:
             # Do not log exceptions: they can contain credentials. Never replay
             # any phase or fabricate a provider terminal. Execution has its own
             # PID1 cleanup; failed terminal/restore needs incident reconciliation.
+            reason=failure_reason(exc)
             containment='NOT_ATTEMPTED'
             if action in STEPS[:4] and (scope/'before.json').exists() and (scope/'baseline.json').exists():
                 try:
@@ -292,4 +333,7 @@ def run(wheels,credential,token,controller_raw,retained_raw,raw,accepted,run_gua
                     containment='RECONCILIATION_REQUIRED'
             owner.retain(directory/'incident.json',owner.encoded(dict(
                 phase=action,containment=containment,state='RECONCILIATION_REQUIRED')))
+            # Preserve the original phase refusal separately, after containment.
+            # Historical incident records are never rewritten or backfilled.
+            owner.retain(directory/'refusal.json',owner.encoded(dict(phase=action,reason=reason)))
             raise RuntimeError('LANE_CYCLE_RECONCILIATION_REQUIRED') from None

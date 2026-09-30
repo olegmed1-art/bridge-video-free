@@ -349,3 +349,38 @@ def child_main(wire,expected,context):
 
 
 REAL_ISOLATED=cycle.isolated
+
+
+def test_cycle_retains_only_bounded_original_refusal(journal, monkeypatch):
+    j=journal
+    original=cycle.isolated
+    code='PILOT_INTAKE_ASSIGNMENT_DRIFT'
+    def isolated(*args, **kwargs):
+        result=original(*args, **kwargs)
+        if kwargs['mode']=='phase' and owner.parse(args[5])['action']=='prepare':
+            raise RuntimeError(code)
+        return result
+    monkeypatch.setattr(cycle,'isolated',isolated)
+    with pytest.raises(RuntimeError,match='RECONCILIATION_REQUIRED'):j.run()
+    assert owner.parse(owner.read(j.path/'refusal.json'))==dict(phase='prepare',reason=code)
+    assert j.calls==['prepare','contain']
+    before={p.name:p.read_bytes() for p in j.path.iterdir()}
+    with pytest.raises(RuntimeError,match='REPLAY'):j.run()
+    assert before=={p.name:p.read_bytes() for p in j.path.iterdir()}
+
+
+def test_unknown_cycle_refusal_never_exposes_exception_text(journal):
+    j=journal;j.fault.phase='publish'
+    with pytest.raises(RuntimeError,match='RECONCILIATION_REQUIRED'):j.run()
+    assert owner.parse(owner.read(j.path/'refusal.json'))==dict(phase='publish',reason='UNCLASSIFIED')
+    assert b'private-' not in b''.join(p.read_bytes() for p in j.path.iterdir())
+
+
+def test_real_agreement_require_is_not_an_exact_runtime_error():
+    from ops.native_maintenance_agreement import require as agreement_require
+    from ops.native_maintenance_workflow_pause import Refused
+    code='COORDINATION_AGREEMENT_EXPIRED'
+    with pytest.raises(Refused) as raised:agreement_require(False,code)
+    assert type(raised.value) is Refused
+    assert code not in cycle.FAILURE_REASONS
+    assert cycle.failure_reason(raised.value)=='UNCLASSIFIED'

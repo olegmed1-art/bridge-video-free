@@ -413,3 +413,29 @@ def test_incomplete_diagnostic_refuses_untrusted_metadata(monitor, damage):
         path.write_bytes(owner.encoded(value))
     with pytest.raises((RuntimeError, OSError)): m.call()
     assert not m.checks and len(m.j.calls) == 1
+
+
+@pytest.mark.parametrize('damage', [None, 'extra', 'code', 'phase', 'link', 'mode'])
+def test_incomplete_refusal_diagnostic_is_optional_and_bound(monitor, damage):
+    m=monitor
+    root=cycle.location(m.j.calls[0]['prepare'])
+    (root/'complete.json').unlink()
+    incident=dict(phase='prepare',containment='INTAKE_ROLLED_BACK',state='RECONCILIATION_REQUIRED')
+    owner.retain(root/'incident.json',owner.encoded(incident))
+    assert 'refusal' not in m.call()['diagnostic']
+    refusal=dict(phase='prepare',reason='PILOT_INTAKE_ASSIGNMENT_DRIFT')
+    if damage=='extra':refusal['secret']='must-not-emit'
+    if damage=='code':refusal['reason']='private-exception-text'
+    if damage=='phase':refusal['phase']='publish'
+    owner.retain(root/'refusal.json',owner.encoded(refusal))
+    if damage=='link':
+        (root/'refusal.json').unlink();(root/'refusal.json').symlink_to(root/'incident.json')
+    if damage=='mode':(root/'refusal.json').chmod(0o644)
+    if damage:
+        with pytest.raises((RuntimeError,OSError)):m.call()
+    else:
+        before={str(p):p.read_bytes() for p in owner.ROOT.rglob('*') if p.is_file()}
+        result=m.call()
+        assert result['diagnostic']['refusal']==refusal and result['live_verified'] is False
+        assert before=={str(p):p.read_bytes() for p in owner.ROOT.rglob('*') if p.is_file()}
+    assert not m.checks and len(m.j.calls)==1

@@ -392,3 +392,21 @@ emitted. This metadata remains explicitly unverified against live execution;
 there is no retry, cleanup, ACK write, provider call, or database connection in
 this diagnostic path. A conflicting or malformed record refuses observation.
 The source change does not retire the incomplete issue or authorize a new one.
+
+### Bounded child refusal diagnostics — source candidate
+
+Future isolated cycle failures preserve only an exact allowlisted RuntimeError
+code. Unknown exceptions become UNCLASSIFIED; no exception text, stderr, SQL
+details or provider response is exposed. The original phase code is retained in
+a separate create-only refusal.json after the existing containment attempt and
+incident record. Containment failure cannot replace the original phase code.
+
+Incomplete observation validates this optional record with the same root-only
+metadata requirements and exact incident phase, then returns only its fixed
+code. An absent record preserves the old observation result. This cannot recover
+the cause erased by the historical run 36694785468; that incident stays unknown,
+retained and incomplete. Expiry, source acceptance, one-shot admission, HOLD,
+containment and replay guards are unchanged. This change grants no retry,
+retirement, acknowledgement, deployment or production activation.
+Agreement's Refused subclass is intentionally outside this exact-RuntimeError
+vocabulary and remains UNCLASSIFIED; the finite Agreement guards still execute.

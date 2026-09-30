@@ -258,11 +258,19 @@ def incomplete_diagnostic(directory, policy, policy_id, index, intent):
     require(not scope.is_symlink(), 'LANE_ISSUER_HISTORY')
     if exists:
         owner.install.root_parent(scope)
-    return dict(incident=incident, scope_exists=exists,
+    result = dict(incident=incident, scope_exists=exists,
         records={name: present(scope/name) if exists else False for name in
                  ('plan.json', 'baseline.json', 'before.json', 'intake.json')},
         phases={action: {kind: present(root/(action+'-'+kind+'.json'))
                          for kind in ('intent', 'done')} for action in cycle.STEPS})
+    if present(root/'refusal.json'):
+        refusal = owner.parse(owner.read(root/'refusal.json', limit=1024))
+        require(type(refusal) is dict and set(refusal) == {'phase', 'reason'}
+                and incident is not None and refusal['phase'] == incident['phase']
+                and type(refusal['reason']) is str and refusal['reason'] in cycle.FAILURE_REASONS,
+                'LANE_ISSUER_HISTORY')
+        result['refusal'] = refusal
+    return result
 
 
 def monitor_request(raw, accepted, controller, runtime, guard):
