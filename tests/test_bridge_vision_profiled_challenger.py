@@ -380,7 +380,7 @@ def test_standard_board_number_derives_dealer_and_vulnerability_cycle():
     assert derive_duplicate_board_metadata(17) == ("N", "NONE")
 
 
-def test_board_metadata_requires_two_frames_and_preserves_rotated_compass(tmp_path: Path):
+def test_board_number_alone_stays_partial_and_preserves_rotated_compass(tmp_path: Path):
     first, second = make_frames(tmp_path)
     metadata = {"board_number": metadata_field(16)}
     observations = {
@@ -394,16 +394,56 @@ def test_board_metadata_requires_two_frames_and_preserves_rotated_compass(tmp_pa
     )
 
     pending = detector(first)["evidence"]["board_metadata"]
-    confirmed = detector(second)["evidence"]["board_metadata"]
+    partial = detector(second)["evidence"]["board_metadata"]
 
     assert pending["status"] == "PENDING_TEMPORAL_CONSENSUS"
+    assert partial["status"] == "PARTIAL_VISUAL_EVIDENCE"
+    assert partial["board_number"] == 16
+    assert partial["dealer"] == "W"
+    assert partial["vulnerability"] == "EW"
+    assert partial["provenance"]["dealer"]["class"] == "DERIVED_FROM_BOARD_NUMBER"
+    assert partial["seat_positions"] == positions
+    assert partial["rotation_degrees_clockwise"] == 90
+
+
+def test_board_dealer_and_vulnerability_need_independent_visual_evidence(tmp_path: Path):
+    first, second = make_frames(tmp_path)
+    metadata = {
+        "board_number": metadata_field(16),
+        "dealer": metadata_field("W"),
+        "vulnerability": metadata_field("EW"),
+    }
+    observations = {
+        first.name: payload(first, [observed_card()], board_metadata=metadata),
+        second.name: payload(second, [observed_card()], board_metadata=metadata),
+    }
+    detector = ProfiledCardChallenger(parse_profile(profile_raw()), lambda frame, _: observations[frame.name])
+    assert detector(first)["evidence"]["board_metadata"]["status"] == "PENDING_TEMPORAL_CONSENSUS"
+    confirmed = detector(second)["evidence"]["board_metadata"]
     assert confirmed["status"] == "CONFIRMED"
-    assert confirmed["board_number"] == 16
-    assert confirmed["dealer"] == "W"
-    assert confirmed["vulnerability"] == "EW"
-    assert confirmed["provenance"]["dealer"]["class"] == "DERIVED_FROM_BOARD_NUMBER"
-    assert confirmed["seat_positions"] == positions
-    assert confirmed["rotation_degrees_clockwise"] == 90
+    assert confirmed["independent_fields_complete"] is True
+    assert confirmed["provenance"]["dealer"]["class"] == "OBSERVED_AND_CYCLE_CONFIRMED"
+    assert confirmed["provenance"]["vulnerability"]["class"] == "OBSERVED_AND_CYCLE_CONFIRMED"
+
+
+def test_teacher_speech_cannot_create_board_metadata(tmp_path: Path):
+    first, _ = make_frames(tmp_path)
+    metadata = {
+        "board_number": {
+            "value": 16,
+            "confidence": 0.99,
+            "source": "TEACHER_SPEECH",
+            "evidence_locator": "transcript#segment-1",
+        }
+    }
+    detector = ProfiledCardChallenger(
+        parse_profile(profile_raw()),
+        lambda frame, _: payload(frame, [observed_card()], board_metadata=metadata),
+    )
+    result = detector(first)
+    assert result["status"] == "REVIEW"
+    assert result["evidence"]["reason"] == "FRAME_GATE_REJECTED"
+    assert "unsupported board number source" in result["evidence"]["detail"]
 
 
 def test_observed_dealer_conflicting_with_board_number_fails_frame_gate(tmp_path: Path):
