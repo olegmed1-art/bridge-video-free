@@ -22,7 +22,7 @@ from ops import light_native_service_switch as switch
 
 ROOT=Path('/var/lib/bridge-light-native-lane-owner')
 FIRST_EXECUTION_SECONDS=420
-EXTRA=('ops/light_native_lane_controller.py','ops/light_native_lane_cycle.py','ops/light_native_lane_execution.py',
+EXTRA=('ops/light_native_lane_issuer.py','ops/light_native_lane_controller.py','ops/light_native_lane_cycle.py','ops/light_native_lane_execution.py',
        'ops/light_native_lane_feed.py','ops/light_native_lane_owner.py',
        'ops/light_native_lane_run_guard.py','database/__init__.py',
        'database/light_native_pilot_intake.py','database/native_cli_permission_engine.py')
@@ -47,7 +47,9 @@ def validate_package(raw,source,accepted,*,allow_legacy=False):
     names=set(value.get('helpers',{}))
     require(set(value)=={'version','kind','source','helpers'} and value['version']==1
             and value['kind']=='LIGHT_LANE_CONTROLLER' and value['source']==source
-            and (names==expected or allow_legacy and names==expected-{'ops/light_native_lane_cycle.py'})
+            and (names==expected or allow_legacy and names in
+                 (expected-{'ops/light_native_lane_issuer.py'},
+                  expected-{'ops/light_native_lane_cycle.py','ops/light_native_lane_issuer.py'}))
             and all(type(v) is str for v in value['helpers'].values()),'LANE_OWNER_PACKAGE')
     return value
 
@@ -167,6 +169,10 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
     require(os.geteuid()==0 and os.uname().nodename=='autopilot-lite-vnic'
             and sha(payload_raw)==accepted_payload,'LANE_OWNER_AUTHORITY')
     value=parse(payload_raw)
+    if value.get('action')=='issue':
+        require(_cycle is None,'LANE_ISSUER_SCOPE')
+        from ops.light_native_lane_issuer import run
+        return run(wheels,credential,token,controller_raw,retained_raw,payload_raw,accepted_payload,run_guard)
     if value.get('action')=='cycle':
         require(_cycle is None,'LANE_CYCLE_SCOPE')
         from ops.light_native_lane_cycle import run

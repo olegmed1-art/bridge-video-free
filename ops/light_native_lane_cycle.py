@@ -152,6 +152,12 @@ def child_main(wire,expected,context):
     from ops.light_native_lane_run_guard import authenticated
     guard=authenticated(context['source'],context['run_id'],context['attempt'],wire['token'])
     value=owner.parse(decoded['payload'])
+    if wire['mode']=='issuer_validate':
+        from ops import light_native_lane_issuer as issuer
+        policy=issuer.validate(decoded['payload'],expected['payload'],decoded['controller'],decoded['runtime'],guard)
+        from ops.native_maintenance_owner_host import loaded_runtime
+        with loaded_runtime(decoded['driver']) as (psycopg,_):
+            return issuer.preflight(policy,expected['payload'],wire['outer'],wire['credential'],wire['token'],psycopg)
     if wire['mode']=='validate':
         prepare=validated(decoded['payload'],expected['payload'],decoded['controller'],decoded['runtime'],guard)
         from ops.native_maintenance_owner_host import loaded_runtime

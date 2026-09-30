@@ -249,6 +249,7 @@ def test_cleanup_not_blocked_by_outer_agreement_expiry(journal,monkeypatch):
 def test_new_packages_strict_but_retained_old_helpers_can_be_verified(request_bytes):
     r=request_bytes;value=owner.parse(r.controller)
     del value['helpers']['ops/light_native_lane_cycle.py']
+    del value['helpers']['ops/light_native_lane_issuer.py']
     raw=owner.encoded(value)
     with pytest.raises(RuntimeError):owner.validate_package(raw,r.prepare['source'],owner.sha(raw))
     owner.validate_package(raw,r.prepare['source'],owner.sha(raw),allow_legacy=True)
