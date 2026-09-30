@@ -1,0 +1,80 @@
+name: IBM VPC authorization diagnostics
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/ibm-vpc-authorization-diagnostics.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+      IBM_EXPECTED_ACCOUNT_ID: 7892cf9edf9b4ee480f9370d73e96138
+      IBM_VPC_REGION: eu-de
+      IBM_VPC_INSTANCE_ID: 02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2
+    steps:
+      - name: Read-only authorization checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          token_body = urllib.parse.urlencode({
+              "grant_type": "urn:ibm:params:oauth:grant-type:apikey",
+              "apikey": os.environ["IBM_CLOUD_API_KEY"],
+          }).encode("ascii")
+          token_request = urllib.request.Request(
+              "https://iam.cloud.ibm.com/identity/token",
+              data=token_body,
+              headers={
+                  "Accept": "application/json",
+                  "Content-Type": "application/x-www-form-urlencoded",
+              },
+              method="POST",
+          )
+          with urllib.request.urlopen(token_request, timeout=20) as response:
+              token = json.load(response)["access_token"]
+
+          parts = token.split(".")
+          payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+          account = payload.get("account", {})
+          account_id = account.get("bss", "") if isinstance(account, dict) else ""
+          account_id = account_id or payload.get("account_id", "")
+          print("IBM_ACCOUNT_MATCH=" + ("YES" if account_id == os.environ["IBM_EXPECTED_ACCOUNT_ID"] else "NO"))
+
+          base = "https://" + os.environ["IBM_VPC_REGION"] + ".iaas.cloud.ibm.com"
+          query = urllib.parse.urlencode({"version": "2026-09-23", "generation": "2"})
+          headers = {"Accept": "application/json", "Authorization": "Bearer " + token}
+
+          def check(label, url, find_instance=False):
+              request = urllib.request.Request(url, headers=headers)
+              try:
+                  with urllib.request.urlopen(request, timeout=20) as response:
+                      status = response.status
+                      data = json.load(response)
+              except urllib.error.HTTPError as exc:
+                  status = exc.code
+                  data = None
+              except Exception as exc:
+                  print(label + "=ERROR category=" + type(exc).__name__)
+                  return
+              print(label + "=HTTP_" + str(status))
+              if find_instance and status == 200:
+                  ids = {item.get("id") for item in data.get("instances", [])}
+                  print("IBM_EXACT_INSTANCE_IN_LIST=" + ("YES" if os.environ["IBM_VPC_INSTANCE_ID"] in ids else "NO"))
+
+          check("IBM_VPC_LIST", base + "/v1/instances?" + query + "&limit=100", True)
+          check("IBM_VPC_EXACT_GET", base + "/v1/instances/" + os.environ["IBM_VPC_INSTANCE_ID"] + "?" + query)
+          PY
