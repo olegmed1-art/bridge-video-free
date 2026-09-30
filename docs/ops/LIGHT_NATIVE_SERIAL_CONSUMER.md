@@ -374,3 +374,21 @@ monitoring service. It does not recover an incomplete execution or prepublicatio
 incident. Those cases remain stopped for separately scoped reconciliation. Live
 acceptance and permanent-service activation remain pending; source tests and CI
 must not be reported as deployment.
+
+### Incomplete issuer observation — 2026-09-30
+
+The first live issuer acceptance (run 36694785468) stopped with
+`LANE_CYCLE_RECONCILIATION_REQUIRED`; independent observation 36695115690
+returned `INCOMPLETE_REQUIRES_RECONCILIATION`, `live_verified: false`.
+The read-only database checks found no work/outbox for the target PR1853 and
+no active task or unfinished receipt. These facts do not identify the refused
+prepare gate and never authorize replay.
+
+Incomplete `observe-issue` now validates the retained derived issue/cycle
+binding and any completed preceding catalogue entries. It reports only the
+fixed incident phase/containment codes and presence of fixed root-owned journal
+records. Record contents, arbitrary filenames and exception text are never
+emitted. This metadata remains explicitly unverified against live execution;
+there is no retry, cleanup, ACK write, provider call, or database connection in
+this diagnostic path. A conflicting or malformed record refuses observation.
+The source change does not retire the incomplete issue or authorize a new one.

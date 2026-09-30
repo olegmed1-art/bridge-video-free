@@ -8,6 +8,7 @@ The parent is stdlib-only; database imports stay in the verified driver child.
 import base64
 from datetime import datetime, timezone
 import os
+import stat
 import time
 
 from ops import light_native_lane_controller as owner
@@ -89,13 +90,15 @@ def derive(policy, accepted, index, predecessor, start):
     return dict(version=1, action='cycle', prepare=prepare)
 
 
-def progress(directory, policy, accepted, *, unacknowledged=None):
+def progress(directory, policy, accepted, *, unacknowledged=None, stop_before=None):
     """Read all entries, refusing holes, partial writes and unknown outcomes."""
     predecessor = policy['predecessor']
     index = 0
     names = {'policy.json'} | {f'{i:04d}' for i in range(len(policy['plans']))}
     require(set(p.name for p in directory.iterdir()) <= names, 'LANE_ISSUER_HISTORY')
     for number, entry in enumerate(policy['plans']):
+        if number == stop_before:
+            break
         path = directory / f'{number:04d}'
         if not path.exists():
             require(not path.is_symlink(), 'LANE_ISSUER_HISTORY')
@@ -221,6 +224,47 @@ MONITOR_KEYS = {'version', 'action', 'source', 'accepted_controller_sha256',
                 'accepted_runtime_sha256', 'policy_sha256', 'index', 'expected_cycle_sha256'}
 
 
+def incomplete_diagnostic(directory, policy, policy_id, index, intent):
+    """Bounded journal metadata only; never infer live safety or retry authority."""
+    count, predecessor = progress(directory, policy, policy_id, stop_before=index)
+    require(count == index, 'LANE_ISSUER_HISTORY')
+    expected = derive(policy, policy_id, index, predecessor, intent['start'])
+    require(intent['cycle'] == expected, 'LANE_ISSUER_HISTORY')
+    prepare = expected['prepare']
+    root = cycle.location(prepare)
+    require(owner.read(root/'intent.json') == owner.encoded(expected), 'LANE_ISSUER_HISTORY')
+    require(not (root/'complete.json').is_symlink(), 'LANE_ISSUER_HISTORY')
+
+    def present(path):
+        owner.install.root_parent(path.parent)
+        try:
+            row = path.lstat()
+        except FileNotFoundError:
+            return False
+        require(stat.S_ISREG(row.st_mode) and stat.S_IMODE(row.st_mode) == 0o600
+                and row.st_uid == 0 and row.st_nlink == 1, 'LANE_ISSUER_HISTORY')
+        return True
+
+    incident = None
+    if present(root/'incident.json'):
+        incident = owner.parse(owner.read(root/'incident.json', limit=1024))
+        require(type(incident) is dict and set(incident) == {'phase', 'containment', 'state'}
+                and incident['phase'] in cycle.STEPS
+                and incident['containment'] in ('NOT_ATTEMPTED', 'RECONCILIATION_REQUIRED',
+                                                'CONTAINED_UNRESOLVED', 'INTAKE_ROLLED_BACK')
+                and incident['state'] == 'RECONCILIATION_REQUIRED', 'LANE_ISSUER_HISTORY')
+    scope = owner.ROOT/prepare['accepted_plan_sha256']
+    exists = scope.exists()
+    require(not scope.is_symlink(), 'LANE_ISSUER_HISTORY')
+    if exists:
+        owner.install.root_parent(scope)
+    return dict(incident=incident, scope_exists=exists,
+        records={name: present(scope/name) if exists else False for name in
+                 ('plan.json', 'baseline.json', 'before.json', 'intake.json')},
+        phases={action: {kind: present(root/(action+'-'+kind+'.json'))
+                         for kind in ('intent', 'done')} for action in cycle.STEPS})
+
+
 def monitor_request(raw, accepted, controller, runtime, guard):
     """Current source authority; historical policy need not still issue work."""
     require(type(raw) is bytes and len(raw) <= 4096 and owner.sha(raw) == accepted,
@@ -270,7 +314,9 @@ def monitor_records(value):
     if not (root/'complete.json').exists():
         require(value['action'] == 'observe-issue' and value['expected_cycle_sha256'] is None,
                 'LANE_ISSUER_RECONCILIATION_REQUIRED')
-        return dict(policy=policy, path=path, state='INCOMPLETE_REQUIRES_RECONCILIATION')
+        diagnostic = incomplete_diagnostic(directory, policy, policy_id, index, intent)
+        return dict(policy=policy, path=path, state='INCOMPLETE_REQUIRES_RECONCILIATION',
+                    diagnostic=diagnostic)
     count, predecessor = progress(directory, policy, policy_id, unacknowledged=index)
     require(count == index+1, 'LANE_ISSUER_HISTORY')
     raw = owner.read(root/'complete.json', value['expected_cycle_sha256'])
@@ -358,8 +404,11 @@ def monitor(wheels, credential, token, controller, runtime, raw, accepted, guard
     with cycle.exclusive(root, create=False):
         record = monitor_records(value)
         if record['state'] == 'INCOMPLETE_REQUIRES_RECONCILIATION':
+            guard.assert_current()
+            require(monitor_records(value) == record, 'LANE_ISSUER_HISTORY')
             return dict(audit='LIGHT_LANE_ISSUER_OBSERVED', state=record['state'],
-                        policy_sha256=value['policy_sha256'], index=value['index'], live_verified=False)
+                        policy_sha256=value['policy_sha256'], index=value['index'], live_verified=False,
+                        diagnostic=record['diagnostic'])
         proof = cycle.isolated(wheels, credential, token, controller, runtime, raw, accepted,
                                guard, outer=accepted, mode='issuer_monitor')
         require(proof == dict(audit='LIGHT_LANE_ISSUER_OBSERVED', state=record['state'],

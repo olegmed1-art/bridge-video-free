@@ -365,3 +365,51 @@ def test_final_primary_failure_after_intent_does_not_write_ack(monitor,monkeypat
     monkeypatch.setattr(cycle,'isolated',failing)
     with pytest.raises(RuntimeError):m.call('reconcile-issue')
     assert not (m.j.path/'0000'/'done.json').exists() and len(m.j.calls)==1
+
+
+def test_incomplete_diagnostic_reads_only_bounded_metadata(monitor, monkeypatch):
+    m = monitor
+    root = cycle.location(m.j.calls[0]['prepare'])
+    (root/'complete.json').unlink()
+    incident = dict(phase='prepare', containment='NOT_ATTEMPTED', state='RECONCILIATION_REQUIRED')
+    owner.retain(root/'incident.json', owner.encoded(incident))
+    scope = owner.ROOT/m.j.calls[0]['prepare']['accepted_plan_sha256']
+    owner.retain(scope/'baseline.json', b'private-secret-do-not-return')
+    before = {str(p): p.read_bytes() for p in owner.ROOT.rglob('*') if p.is_file()}
+    def forbidden(*args, **kwargs):
+        raise AssertionError('diagnostic attempted effects or live verification')
+    monkeypatch.setattr(owner, 'retain', forbidden)
+    monkeypatch.setattr(owner, 'remember', forbidden)
+    monkeypatch.setattr(cycle, 'isolated', forbidden)
+    result = m.call()
+    assert result['live_verified'] is False
+    assert result['diagnostic']['incident'] == incident
+    assert result['diagnostic']['records']['baseline.json'] is True
+    assert 'private-secret' not in owner.encoded(result).decode()
+    assert before == {str(p): p.read_bytes() for p in owner.ROOT.rglob('*') if p.is_file()}
+
+
+@pytest.mark.parametrize('damage', ['incident_extra', 'incident_code', 'scope_link',
+                                  'record_link', 'record_mode', 'cycle_binding', 'issuer_binding'])
+def test_incomplete_diagnostic_refuses_untrusted_metadata(monitor, damage):
+    m = monitor
+    root = cycle.location(m.j.calls[0]['prepare'])
+    (root/'complete.json').unlink()
+    scope = owner.ROOT/m.j.calls[0]['prepare']['accepted_plan_sha256']
+    if damage.startswith('incident'):
+        value = dict(phase='prepare', containment='NOT_ATTEMPTED', state='RECONCILIATION_REQUIRED')
+        if damage == 'incident_extra': value['secret'] = 'must-not-emit'
+        else: value['phase'] = 'untrusted-error-message'
+        owner.retain(root/'incident.json', owner.encoded(value))
+    if damage == 'scope_link':
+        moved = scope.with_name('relocated'); scope.rename(moved); scope.symlink_to(moved)
+    if damage == 'record_link':
+        (scope/'intake.json').unlink(); (scope/'intake.json').symlink_to(root/'intent.json')
+    if damage == 'record_mode': (scope/'intake.json').chmod(0o644)
+    if damage == 'cycle_binding': (root/'intent.json').write_bytes(b'{}')
+    if damage == 'issuer_binding':
+        path = m.j.path/'0000'/'intent.json'
+        value = owner.parse(path.read_bytes()); value['start'] += 1
+        path.write_bytes(owner.encoded(value))
+    with pytest.raises((RuntimeError, OSError)): m.call()
+    assert not m.checks and len(m.j.calls) == 1
