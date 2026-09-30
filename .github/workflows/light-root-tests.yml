@@ -1,23 +1,9 @@
 name: Isolated Light root source tests
 
 on:
-  workflow_dispatch:
-    inputs:
-      approved_run:
-        description: Owner has explicitly approved this test run and its cost boundary
-        required: true
-        type: boolean
-        default: false
-      expected_sha:
-        description: Exact reviewed 40-character commit SHA, including both patches and this gate
-        required: true
-        type: string
-      python_image:
-        description: Reviewed Docker Official Python 3.12 image, python@sha256 plus 64 hex digits
-        required: true
-        type: string
-        # Docker Hub library/python:3.12.14-slim-bookworm, linux/amd64 manifest.
-        default: python@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
+  push:
+    branches: [review/verified-patches-20260930]
+    paths: [.github/workflows/light-root-tests.yml]
 
 permissions:
   contents: read
@@ -28,18 +14,20 @@ concurrency:
 
 jobs:
   root-tests:
-    if: ${{ inputs.approved_run }}
+    if: "${{ github.event_name == 'push' && github.ref == 'refs/heads/review/verified-patches-20260930' && github.event.before == 'e8bcd510db99990887d513d80ddf59c54bcd9a27' && github.event.head_commit.message == 'ci: authorize one isolated root gate 20260930' && github.run_attempt == 1 }}"
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      EXPECTED_SHA: ${{ github.sha }}
+      # Docker Official Python 3.12.14 slim-bookworm, linux/amd64.
+      PYTHON_IMAGE: python@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
     defaults:
       run:
         shell: bash
     steps:
       - name: Validate reviewed inputs
         env:
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
           ACTUAL_SHA: ${{ github.sha }}
-          PYTHON_IMAGE: ${{ inputs.python_image }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -52,7 +40,7 @@ jobs:
           path: candidate
           ref: ${{ github.sha }}
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 2
           submodules: false
           lfs: false
       - name: Checkout immutable baseline
@@ -65,12 +53,13 @@ jobs:
           submodules: false
           lfs: false
       - name: Prepare dependencies and credential-free source export
-        env:
-          PYTHON_IMAGE: ${{ inputs.python_image }}
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
           set -euo pipefail
           [[ "$(git -C candidate rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          reviewed_parent=e8bcd510db99990887d513d80ddf59c54bcd9a27
+          [[ "$(git -C candidate rev-list --parents -n 1 HEAD)" == "$EXPECTED_SHA $reviewed_parent" ]]
+          [[ "$(git -C candidate log -1 --format=%B)" == 'ci: authorize one isolated root gate 20260930' ]]
+          [[ "$(git -C candidate diff --name-status "$reviewed_parent" HEAD)" == $'M\t.github/workflows/light-root-tests.yml' ]]
           baseline_sha=1440920191e1778fb9a9ba24e6701937a1a7459c
           [[ "$(git -C baseline rev-parse HEAD)" == "$baseline_sha" ]]
           source_dir="$RUNNER_TEMP/light-root-source"
