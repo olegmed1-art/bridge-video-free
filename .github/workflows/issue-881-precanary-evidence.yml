@@ -1,6 +1,8 @@
 name: Issue 881 Exact Pre-Canary Evidence
 
 on:
+  # The external pre-canary gate requires successful evidence on every candidate
+  # head, including changes outside UV paths. Keep this trigger unfiltered.
   pull_request:
 
 permissions:
