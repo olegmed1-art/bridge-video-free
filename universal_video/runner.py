@@ -42,6 +42,7 @@ from .contract import (
 )
 from .drive_adapter import access_token, download_file, file_metadata
 from .profiles import resolve_profile
+from .lifecycle import LifecycleError, archive_result, check_archive_state, directory, read_json
 from .speaker_structure import MIN_TEST_LABEL_COVERAGE, run_speaker_structure
 from .readiness import build_test_readiness, deferred_stages
 
@@ -885,12 +886,15 @@ def _prepare_job_dir(
     processing_fingerprint: str | None = None,
 ) -> tuple[Path, str, dict[str, Any] | None]:
     job_hash = canonical_job_hash(job)
+    check_archive_state(output_root, job.job_id)
     job_dir = output_root / job.job_id
     manifest_path = job_dir / "manifest.json"
+    if job_dir.exists() or job_dir.is_symlink():
+        directory(job_dir)
     if manifest_path.exists():
         try:
-            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            existing = read_json(manifest_path)
+        except (OSError, json.JSONDecodeError, LifecycleError):
             existing = None
         if (
             source_reuse_safe
@@ -903,8 +907,8 @@ def _prepare_job_dir(
             and existing.get("status") == "COMPLETED"
         ):
             return job_dir, job_hash, existing
-    if job_dir.exists():
-        shutil.rmtree(job_dir)
+    if job_dir.exists() or job_dir.is_symlink():
+        archive_result(output_root, job.job_id)
     job_dir.mkdir(parents=True, exist_ok=False)
     return job_dir, job_hash, None
 

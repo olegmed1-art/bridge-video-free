@@ -233,7 +233,7 @@ def test_same_job_path_with_changed_source_content_is_not_reused(monkeypatch, tm
     assert not (prepared / "old-frame.jpg").exists()
 
 
-def test_changed_job_hash_cleans_stale_output(monkeypatch, tmp_path: Path):
+def test_changed_job_hash_preserves_stale_output(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "revision-a")
     job = _job(tmp_path)
     inspection = _inspect_source(job, max_source_bytes=1024)
@@ -263,6 +263,8 @@ def test_changed_job_hash_cleans_stale_output(monkeypatch, tmp_path: Path):
     assert existing is None
     assert job_dir.is_dir()
     assert not (job_dir / "old-frame.jpg").exists()
+    archived = list((output_root / ".attempts" / job.job_id).glob("attempt-*/old-frame.jpg"))
+    assert len(archived) == 1 and archived[0].read_bytes() == b"old"
 
 
 def test_drive_checksum_makes_reuse_fingerprint_safe(monkeypatch):
@@ -321,7 +323,9 @@ def test_spool_startup_recovers_orphaned_running_job(tmp_path: Path):
     running = tmp_path / "running"
     running.mkdir(parents=True)
     payload = running / "job.json"
-    payload.write_text('{"job_id":"x"}', encoding="utf-8")
+    (tmp_path / "inbox").mkdir()
+    payload.write_text(json.dumps({"job_id": "job", "profile": "transcript_only", "source": {
+        "kind": "google_drive", "file_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz"}}), encoding="utf-8")
     result = recover_orphaned_jobs(tmp_path)
     assert result == {"recovered": 1, "deduplicated": 0, "conflicts": 0, "rejected": 0}
     assert (tmp_path / "inbox" / "job.json").exists()
@@ -333,8 +337,10 @@ def test_spool_recovery_deduplicates_identical_inbox_payload(tmp_path: Path):
     inbox = tmp_path / "inbox"
     running.mkdir(parents=True)
     inbox.mkdir(parents=True)
-    (running / "job.json").write_text('{"job_id":"x"}', encoding="utf-8")
-    (inbox / "job.json").write_text('{"job_id":"x"}', encoding="utf-8")
+    payload = json.dumps({"job_id": "job", "profile": "transcript_only", "source": {
+        "kind": "google_drive", "file_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz"}})
+    (running / "job.json").write_text(payload, encoding="utf-8")
+    (inbox / "job.json").write_text(payload, encoding="utf-8")
     result = recover_orphaned_jobs(tmp_path)
     assert result == {"recovered": 0, "deduplicated": 1, "conflicts": 0, "rejected": 0}
     assert not (running / "job.json").exists()

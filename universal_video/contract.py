@@ -21,7 +21,7 @@ MAX_FRAME_INTERVAL_SECONDS = 3600
 ALLOWED_SOURCE_KINDS = frozenset({"local_path", "google_drive", "oracle_drive_staged"})
 ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
 DRIVE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,200}$")
-RESERVED_PATH_IDS = frozenset({".", ".."})
+RESERVED_PATH_IDS = frozenset({".", "..", ".attempts"})
 
 
 class VideoContractError(ValueError):

@@ -23,6 +23,10 @@ from .runner import run_job
 from .runtime_preflight import VideoRuntimeUnavailable, validate_staged_video, validate_video_runtime
 from .server_review import ServerReviewError, build_server_review
 from .workload_lock import shared_workload_lock
+from .lifecycle import (
+    LifecycleError, MAX_ATTEMPTS, attempt_records, directory, finish_attempt,
+    lifecycle_lock, read_json, start_attempt,
+)
 
 
 ERROR_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
@@ -76,9 +80,10 @@ def _failure_code(exc: BaseException) -> str:
 
 
 def _dirs(root: Path) -> dict[str, Path]:
-    out = {name: root / name for name in ("inbox", "running", "done", "failed", "results", "progress")}
+    directory(root)
+    out = {name: root / name for name in ("inbox", "running", "done", "failed", "results", "progress", "attempts")}
     for path in out.values():
-        path.mkdir(parents=True, exist_ok=True)
+        directory(path, create=True)
     return out
 
 
@@ -249,7 +254,7 @@ def _regular_payload(path: Path) -> tuple[bool, str | None]:
         return False, f"cannot stat payload: {exc}"
     if stat.S_ISLNK(info.st_mode):
         return False, "symlink payloads are forbidden"
-    if not stat.S_ISREG(info.st_mode):
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
         return False, "payload must be a regular file"
     if info.st_size > MAX_JOB_BYTES:
         return False, "payload exceeds bounded contract"
@@ -278,133 +283,175 @@ def _reject_payload(path: Path, failed_dir: Path, *, error_code: str) -> None:
         )
 
 
-def recover_orphaned_jobs(spool_root: Path) -> dict[str, int]:
-    """Recover jobs left in running/ by a terminated single resident worker.
+def _fsync_directories(*paths: Path) -> None:
+    for path in paths:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
-    universal-video.service owns this spool and runs one worker process. On a
-    fresh process start, any pre-existing running/*.json file is therefore an
-    orphan from a previous process. Identical duplicate inbox payloads are
-    deduplicated; conflicting payloads are quarantined rather than overwritten.
+
+def _quarantine_job_file(path: Path, paths: dict[str, Path], code: str) -> None:
+    """Keep malformed state per job without preventing unrelated recovery."""
+    stamp = time.time_ns()
+    job_hash = None
+    try:
+        job = validate_job(read_json(path, max_bytes=MAX_JOB_BYTES))
+        if job.job_id == path.stem:
+            job_hash = canonical_job_hash(job)
+    except (LifecycleError, ValueError):
+        pass
+    for state in ("inbox", "running", "done", "failed", "progress"):
+        existing = paths[state] / path.name
+        if existing.exists() or existing.is_symlink():
+            existing.rename(paths["attempts"] / f"{path.stem}.{stamp}.{state}.quarantined")
+    _atomic_write_json(paths["failed"] / path.name, {
+        "status": "FAILED", "job_id": path.stem, "job_hash": job_hash,
+        "error_code": code, "identity_verified": job_hash is not None,
+    })
+    _fsync_directories(*[paths[state] for state in ("inbox", "running", "done", "failed", "progress", "attempts")])
+
+
+def recover_orphaned_jobs(spool_root: Path) -> dict[str, int]:
+    """Recover at most one interruption; preserve attempts and terminal ACKs.
+
+    Called only on startup with the existing exclusive workload fence held.
+    Lifecycle is nested inside workload, never the other way around.
     """
+    from .server_intake import _status_locked
 
     paths = _dirs(spool_root)
-    recovered = 0
-    deduplicated = 0
-    conflicts = 0
-    rejected = 0
-    for claimed in sorted(paths["running"].glob("*.json"), key=lambda p: p.name):
-        valid, _ = _regular_payload(claimed)
-        if not valid:
-            _reject_payload(
-                claimed,
-                paths["failed"],
-                error_code="UV_INVALID_ORPHAN_PAYLOAD",
-            )
-            rejected += 1
-            continue
-
-        destination = paths["inbox"] / claimed.name
-        if not destination.exists() and not destination.is_symlink():
-            claimed.rename(destination)
-            recovered += 1
-            continue
-
-        destination_valid, _ = _regular_payload(destination)
-        if not destination_valid:
-            stamp = int(time.time())
-            payload_path = paths["failed"] / f"{claimed.stem}.recovery-conflict-{stamp}.payload.json"
-            receipt_path = paths["failed"] / f"{claimed.stem}.recovery-conflict-{stamp}.receipt.json"
-            claimed.rename(payload_path)
-            receipt_path.write_text(
-                json.dumps(
-                    {
-                        "status": "FAILED",
-                        "error_type": "SpoolRecoveryConflict",
-                        "error_code": "UV_SPOOL_RECOVERY_CONFLICT",
-                        "job_file": claimed.name,
-                        "quarantined_payload": payload_path.name,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-            conflicts += 1
-            continue
-
-        try:
-            identical = claimed.read_bytes() == destination.read_bytes()
-        except OSError:
-            identical = False
-        if identical:
-            claimed.unlink(missing_ok=True)
-            deduplicated += 1
-            continue
-
-        stamp = int(time.time())
-        payload_path = paths["failed"] / f"{claimed.stem}.recovery-conflict-{stamp}.payload.json"
-        receipt_path = paths["failed"] / f"{claimed.stem}.recovery-conflict-{stamp}.receipt.json"
-        claimed.rename(payload_path)
-        receipt_path.write_text(
-            json.dumps(
-                {
-                    "status": "FAILED",
-                    "error_type": "SpoolRecoveryConflict",
-                    "error_code": "UV_SPOOL_RECOVERY_CONFLICT",
-                    "job_file": claimed.name,
-                    "quarantined_payload": payload_path.name,
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        conflicts += 1
-    return {
-        "recovered": recovered,
-        "deduplicated": deduplicated,
-        "conflicts": conflicts,
-        "rejected": rejected,
-    }
+    with lifecycle_lock(spool_root):
+        counts = {"recovered": 0, "deduplicated": 0, "conflicts": 0, "rejected": 0}
+        for claimed in sorted(paths["running"].glob("*.json"), key=lambda p: p.name):
+            try:
+                valid, _ = _regular_payload(claimed)
+                if not valid:
+                    _reject_payload(claimed, paths["failed"], error_code="UV_INVALID_ORPHAN_PAYLOAD")
+                    counts["rejected"] += 1
+                    continue
+                payload = read_json(claimed, max_bytes=MAX_JOB_BYTES)
+                job = validate_job(payload)
+                if claimed.stem != job.job_id:
+                    raise LifecycleError("UV_STATE_IDENTITY_INVALID")
+                job_hash = canonical_job_hash(job)
+                destination = paths["inbox"] / claimed.name
+                if destination.exists() or destination.is_symlink():
+                    valid, _ = _regular_payload(destination)
+                    identical = valid and canonical_job_hash(validate_job(read_json(destination, max_bytes=MAX_JOB_BYTES))) == job_hash
+                    if not identical:
+                        # Keep both competing inputs, remove only the claim from the runnable lane.
+                        conflict = paths["attempts"] / f"{job.job_id}.conflict-{time.time_ns()}"
+                        claimed.rename(conflict)
+                        destination.rename(conflict.with_name(conflict.name + ".inbox.request"))
+                        _atomic_write_json(conflict.with_name(conflict.name + ".receipt.json"), {
+                            "status": "FAILED", "error_code": "UV_SPOOL_RECOVERY_CONFLICT",
+                            "job_id": job.job_id, "job_hash": job_hash,
+                        })
+                        _atomic_write_json(paths["failed"] / claimed.name, {
+                            "status": "FAILED", "error_code": "UV_SPOOL_RECOVERY_CONFLICT",
+                            "job_id": job.job_id, "job_hash": job_hash,
+                        })
+                        _fsync_directories(paths["running"], paths["inbox"], paths["attempts"], paths["failed"])
+                        counts["conflicts"] += 1
+                        continue
+                status = _status_locked(job.job_id, spool_root, job_hash)
+                records = attempt_records(spool_root, job.job_id)
+                if status["status"] in {"COMPLETED", "REVIEW", "FAILED"}:
+                    # Receipt was durable but cleanup/ACK was interrupted: no second compute.
+                    claimed.rename(paths["attempts"] / f"{job.job_id}.terminal-{time.time_ns()}.request")
+                    if destination.exists():
+                        destination.unlink()
+                    if records and records[-1]["state"] == "RUNNING":
+                        finish_attempt(spool_root, job.job_id, records[-1]["attempt"], status["status"])
+                    counts["deduplicated"] += 1
+                    continue
+                if not records:
+                    index = start_attempt(spool_root, job.job_id, job_hash)
+                    records = attempt_records(spool_root, job.job_id)
+                if records[-1]["state"] == "RUNNING":
+                    finish_attempt(spool_root, job.job_id, records[-1]["attempt"], "INTERRUPTED", "UV_WORKER_INTERRUPTED")
+                if len(records) >= MAX_ATTEMPTS:
+                    _atomic_write_json(paths["failed"] / claimed.name, {
+                        "status": "FAILED", "job_id": job.job_id, "job_hash": job_hash,
+                        "profile": job.profile, "error_code": "UV_RECOVERY_EXHAUSTED",
+                    })
+                    claimed.rename(paths["attempts"] / f"{job.job_id}.exhausted-{time.time_ns()}.request")
+                    if destination.exists():
+                        destination.unlink()
+                    counts["rejected"] += 1
+                    continue
+                if destination.exists():
+                    claimed.rename(paths["attempts"] / f"{job.job_id}.duplicate-{time.time_ns()}.request")
+                    counts["deduplicated"] += 1
+                else:
+                    claimed.rename(destination)
+                    counts["recovered"] += 1
+            except (RuntimeError, ValueError):
+                _quarantine_job_file(claimed, paths, "UV_ORPHAN_STATE_INVALID")
+                counts["rejected"] += 1
+        _fsync_directories(paths["running"], paths["inbox"], paths["attempts"])
+        return counts
 
 
 def _process_one_locked(spool_root: Path) -> bool:
     paths = _dirs(spool_root)
-    candidates: list[tuple[float, str, Path]] = []
-    for path in paths["inbox"].glob("*.json"):
-        valid, reason = _regular_payload(path)
-        if not valid:
+    with lifecycle_lock(spool_root):
+        candidates: list[tuple[float, str, Path]] = []
+        for path in paths["inbox"].glob("*.json"):
+            valid, reason = _regular_payload(path)
+            if not valid:
+                info = path.lstat()
+                if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
+                    continue  # preserve for proof-bound privileged intake retry
+                _reject_payload(
+                    path,
+                    paths["failed"],
+                    error_code="UV_INVALID_SPOOL_PAYLOAD",
+                )
+                return True
+            try:
+                from .server_intake import _status_locked
+                request = validate_job(read_json(path, max_bytes=MAX_JOB_BYTES))
+                if request.job_id != path.stem:
+                    raise LifecycleError("UV_STATE_IDENTITY_INVALID")
+                state = _status_locked(request.job_id, spool_root, canonical_job_hash(request))
+                if state["status"] in {"COMPLETED", "REVIEW", "FAILED"}:
+                    path.rename(paths["attempts"] / f"{request.job_id}.terminal-inbox-{time.time_ns()}.request")
+                    _fsync_directories(paths["inbox"], paths["attempts"])
+                    return True
+                if state["status"] == "RUNNING":
+                    continue
+                mtime = path.lstat().st_mtime
+            except (RuntimeError, ValueError):
+                _quarantine_job_file(path, paths, "UV_JOB_STATE_INVALID")
+                return True
+            except OSError:
+                raise
+            candidates.append((mtime, path.name, path))
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        if not candidates:
+            return False
+
+        source = candidates[0][2]
+        claimed = paths["running"] / source.name
+        if claimed.exists() or claimed.is_symlink():
             _reject_payload(
-                path,
+                source,
                 paths["failed"],
-                error_code="UV_INVALID_SPOOL_PAYLOAD",
+                error_code="UV_RUNNING_NAME_COLLISION",
             )
             return True
         try:
-            mtime = path.lstat().st_mtime
-        except OSError:
-            continue
-        candidates.append((mtime, path.name, path))
-    candidates.sort(key=lambda item: (item[0], item[1]))
-    if not candidates:
-        return False
-
-    source = candidates[0][2]
-    claimed = paths["running"] / source.name
-    if claimed.exists() or claimed.is_symlink():
-        _reject_payload(
-            source,
-            paths["failed"],
-            error_code="UV_RUNNING_NAME_COLLISION",
-        )
-        return True
-    try:
-        source.rename(claimed)
-    except FileNotFoundError:
-        return False
+            source.rename(claimed)
+            _fsync_directories(paths["inbox"], paths["running"])
+        except FileNotFoundError:
+            return False
 
     started = time.monotonic()
     payload: dict | None = None
+    attempt_index: int | None = None
     intake_identity: dict | None = None
     staged_job_dir: Path | None = None
     media_root = Path(os.getenv("UNIVERSAL_VIDEO_MEDIA_ROOT", "/opt/bridge-school/universal-video/media"))
@@ -412,7 +459,7 @@ def _process_one_locked(spool_root: Path) -> bool:
         valid, reason = _regular_payload(claimed)
         if not valid:
             raise RuntimeError(reason or "invalid claimed spool payload")
-        payload = json.loads(claimed.read_text(encoding="utf-8"))
+        payload = read_json(claimed, max_bytes=MAX_JOB_BYTES)
         intake_job = validate_job(payload)
         intake_identity = {
             "job_id": intake_job.job_id,
@@ -423,6 +470,10 @@ def _process_one_locked(spool_root: Path) -> bool:
                 "file_id": str(intake_job.source.get("file_id") or ""),
             },
         }
+        if intake_job.job_id != claimed.stem:
+            raise LifecycleError("UV_STATE_IDENTITY_INVALID")
+        with lifecycle_lock(spool_root):
+            attempt_index = start_attempt(spool_root, intake_job.job_id, canonical_job_hash(intake_job))
         validate_video_runtime()
         if intake_job.source.get("kind") == "google_drive":
             _write_progress(paths, intake_job.job_id, "DOWNLOADING_FROM_DRIVE")
@@ -504,13 +555,17 @@ def _process_one_locked(spool_root: Path) -> bool:
         )
         if attestation is not None:
             receipt_payload["runtime_attestation"] = attestation
-        receipt = paths["done"] / source.name
-        _atomic_write_json(receipt, receipt_payload)
-        try:
-            _write_progress(paths, validated_job.job_id, "RESULT_READY" if str(result.get("status") or "") == "COMPLETED" else "REVIEW")
-        except OSError:
-            pass
-        claimed.unlink(missing_ok=True)
+        with lifecycle_lock(spool_root):
+            receipt = paths["done"] / source.name
+            _atomic_write_json(receipt, receipt_payload)
+            finish_attempt(spool_root, validated_job.job_id, attempt_index, str(result.get("status") or "REVIEW"))
+            try:
+                _write_progress(paths, validated_job.job_id, "RESULT_READY" if str(result.get("status") or "") == "COMPLETED" else "REVIEW")
+            except OSError:
+                pass
+            claimed.unlink(missing_ok=True)
+            _fsync_directories(paths["running"])
+
     except Exception as exc:
         source_kind = None
         if isinstance(payload, dict):
@@ -529,15 +584,22 @@ def _process_one_locked(spool_root: Path) -> bool:
         }
         if intake_identity is not None:
             failure.update(intake_identity)
-        _atomic_write_json(paths["failed"] / source.name, failure)
-        if isinstance(payload, dict):
-            failed_job_id = str(payload.get("job_id") or "")
-            if re.fullmatch(r"^[A-Za-z0-9._:-]{1,160}$", failed_job_id):
-                try:
-                    _write_progress(paths, failed_job_id, "FAILED")
-                except OSError:
-                    pass
-        claimed.unlink(missing_ok=True)
+        with lifecycle_lock(spool_root):
+            # A terminal receipt already saved before an ACK/journal failure must
+            # never be contradicted by a new FAILED receipt. Startup reconciles it.
+            if not (paths["done"] / source.name).exists():
+                _atomic_write_json(paths["failed"] / source.name, failure)
+                if attempt_index is not None and intake_identity is not None:
+                    finish_attempt(spool_root, str(intake_identity["job_id"]), attempt_index, "FAILED", _failure_code(exc))
+                if isinstance(payload, dict):
+                    failed_job_id = str(payload.get("job_id") or "")
+                    if re.fullmatch(r"^[A-Za-z0-9._:-]{1,160}$", failed_job_id):
+                        try:
+                            _write_progress(paths, failed_job_id, "FAILED")
+                        except OSError:
+                            pass
+                claimed.unlink(missing_ok=True)
+
     finally:
         if staged_job_dir is not None and staged_job_dir.exists():
             try:
@@ -549,14 +611,28 @@ def _process_one_locked(spool_root: Path) -> bool:
     return True
 
 
+def validate_queue_isolation() -> None:
+    """An explicitly isolated fixture/local spool must never inherit DB routing."""
+    mode = os.getenv("UNIVERSAL_VIDEO_QUEUE_BACKEND", "legacy_auto")
+    if mode not in {"legacy_auto", "spool_only"}:
+        raise LifecycleError("UV_QUEUE_BACKEND_INVALID")
+    if mode == "spool_only" and any(key in os.environ for key in (
+        "BRIDGE_VIDEO_QUEUE_DATABASE_URL", "BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE",
+        "BRIDGE_WORKER_DATABASE_URL",
+    )):
+        raise LifecycleError("UV_ISOLATED_QUEUE_CREDENTIALS_PRESENT")
+
+
 def process_one(spool_root: Path) -> bool:
     """Process at most one local job while honoring the attestation fence."""
 
+    validate_queue_isolation()
     with shared_workload_lock(spool_root):
         return _process_one_locked(spool_root)
 
 
 def run_forever(spool_root: Path, poll_seconds: float) -> None:
+    validate_queue_isolation()
     status_path = Path(
         os.getenv(
             "UNIVERSAL_VIDEO_STATUS_PATH",

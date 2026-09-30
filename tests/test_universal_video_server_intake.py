@@ -63,13 +63,13 @@ def test_worker_group_assignment_failure_does_not_publish_job(
     assert list(staging.iterdir()) == []
 
 
-def test_rejects_duplicate_or_local_source(tmp_path: Path):
+def test_reuses_identical_duplicate_and_rejects_local_source(tmp_path: Path):
     spool, staging = tmp_path / "spool", tmp_path / "staging"
     (spool / "inbox").mkdir(parents=True)
     staging.mkdir()
     submit(payload(), spool_root=spool, staging_root=staging)
-    with pytest.raises(IntakeError):
-        submit(payload(), spool_root=spool, staging_root=staging)
+    assert submit(payload(), spool_root=spool, staging_root=staging) == "lesson-173"
+    assert len(list((spool / "inbox").glob("*.json"))) == 1
     bad = payload("local")
     bad["source"] = {"kind": "local_path", "path": "/media/x.mp4"}
     with pytest.raises(IntakeError):
