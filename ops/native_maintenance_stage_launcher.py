@@ -580,6 +580,16 @@ def _main(mode, transports):
                     'LAUNCHER_REFUSAL_SCHEMA')
                 PHASE = 'host_' + record['phase'] + ':' + record['code']
                 raise RuntimeError('LAUNCHER_HOST_REFUSED')
+            if record.get('kind') == 'NATIVE_STAGE_REFUSED':
+                from ops.native_maintenance_stage_host import PHASES, SAFE_CODES
+                require(packet is not None and set(record) == {
+                    'kind','binding','request_digest','phase','code'}
+                    and record['binding'] == binding and record['request_digest'] == accepted
+                    and type(record['phase']) is str and record['phase'] in PHASES
+                    and type(record['code']) is str and record['code'] in SAFE_CODES,
+                    'LAUNCHER_REFUSAL_SCHEMA')
+                PHASE = 'host_' + record['phase'] + ':' + record['code']
+                raise RuntimeError('LAUNCHER_HOST_REFUSED')
             if record.get('kind') in ('NATIVE_STAGE_COMPLETE','NATIVE_REHEARSAL_COMPLETE'):
                 break
             require(server.sequence < 128, 'LAUNCHER_REQUEST_LIMIT')
