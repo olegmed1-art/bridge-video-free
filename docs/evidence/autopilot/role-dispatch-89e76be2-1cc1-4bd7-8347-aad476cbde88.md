@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=89e76be2-1cc1-4bd7-8347-aad476cbde88
+dispatch_epoch=68
+role=AUTOPILOT
+task_fingerprint=d597ec94375f31d97de1a20eeeda5243ae58047420cb57f0fed7f07ac9c6eac3
+target_pr=1150
+mode=REPAIR
+repair_attempt=1
+origin_task_id=4f527873-6db4-43ff-ba83-37acd4a41285
+prior_task_id=4f527873-6db4-43ff-ba83-37acd4a41285
+blocked_result_code=ROLE_EXECUTOR_FALLBACK_MISSING
+blocked_summary=Direct chat gating remains fail-closed, but enabled unmapped roles lack delivery coverage because no singleton executor fallback exists.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
