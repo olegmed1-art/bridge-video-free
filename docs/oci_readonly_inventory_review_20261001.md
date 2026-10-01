@@ -1,5 +1,10 @@
 # OCI inventory review probe — 2026-10-01
 
+Historical mode: superseded in this review branch by
+`oci_backup_bucket_metadata_review_20261001.md`, following separate owner approval
+for the exact backup bucket and existing broader API-key route. Do not dispatch
+the old readonly marker against the new branch head.
+
 Status: first owner-dispatched run failed during local setup; offline fix prepared,
 NO RERUN AUTHORIZED. Governance: ASSURED / independent I2 review.
 Base main: `1440920191e1778fb9a9ba24e6701937a1a7459c`.

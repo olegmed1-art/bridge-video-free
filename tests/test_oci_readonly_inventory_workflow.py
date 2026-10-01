@@ -25,7 +25,7 @@ class WorkflowContract(unittest.TestCase):
             "github.actor == 'olegmed1-art'",
             "github.triggering_actor == 'olegmed1-art'",
             "github.ref == 'refs/heads/review/oci-readonly-inventory-20261001'",
-            "inputs.source_run_id == format('oci-readonly-inventory-v1:{0}', github.sha)",
+            "inputs.source_run_id == format('oci-backup-bucket-metadata-v1:{0}', github.sha)",
             '[[ "$GITHUB_WORKFLOW_SHA" == "$GITHUB_SHA" ]]',
             'ref: ${{ github.sha }}',
             'persist-credentials: false',
@@ -40,15 +40,16 @@ class WorkflowContract(unittest.TestCase):
 
     def test_credentials_and_executable_surface(self):
         self.assertEqual(set(re.findall(r'secrets\.([A-Z_]+)', self.text)), {
-            'OCI_READONLY_CLI_USER', 'OCI_READONLY_CLI_TENANCY',
-            'OCI_READONLY_CLI_FINGERPRINT', 'OCI_READONLY_CLI_KEY_CONTENT',
-            'OCI_READONLY_CLI_REGION',
+            'OCI_CLI_USER', 'OCI_CLI_TENANCY',
+            'OCI_CLI_FINGERPRINT', 'OCI_CLI_KEY_CONTENT',
+            'OCI_CLI_REGION',
         })
         for forbidden in ('upload-artifact', 'gh issue', 'gh api', 'curl ', 'sudo ',
-                          'OCI_CLI_', 'ibm', 'backup', 'source_run_id=$'):
+                          'OCI_READONLY_CLI_', 'ibm', 'source_run_id=$'):
             self.assertNotIn(forbidden, self.text)
         self.assertIn("'oci==2.187.1'", self.text)
-        self.assertIn('run: python ops/oci_readonly_inventory.py', self.text)
+        self.assertIn('run: python -m ops.oci_backup_bucket_metadata', self.text)
+        self.assertNotIn('run: python ops/oci_readonly_inventory.py', self.text)
 
 
 if __name__ == '__main__':

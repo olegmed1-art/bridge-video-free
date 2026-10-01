@@ -1,10 +1,10 @@
-name: OCI inventory review-only harness
+name: OCI exact backup bucket metadata review-only harness
 
 on:
   workflow_dispatch:
     inputs:
       source_run_id:
-        description: 'Review gate: oci-readonly-inventory-v1:<exact reviewed 40-character commit SHA>'
+        description: 'Review gate: oci-backup-bucket-metadata-v1:<exact reviewed 40-character commit SHA>'
         required: true
         type: string
 
@@ -23,7 +23,7 @@ jobs:
       github.actor == 'olegmed1-art' &&
       github.triggering_actor == 'olegmed1-art' &&
       github.ref == 'refs/heads/review/oci-readonly-inventory-20261001' &&
-      inputs.source_run_id == format('oci-readonly-inventory-v1:{0}', github.sha)
+      inputs.source_run_id == format('oci-backup-bucket-metadata-v1:{0}', github.sha)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -34,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$REVIEW_GATE" == "oci-readonly-inventory-v1:$GITHUB_SHA" ]]
+          [[ "$REVIEW_GATE" == "oci-backup-bucket-metadata-v1:$GITHUB_SHA" ]]
           [[ "$GITHUB_WORKFLOW_SHA" == "$GITHUB_SHA" ]]
           [[ "$GITHUB_WORKFLOW_REF" == 'olegmed1-art/bridge-video-free/.github/workflows/oracle-epoch-readonly-probe.yml@refs/heads/review/oci-readonly-inventory-20261001' ]]
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -42,18 +42,20 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Offline safety tests before credentials
-        run: python -m unittest discover -s tests -p 'test_oci_readonly_inventory*.py'
+        run: |
+          python -m unittest discover -s tests -p 'test_oci_readonly_inventory*.py'
+          python -m unittest discover -s tests -p 'test_oci_backup_bucket_metadata.py'
       - name: Install pinned SDK without OCI credentials
         run: timeout 60s python -m pip install --disable-pip-version-check --quiet 'oci==2.187.1'
       - name: Construct real SDK clients with synthetic key and network blocked
         run: |
           python -c "import oci; assert oci.__version__ == '2.187.1'"
           python -m unittest discover -s tests -p 'test_oci_readonly_inventory_sdk.py'
-      - name: Read only the fixed OCI root compartment
+      - name: GET metadata of the one owner-authorized backup bucket
         env:
-          OCI_READONLY_CLI_USER: ${{ secrets.OCI_READONLY_CLI_USER }}
-          OCI_READONLY_CLI_TENANCY: ${{ secrets.OCI_READONLY_CLI_TENANCY }}
-          OCI_READONLY_CLI_FINGERPRINT: ${{ secrets.OCI_READONLY_CLI_FINGERPRINT }}
-          OCI_READONLY_CLI_KEY_CONTENT: ${{ secrets.OCI_READONLY_CLI_KEY_CONTENT }}
-          OCI_READONLY_CLI_REGION: ${{ secrets.OCI_READONLY_CLI_REGION }}
-        run: python ops/oci_readonly_inventory.py
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+        run: python -m ops.oci_backup_bucket_metadata

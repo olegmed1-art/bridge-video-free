@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from ops import oci_readonly_inventory as probe
+from ops import oci_backup_bucket_metadata as exact_bucket
 
 try:
     import oci
@@ -38,6 +39,20 @@ class RealSdkConstruction(unittest.TestCase):
             self.assertIsInstance(storage, oci.object_storage.ObjectStorageClient)
             self.assertNotIn('key_content', config)  # Caller dictionary is not mutated.
             self.assertIn('eu-frankfurt-1', storage.base_client.endpoint)
+            exact_client = exact_bucket.make_client(config, pem)
+            self.assertIsInstance(exact_client, oci.object_storage.ObjectStorageClient)
+            self.assertIn('eu-frankfurt-1', exact_client.base_client.endpoint)
+            with patch.object(exact_client.base_client, 'call_api') as transport:
+                exact_client.get_namespace(compartment_id=probe.TENANCY)
+                exact_client.get_bucket(namespace_name='synthetic', bucket_name=exact_bucket.BUCKET,
+                                        fields=['approximateSize', 'approximateCount', 'autoTiering'])
+                exact_client.get_object_lifecycle_policy(namespace_name='synthetic',
+                                                         bucket_name=exact_bucket.BUCKET)
+            self.assertEqual(len(transport.call_args_list), 3)
+            self.assertTrue(all(call.kwargs['method'] == 'GET' for call in transport.call_args_list))
+            self.assertEqual([call.kwargs['resource_path'] for call in transport.call_args_list],
+                             ['/n', '/n/{namespaceName}/b/{bucketName}',
+                              '/n/{namespaceName}/b/{bucketName}/l'])
 
 
 if __name__ == '__main__':
