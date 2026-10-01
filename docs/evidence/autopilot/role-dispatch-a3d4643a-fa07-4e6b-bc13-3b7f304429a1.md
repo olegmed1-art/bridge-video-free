@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=a3d4643a-fa07-4e6b-bc13-3b7f304429a1
+dispatch_epoch=35
+role=AUTOPILOT
+task_fingerprint=d4015787974dd22ed146e1dbe2113be622d8e4e936df15f57db7f5312408719d
+target_pr=1047
+mode=REPAIR
+repair_attempt=1
+origin_task_id=defa31a9-ca5d-4a3a-b8d8-2ad5ccb6da69
+prior_task_id=defa31a9-ca5d-4a3a-b8d8-2ad5ccb6da69
+blocked_result_code=UNRESOLVED_P1_DEPLOYMENT_AND_TELEMETRY_CONTRACTS
+blocked_summary=Four exact-head P1 contracts remain unresolved; local checks pass, but authoritative GitHub status is unavailable.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
