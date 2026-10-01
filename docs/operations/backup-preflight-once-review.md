@@ -65,6 +65,10 @@ catalog result marks gates NOT_PROVEN rather than inventing an authentication
 diagnosis. A post-observation main drift produces overall FAIL even if gates were
 observed passing. No client errors, server-returned strings or DSN are serialized.
 
+The offline diagnostic delta adds receipt v2 with fixed failure codes and
+incremental verified gates; see `backup-preflight-diagnostics.md`. Historical v1
+receipts are unchanged. That delta does not authorize another live dispatch.
+
 If checkout, job cancellation or the outer watchdog prevents receipt generation,
 retain the GitHub run status and mark the observation INCONCLUSIVE with gates NOT_PROVEN; do not
 claim PASS or rerun automatically. After the single dispatch, the parent should

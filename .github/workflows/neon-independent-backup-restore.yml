@@ -6,6 +6,7 @@ on:
       - '.github/workflows/neon-independent-backup-restore.yml'
       - 'tests/test_neon_independent_backup_contract.py'
       - 'tests/test_neon_backup_source.py'
+      - 'tests/test_neon_backup_diagnostics.py'
       - 'ops/neon_backup_source.py'
       - 'ops/reliability/NEON_INDEPENDENT_BACKUP_V1.md'
   push:
@@ -41,6 +42,7 @@ jobs:
           ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/neon-independent-backup-restore.yml
           python tests/test_neon_independent_backup_contract.py
           python -m unittest discover -s tests -p test_neon_backup_source.py -v
+          python -m unittest discover -s tests -p test_neon_backup_diagnostics.py -v
 
   backup:
     if: >-

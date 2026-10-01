@@ -10,6 +10,10 @@ from ops import neon_backup_preflight_once as once
 
 
 class PreflightOnceTests(unittest.TestCase):
+    @staticmethod
+    def passed_preflight(pg, *, gates):
+        gates.update({k: 'PASS' for k in gates})
+
     def test_workflow_is_dispatch_only_single_bounded_job_with_only_maintenance_secret(self):
         text = Path('.github/workflows/native-registry-credential-probe.yml').read_text()
         self.assertIn('timeout-minutes: 2', text)
@@ -54,10 +58,11 @@ class PreflightOnceTests(unittest.TestCase):
         with patch.dict(os.environ, self.env(), clear=True), patch.object(once, 'context', return_value='a'*40), \
              patch.object(once, 'check_main') as main_check, \
              patch.object(once.backup, 'parameters', return_value={'safe': 'synthetic'}) as parameters, \
-             patch.object(once.backup, 'preflight') as preflight, patch.object(once.backup, 'main') as modes:
+             patch.object(once.backup, 'preflight', side_effect=self.passed_preflight) as preflight, \
+             patch.object(once.backup, 'main') as modes:
             row = once.observe()
             self.assertNotIn('DATABASE_URL', os.environ)
-        preflight.assert_called_once_with({'safe': 'synthetic'})
+        preflight.assert_called_once_with({'safe': 'synthetic'}, gates=row['gates'])
         parameters.assert_called_once_with('synthetic-not-a-secret')
         modes.assert_not_called(); self.assertEqual(main_check.call_count, 2)
         self.assertEqual(row['status'], 'PASS')
@@ -77,7 +82,7 @@ class PreflightOnceTests(unittest.TestCase):
                  patch.object(once.backup, 'parameters', side_effect=
                      ValueError('private') if stage=='credential_policy' else None), \
                  patch.object(once.backup, 'preflight', side_effect=
-                     RuntimeError('private DSN') if stage=='auth_identity_acl_rls_readonly' else None) as preflight:
+                     RuntimeError('private DSN') if stage=='auth_identity_acl_rls_readonly' else self.passed_preflight) as preflight:
                 row = once.observe()
             self.assertEqual(row['status'], 'FAIL')
             self.assertEqual(row['phase'], stage)

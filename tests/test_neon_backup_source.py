@@ -17,7 +17,7 @@ def evidence():
     return dict(session=['neondb', 'neondb_owner', 'neondb_owner', 'on'], version=18,
                 identity=[[k, v, c, 'configuration file', v, False]
                           for k, (v, c) in backup.IDENTITY.items()],
-                denied_schemas=0, denied_tables=0, denied_sequences=0, denied_largeobjects=0)
+                denied_schemas=0, denied_tables=0, denied_sequences=0, denied_largeobjects=0, denied_rls=0)
 
 
 class BackupSourceTests(unittest.TestCase):
@@ -53,7 +53,7 @@ class BackupSourceTests(unittest.TestCase):
 
     def test_exact_server_identity_and_all_privileges_required(self):
         rows = []
-        for key in ('denied_schemas', 'denied_tables', 'denied_sequences', 'denied_largeobjects'):
+        for key in ('denied_schemas', 'denied_tables', 'denied_sequences', 'denied_largeobjects', 'denied_rls'):
             for value in (1, None, False):
                 row = evidence(); row[key] = value; rows.append(row)
         for i in range(3):
@@ -112,7 +112,7 @@ class BackupSourceTests(unittest.TestCase):
                  self.assertRaises(SystemExit) as stopped:
                 backup.entrypoint()
             self.assertEqual(stopped.exception.code, 2)
-            self.assertEqual(err.getvalue(), 'BACKUP_SOURCE_REFUSED\n')
+            self.assertEqual(err.getvalue(), 'BACKUP_SOURCE_REFUSED:TOOL_FAILED\n')
 
     def test_timeout_removes_only_the_named_container(self):
         with patch.dict(os.environ, {}, clear=True):

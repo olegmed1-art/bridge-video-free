@@ -37,12 +37,12 @@ def check_main():
     # Public source metadata only; no auth/secret is sent to this URL.
     with urlopen('https://api.github.com/repos/' + REPOSITORY + '/git/ref/heads/main', timeout=10) as response:
         data = json.load(response)
-    backup.require(data['object']['sha'] == MAIN)
+    backup.require(data['object']['sha'] == MAIN, 'SOURCE_DRIFT')
 
 
 def observe():
     start = time.monotonic()
-    receipt = dict(schema='backup-source-preflight-receipt-v1', status='FAIL',
+    receipt = dict(schema='backup-source-preflight-receipt-v2', status='FAIL', failure_code='TOOL_FAILED',
                    phase='context', source_sha=None, run_id=None, attempt=1,
                    expected_identity=dict(project=backup.IDENTITY['neon.project_id'][0],
                        branch=backup.IDENTITY['neon.branch_id'][0],
@@ -62,15 +62,24 @@ def observe():
         receipt['phase'] = 'credential_policy'
         pg = backup.parameters(os.environ.pop('DATABASE_URL', ''))
         receipt['phase'] = 'auth_identity_acl_rls_readonly'
-        backup.preflight(pg)  # One psql invocation; catalog SELECT in BEGIN READ ONLY / ROLLBACK.
-        receipt['gates'] = {key: 'PASS' for key in receipt['gates']}
+        backup.preflight(pg, gates=receipt['gates'])  # One psql invocation; no retry.
         receipt['phase'] = 'main_after'
         check_main()
         receipt['phase'] = 'complete'
         receipt['status'] = 'PASS'
-    except BaseException:
+        receipt['failure_code'] = 'NONE'
+    except BaseException as exc:
         # Failure never claims an unevaluated gate passed, nor reveals client errors.
-        pass
+        phase = receipt['phase']
+        if phase == 'context':
+            receipt['failure_code'] = 'CONTEXT_REFUSED'
+        elif phase == 'credential_policy':
+            receipt['failure_code'] = 'URI_POLICY_REFUSED'
+        elif phase in ('main_before', 'main_after'):
+            receipt['failure_code'] = ('SOURCE_DRIFT' if isinstance(exc, backup.BackupFailure)
+                                       and exc.code == 'SOURCE_DRIFT' else 'SOURCE_CHECK_FAILED')
+        elif isinstance(exc, backup.BackupFailure) and exc.code in backup.FAILURE_CODES:
+            receipt['failure_code'] = exc.code
     receipt['elapsed_ms'] = int((time.monotonic() - start) * 1000)
     receipt['observed_at_utc'] = datetime.now(timezone.utc).isoformat()
     return receipt

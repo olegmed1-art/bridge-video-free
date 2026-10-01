@@ -5,6 +5,7 @@ No grants, role changes, production writes, or credential fallback are made.
 """
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -33,11 +34,14 @@ SELECT json_build_object(
    WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'
      AND NOT has_schema_privilege(oid,'USAGE')),
  'denied_tables', (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-   WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' AND c.relkind IN ('r','p','m')
-     AND (NOT has_table_privilege(c.oid,'SELECT') OR row_security_active(c.oid))),
+   WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+     AND CASE WHEN c.relkind IN ('r','p','m') THEN NOT has_table_privilege(c.oid,'SELECT') ELSE false END),
+ 'denied_rls', (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+     AND CASE WHEN c.relkind IN ('r','p','m') THEN row_security_active(c.oid) ELSE false END),
  'denied_sequences', (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-   WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' AND c.relkind='S'
-     AND NOT has_sequence_privilege(c.oid,'SELECT')),
+   WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+     AND CASE WHEN c.relkind='S' THEN NOT has_sequence_privilege(c.oid,'SELECT') ELSE false END),
  'denied_largeobjects', (SELECT count(*) FROM pg_largeobject_metadata
      WHERE NOT has_largeobject_privilege(oid,'SELECT'))
 );
@@ -51,9 +55,75 @@ STATS = """SELECT
 """
 
 
-def require(value):
+FAILURE_CODES = frozenset({
+    'CONTRACT_REFUSED', 'AUTHENTICATION_FAILED', 'TLS_FAILED', 'NETWORK_FAILED',
+    'CONNECT_TIMEOUT', 'STATEMENT_TIMEOUT', 'LOCK_TIMEOUT', 'CLIENT_TIMEOUT',
+    'CLIENT_TIMEOUT_CLEANUP_FAILED', 'TOOL_FAILED', 'SQL_FAILED', 'ACL_DENIED',
+    'RLS_ACTIVE', 'IDENTITY_MISMATCH', 'READ_ONLY_REFUSED', 'OUTPUT_INVALID',
+    'URI_POLICY_REFUSED', 'CONTEXT_REFUSED', 'SOURCE_DRIFT', 'SOURCE_CHECK_FAILED',
+})
+
+
+class BackupFailure(ValueError):
+    def __init__(self, code):
+        self.code = code if code in FAILURE_CODES else 'TOOL_FAILED'
+        super().__init__(self.code)
+
+
+def require(value, code='CONTRACT_REFUSED'):
     if not value:
-        raise ValueError('BACKUP_SOURCE_REFUSED')
+        raise BackupFailure(code)
+
+
+def classify_client_failure(returncode, stderr):
+    """Inspect captured English diagnostics in memory; return ONLY a fixed code.
+
+    Codes describe the client-reported failure, not a proven root cause. Never
+    emit matched substrings, SQLSTATEs, stdout, stderr or exception messages.
+    """
+    if returncode in (125, 126, 127) or returncode < 0:
+        return 'TOOL_FAILED'
+    message = stderr.lower() if isinstance(stderr, str) else ''
+    # psql VERBOSITY=verbose enables structured SQLSTATE prefixes for SQL errors.
+    diagnostics = re.findall(r'(?:error|fatal):\s+([0-9a-z]{5}):\s*([^\r\n]*)', message)
+    if diagnostics:
+        state, primary = diagnostics[0]
+        if state in ('28p01', '28000'):
+            return 'AUTHENTICATION_FAILED'
+        if state == '57014' and primary.startswith('canceling statement due to statement timeout'):
+            return 'STATEMENT_TIMEOUT'
+        if state == '55p03' and primary.startswith('canceling statement due to lock timeout'):
+            return 'LOCK_TIMEOUT'
+        if state == '42501':
+            return ('RLS_ACTIVE' if primary.startswith(('query would be affected by row-level security',
+                    'new row violates row-level security')) else 'ACL_DENIED')
+        if state == '25006':
+            return 'READ_ONLY_REFUSED'
+        return 'SQL_FAILED'
+    if any(x in message for x in
+            ('password authentication failed', 'no password supplied', 'authentication failed')):
+        return 'AUTHENTICATION_FAILED'
+    if any(x in message for x in ('certificate verify failed', 'root certificate file',
+           'server certificate', 'ssl error', 'tls error', 'does not support ssl',
+           'channel binding required', 'channel binding is required')):
+        return 'TLS_FAILED'
+    if 'canceling statement due to statement timeout' in message:
+        return 'STATEMENT_TIMEOUT'
+    if 'canceling statement due to lock timeout' in message:
+        return 'LOCK_TIMEOUT'
+    if 'timeout expired' in message or 'connection timed out' in message:
+        return 'CONNECT_TIMEOUT'
+    if any(x in message for x in ('could not translate host name', 'connection refused',
+           'network is unreachable', 'no route to host', 'could not resolve hostname',
+           'server closed the connection unexpectedly', 'connection reset by peer')):
+        return 'NETWORK_FAILED'
+    if 'row-level security' in message or 'row level security' in message:
+        return 'RLS_ACTIVE'
+    if 'permission denied for' in message:
+        return 'ACL_DENIED'
+    if returncode == 3:  # psql ON_ERROR_STOP script failure
+        return 'SQL_FAILED'
+    return 'TOOL_FAILED'
 
 
 def parameters(raw):
@@ -84,7 +154,7 @@ def parameters(raw):
 
 def client(pg, args, *, sql=None, dump=False):
     name = 'neon-backup-' + uuid.uuid4().hex
-    command = ['docker', 'run', '--rm', '--name', name, '-i',
+    command = ['docker', 'run', '--rm', '--name', name, '-i', '-e', 'LC_ALL=C',
                '--mount', 'type=bind,source=/etc/ssl/certs/ca-certificates.crt,target=/backup-ca.crt,readonly']
     for key in pg:
         command.extend(['-e', key])  # Values never enter argv or output.
@@ -99,24 +169,53 @@ def client(pg, args, *, sql=None, dump=False):
                                 env={**env, **pg}, timeout=660 if dump else 45)
     except subprocess.TimeoutExpired:
         # Killing the Docker CLI alone does not stop the daemon's container.
-        subprocess.run(['docker', 'rm', '-f', name], capture_output=True, env=env, timeout=15)
-        raise ValueError('BACKUP_SOURCE_REFUSED') from None
-    require(result.returncode == 0)
+        try:
+            cleanup = subprocess.run(['docker', 'rm', '-f', name], capture_output=True, env=env, timeout=15)
+            require(cleanup.returncode == 0, 'CLIENT_TIMEOUT_CLEANUP_FAILED')
+        except (OSError, subprocess.TimeoutExpired):
+            raise BackupFailure('CLIENT_TIMEOUT_CLEANUP_FAILED') from None
+        raise BackupFailure('CLIENT_TIMEOUT') from None
+    except (OSError, UnicodeError):
+        raise BackupFailure('TOOL_FAILED') from None
+    if result.returncode != 0:
+        raise BackupFailure(classify_client_failure(result.returncode, result.stderr))
     return result.stdout.strip()
 
 
-def preflight(pg):
-    row = json.loads(client(pg, ['psql', '-XqAt', '-v', 'ON_ERROR_STOP=1'], sql=PREFLIGHT))
-    require(row.get('session') == ['neondb', 'neondb_owner', 'neondb_owner', 'on'])
-    require(row.get('version') == 18)
+def preflight(pg, *, gates=None):
+    payload = client(pg, ['psql', '-XqAt', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=verbose'], sql=PREFLIGHT)
+    try:
+        row = json.loads(payload)
+    except (ValueError, TypeError):
+        raise BackupFailure('OUTPUT_INVALID') from None
+    require(type(row) is dict, 'OUTPUT_INVALID')
+    session = row.get('session')
+    require(type(session) is list and len(session) == 4, 'OUTPUT_INVALID')
+    require(session[:3] == ['neondb', 'neondb_owner', 'neondb_owner'], 'IDENTITY_MISMATCH')
+    if gates is not None:
+        gates['auth'] = 'PASS'
+    require(session[3] == 'on', 'READ_ONLY_REFUSED')
+    if gates is not None:
+        gates['readonly'] = 'PASS'
+    require(type(row.get('version')) is int and row['version'] == 18, 'IDENTITY_MISMATCH')
     tags = row.get('identity')
-    require(isinstance(tags, list) and len(tags) == 3)
-    require({r[0] for r in tags} == set(IDENTITY))
+    require(type(tags) is list and len(tags) == 3, 'IDENTITY_MISMATCH')
+    require(all(type(r) is list and len(r) == 6 and type(r[0]) is str for r in tags), 'OUTPUT_INVALID')
+    require({r[0] for r in tags} == set(IDENTITY), 'IDENTITY_MISMATCH')
     for name, setting, context, source, reset, pending in tags:
         require((setting, context) == IDENTITY[name] and source == 'configuration file'
-                and reset == setting and pending is False)
+                and reset == setting and pending is False, 'IDENTITY_MISMATCH')
+    if gates is not None:
+        gates['identity'] = 'PASS'
     for key in ('denied_schemas', 'denied_tables', 'denied_sequences', 'denied_largeobjects'):
-        require(type(row.get(key)) is int and row[key] == 0)
+        require(type(row.get(key)) is int and row[key] >= 0, 'OUTPUT_INVALID')
+        require(row[key] == 0, 'ACL_DENIED')
+    if gates is not None:
+        gates['acl'] = 'PASS'
+    require(type(row.get('denied_rls')) is int and row['denied_rls'] >= 0, 'OUTPUT_INVALID')
+    require(row['denied_rls'] == 0, 'RLS_ACTIVE')
+    if gates is not None:
+        gates['rls'] = 'PASS'
 
 
 def main(mode):
@@ -138,9 +237,10 @@ def entrypoint():
     try:
         require(len(sys.argv) == 2)
         main(sys.argv[1])
-    except BaseException:
+    except BaseException as exc:
         # libpq/subprocess/URI exceptions may contain private connection material.
-        print('BACKUP_SOURCE_REFUSED', file=sys.stderr)
+        code = exc.code if isinstance(exc, BackupFailure) and exc.code in FAILURE_CODES else 'TOOL_FAILED'
+        print('BACKUP_SOURCE_REFUSED:' + code, file=sys.stderr)
         raise SystemExit(2) from None
 
 
