@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=019e7458-6a36-4700-ba6d-3f4c2eb4ed1c
+dispatch_epoch=26
+role=VIDEO_QUEUE
+task_fingerprint=d4cbd0902dd47de198aa73a3371c4fdd9e5e62d5aabf3d7689d3d4dda8ebe373
+target_pr=1059
+mode=REPAIR
+repair_attempt=1
+origin_task_id=76a8ee52-0837-44f3-b888-da46380225b7
+prior_task_id=76a8ee52-0837-44f3-b888-da46380225b7
+blocked_result_code=P1_DATABASE_NULL_FIELD_BYPASS
+blocked_summary=Exact live head verified; SQL NULL comparisons still allow selectively missing terminal fields before REVIEW_READY.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
