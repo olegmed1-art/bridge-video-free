@@ -1,0 +1,42 @@
+name: Autopilot design contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/autopilot-contract.yml'
+      - 'docs/architecture/SCHOOL_AUTOPILOT_CONTROLLER_V1.md'
+      - 'docs/security/SCHOOL_AUTOPILOT_THREAT_MODEL_V1.md'
+      - 'ops/autopilot/**'
+      - 'tests/test_autopilot_task_kind_contract.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/autopilot-contract.yml'
+      - 'docs/architecture/SCHOOL_AUTOPILOT_CONTROLLER_V1.md'
+      - 'docs/security/SCHOOL_AUTOPILOT_THREAT_MODEL_V1.md'
+      - 'ops/autopilot/**'
+      - 'tests/test_autopilot_task_kind_contract.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate task-kind contracts
+        run: python ops/autopilot/validate_task_kinds.py
+      - name: Run contract regression tests
+        run: python -m unittest discover -s tests -p 'test_autopilot_task_kind_contract.py' -v
+      - name: Verify design remains explicitly inactive
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'DESIGN APPROVED / NOT ACTIVATED' docs/architecture/SCHOOL_AUTOPILOT_CONTROLLER_V1.md >/dev/null
+          grep -F 'AUTOPILOT_ENABLED=false' docs/architecture/SCHOOL_AUTOPILOT_CONTROLLER_V1.md >/dev/null
+          grep -F 'no auto-merge before proven `main` protection' ops/autopilot/README.md >/dev/null
