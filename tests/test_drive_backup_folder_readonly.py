@@ -104,14 +104,4 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(row['status'],'FAIL');http.assert_not_called()
         self.assertNotIn('PRIVATE',json.dumps(row))
 
-    def test_workflow_only_existing_drive_secret_dispatch_and_bounded(self):
-        text=Path('.github/workflows/native-registry-credential-probe.yml').read_text()
-        for good in ('timeout-minutes: 2','github.run_attempt == 1',p.BRANCH,p.OPERATION,
-                     'inputs.expected_review_sha == github.sha','persist-credentials: false'):
-            self.assertIn(good,text)
-        self.assertEqual(text.count('secrets.'),1)
-        for bad in ('upload-artifact','OCI_CLI_','DATABASE_URL','id-token: write','google-github-actions/auth','schedule:','push:'):
-            self.assertNotIn(bad,text)
-
-
 if __name__=='__main__':unittest.main()

@@ -136,6 +136,7 @@ def observe(http,packed,receipt):
     receipt['gates']['parent_owner_only']='PASS'
     receipt['phase']='main_after'; need(http.call(MAIN_URL)['object']['sha']==MAIN)
     receipt.update(status='PASS',phase='complete',failure_code='NONE')
+    return token,user['permissionId']
 
 
 def run():
