@@ -94,7 +94,7 @@ class ReconcileTests(unittest.TestCase):
         self.assertNotIn('PRIVATE',json.dumps(row));self.assertFalse(row['uploads'])
 
     def test_workflow_one_secret_two_minutes_no_write_entrypoint(self):
-        text=Path('.github/workflows/native-registry-credential-probe.yml').read_text()
+        text=Path('tests/fixtures/drive-reconcile-workflow.yml').read_text()
         for good in (p.BRANCH,p.OPERATION,'timeout-minutes: 2','github.run_attempt == 1','95s python -m ops.drive_copy_reconcile_readonly','persist-credentials: false'):
             self.assertIn(good,text)
         self.assertEqual(text.count('secrets.'),1)

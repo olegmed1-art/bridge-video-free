@@ -64,13 +64,24 @@ def source_bytes(client,deadline):
         response.data.close()
 
 
+class SessionURLRefused(ro.Refused):
+    def __init__(self,code):self.code=code
+
+
 def session_url(url):
-    need(isinstance(url,str) and len(url)<8192)
-    parts=urlsplit(url); query=parse_qs(parts.query,keep_blank_values=True,strict_parsing=True)
-    need(parts.scheme=='https' and parts.netloc=='www.googleapis.com'
-         and parts.path=='/upload/drive/v3/files' and not parts.fragment
-         and set(query)=={'uploadType','upload_id'} and query['uploadType']==['resumable']
-         and len(query['upload_id'])==1 and re.fullmatch('[A-Za-z0-9_-]{1,4096}',query['upload_id'][0]))
+    def require(value,code):
+        if not value:raise SessionURLRefused(code)
+    require(isinstance(url,str) and 0<len(url)<8192,'MISSING_OR_LENGTH')
+    require(not any(ord(ch)<=32 or ord(ch)==127 for ch in url),'CONTROL_OR_SPACE')
+    try:
+        parts=urlsplit(url);query=parse_qs(parts.query,keep_blank_values=True,strict_parsing=True)
+    except ValueError:
+        raise SessionURLRefused('MALFORMED') from None
+    require(parts.scheme=='https' and parts.netloc=='www.googleapis.com','ORIGIN')
+    require(parts.path=='/upload/drive/v3/files' and not parts.fragment,'PATH_OR_FRAGMENT')
+    require(set(query)=={'uploadType','upload_id'},'QUERY_KEYS')
+    require(query['uploadType']==['resumable'],'UPLOAD_TYPE')
+    require(len(query['upload_id'])==1 and re.fullmatch('[A-Za-z0-9_-]{1,4096}',query['upload_id'][0]),'UPLOAD_ID_FORMAT')
     return url
 
 
@@ -114,13 +125,14 @@ class Drive(ro.Http):
     def create(self,token,cipher,receipt):
         receipt.update(create_stage='LOCAL_CHECK',http_status=None,failure_class='NONE',
                        initiation_accepted=False,session_validated=False,put_attempted=False,
-                       final_response_accepted=False)
+                       final_response_accepted=False,session_validation_failure='NONE')
         try:
             self._create(token,cipher,receipt)
         except BaseException as exc:
             if isinstance(exc,HTTPError):
                 receipt['http_status']=exc.code if type(exc.code) is int and 100<=exc.code<=599 else None
             receipt['failure_class']=failure_class(exc)
+            if isinstance(exc,SessionURLRefused):receipt['session_validation_failure']=exc.code
             raise
 
     def _create(self,token,cipher,receipt):
@@ -219,13 +231,13 @@ def transfer(client,http,packed,row):
     row.update(status='PASS',phase='complete',second_copy_verified=True)
 
 
-def context():
+def context(*,branch=BRANCH,operation=OPERATION):
     sha=os.environ.get('EXPECTED_REVIEW',''); need(re.fullmatch('[0-9a-f]{40}',sha))
-    exact=dict(GITHUB_REPOSITORY=ro.REPO,GITHUB_REF='refs/heads/'+BRANCH,GITHUB_EVENT_NAME='workflow_dispatch',
+    exact=dict(GITHUB_REPOSITORY=ro.REPO,GITHUB_REF='refs/heads/'+branch,GITHUB_EVENT_NAME='workflow_dispatch',
         GITHUB_ACTOR='olegmed1-art',GITHUB_TRIGGERING_ACTOR='olegmed1-art',GITHUB_RUN_ATTEMPT='1',
-        GITHUB_SHA=sha,GITHUB_WORKFLOW_SHA=sha,EXPECTED_MAIN=ro.MAIN,COPY_OPERATION=OPERATION,
-        COPY_APPROVAL=OPERATION+':'+sha+':one-create-approved',GITHUB_WORKFLOW_REF=ro.REPO+
-        '/.github/workflows/native-registry-credential-probe.yml@refs/heads/'+BRANCH)
+        GITHUB_SHA=sha,GITHUB_WORKFLOW_SHA=sha,EXPECTED_MAIN=ro.MAIN,COPY_OPERATION=operation,
+        COPY_APPROVAL=operation+':'+sha+':one-create-approved',GITHUB_WORKFLOW_REF=ro.REPO+
+        '/.github/workflows/native-registry-credential-probe.yml@refs/heads/'+branch)
     need(all(os.environ.get(k)==v for k,v in exact.items()))
     need(re.fullmatch('[0-9]+',os.environ.get('GITHUB_RUN_ID','')))
     result=subprocess.run(['git','rev-parse','HEAD'],capture_output=True,text=True,timeout=5,
@@ -236,7 +248,7 @@ def context():
     return sha,min(240,end-wall-15,285-(wall-start))
 
 
-def run():
+def run(*,context_fn=None,transfer_fn=None,drive_factory=None):
     packed=os.environ.pop('GOOGLE_DRIVE_OAUTH_JSON','')
     credentials={key:os.environ.pop(key,'') for key in ('OCI_CLI_'+x for x in ('USER','TENANCY','FINGERPRINT','KEY_CONTENT','REGION'))}
     row=dict(schema='drive-existing-ciphertext-copy-v1',status='FAIL',phase='context',source_sha=None,
@@ -246,13 +258,13 @@ def run():
         production_access=False,new_grants=False,permission_changes=False,remote_delete=False,
         plaintext=False,local_files=False)
     try:
-        row['source_sha'],seconds=context(); need(seconds>0)
+        row['source_sha'],seconds=(context_fn or context)(); need(seconds>0)
         def expired(*args): raise ro.Refused()
         signal.signal(signal.SIGALRM,expired); signal.signal(signal.SIGTERM,expired)
         signal.setitimer(signal.ITIMER_REAL,seconds)
         config,key=credential_config(credentials); credentials.clear()
         client=make_client(config,key)
-        transfer(client,Drive(time.monotonic()+seconds),packed,row)
+        (transfer_fn or transfer)(client,(drive_factory or Drive)(time.monotonic()+seconds),packed,row)
     except BaseException:
         row['status']='FAIL'
     finally:

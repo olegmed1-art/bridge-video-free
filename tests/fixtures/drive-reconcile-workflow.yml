@@ -1,0 +1,51 @@
+name: Exact Drive copy reconciliation READ ONLY
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        required: true
+        type: string
+      expected_review_sha:
+        required: true
+        type: string
+      operation:
+        description: DRIVE_EXACT_COPY_RECONCILE_READONLY_V1
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: drive-copy-exact-readonly-reconcile
+  cancel-in-progress: false
+jobs:
+  reconcile:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/test/drive-copy-reconcile-20261001' &&
+      github.event_name == 'workflow_dispatch' && github.actor == 'olegmed1-art' &&
+      github.triggering_actor == 'olegmed1-art' && github.run_attempt == 1 &&
+      inputs.expected_review_sha == github.sha &&
+      inputs.expected_main_sha == '1440920191e1778fb9a9ba24e6701937a1a7459c' &&
+      inputs.operation == 'DRIVE_EXACT_COPY_RECONCILE_READONLY_V1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Offline tests without credentials
+        run: |
+          python -m unittest discover -s tests -p 'test_drive_backup*.py'
+          python -m unittest discover -s tests -p 'test_drive_copy_reconcile_readonly.py'
+      - name: Original OAuth exact file read only
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
+          EXPECTED_REVIEW: ${{ inputs.expected_review_sha }}
+          RECONCILE_OPERATION: ${{ inputs.operation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ulimit -c 0
+          timeout --signal=TERM --kill-after=5s 95s python -m ops.drive_copy_reconcile_readonly
