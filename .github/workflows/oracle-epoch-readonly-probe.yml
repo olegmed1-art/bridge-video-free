@@ -1,10 +1,10 @@
-name: OCI exact backup bucket metadata review-only harness
+name: OCI backup bucket review harness
 
 on:
   workflow_dispatch:
     inputs:
       source_run_id:
-        description: 'Review gate: oci-backup-bucket-metadata-v1:<exact reviewed 40-character commit SHA>'
+        description: 'Exact reviewed mode gate; write probe requires separate policy review and one-write approval'
         required: true
         type: string
 
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: oci-readonly-inventory-review
+  group: oracle-light-backup-mutation
   cancel-in-progress: false
 
 jobs:
@@ -23,7 +23,8 @@ jobs:
       github.actor == 'olegmed1-art' &&
       github.triggering_actor == 'olegmed1-art' &&
       github.ref == 'refs/heads/review/oci-readonly-inventory-20261001' &&
-      inputs.source_run_id == format('oci-backup-bucket-metadata-v1:{0}', github.sha)
+      (inputs.source_run_id == format('oci-backup-bucket-metadata-v1:{0}', github.sha) ||
+       inputs.source_run_id == format('oci-backup-write-probe-v1:{0}:policies-reviewed:one-write-approved', github.sha))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -34,7 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$REVIEW_GATE" == "oci-backup-bucket-metadata-v1:$GITHUB_SHA" ]]
+          [[ "$REVIEW_GATE" == "oci-backup-bucket-metadata-v1:$GITHUB_SHA" || "$REVIEW_GATE" == "oci-backup-write-probe-v1:$GITHUB_SHA:policies-reviewed:one-write-approved" ]]
           [[ "$GITHUB_WORKFLOW_SHA" == "$GITHUB_SHA" ]]
           [[ "$GITHUB_WORKFLOW_REF" == 'olegmed1-art/bridge-video-free/.github/workflows/oracle-epoch-readonly-probe.yml@refs/heads/review/oci-readonly-inventory-20261001' ]]
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -45,6 +46,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_oci_readonly_inventory*.py'
           python -m unittest discover -s tests -p 'test_oci_backup_bucket_metadata.py'
+          python -m unittest discover -s tests -p 'test_oci_backup_write_probe.py'
       - name: Install pinned SDK without OCI credentials
         run: timeout 60s python -m pip install --disable-pip-version-check --quiet 'oci==2.187.1'
       - name: Construct real SDK clients with synthetic key and network blocked
@@ -52,6 +54,7 @@ jobs:
           python -c "import oci; assert oci.__version__ == '2.187.1'"
           python -m unittest discover -s tests -p 'test_oci_readonly_inventory_sdk.py'
       - name: GET metadata of the one owner-authorized backup bucket
+        if: inputs.source_run_id == format('oci-backup-bucket-metadata-v1:{0}', github.sha)
         env:
           OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
           OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
@@ -59,3 +62,13 @@ jobs:
           OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
           OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
         run: python -m ops.oci_backup_bucket_metadata
+      - name: Separately approved one-object synthetic write and readback
+        if: inputs.source_run_id == format('oci-backup-write-probe-v1:{0}:policies-reviewed:one-write-approved', github.sha)
+        env:
+          WRITE_GATE: ${{ inputs.source_run_id }}
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+        run: python -m ops.oci_backup_write_probe

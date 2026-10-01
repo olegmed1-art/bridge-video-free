@@ -51,6 +51,18 @@ class WorkflowContract(unittest.TestCase):
         self.assertIn('run: python -m ops.oci_backup_bucket_metadata', self.text)
         self.assertNotIn('run: python ops/oci_readonly_inventory.py', self.text)
 
+    def test_write_mode_cannot_run_with_readonly_gate(self):
+        read_gate = "inputs.source_run_id == format('oci-backup-bucket-metadata-v1:{0}', github.sha)"
+        write_gate = "inputs.source_run_id == format('oci-backup-write-probe-v1:{0}:policies-reviewed:one-write-approved', github.sha)"
+        read_step = self.text.split('      - name: GET metadata', 1)[1].split('      - name:', 1)[0]
+        write_step = self.text.split('      - name: Separately approved', 1)[1]
+        self.assertIn('if: ' + read_gate, read_step)
+        self.assertIn('if: ' + write_gate, write_step)
+        self.assertNotIn('ops.oci_backup_write_probe', read_step)
+        self.assertIn('WRITE_GATE: ${{ inputs.source_run_id }}', write_step)
+        self.assertIn('run: python -m ops.oci_backup_write_probe', write_step)
+        self.assertIn('group: oracle-light-backup-mutation', self.text)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,9 +1,11 @@
 """Real pinned SDK construction with an ephemeral synthetic key, no OCI calls."""
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
+from types import SimpleNamespace as NS
 
 from ops import oci_readonly_inventory as probe
 from ops import oci_backup_bucket_metadata as exact_bucket
+from ops import oci_backup_write_probe as write_probe
 
 try:
     import oci
@@ -53,6 +55,31 @@ class RealSdkConstruction(unittest.TestCase):
             self.assertEqual([call.kwargs['resource_path'] for call in transport.call_args_list],
                              ['/n', '/n/{namespaceName}/b/{bucketName}',
                               '/n/{namespaceName}/b/{bucketName}/l'])
+            sha = 'a' * 40
+            env = dict(GITHUB_SHA=sha, GITHUB_WORKFLOW_SHA=sha,
+                       GITHUB_REPOSITORY=write_probe.REPOSITORY, GITHUB_REF=write_probe.BRANCH,
+                       GITHUB_WORKFLOW_REF=write_probe.WORKFLOW,
+                       GITHUB_ACTOR='olegmed1-art', GITHUB_TRIGGERING_ACTOR='olegmed1-art',
+                       GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_RUN_ID='123', GITHUB_RUN_ATTEMPT='1',
+                       WRITE_GATE='oci-backup-write-probe-v1:' + sha + ':policies-reviewed:one-write-approved')
+            stream = NS(raw=NS(read=Mock(return_value=write_probe.PAYLOAD)), close=Mock())
+            responses = [NS(data='synthetic'), NS(data=NS(name=exact_bucket.BUCKET,
+                namespace='synthetic', compartment_id=probe.TENANCY, public_access_type='NoPublicAccess',
+                storage_tier='Standard', versioning='Disabled', auto_tiering='Disabled', kms_key_id=None)),
+                NS(status=200), NS(headers={'content-length': str(len(write_probe.PAYLOAD))}, data=stream)]
+            with patch.object(exact_client.base_client, 'call_api', side_effect=responses) as transport:
+                result = write_probe.run_probe(exact_client, env)
+            self.assertEqual(result['status'], 'VERIFIED')
+            self.assertEqual([call.kwargs['method'] for call in transport.call_args_list],
+                             ['GET', 'GET', 'PUT', 'GET'])
+            put = transport.call_args_list[2].kwargs
+            headers = {k.lower(): v for k, v in put['header_params'].items()}
+            self.assertEqual(headers['if-none-match'], '*')
+            self.assertEqual(put['body'], write_probe.PAYLOAD)
+            self.assertLessEqual(len(put['body']), 1024)
+            self.assertEqual(put['path_params']['objectName'], result['object_key'])
+            self.assertEqual(transport.call_args_list[3].kwargs['path_params']['objectName'], result['object_key'])
+            stream.close.assert_called_once()
 
 
 if __name__ == '__main__':
