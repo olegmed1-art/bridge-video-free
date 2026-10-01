@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=a80ab4e3-dd52-4e50-a448-8d76f49b5b78
+dispatch_epoch=11
+role=KNOWLEDGE
+task_fingerprint=7011564665a3d6bc17b513cfc261882345c3c2f2cc6ccdee4dcdbcf2ea831778
+target_pr=860
+mode=REPAIR
+repair_attempt=1
+origin_task_id=f31eaeb2-730c-48e4-8731-adb227b893dd
+prior_task_id=f31eaeb2-730c-48e4-8731-adb227b893dd
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=Outbox requires READ_ONLY on ea62e23, but assignment requires completed REPAIR on stale 1c628a4; binding rejected fail-closed.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
