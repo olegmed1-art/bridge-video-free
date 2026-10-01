@@ -36,9 +36,9 @@ class ExecutorTests(unittest.TestCase):
         self.clock=Clock();self.events=[]
     def out(self,event,**kw): self.events.append({'event':event,**kw})
     def stop(self,client,**kw):return e.ordinary_stop(client,clock=self.clock.now,sleep=self.clock.sleep,out=self.out,**kw)
-    def trial(self,client):
+    def trial(self,client,mode="trial"):
         with mock.patch.object(e,'LIVE_START_ENABLED',True):
-            return e.trial(client,clock=self.clock.now,sleep=self.clock.sleep,out=self.out)
+            return e.trial(client,mode=mode,clock=self.clock.now,sleep=self.clock.sleep,out=self.out)
 
     def test_live_start_locked_before_credentials_and_at_transport(self):
         lock=mock.patch.object(e,'LIVE_START_ENABLED',False)
@@ -119,6 +119,55 @@ class ExecutorTests(unittest.TestCase):
         c=C([])
         self.assertEqual(0,self.trial(c));self.assertEqual(['start','stop'],c.actions)
         self.assertLessEqual(self.clock.t,600)
+
+    def test_manual_console_has_absolute_600_bound_without_short_rdc_cutoff(self):
+        clock=self.clock
+        class C(Fake):
+            def state(self):
+                clock.sleep(e.HTTP_SECONDS)
+                if not self.actions:return ('stopped',True)
+                if self.actions[-1]=='stop':return ('stopped',True)
+                return ('running',False) if clock.now()-self.start_time>=400 else ('starting',False)
+            def action(self,action):
+                self.actions.append(action)
+                if action=='start':self.start_time=clock.now()
+                else:self.stop_time=clock.now()
+                clock.sleep(e.HTTP_SECONDS)
+        c=C([]);self.assertEqual(0,self.trial(c,'manual_console_trial'))
+        self.assertEqual(['start','stop'],c.actions)
+        self.assertGreater(c.stop_time-c.start_time,120)
+        self.assertGreater(c.stop_time-c.start_time,540)
+        self.assertLessEqual(c.stop_time-c.start_time,600)
+        self.assertTrue(any(x['event']=='RUNNING_MANUAL_CONSOLE_WINDOW' for x in self.events))
+        self.assertFalse(any(x['event']=='RUNNING_GUEST_WINDOW' for x in self.events))
+
+    def test_manual_console_immediate_running_uses_full_absolute_window(self):
+        class C(Fake):
+            def state(self):
+                if not self.actions:return ('stopped',True)
+                return ('stopped',True) if self.actions[-1]=='stop' else ('running',False)
+        c=C([])
+        self.assertEqual(0,self.trial(c,'manual_console_trial'))
+        self.assertEqual(['start','stop'],c.actions)
+        self.assertGreaterEqual(self.clock.t,565)
+        self.assertLessEqual(self.clock.t,600)
+
+    def test_manual_console_routes_only_with_distinct_ack(self):
+        with mock.patch.object(e,'authenticate',return_value='fake') as auth, mock.patch.object(e,'trial',return_value=0) as trial, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(3,e.main(['manual_console_trial','--ack','OWNER_APPROVED_10MIN_10USD']))
+            auth.assert_not_called()
+            self.assertEqual(0,e.main(['manual_console_trial','--ack','OWNER_APPROVED_MANUAL_CONSOLE_10MIN_10USD']))
+            self.assertEqual('manual_console_trial',trial.call_args.kwargs['mode'])
+
+    def test_manual_console_unknown_start_is_not_repeated(self):
+        c=Fake([('stopped',True),('starting',False),('stopped',True)],unknown='start')
+        self.assertEqual(0,self.trial(c,'manual_console_trial'))
+        self.assertEqual(['start','stop'],c.actions)
+
+    def test_manual_console_remains_lockable_before_auth(self):
+        with mock.patch.object(e,'LIVE_START_ENABLED',False), mock.patch.object(e,'authenticate') as auth, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(3,e.main(['manual_console_trial','--ack','OWNER_APPROVED_MANUAL_CONSOLE_10MIN_10USD']))
+            auth.assert_not_called()
 
     def test_slow_get_and_post_reserve_stop_submission_time(self):
         clock=self.clock
@@ -232,8 +281,13 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("inputs.mode == 'trial_stop' && 'ibm-vpc-independent-stop'",s)
         self.assertNotIn("false && github.event_name == 'workflow_dispatch'",s)
         self.assertTrue(e.LIVE_START_ENABLED)
-        start=s.split('  trial-start:')[1].split('  trial-stop:')[0]
+        start=s.split('  trial-start:')[1].split('  manual-console-trial:')[0]
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.mode == 'trial_start' && inputs.test_oracle == false && github.ref == 'refs/heads/review/ibm-trial-control-20261001'",start)
+        manual=s.split('  manual-console-trial:')[1].split('  trial-stop:')[0]
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.mode == 'manual_console_trial' && inputs.test_oracle == false && github.ref == 'refs/heads/review/ibm-trial-control-20261001'",manual)
+        self.assertIn('manual_console_trial --ack OWNER_APPROVED_MANUAL_CONSOLE_10MIN_10USD',manual)
+        self.assertIn('needs: contract',manual)
+        self.assertNotIn('ORACLE_SSH_PRIVATE_KEY',manual)
         stop=s.split('  trial-stop:')[1].split('  oracle-probe:')[0]
         self.assertNotIn('needs: trial-start',stop)
         self.assertNotIn('ORACLE_SSH_PRIVATE_KEY',stop)

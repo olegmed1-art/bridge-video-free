@@ -240,7 +240,10 @@ def ordinary_stop(client, *, clock=time.monotonic, sleep=time.sleep, out=emit, s
     return 4
 
 
-def trial(client, *, clock=time.monotonic, sleep=time.sleep, out=emit):
+def trial(client, *, mode="trial", clock=time.monotonic, sleep=time.sleep, out=emit):
+    if mode not in {"trial", "manual_console_trial"}:
+        raise ControlError("trial_mode_invalid")
+    running_limit = RUNNING_SECONDS if mode == "trial" else None
     if not LIVE_START_ENABLED:
         raise ControlError("live_start_locked")
     client.backup()
@@ -255,7 +258,7 @@ def trial(client, *, clock=time.monotonic, sleep=time.sleep, out=emit):
     reason = "window_expired"
     try:
         start_attempted = True
-        out("START_SUBMITTING", max_window_seconds=WINDOW_SECONDS, running_window_seconds=RUNNING_SECONDS)
+        out("START_SUBMITTING", mode=mode, max_window_seconds=WINDOW_SECONDS, running_window_seconds=running_limit)
         client.action("start")
         start_uncertain = False
         out("START_ACCEPTED")
@@ -270,9 +273,13 @@ def trial(client, *, clock=time.monotonic, sleep=time.sleep, out=emit):
             if state == "running":
                 if running_at is None:
                     running_at = clock()
-                    out("RUNNING_GUEST_WINDOW", seconds=RUNNING_SECONDS)
-                # Stop at 120 s regardless of guest success: no unsafe extension.
-                if clock() >= running_at + RUNNING_SECONDS - reserve:
+                    if running_limit is not None:
+                        out("RUNNING_GUEST_WINDOW", seconds=running_limit)
+                    else:
+                        out("RUNNING_MANUAL_CONSOLE_WINDOW", remaining_seconds=max(0, int(began + WINDOW_SECONDS - clock())))
+                # Only the explicit manual console mode omits the short RDC timer.
+                # Its absolute deadline remains anchored BEFORE the sole Start POST.
+                if running_limit is not None and clock() >= running_at + running_limit - reserve:
                     reason = "guest_window_expired"
                     break
             elif state in {"stopping", "stopped"} and running_at is not None:
@@ -296,19 +303,19 @@ def trial(client, *, clock=time.monotonic, sleep=time.sleep, out=emit):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["trial", "stop"])
+    parser.add_argument("mode", choices=["trial", "manual_console_trial", "stop"])
     parser.add_argument("--ack", required=True)
     args = parser.parse_args(argv)
-    expected = {"trial": "OWNER_APPROVED_10MIN_10USD", "stop": "ORDINARY_STOP_EXACT_IBM"}[args.mode]
+    expected = {"trial": "OWNER_APPROVED_10MIN_10USD", "manual_console_trial": "OWNER_APPROVED_MANUAL_CONSOLE_10MIN_10USD", "stop": "ORDINARY_STOP_EXACT_IBM"}[args.mode]
     if args.ack != expected:
         emit("BLOCKED", reason="ack_mismatch")
         return 3
-    if args.mode == "trial" and not LIVE_START_ENABLED:
+    if args.mode != "stop" and not LIVE_START_ENABLED:
         emit("BLOCKED", reason="live_start_locked")
         return 3  # before credentials/auth/network
     try:
         client = Client(authenticate())
-        return trial(client) if args.mode == "trial" else ordinary_stop(client, start_uncertain=True)
+        return trial(client, mode=args.mode) if args.mode != "stop" else ordinary_stop(client, start_uncertain=True)
     except ControlError as exc:
         emit("BLOCKED", reason=str(exc))
         return 3

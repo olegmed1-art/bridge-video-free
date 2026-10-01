@@ -6,7 +6,46 @@ Owner accepted old-workload risk and a $10 limit. Parent accepted the base price
 and explicitly authorized removal of the two temporary preparation locks only.
 `LIVE_START_ENABLED=True`; workflow remains manual, mode- and branch-scoped.
 Live dispatch is NOT authorized in this preparation turn. Parent coordinates it.
-No operational invocation or real IBM API call was performed during preparation.
+No operational invocation is authorized as part of this code preparation.
+
+## Explicit second window: manual console trial (owner approval 09:07:14 UTC)
+
+Owner separately approved a second single window for personal serial-console
+diagnosis, at most 10 minutes with the same $10 budget and accepted old-work risk.
+This does not extend the earlier short RDC trial. That first trial ended with
+three STOPPED observations by 08:51:46 UTC in run 36838730063; RDC never connected.
+
+New exact dispatch inputs on this review branch:
+`mode=manual_console_trial`, `test_oracle=false`, workflow
+`ibm-vpc-power-probe.yml`. CLI mode has a distinct acknowledgement
+`OWNER_APPROVED_MANUAL_CONSOLE_10MIN_10USD`. No dispatch is performed in this turn.
+
+This mode uses the SAME target, backup, stopped/startable, IAM and >=900-second TTL
+guards and one Start/ordinary Stop semantics. It omits ONLY the 120-second RDC
+cutoff. The absolute clock still starts before Start POST; boot time consumes the
+600-second budget. Polling crosses the 565-second containment threshold with the
+same 35-second I/O reserve. The ordinary Stop request is bounded by 600 seconds
+under the existing process/network assumptions; actual shutdown can take longer.
+No time or budget reset at RUNNING, console connection or RDC arrival.
+
+The owner opens the existing serial console personally. Unknown password, denied
+rights, work activity or loss of observation => parent immediately dispatches
+`mode=trial_stop`, `test_oracle=false` on the same ref. No password/role creation,
+key/IAM changes, guest service changes, forced console takeover or force Stop.
+The executor does not infer console success or RDC success. RDC may be passively
+observed; its absence alone does not terminate a usable owner-console session.
+The old six-service-stop instructions below apply ONLY to the earlier RDC trial,
+not to this read-only manual-console diagnosis window.
+
+Independent Stop remains a separate dispatch with its own concurrency and contract
+job. Parent must keep its proven browser dispatch route available throughout. For
+this separately approved manual mode, the earlier t=300 supervision instruction
+does not apply: parent dispatches on completion/refusal immediately and at t=540
+at the latest if still active, while the main timer independently contains before
+t=600. Neither GitHub scheduling nor a hard billing cap is guaranteed; queued Stop
+requires prompt ordinary Stop in the IBM Cloud instance management UI (not a guest
+shell command requiring the unavailable login), not waiting past the deadline.
+No new infrastructure or automation is provisioned.
 
 ## Implemented existing control channels
 

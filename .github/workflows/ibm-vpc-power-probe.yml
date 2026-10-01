@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'status default; trial_start requires coordinated window; trial_stop is independent'
+        description: 'trial_start: short RDC; manual_console_trial: owner console <=10min; trial_stop: independent'
         type: choice
-        options: [status, trial_start, trial_stop]
+        options: [status, trial_start, manual_console_trial, trial_stop]
         default: status
       test_oracle:
         description: 'Also send one authenticated read-only request from Oracle Light'
@@ -58,6 +58,21 @@ jobs:
         env:
           IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
         run: python3 ops/ibm_trial_executor.py trial --ack OWNER_APPROVED_10MIN_10USD
+
+  manual-console-trial:
+    # Separate explicit owner-console window; never extends the short RDC trial.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'manual_console_trial' && inputs.test_oracle == false && github.ref == 'refs/heads/review/ibm-trial-control-20261001' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Owner manual serial console window with bounded ordinary Stop
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+        run: python3 ops/ibm_trial_executor.py manual_console_trial --ack OWNER_APPROVED_MANUAL_CONSOLE_10MIN_10USD
 
   trial-stop:
     # Separate invocation, concurrency lane, token and direct GitHub->IBM route.
