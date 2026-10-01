@@ -68,7 +68,7 @@ class SessionURLRefused(ro.Refused):
     def __init__(self,code):self.code=code
 
 
-def session_url(url):
+def session_url(url,diagnostics=None):
     def require(value,code):
         if not value:raise SessionURLRefused(code)
     require(isinstance(url,str) and 0<len(url)<8192,'MISSING_OR_LENGTH')
@@ -79,8 +79,17 @@ def session_url(url):
         raise SessionURLRefused('MALFORMED') from None
     require(parts.scheme=='https' and parts.netloc=='www.googleapis.com','ORIGIN')
     require(parts.path=='/upload/drive/v3/files' and not parts.fragment,'PATH_OR_FRAGMENT')
-    require(set(query)=={'uploadType','upload_id'},'QUERY_KEYS')
-    require(query['uploadType']==['resumable'],'UPLOAD_TYPE')
+    known={'uploadType','upload_protocol','upload_id'}
+    if diagnostics is not None:
+        # Only predefined names/booleans/counts, never unknown names or any values.
+        diagnostics['session_query_shape']={
+            'has_uploadType':'uploadType' in query,
+            'has_upload_protocol':'upload_protocol' in query,
+            'has_upload_id':'upload_id' in query,
+            'unknown_key_count':min(len(set(query)-known),99)}
+    require(set(query) in ({'uploadType','upload_id'},{'upload_protocol','upload_id'},known),'QUERY_KEYS')
+    if 'uploadType' in query:require(query['uploadType']==['resumable'],'UPLOAD_TYPE')
+    if 'upload_protocol' in query:require(query['upload_protocol']==['resumable'],'UPLOAD_PROTOCOL')
     require(len(query['upload_id'])==1 and re.fullmatch('[A-Za-z0-9_-]{1,4096}',query['upload_id'][0]),'UPLOAD_ID_FORMAT')
     return url
 
@@ -150,7 +159,7 @@ class Drive(ro.Http):
             receipt['http_status']=response.status if type(response.status) is int else None
             need(response.status==200); receipt['initiation_accepted']=True
             receipt['create_stage']='SESSION_VALIDATION'
-            self.session=session_url(response.headers.get('Location'))
+            self.session=session_url(response.headers.get('Location'),receipt)
             receipt['session_validated']=True
         check_deadline(self.deadline)
         self.put=True

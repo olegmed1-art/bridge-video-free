@@ -105,6 +105,46 @@ class RecoveryTests(unittest.TestCase):
         with patch.object(c,'context',return_value=('sha',100)) as context:self.assertEqual(p.context(),('sha',100))
         context.assert_called_once_with(branch=p.BRANCH,operation=p.OPERATION)
 
+    def test_discovery_protocol_alias_and_consistent_dual_form(self):
+        queries=('upload_protocol=resumable&upload_id=synthetic-session',
+                 'upload_id=synthetic-session&upload_protocol=resumable',
+                 'uploadType=resumable&upload_protocol=resumable&upload_id=synthetic-session')
+        for query in queries:
+            url=c.UPLOAD+'?'+query;receipt={}
+            self.assertEqual(c.session_url(url,receipt),url)
+            self.assertTrue(receipt['session_query_shape']['has_upload_protocol'])
+            self.assertEqual(receipt['session_query_shape']['unknown_key_count'],0)
+            for status in (200,201):
+                http=self.http();row={}
+                with patch.object(c,'SIZE',len(DATA)),patch.object(c,'DIGEST',HASH),patch.object(http.opener,'open',side_effect=[response(headers={'Location':url}),response(json.dumps({'id':p.FILE_ID}).encode(),status=status)]) as call:
+                    http.create('PRIVATE_TOKEN',DATA,row)
+                self.assertEqual(call.call_args_list[1].args[0].full_url,url)
+                self.assertEqual(row['create_outcome'],'CONFIRMED')
+                self.assertNotIn('synthetic-session',json.dumps(row));self.assertNotIn('PRIVATE',json.dumps(row))
+
+    def test_protocol_query_negative_cases_preserve_security(self):
+        bad=('upload_id=synthetic',
+             'upload_protocol=raw&upload_id=synthetic',
+             'upload_protocol=Resumable&upload_id=synthetic',
+             'upload_protocol=&upload_id=synthetic',
+             'upload_protocol=resumable&upload_protocol=resumable&upload_id=synthetic',
+             'uploadType=media&upload_protocol=resumable&upload_id=synthetic',
+             'uploadType=resumable&upload_protocol=raw&upload_id=synthetic',
+             'upload_protocol=resumable&upload_id=synthetic&upload_id=second',
+             'upload_protocol=resumable&upload_id=synthetic&access_token=PRIVATE',
+             'upload_protocol=resumable&upload_id=synthetic&redirect_uri=https%3A%2F%2Fevil.example',
+             'upload_protocol=resumable&upload_id=synthetic&fields=id',
+             'upload_protocol=resumable&upload_id=synthetic&PRIVATE_UNKNOWN=PRIVATE_VALUE')
+        for query in bad:
+            receipt={}
+            with self.assertRaises(c.SessionURLRefused):c.session_url(c.UPLOAD+'?'+query,receipt)
+            self.assertNotIn('PRIVATE',json.dumps(receipt));self.assertNotIn('evil',json.dumps(receipt))
+        valid=c.UPLOAD+'?upload_protocol=resumable&upload_id=synthetic'
+        for url in (valid.replace('https:','http:'),valid.replace('www.googleapis.com','evil.example'),
+                    valid.replace('www.googleapis.com','www.googleapis.com:443'),
+                    valid.replace('/upload/','/other/'),valid+'#fragment',valid+'\n'):
+            with self.assertRaises(c.SessionURLRefused):c.session_url(url)
+
     def test_workflow_exact_new_gate_five_minutes_no_auth_change(self):
         text=Path('.github/workflows/native-registry-credential-probe.yml').read_text()
         for good in (p.BRANCH,p.OPERATION,'timeout-minutes: 5','github.run_attempt == 1',

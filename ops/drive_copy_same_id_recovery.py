@@ -5,8 +5,8 @@ from ops import drive_backup_copy_once as c
 from ops import drive_backup_folder_readonly as ro
 from ops.drive_copy_reconcile_readonly import FILE_ID
 
-BRANCH='test/drive-copy-same-id-recovery-20261001'
-OPERATION='DRIVE_SAME_ID_CIPHERTEXT_RECOVERY_V1'
+BRANCH='test/drive-session-query-compat-20261001'
+OPERATION='DRIVE_SAME_ID_QUERY_COMPAT_RECOVERY_V1'
 
 
 class SameIdDrive(c.Drive):
