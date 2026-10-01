@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=ea2421da-d3fb-4bd5-ad2d-e8a3fa697c24
+dispatch_epoch=11
+role=KNOWLEDGE
+task_fingerprint=0867f86dbdf77c8aaebf91a87c278f040fa432499f6241c07a6e78bbfe1380e4
+target_pr=860
+mode=REPAIR
+repair_attempt=1
+origin_task_id=af67cea8-21a3-4dd7-ac01-8d3f5d1d94ad
+prior_task_id=af67cea8-21a3-4dd7-ac01-8d3f5d1d94ad
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=Outbox requires READ_ONLY at 634cbe3, but assignment requires completed Canon-action REPAIR at stale 8877927; binding rejected fail closed.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
