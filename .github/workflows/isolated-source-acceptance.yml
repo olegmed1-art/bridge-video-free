@@ -1,17 +1,9 @@
 name: Reviewed isolated source acceptance
 
 on:
-  workflow_dispatch:
-    inputs:
-      approved_run:
-        description: Execute one reviewed source acceptance run within a 20-minute job
-        required: true
-        type: boolean
-        default: false
-      orchestration_sha:
-        description: Exact reviewed workflow commit SHA (source is fixed independently)
-        required: true
-        type: string
+  push:
+    branches: [review/verified-patches-20260930]
+    paths: [.github/workflows/isolated-source-acceptance.yml]
 
 permissions:
   contents: read
@@ -22,30 +14,24 @@ concurrency:
 
 jobs:
   acceptance:
-    if: ${{ inputs.approved_run && github.ref == 'refs/heads/review/verified-patches-20260930' && github.run_attempt == 1 }}
+    if: "${{ github.event_name == 'push' && github.ref == 'refs/heads/review/verified-patches-20260930' && github.event.before == '1064c13eb7dbdd71ad84134439673ec27ee46c95' && github.event.head_commit.message == 'ci: authorize one exact source acceptance 20261001' && github.run_attempt == 1 }}"
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       SOURCE_SHA: 0098446b9a79f9fdc73986312ad6fc6265b0b199
       BASELINE_SHA: 1440920191e1778fb9a9ba24e6701937a1a7459c
+      ORCHESTRATION_SHA: ${{ github.sha }}
     defaults:
       run:
         shell: bash
     steps:
-      - name: Validate reviewed orchestration identity
-        env:
-          EXPECTED: ${{ inputs.orchestration_sha }}
-          ACTUAL: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ && "$EXPECTED" == "$ACTUAL" ]]
       - name: Checkout orchestration
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           path: control
           ref: ${{ github.sha }}
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 2
           submodules: false
           lfs: false
       - name: Checkout fixed source
@@ -69,6 +55,10 @@ jobs:
       - name: Prepare credential-free exports and dependency-only image
         run: |
           set -euo pipefail
+          reviewed_parent=1064c13eb7dbdd71ad84134439673ec27ee46c95
+          [[ "$(git -C control rev-list --parents -n 1 HEAD)" == "$ORCHESTRATION_SHA $reviewed_parent" ]]
+          [[ "$(git -C control log -1 --format=%B)" == 'ci: authorize one exact source acceptance 20261001' ]]
+          [[ "$(git -C control diff --name-status "$reviewed_parent" HEAD)" == $'M\t.github/workflows/isolated-source-acceptance.yml' ]]
           [[ "$(git -C candidate rev-parse HEAD)" == "$SOURCE_SHA" ]]
           [[ "$(git -C baseline rev-parse HEAD)" == "$BASELINE_SHA" ]]
           export_dir="$RUNNER_TEMP/acceptance-source"
