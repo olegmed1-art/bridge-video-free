@@ -18,6 +18,65 @@ class ApiError(Exception):
 
 
 class BucketMetadataTests(unittest.TestCase):
+    def test_historical_scalar_formats_match_original_parser(self):
+        from ops.oci_light_access_audit import scalar as historical
+        env = self.env()
+        for field in ('tenancy', 'region', 'user', 'fingerprint'):
+            value = env['OCI_CLI_' + field.upper()]
+            forms = [value, '  ' + value + '\r\n', field + '=' + value,
+                     '[DEFAULT]\r\n' + field + '=' + value + '\r\nother=ignored\r\n',
+                     '\n# synthetic header\n  ' + field + '=' + value + '  \n\n']
+            for form in forms:
+                with self.subTest(field=field, form_kind=forms.index(form)):
+                    self.assertEqual(probe.historical_scalar(form, field), historical(form, field))
+                    updated = dict(env, **{'OCI_CLI_' + field.upper(): form})
+                    self.assertEqual(probe.credential_config(updated)[0][field], value)
+            for invalid in [field + '=', field + '=' + value + '\n' + field + '=' + value,
+                            value + '\nambiguous', 'wrongkey=' + value]:
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    historical(invalid, field)
+                with self.assertRaises(probe.StopProbe) as caught:
+                    probe.historical_scalar(invalid, field)
+                self.assertEqual(caught.exception.code, 'CREDENTIAL_' + field.upper() + '_FORMAT_INVALID')
+
+    def test_field_specific_missing_and_format_diagnostics(self):
+        for suffix in ('TENANCY', 'USER', 'FINGERPRINT', 'REGION', 'KEY_CONTENT'):
+            for value in (None, '', ' \r\n '):
+                with self.subTest(suffix=suffix, value_kind=type(value).__name__), self.assertRaises(probe.StopProbe) as caught:
+                    probe.credential_config(dict(self.env(), **{'OCI_CLI_' + suffix: value}))
+                self.assertEqual(caught.exception.code, 'CREDENTIAL_' + suffix + '_MISSING')
+        for suffix, value, code in [('USER', 'not-an-ocid', 'FORMAT_INVALID'),
+                                    ('FINGERPRINT', 'not-a-fingerprint', 'FORMAT_INVALID'),
+                                    ('KEY_CONTENT', 'PRIVATE_MARKER_NOT_PEM', 'FORMAT_UNSUPPORTED')]:
+            with self.subTest(suffix=suffix), self.assertRaises(probe.StopProbe) as caught:
+                probe.credential_config(dict(self.env(), **{'OCI_CLI_' + suffix: value}))
+            self.assertEqual(caught.exception.code, 'CREDENTIAL_' + suffix + '_' + code)
+            self.assertNotIn(value, str(caught.exception))
+
+    def test_historical_pem_newline_formats_and_outer_whitespace(self):
+        original = self.env()['OCI_CLI_KEY_CONTENT']
+        forms = [original, original.replace('\n', '\r\n'), original.replace('\n', '\\n'),
+                 original.replace('\n', '\\r\\n'), '\n  ' + original + '\n']
+        for form in forms:
+            with self.subTest(format_index=forms.index(form)):
+                self.assertEqual(probe.credential_config(dict(self.env(), OCI_CLI_KEY_CONTENT=form))[1], original)
+
+    def test_field_diagnostic_stops_before_any_sdk_or_api(self):
+        stdout = io.StringIO()
+        env = self.env()
+        del env['OCI_CLI_USER']
+        with patch.object(probe.signal, 'SIGALRM', 14, create=True), patch.object(probe.signal, 'signal'), \
+             patch.object(probe.signal, 'alarm', create=True), patch.dict(probe.os.environ, env, clear=True), \
+             patch.object(probe, 'make_client') as client, patch.object(probe, 'read_metadata') as read, \
+             patch('sys.stdout', stdout):
+            self.assertEqual(probe.main(), 2)
+        data = json.loads(stdout.getvalue())
+        self.assertEqual(data['status'], 'CREDENTIAL_USER_MISSING')
+        self.assertEqual(data['failed_stage'], 'credential_input')
+        self.assertNotIn('SECRET', stdout.getvalue())
+        client.assert_not_called()
+        read.assert_not_called()
+
     def env(self):
         return dict(OCI_CLI_TENANCY=probe.TENANCY, OCI_CLI_REGION=probe.REGION,
                     OCI_CLI_USER='ocid1.user.oc1..example', OCI_CLI_FINGERPRINT=':'.join(['ab'] * 16),
@@ -121,7 +180,7 @@ class BucketMetadataTests(unittest.TestCase):
         for key in ('OCI_CLI_TENANCY', 'OCI_CLI_REGION'):
             with self.subTest(key=key), self.assertRaises(probe.StopProbe) as raised:
                 probe.credential_config(dict(env, **{key: 'wrong'}))
-            self.assertEqual(raised.exception.code, 'TARGET_MISMATCH')
+            self.assertEqual(raised.exception.code, 'CREDENTIAL_' + key.removeprefix('OCI_CLI_') + '_TARGET_MISMATCH')
         readonly = {key.replace('OCI_CLI_', 'OCI_READONLY_CLI_'): value for key, value in env.items()}
         with self.assertRaises(probe.StopProbe):
             probe.credential_config(readonly)

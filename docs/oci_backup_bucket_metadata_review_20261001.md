@@ -76,3 +76,38 @@ YAML structure validation PASS. Independent different-model I2 review repeated a
 34 tests: PASS, no blockers. Script SHA256:
 `6884460b303ed5fab0645a80bc8928786ac1b6315a335286831849d906322fa9`.
 No live result is claimed by these tests.
+
+## Credential-format compatibility correction
+
+Owner-dispatched run 36894699163 / job 110478646297 at commit
+`a6db9ff2c01f0092387880c8a8c45c997cfdcf28` stopped with INVALID_CREDENTIAL_INPUT,
+failed_stage credential_input at 2026-10-01T16:48:45Z. SDK synthetic checks passed;
+the runtime client and OCI API reads were not reached. This does not establish that
+the owner key is invalid, or identify which field failed.
+
+Narrow source comparison with oracle-light-candidate-backup.yml and its writer:
+
+- Five individual OCI_CLI_* secrets are used, not OCI_CLI_CONFIG. Historical env
+  aliases were OCI_USER, OCI_TENANCY, OCI_FINGERPRINT, OCI_KEY, OCI_REGION. The new
+  workflow uses the same source secrets under their original names.
+- Both implementations pin the identical tenancy and eu-frankfurt-1.
+- Historical scalar accepts a raw scalar, key=value, or multiline config-like text
+  with exactly one matching nonempty key=value line, ignoring other keys. It strips
+  CR and surrounding line whitespace, and refuses ambiguity/duplicate target keys.
+- Our earlier strict scalar rejected internal newlines. This is a proven code
+  compatibility difference; whether it caused this run is unknown without inspecting
+  values, which was not done. The exact-bucket parser now matches the historical
+  selection behavior, with unchanged target restrictions and field validation.
+- PEM literal backslash-r/backslash-n and CRLF normalization is retained; outer
+  whitespace is accepted. No key decoding, hashing, length disclosure or persistence.
+
+Safe next-run diagnostics identify only a fixed field/reason, e.g.
+CREDENTIAL_USER_MISSING, CREDENTIAL_REGION_FORMAT_INVALID,
+CREDENTIAL_TENANCY_TARGET_MISMATCH, CREDENTIAL_FINGERPRINT_FORMAT_INVALID,
+CREDENTIAL_KEY_CONTENT_FORMAT_UNSUPPORTED. A format code is not a cryptographic
+validity verdict. Secret contents remain unread during preparation; no new live
+attempt is performed. Once separately approved, the next existing exact-bucket run
+will either pass parsing or name the first blocked field before SDK/API access.
+Compatibility-fix verification: 38 tests PASS without skips, including the real SDK
+synthetic-key/network-blocked test. Independent I2 review repeated all 38 tests:
+PASS, no blockers. Runtime cause remains unproven; no new live attempt.

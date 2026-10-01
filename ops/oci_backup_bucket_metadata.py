@@ -6,24 +6,52 @@ import signal
 import time
 
 from ops.oci_readonly_inventory import (
-    TENANCY, REGION, StopProbe, scalar, number, safe_text,
+    TENANCY, REGION, StopProbe, number, safe_text,
 )
 
 BUCKET = 'bridge-light-autopilot-backups'
 BUDGET_SECONDS = 120
 
 
+def field_failure(field, reason):
+    # Only fixed field labels/reasons, never values, lengths, hashes or exception text.
+    raise StopProbe('CREDENTIAL_' + field.upper() + '_' + reason, 'credential_input')
+
+
+def historical_scalar(value, field):
+    if value is None or (isinstance(value, str) and not value.strip()):
+        field_failure(field, 'MISSING')
+    if not isinstance(value, str):
+        field_failure(field, 'FORMAT_INVALID')
+    # Matches ops/oci_light_access_audit.scalar, used by the historical writer.
+    lines = [line.strip() for line in value.replace('\r', '').splitlines() if line.strip()]
+    matches = [line.split('=', 1)[1].strip() for line in lines if line.startswith(field + '=')]
+    if len(matches) == 1 and matches[0]:
+        return matches[0]
+    if not matches and len(lines) == 1 and '=' not in lines[0]:
+        return lines[0]
+    field_failure(field, 'FORMAT_INVALID')
+
+
 def credential_config(env):
-    config = {key: scalar(env.get('OCI_CLI_' + suffix), key) for key, suffix in (
+    config = {key: historical_scalar(env.get('OCI_CLI_' + suffix), key) for key, suffix in (
         ('tenancy', 'TENANCY'), ('user', 'USER'), ('fingerprint', 'FINGERPRINT'), ('region', 'REGION'))}
-    if config['tenancy'] != TENANCY or config['region'] != REGION:
-        raise StopProbe('TARGET_MISMATCH', 'credential_input')
-    if not config['user'].startswith('ocid1.user.') or not re.fullmatch(r'(?:[0-9a-fA-F]{2}:){15}[0-9a-fA-F]{2}', config['fingerprint']):
-        raise StopProbe('INVALID_CREDENTIAL_INPUT', 'credential_input')
-    key = env.get('OCI_CLI_KEY_CONTENT', '')
-    if not isinstance(key, str) or len(key) > 32768 or not key.startswith('-----BEGIN '):
-        raise StopProbe('INVALID_CREDENTIAL_INPUT', 'credential_input')
-    return config, key.replace('\\r', '').replace('\\n', '\n').replace('\r', '')
+    for field, expected in [('tenancy', TENANCY), ('region', REGION)]:
+        if config[field] != expected:
+            field_failure(field, 'TARGET_MISMATCH')
+    if not re.fullmatch(r'ocid1\.user\.[A-Za-z0-9._-]+', config['user']):
+        field_failure('user', 'FORMAT_INVALID')
+    if not re.fullmatch(r'(?:[0-9a-fA-F]{2}:){15}[0-9a-fA-F]{2}', config['fingerprint']):
+        field_failure('fingerprint', 'FORMAT_INVALID')
+    key = env.get('OCI_CLI_KEY_CONTENT')
+    if key is None or (isinstance(key, str) and not key.strip()):
+        field_failure('key_content', 'MISSING')
+    if not isinstance(key, str) or len(key) > 32768:
+        field_failure('key_content', 'FORMAT_UNSUPPORTED')
+    key = key.replace('\\r', '').replace('\\n', '\n').replace('\r', '').strip()
+    if not key.startswith('-----BEGIN '):
+        field_failure('key_content', 'FORMAT_UNSUPPORTED')
+    return config, key
 
 
 def make_client(config, key):
