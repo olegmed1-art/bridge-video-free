@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=f3f33e58-9d35-4961-bf1b-0fefa9b98d49
+dispatch_epoch=5
+role=DATA
+task_fingerprint=fa49a09c4899cfa36ae3b2670a73c53d53fa90eeb5fd50bf992d0d021de99b24
+target_pr=860
+mode=REPAIR
+repair_attempt=1
+origin_task_id=534b76ba-0499-407d-872e-d9a141476ae4
+prior_task_id=534b76ba-0499-407d-872e-d9a141476ae4
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=Outbox requires READ_ONLY on 642b6c2, but assignment requires completed activation-scope REPAIR on stale ea62e23; binding rejected fail-closed.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
