@@ -1,79 +1,55 @@
-name: Oracle epoch read-only probe
+name: OCI inventory review-only harness
 
 on:
   workflow_dispatch:
     inputs:
       source_run_id:
-        description: Historical Oracle Universal Video workflow run ID
+        description: 'Review gate: oci-readonly-inventory-v1:<exact reviewed 40-character commit SHA>'
         required: true
         type: string
-  issue_comment:
-    types: [created]
 
 permissions:
-  actions: read
   contents: read
-  issues: write
+
+concurrency:
+  group: oci-readonly-inventory-review
+  cancel-in-progress: false
 
 jobs:
-  probe:
+  inventory:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'issue_comment' &&
-       github.actor == github.repository_owner &&
-       startsWith(github.event.comment.body, '/oracle-epoch '))
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.actor == 'olegmed1-art' &&
+      github.triggering_actor == 'olegmed1-art' &&
+      github.ref == 'refs/heads/review/oci-readonly-inventory-20261001' &&
+      inputs.source_run_id == format('oci-readonly-inventory-v1:{0}', github.sha)
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
-      - name: Resolve source run
-        id: input
+      - name: Validate reviewed ref before checkout and credentials
         env:
-          DISPATCH_SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          COMMENT_COMMAND: ${{ github.event.comment.body }}
+          REVIEW_GATE: ${{ inputs.source_run_id }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            source_run_id="${DISPATCH_SOURCE_RUN_ID}"
-          else
-            source_run_id="${COMMENT_COMMAND#/oracle-epoch }"
-          fi
-          [[ "$source_run_id" =~ ^[0-9]+$ ]] || { echo 'invalid source run id' >&2; exit 2; }
-          echo "source_run_id=$source_run_id" >> "$GITHUB_OUTPUT"
-
-      - name: Classify historical epoch
-        id: epoch
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$REVIEW_GATE" == "oci-readonly-inventory-v1:$GITHUB_SHA" ]]
+          [[ "$GITHUB_WORKFLOW_SHA" == "$GITHUB_SHA" ]]
+          [[ "$GITHUB_WORKFLOW_REF" == 'olegmed1-art/bridge-video-free/.github/workflows/oracle-epoch-readonly-probe.yml@refs/heads/review/oci-readonly-inventory-20261001' ]]
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Offline safety tests before credentials
+        run: python -m unittest discover -s tests -p 'test_oci_readonly_inventory*.py'
+      - name: Install pinned SDK without OCI credentials
+        run: timeout 60s python -m pip install --disable-pip-version-check --quiet 'oci==2.187.1'
+      - name: Read only the fixed OCI root compartment
         env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN_ID: ${{ steps.input.outputs.source_run_id }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          result="$(gh api \
-            -H 'Accept: application/vnd.github+json' \
-            "/repos/$GITHUB_REPOSITORY/actions/workflows/oracle-universal-video-job.yml/runs?per_page=100" \
-            | SOURCE_RUN_ID="$SOURCE_RUN_ID" python -c 'import json,os,sys; source=int(os.environ["SOURCE_RUN_ID"]); runs=json.load(sys.stdin).get("workflow_runs",[]); row=next((r for r in runs if int(r.get("id",0))==source),None); newer=any(int(r.get("id",0))>source and r.get("event")!="pull_request" for r in runs); print("UNKNOWN" if row is None or row.get("status")!="completed" else "STALE" if newer else "CURRENT")')"
-          case "$result" in CURRENT|STALE|UNKNOWN) ;; *) result=UNKNOWN ;; esac
-          echo "state=$result" >> "$GITHUB_OUTPUT"
-          echo "read-only epoch probe: source_run_id=$SOURCE_RUN_ID state=$result"
-
-      - name: Publish evidence
-        env:
-          STATE: ${{ steps.epoch.outputs.state }}
-          SOURCE_RUN_ID: ${{ steps.input.outputs.source_run_id }}
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            echo '### Oracle epoch read-only probe'
-            echo "- source_run_id: $SOURCE_RUN_ID"
-            echo "- epoch_state: $STATE"
-            echo '- OCI credentials: none'
-            echo '- lifecycle mutation: impossible in this workflow'
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [[ "$GITHUB_EVENT_NAME" == "issue_comment" ]]; then
-            gh issue comment "${{ github.event.issue.number }}" \
-              --repo "$GITHUB_REPOSITORY" \
-              --body "[oracle-epoch evidence] source_run_id=$SOURCE_RUN_ID epoch_state=$STATE; read-only probe, no OCI credentials, no lifecycle mutation."
-          fi
+          OCI_READONLY_CLI_USER: ${{ secrets.OCI_READONLY_CLI_USER }}
+          OCI_READONLY_CLI_TENANCY: ${{ secrets.OCI_READONLY_CLI_TENANCY }}
+          OCI_READONLY_CLI_FINGERPRINT: ${{ secrets.OCI_READONLY_CLI_FINGERPRINT }}
+          OCI_READONLY_CLI_KEY_CONTENT: ${{ secrets.OCI_READONLY_CLI_KEY_CONTENT }}
+          OCI_READONLY_CLI_REGION: ${{ secrets.OCI_READONLY_CLI_REGION }}
+        run: python ops/oci_readonly_inventory.py
