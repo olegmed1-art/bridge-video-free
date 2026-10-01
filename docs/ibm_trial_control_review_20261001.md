@@ -1,11 +1,11 @@
-# IBM trial executor: review branch, LIVE START LOCKED
+# IBM trial executor: review branch, dispatch awaits coordinated window
 
 Scope: instance `02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2`, eu-de;
 API 2026-09-22. No new resources, keys, IAM roles, guest access changes or deployment.
-Owner accepted old-workload risk and a $10 limit. Parent must finish cost review
-and explicitly release Start. Code currently enforces two independent Start locks:
-`LIVE_START_ENABLED=False` and workflow trial-start `if: false && ...`.
-Start refuses BEFORE reading credentials/authentication; stop-only remains usable.
+Owner accepted old-workload risk and a $10 limit. Parent accepted the base price
+and explicitly authorized removal of the two temporary preparation locks only.
+`LIVE_START_ENABLED=True`; workflow remains manual, mode- and branch-scoped.
+Live dispatch is NOT authorized in this preparation turn. Parent coordinates it.
 No operational invocation or real IBM API call was performed during preparation.
 
 ## Implemented existing control channels
@@ -21,8 +21,7 @@ not only socket inactivity. Platforms without that timer refuse operational call
 The existing registered `.github/workflows/ibm-vpc-power-probe.yml` gains two modes
 on `review/ibm-trial-control-20261001` only; original status/test_oracle remain default:
 
-- `mode=trial_start`, `test_oracle=false`: locked pending parent release. Once
-  separately enabled, fresh exact stopped/startable and exact AVAILABLE backup
+- `mode=trial_start`, `test_oracle=false`: fresh exact stopped/startable and exact AVAILABLE backup
   checks precede one `POST .../actions` with `{"type":"start","force":false}`.
 - `mode=trial_stop`, `test_oracle=false`: separate manual workflow dispatch and
   independent `ibm-vpc-independent-stop` concurrency lane. Fresh authentication,
@@ -104,10 +103,94 @@ applicable extras. No claim of guaranteed total ceiling or zero workload risk.
 ## Validation and release
 
 Offline tests mock network, clocks and provider responses, covering separate Stop,
-STARTING, unknown POST, absent queue readback, hard Start locks, timers, 403 and
+STARTING, unknown POST, absent queue readback, retained lock mechanism, timers, 403 and
 no-secret output. A real POSIX wall-timer smoke test is skipped on local Windows
 and runs in the Ubuntu contract job before any future secret-bearing control job.
 Independent I2 review is required before publishing.
-Release requires explicit parent message and review of the narrow Start-unlock
-change; publication does not release Start. No operator provisioning is needed:
-the concrete independent channel is the existing GitHub dispatch described above.
+Parent authorized the narrow Start-unlock code change; publication does not
+authorize live dispatch during preparation. No operator provisioning is needed.
+
+## Coordinated window and division of responsibility
+
+Both dispatches use workflow `ibm-vpc-power-probe.yml`, ref
+`review/ibm-trial-control-20261001`, `test_oracle=false`. Start uses
+`mode=trial_start`; independent ordinary Stop uses `mode=trial_stop`.
+Parent verifies this reviewed branch SHA immediately before dispatch; do not
+change the branch while the window is active. Neither dispatch is run here.
+
+The GitHub Python trial process polls every 5 s. Its monotonic clock starts before
+the Start POST, and first observed RUNNING sets a second clock. The process enters
+containment using thresholds of 565 s from Start or 85 s from first RUNNING (35 s
+I/O reserve), whichever comes first; a poll/in-flight read can delay threshold
+detection. It requests ordinary Stop within 600/120 s under the bounded
+I/O assumptions. It does not wait for guest success and does not call RDC from CI.
+Stop observation is up to 180 s, with a possible final in-flight request/poll overrun;
+ordinary shutdown completion, GitHub scheduling and total bill are not hard-capped.
+Each HTTP operation has a 10 s wall deadline. Start job timeout is 16 min; Stop job
+5 min; their own preceding contract jobs each have a 5 min timeout.
+
+The parent/current interactive executor owns the independent Stop dispatch and
+the guest RDC calls. Before the live window it must have both dispatch and run/log
+observation tools callable, and arrange an active supervisor for the entire window.
+It dispatches Stop immediately on unsafe guest/activity/observer outcomes, and
+at t=300 s after START_SUBMITTING at the latest if terminal STOPPED is not confirmed.
+If that log timestamp cannot be obtained, use the earlier Start dispatch timestamp.
+This is an explicit supervised deadline, NOT an automatic independent watchdog.
+Check that the independent run actually reaches its Stop job; queued dispatch is
+not proof. GitHub scheduling has no 300 s bound. If queued/unavailable, use the
+owner's existing IBM console ordinary Stop promptly; do not wait until t=600.
+Do not cancel the primary in place of Stop or retry an uncertain mutation blindly.
+
+Tool inventory in this delegated environment exposes GitHub run/job/log reads but
+NO workflow-dispatch action. Therefore this executor can own guest RDC observation,
+but cannot promise to dispatch independent Stop here. The parent must own both
+dispatches through its previously proven route and remain active for the window;
+if that route is unavailable, do not start the coordinated trial. No new credential
+or hidden API route is introduced to compensate for this tool limitation.
+
+RDC inventory read on this preparation turn: `list_devices` succeeded; exact IBM
+device `dc66e102-a6cc-43a2-b597-1e8c2a0fe66d` Offline, Light Online.
+`start_process` and process-output tools are available, but guest reachability,
+UID/root privileges and actual service names remain unverified until IBM reconnects.
+No IBM guest command was attempted here. On reconnect the interactive executor
+uses that exact deviceId, `id -u`, and only if needed one `sudo -n id -u`.
+Denial/NO_NEW_PRIVILEGES/no reconnect within the bounded window => independent Stop.
+
+If existing root is confirmed, the interactive executor (not GitHub CI) submits
+one non-blocking temporary systemd stop of these exact six units, using `sudo -n`
+only if the existing privilege check succeeded:
+
+```
+systemctl stop --no-block assistant-lab.service assistant-lab-observer.service assistant-lab-control.service assistant-lab-control-bridge.service universal-video-container.service bridge-ben.service
+```
+
+Read only LoadState/ActiveState/SubState/MainPID/ControlGroup/Result for those units
+with `systemctl show`, then numeric PIDs from their validated existing cgroup paths.
+Do not output environment, full process arguments or journal/credential contents.
+Any missing/failed stop, residual worker, work activity or lost observation triggers
+independent Stop immediately; no disable/mask, worker, install or repair script.
+Parent checks Neon/queues independently through its existing connector. The timer
+continues while guest calls happen and stops even when guest checks succeed.
+
+## Token-lifetime hardening and price composition
+
+Immediately before the Start POST, after preflight, the same verified IAM token
+must have at least 900 s remaining: 600 s trial + 180 s Stop observation + 120 s
+margin. A short token fails closed before Start; no refresh/retry added. Independent
+Stop retains the existing >60 s IAM check and is not blocked by the 900 s Start gate.
+
+The catalog charges `part-is.instance-hours-bx3dc-8x40` per whole Instance-Hour,
+not per vCPU or GiB. IBM defines this profile as 8 vCPU, 40 GiB RAM and 1x260 GB
+instance storage. Gen 3 documentation says local instance storage is included in
+all profiles. Together these support treating $0.52605/hour as the base profile
+bundle, not multiplying by 40 or adding 260 storage units. Persistent boot/block
+volumes, image storage, licenses/confidential modes/network/tax are not included
+in this base-cost claim. Profile sources:
+https://cloud.ibm.com/docs/vpc?topic=vpc-confidential-computing-vsi-profiles-gen3-x86
+https://cloud.ibm.com/docs/vpc?topic=vpc-profiles
+
+Fresh public re-read again returned USD 0.52605/hour and no separate RAM/instance
+storage metric within this product, but returned effective dates 2026-09-01 through
+2026-09-30, unlike the earlier saved October receipt above. USD amount agrees;
+current-period applicability is not independently settled by that stale response.
+No account credentials used and no guaranteed $10 billing cap claimed.

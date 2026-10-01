@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Bounded existing-instance trial and independent ordinary Stop.
 
-LIVE_START_ENABLED is deliberately false pending the parent's cost/release review.
+Preparation locks released by parent; dispatch awaits the coordinated live window.
 Stop-only is a separate process/run; neither path creates resources or forces Stop.
 IBM exposes no GET instance-actions queue: never report that queue as reconciled.
 """
 from __future__ import annotations
 import argparse
+import base64
 from contextlib import contextmanager
 import json
 import os
@@ -21,7 +22,7 @@ try:
 except ImportError:
     from ibm_vpc_oracle_probe import verify_identity
 
-LIVE_START_ENABLED = False
+LIVE_START_ENABLED = True
 INSTANCE_ID = "02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2"
 INSTANCE_NAME = "bridge-school-compute-ibm"
 IMAGE_ID = "r010-25f84546-413c-4476-83ee-ae9580f554e5"
@@ -38,6 +39,7 @@ WINDOW_SECONDS = 600
 RUNNING_SECONDS = 120  # stop even if admin works: no unverified extension signal
 STOP_POLL_SECONDS = 180
 HTTP_SECONDS = 10
+START_TOKEN_MIN_SECONDS = WINDOW_SECONDS + STOP_POLL_SECONDS + 120
 MAX_BYTES = 1024 * 1024
 
 
@@ -113,6 +115,20 @@ def authenticate():
     return token
 
 
+def verify_start_ttl(token):
+    # Recheck AFTER preflight, immediately before Start. No refresh/mutation retry.
+    # Emergency Stop intentionally retains only the existing IAM expiry check.
+    try:
+        now = time.time()
+        verify_identity(token, now=now)
+        payload = token.split('.')[1]
+        expiry = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))['exp']
+        if expiry - now < START_TOKEN_MIN_SECONDS:
+            raise ValueError
+    except Exception:
+        raise ControlError('start_token_lifetime_insufficient') from None
+
+
 class Client:
     def __init__(self, token):
         self.token = token
@@ -126,6 +142,8 @@ class Client:
             raise ControlError("request_not_allowed")
         if method == "POST" and body["type"] == "start" and not LIVE_START_ENABLED:
             raise ControlError("live_start_locked")
+        if method == "POST" and body["type"] == "start":
+            verify_start_ttl(self.token)
         req = urllib.request.Request(ORIGIN + path + QUERY, method=method,
             data=None if body is None else json.dumps(body).encode(),
             headers={"Authorization": "Bearer " + self.token, "Accept": "application/json",

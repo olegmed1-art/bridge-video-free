@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'status default; trial_stop is independent; trial_start remains code-locked'
+        description: 'status default; trial_start requires coordinated window; trial_stop is independent'
         type: choice
         options: [status, trial_start, trial_stop]
         default: status
@@ -45,8 +45,8 @@ jobs:
           python -m py_compile ops/ibm_vpc_power.py ops/ibm_vpc_oracle_probe.py ops/ibm_trial_executor.py
 
   trial-start:
-    # Explicit preparation lock: parent must approve a reviewed enabling change.
-    if: ${{ false && github.event_name == 'workflow_dispatch' && inputs.mode == 'trial_start' && inputs.test_oracle == false && github.ref == 'refs/heads/review/ibm-trial-control-20261001' }}
+    # Preparation lock released; parent coordinates the live dispatch separately.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'trial_start' && inputs.test_oracle == false && github.ref == 'refs/heads/review/ibm-trial-control-20261001' }}
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 16
@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-      - name: Bounded trial (locked pending cost and parent release)
+      - name: Bounded trial within coordinated owner-approved window
         env:
           IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
         run: python3 ops/ibm_trial_executor.py trial --ack OWNER_APPROVED_10MIN_10USD

@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 import urllib.error
 from ops import ibm_trial_executor as e
+from tests.test_ibm_vpc_oracle_probe import token
 
 
 class Clock:
@@ -40,6 +41,8 @@ class ExecutorTests(unittest.TestCase):
             return e.trial(client,clock=self.clock.now,sleep=self.clock.sleep,out=self.out)
 
     def test_live_start_locked_before_credentials_and_at_transport(self):
+        lock=mock.patch.object(e,'LIVE_START_ENABLED',False)
+        lock.start();self.addCleanup(lock.stop)
         with mock.patch.object(e,'authenticate') as auth, contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(3,e.main(['trial','--ack','OWNER_APPROVED_10MIN_10USD']))
             auth.assert_not_called()
@@ -53,6 +56,13 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(['stop'],c.actions)
         self.assertEqual('STOPPED_OBSERVED',self.events[-1]['event'])
         self.assertEqual('NOT_EXPOSED_BY_API',self.events[-1]['action_queue'])
+
+    def test_enabled_cli_requires_ack_and_routes_to_mocked_trial(self):
+        with mock.patch.object(e,'authenticate',return_value='fake-token') as auth, mock.patch.object(e,'trial',return_value=0) as trial, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(3,e.main(['trial','--ack','WRONG']))
+            auth.assert_not_called();trial.assert_not_called()
+            self.assertEqual(0,e.main(['trial','--ack','OWNER_APPROVED_10MIN_10USD']))
+            auth.assert_called_once();trial.assert_called_once()
 
     def test_unknown_stop_not_repeated(self):
         c=Fake([('running',False),('running',False),('stopped',True)],unknown='stop')
@@ -169,6 +179,23 @@ class ExecutorTests(unittest.TestCase):
                 with self.assertRaises(e.ControlError):c.call(method,path,body)
                 wire.assert_not_called()
 
+    def test_start_ttl_checked_at_post_boundary_but_short_token_can_stop(self):
+        with mock.patch.object(e.time,'time',return_value=10000):
+            for remaining in [61,899]:
+                value=token(exp=10000+remaining)
+                with mock.patch.object(e,'wire',return_value={'access_token':value}):
+                    with mock.patch.dict(e.os.environ,{'IBM_CLOUD_API_KEY':'fake'}):
+                        self.assertEqual(value,e.authenticate())
+                with mock.patch.object(e,'wire') as wire:
+                    with self.assertRaisesRegex(e.ControlError,'start_token_lifetime_insufficient'):
+                        e.Client(value).action('start')
+                    wire.assert_not_called()
+                with mock.patch.object(e,'wire',return_value={'type':'stop'}) as wire:
+                    e.Client(value).action('stop');wire.assert_called_once()
+            with mock.patch.object(e,'wire',return_value={'type':'start'}) as wire:
+                e.Client(token(exp=10900)).action('start')
+                self.assertEqual({'type':'start','force':False},json.loads(wire.call_args.args[0].data))
+
     def test_http_errors_and_redirects_do_not_leak_secret_bodies(self):
         for code in [403,404,500]:
             op=mock.Mock();op.open.side_effect=urllib.error.HTTPError('SECRET',code,'SECRET',{},io.BytesIO(b'SECRET'))
@@ -200,11 +227,13 @@ class ExecutorTests(unittest.TestCase):
         with self.assertRaisesRegex(e.ControlError,'wall_deadline_expired'):
             with e.wall_deadline(0.01):time.sleep(0.2)
 
-    def test_workflow_stop_independent_and_start_doubly_locked(self):
+    def test_workflow_stop_independent_and_start_dispatch_scoped(self):
         s=Path('.github/workflows/ibm-vpc-power-probe.yml').read_text()
         self.assertIn("inputs.mode == 'trial_stop' && 'ibm-vpc-independent-stop'",s)
-        self.assertIn("false && github.event_name == 'workflow_dispatch'",s)
-        self.assertFalse(e.LIVE_START_ENABLED)
+        self.assertNotIn("false && github.event_name == 'workflow_dispatch'",s)
+        self.assertTrue(e.LIVE_START_ENABLED)
+        start=s.split('  trial-start:')[1].split('  trial-stop:')[0]
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.mode == 'trial_start' && inputs.test_oracle == false && github.ref == 'refs/heads/review/ibm-trial-control-20261001'",start)
         stop=s.split('  trial-stop:')[1].split('  oracle-probe:')[0]
         self.assertNotIn('needs: trial-start',stop)
         self.assertNotIn('ORACLE_SSH_PRIVATE_KEY',stop)
