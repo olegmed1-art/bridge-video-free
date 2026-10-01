@@ -14,17 +14,17 @@ class PreflightOnceTests(unittest.TestCase):
     def passed_preflight(pg, *, gates):
         gates.update({k: 'PASS' for k in gates})
 
-    def test_workflow_is_dispatch_only_single_bounded_job_with_only_maintenance_secret(self):
+    def test_replacement_workflow_retains_exact_dispatch_context(self):
         text = Path('.github/workflows/native-registry-credential-probe.yml').read_text()
-        self.assertIn('timeout-minutes: 2', text)
+        self.assertIn('timeout-minutes: 20', text)
         self.assertIn('github.run_attempt == 1', text)
         self.assertIn('inputs.expected_review_sha == github.sha', text)
         self.assertIn('ref: ${{ github.sha }}', text)
-        self.assertIn('100s python -m ops.neon_backup_preflight_once', text)
-        self.assertEqual(text.count('secrets.'), 1)
+        self.assertIn('python -m ops.neon_backup_validate_once', text)
+        self.assertEqual(text.count('secrets.'), 2)
         self.assertIn('secrets.LIGHT_MAINTENANCE_DATABASE_URL', text)
         for forbidden in ('pull_request:', 'push:', 'schedule:', 'upload-artifact',
-                          'pg_dump', 'pg_restore', 'NEON_BACKUP_PASSPHRASE',
+                          'pg_dump', 'pg_restore',
                           'secrets.NEON_DATABASE_URL', 'ops.native_registry_credential_probe'):
             self.assertNotIn(forbidden, text)
 

@@ -182,8 +182,8 @@ def client(pg, args, *, sql=None, dump=False):
     return result.stdout.strip()
 
 
-def preflight(pg, *, gates=None):
-    payload = client(pg, ['psql', '-XqAt', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=verbose'], sql=PREFLIGHT)
+def preflight(pg, *, gates=None, run_client=None):
+    payload = (run_client or client)(pg, ['psql', '-XqAt', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=verbose'], sql=PREFLIGHT)
     try:
         row = json.loads(payload)
     except (ValueError, TypeError):
