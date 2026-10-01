@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """One bounded storage inventory; no VPC mutations and no account-wide lists.
 
-API 2026-09-22; eu-de; one instance, one boot volume; at most 100 snapshots.
-Images are deliberately not enumerated: IBM has no source-volume list filter.
+API 2026-09-22; eu-de; one instance, one boot volume, one existing image;
+at most 100 snapshots. No image enumeration, creation, export or power actions.
 Publication is not authorization to execute this credentialed command.
 """
 from __future__ import annotations
@@ -24,6 +24,10 @@ ORIGIN = "https://eu-de.iaas.cloud.ibm.com"
 INSTANCE_ID = "02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2"
 INSTANCE_NAME = "bridge-school-compute-ibm"
 VOLUME_ID = "r010-430d0d70-3cdf-4f0c-8709-53e0ee0c4d7e"
+IMAGE_ID = "r010-25f84546-413c-4476-83ee-ae9580f554e5"
+IMAGE_NAME = "bridge-ibm-before-start-20261001"
+IMAGE_PATH = "/v1/images/" + IMAGE_ID
+IMAGE_STATES = {"available", "deleting", "deprecated", "failed", "obsolete", "partially_available", "pending", "unusable"}
 ORACLE_HOST = "ubuntu@92.5.47.149"
 MAX_BYTES = 1024 * 1024
 PAGE_SIZE = 50
@@ -67,7 +71,7 @@ def request_json(request):
 
 
 def get(token, path, *, start=None):
-    if path not in (INSTANCE_PATH, VOLUME_PATH, SNAPSHOTS_PATH):
+    if path not in (INSTANCE_PATH, VOLUME_PATH, SNAPSHOTS_PATH, IMAGE_PATH):
         raise InventoryError("path_not_allowed")
     query = dict(FIXED_QUERY)
     if path == SNAPSHOTS_PATH:
@@ -154,8 +158,8 @@ def inventory(token):
               "health_state": enum(volume.get("health_state"), {"ok", "degraded", "faulted", "inapplicable"}),
               "busy": boolean(volume.get("busy")),
               "attachment_state": enum(volume.get("attachment_state"), {"attached"}),
-              "delete_volume_on_instance_delete": boolean(attachment.get("delete_volume_on_instance_delete")),
-              "images": "NOT_CHECKED_NO_BOUNDED_LOOKUP"}
+              "delete_volume_on_instance_delete": boolean(attachment.get("delete_volume_on_instance_delete"))}
+    result["image"] = parse_image(get(token, IMAGE_PATH))
     snapshots = []
     seen_ids = set()
     seen_cursors = set()
@@ -185,6 +189,28 @@ def inventory(token):
     raise InventoryError("snapshot_inventory_incomplete_page_limit")
 
 
+def parse_image(image):
+    if (image.get("id") != IMAGE_ID or image.get("name") != IMAGE_NAME
+            or image.get("source_volume", {}).get("id") != VOLUME_ID):
+        raise InventoryError("image_identity_or_source_mismatch")
+    # IBM images use 'none' for provider-managed encryption (unlike volumes).
+    encryption = enum(image.get("encryption"), {"none", "provider_managed"})
+    if "encryption_key" in image:
+        raise InventoryError("image_encryption_mismatch")
+    status = enum(image.get("status"), IMAGE_STATES)
+    file = image.get("file")
+    if not isinstance(file, dict):
+        raise InventoryError("invalid_image_file")
+    size = file.get("size")
+    if "size" in file:
+        size = integer(size, 0, 32000)
+    elif status not in {"pending", "failed"}:
+        raise InventoryError("image_file_size_missing")
+    return {"id": IMAGE_ID, "name": IMAGE_NAME, "source_volume_match": True,
+            "encryption": encryption, "provider_managed": True, "status": status,
+            "file_size_gb": size, "file_size_present": "size" in file}
+
+
 def safe_inventory(token):
     try:
         return {"result": "PASS", **inventory(token)}
@@ -206,16 +232,25 @@ def sanitize_report(report):
                    "next_filter_mismatch", "instance_mismatch", "boot_volume_mismatch", "volume_mismatch",
                    "attachment_mismatch", "invalid_snapshot_page", "snapshot_source_mismatch",
                    "invalid_snapshot_id", "cursor_cycle", "snapshot_inventory_incomplete_page_limit",
-                   "invalid_token_payload"}
+                   "invalid_token_payload", "image_identity_or_source_mismatch", "image_encryption_mismatch",
+                   "invalid_image_file", "image_file_size_missing"}
         if not isinstance(reason, str) or (reason not in allowed and not re.fullmatch(r"http_[1-5][0-9]{2}", reason)):
             raise InventoryError("remote_output_invalid")
         return {"result": "BLOCKED", "reason": reason}
     fixed = {"result": "PASS", "api_version": API_VERSION, "instance_id": INSTANCE_ID,
-             "volume_id": VOLUME_ID, "boot_attachment_match": True, "snapshots_complete": True,
-             "images": "NOT_CHECKED_NO_BOUNDED_LOOKUP"}
+             "volume_id": VOLUME_ID, "boot_attachment_match": True, "snapshots_complete": True}
     if any(type(report.get(k)) is not type(v) or report.get(k) != v for k, v in fixed.items()):
         raise InventoryError("remote_output_invalid")
     out = dict(fixed)
+    image = report.get("image")
+    if not isinstance(image, dict) or image.get("source_volume_match") is not True or image.get("provider_managed") is not True:
+        raise InventoryError("remote_output_invalid")
+    present = boolean(image.get("file_size_present"))
+    if not present and image.get("file_size_gb") is not None:
+        raise InventoryError("remote_output_invalid")
+    out["image"] = parse_image({"id": image.get("id"), "name": image.get("name"),
+        "source_volume": {"id": VOLUME_ID}, "encryption": image.get("encryption"),
+        "status": image.get("status"), "file": {"size": image.get("file_size_gb")} if present else {}})
     for k, choices in {
         "instance_status": {"stopped", "running", "starting", "stopping", "pending", "failed", "restarting"},
         "volume_status": {"available", "pending", "failed", "deleting"},

@@ -26,6 +26,8 @@ def fixture():
          "health_state": "ok", "busy": False, "attachment_state": "attached",
          "volume_attachments": [{"id": "attachment", "type": "boot", "instance": {"id": inv.INSTANCE_ID},
                                  "delete_volume_on_instance_delete": True}]},
+        {"id": inv.IMAGE_ID, "name": inv.IMAGE_NAME, "source_volume": {"id": inv.VOLUME_ID},
+         "encryption": "none", "status": "pending", "file": {}},
         {"snapshots": []},
     ]
 
@@ -55,16 +57,17 @@ class InventoryTests(unittest.TestCase):
     def test_exact_get_allowlist_and_no_body(self):
         result, transport = self.run_inventory()
         self.assertEqual('PASS', result['result'])
-        self.assertEqual('NOT_CHECKED_NO_BOUNDED_LOOKUP', result['images'])
+        self.assertEqual('pending', result['image']['status'])
+        self.assertIsNone(result['image']['file_size_gb'])
         self.assertEqual(0, result['snapshot_count'])
-        self.assertEqual(3, transport.call_count)
+        self.assertEqual(4, transport.call_count)
         for call in transport.call_args_list:
             req = call.args[0]
             self.assertEqual('GET', req.get_method())
             self.assertIsNone(req.data)
             url = urllib.parse.urlsplit(req.full_url)
             self.assertEqual('eu-de.iaas.cloud.ibm.com', url.netloc)
-            self.assertIn(url.path, (inv.INSTANCE_PATH, inv.VOLUME_PATH, inv.SNAPSHOTS_PATH))
+            self.assertIn(url.path, (inv.INSTANCE_PATH, inv.VOLUME_PATH, inv.SNAPSHOTS_PATH, inv.IMAGE_PATH))
             self.assertEqual(['2026-09-22'], urllib.parse.parse_qs(url.query)['version'])
         self.assertEqual([inv.VOLUME_ID], urllib.parse.parse_qs(url.query)['source_volume.id'])
 
@@ -85,7 +88,7 @@ class InventoryTests(unittest.TestCase):
             self.assertLessEqual(transport.call_count, target+1)
 
     def test_filtered_pagination_rebuilds_url_and_rejects_widening(self):
-        data = fixture(); data[2]['next'] = {'href': next_url()}; data.append({'snapshots': []})
+        data = fixture(); data[3]['next'] = {'href': next_url()}; data.append({'snapshots': []})
         report, transport = self.run_inventory(data)
         self.assertTrue(report['snapshots_complete'])
         self.assertEqual(next_url(), transport.call_args.args[0].full_url)
@@ -93,28 +96,28 @@ class InventoryTests(unittest.TestCase):
                      next_url(**{'source_volume.id':'other'}), next_url(limit='100'),
                      next_url()+'&start=duplicate', next_url().replace('/snapshots','/images'),
                      next_url()+'&unknown=1', next_url().replace('https:','http:')]:
-            data = fixture(); data[2]['next'] = {'href': href}
+            data = fixture(); data[3]['next'] = {'href': href}
             report, transport = self.run_inventory(data)
             self.assertEqual('BLOCKED', report['result'])
-            self.assertEqual(3, transport.call_count)
+            self.assertEqual(4, transport.call_count)
 
     def test_page_limit_and_cycle_not_empty_success(self):
         for second in ['page2','page3']:
-            data = fixture(); data[2]['next'] = {'href': next_url()}
+            data = fixture(); data[3]['next'] = {'href': next_url()}
             data.append({'snapshots': [], 'next': {'href': next_url(second)}})
             report, transport = self.run_inventory(data)
             self.assertEqual('BLOCKED', report['result'])
             self.assertNotIn('snapshot_count', report)
-            self.assertEqual(4, transport.call_count)
+            self.assertEqual(5, transport.call_count)
 
     def test_snapshot_source_schema_and_duplicates(self):
         good = {'id':'r010-11111111-1111-1111-1111-111111111111','source_volume':{'id':inv.VOLUME_ID},
                 'lifecycle_state':'stable','bootable':True}
-        data = fixture(); data[2]['snapshots'] = [good]
+        data = fixture(); data[3]['snapshots'] = [good]
         report, _ = self.run_inventory(data)
         self.assertEqual(1, report['snapshot_count'])
         for entries in [[{**good,'source_volume':{'id':'other'}}], [good,good], [None], [good]*51]:
-            data = fixture(); data[2]['snapshots'] = entries
+            data = fixture(); data[3]['snapshots'] = entries
             self.assertEqual('BLOCKED', self.run_inventory(data)[0]['result'])
 
     def test_secrets_and_arbitrary_fields_never_in_report(self):
@@ -176,6 +179,43 @@ class InventoryTests(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/review/ibm-storage-inventory-20261001'",text)
         self.assertEqual(2,text.count("(inputs.mode == 'status' || inputs.mode == '')"))
         self.assertNotIn('pull_request_target:',text)
+
+    def test_exact_image_states_and_optional_pending_file_size(self):
+        for status in inv.IMAGE_STATES:
+            data=fixture();data[2]['status']=status
+            if status not in {'pending','failed'}: data[2]['file']={'size':7}
+            report,transport=self.run_inventory(data)
+            self.assertEqual('PASS',report['result'])
+            self.assertEqual(status,report['image']['status'])
+            self.assertEqual(report,inv.sanitize_report(report))
+            self.assertEqual(inv.ORIGIN+inv.IMAGE_PATH+'?version=2026-09-22&generation=2',transport.call_args_list[2].args[0].full_url)
+
+    def test_image_wrong_identity_encryption_or_schema_blocks(self):
+        for key,value in [('id','other'),('name','other'),('source_volume',{'id':'other'}),
+                          ('encryption','user_managed'),('encryption_key',{'crn':'SECRET'}),
+                          ('status','unknown'),('file',{'size':True}),('file',{'size':None}),
+                          ('file',{'size':-1}),('file',None)]:
+            data=fixture();data[2][key]=value
+            report,transport=self.run_inventory(data)
+            self.assertEqual('BLOCKED',report['result'])
+            self.assertEqual(3,transport.call_count)
+            self.assertNotIn('SECRET',json.dumps(report))
+        data=fixture();data[2]['status']='available'
+        self.assertEqual('image_file_size_missing',self.run_inventory(data)[0]['reason'])
+
+    def test_image_get_403_is_explicit_and_no_list_fallback(self):
+        data=fixture()[:2]+[inv.InventoryError('http_403')]
+        report,transport=self.run_inventory(data)
+        self.assertEqual({'result':'BLOCKED','reason':'http_403'},report)
+        self.assertEqual(3,transport.call_count)
+
+    def test_remote_image_output_is_sanitized(self):
+        report,_=self.run_inventory();report['image']['extra']='SECRET'
+        self.assertNotIn('SECRET',json.dumps(inv.sanitize_report(report)))
+        for key,value in [('id','other'),('name','SECRET'),('source_volume_match',False),
+                          ('provider_managed',False),('file_size_gb',23),('file_size_present',1)]:
+            changed=copy.deepcopy(report);changed['image'][key]=value
+            with self.assertRaises(inv.InventoryError): inv.sanitize_report(changed)
 
 
 if __name__ == '__main__':
