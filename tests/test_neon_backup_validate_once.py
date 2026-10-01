@@ -20,14 +20,14 @@ class ValidationTests(unittest.TestCase):
     def test_no_publication_and_dispatch_bounds(self):
         text = self.workflow()
         for required in ('timeout-minutes: 20', 'github.run_attempt == 1',
-                         'inputs.expected_review_sha == github.sha', v.TOKEN,
+                         'inputs.expected_review_sha == github.sha', 'OCI_BACKUP_ONE_CREATE_READBACK_V1',
                          'deadline_epoch:', 'if: always()', 'persist-credentials: false'):
             self.assertIn(required, text)
         for forbidden in ('upload-artifact', 'download-artifact', 'issues: write', 'gh api',
                           'schedule:', 'push:', 'pull_request:', 'secrets.NEON_DATABASE_URL'):
             self.assertNotIn(forbidden, text)
         self.assertEqual(text.count('runs-on:'), 1)
-        self.assertEqual(text.count('secrets.'), 2)
+        self.assertEqual(text.count('secrets.'), 7)
 
     def test_size_gate_and_hash_tamper(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -101,7 +101,7 @@ class ValidationTests(unittest.TestCase):
                 self.assertFalse(root.exists())
                 self.assertEqual(run.call_count, 4)
 
-    def simulate(self, directory, fail=None, overrides=None):
+    def simulate(self, directory, fail=None, overrides=None, storage=None):
         env = dict(VALIDATION_OPERATION=v.TOKEN, VALIDATION_STARTED='1000',
                    VALIDATION_DEADLINE='2200', RUNNER_TEMP=directory, GITHUB_RUN_ID='123',
                    DATABASE_URL='synthetic-uri', BACKUP_PASSPHRASE='synthetic-passphrase-24-chars')
@@ -140,7 +140,7 @@ class ValidationTests(unittest.TestCase):
             stack.enter_context(patch.object(signal, 'SIGALRM', 14, create=True))
             stack.enter_context(patch.object(signal, 'ITIMER_REAL', 0, create=True))
             stack.enter_context(patch.object(signal, 'setitimer', create=True))
-            return v.execute()
+            return v.execute(storage=storage)
 
     def test_roundtrip_mock_success_and_all_phase_failures_sanitized(self):
         for failure in (None, 'tools', 'preflight', 'source_stats', 'dump', 'encrypt',
@@ -161,6 +161,34 @@ class ValidationTests(unittest.TestCase):
                 self.assertEqual(row['status'], 'FAIL')
                 self.assertEqual(row['phase'], 'context')
                 self.assertFalse(row['dump'])
+                self.assertFalse(list(Path(directory).iterdir()))
+
+    def test_storage_hook_cleanup_and_partial_remote_outcomes(self):
+        class SyntheticStorage:
+            def __init__(self, fail):
+                self.fail=fail
+                self.calls=[]
+                self.state=dict(put_outcome='NOT_ATTEMPTED',readback_verified=False)
+            def prepare(self, runner):
+                self.calls.append('prepare')
+            def exchange(self, path, digest, runner):
+                self.calls.append('exchange')
+                assert v.hash_file(path)==digest
+                self.state['put_outcome']='UNKNOWN' if self.fail=='put' else 'CONFIRMED'
+                if self.fail in ('put','get'):
+                    raise RuntimeError('PRIVATE_TRANSFER_DIAGNOSTIC')
+                self.state['readback_verified']=True
+        for failure in (None,'put','get','restore','cleanup'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as directory:
+                storage=SyntheticStorage(failure)
+                row=self.simulate(directory,fail=failure,storage=storage)
+                self.assertEqual(storage.calls,['prepare','exchange'])
+                self.assertEqual(row['status'],'PASS' if failure is None else 'FAIL')
+                self.assertTrue(row['upload_attempted'])
+                self.assertEqual(row['upload_confirmed'],failure!='put')
+                self.assertEqual(row['durable_copy_confirmed'],failure!='put')
+                self.assertEqual(row['restore'],failure not in ('put','get','restore'))
+                self.assertNotIn('PRIVATE',json.dumps(row))
                 self.assertFalse(list(Path(directory).iterdir()))
 
 

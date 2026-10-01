@@ -20,8 +20,8 @@ class PreflightOnceTests(unittest.TestCase):
         self.assertIn('github.run_attempt == 1', text)
         self.assertIn('inputs.expected_review_sha == github.sha', text)
         self.assertIn('ref: ${{ github.sha }}', text)
-        self.assertIn('python -m ops.neon_backup_validate_once', text)
-        self.assertEqual(text.count('secrets.'), 2)
+        self.assertIn('python -m ops.neon_backup_oci_once', text)
+        self.assertEqual(text.count('secrets.'), 7)
         self.assertIn('secrets.LIGHT_MAINTENANCE_DATABASE_URL', text)
         for forbidden in ('pull_request:', 'push:', 'schedule:', 'upload-artifact',
                           'pg_dump', 'pg_restore',

@@ -155,17 +155,22 @@ class Runner:
         return ok
 
 
-def execute():
+def execute(*, storage=None, operation=TOKEN):
     row = dict(schema='local-backup-validation-v1', status='FAIL', phase='context',
                source_sha=None, upload=False, production_writes=False, durable_backup=False,
                dump=False, encryption=False, hash=False, restore=False, cleanup=False,
                gates=dict(auth='NOT_PROVEN', identity='NOT_PROVEN', acl='NOT_PROVEN',
                           rls='NOT_PROVEN', readonly='NOT_PROVEN'))
     runner = None
+    if storage is not None:
+        row['schema'] = 'oci-backup-roundtrip-v1'
+        row['storage'] = storage.state
+        del row['upload'], row['durable_backup']
+        row.update(upload_attempted=False, upload_confirmed=False, durable_copy_confirmed=False)
     phrase = os.environ.pop('BACKUP_PASSPHRASE', '')
     raw = os.environ.pop('DATABASE_URL', '')
     try:
-        need(os.environ.get('VALIDATION_OPERATION') == TOKEN)
+        need(os.environ.get('VALIDATION_OPERATION') == operation)
         row['source_sha'] = context_guard.context()
         wall = time.time()
         started = int(os.environ['VALIDATION_STARTED'])
@@ -185,6 +190,9 @@ def execute():
         root = Path(os.environ['RUNNER_TEMP']).resolve() / ('backup-validation-' + os.environ['GITHUB_RUN_ID'])
         root.mkdir(mode=0o700)  # Existing directory is refused, never reused.
         runner = Runner(root, os.environ['GITHUB_RUN_ID'], time.monotonic() + seconds)
+        if storage is not None:
+            row['phase'] = 'storage_preflight'
+            storage.prepare(runner)
         row['phase'] = 'tools'
         runner.run(['docker', 'pull', 'postgres:18'], seconds=90)
         runner.run(['prlimit', '--version'], seconds=5)
@@ -204,6 +212,9 @@ def execute():
         encrypted = hash_file(root / 'encrypted')
         (root / 'dump').unlink()
         row['encryption'] = True
+        if storage is not None:
+            row['phase'] = 'storage_create_readback'
+            storage.exchange(root / 'encrypted', encrypted, runner)
         row['phase'] = 'hash_decrypt'
         need(hash_file(root / 'encrypted') == encrypted)
         runner.crypt(phrase, decrypt=True)
@@ -227,12 +238,17 @@ def execute():
             row['cleanup'] = runner.cleanup()
         if not row['cleanup']:
             row['status'] = 'FAIL'
+        if storage is not None:
+            outcome = storage.state['put_outcome']
+            row['upload_attempted'] = outcome != 'NOT_ATTEMPTED'
+            row['upload_confirmed'] = outcome == 'CONFIRMED'
+            row['durable_copy_confirmed'] = outcome == 'CONFIRMED'
     return row
 
 
-def main():
+def main(*, storage=None, operation=TOKEN):
     os.umask(0o077)
-    row = execute()
+    row = execute(storage=storage, operation=operation)
     # No stdout, files, manifest, counts, hashes, SQL, exception text or artifacts.
     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as stream:
         stream.write('```json\n' + json.dumps(row, sort_keys=True) + '\n```\n')

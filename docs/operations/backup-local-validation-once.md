@@ -1,5 +1,9 @@
 # Review-only local backup validation, 2026-10-01
 
+Historical standalone harness: published commit383db1c1cc4d76abeef54abe1f210edcfa239011
+passed run36879969934. The current review-branch workflow is superseded by
+`neon-private-backup-once.md`; the old local-only approval cannot authorize its PUT.
+
 Status: prepared for review; NO live dispatch is authorized by publication.
 ASSURED / I2. This supersedes the preflight-only harness at the same registered
 workflow path on the review branch. Historical preflight observations remain
