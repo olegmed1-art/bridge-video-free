@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=d46a246c-fa77-4b07-9cb8-a210ba2154b6
+dispatch_epoch=3
+role=DATA
+task_fingerprint=7a51e2b271ca8be5558fb5298b6ca0db4bf162a49dfdb121275966e195949155
+target_pr=860
+mode=VERIFY
+repair_attempt=1
+origin_task_id=b27f6681-c57d-431c-a417-f96a4892f2f9
+prior_task_id=2fbdb6a9-a567-4c14-9d28-a68956ccad9b
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=Outbox permits READ_ONLY, but assignment requires REPAIR with repository mutation; binding rejected fail-closed.
+instruction=READ_ONLY_VERIFY_REPAIR_NO_MUTATION
