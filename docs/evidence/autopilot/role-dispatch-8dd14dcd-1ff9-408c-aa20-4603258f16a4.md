@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=8dd14dcd-1ff9-408c-aa20-4603258f16a4
+dispatch_epoch=2
+role=KNOWLEDGE
+task_fingerprint=61f64b457091717e4e43c9f37b41b9678ed18112bcecec9f6a90e99b8b9dfd46
+target_pr=857
+mode=REPAIR
+repair_attempt=1
+origin_task_id=64f0dd50-6619-48fc-961e-c6ae36e92b08
+prior_task_id=64f0dd50-6619-48fc-961e-c6ae36e92b08
+blocked_result_code=MALFORMED_DISPATCH_ENVELOPE
+blocked_summary=Dispatch body is incomplete: repository, mailbox_pr, and expected_head_sha are missing, so the request was rejected fail-closed.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
