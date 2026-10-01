@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=411c24fc-e392-4b70-b0f9-59ed00eec319
+dispatch_epoch=2
+role=KNOWLEDGE
+task_fingerprint=f2731afd0e14e56c11b779de8f929f829ec6e9bd967f9ff8eee54343ab7d89e1
+target_pr=860
+mode=REPAIR
+repair_attempt=1
+origin_task_id=66ed21db-a64e-4adf-909d-06cf5c02fd95
+prior_task_id=66ed21db-a64e-4adf-909d-06cf5c02fd95
+blocked_result_code=MODE_BINDING_MISMATCH
+blocked_summary=Dispatch is READ_ONLY, but the bound assignment requires REPAIR and repository mutation; execution was rejected fail-closed.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
