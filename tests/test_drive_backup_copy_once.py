@@ -188,7 +188,7 @@ class CopyTests(unittest.TestCase):
                 p.context()
 
     def test_workflow_only_existing_credentials_and_explicit_approval(self):
-        text=Path('.github/workflows/native-registry-credential-probe.yml').read_text()
+        text=Path('tests/fixtures/drive-copy-workflow.yml').read_text()
         for good in ('timeout-minutes: 5','github.run_attempt == 1',p.BRANCH,p.OPERATION,
                      'inputs.expected_review_sha == github.sha','persist-credentials: false',
                      'inputs.copy_approval == format','ulimit -c 0','--kill-after=5s 250s'):

@@ -1,0 +1,69 @@
+name: One existing ciphertext OCI to Drive copy (approval required)
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        required: true
+        type: string
+      expected_review_sha:
+        required: true
+        type: string
+      operation:
+        description: DRIVE_EXISTING_CIPHERTEXT_COPY_V1
+        required: true
+        type: string
+      copy_approval:
+        description: Separate owner approval bound to reviewed SHA
+        required: true
+        type: string
+      deadline_epoch:
+        description: Fresh UTC Unix deadline no later than job start plus 300 seconds
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: drive-exact-backup-copy-36908992530
+  cancel-in-progress: false
+jobs:
+  copy:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/test/drive-backup-copy-review-20261001' &&
+      github.event_name == 'workflow_dispatch' && github.actor == 'olegmed1-art' &&
+      github.triggering_actor == 'olegmed1-art' && github.run_attempt == 1 &&
+      inputs.expected_review_sha == github.sha &&
+      inputs.expected_main_sha == '1440920191e1778fb9a9ba24e6701937a1a7459c' &&
+      inputs.operation == 'DRIVE_EXISTING_CIPHERTEXT_COPY_V1' &&
+      inputs.copy_approval == format('DRIVE_EXISTING_CIPHERTEXT_COPY_V1:{0}:one-create-approved', github.sha)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Record start
+        run: echo "COPY_STARTED=$(date -u +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Offline copy tests without credentials
+        run: python -m unittest discover -s tests -p 'test_drive_backup*.py'
+      - name: Install reviewed OCI SDK without credentials
+        run: timeout 60s python -m pip install --disable-pip-version-check --quiet 'oci==2.187.1'
+      - name: One separately approved copy and independent readback
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+          EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
+          EXPECTED_REVIEW: ${{ inputs.expected_review_sha }}
+          COPY_OPERATION: ${{ inputs.operation }}
+          COPY_APPROVAL: ${{ inputs.copy_approval }}
+          COPY_DEADLINE: ${{ inputs.deadline_epoch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ulimit -c 0
+          timeout --signal=TERM --kill-after=5s 250s python -m ops.drive_backup_copy_once

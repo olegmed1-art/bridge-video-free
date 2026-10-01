@@ -8,6 +8,7 @@ import subprocess
 import time
 from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib.request import Request
+from urllib.error import HTTPError
 
 from ops import drive_backup_folder_readonly as ro
 from ops.oci_backup_bucket_metadata import credential_config, make_client, BUCKET, TENANCY
@@ -111,6 +112,18 @@ class Drive(ro.Http):
         self.file_id=ids[0]; return self.file_id
 
     def create(self,token,cipher,receipt):
+        receipt.update(create_stage='LOCAL_CHECK',http_status=None,failure_class='NONE',
+                       initiation_accepted=False,session_validated=False,put_attempted=False,
+                       final_response_accepted=False)
+        try:
+            self._create(token,cipher,receipt)
+        except BaseException as exc:
+            if isinstance(exc,HTTPError):
+                receipt['http_status']=exc.code if type(exc.code) is int and 100<=exc.code<=599 else None
+            receipt['failure_class']=failure_class(exc)
+            raise
+
+    def _create(self,token,cipher,receipt):
         need(self.file_id and not self.initiated and not self.put)
         need(len(cipher)==SIZE and hashlib.sha256(cipher).hexdigest()==DIGEST)
         body=json.dumps(dict(id=self.file_id,name=NAME,mimeType='application/octet-stream',
@@ -118,18 +131,26 @@ class Drive(ro.Http):
         check_deadline(self.deadline)
         # Initiation may mutate remote state; receipt must already be durable.
         self.initiated=True; receipt['create_outcome']='UNKNOWN'
+        receipt['create_stage']='INIT_POST'
         with self.open(UPLOAD,token=token,method='POST',query={'uploadType':'resumable'},body=body,
             headers={'Content-Type':'application/json; charset=UTF-8',
                      'X-Upload-Content-Type':'application/octet-stream','X-Upload-Content-Length':str(SIZE)}) as response:
-            need(response.status==200)
+            receipt['http_status']=response.status if type(response.status) is int else None
+            need(response.status==200); receipt['initiation_accepted']=True
+            receipt['create_stage']='SESSION_VALIDATION'
             self.session=session_url(response.headers.get('Location'))
+            receipt['session_validated']=True
         check_deadline(self.deadline)
         self.put=True
+        receipt.update(create_stage='CONTENT_PUT',put_attempted=True,http_status=None)
         with self.open(self.session,token=token,method='PUT',body=cipher,
             headers={'Content-Type':'application/octet-stream','Content-Length':str(SIZE)}) as response:
-            need(response.status in (200,201))
+            receipt['http_status']=response.status if type(response.status) is int else None
+            need(response.status in (200,201)); receipt['create_stage']='FINAL_REPLY'
             value=self.json(response); need(value.get('id')==self.file_id)
+            receipt['final_response_accepted']=True
         receipt['create_outcome']='CONFIRMED'
+        receipt['create_stage']='COMPLETE'
 
     def readback(self,token):
         with self.open(ro.API+'/files/'+self.file_id,token=token,query={'alt':'media'}) as response:
@@ -144,6 +165,16 @@ def fresh_destination(http,token,owner):
     need(folder.get('capabilities',{}).get('canAddChildren') is True)
     ro.owner_acl(http,token,ro.FOLDER,owner)
     ro.metadata(http,token,ro.PARENT,owner); ro.owner_acl(http,token,ro.PARENT,owner)
+
+
+def failure_class(exc):
+    # Fixed allowlist only: no exception strings, URLs, headers or response bodies.
+    if isinstance(exc,HTTPError): return 'HTTP_ERROR'
+    if isinstance(exc,ro.Refused): return 'GUARD_REFUSED'
+    if isinstance(exc,json.JSONDecodeError): return 'JSON_INVALID'
+    if isinstance(exc,TimeoutError): return 'TIMEOUT'
+    if isinstance(exc,OSError): return 'TRANSPORT_OR_OS_ERROR'
+    return 'OTHER_FAILURE'
 
 
 def verify_file(http,token,owner):
