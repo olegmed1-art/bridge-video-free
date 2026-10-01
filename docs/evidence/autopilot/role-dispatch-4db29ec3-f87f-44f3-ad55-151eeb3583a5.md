@@ -1,0 +1,13 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=4db29ec3-f87f-44f3-ad55-151eeb3583a5
+dispatch_epoch=56
+role=PLANNING
+task_fingerprint=41a3ef3c53de515accf6df522f5c38c6d1c698c1c243a984882bdef4a0e59337
+target_pr=1150
+mode=REPAIR
+repair_attempt=1
+origin_task_id=814ad0e0-c06b-44f3-8038-085dd9d168ea
+prior_task_id=814ad0e0-c06b-44f3-8038-085dd9d168ea
+blocked_result_code=IMPLEMENTATION_NOT_PUBLISHED
+blocked_summary=Mailbox head is exact, but the executor-fallback implementation remains absent from current main and any verified implementation PR.
+instruction=DIAGNOSE_MINIMAL_FIX_TEST_NO_MERGE
