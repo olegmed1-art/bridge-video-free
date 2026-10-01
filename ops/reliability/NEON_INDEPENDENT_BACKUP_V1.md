@@ -12,10 +12,17 @@ This is independent from Neon storage. It does not modify production, school can
 
 `database-production` must contain:
 
-- `NEON_DATABASE_URL` — existing protected production connection string.
+- `LIGHT_MAINTENANCE_DATABASE_URL` - existing owner maintenance connection, selected only for backup. No fallback to the shared writer secret.
 - `NEON_BACKUP_PASSPHRASE` — dedicated recovery passphrase, at least 24 characters. It must be stored separately from repository contents and must not be printed to logs.
 
 The workflow fails closed before backup if either secret is missing.
+
+The backup-only helper reconstructs a direct, certificate-verified TLS connection,
+requires channel binding and read-only transactions, and validates the exact
+production project/branch/endpoint/database/owner before statistics and again
+before dump. Full catalog privilege/RLS checks refuse insufficient access without
+granting anything. See `docs/operations/backup-credential-cutover.md` for remaining
+activation gates and the proposed October monthly catch-up.
 
 ## Retention
 

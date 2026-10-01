@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/neon-independent-backup-restore.yml'
       - 'tests/test_neon_independent_backup_contract.py'
+      - 'tests/test_neon_backup_source.py'
+      - 'ops/neon_backup_source.py'
       - 'ops/reliability/NEON_INDEPENDENT_BACKUP_V1.md'
   push:
     branches:
@@ -38,6 +40,7 @@ jobs:
           set -euo pipefail
           ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/neon-independent-backup-restore.yml
           python tests/test_neon_independent_backup_contract.py
+          python -m unittest discover -s tests -p test_neon_backup_source.py -v
 
   backup:
     if: >-
@@ -50,7 +53,7 @@ jobs:
     timeout-minutes: 25
     environment: database-production
     env:
-      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
       BACKUP_PASSPHRASE: ${{ secrets.NEON_BACKUP_PASSPHRASE }}
     outputs:
       artifact_name: ${{ steps.meta.outputs.artifact_name }}
@@ -65,13 +68,22 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
+
+      - name: Require the event revision to still be current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'olegmed1-art/bridge-video-free'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          current_main="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test -n "$current_main" && test "$GITHUB_SHA" = "$current_main"
 
       - name: Fail closed on missing recovery secrets
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${DATABASE_URL:-}" || { echo 'NEON_DATABASE_URL is not configured'; exit 10; }
+          test -n "${DATABASE_URL:-}" || { echo 'LIGHT_MAINTENANCE_DATABASE_URL is not configured'; exit 10; }
           test -n "${BACKUP_PASSPHRASE:-}" || { echo 'NEON_BACKUP_PASSPHRASE is not configured'; exit 11; }
           if [ "${#BACKUP_PASSPHRASE}" -lt 24 ]; then
             echo 'NEON_BACKUP_PASSPHRASE must be at least 24 characters'
@@ -83,8 +95,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          query="SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema'))::text || '|' || (SELECT count(*) FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema'))::text || '|' || (SELECT count(*) FROM assistant_lab.job)::text || '|' || (SELECT count(*) FROM assistant_lab.research_job)::text;"
-          stats="$(docker run --rm -e DATABASE_URL postgres:18 psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c "$query")"
+          stats="$(python -m ops.neon_backup_source stats)"
           IFS='|' read -r tables schemas jobs research_jobs <<<"$stats"
           [[ "$tables" =~ ^[0-9]+$ && "$schemas" =~ ^[0-9]+$ && "$jobs" =~ ^[0-9]+$ && "$research_jobs" =~ ^[0-9]+$ ]]
           echo "source_tables=$tables" >> "$GITHUB_OUTPUT"
@@ -98,16 +109,7 @@ jobs:
           set -euo pipefail
           umask 077
           rm -f neon.dump
-          docker run --rm \
-            -e DATABASE_URL \
-            -v "$PWD:/backup" \
-            postgres:18 \
-            pg_dump "$DATABASE_URL" \
-              --format=custom \
-              --compress=9 \
-              --no-owner \
-              --no-privileges \
-              --file=/backup/neon.dump
+          python -m ops.neon_backup_source dump
           test -s neon.dump
 
       - name: Encrypt backup before durable upload
