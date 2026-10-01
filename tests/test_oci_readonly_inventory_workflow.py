@@ -33,6 +33,9 @@ class WorkflowContract(unittest.TestCase):
             self.assertIn(gate, self.text)
             self.assertLess(self.text.index(gate), self.text.index('secrets.'))
         self.assertIn('REVIEW_GATE: ${{ inputs.source_run_id }}', self.text)
+        sdk_test = "python -m unittest discover -s tests -p 'test_oci_readonly_inventory_sdk.py'"
+        self.assertIn(sdk_test, self.text)
+        self.assertLess(self.text.index(sdk_test), self.text.index('secrets.'))
         self.assertNotRegex(self.text, r'run:.*\$\{\{\s*inputs\.')
 
     def test_credentials_and_executable_surface(self):

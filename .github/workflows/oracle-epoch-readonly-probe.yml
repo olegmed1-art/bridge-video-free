@@ -45,6 +45,10 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_oci_readonly_inventory*.py'
       - name: Install pinned SDK without OCI credentials
         run: timeout 60s python -m pip install --disable-pip-version-check --quiet 'oci==2.187.1'
+      - name: Construct real SDK clients with synthetic key and network blocked
+        run: |
+          python -c "import oci; assert oci.__version__ == '2.187.1'"
+          python -m unittest discover -s tests -p 'test_oci_readonly_inventory_sdk.py'
       - name: Read only the fixed OCI root compartment
         env:
           OCI_READONLY_CLI_USER: ${{ secrets.OCI_READONLY_CLI_USER }}

@@ -15,8 +15,9 @@ BUDGET_SECONDS = 180
 
 
 class StopProbe(Exception):
-    def __init__(self, code):
+    def __init__(self, code, stage=None):
         self.code = code
+        self.stage = stage
 
 
 def safe_text(value):
@@ -57,12 +58,30 @@ def credential_config(env):
 
 
 def make_clients(config, key):
-    import oci  # Pinned by workflow; absent during offline unit tests.
-    signer = oci.signer.Signer(config['tenancy'], config['user'], config['fingerprint'],
-                               None, private_key_content=key)
-    kwargs = dict(signer=signer, timeout=(3, 8), retry_strategy=oci.retry.NoneRetryStrategy())
-    return (oci.identity.IdentityClient(config, **kwargs),
-            oci.object_storage.ObjectStorageClient(config, **kwargs))
+    stage = 'sdk_import'
+    try:
+        import oci  # Pinned by workflow; no default credential discovery.
+        stage = 'signer_setup'
+        signer = oci.signer.Signer(config['tenancy'], config['user'], config['fingerprint'],
+                                   None, private_key_content=key)
+        # SDK validate_config still requires key_file OR key_content with a regular
+        # API-key Signer. The signer alone does not satisfy that config contract.
+        client_config = dict(config, key_content=key)
+        kwargs = dict(signer=signer, timeout=(3, 8), retry_strategy=oci.retry.NoneRetryStrategy())
+        stage = 'identity_client_setup'
+        iam = oci.identity.IdentityClient(client_config, **kwargs)
+        stage = 'storage_client_setup'
+        storage = oci.object_storage.ObjectStorageClient(client_config, **kwargs)
+        return iam, storage
+    except StopProbe as exc:
+        if exc.stage is None:
+            exc.stage = stage
+        raise
+    except Exception:
+        codes = {'sdk_import': 'SDK_IMPORT_FAILED', 'signer_setup': 'SIGNER_SETUP_FAILED',
+                 'identity_client_setup': 'IDENTITY_CLIENT_SETUP_FAILED',
+                 'storage_client_setup': 'STORAGE_CLIENT_SETUP_FAILED'}
+        raise StopProbe(codes[stage], stage) from None
 
 
 def empty_summary():
@@ -164,13 +183,17 @@ def main():
             raise StopProbe('TIME_BUDGET_EXCEEDED')
         signal.signal(signal.SIGALRM, alarm)
         signal.alarm(BUDGET_SECONDS)
+        stage = 'credential_input'
         try:
             config, key = credential_config(os.environ)
-            result = inventory(*make_clients(config, key))
+            stage = 'client_setup'
+            clients = make_clients(config, key)
+            stage = 'inventory'
+            result = inventory(*clients)
         except StopProbe as exc:
-            result['status'] = exc.code
+            result.update(status=exc.code, failed_stage=exc.stage or stage)
         except Exception:
-            result['status'] = 'CLIENT_SETUP_FAILED'
+            result.update(status='UNEXPECTED_LOCAL_FAILURE', failed_stage=stage)
         finally:
             signal.alarm(0)
     payload = json.dumps(result, sort_keys=True, ensure_ascii=True)

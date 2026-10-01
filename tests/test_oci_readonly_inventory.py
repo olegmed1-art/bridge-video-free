@@ -18,6 +18,58 @@ class ApiError(Exception):
 
 
 class InventoryTests(unittest.TestCase):
+    def test_client_config_in_memory_and_fixed_setup_failures(self):
+        config = dict(tenancy=probe.TENANCY, region=probe.REGION,
+                      user='synthetic', fingerprint='synthetic')
+        secret_marker = 'SYNTHETIC_PRIVATE_MARKER'
+
+        def fake_sdk():
+            return NS(signer=NS(Signer=Mock()), retry=NS(NoneRetryStrategy=Mock()),
+                      identity=NS(IdentityClient=Mock()),
+                      object_storage=NS(ObjectStorageClient=Mock()))
+
+        sdk = fake_sdk()
+        with patch.dict('sys.modules', {'oci': sdk}):
+            probe.make_clients(config, secret_marker)
+        for client in (sdk.identity.IdentityClient, sdk.object_storage.ObjectStorageClient):
+            self.assertEqual(client.call_args.args[0], dict(config, key_content=secret_marker))
+            self.assertEqual(client.call_args.kwargs['timeout'], (3, 8))
+        self.assertNotIn('key_content', config)
+        for stage, code in [('sdk_import', 'SDK_IMPORT_FAILED'),
+                            ('signer_setup', 'SIGNER_SETUP_FAILED'),
+                            ('identity_client_setup', 'IDENTITY_CLIENT_SETUP_FAILED'),
+                            ('storage_client_setup', 'STORAGE_CLIENT_SETUP_FAILED')]:
+            sdk = fake_sdk()
+            constructors = {'signer_setup': sdk.signer.Signer,
+                            'identity_client_setup': sdk.identity.IdentityClient,
+                            'storage_client_setup': sdk.object_storage.ObjectStorageClient}
+            if stage != 'sdk_import':
+                constructors[stage].side_effect = RuntimeError(secret_marker)
+            with self.subTest(stage=stage), patch.dict('sys.modules', {'oci': None if stage == 'sdk_import' else sdk}), \
+                 self.assertRaises(probe.StopProbe) as caught:
+                probe.make_clients(config, secret_marker)
+            self.assertEqual(caught.exception.code, code)
+            self.assertEqual(caught.exception.stage, stage)
+            self.assertNotIn(secret_marker, str(caught.exception))
+            if stage in ('sdk_import', 'signer_setup'):
+                sdk.identity.IdentityClient.assert_not_called()
+            if stage != 'storage_client_setup':
+                sdk.object_storage.ObjectStorageClient.assert_not_called()
+
+    def test_main_reports_setup_stage_without_inventory_or_secret(self):
+        stdout = io.StringIO()
+        with patch.object(probe.signal, 'SIGALRM', 14, create=True), \
+             patch.object(probe.signal, 'signal'), patch.object(probe.signal, 'alarm', create=True), \
+             patch.object(probe, 'credential_config', return_value=({}, 'synthetic')), \
+             patch.object(probe, 'make_clients', side_effect=probe.StopProbe('SIGNER_SETUP_FAILED', 'signer_setup')), \
+             patch.object(probe, 'inventory') as inventory, \
+             patch.dict(probe.os.environ, {}, clear=True), patch('sys.stdout', stdout):
+            self.assertEqual(probe.main(), 2)
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(result['status'], 'SIGNER_SETUP_FAILED')
+        self.assertEqual(result['failed_stage'], 'signer_setup')
+        inventory.assert_not_called()
+
     def clients(self):
         iam = Mock()
         storage = Mock()
@@ -154,7 +206,8 @@ class InventoryTests(unittest.TestCase):
              patch('builtins.open', output), patch('sys.stdout', stdout):
             self.assertEqual(probe.main(), 2)
         payload = stdout.getvalue().strip()
-        self.assertEqual(json.loads(payload)['status'], 'CLIENT_SETUP_FAILED')
+        self.assertEqual(json.loads(payload)['status'], 'UNEXPECTED_LOCAL_FAILURE')
+        self.assertEqual(json.loads(payload)['failed_stage'], 'credential_input')
         self.assertNotIn('PRIVATE_KEY_SECRET', payload)
         output().write.assert_called_once_with('```json\n' + payload + '\n```\n')
 

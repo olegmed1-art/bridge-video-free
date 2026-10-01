@@ -1,6 +1,7 @@
 # OCI inventory review probe — 2026-10-01
 
-Status: PREPARED, NOT LIVE-EXECUTED. Governance: ASSURED / independent I2 review.
+Status: first owner-dispatched run failed during local setup; offline fix prepared,
+NO RERUN AUTHORIZED. Governance: ASSURED / independent I2 review.
 Base main: `1440920191e1778fb9a9ba24e6701937a1a7459c`.
 Review branch: `review/oci-readonly-inventory-20261001`.
 
@@ -70,8 +71,49 @@ stdout and step summary, never an uploaded raw JSON artifact.
 
 Live IAM rights, bucket existence/usage, home region and free balance remain
 unverified. A successful empty root inventory does not establish no buckets elsewhere.
-No live run, IAM change, main merge, resource creation or upload is authorized by
-this preparation. Rollback is to leave the review branch undispatched; main is intact.
+No further live run, IAM change, main merge, resource creation or upload is authorized
+by this preparation. Rollback is to leave the review branch undispatched; main is intact.
+
+## Client setup correction after first run
+
+Owner-dispatched run `36887945718`, job `110455957394`, original commit
+`72c537f93f38b3c4725d91d9911df2dbb5376c79`, returned CLIENT_SETUP_FAILED at
+2026-10-01T15:55:16.648755Z; failed_stage was null. The 17 pre-install mocked tests
+passed. The original catch discarded the exception, so the log cannot establish
+which constructor failed or whether the existing private key is valid.
+
+Confirmed source defect: OCI SDK 2.187.1 clients call validate_config even when
+given a normal API-key Signer. Configuration must contain key_file or key_content.
+The old probe passed key only to Signer and omitted both from client configuration.
+Historical CLI readonly preflight supplied key_file; the existing SDK pattern in
+ops/oci_light_access_audit.py supplies dict(config, key_content=key).
+The fix uses a copied in-memory config with key_content, without a key file,
+credential discovery, fallback, or additional cloud APIs.
+
+Fixed diagnostics now distinguish SDK_IMPORT_FAILED, SIGNER_SETUP_FAILED,
+IDENTITY_CLIENT_SETUP_FAILED and STORAGE_CLIENT_SETUP_FAILED, with a fixed
+failed_stage. Messages, credentials and raw exceptions remain suppressed. Signer
+failure is not labelled an invalid owner key: its cause remains unverified.
+Unexpected local failures also preserve a safe stage. Inventory is never entered
+if client construction fails.
+
+The new real-SDK regression test generates a temporary synthetic RSA key solely in
+memory, reproduces the missing-key_file config rejection, and constructs both fixed
+clients while HTTP/socket connections are blocked. It neither authenticates nor
+makes an OCI API call. The workflow runs this test after SDK installation and before
+the credentials step. The pure mocked tests also cover setup stages and redaction.
+No existing private key was read, printed, decoded or copied during diagnosis.
+
+Correction validation: **20 tests PASS, no skips**, including real OCI SDK 2.187.1
+loaded from the verified wheel with local binary dependencies on Windows/Python
+3.13. The synthetic regression reproduces `InvalidConfig.errors ==
+{'key_file': 'missing'}` for both old client constructors and verifies that both fixed
+constructors succeed with network connections blocked. YAML structure validation
+also passes. This does not validate live owner credentials, IAM, or Linux execution;
+the same synthetic check is now a prerequisite in the future Ubuntu runner job.
+Independent I2 re-review also reproduced the failure/fix and ran all 20 tests:
+PASS, no blockers. Fixed script SHA256:
+`1f8945c235edc78239ba8fe3720167485a4964385c7db5e9e54b041ca2a80bff`.
 
 References:
 - https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow
