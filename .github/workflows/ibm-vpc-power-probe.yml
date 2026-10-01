@@ -3,6 +3,11 @@ name: IBM VPC power read-only probe
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: 'status default; trial_stop is independent; trial_start remains code-locked'
+        type: choice
+        options: [status, trial_start, trial_stop]
+        default: status
       test_oracle:
         description: 'Also send one authenticated read-only request from Oracle Light'
         type: boolean
@@ -14,12 +19,15 @@ on:
       - 'tests/test_ibm_vpc_power.py'
       - 'ops/ibm_vpc_oracle_probe.py'
       - 'tests/test_ibm_vpc_oracle_probe.py'
+      - 'ops/ibm_trial_executor.py'
+      - 'tests/test_ibm_trial_executor.py'
 
 permissions:
   contents: read
 
 concurrency:
-  group: ibm-vpc-power-controller
+  # A stop dispatch MUST NOT queue behind the trial it needs to stop.
+  group: ${{ inputs.mode == 'trial_stop' && 'ibm-vpc-independent-stop' || 'ibm-vpc-power-controller' }}
   cancel-in-progress: false
 
 jobs:
@@ -33,11 +41,42 @@ jobs:
       - name: Validate bounded client contract
         run: |
           set -euo pipefail
-          python -m unittest -v tests.test_ibm_vpc_power tests.test_ibm_vpc_oracle_probe
-          python -m py_compile ops/ibm_vpc_power.py ops/ibm_vpc_oracle_probe.py
+          python -m unittest -v tests.test_ibm_vpc_power tests.test_ibm_vpc_oracle_probe tests.test_ibm_trial_plan tests.test_ibm_trial_executor
+          python -m py_compile ops/ibm_vpc_power.py ops/ibm_vpc_oracle_probe.py ops/ibm_trial_executor.py
+
+  trial-start:
+    # Explicit preparation lock: parent must approve a reviewed enabling change.
+    if: ${{ false && github.event_name == 'workflow_dispatch' && inputs.mode == 'trial_start' && inputs.test_oracle == false && github.ref == 'refs/heads/review/ibm-trial-control-20261001' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Bounded trial (locked pending cost and parent release)
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+        run: python3 ops/ibm_trial_executor.py trial --ack OWNER_APPROVED_10MIN_10USD
+
+  trial-stop:
+    # Separate invocation, concurrency lane, token and direct GitHub->IBM route.
+    # No dependency on primary trial or Light/SSH. No additional IAM permission.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'trial_stop' && inputs.test_oracle == false && github.ref == 'refs/heads/review/ibm-trial-control-20261001' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Ordinary Stop of exact existing IBM only
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+        run: python3 ops/ibm_trial_executor.py stop --ack ORDINARY_STOP_EXACT_IBM
 
   oracle-probe:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_oracle }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'status' || inputs.mode == '') && inputs.test_oracle }}
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -64,7 +103,7 @@ jobs:
             --ssh-key "$probe_dir/key" --known-hosts "$probe_dir/known_hosts"
 
   probe:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'status' || inputs.mode == '') }}
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 5
