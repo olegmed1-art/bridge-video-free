@@ -1,0 +1,7 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=27bf6dcd-80b4-4055-990e-ef5bc6b91b34
+dispatch_epoch=1
+role=VIDEO
+task_fingerprint=fe47f7c4f03f629c19095c8eac89d6b02b41feefe302c1bc49acbdb8b9c98a0f
+target_pr=1599
+mode=READ_ONLY
