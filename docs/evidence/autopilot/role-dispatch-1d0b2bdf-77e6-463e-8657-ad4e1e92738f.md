@@ -1,0 +1,7 @@
+AUTOPILOT_DISPATCH_V1
+dispatch_id=1d0b2bdf-77e6-463e-8657-ad4e1e92738f
+dispatch_epoch=10
+role=DATA
+task_fingerprint=05e68fdf01f4eab37a472f2710ca82292aa75d9f2d0776b442cc893e88c88700
+target_pr=860
+mode=READ_ONLY
