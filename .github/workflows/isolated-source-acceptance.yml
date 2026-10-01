@@ -1,0 +1,137 @@
+name: Reviewed isolated source acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      approved_run:
+        description: Execute one reviewed source acceptance run within a 20-minute job
+        required: true
+        type: boolean
+        default: false
+      orchestration_sha:
+        description: Exact reviewed workflow commit SHA (source is fixed independently)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-source-acceptance-0098446
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    if: ${{ inputs.approved_run && github.ref == 'refs/heads/review/verified-patches-20260930' && github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: 0098446b9a79f9fdc73986312ad6fc6265b0b199
+      BASELINE_SHA: 1440920191e1778fb9a9ba24e6701937a1a7459c
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Validate reviewed orchestration identity
+        env:
+          EXPECTED: ${{ inputs.orchestration_sha }}
+          ACTUAL: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ && "$EXPECTED" == "$ACTUAL" ]]
+      - name: Checkout orchestration
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: control
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Checkout fixed source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: candidate
+          ref: 0098446b9a79f9fdc73986312ad6fc6265b0b199
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Checkout fixed baseline
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: baseline
+          ref: 1440920191e1778fb9a9ba24e6701937a1a7459c
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+      - name: Prepare credential-free exports and dependency-only image
+        run: |
+          set -euo pipefail
+          [[ "$(git -C candidate rev-parse HEAD)" == "$SOURCE_SHA" ]]
+          [[ "$(git -C baseline rev-parse HEAD)" == "$BASELINE_SHA" ]]
+          export_dir="$RUNNER_TEMP/acceptance-source"
+          control_dir="$RUNNER_TEMP/acceptance-control"
+          build_dir="$RUNNER_TEMP/acceptance-build"
+          mkdir -p "$export_dir/candidate" "$export_dir/baseline" "$control_dir" "$build_dir"
+          git -C candidate archive HEAD | tar -x -C "$export_dir/candidate"
+          git -C baseline archive HEAD ops/light_native_lane_cycle.py ops/light_native_lane_issuer.py | tar -x -C "$export_dir/baseline"
+          cp control/.github/acceptance/{runner.py,requirements.txt} "$control_dir/"
+          cp control/.github/acceptance/{Dockerfile,requirements.txt} "$build_dir/"
+          test ! -e "$export_dir/candidate/.git"
+          test ! -e "$export_dir/baseline/.git"
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'acceptance-source/candidate'
+          files = []
+          entries = subprocess.check_output(['git', '-C', 'candidate', 'ls-tree', '-rz', 'HEAD']).split(b'\0')
+          for entry in filter(None, entries):
+              meta, path = entry.split(b'\t', 1)
+              mode, kind, sha = meta.decode().split()
+              assert kind == 'blob' and mode in ('100644', '100755')
+              name = path.decode()
+              p = root / name
+              assert not p.is_symlink()
+              raw = p.read_bytes()
+              assert hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest() == sha
+              files.append({'path': name, 'sha256': hashlib.sha256(raw).hexdigest()})
+          assert len(files) == 2624
+          manifest = {'source_sha': os.environ['SOURCE_SHA'], 'files': files}
+          (Path(os.environ['RUNNER_TEMP']) / 'acceptance-control/source-manifest.json').write_text(json.dumps(manifest))
+          PY
+          docker build --pull --no-cache -t reviewed-source-acceptance:local "$build_dir"
+          docker image inspect --format '{{.Id}}' reviewed-source-acceptance:local
+      - name: Offline lanes within one bounded job
+        run: |
+          set -euo pipefail
+          run_lane() {
+            local lane="$1" identity="$2" tmpfs_mode="$3"
+            shift 3
+            docker run --rm --pull=never --user "$identity" --network none \
+              --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+              --pids-limit 256 --memory 2g --cpus 2 "$@" \
+              --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=512m \
+              --tmpfs /var/tmp:rw,nosuid,nodev,mode=1777,size=512m \
+              --tmpfs "/work:rw,nosuid,nodev,mode=0755,size=512m,$tmpfs_mode" \
+              --mount "type=bind,src=$RUNNER_TEMP/acceptance-source,dst=/source,readonly" \
+              --mount "type=bind,src=$RUNNER_TEMP/acceptance-control,dst=/control,readonly" \
+              --entrypoint /bin/sh reviewed-source-acceptance:local -eu -c '
+                cp -R /source/. /work/
+                cd /work/candidate
+                exec env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp \
+                  PYTHONPATH=/work/candidate PYTHONDONTWRITEBYTECODE=1 \
+                  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 UV_LAYOUT_ISOLATED=1 \
+                  python -B /control/runner.py "$1"
+              ' sh "$lane"
+          }
+          # Each lane starts from fresh exact source; no output/state crosses lanes.
+          failure=0
+          run_lane nonroot 1000:1000 uid=1000,gid=1000 || failure=1
+          run_lane light 0:0 uid=0,gid=0 || failure=1
+          run_lane layout 0:0 uid=0,gid=0 \
+            --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE \
+            --cap-add SETUID --cap-add SETGID || failure=1
+          [[ "$failure" == 0 ]]
+          echo 'EXACT_SOURCE_ACCEPTANCE_PASS: 43 UV + 18 spool + 28 lifecycle + 100 Light + 4 layout; secret scan PASS'
