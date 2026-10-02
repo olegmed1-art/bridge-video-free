@@ -59,11 +59,11 @@ def main():
         result['relation_acl']=value(name,"SELECT string_agg(c.relname||':'||coalesce(c.relacl::text,'NULL')||':'||pg_get_userbyid(c.relowner),',' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='sim'")
         result['function_acl']=value(name,"SELECT string_agg(p.proname||':'||coalesce(p.proacl::text,'NULL')||':'||pg_get_userbyid(p.proowner)||':'||coalesce(p.proconfig::text,'NULL')||':'||p.prosecdef::text,',' ORDER BY p.proname) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='sim'")
         result['schema_acl']=value(name,"SELECT nspacl::text||':'||pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname='sim'")
-        result['default_acl']=value(name,"SELECT coalesce(string_agg(pg_get_userbyid(defaclrole)||':'||defaclnamespace::regnamespace::text||':'||defaclobjtype||':'||defaclacl::text,',' ORDER BY defaclobjtype),'') FROM pg_default_acl")
+        result['default_acl']=value(name,"SELECT coalesce(string_agg(pg_get_userbyid(defaclrole)||':'||defaclnamespace::regnamespace::text||':'||defaclobjtype::text||':'||defaclacl::text,',' ORDER BY defaclobjtype),'') FROM pg_default_acl")
         result['roles']=value(name,"SELECT string_agg(rolname||':'||rolsuper::text||':'||rolcreatedb::text||':'||rolcreaterole::text||':'||rolreplication::text||':'||rolbypassrls::text||':'||rolcanlogin::text,',' ORDER BY rolname) FROM pg_roles WHERE rolname LIKE 'rep_%'")
         result['memberships']=value(name,"SELECT coalesce(string_agg(r.rolname||':'||m.rolname||':'||a.admin_option::text,',' ORDER BY r.rolname,m.rolname),'') FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid JOIN pg_roles m ON m.oid=a.member WHERE r.rolname LIKE 'rep_%' OR m.rolname LIKE 'rep_%'")
         result['constraints']=value(name,"SELECT string_agg(c.conname||':'||pg_get_constraintdef(c.oid)||':'||c.convalidated::text,',' ORDER BY c.conname) FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname='sim'")
-        result['triggers']=value(name,"SELECT string_agg(pg_get_triggerdef(t.oid)||':'||t.tgenabled,',' ORDER BY t.tgname) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='sim' AND NOT t.tgisinternal")
+        result['triggers']=value(name,"SELECT string_agg(pg_get_triggerdef(t.oid)||':'||t.tgenabled::text,',' ORDER BY t.tgname) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='sim' AND NOT t.tgisinternal")
         return result
     try:
         report['image_id']=docker('image','inspect','--format','{{.Id}}',IMAGE).stdout.decode().strip()
