@@ -1,0 +1,64 @@
+name: Isolated incident collector fixtures
+
+on:
+  push:
+    branches: [review/verified-patches-20260930]
+    paths: [.github/workflows/incident-collector-fixtures.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-incident-collector-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  collector-fixtures:
+    if: "${{ github.event_name == 'push' && github.ref == 'refs/heads/review/verified-patches-20260930' && github.event.before == '36003ecbab8fc72492b180b6177bffc32596970b' && github.event.head_commit.message == 'ci: authorize one isolated incident collector fixture run' && github.run_attempt == 1 }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      EXPECTED_SHA: ${{ github.sha }}
+      PYTHON_IMAGE: python@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Exact checkout without persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: candidate
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 2
+          submodules: false
+          lfs: false
+      - name: Verify sole parent and three-file fixture delta
+        run: |
+          set -euo pipefail
+          parent=36003ecbab8fc72492b180b6177bffc32596970b
+          [[ "$(git -C candidate rev-list --parents -n 1 HEAD)" == "$EXPECTED_SHA $parent" ]]
+          [[ "$(git -C candidate log -1 --format=%B)" == 'ci: authorize one isolated incident collector fixture run' ]]
+          expected_files=$(cat <<'FILES'
+          .github/incident-fixtures/collector.py
+          .github/incident-fixtures/test_collector.py
+          .github/workflows/incident-collector-fixtures.yml
+          FILES
+          )
+          [[ "$(git -C candidate diff --name-only "$parent" HEAD)" == "$expected_files" ]]
+          mkdir -p "$RUNNER_TEMP/incident-fixtures"
+          git -C candidate archive HEAD .github/incident-fixtures | tar -x -C "$RUNNER_TEMP/incident-fixtures"
+          docker pull "$PYTHON_IMAGE"
+      - name: Offline real-root fixtures in disposable tmpfs
+        run: |
+          set -euo pipefail
+          docker run --rm --pull=never --user 0:0 --network none --read-only \
+            --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges:true \
+            --pids-limit 64 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=32m \
+            --tmpfs /var/lib/bridge-light-native-lane-owner:rw,nosuid,nodev,mode=0700,size=64m \
+            --mount "type=bind,src=$RUNNER_TEMP/incident-fixtures/.github/incident-fixtures,dst=/fixtures,readonly" \
+            --workdir /fixtures --entrypoint /usr/bin/env "$PYTHON_IMAGE" \
+            -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp INCIDENT_FIXTURE_CONTAINER=1 \
+            /usr/bin/timeout --signal=TERM --kill-after=5s 90s \
+            /usr/local/bin/python -I -S -B /fixtures/test_collector.py
