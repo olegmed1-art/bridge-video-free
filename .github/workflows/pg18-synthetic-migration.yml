@@ -1,0 +1,46 @@
+name: Generic PostgreSQL 18 synthetic migration proof
+
+on:
+  push:
+    branches: [test/pg18-synthetic-migration-20261002]
+    paths:
+      - '.github/workflows/pg18-synthetic-migration.yml'
+      - 'synthetic-pg18/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: generic-pg18-synthetic-proof
+  cancel-in-progress: false
+
+jobs:
+  synthetic:
+    if: github.ref == 'refs/heads/test/pg18-synthetic-migration-20261002'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: synthetic-pg18
+      - name: Fetch immutable official PostgreSQL image
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 180s docker pull --platform linux/amd64 postgres@sha256:9e73daeb439141c2b11eea2463f5f1a3b269fd90d897b41cddb7cb440f21aa5d
+      - name: Run two isolated synthetic rehearsals
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=20s 450s env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp LANG=C.UTF-8 python3 synthetic-pg18/run.py
+          timeout --signal=TERM --kill-after=20s 450s env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp LANG=C.UTF-8 python3 synthetic-pg18/run.py
+      - name: Cleanup only synthetic containers on this disposable runner
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t names < <(docker ps -a --format '{{.Names}}' | grep -E '^pg18-synthetic-[0-9]+-(source|target)$' || true)
+          if ((${#names[@]})); then timeout 30s docker rm -f -v "${names[@]}"; fi
