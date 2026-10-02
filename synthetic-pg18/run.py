@@ -29,7 +29,11 @@ def main():
         if remaining<=0:raise RuntimeError('TIME_BUDGET')
         p=subprocess.run(['docker',*args],input=data,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                          env=ENV,timeout=min(remaining,seconds))
-        if ok and p.returncode:raise RuntimeError('DOCKER_COMMAND_FAILED')
+        if ok and p.returncode:
+            # Only this stand-alone synthetic fixture can reach these containers.
+            report['synthetic_diagnostic']=p.stderr.decode('utf-8',errors='replace')[:2000]
+            report['failed_operation']=next((x for x in args if x in ('psql','pg_dump','pg_restore','initdb')) ,args[0])
+            raise RuntimeError('DOCKER_COMMAND_FAILED')
         return p
     def sql(name,query,ok=True):
         return docker('exec','-i',name,'psql','-X','-q','-A','-t','-v','ON_ERROR_STOP=1',
