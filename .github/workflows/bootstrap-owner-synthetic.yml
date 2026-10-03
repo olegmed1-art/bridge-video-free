@@ -1,0 +1,42 @@
+name: Bootstrap owner isolated regression
+on:
+  push:
+    branches: [test/bootstrap-owner-20261003]
+    paths:
+      - '.github/workflows/bootstrap-owner-synthetic.yml'
+      - 'database/tests/bootstrap-owner/**'
+permissions:
+  contents: read
+concurrency:
+  group: bootstrap-owner-isolated-regression
+  cancel-in-progress: false
+jobs:
+  regression:
+    if: github.ref == 'refs/heads/test/bootstrap-owner-20261003'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: database
+      - name: Fetch immutable official PostgreSQL image
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 180s docker pull --platform linux/amd64 postgres@sha256:9e73daeb439141c2b11eea2463f5f1a3b269fd90d897b41cddb7cb440f21aa5d
+      - name: Test generic owner and access model twice without network
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=20s 450s env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp LANG=C.UTF-8 python3 database/tests/bootstrap-owner/run.py
+          timeout --signal=TERM --kill-after=20s 450s env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp LANG=C.UTF-8 python3 database/tests/bootstrap-owner/run.py
+      - name: Cleanup task containers on disposable runner
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t names < <(docker ps -a --format '{{.Names}}' | grep -E '^bootstrap-owner-[0-9]+$' || true)
+          if ((${#names[@]})); then timeout 30s docker rm -f -v "${names[@]}"; fi
