@@ -143,7 +143,7 @@ def launch(gate):
                  'os.execv(sys.argv[2],sys.argv[2:])')
     return subprocess.Popen(['/usr/bin/python3', '-B', '-u', '-c', bootstrap, str(os.getpid()),
                              '/usr/bin/python3', '-B', '-u', str(BASE / 'prepare_driver.py'), '--run-url', gate.bound['run_url'], '--start-epoch', str(gate.bound['t0'])],
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True, bufsize=0)
 
 
 def reader(stream, events, label, max_line):
@@ -207,7 +207,8 @@ def main():
             lock = open(BASE / 'prepare_driver.py', 'rb')
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         events = queue.Queue(maxsize=32)
-        threading.Thread(target=reader, args=(sys.stdin.buffer, events, 'INPUT', 4096), daemon=True).start()
+        stdin_stream = getattr(sys.stdin.buffer, 'raw', sys.stdin.buffer)
+        threading.Thread(target=reader, args=(stdin_stream, events, 'INPUT', 4096), daemon=True).start()
         emit('RECEIVER_READY', arm_expires_at=gate.arm_wall)
         output_bytes = 0
         while gate.state != 'TERMINAL':
