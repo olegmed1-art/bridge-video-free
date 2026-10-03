@@ -1,0 +1,35 @@
+name: Generic admission containment contract
+on:
+  push:
+    branches: [review/admission-containment-20261003]
+    paths:
+      - 'ops/admission_contract/**'
+      - '.github/workflows/admission-containment-contract.yml'
+permissions:
+  contents: read
+concurrency:
+  group: generic-admission-containment-contract
+  cancel-in-progress: false
+jobs:
+  isolated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Hermetic Linux containment and admission tests
+        working-directory: ops/admission_contract
+        run: |
+          set -euo pipefail
+          export PYTHONDONTWRITEBYTECODE=1
+          export PYTHONPATH="$PWD"
+          python3 -B - <<'PY'
+          import sys, unittest
+          assert 'sitecustomize' in sys.modules
+          suite = unittest.defaultTestLoader.discover('.')
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          print('CONTRACT_TOTAL=' + str(result.testsRun))
+          print('CONTRACT_SKIPPED=' + str(len(result.skipped)))
+          raise SystemExit(0 if result.wasSuccessful() and not result.skipped else 1)
+          PY
