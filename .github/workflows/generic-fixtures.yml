@@ -1,0 +1,83 @@
+name: Generic synthetic fixtures
+
+on:
+  push:
+    branches: [review/generic-local-fixtures-20261003]
+    paths: [.github/workflows/generic-fixtures.yml]
+
+permissions: {}
+
+concurrency:
+  group: generic-synthetic-fixtures
+  cancel-in-progress: false
+
+jobs:
+  fixtures:
+    if: >-
+      github.event.repository.private == false &&
+      github.event.created == true &&
+      github.run_attempt == 1 &&
+      github.event.head_commit.message == 'ci: run reviewed generic fixtures once'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHON_IMAGE: python@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
+    steps:
+      - name: Fetch only five reviewed public files without authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I -S -B <<'PY'
+          import base64, hashlib, json, os, pathlib, re, urllib.request
+          expected = {
+              'collector.py': '74477a73d64e49de7a39dd499cfe4ae81c6c02603e28e07522191d08d98180f1',
+              'README.md': 'b557c0f6b3c42b24ee151430d55f5d15877973067053a7a4291e7268c2187c24',
+              'synthetic-config.json': 'a238f2a6eaa092df242cc9db0089e35a942622ed32163f30ceb29e83f4c9d703',
+              'test_collector.py': 'c597894ad44724a612fb94927c11927a1d62bc4f79268db5ada8e3d49e414844',
+              'test_configuration.py': 'd143d222e04216117c018def6c14d04dd8abbd4e34229de7be179b2410598bc8',
+          }
+          repository, commit = os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA']
+          assert re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository)
+          assert re.fullmatch(r'[0-9a-f]{40}', commit)
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  raise RuntimeError('redirect refused')
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+          bundle = {}
+          for name, digest in expected.items():
+              url = f'https://raw.githubusercontent.com/{repository}/{commit}/.github/incident-fixtures/generic/{name}'
+              with opener.open(url, timeout=15) as response:
+                  raw = response.read(65537)
+              assert len(raw) <= 65536 and hashlib.sha256(raw).hexdigest() == digest
+              bundle[name] = base64.b64encode(raw).decode('ascii')
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'generic-fixtures.json').write_text(json.dumps(bundle), encoding='ascii')
+          PY
+          docker pull "$PYTHON_IMAGE"
+      - name: Offline disposable Linux root tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --pull=never --user 0:0 --network none --read-only \
+            --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges:true \
+            --pids-limit 64 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=16m \
+            --tmpfs /fixture-data:rw,nosuid,nodev,mode=0700,size=16m \
+            --interactive --entrypoint /usr/bin/env "$PYTHON_IMAGE" \
+            -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp WHITELIST_FIXTURE=1 \
+            /usr/bin/timeout --signal=KILL 90s /usr/local/bin/python -I -S -B -c '
+          import base64, json, pathlib, sys, unittest
+          raw = sys.stdin.buffer.read(262145)
+          assert len(raw) <= 262144
+          bundle = json.loads(raw)
+          assert set(bundle) == {"collector.py", "README.md", "synthetic-config.json", "test_collector.py", "test_configuration.py"}
+          root = pathlib.Path("/tmp/fixtures")
+          root.mkdir(mode=0o700)
+          for name, payload in bundle.items():
+              data = base64.b64decode(payload, validate=True)
+              assert len(data) <= 65536
+              (root / name).write_bytes(data)
+          sys.path.insert(0, str(root))
+          suite = unittest.defaultTestLoader.discover(str(root), pattern="test_*.py")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          sys.exit(0 if result.wasSuccessful() and not result.skipped and result.testsRun == 42 else 1)
+          ' < "$RUNNER_TEMP/generic-fixtures.json"
