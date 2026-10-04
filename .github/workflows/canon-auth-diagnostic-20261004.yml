@@ -1,0 +1,46 @@
+name: Canon auth metadata diagnostic 20261004
+
+on:
+  push:
+    branches: ['test/canon-auth-validation-20261004']
+    paths: ['.github/workflows/canon-auth-diagnostic-20261004.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic:
+    if: github.run_number == 1 && github.run_attempt == 1 && github.event.head_commit.message == 'Run reviewed one-shot canon metadata diagnostic'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: 9edc7b9317c7002cb465fe44a9257db1f510abec
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = 9edc7b9317c7002cb465fe44a9257db1f510abec
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check pytest==8.4.2 'psycopg[binary]==3.3.4'
+      - run: python -m pytest -q tools/canon_auth/test_auth.py
+  metadata:
+    needs: synthetic
+    if: github.run_number == 1 && github.run_attempt == 1 && github.event.head_commit.message == 'Run reviewed one-shot canon metadata diagnostic'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: 9edc7b9317c7002cb465fe44a9257db1f510abec
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = 9edc7b9317c7002cb465fe44a9257db1f510abec
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+      - name: Existing smoke credential, fixed read-only metadata probe
+        env:
+          BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
+          CANON_DIAGNOSTIC_INTENT: canon-auth-db-20261004-v1
+        run: timeout 25s python -m tools.canon_auth.db_diagnostic
