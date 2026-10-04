@@ -4,7 +4,6 @@ from contextlib import nullcontext
 import hashlib
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 from bridge_vision import bridgit_primary_production_candidate as adapter
@@ -35,6 +34,9 @@ def recognized(state):
 
 @pytest.fixture
 def video_pass(monkeypatch, tmp_path):
+    # Lightweight contract CI omits pixel dependencies; the dedicated guard
+    # workflow installs numpy and explicitly rejects any skipped guard case.
+    np = pytest.importorskip("numpy")
     state = SimpleNamespace(duration=40000, scenes=[(0, 0)], attempts=[], written={},
                             released=False, duplicate=set(), rejected=set(), fault=None,
                             missing=set(), geometry_change=set(), geometry_unknown=set(), processed_at=[], now=0)
