@@ -5,6 +5,7 @@ on:
     paths:
       - 'bridge_contracts/video_canon_replay.py'
       - 'bridge_contracts/video_source_draft.py'
+      - 'bridge_contracts/video_replay_input.py'
       - 'bridge_contracts/video_canon*.py'
       - 'bridge_contracts/video_learning_candidate.py'
       - 'diana_longitudinal*.py'
@@ -12,6 +13,7 @@ on:
       - 'tools/replay_video_canon.py'
       - 'tests/test_video_canon*.py'
       - 'tests/test_video_source_draft.py'
+      - 'tests/test_video_replay_input.py'
       - 'tests/test_diana_longitudinal*.py'
       - '.github/workflows/video-canon-staging-replay-ci.yml'
 
@@ -41,6 +43,7 @@ jobs:
             tests/test_diana_longitudinal*.py \
             tests/test_video_canon*.py \
             tests/test_video_source_draft.py \
+            tests/test_video_replay_input.py \
             tests/test_bridge_video_learning_candidate.py \
             tests/test_video_candidate_persistence_revision.py \
             tests/test_video_extended_extraction.py \

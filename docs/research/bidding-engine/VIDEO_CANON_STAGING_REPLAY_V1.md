@@ -158,3 +158,56 @@ independent verification. Input PASS labels cannot remove these gaps; this draft
 path never calls even an injected trusted resolver. An operating evidence reader
 and later validated contract construction are separate work. No promotion command
 is emitted. Deterministic payload hashes support existing staging deduplication.
+
+## Pinned file-to-local-staging entry point
+
+`bridge_contracts.video_replay_input.build_replay_input` is a pure byte-input
+builder. It supports full existing master JSON and existing bounded inspection
+packets. It does not download artifacts, extract media, execute DDS, query a
+database or install a trusted resolver. Matching a supplied digest proves file
+integrity against that manifest, never teacher identity or source authority.
+
+The selection manifest is `video-replay-selection-v1` with `input_kind` equal to
+`full_master` or `bounded_packet`, and mandatory `source_raw_sha256`. Full-master
+selection uses exact `segment_id`, `episode_id`, optional `frame_ids`, and
+`source_document_drive_id`. The source layout is `source.driveId/sha256`,
+`transcript[].segment_id/start/end/text/speaker_cluster`, `episodes[].episode_id/
+start/end/segment_ids`, and `screenshots[].evidence_id/time/sha256`. Unknown
+source fields are not inferred. Optional existing speaker-map bytes require
+`speaker_map_raw_sha256`; canonical master digest, job, document and interval
+bindings must agree. Missing maps remain unverified.
+
+Bounded inputs require `source_schema` matching the original packet exactly.
+The builder explicitly converts that schema to the generic bounded schema,
+retains source claims and records the original schema and byte hash in lineage.
+It cannot replace an existing map or overwrite conflicting embedded constraints.
+Duplicate JSON keys, non-finite numbers, bad pins and ambiguous selectors fail
+before output or staging. Source overlaps, omitted episode segments, map conflicts
+and boundary frames become retained builder conflicts, not corrected source data.
+
+An optional constraints sidecar requires `constraints_raw_sha256` in the manifest;
+its full JSON value is retained unchanged as `source_constraints`. It can only
+add blockers. No selected source text, teacher claim or sidecar becomes trusted.
+
+```sh
+python -m tools.replay_video_canon /private/master.json \
+  --selection /private/selection.json --speaker-map /private/map.json \
+  --constraints /private/constraints.json --prepared-output /private/input-1.json \
+  --output /private/receipt-1.json --local-staging-db /private/disposable.sqlite
+```
+
+Repeat with fresh prepared-output and receipt paths and the same SQLite file.
+For bounded-packet input use the same command without `--speaker-map`, with a
+bounded selection manifest. Inputs are not modified; path aliases and existing
+outputs are rejected. Prepared-input and replay hashes are deterministic; execution
+counts and filenames do not enter replay identity. Files and SQLite are separate
+resources, not a distributed transaction: after an output I/O failure, retry with
+fresh output paths; stable staging keys prevent duplicate rows.
+
+The executable regression uses only synthetic full-master files and sidecars.
+An actual bounded-packet smoke is a separate private receipt, not a synthetic
+test or a full-master production demonstration. Actual full-master smoke is not
+claimed by this change and can be run later by the authorized holder of the
+already verified bytes. This intermediate path terminates at disposable local
+SQLite. Production postprocessor, DDS, Drive upload and PostgreSQL hooks are not
+enabled; no new credentials, permissions or database migrations are required.

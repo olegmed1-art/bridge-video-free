@@ -87,6 +87,8 @@ def normalize_source_packet(packet):
     if identity.get("cluster_id") != segment.get("master_speaker_cluster"):
         gap("SPEAKER_CLUSTER_MISMATCH", "speaker_identity_claim.cluster_id")
     gaps.extend(source_constraint_gaps(packet))
+    if packet.get("input_builder_conflicts"):
+        gap("INPUT_BUILDER_CONFLICT", "input_builder_conflicts")
     integrity_ok = not gaps
     # Only an affirmative opening with an explicit causal connector is supported.
     # Unmatched wording is retained verbatim, never completed by a language model.
@@ -135,8 +137,11 @@ def normalize_source_packet(packet):
         "source_claim": deepcopy(source), "parent_document_claim": deepcopy(document),
         "transcript": deepcopy(segment), "computed_text_sha256": computed,
         "episode_claim": deepcopy(episode), "speaker_claim": deepcopy(identity),
+        "speaker_map_context_claim": deepcopy(packet.get("speaker_map_context_claim", {})),
         "frame_inventory_claims": deepcopy(packet.get("frame_inventory_candidates", [])),
         "source_constraints": deepcopy(packet.get("source_constraints", {})),
+        "input_builder_lineage": deepcopy(packet.get("input_builder_lineage")),
+        "input_builder_conflicts": deepcopy(packet.get("input_builder_conflicts", [])),
         "source_integrity_status": "INTERNAL_CHECKS_PASSED" if integrity_ok else "INVALID",
         "knowledge": relation,
         "unknown": {key: "UNKNOWN" for key in (
