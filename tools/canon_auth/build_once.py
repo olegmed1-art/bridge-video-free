@@ -9,7 +9,7 @@ from urllib.request import ProxyHandler, build_opener
 
 from . import vercel_validator as v
 
-MARKER = "CANON_ACCEPTANCE_20261004_ONCE"
+MARKER = "CANON_ACCEPTANCE_20261004_AUTHORIZED_RETRY1"
 MESSAGE = re.compile(r"\A" + MARKER + r"\n{1,2}observed_at=(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\nbase=" + v.READY_SHA + r"\n?\Z")
 HASHES = {"3H": "4127a40bfd62d7fa9d5d5b6e1f5b72b3c751881f2765cef5f690265382dcdb43",
           "3S": "2bb321fc675343a8dd3228cd06497d54ba66727be1a104512808338d9ffd2989"}
@@ -19,7 +19,7 @@ PATH = f"/v1/ai/positions/{v.POSITION}/teacher-evidence"
 def intent(env):
     # Ordinary future builds return immediately, without reading any credential.
     message = env.get("VERCEL_GIT_COMMIT_MESSAGE", "")
-    if not message.startswith(MARKER):
+    if not message.startswith("CANON_ACCEPTANCE_"):
         return None
     match = MESSAGE.fullmatch(message)
     if not match:
@@ -102,7 +102,7 @@ def lifecycle(env, *, opener=None, sleep=time.sleep, now=None, claim=None):
             ("active", "SUPPORTED", "ABSTAIN"), ("revoked", "ABSTAIN", "SUPPORTED"),
             ("reactivated", "SUPPORTED", "ABSTAIN")):
         reached = False
-        for attempt in range(8):
+        for attempt in range(10 if phase == "baseline" else 8):
             status, data, receipt = v.request(client, PATH, token=token, body=body("3H"))
             accept(receipt)
             all_receipts.append(receipt)
@@ -127,7 +127,8 @@ def lifecycle(env, *, opener=None, sleep=time.sleep, now=None, claim=None):
                 break
             if observed != waiting:
                 raise v.Rejected("phase_order_rejected")
-            sleep(8)
+            emit("poll", [receipt])
+            sleep(16 if phase == "baseline" else 8)
         if not reached:
             raise v.Rejected("phase_deadline_exceeded")
     if len({r["request_id"] for r in all_receipts}) != len(all_receipts):
