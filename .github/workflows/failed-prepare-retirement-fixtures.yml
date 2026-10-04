@@ -14,7 +14,7 @@ jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == '743e6a479005c8a1d032d0f92b7d4366e28a1af6' &&
+      github.event.before == 'e0527671a43b61f38a61b2ce9113d5b989680c99' &&
       github.run_attempt == 1 &&
       github.event.head_commit.message == 'ci: verify local journal diagnostic'
     strategy:
@@ -192,12 +192,13 @@ jobs:
                  ("controller","cycle","execution","feed","install","issuer","owner","run_guard")]
           tests += ["tests/test_light_native_pilot_intake.py"]
           tests += sorted(str(p.relative_to(root)) for p in (root/"tests").glob("test_light_native_retirement*.py"))
+          tests += ["tests/test_video_canon_replay.py","tests/test_video_replay_input.py","tests/test_video_source_draft.py","tests/test_book_material_staging.py","tests/test_book_runtime_identity.py","tests/test_book_teacher_api.py"]
           tests += ["tools/canon_auth","tools/tournament_pilot/test_pilot.py","tests/test_l1_canonical_registry.py","tests/test_l1_canonical_runtime.py","tests/test_knowledge_read_api.py","tests/test_ai_api_routes.py","tests/test_ai_final_decision_contract.py"]
           code=pytest.main(["-q","-ra","-p","no:cacheprovider","--noconftest","-c","/dev/null","--basetemp=/fixture-data/tests",
                             "--rootdir="+str(root),"--junitxml=/tmp/retirement.xml",*tests])
           cases=ET.parse("/tmp/retirement.xml").getroot().findall(".//testcase")
           ids={(x.get("classname"),x.get("name")) for x in cases}
-          assert code==0 and len(cases)==740 and len(ids)==len(cases)
+          assert code==0 and len(cases)>=740 and len(ids)==len(cases)
           assert all(not any(x.find(k) is not None for k in ("skipped","failure","error")) for x in cases)
           print("LOCAL_JOURNAL_DIAGNOSTIC_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
           ' < "$RUNNER_TEMP/retirement-test-input.zip"

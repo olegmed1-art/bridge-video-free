@@ -22,6 +22,7 @@ from bridge_contracts.video_dds_decision_comparison import DDSRequestExecutor
 from bridge_contracts.video_extended_extraction import build_extended_extraction
 from bridge_contracts.video_learning_feedback import CorrectionReceiptResolver
 from bridge_contracts.video_canon_auto_pipeline import run_video_canon_auto_pipeline
+from bridge_contracts.video_canon_replay import replay_requested, replay_result_bundle, staging_replay_required
 
 QUALITY_SCHEMA = v41.QUALITY_SCHEMA
 QUALITY_SCHEMA_VERSION = 5
@@ -202,10 +203,14 @@ def build_quality_layer(
     learning_candidate = working.get("video_canon_learning_candidate")
     assertions = working.get("video_canon_assertions")
     verifications = working.get("video_canon_verification_bundles")
-    if isinstance(learning_candidate, Mapping) and isinstance(assertions, list) and isinstance(verifications, Mapping):
+    if staging_replay_required(working):
+        auto_pipeline = replay_result_bundle(working)
+    elif isinstance(learning_candidate, Mapping) and isinstance(assertions, list) and isinstance(verifications, Mapping):
         auto_pipeline = run_video_canon_auto_pipeline(
             learning_candidate, assertions, verifications
         )
+    elif replay_requested(working):
+        auto_pipeline = replay_result_bundle(working)
     else:
         auto_pipeline = {
             "schema": "video-canon-auto-pipeline-v1",
@@ -221,7 +226,12 @@ def build_quality_layer(
     staging.extend(auto_pipeline["candidates"])
     counts["video_canon_auto_promotions_ready"] = len(auto_pipeline["promotion_commands"])
     counts["video_canon_auto_gaps"] = len(auto_pipeline["gaps"])
-    counts["video_canon_candidates"] = len(auto_pipeline["candidates"])
+    # Replay gaps and provenance receipts share staging, but are not Canon
+    # candidates. Preserve the meaning of the existing candidate counter.
+    counts["video_canon_candidates"] = sum(
+        row.get("candidate_type") == "video_school_canon_candidate"
+        for row in auto_pipeline["candidates"]
+    )
     counts["staging_records"] = len(staging)
     return quality
 
