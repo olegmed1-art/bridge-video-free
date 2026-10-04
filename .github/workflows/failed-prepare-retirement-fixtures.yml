@@ -14,13 +14,30 @@ jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == '8f180e2483b029d39d20f1334e0ce96a63cec29c' &&
+      github.event.before == 'f8bd333ff78513dda780659185e0b071f937cc36' &&
       github.run_attempt == 1 &&
       github.event.head_commit.message == 'ci: verify failed prepare retirement protocol'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            machine: x86_64
+            image: python@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
+            manifest: wheels.json
+            manifest_sha256: 5340e9e97ed94f4632e8d1bff361ef2c43d3742eebf3c8de44b7c341e4a353b9
+          - runner: ubuntu-24.04-arm
+            machine: aarch64
+            image: python@sha256:349275ed26e7aea20752e1fd63c40c30a0281d324e51fb41612c2433cb6482d4
+            manifest: wheels-aarch64.json
+            manifest_sha256: c72843242d64570a297608de7071af677f8fdf2c5de3d5e8cd6d7f4dae817b1c
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
     env:
-      PYTHON_IMAGE: python@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
+      PYTHON_IMAGE: ${{ matrix.image }}
+      EXPECTED_MACHINE: ${{ matrix.machine }}
+      WHEEL_MANIFEST: ${{ matrix.manifest }}
+      WHEEL_MANIFEST_SHA256: ${{ matrix.manifest_sha256 }}
     steps:
       - name: Fetch exact public source and hash-pinned wheels without credentials
         shell: bash
@@ -46,8 +63,10 @@ jobs:
           archive = zipfile.ZipFile(io.BytesIO(source))
           prefix = 'bridge-video-free-'+sha+'/'
           assert all(x.startswith(prefix) for x in archive.namelist())
-          manifest = archive.read(prefix+'.github/retirement-fixtures/wheels.json')
-          assert hashlib.sha256(manifest).hexdigest() == '5340e9e97ed94f4632e8d1bff361ef2c43d3742eebf3c8de44b7c341e4a353b9'
+          assert os.uname().machine == os.environ['EXPECTED_MACHINE']
+          assert os.environ['WHEEL_MANIFEST'] in ('wheels.json','wheels-aarch64.json')
+          manifest = archive.read(prefix+'.github/retirement-fixtures/'+os.environ['WHEEL_MANIFEST'])
+          assert hashlib.sha256(manifest).hexdigest() == os.environ['WHEEL_MANIFEST_SHA256']
           context = work/'retirement-dependencies'; context.mkdir()
           requirements = []
           for wheel in json.loads(manifest):
@@ -79,11 +98,12 @@ jobs:
             --tmpfs /fixture-data:rw,nosuid,nodev,mode=0700,size=128m \
             --interactive --entrypoint /usr/bin/env retirement-offline \
             -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp PYTHONDONTWRITEBYTECODE=1 \
-            PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 EXPECTED_SHA="$GITHUB_SHA" \
-            /usr/bin/timeout --signal=KILL 780s /usr/local/bin/python -I -B -c '
+            PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 EXPECTED_SHA="$GITHUB_SHA" EXPECTED_MACHINE="$EXPECTED_MACHINE" \
+            /usr/bin/timeout --signal=KILL 480s /usr/local/bin/python -I -B -c '
           import io, os, pathlib, stat, sys, zipfile
           import xml.etree.ElementTree as ET
           assert sys.platform=="linux" and sys.version_info[:2]==(3,12)
+          assert os.uname().machine==os.environ["EXPECTED_MACHINE"]
           assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
           assert set(os.listdir("/sys/class/net"))=={"lo"}
           raw=sys.stdin.buffer.read(24*1024*1024+1);assert len(raw)<=24*1024*1024
@@ -111,5 +131,5 @@ jobs:
           ids={(x.get("classname"),x.get("name")) for x in cases}
           assert code==0 and len(cases)>=140 and len(ids)==len(cases)
           assert all(not any(x.find(k) is not None for k in ("skipped","failure","error")) for x in cases)
-          print("RETIREMENT_FIXTURES_PASS",len(cases),"unique cases zero skips",flush=True)
+          print("RETIREMENT_FIXTURES_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
           ' < "$RUNNER_TEMP/retirement-source.zip"
