@@ -168,6 +168,10 @@ def finalize_drive_job(result_dir: Path, source_dir: Path, binding: dict, *,
             raise RuntimeError("invalid previous finalization receipt")
         atomic_json(prior, {"schema": "universal-video-drive-finalization-v1", "status": "REVALIDATING"})
     token = access_token()  # existing resident credentials only
+    intake = read_receipt(source_dir / SOURCE_RECEIPT)
+    if (intake.get("schema") != "universal-video-source-integrity-v1"
+            or intake.get("job_id") != job_id or intake.get("job_hash") != job_hash):
+        raise RuntimeError("source pin/job identity mismatch")
     source = verify_source(source_dir, token)  # reject changed source before writes
     if source["file_id"] != binding["source_file_id"]:
         raise RuntimeError("Drive source binding mismatch")

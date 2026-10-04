@@ -44,6 +44,8 @@ def spool(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "run_job", run)
     monkeypatch.setattr(worker, "cleanup_proof_matches", lambda *args, **kw: True)
     monkeypatch.setattr(worker, "remove_staged_job", lambda *args: calls.append("cleanup"))
+    monkeypatch.setattr(worker, "queue_cleanup", lambda *args: tmp_path / "synthetic-intent.json")
+    monkeypatch.setattr(worker, "retry_cleanup", lambda *args: calls.append("cleanup"))
     monkeypatch.setattr(worker, "finalize_drive_job", lambda *args, **kw: {"status": "PUBLISHED_VERIFIED"})
     return tmp_path, staged_dir, calls
 

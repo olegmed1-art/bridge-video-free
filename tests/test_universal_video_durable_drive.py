@@ -2,6 +2,7 @@
 import hashlib
 import json
 import re
+import os
 from pathlib import Path
 
 import pytest
@@ -92,7 +93,8 @@ def setup(tmp_path, monkeypatch):
     source_dir = tmp_path / "source"
     source_dir.mkdir()
     durable.atomic_json(source_dir / durable.SOURCE_RECEIPT,
-                        {"original": adapter.original_snapshot(META), "sha256": SHA})
+                        {"schema": "universal-video-source-integrity-v1", "job_id": "job", "job_hash": "a" * 64,
+                         "original": adapter.original_snapshot(META), "sha256": SHA})
     result = tmp_path / "job"
     result.mkdir()
     manifest = {"status": "COMPLETED", "job_id": "job", "job_hash": "a" * 64,
@@ -114,6 +116,146 @@ def setup(tmp_path, monkeypatch):
 def finish(setup):
     result, source, _, binding = setup
     return durable.finalize_drive_job(result, source, binding, job_id="job", profile="transcript_only", job_hash="a" * 64)
+
+
+def test_shared_inventory_uses_realistic_list_field_selection(setup, monkeypatch):
+    result, _, drive, _ = setup
+    artifact = outputs.collect_compact_artifacts(result)[0]
+    outputs._upload_or_verify_file(FOLDERS["checks"], artifact, "synthetic-token")
+    original = drive.get
+    def selected(url, **kw):
+        response = original(url, **kw)
+        if "q" in kw.get("params", {}):
+            fields = kw["params"]["fields"]
+            # Drive list projection really omits fields not requested.
+            response.data["files"] = [{k: v for k, v in item.items()
+                                       if re.search(r"\b" + k + r"\b", fields)}
+                                      for item in response.data["files"]]
+        return response
+    monkeypatch.setattr(adapter.requests, "get", selected)
+    records = outputs._verify_remote_inventory(FOLDERS["checks"], [artifact], "synthetic-token")
+    assert records[0]["verification"] == durable.READBACK
+    drive.reparent = True
+    with pytest.raises(RuntimeError):
+        outputs._verify_remote_inventory(FOLDERS["checks"], [artifact], "synthetic-token")
+
+
+@pytest.fixture
+def full_chain(setup, tmp_path, monkeypatch):
+    if os.name != "posix":
+        pytest.skip("stage directory fsync is a Linux resident contract")
+    from universal_video import drive_stage as stage
+    from universal_video.contract import validate_job, canonical_job_hash
+    monkeypatch.setitem(globals(), "CONTENT", b"v" * (1024 * 1024))
+    monkeypatch.setitem(globals(), "SHA", hashlib.sha256(CONTENT).hexdigest())
+    result, _, drive, binding = setup
+    drive.meta["size"] = str(len(CONTENT))
+    media = tmp_path / "media"
+    media.mkdir()
+    payload = {"job_id": "job", "profile": "transcript_only", "source": {"kind": "google_drive", "file_id": SOURCE}}
+    job = validate_job(payload)
+    job_hash = canonical_job_hash(job)
+    monkeypatch.setattr(stage, "access_token", lambda: "synthetic-token")
+    staged, source = stage.stage_drive_job(job, payload, media)
+    manifest = durable.read_receipt(result / "manifest.json")
+    manifest.update(job_hash=job_hash, media={"sha256": SHA})
+    durable.atomic_json(result / "manifest.json", manifest)
+    def finalize():
+        return durable.finalize_drive_job(result, source, binding, job_id="job", profile="transcript_only", job_hash=job_hash)
+    return job, payload, media, source, staged, drive, result, finalize
+
+
+@pytest.mark.parametrize("mutation,cache_loss", [("name", False), ("name", True), ("version", True), ("version", False)])
+def test_stage_resume_finalize_cannot_rebind_same_bytes(full_chain, mutation, cache_loss):
+    from universal_video import drive_stage as stage
+    job, payload, media, source, staged, drive, result, finalize = full_chain
+    before = (source / durable.SOURCE_RECEIPT).read_bytes()
+    if cache_loss:
+        Path(staged["source"]["path"]).unlink()
+    drive.meta[mutation] = "renamed.mov" if mutation == "name" else "2"
+    with pytest.raises(stage.DriveStageError, match="binding changed"):
+        stage.stage_drive_job(job, payload, media)
+    with pytest.raises(RuntimeError):
+        finalize()
+    assert (source / durable.SOURCE_RECEIPT).read_bytes() == before
+    assert not drive.posts and (result / "transcript.txt").exists()
+
+
+def test_cache_loss_unchanged_source_restores_without_rebinding_and_finalizes(full_chain):
+    from universal_video import drive_stage as stage
+    job, payload, media, source, staged, drive, result, finalize = full_chain
+    before = (source / durable.SOURCE_RECEIPT).read_bytes()
+    Path(staged["source"]["path"]).unlink()
+    stage.stage_drive_job(job, payload, media)
+    assert (source / durable.SOURCE_RECEIPT).read_bytes() == before
+    first = finalize()
+    assert first == finalize() and len(drive.posts) == 6
+
+
+def test_missing_pin_retains_existing_cache(full_chain):
+    from universal_video import drive_stage as stage
+    job, payload, media, source, staged, drive, _, _ = full_chain
+    (source / durable.SOURCE_RECEIPT).unlink()
+    drive.meta["version"] = "2"
+    with pytest.raises(stage.DriveStageError, match="no immutable pin"):
+        stage.stage_drive_job(job, payload, media)
+    assert Path(staged["source"]["path"]).read_bytes() == CONTENT
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_cleanup_failure_restart_preserves_proof_and_never_republishes(full_chain, tmp_path, monkeypatch, partial):
+    from universal_video import drive_cleanup as cleanup
+    from universal_video import maintenance
+    job, _, media, source, _, drive, result, finalize = full_chain
+    proof = finalize()
+    posts = len(drive.posts)
+    spool = tmp_path / "spool"
+    (spool / "results").mkdir(parents=True)
+    result.rename(spool / "results/job")
+    (spool / "done").mkdir()
+    done = spool / "done/job.json"
+    durable.atomic_json(done, {"job_id": "job", "job_hash": proof["job_hash"], "status": "COMPLETED"})
+    pending = cleanup.queue_cleanup(spool, media, "job", done)
+    original = cleanup.remove_staged_job
+    def interrupted(*args):
+        if partial:
+            (source / durable.SOURCE_RECEIPT).unlink()
+        raise PermissionError("synthetic transient deletion failure")
+    monkeypatch.setattr(cleanup, "remove_staged_job", interrupted)
+    assert cleanup.retry_cleanup(spool, media, pending) is False
+    assert pending.exists() and source.exists()
+    assert not any(c.path == spool / "results/job" for c in maintenance.build_cleanup_plan(tmp_path, now=2_000_000_000))
+    data = durable.read_receipt(pending)
+    data["retry_after_unix"] = 0
+    durable.atomic_json(pending, data)
+    monkeypatch.setattr(cleanup, "remove_staged_job", original)
+    report = maintenance.run_maintenance(tmp_path, dry_run=False)
+    assert report["source_cleanups_completed"] == 1
+    assert not source.exists() and not pending.exists()
+    assert len(drive.posts) == posts and drive.meta["version"] == "1"
+
+
+@pytest.mark.parametrize("state", ["active", "revalidating"])
+def test_stale_maintenance_plan_rechecks_activity_and_current_receipt(full_chain, tmp_path, state):
+    from universal_video import maintenance
+    _, payload, _, _, _, _, result, finalize = full_chain
+    finalize()
+    spool = tmp_path / "spool"
+    (spool / "results").mkdir(parents=True)
+    target = spool / "results/job"
+    result.rename(target)
+    old = 1_000_000_000
+    os.utime(target, (old, old))
+    plan = maintenance.build_cleanup_plan(tmp_path)
+    assert target in {c.path for c in plan}
+    if state == "active":
+        (spool / "inbox").mkdir()
+        durable.atomic_json(spool / "inbox/job.json", payload)
+    else:
+        durable.atomic_json(target / durable.FINAL_RECEIPT, {"status": "REVALIDATING"})
+        os.utime(target, (old, old))  # defeat reliance on directory mtime alone
+    report = maintenance.apply_cleanup_plan(tmp_path, plan, dry_run=False)
+    assert target.exists() and report["deleted"] == 0
 
 
 def test_retry_reads_back_all_outputs_without_duplicate_posts(setup):

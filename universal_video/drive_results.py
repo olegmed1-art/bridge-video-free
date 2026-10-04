@@ -244,7 +244,7 @@ def _find_existing_file(parent_id: str, name: str, token: str) -> dict[str, Any]
         headers=_headers(token),
         params={
             "q": query,
-            "fields": "nextPageToken,files(id,name,size,md5Checksum,mimeType,appProperties,permissions(id,type,role),trashed)",
+            "fields": "nextPageToken,files(id,name,parents,version,size,md5Checksum,mimeType,appProperties,permissions(id,type,role),trashed)",
             "pageSize": 1000,
             "supportsAllDrives": True,
             "includeItemsFromAllDrives": True,
@@ -366,7 +366,7 @@ def _list_children(parent_id: str, token: str) -> list[dict[str, Any]]:
         headers=_headers(token),
         params={
             "q": query,
-            "fields": "nextPageToken,files(id,name,size,md5Checksum,mimeType,appProperties,permissions(id,type,role),trashed)",
+            "fields": "nextPageToken,files(id,name,parents,version,size,md5Checksum,mimeType,appProperties,permissions(id,type,role),trashed)",
             "pageSize": 1000,
             "supportsAllDrives": True,
             "includeItemsFromAllDrives": True,
@@ -395,7 +395,7 @@ def _verify_remote_inventory(
         by_name[name] = item
     if set(by_name) != set(expected):
         raise RuntimeError("Drive publication inventory mismatch")
-    return [_verify_remote_artifact(by_name[name], artifact, token) for name, artifact in sorted(expected.items())]
+    return [_verify_remote_artifact(by_name[name], artifact, token, child_id) for name, artifact in sorted(expected.items())]
 
 
 def publish_result(
