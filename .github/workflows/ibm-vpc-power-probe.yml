@@ -3,6 +3,10 @@ name: IBM VPC power read-only probe
 on:
   workflow_dispatch:
     inputs:
+      expected_main_sha:
+        description: Exact reviewed current main SHA
+        required: true
+        type: string
       test_oracle:
         description: 'Also send one authenticated read-only request from Oracle Light'
         type: boolean
@@ -37,7 +41,16 @@ jobs:
           python -m py_compile ops/ibm_vpc_power.py ops/ibm_vpc_oracle_probe.py
 
   oracle-probe:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.test_oracle }}
+    # Quarantined pending an owner-approved external credential boundary.
+    # See docs/security/WORKFLOW_CREDENTIAL_BOUNDARY_2026-10-04.md.
+    environment: production-operations
+    if: >-
+      false &&
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.expected_main_sha == github.sha &&
+      inputs.test_oracle
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -45,6 +58,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
       - name: Read exact IBM instance state directly from Oracle Light
         env:
           IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
@@ -64,12 +78,19 @@ jobs:
             --ssh-key "$probe_dir/key" --known-hosts "$probe_dir/known_hosts"
 
   probe:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    # Quarantined pending an owner-approved external credential boundary.
+    # See docs/security/WORKFLOW_CREDENTIAL_BOUNDARY_2026-10-04.md.
+    environment: production-operations
+    if: >-
+      false &&
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.expected_main_sha == github.sha
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
       IBM_EXPECTED_SERVICE_ID: ServiceId-e08e417c-dd54-49ec-9159-4df0b147c837
       IBM_VPC_REGION: eu-de
       IBM_VPC_INSTANCE_ID: 02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2
@@ -78,12 +99,17 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
       - name: Verify secret presence without disclosure
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
         run: |
           set -euo pipefail
           test -n "${IBM_CLOUD_API_KEY:-}"
           echo 'IBM_CLOUD_API_KEY_PRESENT=YES'
       - name: Verify API key identity without disclosure
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -156,6 +182,8 @@ jobs:
                   print(f"IBM_IAM_POLICY_{index}=roles:{'+'.join(roles) or 'NONE'} attrs:{safe_attrs or 'NONE'}")
           PY
       - name: Read exact IBM instance state
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
         run: |
           set -euo pipefail
           python3 ops/ibm_vpc_power.py status \
