@@ -14,7 +14,7 @@ jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == 'fbfd1b91d37183e07b76f1cf19215d3f6a84e8d7' &&
+      github.event.before == 'a11952d95bf3461190709c3029af1266efdd01ef' &&
       github.run_attempt == 1 &&
       github.event.head_commit.message == 'ci: verify retirement observer import order'
     strategy:
@@ -25,12 +25,12 @@ jobs:
             machine: x86_64
             image: python@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
             manifest: wheels.json
-            manifest_sha256: e31af600877201c0cf9cebca01ef9db55cf645bd407b676889f853c4986a3bb4
+            manifest_sha256: 44bc1e84dde52c95956645f07b68291e7065dd470a5931616673a44e5c234a79
           - runner: ubuntu-24.04-arm
             machine: aarch64
             image: python@sha256:349275ed26e7aea20752e1fd63c40c30a0281d324e51fb41612c2433cb6482d4
             manifest: wheels-aarch64.json
-            manifest_sha256: d1b65a8467c3f957b95261bd2560aacfbb6da0f0e603a0530ceed29a25e5beee
+            manifest_sha256: 002fb7921c5b01234bf5637ed0afcf6be380c459c907e924b8dd5ee8db88575f
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     env:
@@ -85,7 +85,7 @@ jobs:
           for wheel in json.loads(manifest):
               assert re.fullmatch('[A-Za-z0-9_.-]+[.]whl', wheel['filename'])
               assert wheel['url'].startswith('https://files.pythonhosted.org/packages/')
-              raw = fetch(wheel['url'], 16*1024*1024)
+              raw = fetch(wheel['url'], 64*1024*1024)
               assert hashlib.sha256(raw).hexdigest() == wheel['sha256']
               (context/wheel['filename']).write_bytes(raw)
               requirements.append(wheel['name']+'=='+wheel['version']+' --hash=sha256:'+wheel['sha256'])
@@ -215,13 +215,14 @@ jobs:
                  ("controller","cycle","execution","feed","install","issuer","owner","run_guard")]
           tests += ["tests/test_light_native_pilot_intake.py"]
           tests += sorted(str(p.relative_to(root)) for p in (root/"tests").glob("test_light_native_retirement*.py"))
+          tests += ["tests/test_diana_longitudinal_source_draft_integration.py"]
           tests += ["tests/test_video_canon_replay.py","tests/test_video_replay_input.py","tests/test_video_source_draft.py","tests/test_book_material_staging.py","tests/test_book_runtime_identity.py","tests/test_book_teacher_api.py"]
           tests += ["tools/canon_auth","tools/tournament_pilot/test_pilot.py","tests/test_l1_canonical_registry.py","tests/test_l1_canonical_runtime.py","tests/test_knowledge_read_api.py","tests/test_ai_api_routes.py","tests/test_ai_final_decision_contract.py"]
           code=pytest.main(["-q","-ra","-p","no:cacheprovider","--noconftest","-c","/dev/null","--basetemp=/fixture-data/tests",
                             "--rootdir="+str(root),"--junitxml=/tmp/retirement.xml",*tests])
           cases=ET.parse("/tmp/retirement.xml").getroot().findall(".//testcase")
           ids={(x.get("classname"),x.get("name")) for x in cases}
-          assert code==0 and len(cases)==848 and len(ids)==len(cases)
+          assert code==0 and len(cases)==860 and len(ids)==len(cases)
           assert all(not any(x.find(k) is not None for k in ("skipped","failure","error")) for x in cases)
           print("OBSERVER_IMPORT_ORDER_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
           ' < "$RUNNER_TEMP/retirement-test-input.zip"
