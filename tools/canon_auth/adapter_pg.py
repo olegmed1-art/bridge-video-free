@@ -802,6 +802,8 @@ def test_full_source_relation_primary_key_refuses_before_revoke(fixture,call,kin
         "WHERE knowledge_version_id=%s AND source_id=%s ORDER BY relation_type",
         (values["knowledge_version_id"],values["source_id"])).fetchall()
     events=scalar(a.conn,"SELECT count(*) FROM bidding.ingestion_event")
+    canon=a.conn.execute("SELECT canon_activation_id,status FROM public.canon_activation "
+                         "ORDER BY canon_activation_id").fetchall()
     activations=a.conn.execute("SELECT runtime_activation_id,status FROM bidding.runtime_activation "
                               "ORDER BY runtime_activation_id").fetchall()
     with pytest.raises(Refused):
@@ -812,6 +814,8 @@ def test_full_source_relation_primary_key_refuses_before_revoke(fixture,call,kin
         "WHERE knowledge_version_id=%s AND source_id=%s ORDER BY relation_type",
         (values["knowledge_version_id"],values["source_id"])).fetchall()==before
     assert scalar(a.conn,"SELECT count(*) FROM bidding.ingestion_event")==events
+    assert a.conn.execute("SELECT canon_activation_id,status FROM public.canon_activation "
+                         "ORDER BY canon_activation_id").fetchall()==canon
     assert a.conn.execute("SELECT runtime_activation_id,status FROM bidding.runtime_activation "
                           "ORDER BY runtime_activation_id").fetchall()==activations
 
@@ -827,6 +831,9 @@ def test_before_fix_source_relation_counterfactual_real_inventory(fixture):
             "SELECT knowledge_version_id,source_id,'supports',source_locator "
             "FROM public.knowledge_version_source WHERE knowledge_version_id=%s AND source_id=%s",
             (spec["values"]["knowledge_version_id"],spec["values"]["source_id"]))
+    before={table:a.conn.execute("SELECT status FROM "+table+" ORDER BY "+key).fetchall()
+        for table,key in (("public.canon_activation","canon_activation_id"),
+                          ("bidding.runtime_activation","runtime_activation_id"))}
     source=subprocess.check_output(["git","show",
         "12fd5acb1fd1448e958b421ecb89031380654758:tools/canon_auth/ownership.py"],text=True)
     old=types.ModuleType("tools.canon_auth.before_source_pk_fix")
@@ -839,6 +846,10 @@ def test_before_fix_source_relation_counterfactual_real_inventory(fixture):
         with pytest.raises(Refused,match="foreign_related_row"):
             inventory(a.conn,a.compiled,school)
     assert scalar(a.conn,"SELECT count(*) FROM public.knowledge_version_source")==3
+    after={table:a.conn.execute("SELECT status FROM "+table+" ORDER BY "+key).fetchall()
+        for table,key in (("public.canon_activation","canon_activation_id"),
+                          ("bidding.runtime_activation","runtime_activation_id"))}
+    assert before==after
     record_evidence("before_after_full_source_relation_primary_key",
         {"before_sha":"12fd5acb1fd1448e958b421ecb89031380654758",
          "before_accepted_rows":34,"actual_source_link_rows":3,
