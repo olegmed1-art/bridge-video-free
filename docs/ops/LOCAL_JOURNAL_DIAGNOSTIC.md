@@ -8,7 +8,7 @@ The separate diagnose-local-reference action requires an independently accepted 
 
 The public result is strict and under 4096 bytes: fixed checkpoint, reason category, role and helper indices, a fixed 26-row trace, and the accepted record SHA256. No paths, journal content or exception text are serialized. Trace columns are read, metadata, hash, schema; values are 0 not established, 1 PASS, 2 FAIL, 3 not applicable. Successful parsing alone does not certify semantic schema. A role is last-read context, not attribution of every predicate failure. JSON_KEYS/JSON_TYPE/JSON_SYNTAX are exception categories, not independent proof of a specific malformed field. Unknown trusted historical-prefix reads remain subject to the original Snapshot checks without exporting their paths.
 
-LOCAL_CHECKED certifies only this bounded local check. Proposal observation, HOLD/DB/provider verification, incident closure, execution ACK and new-task authority always remain false. Early proposal ABSENT from a refused older observation is not final absence proof. Neither the original unknown CREATE nor a previous closed observation Agreement may be replayed.
+LOCAL_CHECKED and schema PASS certify only the existing local() guards; they do not certify full downstream observer schema. The original guards accept baseline/before arrays, and the equivalence tests intentionally preserve that behavior. Proposal observation, HOLD/DB/provider verification, incident closure, execution ACK and new-task authority always remain false. Early proposal ABSENT from a refused older observation is not final absence proof. Neither the original unknown CREATE nor a previous closed observation Agreement may be replayed.
 
 ## Deployment and rollback
 
