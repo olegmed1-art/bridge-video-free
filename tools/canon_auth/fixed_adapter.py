@@ -47,6 +47,25 @@ class FixedAdapter:
         catalog_path(self.conn)
         self.conn.execute("SELECT pg_catalog.pg_advisory_xact_lock(20261004,201)")
 
+    def _write_path(self):
+        # Existing immutable source-scope trigger resolves public tables by
+        # unqualified names. Permit only that trusted schema AFTER pg_catalog;
+        # explicit pg_temp last prevents temporary-table shadowing.
+        trusted = self.conn.execute("""
+            SELECT NOT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_namespace n,
+                     LATERAL pg_catalog.aclexplode(COALESCE(n.nspacl,
+                         pg_catalog.acldefault('n',n.nspowner))) a
+                WHERE n.nspname='public' AND a.privilege_type='CREATE'
+                  AND a.grantee NOT IN (n.nspowner,
+                      (SELECT oid FROM pg_catalog.pg_roles WHERE rolname=current_user))
+            ) AND pg_catalog.pg_my_temp_schema()=0
+        """).fetchone()
+        require(trusted == (True,), "trusted_trigger_schema_required")
+        self.conn.execute("SET LOCAL search_path=pg_catalog,public,pg_temp")
+        require(self.conn.execute("SELECT pg_catalog.current_setting('search_path')").fetchone()
+                == ("pg_catalog, public, pg_temp",), "trusted_trigger_path_required")
+
     def inspect(self):
         idle(self.conn)
         self.source_check()
@@ -82,6 +101,7 @@ class FixedAdapter:
                 require(before["state"] == PREVIOUS[stage], "duplicate_or_out_of_order_stage")
                 self.launch.normal(self.clock())
                 permit.verify(self.launch, stage, self.clock())
+                self._write_path()
                 for sql in self.compiled[stage]:
                     self.conn.execute(sql)
                 after = inventory(self.conn, self.compiled, self.school)
@@ -110,6 +130,7 @@ class FixedAdapter:
                 if before["state"] == "absent":
                     after = before
                 else:
+                    self._write_path()
                     for sql in self.compiled["emergency"]:
                         self.conn.execute(sql)
                     after = inventory(self.conn, self.compiled, self.school)

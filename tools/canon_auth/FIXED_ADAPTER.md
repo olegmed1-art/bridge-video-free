@@ -39,12 +39,15 @@ are reused unchanged, then school is resolved uniquely by the existing
 EXPECTED_SCHOOL. Recovery has its own invocation and dedicated connection.
 
 BoundedController.run is executable, bounded to one attempt, <=40 HTTP requests,
-420 seconds and the explicit launch window. It requires separate normal/recovery
+420 seconds and the explicit launch window, with a POSIX main-thread alarm that
+interrupts blocking normal calls and a separate 60-second recovery alarm. It requires separate normal/recovery
 channels, a durable single-build claim supplied by the authorized dispatcher,
 fresh independently retained read-only recovery readiness, real application LOGIN
 behavior, health, school overview and initial position404. Every poll, positive
 3H and negative3S receipt needs deployment/request correlation before the next
-stage. Stage receipts and final correlation are checked. Any failure after a
+stage. Stage receipts, final correlation and a fresh independent read-only database
+readback (40 rows, active4, original expiry, zero owned output/search/final rows)
+are checked. Any failure after a
 possibly committed dispatch calls the independent recovery channel. Lost receipt
 or connection is uncertain; no rollback assertion and no automatic replay.
 
@@ -54,6 +57,12 @@ compiled plan P, reviewed program hash, UTC open/admission/stage cutoffs.
 Admission is <=5 minutes and normal stages <=15 minutes. No implicit rollover or
 expired legacy validator changes. The previously proposed midnight window is not
 admission; missing prerequisites at the separate readiness cutoff cancels it.
+
+The unchanged source-scope trigger requires public table-name resolution during
+writes. The wrapper checks public CREATE ACL against only schema/current owner,
+rejects any existing temp schema, and pins pg_catalog,public,pg_temp. Read-only
+inventory retains pg_catalog only. No trigger/schema/privilege is altered by the
+operational adapter.
 
 ## Evidence and limits
 
@@ -79,5 +88,8 @@ IBM task and currently exposes inventory only. No normal stage dispatcher,
 independently reachable installed recovery command, durable authoritative build
 claim or authenticated Vercel/GitHub observer is installed by this PR.
 Caller-created JSON/hash/fixture readiness does not authenticate these channels.
+The module hash pins adapter files; exact current-main review must also cover its
+unchanged transitive resident/parser/package/teacher/schema dependencies. Future
+owner wiring must supply existing app import dependencies; no imports install them.
 Do not install or execute until that concrete wiring and exact source review are
 complete. Successful unit/PG tests do not confer production readiness.

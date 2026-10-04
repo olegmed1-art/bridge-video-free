@@ -136,12 +136,12 @@ class BoundedController:
         require(hasattr(signal, "SIGALRM") and threading.current_thread() is threading.main_thread(),
                 "posix_main_thread_supervisor_required")
         require(signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0), "existing_alarm_refused")
+        seconds = min(420, (self.launch.stage_until-self.clock()).total_seconds())
+        require(seconds > 0, "stage_window_refused")
         previous = signal.getsignal(signal.SIGALRM)
         def stop(*args):
             raise Refused("controller_wall_deadline")
         signal.signal(signal.SIGALRM, stop)
-        seconds = min(420, (self.launch.stage_until-self.clock()).total_seconds())
-        require(seconds > 0, "stage_window_refused")
         signal.setitimer(signal.ITIMER_REAL, seconds)
         try:
             return self._run()
@@ -154,7 +154,11 @@ class BoundedController:
         self.launch.admit(self.clock())
         # A must be the sole immutable validation-build ID; normal channel owns
         # a durable claim tied to the controller run ID and first workflow attempt.
-        self.normal.claim(self.launch)
+        claim = self.normal.claim(self.launch)
+        require(claim == {"status":"DURABLE_CLAIM", "contract_hash":self.launch.fingerprint,
+            "intent":self.launch.intent, "validation_build_id":self.launch.validation_build_id,
+            "controller_run_id":self.launch.controller_run_id, "attempt":1},
+            "durable_single_build_claim_refused")
         self.attempted, self.started = True, self.clock()
         mutation_possible = False
         try:

@@ -216,6 +216,8 @@ class Channel:
         assert not self.claimed
         assert self.adapter.inspect()["state"]=="absent"
         self.claimed=True # fixture-only; live requires durable authoritative claim
+        return dict(status="DURABLE_CLAIM",contract_hash=launch.fingerprint,intent=launch.intent,
+            validation_build_id=launch.validation_build_id,controller_run_id=launch.controller_run_id,attempt=1)
     def execute(self,name,p):
         return self.adapter.execute(name,p)
     def inspect(self,launch):
@@ -371,6 +373,7 @@ def test_compiler_inventory_diagnostic(fixture):
     a,r,_,_=fixture
     with a.conn.transaction(force_rollback=True):
         a._begin()
+        a._write_path()
         for name in ("baseline","initial"):
             for sql in a.compiled[name]:
                 a.conn.execute(sql)
@@ -385,3 +388,60 @@ def test_final_owned_readback_drift_recovers(fixture):
         with pytest.raises(Refused,match="owned_recovery_confirmed"):
             ctrl.run()
         assert fixture[0].inspect()["active"]==0
+
+
+def test_wall_supervisor_interrupts_blocked_preflight_without_writes(fixture):
+    import time
+    from .launch_contract import Launch
+    with api_client() as client:
+        ctrl,obs=controller(fixture,client)
+        now=datetime.now(timezone.utc)
+        l=Launch.parse(ctrl.launch.public()|{
+            "open_at":(now-timedelta(seconds=1)).isoformat().replace("+00:00","Z"),
+            "admission_until":(now+timedelta(seconds=.3)).isoformat().replace("+00:00","Z"),
+            "stage_until":(now+timedelta(seconds=.3)).isoformat().replace("+00:00","Z")})
+        ctrl.launch=l;obs.l=l
+        clock=lambda:datetime.now(timezone.utc)
+        ctrl.clock=clock;obs.clock=clock;ctrl.api.clock=clock
+        fixture[0].launch=l;fixture[1].launch=l
+        reached=[]
+        def blocked():
+            reached.append(True)
+            time.sleep(2)
+            raise AssertionError("Supervisor did not interrupt")
+        ctrl.api.behavior=blocked
+        began=time.monotonic()
+        with pytest.raises(Refused,match="before_writes"):
+            ctrl.run()
+        assert reached and time.monotonic()-began < 1.5
+        assert fixture[0].inspect()["rows"]==0
+
+
+def test_missing_durable_claim_stops_before_writes(fixture):
+    with api_client() as client:
+        ctrl,obs=controller(fixture,client)
+        ctrl.normal.claim=lambda l:None
+        with pytest.raises(Refused,match="durable_single_build_claim"):
+            ctrl.run()
+        assert fixture[0].inspect()["rows"]==0
+
+
+def test_untrusted_public_create_refuses_without_write(fixture):
+    a,r,_,_=fixture
+    with connect("postgres") as admin:
+        admin.execute("GRANT CREATE ON SCHEMA public TO bridge_school_app_principal")
+    try:
+        with pytest.raises(Refused,match="trusted_trigger_schema"):
+            stage(a,"baseline")
+        assert r.inspect()["rows"]==0
+    finally:
+        with connect("postgres") as admin:
+            admin.execute("REVOKE CREATE ON SCHEMA public FROM bridge_school_app_principal")
+
+
+def test_temp_schema_shadow_refuses_without_write(fixture):
+    a,r,_,_=fixture
+    a.conn.execute("CREATE TEMP TABLE knowledge_version(x integer)")
+    with pytest.raises(Refused,match="trusted_trigger_schema"):
+        stage(a,"baseline")
+    assert r.inspect()["rows"]==0
