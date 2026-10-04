@@ -28,6 +28,11 @@ process_video_gate_armed=0
 root_pr_number=991
 prior_gate_pr_number=1070
 protected_gate_paths=(
+  '.github/workflows/light-native-retirement-observe.yml'
+  'ops/light_native_retirement_observe_runner.py'
+  'ops/light_native_retirement_live.py'
+  'ops/light_native_retirement.py'
+  'ops/light_native_bounded.py'
   '.github/workflows/light-native-lane-owner.yml'
   'ops/light_native_lane_controller.py'
   'ops/light_native_lane_owner_runner.py'
@@ -907,7 +912,7 @@ owner_release_token_sha="$(printf '%s' "$owner_release_token" | sha256sum | awk 
   UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_FILE='$recovery_remote_file' \
   UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256='$recovery_sha' \
   UNIVERSAL_VIDEO_CANARY_FILE_ID='198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI' \
-  UNIVERSAL_VIDEO_CANARY_NAME='Диана 13.mp4' \
+  UNIVERSAL_VIDEO_CANARY_NAME='Р”РёР°РЅР° 13.mp4' \
   UNIVERSAL_VIDEO_CANARY_MIME='video/mp4' \
   UNIVERSAL_VIDEO_CANARY_SIZE='696237577' \
   UNIVERSAL_VIDEO_CANARY_PARENT='1Fr-H2NgBKEpp3q_H4FzNmQwCV6bj2x6b' \
