@@ -27,6 +27,11 @@ def rehearsal(code_sha):
         else:
             raise AssertionError("Loopback non-TLS fixture must not pass the production inventory")
         assert all(inspect_disposable(conn).values())
+        with conn.transaction(force_rollback=True):
+            assert scalar(conn, "SELECT EXISTS(SELECT 1 FROM bidding.rule WHERE rule_id=%s)",
+                          ("00000000-0000-0000-0000-000000000000",)) is False
+            assert scalar(conn, "SELECT bidding.rule_passes_activation_gates(%s)",
+                          ("00000000-0000-0000-0000-000000000000",)) is False
         with psycopg.connect(host='127.0.0.1', hostaddr='127.0.0.1', port=55432,
                 dbname=DB, user='bridge_school_app_principal', password='',
                 passfile='/dev/null', sslmode='disable', autocommit=True) as app_conn:
@@ -131,7 +136,7 @@ def rehearsal(code_sha):
                 "duplicate_stages_rejected": True, "extra_disposable_school_fixture": 1,
                 "resident_owner_capabilities": True, "app_revoke_refused": True,
                 "injected_gate_failure_committed_revoke": True,
-                "teacher_behavior": teacher_checks, "evidence_class": "disposable_postgresql18_not_live"}
+                "teacher_behavior": teacher_checks, "owner_missing_rule_gate_false": True, "evidence_class": "disposable_postgresql18_not_live"}
 
 
 if __name__ == "__main__":

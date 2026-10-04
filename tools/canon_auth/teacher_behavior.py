@@ -4,6 +4,7 @@ No connection launcher, environment/credential lookup, role change, or live CLI.
 A disposable result never qualifies the live application credential.
 """
 from uuid import UUID
+from psycopg.errors import InsufficientPrivilege
 from psycopg.rows import tuple_row
 from bridge_school_api import tournament_teacher as teacher
 from .resident_preflight import Refused, catalog_path
@@ -39,23 +40,29 @@ def inspect_teacher_connection(conn, *, database="neondb"):
                 no_revoke = all(cur.execute("SELECT pg_catalog.has_column_privilege(current_user,%s,%s,'UPDATE')",
                                             (table, column)).fetchone() == (False,)
                                 for table, column in REVOKE_COLUMNS)
-                for table, key in (("public.school", "school_id"), ("bidding.rule", "rule_id")):
+                for table, key in (("public.school", "school_id"),):
                     exists = cur.execute("SELECT EXISTS(SELECT 1 FROM " + table +
                                          " WHERE " + key + "=%s)", (ABSENT_ID,)).fetchone()
                     if exists != (False,):
                         raise Refused("absent_synthetic_ids_required")
                 # Execute the actual fixed routines, with an absent synthetic ID.
                 # No rows, identifiers or private school contexts leave this module.
-                gate = cur.execute("SELECT bidding.rule_passes_activation_gates(%s)", (ABSENT_ID,)).fetchone()
-                missing_rule = gate == (False,)
+                # Internal activation gate is deliberately inaccessible to app.
+                # The public school catalog calls it as SECURITY DEFINER.
+                gate_denied = False
+                try:
+                    with conn.transaction(force_rollback=True):
+                        cur.execute("SELECT bidding.rule_passes_activation_gates(%s)", (ABSENT_ID,))
+                except InsufficientPrivilege:
+                    gate_denied = True
                 catalog_empty = cur.execute(
                     "SELECT EXISTS(SELECT 1 FROM bidding.get_school_runtime_rule_catalog(%s,%s))",
                     (ABSENT_ID, teacher.SCOPE)).fetchone() == (False,)
-                if not all((reads, no_revoke, missing_rule, catalog_empty)):
+                if not all((reads, no_revoke, gate_denied, catalog_empty)):
                     raise Refused("teacher_behavior_required")
         return {"status": "teacher_readonly_behavior", "application_login_identity": True,
                 "read_privileges": True, "owned_revoke_denied": True,
-                "missing_rule_gate_false": True, "absent_school_catalog_empty": True,
+                "internal_gate_execute_denied": True, "absent_school_catalog_empty": True,
                 "transaction_read_only": True, "mutations": False, "write_admission": False}
     except Refused:
         raise

@@ -14,7 +14,8 @@ The old resident checker is not copied over the hardened installed checker.
 The isolated ten-minute PostgreSQL 18 service applies unchanged migrations.
 Only this disposable fixture makes the already existing app principal LOGIN.
 The new behavior checker uses an actual app-principal login, never owner SET ROLE.
-It executes the actual missing-rule gate and absent-school catalog function under
+Owner executes the missing-rule gate; app execution of that internal gate must
+be denied under unchanged ACLs. App executes the public absent-school catalog under
 READ ONLY, pinned pg_catalog and forced rollback. Privilege inspection confirms
 necessary teacher reads and absence of owned activation revoke UPDATE privileges.
 These checks are necessary behavior, not activated-rule acceptance.

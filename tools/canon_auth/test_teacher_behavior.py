@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from psycopg.errors import InsufficientPrivilege
 from types import SimpleNamespace
 import pytest
 from .teacher_behavior import inspect_teacher_connection, Refused, PRINCIPAL
@@ -11,7 +12,7 @@ class Connection:
         self.info = SimpleNamespace(transaction_status=0)
         self.calls, self.end = [], None
         self.identity = ("neondb", PRINCIPAL, PRINCIPAL)
-        self.readonly, self.reads, self.revoke, self.gate, self.catalog, self.exists = "on", True, False, False, False, False
+        self.readonly, self.reads, self.revoke, self.gate, self.catalog, self.exists = "on", True, False, "denied", False, False
         self.fail_rollback = False
 
     @contextmanager
@@ -36,7 +37,9 @@ class Connection:
         elif "transaction_read_only" in sql: self.value = [(self.readonly,)]
         elif "has_table_privilege" in sql: self.value = [(self.reads,)]
         elif "has_column_privilege" in sql: self.value = [(self.revoke,)]
-        elif "rule_passes_activation_gates" in sql: self.value = [(self.gate,)]
+        elif "rule_passes_activation_gates" in sql:
+            if self.gate == "denied": raise InsufficientPrivilege("synthetic denied")
+            self.value = [(self.gate,)]
         elif "get_school_runtime_rule_catalog" in sql: self.value = [(self.catalog,)]
         elif "SELECT EXISTS" in sql: self.value = [(self.exists,)]
         return self
@@ -49,7 +52,7 @@ def test_fixed_routines_executed_only_readonly_and_report_after_rollback():
     conn = Connection()
     result = inspect_teacher_connection(conn)
     assert conn.end == "rollback"
-    assert result["missing_rule_gate_false"] and result["absent_school_catalog_empty"]
+    assert result["internal_gate_execute_denied"] and result["absent_school_catalog_empty"]
     assert result["mutations"] is False and result["write_admission"] is False
     sql = [s for s, _ in conn.calls]
     assert sql[0].endswith("READ ONLY")
