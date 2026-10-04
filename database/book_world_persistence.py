@@ -8,17 +8,23 @@ from __future__ import annotations
 from uuid import UUID
 
 from psycopg.rows import tuple_row
+from bridge_contracts.book_source_identity import needs_asset_binding
+from .book_source_reconciliation import source_locator, require_source_asset
+from bridge_contracts.book_source_review import validate_identity_review, source_from_citation
 
 from bridge_contracts.book_material import canonical_json, digest
 from bridge_contracts.book_world import build_world_publication, publication_version, world_uuid, WORLD_SCHEMA
 
 
 def persist_book_world(connection, bundle: dict, receipt: dict, *, school_id: str,
-                       source_id: str, before_commit=None) -> dict:
-    publication = build_world_publication(bundle, receipt)
+                       source_id: str, before_commit=None, dry_run=False, identity_receipt=None) -> dict:
+    publication = build_world_publication(bundle, receipt, identity_receipt)
     school_id, source_id = str(UUID(school_id)), str(UUID(source_id))
-    if connection.info.transaction_status != 0:
+    if type(dry_run) is not bool or connection.info.transaction_status != 0:
         raise ValueError("BOOK_WORLD_REQUIRES_IDLE_CONNECTION")
+    if identity_receipt is not None:
+        validate_identity_review(publication["source"], receipt, identity_receipt,
+                                 school_id=school_id, source_id=source_id)
     run_id = publication["run"]["run_id"]
     change_id = world_uuid("changeset", school_id, run_id)
     event_id = world_uuid("event", school_id, run_id)
@@ -26,20 +32,23 @@ def persist_book_world(connection, bundle: dict, receipt: dict, *, school_id: st
     payload = {"schema": WORLD_SCHEMA, "publication_hash": publication["publication_hash"],
                "run": publication["run"], "source_id": source_id,
                "stable_keys": [r["stable_key"] for r in publication["records"]],
-               "version_ids": [world_uuid("version", school_id, r["stable_key"] + ":" + publication_version(r, receipt))
+               "version_ids": [world_uuid("version", school_id, r["stable_key"] + ":" + publication_version(r, receipt, identity_receipt))
                                for r in publication["records"]]}
     payload_hash = digest(payload)
     inserted, version_ids = 0, []
-    with connection.transaction():
+    with connection.transaction(force_rollback=dry_run):
         with connection.cursor(row_factory=tuple_row) as cur:
             cur.execute("SET LOCAL lock_timeout = '5s'")
             cur.execute("SET LOCAL statement_timeout = '15s'")
-            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"book-world-run:{school_id}:{run_id}",))
-            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"book-world:{school_id}:{source_id}",))
-            cur.execute("SELECT source_id FROM public.source WHERE source_id=%s AND school_id=%s AND canonical_locator=%s AND status='active' FOR SHARE",
-                        (source_id, school_id, publication["source"]["locator"]))
-            if cur.fetchone() is None:
-                raise ValueError("BOOK_WORLD_SOURCE_BINDING_MISSING")
+            cur.execute("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(%s, 0))", (f"book-world-run:{school_id}:{run_id}",))
+            cur.execute("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(%s, 0))", (f"book-world:{school_id}:{source_id}",))
+            stored_locator = source_locator(cur, school_id, source_id, publication["source"]["locator"],
+                expected_stored=identity_receipt["stored_locator"] if identity_receipt is not None else None)
+            if needs_asset_binding(stored_locator) and identity_receipt is None:
+                raise ValueError("BOOK_SOURCE_IDENTITY_REVIEW_REQUIRED")
+            if identity_receipt is not None:
+                require_source_asset(cur, school_id, source_id, publication["source"], receipt,
+                                     asset_id=identity_receipt["asset_id"])
             cur.execute("SELECT payload_hash FROM public.domain_event WHERE event_id=%s", (event_id,))
             prior = cur.fetchone()
             if prior and prior[0] != payload_hash:
@@ -49,11 +58,13 @@ def persist_book_world(connection, bundle: dict, receipt: dict, *, school_id: st
             for record in publication["records"]:
                 key, content = record["stable_key"], record["content"]
                 item_id = world_uuid("item", school_id, key)
-                version_hash = publication_version(record, receipt)
+                version_hash = publication_version(record, receipt, identity_receipt)
                 version_id = world_uuid("version", school_id, key + ":" + version_hash)
                 version_ids.append(version_id)
                 provenance = {"schema": WORLD_SCHEMA, "version_hash": version_hash,
                               "review_receipt": receipt, "source_id": source_id}
+                if identity_receipt is not None:
+                    provenance.update(source_identity_review=identity_receipt, school_id=school_id)
                 cur.execute("INSERT INTO public.knowledge_item (knowledge_item_id,school_id,stable_key,knowledge_type,title) VALUES (%s,%s,%s,'book_atom',%s) ON CONFLICT (school_id,stable_key) DO NOTHING",
                             (item_id, school_id, key, publication["source"]["title"]))
                 cur.execute("SELECT knowledge_item_id FROM public.knowledge_item WHERE school_id=%s AND stable_key=%s", (school_id, key))
@@ -98,27 +109,28 @@ def persist_book_world(connection, bundle: dict, receipt: dict, *, school_id: st
     return {"schema": WORLD_SCHEMA, "changeset_id": change_id, "version_ids": version_ids,
             "new_versions": inserted, "authority_lane": "WORLD_EXTERNAL",
             "publication_hash": publication["publication_hash"],
-            "outbox_delivery": "REQUIRES_READBACK", "canon_activation_performed": False}
+            "outbox_delivery": "REQUIRES_READBACK", "canon_activation_performed": False,
+            "dry_run": dry_run, "committed": not dry_run}
 
 
 def publish_book_world(connection, *, school_id: str, changeset_id: str,
-                       delivery_receipt: dict) -> dict:
+                       delivery_receipt: dict, dry_run=False, before_commit=None) -> dict:
     """Expose only a complete, delivered batch; trusted operator call, no HTTP route."""
     from bridge_contracts.book_material import _fields, _require, _text
     _fields(delivery_receipt, {"schema", "publication_hash", "catalog_receipt_ref"}, "DELIVERY_FIELDS")
     _require(delivery_receipt["schema"] == "book-world-delivery-v1"
              and _text(delivery_receipt["catalog_receipt_ref"]), "CATALOG_DELIVERY_RECEIPT_REQUIRED")
     school_id, changeset_id = str(UUID(school_id)), str(UUID(changeset_id))
-    if connection.info.transaction_status != 0:
+    if type(dry_run) is not bool or connection.info.transaction_status != 0:
         raise ValueError("BOOK_WORLD_REQUIRES_IDLE_CONNECTION")
     publish_id = world_uuid("publish", school_id, changeset_id)
     event_id = world_uuid("publish-event", school_id, changeset_id)
     payload_hash = digest(delivery_receipt)
-    with connection.transaction():
+    with connection.transaction(force_rollback=dry_run):
         with connection.cursor(row_factory=tuple_row) as cur:
             cur.execute("SET LOCAL lock_timeout = '5s'")
             cur.execute("SET LOCAL statement_timeout = '15s'")
-            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (f"book-world-publish:{changeset_id}",))
+            cur.execute("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(%s,0))", (f"book-world-publish:{changeset_id}",))
             cur.execute("""SELECT e.payload FROM public.domain_event e
                 JOIN public.changeset c ON c.changeset_id=e.changeset_id
                 JOIN public.outbox_message o ON o.event_id=e.event_id
@@ -128,9 +140,42 @@ def publish_book_world(connection, *, school_id: str, changeset_id: str,
             rows = cur.fetchall()
             if len(rows) != 1 or rows[0][0]["publication_hash"] != delivery_receipt["publication_hash"]:
                 raise ValueError("BOOK_WORLD_DELIVERY_NOT_COMPLETE")
+            source_id = str(UUID(rows[0][0]["source_id"]))
             versions = rows[0][0]["version_ids"]
             if not 0 < len(versions) <= 3 or len(set(versions)) != len(versions):
                 raise ValueError("BOOK_WORLD_PUBLICATION_BUDGET")
+            # Lock source -> asset/link -> citation before locking versions.
+            cur.execute("""SELECT kv.knowledge_version_id,kv.content,kv.provenance
+                FROM public.knowledge_version kv JOIN public.knowledge_item ki
+                  ON ki.knowledge_item_id=kv.knowledge_item_id
+                WHERE ki.school_id=%s AND kv.knowledge_version_id=ANY(%s::uuid[])
+                ORDER BY kv.knowledge_version_id""", (school_id, versions))
+            candidates = cur.fetchall()
+            if len(candidates) != len(versions):
+                raise ValueError("BOOK_WORLD_PUBLICATION_SCOPE")
+            expected_state = {}
+            for version_id, content, provenance in candidates:
+                if provenance.get("source_id") != source_id:
+                    raise ValueError("BOOK_WORLD_PUBLICATION_SOURCE_MISMATCH")
+                identity_review = provenance.get("source_identity_review")
+                source = source_from_citation(content["citation"], provenance["review_receipt"])
+                if identity_review is not None:
+                    validate_identity_review(source, provenance["review_receipt"], identity_review,
+                                             school_id=school_id, source_id=source_id)
+                stored = source_locator(cur, school_id, source_id, source["locator"],
+                    expected_stored=identity_review["stored_locator"] if identity_review is not None else None)
+                if needs_asset_binding(stored) and identity_review is None:
+                    raise ValueError("BOOK_SOURCE_IDENTITY_REVIEW_REQUIRED")
+                if identity_review is not None:
+                    require_source_asset(cur, school_id, source_id, source, provenance["review_receipt"],
+                                         asset_id=identity_review["asset_id"])
+                cur.execute("""SELECT source_locator FROM public.knowledge_version_source
+                    WHERE knowledge_version_id=%s AND source_id=%s
+                      AND relation_type='derived_from' FOR SHARE""", (version_id, source_id))
+                citation_rows = cur.fetchall()
+                if len(citation_rows) != 1 or citation_rows[0][0] != content["citation"]:
+                    raise ValueError("BOOK_WORLD_PUBLICATION_SCOPE")
+                expected_state[str(version_id)] = digest({"content": content, "provenance": provenance})
             cur.execute("""SELECT kv.knowledge_version_id,kv.content,kv.provenance,ki.stable_key
                 FROM public.knowledge_version kv
                 JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
@@ -141,14 +186,30 @@ def publish_book_world(connection, *, school_id: str, changeset_id: str,
                   AND EXISTS (SELECT 1 FROM public.knowledge_version_source link
                     JOIN public.source src ON src.source_id=link.source_id
                     WHERE link.knowledge_version_id=kv.knowledge_version_id AND src.status='active'
-                      AND src.school_id=ki.school_id AND link.source_locator=kv.content->'citation'
-                      AND src.canonical_locator=kv.content->'citation'->>'locator')
-                FOR UPDATE OF kv""", (school_id, versions, WORLD_SCHEMA))
+                      AND src.school_id=ki.school_id
+                      AND src.source_id::text=kv.provenance->>'source_id'
+                      AND link.source_locator=kv.content->'citation'
+                      AND (src.canonical_locator=kv.content->'citation'->>'locator'
+                        OR (src.canonical_locator='drive:' || substring(
+                          kv.content->'citation'->>'locator' FROM
+                          '^https://drive[.]google[.]com/file/d/([A-Za-z0-9_-]{20,128})/view$')
+                          AND EXISTS (SELECT 1 FROM public.source_asset sa JOIN public.asset a
+                            ON a.asset_id=sa.asset_id WHERE sa.source_id=src.source_id AND sa.relation_type='embodies'
+                            AND a.school_id=ki.school_id AND a.checksum_algorithm='sha256'
+                            AND a.asset_id::text=kv.provenance->'source_identity_review'->>'asset_id'
+                            AND a.checksum_value=kv.content->'citation'->>'rendition_sha256'
+                            AND pg_catalog.to_jsonb(a.byte_size)=kv.provenance->'review_receipt'->'source_size_bytes'
+                            AND a.immutable_flag IS TRUE AND a.mime_type='application/pdf'))))
+                ORDER BY kv.knowledge_version_id FOR UPDATE OF kv""", (school_id, versions, WORLD_SCHEMA))
             records = cur.fetchall()
             if len(records) != len(versions):
                 raise ValueError("BOOK_WORLD_PUBLICATION_SCOPE")
-            for _, content, provenance, key in records:
-                if provenance["version_hash"] != publication_version({"stable_key": key, "content": content}, provenance["review_receipt"]):
+            for version_id, content, provenance, key in records:
+                if digest({"content": content, "provenance": provenance}) != expected_state[str(version_id)]:
+                    raise ValueError("BOOK_WORLD_PUBLICATION_STATE_CHANGED")
+                if provenance["version_hash"] != publication_version(
+                        {"stable_key": key, "content": content}, provenance["review_receipt"],
+                        provenance.get("source_identity_review")):
                     raise ValueError("BOOK_WORLD_PUBLICATION_HASH")
             cur.execute("SELECT payload_hash FROM public.domain_event WHERE event_id=%s", (event_id,))
             prior = cur.fetchone()
@@ -167,8 +228,10 @@ def publish_book_world(connection, *, school_id: str, changeset_id: str,
             cur.execute("UPDATE public.changeset SET status='committed',committed_at=COALESCE(committed_at,now()) WHERE changeset_id=%s AND status IN ('started','committed')", (publish_id,))
             if cur.rowcount != 1:
                 raise ValueError("BOOK_WORLD_PUBLICATION_CHANGESET")
-    return {"changeset_id": publish_id, "version_ids": versions, "publication": "WORLD_VERIFIED",
-            "canon_activation_performed": False}
+            if before_commit:
+                before_commit()
+    return {"changeset_id": publish_id, "version_ids": versions, "publication": "DRY_RUN_NOT_PUBLISHED" if dry_run else "WORLD_VERIFIED",
+            "canon_activation_performed": False, "dry_run": dry_run, "committed": not dry_run}
 
 
 def retire_book_world(connection, *, school_id: str, version_ids: list[str]) -> int:

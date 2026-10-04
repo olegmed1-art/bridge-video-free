@@ -6,6 +6,7 @@ on:
     paths:
       - 'bridge_contracts/book_*.py'
       - 'database/book_world_persistence.py'
+      - 'database/book_source_reconciliation.py'
       - 'bridge_school_api/knowledge.py'
       - 'bridge_school_api/book_runtime_identity.py'
       - 'tests/test_book_*.py'
@@ -44,5 +45,5 @@ jobs:
       - run: >-
           python -m pytest -q tests/test_book_material_staging.py tests/test_book_world.py
           tests/test_book_teacher_api.py tests/test_book_world_postgres.py
-          tests/test_book_runtime_identity.py
+          tests/test_book_runtime_identity.py tests/test_book_source_identity.py
           tests/test_knowledge_read_api.py tests/test_canon_source_domain_policy.py
