@@ -25,7 +25,12 @@ python -m pytest -q experiments/tournament_teacher
 
 The consumer and demo require only Python 3.12 standard library. Tests additionally
 use pytest and the existing API dependencies to verify the unchanged production
-profile gate. No services, credentials, student records or full deals are used.
+profile gate. Those commands use no services, credentials, student records or full deals.
+
+The additional [candidate import rehearsal](CANDIDATE_REHEARSAL.md) runs against
+one disposable PostgreSQL 18 service in the same isolated CI job. It preserves
+candidate status, executes the existing HTTP path over DB readback, tests SQL
+gates and verifies history-preserving rollback. No production database is used.
 
 Example `request.json` (all cards and the numeric premise are synthetic):
 

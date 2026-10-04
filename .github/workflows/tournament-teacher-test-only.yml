@@ -16,6 +16,20 @@ jobs:
   offline-consumer:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: tournament_rehearsal
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - '127.0.0.1:55432:5432'
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tournament_rehearsal"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -45,6 +59,12 @@ jobs:
         run: python -m experiments.tournament_teacher.coverage > tournament-teacher-evidence.json
       - name: Existing teacher HTTP API to source-linked answer
         run: python -m experiments.tournament_teacher.api_demo > tournament-teacher-api-evidence.json
+      - name: Build non-activatable candidate package
+        run: python -m experiments.tournament_teacher.candidate_package > tournament-candidate-package.json
+      - name: Apply unchanged schema to disposable PostgreSQL 18
+        run: python -m experiments.tournament_teacher.postgres_bootstrap '${{ job.services.postgres.id }}'
+      - name: Rehearse candidate import, HTTP readback, gates and rollback
+        run: python -m experiments.tournament_teacher.postgres_rehearsal > tournament-postgres-evidence.json
       - name: Preserve synthetic decision evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -52,4 +72,6 @@ jobs:
           path: |
             tournament-teacher-evidence.json
             tournament-teacher-api-evidence.json
+            tournament-candidate-package.json
+            tournament-postgres-evidence.json
           retention-days: 7

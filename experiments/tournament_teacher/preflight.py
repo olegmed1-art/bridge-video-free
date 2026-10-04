@@ -68,9 +68,14 @@ def main():
     assert workflow["permissions"] == {"contents":"read"}
     assert len(workflow["jobs"]) == 1
     job = workflow["jobs"]["offline-consumer"]
-    assert job["timeout-minutes"] <= 20 and "services" not in job and "environment" not in job
+    assert job["timeout-minutes"] <= 20 and "environment" not in job
+    service = job["services"]["postgres"]
+    assert set(job["services"]) == {"postgres"}
+    assert service["image"] == "postgres:18"
+    assert service["env"] == {"POSTGRES_DB":"tournament_rehearsal", "POSTGRES_USER":"postgres", "POSTGRES_HOST_AUTH_METHOD":"trust"}
+    assert service["ports"] == ["127.0.0.1:55432:5432"]
     print(f"Publication scope: {len(changed)} minimal experiment files; baseline {BASE}")
-    print("Automatic push workflow: tournament-teacher-test-only only; one job, 10-minute cap; no secrets/services")
+    print("Automatic push workflow: tournament-teacher-test-only only; one job, 10-minute cap; no secrets; one loopback disposable PostgreSQL service")
     print("Only existing teacher route and offline adapter allowed outside experiment; L1/SQL gates and deployment unchanged")
 
 
