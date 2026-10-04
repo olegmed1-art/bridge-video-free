@@ -45,9 +45,6 @@ def main():
                             and t.id == "forbidden" for t in n.targets))
             lines = content.splitlines(keepends=True)
             content = "".join(lines[:node.lineno - 1] + lines[node.end_lineno:])
-        if name == "tools/canon_auth/test_auth.py":
-            # Exact f-string fixture, not an actual DSN or blanket file exclusion.
-            content = content.replace("postgresql://{d.db.EXPECTED_PRINCIPAL}:{SECRET}@{host}/neondb?{query}", "synthetic-dsn-fixture")
         assert not any(re.search(pattern, content) for pattern in forbidden), name
     triggered = []
     for path in (root / ".github/workflows").glob("*.y*ml"):
