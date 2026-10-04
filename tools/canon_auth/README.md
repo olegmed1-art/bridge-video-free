@@ -12,13 +12,19 @@ role/database/TLS booleans and a fixed outcome. One connection, read-only sessio
 5-second statement timeout, explicit rollback. No secret bytes or fingerprints.
 An authentication failure is a useful diagnostic result, not a reason to rotate.
 
-`vercel_validator` is prepared but NOT wired into a build. The immutable target
-origin currently redirects to Vercel Protection. That is a STOP, not permission to
-use a mutable alias, bypass protection or extract the resident API token.
+`vercel_validator` is prepared but NOT wired into a build. Its fixed target is the
+official production API origin https://bridge-video-free.vercel.app, already used
+by the existing client. The owner-authorized assessment confirmed that this origin
+is allowed by the configured Protection scope. This does not authorize access to
+the protected immutable URL, a protection bypass, or API-token extraction.
+
+READY_SHA and DEPLOYMENT are deliberately empty while the independent retirement
+release changes main. Every invocation fails closed until both reviewed pins are
+updated together after that release. No live execution is currently enabled.
 
 Before any future explicit invocation, an authorized operator must verify and
 record current control-plane READY metadata binding the pinned project,
-deployment, immutable origin and exact SHA. The script accepts that attestation
+deployment, production alias and exact SHA. The script accepts that attestation
 for at most 300 seconds; it cannot independently query the control plane. Its
 CANON_* intent/attestation values are per-invocation non-secret inputs and must
 never be added as project-wide env or a persistent build hook.
@@ -26,8 +32,21 @@ never be added as project-wide env or a persistent build hook.
 In a permitted build context it makes at most three requests with redirects and
 proxies disabled, eight-second socket timeouts and a 35-second process deadline:
 credential-free health, authenticated overview (payload never logged), and the
-fixed canon request for a synthetic nonexistent position. The latter proves a
-typed authenticated refusal, NOT baseline ABSTAIN or an active canon rule.
+fixed canon request for a synthetic nonexistent position. It emits only
+`pending_deployment_correlation`, never an acceptance PASS. Responses must include
+a valid x-vercel-id. Its suffix after the last `::` is the runtime-log request ID;
+this mapping was checked with a real credential-free production health request.
+
+The operator must read alias/deployment metadata again after the request batch,
+and query runtime logs for each receipt using both its request-ID filter and the
+expected deployment ID. Preserve original authenticated tool responses and query
+arguments. `verify_binding.verify` rejects missing/ambiguous matches, changed
+SHA/deployment/origin, mismatched path/status/time or an observation window over
+300 seconds. It validates normalized evidence but cannot authenticate supplied
+JSON. A caller-created JSON assertion is not evidence. The release coordinator
+must prevent concurrent alias changes; do not rely solely on bracketing alias
+reads. The final result proves only an authenticated typed refusal, NOT baseline
+ABSTAIN or active canon meaning. It does not declare legacy GitHub CI green.
 
 The exclusive temporary claim prevents a second attempt in the same build's temp
 filesystem, including after failure. It is NOT a cross-build one-shot ledger.

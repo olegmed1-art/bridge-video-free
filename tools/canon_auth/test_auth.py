@@ -11,6 +11,12 @@ NOW = datetime(2026, 10, 4, 12, tzinfo=timezone.utc)
 SECRET = "synthetic-never-print-this-token"
 
 
+@pytest.fixture(autouse=True)
+def synthetic_ready_binding(monkeypatch):
+    monkeypatch.setattr(v, "READY_SHA", "a" * 40)
+    monkeypatch.setattr(v, "DEPLOYMENT", "dpl_synthetic")
+
+
 def intent():
     return dict(CANON_VALIDATION_INTENT=v.INTENT, CANON_READY_SHA=v.READY_SHA,
                 CANON_READY_DEPLOYMENT=v.DEPLOYMENT, CANON_READY_STATE="READY",
@@ -22,6 +28,8 @@ class Response(io.BytesIO):
     def __init__(self, url, status, data):
         super().__init__(json.dumps(data).encode())
         self.status, self.url = status, url
+        number = 1 if url.endswith("healthz") else 2 if url.endswith("overview") else 3
+        self.headers = {"x-vercel-id": f"fra1::fra1::test{number}-1791113746799-e295f3ece609"}
 
     def geturl(self):
         return self.url
@@ -48,7 +56,7 @@ class Transport:
 def test_only_fixed_requests_and_redacted_result(tmp_path):
     tr = Transport()
     result = v.run(intent(), now=NOW, opener=tr, claim=tmp_path / "claim")
-    assert result["status"] == "authenticated_refusal_pass"
+    assert result["status"] == "pending_deployment_correlation"
     assert not result["baseline_abstain_proven"]
     assert len(tr.calls) == 3 and SECRET not in json.dumps(result)
     assert tr.calls[0].get_header("Authorization") is None
@@ -62,7 +70,7 @@ def test_only_fixed_requests_and_redacted_result(tmp_path):
 @pytest.mark.parametrize("field,value", [
     ("CANON_READY_SHA", "0" * 40), ("CANON_READY_STATE", "BUILDING"),
     ("CANON_READY_ORIGIN", "https://attacker.invalid"),
-    ("CANON_READY_ORIGIN", "https://bridge-video-free.vercel.app"),
+    ("CANON_READY_ORIGIN", "https://bridge-video-free-other.vercel.app"),
     ("CANON_READY_DEPLOYMENT", "other"), ("CANON_VALIDATION_INTENT", ""),
     ("VERCEL_PROJECT_ID", "other"), ("VERCEL_ENV", "preview"),
     ("CANON_READY_OBSERVED_AT", (NOW - timedelta(seconds=301)).isoformat()),
@@ -171,3 +179,95 @@ def test_db_libpq_environment_blocked(monkeypatch):
     setup_dsn(monkeypatch)
     monkeypatch.setenv("PGPASSWORD", SECRET)
     assert d.probe()["status"] == "libpq_environment_rejected"
+
+
+def test_unbound_retirement_target_never_requests(tmp_path, monkeypatch):
+    monkeypatch.setattr(v, "READY_SHA", "")
+    monkeypatch.setattr(v, "DEPLOYMENT", "")
+    tr = Transport()
+    with pytest.raises(v.Rejected, match="intent_rejected"):
+        v.run(intent(), now=NOW, opener=tr, claim=tmp_path / "claim")
+    assert not tr.calls
+
+
+@pytest.mark.parametrize("header", ["", SECRET, "fra1::other", "fra1::fra1::" + SECRET,
+                                    "fra1::fra1::test-1791113746799-e295f3ece609\n"])
+def test_untrusted_request_id_not_emitted(tmp_path, header):
+    def change(req, n):
+        r = Response(req.full_url, 200, {"status": "ok"})
+        r.headers["x-vercel-id"] = header
+        return r
+    tr = Transport(change)
+    with pytest.raises(v.Rejected, match="request_id_rejected") as exc:
+        v.run(intent(), now=NOW, opener=tr, claim=tmp_path / "claim")
+    assert SECRET not in str(exc.value)
+    assert len(tr.calls) == 1
+
+
+def binding_fixture(tmp_path):
+    result = v.run(intent(), now=NOW, opener=Transport(), claim=tmp_path / "claim")
+    before = dict(project_id=v.PROJECT, deployment_id=v.DEPLOYMENT, sha=v.READY_SHA,
+                  origin=v.ORIGIN, state="READY", observed_at=NOW.isoformat())
+    after = before | {"observed_at": (NOW + timedelta(seconds=30)).isoformat()}
+    logs = [dict(query_request_id=r["request_id"], query_project_id=v.PROJECT,
+                 query_deployment_id=v.DEPLOYMENT, deployment_id=v.DEPLOYMENT,
+                 matched_count=1, path=r["path"], status_code=r["status_code"],
+                 request_at=(NOW + timedelta(seconds=10)).isoformat()) for r in result["receipts"]]
+    return result, before, after, logs
+
+
+def test_verified_refusal_requires_every_log_binding(tmp_path):
+    from .verify_binding import verify
+    result = verify(*binding_fixture(tmp_path))
+    assert result["status"] == "authenticated_refusal_verified"
+    assert result["requests_correlated"] == 3 and not result["baseline_abstain_proven"]
+
+
+@pytest.mark.parametrize("mutation", ["alias_sha", "alias_deployment", "missing_log", "duplicate_log",
+    "wrong_request", "wrong_log_deployment", "no_match", "wrong_path", "wrong_status", "wrong_time", "stale_window"])
+def test_no_acceptance_from_alias_only_or_wrong_logs(tmp_path, mutation):
+    from .verify_binding import verify
+    result, before, after, logs = binding_fixture(tmp_path)
+    if mutation == "alias_sha": after["sha"] = "b" * 40
+    if mutation == "alias_deployment": after["deployment_id"] = "dpl_other"
+    if mutation == "missing_log": logs.pop()
+    if mutation == "duplicate_log": logs[2] = logs[0].copy()
+    if mutation == "wrong_request": logs[0]["query_request_id"] = "different"
+    if mutation == "wrong_log_deployment": logs[0]["deployment_id"] = "dpl_other"
+    if mutation == "no_match": logs[0]["matched_count"] = 0
+    if mutation == "wrong_path": logs[0]["path"] = "/other"
+    if mutation == "wrong_status": logs[0]["status_code"] = 500
+    if mutation == "wrong_time": logs[0]["request_at"] = (NOW - timedelta(seconds=1)).isoformat()
+    if mutation == "stale_window": after["observed_at"] = (NOW + timedelta(seconds=301)).isoformat()
+    with pytest.raises(v.Rejected):
+        verify(result, before, after, logs)
+
+
+@pytest.mark.parametrize("field", ["schema", "requests", "persisted", "queued", "finalized",
+                                    "pilot_activated", "baseline_abstain_proven"])
+def test_incomplete_result_never_verified(tmp_path, field):
+    from .verify_binding import verify
+    result, before, after, logs = binding_fixture(tmp_path)
+    del result[field]
+    with pytest.raises(v.Rejected, match="result_binding_rejected"):
+        verify(result, before, after, logs)
+
+
+def test_malformed_receipt_and_boolean_count_rejected(tmp_path):
+    from .verify_binding import verify
+    result, before, after, logs = binding_fixture(tmp_path)
+    logs[0]["matched_count"] = True
+    with pytest.raises(v.Rejected):
+        verify(result, before, after, logs)
+    logs[0]["matched_count"] = 1
+    result["receipts"][0]["request_id"] = "bad"
+    with pytest.raises(v.Rejected):
+        verify(result, before, after, logs)
+
+
+def test_health_id_cannot_echo_resident_token_even_without_auth_header(tmp_path):
+    env = intent() | {"BRIDGE_API_TOKEN": "test1-1791113746799-e295f3ece609"}
+    tr = Transport()
+    with pytest.raises(v.Rejected, match="request_id_rejected"):
+        v.run(env, now=NOW, opener=tr, claim=tmp_path / "claim")
+    assert tr.calls[0].get_header("Authorization") is None
