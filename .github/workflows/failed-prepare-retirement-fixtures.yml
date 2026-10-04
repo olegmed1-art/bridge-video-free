@@ -14,7 +14,7 @@ jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == '3960e308d37c49baf33bd0b32750072f7eff7361' &&
+      github.event.before == '8f180e2483b029d39d20f1334e0ce96a63cec29c' &&
       github.run_attempt == 1 &&
       github.event.head_commit.message == 'ci: verify failed prepare retirement protocol'
     runs-on: ubuntu-24.04

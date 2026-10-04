@@ -32,8 +32,10 @@ def test_bootstrap_acceptance_covers_action_and_all_bytes(tmp_path):
 
 
 def test_root_writes_refuse_writable_ancestors_and_symlinks(tmp_path):
-    # pytest /tmp is deliberately writable, so root_parent must reject it.
-    with pytest.raises(RuntimeError,match='PARENT'): target.root_parent(tmp_path)
+    # Build the unsafe ancestor explicitly; pytest's base directory may be private.
+    writable = tmp_path/'writable';writable.mkdir();writable.chmod(0o777)
+    child = writable/'child';child.mkdir(mode=0o700)
+    with pytest.raises(RuntimeError,match='PARENT'): target.root_parent(child)
     alias = tmp_path/'alias';alias.symlink_to(tmp_path,target_is_directory=True)
     with pytest.raises(RuntimeError,match='PARENT'): target.root_parent(alias)
 
