@@ -58,7 +58,7 @@ def remote_failure(raw):
 
 def dispatch_inputs(event_path,source,*,read_only=False):
     """Validate before use; no input interpolation into runner logging surfaces."""
-    from ops.light_native_retirement_live import public_reference
+    from ops.light_native_retirement_live import public_reference,read_only_reference
     from ops import light_native_retirement as r
     with open(event_path,'rb') as stream:
         event=r.parse(stream.read(1024*1024+1),limit=1024*1024)
@@ -71,7 +71,7 @@ def dispatch_inputs(event_path,source,*,read_only=False):
     release.require(type(value['retirement_reference_json']) is str,'LANE_OWNER_NOT_ACCEPTED')
     payload=value['retirement_reference_json'].encode('utf-8')
     release.require(type(read_only) is bool,'LANE_OWNER_NOT_ACCEPTED')
-    reference=public_reference(payload,action='observe-retirement-reference' if read_only else 'retire-prepare-reference')
+    reference=read_only_reference(payload) if read_only else public_reference(payload)
     release.require(r.sha(payload)==digests[2] and reference['source']==source
         and reference['accepted_controller_sha256']==digests[0]
         and reference['accepted_runtime_sha256']==digests[1],'LANE_OWNER_NOT_ACCEPTED')
@@ -105,12 +105,14 @@ try:
   sys.path.append('/opt/bridge-school/school-autopilot-production-light/releases/f82d58efabf21ba62fd242a4fa02a8e7cfda1d23')
   from ops.light_native_lane_run_guard import authenticated
   from ops.light_native_lane_controller import phase
-  from ops.light_native_retirement_live import public_reference,public_result,public_observation_result,inspect_retirement
-  reference=public_reference(decoded['payload'],action=%r)
+  from ops.light_native_retirement_live import public_reference,public_result,public_observation_result,inspect_retirement,read_only_reference,inspect_local,public_local_result
+  reference=read_only_reference(decoded['payload']) if %r else public_reference(decoded['payload'])
   if %r:
    guard=authenticated(%r,%d,%d,value['token'],read_only=True)
-   result=inspect_retirement(decoded['driver'],value['credential'],decoded['controller'],decoded['runtime'],decoded['payload'],%r,guard)
-   check_result=public_observation_result
+   diagnostic=reference['action']=='diagnose-local-reference'
+   operation=inspect_local if diagnostic else inspect_retirement
+   result=operation(decoded['driver'],value['credential'],decoded['controller'],decoded['runtime'],decoded['payload'],%r,guard)
+   check_result=public_local_result if diagnostic else public_observation_result
   else:
    guard=authenticated(%r,%d,%d,value['token'])
    result=phase(decoded['driver'],value['credential'],value['token'],decoded['controller'],decoded['runtime'],decoded['payload'],%r,guard)
@@ -123,7 +125,7 @@ except BaseException as exc:
  raise SystemExit(2) from None
 ''' % (dict(controller=accepted_controller,runtime=accepted_runtime,payload=accepted_payload,driver=wheel_sha),
        source,tuple(dict.fromkeys((*release.HELPERS,*controller.EXTRA))),
-       'observe-retirement-reference' if read_only else 'retire-prepare-reference',read_only,
+       read_only,read_only,
        source,run,attempt,accepted_payload,source,run,attempt,accepted_payload)
 
 
@@ -136,7 +138,7 @@ def main(*,read_only=False):
     repo=Path(__file__).resolve().parents[1]
     raw=controller.package(repo,source)
     retained=release.package(repo,controller.install.RETAINED_SOURCE)
-    from ops.light_native_retirement_live import public_result,public_reference,public_observation_result
+    from ops.light_native_retirement_live import public_result,public_reference,public_observation_result,public_local_result,read_only_reference
     wheels=driver.build(wheel_directory)
     release.require([controller.sha(item) for item in (raw,retained,payload)]==digests,'LANE_OWNER_NOT_ACCEPTED')
     code=bootstrap(source,*digests,driver.sha(wheels),run,attempt,read_only=read_only)
@@ -153,11 +155,12 @@ def main(*,read_only=False):
     if result.returncode!=0:
         print(json.dumps(remote_failure(result.stdout),sort_keys=True))
         return 2
-    reference=public_reference(payload,action='observe-retirement-reference' if read_only else 'retire-prepare-reference')
-    value=(public_observation_result if read_only else public_result)(json.loads(result.stdout),reference['record_sha256'])
+    reference=read_only_reference(payload) if read_only else public_reference(payload)
+    check_result=(public_local_result if reference['action']=='diagnose-local-reference' else public_observation_result) if read_only else public_result
+    value=check_result(json.loads(result.stdout),reference['record_sha256'])
     source_check(source)
     print(json.dumps(value,sort_keys=True))
-    return 2 if read_only and value['state']!='OBSERVED' else 0
+    return 2 if read_only and value['state'] not in ('OBSERVED','LOCAL_CHECKED') else 0
 
 
 if __name__=='__main__':
