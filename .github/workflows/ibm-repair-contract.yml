@@ -1,0 +1,15 @@
+name: IBM repair contract
+on:
+  push:
+    branches: [review/ibm-repair-contract-20261004]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Isolated Linux systemd and pure gate contracts
+        run: sudo -n python3 -B -m unittest discover -s ops/ibm_repair_contract -p 'test_*.py' -v
