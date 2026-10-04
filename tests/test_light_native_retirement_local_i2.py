@@ -74,7 +74,7 @@ def local_outcome(t, diagnostic=None):
             return ('PASS', result)
         except Exception as exc:
             # Comparison is internal to synthetic tests; never a public report.
-            return ('FAIL', type(exc), str(exc))
+            return ('FAIL', type(exc), str(exc), exc)
 
 
 CASES = [
@@ -141,13 +141,14 @@ def test_diagnostic_preserves_actual_local_outcome_and_first_failure(retained, f
     plain = local_outcome(t)
     diagnostic = live.LocalDiagnostic()
     observed = local_outcome(t, diagnostic)
-    assert plain == observed
+    assert plain[:3] == observed[:3]
     if checkpoint is None:
         assert observed[0] == 'PASS'
     else:
         assert observed[0] == 'FAIL' and diagnostic.checkpoint == checkpoint
-        # Reconstitute only a synthetic exception for the fixed enum classifier.
-        exc = observed[1](observed[2])
+        # Keep the actual synthetic exception: JSONDecodeError cannot be
+        # reconstructed from its formatted message alone.
+        exc = observed[3]
         assert diagnostic.reason(exc) == reason
         safe = diagnostic.result(exc)
         assert PRIVATE not in r.encoded(safe).decode()

@@ -14,7 +14,7 @@ jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == '354db90bdc226ec56f7368fc7f3655fd0d2217d2' &&
+      github.event.before == '743e6a479005c8a1d032d0f92b7d4366e28a1af6' &&
       github.run_attempt == 1 &&
       github.event.head_commit.message == 'ci: verify local journal diagnostic'
     strategy:
