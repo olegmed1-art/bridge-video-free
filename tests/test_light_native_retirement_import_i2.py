@@ -10,6 +10,7 @@ import importlib.util
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -196,17 +197,18 @@ def test_isolated_packed_observer_import_boundary(tmp_path, mode):
     repository = Path(__file__).resolve().parents[1]
     names = tuple(dict.fromkeys((*owner.release.HELPERS, *owner.EXTRA)))
     assert len(names) == 35
-    helpers = tmp_path / 'packed'
-    for name in names:
-        path = helpers / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b'' if name.endswith('/__init__.py') else (repository / name).read_bytes())
-    spec = importlib.util.find_spec('psycopg')
-    assert spec is not None and spec.origin
-    site = Path(spec.origin).resolve().parent.parent
-    result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', CHILD,
-                             str(helpers), str(site), mode], capture_output=True,
-                            text=True, timeout=45, env={'PATH': '/usr/bin:/bin', 'PSYCOPG_IMPL': 'binary'})
+    with tempfile.TemporaryDirectory(prefix='packed-helpers-', dir=tmp_path) as temporary:
+        helpers = Path(temporary)
+        for name in names:
+            path = helpers / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'' if name.endswith('/__init__.py') else (repository / name).read_bytes())
+        spec = importlib.util.find_spec('psycopg')
+        assert spec is not None and spec.origin
+        site = Path(spec.origin).resolve().parent.parent
+        result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', CHILD,
+                                 str(helpers), str(site), mode], capture_output=True,
+                                text=True, timeout=45, env={'PATH': '/usr/bin:/bin', 'PSYCOPG_IMPL': 'binary'})
     assert result.returncode == 0, result.stdout + result.stderr
     expected = 'COLD_ATTEST_REQUIRES_DRIVER' if mode == 'cold-counterexample' else 'ISOLATED_IMPORT_BOUNDARY_PASS ' + mode
     assert result.stdout.strip() == expected

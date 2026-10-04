@@ -14,7 +14,7 @@ jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == '08cd157b32a3e34974c4d24706882ef31681891d' &&
+      github.event.before == 'fbfd1b91d37183e07b76f1cf19215d3f6a84e8d7' &&
       github.run_attempt == 1 &&
       github.event.head_commit.message == 'ci: verify retirement observer import order'
     strategy:
@@ -64,12 +64,14 @@ jobs:
           assert hashlib.sha256(old).hexdigest() == '3762caa927970b6410a7850c76fa1dcbbfeab214c5470ff98c6b8059b51ffcb4'
           old_workflow = fetch('https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/cf6091f09fa70afc4b25162fbbb2fea0dc36898a/.github/workflows/light-native-lane-owner.yml', 32768)
           assert hashlib.sha256(old_workflow).hexdigest() == '0320ffa0e7229f315c8acc71401038eadd1b8e6901a4e1e38c69190b81ba850e'
+          old_observer = fetch('https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/08cd157b32a3e34974c4d24706882ef31681891d/ops/light_native_retirement_live.py', 128*1024)
+          assert hashlib.sha256(old_observer).hexdigest() == 'f7e8969653cc05879bf7df918181b6371534dd8e6181a1a729dd9ae965034c35'
           bundle = io.BytesIO()
           with zipfile.ZipFile(bundle, 'w', zipfile.ZIP_DEFLATED) as packed:
               packed.writestr('candidate.zip', source)
               packed.writestr('revoked-controller.py', old)
               packed.writestr('old-owner-workflow.yml', old_workflow)
-              packed.writestr("old-observer.py", urllib.request.urlopen("https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/08cd157b32a3e34974c4d24706882ef31681891d/ops/light_native_retirement_live.py",timeout=30).read())
+              packed.writestr("old-observer.py", old_observer)
           (work/'retirement-test-input.zip').write_bytes(bundle.getvalue())
           archive = zipfile.ZipFile(io.BytesIO(source))
           prefix = 'bridge-video-free-'+sha+'/'
@@ -173,6 +175,7 @@ jobs:
           print("OLD_WORKFLOW_CONFIDENTIALITY_REGRESSION_DETECTED",os.uname().machine,flush=True)
           observer=root/"ops/light_native_retirement_live.py";fixed=observer.read_bytes()
           old_observer=packed.read("old-observer.py")
+          assert hashlib.sha256(old_observer).hexdigest()=="f7e8969653cc05879bf7df918181b6371534dd8e6181a1a729dd9ae965034c35"
           try:
               observer.write_bytes(old_observer)
               red=subprocess.run([sys.executable,"-B","-m","pytest","-q","-p","no:cacheprovider",
