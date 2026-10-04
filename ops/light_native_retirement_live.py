@@ -5,6 +5,7 @@ ACK, intake or provider submission occurs in this module. The driver is loaded
 once by the authenticated child; historical helper packages are data, not imports.
 """
 import base64
+from contextlib import contextmanager
 from dataclasses import asdict
 import os
 
@@ -230,13 +231,14 @@ def public_result(value,accepted_record):
     return value
 
 
-def public_reference(raw):
+def public_reference(raw,*,action='retire-prepare-reference'):
     """Only public pins and finite coordination metadata may cross dispatch."""
     from ops.native_maintenance_agreement import Agreement,COVERAGE
     value=r.parse(raw,limit=8192)
     r.need(type(value) is dict and set(value)==REFERENCE_KEYS and r.encoded(value)==raw
            and type(value['version']) is int and value['version']==1
-           and value['action']=='retire-prepare-reference','LANE_RETIREMENT_REFERENCE')
+           and action in ('retire-prepare-reference','observe-retirement-reference')
+           and value['action']==action,'LANE_RETIREMENT_REFERENCE')
     r.references([{k:value[k] for k in ('policy_sha256','index','record_sha256')}])
     r.need(r.digest(value['source'],40) and all(r.digest(value[k]) for k in
         ('accepted_controller_sha256','accepted_runtime_sha256','journal_map_sha256',
@@ -245,7 +247,8 @@ def public_reference(raw):
     r.need(type(agreement) is dict and set(agreement)=={'version','owner','operation_digest',
         'not_before','expires_at','coverage','evidence'} and type(agreement['version']) is int
         and agreement['version']==1 and agreement['owner']=='olegmed1-art'
-        and agreement['coverage']==COVERAGE and agreement['evidence']==PUBLIC_EVIDENCE
+        and agreement['coverage']==COVERAGE and agreement['evidence']==(
+            'OWNER_ACCEPTED_READ_ONLY_RETIREMENT_OBSERVATION' if action=='observe-retirement-reference' else PUBLIC_EVIDENCE)
         and r.digest(agreement['operation_digest'])
         and r.sha(r.encoded(agreement))==value['accepted_agreement_sha256'],
         'LANE_RETIREMENT_REFERENCE')
@@ -254,7 +257,7 @@ def public_reference(raw):
     return value
 
 
-def resolve_reference(raw,accepted,controller,runtime,guard):
+def resolve_reference(raw,accepted,controller,runtime,guard,*,read_only=False):
     """Reconstruct private bytes in protected root memory; never mint acceptance.
 
     Reads use fixed existing paths and the same no-follow metadata verifier.
@@ -265,7 +268,8 @@ def resolve_reference(raw,accepted,controller,runtime,guard):
     from ops.native_maintenance_agreement import Agreement
     import time
     r.need(r.sha(raw)==accepted,'LANE_RETIREMENT_NOT_ACCEPTED')
-    value=public_reference(raw)
+    r.need(type(read_only) is bool,'LANE_RETIREMENT_REFERENCE')
+    value=public_reference(raw,action='observe-retirement-reference' if read_only else 'retire-prepare-reference')
     owner.validate_package(controller,value['source'],value['accepted_controller_sha256'])
     r.need(r.sha(runtime)==value['accepted_runtime_sha256'],'LANE_RETIREMENT_BINDING')
     guard.assert_current();owner.release.staging.require_current_main(value['source'])
@@ -273,7 +277,7 @@ def resolve_reference(raw,accepted,controller,runtime,guard):
     r.need(start<=time.time()<end,'LANE_RETIREMENT_REFERENCE')
     policy_hash=value['policy_sha256'];index=value['index']
     entry='issuers/'+policy_hash+'/'+format(index,'04d')
-    with r.Snapshot(owner.ROOT,entry) as view:
+    with r.Snapshot(owner.ROOT,'unused' if read_only else entry) as view:
         policy=r.parse(view.read('issuers/'+policy_hash+'/policy.json',policy_hash))
         r.need(set(policy)==issuer.POLICY_KEYS and policy['version']==1
                and policy['action']=='issue' and index<len(policy['plans']), 'LANE_RETIREMENT_REFERENCE')
@@ -301,29 +305,31 @@ def resolve_reference(raw,accepted,controller,runtime,guard):
         proposal=r.encoded(record);r.record(proposal,value['record_sha256'])
         request={k:value[k] for k in ('version','source','accepted_controller_sha256',
             'accepted_runtime_sha256','record_sha256','agreement','accepted_agreement_sha256')}
-        request.update(action='retire-prepare',record_base64=base64.b64encode(proposal).decode(),
+        request.update(action='observe-retirement' if read_only else 'retire-prepare',record_base64=base64.b64encode(proposal).decode(),
                        historical_journal_sha256=pins)
         private=r.encoded(request)
         r.need(r.sha(private)==value['private_request_sha256'],'LANE_RETIREMENT_NOT_ACCEPTED')
         # Validate the independently approved finite scope before any write/DB access.
-        write_request(private,value['private_request_sha256'],controller,runtime,guard)
+        write_request(private,value['private_request_sha256'],controller,runtime,guard,read_only=read_only)
         view.check()
     return private,value['private_request_sha256']
 
 
-def write_request(raw,accepted,controller,runtime,guard):
+def write_request(raw,accepted,controller,runtime,guard,*,read_only=False):
     from ops import light_native_lane_controller as owner
     from ops.native_maintenance_agreement import Agreement
     r.need(r.sha(raw)==accepted,'LANE_RETIREMENT_NOT_ACCEPTED')
     value=r.parse(raw)
     r.need(type(value) is dict and set(value)==WRITE_KEYS and type(value['version']) is int
-           and value['version']==1 and value['action']=='retire-prepare','LANE_RETIREMENT_SCHEMA')
+           and type(read_only) is bool and value['version']==1
+           and value['action']==('observe-retirement' if read_only else 'retire-prepare'),'LANE_RETIREMENT_SCHEMA')
     owner.validate_package(controller,value['source'],value['accepted_controller_sha256'])
     r.need(r.sha(runtime)==value['accepted_runtime_sha256'],'LANE_RETIREMENT_BINDING')
     payload=base64.b64decode(value['record_base64'],validate=True)
     proposal=r.record(payload,value['record_sha256']);r.journal_pins(value['historical_journal_sha256'])
     r.need(proposal['retained_runtime_sha256']==value['accepted_runtime_sha256'],'LANE_RETIREMENT_BINDING')
-    scope=dict(version=1,operation='CREATE_FAILED_PREPARE_RETIREMENT_PROPOSAL',source=value['source'],
+    scope=dict(version=1,operation=('READ_ONLY_VERIFY_FAILED_PREPARE_RETIREMENT' if read_only else
+               'CREATE_FAILED_PREPARE_RETIREMENT_PROPOSAL'),source=value['source'],
                controller_sha256=value['accepted_controller_sha256'],runtime_sha256=value['accepted_runtime_sha256'],
                record_sha256=value['record_sha256'],historical_journal_sha256=value['historical_journal_sha256'])
     agreement=Agreement(value['agreement'],value['accepted_agreement_sha256'],scope)
@@ -366,7 +372,7 @@ def write(wheels,credential,controller,runtime,raw,accepted,guard):
     return run(operation)
 
 
-def local(view,value,pins):
+def local(view,value,pins,*,observation=False):
     from ops import light_native_lane_controller as owner
     from ops import light_native_lane_issuer as issuer
     policy_root='issuers/'+value['policy_sha256'];entry=r.entry(value)
@@ -388,8 +394,12 @@ def local(view,value,pins):
     r.need(view.names(policy_root)=={'policy.json'}|{format(n,'04d') for n in range(index+1)},
            'LANE_RETIREMENT_LATER_ISSUE')
     writing=view.output_parent==entry
-    r.need(view.names(entry,allow_output=writing)==({'intent.json'} if writing else {'intent.json',r.NAME}),
-           'LANE_RETIREMENT_BINDING')
+    if observation:
+        r.need(not writing and view.names(entry) in ({'intent.json'},{'intent.json',r.NAME}),
+               'LANE_RETIREMENT_BINDING')
+    else:
+        r.need(view.names(entry,allow_output=writing)==({'intent.json'} if writing else {'intent.json',r.NAME}),
+               'LANE_RETIREMENT_BINDING')
     intent=r.parse(view.read(entry+'/intent.json'))
     r.need(set(intent)=={'start','cycle'},'LANE_RETIREMENT_BINDING')
     count,previous=issuer.progress(owner.ROOT/policy_root,policy,value['policy_sha256'],stop_before=index,
@@ -452,14 +462,14 @@ def local(view,value,pins):
                 prior_plan=prior_plan,terminal=terminal,receipt=receipt,complete=complete)
 
 
-def observer(view,value,conn,guard,*,pins,latest=None,descendants=()):
+def observer(view,value,conn,guard,*,pins,latest=None,descendants=(),observation=False):
     """Read-only checked view; sequence anchor is not frozen after later jobs."""
     from database import light_native_pilot_intake as intake
     from ops import light_native_lane_controller as owner
     from ops import light_native_lane_owner as acceptance
     from ops import light_native_lane_feed as feed
     guard.assert_current()
-    data=local(view,value,pins)
+    data=local(view,value,pins,observation=True) if observation else local(view,value,pins)
     plan=intake.Plan(data['raw_plan'],value['plan_sha256'])
     prior=value['predecessor'];prior_plan=intake.Plan(data['prior_plan'],prior['plan_sha256'])
     before=data['before'];baseline=data['baseline']
@@ -550,3 +560,138 @@ def observer(view,value,conn,guard,*,pins,latest=None,descendants=()):
     return {'local_sha256':r.sha(r.encoded(view.rows)), 'history_sha256':r.sha(r.encoded([
         [r.sha(a),r.sha(b)] for a,b in history])), 'provider_sha256':terminal['result']['provider_evidence_sha256'],
         'controls_sha256':r.sha(r.encoded(database_before)), 'latest':current}
+
+
+OBSERVATION_PHASES=('AUTHORITY','LOCKS','PROPOSAL','RECONSTRUCTION','REQUEST_AUTHORITY',
+    'RUNTIME','LOCAL_JOURNALS','DATABASE_CONNECT','HOST_DB_PROVIDER','FINAL_GUARDS','DONE')
+
+
+def public_observation_result(value,accepted_record):
+    keys={'audit','state','phase','proposal_state','proposal_observation_final','metadata','record_sha256','record_matches',
+          'content_shape_valid','journal_pins_verified','hold_db_provider_verified',
+          'incident_closed','execution_acknowledged','new_task_authorized'}
+    r.need(type(value) is dict and set(value)==keys and value['audit']=='LIGHT_LANE_RETIREMENT_OBSERVATION'
+        and value['state'] in ('OBSERVED','OBSERVATION_REFUSED') and value['phase'] in OBSERVATION_PHASES
+        and value['proposal_state'] in ('UNKNOWN','ABSENT','EXACT','CONFLICT')
+        and r.digest(accepted_record) and value['record_sha256']==accepted_record
+        and all(type(value[k]) is bool for k in ('proposal_observation_final','record_matches','content_shape_valid',
+            'journal_pins_verified','hold_db_provider_verified'))
+        and all(value[k] is False for k in ('incident_closed','execution_acknowledged','new_task_authorized')),
+        'LANE_RETIREMENT_REFUSED')
+    meta=value['metadata']
+    r.need(meta is None or type(meta) is dict and set(meta)=={'uid','gid','mode','nlink','size'}
+        and all(type(n) is int for n in meta.values()) and meta['uid']==meta['gid']==0
+        and meta['mode']==0o600 and meta['nlink']==1 and 0<=meta['size']<=4096,'LANE_RETIREMENT_REFUSED')
+    r.need((value['proposal_state'] in ('UNKNOWN','ABSENT'))==(meta is None)
+        and value['proposal_observation_final']==(value['state']=='OBSERVED')
+        and value['record_matches']==(value['proposal_state']=='EXACT')
+        and (not value['record_matches'] or value['content_shape_valid'])
+        and (value['state']!='OBSERVATION_REFUSED' or not value['journal_pins_verified']
+             and not value['hold_db_provider_verified'])
+        and (value['state']!='OBSERVED' or value['phase']=='DONE' and value['proposal_state']!='UNKNOWN'
+             and value['journal_pins_verified'] and value['hold_db_provider_verified']), 'LANE_RETIREMENT_REFUSED')
+    return value
+
+
+@contextmanager
+def observation_locks(root):
+    """Existing fixed lock inodes only; read-only descriptors, no creation."""
+    import fcntl
+    with r.Snapshot(root,'unused') as view:
+        held=[]
+        try:
+            for directory in ('issuers','cycles'):
+                with view.directory(directory) as parent:
+                    fd=os.open('cycle.lock',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_NOATIME,dir_fd=parent)
+                    held.append(fd);r.Snapshot.file_meta(os.fstat(fd))
+                    fcntl.flock(fd,fcntl.LOCK_SH|fcntl.LOCK_NB)
+                    view.read(directory+'/cycle.lock')
+                    r.need(r.identity(os.stat('cycle.lock',dir_fd=parent,follow_symlinks=False))==
+                           r.identity(os.fstat(fd)),'LANE_RETIREMENT_DRIFT')
+            view.check();yield;view.check()
+        finally:
+            for fd in reversed(held):os.close(fd)
+
+
+def proposal_observation(view,value):
+    """Track the target as an original, with no writer metadata exemption."""
+    path=r.entry(value)+'/'+r.NAME
+    raw=view.read(path,optional=True,limit=4096)
+    if raw is None:
+        result=dict(proposal_state='ABSENT',metadata=None,record_matches=False,content_shape_valid=False)
+    else:
+        meta=view.rows[path][0]
+        shape=True
+        try:r.record(raw)
+        except (RuntimeError,ValueError,UnicodeDecodeError):shape=False
+        match=r.sha(raw)==value['record_sha256']
+        result=dict(proposal_state='EXACT' if match else 'CONFLICT',
+            metadata=dict(uid=meta[3],gid=meta[4],mode=meta[2]&0o777,nlink=meta[5],size=meta[6]),
+            record_matches=match,content_shape_valid=shape)
+    view.check()
+    return result
+
+
+def inspect_retirement(wheels,credential,controller,runtime,raw,accepted,guard):
+    """Strictly observation: never calls write, retain, or a create-only entrypoint.
+
+    Ordinary failures return a fixed CURRENT phase, not the lost historical cause.
+    Supervisor crash/deadline still means UNKNOWN; no raw exceptions leave root.
+    Temporary driver/helper files belong to the existing authenticated bootstrap;
+    this function never writes journals, DB rows, services or controls.
+    """
+    from ops import light_native_lane_controller as owner
+    from ops.native_maintenance_agreement import Agreement
+    from ops.light_native_bounded import run
+    import time
+    r.need(os.geteuid()==0 and os.uname().nodename=='autopilot-lite-vnic','LANE_RETIREMENT_ROOT')
+    reference=public_reference(raw,action='observe-retirement-reference')
+    def operation():
+        phase='AUTHORITY'
+        result=dict(audit='LIGHT_LANE_RETIREMENT_OBSERVATION',state='OBSERVATION_REFUSED',phase=phase,
+            proposal_state='UNKNOWN',proposal_observation_final=False,metadata=None,record_sha256=reference['record_sha256'],
+            record_matches=False,content_shape_valid=False,journal_pins_verified=False,
+            hold_db_provider_verified=False,incident_closed=False,execution_acknowledged=False,new_task_authorized=False)
+        try:
+            r.need(r.sha(raw)==accepted,'LANE_RETIREMENT_NOT_ACCEPTED')
+            owner.validate_package(controller,reference['source'],reference['accepted_controller_sha256'])
+            r.need(r.sha(runtime)==reference['accepted_runtime_sha256'],'LANE_RETIREMENT_BINDING')
+            start,end=(Agreement.timestamp(reference['agreement'][k]) for k in ('not_before','expires_at'))
+            r.need(start<=time.time()<end,'LANE_RETIREMENT_REFERENCE')
+            guard.assert_current();owner.release.staging.require_current_main(reference['source'])
+            phase='LOCKS'
+            with observation_locks(owner.ROOT),r.Snapshot(owner.ROOT,'unused') as view:
+                phase='PROPOSAL';result.update(proposal_observation(view,reference))
+                phase='RECONSTRUCTION'
+                request,pin=resolve_reference(raw,accepted,controller,runtime,guard,read_only=True)
+                phase='REQUEST_AUTHORITY'
+                value,payload,agreement=write_request(request,pin,controller,runtime,guard,read_only=True)
+                proposal=r.record(payload,value['record_sha256'])
+                phase='RUNTIME';retained=r.parse(runtime,limit=3*1024*1024)
+                r.need(owner.release.encoded(retained)==runtime and retained['source']==owner.install.RETAINED_SOURCE,
+                       'LANE_RETIREMENT_BINDING')
+                owner.release.validate(retained['runtime'],retained['source'],retained['runtime']['sha256'])
+                owner.release.staging.verify_release(owner.execution.plan.source_path(retained['source']),retained['runtime'])
+                phase='LOCAL_JOURNALS';local(view,proposal,value['historical_journal_sha256'],observation=True)
+                from ops.native_maintenance_owner_host import loaded_runtime
+                from ops.native_maintenance_owner_attest import parameters
+                phase='DATABASE_CONNECT'
+                with loaded_runtime(wheels) as (psycopg,_):
+                    with psycopg.connect(**parameters(credential),autocommit=True) as conn:
+                        conn.read_only=True
+                        phase='HOST_DB_PROVIDER'
+                        agreement.assert_held(agreement.scope)
+                        before=observer(view,proposal,conn,guard,pins=value['historical_journal_sha256'],observation=True)
+                        r.need(observer(view,proposal,conn,guard,pins=value['historical_journal_sha256'],observation=True)==before,
+                               'LANE_RETIREMENT_DRIFT')
+                phase='FINAL_GUARDS'
+                agreement.assert_held(agreement.scope);guard.assert_current()
+                owner.release.staging.require_current_main(reference['source'])
+                r.need(proposal_observation(view,reference)=={k:result[k] for k in
+                    ('proposal_state','metadata','record_matches','content_shape_valid')},'LANE_RETIREMENT_DRIFT')
+                view.check()
+            result.update(state='OBSERVED',phase='DONE',proposal_observation_final=True,journal_pins_verified=True,hold_db_provider_verified=True)
+        except BaseException:
+            result.update(state='OBSERVATION_REFUSED',phase=phase,journal_pins_verified=False,hold_db_provider_verified=False)
+        return public_observation_result(result,reference['record_sha256'])
+    return run(operation)
