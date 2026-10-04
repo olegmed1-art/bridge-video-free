@@ -917,10 +917,11 @@ def inspect_retirement(wheels,credential,controller,runtime,raw,accepted,guard):
                 owner.release.validate(retained['runtime'],retained['source'],retained['runtime']['sha256'])
                 owner.release.staging.verify_release(owner.execution.plan.source_path(retained['source']),retained['runtime'])
                 phase='LOCAL_JOURNALS';local(view,proposal,value['historical_journal_sha256'],observation=True)
+                phase='RUNTIME'
                 from ops.native_maintenance_owner_host import loaded_runtime
-                from ops.native_maintenance_owner_attest import parameters
-                phase='DATABASE_CONNECT'
                 with loaded_runtime(wheels) as (psycopg,_):
+                    from ops.native_maintenance_owner_attest import parameters
+                    phase='DATABASE_CONNECT'
                     with psycopg.connect(**parameters(credential),autocommit=True) as conn:
                         conn.read_only=True
                         phase='HOST_DB_PROVIDER'

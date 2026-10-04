@@ -1,8 +1,13 @@
 # Resident connection path: inventory and isolated experiment
 
-Inventory base: current main efe59fc153aca09d83b8d5b4f9595d0fb2dc5e73.
-The existing candidate f6149671 is based on 08cd157b; fresh integration and
-deployment pins remain mandatory before any later live attempt.
+Inventory observed main efe59fc153aca09d83b8d5b4f9595d0fb2dc5e73.
+Test branch integrated main 711ddd648fa74f2b903f9d7127dadc412f94b277
+on 2026-10-04. Publication preflight compares only experiment changes against
+that exact integration base. The official production alias was read-only verified
+READY on that SHA (deployment dpl_4sxqMktPVrW8ULuhwqyQNhLmJqdJ), and
+static validator pins were updated. This observation does not authorize execution
+or replace fresh live identity, privilege and deployment checks before a later
+production attempt. The original deadline and request/row limits are unchanged.
 
 | Existing path | Exact preflight / revoke capability | Result |
 |---|---|---|

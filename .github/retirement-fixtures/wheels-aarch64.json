@@ -166,5 +166,68 @@
     "filename": "typing_inspection-0.4.4-py3-none-any.whl",
     "url": "https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl",
     "sha256": "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147"
+  },
+  {
+    "name": "PyMuPDF",
+    "version": "1.26.0",
+    "filename": "pymupdf-1.26.0-cp39-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+    "url": "https://files.pythonhosted.org/packages/90/e1/847d93fecbc975978cb2c6c38dbfbd09dde48c1bc97f9298f2b719880230/pymupdf-1.26.0-cp39-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+    "sha256": "84a4dc96144a6bdf13f7d78c21500b3d1bef14d658156afd479acb3995f650c3"
+  },
+  {
+    "name": "opencv-python-headless",
+    "version": "4.11.0.86",
+    "filename": "opencv_python_headless-4.11.0.86-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    "url": "https://files.pythonhosted.org/packages/45/be/1438ce43ebe65317344a87e4b150865c5585f4c0db880a34cdae5ac46881/opencv_python_headless-4.11.0.86-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    "sha256": "6efabcaa9df731f29e5ea9051776715b1bdd1845d7c9530065c7951d2a2899eb"
+  },
+  {
+    "name": "numpy",
+    "version": "2.2.6",
+    "filename": "numpy-2.2.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    "url": "https://files.pythonhosted.org/packages/f8/35/8c80729f1ff76b3921d5c9487c7ac3de9b2a103b1cd05e905b3090513510/numpy-2.2.6-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    "sha256": "f2618db89be1b4e05f7a1a847a9c1c0abd63e63a1607d892dd54668dd92faf87"
+  },
+  {
+    "name": "Pillow",
+    "version": "11.2.1",
+    "filename": "pillow-11.2.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    "url": "https://files.pythonhosted.org/packages/a4/5c/467a161f9ed53e5eab51a42923c33051bf8d1a2af4626ac04f5166e58e0c/pillow-11.2.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    "sha256": "25a5f306095c6780c52e6bbb6109624b95c5b18e40aab1c3041da3e9e0cd3e2d"
+  },
+  {
+    "name": "google-auth",
+    "version": "2.40.3",
+    "filename": "google_auth-2.40.3-py2.py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/17/63/b19553b658a1692443c62bd07e5868adaa0ad746a0751ba62c59568cd45b/google_auth-2.40.3-py2.py3-none-any.whl",
+    "sha256": "1370d4593e86213563547f97a92752fc658456fe4514c809544f330fed45a7ca"
+  },
+  {
+    "name": "cachetools",
+    "version": "5.5.2",
+    "filename": "cachetools-5.5.2-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/72/76/20fa66124dbe6be5cafeb312ece67de6b61dd91a0247d1ea13db4ebb33c2/cachetools-5.5.2-py3-none-any.whl",
+    "sha256": "d26a22bcc62eb95c3beabd9f1ee5e820d3d2704fe2967cbe350e20c8ffcd3f0a"
+  },
+  {
+    "name": "pyasn1-modules",
+    "version": "0.4.2",
+    "filename": "pyasn1_modules-0.4.2-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl",
+    "sha256": "29253a9207ce32b64c3ac6600edc75368f98473906e8fd1043bd6b5b1de2c14a"
+  },
+  {
+    "name": "pyasn1",
+    "version": "0.6.1",
+    "filename": "pyasn1-0.6.1-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/c8/f1/d6a797abb14f6283c0ddff96bbdd46937f64122b8c925cab503dd37f8214/pyasn1-0.6.1-py3-none-any.whl",
+    "sha256": "0d632f46f2ba09143da3a8afe9e33fb6f92fa2320ab7e886e2d0f7672af84629"
+  },
+  {
+    "name": "rsa",
+    "version": "4.9.1",
+    "filename": "rsa-4.9.1-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/64/8d/0133e4eb4beed9e425d9a98ed6e081a55d195481b7632472be1af08d2f6b/rsa-4.9.1-py3-none-any.whl",
+    "sha256": "68635866661c6836b8d39430f97a996acbd61bfa49406748ea243539fe239762"
   }
 ]
