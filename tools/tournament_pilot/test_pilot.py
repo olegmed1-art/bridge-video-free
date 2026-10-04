@@ -146,6 +146,28 @@ def test_auth_is_required_before_any_database_access(monkeypatch):
         assert client.post(path,json=envelope("3H"),headers={"Authorization":"Bearer wrong"}).status_code==403
 
 
+def test_entrypoint_wraps_once_and_preserves_legacy_writer(monkeypatch):
+    import app as entrypoint
+    path="/v1/ai/positions/{position_id}/teacher-evidence"
+    def paths(router):
+        for route in router.routes:
+            if hasattr(route,"original_router"):
+                yield from paths(route.original_router)
+            else:
+                yield getattr(route,"path",None)
+    assert list(paths(entrypoint.app)).count(path)==1
+    calls=[]
+    def legacy(pid,evidence):
+        calls.append((pid,evidence.teacher_key,evidence.action))
+        return {"legacy":True}
+    monkeypatch.setattr(teacher,"record_teacher_evidence",legacy)
+    monkeypatch.setenv("BRIDGE_API_TOKEN","synthetic-test-token")
+    with TestClient(entrypoint.app) as client:
+        response=client.post(path.replace("{position_id}",str(UUID(int=1))),
+            headers={"Authorization":"Bearer synthetic-test-token"},json={"teacher_key":"BEN_DEFAULT","action":"PASS"})
+    assert response.json()=={"legacy":True} and calls==[(UUID(int=1),"BEN_DEFAULT","PASS")]
+
+
 @pytest.mark.parametrize("change",[{"stable_key":"other"},{"hand_pbn":"2.234.2345.23456"},
     {"dealer":"E","seat":"W"},{"source_id":None}])
 def test_stored_canary_guard_precedes_catalog(monkeypatch,change):
@@ -159,7 +181,7 @@ def test_stored_canary_guard_precedes_catalog(monkeypatch,change):
     monkeypatch.setattr(teacher,"connect",connection)
     def forbidden(*args): raise AssertionError("Other position read catalog")
     monkeypatch.setattr(teacher,"read_school_catalog",forbidden)
-    answer=teacher.answer(UUID(int=1),ai_teacher.TeacherEvidence(**envelope("3H")))
+    answer=teacher.answer(UUID(int=1),teacher.TeacherEvidence(**envelope("3H")))
     assert answer["status"]=="ABSTAIN" and answer["reason"]=="PILOT_POSITION_ONLY"
 
 

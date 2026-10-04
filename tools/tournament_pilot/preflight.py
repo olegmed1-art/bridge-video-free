@@ -9,7 +9,7 @@ import yaml
 BASE = "1440920191e1778fb9a9ba24e6701937a1a7459c"
 BRANCH = "test/tournament-shape-pilot-20261004"
 WORKFLOW = ".github/workflows/tournament-shape-pilot.yml"
-API_FILES = {"bridge_school_api/tournament_teacher.py", "bridge_school_api/ai_teacher.py"}
+API_FILES = {"bridge_school_api/tournament_teacher.py", "app.py"}
 
 
 def matches(value, patterns):

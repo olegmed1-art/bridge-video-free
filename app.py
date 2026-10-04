@@ -8,7 +8,7 @@ from bridge_school_api.ai import router as ai_router
 from bridge_school_api.ai_decision import router as ai_decision_router
 from bridge_school_api.ai_orchestrator import router as ai_orchestrator_router
 from bridge_school_api.ai_policy import router as ai_policy_router
-from bridge_school_api.ai_teacher import router as ai_teacher_router
+from bridge_school_api.tournament_teacher import router as ai_teacher_router
 from bridge_school_api.ai_worker import router as ai_worker_router
 from bridge_school_api.assistant_lab_bootstrap import router as assistant_lab_bootstrap_router
 from bridge_school_api.main import app, require_api_token

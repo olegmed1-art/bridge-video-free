@@ -6,10 +6,30 @@ The stored position supplies school and hand; callers cannot override either.
 from hashlib import sha256
 import json
 
-from fastapi import HTTPException
+from fastapi import APIRouter, HTTPException
+from pydantic import ConfigDict
+from uuid import UUID
 
 from .bidding_catalog_reader import read_school_catalog
 from .db import connect
+from .ai_teacher import TeacherEvidence as LegacyTeacherEvidence, record_teacher_evidence
+
+router = APIRouter(prefix="/v1/ai",tags=["bridge-ai-teacher"])
+
+
+class TeacherEvidence(LegacyTeacherEvidence):
+    model_config = ConfigDict(extra="allow")
+    canon_request: dict | None = None
+
+
+@router.post("/positions/{position_id}/teacher-evidence")
+def assess_or_record(position_id: UUID, evidence: TeacherEvidence):
+    if ("canon_request" in evidence.model_fields_set
+            or evidence.teacher_key.startswith("school-tournament-shape")
+            or (evidence.teacher_version or "").startswith("tour-1nt-shape-")
+            or any(key.lower().replace("_", "").startswith("canon") for key in (evidence.model_extra or {}))):
+        return answer(position_id,evidence)
+    return record_teacher_evidence(position_id,evidence)
 
 KEY = "school-tournament-shape"
 VERSION = "tour-1nt-shape-assessment-v1"

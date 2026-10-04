@@ -5,7 +5,7 @@ on:
     branches: ['test/tournament-shape-pilot-20261004']
     paths:
       - 'tools/tournament_pilot/**'
-      - 'bridge_school_api/ai_teacher.py'
+      - 'app.py'
       - 'bridge_school_api/tournament_teacher.py'
       - '.github/workflows/tournament-shape-pilot.yml'
 

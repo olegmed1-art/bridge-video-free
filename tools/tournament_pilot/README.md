@@ -72,7 +72,7 @@ deployment отдельно от SQL revoke. Не удалять BEN history и 
 ## Deployment остаётся выключенным
 
 Ветка основана на main1440920, не включает предыдущий36-file эксперимент.
-Production runtime diff — только ai_teacher.py и tournament_teacher.py. Остальные
+Production runtime diff — только app.py и tournament_teacher.py. Остальные
 файлы: две выдержки, локальный экран, tests/rehearsal/review и один isolated CI.
 Preview запрещён vercel.json/ignoreCommand; не обходить этот gate. Только одно
 будущее согласование минимального merge в main + existing Vercel release +40row
@@ -80,3 +80,8 @@ Preview запрещён vercel.json/ignoreCommand; не обходить это
 Перед исполнением: exact SHA review, current target/side-effect/free quota/access
 preflight. Нет существующего доступа или появился платёж — stop до записи.
 Private exact targets и пользовательский вопрос находятся в локальном review пакете.
+
+Legacy ai_teacher.py остаётся точной копией main. Vercel entrypoint монтирует
+обёртку на том же URL/auth, которая делегирует старые запросы прежнему writer.
+Изменение ai_teacher.py запустило бы production BEN workflow с secret; этот
+побочный эффект исключён выбором отдельного адаптера, workflow не изменяется.

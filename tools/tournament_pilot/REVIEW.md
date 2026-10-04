@@ -66,3 +66,21 @@ Other consumers and production configuration require their own preflight.
 No production database, credentials, remote workflow or browser was exercised
 by this reviewer. Browser QA and exact-SHA SQL CI are separate evidence. The
 review records source code and local tests, not a deployed end-to-end result.
+
+## Router isolation follow-up
+
+The final integration restores `bridge_school_api/ai_teacher.py` to main and
+changes one import in `app.py` to mount the new module's router at the existing
+URL. Its request model extends the legacy model, fences canon requests into the
+read-only evaluator, and delegates ordinary envelopes to the unchanged legacy
+writer. The existing `require_api_token` router dependency remains attached.
+Independently checked the zero legacy-file diff and reran the same suite:
+**130 passed** after this adjustment.
+
+This avoids matching the existing production BEN workflow's legacy-teacher path
+filter; no production workflow or gate was disabled. Test-branch preflight is
+not approval for a later main merge, whose workflows must be checked again.
+The parent reported successful disposable SQL CI at the preceding `f387d100`
+revision (run `37194385971`) and separate browser QA. Those reports are not
+independent verification by this reviewer and do not replace exact-SHA CI for
+the revised router integration.
