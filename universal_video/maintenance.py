@@ -23,7 +23,7 @@ DAY = 24 * 3600
 HOUR = 3600
 TERMINAL_STATUSES = frozenset({"COMPLETED", "REVIEW", "FAILED"})
 COMPLETED_CLEANUP_PROOF_STATUSES = frozenset({"PUBLISHED_VERIFIED"})
-COMPLETED_CLEANUP_REMOTE_VERIFICATION = "SIZE_MD5_SHA256_PROPERTY_MATCH"
+COMPLETED_CLEANUP_REMOTE_VERIFICATION = "CONTENT_READBACK_SHA256"
 MAX_PUBLISHED_RECEIPT_ROOTS = 10
 
 
@@ -181,6 +181,10 @@ def _completed_durable_proof(payload: dict[str, Any] | None, *, job_id: str | No
     if job_id is not None and str(payload.get("job_id") or "") != job_id:
         return False
     publication = payload.get("publication") if isinstance(payload.get("publication"), dict) else {}
+    source = publication.get("source") if isinstance(publication.get("source"), dict) else {}
+    if (source.get("unchanged") is not True or source.get("verification") != COMPLETED_CLEANUP_REMOTE_VERIFICATION
+            or not source.get("sha256_before") or source.get("sha256_before") != source.get("sha256_after")):
+        return False
     conformance = (
         payload.get("conformance")
         if isinstance(payload.get("conformance"), dict)
@@ -209,6 +213,8 @@ def _completed_durable_proof(payload: dict[str, Any] | None, *, job_id: str | No
     remote_artifacts = publication.get("remote_artifacts")
     if not isinstance(remote_artifacts, list) or not remote_artifacts:
         return False
+    if any(r.get("verification") != COMPLETED_CLEANUP_REMOTE_VERIFICATION for r in remote_artifacts):
+        return False
     return True
 
 
@@ -222,6 +228,9 @@ def _completed_receipt_has_durable_proof(done_root: Path, job_id: str, proof_roo
 
 
 def _completed_local_publication_proof(path: Path, job_id: str) -> bool:
+    from .durable_drive import cleanup_proof_matches
+    if cleanup_proof_matches(path, None, job_id=job_id):
+        return True
     manifest = _safe_json(path / "manifest.json")
     if not manifest or str(manifest.get("job_id") or "") != job_id:
         return False
@@ -236,6 +245,10 @@ def _completed_local_publication_proof(path: Path, job_id: str) -> bool:
         return False
     if proof.get("remote_verification") != COMPLETED_CLEANUP_REMOTE_VERIFICATION:
         return False
+    source = proof.get("source") if isinstance(proof.get("source"), dict) else {}
+    if (source.get("unchanged") is not True or source.get("verification") != COMPLETED_CLEANUP_REMOTE_VERIFICATION
+            or not source.get("sha256_before") or source.get("sha256_before") != source.get("sha256_after")):
+        return False
     if not str(proof.get("drive_folder_id") or "").strip():
         return False
     artifact_set = str(proof.get("artifact_set_sha256") or "").lower()
@@ -246,6 +259,18 @@ def _completed_local_publication_proof(path: Path, job_id: str) -> bool:
         and len(marker) == 64
         and all(ch in "0123456789abcdef" for ch in marker)
     )
+
+
+def _result_cleanup_safe(spool: Path, path: Path, proof_roots: Iterable[Path]) -> bool:
+    if (spool / "cleanup_pending" / f"{path.name}.json").exists():
+        return False
+    # A previous done receipt cannot override current REVALIDATING state.
+    final = path / "DRIVE_FINALIZATION.json"
+    if final.exists():
+        from .durable_drive import cleanup_proof_matches
+        return cleanup_proof_matches(path, None, job_id=path.name)
+    return (_completed_receipt_has_durable_proof(spool / "done", path.name, proof_roots)
+            or _completed_local_publication_proof(path, path.name))
 
 
 def _dedupe(candidates: Iterable[Candidate]) -> list[Candidate]:
@@ -281,6 +306,8 @@ def build_cleanup_plan(
                 if bucket == "done":
                     payload = _safe_json(path)
                     job_id = str((payload or {}).get("job_id") or path.stem)
+                    if job_id in active_job_ids or (spool_root / "cleanup_pending" / f"{job_id}.json").exists():
+                        continue
                     if not _completed_receipt_has_durable_proof(root, job_id, proof_roots):
                         continue
                 info = path.lstat()
@@ -309,13 +336,10 @@ def build_cleanup_plan(
                 continue
             age = now - mtime
             if not _terminal_result_dir(path):
-                if age >= policy.abandoned_results_ttl_seconds:
-                    candidates.append(Candidate(path, "results", mtime, size, "abandoned_ttl"))
+                # A crash can leave the only transcript/frames here. Never use
+                # age alone as evidence that unpersisted outputs are disposable.
                 continue
-            if not (
-                _completed_receipt_has_durable_proof(spool_root / "done", path.name, proof_roots)
-                or _completed_local_publication_proof(path, path.name)
-            ):
+            if not _result_cleanup_safe(spool_root, path, proof_roots):
                 continue
             result_dirs.append((mtime, path, size))
     result_dirs.sort(key=lambda item: (item[0], item[1].name))
@@ -339,6 +363,10 @@ def build_cleanup_plan(
     media_files: list[tuple[float, Path, int]] = []
     if media_root.is_dir():
         for path in media_root.rglob("*"):
+            if "drive-ready" in path.relative_to(media_root).parts:
+                # Managed source copies have an explicit per-job finalization
+                # gate in the worker; generic TTL must not bypass it.
+                continue
             try:
                 info = path.lstat()
             except OSError:
@@ -382,7 +410,7 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
-def apply_cleanup_plan(base_dir: Path, plan: Iterable[Candidate], *, dry_run: bool) -> dict[str, Any]:
+def _apply_cleanup_plan_locked(base_dir: Path, plan: Iterable[Candidate], *, dry_run: bool) -> dict[str, Any]:
     roots = {
         "done": base_dir / "spool" / "done",
         "failed": base_dir / "spool" / "failed",
@@ -399,6 +427,32 @@ def apply_cleanup_plan(base_dir: Path, plan: Iterable[Candidate], *, dry_run: bo
             raise RuntimeError("cleanup candidate escapes managed root")
         if item.path.is_symlink():
             raise RuntimeError("cleanup refuses symlink candidate")
+        # A selected directory can have been requeued or its proof invalidated.
+        # Recompute under the same exclusive worker fence immediately before
+        # deletion; stale size/mtime/category must never authorize removal.
+        if root.is_symlink() or not item.path.exists():
+            continue
+        info = item.path.lstat()
+        size = _tree_size_no_links(item.path) if item.path.is_dir() else info.st_size
+        if info.st_mtime != item.mtime or size != item.size_bytes:
+            continue
+        spool = base_dir / "spool"
+        active, protected_media = _protected_state(spool, base_dir / "media")
+        if item.path.stem in active or item.path.name in active:
+            continue
+        if item.category == "results" and (not _terminal_result_dir(item.path)
+                or not _result_cleanup_safe(spool, item.path, published_receipt_roots_from_env())):
+            continue
+        if item.category == "done" and ((spool / "cleanup_pending" / f"{item.path.stem}.json").exists()
+                or not _completed_receipt_has_durable_proof(root, item.path.stem, published_receipt_roots_from_env())):
+            continue
+        if item.category == "media" and item.path.resolve() in protected_media:
+            continue
+        relative = item.path.relative_to(root)
+        if item.category != "media" and len(relative.parts) != 1:
+            raise RuntimeError("cleanup candidate is not job-owned")
+        if item.category == "media" and "drive-ready" in relative.parts:
+            raise RuntimeError("generic cleanup refuses managed Drive cache")
         by_category[item.category] = by_category.get(item.category, 0) + 1
         if dry_run:
             continue
@@ -417,10 +471,35 @@ def apply_cleanup_plan(base_dir: Path, plan: Iterable[Candidate], *, dry_run: bo
     }
 
 
+def apply_cleanup_plan(base_dir: Path, plan: Iterable[Candidate], *, dry_run: bool) -> dict[str, Any]:
+    from .workload_lock import shared_workload_lock
+    _check_managed_roots(base_dir)
+    with shared_workload_lock(base_dir / "spool", exclusive=True):
+        return _apply_cleanup_plan_locked(base_dir, plan, dry_run=dry_run)
+
+
 def run_maintenance(base_dir: Path, *, dry_run: bool) -> dict[str, Any]:
-    policy = policy_from_env()
-    plan = build_cleanup_plan(base_dir, policy=policy)
-    return apply_cleanup_plan(base_dir, plan, dry_run=dry_run)
+    from .workload_lock import shared_workload_lock
+    from .drive_cleanup import retry_cleanup
+    spool = base_dir / "spool"
+    _check_managed_roots(base_dir)
+    with shared_workload_lock(spool, exclusive=True):
+        cleanup_pending = 0
+        if not dry_run:
+            for pending in sorted((spool / "cleanup_pending").glob("*.json"))[:100]:
+                try:
+                    cleanup_pending += bool(retry_cleanup(spool, base_dir / "media", pending))
+                except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                    pass  # invalid/changed proof retains evidence
+        plan = build_cleanup_plan(base_dir, policy=policy_from_env())
+        report = _apply_cleanup_plan_locked(base_dir, plan, dry_run=dry_run)
+        report["source_cleanups_completed"] = cleanup_pending
+        return report
+
+
+def _check_managed_roots(base_dir: Path) -> None:
+    if any(path.is_symlink() for path in (base_dir, base_dir / "spool", base_dir / "media")):
+        raise RuntimeError("maintenance refuses symlink managed roots")
 
 
 def main() -> None:

@@ -12,17 +12,21 @@ import re
 import secrets
 import stat
 import time
+import requests
 from pathlib import Path
 from typing import Any
 
 from .contract import MAX_JOB_BYTES, VideoContractError, canonical_job_hash, validate_from_env, validate_job
 from .drive_stage import DriveStageError, remove_staged_job, stage_drive_job
+from .durable_drive import (configured_binding, finalize_drive_job, cleanup_proof_matches,
+                            read_receipt, prepare_compute_recovery)
 from .finops_observation import build_video_finops_observation, directory_bytes
 from .result_conformance import ResultConformanceError, verify_result
 from .runner import run_job
 from .runtime_preflight import VideoRuntimeUnavailable, validate_staged_video, validate_video_runtime
 from .server_review import ServerReviewError, build_server_review
 from .workload_lock import shared_workload_lock
+from .drive_cleanup import queue_cleanup, retry_cleanup, preserve_pending_completion
 
 
 ERROR_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
@@ -76,7 +80,7 @@ def _failure_code(exc: BaseException) -> str:
 
 
 def _dirs(root: Path) -> dict[str, Path]:
-    out = {name: root / name for name in ("inbox", "running", "done", "failed", "results", "progress")}
+    out = {name: root / name for name in ("inbox", "running", "done", "failed", "results", "progress", "recovery")}
     for path in out.values():
         path.mkdir(parents=True, exist_ok=True)
     return out
@@ -382,8 +386,18 @@ def _process_one_locked(spool_root: Path) -> bool:
             return True
         try:
             mtime = path.lstat().st_mtime
+            candidate_payload = json.loads(path.read_text(encoding="utf-8"))
+            candidate_job = validate_job(candidate_payload)
+            retry_path = paths["progress"] / f"{candidate_job.job_id}.recovery.json"
+            if retry_path.exists():
+                retry = read_receipt(retry_path)
+                if (retry.get("job_hash") == canonical_job_hash(candidate_job)
+                        and retry.get("retry_after_unix", 0) > time.time()):
+                    continue
         except OSError:
             continue
+        except (ValueError, RuntimeError, VideoContractError):
+            pass  # Invalid JSON/contracts are quarantined by the claimed path.
         candidates.append((mtime, path.name, path))
     candidates.sort(key=lambda item: (item[0], item[1]))
     if not candidates:
@@ -407,6 +421,9 @@ def _process_one_locked(spool_root: Path) -> bool:
     payload: dict | None = None
     intake_identity: dict | None = None
     staged_job_dir: Path | None = None
+    cleanup_ready = False
+    finalizing = False
+    attempt = 0
     media_root = Path(os.getenv("UNIVERSAL_VIDEO_MEDIA_ROOT", "/opt/bridge-school/universal-video/media"))
     try:
         valid, reason = _regular_payload(claimed)
@@ -423,20 +440,53 @@ def _process_one_locked(spool_root: Path) -> bool:
                 "file_id": str(intake_job.source.get("file_id") or ""),
             },
         }
-        validate_video_runtime()
+        # Fail before a potentially large download when compute is unavailable.
+        # A retained Drive result can instead enter publication-only recovery.
+        if (intake_job.source.get("kind") != "google_drive"
+                or not (paths["results"] / intake_job.job_id).exists()):
+            validate_video_runtime()
         if intake_job.source.get("kind") == "google_drive":
             _write_progress(paths, intake_job.job_id, "DOWNLOADING_FROM_DRIVE")
             payload, staged_job_dir = stage_drive_job(intake_job, payload, media_root)
-            validate_staged_video(Path(str((payload.get("source") or {}).get("path") or "")))
             _write_progress(paths, intake_job.job_id, "SOURCE_READY_ON_ORACLE")
         validated_job = validate_from_env(payload)
         _write_progress(paths, validated_job.job_id, "PROCESSING")
-        result = run_job(payload, paths["results"])
+        existing_dir = paths["results"] / validated_job.job_id
+        finalization_only = staged_job_dir is not None and existing_dir.exists()
+        if finalization_only:
+            # Recovery must not enter runner's compute/replacement path. Pin the
+            # old runtime/artifact package; incompatible or partial data stays.
+            if existing_dir.is_symlink():
+                raise RuntimeError("unsafe existing result directory")
+            try:
+                result = read_receipt(existing_dir / "manifest.json")
+            except (OSError, ValueError):
+                # A pre-manifest crash is recoverable without discarding its
+                # transcript/frames. Preserve the whole partial tree first.
+                attempts_path = paths["progress"] / f"{validated_job.job_id}.compute-recovery.json"
+                prepare_compute_recovery(existing_dir, paths["recovery"] / validated_job.job_id,
+                                         attempts_path, job_hash=canonical_job_hash(validated_job))
+                validate_video_runtime()
+                validate_staged_video(Path(validated_job.source["path"]))
+                result = run_job(payload, paths["results"])
+                finalization_only = False
+            if (result.get("status") != "COMPLETED"
+                    or result.get("job_hash") != canonical_job_hash(validated_job)
+                    or (result.get("media") or {}).get("sha256") != validated_job.source["sha256"]):
+                raise RuntimeError("existing Drive result is incomplete/conflicting; retained for recovery")
+        else:
+            attempts_path = paths["progress"] / f"{validated_job.job_id}.compute-recovery.json"
+            if staged_job_dir is not None and attempts_path.exists():
+                prepare_compute_recovery(existing_dir, paths["recovery"] / validated_job.job_id,
+                                         attempts_path, job_hash=canonical_job_hash(validated_job))
+            if staged_job_dir is not None:
+                validate_staged_video(Path(validated_job.source["path"]))
+            result = run_job(payload, paths["results"])
         result_dir = paths["results"] / str(result.get("job_id") or "")
         media = result.get("media") or {}
         processing_model = result.get("processing_whisper_model") or (result.get("runtime") or {}).get("whisper_model")
         source_info = result.get("source") or {}
-        reused_finalized_result = isinstance(result.get("finops_observation"), dict)
+        reused_finalized_result = finalization_only or isinstance(result.get("finops_observation"), dict)
         if not reused_finalized_result:
             runtime = result.get("runtime") if isinstance(result.get("runtime"), dict) else {}
             elapsed = runtime.get("elapsed_seconds") or (time.monotonic() - started)
@@ -504,14 +554,49 @@ def _process_one_locked(spool_root: Path) -> bool:
         )
         if attestation is not None:
             receipt_payload["runtime_attestation"] = attestation
+        if staged_job_dir is not None and str(result.get("status") or "") == "COMPLETED":
+            binding = configured_binding(validated_job.job_id, str(validated_job.source["file_id"]),
+                                         canonical_job_hash(validated_job))
+            if binding is not None:
+                retry_path = paths["progress"] / f"{validated_job.job_id}.recovery.json"
+                retry = read_receipt(retry_path) if retry_path.exists() else {}
+                if retry and retry.get("job_hash") != canonical_job_hash(validated_job):
+                    raise RuntimeError("Drive retry identity changed")
+                attempt = int(retry.get("attempts", 0)) + 1
+                if attempt > 3:
+                    raise RuntimeError("Drive finalization retry budget exhausted; evidence retained")
+                _atomic_write_json(retry_path, {"job_hash": canonical_job_hash(validated_job),
+                                               "attempts": attempt, "retry_after_unix": time.time() + 60})
+                finalizing = True
+                receipt_payload["drive_finalization"] = finalize_drive_job(
+                    result_dir, staged_job_dir, binding, job_id=validated_job.job_id,
+                    profile=validated_job.profile, job_hash=canonical_job_hash(validated_job))
         receipt = paths["done"] / source.name
-        _atomic_write_json(receipt, receipt_payload)
+        if not (staged_job_dir is not None and preserve_pending_completion(
+                spool_root, media_root, validated_job.job_id, receipt)):
+            _atomic_write_json(receipt, receipt_payload)
+        if (staged_job_dir is not None and cleanup_proof_matches(result_dir, staged_job_dir,
+                                                                job_id=validated_job.job_id)):
+            queue_cleanup(spool_root, media_root, validated_job.job_id, receipt)
+        cleanup_ready = True  # after durable done receipt, never from finally alone
         try:
             _write_progress(paths, validated_job.job_id, "RESULT_READY" if str(result.get("status") or "") == "COMPLETED" else "REVIEW")
         except OSError:
             pass
         claimed.unlink(missing_ok=True)
     except Exception as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        transient = (isinstance(exc, (requests.ConnectionError, requests.Timeout, TimeoutError, OSError))
+                     or isinstance(exc, requests.HTTPError) and status_code in {429, 500, 502, 503, 504})
+        if finalizing and transient and attempt < 3:
+            # Durable completed results remain reusable; no new ASR on retry.
+            # The attempt receipt was committed before writes, including crashes.
+            _write_progress(paths, intake_identity["job_id"], "DRIVE_RECOVERY_PENDING")
+            destination = paths["inbox"] / source.name
+            if destination.exists() or destination.is_symlink():
+                raise RuntimeError("Drive retry inbox collision; running evidence retained")
+            claimed.rename(destination)
+            return True
         source_kind = None
         if isinstance(payload, dict):
             source_kind = str((payload.get("source") or {}).get("kind") or "") or None
@@ -539,12 +624,16 @@ def _process_one_locked(spool_root: Path) -> bool:
                     pass
         claimed.unlink(missing_ok=True)
     finally:
-        if staged_job_dir is not None and staged_job_dir.exists():
+        if (cleanup_ready and staged_job_dir is not None and staged_job_dir.exists()
+                and cleanup_proof_matches(paths["results"] / staged_job_dir.name,
+                                          staged_job_dir, job_id=staged_job_dir.name)):
             try:
-                remove_staged_job(staged_job_dir, media_root)
-            except (DriveStageError, OSError):
-                # A terminal receipt remains authoritative. Maintenance may
-                # later quarantine an undeletable staging directory.
+                pending = queue_cleanup(spool_root, media_root, staged_job_dir.name,
+                                        paths["done"] / source.name)
+                retry_cleanup(spool_root, media_root, pending)
+            except (DriveStageError, OSError, RuntimeError):
+                # Intent survives transient deletion failure. Maintenance retries
+                # under the same fence, without compute or publication.
                 pass
     return True
 
@@ -552,7 +641,9 @@ def _process_one_locked(spool_root: Path) -> bool:
 def process_one(spool_root: Path) -> bool:
     """Process at most one local job while honoring the attestation fence."""
 
-    with shared_workload_lock(spool_root):
+    # Serialize source/container workers through compute + publication. A shared
+    # lock allowed two differently named retries to publish the same job.
+    with shared_workload_lock(spool_root, exclusive=True):
         return _process_one_locked(spool_root)
 
 
