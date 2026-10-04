@@ -214,6 +214,102 @@ def prepare_guard(value,authority,wheels,credential,guard):
 WRITE_KEYS={'version','action','source','accepted_controller_sha256','accepted_runtime_sha256',
             'record_base64','record_sha256','historical_journal_sha256','agreement','accepted_agreement_sha256'}
 
+REFERENCE_KEYS={'version','action','source','accepted_controller_sha256','accepted_runtime_sha256',
+    'policy_sha256','index','record_sha256','journal_map_sha256','private_request_sha256',
+    'agreement','accepted_agreement_sha256'}
+PUBLIC_EVIDENCE='OWNER_ACCEPTED_ONE_CREATE_ONLY_RETIREMENT_PROPOSAL'
+
+
+def public_result(value,accepted_record):
+    r.need(type(value) is dict and set(value)=={'audit','state','record_sha256',
+        'incident_closed','execution_acknowledged','new_task_authorized'}
+        and value['audit']=='LIGHT_LANE_RETIREMENT'
+        and value['state'] in ('PROPOSAL_RETAINED_UNACCEPTED','PROPOSAL_PRESENT_UNACCEPTED')
+        and r.digest(accepted_record) and value['record_sha256']==accepted_record and all(value[k] is False for k in
+        ('incident_closed','execution_acknowledged','new_task_authorized')), 'LANE_RETIREMENT_REFUSED')
+    return value
+
+
+def public_reference(raw):
+    """Only public pins and finite coordination metadata may cross dispatch."""
+    from ops.native_maintenance_agreement import Agreement,COVERAGE
+    value=r.parse(raw,limit=8192)
+    r.need(type(value) is dict and set(value)==REFERENCE_KEYS and r.encoded(value)==raw
+           and type(value['version']) is int and value['version']==1
+           and value['action']=='retire-prepare-reference','LANE_RETIREMENT_REFERENCE')
+    r.references([{k:value[k] for k in ('policy_sha256','index','record_sha256')}])
+    r.need(r.digest(value['source'],40) and all(r.digest(value[k]) for k in
+        ('accepted_controller_sha256','accepted_runtime_sha256','journal_map_sha256',
+         'private_request_sha256','accepted_agreement_sha256')),'LANE_RETIREMENT_REFERENCE')
+    agreement=value['agreement']
+    r.need(type(agreement) is dict and set(agreement)=={'version','owner','operation_digest',
+        'not_before','expires_at','coverage','evidence'} and type(agreement['version']) is int
+        and agreement['version']==1 and agreement['owner']=='olegmed1-art'
+        and agreement['coverage']==COVERAGE and agreement['evidence']==PUBLIC_EVIDENCE
+        and r.digest(agreement['operation_digest'])
+        and r.sha(r.encoded(agreement))==value['accepted_agreement_sha256'],
+        'LANE_RETIREMENT_REFERENCE')
+    start,end=(Agreement.timestamp(agreement[k]) for k in ('not_before','expires_at'))
+    r.need(0<end-start<=1800,'LANE_RETIREMENT_REFERENCE')
+    return value
+
+
+def resolve_reference(raw,accepted,controller,runtime,guard):
+    """Reconstruct private bytes in protected root memory; never mint acceptance.
+
+    Reads use fixed existing paths and the same no-follow metadata verifier.
+    The original writer subsequently rechecks every accepted byte and live proof.
+    """
+    from ops import light_native_lane_controller as owner
+    from ops import light_native_lane_issuer as issuer
+    from ops.native_maintenance_agreement import Agreement
+    import time
+    r.need(r.sha(raw)==accepted,'LANE_RETIREMENT_NOT_ACCEPTED')
+    value=public_reference(raw)
+    owner.validate_package(controller,value['source'],value['accepted_controller_sha256'])
+    r.need(r.sha(runtime)==value['accepted_runtime_sha256'],'LANE_RETIREMENT_BINDING')
+    guard.assert_current();owner.release.staging.require_current_main(value['source'])
+    start,end=(Agreement.timestamp(value['agreement'][k]) for k in ('not_before','expires_at'))
+    r.need(start<=time.time()<end,'LANE_RETIREMENT_REFERENCE')
+    policy_hash=value['policy_sha256'];index=value['index']
+    entry='issuers/'+policy_hash+'/'+format(index,'04d')
+    with r.Snapshot(owner.ROOT,entry) as view:
+        policy=r.parse(view.read('issuers/'+policy_hash+'/policy.json',policy_hash))
+        r.need(set(policy)==issuer.POLICY_KEYS and policy['version']==1
+               and policy['action']=='issue' and index<len(policy['plans']), 'LANE_RETIREMENT_REFERENCE')
+        plan_hash=policy['plans'][index]['accepted_plan_sha256']
+        r.need(r.digest(plan_hash),'LANE_RETIREMENT_REFERENCE')
+        plan=r.parse(view.read(plan_hash+'/plan.json',plan_hash))
+        intent=r.parse(view.read(entry+'/intent.json'))
+        cycle='cycles/'+plan_hash
+        paths={name:plan_hash+'/'+name for name in
+            ('baseline.json','before.json','contained.json','prepare.json','runtime-package.json','wheels.tar')}
+        paths.update({'cycle-contain-intent':cycle+'/contain-intent.json','cycle-intent':cycle+'/intent.json',
+            'driver-contain-intent':plan_hash+'/contain-intent.json','incident.json':cycle+'/incident.json',
+            'issuer-intent':entry+'/intent.json'})
+        pins={name:r.sha(view.read(path,limit=16*1024*1024)) for name,path in paths.items()}
+        r.need(r.sha(r.encoded(pins))==value['journal_map_sha256'],'LANE_RETIREMENT_PINS')
+        record=dict(version=1,kind='FAILED_PREPARE_RETIREMENT_PROPOSAL',
+            requested_disposition='RETIRE_FAILED_PREPARE_AND_CANCEL_OLD_POLICY_REMAINDER',
+            policy_sha256=policy_hash,index=index,plan_sha256=plan_hash,repository=plan['repository'],
+            failed_work_key=plan['work_key'],failed_target_pr=plan['target_pr'],
+            predecessor=intent['cycle']['prepare']['predecessor'],incident_sha256=pins['incident.json'],
+            historical_controller_source=policy['source'],historical_controller_sha256=policy['accepted_controller_sha256'],
+            retained_runtime_source=owner.install.RETAINED_SOURCE,retained_runtime_sha256=value['accepted_runtime_sha256'],
+            original_failure='UNKNOWN',interpretation='EXPLICIT_NEW_POLICY_HASH_ALLOWLIST_AND_FRESH_GUARDS_REQUIRED',
+            **{k:False for k in r.FALSE_FLAGS})
+        proposal=r.encoded(record);r.record(proposal,value['record_sha256'])
+        request={k:value[k] for k in ('version','source','accepted_controller_sha256',
+            'accepted_runtime_sha256','record_sha256','agreement','accepted_agreement_sha256')}
+        request.update(action='retire-prepare',record_base64=base64.b64encode(proposal).decode(),
+                       historical_journal_sha256=pins)
+        private=r.encoded(request)
+        r.need(r.sha(private)==value['private_request_sha256'],'LANE_RETIREMENT_NOT_ACCEPTED')
+        # Validate the independently approved finite scope before any write/DB access.
+        write_request(private,value['private_request_sha256'],controller,runtime,guard)
+        view.check()
+    return private,value['private_request_sha256']
+
 
 def write_request(raw,accepted,controller,runtime,guard):
     from ops import light_native_lane_controller as owner
@@ -242,7 +338,10 @@ def write(wheels,credential,controller,runtime,raw,accepted,guard):
     from ops.light_native_bounded import run
     r.need(os.geteuid()==0 and os.uname().nodename=='autopilot-lite-vnic','LANE_RETIREMENT_ROOT')
     def operation():
-        value,payload,agreement=write_request(raw,accepted,controller,runtime,guard)
+        request,request_pin=raw,accepted
+        if r.parse(raw).get('action')=='retire-prepare-reference':
+            request,request_pin=resolve_reference(raw,accepted,controller,runtime,guard)
+        value,payload,agreement=write_request(request,request_pin,controller,runtime,guard)
         retained=r.parse(runtime,limit=3*1024*1024)
         r.need(owner.release.encoded(retained)==runtime and retained['source']==owner.install.RETAINED_SOURCE,
                'LANE_RETIREMENT_BINDING')
