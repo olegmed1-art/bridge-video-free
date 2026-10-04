@@ -1,0 +1,52 @@
+name: Canon owner installation synthetic review
+
+on:
+  push:
+    branches: ['review/canon-owner-installation-20261004']
+    paths:
+      - 'tools/canon_auth/owner_probe.py'
+      - '.github/workflows/native-maintenance-owner-attest.yml'
+      - 'tools/canon_auth/test_installed_owner_workflow.py'
+      - 'tools/canon_auth/test_owner_probe.py'
+      - 'tools/canon_auth/test_owner_resident.py'
+      - 'tools/canon_auth/resident_preflight.py'
+      - 'tools/canon_auth/installation_checks.py'
+      - 'tools/canon_auth/installation/**'
+      - '.github/workflows/canon-owner-installation-review.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install pinned synthetic test dependencies
+        run: python -m pip install --disable-pip-version-check pytest==8.4.2 PyYAML==6.0.2 'psycopg[binary]==3.3.4'
+      - name: Verify actual installation delta and unchanged publication gate
+        run: python -m tools.canon_auth.installation_checks
+      - name: Synthetic transport and owner-parser contracts only
+        run: |
+          python -m pytest -q tools/canon_auth/test_owner_probe.py tools/canon_auth/test_owner_resident.py tools/canon_auth/test_installed_owner_workflow.py
+          python -m unittest discover -s tests -p 'test_native_maintenance_owner_attest.py' -v
+          python -m unittest discover -s tests -p 'test_native_maintenance_registry_scope.py' -v
+          python -m unittest discover -s tests -p 'test_native_cli_connection_parameters.py' -v
+      - name: Preserve exact nonsecret installation delta
+        run: git diff --binary 4f2c7a98d0b7e1e5f48ac781332442becea302dd "$GITHUB_SHA" > "$RUNNER_TEMP/canon-owner-installation.patch"
+      - name: Preserve reviewed nonsecret content hashes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: canon-owner-installation-manifest-${{ github.sha }}
+          path: |
+            tools/canon_auth/installation/manifest.json
+            ${{ runner.temp }}/canon-owner-installation.patch
+          retention-days: 7
+          if-no-files-found: error
