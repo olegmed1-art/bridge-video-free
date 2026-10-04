@@ -187,7 +187,7 @@ def test_legacy_identity_dry_run_replay_stage_publish_and_visibility_rollback(mo
             mutate.execute("UPDATE public.asset SET immutable_flag=false WHERE asset_id=%s",
                            (identity_result["asset_id"],))
         assert client.get("/v1/knowledge/teacher/book", **request_args).status_code == 409
-        with pytest.raises(ValueError, match="PUBLICATION_SCOPE"):
+        with pytest.raises(ValueError, match="ASSET_BINDING_REQUIRED"):
             publish_book_world(conn, **pub_args)
         with psycopg.connect(DSN, autocommit=True) as restore:
             restore.execute("UPDATE public.asset SET immutable_flag=true WHERE asset_id=%s",
@@ -269,7 +269,7 @@ def test_identity_review_cannot_be_reused_for_another_registry_binding(change):
                             (bundle["source"]["rendition_sha256"],)).fetchone()[0] == 0
 
 
-@pytest.mark.parametrize("mutation", ["asset", "link", "source"])
+@pytest.mark.parametrize("mutation", ["asset", "link", "source", "citation", "citation_delete"])
 def test_publication_holds_identity_rows_against_concurrent_mutation(mutation):
     from database.book_source_reconciliation import reconcile_book_source_asset
     bundle, receipt, school_id, source_id, stored = legacy_identity_fixture()
@@ -293,6 +293,12 @@ def test_publication_holds_identity_rows_against_concurrent_mutation(mutation):
                              "AND relation_type='embodies'", (source_id, identity["asset_id"])),
                     "source": ("UPDATE public.source SET canonical_locator=%s WHERE source_id=%s",
                                (bundle["source"]["locator"], source_id)),
+                    "citation": ("UPDATE public.knowledge_version_source SET source_locator='{}'::jsonb "
+                                 "WHERE knowledge_version_id=%s AND source_id=%s "
+                                 "AND relation_type='derived_from'", (staged["version_ids"][0], source_id)),
+                    "citation_delete": ("DELETE FROM public.knowledge_version_source "
+                                        "WHERE knowledge_version_id=%s AND source_id=%s "
+                                        "AND relation_type='derived_from'", (staged["version_ids"][0], source_id)),
                 }
                 with pytest.raises(psycopg.errors.LockNotAvailable):
                     contender.execute(*statements[mutation])
@@ -310,5 +316,9 @@ def test_publication_holds_identity_rows_against_concurrent_mutation(mutation):
                             (source_id, identity["asset_id"])).fetchone()[0] == 1
         assert read.execute("SELECT canonical_locator FROM public.source WHERE source_id=%s",
                             (source_id,)).fetchone()[0] == stored
+        assert read.execute("SELECT source_locator FROM public.knowledge_version_source "
+                            "WHERE knowledge_version_id=%s AND source_id=%s "
+                            "AND relation_type='derived_from'",
+                            (staged["version_ids"][0], source_id)).fetchone()[0] == build_world_publication(bundle, receipt, identity)["records"][0]["content"]["citation"]
         assert read.execute("SELECT count(*) FROM public.domain_event WHERE changeset_id=%s "
                             "AND event_type='BookWorldPublished'", (result["changeset_id"],)).fetchone()[0] == 1

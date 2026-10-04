@@ -56,7 +56,8 @@ from source text or accept it from an unauthenticated caller. It becomes part of
 the publication/version hashes and stored provenance; legacy staging/rendering
 require it. Old claim-review receipts do not implicitly authorize reconciliation.
 
-Publication locks source -> asset/link -> selected versions and rechecks exact
+Publication locks source -> asset/link -> exact derived_from citation -> selected
+versions and rechecks exact
 content/provenance state before writes. All identity locks remain through commit;
 source-UUID link mismatch, changed evidence or missing assets fail closed.
 Catalog reads and lock/hash functions use pg_catalog qualification, so an idle

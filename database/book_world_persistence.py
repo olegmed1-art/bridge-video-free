@@ -144,7 +144,7 @@ def publish_book_world(connection, *, school_id: str, changeset_id: str,
             versions = rows[0][0]["version_ids"]
             if not 0 < len(versions) <= 3 or len(set(versions)) != len(versions):
                 raise ValueError("BOOK_WORLD_PUBLICATION_BUDGET")
-            # Lock source -> asset/link before locking versions, matching staging order.
+            # Lock source -> asset/link -> citation before locking versions.
             cur.execute("""SELECT kv.knowledge_version_id,kv.content,kv.provenance
                 FROM public.knowledge_version kv JOIN public.knowledge_item ki
                   ON ki.knowledge_item_id=kv.knowledge_item_id
@@ -169,6 +169,12 @@ def publish_book_world(connection, *, school_id: str, changeset_id: str,
                 if identity_review is not None:
                     require_source_asset(cur, school_id, source_id, source, provenance["review_receipt"],
                                          asset_id=identity_review["asset_id"])
+                cur.execute("""SELECT source_locator FROM public.knowledge_version_source
+                    WHERE knowledge_version_id=%s AND source_id=%s
+                      AND relation_type='derived_from' FOR SHARE""", (version_id, source_id))
+                citation_rows = cur.fetchall()
+                if len(citation_rows) != 1 or citation_rows[0][0] != content["citation"]:
+                    raise ValueError("BOOK_WORLD_PUBLICATION_SCOPE")
                 expected_state[str(version_id)] = digest({"content": content, "provenance": provenance})
             cur.execute("""SELECT kv.knowledge_version_id,kv.content,kv.provenance,ki.stable_key
                 FROM public.knowledge_version kv
