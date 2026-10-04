@@ -1,0 +1,114 @@
+name: Recognizer observation guards
+
+on:
+  pull_request:
+    paths:
+      - 'bridge_vision/bridgit_primary_*candidate.py'
+      - 'bridge_vision/bridgit_primary_production_r265.py'
+      - 'bridge_vision/teacher_card_reconstruction_r265.py'
+      - 'tests/test_bridge_vision_observation_guards.py'
+      - 'tests/test_r265_observation_provenance_guards.py'
+      - 'tests/recognizer_guard_baseline.txt'
+      - '.github/workflows/recognizer-observation-guards.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Checkout frozen baseline
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: 711ddd648fa74f2b903f9d7127dadc412f94b277
+          path: baseline
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install bounded test dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          pytest==8.4.1 numpy==2.2.6 opencv-python-headless==4.11.0.86
+          Pillow==11.2.1 requests==2.32.3 google-auth==2.40.3
+          reportlab==4.4.0 PyMuPDF==1.26.0 PyYAML==6.0.2
+      - name: Record tested commits
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git -C candidate rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git -C baseline rev-parse HEAD)" = '711ddd648fa74f2b903f9d7127dadc412f94b277'
+          mkdir results
+          git -C candidate rev-parse HEAD > results/candidate-sha.txt
+          git -C baseline rev-parse HEAD > results/baseline-sha.txt
+      - name: Existing tests on baseline
+        id: baseline
+        continue-on-error: true
+        working-directory: baseline
+        run: |
+          mapfile -t cases < ../candidate/tests/recognizer_guard_baseline.txt
+          python -m pytest -q -ra -p no:cacheprovider --continue-on-collection-errors "${cases[@]}" --junitxml=../results/baseline.xml
+      - name: Existing tests on candidate
+        id: candidate
+        continue-on-error: true
+        working-directory: candidate
+        run: |
+          mapfile -t cases < tests/recognizer_guard_baseline.txt
+          python -m pytest -q -ra -p no:cacheprovider --continue-on-collection-errors "${cases[@]}" --junitxml=../results/candidate.xml
+      - name: New guard regressions on candidate
+        id: guards
+        continue-on-error: true
+        working-directory: candidate
+        run: >-
+          python -m pytest -q -ra -p no:cacheprovider
+          tests/test_bridge_vision_observation_guards.py
+          tests/test_r265_observation_provenance_guards.py
+          --junitxml=../results/guards.xml
+      - name: Classify baseline failures and enforce candidate checks
+        if: always()
+        env:
+          BASELINE_OUTCOME: ${{ steps.baseline.outcome }}
+          CANDIDATE_OUTCOME: ${{ steps.candidate.outcome }}
+          GUARDS_OUTCOME: ${{ steps.guards.outcome }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, xml.etree.ElementTree as ET
+          root = pathlib.Path('results')
+          summary = {}
+          failures = {}
+          for name in ('baseline', 'candidate', 'guards'):
+              cases = list(ET.parse(root / (name + '.xml')).iter('testcase'))
+              failed = {x.get('classname', '') + '::' + x.get('name', '')
+                        for x in cases if x.find('failure') is not None or x.find('error') is not None}
+              skipped = [x.get('classname', '') + '::' + x.get('name', '')
+                         for x in cases if x.find('skipped') is not None]
+              failures[name] = failed
+              summary[name] = dict(tests=len(cases), passed=len(cases)-len(failed)-len(skipped),
+                                   failed=sorted(failed), skipped=skipped,
+                                   outcome=os.environ[name.upper() + '_OUTCOME'])
+          summary['candidate_new_failures'] = sorted(failures['candidate'] - failures['baseline'])
+          (root / 'summary.json').write_text(json.dumps(summary, indent=2))
+          print(json.dumps(summary, indent=2))
+          assert summary['guards']['outcome'] == 'success' and not summary['guards']['skipped']
+          assert summary['candidate']['outcome'] == 'success', 'Candidate baseline suite must pass; see comparison'
+          assert summary['baseline']['outcome'] == 'success', 'Existing frozen baseline failure; see comparison'
+          PY
+      - name: Save exact-head evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: recognizer-guards-${{ github.event.pull_request.head.sha }}
+          path: results/
+          retention-days: 14
