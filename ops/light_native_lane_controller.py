@@ -175,7 +175,7 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
     require(os.geteuid()==0 and os.uname().nodename=='autopilot-lite-vnic'
             and sha(payload_raw)==accepted_payload,'LANE_OWNER_AUTHORITY')
     value=parse(payload_raw)
-    if value.get('action')=='retire-prepare':
+    if value.get('action') in ('retire-prepare','retire-prepare-reference'):
         require(_cycle is None,'LANE_RETIREMENT_AUTHORITY')
         from ops.light_native_retirement_live import write
         return write(wheels,credential,controller_raw,retained_raw,payload_raw,accepted_payload,run_guard)

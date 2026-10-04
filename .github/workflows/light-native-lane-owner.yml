@@ -5,6 +5,9 @@ on:
     paths:
       - '.github/workflows/light-native-lane-owner.yml'
       - 'ops/light_native_lane_*.py'
+      - 'ops/light_native_retirement*.py'
+      - 'ops/light_native_bounded.py'
+      - 'tests/test_light_native_retirement*.py'
       - 'tests/test_light_native_lane_*.py'
       - 'database/light_native_pilot_intake.py'
       - 'tests/test_light_native_lane_owner*.py'
@@ -32,11 +35,11 @@ on:
         required: true
         type: string
       accepted_payload_sha256:
-        description: Independently accepted one-step canonical payload SHA256
+        description: Independently accepted canonical public retirement reference SHA256
         required: true
         type: string
-      payload_base64:
-        description: Accepted step data as base64 (no credentials)
+      retirement_reference_json:
+        description: Public retirement pins and exact finite Agreement only; never private records or free text
         required: true
         type: string
 
@@ -64,7 +67,16 @@ jobs:
         shell: bash
         run: |
           runtime_test_site="$(python -c 'from pathlib import Path; import pytest; print(Path(pytest.__file__).resolve().parent.parent)')"
-          sudo -n env PYTHONPATH="$PWD:$runtime_test_site" "$(command -v python)" -m pytest -q tests/test_light_native_lane_controller.py tests/test_light_native_lane_cycle.py tests/test_light_native_lane_issuer.py tests/test_light_native_lane_execution.py tests/test_light_native_lane_owner.py
+          sudo -n env PYTHONPATH="$PWD:$runtime_test_site" "$(command -v python)" - <<'PY'
+          import pathlib, subprocess, sys, tempfile
+          tests = ['tests/test_light_native_lane_'+name+'.py' for name in
+                   ('controller','cycle','issuer','execution','owner')]
+          tests += sorted(str(p) for p in pathlib.Path('tests').glob('test_light_native_retirement*.py'))
+          with tempfile.TemporaryDirectory(prefix='bridge-retirement-contract-', dir='/root') as fixture:
+              code = subprocess.call([sys.executable, '-m', 'pytest', '-q',
+                                      '--basetemp='+fixture+'/tests', *tests])
+          raise SystemExit(code)
+          PY
 
   step:
     needs: contract
@@ -89,11 +101,6 @@ jobs:
           NATIVE_OWNER_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
           SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}
-          EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
-          LANE_CONTROLLER_SHA256: ${{ inputs.accepted_controller_sha256 }}
-          LANE_RUNTIME_SHA256: ${{ inputs.accepted_runtime_sha256 }}
-          LANE_PAYLOAD_SHA256: ${{ inputs.accepted_payload_sha256 }}
-          LANE_PAYLOAD_BASE64: ${{ inputs.payload_base64 }}
         shell: bash
         run: |
           set -Eeuo pipefail
