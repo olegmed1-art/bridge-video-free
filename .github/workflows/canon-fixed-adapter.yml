@@ -76,4 +76,5 @@ jobs:
             tools/tournament_pilot/package.json
             canon-staged-sql-evidence.json
             canon-fixed-adapter-pg.txt
+            canon-cutoff-watchdog-evidence.json
           retention-days: 7

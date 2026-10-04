@@ -19,6 +19,14 @@ from .resident_preflight import Refused
 from .bounded_controller import BoundedController, PATH
 from .launch_contract import digest, ORIGIN
 
+def record_evidence(case, value):
+    from pathlib import Path
+    path=Path("canon-cutoff-watchdog-evidence.json")
+    records=json.loads(path.read_text()) if path.exists() else []
+    records.append({"case":case,"evidence_class":"real_loopback_postgresql18_not_live",**value})
+    path.write_text(json.dumps(records,sort_keys=True,indent=2))
+
+
 def connect(user=ROLE):
     return psycopg.connect(host="127.0.0.1",hostaddr="127.0.0.1",port=55432,
         dbname=DB,user=user,password="",passfile="/dev/null",sslmode="disable",autocommit=True)
@@ -582,6 +590,7 @@ def test_real_delayed_sql_cannot_commit_after_cutoff(fixture,point):
         module.inventory=original
     assert r.inspect()["rows"]==0
     assert r.recover()["no_op"] is True
+    record_evidence("delayed_"+point,{"status":"PASS","committed_rows":0,"completion":"UNCERTAIN_THEN_ZERO_READBACK"})
 
 
 def test_precommit_clock_check_rolls_back_after_slow_inventory(fixture):
@@ -649,6 +658,9 @@ def test_separate_watchdog_survives_controller_process_death(fixture,tmp_path):
         assert result["status"]=="WATCHDOG_REVOKE_CONFIRMED"
         assert result["receipt"]["active"]==0 and result["receipt"]["rows"]==36
         assert r.inspect()["state"]=="emergency"
+        record_evidence("independent_watchdog_controller_death",{"status":"PASS",
+            "controller_pid":controller.pid,"watchdog_pid":watchdog.pid,
+            "controller_killed":True,"watchdog_survived":True,"result":result})
     finally:
         for process in (controller,watchdog):
             if process is not None and process.poll() is None:
@@ -755,3 +767,5 @@ def test_before_fix_delayed_real_sql_committed_after_cutoff_counterfactual(fixtu
     assert receipt["status"]=="STAGE_COMMITTED" and a.clock() >= l.stage_until
     assert r.inspect()["rows"]==2
     assert r.recover()["rows"]==4
+    record_evidence("before_fix_counterfactual_40ee",{"status":"BUG_REPRODUCED",
+        "late_commit":True,"committed_rows":2,"independent_revoke_rows":4})
