@@ -223,4 +223,3 @@ def rehearsal():
 
 if __name__=="__main__":
     print(json.dumps(rehearsal(),ensure_ascii=False,indent=2))
-
