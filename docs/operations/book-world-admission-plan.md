@@ -15,8 +15,12 @@ Reuse this evidence and its existing credential path. Do not repeat runtime
 qualification merely to obtain a book-specific label.
 
 The installed canon probe checks SELECT/INSERT on 12 plan relations, separately
-SELECT on school, and a fixed set of column UPDATE privileges. A book writer
-has the following additional requirements; owner identity alone is insufficient.
+SELECT on school, and a fixed set of column UPDATE privileges. Parent's earlier
+forced-read-only catalog evidence additionally confirms owner SELECT/INSERT/
+UPDATE/DELETE and application SELECT (with application writes absent) on ten
+existing public relations, including the book knowledge/audit tables. Those
+metadata gates are closed; do not duplicate them. Only asset/source_asset ACLs
+remain unobserved. The matrix records code requirements, not ten new blockers.
 
 | Relation | Existing probe coverage | Book operations to establish |
 | --- | --- | --- |
@@ -27,9 +31,9 @@ has the following additional requirements; owner identity alone is insufficient.
 | public.knowledge_item | SELECT/INSERT | SELECT/INSERT |
 | public.knowledge_version | SELECT/INSERT, UPDATE authority_class/review_status | SELECT/INSERT, UPDATE status for publication/retirement |
 | public.knowledge_version_source | SELECT/INSERT | SELECT/INSERT and UPDATE on any column for FOR SHARE; no citation mutation |
-| public.changeset | Not checked | SELECT/INSERT, UPDATE status/committed_at |
-| public.domain_event | Not checked | SELECT/INSERT |
-| public.outbox_message | Not checked | SELECT/INSERT; existing dispatcher owns delivery |
+| public.changeset | Outside Canon probe; public owner table ACL already observed | SELECT/INSERT, UPDATE status/committed_at |
+| public.domain_event | Outside Canon probe; public owner table ACL already observed | SELECT/INSERT |
+| public.outbox_message | Outside Canon probe; public owner table ACL already observed | SELECT/INSERT; existing dispatcher owns delivery |
 | public.canon_activation | SELECT/INSERT and selected UPDATE columns | SELECT only; no activation or write |
 
 Check these with fixed pg_catalog.has_table_privilege,
@@ -110,9 +114,11 @@ Keep BIDDING and Canon out of this plan.
    Never emulate fixture outbox UPDATE or create a receipt from pending work.
    The publication audit outbox needs its own post-publication reconciliation.
 
-The current owner inventory closes only the transport/runtime part. Final
-receipts, rights, semantic comparison, actual effect bounds, recovery and
-delivery evidence must be supplied by their responsible reviewers/operators.
+Reuse already independently reviewed source PDF/claim evidence; do not repeat
+source semantics review merely to obtain a new report. Parent's confirmed table
+UPDATE privileges cover their columns and row locks. Close only asset/source_asset
+ACLs, actual effects, bounded semantic dedup, rights, final identity receipt,
+recovery and delivery using fresh private evidence and deterministic binding.
 If supported source download is denied, stop that path and report the denial.
 
 ## Separately coordinated execution, once all gates are evidenced
