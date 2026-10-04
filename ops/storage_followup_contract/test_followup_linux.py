@@ -44,7 +44,19 @@ class ActualLinuxTests(unittest.TestCase):
     result=g.signature_probe(name,str(path));self.assertNotEqual(result.get('state'),'UNKNOWN')
     self.assertEqual(path.read_bytes(),raw)
  def test_full_current_manager_graph(self):
-  graph=g.full_graph();self.assertTrue(graph['closure_complete']);self.assertIn('-.mount',graph['unit_names'])
+  original=g.command
+  def observed(argv,*args,**kwargs):
+   result=original(argv,*args,**kwargs)
+   if argv[:2]==['/usr/bin/systemctl','show']:
+    for line in result.splitlines():
+     key,sep,value=line.partition('=')
+     if key in g.EDGES or key=='Names':
+      for token in value.split():
+       if not g.UNIT.fullmatch(token):print(json.dumps({'ci_unit_parse':key,'length':len(token),'value':token[:512]}),flush=True)
+   return result
+  with patch.object(g,'command',side_effect=observed):graph=g.full_graph()
+  self.assertTrue(graph['closure_complete'],graph.get('missing_edge_properties'));self.assertIn('-.mount',graph['unit_names'])
   self.assertLess(len(json.dumps(graph)),220000)
 
 if __name__=='__main__':unittest.main()
+
