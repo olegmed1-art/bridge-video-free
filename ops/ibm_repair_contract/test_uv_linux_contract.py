@@ -67,10 +67,10 @@ class RuntimeDirectoryContract(unittest.TestCase):
    args=['/usr/bin/systemd-tmpfiles','--create','--prefix='+str(path),str(config)]
    command(args);st=path.stat();self.assertEqual((st.st_uid,st.st_gid,stat.S_IMODE(st.st_mode)),(self.account.pw_uid,self.account.pw_gid,0o750))
    payload=path/'fixture-payload';payload.write_bytes(b'preserved fixture bytes');os.chown(payload,self.account.pw_uid,self.account.pw_gid)
-   identity=(payload.stat().st_ino,payload.stat().st_uid,payload.stat().st_gid,hashlib.sha256(payload.read_bytes()).hexdigest())
+   identity=(payload.stat().st_ino,payload.stat().st_uid,payload.stat().st_gid,stat.S_IMODE(payload.stat().st_mode),hashlib.sha256(payload.read_bytes()).hexdigest())
    self.assertEqual(self.start(unit,path,['/usr/bin/test','-d',str(path)])['Result'],'success')
    command(['/usr/bin/systemctl','stop','--',unit]);command(args);self.assertEqual(self.start(unit,path,['/usr/bin/test','-d',str(path)])['Result'],'success')
-   after=(payload.stat().st_ino,payload.stat().st_uid,payload.stat().st_gid,hashlib.sha256(payload.read_bytes()).hexdigest())
+   after=(payload.stat().st_ino,payload.stat().st_uid,payload.stat().st_gid,stat.S_IMODE(payload.stat().st_mode),hashlib.sha256(payload.read_bytes()).hexdigest())
    self.assertEqual(after,identity);self.assertTrue(payload.exists())
 
 if __name__=='__main__':unittest.main(verbosity=2)
