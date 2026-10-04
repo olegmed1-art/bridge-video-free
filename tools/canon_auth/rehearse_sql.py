@@ -2,11 +2,16 @@
 import json
 from uuid import uuid4
 import psycopg
+from psycopg.rows import tuple_row
 
 from bridge_school_api import tournament_teacher as t
 from tools.tournament_pilot.rehearsal import local_connect, scalar, api_client, DB, TABLE_BUDGET
 from tools.tournament_pilot.package import envelope
 from .pilot_sql import plan
+from .resident_preflight import inspect_resident, Binding, Refused
+from .disposable_preflight import inspect_disposable
+from .teacher_behavior import inspect_teacher_connection
+from .resident_rehearsal import revoke_on_failure
 
 
 def rehearsal(code_sha):
@@ -15,6 +20,25 @@ def rehearsal(code_sha):
         school = scalar(conn, "INSERT INTO public.school(stable_name) VALUES (%s) RETURNING school_id",
                         ("synthetic-staged-sql-" + str(uuid4()),))
         p = plan(school, code_sha)
+        try:
+            inspect_resident(conn, Binding("fixture-project", "fixture-branch", "fixture-endpoint", "127.0.0.1"))
+        except Refused as exc:
+            assert str(exc) == "resident_transport_binding_required"
+        else:
+            raise AssertionError("Loopback non-TLS fixture must not pass the production inventory")
+        assert all(inspect_disposable(conn).values())
+        with psycopg.connect(host='127.0.0.1', hostaddr='127.0.0.1', port=55432,
+                dbname=DB, user='bridge_school_app_principal', password='',
+                passfile='/dev/null', sslmode='disable', autocommit=True) as app_conn:
+            # Use an idle fixture connection; change no privileges or production role.
+            app_conn.commit()
+            app_conn.autocommit = True
+            app_conn.row_factory = tuple_row
+            app_checks = inspect_disposable(app_conn)
+            assert not app_checks["owned_revoke_privileges"]
+            teacher_checks = inspect_teacher_connection(app_conn, database=DB)
+            assert teacher_checks["status"] == "teacher_readonly_behavior"
+            assert teacher_checks["write_admission"] is False
         initial_counts = {table: scalar(conn, "SELECT count(*) FROM " + table) for table in TABLE_BUDGET}
         outputs = scalar(conn, "SELECT count(*) FROM ai.teacher_output")
         def execute(stage):
@@ -86,7 +110,13 @@ def rehearsal(code_sha):
                 else:
                     raise AssertionError("Duplicate stage accepted: " + stage)
             assert sum(total().values()) == 40
-            execute("emergency")
+            try:
+                with revoke_on_failure(conn, school, code_sha):
+                    raise RuntimeError("synthetic external receipt gate failure")
+            except Refused as exc:
+                assert str(exc) == "rehearsal_failure_owned_bindings_revoked"
+            else:
+                raise AssertionError("Synthetic failed gate did not stop the experiment")
             assert assess()["status"] == "ABSTAIN"
             assert sum(total().values()) == 42
             execute("emergency")
@@ -98,7 +128,10 @@ def rehearsal(code_sha):
         return {"status": "PASS", "code_sha": code_sha, "staged_http": observed, "normal_rows": 40,
                 "emergency_rows": 42, "emergency_repeat_rows": 42, "semantic_cases": len(p["semantic_cases"]),
                 "unchanged_expiry": True, "teacher_output_writes": 0, "search_runs": 0, "final_decisions": 0,
-                "duplicate_stages_rejected": True, "extra_disposable_school_fixture": 1}
+                "duplicate_stages_rejected": True, "extra_disposable_school_fixture": 1,
+                "resident_owner_capabilities": True, "app_revoke_refused": True,
+                "injected_gate_failure_committed_revoke": True,
+                "teacher_behavior": teacher_checks, "evidence_class": "disposable_postgresql18_not_live"}
 
 
 if __name__ == "__main__":
