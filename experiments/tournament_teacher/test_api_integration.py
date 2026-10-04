@@ -209,3 +209,31 @@ def test_source_target_manifest_matches_executable_bindings():
     assert saved["deployed_target"] is None
     assert len(saved["rule_bindings"]) == 26
     assert all(r["database_rule_uuid"] is None for r in saved["rule_bindings"])
+
+
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+@pytest.mark.parametrize("modified", [False, True])
+def test_snapshot_newlines_and_content_integrity_over_http(client, monkeypatch, tmp_path, newline, modified):
+    import experiments.tournament_teacher.consumer as consumer
+    snapshot = consumer.RULES_PATH.read_text(encoding="utf-8")
+    if modified:
+        snapshot += " "  # Even valid JSON whitespace changes the pinned snapshot.
+    path = tmp_path / "rules.json"
+    path.write_bytes(snapshot.encode("utf-8").replace(b"\n", newline))
+    monkeypatch.setattr(consumer, "RULES_PATH", path)
+    context = make_request(CASES[0])
+    response = client.post(url(context), json=body(context))
+    assert response.status_code == (409 if modified else 200)
+    if modified:
+        assert response.json()["detail"]["code"] == "TEST_RULE_SNAPSHOT_MISMATCH"
+
+
+def test_non_utf8_snapshot_refuses_over_http(client, monkeypatch, tmp_path):
+    import experiments.tournament_teacher.consumer as consumer
+    path = tmp_path / "invalid.json"
+    path.write_bytes(b"\xff")
+    monkeypatch.setattr(consumer, "RULES_PATH", path)
+    context = make_request(CASES[0])
+    response = client.post(url(context), json=body(context))
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "TEST_RULE_SNAPSHOT_UNAVAILABLE"

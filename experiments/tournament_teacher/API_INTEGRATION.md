@@ -82,3 +82,5 @@ authentication, UUID/snapshot mismatch, output injection, DRAFT preservation,
 legacy writer behavior with a transaction double, and finalizer refusal. The
 HTTP demo output is retained with the synthetic decision evidence artifact.
 Passing these checks demonstrates local integration, not production readiness.
+
+The source fingerprint hashes UTF-8 text after universal-newline normalization (LF). Git LF and Windows CRLF checkouts therefore share one pinned version; any other content change still fails closed.

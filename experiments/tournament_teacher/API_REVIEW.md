@@ -78,3 +78,27 @@ identifies the pinned rule snapshot, not a verified deployment identity.
 Passing local HTTP checks establishes an executable isolated integration with
 the existing route. It does not establish production readiness, complete bidding
 strategy, or permission to deploy or activate tournament rules.
+
+## Follow-up: cross-platform snapshot binding
+
+The initial raw-byte digest described a Windows CRLF working copy, while Git
+stores the same snapshot with LF newlines. The corrected adapter hashes UTF-8
+text after universal-newline normalization, matching the consumer's file-reading
+semantics. The reviewer independently confirmed that the normalized working-copy
+digest and the actual Git blob digest both equal the new pin:
+`45081a9d6ceb60dd7facf58bbbba83296fcfe9eace71824b5d23939e912b951d`.
+The regenerated source version and synthetic UUID bindings change consistently;
+no bidding predicates or canonical rule content changed.
+
+The reviewer independently reran the final API suite: **64 tests passed**, with
+the same non-failing Starlette/httpx deprecation warning. Four new HTTP cases
+verify that LF and CRLF snapshots are accepted and that adding a space to either
+snapshot is still rejected with 409. Newline normalization does not disable
+content integrity checks.
+
+Review also identified that decoding a corrupted non-UTF-8 snapshot could raise
+an uncaught `UnicodeDecodeError`. The implementation now catches `UnicodeError`,
+and the added HTTP test confirms a structured 503
+`TEST_RULE_SNAPSHOT_UNAVAILABLE` refusal. No unresolved defect was identified in
+this follow-up. These are local verification results; publication still requires
+the new exact commit's CI result and does not establish a deployed consumer.

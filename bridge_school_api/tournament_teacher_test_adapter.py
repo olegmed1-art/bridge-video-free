@@ -14,7 +14,8 @@ from fastapi import HTTPException
 TEACHER_KEY = "tournament-canon-test"
 TEACHER_VERSION = "tournament-teacher-test-v2"
 PROFILE = "SCHOOL_TOURNAMENT_CURRENT_V1"
-RULES_SHA256 = "6f3489ce26bacfe6ce858a343519fe1e20179c857f9f25e5cafa0b937e2441e3"
+# SHA-256 of UTF-8 text with universal newlines (Git LF and Windows CRLF agree).
+RULES_SHA256 = "45081a9d6ceb60dd7facf58bbbba83296fcfe9eace71824b5d23939e912b951d"
 SOURCE_VERSION = "tour-canon-test-20261004:" + RULES_SHA256
 CONTRACT = "teacher-evidence-tournament-test-v1"
 TARGET = "local-asgi:app:app:POST:/v1/ai/positions/{position_id}/teacher-evidence"
@@ -54,9 +55,9 @@ class OfflineTournamentTeacherTarget:
             raise HTTPException(409, detail={"code":"SYNTHETIC_POSITION_BINDING_MISMATCH"})
         try:
             from experiments.tournament_teacher.consumer import RULES_PATH, decide
-            if sha256(RULES_PATH.read_bytes()).hexdigest() != RULES_SHA256:
+            if sha256(RULES_PATH.read_text(encoding="utf-8").encode("utf-8")).hexdigest() != RULES_SHA256:
                 raise HTTPException(409, detail={"code":"TEST_RULE_SNAPSHOT_MISMATCH"})
-        except (ImportError, OSError) as exc:
+        except (ImportError, OSError, UnicodeError) as exc:
             raise HTTPException(503, detail={"code":"TEST_RULE_SNAPSHOT_UNAVAILABLE"}) from exc
         result = decide(context, enabled=True)
         explanation = "\n".join(c["explanation"] for c in result["checks"])
