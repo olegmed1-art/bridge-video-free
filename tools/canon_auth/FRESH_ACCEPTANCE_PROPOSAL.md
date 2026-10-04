@@ -46,10 +46,14 @@ interpreting a specific request; do not invent a fresh SQL execution per GET.
 The existing authenticated route
 /v1/knowledge/validation/runtime-identity already supplies the narrower missing
 configuration/target evidence if a refresh is needed. It calls the existing
-incident probe to reject unexpected effective URI parameters, source endpoint
-rewrites and libpq environment overrides; uses the same resident app connector;
+incident probe to reject unexpected effective URI parameters, unknown raw source
+hosts and libpq environment overrides; expected direct-to-pooler canonicalization
+is permitted; uses the same resident app connector;
 checks TLS, host/port, current principal/database and immutable server tags;
-runs bounded read-only SQL and explicitly rolls back. It reports
+runs bounded read-only SQL and explicitly rolls back. Its existing policy permits
+sslmode=require as well as verify-full: it proves TLS-in-use, not a universal
+certificate-verification policy. Verified owner TLS remains a separate receipt.
+It reports
 OBSERVED_NOT_ADMITTED, not teacher or canon readiness. Consume it once in the
 same fresh in-place caller; do not create a second identity build or export an
 API token. Previous SHA711 evidence remains historical, not a current receipt.
@@ -66,7 +70,8 @@ called IN PLACE by the one fresh validation build using bridge_school_api.db.con
 No new app route or generic identity adapter is necessary. Before that call:
 - fresh admission and code/target pins pass before any credential lookup;
 - incident_db_probe.probe(False) must pass the existing strict configuration
-  checks; actual connection host/port/TLS must match the existing app target;
+  checks (including permitted expected direct-to-pooler canonicalization); actual
+  connection host/port/TLS must match the existing app target;
 - the connection is dedicated and idle, session_user=current_user=app principal,
   current database is the expected database;
 - helper pins pg_catalog, READ ONLY, bounded timeouts and forced rollback;
@@ -96,8 +101,11 @@ reviewed source installation and ordinary READY deployment:
   with the exact fresh marker/context and the SAME Git tree as S. After creation
   its exact SHA is recorded externally; never embed its own SHA in its code.
 - A: the one immutable Vercel validation-build ID for B; record it externally.
-- P: exact compiled pilot-plan hash and approved compiler/package/schema
+- C: original compiled-plan code SHA, fixed once to S (not B or later R).
+- P: exact compiled pilot-plan hash using that C and approved compiler/package/schema
   hashes, determined without publishing the school ID or private registry.
+  The retained intent ledger binds N/P/C. Later stages and recovery recompute
+  with the original C and deterministic IDs; R must never replace C.
 - R: exact externally reviewed current main SHA for each owner stage/recovery
   dispatch, plus the unchanged reviewed operator/module hashes.
 
@@ -210,13 +218,19 @@ fixed entrypoint/fault recovery tested in disposable PostgreSQL.
 | Failure at any point | stop progression; independent owned recovery; database readback; API ABSTAIN if available |
 | Final | all waiting polls and phase receipts correlated; rows40/max42, history retained, output/search/final-decision writes0 |
 
-For EVERY HTTP request, call existing get_runtime_logs with projectId,
-deploymentId=D, requestId=the exact receipt, bounded since/until and limit.
-Require exactly one structured match with path/status/request time/deployment.
+For EVERY HTTP request, call existing get_runtime_logs with required teamId,
+projectId, deploymentId=D, requestId=the exact receipt, bounded since/until and limit.
+Require exactly one authoritative request/invocation match with path/status/time/
+deployment. Multiple console/log lines belonging to that same invocation are not
+multiple requests: preserve them and normalize only when their common invocation
+identity and metadata are proven. Do not silently collapse contradictory records.
 Full-text query or aggregate counts are not a request match. Keep actual tool
 query parameters and original responses alongside normalized checks.
 Before/after get_deployment and alias observations must still bind D/S/origin.
-No-match, duplicate-match, stale alias, unavailable logs or a wrong status stops
+Before any pilot write, prove these filtered request/invocation records are
+actually available, including the credential-free health receipt. A cached health
+GET can lack a fresh function invocation; body=ok alone cannot fill a missing log.
+No-match, multiple distinct invocation matches, stale alias, unavailable logs or a wrong status stops
 the next write. Correlate waiting polls too; HTTP results stay pending until this.
 App-build behavior receipt is separately bound to A/B and tree S, not falsely
 labelled as a teacher HTTP request receipt.
