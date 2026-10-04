@@ -75,7 +75,9 @@ def exclusive(root, *, create=True):
         require(stat.S_ISREG(row.st_mode) and row.st_uid==0 and row.st_nlink==1
                 and stat.S_IMODE(row.st_mode)==0o600,'LANE_CYCLE_LOCK')
         fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        require(os.stat(path,follow_symlinks=False)==os.fstat(fd),'LANE_CYCLE_LOCK')
         yield
+        require(os.stat(path,follow_symlinks=False)==os.fstat(fd),'LANE_CYCLE_LOCK')
     finally:
         os.close(fd)
 
@@ -87,8 +89,9 @@ def validated(raw,accepted,controller_raw,retained_raw,run_guard):
             and type(outer['version']) is int and outer['version']==1
             and outer['action']=='cycle','LANE_CYCLE_SCOPE')
     value=outer['prepare']
-    require(type(value) is dict and set(value)==KEYS and type(value['version']) is int
-            and value['version']==2 and value['action']=='prepare'
+    require(type(value) is dict and type(value['version']) is int
+            and (set(value)==KEYS and value['version']==2 or set(value)==KEYS|{'issuer'} and value['version']==3)
+            and value['action']=='prepare'
             and all(value[key] is None for _,key,_ in BINDINGS),'LANE_CYCLE_SCOPE')
     owner.sequence(value)
     owner.validate_package(controller_raw,value['source'],value['accepted_controller_sha256'])
@@ -159,8 +162,13 @@ def child_main(wire,expected,context):
         from ops import light_native_lane_issuer as issuer
         policy=issuer.validate(decoded['payload'],expected['payload'],decoded['controller'],decoded['runtime'],guard)
         from ops.native_maintenance_owner_host import loaded_runtime
-        with loaded_runtime(decoded['driver']) as (psycopg,_):
-            return issuer.preflight(policy,expected['payload'],wire['outer'],wire['credential'],wire['token'],psycopg)
+        def check():
+            with loaded_runtime(decoded['driver']) as (psycopg,_):
+                return issuer.preflight(policy,expected['payload'],wire['outer'],wire['credential'],wire['token'],psycopg,guard=guard)
+        if policy['version']==2:
+            from ops.light_native_bounded import run
+            return run(check)
+        return check()
     if wire['mode']=='validate':
         prepare=validated(decoded['payload'],expected['payload'],decoded['controller'],decoded['runtime'],guard)
         from ops.native_maintenance_owner_host import loaded_runtime
@@ -227,9 +235,11 @@ except BaseException:
     except BaseException:raise RuntimeError('LANE_CYCLE_CHILD_UNKNOWN') from None
 
 
-def run(wheels,credential,token,controller_raw,retained_raw,raw,accepted,run_guard):
+def run(wheels,credential,token,controller_raw,retained_raw,raw,accepted,run_guard,*,_issuer=None):
     require(os.geteuid()==0 and os.uname().nodename=='autopilot-lite-vnic','LANE_CYCLE_SCOPE')
     prepare=validated(raw,accepted,controller_raw,retained_raw,run_guard)
+    from ops.light_native_retirement_live import entry_guard
+    entry_guard(prepare,_issuer)
     result=isolated(wheels,credential,token,controller_raw,retained_raw,raw,accepted,run_guard,
         outer=accepted,mode='validate')
     require(result==dict(audit='LIGHT_LANE_CYCLE_VALIDATED'),'LANE_CYCLE_RESULT')
@@ -238,6 +248,7 @@ def run(wheels,credential,token,controller_raw,retained_raw,raw,accepted,run_gua
     root=owner.ROOT/'cycles'
     if not root.exists():owner.install.fresh_directory(root,0o700)
     with exclusive(root):
+        entry_guard(prepare,_issuer)
         directory=location(prepare)
         scope=owner.ROOT/prepare['accepted_plan_sha256']
         require(not directory.exists() and not scope.exists(),'LANE_CYCLE_REPLAY')

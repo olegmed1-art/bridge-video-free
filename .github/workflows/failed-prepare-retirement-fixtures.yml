@@ -1,0 +1,165 @@
+name: Isolated canon retirement integration
+
+on:
+  push:
+    branches: [review/canon-retirement-integration-20261004]
+    paths: [.github/workflows/failed-prepare-retirement-fixtures.yml]
+
+permissions: {}
+concurrency:
+  group: isolated-canon-retirement-integration
+  cancel-in-progress: false
+
+jobs:
+  fixtures:
+    if: >-
+      github.event.repository.private == false && github.event.created == false &&
+      github.event.before == '57fcfb319692b5117bca052101432c0eb25b9d15' &&
+      github.run_attempt == 1 &&
+      github.event.head_commit.message == 'ci: verify canon retirement integration'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            machine: x86_64
+            image: python@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
+            manifest: wheels.json
+            manifest_sha256: e31af600877201c0cf9cebca01ef9db55cf645bd407b676889f853c4986a3bb4
+          - runner: ubuntu-24.04-arm
+            machine: aarch64
+            image: python@sha256:349275ed26e7aea20752e1fd63c40c30a0281d324e51fb41612c2433cb6482d4
+            manifest: wheels-aarch64.json
+            manifest_sha256: d1b65a8467c3f957b95261bd2560aacfbb6da0f0e603a0530ceed29a25e5beee
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    env:
+      PYTHON_IMAGE: ${{ matrix.image }}
+      EXPECTED_MACHINE: ${{ matrix.machine }}
+      WHEEL_MANIFEST: ${{ matrix.manifest }}
+      WHEEL_MANIFEST_SHA256: ${{ matrix.manifest_sha256 }}
+    steps:
+      - name: Fetch exact public source and hash-pinned wheels without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I -S -B <<'PY'
+          import hashlib, io, json, os, pathlib, re, urllib.request, zipfile
+          sha = os.environ['GITHUB_SHA']
+          assert re.fullmatch('[0-9a-f]{40}', sha)
+          assert os.environ['GITHUB_REPOSITORY'] == 'olegmed1-art/bridge-video-free'
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  raise RuntimeError('redirect refused')
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+          def fetch(url, limit):
+              with opener.open(url, timeout=30) as response:
+                  raw = response.read(limit+1)
+              assert len(raw) <= limit
+              return raw
+          source = fetch('https://codeload.github.com/olegmed1-art/bridge-video-free/zip/'+sha, 24*1024*1024)
+          work = pathlib.Path(os.environ['RUNNER_TEMP'])
+          (work/'retirement-source.zip').write_bytes(source)
+          old = fetch('https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/b9b85763542743b9c839febd63d4c911c79bbd20/ops/light_native_lane_controller.py', 128*1024)
+          assert hashlib.sha256(old).hexdigest() == '3762caa927970b6410a7850c76fa1dcbbfeab214c5470ff98c6b8059b51ffcb4'
+          bundle = io.BytesIO()
+          with zipfile.ZipFile(bundle, 'w', zipfile.ZIP_DEFLATED) as packed:
+              packed.writestr('candidate.zip', source)
+              packed.writestr('revoked-controller.py', old)
+          (work/'retirement-test-input.zip').write_bytes(bundle.getvalue())
+          archive = zipfile.ZipFile(io.BytesIO(source))
+          prefix = 'bridge-video-free-'+sha+'/'
+          assert all(x.startswith(prefix) for x in archive.namelist())
+          assert os.uname().machine == os.environ['EXPECTED_MACHINE']
+          assert os.environ['WHEEL_MANIFEST'] in ('wheels.json','wheels-aarch64.json')
+          manifest = archive.read(prefix+'.github/retirement-fixtures/'+os.environ['WHEEL_MANIFEST'])
+          assert hashlib.sha256(manifest).hexdigest() == os.environ['WHEEL_MANIFEST_SHA256']
+          context = work/'retirement-dependencies'; context.mkdir()
+          requirements = []
+          for wheel in json.loads(manifest):
+              assert re.fullmatch('[A-Za-z0-9_.-]+[.]whl', wheel['filename'])
+              assert wheel['url'].startswith('https://files.pythonhosted.org/packages/')
+              raw = fetch(wheel['url'], 16*1024*1024)
+              assert hashlib.sha256(raw).hexdigest() == wheel['sha256']
+              (context/wheel['filename']).write_bytes(raw)
+              requirements.append(wheel['name']+'=='+wheel['version']+' --hash=sha256:'+wheel['sha256'])
+          (context/'requirements.txt').write_text('\n'.join(requirements)+'\n')
+          dockerfile = 'FROM '+os.environ['PYTHON_IMAGE']+'\n'
+          dockerfile += 'RUN rm -f /etc/apt/sources.list.d/debian.sources && echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260930T000000Z bookworm main" > /etc/apt/sources.list && echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260930T000000Z bookworm-security main" >> /etc/apt/sources.list && apt-get -o Acquire::Retries=0 -o Acquire::https::Timeout=30 update && apt-get -y --no-install-recommends install git && rm -rf /var/lib/apt/lists/*\n'
+          dockerfile += 'COPY . /wheels/\nRUN python -m pip install --no-cache-dir --disable-pip-version-check --no-index --find-links=/wheels --only-binary=:all: --no-deps --require-hashes -r /wheels/requirements.txt && python -m pip check && ln -sf /usr/local/bin/python3 /usr/bin/python3\n'
+          (context/'Dockerfile').write_text(dockerfile)
+          print('EXACT_SOURCE', sha, 'ARCHIVE_SHA256', hashlib.sha256(source).hexdigest())
+          PY
+          docker pull "$PYTHON_IMAGE"
+          docker build --pull=false --tag retirement-offline "$RUNNER_TEMP/retirement-dependencies"
+      - name: Offline Linux regression and real-root fault tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --init --pull=never --user 0:0 --network none --read-only \
+            --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+            --cap-add SETUID --cap-add SETGID --cap-add KILL \
+            --security-opt no-new-privileges:true --pids-limit 192 --memory 1g --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=256m \
+            --tmpfs /var/tmp:rw,nosuid,nodev,mode=1777,size=32m \
+            --tmpfs /fixture-data:rw,nosuid,nodev,mode=0700,size=128m \
+            --interactive --entrypoint /usr/bin/env retirement-offline \
+            -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp PYTHONDONTWRITEBYTECODE=1 \
+            PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 EXPECTED_SHA="$GITHUB_SHA" EXPECTED_MACHINE="$EXPECTED_MACHINE" \
+            /usr/bin/timeout --signal=KILL 480s /usr/local/bin/python -I -B -c '
+          import hashlib, io, os, pathlib, stat, subprocess, sys, zipfile
+          import xml.etree.ElementTree as ET
+          assert sys.platform=="linux" and sys.version_info[:2]==(3,12)
+          assert os.uname().machine==os.environ["EXPECTED_MACHINE"]
+          assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
+          assert set(os.listdir("/sys/class/net"))=={"lo"}
+          wire=sys.stdin.buffer.read(25*1024*1024+1);assert len(wire)<=25*1024*1024
+          packed=zipfile.ZipFile(io.BytesIO(wire));assert set(packed.namelist())=={"candidate.zip","revoked-controller.py"}
+          raw=packed.read("candidate.zip");assert len(raw)<=24*1024*1024
+          old=packed.read("revoked-controller.py")
+          assert hashlib.sha256(old).hexdigest()=="3762caa927970b6410a7850c76fa1dcbbfeab214c5470ff98c6b8059b51ffcb4"
+          archive=zipfile.ZipFile(io.BytesIO(raw));prefix="bridge-video-free-"+os.environ["EXPECTED_SHA"]+"/"
+          root=pathlib.Path("/tmp/candidate");root.mkdir(mode=0o700)
+          total=0
+          for item in archive.infolist():
+              assert item.filename.startswith(prefix)
+              name=item.filename[len(prefix):]
+              assert not name.startswith("/") and ".." not in pathlib.PurePosixPath(name).parts
+              assert not stat.S_ISLNK(item.external_attr>>16)
+              if item.is_dir():continue
+              total+=item.file_size;assert total<=100*1024*1024
+              path=root/name;path.parent.mkdir(parents=True,exist_ok=True)
+              path.write_bytes(archive.read(item))
+          os.chdir(root);sys.path.insert(0,str(root));sys.path.insert(0,str(root/"tests"))
+          controller=root/"ops/light_native_lane_controller.py";corrected=controller.read_bytes()
+          # Prove the integration regression detects the exact revoked public code.
+          # Only disposable container files change; restore before the full suite.
+          red_node="tests/test_light_native_retirement_sequence.py::test_derived_prepare_reaches_real_supervisor_and_feed[retirement-sequence-3]"
+          try:
+              controller.write_bytes(old)
+              red=subprocess.run([sys.executable,"-B","-m","pytest","-q","-p","no:cacheprovider",
+                  "--noconftest","-c","/dev/null","--basetemp=/fixture-data/red",
+                  "--junitxml=/tmp/sequence-red.xml",red_node],capture_output=True,text=True,timeout=180)
+          finally:
+              controller.write_bytes(corrected)
+          print(red.stdout,flush=True);print(red.stderr,flush=True)
+          failed=ET.parse("/tmp/sequence-red.xml").getroot().findall(".//testcase")
+          assert red.returncode==1 and len(failed)==1
+          assert failed[0].find("failure") is not None and failed[0].find("error") is None and failed[0].find("skipped") is None
+          assert "LANE_EXEC_FEED_CHANGED" in ET.tostring(failed[0],encoding="unicode")
+          assert controller.read_bytes()==corrected
+          print("REVOKED_SEQUENCE_REGRESSION_DETECTED",os.uname().machine,flush=True)
+          import pytest
+          tests=["tests/test_light_native_lane_"+name+".py" for name in
+                 ("controller","cycle","execution","feed","install","issuer","owner","run_guard")]
+          tests += ["tests/test_light_native_pilot_intake.py"]
+          tests += sorted(str(p.relative_to(root)) for p in (root/"tests").glob("test_light_native_retirement*.py"))
+          tests += ["tools/tournament_pilot/test_pilot.py","tests/test_l1_canonical_registry.py","tests/test_l1_canonical_runtime.py","tests/test_knowledge_read_api.py","tests/test_ai_api_routes.py","tests/test_ai_final_decision_contract.py"]
+          code=pytest.main(["-q","-ra","-p","no:cacheprovider","--noconftest","-c","/dev/null","--basetemp=/fixture-data/tests",
+                            "--rootdir="+str(root),"--junitxml=/tmp/retirement.xml",*tests])
+          cases=ET.parse("/tmp/retirement.xml").getroot().findall(".//testcase")
+          ids={(x.get("classname"),x.get("name")) for x in cases}
+          assert code==0 and len(cases)==480 and len(ids)==len(cases)
+          assert all(not any(x.find(k) is not None for k in ("skipped","failure","error")) for x in cases)
+          print("CANON_RETIREMENT_INTEGRATION_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
+          ' < "$RUNNER_TEMP/retirement-test-input.zip"
