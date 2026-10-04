@@ -14,7 +14,7 @@ jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == 'f8bd333ff78513dda780659185e0b071f937cc36' &&
+      github.event.before == 'b9b85763542743b9c839febd63d4c911c79bbd20' &&
       github.run_attempt == 1 &&
       github.event.head_commit.message == 'ci: verify failed prepare retirement protocol'
     strategy:
@@ -60,6 +60,13 @@ jobs:
           source = fetch('https://codeload.github.com/olegmed1-art/bridge-video-free/zip/'+sha, 24*1024*1024)
           work = pathlib.Path(os.environ['RUNNER_TEMP'])
           (work/'retirement-source.zip').write_bytes(source)
+          old = fetch('https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/b9b85763542743b9c839febd63d4c911c79bbd20/ops/light_native_lane_controller.py', 128*1024)
+          assert hashlib.sha256(old).hexdigest() == '3762caa927970b6410a7850c76fa1dcbbfeab214c5470ff98c6b8059b51ffcb4'
+          bundle = io.BytesIO()
+          with zipfile.ZipFile(bundle, 'w', zipfile.ZIP_DEFLATED) as packed:
+              packed.writestr('candidate.zip', source)
+              packed.writestr('revoked-controller.py', old)
+          (work/'retirement-test-input.zip').write_bytes(bundle.getvalue())
           archive = zipfile.ZipFile(io.BytesIO(source))
           prefix = 'bridge-video-free-'+sha+'/'
           assert all(x.startswith(prefix) for x in archive.namelist())
@@ -100,13 +107,17 @@ jobs:
             -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp PYTHONDONTWRITEBYTECODE=1 \
             PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 EXPECTED_SHA="$GITHUB_SHA" EXPECTED_MACHINE="$EXPECTED_MACHINE" \
             /usr/bin/timeout --signal=KILL 480s /usr/local/bin/python -I -B -c '
-          import io, os, pathlib, stat, sys, zipfile
+          import hashlib, io, os, pathlib, stat, subprocess, sys, zipfile
           import xml.etree.ElementTree as ET
           assert sys.platform=="linux" and sys.version_info[:2]==(3,12)
           assert os.uname().machine==os.environ["EXPECTED_MACHINE"]
           assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
           assert set(os.listdir("/sys/class/net"))=={"lo"}
-          raw=sys.stdin.buffer.read(24*1024*1024+1);assert len(raw)<=24*1024*1024
+          wire=sys.stdin.buffer.read(25*1024*1024+1);assert len(wire)<=25*1024*1024
+          packed=zipfile.ZipFile(io.BytesIO(wire));assert set(packed.namelist())=={"candidate.zip","revoked-controller.py"}
+          raw=packed.read("candidate.zip");assert len(raw)<=24*1024*1024
+          old=packed.read("revoked-controller.py")
+          assert hashlib.sha256(old).hexdigest()=="3762caa927970b6410a7850c76fa1dcbbfeab214c5470ff98c6b8059b51ffcb4"
           archive=zipfile.ZipFile(io.BytesIO(raw));prefix="bridge-video-free-"+os.environ["EXPECTED_SHA"]+"/"
           root=pathlib.Path("/tmp/candidate");root.mkdir(mode=0o700)
           total=0
@@ -120,6 +131,24 @@ jobs:
               path=root/name;path.parent.mkdir(parents=True,exist_ok=True)
               path.write_bytes(archive.read(item))
           os.chdir(root);sys.path.insert(0,str(root));sys.path.insert(0,str(root/"tests"))
+          controller=root/"ops/light_native_lane_controller.py";corrected=controller.read_bytes()
+          # Prove the integration regression detects the exact revoked public code.
+          # Only disposable container files change; restore before the full suite.
+          red_node="tests/test_light_native_retirement_sequence.py::test_derived_prepare_reaches_real_supervisor_and_feed[retirement-sequence-3]"
+          try:
+              controller.write_bytes(old)
+              red=subprocess.run([sys.executable,"-B","-m","pytest","-q","-p","no:cacheprovider",
+                  "--noconftest","-c","/dev/null","--basetemp=/fixture-data/red",
+                  "--junitxml=/tmp/sequence-red.xml",red_node],capture_output=True,text=True,timeout=180)
+          finally:
+              controller.write_bytes(corrected)
+          print(red.stdout,flush=True);print(red.stderr,flush=True)
+          failed=ET.parse("/tmp/sequence-red.xml").getroot().findall(".//testcase")
+          assert red.returncode==1 and len(failed)==1
+          assert failed[0].find("failure") is not None and failed[0].find("error") is None and failed[0].find("skipped") is None
+          assert "LANE_EXEC_FEED_CHANGED" in ET.tostring(failed[0],encoding="unicode")
+          assert controller.read_bytes()==corrected
+          print("REVOKED_SEQUENCE_REGRESSION_DETECTED",os.uname().machine,flush=True)
           import pytest
           tests=["tests/test_light_native_lane_"+name+".py" for name in
                  ("controller","cycle","execution","feed","install","issuer","owner","run_guard")]
@@ -132,4 +161,4 @@ jobs:
           assert code==0 and len(cases)>=140 and len(ids)==len(cases)
           assert all(not any(x.find(k) is not None for k in ("skipped","failure","error")) for x in cases)
           print("RETIREMENT_FIXTURES_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
-          ' < "$RUNNER_TEMP/retirement-source.zip"
+          ' < "$RUNNER_TEMP/retirement-test-input.zip"

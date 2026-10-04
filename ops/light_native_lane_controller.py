@@ -385,7 +385,7 @@ def launch(wheels,credential,token,plan,directory,value,prior,baseline,feed_resu
         cursor_sha256=feed_result['cursor_sha256'],dispatch_id=feed_result['dispatch_id'],
         original=install.verify_hold_process(install.RETAINED_SOURCE,pwd.getpwnam('school-autopilot')),
         supervisor_sha256=sha(script),owner_context_sha256=sha(context)))
-    if value.get('version')==2:
+    if value.get('version') in (2,3):
         body=parse(request);body.update(version=2,sequence=sequence(value))
         request=encoded(body)
     digest=sha(request)
