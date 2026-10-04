@@ -160,3 +160,8 @@ The server timer is explicitly reset to zero before arming, then the server
 remaining budget is calculated in the SAME statement as set_config. Qualification
 injects real pg_sleep before configuration and an inherited60-second transaction
 timer; neither can extend the normal transaction through the absolute cutoff.
+
+A counterfactual test executes immutable before-fix40ee adapter source ONLY against
+the loopback disposable fixture: delayed PostgreSQL baseline commits after cutoff.
+New adapter delayed-write/post-inventory tests prove zero committed rows instead;
+the counterfactual is followed by independent owned revoke and has no live runner.

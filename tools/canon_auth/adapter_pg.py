@@ -730,3 +730,28 @@ def test_deadline_arming_latency_and_inherited_timer_cannot_extend_cutoff(fixtur
         assert int(captured[0].removesuffix("ms")) <= 500
     assert r.inspect()["rows"]==0
     assert r.recover()["no_op"] is True
+
+
+def test_before_fix_delayed_real_sql_committed_after_cutoff_counterfactual(fixture):
+    import subprocess,types
+    a,r,school,l=fixture
+    l=real_window(fixture,1.1)
+    text=subprocess.check_output(["git","show",
+        "40ee13d2826a7cd697b9dd0d89962cd542cb887c:tools/canon_auth/fixed_adapter.py"],text=True)
+    previous=types.ModuleType(__package__+".before_remote_cutoff_fix")
+    previous.__package__=__package__
+    exec(compile(text,"immutable-before-cutoff-fix","exec"),previous.__dict__)
+    class Delayed(ConnectionProxy):
+        def execute(self,sql,*args,**kwargs):
+            result=self.conn.execute(sql,*args,**kwargs)
+            if sql.startswith("INSERT INTO ai.decision_position("):
+                self.conn.execute("SELECT pg_catalog.pg_sleep(1.5)")
+            return result
+    old=previous.FixedAdapter(Delayed(a.conn),school,l,lambda:None,a.clock)
+    receipt=old.execute("baseline",permit(l,"baseline",a.clock()))
+    # Counterfactual runs ONLY the public old code in the anonymous disposable
+    # loopback fixture. It demonstrates the exact bug, then independently cleans
+    # owned bindings; no old code is exposed as an operational entrypoint.
+    assert receipt["status"]=="STAGE_COMMITTED" and a.clock() >= l.stage_until
+    assert r.inspect()["rows"]==2
+    assert r.recover()["rows"]==4
