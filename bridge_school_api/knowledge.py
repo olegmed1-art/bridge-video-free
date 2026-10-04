@@ -4,6 +4,8 @@ from enum import StrEnum
 
 from fastapi import APIRouter, HTTPException, Query
 
+from bridge_contracts.book_world import render_teacher_book
+
 from .db import connect
 from .l1_canonical_registry import (
     ACTIVE_DOMAIN_RULE_IDS,
@@ -108,6 +110,7 @@ _KNOWLEDGE_VERSIONS_SQL = """
                         'source_id', src.source_id,
                         'source_type', src.source_type,
                         'title', src.title,
+                        'status', src.status,
                         'canonical_locator', src.canonical_locator,
                         'relation_type', kvs.relation_type,
                         'source_locator', kvs.source_locator
@@ -247,6 +250,23 @@ def _retrieval_status(lane: AuthorityLane, count: int) -> str:
     if lane is AuthorityLane.WORLD_EXTERNAL:
         return "WORLD_MATCH" if count else "WORLD_GAP"
     return "SOURCE_MATCH" if count else "SOURCE_GAP"
+
+
+@router.get("/teacher/book")
+def teacher_book_answer(stable_key: str = Query(min_length=1, max_length=200)) -> dict:
+    """Protected router: cite a persisted reviewed WORLD atom, without LLM calls."""
+    result = query_knowledge(
+        lane=AuthorityLane.WORLD_EXTERNAL, system_profile="SYSTEM_NEUTRAL",
+        stable_key=stable_key, scope_key="default", limit=2, offset=0,
+    )
+    if not result["items"]:
+        raise HTTPException(status_code=404, detail="BOOK_WORLD_GAP")
+    if len(result["items"]) != 1:
+        raise HTTPException(status_code=409, detail="BOOK_WORLD_VERSION_AMBIGUITY")
+    try:
+        return render_teacher_book(result["items"][0])
+    except (ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(status_code=409, detail="BOOK_WORLD_EVIDENCE_INVALID") from exc
 
 
 @router.get("/query")
