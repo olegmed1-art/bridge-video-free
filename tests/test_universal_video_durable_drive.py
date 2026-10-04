@@ -288,7 +288,8 @@ def test_pending_cleanup_blocks_active_changed_or_exhausted_job(full_chain, tmp_
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Linux resident directory fsync/fcntl contract")
-def test_full_intent_crash_orphan_reuse_cleanup_with_real_conformance(tmp_path, monkeypatch):
+@pytest.mark.parametrize("preserve_completion", [True, False], ids=["fixed-recovery", "legacy-rewrite-fault"])
+def test_full_intent_crash_orphan_reuse_cleanup_with_real_conformance(tmp_path, monkeypatch, preserve_completion):
     from universal_video import spool_worker as worker, drive_stage as stage, drive_cleanup as cleanup
     from universal_video.contract import validate_job, canonical_job_hash
     from test_universal_video_result_conformance import _bundle, _fingerprint
@@ -355,8 +356,22 @@ def test_full_intent_crash_orphan_reuse_cleanup_with_real_conformance(tmp_path, 
     state["retry_after_unix"] = 0
     durable.atomic_json(retry, state)
     monkeypatch.setattr(worker, "queue_cleanup", original_queue)
+    if not preserve_completion:
+        # Reproduce the previous done overwrite exactly, without replacing the
+        # real conformance, finalizer, receipts or cleanup hash gates.
+        monkeypatch.setattr(worker, "preserve_pending_completion", lambda *args: False)
     assert worker.process_one(spool)
     assert computes == ["fixture_generation"] and len(backend.posts) == posts
+    if not preserve_completion:
+        from universal_video.maintenance import run_maintenance
+        assert done.read_bytes() != original_done
+        assert durable.read_receipt(done)["result_conformance"]["evidence_phase"] == "REUSE_OBSERVATION"
+        pending = spool / "cleanup_pending/exact-video-job.json"
+        assert durable.read_receipt(pending)["done_sha256"] != hashlib.sha256(done.read_bytes()).hexdigest()
+        assert source.exists() and (spool / "failed/job.json").exists()
+        assert run_maintenance(tmp_path, dry_run=False)["source_cleanups_completed"] == 0
+        assert source.exists() and backend.meta == original_metadata
+        return
     assert done.read_bytes() == original_done
     assert (result / durable.FINAL_RECEIPT).read_bytes() == original_final
     assert not source.exists() and not list((spool / "cleanup_pending").glob("*.json"))
