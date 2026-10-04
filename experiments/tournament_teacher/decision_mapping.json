@@ -1,0 +1,254 @@
+[
+  {
+    "decision_id": "TDEC-20261002-001",
+    "rule_ids": [
+      "RULE-TOUR-1D-1NT-REBID-2H",
+      "RULE-TOUR-1D-1NT-REBID-2S"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "Assess 2H/2S with D>=5, exact four-card called major and 18+. No preference between matching reverses is inferred.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261002-002",
+    "rule_ids": [
+      "RULE-TOUR-1D-1NT-REBID-PASS"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "PASS is a DRAFT candidate assessment only. Shape and priority are unspecified; recommend abstains. Repeated 1NT is unsupported.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261002-003",
+    "rule_ids": [
+      "RULE-TOUR-1S-RSP-2C",
+      "RULE-TOUR-1S-RSP-2D",
+      "RULE-TOUR-1S-RSP-2H"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "2C/2D show their own minor >=4 at 11+, F1. Separate 2H >=5 is preserved as a companion; no priority inferred.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261002-004",
+    "rule_ids": [
+      "RULE-TOUR-1H-1NT-REBID-2S"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "2S requires S=4 AND H>=5 AND 18+, FG. The erroneous 5332 is retained only in the source excerpt.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261002-005",
+    "rule_ids": [
+      "RULE-TOUR-1S-1NT-REBID-2S",
+      "RULE-TOUR-1S-1NT-REBID-3S"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "2S 12–15 and 3S 16–17, both S>=6. NF versus INV preserved. No automatic selection from a partial menu.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261002-006",
+    "rule_ids": [
+      "RULE-TOUR-1C-1H-REBID-2C",
+      "RULE-TOUR-1C-1H-REBID-3C"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "2C 12–15, C>=6 OR (C>=5 AND D=4), H<4 and S<4; 3C 16–17 C>=6, NF, preserved continuation note. No unstated shape restrictions on 3C.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261002-007",
+    "rule_ids": [
+      "RULE-TOUR-1C-1H-REBID-1S"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "1S 12–22, S=4, H<4, F1; no other opening-hand conditions invented.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261002-008",
+    "rule_ids": [
+      "RULE-TOUR-1H-1NT-REBID-2NT",
+      "RULE-TOUR-1S-1NT-REBID-2NT",
+      "RULE-TOUR-OPEN-1NT",
+      "RULE-TOUR-OPEN-1H",
+      "RULE-TOUR-OPEN-1S"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "Opening 1NT permits confirmed 5m332, preserved 5m422/6m322; excludes 5M332. Other shapes abstain. Explicit 1M then 2NT choice only for 15–17 and 5M332. Forcing of rebid remains null.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261002-009",
+    "rule_ids": [
+      "RULE-TOUR-OPEN-2NT"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "2NT 20–22, confirmed 5m332 and preserved 5m422/6m322; excludes 5M332. Unknown 4333/4432 abstain, not rejected. No priority at 20–22 inferred.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261002-010",
+    "rule_ids": [
+      "RULE-TOUR-1D-1H-1S-RSP-3C",
+      "RULE-TOUR-1D-1H-1NT-RSP-3C"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "Both 3C continuations require H=4 AND C>=5 AND 13+, FG; conjunction and exact hearts tested.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261002-011",
+    "rule_ids": [
+      "RULE-TOUR-2S-RSP-3C",
+      "RULE-TOUR-2S-RSP-3D"
+    ],
+    "decision_role": "PARTIAL_SUPPLEMENTED_BY_TDEC-20261003-001",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "Partial call-list decision only, supplemented by 20261003-001. Positive/negative/shape boundaries use the combined current source, not this historical decision alone; no independent numeric or hidden-information rule is invented.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261003-001",
+    "rule_ids": [
+      "RULE-TOUR-2S-RSP-3C",
+      "RULE-TOUR-2S-RSP-3D"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "After explicitly weak 2S: own minor >=5, 17+, FG. Missing weak meaning abstains. Original values phrase retained only as source; 3D stays DRAFT.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261003-002",
+    "rule_ids": [
+      "RULE-TOUR-1NT-RSP-3H",
+      "RULE-TOUR-1NT-RSP-3S"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "3H/3S show the corresponding singleton and both 5–4 minor orientations in 5431, FG. Singleton is exact; numeric boundary not applicable because no threshold exists.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  },
+  {
+    "decision_id": "TDEC-20261003-003",
+    "rule_ids": [
+      "RULE-TOUR-1NT-RSP-2C",
+      "RULE-TOUR-1NT-RSP-2NT"
+    ],
+    "decision_role": "CONFIRMED_CONSTRAINTS",
+    "coverage": [
+      "positive",
+      "negative",
+      "boundary",
+      "hidden_information"
+    ],
+    "boundary_or_limitation": "Stayman 8+ and at least one literal four-card major; five-card-major agreement abstains. Direct 2NT 8–9 INV has no invented shape restrictions. Overlap cannot establish unique choice.",
+    "source_id": "SRC-0096",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "execution": "python -m experiments.tournament_teacher.coverage"
+  }
+]

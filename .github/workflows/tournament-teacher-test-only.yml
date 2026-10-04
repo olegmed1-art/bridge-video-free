@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
@@ -30,9 +30,19 @@ jobs:
           python -m experiments.tournament_teacher.preflight
       - name: Real consumer, finite model, and L1 regression
         run: >-
-          python -m pytest -q experiments/tournament_teacher/test_consumer.py
+          python -m pytest -q experiments/tournament_teacher
           tests/test_l1_canonical_registry.py tests/test_l1_canonical_runtime.py
           tests/test_l1_canonical_runtime_v3.py tests/test_l1_canonical_runtime_v4.py
           tests/test_l1_runtime_coverage_audit.py tests/test_knowledge_read_api.py
       - name: Before and after, explanation and provenance
         run: python -m experiments.tournament_teacher.demo
+      - name: Independent exhaustive choice-policy review
+        run: python -m experiments.tournament_teacher.independent_review
+      - name: All fourteen decisions with hands and source-linked results
+        run: python -m experiments.tournament_teacher.coverage > tournament-teacher-evidence.json
+      - name: Preserve synthetic decision evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tournament-teacher-evidence-${{ github.sha }}
+          path: tournament-teacher-evidence.json
+          retention-days: 7

@@ -22,7 +22,10 @@
     "source_location": "стр. 2, Открытие 1NT. Первые ответы",
     "original_excerpt": "2♣ = Стейман, вопрос о 4-карточных мажорах",
     "teacher_excerpt": "8+ 2бк=8-9; обязательна",
-    "meaning": "После 1NT: 2♣ — Стейман, от 8 очков, обязательна хотя бы одна четвёрка в мажоре. Соглашение с пятёркой в мажоре не уточнено."
+    "meaning": "После 1NT: 2♣ — Стейман, от 8 очков, обязательна хотя бы одна четвёрка в мажоре. Соглашение с пятёркой в мажоре не уточнено.",
+    "decision_ids": [
+      "TDEC-20261003-003"
+    ]
   },
   {
     "source_id": "SRC-0096",
@@ -47,7 +50,10 @@
     "source_location": "стр. 2, Открытие 1NT. Первые ответы",
     "original_excerpt": "2NT = ИНВ к 3NT",
     "teacher_excerpt": "8+ 2бк=8-9",
-    "meaning": "После 1NT: прямой 2NT — 8–9 очков, инвит к 3NT. Дополнительные ограничения формы и приоритет перед Стейманом не заданы."
+    "meaning": "После 1NT: прямой 2NT — 8–9 очков, инвит к 3NT. Дополнительные ограничения формы и приоритет перед Стейманом не заданы.",
+    "decision_ids": [
+      "TDEC-20261003-003"
+    ]
   },
   {
     "source_id": "SRC-0096",
@@ -72,7 +78,10 @@
     "source_location": "стр. 2, Открытие 1NT. Первые ответы",
     "original_excerpt": "3♥/♠ = ФГ, «5431», краткость, от 5/4 в минорах",
     "teacher_excerpt": "Да. Именно так.",
-    "meaning": "После 1NT: 3♥ — ФГ, 5431, синглет ♥; миноры 5♣–4♦ или 4♣–5♦. Порог очков не задан."
+    "meaning": "После 1NT: 3♥ — ФГ, 5431, синглет ♥; миноры 5♣–4♦ или 4♣–5♦. Порог очков не задан.",
+    "decision_ids": [
+      "TDEC-20261003-002"
+    ]
   },
   {
     "source_id": "SRC-0096",
@@ -97,7 +106,10 @@
     "source_location": "стр. 2, Открытие 1NT. Первые ответы",
     "original_excerpt": "3♥/♠ = ФГ, «5431», краткость, от 5/4 в минорах",
     "teacher_excerpt": "Да. Именно так.",
-    "meaning": "После 1NT: 3♠ — ФГ, 5431, синглет ♠; миноры 5♣–4♦ или 4♣–5♦. Порог очков не задан."
+    "meaning": "После 1NT: 3♠ — ФГ, 5431, синглет ♠; миноры 5♣–4♦ или 4♣–5♦. Порог очков не задан.",
+    "decision_ids": [
+      "TDEC-20261003-002"
+    ]
   },
   {
     "source_id": "SRC-0096",
@@ -125,7 +137,10 @@
     "original_excerpt": "2NT = 15-17, 5332",
     "teacher_excerpt": "5332 с минором. 5m332; да",
     "meaning": "С 5♥332 и 15–17 очками открываем 1♥, после ответа 1NT заявляем 2NT. Форсирующий статус не указан.",
-    "activation_note": "source_conflict_resolved; activation_status_pending_separate_verification"
+    "activation_note": "source_conflict_resolved; activation_status_pending_separate_verification",
+    "decision_ids": [
+      "TDEC-20261002-008"
+    ]
   },
   {
     "source_id": "SRC-0096",
@@ -153,6 +168,764 @@
     "original_excerpt": "2NT = 15-17, 5332",
     "teacher_excerpt": "5332 с минором. 5m332; да",
     "meaning": "С 5♠332 и 15–17 очками открываем 1♠, после ответа 1NT заявляем 2NT. Форсирующий статус не указан.",
-    "activation_note": "source_conflict_resolved; activation_status_pending_separate_verification"
+    "activation_note": "source_conflict_resolved; activation_status_pending_separate_verification",
+    "decision_ids": [
+      "TDEC-20261002-008"
+    ]
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1D-1NT-REBID-2H",
+    "fact_id": "FACT-TOUR-1D-1NT-OPENER-REBIDS",
+    "sheet_row": 205,
+    "auction": [
+      "1D",
+      "PASS",
+      "1NT",
+      "PASS"
+    ],
+    "call": "2H",
+    "predicate": "bounds",
+    "shape_constraints": {
+      "H": {
+        "eq": 4
+      },
+      "D": {
+        "min": 5
+      }
+    },
+    "points_min": 18,
+    "points_max": null,
+    "forcing_status": "FG",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-001",
+    "decision_ids": [
+      "TDEC-20261002-001"
+    ],
+    "source_location": "DOCX/PDF, стр. 2, верхний ряд, колонка 2, блок «1♦ - 1NT», строки реверсов 2♥ и 2♠",
+    "original_excerpt": "2♥ ФГ 18+, 4♥, 5♣+ (реверс)",
+    "teacher_excerpt": "Да",
+    "meaning": "Реверс 2♥.",
+    "confirmed_conditions": "school_points>=18; H=4; D>=5; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1D-1NT-REBID-2S",
+    "fact_id": "FACT-TOUR-1D-1NT-OPENER-REBIDS",
+    "sheet_row": 206,
+    "auction": [
+      "1D",
+      "PASS",
+      "1NT",
+      "PASS"
+    ],
+    "call": "2S",
+    "predicate": "bounds",
+    "shape_constraints": {
+      "S": {
+        "eq": 4
+      },
+      "D": {
+        "min": 5
+      }
+    },
+    "points_min": 18,
+    "points_max": null,
+    "forcing_status": "FG",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-001",
+    "decision_ids": [
+      "TDEC-20261002-001"
+    ],
+    "source_location": "DOCX/PDF, стр. 2, верхний ряд, колонка 2, блок «1♦ - 1NT», строки реверсов 2♥ и 2♠",
+    "original_excerpt": "2♠ ФГ 18+, 4♠, 5♣+ (реверс)",
+    "teacher_excerpt": "Да",
+    "meaning": "Реверс 2♠.",
+    "confirmed_conditions": "school_points>=18; S=4; D>=5; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1D-1NT-REBID-PASS",
+    "fact_id": "FACT-TOUR-1D-1NT-OPENER-REBIDS",
+    "sheet_row": 603,
+    "auction": [
+      "1D",
+      "PASS",
+      "1NT",
+      "PASS"
+    ],
+    "call": "PASS",
+    "predicate": "bounds",
+    "shape_constraints": {},
+    "points_min": 12,
+    "points_max": 14,
+    "forcing_status": "NF",
+    "rule_status": "DRAFT",
+    "decision_id": "TDEC-20261002-002",
+    "decision_ids": [
+      "TDEC-20261002-002"
+    ],
+    "source_location": "DOCX/PDF, стр. 2, верхний ряд, колонка 2, блок «1♦ - 1NT», строки реверсов 2♥ и 2♠",
+    "original_excerpt": "1NT НФ 12-14",
+    "teacher_excerpt": "Вместо 1nt. пас",
+    "meaning": "После 1♦–1NT: PASS, 12–14 очков, НФ. Форма и приоритет паса не заданы; диапазон не достаточен для выбора.",
+    "confirmed_conditions": "school_points>=12; school_points<=14; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1S-RSP-2C",
+    "fact_id": "FACT-TOUR-1S-FIRST-RESPONSES",
+    "sheet_row": 254,
+    "auction": [
+      "1S",
+      "PASS"
+    ],
+    "call": "2C",
+    "predicate": "bounds",
+    "shape_constraints": {
+      "C": {
+        "min": 4
+      }
+    },
+    "points_min": 11,
+    "points_max": null,
+    "forcing_status": "F1",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-003",
+    "decision_ids": [
+      "TDEC-20261002-003"
+    ],
+    "source_location": "DOCX/PDF, стр. 2, второй ряд, колонка 3, блок «Открытие 1♠. Первые ответы», строка «2♦/♥ = Ф1, 11+, 4♣/♦+»",
+    "original_excerpt": "2♦/♥ Ф1 11+, 4♣/♦+",
+    "teacher_excerpt": "Да",
+    "meaning": "После 1♠: 2♣ — Ф1, 11+ очков, минимум четыре трефы; отдельная 2♥ сохранена.",
+    "confirmed_conditions": "school_points>=11; C>=4; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1S-RSP-2D",
+    "fact_id": "FACT-TOUR-1S-FIRST-RESPONSES",
+    "sheet_row": 255,
+    "auction": [
+      "1S",
+      "PASS"
+    ],
+    "call": "2D",
+    "predicate": "bounds",
+    "shape_constraints": {
+      "D": {
+        "min": 4
+      }
+    },
+    "points_min": 11,
+    "points_max": null,
+    "forcing_status": "F1",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-003",
+    "decision_ids": [
+      "TDEC-20261002-003"
+    ],
+    "source_location": "DOCX/PDF, стр. 2, второй ряд, колонка 3, блок «Открытие 1♠. Первые ответы», строка «2♦/♥ = Ф1, 11+, 4♣/♦+»",
+    "original_excerpt": "2♦/♥ Ф1 11+, 4♣/♦+",
+    "teacher_excerpt": "Да",
+    "meaning": "После 1♠: 2♦ — Ф1, 11+ очков, минимум четыре бубны; отдельная 2♥ сохранена.",
+    "confirmed_conditions": "school_points>=11; D>=4; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1S-RSP-2H",
+    "fact_id": "FACT-TOUR-1S-FIRST-RESPONSES",
+    "sheet_row": 256,
+    "auction": [
+      "1S",
+      "PASS"
+    ],
+    "call": "2H",
+    "predicate": "bounds",
+    "shape_constraints": {
+      "H": {
+        "min": 5
+      }
+    },
+    "points_min": 11,
+    "points_max": null,
+    "forcing_status": "F1",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-003",
+    "decision_ids": [
+      "TDEC-20261002-003"
+    ],
+    "source_location": "PDF, page 2, second row, column 3, opening 1S first responses, separate 2H row",
+    "original_excerpt": "2♥ Ф1 11+, 5♥+",
+    "teacher_excerpt": "Да",
+    "meaning": "После 1♠: отдельная 2♥ — Ф1, 11+ очков, минимум пять червей; не объединяется с исправленной строкой миноров.",
+    "confirmed_conditions": "school_points>=11; H>=5; point_method=UNRESOLVED_SCHOOL_POINT_METHOD",
+    "companion_preserved": true,
+    "points_note": "Source row says HCP, but this experiment uses only explicitly synthetic school-point premises; no school counting method is asserted.",
+    "source_row_conditions": "HCP>=11; H>=5"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1H-1NT-REBID-2S",
+    "fact_id": "FACT-TOUR-1H-1NT-OPENER-REBIDS",
+    "sheet_row": 247,
+    "auction": [
+      "1H",
+      "PASS",
+      "1NT",
+      "PASS"
+    ],
+    "call": "2S",
+    "predicate": "bounds",
+    "shape_constraints": {
+      "S": {
+        "eq": 4
+      },
+      "H": {
+        "min": 5
+      }
+    },
+    "points_min": 18,
+    "points_max": null,
+    "forcing_status": "FG",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-004",
+    "decision_ids": [
+      "TDEC-20261002-004"
+    ],
+    "source_location": "DOCX/PDF, стр. 2, блок «1♥ - 1NT», второй ряд, колонка 2, строка «2♠ = ФГ, 18+, 5332 (реверс)»",
+    "original_excerpt": "2♠ ФГ 18+, 5332 (реверс)",
+    "teacher_excerpt": "4-ка пик; Да",
+    "meaning": "После 1♥–1NT: 2♠ — реверс, ровно четыре пики, минимум пять червей, 18+ очков, форсинг до гейма (ФГ).",
+    "confirmed_conditions": "school_points>=18; S=4; H>=5; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1S-1NT-REBID-2S",
+    "fact_id": "FACT-TOUR-1S-1NT-OPENER-REBIDS",
+    "sheet_row": 267,
+    "auction": [
+      "1S",
+      "PASS",
+      "1NT",
+      "PASS"
+    ],
+    "call": "2S",
+    "predicate": "bounds",
+    "shape_constraints": {
+      "S": {
+        "min": 6
+      }
+    },
+    "points_min": 12,
+    "points_max": 15,
+    "forcing_status": "NF",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-005",
+    "decision_ids": [
+      "TDEC-20261002-005"
+    ],
+    "source_location": "DOCX/PDF, стр. 2, блок «1♠ - 1NT», второй ряд, колонка 4, строка 2♠",
+    "original_excerpt": "2♠ НФ 12-14, 6♠+",
+    "teacher_excerpt": "Да",
+    "meaning": "Нефорсирующий повтор 2♠.",
+    "confirmed_conditions": "school_points 12-15; S>=6; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1S-1NT-REBID-3S",
+    "fact_id": "FACT-TOUR-1S-1NT-OPENER-REBIDS",
+    "sheet_row": 272,
+    "auction": [
+      "1S",
+      "PASS",
+      "1NT",
+      "PASS"
+    ],
+    "call": "3S",
+    "predicate": "bounds",
+    "shape_constraints": {
+      "S": {
+        "min": 6
+      }
+    },
+    "points_min": 16,
+    "points_max": 17,
+    "forcing_status": "INV",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-005",
+    "decision_ids": [
+      "TDEC-20261002-005"
+    ],
+    "source_location": "PDF, page 2, second row, column 4, 1S-1NT, 3S row",
+    "original_excerpt": "3♠ ИНВ 16-17, 6♠+",
+    "teacher_excerpt": "Да",
+    "meaning": "Инвит 3♠.",
+    "confirmed_conditions": "school_points 16-17; S>=6; point_method=UNRESOLVED_SCHOOL_POINT_METHOD",
+    "companion_preserved": true,
+    "points_note": "Source row says HCP, but this experiment uses only explicitly synthetic school-point premises; no school counting method is asserted.",
+    "source_row_conditions": "HCP 16-17; S>=6"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1C-1H-REBID-2C",
+    "fact_id": "FACT-TOUR-1C-1H-OPENER-REBIDS",
+    "sheet_row": 85,
+    "auction": [
+      "1C",
+      "PASS",
+      "1H",
+      "PASS"
+    ],
+    "call": "2C",
+    "predicate": "club_repeat",
+    "shape_constraints": {
+      "H": {
+        "max": 3
+      },
+      "S": {
+        "max": 3
+      }
+    },
+    "points_min": 12,
+    "points_max": 15,
+    "forcing_status": "NF",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-006",
+    "decision_ids": [
+      "TDEC-20261002-006"
+    ],
+    "source_location": "DOCX/PDF, стр. 1, блок «1♣ - 1♥», второй ряд, колонка 3, строки 2♣ и 3♣",
+    "original_excerpt": "2♣ НФ 12-17, 6♣+ или 5♣+4♦, нет 4♥/♠",
+    "teacher_excerpt": "12-15 и 16-17",
+    "meaning": "Нефорсирующий ребид 2♣.",
+    "confirmed_conditions": "school_points 12-15; (C>=6 OR (C>=5 and D=4)); H<4; S<4; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1C-1H-REBID-3C",
+    "fact_id": "FACT-TOUR-1C-1H-OPENER-REBIDS",
+    "sheet_row": 90,
+    "auction": [
+      "1C",
+      "PASS",
+      "1H",
+      "PASS"
+    ],
+    "call": "3C",
+    "predicate": "bounds",
+    "shape_constraints": {
+      "C": {
+        "min": 6
+      }
+    },
+    "points_min": 16,
+    "points_max": 17,
+    "forcing_status": "NF",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-006",
+    "decision_ids": [
+      "TDEC-20261002-006"
+    ],
+    "source_location": "DOCX/PDF, стр. 1, блок «1♣ - 1♥», второй ряд, колонка 3, строки 2♣ и 3♣",
+    "original_excerpt": "3♣ НФ 15-17, 6♣+ → все натурально, ФГ",
+    "teacher_excerpt": "12-15 и 16-17",
+    "meaning": "Ребид 3♣.",
+    "confirmed_conditions": "school_points 16-17; C>=6; point_method=UNRESOLVED_SCHOOL_POINT_METHOD",
+    "continuation_note": "После продолжения: все натурально, ФГ. Не меняет NF самой заявки; выбор продолжения не реализован."
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1C-1H-REBID-1S",
+    "fact_id": "FACT-TOUR-1C-1H-OPENER-REBIDS",
+    "sheet_row": 83,
+    "auction": [
+      "1C",
+      "PASS",
+      "1H",
+      "PASS"
+    ],
+    "call": "1S",
+    "predicate": "bounds",
+    "shape_constraints": {
+      "S": {
+        "eq": 4
+      },
+      "H": {
+        "max": 3
+      }
+    },
+    "points_min": 12,
+    "points_max": 22,
+    "forcing_status": "F1",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-007",
+    "decision_ids": [
+      "TDEC-20261002-007"
+    ],
+    "source_location": "DOCX/PDF, стр. 1, блок «1♣ - 1♥», второй ряд, колонка 3, строки 2♣ и 3♣",
+    "original_excerpt": "1♠ НФ 12-15, 4♠, нет 4♥",
+    "teacher_excerpt": "Должно быть12-22; Да",
+    "meaning": "Форсирующий на один круг ребид 1♠ после 1♣–1♥: 12–22 очка, ровно 4♠, нет четырёх ♥.",
+    "confirmed_conditions": "school_points 12-22; S=4; H<4; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-OPEN-1NT",
+    "fact_id": "FACT-TOUR-OPEN-1NT",
+    "sheet_row": 9,
+    "auction": [],
+    "call": "1NT",
+    "predicate": "nt_open",
+    "shape_constraints": {},
+    "points_min": 15,
+    "points_max": 17,
+    "forcing_status": null,
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-008",
+    "decision_ids": [
+      "TDEC-20261002-008"
+    ],
+    "source_location": "DOCX/PDF, стр. 1, раздел «Открытия», строка 1NT",
+    "original_excerpt": "1NT = 15-17 любые 5332, 5m422, 6m322",
+    "teacher_excerpt": "5332 с минором. 5m332; да",
+    "meaning": "Открытие 1NT: 15–17 очков; подтверждены 5m332, сохранены 5m422/6m322; 5M332 исключён. Другие формы, включая 4333/4432, не подтверждены и не исключены.",
+    "confirmed_conditions": "unopposed opening"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-OPEN-1H",
+    "fact_id": "FACT-TOUR-OPEN-1MAJOR",
+    "sheet_row": 7,
+    "auction": [],
+    "call": "1H",
+    "predicate": "major_open",
+    "shape_constraints": {
+      "H": {
+        "min": 5
+      },
+      "S": {
+        "max": 4
+      }
+    },
+    "points_min": 12,
+    "points_max": 22,
+    "forcing_status": null,
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-008",
+    "decision_ids": [
+      "TDEC-20261002-008"
+    ],
+    "source_location": "DOCX/PDF, стр. 1, раздел «Открытия»",
+    "original_excerpt": "1♥/♠ = 12-22, от 5♥/♠, 1♥ отрицает 5♠",
+    "teacher_excerpt": "5332 с минором. 5m332; да",
+    "meaning": "Открытие 1♥.",
+    "confirmed_conditions": "unopposed opening"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-OPEN-1S",
+    "fact_id": "FACT-TOUR-OPEN-1MAJOR",
+    "sheet_row": 8,
+    "auction": [],
+    "call": "1S",
+    "predicate": "major_open",
+    "shape_constraints": {
+      "S": {
+        "min": 5
+      }
+    },
+    "points_min": 12,
+    "points_max": 22,
+    "forcing_status": null,
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-008",
+    "decision_ids": [
+      "TDEC-20261002-008"
+    ],
+    "source_location": "DOCX/PDF, стр. 1, раздел «Открытия»",
+    "original_excerpt": "1♥/♠ = 12-22, от 5♥/♠, 1♥ отрицает 5♠",
+    "teacher_excerpt": "5332 с минором. 5m332; да",
+    "meaning": "Открытие 1♠.",
+    "confirmed_conditions": "unopposed opening"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-OPEN-2NT",
+    "fact_id": "FACT-TOUR-OPEN-2NT",
+    "sheet_row": 14,
+    "auction": [],
+    "call": "2NT",
+    "predicate": "nt_open",
+    "shape_constraints": {},
+    "points_min": 20,
+    "points_max": 22,
+    "forcing_status": null,
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-009",
+    "decision_ids": [
+      "TDEC-20261002-009"
+    ],
+    "source_location": "DOCX/PDF, стр. 1, раздел «Открытия», строка 2NT",
+    "original_excerpt": "2NT = 20-22 любые 5332, 5m422, 6m322",
+    "teacher_excerpt": "тоже",
+    "meaning": "Открытие 2NT: 20–22 очков; подтверждены 5m332, сохранены 5m422/6m322; 5M332 исключён. Другие формы, включая 4333/4432, не подтверждены и не исключены.",
+    "confirmed_conditions": "unopposed opening"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1D-1H-1S-RSP-3C",
+    "fact_id": "FACT-TOUR-1D-1H-1S-RESPONDER",
+    "sheet_row": 178,
+    "auction": [
+      "1D",
+      "PASS",
+      "1H",
+      "PASS",
+      "1S",
+      "PASS"
+    ],
+    "call": "3C",
+    "predicate": "bounds",
+    "shape_constraints": {
+      "H": {
+        "eq": 4
+      },
+      "C": {
+        "min": 5
+      }
+    },
+    "points_min": 13,
+    "points_max": null,
+    "forcing_status": "FG",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-010",
+    "decision_ids": [
+      "TDEC-20261002-010"
+    ],
+    "source_location": "DOCX/PDF, стр. 1, блок «1♦–1♥–1♠»",
+    "original_excerpt": "3♣ ФГ 13+, 4♥/5♣+",
+    "teacher_excerpt": "да",
+    "meaning": "3♣ — ФГ, 13+ очков, одновременно ровно 4♥ и минимум 5♣. TDEC-20261002-010.",
+    "confirmed_conditions": "school_points>=13; H=4; C>=5; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-1D-1H-1NT-RSP-3C",
+    "fact_id": "FACT-TOUR-1D-1H-1NT-RESPONDER",
+    "sheet_row": 188,
+    "auction": [
+      "1D",
+      "PASS",
+      "1H",
+      "PASS",
+      "1NT",
+      "PASS"
+    ],
+    "call": "3C",
+    "predicate": "bounds",
+    "shape_constraints": {
+      "H": {
+        "eq": 4
+      },
+      "C": {
+        "min": 5
+      }
+    },
+    "points_min": 13,
+    "points_max": null,
+    "forcing_status": "FG",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261002-010",
+    "decision_ids": [
+      "TDEC-20261002-010"
+    ],
+    "source_location": "DOCX/PDF, стр. 1, блок «1♦–1♥–1NT»",
+    "original_excerpt": "3♣ ФГ 13+, 4♥/5♣",
+    "teacher_excerpt": "да",
+    "meaning": "3♣ — ФГ, 13+ очков, одновременно ровно 4♥ и минимум 5♣. TDEC-20261002-010.",
+    "confirmed_conditions": "school_points>=13; H=4; C>=5; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-2S-RSP-3C",
+    "fact_id": "FACT-TOUR-2S-FIRST-RESPONSES",
+    "sheet_row": 341,
+    "auction": [
+      "2S",
+      "PASS"
+    ],
+    "call": "3C",
+    "predicate": "weak_minor",
+    "shape_constraints": {
+      "C": {
+        "min": 5
+      }
+    },
+    "points_min": 17,
+    "points_max": null,
+    "forcing_status": "FG",
+    "rule_status": "ACTIVE",
+    "decision_id": "TDEC-20261003-001",
+    "decision_ids": [
+      "TDEC-20261002-011",
+      "TDEC-20261003-001"
+    ],
+    "source_location": "DOCX/PDF, стр. 2, блок «Открытие 2♠. Первые ответы»",
+    "original_excerpt": "3♣ ФГ 17+, «5♣/♦+ → ценности»",
+    "teacher_excerpt": "Убери про ценности. Три трефы, три бубна. Да.",
+    "meaning": "После слабого открытия 2♠: 3♣ — ФГ, от 17 очков, минимум 5♣; заявка показывает свою масть.",
+    "confirmed_conditions": "school_points>=17; C>=5; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
+  },
+  {
+    "source_id": "SRC-0096",
+    "source_url": "https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view",
+    "rules_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300003",
+    "decisions_url": "https://docs.google.com/spreadsheets/d/1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo/edit#gid=300004",
+    "source_checked_at": "2026-10-04",
+    "sync_status": "DRIVE_CANON_ONLY",
+    "explicit_choice": false,
+    "rule_id": "RULE-TOUR-2S-RSP-3D",
+    "fact_id": "FACT-TOUR-2S-FIRST-RESPONSES",
+    "sheet_row": 602,
+    "auction": [
+      "2S",
+      "PASS"
+    ],
+    "call": "3D",
+    "predicate": "weak_minor",
+    "shape_constraints": {
+      "D": {
+        "min": 5
+      }
+    },
+    "points_min": 17,
+    "points_max": null,
+    "forcing_status": "FG",
+    "rule_status": "DRAFT",
+    "decision_id": "TDEC-20261003-001",
+    "decision_ids": [
+      "TDEC-20261002-011",
+      "TDEC-20261003-001"
+    ],
+    "source_location": "DOCX/PDF, стр. 2, блок «Открытие 2♠. Первые ответы»",
+    "original_excerpt": "3♣ ФГ 17+, «5♣/♦+ → ценности»",
+    "teacher_excerpt": "Убери про ценности. Три трефы, три бубна. Да.",
+    "meaning": "После слабого открытия 2♠: 3♦ — ФГ, от 17 очков, минимум 5♦; заявка показывает свою масть.",
+    "confirmed_conditions": "school_points>=17; D>=5; point_method=UNRESOLVED_SCHOOL_POINT_METHOD"
   }
 ]
