@@ -77,7 +77,7 @@ _SOURCE_FACTS_SQL = """
           )
       )
       AND f.review_status = 'APPROVED_SOURCE'
-      AND (%s IS NULL OR f.stable_key = %s)
+      AND (%s::text IS NULL OR f.stable_key = %s)
     GROUP BY f.fact_id, src.source_id
     ORDER BY f.stable_key
     LIMIT %s OFFSET %s
@@ -129,7 +129,7 @@ _KNOWLEDGE_VERSIONS_SQL = """
     WHERE school.stable_name = %s
       AND kv.authority_class = %s
       AND COALESCE(kv.bidding_system_key, 'SYSTEM_NEUTRAL') = %s
-      AND (%s IS NULL OR ki.stable_key = %s)
+      AND (%s::text IS NULL OR ki.stable_key = %s)
       {lifecycle_filter}
     ORDER BY ki.stable_key, kv.version_no DESC
     LIMIT %s OFFSET %s
