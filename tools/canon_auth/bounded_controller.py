@@ -216,7 +216,9 @@ class BoundedController:
             self.deadline()
             return {"status":"BOUNDED_ACCEPTANCE", "contract_hash":self.launch.fingerprint,
                 "requests":self.calls,"receipts":list(self.receipts),"phase_hash":final,
-                "normal_rows":40,"original_expiry":original,"evidence_class":self.observer.evidence_class}
+                "normal_rows":40,"original_expiry":original,"evidence_class":self.observer.evidence_class,
+                "unconditional_revoke_at":self.launch.public()["stage_until"],
+                "pilot_24h_admission":False}
         except BaseException:
             if mutation_possible:
                 try:

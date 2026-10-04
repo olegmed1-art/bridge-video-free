@@ -303,6 +303,8 @@ def test_real_bounded_controller(fixture):
         ctrl,obs=controller(fixture,client)
         result=ctrl.run()
         assert result["status"]=="BOUNDED_ACCEPTANCE" and result["normal_rows"]==40
+        assert result["pilot_24h_admission"] is False
+        assert result["unconditional_revoke_at"]==ctrl.launch.public()["stage_until"]
         assert result["requests"]==9 and len(result["receipts"])==9
         assert len({r["request_id"] for r in result["receipts"]})==9
         with pytest.raises(Refused,match="single_controller"):
