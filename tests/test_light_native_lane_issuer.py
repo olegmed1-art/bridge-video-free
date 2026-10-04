@@ -184,8 +184,8 @@ def test_driver_preflight_uses_live_readonly_sources(request_bytes,monkeypatch,f
         seen.append('head')
         if fault=='head':raise RuntimeError('head changed')
     monkeypatch.setattr(pilot,'observed_target',observed)
-    def previous(c,p):
-        assert c.read_only and p['predecessor']==r.policy['predecessor']
+    def previous(c,p,*,readonly):
+        assert readonly is True and c.read_only and p['predecessor']==r.policy['predecessor']
         seen.append('predecessor')
         if fault=='predecessor':raise RuntimeError('predecessor changed')
     monkeypatch.setattr(owner,'verify_previous',previous)

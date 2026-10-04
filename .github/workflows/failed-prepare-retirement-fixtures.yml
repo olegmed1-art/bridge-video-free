@@ -14,7 +14,7 @@ jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == '1def3a71be13e6cfdd2ab45186b23e0b2ffd04c0' &&
+      github.event.before == '3960e308d37c49baf33bd0b32750072f7eff7361' &&
       github.run_attempt == 1 &&
       github.event.head_commit.message == 'ci: verify failed prepare retirement protocol'
     runs-on: ubuntu-24.04
@@ -58,11 +58,14 @@ jobs:
               (context/wheel['filename']).write_bytes(raw)
               requirements.append(wheel['name']+'=='+wheel['version']+' --hash=sha256:'+wheel['sha256'])
           (context/'requirements.txt').write_text('\n'.join(requirements)+'\n')
-          (context/'Dockerfile').write_text('FROM '+os.environ['PYTHON_IMAGE']+'\nCOPY . /wheels/\nRUN python -m pip install --no-cache-dir --disable-pip-version-check --no-index --find-links=/wheels --only-binary=:all: --no-deps --require-hashes -r /wheels/requirements.txt && python -m pip check && ln -sf /usr/local/bin/python3 /usr/bin/python3\n')
+          dockerfile = 'FROM '+os.environ['PYTHON_IMAGE']+'\n'
+          dockerfile += 'RUN rm -f /etc/apt/sources.list.d/debian.sources && echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260930T000000Z bookworm main" > /etc/apt/sources.list && echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260930T000000Z bookworm-security main" >> /etc/apt/sources.list && apt-get -o Acquire::Retries=0 -o Acquire::https::Timeout=30 update && apt-get -y --no-install-recommends install git && rm -rf /var/lib/apt/lists/*\n'
+          dockerfile += 'COPY . /wheels/\nRUN python -m pip install --no-cache-dir --disable-pip-version-check --no-index --find-links=/wheels --only-binary=:all: --no-deps --require-hashes -r /wheels/requirements.txt && python -m pip check && ln -sf /usr/local/bin/python3 /usr/bin/python3\n'
+          (context/'Dockerfile').write_text(dockerfile)
           print('EXACT_SOURCE', sha, 'ARCHIVE_SHA256', hashlib.sha256(source).hexdigest())
           PY
           docker pull "$PYTHON_IMAGE"
-          docker build --network none --pull=false --tag retirement-offline "$RUNNER_TEMP/retirement-dependencies"
+          docker build --pull=false --tag retirement-offline "$RUNNER_TEMP/retirement-dependencies"
       - name: Offline Linux regression and real-root fault tests
         shell: bash
         run: |
@@ -73,6 +76,7 @@ jobs:
             --security-opt no-new-privileges:true --pids-limit 192 --memory 1g --cpus 2 \
             --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=256m \
             --tmpfs /var/tmp:rw,nosuid,nodev,mode=1777,size=32m \
+            --tmpfs /fixture-data:rw,nosuid,nodev,mode=0700,size=128m \
             --interactive --entrypoint /usr/bin/env retirement-offline \
             -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp PYTHONDONTWRITEBYTECODE=1 \
             PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 EXPECTED_SHA="$GITHUB_SHA" \
@@ -101,7 +105,7 @@ jobs:
                  ("controller","cycle","execution","feed","install","issuer","owner","run_guard")]
           tests += ["tests/test_light_native_pilot_intake.py"]
           tests += sorted(str(p.relative_to(root)) for p in (root/"tests").glob("test_light_native_retirement*.py"))
-          code=pytest.main(["-q","-ra","-p","no:cacheprovider","--noconftest","-c","/dev/null",
+          code=pytest.main(["-q","-ra","-p","no:cacheprovider","--noconftest","-c","/dev/null","--basetemp=/fixture-data/tests",
                             "--rootdir="+str(root),"--junitxml=/tmp/retirement.xml",*tests])
           cases=ET.parse("/tmp/retirement.xml").getroot().findall(".//testcase")
           ids={(x.get("classname"),x.get("name")) for x in cases}
