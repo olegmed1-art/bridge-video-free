@@ -1,0 +1,88 @@
+--- a/.github/workflows/native-maintenance-owner-attest.yml
++++ b/.github/workflows/native-maintenance-owner-attest.yml
+@@ -11,8 +11,22 @@
+       - 'tests/test_native_maintenance_owner_attest.py'
+       - 'tests/test_native_maintenance_registry_scope.py'
+       - 'tests/test_native_cli_connection_parameters.py'
++      - 'tools/canon_auth/owner_probe.py'
++      - 'tools/canon_auth/resident_preflight.py'
++      - 'tools/canon_auth/test_owner_probe.py'
++      - 'tools/canon_auth/test_resident.py'
+   workflow_dispatch:
+     inputs:
++      probe_scope:
++        description: Explicit read-only inventory scope
++        required: true
++        type: choice
++        default: maintenance
++        options: [maintenance, canon-readonly]
++      expected_probe_sha:
++        description: Reviewed exact test-branch SHA for canon-readonly; unused for maintenance
++        required: false
++        type: string
+       expected_main_sha:
+         description: Exact reviewed main for read-only owner-path verification
+         required: true
+@@ -24,6 +38,7 @@
+ jobs:
+   contract:
+     runs-on: ubuntu-24.04
++    timeout-minutes: 5
+     steps:
+       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+         with:
+@@ -31,7 +46,8 @@
+       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+         with:
+           python-version: '3.12'
+-      - run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
++      - run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4' pytest==8.4.2 fastapi==0.141.1
++      - run: python -m pytest -q tools/canon_auth/test_owner_probe.py tools/canon_auth/test_resident.py
+       - run: python -m unittest discover -s tests -p 'test_native_maintenance_owner_attest.py' -v
+       - run: python -m unittest discover -s tests -p 'test_native_maintenance_registry_scope.py' -v
+       - run: python -m unittest discover -s tests -p 'test_native_cli_connection_parameters.py' -v
+@@ -41,7 +57,8 @@
+     if: >-
+       github.repository == 'olegmed1-art/bridge-video-free' &&
+       github.ref == 'refs/heads/main' && github.actor == github.repository_owner &&
+-      github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha
++      github.event_name == 'workflow_dispatch' && inputs.probe_scope == 'maintenance' &&
++      inputs.expected_main_sha == github.sha
+     environment: database-production
+     runs-on: ubuntu-24.04
+     timeout-minutes: 3
+@@ -65,3 +82,34 @@
+           GH_TOKEN: ${{ github.token }}
+           EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
+         run: python -m ops.native_maintenance_registry_scope
++
++  canon-owner-probe:
++    needs: contract
++    if: >-
++      github.repository == 'olegmed1-art/bridge-video-free' &&
++      github.ref == 'refs/heads/test/canon-acceptance-cf6091-20261004' &&
++      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
++      github.event_name == 'workflow_dispatch' && inputs.probe_scope == 'canon-readonly' &&
++      inputs.expected_probe_sha == github.sha &&
++      inputs.expected_main_sha == '711ddd648fa74f2b903f9d7127dadc412f94b277'
++    environment: database-production
++    runs-on: ubuntu-24.04
++    timeout-minutes: 3
++    steps:
++      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
++        with:
++          ref: ${{ github.sha }}
++          fetch-depth: 0
++          persist-credentials: false
++      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
++        with:
++          python-version: '3.12'
++      - run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
++      - name: Inventory existing owner connection without writes
++        env:
++          NATIVE_OWNER_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL || secrets.NEON_DATABASE_URL }}
++          GH_TOKEN: ${{ github.token }}
++          EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
++          EXPECTED_PROBE_SHA: ${{ inputs.expected_probe_sha }}
++          OWNER_PROBE_SCOPE: ${{ inputs.probe_scope }}
++        run: python -m tools.canon_auth.owner_probe

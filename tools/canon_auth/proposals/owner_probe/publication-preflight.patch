@@ -1,0 +1,14 @@
+--- a/tools/canon_auth/preflight.py
++++ b/tools/canon_auth/preflight.py
+@@ -4,0 +5 @@
++import hashlib
+@@ -12,0 +14,3 @@
++OWNER_PROBE_WORKFLOW = ".github/workflows/native-maintenance-owner-attest.yml"
++# Exact parent-reviewed manual-only proposal; no blanket workflow exception.
++OWNER_PROBE_WORKFLOW_SHA256 = "d75c5dd51ee3362412cff8c96883e413d92dee4ac1f81f8013925788df62fd59"
+@@ -32 +36,4 @@
+-    assert all(p == WORKFLOW or p in API_FILES or p.startswith("tools/canon_auth/") for p in changed)
++    assert all(p in {WORKFLOW, OWNER_PROBE_WORKFLOW} or p in API_FILES or p.startswith("tools/canon_auth/") for p in changed)
++    if OWNER_PROBE_WORKFLOW in changed:
++        owner_text = (root / OWNER_PROBE_WORKFLOW).read_text(encoding="utf-8")
++        assert hashlib.sha256(owner_text.encode()).hexdigest() == OWNER_PROBE_WORKFLOW_SHA256, "Owner workflow differs from exact reviewed read-only proposal"
