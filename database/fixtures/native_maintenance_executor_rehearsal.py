@@ -7,6 +7,8 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 import hashlib
+import json
+import re
 import tempfile
 from unittest.mock import patch
 
@@ -26,6 +28,18 @@ SOURCE = 'a' * 40
 ROW = dict(id=7, path='.github/workflows/ci-only-writer.yml', state='active',
            updated_at='2026-09-26T00:00:00Z')
 PLAN = dict(version=1, repository=api.REPOSITORY, source=SOURCE, workflows=[ROW])
+
+
+def diagnostic_chain(exc):
+    """CI-only bounded exception attribution, never arbitrary database messages."""
+    result, seen = [], set()
+    while exc is not None and id(exc) not in seen and len(result) < 8:
+        seen.add(id(exc))
+        code = exc.args[0] if len(exc.args) == 1 and isinstance(exc.args[0], str) else None
+        result.append({'type': type(exc).__name__,
+                       'code': code if code and re.fullmatch('[A-Z0-9_]{1,100}', code) else None})
+        exc = exc.__cause__ or exc.__context__
+    return result
 
 
 @dataclass
@@ -161,7 +175,11 @@ def main():
 
             def observed(expected):
                 with owned() as conn:
-                    engine.check(engine.inspect(conn, TARGET, manifest, manifest_digest) == expected, 'CI_DB_STATE')
+                    actual = engine.inspect(conn, TARGET, manifest, manifest_digest)
+                    if actual != expected:
+                        print(json.dumps({'rehearsal': 'CI_DB_STATE', 'expected': expected,
+                                          'actual': actual}), flush=True)
+                    engine.check(actual == expected, 'CI_DB_STATE')
                 engine.check(all(c.closed for c in CONNECTIONS), 'CI_CONNECTION_LEAK')
 
             # Exercise both legacy and staged paths: apply, rollback, lost return,
@@ -170,6 +188,9 @@ def main():
                      for operation, lost in [('apply', False), ('rollback', False),
                                              ('apply', True), ('rollback', False)]]
             for index, (staged, operation, lost) in enumerate(cases):
+                print(json.dumps({'rehearsal': 'CASE_START', 'index': index, 'staged': staged,
+                                  'operation': operation, 'lost_return': lost}), flush=True)
+                injected_loss = []
                 remote, authority, store = CIRemote(), CIAuthority(), CIMemoryStore()
                 registry = OwnedConnections(owned, TARGET)
                 authority.connections = registry
@@ -202,6 +223,7 @@ def main():
                                  'CI_REMOTE_INTENT_ORDER')
                     result = session.execute(*args, **kwargs)
                     if lost:
+                        injected_loss.append(result)
                         raise ConnectionError('CI_LOST_RETURN_AFTER_REAL_COMMIT')
                     return result
                 try:
@@ -235,6 +257,10 @@ def main():
                             try:
                                 dispatch(registry.open, route_root=route)
                             except executor.ExecutionError as exc:
+                                if injected_loss != [expected]:
+                                    print(json.dumps({'rehearsal': 'LOSS_NOT_INJECTED', 'index': index,
+                                                      'chain': diagnostic_chain(exc)}), flush=True)
+                                    raise AssertionError('CI_POST_COMMIT_LOSS_NOT_REACHED') from exc
                                 engine.check(exc.outcome == 'UNKNOWN', 'CI_LOST_RETURN_CLASSIFICATION')
                             else:
                                 raise AssertionError('CI_LOST_RETURN_ACCEPTED')
@@ -281,6 +307,10 @@ def main():
                             print('NATIVE_MAINTENANCE_CHECKPOINT_REAL_COMMIT_RECOVERY_PASS')
                         if staged:
                             print('NATIVE_MAINTENANCE_STAGED_REAL_SESSION_PASS')
+                except BaseException as exc:
+                    print(json.dumps({'rehearsal': 'CASE_FAILED', 'index': index,
+                                      'chain': diagnostic_chain(exc)}), flush=True)
+                    raise
                 finally:
                     for journal in journals:
                         journal.close()

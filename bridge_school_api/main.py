@@ -59,7 +59,12 @@ def require_api_token(authorization: str | None = Header(default=None)) -> None:
     prefix = "Bearer "
     if not authorization or not authorization.startswith(prefix):
         raise HTTPException(status_code=401, detail="missing bearer token")
-    if not secrets.compare_digest(authorization[len(prefix):], configured):
+    try:
+        matches = secrets.compare_digest(authorization[len(prefix):], configured)
+    except TypeError:
+        # compare_digest rejects non-ASCII strings; malformed headers fail closed.
+        matches = False
+    if not matches:
         raise HTTPException(status_code=403, detail="invalid bearer token")
 
 
