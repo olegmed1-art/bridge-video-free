@@ -28,7 +28,9 @@ def intent(env):
         raise v.Rejected("build_context_rejected")
     if env.get("VERCEL_ENV") != "production" or env.get("VERCEL_PROJECT_ID") != v.PROJECT:
         raise v.Rejected("build_context_rejected")
-    return dict(env, CANON_VALIDATION_INTENT=v.INTENT, CANON_READY_SHA=v.READY_SHA,
+    # Construct only public context; never iterate or copy the environment.
+    return dict(VERCEL_ENV="production", VERCEL_PROJECT_ID=v.PROJECT,
+                CANON_VALIDATION_INTENT=v.INTENT, CANON_READY_SHA=v.READY_SHA,
                 CANON_READY_DEPLOYMENT=v.DEPLOYMENT, CANON_READY_STATE="READY",
                 CANON_READY_ORIGIN=v.ORIGIN, CANON_READY_OBSERVED_AT=match[1])
 
@@ -143,6 +145,9 @@ def main():
         if env is None:
             print("canon-acceptance: inactive ordinary build")
             return 0
+        # Admission precedes the first credential access at the real entrypoint.
+        v.validate_intent(env, datetime.now(timezone.utc))
+        env["BRIDGE_API_TOKEN"] = os.environ.get("BRIDGE_API_TOKEN", "")
         signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(v.Rejected("build_deadline_exceeded")))
         signal.alarm(420)
         result = lifecycle(env)

@@ -20,7 +20,9 @@ READ ONLY, pinned pg_catalog and forced rollback. Privilege inspection confirms
 necessary teacher reads and absence of owned activation revoke UPDATE privileges.
 These checks are necessary behavior, not activated-rule acceptance.
 
-The staged existing compiler then exercises the authenticated teacher HTTP route:
+The staged existing compiler then exercises the authenticated teacher HTTP route
+using the existing disposable owner connection with SET ROLE app. This is effective
+app-role SQL evidence, not an actual production app login or live runtime proof:
 absent position 404; baseline ABSTAIN; 3H SUPPORTED and 3S CONTRADICTED;
 owned revoke ABSTAIN; reactivation with the same original expiry restores both
 assessments. Failure after activation commits the exact owned emergency revoke,
@@ -64,7 +66,9 @@ Points, HCP, bid priority and unresolved decisions13/14 are not inferred.
 
 The original build validator deadline remains 2026-10-04T18:00:00Z and has elapsed.
 Old SHA/READY pins are historical and are not refreshed in this integration.
-The preserved refusal is tested before token lookup, claim creation or HTTP.
+The preserved refusal is tested at both v.run and the real build_once.main before
+token lookup, claim creation or HTTP; intent constructs only public context and
+never copies the process environment.
 The prior pilot authorization is recorded; this checkpoint does not reopen that
 expired execution window or request a new permission. Parent must reconcile the
 temporal constraint before choosing a live execution plan. No live pilot, build,
