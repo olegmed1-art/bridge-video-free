@@ -28,6 +28,11 @@ process_video_gate_armed=0
 root_pr_number=991
 prior_gate_pr_number=1070
 protected_gate_paths=(
+  '.github/workflows/light-native-retirement-observe.yml'
+  'ops/light_native_retirement_observe_runner.py'
+  'ops/light_native_retirement_live.py'
+  'ops/light_native_retirement.py'
+  'ops/light_native_bounded.py'
   '.github/workflows/light-native-lane-owner.yml'
   'ops/light_native_lane_controller.py'
   'ops/light_native_lane_owner_runner.py'

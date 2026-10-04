@@ -1,8 +1,8 @@
 # Bounded canon acceptance on the existing production origin
 
 This module verifies the already deployed teacher at main
-`cf6091f09fa70afc4b25162fbbb2fea0dc36898a`, READY deployment
-`dpl_9tC4HDYrX6WLxgQXpcMm32te8ue3`, through the owner-authorized official origin
+`08cd157b32a3e34974c4d24706882ef31681891d`, READY deployment
+`dpl_Dt7d8TupCi3owHDMK7MFfwLj9Lr7`, through the owner-authorized official origin
 https://bridge-video-free.vercel.app. It never uses the protected immutable URL,
 a protection bypass, a new credential, or credential export.
 

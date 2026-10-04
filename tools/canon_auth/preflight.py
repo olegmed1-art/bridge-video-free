@@ -6,7 +6,7 @@ import subprocess
 
 import yaml
 
-BASE = "cf6091f09fa70afc4b25162fbbb2fea0dc36898a"
+BASE = "08cd157b32a3e34974c4d24706882ef31681891d"
 BRANCH = "test/canon-acceptance-cf6091-20261004"
 WORKFLOW = ".github/workflows/canon-acceptance-rehearsal.yml"
 API_FILES = {"pyproject.toml", ".vercelignore"}

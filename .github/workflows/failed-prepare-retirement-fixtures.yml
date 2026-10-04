@@ -1,22 +1,22 @@
-name: Isolated canon retirement integration
+name: Isolated local journal diagnostic
 
 on:
   push:
-    branches: [review/canon-retirement-integration-20261004]
+    branches: [review/local-journal-diagnostic-20261004]
     paths: [.github/workflows/failed-prepare-retirement-fixtures.yml]
 
 permissions: {}
 concurrency:
-  group: isolated-canon-retirement-integration
+  group: isolated-local-journal-diagnostic
   cancel-in-progress: false
 
 jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == '57fcfb319692b5117bca052101432c0eb25b9d15' &&
+      github.event.before == 'c3c2d43bbbdfa7dea9637533774d2618d2f5df02' &&
       github.run_attempt == 1 &&
-      github.event.head_commit.message == 'ci: verify canon retirement integration'
+      github.event.head_commit.message == 'ci: verify local journal diagnostic'
     strategy:
       fail-fast: false
       matrix:
@@ -62,10 +62,13 @@ jobs:
           (work/'retirement-source.zip').write_bytes(source)
           old = fetch('https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/b9b85763542743b9c839febd63d4c911c79bbd20/ops/light_native_lane_controller.py', 128*1024)
           assert hashlib.sha256(old).hexdigest() == '3762caa927970b6410a7850c76fa1dcbbfeab214c5470ff98c6b8059b51ffcb4'
+          old_workflow = fetch('https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/cf6091f09fa70afc4b25162fbbb2fea0dc36898a/.github/workflows/light-native-lane-owner.yml', 32768)
+          assert hashlib.sha256(old_workflow).hexdigest() == '0320ffa0e7229f315c8acc71401038eadd1b8e6901a4e1e38c69190b81ba850e'
           bundle = io.BytesIO()
           with zipfile.ZipFile(bundle, 'w', zipfile.ZIP_DEFLATED) as packed:
               packed.writestr('candidate.zip', source)
               packed.writestr('revoked-controller.py', old)
+              packed.writestr('old-owner-workflow.yml', old_workflow)
           (work/'retirement-test-input.zip').write_bytes(bundle.getvalue())
           archive = zipfile.ZipFile(io.BytesIO(source))
           prefix = 'bridge-video-free-'+sha+'/'
@@ -114,7 +117,7 @@ jobs:
           assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
           assert set(os.listdir("/sys/class/net"))=={"lo"}
           wire=sys.stdin.buffer.read(25*1024*1024+1);assert len(wire)<=25*1024*1024
-          packed=zipfile.ZipFile(io.BytesIO(wire));assert set(packed.namelist())=={"candidate.zip","revoked-controller.py"}
+          packed=zipfile.ZipFile(io.BytesIO(wire));assert set(packed.namelist())=={"candidate.zip","revoked-controller.py","old-owner-workflow.yml"}
           raw=packed.read("candidate.zip");assert len(raw)<=24*1024*1024
           old=packed.read("revoked-controller.py")
           assert hashlib.sha256(old).hexdigest()=="3762caa927970b6410a7850c76fa1dcbbfeab214c5470ff98c6b8059b51ffcb4"
@@ -149,17 +152,54 @@ jobs:
           assert "LANE_EXEC_FEED_CHANGED" in ET.tostring(failed[0],encoding="unicode")
           assert controller.read_bytes()==corrected
           print("REVOKED_SEQUENCE_REGRESSION_DETECTED",os.uname().machine,flush=True)
+          workflow=root/".github/workflows/light-native-lane-owner.yml";safe=workflow.read_bytes()
+          old_workflow=packed.read("old-owner-workflow.yml")
+          assert hashlib.sha256(old_workflow).hexdigest()=="0320ffa0e7229f315c8acc71401038eadd1b8e6901a4e1e38c69190b81ba850e"
+          try:
+              workflow.write_bytes(old_workflow)
+              red=subprocess.run([sys.executable,"-B","-m","pytest","-q","-p","no:cacheprovider",
+                  "--noconftest","-c","/dev/null","--basetemp=/fixture-data/privacy-red",
+                  "--junitxml=/tmp/privacy-red.xml",
+                  "tests/test_light_native_retirement_reference_i2.py::test_workflow_never_interpolates_dispatch_values_into_steps"],
+                  capture_output=True,text=True,timeout=60)
+          finally:
+              workflow.write_bytes(safe)
+          print(red.stdout,flush=True);print(red.stderr,flush=True)
+          failed=ET.parse("/tmp/privacy-red.xml").getroot().findall(".//testcase")
+          assert red.returncode==1 and len(failed)==1
+          assert failed[0].find("failure") is not None and failed[0].find("error") is None and failed[0].find("skipped") is None
+          assert workflow.read_bytes()==safe
+          print("OLD_WORKFLOW_CONFIDENTIALITY_REGRESSION_DETECTED",os.uname().machine,flush=True)
+          from contextlib import redirect_stdout
+          from unittest.mock import patch
+          from tools.canon_auth import build_once
+          class PublicBuildContext(dict):
+              def get(self,key,default=None):
+                  assert key!="BRIDGE_API_TOKEN", "ordinary build must not read credentials"
+                  return super().get(key,default)
+              def __getitem__(self,key):
+                  assert key!="BRIDGE_API_TOKEN", "ordinary build must not read credentials"
+                  return super().__getitem__(key)
+          def forbidden_lifecycle(*args,**kwargs):
+              raise AssertionError("ordinary build must not invoke canon lifecycle")
+          output=io.StringIO()
+          with patch.object(build_once.os,"environ",PublicBuildContext(VERCEL_GIT_COMMIT_MESSAGE="Merge confidentiality root-reference transport")), patch.object(build_once,"lifecycle",forbidden_lifecycle), redirect_stdout(output):
+              assert build_once.main()==0
+          assert output.getvalue().strip()=="canon-acceptance: inactive ordinary build"
+          print("ORDINARY_BUILD_NO_CANON_ACTIVATION",os.uname().machine,flush=True)
+          import app  # Initialize the real entrypoint before API tests start its shared app.
           import pytest
           tests=["tests/test_light_native_lane_"+name+".py" for name in
                  ("controller","cycle","execution","feed","install","issuer","owner","run_guard")]
           tests += ["tests/test_light_native_pilot_intake.py"]
           tests += sorted(str(p.relative_to(root)) for p in (root/"tests").glob("test_light_native_retirement*.py"))
-          tests += ["tools/tournament_pilot/test_pilot.py","tests/test_l1_canonical_registry.py","tests/test_l1_canonical_runtime.py","tests/test_knowledge_read_api.py","tests/test_ai_api_routes.py","tests/test_ai_final_decision_contract.py"]
+          tests += ["tests/test_video_canon_replay.py","tests/test_video_replay_input.py","tests/test_video_source_draft.py","tests/test_book_material_staging.py","tests/test_book_runtime_identity.py","tests/test_book_teacher_api.py"]
+          tests += ["tools/canon_auth","tools/tournament_pilot/test_pilot.py","tests/test_l1_canonical_registry.py","tests/test_l1_canonical_runtime.py","tests/test_knowledge_read_api.py","tests/test_ai_api_routes.py","tests/test_ai_final_decision_contract.py"]
           code=pytest.main(["-q","-ra","-p","no:cacheprovider","--noconftest","-c","/dev/null","--basetemp=/fixture-data/tests",
                             "--rootdir="+str(root),"--junitxml=/tmp/retirement.xml",*tests])
           cases=ET.parse("/tmp/retirement.xml").getroot().findall(".//testcase")
           ids={(x.get("classname"),x.get("name")) for x in cases}
-          assert code==0 and len(cases)==480 and len(ids)==len(cases)
+          assert code==0 and len(cases)==843 and len(ids)==len(cases)
           assert all(not any(x.find(k) is not None for k in ("skipped","failure","error")) for x in cases)
-          print("CANON_RETIREMENT_INTEGRATION_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
+          print("LOCAL_JOURNAL_DIAGNOSTIC_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
           ' < "$RUNNER_TEMP/retirement-test-input.zip"

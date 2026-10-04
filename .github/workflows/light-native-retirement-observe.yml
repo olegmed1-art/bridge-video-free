@@ -1,9 +1,9 @@
-name: Oracle Light accepted first-lane owner cycle
+name: Oracle Light read-only retirement observation
 
 on:
   pull_request:
     paths:
-      - '.github/workflows/light-native-lane-owner.yml'
+      - '.github/workflows/light-native-retirement-observe.yml'
       - 'ops/light_native_lane_*.py'
       - 'ops/light_native_retirement*.py'
       - 'ops/light_native_bounded.py'
@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       expected_main_sha:
-        description: Exact reviewed main and staged candidate for one accepted owner step
+        description: Exact reviewed main and staged candidate for one read-only retirement observation
         required: true
         type: string
       accepted_controller_sha256:
@@ -96,7 +96,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-      - name: Execute one fixed accepted owner step using the pinned Oracle driver
+      - name: Observe retirement without journal, DB or control writes
         env:
           NATIVE_OWNER_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
           SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
@@ -118,4 +118,4 @@ jobs:
           unset SSH_PRIVATE_KEY
           ssh-keygen -y -P '' -f "$work/key" > "$work/public" 2>/dev/null
           bash ops/oracle_known_hosts_from_scan.sh 92.5.47.149 SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go "$work/known_hosts"
-          PYTHONPATH=. python ops/light_native_lane_owner_runner.py "$work/key" "$work/known_hosts" "$work/wheels"
+          PYTHONPATH=. python ops/light_native_retirement_observe_runner.py "$work/key" "$work/known_hosts" "$work/wheels"

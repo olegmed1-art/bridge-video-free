@@ -31,9 +31,16 @@ def journal_pins(value):
     return value
 
 
+class Refusal(RuntimeError):
+    """Internal fixed-code refusal; public diagnostics never export its text."""
+    def __init__(self,code):
+        super().__init__(code)
+        self.code=code
+
+
 def need(ok, code='LANE_RETIREMENT_REFUSED'):
     if not ok:
-        raise RuntimeError(code)
+        raise Refusal(code)
 
 
 def encoded(value):
