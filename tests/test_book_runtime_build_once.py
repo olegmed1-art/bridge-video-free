@@ -56,12 +56,15 @@ class Client:
         return self.response
 
 
-def test_ordinary_build_does_not_read_token_or_other_environment(monkeypatch, capsys):
-    class Guard:
+@pytest.mark.parametrize("message_environment", [{}, {"VERCEL_GIT_COMMIT_MESSAGE": ""},
+    {"VERCEL_GIT_COMMIT_MESSAGE": "Ordinary independent change"},
+    {"VERCEL_GIT_COMMIT_MESSAGE": "TRUNCATED_" + hook.MARKER}])
+def test_missing_or_changed_intent_stops_before_other_environment(monkeypatch, capsys, message_environment):
+    class Guard(dict):
         def get(self, key, default=None):
             assert key == "VERCEL_GIT_COMMIT_MESSAGE"
-            return "Ordinary independent change"
-    monkeypatch.setattr(hook, "os", SimpleNamespace(environ=Guard()))
+            return super().get(key, default)
+    monkeypatch.setattr(hook, "os", SimpleNamespace(environ=Guard(message_environment)))
     assert hook.main() == 1
     assert "INTENT_REQUIRED_VALIDATION_BUILD_ONLY" in capsys.readouterr().out
 
