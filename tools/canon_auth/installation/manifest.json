@@ -1,0 +1,15 @@
+{
+  "installation_base": "4f2c7a98d0b7e1e5f48ac781332442becea302dd",
+  "execution_branch": "main",
+  "content_sha256": {
+    "tools/canon_auth/installation_checks.py": "d27316c4475f38f85267c26213abef3210558fddcd9d1e4e9562a3c8e3e53ea1",
+    "tools/canon_auth/owner_probe.py": "3d01e136fd07ec97be3aefb07bf3888eb984eb240b1d5304e20718db029bf7cd",
+    "tools/canon_auth/resident_preflight.py": "853239014dd85caf56f7a375e4c9142e902f38c86689834c99c381d09f1ab154",
+    "tools/canon_auth/test_owner_probe.py": "b306bcbe4ac7aa64b0d8a350662b4356b9c56be0b52428f79d5f3e616b598f51",
+    "tools/canon_auth/test_owner_resident.py": "feac9db78ea93c7ae849de6efd82fa10a4cef0bbcb3d5101be43666a387e91e0",
+    ".github/workflows/native-maintenance-owner-attest.yml": "c6fd46d973bbbf08d7fe63ae40c5bf8cf63af347ef50c3eb466108e4fd1cfc92",
+    ".github/workflows/canon-owner-installation-review.yml": "b20999ac72cd6e5816fb65d46e0fe4df8de51d469e7cb8ead0313d91702fbc80",
+    "tools/canon_auth/test_installed_owner_workflow.py": "3124c480f2ce28521bb98fa7911623a8d9fdcd7104d29caaf24f32d32064a470",
+    "tools/canon_auth/installation/README.md": "621363592b3b9bad77b30ef07e9b77591e2315b6cbaae41e610139f2d449637c"
+  }
+}
