@@ -26,10 +26,17 @@ class TeacherEvidence(BaseModel):
     # Optional, explicit offline request. Never forwarded to the legacy writer.
     test_request: dict | None = None
     test_source_version: str | None = None
+    canon_request: dict | None = None
 
 
 @router.post("/positions/{position_id}/teacher-evidence")
 def record_teacher_evidence(position_id: UUID, evidence: TeacherEvidence, request: Request) -> dict:
+    if ("canon_request" in evidence.model_fields_set
+            or evidence.teacher_key.startswith("school-tournament-shape")
+            or (evidence.teacher_version or "").startswith("tour-1nt-shape-")
+            or any(key.lower().replace("_", "").startswith("canon") for key in (evidence.model_extra or {}))):
+        from .tournament_teacher import answer
+        return answer(position_id, evidence)
     if ({"test_request", "test_source_version"} & evidence.model_fields_set
             or evidence.teacher_key.startswith("tournament-canon-test")
             or (evidence.teacher_version or "").startswith("tournament-teacher-test-")

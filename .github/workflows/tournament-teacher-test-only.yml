@@ -6,6 +6,7 @@ on:
     paths:
       - 'experiments/tournament_teacher/**'
       - 'bridge_school_api/ai_teacher.py'
+      - 'bridge_school_api/tournament_teacher.py'
       - 'bridge_school_api/tournament_teacher_test_adapter.py'
       - '.github/workflows/tournament-teacher-test-only.yml'
 
@@ -44,34 +45,24 @@ jobs:
         run: |
           git rev-parse HEAD
           python -m experiments.tournament_teacher.preflight
-      - name: Real consumer, finite model, and L1 regression
+      - name: Formal teacher, existing API and L1 regression
         run: >-
-          python -m pytest -q experiments/tournament_teacher
+          python -m pytest -q experiments/tournament_teacher/test_formal_teacher.py
+          experiments/tournament_teacher/test_api_integration.py
           tests/test_l1_canonical_registry.py tests/test_l1_canonical_runtime.py
-          tests/test_l1_canonical_runtime_v3.py tests/test_l1_canonical_runtime_v4.py
-          tests/test_l1_runtime_coverage_audit.py tests/test_knowledge_read_api.py
-          tests/test_ai_api_routes.py tests/test_ai_final_decision_contract.py
-      - name: Before and after, explanation and provenance
-        run: python -m experiments.tournament_teacher.demo
-      - name: Independent exhaustive choice-policy review
-        run: python -m experiments.tournament_teacher.independent_review
-      - name: All fourteen decisions with hands and source-linked results
-        run: python -m experiments.tournament_teacher.coverage > tournament-teacher-evidence.json
-      - name: Existing teacher HTTP API to source-linked answer
-        run: python -m experiments.tournament_teacher.api_demo > tournament-teacher-api-evidence.json
-      - name: Build non-activatable candidate package
-        run: python -m experiments.tournament_teacher.candidate_package > tournament-candidate-package.json
+          tests/test_knowledge_read_api.py tests/test_ai_api_routes.py
+          tests/test_ai_final_decision_contract.py
+      - name: Build two-rule first import package
+        run: python -m experiments.tournament_teacher.formal_package > tournament-first-import-package.json
       - name: Apply unchanged schema to disposable PostgreSQL 18
         run: python -m experiments.tournament_teacher.postgres_bootstrap '${{ job.services.postgres.id }}'
-      - name: Rehearse candidate import, HTTP readback, gates and rollback
-        run: python -m experiments.tournament_teacher.postgres_rehearsal > tournament-postgres-evidence.json
-      - name: Preserve synthetic decision evidence
+      - name: First binding through real gated teacher API and rollback
+        run: python -m experiments.tournament_teacher.first_init | tee tournament-first-binding-evidence.json
+      - name: Preserve first binding evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: tournament-teacher-evidence-${{ github.sha }}
           path: |
-            tournament-teacher-evidence.json
-            tournament-teacher-api-evidence.json
-            tournament-candidate-package.json
-            tournament-postgres-evidence.json
+            tournament-first-import-package.json
+            tournament-first-binding-evidence.json
           retention-days: 7

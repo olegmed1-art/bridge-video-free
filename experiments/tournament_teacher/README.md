@@ -9,6 +9,12 @@ and provenance. Version 2 contains 26 rule/companion entries. Decision record
 
 ## Run
 
+The next working integration is the [two-rule SQL-gated request path](FIRST_BINDING_PLAN.md).
+It uses the existing teacher endpoint, a stored position and an active canonical
+binding to assess 3H/3S shape meaning. Its first candidate import, eligibility,
+activation and audited rollback are rehearsed only in disposable PostgreSQL.
+Production changes require the separate single-action reviews documented there.
+
 The existing teacher API now has an explicit offline integration path. See
 [API integration and exact deployed-target gap](API_INTEGRATION.md), including
 the local source target manifest and rollback. Run

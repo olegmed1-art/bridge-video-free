@@ -9,7 +9,7 @@ import yaml
 BASE = "1440920191e1778fb9a9ba24e6701937a1a7459c"
 BRANCH = "test/tournament-teacher-canon-20261004"
 WORKFLOW = ".github/workflows/tournament-teacher-test-only.yml"
-API_FILES = {"bridge_school_api/ai_teacher.py", "bridge_school_api/tournament_teacher_test_adapter.py"}
+API_FILES = {"bridge_school_api/tournament_teacher.py", "bridge_school_api/ai_teacher.py", "bridge_school_api/tournament_teacher_test_adapter.py"}
 
 
 def matches(value, patterns):
@@ -76,7 +76,7 @@ def main():
     assert service["ports"] == ["127.0.0.1:55432:5432"]
     print(f"Publication scope: {len(changed)} minimal experiment files; baseline {BASE}")
     print("Automatic push workflow: tournament-teacher-test-only only; one job, 10-minute cap; no secrets; one loopback disposable PostgreSQL service")
-    print("Only existing teacher route and offline adapter allowed outside experiment; L1/SQL gates and deployment unchanged")
+    print("Only existing teacher route and its bounded adapters allowed outside experiment; L1/SQL gates and deployment unchanged")
 
 
 if __name__ == "__main__":

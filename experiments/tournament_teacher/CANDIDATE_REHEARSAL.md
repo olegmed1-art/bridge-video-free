@@ -62,11 +62,13 @@ Execution order:
    runtime/canon activation and retain both rows and all test history. This is
    neither approval nor activation of any tournament rule.
 
-CI retains `tournament-candidate-package.json` and
+The successful CI at `5945eaeb87f1d7a07f403c472137873308aa6f1b` retains `tournament-candidate-package.json` and
 `tournament-postgres-evidence.json` beside the existing API/decision artifacts.
 The latter records counts, migration identity, HTTP case count, gate refusals and
 rollback outcomes without database UUIDs. Workflow failure is a failed rehearsal,
 not a partially approved import. The service is destroyed with the hosted job.
+The subsequent workflow focuses on the changed two-rule first binding described
+in FIRST_BINDING_PLAN.md; it does not repeat this unchanged 26-candidate rehearsal.
 
 Production import still requires reviewed semantic scope, established caller,
 real private identity mapping, applied-schema reconciliation and a separately

@@ -39,7 +39,7 @@ def main():
     # Fixture membership permits SET ROLE for the capability-negative test;
     # it adds no table/function privilege to the worker role itself.
     run("exec",cid,"psql","-U","postgres","-d","tournament_rehearsal","-v","ON_ERROR_STOP=1","-c",
-        "GRANT bridge_school_worker TO tournament_rehearsal_owner WITH INHERIT FALSE, SET TRUE")
+        "GRANT bridge_school_worker, bridge_school_app TO tournament_rehearsal_owner WITH INHERIT FALSE, SET TRUE")
     print("Repository migrations applied as non-superuser owner; no production connection.")
 
 
