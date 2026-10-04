@@ -1,0 +1,26 @@
+name: Read-only storage identity contract
+on:
+  push:
+    branches: [review/ibm-storage-identity-20261004]
+    paths:
+      - 'ops/storage_identity_contract/**'
+      - '.github/workflows/storage-identity-contract.yml'
+permissions:
+  contents: read
+concurrency:
+  group: storage-identity-synthetic-contract
+  cancel-in-progress: false
+jobs:
+  synthetic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Read-only followup and bounded transport tests
+        working-directory: ops/storage_identity_contract
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -v
+          python3 -B independent_checker.py
