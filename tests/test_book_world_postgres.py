@@ -21,6 +21,18 @@ pytestmark = pytest.mark.skipif(os.environ.get("BOOK_WORLD_PG_TEST") != "1", rea
 DSN = "postgresql://postgres@127.0.0.1:5432/book_world_test"
 
 
+def test_real_postgres_runtime_identity_queries_are_read_only_and_rolled_back():
+    from bridge_school_api.book_runtime_identity import _read_identity_rows
+    with psycopg.connect(DSN) as conn:
+        session, tags = _read_identity_rows(conn)
+        assert session[:3] == ("postgres", "book_world_test", "on")
+        assert tags == []  # Plain PostgreSQL cannot manufacture Neon attestation.
+        assert conn.info.transaction_status == 0
+        # SET TRANSACTION READ ONLY was scoped to the transaction, then rolled back.
+        assert conn.execute("SHOW transaction_read_only").fetchone()[0] == "off"
+        conn.rollback()
+
+
 def test_postgres_persistence_protected_teacher_replay_failure_and_rollback(monkeypatch):
     bundle, receipt = reviewed_fixture()
     school_id, source_id = str(uuid4()), str(uuid4())

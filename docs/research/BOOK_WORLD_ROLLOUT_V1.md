@@ -81,6 +81,46 @@ is a trusted operator input with schema `book-world-delivery-v1`, fields
 
 ## Serial execution plan
 
+### Resolve the deployed connection before selecting a database branch
+
+Historical branch names in canary manifests are not runtime evidence. The existing
+`incident_db_probe` validates effective resident DSN parameters and can check the
+session principal/database, but does not attest the server's Neon branch. Existing
+`/healthz` returns only availability. A Light-host attestation concerns that host's
+connection, not the Vercel WORLD reader.
+
+The small `GET /v1/knowledge/validation/runtime-identity` route runs under the same
+existing API-token dependency and no-store response middleware as WORLD retrieval.
+It accepts no target, SQL, credential or publication parameters. It first reuses
+the incident probe's effective-configuration checks, then opens the same connector
+as WORLD retrieval and performs two SELECTs in a read-only transaction with bounded
+timeouts and explicit rollback. No school, student, knowledge or source rows are
+read. Missing or inconsistent identity metadata returns a generic 503; raw database
+errors, DSNs and environment values are never serialized.
+
+The allowlisted result contains observed timestamp, optional validated deployment
+SHA, actual checked host/port/database/principal and exactly the three Neon identity
+tags. Tags must have their expected server contexts, configuration-file provenance,
+matching reset values and no pending restart. The branch is returned as an
+observation, with `OBSERVED_NOT_ADMITTED`; no historical branch is automatically
+selected and no rollout gate is advanced.
+
+Minimal execution after parent coordinates a code-only merge/deploy:
+
+1. Resolve the production alias to its actual deployment and Git SHA through the
+   existing Vercel metadata read. Use the existing authorized operator HTTP client
+   and resident API token to call the validation route once; never copy that token
+   into prompts, files or logs. Anonymous requests must remain 401/403.
+2. Bind the no-store response to that deployment. A missing revision needs separate
+   deployment corroboration; a mismatching revision or failed identity is a stop.
+   Compare the observed endpoint/project/branch with fresh control-plane evidence
+   before selecting a branch for the existing read-only source/schema/ACL preflight.
+3. Only after actual target, source/key dedup, source-review and recovery gates are
+   satisfied may parent coordinate the bounded staging/publication window below.
+
+This route grants no new role/key/permission and does not call a writer. Its
+synthetic tests and disposable PostgreSQL rehearsal are not a live runtime receipt.
+
 1. Parent confirms current main, deployment revision, affected schema/grants,
    source binding, reviewed source pack, I2 regression and exact selected IDs.
 2. Preserve a private preflight snapshot of selected source and existing keys,

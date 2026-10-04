@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from bridge_contracts.book_world import render_teacher_book
 
 from .db import connect
+from .book_runtime_identity import observe_runtime_identity, RuntimeIdentityUnavailable
 from .l1_canonical_registry import (
     ACTIVE_DOMAIN_RULE_IDS,
     RULE_ID_FINGERPRINT,
@@ -250,6 +251,15 @@ def _retrieval_status(lane: AuthorityLane, count: int) -> str:
     if lane is AuthorityLane.WORLD_EXTERNAL:
         return "WORLD_MATCH" if count else "WORLD_GAP"
     return "SOURCE_MATCH" if count else "SOURCE_GAP"
+
+
+@router.get("/validation/runtime-identity")
+def book_runtime_identity() -> dict:
+    """Operator validation under the router's existing API-token boundary."""
+    try:
+        return observe_runtime_identity()
+    except RuntimeIdentityUnavailable:
+        raise HTTPException(status_code=503, detail="BOOK_RUNTIME_IDENTITY_UNAVAILABLE") from None
 
 
 @router.get("/teacher/book")
