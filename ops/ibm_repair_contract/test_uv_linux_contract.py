@@ -15,7 +15,9 @@ class RuntimeDirectoryContract(unittest.TestCase):
   self.account=pwd.getpwnam('nobody');self.units=[]
  def tearDown(self):
   # Stop only our recorded random transient fixture units. Preserve directories/data.
-  for unit in self.units:command(['/usr/bin/systemctl','stop','--',unit])
+  for unit in self.units:
+   r=subprocess.run(['/usr/bin/systemctl','stop','--',unit],capture_output=True,text=True,timeout=12)
+   self.assertIn(r.returncode,(0,5)) # inactive transient fixtures may already be collected
  def fixture(self):
   name='ibm-repair-contract-'+uuid.uuid4().hex
   return name,Path('/run')/name,name+'.service'
@@ -35,7 +37,11 @@ class RuntimeDirectoryContract(unittest.TestCase):
         '--property=User=root','--property=Group=root','--property=ProtectSystem=strict',
         '--property=NoNewPrivileges=yes','--property=PrivateTmp=yes','--property=ReadWritePaths='+str(path)]
   if runtime:args+=['--property=RuntimeDirectory='+runtime,'--property=RuntimeDirectoryMode=0750','--property=RuntimeDirectoryPreserve=yes']
-  command(args+['--',*argv]);self.units.append(unit);return self.wait(unit)
+  r=subprocess.run(args+['--',*argv],capture_output=True,text=True,timeout=12)
+  if unit not in self.units:self.units.append(unit)
+  row=self.wait(unit)
+  if r.returncode:self.assertEqual((r.returncode,row.get('ActiveState')),(1,'failed'),r.stderr)
+  return row
  def test_missing_required_path_fails_namespace_before_command(self):
   name,path,unit=self.fixture();self.assertFalse(path.exists())
   row=self.start(unit,path,['/usr/bin/test','-d',str(path)])
@@ -49,7 +55,7 @@ class RuntimeDirectoryContract(unittest.TestCase):
   self.assertEqual(path.stat().st_uid,self.account.pw_uid)
   before=hashlib.sha256(payload.read_bytes()).hexdigest()
   command(['/usr/bin/systemctl','stop','--',unit]);self.assertTrue(payload.exists())
-  command(['/usr/bin/systemctl','start','--',unit]);self.assertEqual(self.wait(unit)['Result'],'success')
+  self.assertEqual(self.start(unit,path,argv,runtime=name)['Result'],'success')
   self.assertEqual(path.stat().st_uid,self.account.pw_uid) # install restores only directory owner
   self.assertEqual(payload.stat().st_uid,0) # RuntimeDirectory changed preserved child owner
   self.assertEqual(hashlib.sha256(payload.read_bytes()).hexdigest(),before)
@@ -63,7 +69,7 @@ class RuntimeDirectoryContract(unittest.TestCase):
    payload=path/'fixture-payload';payload.write_bytes(b'preserved fixture bytes');os.chown(payload,self.account.pw_uid,self.account.pw_gid)
    identity=(payload.stat().st_ino,payload.stat().st_uid,payload.stat().st_gid,hashlib.sha256(payload.read_bytes()).hexdigest())
    self.assertEqual(self.start(unit,path,['/usr/bin/test','-d',str(path)])['Result'],'success')
-   command(['/usr/bin/systemctl','stop','--',unit]);command(args);command(['/usr/bin/systemctl','start','--',unit]);self.assertEqual(self.wait(unit)['Result'],'success')
+   command(['/usr/bin/systemctl','stop','--',unit]);command(args);self.assertEqual(self.start(unit,path,['/usr/bin/test','-d',str(path)])['Result'],'success')
    after=(payload.stat().st_ino,payload.stat().st_uid,payload.stat().st_gid,hashlib.sha256(payload.read_bytes()).hexdigest())
    self.assertEqual(after,identity);self.assertTrue(payload.exists())
 
