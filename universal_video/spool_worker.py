@@ -26,7 +26,7 @@ from .runner import run_job
 from .runtime_preflight import VideoRuntimeUnavailable, validate_staged_video, validate_video_runtime
 from .server_review import ServerReviewError, build_server_review
 from .workload_lock import shared_workload_lock
-from .drive_cleanup import queue_cleanup, retry_cleanup
+from .drive_cleanup import queue_cleanup, retry_cleanup, preserve_pending_completion
 
 
 ERROR_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
@@ -572,7 +572,9 @@ def _process_one_locked(spool_root: Path) -> bool:
                     result_dir, staged_job_dir, binding, job_id=validated_job.job_id,
                     profile=validated_job.profile, job_hash=canonical_job_hash(validated_job))
         receipt = paths["done"] / source.name
-        _atomic_write_json(receipt, receipt_payload)
+        if not (staged_job_dir is not None and preserve_pending_completion(
+                spool_root, media_root, validated_job.job_id, receipt)):
+            _atomic_write_json(receipt, receipt_payload)
         if (staged_job_dir is not None and cleanup_proof_matches(result_dir, staged_job_dir,
                                                                 job_id=validated_job.job_id)):
             queue_cleanup(spool_root, media_root, validated_job.job_id, receipt)

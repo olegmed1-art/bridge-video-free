@@ -49,6 +49,20 @@ def queue_cleanup(spool: Path, media: Path, job_id: str, done: Path) -> Path:
     return path
 
 
+def preserve_pending_completion(spool: Path, media: Path, job_id: str, done: Path) -> bool:
+    """A restart must observe, not replace, the completion bound by cleanup.
+
+    Revalidation may produce a REUSE_OBSERVATION report, but the immutable
+    GENERATION_FINALIZATION completion remains the record authorizing cleanup.
+    queue_cleanup rechecks exact live pin, done bytes and final receipt hashes.
+    """
+    pending = spool / "cleanup_pending" / f"{job_id}.json"
+    if not pending.exists():
+        return False
+    queue_cleanup(spool, media, job_id, done)
+    return True
+
+
 def retry_cleanup(spool: Path, media: Path, pending: Path) -> bool:
     """Caller holds the exclusive workload fence. Invalid proof always retains."""
     data = read_receipt(pending)

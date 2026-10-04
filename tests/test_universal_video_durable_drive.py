@@ -287,6 +287,84 @@ def test_pending_cleanup_blocks_active_changed_or_exhausted_job(full_chain, tmp_
     assert source.exists() and pending.exists() and len(drive.posts) == posts
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Linux resident directory fsync/fcntl contract")
+def test_full_intent_crash_orphan_reuse_cleanup_with_real_conformance(tmp_path, monkeypatch):
+    from universal_video import spool_worker as worker, drive_stage as stage, drive_cleanup as cleanup
+    from universal_video.contract import validate_job, canonical_job_hash
+    from test_universal_video_result_conformance import _bundle, _fingerprint
+
+    monkeypatch.setitem(globals(), "CONTENT", b"v" * (1024 * 1024))
+    monkeypatch.setitem(globals(), "SHA", hashlib.sha256(CONTENT).hexdigest())
+    backend = FakeDrive()
+    backend.meta["size"] = str(len(CONTENT))
+    provider_md5 = hashlib.md5(CONTENT, usedforsecurity=False).hexdigest()
+    backend.meta["md5Checksum"] = provider_md5
+    original_metadata = dict(backend.meta)
+    monkeypatch.setattr(adapter.requests, "get", backend.get)
+    monkeypatch.setattr(adapter.requests, "post", backend.post)
+    monkeypatch.setattr(stage, "access_token", lambda: "synthetic-token")
+    monkeypatch.setattr(durable, "access_token", lambda: "synthetic-token")
+    spool = tmp_path / "spool"
+    (spool / "inbox").mkdir(parents=True)
+    media = tmp_path / "media"
+    media.mkdir()
+    monkeypatch.setenv("UNIVERSAL_VIDEO_MEDIA_ROOT", str(media))
+    payload = {"job_id": "exact-video-job", "profile": "bridge_lesson",
+               "source": {"kind": "google_drive", "file_id": SOURCE}}
+    (spool / "inbox/job.json").write_text(json.dumps(payload))
+    job_hash = canonical_job_hash(validate_job(payload))
+    monkeypatch.setattr(worker, "validate_video_runtime", lambda: None)
+    monkeypatch.setattr(worker, "validate_staged_video", lambda _: None)
+    binding = {"source_file_id": SOURCE, "folders": dict(FOLDERS)}
+    monkeypatch.setattr(worker, "configured_binding", lambda *args: binding)
+    computes = []
+    def synthetic_producer(staged, output):
+        computes.append("fixture_generation")
+        result, manifest = _bundle(output)
+        source_fp = _fingerprint({"kind": "google_drive", "file_id": SOURCE,
+                                 "size_bytes": len(CONTENT), "checksum_kind": "md5Checksum", "checksum": provider_md5})
+        manifest.update(job_hash=job_hash, source_fingerprint=source_fp,
+                        media={"sha256": SHA, "size_bytes": len(CONTENT), "duration_seconds": 90.0})
+        manifest["source"].update(file_id=SOURCE, size=str(len(CONTENT)), md5Checksum=provider_md5,
+                                  fingerprint=source_fp)
+        durable.atomic_json(result / "manifest.json", manifest)
+        return manifest
+    monkeypatch.setattr(worker, "run_job", synthetic_producer)
+    original_queue = worker.queue_cleanup
+    def crash_after_intent(*args):
+        pending = original_queue(*args)
+        assert pending.exists() and (spool / "running/job.json").exists()
+        raise KeyboardInterrupt("synthetic power loss after durable cleanup intent")
+    monkeypatch.setattr(worker, "queue_cleanup", crash_after_intent)
+    with pytest.raises(KeyboardInterrupt):
+        worker.process_one(spool)
+    source = media / "drive-ready/exact-video-job"
+    result = spool / "results/exact-video-job"
+    done = spool / "done/job.json"
+    original_done = done.read_bytes()
+    original_final = (result / durable.FINAL_RECEIPT).read_bytes()
+    original_pin = (source / durable.SOURCE_RECEIPT).read_bytes()
+    first = durable.read_receipt(done)
+    assert first["result_conformance"]["state"] == "PASS"
+    assert first["result_conformance"]["evidence_phase"] == "GENERATION_FINALIZATION"
+    posts = len(backend.posts)
+    assert durable.cleanup_proof_matches(result, source, job_id="exact-video-job")
+    assert worker.recover_orphaned_jobs(spool)["recovered"] == 1
+    retry = spool / "progress/exact-video-job.recovery.json"
+    state = durable.read_receipt(retry)
+    state["retry_after_unix"] = 0
+    durable.atomic_json(retry, state)
+    monkeypatch.setattr(worker, "queue_cleanup", original_queue)
+    assert worker.process_one(spool)
+    assert computes == ["fixture_generation"] and len(backend.posts) == posts
+    assert done.read_bytes() == original_done
+    assert (result / durable.FINAL_RECEIPT).read_bytes() == original_final
+    assert not source.exists() and not list((spool / "cleanup_pending").glob("*.json"))
+    assert backend.meta == original_metadata and SOURCE not in backend.files
+    assert not (spool / "failed/job.json").exists()
+    assert original_pin  # real pin was retained through restart, then authorized cleanup
+
+
 def test_retry_reads_back_all_outputs_without_duplicate_posts(setup):
     result, source, drive, _ = setup
     first = finish(setup)
