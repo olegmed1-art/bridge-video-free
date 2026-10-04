@@ -14,6 +14,7 @@ from typing import Any, Mapping
 import diana_longitudinal_postprocess as base
 from bridge_report_board_reconstruction import reconstruct_report_visual_deals
 from bridge_contracts.video_dds_pinned_executor import execute_digest_pinned_dds3
+from bridge_contracts.video_replay_input import build_replay_input, read_json, sha256, ReplayInputError
 from diana_longitudinal_quality_v4_2 import (
     QUALITY_METHOD_VERSION,
     QUALITY_SCHEMA_VERSION,
@@ -21,6 +22,40 @@ from diana_longitudinal_quality_v4_2 import (
 )
 
 SCHEMA_VERSION = 5
+
+
+def _source_draft_files(env: Mapping[str, str]) -> dict[str, bytes] | None:
+    """Read explicitly configured local inputs once; never discover/download them."""
+    paths = {name: str(env.get('BRIDGE_VIDEO_SOURCE_DRAFT_' + name.upper() + '_PATH') or '').strip()
+             for name in ('selection', 'constraints', 'speaker_map')}
+    if not any(paths.values()):
+        return None
+    if not paths['selection']:
+        raise ReplayInputError('SOURCE_DRAFT_SELECTION_REQUIRED')
+    result = {}
+    for name, path in paths.items():
+        if path:
+            try:
+                result[name] = Path(path).read_bytes()
+            except OSError:
+                raise ReplayInputError('SOURCE_DRAFT_' + name.upper() + '_READ_FAILED') from None
+    return result
+
+
+def _prepare_source_draft(master: Mapping[str, Any], master_pdf: Mapping[str, Any],
+                          raw: bytes, files: Mapping[str, bytes]) -> dict[str, Any]:
+    """Bind the local selection to the exact master already loaded by this job."""
+    selection = read_json(files['selection'])
+    if not isinstance(selection, dict) or selection.get('input_kind') != 'full_master':
+        raise ReplayInputError('POSTPROCESS_FULL_MASTER_SELECTION_REQUIRED')
+    if not master_pdf.get('drive_id') or selection.get('source_document_drive_id') != master_pdf['drive_id']:
+        raise ReplayInputError('POSTPROCESS_MASTER_DOCUMENT_MISMATCH')
+    if sha256(raw) != master_pdf.get('master_json_sha256'):
+        raise ReplayInputError('POSTPROCESS_MASTER_BYTES_MISMATCH')
+    if json.dumps(read_json(raw), sort_keys=True, allow_nan=False) != json.dumps(master, sort_keys=True, allow_nan=False):
+        raise ReplayInputError('POSTPROCESS_MASTER_CONTENT_MISMATCH')
+    return build_replay_input(raw, selection, constraints_bytes=files.get('constraints'),
+                              speaker_map_bytes=files.get('speaker_map'))
 
 
 def _trusted_correction_receipt_resolver():
@@ -139,12 +174,18 @@ def main() -> int:
     work_folder = os.environ.get('BRIDGE_WORK_FOLDER_ID', '').strip()
     if not job_id or not result_folder:
         raise RuntimeError('LONGITUDINAL_JOB_AND_OUTPUT_FOLDER_REQUIRED')
+    source_draft_files = _source_draft_files(os.environ)
     token = base.user_oauth_token()
     if not token:
         raise RuntimeError('BLOCKED_ACCESS: Drive OAuth unavailable')
 
     done_item, done = base._latest_done(token, job_id)
-    master, master_pdf = base._load_master(token, done)
+    source_draft_input = None
+    if source_draft_files is None:
+        master, master_pdf = base._load_master(token, done)
+    else:
+        master, master_pdf, raw_master = base._load_master_with_raw(token, done)
+        source_draft_input = _prepare_source_draft(master, master_pdf, raw_master, source_draft_files)
     if master.get('job_id') != job_id:
         raise RuntimeError('LONGITUDINAL_JOB_ID_MISMATCH')
 
@@ -167,6 +208,7 @@ def main() -> int:
         lesson,
         dds_request_executor=execute_digest_pinned_dds3,
         correction_receipt_resolver=_trusted_correction_receipt_resolver(),
+        source_draft_input=source_draft_input,
     )
     curriculum = base._curriculum(working_master, lesson, quality)
     gaps = list(working_master.get('knowledge_gaps') or [])
