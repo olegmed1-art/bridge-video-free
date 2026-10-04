@@ -32,6 +32,13 @@ def guard(condition, code):
 
 def plan(school_id, code_sha):
     """Return stage transactions bound to one school, fixed package and reviewed SHA."""
+    # Add a structured ownership inventory without changing rendered SQL.
+    declared = []
+    birth = "baseline"
+    def emit_insert(table, values):
+        declared.append({"table": table, "values": values.copy(), "birth": birth})
+        return insert(table, values)
+
     school = str(UUID(str(school_id)))
     if not re.fullmatch(r"[0-9a-f]{40}", code_sha):
         raise ValueError("REVIEWED_CODE_SHA_REQUIRED")
@@ -52,7 +59,7 @@ def plan(school_id, code_sha):
     not_stopped = guard("NOT EXISTS(SELECT 1 FROM bidding.ingestion_run WHERE ingestion_run_id=" +
                         literal(emergency_run) + ")", "PILOT_EMERGENCY_TERMINAL")
     def event(number, action):
-        return insert("bidding.ingestion_event", dict(ingestion_event_id=uid("event:" + str(number)),
+        return emit_insert("bidding.ingestion_event", dict(ingestion_event_id=uid("event:" + str(number)),
             ingestion_run_id=run, event_no=number, role_key="canon_steward", action_key=action,
             details={"bindings": bindings, "approval": approval}))
     def stage_guard(number):
@@ -84,11 +91,12 @@ def plan(school_id, code_sha):
               " OR (school_id=" + literal(school) + " AND stable_key=" + literal(t.CANARY_KEY) + "))", "PILOT_POSITION_EXISTS"),
         guard("NOT EXISTS(SELECT 1 FROM public.source WHERE school_id=" + literal(school) +
               " AND canonical_locator=" + literal(url) + ")", "PILOT_SOURCE_EXISTS"),
-        insert("public.source", dict(source_id=source, school_id=school, source_type="document",
+        emit_insert("public.source", dict(source_id=source, school_id=school, source_type="document",
             title="SRC-0096 approved tournament excerpts", canonical_locator=url, status="active")),
-        insert("ai.decision_position", dict(position_id=POSITION, school_id=school, source_id=source,
+        emit_insert("ai.decision_position", dict(position_id=POSITION, school_id=school, source_id=source,
             stable_key=t.CANARY_KEY, decision_type="BIDDING", seat="S", dealer="N", hand_pbn=t.CANARY_HAND,
             auction_json=["1NT", "PASS"], cards_played_json=[], system_us=t.PROFILE, input_status="COMPLETE"))]
+    birth = "initial"
     initial = prefix + [not_stopped,
         guard("EXISTS(SELECT 1 FROM public.source s JOIN public.school sc USING(school_id) WHERE s.source_id=" +
               literal(source) + " AND s.school_id=" + literal(school) + " AND s.canonical_locator=" + literal(url) +
@@ -102,7 +110,7 @@ def plan(school_id, code_sha):
               " AND rule_key IN (" + keys + "))", "PILOT_RULE_EXISTS"),
         guard("NOT EXISTS(SELECT 1 FROM public.knowledge_item WHERE school_id=" + literal(school) +
               " AND stable_key IN (" + keys + "))", "PILOT_KNOWLEDGE_EXISTS"),
-        insert("bidding.ingestion_run", dict(ingestion_run_id=run, school_id=school, source_id=source,
+        emit_insert("bidding.ingestion_run", dict(ingestion_run_id=run, school_id=school, source_id=source,
             source_manifest_key=t.VERSION, source_sha256=t.digest(pkg), metadata={"scope": t.SCOPE, "approval": approval})).replace(
                 literal({"scope": t.SCOPE, "approval": approval}),
                 literal({"scope": t.SCOPE, "approval": approval}) + "::jsonb||jsonb_build_object('original_expiry',now()+interval '24 hours')")]
@@ -111,15 +119,15 @@ def plan(school_id, code_sha):
         payload = entry["payload"]
         r = payload["source_rule"]
         initial += [
-            insert("public.knowledge_item", dict(knowledge_item_id=b["knowledge_item_id"], school_id=school,
+            emit_insert("public.knowledge_item", dict(knowledge_item_id=b["knowledge_item_id"], school_id=school,
                 stable_key=b["rule_key"], knowledge_type="bidding_rule", title=r["meaning"], status="candidate")),
-            insert("public.knowledge_version", dict(knowledge_version_id=b["knowledge_version_id"],
+            emit_insert("public.knowledge_version", dict(knowledge_version_id=b["knowledge_version_id"],
                 knowledge_item_id=b["knowledge_item_id"], version_no=1, content=payload, authority_class="research_candidate",
                 review_status="unreviewed", bidding_system_key=t.PROFILE, agreement_scope={"scope_key": t.SCOPE},
                 method_version=t.VERSION, provenance={"payload_sha256": entry["payload_sha256"], "approval": approval}, status="candidate")),
-            insert("public.knowledge_version_source", dict(knowledge_version_id=b["knowledge_version_id"], source_id=source,
+            emit_insert("public.knowledge_version_source", dict(knowledge_version_id=b["knowledge_version_id"], source_id=source,
                 source_locator={k: r[k] for k in ("sheet_row", "rules_url", "original_excerpt", "teacher_excerpt")})),
-            insert("bidding.rule", dict(rule_id=b["rule_id"], school_id=school, knowledge_version_id=b["knowledge_version_id"],
+            emit_insert("bidding.rule", dict(rule_id=b["rule_id"], school_id=school, knowledge_version_id=b["knowledge_version_id"],
                 rule_key=b["rule_key"], compiled_payload=payload, lifecycle_status="candidate", **payload["catalog"]))]
         for kind in ("positive", "negative", "boundary", "hidden_information"):
             fixtures, observed = [], []
@@ -135,9 +143,9 @@ def plan(school_id, code_sha):
                 observed.append({"case": name, "observed": result["status"], "expected": expected})
             test = uid(b["call"] + ":test:" + kind)
             initial += [
-                insert("bidding.rule_test", dict(rule_test_id=test, school_id=school, rule_id=b["rule_id"], test_key=kind,
+                emit_insert("bidding.rule_test", dict(rule_test_id=test, school_id=school, rule_id=b["rule_id"], test_key=kind,
                     test_type=kind, fixture={"cases": fixtures}, expected={"all_cases_match": True}, method_version=t.VERSION)),
-                insert("bidding.rule_test_run", dict(rule_test_run_id=uid(b["call"] + ":test_run:" + kind), school_id=school,
+                emit_insert("bidding.rule_test_run", dict(rule_test_run_id=uid(b["call"] + ":test_run:" + kind), school_id=school,
                     rule_test_id=test, result="pass", result_details={"evidence_class": "synthetic_candidate_evaluator",
                     "cases": observed, "code_sha": code_sha}, method_version=t.VERSION))]
             observations.extend(observed)
@@ -151,20 +159,35 @@ def plan(school_id, code_sha):
             guard("bidding.rule_passes_activation_gates(" + literal(b["rule_id"]) + ")", "PILOT_ACTIVATION_GATE_FAILED")]
     initial += [event(2, "owner_approved_meaning_reviewed")]
     initial += activation(1) + [event(3, "first_activation")]
+    birth = "revoke"
     revoke = prefix + [stage_guard(3)] + revoke_owned() + [event(4, "owned_bindings_revoked")]
+    birth = "reactivate"
     reactivate = prefix + [not_stopped, stage_guard(4), guard(expiry + ">now()", "PILOT_ORIGINAL_EXPIRY_ELAPSED")]
     reactivate += activation(2) + [event(5, "reactivated_same_expiry"),
         "UPDATE bidding.ingestion_run SET status='completed',finished_at=clock_timestamp() WHERE ingestion_run_id=" + literal(run)]
     # Emergency history uses a separate deterministic run+event: at most two extra
     # rows. A repeated request revokes again but does not append unbounded history.
+    birth = "emergency"
     emergency_audit = [
-        insert("bidding.ingestion_run", dict(ingestion_run_id=emergency_run, school_id=school, source_id=source,
+        emit_insert("bidding.ingestion_run", dict(ingestion_run_id=emergency_run, school_id=school, source_id=source,
             source_manifest_key=t.VERSION, source_sha256=t.digest(pkg), metadata={"scope": t.SCOPE, "operation": "emergency_revoke", "approval": approval})),
-        insert("bidding.ingestion_event", dict(ingestion_event_id=uid("emergency_event"), ingestion_run_id=emergency_run,
+        emit_insert("bidding.ingestion_event", dict(ingestion_event_id=uid("emergency_event"), ingestion_run_id=emergency_run,
             event_no=1, role_key="canon_steward", action_key="owned_bindings_emergency_revoked", details={"bindings": bindings})),
         "UPDATE bidding.ingestion_run SET status='completed',finished_at=clock_timestamp() WHERE ingestion_run_id=" + literal(emergency_run)]
     emergency = prefix + revoke_owned() + ["DO $audit$ BEGIN IF NOT EXISTS(SELECT 1 FROM bidding.ingestion_run WHERE ingestion_run_id=" +
         literal(emergency_run) + ") THEN " + ";".join(emergency_audit) + "; END IF; END $audit$"]
-    return {"baseline": baseline, "initial": initial, "revoke": revoke, "reactivate": reactivate, "emergency": emergency,
+    for generation, born in ((1, "initial"), (2, "reactivate")):
+        for b in bindings:
+            ca = uid(b["call"] + ":canon:" + str(generation))
+            ra = uid(b["call"] + ":runtime:" + str(generation))
+            declared.extend([
+                {"table": "public.canon_activation", "birth": born, "generation": generation,
+                 "values": {"canon_activation_id": ca, "knowledge_version_id": b["knowledge_version_id"],
+                    "scope_key": t.SCOPE, "approval_provenance": approval}},
+                {"table": "bidding.runtime_activation", "birth": born, "generation": generation,
+                 "values": {"runtime_activation_id": ra, "school_id": school, "rule_id": b["rule_id"],
+                    "authority_lane": "school_canon", "canon_activation_id": ca, "scope_key": t.SCOPE,
+                    "activation_provenance": approval}}])
+    return {"declared_rows": declared, "baseline": baseline, "initial": initial, "revoke": revoke, "reactivate": reactivate, "emergency": emergency,
             "ids": {"source": source, "run": run, "position": POSITION, "bindings": bindings},
             "semantic_cases": observations}
