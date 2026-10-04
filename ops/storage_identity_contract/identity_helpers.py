@@ -31,7 +31,7 @@ def block_identity(name):
  sectors=small_read('/sys/dev/block/'+str(major)+':'+str(minor)+'/size').decode().strip()
  if not sectors.isdigit():raise ValueError('DEVICE_SIZE_SCHEMA')
  return {'name':name,'major':major,'minor':minor,'inode':st.st_ino,'size_bytes':int(sectors)*512,
-         'serial':serial_value('/sys/class/block/'+name+'/device/serial'),
+         'serial':serial_value('/sys/class/block/'+name+'/serial'),
          'partition_marker_present':os.path.lexists('/sys/class/block/'+name+'/partition')}
 
 def by_id_links():
@@ -90,9 +90,9 @@ def parse_exec_pre(raw):
  value=json.loads(raw)
  if not isinstance(value,dict) or set(value)!={'type','data'} or value['type']!='a(sasbttttuii)':raise ValueError('DBUS_TYPE_SCHEMA')
  data=value['data']
- if not isinstance(data,list) or len(data)!=1 or not isinstance(data[0],list) or len(data[0])>16:raise ValueError('DBUS_ARRAY_SCHEMA')
+ if not isinstance(data,list) or len(data)>16:raise ValueError('DBUS_ARRAY_SCHEMA')
  entries=[]
- for row in data[0]:
+ for row in data:
   if not isinstance(row,list) or len(row)!=10:raise ValueError('DBUS_ENTRY_SCHEMA')
   if not isinstance(row[0],str) or not isinstance(row[1],list) or len(row[1])>256 or not all(isinstance(x,str) for x in row[1]) or type(row[2]) is not bool:raise ValueError('DBUS_EXEC_SCHEMA')
   if not all(type(x) is int and 0<=x<2**64 for x in row[3:7]):raise ValueError('DBUS_TIME_SCHEMA')

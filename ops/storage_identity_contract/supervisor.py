@@ -17,7 +17,7 @@ import time
 
 SHA = '1111111111111111111111111111111111111111'
 BASE = Path('/nonexistent/synthetic-storage-identity')
-PINS = {'prepare_driver.py': '48b3dc53c90e01d7e99b0a7ee7d0e8cde6e641d2c3c602b74ba27878638fa271', 'diagnostic_guest.py': '215e0f3a3844064ea02c64ff7b9db1ed6d8d24a3331bb30a2247fb7131c78125'}
+PINS = {'prepare_driver.py': '8e5611d0011e7b248c6dbdabcce8592431b500683ba1e97196699ab741ca26eb', 'diagnostic_guest.py': '1f75c93fb3155c1af86c49d674683f040142f9c07289432bd05fb12151740c2a'}
 
 RUN = re.compile(r'https://github\.com/example-owner/example-repository/actions/runs/[1-9][0-9]*\Z')
 JOB = re.compile(r'https://github\.com/example-owner/example-repository/actions/runs/[1-9][0-9]*/job/[1-9][0-9]*\Z')

@@ -17,7 +17,7 @@ from types import SimpleNamespace
 BASE = Path('/nonexistent/synthetic-storage-identity')
 OLD = Path('/nonexistent/synthetic-storage-followup')
 LEGACY_LOCK = Path('/nonexistent/synthetic-preparation/prepare_driver.py')
-GUEST_SHA = '215e0f3a3844064ea02c64ff7b9db1ed6d8d24a3331bb30a2247fb7131c78125'
+GUEST_SHA = '1f75c93fb3155c1af86c49d674683f040142f9c07289432bd05fb12151740c2a'
 BOOTSTRAP = ('import ctypes,os,signal,sys; r=ctypes.CDLL(None).prctl(1,signal.SIGKILL); '
              'os._exit(125) if r!=0 or os.getppid()!=int(sys.argv[1]) else None; '
              'os.execv(sys.argv[2],sys.argv[2:])')

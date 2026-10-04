@@ -24,7 +24,7 @@ from policy import BRANCH, REPO, SHA, WORKFLOW, Refused, require, select_run, va
 
 BASE = Path('/nonexistent/synthetic-storage-identity')
 SUPERVISOR = BASE / 'supervisor.py'
-SUPERVISOR_SHA = '0155d84f0a80a5d86f93d86eb73082f857ac25e6ad6202ffba24cd2b4f120190'
+SUPERVISOR_SHA = 'bef59615b841a37841337f56c7fbb65602ff595d254b83232736720b974154e9'
 CLAIM = Path('/nonexistent/synthetic-storage-identity') / 'autonomous-admission.claim.json'
 RECEIPT = Path('/nonexistent/synthetic-storage-identity') / 'autonomous-admission.receipt.json'
 BOOTSTRAP = ('import ctypes,os,signal,sys; r=ctypes.CDLL(None).prctl(1,signal.SIGKILL); '

@@ -91,6 +91,26 @@ class IndependentTests(unittest.TestCase):
             count+=1
         COUNTS['disk_cases']=count
 
+    def test_virtio_serial_acquisition_path(self):
+        # Independent adapter contract: Linux virtio_blk publishes the disk
+        # attribute on /sys/class/block/<name>/serial, not device/serial.
+        from types import SimpleNamespace
+        import stat
+        n=self.ns;reads=[];serial_reads=[]
+        n['os']=SimpleNamespace(lstat=lambda p:SimpleNamespace(st_mode=stat.S_IFBLK,st_rdev=1,st_ino=100),
+                                major=lambda x:253,minor=lambda x:48,path=SimpleNamespace(lexists=lambda p:False))
+        def small(path,limit=256):
+            reads.append(path);self.assertEqual(path,'/sys/dev/block/253:48/size');return b'507812500\n'
+        def serial(path):
+            serial_reads.append(path);return {'state':'PRESENT','value':'synthetic-serial'}
+        n['small_read']=small;n['serial_value']=serial
+        for name in ('vda','vdd'):
+            result=n['block_identity'](name)
+            self.assertEqual(result['size_bytes'],260000000000)
+            self.assertEqual(serial_reads[-1],'/sys/class/block/'+name+'/serial')
+        self.assertFalse(any('/device/serial' in p for p in serial_reads))
+        self.assertEqual(len(reads),2)
+
     def test_settle_independent_conjunction(self):
         n=self.ns;count=0
         for bits in itertools.product((False,True),repeat=7):
@@ -115,7 +135,7 @@ class IndependentTests(unittest.TestCase):
     def test_typed_shape_secrets_and_scalar_boundaries(self):
         n=self.ns; signature='a(sasbttttuii)'; secret='Authorization=VERY_PRIVATE_SECRET'
         row=['/usr/bin/install',['install',secret],False,0,2**64-1,0,1,2**32-1,-2**31,2**31-1]
-        def call(rows):return n['parse_exec_pre'](json.dumps(dict(type=signature,data=[rows])))
+        def call(rows):return n['parse_exec_pre'](json.dumps(dict(type=signature,data=rows)))
         actual=call([row]);self.assertNotIn(secret,json.dumps(actual));self.assertTrue(actual['argv_omitted'])
         self.assertTrue(call([])['empty'])
         bad=[]
@@ -124,9 +144,14 @@ class IndependentTests(unittest.TestCase):
         bad.extend(([row[:-1]], [row]*17))
         for value in bad:
             with self.assertRaises((ValueError,TypeError)):call(value)
-        for value in (dict(type=signature,data=[]),dict(type='s',data=[[]]),dict(type=signature,data=[[]],extra=secret)):
+        # busctl serializes the variant's array directly. The formerly assumed
+        # outer wrapper must fail for BOTH empty and nonempty property values.
+        malformed=(dict(type=signature,data=[[]]),dict(type=signature,data=[[row]]),
+                   dict(type=signature,data=None),dict(type=signature,data={}),
+                   dict(type='s',data=[]),dict(type=signature,data=[],extra=secret))
+        for value in malformed:
             with self.assertRaises(ValueError):n['parse_exec_pre'](json.dumps(value))
-        COUNTS['typed_negative_cases']=len(bad)+3
+        COUNTS['typed_negative_cases']=len(bad)+len(malformed)
 
     def test_acquisition_parse_separation_and_cached_status(self):
         n=self.ns;n['units']=lambda *a:{n['UV']:{'InvocationID':'a'*32}}
@@ -134,7 +159,7 @@ class IndependentTests(unittest.TestCase):
         n['command']=fail; out=n['uv_startup']();self.assertEqual(out['failure']['phase'],'ACQUIRE')
         self.assertNotIn('DO_NOT_EMIT',json.dumps(out))
         n['command']=lambda *a:'bad-json';self.assertEqual(n['uv_startup']()['failure']['phase'],'PARSE')
-        n['command']=lambda *a:json.dumps(dict(type='a(sasbttttuii)',data=[[]]))
+        n['command']=lambda *a:json.dumps(dict(type='a(sasbttttuii)',data=[]))
         out=n['uv_startup']();self.assertIs(out['error_attribution_verified'],False)
         self.assertEqual(out['status_scope'],'LAST_REPORTED_COMMAND_EXECUTION')
 

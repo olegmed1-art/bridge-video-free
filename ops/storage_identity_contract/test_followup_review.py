@@ -48,7 +48,7 @@ class ReviewTests(unittest.TestCase):
    if name=='wipefs':self.assertIn('--no-act',args)
    if name=='blkid':self.assertIn('-p',args)
  def test_uv_argv_secret_not_emitted(self):
-  raw=json.dumps({'type':'a(sasbttttuii)','data':[[['/usr/bin/test',['SECRET_SENTINEL'],False,0,0,0,0,0,0,0]]]})
+  raw=json.dumps({'type':'a(sasbttttuii)','data':[['/usr/bin/test',['SECRET_SENTINEL'],False,0,0,0,0,0,0,0]]})
   with patch.object(g,'command',return_value=raw),patch.object(g,'units',return_value={g.UV:{'InvocationID':'a'*32}}):r=g.uv_startup()
   self.assertNotIn('SECRET_SENTINEL',json.dumps(r));self.assertTrue(r['typed_status']['exec_start_pre'][0]['argv_omitted'])
 if __name__=='__main__':unittest.main(verbosity=2)

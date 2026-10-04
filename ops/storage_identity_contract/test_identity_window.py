@@ -19,7 +19,7 @@ class IdentityTests(unittest.TestCase):
   d,l=self.disk()
   for links in (l+l,[dict(l[0],link_stable=False)],[dict(l[0],serial_prefix=g.PROVIDER_DISK_ID[:15])],l+[dict(l[0],target='/dev/vda')]):
    self.assertEqual(g.correlate_disk(d,d,links,links)['state'],'UNKNOWN')
- def raw(self,rows):return json.dumps({'type':'a(sasbttttuii)','data':[rows]})
+ def raw(self,rows):return json.dumps({'type':'a(sasbttttuii)','data':rows})
  def row(self):return ['/usr/bin/test',['SECRET_SENTINEL','${TOKEN}; }'],False,1,2,3,4,5,1,203]
  def test_typed_prestart_scalars_and_empty(self):
   r=g.parse_exec_pre(self.raw([self.row(),self.row()]));self.assertEqual(len(r['exec_start_pre']),2);self.assertEqual(r['exec_start_pre'][0]['status'],203);self.assertNotIn('SECRET_SENTINEL',json.dumps(r));self.assertTrue(g.parse_exec_pre(self.raw([]))['empty'])
@@ -65,7 +65,12 @@ class IdentityTests(unittest.TestCase):
 class LinuxIdentityTests(unittest.TestCase):
  def test_real_busctl_typed_property_existing_loaded_unit(self):
   raw=g.command(['/usr/bin/busctl','--system','--json=short','--auto-start=no','--allow-interactive-authorization=no','--timeout=3s','get-property','org.freedesktop.systemd1','/org/freedesktop/systemd1/unit/systemd_2djournald_2eservice','org.freedesktop.systemd1.Service','ExecStartPre'])
+  self.assertEqual(json.loads(raw)['data'],[])
   result=g.parse_exec_pre(raw);self.assertEqual(result['signature'],'a(sasbttttuii)');self.assertTrue(result['argv_omitted'])
+ def test_real_busctl_nonempty_prestart_existing_ssh_unit(self):
+  raw=g.command(['/usr/bin/busctl','--system','--json=short','--auto-start=no','--allow-interactive-authorization=no','--timeout=3s','get-property','org.freedesktop.systemd1','/org/freedesktop/systemd1/unit/ssh_2eservice','org.freedesktop.systemd1.Service','ExecStartPre'])
+  self.assertEqual(len(json.loads(raw)['data'][0]),10)
+  result=g.parse_exec_pre(raw);self.assertFalse(result['empty']);self.assertTrue(all(row['argv_omitted'] for row in result['exec_start_pre']))
  def test_small_read_refuses_symlink_and_preserves_content(self):
   with tempfile.TemporaryDirectory() as temp:
    p=Path(temp)/'file';p.write_bytes(b'original');link=Path(temp)/'link';link.symlink_to(p)
