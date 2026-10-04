@@ -5,6 +5,13 @@ import diagnostic_guest as g
 import prepare_driver as d
 
 class FollowupTests(unittest.TestCase):
+ def test_quoted_escaped_systemd_unit_list(self):
+  name=r'dev-disk-by\x2dlabel-BOOT.device'
+  self.assertEqual(g.unit_words(json.dumps(name)+' plain.service '+name),[name,'plain.service',name])
+  raw='Id=x.service\nNames=x.service\nAfter='+json.dumps(name)
+  with patch.object(g,'command',return_value=raw):self.assertEqual(g.units({'x.service'})['x.service']['After'],[name])
+  for value in ('"unterminated','"space name.service"','"\\nsecret"','"/etc/passwd"'):
+   with self.assertRaises(ValueError):g.unit_words(value)
  def test_option_like_name_after_separator(self):
   with patch.object(g,'command',return_value='Id=-.mount\nNames=-.mount\nLoadState=loaded') as call:
    g.units({'-.mount'})
@@ -59,4 +66,3 @@ class ActualLinuxTests(unittest.TestCase):
   self.assertLess(len(json.dumps(graph)),220000)
 
 if __name__=='__main__':unittest.main()
-

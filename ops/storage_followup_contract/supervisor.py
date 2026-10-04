@@ -17,7 +17,7 @@ import time
 
 SHA = '1111111111111111111111111111111111111111'
 BASE = Path('/nonexistent/synthetic-storage-followup')
-PINS = {'prepare_driver.py': 'a9ebc5d7d93cca7b0de4497eed9ff185900ec9a6edc7011626dbdf4bbc6d79f9', 'diagnostic_guest.py': '3dff78885e066bc8cbe15b87604beb9d7cd76dd0d883aa7d2c2f66a34df02561'}
+PINS = {'prepare_driver.py': 'a6583af68fe1a04211d4422be9662772afac59484bcab70b58bbc617ba96bd75', 'diagnostic_guest.py': '5912a5a6631b4c655b382b1104c56ee1f3c677839f80d0208bc5b02445193393'}
 
 RUN = re.compile(r'https://github\.com/example-owner/example-repository/actions/runs/[1-9][0-9]*\Z')
 JOB = re.compile(r'https://github\.com/example-owner/example-repository/actions/runs/[1-9][0-9]*/job/[1-9][0-9]*\Z')

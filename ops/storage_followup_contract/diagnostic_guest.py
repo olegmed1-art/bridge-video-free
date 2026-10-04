@@ -117,6 +117,14 @@ def file_hashes(graph,mi):
   finally:os.close(fd)
  return {'files':out,'complete':len(paths)<=100}
 
+def unit_words(value):
+ values=[]
+ for token in value.split():
+  parsed=json.loads(token) if token.startswith('"') else token
+  if not isinstance(parsed,str) or not UNIT.fullmatch(parsed):raise ValueError('UNIT_WORD_SCHEMA')
+  values.append(parsed)
+ return values
+
 def units(names,properties=PROPS):
  raw=command(['/usr/bin/systemctl','show','--all','--no-pager','--property='+','.join(properties),'--',*sorted(names)])
  result={};covered=set()
@@ -124,12 +132,12 @@ def units(names,properties=PROPS):
   pairs=[x.split('=',1) for x in block.splitlines() if '=' in x]
   assert len({x[0] for x in pairs})==len(pairs) and all(k in properties for k,v in pairs)
   row=dict(pairs);ident=row.get('Id');assert isinstance(ident,str) and UNIT.fullmatch(ident)
-  aliases=set(row.get('Names','').split())|{ident};assert all(UNIT.fullmatch(n) for n in aliases)
+  aliases=set(unit_words(row.get('Names','')))|{ident};assert all(UNIT.fullmatch(n) for n in aliases)
   assert aliases&names;covered.update(aliases&names)
   safe={}
   for k,v in row.items():
    if k in EDGES or k=='Names':
-    values=v.split();assert all(UNIT.fullmatch(x) for x in values);safe[k]=values
+    safe[k]=unit_words(v)
    elif k=='Options':safe[k]=options(v)
    elif k=='What':safe[k]=source(v)
    elif k in ('DropInPaths','RequiresMountsFor','ReadOnlyPaths','ReadWritePaths','BindPaths','BindReadOnlyPaths'):safe[k]=[safe_path(x) for x in v.split()]
