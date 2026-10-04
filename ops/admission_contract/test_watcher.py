@@ -160,6 +160,57 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(p.Refused):b.check()
 
 
+class HTTPQuotaTests(unittest.TestCase):
+    def response(self,remaining='42',**changes):
+        from types import SimpleNamespace
+        m=dict(status=200,bytes=2,remaining=remaining,reset='2000000000',pagination=False,elapsed=.1);m.update(changes)
+        return SimpleNamespace(returncode=0,stdout=json.dumps({'meta':m,'data':{'ok':True}}).encode())
+    def test_prearm_shared_quota_floor(self):
+        for n in ['0','2','3','41']:
+            a=w.GitHub(w.Budget(FakeClock()))
+            with patch.object(w.subprocess,'run',return_value=self.response(n)):
+                with self.assertRaisesRegex(p.Refused,'HTTP_QUOTA_INSUFFICIENT'):a.runs()
+        a=w.GitHub(w.Budget(FakeClock()))
+        with patch.object(w.subprocess,'run',return_value=self.response('42')):self.assertEqual(a.runs(),{'ok':True})
+    def test_later_floor_and_total_limit_unchanged(self):
+        a=w.GitHub(w.Budget(FakeClock()));a.calls=1
+        with patch.object(w.subprocess,'run',return_value=self.response('2')):
+            with self.assertRaisesRegex(p.Refused,'HTTP_QUOTA_INSUFFICIENT'):a.jobs(101)
+        a.calls=39;a.budget.bound={}
+        with patch.object(w.subprocess,'run',return_value=self.response('3')) as call:
+            self.assertEqual(a.jobs(101),{'ok':True})
+            with self.assertRaisesRegex(p.Refused,'HTTP_CALL_BUDGET'):a.jobs(101)
+            self.assertEqual(call.call_count,1)
+    def test_http_failure_metadata(self):
+        for change in [dict(status=403),dict(status=429),dict(bytes=1048577),dict(pagination=True),dict(error='TimeoutError')]:
+            a=w.GitHub(w.Budget(FakeClock()))
+            with patch.object(w.subprocess,'run',return_value=self.response(**change)):
+                with self.assertRaisesRegex(p.Refused,'HTTP_RESPONSE') as ex:a.jobs(101)
+                self.assertIn('runs/101/jobs',str(ex.exception));self.assertNotIn('secret',str(ex.exception))
+    def test_discovery_preserves_ten_calls(self):
+        a=w.GitHub(w.Budget(FakeClock()));a.calls=30
+        with patch.object(w.subprocess,'run') as call:
+            with self.assertRaisesRegex(p.Refused,'DISCOVERY_BUDGET_RESERVE'):a.runs()
+            call.assert_not_called()
+    def test_actual_helper_http_error_metadata_allowlist(self):
+        import ast,contextlib,io,inspect,textwrap,urllib.error
+        tree=ast.parse(Path(w.__file__).read_text())
+        helper=next(n.value.value for n in ast.walk(tree) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='helper' for t in n.targets))
+        class FakeOpener:
+            def open(self,*args,**kwargs):
+                raise urllib.error.HTTPError('https://api.github.com/example',403,'private-message',{'X-RateLimit-Remaining':'2','X-RateLimit-Reset':'2000000000','Authorization':'secret'},None)
+        out=io.StringIO()
+        with patch.object(w.urllib.request,'build_opener',return_value=FakeOpener()),patch.object(w.sys,'argv',['helper','https://api.github.com/example']),contextlib.redirect_stdout(out):exec(helper,{})
+        envelope=json.loads(out.getvalue())
+        self.assertEqual(envelope['meta']['status'],403);self.assertEqual(envelope['meta']['remaining'],'2');self.assertIsNone(envelope['data'])
+        self.assertNotIn('secret',out.getvalue());self.assertNotIn('private-message',out.getvalue())
+    def test_missing_or_bad_quota(self):
+        for value in [None,'','nan',42]:
+            a=w.GitHub(w.Budget(FakeClock()))
+            with patch.object(w.subprocess,'run',return_value=self.response(value)):
+                with self.assertRaisesRegex(p.Refused,'HTTP_QUOTA_METADATA'):a.runs()
+
+
 class DurableTests(unittest.TestCase):
     def test_global_claim_one_winner_and_restart_blocked(self):
         with tempfile.TemporaryDirectory() as tmp:

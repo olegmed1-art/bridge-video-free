@@ -100,28 +100,47 @@ class GitHub:
     def get(self, tail):
         self.budget.check(5)
         require(self.calls < 40, 'HTTP_CALL_BUDGET')
+        require(self.budget.bound is not None or self.calls < 30, 'DISCOVERY_BUDGET_RESERVE')
         self.calls += 1
         url = f'https://api.github.com/repos/{REPO}/actions/'+tail
         # A killable helper caps DNS + redirects + response body together.
         # urllib's socket timeout alone would not cap a slow-drip response.
-        helper = '''import json,sys,urllib.request
+        helper = '''import json,sys,time,urllib.request,urllib.error
+started=time.monotonic()
 class NoRedirect(urllib.request.HTTPRedirectHandler):
  def redirect_request(self,*args,**kwargs):raise RuntimeError('REDIRECT')
 opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
 request=urllib.request.Request(sys.argv[1],headers={'Accept':'application/vnd.github+json','User-Agent':'bounded-admission-readonly','Cache-Control':'no-cache','X-GitHub-Api-Version':'2022-11-28'},method='GET')
-with opener.open(request,timeout=3) as r:
- if r.status!=200 or 'rel="next"' in r.headers.get('Link',''):raise RuntimeError('STATUS_OR_PAGINATION')
- remain=r.headers.get('X-RateLimit-Remaining','')
- if not remain.isdigit() or int(remain)<3:raise RuntimeError('RATE_LIMIT')
- raw=r.read(1048577)
- if len(raw)>1048576:raise RuntimeError('SIZE')
- obj=json.loads(raw)
-print(json.dumps(obj,separators=(',',':')))
+meta={'status':None,'bytes':0,'remaining':None,'reset':None,'pagination':False}
+try:
+ with opener.open(request,timeout=3) as r:
+  meta.update(status=r.status,remaining=r.headers.get('X-RateLimit-Remaining'),reset=r.headers.get('X-RateLimit-Reset'),pagination='rel="next"' in r.headers.get('Link',''))
+  raw=r.read(1048577);meta['bytes']=len(raw)
+  obj=json.loads(raw) if len(raw)<=1048576 else None
+except urllib.error.HTTPError as e:
+ meta.update(status=e.code,remaining=e.headers.get('X-RateLimit-Remaining'),reset=e.headers.get('X-RateLimit-Reset'));obj=None
+except Exception as e:
+ meta['error']=type(e).__name__;obj=None
+meta['elapsed']=round(time.monotonic()-started,3)
+print(json.dumps({'meta':meta,'data':obj},separators=(',',':')))
+
 '''
         result = subprocess.run(child_argv(['/usr/bin/python3','-I','-B','-u','-c',helper,url]),capture_output=True,timeout=4,start_new_session=True)
-        require(result.returncode == 0 and len(result.stdout)<=1048576,'HTTP_FAILED_OR_SIZE')
+        require(result.returncode == 0 and len(result.stdout)<=2097152,'HTTP_HELPER_FAILED_OR_SIZE')
         self.budget.check()
-        return json.loads(result.stdout)
+        envelope=json.loads(result.stdout)
+        meta=envelope.get('meta',{})
+        # Allowlisted scalars only, never HTTP body, headers or stderr.
+        safe={k:meta.get(k) for k in ('status','bytes','remaining','reset','pagination','elapsed','error')}
+        detail=json.dumps({'endpoint':tail.split('?')[0],**safe},sort_keys=True)
+        require(meta.get('status')==200 and not meta.get('pagination') and type(meta.get('bytes')) is int and meta['bytes']<=1048576 and 'error' not in meta,'HTTP_RESPONSE '+detail)
+        remaining=meta.get('remaining')
+        require(isinstance(remaining,str) and remaining.isdigit(),'HTTP_QUOTA_METADATA '+detail)
+        # Reserve the full remaining process budget plus the 3-call floor,
+        # before the first response can produce WATCHER_READY.
+        floor=42 if self.calls==1 else 3
+        require(int(remaining)>=floor,'HTTP_QUOTA_INSUFFICIENT '+detail)
+        return envelope['data']
 
     def runs(self):
         date = dt.datetime.fromtimestamp(self.budget.earliest, dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
