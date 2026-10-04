@@ -1,0 +1,26 @@
+name: Read-only storage diagnostic contract
+on:
+  push:
+    branches: [review/admission-containment-20261003]
+    paths:
+      - 'ops/storage_contract/**'
+      - '.github/workflows/storage-contract.yml'
+permissions:
+  contents: read
+concurrency:
+  group: storage-synthetic-contract
+  cancel-in-progress: false
+jobs:
+  synthetic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Read-only collector and bounded transport synthetic tests
+        working-directory: ops/storage_contract
+        run: |
+          set -euo pipefail
+          python3 -m py_compile diagnostic_guest.py prepare_driver.py supervisor.py watcher.py policy.py
+          python3 -m unittest discover -v
