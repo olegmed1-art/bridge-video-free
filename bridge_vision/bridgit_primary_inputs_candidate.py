@@ -79,5 +79,3 @@ def _prepare_assets(base, token: str, work: Path) -> Path:
         for path in asset_root.glob("*"):
             path.unlink(missing_ok=True)
     raise PrimaryInputUnavailable("CARD_PRIMARY_GAMBLER_ASSETS_UNAVAILABLE:" + ",".join(failures[:16]))
-
-
