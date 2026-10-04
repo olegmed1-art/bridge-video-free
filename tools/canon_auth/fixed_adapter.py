@@ -55,9 +55,12 @@ class FixedAdapter:
             # FOR UPDATE isn't permitted in READ ONLY; read-only readiness uses
             # the same snapshot but no row locks. Mutations recheck with locks.
             state = inventory(self.conn, self.compiled, self.school, lock=False)
+            zero = {table: self.conn.execute("SELECT count(*) FROM ai." + table +
+                " WHERE position_id=%s", (self.compiled["ids"]["position"],)).fetchone()[0]
+                for table in ("teacher_output", "search_run", "final_decision")}
         self.source_check()
         return {"status": "READ_ONLY_PLAN", "contract_hash": self.launch.fingerprint,
-                "plan_hash": self.launch.plan_hash, **state, "db_committed": False}
+                "plan_hash": self.launch.plan_hash, **state, "db_committed": False, "owned_outputs": zero}
 
     def execute(self, stage, permit):
         require(stage in PHASES, "fixed_stage_required")
@@ -77,6 +80,8 @@ class FixedAdapter:
                 require(school == ("active",), "active_school_required")
                 before = inventory(self.conn, self.compiled, self.school)
                 require(before["state"] == PREVIOUS[stage], "duplicate_or_out_of_order_stage")
+                self.launch.normal(self.clock())
+                permit.verify(self.launch, stage, self.clock())
                 for sql in self.compiled[stage]:
                     self.conn.execute(sql)
                 after = inventory(self.conn, self.compiled, self.school)

@@ -218,6 +218,8 @@ class Channel:
         self.claimed=True # fixture-only; live requires durable authoritative claim
     def execute(self,name,p):
         return self.adapter.execute(name,p)
+    def inspect(self,launch):
+        return self.adapter.inspect()
     def recover(self,launch):
         return self.adapter.recover()
 
@@ -361,3 +363,25 @@ def test_forged_stage_receipt_recovers(fixture):
         with pytest.raises(Refused,match="owned_recovery_confirmed"):
             ctrl.run()
         assert fixture[0].inspect()["rows"]==4
+
+
+def test_compiler_inventory_diagnostic(fixture):
+    # Raw fixture transaction preserves underlying SQL diagnostics for tests;
+    # production owner CLI still emits only fixed sanitized categories.
+    a,r,_,_=fixture
+    with a.conn.transaction(force_rollback=True):
+        a._begin()
+        for name in ("baseline","initial"):
+            for sql in a.compiled[name]:
+                a.conn.execute(sql)
+        assert inventory(a.conn,a.compiled,a.school)["rows"]==34
+
+
+def test_final_owned_readback_drift_recovers(fixture):
+    with api_client() as client:
+        ctrl,obs=controller(fixture,client)
+        original=ctrl.normal.inspect
+        ctrl.normal.inspect=lambda l:original(l)|{"owned_outputs":{"teacher_output":1,"search_run":0,"final_decision":0}}
+        with pytest.raises(Refused,match="owned_recovery_confirmed"):
+            ctrl.run()
+        assert fixture[0].inspect()["active"]==0

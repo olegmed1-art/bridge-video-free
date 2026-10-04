@@ -130,6 +130,26 @@ class BoundedController:
         return receipt
 
     def run(self):
+        # POSIX main-thread supervisor interrupts blocking normal channels.
+        # Independently invoked recovery receives its own 60-second alarm.
+        import signal, threading, math
+        require(hasattr(signal, "SIGALRM") and threading.current_thread() is threading.main_thread(),
+                "posix_main_thread_supervisor_required")
+        require(signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0), "existing_alarm_refused")
+        previous = signal.getsignal(signal.SIGALRM)
+        def stop(*args):
+            raise Refused("controller_wall_deadline")
+        signal.signal(signal.SIGALRM, stop)
+        seconds = min(420, (self.launch.stage_until-self.clock()).total_seconds())
+        require(seconds > 0, "stage_window_refused")
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        try:
+            return self._run()
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+
+    def _run(self):
         require(not self.attempted, "single_controller_attempt_required")
         self.launch.admit(self.clock())
         # A must be the sole immutable validation-build ID; normal channel owns
@@ -173,12 +193,25 @@ class BoundedController:
                 require(self.observer.reverify(self.launch, receipt) is True,
                         "final_request_correlation_refused")
             self.deadline()
+            final_db = self.normal.inspect(self.launch)
+            require(final_db.get("status") == "READ_ONLY_PLAN"
+                    and final_db.get("contract_hash") == self.launch.fingerprint
+                    and final_db.get("plan_hash") == self.launch.plan_hash
+                    and (final_db.get("state"), final_db.get("rows"), final_db.get("active"))
+                        == ("reactivated", 40, 4)
+                    and final_db.get("original_expiry") == original
+                    and final_db.get("owned_outputs") ==
+                        {"teacher_output":0, "search_run":0, "final_decision":0},
+                    "final_owned_database_readback_refused")
+            self.deadline()
             return {"status":"BOUNDED_ACCEPTANCE", "contract_hash":self.launch.fingerprint,
                 "requests":self.calls,"receipts":list(self.receipts),"phase_hash":final,
                 "normal_rows":40,"original_expiry":original,"evidence_class":self.observer.evidence_class}
         except BaseException:
             if mutation_possible:
                 try:
+                    import signal
+                    signal.setitimer(signal.ITIMER_REAL, 60)
                     receipt = self.recovery.recover(self.launch)
                     require(receipt["status"] == "OWNED_REVOKE_CONFIRMED"
                             and receipt.get("contract_hash") == self.launch.fingerprint
