@@ -97,9 +97,16 @@ reviewed source installation and ordinary READY deployment:
 - D: exact READY production deployment ID, git SHA=S and official origin.
 - OBS: authenticated alias/deployment observation, no older than 300 seconds.
 - N: one new immutable intent ID, fixed timestamps above, no attempted build.
-- B: the one acceptance-control commit/build. It may be an empty commit on main
-  with the exact fresh marker/context and the SAME Git tree as S. After creation
-  its exact SHA is recorded externally; never embed its own SHA in its code.
+- B: the one acceptance-control commit/build on main. The existing ignored-build
+  script skips an empty commit, so do NOT rely on one. B changes ONLY a reviewed
+  public [tool.canon_acceptance.fresh] intent table in pyproject.toml, already a
+  legitimate thin-runtime build trigger and included in the bundle. It contains
+  N, S/D, observed time, finite timestamps and public hashes, never credentials
+  or school IDs. The new dispatcher validates that table plus the exact marker.
+  Git comparison must show only that table changed: dependencies, build script,
+  all app/teacher/owner/operator/compiler modules and other files equal S.
+  After creation B's exact SHA is recorded externally; never embed its own SHA
+  in its code. This uses the existing main build gate without expanding it.
 - A: the one immutable Vercel validation-build ID for B; record it externally.
 - C: original compiled-plan code SHA, fixed once to S (not B or later R).
 - P: exact compiled pilot-plan hash using that C and approved compiler/package/schema
@@ -110,9 +117,10 @@ reviewed source installation and ordinary READY deployment:
   dispatch, plus the unchanged reviewed operator/module hashes.
 
 Stage execution requires B=current frozen main during normal acceptance and
-exact installed source equality. READY target stays D/S while validation B
+exact installed executable-module equality plus the reviewed intent-table delta. READY target stays D/S while validation B
 always exits nonzero and never promotes. This intentional validation-only
-relationship requires full tree equality S/B and before/after alias binding;
+relationship requires exact executable/source equality S/B outside that single
+public intent-table delta and before/after alias binding;
 it is not permission to accept an arbitrary stale deployment.
 
 A new fresh build dispatcher/entrypoint is required for this finite proposal.
@@ -138,7 +146,10 @@ one attempt; no redeploy/rerun. Coordinator records A durably before pilot write
 The ephemeral claim alone is not a durable single-attempt guarantee.
 
 Use the existing git-connected production build hook to invoke the new fresh
-entrypoint, after source installation. Current tools expose deployment/log
+entrypoint, after source installation. scripts/vercel_ignore_build.sh already
+builds main when pyproject.toml changes, but skips empty/control-message-only
+commits when a comparison base is available. A message alone is not a launch.
+The reviewed public intent-table change is the concrete existing build trigger. Current tools expose deployment/log
 reads, not a callable create-deployment action; do not claim a nonexistent tool,
 use a share-link bypass or repurpose the old expired marked commit. Creating
 the new exact control commit is a later coordinated source mutation, not done here.
@@ -232,7 +243,8 @@ actually available, including the credential-free health receipt. A cached healt
 GET can lack a fresh function invocation; body=ok alone cannot fill a missing log.
 No-match, multiple distinct invocation matches, stale alias, unavailable logs or a wrong status stops
 the next write. Correlate waiting polls too; HTTP results stay pending until this.
-App-build behavior receipt is separately bound to A/B and tree S, not falsely
+App-build behavior receipt is separately bound to A/B, reviewed modules S and
+its exact public intent-table delta, not falsely
 labelled as a teacher HTTP request receipt.
 
 Healthy completion leaves only the already approved original24h pilot eligible.
