@@ -1,0 +1,27 @@
+name: Preflight diagnostic contract
+on:
+  push:
+    branches: [review/admission-containment-20261003]
+    paths:
+      - 'ops/preflight_diagnostic_contract/**'
+      - '.github/workflows/preflight-diagnostic-contract.yml'
+permissions:
+  contents: read
+concurrency:
+  group: preflight-diagnostic-synthetic-contract
+  cancel-in-progress: false
+jobs:
+  synthetic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Synthetic faults and Linux process filesystem contract
+        working-directory: ops/preflight_diagnostic_contract
+        run: |
+          set -euo pipefail
+          python3 -m py_compile runner.py protocol.py durable.py guest.py
+          sudo env IBM_V2_SYNTHETIC_SYSTEMD=1 /usr/bin/python3 -m unittest discover -v
+          python3 -c 'import runner; print("PACKAGE_SHA256=" + runner.package_sha())'
