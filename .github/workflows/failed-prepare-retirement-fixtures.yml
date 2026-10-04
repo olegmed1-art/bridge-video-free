@@ -14,7 +14,7 @@ jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == '3c0d5af66be470053f2f27d76a1394c09b7b79b4' &&
+      github.event.before == 'f099865ff2568d2bc17c690645eba08694f342d7' &&
       github.run_attempt == 1 &&
       github.event.head_commit.message == 'ci: verify retirement writer import order'
     strategy:
