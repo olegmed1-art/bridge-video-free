@@ -28,8 +28,12 @@ jobs:
           ruby -e 'require "yaml"; YAML.parse_file(ARGV.fetch(0))' .github/workflows/oracle-light-native-cli-install-preflight.yml
 
   probe:
+    # Quarantined pending an owner-approved external credential boundary.
+    # See docs/security/WORKFLOW_CREDENTIAL_BOUNDARY_2026-10-04.md.
+    environment: production-operations
     needs: contract
     if: >-
+      false &&
       github.repository == 'olegmed1-art/bridge-video-free' &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'workflow_dispatch' &&
@@ -41,6 +45,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
       - name: Check CLI prerequisites without credentials or package installation
         shell: bash
         env:

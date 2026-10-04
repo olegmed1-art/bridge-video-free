@@ -41,7 +41,14 @@ jobs:
           PY
 
   probe:
-    if: ${{ github.event_name == 'push' }}
+    # Quarantined pending an owner-approved external credential boundary.
+    # See docs/security/WORKFLOW_CREDENTIAL_BOUNDARY_2026-10-04.md.
+    environment: production-operations
+    if: >-
+      false &&
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push'
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -49,33 +56,12 @@ jobs:
       ISSUE_NUMBER: '318'
       EXPECTED_INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
 
-      OCI_CLI_USER_SLOT: ${{ secrets.OCI_CLI_USER }}
-      OCI_CLI_TENANCY_SLOT: ${{ secrets.OCI_CLI_TENANCY }}
-      OCI_CLI_FINGERPRINT_SLOT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-      OCI_CLI_KEY_CONTENT_SLOT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-      OCI_CLI_REGION_SLOT: ${{ secrets.OCI_CLI_REGION }}
-
-      OCI_USER_OCID_SLOT: ${{ secrets.OCI_USER_OCID }}
-      OCI_TENANCY_OCID_SLOT: ${{ secrets.OCI_TENANCY_OCID }}
-      OCI_FINGERPRINT_SLOT: ${{ secrets.OCI_FINGERPRINT }}
-      OCI_PRIVATE_KEY_SLOT: ${{ secrets.OCI_PRIVATE_KEY }}
-      OCI_REGION_SLOT: ${{ secrets.OCI_REGION }}
-
-      OCI_API_USER_SLOT: ${{ secrets.OCI_API_USER }}
-      OCI_API_TENANCY_SLOT: ${{ secrets.OCI_API_TENANCY }}
-      OCI_API_FINGERPRINT_SLOT: ${{ secrets.OCI_API_FINGERPRINT }}
-      OCI_API_PRIVATE_KEY_SLOT: ${{ secrets.OCI_API_PRIVATE_KEY }}
-      OCI_API_REGION_SLOT: ${{ secrets.OCI_API_REGION }}
-
-      OCI_CONFIG_SLOT: ${{ secrets.OCI_CONFIG }}
-      OCI_CONFIG_B64_SLOT: ${{ secrets.OCI_CONFIG_B64 }}
-      OCI_CLI_CONFIG_SLOT: ${{ secrets.OCI_CLI_CONFIG }}
-      OCI_CREDENTIALS_JSON_SLOT: ${{ secrets.OCI_CREDENTIALS_JSON }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
           fetch-depth: 2
 
       - name: Validate one bounded probe request
@@ -84,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
-            | grep -E '^ops/oracle-universal-video-oci-probes/[^/]+\.json$' | sort -u)
+            | grep -E '^ops/oracle-universal-video-oci-probes/[^/]+\.json | sort -u)
           [[ ${#files[@]} -eq 1 ]] || {
             echo "Expected exactly one OCI auth probe request; found ${#files[@]}" >&2
             exit 1
@@ -100,7 +86,30 @@ jobs:
           print(f"request_id={x['request_id']}")
           PY
 
-      - name: Evaluate secret-set completeness without reading values
+      - name: Evaluate secret-set completeness without disclosing values
+        env:
+          OCI_CLI_USER_SLOT: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY_SLOT: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT_SLOT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT_SLOT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_CLI_REGION_SLOT: ${{ secrets.OCI_CLI_REGION }}
+
+          OCI_USER_OCID_SLOT: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID_SLOT: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT_SLOT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_PRIVATE_KEY_SLOT: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_REGION_SLOT: ${{ secrets.OCI_REGION }}
+
+          OCI_API_USER_SLOT: ${{ secrets.OCI_API_USER }}
+          OCI_API_TENANCY_SLOT: ${{ secrets.OCI_API_TENANCY }}
+          OCI_API_FINGERPRINT_SLOT: ${{ secrets.OCI_API_FINGERPRINT }}
+          OCI_API_PRIVATE_KEY_SLOT: ${{ secrets.OCI_API_PRIVATE_KEY }}
+          OCI_API_REGION_SLOT: ${{ secrets.OCI_API_REGION }}
+
+          OCI_CONFIG_SLOT: ${{ secrets.OCI_CONFIG }}
+          OCI_CONFIG_B64_SLOT: ${{ secrets.OCI_CONFIG_B64 }}
+          OCI_CLI_CONFIG_SLOT: ${{ secrets.OCI_CLI_CONFIG }}
+          OCI_CREDENTIALS_JSON_SLOT: ${{ secrets.OCI_CREDENTIALS_JSON }}
         id: auth
         shell: bash
         run: |
