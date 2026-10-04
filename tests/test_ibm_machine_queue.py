@@ -40,6 +40,7 @@ class PipeTests(unittest.TestCase):
  def test_malformed(self):self.refuse(dbmode="MALFORMED")
  def test_oversize(self):self.refuse(dbmode="OVERSIZE")
  def test_active_jobs(self):self.refuse(dbmode="NONZERO")
+ def test_intervening_wal_change(self):self.refuse(dbmode="WAL_CHANGED")
  def test_boolean_count(self):self.refuse(dbmode="BOOL")
  def test_rls(self):self.refuse(dbmode="RLS")
  def test_stale_server_clock(self):self.refuse(dbmode="STALE")
@@ -231,8 +232,10 @@ class ConcurrentRelationTests(unittest.TestCase):
    c.execute("CREATE TABLE assistant_lab.job(status text)")
    c.execute("CREATE TABLE assistant_lab.control_command(status text)")
  def tearDown(self):
-  with self.connect() as c:c.execute("DROP SCHEMA assistant_lab CASCADE")
- def race(self,ddl,writer=False):
+  with self.connect() as c:
+   c.execute("DROP SCHEMA assistant_lab CASCADE")
+   c.execute("DROP SCHEMA IF EXISTS old_name CASCADE")
+ def race(self,ddl,writer=False,namespace=False,baseline=False):
   import threading
   from database import native_cli_permission_engine as engine
   start=threading.Event();done=threading.Event();codes=[]
@@ -243,6 +246,8 @@ class ConcurrentRelationTests(unittest.TestCase):
     try:c.execute(ddl);codes.append("OK")
     except Exception as e:codes.append(getattr(e,"sqlstate",None))
     finally:done.set()
+  if namespace:
+   with self.connect() as initial:initial.execute("INSERT INTO assistant_lab.job(status) VALUES ('RUNNING')")
   thread=threading.Thread(target=concurrent);thread.start()
   with self.connect() as c:
    c.read_only=True
@@ -256,12 +261,21 @@ class ConcurrentRelationTests(unittest.TestCase):
      return c.execute(sql)
    try:
     with patch.object(engine,"identity"):
-     if writer:
-      with self.assertRaises(p.Refused):db.query(LockedObserver())
-     else:self.assertEqual(db.query(LockedObserver())["lab_nonterminal"],0)
+     query=f.schema_rename_baseline_query if baseline else db.query
+     if writer or namespace and not baseline:
+      with self.assertRaises(p.Refused):query(LockedObserver())
+     else:self.assertEqual(query(LockedObserver())["lab_nonterminal"],0)
    finally:start.set();thread.join(timeout=3)
   self.assertFalse(thread.is_alive())
-  self.assertEqual(codes,["OK" if writer else "55P03"])
+  self.assertEqual(codes,["OK" if writer or namespace else "55P03"])
+  if namespace:
+   with self.connect() as check:self.assertEqual(check.execute("SELECT count(*) FROM old_name.job WHERE status='RUNNING'").fetchone(),(1,))
+ def schema_rename(self,baseline=False):
+  self.race("ALTER SCHEMA assistant_lab RENAME TO old_name; CREATE SCHEMA assistant_lab; CREATE VIEW assistant_lab.job AS SELECT 'COMPLETED'::text AS status; CREATE VIEW assistant_lab.control_command AS SELECT 'COMPLETED'::text AS status",namespace=True,baseline=baseline)
+ def test_prior_query_false_pass_reproduced_on_schema_rename(self):self.schema_rename(baseline=True)
+ def test_schema_rename_and_new_views_refused(self):self.schema_rename()
+ def test_postgres_target_is_18(self):
+  with self.connect() as c:self.assertEqual(c.execute("SELECT current_setting('server_version_num')::int/10000").fetchone(),(18,))
  def test_drop_then_view_replacement_is_blocked_until_counts(self):
   self.race("DROP TABLE assistant_lab.job; CREATE VIEW assistant_lab.job AS SELECT 'COMPLETED'::text AS status")
  def test_enable_rls_is_blocked_until_counts(self):

@@ -1,6 +1,15 @@
 """Fixed read-only Assistant Lab queue observer in the existing owner context."""
 import datetime,os,sys
 from ops.ibm_machine_queue_protocol import SQL,SQL_SHA,need,parse,canonical,HardCap
+FENCE_SQL="""SELECT pg_catalog.pg_is_in_recovery(),pg_catalog.pg_current_wal_insert_lsn()::text,
+ 'assistant_lab.control_command'::pg_catalog.regclass::pg_catalog.oid,
+ 'assistant_lab.job'::pg_catalog.regclass::pg_catalog.oid,
+ (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname='assistant_lab')"""
+def identity_fence(conn,locked):
+ row=conn.execute(FENCE_SQL).fetchone()
+ import re
+ need(type(row) is tuple and len(row)==5 and row[0] is False and type(row[1]) is str and re.fullmatch(r"[0-9A-F]+/[0-9A-F]+",row[1]) and tuple(row[2:4])==locked and all(type(x) is int and x>0 for x in row[2:]),"RELATION_IDENTITY_FENCE")
+ return row[1:]
 def query(conn):
  from database.native_cli_permission_engine import identity
  from ops.native_permission_hold_guard import EXPECTED_TARGET
@@ -18,6 +27,9 @@ def query(conn):
   conn.execute("LOCK TABLE ONLY assistant_lab.control_command, ONLY assistant_lab.job IN ACCESS SHARE MODE")
   locked=conn.execute("SELECT 'assistant_lab.control_command'::regclass::oid,'assistant_lab.job'::regclass::oid").fetchone()
   need(type(locked) is tuple and len(locked)==2 and all(type(x) is int and x>0 for x in locked) and len(set(locked))==2,"LOCKED_RELATION_OIDS")
+  # Namespace rename is not blocked by table locks. Reject any intervening WAL
+  # insertion plus namespace/OID drift, including an ABA rename/replacement.
+  before=identity_fence(conn,locked)
   # Validate these exact locked OIDs; no views, partitions, inheritance or RLS.
   catalog=conn.execute("""SELECT c.oid,c.relname,c.relkind,c.relrowsecurity,c.relforcerowsecurity,a.amname,
     EXISTS(SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid)
@@ -27,6 +39,7 @@ def query(conn):
   need(catalog==[(locked[0],"control_command","r",False,False,"heap",False),(locked[1],"job","r",False,False,"heap",False)],"QUEUE_CATALOG")
   cur=conn.execute(SQL);values=cur.fetchone()
   row=dict(zip([c.name for c in cur.description],values))
+  need(identity_fence(conn,locked)==before,"WAL_OR_NAMESPACE_CHANGED")
   need(row["database_name"]==target.database and all(type(row[k]) is int and row[k]==0 for k in ("lab_nonterminal","control_nonterminal","null_status_count")) and row["job_rls_off"] is True and row["control_rls_off"] is True,"QUEUE_NOT_ZERO_OR_VISIBLE")
   observed=row["observed_at"];need(isinstance(observed,datetime.datetime) and observed.tzinfo is not None,"SERVER_TIMESTAMP")
   row["observed_at"]=observed.isoformat()

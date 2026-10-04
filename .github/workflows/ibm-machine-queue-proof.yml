@@ -39,7 +39,7 @@ jobs:
     timeout-minutes: 5
     services:
       postgres:
-        image: postgres:16.4-bookworm
+        image: postgres@sha256:3f55f8895c4ed50603e2fbdfc72fffeeaba3173321fee5cb825bbbeb30d9d854 # 18.0-bookworm; primary registry verified
         env: {POSTGRES_PASSWORD: postgres, POSTGRES_DB: neondb}
         ports: ['5432:5432']
         options: >-

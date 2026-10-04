@@ -31,6 +31,9 @@ class FakeConnection:
  def transaction(self):return Transaction(self)
  def execute(self,sql,args=None):
   self.commands.append(sql)
+  if sql==db.FENCE_SQL:
+   lsn="0/"+format(0x1000000*(1+self.commands.count(p.SQL) if self.mode=="WAL_CHANGED" else 1),"X")
+   return Result((False,lsn,1001,1002,1000))
   if sql=="SELECT current_setting('transaction_read_only')":return Result(("off" if self.mode=="READWRITE" else "on",))
   if sql=="SELECT current_database(),session_user,current_user":return Result((TARGET["database"],TARGET["session_owner"],"other" if self.mode=="ROLE" else TARGET["owner"]))
   if "FROM pg_catalog.pg_settings" in sql:
@@ -122,3 +125,13 @@ def main(role,mode):
 if __name__=="__main__":
  try:main(*sys.argv[1:])
  except BaseException:send({"kind":"ADAPTER_ERROR"});sys.exit(2)
+
+# Exact query function from prior reviewed head51fdca29; test-only historical reproducer.
+# SHA256 e84608d6f6a7cf80ae696ec798c5c4e48f3ff31fbf2746eaaaafef4ddf0638cd.
+SCHEMA_RENAME_BASELINE_QUERY="def query(conn):\n from database.native_cli_permission_engine import identity\n from ops.native_permission_hold_guard import EXPECTED_TARGET\n from database.native_cli_permission_engine import Target,NeonBinding\n target=Target(**{**EXPECTED_TARGET,\"neon\":NeonBinding(**EXPECTED_TARGET[\"neon\"])})\n need(conn.read_only is True,\"READONLY_CONFIGURATION\")\n with conn.transaction():\n  conn.execute(\"SET TRANSACTION ISOLATION LEVEL READ COMMITTED READ ONLY\")\n  conn.execute(\"SET LOCAL statement_timeout='2s'\")\n  conn.execute(\"SET LOCAL lock_timeout='1s'\")\n  conn.execute(\"SET LOCAL search_path='pg_catalog'\")\n  need(conn.execute(\"SELECT current_setting('transaction_read_only')\").fetchone()==(\"on\",),\"READONLY_TRANSACTION\")\n  identity(conn,target)\n  # ACCESS SHARE permits writers, but pins both named relations through counts.\n  conn.execute(\"LOCK TABLE ONLY assistant_lab.control_command, ONLY assistant_lab.job IN ACCESS SHARE MODE\")\n  locked=conn.execute(\"SELECT 'assistant_lab.control_command'::regclass::oid,'assistant_lab.job'::regclass::oid\").fetchone()\n  need(type(locked) is tuple and len(locked)==2 and all(type(x) is int and x>0 for x in locked) and len(set(locked))==2,\"LOCKED_RELATION_OIDS\")\n  # Validate these exact locked OIDs; no views, partitions, inheritance or RLS.\n  catalog=conn.execute(\"\"\"SELECT c.oid,c.relname,c.relkind,c.relrowsecurity,c.relforcerowsecurity,a.amname,\n    EXISTS(SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid)\n    FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace\n    LEFT JOIN pg_catalog.pg_am a ON a.oid=c.relam\n    WHERE c.oid IN ('assistant_lab.control_command'::regclass,'assistant_lab.job'::regclass) AND n.nspname='assistant_lab' ORDER BY c.relname\"\"\").fetchall()\n  need(catalog==[(locked[0],\"control_command\",\"r\",False,False,\"heap\",False),(locked[1],\"job\",\"r\",False,False,\"heap\",False)],\"QUEUE_CATALOG\")\n  cur=conn.execute(SQL);values=cur.fetchone()\n  row=dict(zip([c.name for c in cur.description],values))\n  need(row[\"database_name\"]==target.database and all(type(row[k]) is int and row[k]==0 for k in (\"lab_nonterminal\",\"control_nonterminal\",\"null_status_count\")) and row[\"job_rls_off\"] is True and row[\"control_rls_off\"] is True,\"QUEUE_NOT_ZERO_OR_VISIBLE\")\n  observed=row[\"observed_at\"];need(isinstance(observed,datetime.datetime) and observed.tzinfo is not None,\"SERVER_TIMESTAMP\")\n  row[\"observed_at\"]=observed.isoformat()\n  return row\n"
+def schema_rename_baseline_query(conn):
+ import hashlib
+ p.need(hashlib.sha256(SCHEMA_RENAME_BASELINE_QUERY.encode()).hexdigest()=="e84608d6f6a7cf80ae696ec798c5c4e48f3ff31fbf2746eaaaafef4ddf0638cd","HISTORICAL_QUERY_PIN")
+ scope={"datetime":datetime,"SQL":p.SQL,"need":p.need}
+ exec(compile(SCHEMA_RENAME_BASELINE_QUERY,"<pinned-test-only-query>","exec"),scope)
+ return scope["query"](conn)
