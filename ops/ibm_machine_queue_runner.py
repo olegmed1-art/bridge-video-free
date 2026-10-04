@@ -7,6 +7,11 @@ from ops.native_maintenance_store_runner import HOST,REPOSITORY
 ROOT=Path(__file__).resolve().parents[1]
 ROUTE_WORKFLOW=".github/workflows/native-maintenance-owner-host.yml"
 ROUTE_SHA="6afa5ef26efd3d3d5151d9bd47c629067fd0f23ae02f30dec33dd518295faf38"
+def validate_inputs(main,mode,package):
+ need(type(main) is str and re.fullmatch(r"[0-9a-f]{40}",main),"MAIN_SELECTOR")
+ need(mode in ("queue-qualify","bounded-relay"),"MODE")
+ need(type(package) is str and (bool(re.fullmatch(r"[0-9a-f]{64}",package)) if mode=="bounded-relay" else package==""),"PACKAGE_SELECTOR")
+ return main,mode,package
 def route():
  raw=(ROOT/ROUTE_WORKFLOW).read_bytes();need(hashlib.sha256(raw).hexdigest()==ROUTE_SHA,"ROUTE_SOURCE_DRIFT")
  lines=[x.strip() for x in raw.decode().splitlines() if x.strip().startswith("bash ops/oracle_known_hosts_from_scan.sh ")]
@@ -45,20 +50,25 @@ def binding(frame,main,dbready):
  need(type(r["host"]) is str and re.fullmatch(r"[A-Za-z0-9_-]{1,100}",r["host"]) and re.fullmatch(r"[0-9a-f-]{36}",r["boot"]) and re.fullmatch(r"[1-9][0-9]{5,14}",r["run"]),"CHANNEL_IDENTITY")
  pins=frame["source_pins"];need(type(pins) is dict and set(pins)=={"repair_gate.py","fs_transaction.py","host_adapter.py","executor.py","inspector.py"} and all(type(x) is str and re.fullmatch(r"[0-9a-f]{64}",x) for x in pins.values()),"GUEST_PINS")
  return r
+def close_clients(clients):
+ errors=[]
+ while clients:
+  child=clients.pop()
+  try:child.close()
+  except BaseException:errors.append(True)
+ need(not errors,"CLEANUP_FAILED")
 def entry():
  deadline=time.monotonic()+160;cap=HardCap(160);clients=[]
  try:
-  main=os.environ.get("EXPECTED_MAIN");context(main)
+  main,mode,package=validate_inputs(os.environ.get("EXPECTED_MAIN"),os.environ.get("QUEUE_MODE"),os.environ.get("EXPECTED_PACKAGE_SHA",""));context(main)
   need(subprocess.check_output(["/usr/bin/git","rev-parse","HEAD"],cwd=ROOT,text=True).strip()==main and subprocess.run(["/usr/bin/git","diff","--quiet","HEAD","--"],cwd=ROOT).returncode==0,"CHECKOUT_DRIFT")
-  mode=os.environ.get("QUEUE_MODE");need(mode in ("queue-qualify","bounded-relay"),"MODE")
   main_source(main)
   db=PipeClient([sys.executable,"-B","-u","-m","ops.ibm_machine_queue_db"],child_env("db"),5);clients.append(db)
   os.environ.pop("NATIVE_OWNER_DATABASE_URL",None)
   dbready=db.recv(time.monotonic()+15)
   need(set(dbready)=={"kind","project","branch","database","role"} and dbready["kind"]=="DB_READY" and dbready["role"]=="neondb_owner","DB_PREPARE")
   if mode=="queue-qualify":
-   main_source(main);print('{"audit":"ASSISTANT_LAB_QUEUE_READ_ONLY_PASS","production_mutations":false,"live_actions":0}',flush=True);return 0
-  package=os.environ.get("EXPECTED_PACKAGE_SHA","");need(re.fullmatch(r"[0-9a-f]{64}",package),"REVIEWED_PACKAGE_PIN")
+   main_source(main);close_clients(clients);cap.close();cap=None;print('{"audit":"ASSISTANT_LAB_QUEUE_READ_ONLY_PASS","production_mutations":false,"live_actions":0}',flush=True);return 0
   source=PipeClient([sys.executable,"-B","-u","-m","ops.ibm_machine_queue_source"],child_env("source"),5);clients.append(source)
   need(source.recv(time.monotonic()+5)=={"kind":"SOURCE_READY"},"SOURCE_PREPARE")
   with tempfile.TemporaryDirectory(prefix="machine-queue-",dir=os.environ["RUNNER_TEMP"]) as temp:
@@ -75,10 +85,12 @@ def entry():
    accept_channel(relay,primary,reviewed,bind_nonce,deadline)
    result=Supervisor(db,source,reviewed,5,used_nonces=(bind_nonce,)).session(relay,frame)
    need(result["proofs"]==2,"PROOF_COUNT")
+  close_clients(clients);cap.close();cap=None
   print('{"audit":"MACHINE_QUEUE_RELAY_COMPLETE","proofs":2,"parent_stop_required":true,"automatic_starts":0}',flush=True);return 0
  except BaseException:
   print('{"audit":"MACHINE_QUEUE_REFUSED","parent_stop_required":true,"automatic_starts":0}',flush=True);return 2
  finally:
-  for child in reversed(clients):child.close()
-  cap.close()
+  try:close_clients(clients)
+  finally:
+   if cap:cap.close()
 if __name__=="__main__":sys.exit(entry())

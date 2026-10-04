@@ -38,9 +38,10 @@ class FakeConnection:
    if self.mode=="GUC_SOURCE":rows[2]=(*rows[2][:3],"session",*rows[2][4:])
    if self.mode=="GUC_MISSING":rows.pop()
    return Result(rows=rows)
+  if sql=="SELECT 'assistant_lab.control_command'::regclass::oid,'assistant_lab.job'::regclass::oid":return Result((1001,1002))
   if "FROM pg_catalog.pg_class" in sql:
-   rows=[("control_command","r",False,False,"heap",False),("job","r",self.mode=="CAT_RLS",False,"heap",False)]
-   if self.mode=="CAT_VIEW":rows[1]=("job","v",False,False,None,False)
+   rows=[(1001,"control_command","r",False,False,"heap",False),(1002,"job","r",self.mode=="CAT_RLS",False,"heap",False)]
+   if self.mode=="CAT_VIEW":rows[1]=(1002,"job","v",False,False,None,False)
    return Result(rows=rows)
   if sql==p.SQL:
    names=["observed_at","database_name","lab_nonterminal","control_nonterminal","null_status_count","job_rls_off","control_rls_off"]
@@ -101,6 +102,8 @@ def main(role,mode):
    r=request("POST_STOP" if mode=="BAD_PHASE" else phase,first if mode=="REPLAY" else None);first=r["nonce"]
    send(r);proof=recv();p.need(proof.get("kind")=="QUEUE_PROOF" and proof.get("nonce")==r["nonce"],"FIXTURE_PROOF")
   send({"kind":"REPAIR_RESULT","state":"APPLIED_QUIESCENT_NOT_STARTED","automatic_starts":0,"stop_now_required":True})
+  if mode=="GUEST_RESULT_NONZERO":os._exit(7)
+  if mode=="GUEST_RESULT_HANG":time.sleep(20)
  elif role=="ssh":
   # Mock SSH still introduces a real second-hop process and real duplex pipes.
   send({"kind":"CHANNEL_PREPARED_NO_IBM_CONNECTION"});send({"kind":"CHANNEL_BINDING","reviewed":reviewed(),"source_pins":PINS})
@@ -110,7 +113,10 @@ def main(role,mode):
    send(child.recv(time.monotonic()+5))
    for _ in range(2):
     r=child.recv(time.monotonic()+5);send(r);child.send(recv(),time.monotonic()+2)
-   send(child.recv(time.monotonic()+5))
+   result=child.recv(time.monotonic()+5);child.finish(time.monotonic()+.5);child.close();send(result)
+   if mode=="RESULT_THEN_NONZERO":os._exit(7)
+   if mode=="RESULT_THEN_HANG":time.sleep(20)
+   if mode=="RESULT_THEN_CLEANUP_FAILURE":raise RuntimeError("FIXTURE_CLEANUP_FAILURE")
   finally:child.close()
  else:raise RuntimeError("FIXTURE_ROLE")
 if __name__=="__main__":

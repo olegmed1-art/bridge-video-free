@@ -88,8 +88,9 @@ def entry(main,expected_package_sha):
    io.send(request);proof=io.recv(min(deadline,time.monotonic()+7))
    need(proof.get("kind")=="QUEUE_PROOF" and proof.get("nonce")==request["nonce"],"PARENT_PROOF")
    child.send(proof,min(deadline,time.monotonic()+1))
-  result=child.recv(deadline);need(result.get("kind")=="REPAIR_RESULT","GUEST_RESULT");io.send(result)
-  need(result.get("state")=="APPLIED_QUIESCENT_NOT_STARTED","REPAIR_REFUSED");return 0
+  result=child.recv(deadline);need(result.get("kind")=="REPAIR_RESULT" and result.get("state")=="APPLIED_QUIESCENT_NOT_STARTED","REPAIR_REFUSED")
+  child.finish(min(deadline,time.monotonic()+3));child.close();child=None
+  io.send(result);return 0
  except BaseException:
   io.send({"kind":"ADAPTER_ERROR"});return 2
  finally:

@@ -27,7 +27,9 @@ class HardCap:
      os._exit(124)
     if sel.select(min(left,.05)) and not os.read(reader,1):os._exit(0)
   os.close(reader);self.fd=writer;self.pid=pid
- def close(self):os.close(self.fd);os.waitpid(self.pid,0)
+ def close(self):
+  if self.fd is not None:os.close(self.fd);self.fd=None
+  if self.pid is not None:os.waitpid(self.pid,0);self.pid=None
 class PipeClient:
  def __init__(self,argv,env,cap=5):
   parent=os.getpid()
@@ -61,6 +63,16 @@ class PipeClient:
   return result
  def call(self,value,end):
   with self.lock:self.send(value,end);return self.recv(end)
+ def finish(self,end):
+  # A result frame is provisional until clean EOF and zero process exit.
+  need(not self.buf,"TRAILING_OUTPUT")
+  self.wait(self.p.stdout.fileno(),selectors.EVENT_READ,end)
+  try:raw=os.read(self.p.stdout.fileno(),4096)
+  except OSError:raise Refused("TERMINAL_IO") from None
+  need(raw==b"","TRAILING_OUTPUT")
+  try:code=self.p.wait(timeout=max(0,end-time.monotonic()))
+  except subprocess.TimeoutExpired:raise Refused("TERMINAL_TIMEOUT") from None
+  need(code==0,"TERMINAL_NONZERO")
  def close(self):
   if self.p.poll() is None:
    try:os.killpg(self.p.pid,signal.SIGKILL)
@@ -106,6 +118,7 @@ class Supervisor:
    request=relay.recv(time.monotonic()+55)
    if request.get("kind")=="REPAIR_RESULT":
     need(phases==["PRE_STOP","POST_STOP"] and request.get("state")=="APPLIED_QUIESCENT_NOT_STARTED" and request.get("automatic_starts")==0 and request.get("stop_now_required") is True,"REPAIR_RESULT_REFUSED")
+    relay.finish(time.monotonic()+min(3,self.cap))
     return {"kind":"MACHINE_QUEUE_COMPLETE","proofs":2,"automatic_starts":0,"parent_stop_required":True}
    need(request.get("kind")=="QUEUE_REQUEST" and len(phases)<2 and request.get("phase")==("PRE_STOP" if not phases else "POST_STOP"),"PHASE_SEQUENCE")
    proof=self.prove(request);phases.append(request["phase"])

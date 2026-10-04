@@ -63,6 +63,11 @@ class PipeTests(unittest.TestCase):
  def test_initial_admission_future(self):self.refuse(apimode="BIND_FUTURE")
  def test_initial_admission_wrong_mode(self):self.refuse(apimode="BIND_MODE")
  def test_initial_admission_missing_timestamp(self):self.refuse(apimode="BIND_MISSING")
+ def test_guest_result_then_nonzero(self):self.refuse(sshmode="GUEST_RESULT_NONZERO")
+ def test_guest_result_then_hang(self):self.refuse(sshmode="GUEST_RESULT_HANG")
+ def test_result_then_nonzero(self):self.refuse(sshmode="RESULT_THEN_NONZERO")
+ def test_result_then_hang(self):self.refuse(sshmode="RESULT_THEN_HANG")
+ def test_result_then_cleanup_failure(self):self.refuse(sshmode="RESULT_THEN_CLEANUP_FAILURE")
  def test_parent_death_kills_pipe_child(self):
   code="import sys,time;from ops.ibm_machine_queue_protocol import PipeClient;c=PipeClient([sys.executable,'-c','import time;time.sleep(30)'],{},2);print(c.p.pid,flush=True);time.sleep(30)"
   parent=subprocess.Popen([sys.executable,"-B","-c",code],cwd=ROOT,stdout=subprocess.PIPE)
@@ -76,6 +81,27 @@ class PipeTests(unittest.TestCase):
    time.sleep(.01)
   self.assertTrue(dead)
 class Guards(unittest.TestCase):
+ def test_public_mode_and_package_selectors(self):
+  self.assertEqual(runner.validate_inputs(f.MAIN,"queue-qualify",""),(f.MAIN,"queue-qualify",""))
+  self.assertEqual(runner.validate_inputs(f.MAIN,"bounded-relay","a"*64),(f.MAIN,"bounded-relay","a"*64))
+  for main,mode,package in ((f.MAIN,"arbitrary",""),(f.MAIN,"bounded-relay",""),(f.MAIN,"bounded-relay","A"*64),(f.MAIN,"bounded-relay","a"*64+";x"),(f.MAIN,"queue-qualify","a"*64),("bad","queue-qualify","")):
+   with self.subTest(mode=mode,package=package),self.assertRaises(p.Refused):runner.validate_inputs(main,mode,package)
+ def test_bad_selectors_never_reach_secret_checkout_or_db(self):
+  for mode,package in (("arbitrary",""),("bounded-relay",""),("bounded-relay","A"*64),("queue-qualify","a"*64)):
+   accessed=[]
+   class Environment(dict):
+    def get(self,key,default=None):
+     if key in ("NATIVE_OWNER_DATABASE_URL","SSH_PRIVATE_KEY","GH_TOKEN"):accessed.append(key)
+     return super().get(key,default)
+    def items(self):
+     accessed.append("credential-environment-enumeration");return super().items()
+   env=Environment(fakeenv());env.update(QUEUE_MODE=mode,EXPECTED_PACKAGE_SHA=package,NATIVE_OWNER_DATABASE_URL="synthetic-private-db",SSH_PRIVATE_KEY="synthetic-private-key")
+   import io
+   output=io.StringIO()
+   with patch.object(runner.os,"environ",env),patch.object(runner,"HardCap",return_value=types.SimpleNamespace(close=lambda:None)),patch.object(runner,"PipeClient") as child,patch.object(runner,"main_source") as api,patch.object(runner.subprocess,"check_output") as checkout,contextlib.redirect_stdout(output):
+    self.assertEqual(runner.entry(),2)
+   self.assertEqual(accessed,[]);child.assert_not_called();api.assert_not_called();checkout.assert_not_called()
+   self.assertNotIn("synthetic-private",output.getvalue())
  def test_fixed_sql_digest(self):self.assertEqual(hashlib.sha256(p.SQL.encode()).hexdigest(),p.SQL_SHA)
  def test_duplicate_json_rejected(self):
   with self.assertRaises(p.Refused):p.parse(b'{"kind":"x","kind":"y"}')
@@ -98,6 +124,9 @@ class Guards(unittest.TestCase):
   self.assertIn("SELECT current_database(),session_user,current_user",conn.commands)
   self.assertTrue(any("FROM pg_catalog.pg_settings" in x for x in conn.commands))
   self.assertEqual(conn.commands[-1],"TRANSACTION_END");self.assertIn(p.SQL,conn.commands)
+  lock="LOCK TABLE ONLY assistant_lab.control_command, ONLY assistant_lab.job IN ACCESS SHARE MODE"
+  self.assertLess(conn.commands.index(lock),next(i for i,x in enumerate(conn.commands) if "FROM pg_catalog.pg_class" in x))
+  self.assertLess(conn.commands.index(lock),conn.commands.index(p.SQL))
   self.assertFalse(any(x.startswith(("GRANT","REVOKE","UPDATE","DELETE","INSERT","CREATE")) for x in conn.commands))
  def test_queue_catalog_view_refused(self):
   with self.assertRaises(p.Refused):db.query(f.FakeConnection("CAT_VIEW"))
@@ -150,6 +179,7 @@ class WorkflowContract(unittest.TestCase):
   steps=owner["steps"]
   for step in steps[:-1]:self.assertNotIn("secrets.",json.dumps(step))
   env=steps[-1]["env"];self.assertEqual(env["NATIVE_OWNER_DATABASE_URL"],"${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}");self.assertIn("inputs.mode == 'bounded-relay'",env["SSH_PRIVATE_KEY"])
+  before=steps[-2];self.assertIn("validate_inputs",before["run"]);self.assertEqual(set(before["env"]),{"EXPECTED_MAIN","QUEUE_MODE","EXPECTED_PACKAGE_SHA"})
   self.assertNotIn("IBM_CLOUD_API_KEY",json.dumps(value));self.assertNotIn("actions: write",json.dumps(value))
  def test_existing_canon_maintenance_workflow_unchanged(self):
   expected={".github/workflows/native-maintenance-owner-attest.yml":"c6fd46d973bbbf08d7fe63ae40c5bf8cf63af347ef50c3eb466108e4fd1cfc92",".github/workflows/native-maintenance-owner-host.yml":runner.ROUTE_SHA}
@@ -186,5 +216,57 @@ class BeforeConnection(unittest.TestCase):
   self.assertLess(text.index("hashlib.sha256(raw)"),text.index("exec(compile(raw"))
   self.assertIn("validate_review(policy,authorization",text)
   self.assertIn("APPROVAL_OPERATION_SCOPE",text)
+
+
+@unittest.skipUnless(os.environ.get("MACHINE_QUEUE_SYNTHETIC_POSTGRES")=="1","disposable CI PostgreSQL only")
+class ConcurrentRelationTests(unittest.TestCase):
+ def connect(self):
+  import psycopg
+  # Fixed disposable loopback service; never use an owner credential/DSN.
+  return psycopg.connect(host="127.0.0.1",port=5432,dbname="neondb",user="postgres",password="postgres",connect_timeout=2,sslmode="disable",gssencmode="disable",autocommit=True)
+ def setUp(self):
+  self.assertEqual(os.environ.get("GITHUB_ACTIONS"),"true")
+  with self.connect() as c:
+   c.execute("CREATE SCHEMA assistant_lab")
+   c.execute("CREATE TABLE assistant_lab.job(status text)")
+   c.execute("CREATE TABLE assistant_lab.control_command(status text)")
+ def tearDown(self):
+  with self.connect() as c:c.execute("DROP SCHEMA assistant_lab CASCADE")
+ def race(self,ddl,writer=False):
+  import threading
+  from database import native_cli_permission_engine as engine
+  start=threading.Event();done=threading.Event();codes=[]
+  def concurrent():
+   with self.connect() as c:
+    c.execute("SET lock_timeout='150ms'")
+    if not start.wait(2):codes.append("NO_CHALLENGE");done.set();return
+    try:c.execute(ddl);codes.append("OK")
+    except Exception as e:codes.append(getattr(e,"sqlstate",None))
+    finally:done.set()
+  thread=threading.Thread(target=concurrent);thread.start()
+  with self.connect() as c:
+   c.read_only=True
+   class LockedObserver:
+    read_only=True
+    def transaction(self):return c.transaction()
+    def execute(self,sql):
+     if sql==p.SQL:
+      start.set()
+      if not done.wait(2):raise AssertionError("DDL_ATTEMPT_TIMEOUT")
+     return c.execute(sql)
+   try:
+    with patch.object(engine,"identity"):
+     if writer:
+      with self.assertRaises(p.Refused):db.query(LockedObserver())
+     else:self.assertEqual(db.query(LockedObserver())["lab_nonterminal"],0)
+   finally:start.set();thread.join(timeout=3)
+  self.assertFalse(thread.is_alive())
+  self.assertEqual(codes,["OK" if writer else "55P03"])
+ def test_drop_then_view_replacement_is_blocked_until_counts(self):
+  self.race("DROP TABLE assistant_lab.job; CREATE VIEW assistant_lab.job AS SELECT 'COMPLETED'::text AS status")
+ def test_enable_rls_is_blocked_until_counts(self):
+  self.race("ALTER TABLE assistant_lab.job ENABLE ROW LEVEL SECURITY")
+ def test_access_share_allows_enqueue_and_count_refuses(self):
+  self.race("INSERT INTO assistant_lab.job(status) VALUES ('RUNNING')",writer=True)
 
 if __name__=="__main__":unittest.main()

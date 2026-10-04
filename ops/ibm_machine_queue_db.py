@@ -14,13 +14,17 @@ def query(conn):
   conn.execute("SET LOCAL search_path='pg_catalog'")
   need(conn.execute("SELECT current_setting('transaction_read_only')").fetchone()==("on",),"READONLY_TRANSACTION")
   identity(conn,target)
-  # Regular heap relations only. No views, partitions, inheritance or RLS filter.
-  catalog=conn.execute("""SELECT c.relname,c.relkind,c.relrowsecurity,c.relforcerowsecurity,a.amname,
+  # ACCESS SHARE permits writers, but pins both named relations through counts.
+  conn.execute("LOCK TABLE ONLY assistant_lab.control_command, ONLY assistant_lab.job IN ACCESS SHARE MODE")
+  locked=conn.execute("SELECT 'assistant_lab.control_command'::regclass::oid,'assistant_lab.job'::regclass::oid").fetchone()
+  need(type(locked) is tuple and len(locked)==2 and all(type(x) is int and x>0 for x in locked) and len(set(locked))==2,"LOCKED_RELATION_OIDS")
+  # Validate these exact locked OIDs; no views, partitions, inheritance or RLS.
+  catalog=conn.execute("""SELECT c.oid,c.relname,c.relkind,c.relrowsecurity,c.relforcerowsecurity,a.amname,
     EXISTS(SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid)
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     LEFT JOIN pg_catalog.pg_am a ON a.oid=c.relam
-    WHERE n.nspname='assistant_lab' AND c.relname IN ('job','control_command') ORDER BY c.relname""").fetchall()
-  need(catalog==[("control_command","r",False,False,"heap",False),("job","r",False,False,"heap",False)],"QUEUE_CATALOG")
+    WHERE c.oid IN ('assistant_lab.control_command'::regclass,'assistant_lab.job'::regclass) AND n.nspname='assistant_lab' ORDER BY c.relname""").fetchall()
+  need(catalog==[(locked[0],"control_command","r",False,False,"heap",False),(locked[1],"job","r",False,False,"heap",False)],"QUEUE_CATALOG")
   cur=conn.execute(SQL);values=cur.fetchone()
   row=dict(zip([c.name for c in cur.description],values))
   need(row["database_name"]==target.database and all(type(row[k]) is int and row[k]==0 for k in ("lab_nonterminal","control_nonterminal","null_status_count")) and row["job_rls_off"] is True and row["control_rls_off"] is True,"QUEUE_NOT_ZERO_OR_VISIBLE")

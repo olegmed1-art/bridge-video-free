@@ -37,6 +37,16 @@ jobs:
   contract:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres:16.4-bookworm
+        env: {POSTGRES_PASSWORD: postgres, POSTGRES_DB: neondb}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d neondb"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      MACHINE_QUEUE_SYNTHETIC_POSTGRES: '1'
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -71,7 +81,9 @@ jobs:
       - name: Verify exact main context before credential injection
         env:
           EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
-        run: python -c 'import os; from ops.ibm_machine_queue_source import main_source; main_source(os.environ["EXPECTED_MAIN"])'
+          QUEUE_MODE: ${{ inputs.mode }}
+          EXPECTED_PACKAGE_SHA: ${{ inputs.expected_package_sha }}
+        run: python -c 'import os; from ops.ibm_machine_queue_runner import validate_inputs; from ops.ibm_machine_queue_source import main_source; main,_,_=validate_inputs(os.environ.get("EXPECTED_MAIN"),os.environ.get("QUEUE_MODE"),os.environ.get("EXPECTED_PACKAGE_SHA","")); main_source(main)'
       - name: Fixed owner queue observer and optional bounded relay
         env:
           NATIVE_OWNER_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
