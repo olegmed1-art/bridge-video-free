@@ -15,3 +15,8 @@
 !/tools/canon_auth/__init__.py
 !/tools/canon_auth/vercel_validator.py
 !/tools/canon_auth/build_once.py
+!/tools/book_runtime_observation
+/tools/book_runtime_observation/*
+!/tools/book_runtime_observation/__init__.py
+!/tools/book_runtime_observation/build_entry.py
+!/tools/book_runtime_observation/build_once.py
