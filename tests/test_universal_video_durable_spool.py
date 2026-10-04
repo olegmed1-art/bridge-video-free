@@ -103,6 +103,54 @@ def test_unknown_resident_auth_no_registry_retains_local_copy(spool, monkeypatch
     assert calls == ["compute"] and source.exists()
 
 
+def test_cleanup_intent_committed_before_running_claim_unlink(spool, monkeypatch):
+    root, source, calls = spool
+    def interrupt(spool_root, media, job_id, done):
+        assert (root / "running/synthetic-job.json").exists()
+        assert done.exists()
+        (root / "synthetic-cleanup-intent.json").write_text("durable synthetic intent")
+        raise KeyboardInterrupt("synthetic power loss after cleanup intent")
+    monkeypatch.setattr(worker, "queue_cleanup", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        worker.process_one(root)
+    assert (root / "synthetic-cleanup-intent.json").exists()
+    assert (root / "running/synthetic-job.json").exists()
+    assert source.exists() and calls == ["compute"]
+
+
+def test_maintenance_cannot_enter_worker_exclusive_fence(tmp_path):
+    import subprocess
+    import sys
+    import time
+    from universal_video.workload_lock import shared_workload_lock
+    spool = tmp_path / "spool"
+    script = """
+import sys
+from pathlib import Path
+from universal_video.maintenance import run_maintenance
+base = Path(sys.argv[1])
+(base / 'attempted').write_text('ready')
+run_maintenance(base, dry_run=True)
+(base / 'finished').write_text('done')
+"""
+    child = None
+    try:
+        with shared_workload_lock(spool, exclusive=True):
+            child = subprocess.Popen([sys.executable, "-c", script, str(tmp_path)])
+            deadline = time.monotonic() + 5
+            while not (tmp_path / "attempted").exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert (tmp_path / "attempted").exists()
+            time.sleep(0.1)
+            assert child.poll() is None and not (tmp_path / "finished").exists()
+        assert child.wait(timeout=5) == 0
+        assert (tmp_path / "finished").exists()
+    finally:
+        if child is not None and child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
+
+
 def test_retry_budget_exhaustion_retains_evidence(spool, monkeypatch):
     root, source, calls = spool
     monkeypatch.setattr(worker, "finalize_drive_job", lambda *a, **kw: (_ for _ in ()).throw(requests.ConnectionError("synthetic")))

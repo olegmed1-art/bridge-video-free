@@ -11,6 +11,8 @@ from .drive_stage import remove_staged_job
 
 
 def _digest(path: Path) -> str:
+    if path.is_symlink() or path.stat().st_size > 1024 * 1024:
+        raise RuntimeError("unsafe cleanup evidence file")
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -33,6 +35,11 @@ def queue_cleanup(spool: Path, media: Path, job_id: str, done: Path) -> Path:
     if path.parent.is_symlink():
         raise RuntimeError("unsafe cleanup intent root")
     if path.exists():
+        previous = read_receipt(path)
+        if (previous.get("job_id") != job_id or previous.get("job_hash") != pin["job_hash"]
+                or previous.get("source_pin") != pin or previous.get("done_sha256") != _digest(done)
+                or previous.get("final_sha256") != _digest(result / FINAL_RECEIPT)):
+            raise RuntimeError("existing cleanup intent changed")
         return path  # preserve retry budget / original intent
     atomic_json(path, {"schema": "universal-video-cleanup-pending-v1", "job_id": job_id,
                        "job_hash": pin["job_hash"], "source_path": str(source.absolute()),
@@ -61,6 +68,10 @@ def retry_cleanup(spool: Path, media: Path, pending: Path) -> bool:
             or result.is_symlink() or (spool / "results").is_symlink() or done.is_symlink()
             or (spool / "done").is_symlink() or pending.parent.is_symlink()):
         raise RuntimeError("cleanup path changed")
+    from .maintenance import _protected_state
+    active, _ = _protected_state(spool, media)
+    if job_id in active:
+        return False  # a queued/running retry still owns these local bytes
     # Bind the saved pin to the same verified receipt after a partial rmtree
     # may have removed the live pin. Never reconstruct or republish outputs.
     proof = read_receipt(result / FINAL_RECEIPT)

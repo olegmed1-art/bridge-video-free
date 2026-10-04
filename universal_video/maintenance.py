@@ -473,6 +473,7 @@ def _apply_cleanup_plan_locked(base_dir: Path, plan: Iterable[Candidate], *, dry
 
 def apply_cleanup_plan(base_dir: Path, plan: Iterable[Candidate], *, dry_run: bool) -> dict[str, Any]:
     from .workload_lock import shared_workload_lock
+    _check_managed_roots(base_dir)
     with shared_workload_lock(base_dir / "spool", exclusive=True):
         return _apply_cleanup_plan_locked(base_dir, plan, dry_run=dry_run)
 
@@ -481,6 +482,7 @@ def run_maintenance(base_dir: Path, *, dry_run: bool) -> dict[str, Any]:
     from .workload_lock import shared_workload_lock
     from .drive_cleanup import retry_cleanup
     spool = base_dir / "spool"
+    _check_managed_roots(base_dir)
     with shared_workload_lock(spool, exclusive=True):
         cleanup_pending = 0
         if not dry_run:
@@ -493,6 +495,11 @@ def run_maintenance(base_dir: Path, *, dry_run: bool) -> dict[str, Any]:
         report = _apply_cleanup_plan_locked(base_dir, plan, dry_run=dry_run)
         report["source_cleanups_completed"] = cleanup_pending
         return report
+
+
+def _check_managed_roots(base_dir: Path) -> None:
+    if any(path.is_symlink() for path in (base_dir, base_dir / "spool", base_dir / "media")):
+        raise RuntimeError("maintenance refuses symlink managed roots")
 
 
 def main() -> None:

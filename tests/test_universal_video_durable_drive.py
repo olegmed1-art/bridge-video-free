@@ -258,6 +258,35 @@ def test_stale_maintenance_plan_rechecks_activity_and_current_receipt(full_chain
     assert target.exists() and report["deleted"] == 0
 
 
+@pytest.mark.parametrize("block", ["active", "changed_proof", "exhausted"])
+def test_pending_cleanup_blocks_active_changed_or_exhausted_job(full_chain, tmp_path, block):
+    from universal_video import drive_cleanup as cleanup
+    _, payload, media, source, _, drive, result, finalize = full_chain
+    proof = finalize()
+    posts = len(drive.posts)
+    spool = tmp_path / "spool"
+    (spool / "results").mkdir(parents=True)
+    result.rename(spool / "results/job")
+    (spool / "done").mkdir()
+    done = spool / "done/job.json"
+    durable.atomic_json(done, {"job_id": "job", "job_hash": proof["job_hash"], "status": "COMPLETED"})
+    pending = cleanup.queue_cleanup(spool, media, "job", done)
+    if block == "active":
+        (spool / "inbox").mkdir()
+        durable.atomic_json(spool / "inbox/job.json", payload)
+        assert cleanup.retry_cleanup(spool, media, pending) is False
+    elif block == "exhausted":
+        data = durable.read_receipt(pending)
+        data["attempts"] = 3
+        durable.atomic_json(pending, data)
+        assert cleanup.retry_cleanup(spool, media, pending) is False
+    else:
+        durable.atomic_json(spool / "results/job" / durable.FINAL_RECEIPT, {"status": "REVALIDATING"})
+        with pytest.raises((RuntimeError, KeyError)):
+            cleanup.retry_cleanup(spool, media, pending)
+    assert source.exists() and pending.exists() and len(drive.posts) == posts
+
+
 def test_retry_reads_back_all_outputs_without_duplicate_posts(setup):
     result, source, drive, _ = setup
     first = finish(setup)
