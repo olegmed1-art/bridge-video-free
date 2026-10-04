@@ -1,0 +1,87 @@
+name: Canon source ownership fix
+
+on:
+  push:
+    branches: ['review/canon-source-ownership-fix-20261004']
+    paths:
+      - 'tools/canon_auth/**'
+      - 'pyproject.toml'
+      - '.vercelignore'
+      - '.github/workflows/canon-source-ownership-fix.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-consumer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: tournament_rehearsal
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - '127.0.0.1:55432:5432'
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tournament_rehearsal"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check pytest==8.4.2 PyYAML==6.0.2 httpx==0.28.1 fastapi==0.141.1 'psycopg[binary]==3.3.4'
+      - name: Exact SHA and isolation preflight
+        run: |
+          git rev-parse HEAD
+          python -m tools.canon_auth.source_review_checks
+      - name: Formal teacher, existing API and L1 regression
+        run: >-
+          python -m pytest -q tools/canon_auth tools/tournament_pilot/test_pilot.py
+          tests/test_l1_canonical_registry.py tests/test_l1_canonical_runtime.py
+          tests/test_knowledge_read_api.py tests/test_ai_api_routes.py
+          tests/test_ai_final_decision_contract.py
+          tests/test_book_teacher_api.py tests/test_book_runtime_identity.py
+      - name: Apply unchanged schema to disposable PostgreSQL 18
+        run: python -m tools.tournament_pilot.bootstrap '${{ job.services.postgres.id }}'
+      - name: Staged SQL and authenticated API rehearsal
+        shell: bash
+        run: |
+          python -m tools.canon_auth.rehearse_sql > canon-staged-sql-evidence.json
+          python -c "import json; assert json.load(open('canon-staged-sql-evidence.json'))['status'] == 'PASS'"
+          cat canon-staged-sql-evidence.json
+      - name: Fixed owner adapter and bounded controller on real PostgreSQL
+        shell: bash
+        run: |
+          if python -m pytest -q tools/canon_auth/adapter_pg.py > canon-fixed-adapter-pg.txt; then
+            cat canon-fixed-adapter-pg.txt
+          else
+            cat canon-fixed-adapter-pg.txt
+            exit 1
+          fi
+      - name: Preserve cancelled candidate and transitive source inventory
+        run: |
+          python -m tools.canon_auth.candidate_readiness > canon-candidate-cancellation.json
+          python -m tools.canon_auth.source_closure > canon-source-review-required.json
+          python -c "import json; r=json.load(open('canon-candidate-cancellation.json')); assert r['status']=='CANDIDATE_CANCELLED' and r['admission'] is False"
+      - name: Preserve first binding evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: canon-source-ownership-fix-${{ github.sha }}
+          path: |
+            tools/tournament_pilot/package.json
+            canon-staged-sql-evidence.json
+            canon-fixed-adapter-pg.txt
+            canon-cutoff-watchdog-evidence.json
+            canon-candidate-cancellation.json
+            canon-source-review-required.json
+          retention-days: 7
