@@ -17,8 +17,8 @@ MARKER = "BOOK_RUNTIME_OBSERVATION_20261004_ONCE"
 ORIGIN = "https://bridge-video-free.vercel.app"
 PATH = "/v1/knowledge/validation/runtime-identity"
 PROJECT = "prj_oF4SA0gA1PX6BuJEmJ1BiHVBXUGP"
-READY_SHA = "efe59fc153aca09d83b8d5b4f9595d0fb2dc5e73"
-READY_DEPLOYMENT = "dpl_9vn5iGMYbe8Vi3AGegAcnUMWufXP"
+READY_SHA = "711ddd648fa74f2b903f9d7127dadc412f94b277"
+READY_DEPLOYMENT = "dpl_4sxqMktPVrW8ULuhwqyQNhLmJqdJ"
 DEADLINE = datetime(2026, 10, 4, 18, tzinfo=timezone.utc)
 MESSAGE = re.compile(r"\A" + MARKER + r"\n{1,2}observed_at=(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)"
                      r"\nbase=" + READY_SHA + r"\ndeployment=" + READY_DEPLOYMENT
