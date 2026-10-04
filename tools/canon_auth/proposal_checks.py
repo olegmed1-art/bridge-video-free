@@ -81,6 +81,8 @@ subprocess.run(["git", "apply", "--check", str(ROOT / "workflow.patch")], cwd=RE
 assert not (ROOT / "preflight.py.template").exists()
 assert not (ROOT / "publication-preflight.patch").exists()
 
+subprocess.run(["git", "diff", "--check", BASE], cwd=REPO, check=True)
+
 # No modifications to either live protection boundary.
 for protected in (OWNER, "tools/canon_auth/preflight.py"):
     assert subprocess.check_output(["git", "diff", BASE, "--", protected], cwd=REPO) == b""

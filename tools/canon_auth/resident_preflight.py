@@ -102,4 +102,3 @@ def inspect_resident(conn, binding):
         raise
     except Exception:
         raise Refused("resident_inventory_unavailable") from None
-
