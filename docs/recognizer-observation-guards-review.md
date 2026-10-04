@@ -70,9 +70,13 @@ the requested revision on failure and refuses retry after partial installation.
 It has no `run` entry point and is not selected by any default runtime.
 
 Candidate results belong to each base installation and job. A failed/foreign
-job cannot reuse previous primary deals; repeated derivation does not append
+job cannot reuse previous primary deals; a report with a foreign or absent job
+ID receives NOT_RUN and zero primary deals. Repeated derivation does not append
 to the inherited result list. Repeated installation verifies the same hooks
-and token provider; concurrent visual calls on one installation are rejected.
+and token provider. A process-wide gate rejects overlapping candidate visual
+calls, including calls through separate base installations: native geometry
+temporarily patches shared rank helpers. Parallel candidates require separate
+processes. This gate does not make mixed historical/candidate runtimes safe.
 Unopened video/invalid metadata are input unavailability and release the
 decoder. Reference/integrity/program failures still propagate.
 

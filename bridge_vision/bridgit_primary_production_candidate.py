@@ -19,6 +19,8 @@ from bridge_vision.bridgit_primary_inputs_candidate import (
 from bridge_vision.bridgit_primary_video_candidate import PrimaryVideoInputError, recognize_video_primary
 from bridge_vision.gambler_classic_reference import GamblerClassicReferenceError
 
+# Native geometry temporarily patches shared rank helpers; serialize candidate passes.
+PRIMARY_PASS_LOCK = Lock()
 STATE_ATTRIBUTE = "_bridge_v2_candidate_installation"
 HISTORICAL_ADAPTERS = (
     "bridge_vision.bridgit_primary_production",
@@ -87,11 +89,10 @@ def install(base, token_func: Callable[[], str]) -> None:
     original_master = base.master_analysis_payload
     # State belongs to this base installation, never another process/job/base.
     state = {"job": None, "deals": [], "shots": [], "qc": {"status": "NOT_RUN"}}
-    lock = Lock()
 
     def visual(video, work, dur, critical, job):
-        if not lock.acquire(blocking=False):
-            raise CandidateInstallationError("concurrent visual jobs require separate installations")
+        if not PRIMARY_PASS_LOCK.acquire(blocking=False):
+            raise CandidateInstallationError("concurrent candidate visual jobs require separate processes")
         state.update({"job": job, "deals": [], "shots": [], "qc": {"status": "RUNNING", "job_id": job}})
         try:
             p1, p2, shots = original_visual(video, work, dur, critical, job)
@@ -103,7 +104,7 @@ def install(base, token_func: Callable[[], str]) -> None:
             state.update({"deals": [], "shots": [], "qc": {"status": "FAILED", "job_id": job}})
             raise
         finally:
-            lock.release()
+            PRIMARY_PASS_LOCK.release()
 
     def derive(episodes, job):
         deals, decisions = original_derive(episodes, job)
@@ -113,8 +114,11 @@ def install(base, token_func: Callable[[], str]) -> None:
 
     def master_payload(*args, **kwargs):
         master = original_master(*args, **kwargs)
-        master.setdefault("technical_qc", {})["card_recognizer"] = dict(state["qc"])
-        master.setdefault("content_quality", {})["primary_visual_deals"] = len(state["deals"])
+        job = kwargs.get("job_id", master.get("job_id"))
+        current = job is not None and state["job"] == job
+        qc = dict(state["qc"]) if current else {"status": "NOT_RUN", "job_id": job}
+        master.setdefault("technical_qc", {})["card_recognizer"] = qc
+        master.setdefault("content_quality", {})["primary_visual_deals"] = len(state["deals"]) if current else 0
         return master
 
     hooks = (visual, derive, master_payload)

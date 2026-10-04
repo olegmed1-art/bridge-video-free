@@ -49,7 +49,7 @@ def test_adapter_is_installed_once_and_derivation_is_repeatable(monkeypatch, tmp
         deals, _ = base.derive_deals_decisions([], "one")
         assert [d["deal_id"] for d in deals] == ["inherited", "base:one"]
     assert base.inherited == [{"deal_id": "inherited"}]
-    assert base.master_analysis_payload()["technical_qc"]["card_recognizer"]["job_id"] == "one"
+    assert base.master_analysis_payload(job_id="one")["technical_qc"]["card_recognizer"]["job_id"] == "one"
 
 
 def test_foreign_job_and_failed_next_job_never_reuse_prior_cards(monkeypatch, tmp_path):
@@ -65,7 +65,7 @@ def test_foreign_job_and_failed_next_job_never_reuse_prior_cards(monkeypatch, tm
         run_visual(base, tmp_path, "two")
     for job in ("one", "two"):
         assert base.derive_deals_decisions([], job)[0] == base.inherited
-    master = base.master_analysis_payload()
+    master = base.master_analysis_payload(job_id="two")
     assert master["content_quality"]["primary_visual_deals"] == 0
     assert master["technical_qc"]["card_recognizer"] == {"status": "FAILED", "job_id": "two"}
 
@@ -112,7 +112,59 @@ def test_reentrant_visual_job_is_rejected_and_original_failure_escapes(monkeypat
     adapter.install(base, TOKEN)
     with pytest.raises(adapter.CandidateInstallationError, match="concurrent"):
         run_visual(base, tmp_path)
-    assert base.master_analysis_payload()["technical_qc"]["card_recognizer"]["status"] == "FAILED"
+    assert base.master_analysis_payload(job_id="one")["technical_qc"]["card_recognizer"]["status"] == "FAILED"
+
+
+@pytest.mark.parametrize("query", ["other", None])
+def test_master_payload_never_borrows_foreign_or_unspecified_job_qc(monkeypatch, tmp_path, query):
+    base = make_base()
+    monkeypatch.setattr(adapter, "_run_primary", fake_primary)
+    adapter.install(base, TOKEN)
+    run_visual(base, tmp_path, "one")
+    master = base.master_analysis_payload(**({"job_id": query} if query else {}))
+    assert master["technical_qc"]["card_recognizer"] == {"status": "NOT_RUN", "job_id": query}
+    assert master["content_quality"]["primary_visual_deals"] == 0
+    own = base.master_analysis_payload(job_id="one")
+    assert own["technical_qc"]["card_recognizer"]["status"] == "PRIMARY_COMPLETE"
+    assert own["content_quality"]["primary_visual_deals"] == 1
+
+
+def test_master_payload_before_visual_reports_not_run():
+    base = make_base()
+    adapter.install(base, TOKEN)
+    master = base.master_analysis_payload(job_id="one")
+    assert master["technical_qc"]["card_recognizer"] == {"status": "NOT_RUN", "job_id": "one"}
+    assert master["content_quality"]["primary_visual_deals"] == 0
+
+
+def test_master_payload_can_use_original_payload_job_id(monkeypatch, tmp_path):
+    base = make_base()
+    base.master_analysis_payload = lambda job: {"job_id": job}
+    monkeypatch.setattr(adapter, "_run_primary", fake_primary)
+    adapter.install(base, TOKEN)
+    run_visual(base, tmp_path, "one")
+    assert base.master_analysis_payload("one")["content_quality"]["primary_visual_deals"] == 1
+    assert base.master_analysis_payload("other")["content_quality"]["primary_visual_deals"] == 0
+
+
+def test_overlapping_candidates_on_separate_bases_are_rejected_before_io(monkeypatch, tmp_path):
+    first, second = make_base("first"), make_base("second")
+    for base in (first, second):
+        adapter.install(base, TOKEN)
+    def overlapping(base, token, video, work, job):
+        if base is first:
+            with pytest.raises(adapter.CandidateInstallationError, match="separate processes"):
+                run_visual(second, tmp_path, "two")
+            assert second.calls == []
+            assert second.master_analysis_payload(job_id="two")["technical_qc"]["card_recognizer"]["status"] == "NOT_RUN"
+        return fake_primary(base, token, video, work, job)
+    monkeypatch.setattr(adapter, "_run_primary", overlapping)
+    run_visual(first, tmp_path, "one")
+    # The process-wide gate is released after the first pass.
+    run_visual(second, tmp_path, "two")
+    assert first.calls == second.calls == ["visual", "primary"]
+    assert first.derive_deals_decisions([], "one")[0][-1]["deal_id"] == "first:one"
+    assert second.derive_deals_decisions([], "two")[0][-1]["deal_id"] == "second:two"
 
 
 def test_unusable_input_returns_unavailable_but_integrity_error_escapes(monkeypatch, tmp_path):
