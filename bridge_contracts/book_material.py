@@ -14,7 +14,7 @@ import math
 import re
 import unicodedata
 from typing import Any
-from urllib.parse import urlsplit
+from .book_source_identity import is_public_book_locator
 
 SCHEMA = "book-material-staging-v1"
 SHA = re.compile(r"[0-9a-f]{64}\Z")
@@ -160,9 +160,7 @@ def validate_bundle(bundle: dict) -> None:
     _require(all(_text(source[k]) for k in ("source_id", "edition_id", "title", "locator")), "SOURCE_TEXT")
     _require(isinstance(source["rendition_sha256"], str) and bool(SHA.fullmatch(source["rendition_sha256"])), "SOURCE_HASH")
     _require(type(source["page_count"]) is int and source["page_count"] > 0, "PAGE_COUNT")
-    url = urlsplit(source["locator"])
-    _require(url.scheme == "https" and bool(url.hostname) and not url.username and not url.password
-             and not url.query and not url.fragment, "CANONICAL_LOCATOR_REQUIRED")
+    _require(is_public_book_locator(source["locator"]), "CANONICAL_LOCATOR_REQUIRED")
     _fields(bundle["run"], {"run_id", "model_version", "prompt_version"}, "RUN_FIELDS")
     _require(all(_text(v) for v in bundle["run"].values()), "RUN_TEXT")
     legacy = bundle["legacy_ids"]

@@ -7,6 +7,7 @@ from an unauthenticated endpoint or from text embedded in a book.
 from __future__ import annotations
 
 from copy import deepcopy
+from .book_source_identity import book_source_matches, needs_asset_binding
 from uuid import NAMESPACE_URL, uuid5
 
 from .book_material import InvalidBookMaterial, SHA, _fields, _require, _text, digest, validate_bundle
@@ -95,7 +96,10 @@ def render_teacher_book(item: dict) -> dict:
     _require(len(claims) == 1 and claims[0].get("checks") == {k: "PASS" for k in CHECKS}
              and receipt.get("assurance") in {"I2", "I3", "I4"}, "BOOK_WORLD_REVIEW")
     matching = [src for src in item.get("sources", []) if src.get("source_locator") == citation
-                and src.get("canonical_locator") == citation["locator"] and src.get("status") == "active"]
+                and book_source_matches(src.get("canonical_locator"), citation["locator"])
+                and src.get("status") == "active"
+                and (not needs_asset_binding(src.get("canonical_locator"))
+                     or src.get("book_asset_verified") is True)]
     _require(len(matching) == 1, "BOOK_WORLD_SOURCE_LINK")
     return {"contract_version": WORLD_SCHEMA, "authority_lane": "WORLD_EXTERNAL",
             "knowledge_version_id": str(item["item_id"]), "stable_key": item["stable_key"],

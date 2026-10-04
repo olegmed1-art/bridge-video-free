@@ -38,3 +38,12 @@ CREATE TABLE IF NOT EXISTS public.outbox_message (
  event_id uuid NOT NULL UNIQUE REFERENCES public.domain_event, status text NOT NULL DEFAULT 'pending');
 CREATE TABLE IF NOT EXISTS public.canon_activation (
  canon_activation_id uuid PRIMARY KEY, knowledge_version_id uuid NOT NULL REFERENCES public.knowledge_version);
+
+CREATE TABLE IF NOT EXISTS public.asset (
+ asset_id uuid PRIMARY KEY, school_id uuid NOT NULL REFERENCES public.school,
+ asset_type text NOT NULL, mime_type text NOT NULL, byte_size bigint NOT NULL,
+ checksum_algorithm text NOT NULL, checksum_value text NOT NULL, immutable_flag boolean NOT NULL,
+ UNIQUE(checksum_algorithm,checksum_value));
+CREATE TABLE IF NOT EXISTS public.source_asset (
+ source_id uuid NOT NULL REFERENCES public.source, asset_id uuid NOT NULL REFERENCES public.asset,
+ relation_type text NOT NULL, PRIMARY KEY(source_id,asset_id,relation_type));
