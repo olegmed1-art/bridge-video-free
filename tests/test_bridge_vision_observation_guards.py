@@ -38,7 +38,7 @@ def video_pass(monkeypatch, tmp_path):
     # workflow installs numpy and explicitly rejects any skipped guard case.
     np = pytest.importorskip("numpy")
     state = SimpleNamespace(duration=40000, scenes=[(0, 0)], attempts=[], written={},
-                            released=False, duplicate=set(), rejected=set(), fault=None,
+                            released=False, opened=True, metadata={}, duplicate=set(), rejected=set(), fault=None,
                             missing=set(), geometry_change=set(), geometry_unknown=set(), processed_at=[], now=0)
     def frame_at(capture, timestamp):
         # Only integer scan seconds update the processing-clock observation.
@@ -48,8 +48,8 @@ def video_pass(monkeypatch, tmp_path):
             return None
         scene = next(value for start, value in reversed(state.scenes) if timestamp >= start)
         return Frame(timestamp, scene)
-    capture = SimpleNamespace(isOpened=lambda: True,
-        get=lambda key: {1: 1000.0, 2: state.duration, 3: 1920, 4: 1010}[key],
+    capture = SimpleNamespace(isOpened=lambda: state.opened,
+        get=lambda key: state.metadata.get(key, {1: 1000.0, 2: state.duration, 3: 1920, 4: 1010}[key]),
         release=lambda: setattr(state, "released", True))
     cv = SimpleNamespace(IMREAD_COLOR=1, CAP_PROP_FPS=1, CAP_PROP_FRAME_COUNT=2,
                          CAP_PROP_FRAME_WIDTH=3, CAP_PROP_FRAME_HEIGHT=4,
@@ -206,3 +206,20 @@ def test_adapter_propagates_internal_error(monkeypatch, tmp_path):
 def test_void_hand_still_abstains_until_geometry_is_separately_supported():
     assert infer_horizontal_fan_model([209, 184, 184]) is None
     assert infer_horizontal_fan_model([209, 184, 184, 0]) is None
+
+def test_unopened_video_is_an_input_error_and_releases_decoder(video_pass):
+    video_pass.opened = False
+    with pytest.raises(primary.PrimaryVideoInputError, match="could not open"):
+        video_pass.run()
+    assert video_pass.released
+    assert not video_pass.attempts
+
+
+@pytest.mark.parametrize("key,value", [(1, 0), (1, float("nan")), (1, float("inf")),
+                                     (2, 0), (2, float("nan")), (3, 0), (4, -1)])
+def test_invalid_video_metadata_is_not_a_program_failure(video_pass, key, value):
+    video_pass.metadata[key] = value
+    with pytest.raises(primary.PrimaryVideoInputError, match="metadata"):
+        video_pass.run()
+    assert video_pass.released
+    assert not video_pass.attempts

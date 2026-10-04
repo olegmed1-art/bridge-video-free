@@ -5,13 +5,15 @@ hash-bound original Gambler classic deck as rank authority.  This module
 only emits recognizer candidates; it never writes SCHOOL CANON and never uses
 hidden-hand/deck-complement inference.
 
-Run in a fresh isolated process: the historical r26 installer globally patches
-the shared selector. This candidate is not yet integrated into that runtime.
+The candidate owns its selector type, so historical r26's global retry patch
+cannot affect it. It is installed only by an explicit review runtime wrapper;
+no default runtime route selects it.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import tempfile
 from collections import Counter, deque
 from pathlib import Path
@@ -26,7 +28,8 @@ from bridge_vision.bridgit_gambler_rank_layout import (
 from bridge_vision.gambler_classic_reference import (
     load_sprite,
 )
-from bridge_vision.bridgit_event_frame_selector import EventFrameSelector, bridge_layout_regions, frame_signature, signature_distance
+from bridge_vision.bridgit_event_frame_selector import bridge_layout_regions, frame_signature, signature_distance
+from bridge_vision.bridgit_candidate_frame_selector import CandidateFrameSelector as EventFrameSelector
 from bridge_vision.gambler_reference_authority import (
     GamblerReferenceAuthorityError,
     variant_for_pinned_sprite_sha256,
@@ -37,7 +40,7 @@ from bridge_vision.bridgit_primary_video import (
     _frame_at, _full_geometry_gate, _write_png, resolve_original_gambler_asset,
 )
 
-PRIMARY_VIDEO_VERSION = "bridgit-primary-video-gambler-v2-observation-guards-candidate1"
+PRIMARY_VIDEO_VERSION = "bridgit-primary-video-gambler-v2-observation-guards-candidate2"
 MAX_PENDING_PAIRS = 4
 DUPLICATE_OBSERVATION_ERRORS = frozenset({
     "duplicate frame bytes do not provide independent evidence",
@@ -46,6 +49,10 @@ DUPLICATE_OBSERVATION_ERRORS = frozenset({
 })
 DEFAULT_SCAN_MS = 3000
 DEFAULT_ATTEMPT_GAP_MS = 15000
+
+
+class PrimaryVideoInputError(PrimaryVideoRecognitionError):
+    """The source decoder cannot provide valid video input."""
 
 
 def recognize_video_primary(
@@ -114,14 +121,18 @@ def recognize_video_primary(
 
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
-        raise PrimaryVideoRecognitionError("video decoder could not open source")
-    fps = float(capture.get(cv2.CAP_PROP_FPS))
-    frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    if fps <= 0 or frame_count <= 0:
         capture.release()
-        raise PrimaryVideoRecognitionError("video metadata is invalid")
+        raise PrimaryVideoInputError("video decoder could not open source")
+    try:
+        fps = float(capture.get(cv2.CAP_PROP_FPS))
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if not math.isfinite(fps) or fps <= 0 or frame_count <= 0 or width <= 0 or height <= 0:
+            raise ValueError("invalid metadata")
+    except (TypeError, ValueError, OverflowError) as exc:
+        capture.release()
+        raise PrimaryVideoInputError("video metadata is invalid") from exc
     if width != profile.width or not (
         profile.height <= height <= profile.height + MAX_VERTICAL_PADDING_PX
     ):
@@ -313,4 +324,4 @@ def recognize_video_primary(
     }
 
 
-__all__ = ["PRIMARY_VIDEO_VERSION", "PrimaryVideoRecognitionError", "recognize_video_primary", "resolve_original_gambler_asset"]
+__all__ = ["PRIMARY_VIDEO_VERSION", "PrimaryVideoRecognitionError", "PrimaryVideoInputError", "recognize_video_primary", "resolve_original_gambler_asset"]

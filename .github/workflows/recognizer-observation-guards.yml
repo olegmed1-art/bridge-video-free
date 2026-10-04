@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'bridge_vision/bridgit_primary_*candidate.py'
+      - 'bridge_vision/bridgit_candidate_frame_selector.py'
+      - 'bridge_runtime_hardening_r26_candidate.py'
+      - 'tests/test_r26_candidate_integration.py'
       - 'bridge_vision/bridgit_primary_production_r265.py'
       - 'bridge_vision/teacher_card_reconstruction_r265.py'
       - 'tests/test_bridge_vision_observation_guards.py'
@@ -75,6 +78,7 @@ jobs:
           python -m pytest -q -ra -p no:cacheprovider
           tests/test_bridge_vision_observation_guards.py
           tests/test_r265_observation_provenance_guards.py
+          tests/test_r26_candidate_integration.py
           --junitxml=../results/guards.xml
       - name: Classify baseline failures and enforce candidate checks
         if: always()

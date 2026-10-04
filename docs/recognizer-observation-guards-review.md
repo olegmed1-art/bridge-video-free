@@ -58,14 +58,28 @@ candidate adapter. Frozen source/hash contracts remain unchanged. Shared
 geometry, rank assignment and acceptance helpers are reused from the frozen
 implementation. No default runtime imports the candidate.
 
-Use this candidate in a **fresh isolated process**. The old r26 installer globally
-patches the shared `EventFrameSelector.observe`; installing it in the same process
-would restore an unconditional short retry. This remaining integration issue
-must be resolved and tested before wiring the candidate into a production runtime.
-Unopened/corrupt video and reference-integrity failures currently propagate from
-the candidate video layer; input-error classification needs a separate integration
-decision. Buffer overflow can still lose coverage, explicitly reported; increasing
-capacity or lifting the cooldown needs resource measurements on the target host.
+The candidate now owns its selector type, so the historical r26 global
+retry patch cannot replace its observe method. Input loaders no longer import
+the r264 production/video adapter. The gold builder named r264 is reused only
+for unchanged pinned v2 geometry and its input/output error boundary.
+
+`bridge_runtime_hardening_r26_candidate.install` requires the exact explicit
+candidate revision. It installs the r25.16 predecessor and exactly one v2
+adapter, refuses a base with an existing historical primary adapter, restores
+the requested revision on failure and refuses retry after partial installation.
+It has no `run` entry point and is not selected by any default runtime.
+
+Candidate results belong to each base installation and job. A failed/foreign
+job cannot reuse previous primary deals; repeated derivation does not append
+to the inherited result list. Repeated installation verifies the same hooks
+and token provider; concurrent visual calls on one installation are rejected.
+Unopened video/invalid metadata are input unavailability and release the
+decoder. Reference/integrity/program failures still propagate.
+
+This is preparatory integration, not production enablement. Fresh isolated
+evaluation remains required for golden/holdout replay. Queue overflow can still
+lose coverage explicitly; increasing capacity or lifting the cooldown needs
+target-host resource measurements.
 
 Neither r26.4 nor r26.5 is permitted for production (`production_allowed=false`
 in their existing contracts). The speech grammar cannot recover an ASR-dropped
@@ -79,11 +93,14 @@ still share a group even if they occur in separate lesson episodes.
   cover the original nine audit witnesses as expected guards, including the
   unsupported-void abstention boundary. Frame decoding and rank recognition are
   mocked in orchestration cases; no pixel-accuracy claim follows from them.
-- Local candidate validation: **84 new guards passed**; with existing r264/r265
-  suites, **106 passed**. Independent I2 review by a different model reran all
-  106 cases successfully, verified the partial/conflict repeat fix, and found
-  no blocking issue in the fresh-process candidate scope. Linux results are
-  recorded separately by the workflow, not inferred from this Windows run.
+- The preceding candidate passed 84 new guards and 106 tests including the
+  existing r264/r265 suites, with different-model I2 review. This integration
+  adds selector-installation, job-isolation, decoder-input and runtime-wrapper
+  regressions. The current exact-head CI and I2 results are recorded in the PR;
+  prior results do not establish that changed code has passed.
+- The local executor for this integration is unavailable due to an ACL setup
+  error. Source is read/published through GitHub and execution occurs in Linux
+  CI. No local integration run or newly available private fixture is claimed.
 - Original Windows audit: **274 passed, 10 failed, 7 skipped, 1 collection error**.
   Nine failures require POSIX facilities/privileges; one needs OpenCV. The
   collection error is a missing `requests` dependency. These are pre-existing
@@ -104,3 +121,24 @@ still share a group even if they occur in separate lesson episodes.
 
 Rollback is to omit the explicit candidate adapter and discard this review
 branch. No runtime promotion or main merge is part of this change.
+
+## Future v2-only enablement
+
+Recover and hash-verify the previously approved gold package, reference/profile
+and v5 sprite; rerun both currently skipped asset cases and the known 01:55:35
+control on old v2 and the candidate in separate processes. That known 52/52
+result is a regression control, never a holdout.
+
+Freeze independent gold before output using the existing r263 promotion
+contract: 24 cases from 4 sessions, 12 complete and 12 non-complete cases,
+3 resolution groups, 2 layout/theme families when available and at least
+4 complete void deals. Preserve precision >=0.995, visible recall >=0.95,
+zero seat errors and zero false completes. Do not remove unsupported void
+cases from the denominator. Keep canonical promotion separately closed.
+
+After any integration change, rerun golden/holdout, exact-head Linux checks and
+independent I2. Only after explicit coordination, an authorized IBM window and
+a bounded canary may a reversible v2 route switch be considered. Record source,
+runtime/profile/asset digests and CPU/RAM/coverage; retain the previous immutable
+runtime for rollback. Temporal union, fourth-hand inference, r264/r265
+installers, speech reconstruction and v3 production remain off.
