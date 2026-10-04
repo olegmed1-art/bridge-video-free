@@ -211,6 +211,17 @@ class BeforeConnection(unittest.TestCase):
   text=inspect.getsource(oracle.entry)
   self.assertLess(text.index("validate_guest_review("),text.index("child=PipeClient("))
   self.assertLess(text.index("remaining_budget(deadline_total)"),text.index("child=PipeClient("))
+ def test_private_bind_is_sent_before_readiness(self):
+  packet={"kind":"BIND_REVIEWED","policy":{"host":f.HOST,"boot":f.BOOT}}
+  bundle={"source_pins":f.PINS};events=[]
+  class Child:
+   def send(self,value,end):
+    self.value=value;events.append("bind")
+   def recv(self,end):
+    if events!=["bind"]:raise AssertionError("relay cannot become ready before preclaim bind")
+    events.append("ready");return {"kind":"EXECUTOR_READY","host":self.value["policy"]["host"],"boot":self.value["policy"]["boot"],"source_pins":f.PINS}
+  self.assertEqual(oracle.bind_guest(Child(),packet,bundle,time.monotonic()+5)["kind"],"EXECUTOR_READY")
+  self.assertEqual(events,["bind","ready"])
  def test_cached_guest_sources_hash_before_compile(self):
   import inspect
   text=inspect.getsource(oracle.validate_guest_review)
@@ -264,7 +275,12 @@ class ConcurrentRelationTests(unittest.TestCase):
      query=f.schema_rename_baseline_query if baseline else db.query
      if writer or namespace and not baseline:
       with self.assertRaises(p.Refused):query(LockedObserver())
-     else:self.assertEqual(query(LockedObserver())["lab_nonterminal"],0)
+     elif baseline:self.assertEqual(query(LockedObserver())["lab_nonterminal"],0)
+     else:
+      # A blocked DDL transaction can itself insert abort WAL. Both zero
+      # and conservative refusal preserve safety; still verify its lock timeout.
+      try:self.assertEqual(query(LockedObserver())["lab_nonterminal"],0)
+      except p.Refused as error:self.assertEqual(str(error),"WAL_OR_NAMESPACE_CHANGED")
    finally:start.set();thread.join(timeout=3)
   self.assertFalse(thread.is_alive())
   self.assertEqual(codes,["OK" if writer or namespace else "55P03"])

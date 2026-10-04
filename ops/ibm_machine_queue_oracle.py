@@ -44,6 +44,12 @@ def validate_guest_review(bundle,policy,authorization):
   for name,value in saved.items():
    if value is None:sys.modules.pop(name,None)
    else:sys.modules[name]=value
+def bind_guest(child,packet,bundle,deadline):
+ # Relay validates run/policy/authorization before claim or IBM reconnect.
+ child.send(packet,min(deadline,time.monotonic()+1))
+ ready=child.recv(min(deadline,time.monotonic()+10));p=packet["policy"]
+ need(ready.get("kind")=="EXECUTOR_READY" and ready.get("host")==p["host"] and ready.get("boot")==p["boot"] and ready.get("source_pins")==bundle["source_pins"],"GUEST_READBACK")
+ return ready
 def entry(main,expected_package_sha):
  deadline_total=time.monotonic()+135;cap=HardCap(135);child=None;io=Stdio()
  try:
@@ -80,9 +86,7 @@ def entry(main,expected_package_sha):
   code="import base64,sys,types;v=types.ModuleType('reviewed_relay');exec(compile(base64.b64decode("+repr(base64.b64encode(cache["relay.py"]).decode())+"),'<verified-relay>','exec'),v.__dict__);sys.argv="+repr(args)+";sys.exit(v.main())"
   child=PipeClient([sys.executable,"-I","-B","-u","-c",code],{"PATH":"/usr/bin:/bin"},65)
   deadline=time.monotonic()+65
-  ready=child.recv(min(deadline,time.monotonic()+10))
-  need(ready.get("kind")=="EXECUTOR_READY" and ready.get("host")==p["host"] and ready.get("boot")==p["boot"] and ready.get("source_pins")==bundle["source_pins"],"GUEST_READBACK")
-  child.send(packet,min(deadline,time.monotonic()+1));io.send(ready)
+  ready=bind_guest(child,packet,bundle,deadline);io.send(ready)
   for phase in ("PRE_STOP","POST_STOP"):
    request=child.recv(deadline);need(request.get("kind")=="QUEUE_REQUEST" and request.get("phase")==phase,"GUEST_PHASE")
    io.send(request);proof=io.recv(min(deadline,time.monotonic()+7))
