@@ -17,7 +17,7 @@ class Connection:
         self.pgconn = SimpleNamespace(ssl_in_use=True)
         self.session = (identity.EXPECTED_PRINCIPAL, identity.EXPECTED_DATABASE, "on",
                         datetime(2026, 1, 1, tzinfo=timezone.utc))
-        self.rows = [(name, value, identity.TAG_CONTEXTS[name], "configuration file", value, False)
+        self.rows = [(name, value, "postmaster", "configuration file", value, False)
                      for name, value in [("neon.project_id", identity.PROJECT),
                                          ("neon.branch_id", "br-synthetic-observed"),
                                          ("neon.endpoint_id", identity.ENDPOINT)]]
@@ -66,6 +66,10 @@ def test_runtime_identity_auth_precedes_connection_and_response_is_not_cached(mo
     path = "/v1/knowledge/validation/runtime-identity"
     assert client.get(path).status_code == 401
     assert client.get(path, headers={"Authorization": "Bearer wrong"}).status_code == 403
+    malformed = client.get(path, headers=[(b"Authorization", b"Bearer \xff")])
+    assert malformed.status_code == 403
+    assert malformed.json() == {"detail": "invalid bearer token"}
+    assert malformed.headers["cache-control"] == "private, no-store, max-age=0"
     assert not conn.executions
     response = client.get(path, headers={"Authorization": "Bearer synthetic-validation-token"})
     assert response.status_code == 200
@@ -81,6 +85,25 @@ def test_runtime_identity_auth_precedes_connection_and_response_is_not_cached(mo
     assert sum(sql.startswith("SELECT") for sql in conn.executions) == 2
     assert all(sql.startswith(("SELECT", "SET ")) for sql in conn.executions)
     assert all("public." not in sql for sql in conn.executions)
+
+
+@pytest.mark.parametrize("context", ["postmaster", "superuser"])
+def test_endpoint_privileged_context_compatibility(monkeypatch, context):
+    conn = Connection()
+    install(monkeypatch, conn)
+    conn.rows[2] = ("neon.endpoint_id", identity.ENDPOINT, context,
+                    "configuration file", identity.ENDPOINT, False)
+    assert identity.observe_runtime_identity()["status"] == "OBSERVED_NOT_ADMITTED"
+
+
+@pytest.mark.parametrize("context", ["user", "backend", "superuser-backend", "sighup", "internal"])
+def test_other_endpoint_contexts_are_not_accepted(monkeypatch, context):
+    conn = Connection()
+    install(monkeypatch, conn)
+    conn.rows[2] = ("neon.endpoint_id", identity.ENDPOINT, context,
+                    "configuration file", identity.ENDPOINT, False)
+    with pytest.raises(identity.RuntimeIdentityUnavailable):
+        identity.observe_runtime_identity()
 
 
 def test_configuration_failure_prevents_connection(monkeypatch):

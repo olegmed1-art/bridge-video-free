@@ -11,8 +11,10 @@ from .incident_db_probe import probe
 
 PROJECT = "misty-poetry-18012774"
 ENDPOINT = "ep-noisy-pine-b1pe30sf"
-TAG_CONTEXTS = {"neon.project_id": "postmaster", "neon.branch_id": "postmaster",
-                "neon.endpoint_id": "superuser"}
+# Current upstream uses postmaster for all three tags. Retain the endpoint's
+# privileged superuser context supported by the existing project attestor.
+TAG_CONTEXTS = {"neon.project_id": {"postmaster"}, "neon.branch_id": {"postmaster"},
+                "neon.endpoint_id": {"postmaster", "superuser"}}
 
 
 class RuntimeIdentityUnavailable(ValueError):
@@ -20,7 +22,7 @@ class RuntimeIdentityUnavailable(ValueError):
 
 
 def _read_identity_rows(conn):
-    """Two catalog/session SELECTs in a bounded, explicitly rolled-back transaction."""
+    """Two SELECTs with server statement timeouts and explicit rollback."""
     if conn.autocommit or conn.info.transaction_status != 0:
         raise RuntimeIdentityUnavailable("idle transactional connection required")
     try:
@@ -28,7 +30,8 @@ def _read_identity_rows(conn):
             cur.execute("SET TRANSACTION READ ONLY")
             cur.execute("SET LOCAL statement_timeout = '5s'")
             cur.execute("SET LOCAL lock_timeout = '2s'")
-            cur.execute("SELECT current_user,current_database(),current_setting('transaction_read_only'),statement_timestamp()")
+            cur.execute("SELECT current_user,pg_catalog.current_database(),"
+                        "pg_catalog.current_setting('transaction_read_only'),pg_catalog.statement_timestamp()")
             session = cur.fetchone()
             cur.execute("""SELECT name,setting,context,source,reset_val,pending_restart
                 FROM pg_catalog.pg_settings
@@ -59,7 +62,7 @@ def observe_runtime_identity() -> dict:
             raise RuntimeIdentityUnavailable("identity tags missing or duplicated")
         tags = {}
         for name, setting, context, source, reset, pending in rows:
-            if (context != TAG_CONTEXTS[name] or source != "configuration file"
+            if (context not in TAG_CONTEXTS[name] or source != "configuration file"
                     or reset != setting or pending is not False):
                 raise RuntimeIdentityUnavailable("identity provenance mismatch")
             tags[name] = setting

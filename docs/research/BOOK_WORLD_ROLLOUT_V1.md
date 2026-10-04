@@ -93,8 +93,10 @@ The small `GET /v1/knowledge/validation/runtime-identity` route runs under the s
 existing API-token dependency and no-store response middleware as WORLD retrieval.
 It accepts no target, SQL, credential or publication parameters. It first reuses
 the incident probe's effective-configuration checks, then opens the same connector
-as WORLD retrieval and performs two SELECTs in a read-only transaction with bounded
-timeouts and explicit rollback. No school, student, knowledge or source rows are
+as WORLD retrieval and performs two SELECTs in a read-only transaction with server
+statement/lock timeouts and explicit rollback. These timeouts are not a hard HTTP
+request deadline; connection retries, transport and rollback have separate limits.
+No school, student, knowledge or source rows are
 read. Missing or inconsistent identity metadata returns a generic 503; raw database
 errors, DSNs and environment values are never serialized.
 
@@ -104,6 +106,15 @@ tags. Tags must have their expected server contexts, configuration-file provenan
 matching reset values and no pending restart. The branch is returned as an
 observation, with `OBSERVED_NOT_ADMITTED`; no historical branch is automatically
 selected and no rollout gate is advanced.
+
+Project and branch require `postmaster` context. Endpoint accepts `postmaster`
+(the [current upstream Neon definition](https://github.com/neondatabase/neon/blob/main/pgxn/neon/libpagestore.c))
+and the privileged `superuser` context used by the existing project attestor.
+Neither context substitutes for the configuration-file/reset/pending checks.
+Catalog functions are schema-qualified. Configured hostname, TLS in use and required
+channel binding do not independently prove certificate hostname verification or
+protect against a compromised server/control plane; fresh external corroboration
+remains mandatory.
 
 Minimal execution after parent coordinates a code-only merge/deploy:
 
