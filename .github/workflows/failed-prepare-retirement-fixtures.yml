@@ -1,22 +1,22 @@
-name: Isolated retirement canon integration
+name: Isolated retirement read-only observation
 
 on:
   push:
-    branches: [review/retirement-confidentiality-integration-20261004]
+    branches: [review/retirement-readonly-observation-20261004]
     paths: [.github/workflows/failed-prepare-retirement-fixtures.yml]
 
 permissions: {}
 concurrency:
-  group: isolated-retirement-canon-integration
+  group: isolated-retirement-readonly-observation
   cancel-in-progress: false
 
 jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == '5116e39850c5dabf34107067d5a29ba8b37a0839' &&
+      github.event.before == 'ca96bdc5765f46c126d6dd6ac50f5add4a64958d' &&
       github.run_attempt == 1 &&
-      github.event.head_commit.message == 'ci: verify retirement canon integration'
+      github.event.head_commit.message == 'ci: verify retirement read-only observation'
     strategy:
       fail-fast: false
       matrix:
@@ -197,7 +197,7 @@ jobs:
                             "--rootdir="+str(root),"--junitxml=/tmp/retirement.xml",*tests])
           cases=ET.parse("/tmp/retirement.xml").getroot().findall(".//testcase")
           ids={(x.get("classname"),x.get("name")) for x in cases}
-          assert code==0 and len(cases)==617 and len(ids)==len(cases)
+          assert code==0 and len(cases)==682 and len(ids)==len(cases)
           assert all(not any(x.find(k) is not None for k in ("skipped","failure","error")) for x in cases)
-          print("RETIREMENT_CONFIDENTIALITY_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
+          print("RETIREMENT_READONLY_OBSERVATION_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
           ' < "$RUNNER_TEMP/retirement-test-input.zip"
