@@ -39,13 +39,18 @@ def inspect_teacher_connection(conn, *, database="neondb"):
                 no_revoke = all(cur.execute("SELECT pg_catalog.has_column_privilege(current_user,%s,%s,'UPDATE')",
                                             (table, column)).fetchone() == (False,)
                                 for table, column in REVOKE_COLUMNS)
+                for table, key in (("public.school", "school_id"), ("bidding.rule", "rule_id")):
+                    exists = cur.execute("SELECT EXISTS(SELECT 1 FROM " + table +
+                                         " WHERE " + key + "=%s)", (ABSENT_ID,)).fetchone()
+                    if exists != (False,):
+                        raise Refused("absent_synthetic_ids_required")
                 # Execute the actual fixed routines, with an absent synthetic ID.
                 # No rows, identifiers or private school contexts leave this module.
                 gate = cur.execute("SELECT bidding.rule_passes_activation_gates(%s)", (ABSENT_ID,)).fetchone()
                 missing_rule = gate == (False,)
-                catalog_empty = not cur.execute(
-                    "SELECT * FROM bidding.get_school_runtime_rule_catalog(%s,%s)",
-                    (ABSENT_ID, teacher.SCOPE)).fetchall()
+                catalog_empty = cur.execute(
+                    "SELECT EXISTS(SELECT 1 FROM bidding.get_school_runtime_rule_catalog(%s,%s))",
+                    (ABSENT_ID, teacher.SCOPE)).fetchone() == (False,)
                 if not all((reads, no_revoke, missing_rule, catalog_empty)):
                     raise Refused("teacher_behavior_required")
         return {"status": "teacher_readonly_behavior", "application_login_identity": True,

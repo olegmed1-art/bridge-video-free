@@ -11,7 +11,7 @@ class Connection:
         self.info = SimpleNamespace(transaction_status=0)
         self.calls, self.end = [], None
         self.identity = ("neondb", PRINCIPAL, PRINCIPAL)
-        self.readonly, self.reads, self.revoke, self.gate, self.rows = "on", True, False, False, []
+        self.readonly, self.reads, self.revoke, self.gate, self.catalog, self.exists = "on", True, False, False, False, False
         self.fail_rollback = False
 
     @contextmanager
@@ -37,7 +37,8 @@ class Connection:
         elif "has_table_privilege" in sql: self.value = [(self.reads,)]
         elif "has_column_privilege" in sql: self.value = [(self.revoke,)]
         elif "rule_passes_activation_gates" in sql: self.value = [(self.gate,)]
-        elif "get_school_runtime_rule_catalog" in sql: self.value = self.rows
+        elif "get_school_runtime_rule_catalog" in sql: self.value = [(self.catalog,)]
+        elif "SELECT EXISTS" in sql: self.value = [(self.exists,)]
         return self
 
     def fetchone(self): return self.value[0]
@@ -60,7 +61,7 @@ def test_fixed_routines_executed_only_readonly_and_report_after_rollback():
     ("identity", ("neondb", "neondb_owner", PRINCIPAL)),
     ("identity", ("neondb", "neondb_owner", "neondb_owner")),
     ("readonly", "off"), ("reads", False), ("revoke", True),
-    ("gate", None), ("gate", True), ("rows", [{"private": "not exported"}]),
+    ("gate", None), ("gate", True), ("catalog", True), ("exists", True),
     ("fail_rollback", True)])
 def test_wrong_role_gate_or_privilege_refuses_without_private_values(field, value):
     conn = Connection()
