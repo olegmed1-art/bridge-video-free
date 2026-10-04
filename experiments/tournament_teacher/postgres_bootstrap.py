@@ -36,6 +36,10 @@ def main():
     run("exec","-w","/tmp/tournament-schema","-e","LC_ALL=C","-e",
         "DATABASE_URL=host=/var/run/postgresql dbname=tournament_rehearsal user=tournament_rehearsal_owner",
         cid,"bash","database/scripts/migrate.sh")
+    # Fixture membership permits SET ROLE for the capability-negative test;
+    # it adds no table/function privilege to the worker role itself.
+    run("exec",cid,"psql","-U","postgres","-d","tournament_rehearsal","-v","ON_ERROR_STOP=1","-c",
+        "GRANT bridge_school_worker TO tournament_rehearsal_owner WITH INHERIT FALSE, SET TRUE")
     print("Repository migrations applied as non-superuser owner; no production connection.")
 
 

@@ -30,6 +30,12 @@ def activation_control(conn, school, unused_source):
                      (school,test,Jsonb({'observed':observed,'expected':expected})))
         tests.append(test)
     assert gate() is True
+    other_version = scalar(conn,"INSERT INTO public.knowledge_version(knowledge_item_id,version_no,content,authority_class,status) VALUES (%s,2,'{}','research_candidate','candidate') RETURNING knowledge_version_id",(item,))
+    other_rule = scalar(conn,"INSERT INTO bidding.rule(school_id,knowledge_version_id,rule_key,rule_kind,action) VALUES (%s,%s,'SYNTHETIC-CONFLICT-CONTROL','bid','{}') RETURNING rule_id",(school,other_version))
+    conflict = scalar(conn,"INSERT INTO bidding.rule_conflict(school_id,left_rule_id,right_rule_id,conflict_type,details) VALUES (%s,%s,%s,'overlap',%s) RETURNING rule_conflict_id",(school,rule,other_rule,Jsonb({"test_only":True})))
+    assert gate() is False
+    conn.execute("UPDATE bidding.rule_conflict SET status='invalidated',resolved_at=clock_timestamp() WHERE rule_conflict_id=%s",(conflict,))
+    assert gate() is True
     conn.execute("UPDATE public.source SET status='inactive' WHERE source_id=%s",(source,))
     assert gate() is False
     conn.execute("UPDATE public.source SET status='active' WHERE source_id=%s",(source,))
@@ -57,4 +63,4 @@ def activation_control(conn, school, unused_source):
     assert scalar(conn,"SELECT status FROM public.canon_activation WHERE canon_activation_id=%s",(canon,)) == 'revoked'
     assert scalar(conn,"SELECT count(*) FROM bidding.rule_test_run WHERE school_id=%s",(school,)) == 6
     return dict(test_only=True,active_before_rollback=1,active_after_rollback=0,
-                retained_activation_rows=2,retained_test_runs=6)
+                retained_activation_rows=2,retained_test_runs=6,retained_synthetic_conflicts=1)

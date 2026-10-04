@@ -25,6 +25,9 @@ composite checksum must equal
 the reported applied production checksum. Evidence lists the other repository
 migration checksums; their application here is not independent proof that every
 one is installed in production. No production database copy is used.
+The disposable owner receives SET-only membership of the existing worker role
+solely for the negative capability test; no worker table/function grants change.
+Migration ordering uses the C locale, including numeric suffix migrations.
 
 The rehearsal has no DSN, school, host or activation CLI arguments. It clears
 ambient libpq variables and pins both host and hostaddr to loopback, a fixed
@@ -53,7 +56,8 @@ Execution order:
    rows for these candidates remain absent throughout.
 7. Separately exercise a visibly synthetic public-count control predicate through
    the genuine SQL gates: missing review/tests, inactive source, latest failed
-   evidence, wrong authority lane and wrong scope must fail. Activate only that
+   evidence, an open synthetic conflict, wrong authority lane and wrong scope
+   must fail. The invalidated synthetic conflict remains recorded. Activate only that
    control, check the real active view, reject active-rule mutation, then revoke
    runtime/canon activation and retain both rows and all test history. This is
    neither approval nor activation of any tournament rule.
