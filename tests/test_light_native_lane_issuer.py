@@ -70,7 +70,7 @@ def journal(request_bytes,tmp_path,monkeypatch):
         if fault.preflight:raise RuntimeError('preflight rejected')
         value=issuer.derive(r.policy,r.accepted,**outer)
         return dict(audit='LIGHT_LANE_ISSUER_ADMITTED',cycle_sha256=owner.sha(owner.encoded(value)))
-    def run(wheels,credential,token,controller,runtime,raw,accepted,guard):
+    def run(wheels,credential,token,controller,runtime,raw,accepted,guard,*,_issuer=None):
         calls.append(owner.parse(raw));assert owner.sha(raw)==accepted
         if fault.unknown:raise RuntimeError('lost acknowledgement private-secret')
         outer=owner.parse(raw);p=outer['prepare'];target=cycle.location(p)

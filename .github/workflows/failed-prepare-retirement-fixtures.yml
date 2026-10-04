@@ -1,0 +1,110 @@
+name: Isolated failed prepare retirement fixtures
+
+on:
+  push:
+    branches: [review/failed-prepare-retirement-20261004]
+    paths: [.github/workflows/failed-prepare-retirement-fixtures.yml]
+
+permissions: {}
+concurrency:
+  group: isolated-failed-prepare-retirement
+  cancel-in-progress: false
+
+jobs:
+  fixtures:
+    if: >-
+      github.event.repository.private == false && github.event.created == true &&
+      github.run_attempt == 1 &&
+      github.event.head_commit.message == 'ci: verify failed prepare retirement protocol'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHON_IMAGE: python@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
+    steps:
+      - name: Fetch exact public source and hash-pinned wheels without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I -S -B <<'PY'
+          import hashlib, io, json, os, pathlib, re, urllib.request, zipfile
+          sha = os.environ['GITHUB_SHA']
+          assert re.fullmatch('[0-9a-f]{40}', sha)
+          assert os.environ['GITHUB_REPOSITORY'] == 'olegmed1-art/bridge-video-free'
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  raise RuntimeError('redirect refused')
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+          def fetch(url, limit):
+              with opener.open(url, timeout=30) as response:
+                  raw = response.read(limit+1)
+              assert len(raw) <= limit
+              return raw
+          source = fetch('https://codeload.github.com/olegmed1-art/bridge-video-free/zip/'+sha, 24*1024*1024)
+          work = pathlib.Path(os.environ['RUNNER_TEMP'])
+          (work/'retirement-source.zip').write_bytes(source)
+          archive = zipfile.ZipFile(io.BytesIO(source))
+          prefix = 'bridge-video-free-'+sha+'/'
+          assert all(x.startswith(prefix) for x in archive.namelist())
+          manifest = archive.read(prefix+'.github/retirement-fixtures/wheels.json')
+          assert hashlib.sha256(manifest).hexdigest() == '91b46fe96b1d8b6988ed37ca3ed47f31cd17f1d9c97ebe534efa6efdcbe13f4c'
+          context = work/'retirement-dependencies'; context.mkdir()
+          requirements = []
+          for wheel in json.loads(manifest):
+              assert re.fullmatch('[A-Za-z0-9_.-]+[.]whl', wheel['filename'])
+              assert wheel['url'].startswith('https://files.pythonhosted.org/packages/')
+              raw = fetch(wheel['url'], 16*1024*1024)
+              assert hashlib.sha256(raw).hexdigest() == wheel['sha256']
+              (context/wheel['filename']).write_bytes(raw)
+              requirements.append(wheel['name']+'=='+wheel['version']+' --hash=sha256:'+wheel['sha256'])
+          (context/'requirements.txt').write_text('\n'.join(requirements)+'\n')
+          (context/'Dockerfile').write_text('FROM '+os.environ['PYTHON_IMAGE']+'\nCOPY . /wheels/\nRUN python -m pip install --no-cache-dir --disable-pip-version-check --no-index --find-links=/wheels --only-binary=:all: --no-deps --require-hashes -r /wheels/requirements.txt && python -m pip check && ln -sf /usr/local/bin/python3 /usr/bin/python3\n')
+          print('EXACT_SOURCE', sha, 'ARCHIVE_SHA256', hashlib.sha256(source).hexdigest())
+          PY
+          docker pull "$PYTHON_IMAGE"
+          docker build --network none --pull=false --tag retirement-offline "$RUNNER_TEMP/retirement-dependencies"
+      - name: Offline Linux regression and real-root fault tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --init --pull=never --user 0:0 --network none --read-only \
+            --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+            --cap-add SETUID --cap-add SETGID --cap-add KILL \
+            --security-opt no-new-privileges:true --pids-limit 192 --memory 1g --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=256m \
+            --tmpfs /var/tmp:rw,nosuid,nodev,mode=1777,size=32m \
+            --interactive --entrypoint /usr/bin/env retirement-offline \
+            -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp PYTHONDONTWRITEBYTECODE=1 \
+            PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 EXPECTED_SHA="$GITHUB_SHA" \
+            /usr/bin/timeout --signal=KILL 780s /usr/local/bin/python -I -B -c '
+          import io, os, pathlib, stat, sys, zipfile
+          import xml.etree.ElementTree as ET
+          assert sys.platform=="linux" and sys.version_info[:2]==(3,12)
+          assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
+          assert set(os.listdir("/sys/class/net"))=={"lo"}
+          raw=sys.stdin.buffer.read(24*1024*1024+1);assert len(raw)<=24*1024*1024
+          archive=zipfile.ZipFile(io.BytesIO(raw));prefix="bridge-video-free-"+os.environ["EXPECTED_SHA"]+"/"
+          root=pathlib.Path("/tmp/candidate");root.mkdir(mode=0o700)
+          total=0
+          for item in archive.infolist():
+              assert item.filename.startswith(prefix)
+              name=item.filename[len(prefix):]
+              assert not name.startswith("/") and ".." not in pathlib.PurePosixPath(name).parts
+              assert not stat.S_ISLNK(item.external_attr>>16)
+              if item.is_dir():continue
+              total+=item.file_size;assert total<=100*1024*1024
+              path=root/name;path.parent.mkdir(parents=True,exist_ok=True)
+              path.write_bytes(archive.read(item))
+          os.chdir(root);sys.path.insert(0,str(root));sys.path.insert(0,str(root/"tests"))
+          import pytest
+          tests=["tests/test_light_native_lane_"+name+".py" for name in
+                 ("controller","cycle","execution","feed","install","issuer","owner","run_guard")]
+          tests += ["tests/test_light_native_pilot_intake.py"]
+          tests += sorted(str(p.relative_to(root)) for p in (root/"tests").glob("test_light_native_retirement*.py"))
+          code=pytest.main(["-q","-ra","-p","no:cacheprovider","--noconftest","-c","/dev/null",
+                            "--rootdir="+str(root),"--junitxml=/tmp/retirement.xml",*tests])
+          cases=ET.parse("/tmp/retirement.xml").getroot().findall(".//testcase")
+          ids={(x.get("classname"),x.get("name")) for x in cases}
+          assert code==0 and len(cases)>=140 and len(ids)==len(cases)
+          assert all(not any(x.find(k) is not None for k in ("skipped","failure","error")) for x in cases)
+          print("RETIREMENT_FIXTURES_PASS",len(cases),"unique cases zero skips",flush=True)
+          ' < "$RUNNER_TEMP/retirement-source.zip"

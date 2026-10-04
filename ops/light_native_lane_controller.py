@@ -25,7 +25,9 @@ FIRST_EXECUTION_SECONDS=420
 EXTRA=('ops/light_native_lane_issuer.py','ops/light_native_lane_controller.py','ops/light_native_lane_cycle.py','ops/light_native_lane_execution.py',
        'ops/light_native_lane_feed.py','ops/light_native_lane_owner.py',
        'ops/light_native_lane_run_guard.py','database/__init__.py',
-       'database/light_native_pilot_intake.py','database/native_cli_permission_engine.py')
+       'database/light_native_pilot_intake.py','database/native_cli_permission_engine.py',
+       'ops/light_native_retirement.py','ops/light_native_retirement_live.py','ops/light_native_bounded.py')
+RETIREMENT_HELPERS={'ops/light_native_retirement.py','ops/light_native_retirement_live.py','ops/light_native_bounded.py'}
 require=release.require
 encoded=execution.encoded
 parse=execution.parse
@@ -48,7 +50,10 @@ def validate_package(raw,source,accepted,*,allow_legacy=False):
     require(set(value)=={'version','kind','source','helpers'} and value['version']==1
             and value['kind']=='LIGHT_LANE_CONTROLLER' and value['source']==source
             and (names==expected or allow_legacy and names in
-                 (expected-{'ops/light_native_lane_issuer.py'},
+                 (expected-RETIREMENT_HELPERS,
+                  expected-RETIREMENT_HELPERS-{'ops/light_native_lane_issuer.py'},
+                  expected-RETIREMENT_HELPERS-{'ops/light_native_lane_cycle.py','ops/light_native_lane_issuer.py'},
+                  expected-{'ops/light_native_lane_issuer.py'},
                   expected-{'ops/light_native_lane_cycle.py','ops/light_native_lane_issuer.py'}))
             and all(type(v) is str for v in value['helpers'].values()),'LANE_OWNER_PACKAGE')
     return value
@@ -102,7 +107,7 @@ def sequence(value):
     if predecessor is None:
         require(value['version']==1,'LANE_OWNER_PREDECESSOR')
         return 0
-    require(value['version']==2 and type(predecessor) is dict
+    require(value['version'] in (2,3) and type(predecessor) is dict
             and set(predecessor)=={'plan_sha256','terminal_sha256','sequence'}
             and type(predecessor['sequence']) is int and 0<=predecessor['sequence']<9999
             and all(release.source.identifier(predecessor[k],64) for k in ('plan_sha256','terminal_sha256')),
@@ -170,6 +175,10 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
     require(os.geteuid()==0 and os.uname().nodename=='autopilot-lite-vnic'
             and sha(payload_raw)==accepted_payload,'LANE_OWNER_AUTHORITY')
     value=parse(payload_raw)
+    if value.get('action')=='retire-prepare':
+        require(_cycle is None,'LANE_RETIREMENT_AUTHORITY')
+        from ops.light_native_retirement_live import write
+        return write(wheels,credential,controller_raw,retained_raw,payload_raw,accepted_payload,run_guard)
     if value.get('action') in ('observe-issue','reconcile-issue'):
         require(_cycle is None,'LANE_ISSUER_SCOPE')
         from ops.light_native_lane_issuer import monitor
@@ -187,7 +196,8 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
           'accepted_receipt_sha256','accepted_discovery_sha256','accepted_permit_sha256',
           'accepted_terminal_sha256'}
     require((set(value)==keys and value['version']==1
-             or set(value)==keys|{'predecessor'} and value['version']==2) and value['action'] in
+             or set(value)==keys|{'predecessor'} and value['version']==2
+             or set(value)==keys|{'predecessor','issuer'} and value['version']==3) and value['action'] in
             ('prepare','publish','permit','execute','terminal','restore','contain','recover'),'LANE_OWNER_PHASE')
     number=sequence(value)
     from ops.light_native_lane_cycle import authorize_phase
@@ -204,6 +214,9 @@ def phase(wheels,credential,token,controller_raw,retained_raw,payload_raw,accept
     release.validate(retained['runtime'],retained['source'],retained['runtime']['sha256'])
     candidate=execution.plan.source_path(retained['source'])
     release.staging.verify_release(candidate,retained['runtime'])
+    if value['action']=='prepare':
+        from ops.light_native_retirement_live import prepare_guard
+        prepare_guard(value,_cycle,wheels,credential,run_guard)
     from ops.native_maintenance_owner_host import loaded_runtime
     from ops.native_maintenance_agreement import Agreement
     from ops import light_native_pilot_owner as owner
