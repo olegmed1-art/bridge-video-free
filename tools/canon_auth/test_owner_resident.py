@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
+import re
 from . import resident_preflight as r
 
 BINDING = r.Binding("synthetic-project", "synthetic-branch", "synthetic-endpoint", "synthetic.neon.tech")
@@ -40,21 +41,45 @@ class Conn:
         self.calls = []
         self.writes = []
         self.events = []
+        self.search_path = "hostile, pg_catalog"
+        self.ignore_path = False
+        self.overrides_called = []
+        self.rollback_failure = False
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, *, force_rollback=False):
         self.events.append("begin")
+        old_path = self.search_path
         try:
             yield
         except BaseException:
             self.events.append("rollback")
             raise
         else:
-            self.events.append("commit")
+            self.events.append("rollback" if force_rollback else "commit")
+            if force_rollback and self.rollback_failure:
+                raise RuntimeError("synthetic rollback failure")
+        finally:
+            self.search_path = old_path
 
     def execute(self, sql, params=()):
         self.calls.append((sql, params))
-        if "current_database(),session_user" in sql:
+        if sql == "SET LOCAL search_path = pg_catalog":
+            if not self.ignore_path:
+                self.search_path = "pg_catalog"
+            return SimpleNamespace(fetchone=lambda: None, fetchall=lambda: [])
+        if sql.strip().startswith("SELECT"):
+            unqualified = re.search(r"(?<![.\w])(current_setting|current_database|has_[a-z_]+_privilege|unnest)\s*\(", sql)
+            if unqualified:
+                self.overrides_called.append(sql)
+                if self.search_path != "pg_catalog":
+                    # Synthetic malicious schema: forged builtin-looking results.
+                    rows = [self.identity] if "current_database" in sql else [(True,)]
+                    return SimpleNamespace(fetchone=lambda: rows[0], fetchall=lambda: rows)
+                raise AssertionError("Builtin was not schema-qualified")
+        if sql == "SELECT pg_catalog.current_setting('search_path')":
+            rows = [(self.search_path,)]
+        elif "current_database(),session_user" in sql:
             rows = [self.identity]
         elif "current_database()" in sql:
             rows = [("tournament_rehearsal",)]
@@ -119,3 +144,53 @@ def test_effective_compiled_default_and_psycopg_resolved_address_supported():
     conn.params["hostaddr"] = "203.0.113.10"
     assert r.inspect_resident(conn, BINDING)["server_binding"] is True
     assert not conn.writes
+
+def test_hostile_inherited_path_is_replaced_and_success_rolls_back():
+    conn = Conn()
+    assert conn.search_path == "hostile, pg_catalog"
+    assert r.inspect_resident(conn, BINDING)["server_binding"] is True
+    assert conn.search_path == "hostile, pg_catalog"
+    assert conn.events == ["begin", "rollback"]
+    assert not conn.overrides_called
+    first_select = next(i for i, (sql, _) in enumerate(conn.calls) if sql.strip().startswith("SELECT"))
+    assert conn.calls[first_select - 1][0] == "SET LOCAL search_path = pg_catalog"
+    assert all("::text[]" not in sql and "gates(uuid)" not in sql for sql, _ in conn.calls)
+
+
+def test_ignored_path_pin_refuses_before_identity_catalog_or_privileges():
+    conn = Conn()
+    conn.ignore_path = True
+    with pytest.raises(r.Refused, match="catalog_search_path_required"):
+        r.inspect_resident(conn, BINDING)
+    assert conn.events == ["begin", "rollback"]
+    assert not conn.overrides_called
+    assert not any("current_database" in sql or "pg_settings" in sql or "has_" in sql for sql, _ in conn.calls)
+
+
+def test_failed_binding_rolls_back_with_no_commit():
+    conn = Conn()
+    conn.server_source = "session"
+    with pytest.raises(r.Refused, match="server_binding_unproven"):
+        r.inspect_resident(conn, BINDING)
+    assert conn.events == ["begin", "rollback"]
+    assert conn.search_path == "hostile, pg_catalog"
+
+
+def test_rollback_failure_cannot_return_inventory():
+    conn = Conn()
+    conn.rollback_failure = True
+    with pytest.raises(r.Refused, match="resident_inventory_unavailable"):
+        r.inspect_resident(conn, BINDING)
+    assert "commit" not in conn.events
+
+def test_synthetic_hostile_override_can_forge_legacy_privilege_answer():
+    conn = Conn()
+    conn.allowed = False
+    assert conn.execute("SELECT has_schema_privilege(current_user,'public','USAGE')").fetchone() == (True,)
+    assert conn.overrides_called
+    conn.overrides_called.clear()
+    result = r.inspect_resident(conn, BINDING)
+    assert result["schema_usage"] is False
+    assert result["write_admission"] is False
+    assert not conn.overrides_called
+    assert conn.events == ["begin", "rollback"]

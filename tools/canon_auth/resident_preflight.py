@@ -29,20 +29,27 @@ def idle(conn):
         raise Refused("idle_dedicated_connection_required")
 
 
+def catalog_path(conn):
+    """Pin function/type/operator resolution before the first SELECT."""
+    conn.execute("SET LOCAL search_path = pg_catalog")
+    if conn.execute("SELECT pg_catalog.current_setting('search_path')").fetchone() != ("pg_catalog",):
+        raise Refused("catalog_search_path_required")
+
+
 def capabilities(conn):
     """Necessary plan privileges, including both revoke tables; not write admission."""
-    schemas = all(conn.execute("SELECT has_schema_privilege(current_user,%s,'USAGE')",
+    schemas = all(conn.execute("SELECT pg_catalog.has_schema_privilege(current_user,%s,'USAGE')",
                                (name,)).fetchone()[0] for name in ("public", "bidding", "ai"))
-    school = conn.execute("SELECT has_table_privilege(current_user,'public.school','SELECT')").fetchone()[0]
-    gate = conn.execute("SELECT has_function_privilege(current_user,'bidding.rule_passes_activation_gates(uuid)','EXECUTE')").fetchone()[0]
+    school = conn.execute("SELECT pg_catalog.has_table_privilege(current_user,'public.school','SELECT')").fetchone()[0]
+    gate = conn.execute("SELECT pg_catalog.has_function_privilege(current_user,'bidding.rule_passes_activation_gates(pg_catalog.uuid)','EXECUTE')").fetchone()[0]
     rows = conn.execute("""
-        SELECT name, has_table_privilege(current_user,name,'SELECT'),
-                     has_table_privilege(current_user,name,'INSERT')
-        FROM unnest(%s::text[]) AS name
+        SELECT name, pg_catalog.has_table_privilege(current_user,name,'SELECT'),
+                     pg_catalog.has_table_privilege(current_user,name,'INSERT')
+        FROM pg_catalog.unnest(%s::pg_catalog.text[]) AS name
     """, (list(TABLES),)).fetchall()
-    update = [conn.execute("SELECT has_column_privilege(current_user,%s,%s,'UPDATE')",
+    update = [conn.execute("SELECT pg_catalog.has_column_privilege(current_user,%s,%s,'UPDATE')",
                           (table, column)).fetchone()[0] for table, column in UPDATES]
-    revoke = all(conn.execute("SELECT has_column_privilege(current_user,%s,%s,'UPDATE')",
+    revoke = all(conn.execute("SELECT pg_catalog.has_column_privilege(current_user,%s,%s,'UPDATE')",
                               (table, column)).fetchone()[0]
                  for table in ("public.canon_activation", "bidding.runtime_activation")
                  for column in ("status", "valid_to"))
@@ -76,11 +83,12 @@ def inspect_resident(conn, binding):
             # Psycopg resolves hostaddr itself. TLS authenticates the expected
             # hostname; immutable server tags below authenticate the target.
             raise Refused("preverified_owner_transport_required")
-        with conn.transaction():
+        with conn.transaction(force_rollback=True):
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             conn.execute("SET LOCAL statement_timeout='5s'")
             conn.execute("SET LOCAL lock_timeout='2s'")
-            if conn.execute("SELECT current_database(),session_user,current_user").fetchone() != (
+            catalog_path(conn)
+            if conn.execute("SELECT pg_catalog.current_database(),session_user,current_user").fetchone() != (
                     "neondb", "neondb_owner", "neondb_owner"):
                 raise Refused("existing_owner_connection_required")
             expected = {"neon.project_id": (binding.project_id, {"postmaster"}),

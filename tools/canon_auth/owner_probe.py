@@ -82,10 +82,11 @@ def observe(connect, raw):
     with connect(**kwargs, autocommit=True) as conn:
         PHASE = "read_only_transaction"
         conn.read_only = True  # Before the first transaction/query.
-        with conn.transaction():
+        with conn.transaction(force_rollback=True):
             conn.execute("SET TRANSACTION READ ONLY")
             conn.execute("SET LOCAL statement_timeout='5s'")
-            require(conn.execute("SELECT current_setting('transaction_read_only')").fetchone()
+            resident.catalog_path(conn)
+            require(conn.execute("SELECT pg_catalog.current_setting('transaction_read_only')").fetchone()
                     == ("on",), "server_read_only_required")
         PHASE = "identity_and_permissions"
         report = resident.inspect_resident(conn, binding)

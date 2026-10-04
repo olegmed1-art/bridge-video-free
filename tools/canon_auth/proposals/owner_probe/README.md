@@ -42,3 +42,12 @@ contracts: contents:read, no environment, secrets, database or owner entrypoint;
 one ten-minute job. The new read-only tests have no rehearsal/write imports.
 Content hashes normalize UTF-8 newlines. No private registry is included.
 Rollback: remove the exact source additions; no database rollback is needed.
+
+Security follow-up: inherited role/database search_path is not trusted.
+Every transaction sets and verifies a fixed pg_catalog path before its first
+catalog/identity/privilege SELECT; builtins and relevant types are schema-qualified.
+Both transactions explicitly request Psycopg force_rollback=True, including
+successful inventory. Rollback failure cannot yield PASS. Synthetic hostile-path
+fixtures demonstrate a forged legacy privilege answer and the hardened refusal/
+correct-result behavior. No hostile production path or exploit was observed.
+Psycopg transaction contract: https://www.psycopg.org/psycopg3/docs/api/connections.html

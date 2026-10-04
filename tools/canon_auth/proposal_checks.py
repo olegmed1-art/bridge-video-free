@@ -93,6 +93,15 @@ for path in (REPO / PROBE, REPO / "tools/canon_auth/resident_preflight.py"):
             assert isinstance(node.args[0], ast.Constant)
             assert node.args[0].value.strip().startswith(("SELECT", "SET TRANSACTION", "SET LOCAL"))
     assert not any(word in source for word in ("pilot_sql", "revoke_on_failure", "SET ROLE", "GRANT "))
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr == "transaction":
+                assert any(k.arg == "force_rollback" and isinstance(k.value, ast.Constant)
+                           and k.value.value is True for k in node.keywords)
+            if node.func.attr == "execute":
+                sql = node.args[0].value
+                assert not re.search(r"(?<![.\w])(current_setting|current_database|has_[a-z_]+_privilege|unnest)\s*\(", sql)
+                assert "::text[]" not in sql and "gates(uuid)" not in sql
 assert 'BRANCH = "main"' in (REPO / PROBE).read_text()
 assert 'MAIN = ' not in (REPO / PROBE).read_text()
 

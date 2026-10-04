@@ -27,3 +27,9 @@ This verdict does not authorize installation, dispatch, main merge or live acces
 Protected runner TLS/credential qualification and teacher-role/gate behavior remain
 unproven. Local Windows execution failed before process start at the ACL helper;
 no execution or permission bypass was attempted.
+
+Additional independent review identified an inherited search_path invariant gap
+and implicit successful transaction commits in a7ee189. No live hostile path was
+observed. Follow-up source review and exact-head CI must qualify the new namespace
+pinning, pg_catalog-qualified builtins/types and successful forced rollback.
+Earlier PASS receipts remain historical and do not qualify these new changes.

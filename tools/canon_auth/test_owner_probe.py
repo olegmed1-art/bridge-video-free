@@ -82,7 +82,8 @@ class Resident(Conn):
     def execute(self, sql, params=()):
         assert self.read_only
         assert sql.strip().startswith(("SELECT", "SET TRANSACTION", "SET LOCAL"))
-        if sql == "SELECT current_setting('transaction_read_only')":
+        if sql == "SELECT pg_catalog.current_setting('transaction_read_only')":
+            assert self.search_path == "pg_catalog"
             self.calls.append((sql, params))
             return SimpleNamespace(fetchone=lambda: ("on",))
         return super().execute(sql, params)
@@ -116,6 +117,8 @@ def test_real_inventory_sql_is_readonly_and_outputs_no_connection_values():
     assert report["write_admission"] is False and report["production_mutations"] is False
     assert report["transaction_read_only"] is True
     assert not conn.writes
+    assert conn.events == ["begin", "rollback", "begin", "rollback"]
+    assert conn.search_path == "hostile, pg_catalog"
     assert not any(value in json.dumps(report) for value in ("synthetic-private", BINDING.host, BINDING.project_id))
 
 
@@ -131,9 +134,12 @@ def test_missing_privileges_are_reported_without_self_elevation():
 
 def test_server_readonly_off_refused_before_catalog_reads():
     conn = Resident()
+    original = conn.execute
     def off(sql, params=()):
-        conn.calls.append((sql, params))
-        return SimpleNamespace(fetchone=lambda: ("off",))
+        if sql == "SELECT pg_catalog.current_setting('transaction_read_only')":
+            conn.calls.append((sql, params))
+            return SimpleNamespace(fetchone=lambda: ("off",))
+        return original(sql, params)
     conn.execute = off
     with fixture(conn) as (connect, closed), pytest.raises(p.resident.Refused, match="server_read_only_required"):
         p.observe(connect, "synthetic-private")
@@ -211,3 +217,19 @@ def test_exact_main_probe_flow_emits_only_after_both_source_checks():
         assert p.main() == 0
     assert events == ["source", "observe", "source"]
     assert json.loads(output.getvalue())["main_sha"] == "a" * 40
+
+def test_owner_probe_refuses_ignored_search_path_before_readonly_check():
+    conn = Resident()
+    conn.ignore_path = True
+    with fixture(conn) as (connect, closed), pytest.raises(p.resident.Refused, match="catalog_search_path_required"):
+        p.observe(connect, "synthetic-private")
+    assert closed and conn.events == ["begin", "rollback"]
+    assert not any("transaction_read_only" in sql or "pg_settings" in sql for sql, _ in conn.calls)
+
+
+def test_owner_probe_rollback_failure_never_returns_pass():
+    conn = Resident()
+    conn.rollback_failure = True
+    with fixture(conn) as (connect, closed), pytest.raises(RuntimeError, match="rollback failure"):
+        p.observe(connect, "synthetic-private")
+    assert closed and "commit" not in conn.events
