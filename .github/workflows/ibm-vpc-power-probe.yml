@@ -6,7 +6,7 @@ on:
       mode:
         description: 'trial_start: short RDC; manual_console_trial: owner console <=10min; trial_stop: independent'
         type: choice
-        options: [status, trial_start, manual_console_trial, trial_stop]
+        options: [status, trial_start, manual_console_trial, trial_stop, storage_evidence]
         default: status
       test_oracle:
         description: 'Also send one authenticated read-only request from Oracle Light'
@@ -21,6 +21,8 @@ on:
       - 'tests/test_ibm_vpc_oracle_probe.py'
       - 'ops/ibm_trial_executor.py'
       - 'tests/test_ibm_trial_executor.py'
+      - 'ops/ibm_vpc_storage_evidence.py'
+      - 'tests/test_ibm_vpc_storage_evidence.py'
 
 permissions:
   contents: read
@@ -41,7 +43,7 @@ jobs:
       - name: Validate bounded client contract
         run: |
           set -euo pipefail
-          python -m unittest -v tests.test_ibm_vpc_power tests.test_ibm_vpc_oracle_probe tests.test_ibm_trial_plan tests.test_ibm_trial_executor
+          python -m unittest -v tests.test_ibm_vpc_power tests.test_ibm_vpc_oracle_probe tests.test_ibm_trial_plan tests.test_ibm_trial_executor tests.test_ibm_vpc_storage_evidence
           python -m py_compile ops/ibm_vpc_power.py ops/ibm_vpc_oracle_probe.py ops/ibm_trial_executor.py
 
   trial-start:
@@ -216,3 +218,18 @@ jobs:
             --region "$IBM_VPC_REGION" \
             --instance-id "$IBM_VPC_INSTANCE_ID" \
             --instance-name "$IBM_VPC_INSTANCE_NAME"
+
+  storage-evidence:
+    # Read embedded storage metadata only; no power/SSH/Oracle path.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'storage_evidence' && inputs.test_oracle == false && github.ref == 'refs/heads/review/ibm-storage-provider-evidence-20261004' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Read storage metadata for exact stopped IBM instance
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+        run: timeout --signal=TERM --kill-after=1s 75s python3 ops/ibm_vpc_storage_evidence.py
