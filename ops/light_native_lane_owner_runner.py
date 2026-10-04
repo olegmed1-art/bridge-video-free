@@ -56,7 +56,7 @@ def remote_failure(raw):
     return failure(RuntimeError('LANE_OWNER_OUTCOME_UNKNOWN'))
 
 
-def dispatch_inputs(event_path,source):
+def dispatch_inputs(event_path,source,*,read_only=False):
     """Validate before use; no input interpolation into runner logging surfaces."""
     from ops.light_native_retirement_live import public_reference
     from ops import light_native_retirement as r
@@ -70,14 +70,16 @@ def dispatch_inputs(event_path,source):
     release.require(all(r.digest(x) for x in digests),'LANE_OWNER_NOT_ACCEPTED')
     release.require(type(value['retirement_reference_json']) is str,'LANE_OWNER_NOT_ACCEPTED')
     payload=value['retirement_reference_json'].encode('utf-8')
-    reference=public_reference(payload)
+    release.require(type(read_only) is bool,'LANE_OWNER_NOT_ACCEPTED')
+    reference=public_reference(payload,action='observe-retirement-reference' if read_only else 'retire-prepare-reference')
     release.require(r.sha(payload)==digests[2] and reference['source']==source
         and reference['accepted_controller_sha256']==digests[0]
         and reference['accepted_runtime_sha256']==digests[1],'LANE_OWNER_NOT_ACCEPTED')
     return payload,digests
 
 
-def bootstrap(source,accepted_controller,accepted_runtime,accepted_payload,wheel_sha,run,attempt):
+def bootstrap(source,accepted_controller,accepted_runtime,accepted_payload,wheel_sha,run,attempt,*,read_only=False):
+    release.require(type(read_only) is bool,'LANE_OWNER_RUN')
     for digest in (accepted_controller,accepted_runtime,accepted_payload,wheel_sha):
         release.require(release.source.identifier(digest,64),'LANE_OWNER_DIGEST')
     release.require(release.source.identifier(source,40) and type(run) is int and run>0
@@ -103,33 +105,41 @@ try:
   sys.path.append('/opt/bridge-school/school-autopilot-production-light/releases/f82d58efabf21ba62fd242a4fa02a8e7cfda1d23')
   from ops.light_native_lane_run_guard import authenticated
   from ops.light_native_lane_controller import phase
-  from ops.light_native_retirement_live import public_reference,public_result
-  reference=public_reference(decoded['payload'])
-  guard=authenticated(%r,%d,%d,value['token'])
-  result=phase(decoded['driver'],value['credential'],value['token'],decoded['controller'],decoded['runtime'],decoded['payload'],%r,guard)
+  from ops.light_native_retirement_live import public_reference,public_result,public_observation_result,inspect_retirement
+  reference=public_reference(decoded['payload'],action=%r)
+  if %r:
+   guard=authenticated(%r,%d,%d,value['token'],read_only=True)
+   result=inspect_retirement(decoded['driver'],value['credential'],decoded['controller'],decoded['runtime'],decoded['payload'],%r,guard)
+   check_result=public_observation_result
+  else:
+   guard=authenticated(%r,%d,%d,value['token'])
+   result=phase(decoded['driver'],value['credential'],value['token'],decoded['controller'],decoded['runtime'],decoded['payload'],%r,guard)
+   check_result=public_result
   guard.assert_running()
-  print(json.dumps(public_result(result,reference['record_sha256']),sort_keys=True))
+  print(json.dumps(check_result(result,reference['record_sha256']),sort_keys=True))
 except BaseException as exc:
  reason=str(exc)
  print(json.dumps(dict(audit='LIGHT_LANE_OWNER_REFUSED',reason=reason if reason in FAILURE_REASONS else 'UNCLASSIFIED'),sort_keys=True))
  raise SystemExit(2) from None
 ''' % (dict(controller=accepted_controller,runtime=accepted_runtime,payload=accepted_payload,driver=wheel_sha),
-       source,tuple(dict.fromkeys((*release.HELPERS,*controller.EXTRA))),source,run,attempt,accepted_payload)
+       source,tuple(dict.fromkeys((*release.HELPERS,*controller.EXTRA))),
+       'observe-retirement-reference' if read_only else 'retire-prepare-reference',read_only,
+       source,run,attempt,accepted_payload,source,run,attempt,accepted_payload)
 
 
-def main():
+def main(*,read_only=False):
     release.require(len(sys.argv)==4,'LANE_OWNER_ARGUMENTS')
     key,known,wheel_directory=sys.argv[1:]
-    source,run,attempt=local_context(os.environ)
-    payload,digests=dispatch_inputs(os.environ['GITHUB_EVENT_PATH'],source)
+    source,run,attempt=local_context(os.environ,read_only=read_only)
+    payload,digests=dispatch_inputs(os.environ['GITHUB_EVENT_PATH'],source,read_only=read_only)
     source_check(source)
     repo=Path(__file__).resolve().parents[1]
     raw=controller.package(repo,source)
     retained=release.package(repo,controller.install.RETAINED_SOURCE)
-    from ops.light_native_retirement_live import public_result,public_reference
+    from ops.light_native_retirement_live import public_result,public_reference,public_observation_result
     wheels=driver.build(wheel_directory)
     release.require([controller.sha(item) for item in (raw,retained,payload)]==digests,'LANE_OWNER_NOT_ACCEPTED')
-    code=bootstrap(source,*digests,driver.sha(wheels),run,attempt)
+    code=bootstrap(source,*digests,driver.sha(wheels),run,attempt,read_only=read_only)
     wire=controller.encoded(dict(controller=base64.b64encode(raw).decode(),runtime=base64.b64encode(retained).decode(),
         payload=base64.b64encode(payload).decode(),driver=base64.b64encode(wheels).decode(),
         credential=os.environ.pop('NATIVE_OWNER_DATABASE_URL',''),token=os.environ['GH_TOKEN']))
@@ -143,9 +153,11 @@ def main():
     if result.returncode!=0:
         print(json.dumps(remote_failure(result.stdout),sort_keys=True))
         return 2
-    value=public_result(json.loads(result.stdout),public_reference(payload)['record_sha256'])
+    reference=public_reference(payload,action='observe-retirement-reference' if read_only else 'retire-prepare-reference')
+    value=(public_observation_result if read_only else public_result)(json.loads(result.stdout),reference['record_sha256'])
     source_check(source)
     print(json.dumps(value,sort_keys=True))
+    return 2 if read_only and value['state']!='OBSERVED' else 0
 
 
 if __name__=='__main__':
