@@ -103,15 +103,3 @@ def inspect_resident(conn, binding):
     except Exception:
         raise Refused("resident_inventory_unavailable") from None
 
-
-def inspect_disposable(conn):
-    """Only the existing loopback PG18 fixture; not a production fallback."""
-    idle(conn)
-    if (conn.info.host not in ("127.0.0.1", "localhost") or conn.info.port != 55432
-            or conn.info.hostaddr not in ("127.0.0.1", "::1")):
-        raise Refused("disposable_loopback_required")
-    with conn.transaction():
-        conn.execute("SET TRANSACTION READ ONLY")
-        if conn.execute("SELECT current_database()").fetchone() != ("tournament_rehearsal",):
-            raise Refused("disposable_database_required")
-        return capabilities(conn)

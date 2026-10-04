@@ -1,101 +1,44 @@
-# Owner qualification: inactive public review proposal
+# Dormant main-only owner inventory proposal
 
-This branch contains sanitized code, synthetic tests and INACTIVE templates.
-The actual protected owner workflow and actual publication preflight are unchanged.
-The review CI has no secret injection, protected environment, database, live owner
-probe, workflow dispatch, build, deployment, SQL mutation, or role/ACL change.
+Scope: source review only, based on main 7ae456e543ae584112a31dda3e63a8a8cab64d63.
+PR2104 targets main and remains draft. No installation, merge or dispatch is
+authorized by this package. The active protected workflow and publication gate
+remain unchanged. The earlier feature-branch proposal and its publication-gate
+exception are superseded and removed.
 
-This is a stacked draft review against the existing canon test branch at
-2c7445aecdfe7e657797fbc0ccc63bf89920a8b4. No merge into main is proposed.
-The original proposed source guard stays pinned to main
-711ddd648fa74f2b903f9d7127dadc412f94b277 and refuses changed main BEFORE reading
-the owner credential or connecting. Book cleanup/current-main reconciliation must
-finish before any future target update; this publication does not change live pins.
+External boundary confirmed by the owner on 2026-10-04 at 20:09:33 UTC:
+database-production permits exactly main (one branch, zero tags). Feature branches
+are ineligible. No settings, reviewers, waits, bypasses or secrets are changed here.
 
-## Proposed supported route, subject to later parent review
+The inactive workflow template adds a separate canon-readonly choice while
+preserving the maintenance job's repository, main, actor, manual event and exact
+expected_main_sha checks. The new job also requires the triggering actor to be the
+owner, reviewed source and probe inputs to equal github.sha, and the existing
+database-production environment. Default remains maintenance. Existing credential
+names and credential parser are reused without role or principal substitution.
 
-The existing native-maintenance-owner-attest workflow already has workflow_dispatch
-on default main. GitHub supports selecting another branch for its manual run:
-[GitHub manual workflow documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
-The child has no dispatch tool; an authorized parent UI can supply that interface.
-Do not use an unrelated workflow rerun or migration workflow as a substitute.
+There is no static pin to an obsolete main, nor a self-referential installation
+hash. After separately reviewed installation on main and release coordination,
+the operator must supply the exact reviewed installation SHA in both inputs.
+Code requires that SHA to equal GITHUB_SHA, checked-out HEAD and the live main
+ref before and after inventory. Moving main causes refusal before credential
+access or suppresses the PASS result. Every feature ref is rejected before
+credential access. This does not authorize installation or live execution now.
 
-workflow.patch and native-maintenance-owner-attest.yml.template propose a separate
-manual canon-readonly job using the EXISTING protected owner credential expression.
-Only credential NAMES appear in these inactive templates; no values, new keys,
-connection strings, tenant identifiers, endpoints or private rows are published.
-Actual secret consumption would remain inside that existing protected runner.
-The new code imports the existing strict owner parser instead of copying private
-target parameters into this package or substituting another principal.
+owner_probe uses only fixed read-only SQL and existing strict TLS/target binding.
+It exports booleans and exact public code SHAs, never credentials, host IDs,
+snapshots or application rows. Catalog privilege checks do not execute the
+school gate and do not constitute write admission, teacher-runtime qualification
+or production readiness.
 
-Future inputs: probe_scope=canon-readonly, expected_main_sha=the frozen reviewed
-main, expected_probe_sha=the full separately reviewed published executable SHA.
-That future SHA is NOT the review branch SHA: its new mode is not installed here.
-The proposal additionally binds exact branch, workflow ref, checkout SHA, owner
-actor and triggering actor, main ancestry, and current main before/after inventory.
-Do not dispatch this review branch. Actual execution remains unapproved here.
+The bounded qualification.sql catalog check was externally completed and rolled
+back on 2026-10-04 at 19:32:00 UTC. Schema/relation/column/function privileges
+were present. SQL-editor backend ssl=false does not qualify a real protected
+runner's verified TLS connection. Credential validity, actual runner binding and
+teacher-role/gate behavior remain unproven.
 
-## Why this grants no additional authority
-
-No repository/environment permissions, branch policies, DB roles, grants, secrets,
-old maintenance manifests or clients change. The proposed job uses the existing
-database-production protection and its current approvals. Branch eligibility and
-credential validity are UNKNOWN; if protection rejects the branch, STOP. Do not
-change that policy or move credentials to make the probe run.
-
-It consumes the existing owner credential only to establish a dedicated READ ONLY
-connection, with no caller SQL. It checks TLS, exact actual owner identity,
-immutable server routing tags and necessary catalog privileges. The server
-transaction is read-only before catalog queries. The business activation function
-is never called: only its EXECUTE privilege is inspected. All SQL is SELECT or
-transaction-local SET. No pilot, revoke, activation, queue or replay functions are
-imported by the production probe. Output is fixed booleans and source SHAs; errors
-never serialize raw connection details. PASS explicitly has write_admission=false.
-
-Using existing owner authentication is still sensitive. These technical limits
-do not replace parent review, environment approval or independent review. This
-proposal cannot prove permission to mutate or successful persistent revoke.
-
-## Why the proposed publication gate remains strict
-
-publication-preflight.patch (apply with git apply --unidiff-zero) and
-preflight.py.template are INACTIVE. They propose
-one extra workflow path only if its normalized content hash equals the exact
-reviewed manual-only workflow. Other workflow paths, expanded permissions or even
-an unreviewed comment are refused. Existing secret scanning and checks against
-extra push/create/workflow_run triggers remain intact. No wildcard or disabled
-security check is introduced. The exact hash protects the proposed mode's actor,
-scope, protected-environment and no-side-effect boundaries.
-
-proposal_checks verifies the manifest, sanitized scope, unchanged actual protected
-files, literal read-only SQL, exact workflow hash, and negative unreviewed-workflow
-cases in a temporary tree. Only git's changed-file list is mocked in that scope
-smoke test; the actual hash/YAML/workflow audit executes. The proposed gate must
-be reviewed separately before any activation. Do not merge all review artifacts
-into the older canon test branch; only the separately approved executable files
-and exact patches belong in a later activation candidate.
-
-## Independent evidence and metadata SQL
-
-I2_REVIEW.md records the earlier independent offline review. This public package
-gets an additional review of publication boundaries and synthetic Ubuntu CI.
-The tests use synthetic transports, roles, secrets and server tags. Existing Linux
-owner-parser tests also mock connection/snapshot functions and make no DB call.
-
-qualification.sql is a single bounded catalog SELECT: three schemas, thirteen
-relations, nine UPDATE columns and one activation-gate signature. It reads no
-application rows and calls only built-in metadata/privilege functions. It does NOT
-execute a school function. It may help an independently verified read-only browser
-metadata channel; output with private server context must remain in that private
-channel, not this repository. Missing objects/permissions remain false, with no
-self-elevation.
-
-The SQL-editor gateway's pg_stat_ssl is not proof of deployment/client TLS.
-An independently observed ssl=false on that backend does not establish that user
-HTTPS was unencrypted; it also does not satisfy the resident verified-TLS gate.
-Role/ACL metadata is supplementary evidence, not qualified runtime connection proof.
-
-Checks: python -m tools.canon_auth.proposal_checks and the synthetic-only CI job.
-Manifest content hashes use normalized UTF-8 text, making them stable across LF/CRLF.
-Rollback: discard this branch or revert these exact review files. No DB rollback
-is required, because this publication and CI have no live mutation path.
+Review CI runs only synthetic transports and mocked existing Linux parser
+contracts: contents:read, no environment, secrets, database or owner entrypoint;
+one ten-minute job. The new read-only tests have no rehearsal/write imports.
+Content hashes normalize UTF-8 newlines. No private registry is included.
+Rollback: remove the exact source additions; no database rollback is needed.

@@ -1,22 +1,22 @@
-name: Isolated retirement observer import order
+name: Isolated retirement writer import order
 
 on:
   push:
-    branches: [review/retirement-observer-import-order-20261004]
+    branches: [review/retirement-writer-import-order-20261004]
     paths: [.github/workflows/failed-prepare-retirement-fixtures.yml]
 
 permissions: {}
 concurrency:
-  group: isolated-retirement-observer-import-order
+  group: isolated-retirement-writer-import-order
   cancel-in-progress: false
 
 jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == '6edfa8cb262bfccf48ace850b2b436fe7945357e' &&
+      github.event.before == 'f099865ff2568d2bc17c690645eba08694f342d7' &&
       github.run_attempt == 1 &&
-      github.event.head_commit.message == 'ci: verify retirement observer import order'
+      github.event.head_commit.message == 'ci: verify retirement writer import order'
     strategy:
       fail-fast: false
       matrix:
@@ -66,12 +66,15 @@ jobs:
           assert hashlib.sha256(old_workflow).hexdigest() == '0320ffa0e7229f315c8acc71401038eadd1b8e6901a4e1e38c69190b81ba850e'
           old_observer = fetch('https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/08cd157b32a3e34974c4d24706882ef31681891d/ops/light_native_retirement_live.py', 128*1024)
           assert hashlib.sha256(old_observer).hexdigest() == 'f7e8969653cc05879bf7df918181b6371534dd8e6181a1a729dd9ae965034c35'
+          old_writer = fetch('https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/711ddd648fa74f2b903f9d7127dadc412f94b277/ops/light_native_retirement_live.py', 128*1024)
+          assert hashlib.sha256(old_writer).hexdigest() == '99d23b53f426eb12279b136261478e34c45e10e724b5bc1e97365c9e1b176df2'
           bundle = io.BytesIO()
           with zipfile.ZipFile(bundle, 'w', zipfile.ZIP_DEFLATED) as packed:
               packed.writestr('candidate.zip', source)
               packed.writestr('revoked-controller.py', old)
               packed.writestr('old-owner-workflow.yml', old_workflow)
               packed.writestr("old-observer.py", old_observer)
+              packed.writestr("old-writer.py", old_writer)
           (work/'retirement-test-input.zip').write_bytes(bundle.getvalue())
           archive = zipfile.ZipFile(io.BytesIO(source))
           prefix = 'bridge-video-free-'+sha+'/'
@@ -120,7 +123,7 @@ jobs:
           assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
           assert set(os.listdir("/sys/class/net"))=={"lo"}
           wire=sys.stdin.buffer.read(25*1024*1024+1);assert len(wire)<=25*1024*1024
-          packed=zipfile.ZipFile(io.BytesIO(wire));assert set(packed.namelist())=={"candidate.zip","revoked-controller.py","old-owner-workflow.yml","old-observer.py"}
+          packed=zipfile.ZipFile(io.BytesIO(wire));assert set(packed.namelist())=={"candidate.zip","revoked-controller.py","old-owner-workflow.yml","old-observer.py","old-writer.py"}
           raw=packed.read("candidate.zip");assert len(raw)<=24*1024*1024
           old=packed.read("revoked-controller.py")
           assert hashlib.sha256(old).hexdigest()=="3762caa927970b6410a7850c76fa1dcbbfeab214c5470ff98c6b8059b51ffcb4"
@@ -192,6 +195,24 @@ jobs:
           assert "COLD_OBSERVER_IMPORT_BEFORE_DRIVER" in ET.tostring(failed[0],encoding="unicode")
           assert observer.read_bytes()==fixed
           print("OLD_OBSERVER_IMPORT_REGRESSION_DETECTED",os.uname().machine,flush=True)
+          fixed_writer=observer.read_bytes();old_writer=packed.read("old-writer.py")
+          assert hashlib.sha256(old_writer).hexdigest()=="99d23b53f426eb12279b136261478e34c45e10e724b5bc1e97365c9e1b176df2"
+          try:
+              observer.write_bytes(old_writer)
+              red=subprocess.run([sys.executable,"-B","-m","pytest","-q","-p","no:cacheprovider",
+                  "--noconftest","-c","/dev/null","--basetemp=/fixture-data/writer-red",
+                  "--junitxml=/tmp/writer-red.xml",
+                  "tests/test_light_native_retirement_writer_import_i2.py::test_isolated_packed_writer_import_boundary[success]"],
+                  capture_output=True,text=True,timeout=60)
+          finally:
+              observer.write_bytes(fixed_writer)
+          print(red.stdout,flush=True);print(red.stderr,flush=True)
+          failed=ET.parse("/tmp/writer-red.xml").getroot().findall(".//testcase")
+          assert red.returncode==1 and len(failed)==1
+          assert failed[0].find("failure") is not None and failed[0].find("error") is None and failed[0].find("skipped") is None
+          assert "COLD_WRITER_IMPORT_BEFORE_DRIVER" in ET.tostring(failed[0],encoding="unicode")
+          assert observer.read_bytes()==fixed_writer
+          print("OLD_WRITER_IMPORT_REGRESSION_DETECTED",os.uname().machine,flush=True)
           from contextlib import redirect_stdout
           from unittest.mock import patch
           from tools.canon_auth import build_once
@@ -222,7 +243,7 @@ jobs:
                             "--rootdir="+str(root),"--junitxml=/tmp/retirement.xml",*tests])
           cases=ET.parse("/tmp/retirement.xml").getroot().findall(".//testcase")
           ids={(x.get("classname"),x.get("name")) for x in cases}
-          assert code==0 and len(cases)==860 and len(ids)==len(cases)
+          assert code==0 and len(cases)==870 and len(ids)==len(cases)
           assert all(not any(x.find(k) is not None for k in ("skipped","failure","error")) for x in cases)
-          print("OBSERVER_IMPORT_ORDER_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
+          print("WRITER_IMPORT_ORDER_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
           ' < "$RUNNER_TEMP/retirement-test-input.zip"

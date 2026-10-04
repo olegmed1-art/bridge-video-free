@@ -14,7 +14,7 @@ on:
       - 'tools/canon_auth/owner_probe.py'
       - 'tools/canon_auth/resident_preflight.py'
       - 'tools/canon_auth/test_owner_probe.py'
-      - 'tools/canon_auth/test_resident.py'
+      - 'tools/canon_auth/test_owner_resident.py'
   workflow_dispatch:
     inputs:
       probe_scope:
@@ -24,7 +24,7 @@ on:
         default: maintenance
         options: [maintenance, canon-readonly]
       expected_probe_sha:
-        description: Reviewed exact test-branch SHA for canon-readonly; unused for maintenance
+        description: Reviewed exact main SHA for canon-readonly; must equal expected_main_sha
         required: false
         type: string
       expected_main_sha:
@@ -46,8 +46,8 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
-      - run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4' pytest==8.4.2 fastapi==0.141.1
-      - run: python -m pytest -q tools/canon_auth/test_owner_probe.py tools/canon_auth/test_resident.py
+      - run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4' pytest==8.4.2
+      - run: python -m pytest -q tools/canon_auth/test_owner_probe.py tools/canon_auth/test_owner_resident.py
       - run: python -m unittest discover -s tests -p 'test_native_maintenance_owner_attest.py' -v
       - run: python -m unittest discover -s tests -p 'test_native_maintenance_registry_scope.py' -v
       - run: python -m unittest discover -s tests -p 'test_native_cli_connection_parameters.py' -v
@@ -87,11 +87,11 @@ jobs:
     needs: contract
     if: >-
       github.repository == 'olegmed1-art/bridge-video-free' &&
-      github.ref == 'refs/heads/test/canon-acceptance-cf6091-20261004' &&
+      github.ref == 'refs/heads/main' &&
       github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
       github.event_name == 'workflow_dispatch' && inputs.probe_scope == 'canon-readonly' &&
       inputs.expected_probe_sha == github.sha &&
-      inputs.expected_main_sha == '711ddd648fa74f2b903f9d7127dadc412f94b277'
+      inputs.expected_main_sha == github.sha
     environment: database-production
     runs-on: ubuntu-24.04
     timeout-minutes: 3

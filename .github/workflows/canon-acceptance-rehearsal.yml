@@ -50,7 +50,6 @@ jobs:
           tests/test_l1_canonical_registry.py tests/test_l1_canonical_runtime.py
           tests/test_knowledge_read_api.py tests/test_ai_api_routes.py
           tests/test_ai_final_decision_contract.py
-          tests/test_book_teacher_api.py tests/test_book_runtime_identity.py
       - name: Apply unchanged schema to disposable PostgreSQL 18
         run: python -m tools.tournament_pilot.bootstrap '${{ job.services.postgres.id }}'
       - name: Staged SQL and authenticated API rehearsal

@@ -23,14 +23,14 @@ from typing import Any
 import requests
 
 from .contract import CONTRACT_VERSION
-from .drive_adapter import DRIVE, access_token
+from .drive_adapter import DRIVE, access_token, hash_remote_file
 from .result_conformance import ResultConformanceError, verify_result
 
 UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 BASE_TOP_LEVEL_ALLOWLIST = frozenset({"manifest.json", "transcript.jsonl", "transcript.txt", "transcript_qc.json"})
 TOP_LEVEL_ALLOWLIST = BASE_TOP_LEVEL_ALLOWLIST | {"server_review.json"}
-OPTIONAL_TOP_LEVEL_ALLOWLIST = frozenset({"source_parts_manifest.json"})
+OPTIONAL_TOP_LEVEL_ALLOWLIST = frozenset({"source_parts_manifest.json", "speaker_diarization.json", "algorithm_3_1_test.json"})
 FRAME_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 PUBLISHABLE_STATUSES = frozenset({"COMPLETED"})
 RAW_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".avi", ".webm", ".wav", ".mp3", ".m4a", ".flac"})
@@ -244,7 +244,7 @@ def _find_existing_file(parent_id: str, name: str, token: str) -> dict[str, Any]
         headers=_headers(token),
         params={
             "q": query,
-            "fields": "nextPageToken,files(id,name,size,md5Checksum,mimeType,appProperties,permissions(id,type,role),trashed)",
+            "fields": "nextPageToken,files(id,name,parents,version,size,md5Checksum,mimeType,appProperties,permissions(id,type,role),trashed)",
             "pageSize": 1000,
             "supportsAllDrives": True,
             "includeItemsFromAllDrives": True,
@@ -264,7 +264,7 @@ def _get_file_metadata(file_id: str, token: str) -> dict[str, Any]:
         f"{DRIVE}/files/{file_id}",
         headers=_headers(token),
         params={
-            "fields": "id,name,size,md5Checksum,mimeType,appProperties,permissions(id,type,role),trashed",
+            "fields": "id,name,size,md5Checksum,mimeType,appProperties,permissions(id,type,role),trashed,parents,version",
             "supportsAllDrives": True,
         },
         timeout=30,
@@ -273,7 +273,10 @@ def _get_file_metadata(file_id: str, token: str) -> dict[str, Any]:
     return dict(response.json())
 
 
-def _verify_remote_artifact(remote: dict[str, Any], artifact: PublishArtifact) -> dict[str, Any]:
+def _verify_remote_artifact(remote: dict[str, Any], artifact: PublishArtifact, token: str,
+                            expected_parent_id: str | None = None) -> dict[str, Any]:
+    if not str(remote.get("id") or "") or remote.get("name") != artifact.relative_name.replace("/", "__"):
+        raise RuntimeError(f"Drive result identity/name mismatch: {artifact.relative_name}")
     properties = remote.get("appProperties") if isinstance(remote.get("appProperties"), dict) else {}
     try:
         remote_size = int(remote.get("size"))
@@ -285,19 +288,28 @@ def _verify_remote_artifact(remote: dict[str, Any], artifact: PublishArtifact) -
         raise RuntimeError(f"Drive result checksum mismatch: {artifact.relative_name}")
     if str(properties.get("sha256") or "").lower() != artifact.sha256:
         raise RuntimeError(f"Drive result SHA-256 property mismatch: {artifact.relative_name}")
-    if bool(remote.get("trashed")):
+    if expected_parent_id is not None and remote.get("parents") != [expected_parent_id]:
+        raise RuntimeError(f"Drive result parent mismatch: {artifact.relative_name}")
+    if remote.get("trashed") is not False:
         raise RuntimeError(f"Drive result is trashed: {artifact.relative_name}")
     permissions = remote.get("permissions")
     if not isinstance(permissions, list) or not permissions:
         raise RuntimeError(f"Drive result ACL is unavailable: {artifact.relative_name}")
     if any(str(item.get("type") or "") in {"anyone", "domain"} for item in permissions if isinstance(item, dict)):
         raise RuntimeError(f"Drive result has broad ACL: {artifact.relative_name}")
+    readback = hash_remote_file(str(remote.get("id") or ""), token,
+                                expected_size=artifact.size_bytes, expected_sha256=artifact.sha256)
+    after = _get_file_metadata(str(remote["id"]), token)
+    stable_keys = ("id", "name", "parents", "version", "size", "md5Checksum", "trashed", "permissions", "appProperties")
+    if any(after.get(key) != remote.get(key) for key in stable_keys):
+        raise RuntimeError(f"Drive result changed during read-back: {artifact.relative_name}")
     return {
         "relative_name": artifact.relative_name,
         "file_id": str(remote.get("id") or ""),
         "size_bytes": artifact.size_bytes,
         "md5": artifact.md5,
         "sha256": artifact.sha256,
+        "verification": readback["verification"],
     }
 
 
@@ -305,7 +317,7 @@ def _upload_or_verify_file(parent_id: str, artifact: PublishArtifact, token: str
     upload_name = artifact.relative_name.replace("/", "__")
     existing = _find_existing_file(parent_id, upload_name, token)
     if existing is not None:
-        return _verify_remote_artifact(_get_file_metadata(str(existing.get("id") or ""), token), artifact)
+        return _verify_remote_artifact(_get_file_metadata(str(existing.get("id") or ""), token), artifact, token, parent_id)
     mime = mimetypes.guess_type(upload_name)[0] or "application/octet-stream"
     metadata = {"name": upload_name, "parents": [parent_id], "appProperties": {"sha256": artifact.sha256}}
     media = artifact.path.read_bytes()
@@ -344,7 +356,7 @@ def _upload_or_verify_file(parent_id: str, artifact: PublishArtifact, token: str
     )
     response.raise_for_status()
     remote = _get_file_metadata(str(response.json()["id"]), token)
-    return _verify_remote_artifact(remote, artifact)
+    return _verify_remote_artifact(remote, artifact, token, parent_id)
 
 
 def _list_children(parent_id: str, token: str) -> list[dict[str, Any]]:
@@ -354,7 +366,7 @@ def _list_children(parent_id: str, token: str) -> list[dict[str, Any]]:
         headers=_headers(token),
         params={
             "q": query,
-            "fields": "nextPageToken,files(id,name,size,md5Checksum,mimeType,appProperties,permissions(id,type,role),trashed)",
+            "fields": "nextPageToken,files(id,name,parents,version,size,md5Checksum,mimeType,appProperties,permissions(id,type,role),trashed)",
             "pageSize": 1000,
             "supportsAllDrives": True,
             "includeItemsFromAllDrives": True,
@@ -383,7 +395,7 @@ def _verify_remote_inventory(
         by_name[name] = item
     if set(by_name) != set(expected):
         raise RuntimeError("Drive publication inventory mismatch")
-    return [_verify_remote_artifact(by_name[name], artifact) for name, artifact in sorted(expected.items())]
+    return [_verify_remote_artifact(by_name[name], artifact, token, child_id) for name, artifact in sorted(expected.items())]
 
 
 def publish_result(
@@ -486,7 +498,7 @@ def publish_result(
     report["child_folder_id"] = child_id
     report["publication_marker_sha256"] = marker.sha256
     report["remote_artifacts"] = verified
-    report["remote_verification"] = "SIZE_MD5_SHA256_PROPERTY_MATCH"
+    report["remote_verification"] = "CONTENT_READBACK_SHA256"
     report["verified_at"] = datetime.now(timezone.utc).isoformat()
     _verify_folder(child_id, token, expected_parent_id=folder_id, require_writable=True)
     proof = {
@@ -497,7 +509,7 @@ def publish_result(
         "drive_folder_id": child_id,
         "artifact_set_sha256": bundle_hash,
         "publication_marker_sha256": marker.sha256,
-        "remote_verification": "SIZE_MD5_SHA256_PROPERTY_MATCH",
+        "remote_verification": "CONTENT_READBACK_SHA256",
         "verified_at": report["verified_at"],
     }
     proof_path = job_dir / "DURABLE_PUBLICATION_PROOF.json"

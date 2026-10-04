@@ -1,17 +1,17 @@
 {
-  "base_candidate": "2c7445aecdfe7e657797fbc0ccc63bf89920a8b4",
-  "frozen_main": "711ddd648fa74f2b903f9d7127dadc412f94b277",
+  "source_base": "7ae456e543ae584112a31dda3e63a8a8cab64d63",
+  "execution_branch": "main",
   "content_sha256": {
-    "tools/canon_auth/owner_probe.py": "d5f0c1020af44c4e7bd43b70d73410d1f0b64f77974c909c2da2a0b7fd1d5dab",
-    "tools/canon_auth/test_owner_probe.py": "b1fd1ed07f86e4c2507517004201793cac072be3fd2928029e3fda6618221037",
-    "tools/canon_auth/proposal_checks.py": "9b8f8b747e30c8c1eb61d1908a5fbea8b22185269459b68bf76cd116f440c06d",
-    ".github/workflows/canon-owner-proposal-review.yml": "7b54d34c8cbc00f78be05103500c7547919aea1bba7d31f23a2a4dd2f70d9943",
-    "tools/canon_auth/proposals/owner_probe/I2_REVIEW.md": "e58537014a6a9f75727212ad5b4a50cc366f4fd18c59dea966b6d488d9ffa825",
-    "tools/canon_auth/proposals/owner_probe/native-maintenance-owner-attest.yml.template": "d75c5dd51ee3362412cff8c96883e413d92dee4ac1f81f8013925788df62fd59",
-    "tools/canon_auth/proposals/owner_probe/preflight.py.template": "b11fe02d3fc24c6546c480a6e3aeba447cc3c4036e73f03a7d407dd423813cac",
-    "tools/canon_auth/proposals/owner_probe/publication-preflight.patch": "b8d11ae22980af61ad481a414dc7e31b75d68d173a618afe777c2ccc78ef36b8",
+    "tools/canon_auth/owner_probe.py": "7e83070d763aeb8d991eb78e3b953488e37400c20b9eeee771328de9797b1eae",
+    "tools/canon_auth/resident_preflight.py": "094191677ec553d1fe57d2702dfab69613ae99cccd02b977bc9fea03f8c86b7f",
+    "tools/canon_auth/test_owner_resident.py": "e3d3ad8d1b34dc2a457242c12741496bb7bfc845ad46cbf6679129362c1d4489",
+    "tools/canon_auth/test_owner_probe.py": "6266ec428eaa2485a4432a22729f910b64f14674d45bd359483db7d99374f66c",
+    "tools/canon_auth/proposals/owner_probe/native-maintenance-owner-attest.yml.template": "ef05a86648dce41b1e24206fc7cfd949f422543ddc2cf7e4b7b0b15728867983",
+    ".github/workflows/canon-owner-proposal-review.yml": "4f58ac2da46ad1cf35641f82c6c2ade6fbef2766eb4c5094355a5c1a816ab5f0",
     "tools/canon_auth/proposals/owner_probe/qualification.sql": "ec554da681e9bfb25a23c0ce379d493d4d9fb47f793628cd40e8bd533313c5c9",
-    "tools/canon_auth/proposals/owner_probe/README.md": "a9d365736d2220e7b32545abdc5854e7fb2a1438e4ac1a075ce4208f7cef13a5",
-    "tools/canon_auth/proposals/owner_probe/workflow.patch": "2c1499c23d84901bccf1ed422f1b47cb8b37b78ac710e74f5571829aa95b21e0"
+    "tools/canon_auth/proposals/owner_probe/workflow.patch": "0f72583d338776e6b8379345d6b68b7da1e628f3a0797dc1c2efc3e1b9679828",
+    "tools/canon_auth/proposals/owner_probe/README.md": "e080b71a8cc00574a98d868451bb0d51c97ce14cd9ae578d7eb7488ba00e30eb",
+    "tools/canon_auth/proposal_checks.py": "caf32db17e0f58ff86290668984e14f005b7ff034cec373161ca18f3124114ea",
+    "tools/canon_auth/proposals/owner_probe/I2_REVIEW.md": "6dba0a9ce8c89f191500ef636116910c69ab18428c07750537bd7d75788fa7fd"
   }
 }

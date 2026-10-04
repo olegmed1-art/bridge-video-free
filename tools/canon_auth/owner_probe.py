@@ -1,6 +1,6 @@
 """Manual owner inventory proposal: fixed read-only checks, never pilot SQL.
 
-Only a reviewed test-branch workflow may supply its existing resident credential.
+Only a reviewed main workflow may supply its existing resident credential.
 No caller SQL, credential export, writes, role changes, or activation are accepted.
 """
 import json
@@ -13,8 +13,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 from . import resident_preflight as resident
 
 REPOSITORY = "olegmed1-art/bridge-video-free"
-BRANCH = "test/canon-acceptance-cf6091-20261004"
-MAIN = "711ddd648fa74f2b903f9d7127dadc412f94b277"
+BRANCH = "main"
 WORKFLOW = ".github/workflows/native-maintenance-owner-attest.yml"
 URL = "https://api.github.com/repos/" + REPOSITORY + "/git/ref/heads/main"
 PHASE = "context"
@@ -27,9 +26,9 @@ def require(ok, code):
 
 def context(env, git):
     """Check before credential access; expected probe SHA is reviewed externally."""
-    sha = env.get("EXPECTED_PROBE_SHA", "")
+    sha = env.get("EXPECTED_MAIN", "")
     require(bool(re.fullmatch(r"[0-9a-f]{40}", sha))
-            and env.get("GITHUB_SHA") == sha and env.get("EXPECTED_MAIN") == MAIN
+            and env.get("GITHUB_SHA") == sha and env.get("EXPECTED_PROBE_SHA") == sha
             and env.get("GITHUB_REPOSITORY") == REPOSITORY
             and env.get("GITHUB_REF") == "refs/heads/" + BRANCH
             and env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
@@ -37,8 +36,7 @@ def context(env, git):
             and env.get("GITHUB_TRIGGERING_ACTOR") == "olegmed1-art"
             and env.get("GITHUB_WORKFLOW_REF") == REPOSITORY + "/" + WORKFLOW + "@refs/heads/" + BRANCH
             and env.get("OWNER_PROBE_SCOPE") == "canon-readonly", "probe_context_refused")
-    require(git("rev-parse", "HEAD") == sha
-            and git("merge-base", "HEAD", MAIN) == MAIN, "probe_checkout_refused")
+    require(git("rev-parse", "HEAD") == sha, "probe_checkout_refused")
     return sha
 
 
@@ -55,7 +53,8 @@ def unique(pairs):
     return result
 
 
-def source_check(token, opener):
+def source_check(token, opener, expected_sha):
+    require(bool(re.fullmatch(r"[0-9a-f]{40}", expected_sha)), "source_sha_required")
     require(bool(token), "source_token_required")
     request = Request(URL, headers={"Authorization": "Bearer " + token,
                       "Accept": "application/vnd.github+json", "Cache-Control": "no-cache",
@@ -67,7 +66,7 @@ def source_check(token, opener):
     value = json.loads(raw, object_pairs_hook=unique)
     require(value.get("ref") == "refs/heads/main"
             and value.get("object", {}).get("type") == "commit"
-            and value["object"]["sha"] == MAIN, "live_main_changed")
+            and value["object"]["sha"] == expected_sha, "live_main_changed")
 
 
 def observe(connect, raw):
@@ -113,12 +112,12 @@ def main():
     sha = context(os.environ, git)
     opener = build_opener(NoRedirect(), ProxyHandler({}))
     PHASE = "source_before"
-    source_check(os.environ.get("GH_TOKEN", ""), opener)
+    source_check(os.environ.get("GH_TOKEN", ""), opener, sha)
     PHASE = "owner_inventory"
     report = observe(psycopg.connect, os.environ.get("NATIVE_OWNER_DATABASE_URL", ""))
     PHASE = "source_after"
-    source_check(os.environ.get("GH_TOKEN", ""), opener)
-    print(json.dumps({**report, "probe_sha": sha, "main_sha": MAIN}, sort_keys=True))
+    source_check(os.environ.get("GH_TOKEN", ""), opener, sha)
+    print(json.dumps({**report, "probe_sha": sha, "main_sha": sha}, sort_keys=True))
     return 0 if report["status"] == "PASS" else 2
 
 

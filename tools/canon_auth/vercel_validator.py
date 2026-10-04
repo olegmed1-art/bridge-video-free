@@ -14,8 +14,8 @@ from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 INTENT = "canon-auth-vercel-20261004-v1"
-READY_SHA = "711ddd648fa74f2b903f9d7127dadc412f94b277"
-DEPLOYMENT = "dpl_4sxqMktPVrW8ULuhwqyQNhLmJqdJ"
+READY_SHA = "cf6091f09fa70afc4b25162fbbb2fea0dc36898a"
+DEPLOYMENT = "dpl_9tC4HDYrX6WLxgQXpcMm32te8ue3"
 ORIGIN = "https://bridge-video-free.vercel.app"
 PROJECT = "prj_oF4SA0gA1PX6BuJEmJ1BiHVBXUGP"
 DEADLINE = datetime(2026, 10, 4, 18, tzinfo=timezone.utc)

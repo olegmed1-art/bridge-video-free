@@ -9,5 +9,4 @@ dependencies = [
 ]
 
 [tool.vercel.scripts]
-# Explicit fresh validation-only attempt; ordinary commits remain inactive.
 build = "python -m tools.canon_auth.build_once"
