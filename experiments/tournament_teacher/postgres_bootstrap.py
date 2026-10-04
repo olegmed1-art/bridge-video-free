@@ -33,7 +33,7 @@ def main():
     """)
     run("exec",cid,"mkdir","-p","/tmp/tournament-schema")
     run("cp","database",cid+":/tmp/tournament-schema/database")
-    run("exec","-w","/tmp/tournament-schema","-e",
+    run("exec","-w","/tmp/tournament-schema","-e","LC_ALL=C","-e",
         "DATABASE_URL=host=/var/run/postgresql dbname=tournament_rehearsal user=tournament_rehearsal_owner",
         cid,"bash","database/scripts/migrate.sh")
     print("Repository migrations applied as non-superuser owner; no production connection.")
