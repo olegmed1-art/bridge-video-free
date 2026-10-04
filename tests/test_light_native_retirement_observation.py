@@ -74,7 +74,9 @@ def test_bootstrap_compiles_and_binds_mode(readonly):
     assert len(selected)==1 and selected[0].test.value is readonly
     body=selected[0].body if readonly else selected[0].orelse
     calls=[x.func.id for node in body for x in ast.walk(node) if isinstance(x,ast.Call) and isinstance(x.func,ast.Name)]
-    assert ('inspect_retirement' in calls)==readonly
+    choices=[x.id for node in body for x in ast.walk(node) if isinstance(x,ast.Name)]
+    assert ('inspect_retirement' in choices)==readonly
+    assert ('inspect_local' in choices)==readonly
     assert ('phase' in calls)==(not readonly)
 
 
