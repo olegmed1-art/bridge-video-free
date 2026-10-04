@@ -2,6 +2,7 @@
 from fnmatch import fnmatchcase
 from pathlib import Path
 import re
+import ast
 import subprocess
 
 import yaml
@@ -37,8 +38,13 @@ def main():
     for name in changed:
         content = (root / name).read_text(encoding="utf-8")
         # Scanner definitions above are not leaked private material.
-        if name.endswith("preflight.py"):
-            continue
+        if name == "tools/canon_auth/integration_checks.py":
+            # Remove only this audit's literal scanner-pattern assignment.
+            node = next(n for n in ast.walk(ast.parse(content))
+                        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name)
+                            and t.id == "forbidden" for t in n.targets))
+            lines = content.splitlines(keepends=True)
+            content = "".join(lines[:node.lineno - 1] + lines[node.end_lineno:])
         if name == "tools/canon_auth/test_auth.py":
             # Exact f-string fixture, not an actual DSN or blanket file exclusion.
             content = content.replace("postgresql://{d.db.EXPECTED_PRINCIPAL}:{SECRET}@{host}/neondb?{query}", "synthetic-dsn-fixture")
@@ -77,7 +83,7 @@ def main():
     assert workflow["permissions"] == {"contents":"read"}
     assert len(workflow["jobs"]) == 1
     job = workflow["jobs"]["offline-consumer"]
-    assert job["timeout-minutes"] <= 20 and "environment" not in job
+    assert job["timeout-minutes"] == 10 and "environment" not in job
     rehearsal = next(s for s in job["steps"] if s.get("name") == "Staged SQL and authenticated API rehearsal")
     assert rehearsal["shell"] == "bash"  # Explicit bash enables -eo pipefail.
     assert "| tee" not in rehearsal["run"]
@@ -88,7 +94,7 @@ def main():
     assert service["env"] == {"POSTGRES_DB":"tournament_rehearsal", "POSTGRES_USER":"postgres", "POSTGRES_HOST_AUTH_METHOD":"trust"}
     assert service["ports"] == ["127.0.0.1:55432:5432"]
     print(f"Publication scope: {len(changed)} acceptance files; baseline {BASE}")
-    print("Automatic push workflow: canon-acceptance-rehearsal only; one job, 10-minute cap; no secrets; one loopback disposable PostgreSQL service")
+    print("Automatic push workflow: canon-pilot-integration only; one job, 10-minute cap; no secrets; one loopback disposable PostgreSQL service")
     print("Qualified owner path, application/L1/SQL compiler and gates unchanged; expired live validator preserved; no production execution")
 
 
