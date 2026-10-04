@@ -13,7 +13,8 @@ class Conn:
     def __init__(self):
         self.closed = False
         self.autocommit = True
-        self.info = SimpleNamespace(transaction_status=0, host=BINDING.host, port=5432, ssl_in_use=True)
+        self.info = SimpleNamespace(transaction_status=0, host=BINDING.host, port=5432)
+        self.pgconn = SimpleNamespace(ssl_in_use=True)
         self.identity = ("neondb", "neondb_owner", "neondb_owner")
         self.allowed = True
         self.fail_write = False
@@ -77,7 +78,7 @@ def test_unbound_or_shared_connection_refused(change):
     if change == "role": conn.identity = ("neondb", "bridge_school_app_principal", "bridge_school_app_principal")
     if change == "host": conn.info.host = "other.invalid"
     if change == "port": conn.info.port = 9999
-    if change == "tls": conn.info.ssl_in_use = False
+    if change == "tls": conn.pgconn.ssl_in_use = False
     if change == "server_override": conn.server_source = "session"
     if change == "busy": conn.info.transaction_status = 2
     if change == "closed": conn.closed = True

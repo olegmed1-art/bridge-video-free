@@ -56,7 +56,7 @@ def inspect_resident(conn, binding):
     if (not isinstance(binding, Binding) or not all((binding.project_id, binding.branch_id,
                                                     binding.endpoint_id, binding.host))
             or conn.info.host != binding.host or conn.info.port != 5432
-            or not conn.info.ssl_in_use):
+            or not conn.pgconn.ssl_in_use):
         raise Refused("resident_transport_binding_required")
     try:
         with conn.transaction():

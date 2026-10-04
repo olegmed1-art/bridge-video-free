@@ -8,7 +8,7 @@ from bridge_school_api import tournament_teacher as t
 from tools.tournament_pilot.rehearsal import local_connect, scalar, api_client, DB, TABLE_BUDGET
 from tools.tournament_pilot.package import envelope
 from .pilot_sql import plan
-from .resident_preflight import inspect_disposable, Refused
+from .resident_preflight import inspect_disposable, inspect_resident, Binding, Refused
 from .resident_rehearsal import revoke_on_failure
 
 
@@ -18,6 +18,12 @@ def rehearsal(code_sha):
         school = scalar(conn, "INSERT INTO public.school(stable_name) VALUES (%s) RETURNING school_id",
                         ("synthetic-staged-sql-" + str(uuid4()),))
         p = plan(school, code_sha)
+        try:
+            inspect_resident(conn, Binding("fixture-project", "fixture-branch", "fixture-endpoint", "127.0.0.1"))
+        except Refused as exc:
+            assert str(exc) == "resident_transport_binding_required"
+        else:
+            raise AssertionError("Loopback non-TLS fixture must not pass the production inventory")
         assert all(inspect_disposable(conn).values())
         with local_connect(as_app=True) as app_conn:
             # Use an idle fixture connection; change no privileges or production role.
