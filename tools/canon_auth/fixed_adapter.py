@@ -84,19 +84,29 @@ class FixedAdapter:
         # just a single statement. Unsupported server versions fail before DML.
         require(int(self.conn.execute("SHOW server_version_num").fetchone()[0]) >= 170000,
                 "transaction_deadline_server_required")
-        server = self.conn.execute("SELECT pg_catalog.clock_timestamp()").fetchone()[0]
+        # A positive inherited timer is not shortened by another positive SET.
+        # Disable it explicitly; rearm from server time in the SAME statement
+        # that configures the timer, so intervening network latency cannot add
+        # time beyond the absolute cutoff.
+        self.conn.execute("SET LOCAL transaction_timeout='0'")
         self._normal_gate(permit)
-        remaining = min(60, (self.launch.stage_until-server).total_seconds(),
-                        (permit.observed_at+timedelta(seconds=60)-server).total_seconds(),
-                        (self.launch.stage_until-self.clock()).total_seconds(),
-                        (permit.observed_at+timedelta(seconds=60)-self.clock()).total_seconds())
-        # Keep 100ms admission reserve; uncertain COMMIT is reconciled/recovered.
-        milliseconds = math.floor(remaining*1000)-100
-        require(milliseconds > 0, "transaction_deadline_margin_required")
-        self.conn.execute("SELECT pg_catalog.set_config('transaction_timeout',%s,true)",
-                          (str(milliseconds)+"ms",))
+        client_remaining = min(60, (self.launch.stage_until-self.clock()).total_seconds(),
+            (permit.observed_at+timedelta(seconds=60)-self.clock()).total_seconds())
+        deadline = min(self.launch.stage_until, permit.observed_at+timedelta(seconds=60))
+        armed = self.conn.execute("""
+            WITH budget AS MATERIALIZED (
+                SELECT pg_catalog.floor(LEAST(%s::pg_catalog.numeric,
+                    EXTRACT(epoch FROM (%s::pg_catalog.timestamptz-
+                        pg_catalog.clock_timestamp()))*1000))-100 AS ms
+            )
+            SELECT CASE WHEN ms>0 THEN pg_catalog.set_config(
+                'transaction_timeout',ms::pg_catalog.text||'ms',true) END,ms
+            FROM budget
+        """, (math.floor(client_remaining*1000), deadline)).fetchone()
+        require(armed is not None and armed[0] is not None and armed[1]>0,
+                "transaction_deadline_margin_required")
         self.conn.execute("SELECT pg_catalog.set_config('statement_timeout',%s,true)",
-                          (str(min(milliseconds,15000))+"ms",))
+                          (str(min(int(armed[1]),15000))+"ms",))
 
     def inspect(self):
         idle(self.conn)

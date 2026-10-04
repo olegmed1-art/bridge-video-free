@@ -155,3 +155,8 @@ Transaction budget is the minimum of client AND server remaining time; server
 normal-window lower bound and permit freshness are checked as well. Actual SQL
 fixtures use current UTC finite windows. Clock-skew tests cannot admit before the
 server opens the window or hold a delayed normal transaction past server cutoff.
+
+The server timer is explicitly reset to zero before arming, then the server
+remaining budget is calculated in the SAME statement as set_config. Qualification
+injects real pg_sleep before configuration and an inherited60-second transaction
+timer; neither can extend the normal transaction through the absolute cutoff.

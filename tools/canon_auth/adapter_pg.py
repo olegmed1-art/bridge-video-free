@@ -704,3 +704,29 @@ def test_client_ahead_cannot_admit_before_server_open(fixture):
     with pytest.raises(Refused,match="server_stage_deadline"):
         a.execute("baseline",permit(l,"baseline",a.clock()))
     assert r.inspect()["rows"]==0
+
+
+@pytest.mark.parametrize("fault",["delayed_configuration","inherited_positive_timer"])
+def test_deadline_arming_latency_and_inherited_timer_cannot_extend_cutoff(fixture,fault):
+    a,r,_,_=fixture
+    l=real_window(fixture,1.2)
+    if fault=="inherited_positive_timer":
+        a.conn.execute("SET transaction_timeout='60s'")
+    captured=[]
+    class ArmDelay(ConnectionProxy):
+        def execute(self,sql,*args,**kwargs):
+            if fault=="delayed_configuration" and sql.lstrip().startswith("WITH budget AS"):
+                self.conn.execute("SELECT pg_catalog.pg_sleep(.7)")
+            result=self.conn.execute(sql,*args,**kwargs)
+            if sql.startswith("INSERT INTO ai.decision_position("):
+                captured.append(self.conn.execute("SHOW transaction_timeout").fetchone()[0])
+                self.conn.execute("SELECT pg_catalog.pg_sleep(3)")
+            return result
+    a.conn=ArmDelay(a.conn)
+    with pytest.raises(CommitUncertain):
+        a.execute("baseline",permit(l,"baseline",a.clock()))
+    assert captured
+    if fault=="delayed_configuration":
+        assert int(captured[0].removesuffix("ms")) <= 500
+    assert r.inspect()["rows"]==0
+    assert r.recover()["no_op"] is True
