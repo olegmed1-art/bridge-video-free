@@ -243,6 +243,8 @@ class Observer:
             contract_hash=l.fingerprint,status="RECOVERY_READY_READ_ONLY",independent=self.ready,
             attempt=1,event="workflow_dispatch",ref="refs/heads/main",actor="olegmed1-art",
             source_transport="authenticated_github",owned_revoke_privileges=True,
+            watchdog_status="WATCHDOG_ARMED",watchdog_cutoff=l.public()["stage_until"],
+            unconditional_revoke=True,watchdog_run_id=789,watchdog_original_sha256="b"*64,
             run_id=456,original_record_sha256="a"*64,observed_at=self.clock().isoformat().replace("+00:00","Z"))
 
 
@@ -530,3 +532,117 @@ def test_inspection_waiting_for_lock_sees_committed_recovery(fixture):
         assert (observed["state"],observed["rows"],observed["active"])==("emergency",42,0)
     finally:
         pool.shutdown(wait=True)
+
+
+def real_window(fixture, seconds):
+    from .launch_contract import Launch
+    a,r,_,l=fixture
+    now=datetime.now(timezone.utc)
+    changed=Launch.parse(l.public()|{
+        "open_at":(now-timedelta(seconds=1)).isoformat().replace("+00:00","Z"),
+        "admission_until":(now+timedelta(seconds=seconds)).isoformat().replace("+00:00","Z"),
+        "stage_until":(now+timedelta(seconds=seconds)).isoformat().replace("+00:00","Z")})
+    a.launch=r.launch=changed
+    a.clock=r.clock=lambda:datetime.now(timezone.utc)
+    return changed
+
+
+@pytest.mark.parametrize("point",["write","post_inventory"])
+def test_real_delayed_sql_cannot_commit_after_cutoff(fixture,point):
+    a,r,_,_=fixture
+    real_window(fixture,.9)
+    from . import fixed_adapter as module
+    original=module.inventory
+    if point=="write":
+        class DelayAfterWrites(ConnectionProxy):
+            def execute(self,sql,*args,**kwargs):
+                result=self.conn.execute(sql,*args,**kwargs)
+                if sql.startswith("INSERT INTO ai.decision_position("):
+                    self.conn.execute("SELECT pg_catalog.pg_sleep(2)")
+                return result
+        a.conn=DelayAfterWrites(a.conn)
+    else:
+        def delayed(conn,compiled,school,**kwargs):
+            result=original(conn,compiled,school,**kwargs)
+            if conn is a.conn and result["state"]=="baseline":
+                conn.execute("SELECT pg_catalog.pg_sleep(2)")
+            return result
+        module.inventory=delayed
+    try:
+        with pytest.raises(CommitUncertain):
+            a.execute("baseline",permit(a.launch,"baseline",a.clock()))
+    finally:
+        module.inventory=original
+    assert r.inspect()["rows"]==0
+    assert r.recover()["no_op"] is True
+
+
+def test_precommit_clock_check_rolls_back_after_slow_inventory(fixture):
+    a,r,_,_=fixture
+    from . import fixed_adapter as module
+    original=module.inventory
+    def drift(conn,compiled,school,**kwargs):
+        result=original(conn,compiled,school,**kwargs)
+        if conn is a.conn and result["state"]=="baseline":
+            # Transaction still open, all writes visible here but uncommitted.
+            a.clock=lambda:NOW+timedelta(days=1)
+        return result
+    with patch.object(module,"inventory",drift):
+        with pytest.raises(Refused,match="stage_window"):
+            stage(a,"baseline")
+    assert r.inspect()["rows"]==0
+
+
+def test_remote_commit_completed_after_cutoff_is_uncertain(fixture):
+    a,r,_,_=fixture
+    real=a.conn
+    class LateAck(ConnectionProxy):
+        @contextmanager
+        def transaction(self,**kwargs):
+            with self.conn.transaction(**kwargs):
+                yield
+            if not kwargs.get("force_rollback"):
+                a.clock=lambda:NOW+timedelta(days=1)
+    a.conn=LateAck(real)
+    with pytest.raises(CommitUncertain):
+        stage(a,"baseline")
+    assert r.inspect()["rows"]==2
+    assert r.recover()["rows"]==4
+
+
+def test_separate_watchdog_survives_controller_process_death(fixture,tmp_path):
+    import subprocess,sys,time
+    a,r,school,l=fixture
+    l=real_window(fixture,6)
+    contract=tmp_path/"public-contract.json";contract.write_text(json.dumps(l.public()))
+    armed=tmp_path/"armed.json";active=tmp_path/"active.json";receipt=tmp_path/"revoke.json"
+    def command(role,ready):
+        return [sys.executable,"-m","tools.canon_auth.watchdog_fixture",
+            "--role",role,"--contract",str(contract),"--school",str(school),
+            "--ready",str(ready),"--receipt",str(receipt)]
+    watchdog=subprocess.Popen(command("watchdog",armed),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    controller=None
+    def wait_file(path,seconds=3):
+        end=time.monotonic()+seconds
+        while not path.exists() and time.monotonic()<end:
+            time.sleep(.03)
+        assert path.exists()
+    try:
+        wait_file(armed)
+        assert json.loads(armed.read_text())["status"]=="WATCHDOG_ARMED"
+        controller=subprocess.Popen(command("controller",active),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        assert controller.pid != watchdog.pid
+        wait_file(active)
+        assert r.inspect()["active"]==4
+        controller.kill();controller.wait(timeout=2)
+        assert watchdog.poll() is None # independent OS process remains armed
+        watchdog.wait(timeout=8)
+        assert watchdog.returncode==0
+        result=json.loads(receipt.read_text())
+        assert result["status"]=="WATCHDOG_REVOKE_CONFIRMED"
+        assert result["receipt"]["active"]==0 and result["receipt"]["rows"]==36
+        assert r.inspect()["state"]=="emergency"
+    finally:
+        for process in (controller,watchdog):
+            if process is not None and process.poll() is None:
+                process.kill();process.wait(timeout=2)

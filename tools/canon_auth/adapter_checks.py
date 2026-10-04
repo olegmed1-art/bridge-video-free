@@ -30,7 +30,7 @@ def main():
         ["git","ls-files","--others","--exclude-standard"], cwd=root, text=True).splitlines()
     changed = sorted(set(changed))
     assert changed, "No experiment changes"
-    assert set(changed) == set(["tools/canon_auth/pilot_sql.py","tools/canon_auth/launch_contract.py","tools/canon_auth/ownership.py","tools/canon_auth/fixed_adapter.py","tools/canon_auth/bounded_controller.py","tools/canon_auth/owner_stage.py","tools/canon_auth/test_fixed_adapter.py","tools/canon_auth/adapter_pg.py","tools/canon_auth/adapter_checks.py","tools/canon_auth/FIXED_ADAPTER.md",".github/workflows/canon-fixed-adapter.yml"])
+    assert set(changed) == set(["tools/canon_auth/pilot_sql.py","tools/canon_auth/launch_contract.py","tools/canon_auth/ownership.py","tools/canon_auth/fixed_adapter.py","tools/canon_auth/bounded_controller.py","tools/canon_auth/owner_stage.py","tools/canon_auth/test_fixed_adapter.py","tools/canon_auth/adapter_pg.py","tools/canon_auth/adapter_checks.py",".github/workflows/canon-fixed-adapter.yml","tools/canon_auth/FIXED_ADAPTER.md","tools/canon_auth/stage_deadline.py","tools/canon_auth/watchdog.py","tools/canon_auth/watchdog_fixture.py","tools/canon_auth/recovery_transition.py"])
     assert all(p == ".vercelignore" or Path(p).suffix in {".py",".md",".yml",".toml"} for p in changed)
     forbidden = [r"-----BEGIN .*PRIVATE KEY", r"gh[pousr]_[A-Za-z0-9]{20,}",
                  r"github_pat_[A-Za-z0-9_]{20,}", r"AKIA[A-Z0-9]{16}",

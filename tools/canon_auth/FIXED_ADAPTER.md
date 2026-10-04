@@ -95,3 +95,58 @@ unchanged transitive resident/parser/package/teacher/schema dependencies. Future
 owner wiring must supply existing app import dependencies; no imports install them.
 Do not install or execute until that concrete wiring and exact source review are
 complete. Successful unit/PG tests do not confer production readiness.
+
+
+## Parent-review correction: remote cutoff and process death
+
+Each normal owner invocation now has its OWN POSIX <=60-second supervisor bounded
+by stage_until. PostgreSQL17+ transaction_timeout bounds the entire transaction;
+unsupported server versions fail before DML. Client and server clocks are checked
+before each SQL and immediately before commit, including after post-inventory and
+source recheck. A late commit acknowledgement cannot produce STAGE_COMMITTED;
+it is uncertain and requires reconciliation/independent revoke. SQL COMMIT and
+receipt transport cannot be made atomically simultaneous with an external clock.
+
+Real delayed PostgreSQL tests sleep inside writes and after post-inventory beyond
+cutoff; the transaction is terminated and independent readback proves zero committed
+pilot rows. Separate tests advance the clock before commit (rollback) and after
+real commit (uncertain; independent readback/revoke).
+
+watchdog.watch and owner_stage --stage watchdog are a separate-process channel.
+It must be armed BEFORE baseline against absent owned IDs, then UNCONDITIONALLY
+revokes at the bounded acceptance stage cutoff; there is no cancel/disarm command.
+This ends the acceptance experiment even if its controller succeeds; it is NOT a
+24-hour active-pilot host. Qualification launches TWO actual OS processes, commits
+initial stages in one, kills that controller, and proves the surviving watchdog
+uses its own PostgreSQL connection to commit/read back owned revoke. That fixture
+proof is not live GitHub survivability or reachability.
+
+Live admission requires an independently authenticated WATCHDOG_ARMED run receipt
+from an uncancelled separately supervised run, verified before baseline; distinct
+strings/JSON alone are insufficient. No live watcher workflow or secret binding
+is installed here. Active owner workflow remains IBM-owned and unchanged.
+
+## Main continuity and complete source review
+
+Default normal/watchdog/recovery still require exact current main R. Do not activate
+while main may advance without a proven emergency source transition. Without an
+installed qualified transition, HOLD MAIN through the entire recovery period
+(including any proposed24-hour pilot), until persisted revoke is confirmed. This
+would block unrelated main merges/deployments; a five-minute source hold is
+insufficient for a24-hour pilot. No24-hour pilot admission is requested.
+
+recovery_transition provides an explicit <=15-minute externally reviewed transition
+for OWNED EMERGENCY REVOKE ONLY. A protected manual owner invocation pins the reviewed
+manifest digest, original contract/C/P/R/module tuple, immutable original checkout
+commit AND entire Git tree, and exact separately reviewed new current-main SHA.
+Authenticated source checks read that exact current main before/after; only pinned
+original recovery code executes. Normal writes/watchdog cannot use this transition,
+and it cannot change IDs/plan/TTL or infer compatibility from a hash alone. A fresh
+transition must be reviewed for each new main; no broad current-main bypass exists.
+
+The full pinned checkout tree covers transitive repository source identity; hashes
+do not prove review. Before live installation, review the actual complete import/
+schema/compiler/package closure and pinned third-party dependencies, trusted runner
+and checkout/import policy. Authenticated GitHub/Vercel observers and authoritative
+durable one-build/stage claims remain uninstalled blockers. No fixture or proposal
+JSON is live production proof.

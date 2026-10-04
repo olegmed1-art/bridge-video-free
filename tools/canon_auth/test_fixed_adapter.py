@@ -96,3 +96,75 @@ def test_metadata_only_compiler_change():
     school=uuid4();before=old.plan(school,C);after=plan(school,C)
     assert {k:after[k] for k in before} == before
     assert len(after["declared_rows"]) == 42
+
+
+def test_real_owner_invoke_supervisor_before_connection():
+    import time
+    l=launch(uuid4())
+    l=Launch.parse(l.public()|{"admission_until":"2026-10-05T00:00:00.300000Z",
+                              "stage_until":"2026-10-05T00:00:00.300000Z"})
+    p=permit(l,"baseline")
+    reached=[]
+    def blocked(*args):
+        reached.append(True);time.sleep(2)
+        raise AssertionError("Owner supervisor failed")
+    with patch.object(owner_stage,"_invoke_verified",blocked):
+        with pytest.raises(Refused,match="owner_stage_process_deadline"):
+            owner_stage.invoke(Guarded(environment(l,"baseline",p)),lambda *a:l.runtime_sha,
+                l,"baseline",p,connect=None,check_source=None,now=lambda:NOW)
+    assert reached
+
+
+def transition(l, now=NOW):
+    return dict(purpose="owned-emergency-revoke-only",code_sha=l.code_sha,runtime_sha=l.runtime_sha,
+        plan_hash=l.plan_hash,contract_hash=l.fingerprint,module_hash=l.module_hash,
+        checkout_tree="c"*40,current_main="d"*40,reviewed_by="olegmed1-art",
+        authorized_at=(now-timedelta(seconds=1)).isoformat().replace("+00:00","Z"),
+        expires_at=(now+timedelta(minutes=10)).isoformat().replace("+00:00","Z"))
+
+
+def transition_git(l, value):
+    def git(*args):
+        return l.runtime_sha if args==("rev-parse","HEAD") else (
+            value["checkout_tree"] if args==("rev-parse","HEAD^{tree}") else "")
+    return git
+
+
+def test_reviewed_transition_allows_only_pinned_owned_revoke_on_exact_new_main():
+    l=launch(uuid4());value=transition(l)
+    env=Guarded(environment(l,"emergency")|dict(EXPECTED_RECOVERY_TRANSITION=digest(value),
+        EXPECTED_MAIN=value["current_main"],GITHUB_SHA=value["current_main"]))
+    assert owner_stage.context(env,transition_git(l,value),l,"emergency",None,NOW,value)==value["current_main"]
+
+
+@pytest.mark.parametrize("change",[
+    {"contract_hash":"0"*64},{"code_sha":"0"*40},{"plan_hash":"0"*64},
+    {"runtime_sha":"0"*40},{"module_hash":"0"*64},{"reviewed_by":"other"},
+    {"expires_at":"2026-10-04T23:59:59Z"},{"purpose":"activate"}])
+def test_transition_cannot_change_original_tuple(change):
+    l=launch(uuid4());value=transition(l)|change
+    env=Guarded(environment(l,"emergency")|dict(EXPECTED_RECOVERY_TRANSITION=digest(value),
+        EXPECTED_MAIN=value["current_main"],GITHUB_SHA=value["current_main"]))
+    with pytest.raises(Refused):
+        owner_stage.invoke(env,transition_git(l,value),l,"emergency",None,
+            connect=lambda **kw:pytest.fail("credential"),check_source=lambda s:pytest.fail("source"),
+            now=lambda:NOW,transition=value)
+
+
+def test_transition_cannot_admit_normal_write():
+    l=launch(uuid4());value=transition(l);p=permit(l,"baseline")
+    env=Guarded(environment(l,"baseline",p)|{"EXPECTED_RECOVERY_TRANSITION":digest(value)})
+    with pytest.raises(Refused,match="revoke_only"):
+        owner_stage.invoke(env,transition_git(l,value),l,"baseline",p,
+            connect=None,check_source=None,now=lambda:NOW,transition=value)
+
+
+def test_transition_requires_reviewed_digest_and_entire_checkout_tree():
+    l=launch(uuid4());value=transition(l)
+    env=Guarded(environment(l,"emergency")|dict(EXPECTED_MAIN=value["current_main"],
+        GITHUB_SHA=value["current_main"],EXPECTED_RECOVERY_TRANSITION="0"*64))
+    with pytest.raises(Refused,match="reviewed_recovery_transition"):
+        owner_stage.context(env,transition_git(l,value),l,"emergency",None,NOW,value)
+    env["EXPECTED_RECOVERY_TRANSITION"]=digest(value)
+    with pytest.raises(Refused,match="pinned_recovery_checkout"):
+        owner_stage.context(env,lambda *a:l.runtime_sha,l,"emergency",None,NOW,value)

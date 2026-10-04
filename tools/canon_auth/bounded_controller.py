@@ -82,9 +82,15 @@ class BoundedController:
             "runtime_sha": self.launch.runtime_sha, "contract_hash": self.launch.fingerprint,
             "status": "RECOVERY_READY_READ_ONLY", "independent": True, "attempt": 1,
             "event": "workflow_dispatch", "ref": "refs/heads/main", "actor": "olegmed1-art",
-            "source_transport": "authenticated_github", "owned_revoke_privileges": True}
+            "source_transport": "authenticated_github", "owned_revoke_privileges": True,
+            "watchdog_status":"WATCHDOG_ARMED", "watchdog_cutoff":self.launch.public()["stage_until"],
+            "unconditional_revoke":True}
         require(all(proof.get(k) == v for k, v in expected.items())
                 and type(proof.get("run_id")) is int and proof["run_id"] > 0
+                and type(proof.get("watchdog_run_id")) is int
+                and proof["watchdog_run_id"] > 0
+                and proof["watchdog_run_id"] != self.launch.controller_run_id
+                and bool(__import__("re").fullmatch(r"[a-f0-9]{64}",proof.get("watchdog_original_sha256","")))
                 and bool(__import__("re").fullmatch(r"[a-f0-9]{64}", proof.get("original_record_sha256", "")))
                 and timedelta(0) <= self.clock()-timestamp(proof["observed_at"]) <= timedelta(seconds=300),
                 "independent_recovery_not_ready")

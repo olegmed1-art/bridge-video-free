@@ -3,7 +3,8 @@
 No env/credentials/role changes, caller SQL, migrations or workflow dispatch.
 All42 IDs are inventoried inside the original transaction/advisory lock.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import math
 from .pilot_sql import plan
 from .launch_contract import PHASES, STAGES, digest, require
 from .resident_preflight import Refused, idle, catalog_path
@@ -39,11 +40,13 @@ class FixedAdapter:
         self.compiled, fingerprint = compile_plan(school, launch.code_sha)
         require(fingerprint == launch.plan_hash, "original_plan_hash_required")
 
-    def _begin(self, readonly=False):
+    def _begin(self, readonly=False, permit=None):
         self.conn.execute("SET TRANSACTION ISOLATION LEVEL " +
                           ("READ COMMITTED READ ONLY" if readonly else "READ COMMITTED READ WRITE"))
         self.conn.execute("SET LOCAL statement_timeout='15s'")
         self.conn.execute("SET LOCAL lock_timeout='2s'")
+        if permit is not None:
+            self._arm_transaction(permit)
         catalog_path(self.conn)
         self.conn.execute("SELECT pg_catalog.pg_advisory_xact_lock(20261004,201)")
 
@@ -66,13 +69,36 @@ class FixedAdapter:
         require(self.conn.execute("SELECT pg_catalog.current_setting('search_path')").fetchone()
                 == ("pg_catalog, public, pg_temp",), "trusted_trigger_path_required")
 
+    def _normal_gate(self, permit):
+        self.launch.normal(self.clock())
+        permit.verify(self.launch, permit.stage, self.clock())
+        # Server clock protects a delayed remote stage even if its controller died.
+        until = min(self.launch.stage_until, permit.observed_at+timedelta(seconds=60))
+        require(self.conn.execute("SELECT pg_catalog.clock_timestamp()<%s::pg_catalog.timestamptz",
+                                 (until,)).fetchone() == (True,), "server_stage_deadline_refused")
+
+    def _arm_transaction(self, permit):
+        # PG17+ transaction_timeout cancels the entire remote transaction, not
+        # just a single statement. Unsupported server versions fail before DML.
+        require(int(self.conn.execute("SHOW server_version_num").fetchone()[0]) >= 170000,
+                "transaction_deadline_server_required")
+        remaining = min(60, (self.launch.stage_until-self.clock()).total_seconds(),
+                        (permit.observed_at+timedelta(seconds=60)-self.clock()).total_seconds())
+        # Keep 100ms admission reserve; uncertain COMMIT is reconciled/recovered.
+        milliseconds = math.floor(remaining*1000)-100
+        require(milliseconds > 0, "transaction_deadline_margin_required")
+        self.conn.execute("SELECT pg_catalog.set_config('transaction_timeout',%s,true)",
+                          (str(milliseconds)+"ms",))
+        self.conn.execute("SELECT pg_catalog.set_config('statement_timeout',%s,true)",
+                          (str(min(milliseconds,15000))+"ms",))
+
     def inspect(self):
         idle(self.conn)
         self.source_check()
         with self.conn.transaction(force_rollback=True):
             self._begin(readonly=True)
             # FOR UPDATE isn't permitted in READ ONLY; read-only readiness uses
-            # the same snapshot but no row locks. Mutations recheck with locks.
+            # fresh statement snapshots under the shared advisory lock. Mutations lock rows.
             state = inventory(self.conn, self.compiled, self.school, lock=False)
             zero = {table: self.conn.execute("SELECT count(*) FROM ai." + table +
                 " WHERE position_id=%s", (self.compiled["ids"]["position"],)).fetchone()[0]
@@ -90,7 +116,7 @@ class FixedAdapter:
         commit_started = False
         try:
             with self.conn.transaction():
-                self._begin()
+                self._begin(permit=permit)
                 # Deadline/permit checked AGAIN after any lock wait.
                 self.launch.normal(self.clock())
                 permit.verify(self.launch, stage, self.clock())
@@ -105,11 +131,17 @@ class FixedAdapter:
                 self.launch.normal(self.clock())
                 permit.verify(self.launch, stage, self.clock())
                 for sql in self.compiled[stage]:
+                    self._normal_gate(permit)
                     self.conn.execute(sql)
                 after = inventory(self.conn, self.compiled, self.school)
                 require(after["state"] == NEXT[stage] and after["rows"] <= 40,
                         "stage_postcondition_refused")
+                self._normal_gate(permit)  # Last guard immediately BEFORE COMMIT.
+                self.source_check()
+                self._normal_gate(permit)
                 commit_started = True
+            self.launch.normal(self.clock())  # Late/uncertain completion cannot claim success.
+            permit.verify(self.launch, stage, self.clock())
             self.source_check()
         except Refused:
             if commit_started:
