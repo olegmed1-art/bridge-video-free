@@ -5,6 +5,7 @@ import io
 import json
 from types import SimpleNamespace
 import socket
+import subprocess
 import pytest
 from tools.book_runtime_observation import build_once as hook
 from tools.book_runtime_observation import build_entry
@@ -61,8 +62,8 @@ def test_ordinary_build_does_not_read_token_or_other_environment(monkeypatch, ca
             assert key == "VERCEL_GIT_COMMIT_MESSAGE"
             return "Ordinary independent change"
     monkeypatch.setattr(hook, "os", SimpleNamespace(environ=Guard()))
-    assert hook.main() == 0
-    assert "inactive ordinary build" in capsys.readouterr().out
+    assert hook.main() == 1
+    assert "INTENT_REQUIRED_VALIDATION_BUILD_ONLY" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("key,value", [("VERCEL_ENV", "preview"), ("VERCEL_GIT_COMMIT_REF", "feature"),
@@ -180,17 +181,16 @@ def test_successful_observation_still_exits_failure_and_disarms(monkeypatch, cap
 
 def test_entry_never_calls_canon_after_marked_book_hook(monkeypatch):
     monkeypatch.setattr(build_entry, "observe_book", lambda: 1)
-    monkeypatch.setattr(build_entry.subprocess, "run", lambda *_a, **_k: pytest.fail("canon must not run"))
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: pytest.fail("canon must not run"))
     assert build_entry.main() == 1
 
 
-def test_ordinary_entry_preserves_existing_command(monkeypatch):
+def test_entry_refuses_success_even_when_observation_returns_zero(monkeypatch):
     calls = []
-    monkeypatch.setattr(build_entry, "observe_book", lambda: 0)
-    def run(command, *, check):
-        calls.append(command)
-        assert check is False
-        return SimpleNamespace(returncode=0)
-    monkeypatch.setattr(build_entry.subprocess, "run", run)
-    assert build_entry.main() == 0
-    assert calls == [[build_entry.sys.executable, "-m", "tools.canon_auth.build_once"]]
+    def observe():
+        calls.append("book")
+        return 0
+    monkeypatch.setattr(build_entry, "observe_book", observe)
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: pytest.fail("canon must never run"))
+    assert build_entry.main() == 1
+    assert calls == ["book"]

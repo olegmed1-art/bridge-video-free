@@ -122,8 +122,7 @@ def main():
     try:
         binding = intent(os.environ, datetime.now(timezone.utc))
         if binding is None:
-            print("book-runtime-observation: inactive ordinary build")
-            return 0
+            raise Rejected("INTENT_REQUIRED_VALIDATION_BUILD_ONLY")
         if not hasattr(signal, "SIGALRM"):
             raise Rejected("HARD_DEADLINE_UNAVAILABLE")
         signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(Rejected("BUILD_DEADLINE_EXCEEDED")))

@@ -1,14 +1,10 @@
-"""Preserve the existing build command unless the separate book hook stops it."""
-import subprocess
-import sys
+"""Temporary validation entry: every invocation fails; no canon delegation."""
 from .build_once import main as observe_book
 
 
 def main():
-    result = observe_book()
-    if result:
-        return result
-    return subprocess.run([sys.executable, "-m", "tools.canon_auth.build_once"], check=False).returncode
+    observe_book()
+    return 1
 
 
 if __name__ == "__main__":
