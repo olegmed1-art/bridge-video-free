@@ -1,0 +1,49 @@
+name: Video Canon Staging Replay CI
+
+on:
+  pull_request:
+    paths:
+      - 'bridge_contracts/video_canon_replay.py'
+      - 'bridge_contracts/video_source_draft.py'
+      - 'bridge_contracts/video_canon*.py'
+      - 'bridge_contracts/video_learning_candidate.py'
+      - 'diana_longitudinal*.py'
+      - 'database/video_candidate_persistence.py'
+      - 'tools/replay_video_canon.py'
+      - 'tests/test_video_canon*.py'
+      - 'tests/test_video_source_draft.py'
+      - 'tests/test_diana_longitudinal*.py'
+      - '.github/workflows/video-canon-staging-replay-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  staging-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ''
+      BRIDGE_WORKER_DATABASE_URL: ''
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install local test dependencies
+        run: python -m pip install pytest requests google-auth google-auth-oauthlib pymupdf opencv-python-headless pillow 'psycopg[binary]==3.3.4'
+      - name: Run staging and existing video-canon regressions
+        run: |
+          python -m pytest -q \
+            tests/test_diana_longitudinal*.py \
+            tests/test_video_canon*.py \
+            tests/test_video_source_draft.py \
+            tests/test_bridge_video_learning_candidate.py \
+            tests/test_video_candidate_persistence_revision.py \
+            tests/test_video_extended_extraction.py \
+            tests/test_canon_source_domain_policy.py \
+            tests/test_bridge_report_board_reconstruction.py \
+            tests/test_r29_status_file_idempotency.py
