@@ -7,6 +7,7 @@ engine and installed psycopg binary import execute; no credential or live I/O
 is used. The driver adapter exposes its site directory only upon context entry.
 """
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -22,11 +23,14 @@ import base64, contextlib, hashlib, importlib, json, os, pathlib, sys, time
 import importlib.util
 from types import SimpleNamespace
 
-root, site, mode = sys.argv[1:]
+root, driver_roots_json, mode = sys.argv[1:]
+driver_roots = json.loads(driver_roots_json)
+assert set(driver_roots) == {'psycopg', 'psycopg_binary', 'typing_extensions'}
+sites = list(dict.fromkeys(driver_roots.values()))
 assert sys.flags.isolated == 1 and sys.flags.no_site == 1
-assert not any(x == site for x in sys.path)
-assert not any(x.startswith('psycopg') for x in sys.modules)
-assert importlib.util.find_spec('psycopg') is None
+assert all(site not in sys.path for site in sites)
+assert all(name not in sys.modules for name in driver_roots)
+assert all(importlib.util.find_spec(name) is None for name in driver_roots)
 sys.path.insert(0, root)
 
 def no_external(event, args):
@@ -92,12 +96,15 @@ def loader(wheels):
     if mode == 'loader-failure':
         raise RuntimeError('SYNTHETIC_PRIVATE_DRIVER_FAILURE')
     entered = True
-    sys.path.insert(0, site)
+    sys.path[:0] = sites
     try:
         psycopg = importlib.import_module('psycopg')
         assert psycopg.__version__ == '3.3.4'
         assert psycopg.pq.__impl__ == 'binary'
-        assert pathlib.Path(psycopg.__file__).resolve().is_relative_to(pathlib.Path(site).resolve())
+        for name, expected_root in driver_roots.items():
+            module = importlib.import_module(name)
+            assert pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(expected_root).resolve())
+        assert sys.modules['psycopg_binary'].__version__ == '3.3.4'
         psycopg.connect = connect
         if mode == 'attest-import-failure':
             # A finder refuses the real attest import after driver entry; it
@@ -111,7 +118,8 @@ def loader(wheels):
             sys.meta_path.insert(0, RefuseAttest())
         yield psycopg, 'synthetic-runtime-id'
     finally:
-        sys.path.remove(site)
+        for site in sites:
+            sys.path.remove(site)
         entered = False
         events.append('loader-exit')
 
@@ -172,6 +180,7 @@ assert 'local' in events
 assert 'loader-enter' in events, ('COLD_OBSERVER_IMPORT_BEFORE_DRIVER', events, result)
 assert events.index('local') < events.index('loader-enter'), (events, result)
 assert not entered
+assert all(site not in sys.path for site in sites)
 assert all('SYNTHETIC_PRIVATE' not in str(value) for value in result.values())
 if mode == 'success':
     assert result['state'] == 'OBSERVED' and result['phase'] == 'DONE', result
@@ -203,11 +212,17 @@ def test_isolated_packed_observer_import_boundary(tmp_path, mode):
             path = helpers / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b'' if name.endswith('/__init__.py') else (repository / name).read_bytes())
-        spec = importlib.util.find_spec('psycopg')
-        assert spec is not None and spec.origin
-        site = Path(spec.origin).resolve().parent.parent
+        # Ubuntu may provide typing_extensions in distro dist-packages while
+        # psycopg lives in pip's site. Pass only these three dependency roots;
+        # never the parent's whole sys.path or PYTHONPATH into the cold child.
+        driver_roots = {}
+        for name in ('psycopg', 'psycopg_binary', 'typing_extensions'):
+            spec = importlib.util.find_spec(name)
+            assert spec is not None and spec.origin
+            location = Path(spec.origin).resolve()
+            driver_roots[name] = str(location.parent.parent if spec.submodule_search_locations is not None else location.parent)
         result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', CHILD,
-                                 str(helpers), str(site), mode], capture_output=True,
+                                 str(helpers), json.dumps(driver_roots), mode], capture_output=True,
                                 text=True, timeout=45, env={'PATH': '/usr/bin:/bin', 'PSYCOPG_IMPL': 'binary'})
     assert result.returncode == 0, result.stdout + result.stderr
     expected = 'COLD_ATTEST_REQUIRES_DRIVER' if mode == 'cold-counterexample' else 'ISOLATED_IMPORT_BOUNDARY_PASS ' + mode
