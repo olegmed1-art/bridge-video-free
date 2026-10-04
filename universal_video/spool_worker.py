@@ -439,6 +439,11 @@ def _process_one_locked(spool_root: Path) -> bool:
                 "file_id": str(intake_job.source.get("file_id") or ""),
             },
         }
+        # Fail before a potentially large download when compute is unavailable.
+        # A retained Drive result can instead enter publication-only recovery.
+        if (intake_job.source.get("kind") != "google_drive"
+                or not (paths["results"] / intake_job.job_id).exists()):
+            validate_video_runtime()
         if intake_job.source.get("kind") == "google_drive":
             _write_progress(paths, intake_job.job_id, "DOWNLOADING_FROM_DRIVE")
             payload, staged_job_dir = stage_drive_job(intake_job, payload, media_root)
@@ -473,7 +478,6 @@ def _process_one_locked(spool_root: Path) -> bool:
             if staged_job_dir is not None and attempts_path.exists():
                 prepare_compute_recovery(existing_dir, paths["recovery"] / validated_job.job_id,
                                          attempts_path, job_hash=canonical_job_hash(validated_job))
-            validate_video_runtime()
             if staged_job_dir is not None:
                 validate_staged_video(Path(validated_job.source["path"]))
             result = run_job(payload, paths["results"])
