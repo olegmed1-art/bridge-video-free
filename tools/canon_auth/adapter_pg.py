@@ -35,14 +35,15 @@ def fixture():
     with connect() as owner, connect() as recovery:
         school=scalar(owner,"INSERT INTO public.school(stable_name) VALUES (%s) RETURNING school_id",
                       ("synthetic-adapter-"+str(uuid4()),))
-        l=launch(school)
-        a=FixedAdapter(owner,school,l,lambda:None,lambda:NOW)
-        r=FixedAdapter(recovery,school,l,lambda:None,lambda:NOW)
+        clock=lambda:datetime.now(timezone.utc)
+        l=launch(school,now=clock())
+        a=FixedAdapter(owner,school,l,lambda:None,clock)
+        r=FixedAdapter(recovery,school,l,lambda:None,clock)
         yield a,r,school,l
 
 
 def stage(a,name):
-    return a.execute(name,permit(a.launch,name))
+    return a.execute(name,permit(a.launch,name,a.clock()))
 
 
 def full(a):
@@ -111,8 +112,14 @@ def test_serialized_duplicate_stage(fixture):
 
 def test_window_rechecked_after_lock(fixture):
     a,r,_,_=fixture
-    calls=[NOW,NOW,NOW+timedelta(days=1)]
-    a.clock=lambda:calls.pop(0) if calls else NOW+timedelta(days=1)
+    base=a.clock()
+    class ExpireAfterLock(ConnectionProxy):
+        def execute(self,sql,*args,**kwargs):
+            result=self.conn.execute(sql,*args,**kwargs)
+            if "pg_advisory_xact_lock(20261004,201)" in sql:
+                a.clock=lambda:base+timedelta(days=1)
+            return result
+    a.conn=ExpireAfterLock(a.conn)
     with pytest.raises(Refused,match="stage_window"):
         stage(a,"baseline")
     assert r.inspect()["rows"]==0
@@ -124,7 +131,7 @@ def test_commit_then_source_receipt_loss_is_uncertain_and_recoverable(fixture):
     def source():
         nonlocal calls
         calls+=1
-        if calls==2:
+        if calls==3:
             raise Refused("source_after_missing")
     a.source_check=source
     with pytest.raises(CommitUncertain):
@@ -277,7 +284,7 @@ class Api:
 
 def controller(fixture,client):
     a,r,_,l=fixture
-    clock=lambda:NOW
+    clock=lambda:datetime.now(timezone.utc)
     obs=Observer(l,clock);api=Api(client,obs,clock)
     return BoundedController(l,api,obs,Channel(a,"normal"),Channel(r,"independent-recovery"),
                              clock=clock,sleep=lambda n:None),obs
@@ -646,3 +653,54 @@ def test_separate_watchdog_survives_controller_process_death(fixture,tmp_path):
         for process in (controller,watchdog):
             if process is not None and process.poll() is None:
                 process.kill();process.wait(timeout=2)
+
+
+def test_precommit_source_failure_proves_rollback(fixture):
+    a,r,_,_=fixture
+    calls=0
+    def source():
+        nonlocal calls
+        calls+=1
+        if calls==2:
+            raise Refused("precommit_source_missing")
+    a.source_check=source
+    with pytest.raises(Refused,match="precommit_source_missing"):
+        stage(a,"baseline")
+    assert r.inspect()["rows"]==0
+
+
+def test_server_budget_bounds_behind_client_skew_with_delayed_sql(fixture):
+    import time
+    a,r,_,_=fixture
+    l=real_window(fixture,1.1)
+    a.clock=lambda:datetime.now(timezone.utc)-timedelta(seconds=.5)
+    captured=[]
+    class SkewDelay(ConnectionProxy):
+        def execute(self,sql,*args,**kwargs):
+            result=self.conn.execute(sql,*args,**kwargs)
+            if sql.startswith("INSERT INTO ai.decision_position("):
+                captured.append(self.conn.execute("SELECT pg_catalog.current_setting('transaction_timeout')").fetchone()[0])
+                self.conn.execute("SELECT pg_catalog.pg_sleep(2)")
+            return result
+    a.conn=SkewDelay(a.conn)
+    begin=time.monotonic()
+    with pytest.raises(CommitUncertain):
+        a.execute("baseline",permit(l,"baseline",a.clock()))
+    assert captured and int(captured[0].removesuffix("ms")) <= 1000
+    assert time.monotonic()-begin < 1.6
+    assert r.inspect()["rows"]==0
+    assert r.recover()["no_op"] is True
+
+
+def test_client_ahead_cannot_admit_before_server_open(fixture):
+    from .launch_contract import Launch
+    a,r,_,l=fixture
+    now=datetime.now(timezone.utc)
+    l=Launch.parse(l.public()|{
+        "open_at":(now+timedelta(seconds=2)).isoformat().replace("+00:00","Z"),
+        "admission_until":(now+timedelta(seconds=4)).isoformat().replace("+00:00","Z"),
+        "stage_until":(now+timedelta(seconds=10)).isoformat().replace("+00:00","Z")})
+    a.launch=l;a.clock=lambda:now+timedelta(seconds=3)
+    with pytest.raises(Refused,match="server_stage_deadline"):
+        a.execute("baseline",permit(l,"baseline",a.clock()))
+    assert r.inspect()["rows"]==0

@@ -150,3 +150,8 @@ schema/compiler/package closure and pinned third-party dependencies, trusted run
 and checkout/import policy. Authenticated GitHub/Vercel observers and authoritative
 durable one-build/stage claims remain uninstalled blockers. No fixture or proposal
 JSON is live production proof.
+
+Transaction budget is the minimum of client AND server remaining time; server
+normal-window lower bound and permit freshness are checked as well. Actual SQL
+fixtures use current UTC finite windows. Clock-skew tests cannot admit before the
+server opens the window or hold a delayed normal transaction past server cutoff.

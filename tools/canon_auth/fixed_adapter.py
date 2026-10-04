@@ -74,15 +74,21 @@ class FixedAdapter:
         permit.verify(self.launch, permit.stage, self.clock())
         # Server clock protects a delayed remote stage even if its controller died.
         until = min(self.launch.stage_until, permit.observed_at+timedelta(seconds=60))
-        require(self.conn.execute("SELECT pg_catalog.clock_timestamp()<%s::pg_catalog.timestamptz",
-                                 (until,)).fetchone() == (True,), "server_stage_deadline_refused")
+        server = self.conn.execute("SELECT pg_catalog.clock_timestamp()").fetchone()[0]
+        require(self.launch.open_at <= server < until
+                and timedelta(0) <= server-permit.observed_at < timedelta(seconds=60),
+                "server_stage_deadline_refused")
 
     def _arm_transaction(self, permit):
         # PG17+ transaction_timeout cancels the entire remote transaction, not
         # just a single statement. Unsupported server versions fail before DML.
         require(int(self.conn.execute("SHOW server_version_num").fetchone()[0]) >= 170000,
                 "transaction_deadline_server_required")
-        remaining = min(60, (self.launch.stage_until-self.clock()).total_seconds(),
+        server = self.conn.execute("SELECT pg_catalog.clock_timestamp()").fetchone()[0]
+        self._normal_gate(permit)
+        remaining = min(60, (self.launch.stage_until-server).total_seconds(),
+                        (permit.observed_at+timedelta(seconds=60)-server).total_seconds(),
+                        (self.launch.stage_until-self.clock()).total_seconds(),
                         (permit.observed_at+timedelta(seconds=60)-self.clock()).total_seconds())
         # Keep 100ms admission reserve; uncertain COMMIT is reconciled/recovered.
         milliseconds = math.floor(remaining*1000)-100
