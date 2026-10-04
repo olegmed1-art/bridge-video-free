@@ -22,9 +22,9 @@ import urllib.request
 
 from policy import BRANCH, REPO, SHA, WORKFLOW, Refused, require, select_run, validate_jobs, validate_boot
 
-BASE = Path('/nonexistent/synthetic-preparation')
+BASE = Path('/nonexistent/synthetic-diagnostic')
 SUPERVISOR = BASE / 'supervisor.py'
-SUPERVISOR_SHA = '2bccbeb05bde9c55c80f35d095e2ff9c1ee438a06a02fb423a3a35df59e47bdd'
+SUPERVISOR_SHA = 'ce33da0b7ea2f31244163253c870bfed5892c31e16c4440cfbbab4d0129682d2'
 CLAIM = BASE / 'autonomous-admission.claim.json'
 RECEIPT = BASE / 'autonomous-admission.receipt.json'
 BOOTSTRAP = ('import ctypes,os,signal,sys; r=ctypes.CDLL(None).prctl(1,signal.SIGKILL); '
@@ -287,7 +287,7 @@ class Engine:
                 require(e.get('state') in ('EXECUTION_STARTING','DRIVER_PROGRESS','STOP_NOW'),'RECEIVER_FAILED')
                 if e['state']=='STOP_NOW':
                     reason=e.get('reason','UNKNOWN')
-                    success=reason=='PREPARATION_COMPLETE'
+                    success=reason=='DIAGNOSTIC_COMPLETE'
                     break
         except Exception as exc:
             reason=str(exc) if isinstance(exc,Refused) else type(exc).__name__
@@ -298,7 +298,7 @@ class Engine:
             try:self.receiver.close()
             except Exception:success=False
             if self.claimed:
-                try:self.receipt({'state':'PREPARATION_COMPLETE' if success else 'UNKNOWN_OR_ABORTED','nonce':self.nonce,'run':self.bound,'reason':reason,'running_sent':self.sent_running,'at':self.clock.wall(),'reconciliation_required':True})
+                try:self.receipt({'state':'DIAGNOSTIC_COMPLETE' if success else 'UNKNOWN_OR_ABORTED','nonce':self.nonce,'run':self.bound,'reason':reason,'running_sent':self.sent_running,'at':self.clock.wall(),'reconciliation_required':True})
                 except Exception:success=False
         return success
 

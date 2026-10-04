@@ -53,7 +53,7 @@ class FakeAPI:
 
 
 class FakeReceiver:
-    def __init__(self,clock,outcome='PREPARATION_COMPLETE'):
+    def __init__(self,clock,outcome='DIAGNOSTIC_COMPLETE'):
         self.clock=clock;self.outcome=outcome;self.events=[dict(state='RECEIVER_READY',nonce=NONCE,simulation=False)];self.sent=[];self.closed=False
     def send(self,msg):
         self.sent.append(msg.copy())
@@ -104,7 +104,7 @@ class PolicyTests(unittest.TestCase):
 
 
 class EngineTests(unittest.TestCase):
-    def setup_engine(self,probe_change=None,api_change=None,outcome='PREPARATION_COMPLETE',claim_fault=None):
+    def setup_engine(self,probe_change=None,api_change=None,outcome='DIAGNOSTIC_COMPLETE',claim_fault=None):
         clock=FakeClock();receiver=FakeReceiver(clock,outcome);api=FakeAPI(clock,api_change);claims=[];receipts=[];events=[]
         def probe(budget):
             sent=clock.wall();clock.sleep(.2)
@@ -120,11 +120,11 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(e.execute())
         self.assertEqual([x['type'] for x in r.sent],['BIND','RUNNING','CANCEL'])
         self.assertEqual(len(claims),1);self.assertTrue(r.closed)
-        self.assertEqual(receipts[0]['state'],'PREPARATION_COMPLETE')
+        self.assertEqual(receipts[0]['state'],'DIAGNOSTIC_COMPLETE')
         self.assertEqual(events[-1]['state'],'STOP_NOW')
         self.assertFalse(next(x for x in events if x['state']=='SSH_READY_EVIDENCE')['provider_running_asserted'])
         # Feed exactly the generated packets into original b7ad gate, no edits.
-        file=Path(__file__).resolve().parents[1]/'admission_contract/supervisor.py'
+        file=Path(__file__).resolve().parent/'supervisor.py'
         spec=importlib.util.spec_from_file_location('unchanged_supervisor',file);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         g=module.Gate(NONCE,False,1000,20)
         self.assertEqual(g.receive(r.sent[0],1008.1,28.1),'BOUND')

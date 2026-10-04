@@ -16,14 +16,8 @@ import threading
 import time
 
 SHA = '1111111111111111111111111111111111111111'
-BASE = Path('/nonexistent/synthetic-preparation')
-PINS = {
-    'runner.py': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'protocol.py': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'durable.py': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'guest.py': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    'prepare_driver.py': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-}
+BASE = Path('/nonexistent/synthetic-diagnostic')
+PINS = {'prepare_driver.py': '040f19456c189e2fa51ca50054391466d45987b0e38b5ff4eaaaa7d5f67e63f3', 'diagnostic_guest.py': 'e38e4a8cfc8105d4ebbf2455cfa16918f3742ef4eece2f092fc5c820e9b21530'}
 RUN = re.compile(r'https://github\.com/example-owner/example-repository/actions/runs/[1-9][0-9]*\Z')
 JOB = re.compile(r'https://github\.com/example-owner/example-repository/actions/runs/[1-9][0-9]*/job/[1-9][0-9]*\Z')
 
@@ -117,7 +111,7 @@ def preflight():
         if hashlib.sha256(safe_file(BASE / name)).hexdigest() != digest:
             raise ValueError('HASH_MISMATCH')
     # Public known_hosts only. Never open the private key.
-    result = subprocess.run(['/usr/bin/ssh-keygen', '-F', '192.0.2.1', '-f', '/nonexistent/synthetic-known-hosts'], capture_output=True, timeout=3, check=True)
+    result = subprocess.run(['/usr/bin/ssh-keygen', '-F', '192.0.2.1', '-f', '/nonexistent/synthetic-hosts'], capture_output=True, timeout=3, check=True)
     fp = subprocess.run(['/usr/bin/ssh-keygen', '-lf', '-'], input=result.stdout, capture_output=True, timeout=3, check=True)
     if not exact_ed25519(fp.stdout):
         raise ValueError('HOST_PIN')
@@ -253,7 +247,7 @@ def main():
                     gate.stop('DRIVER_ABORT')
             elif label == 'CHILD_EOF':
                 rc = child.wait(timeout=1)
-                gate.stop('PREPARATION_COMPLETE' if rc == 0 else 'DRIVER_ABORT')
+                gate.stop('DIAGNOSTIC_COMPLETE' if rc == 0 else 'DRIVER_ABORT')
             else:
                 gate.stop('CHANNEL_CLOSED_OR_ERROR')
     except Exception:
@@ -269,7 +263,7 @@ def main():
             child.wait(timeout=2)
         if lock is not None:
             lock.close()
-    return 0 if gate.reason in ('SIMULATION_COMPLETE', 'PREPARATION_COMPLETE') else 2
+    return 0 if gate.reason in ('SIMULATION_COMPLETE', 'DIAGNOSTIC_COMPLETE') else 2
 
 
 if __name__ == '__main__':

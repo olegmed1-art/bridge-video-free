@@ -20,13 +20,13 @@ from test_watcher import run, page, jobs, NONCE
 
 
 def original_supervisor():
-    return Path(__file__).resolve().parents[1]/'admission_contract/supervisor.py'
+    return Path(__file__).resolve().parent/'supervisor.py'
 
 
 def isolated_engine(tmp, hang=False):
     """Real pipe/PDEATHSIG chain; fake API, boot samples and temporary driver."""
     tmp=Path(tmp)
-    driver='import json,time,os\nprint(json.dumps({"phase":"FAKE_READY","pid":os.getpid()}),flush=True)\n'+('time.sleep(30)\n' if hang else 'print(json.dumps({"phase":"PREPARATION_COMPLETE_REQUEST_PARENT_STOP"}),flush=True)\n')
+    driver='import json,time,os\nprint(json.dumps({"phase":"FAKE_READY","pid":os.getpid()}),flush=True)\n'+('time.sleep(30)\n' if hang else 'print(json.dumps({"phase":"DIAGNOSTIC_COMPLETE_REQUEST_PARENT_STOP"}),flush=True)\n')
     (tmp/'prepare_driver.py').write_text(driver)
     wrapper=('import importlib.util,sys\nfrom pathlib import Path\n'
              f'spec=importlib.util.spec_from_file_location("safe_supervisor",{str(original_supervisor())!r})\n'
@@ -96,7 +96,7 @@ class LinuxAdapters(unittest.TestCase):
         self.assertEqual(proc.returncode,0,stderr.decode())
         rows=[json.loads(x) for x in output.splitlines()]
         self.assertEqual(rows[-1]['state'],'STOP_NOW')
-        self.assertEqual(rows[-1]['reason'],'PREPARATION_COMPLETE')
+        self.assertEqual(rows[-1]['reason'],'DIAGNOSTIC_COMPLETE')
         self.assertTrue((Path(self.tmp.name)/'receipt').exists())
     def test_watcher_death_kills_receiver_and_driver(self):
         proc=self.spawn(f'import test_watcher_posix as t;t.isolated_engine({self.tmp.name!r},True)')
