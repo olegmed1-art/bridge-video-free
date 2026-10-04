@@ -13,7 +13,8 @@ concurrency:
 jobs:
   fixtures:
     if: >-
-      github.event.repository.private == false && github.event.created == true &&
+      github.event.repository.private == false && github.event.created == false &&
+      github.event.before == '1def3a71be13e6cfdd2ab45186b23e0b2ffd04c0' &&
       github.run_attempt == 1 &&
       github.event.head_commit.message == 'ci: verify failed prepare retirement protocol'
     runs-on: ubuntu-24.04
@@ -46,7 +47,7 @@ jobs:
           prefix = 'bridge-video-free-'+sha+'/'
           assert all(x.startswith(prefix) for x in archive.namelist())
           manifest = archive.read(prefix+'.github/retirement-fixtures/wheels.json')
-          assert hashlib.sha256(manifest).hexdigest() == '91b46fe96b1d8b6988ed37ca3ed47f31cd17f1d9c97ebe534efa6efdcbe13f4c'
+          assert hashlib.sha256(manifest).hexdigest() == '5340e9e97ed94f4632e8d1bff361ef2c43d3742eebf3c8de44b7c341e4a353b9'
           context = work/'retirement-dependencies'; context.mkdir()
           requirements = []
           for wheel in json.loads(manifest):
