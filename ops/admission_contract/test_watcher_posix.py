@@ -81,7 +81,7 @@ class LinuxAdapters(unittest.TestCase):
         for _ in range(100):
             try:
                 if Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()[0]=='Z':return True
-            except FileNotFoundError:return True
+            except (FileNotFoundError, ProcessLookupError):return True
             time.sleep(.02)
         return False
     def test_real_global_claim_fsync_readback_and_restart(self):

@@ -60,7 +60,7 @@ class ContainmentTests(unittest.TestCase):
             try:
                 text = Path('/proc') .joinpath(str(pid),'stat').read_text()
                 if text.rsplit(')',1)[1].split()[0] == 'Z': return True
-            except FileNotFoundError: return True
+            except (FileNotFoundError, ProcessLookupError): return True
             time.sleep(0.02)
         return False
 
