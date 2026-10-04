@@ -38,11 +38,12 @@ def _durable_publication_receipt(root: Path, job_id: str, *, age_seconds: int, n
                 "publication_state": "REMOTE_VERIFIED",
                 "publication": {
                     "status": "PUBLISHED_VERIFIED",
-                    "remote_verification": "SIZE_MD5_SHA256_PROPERTY_MATCH",
+                    "remote_verification": "CONTENT_READBACK_SHA256",
+                    "source": {"unchanged": True, "verification": "CONTENT_READBACK_SHA256", "sha256_before": "d" * 64, "sha256_after": "d" * 64},
                     "artifact_set_sha256": artifact_set,
                     "manifest_sha256": manifest_sha,
                     "remote_artifacts": [
-                        {"relative_name": "manifest.json", "size_bytes": 10, "sha256": manifest_sha}
+                        {"relative_name": "manifest.json", "size_bytes": 10, "sha256": manifest_sha, "verification": "CONTENT_READBACK_SHA256"}
                     ],
                 },
                 "conformance": {
@@ -75,7 +76,8 @@ def _durable_publication_proof(result_dir: Path, job_id: str) -> Path:
                 "drive_folder_id": "drive-folder-id",
                 "artifact_set_sha256": "a" * 64,
                 "publication_marker_sha256": "b" * 64,
-                "remote_verification": "SIZE_MD5_SHA256_PROPERTY_MATCH",
+                "remote_verification": "CONTENT_READBACK_SHA256",
+                    "source": {"unchanged": True, "verification": "CONTENT_READBACK_SHA256", "sha256_before": "d" * 64, "sha256_after": "d" * 64},
             }
         ),
         encoding="utf-8",
@@ -201,7 +203,7 @@ def test_retention_rejects_incomplete_local_publication_proof_sidecar(tmp_path: 
     assert result not in {item.path for item in plan}
 
 
-def test_abandoned_result_directory_is_bounded_after_grace(tmp_path: Path):
+def test_abandoned_result_directory_is_retained_until_persisted(tmp_path: Path):
     now = 2_000_000_000.0
     base = tmp_path / "uv"
     for name in ("inbox", "running", "done", "failed", "results"):
@@ -215,8 +217,7 @@ def test_abandoned_result_directory_is_bounded_after_grace(tmp_path: Path):
     os.utime(abandoned, (old, old))
 
     plan = build_cleanup_plan(base, policy=RetentionPolicy(), now=now)
-    item = next(candidate for candidate in plan if candidate.path == abandoned)
-    assert item.reason == "abandoned_ttl"
+    assert abandoned not in {candidate.path for candidate in plan}
 
 
 def test_retention_apply_removes_only_planned_managed_paths(tmp_path: Path):
@@ -335,23 +336,23 @@ def test_remote_artifact_verification_rejects_same_name_wrong_content(tmp_path: 
         drive_results._md5(path),
     )
     remote = {
-        "id": "remote-id",
+        "id": "remote-id", "name": "artifact.txt", "trashed": False,
         "size": str(path.stat().st_size),
         "md5Checksum": "0" * 32,
         "appProperties": {"sha256": artifact.sha256},
     }
     with pytest.raises(RuntimeError, match="checksum mismatch"):
-        drive_results._verify_remote_artifact(remote, artifact)
+        drive_results._verify_remote_artifact(remote, artifact, "synthetic-token")
 
     public_remote = {
-        "id": "remote-id",
+        "id": "remote-id", "name": "artifact.txt", "trashed": False,
         "size": str(path.stat().st_size),
         "md5Checksum": artifact.md5,
         "appProperties": {"sha256": artifact.sha256},
         "permissions": [{"type": "anyone", "role": "reader"}],
     }
     with pytest.raises(RuntimeError, match="broad ACL"):
-        drive_results._verify_remote_artifact(public_remote, artifact)
+        drive_results._verify_remote_artifact(public_remote, artifact, "synthetic-token")
 
 
 def test_drive_upload_uses_multipart_related_metadata_first(tmp_path: Path, monkeypatch):
@@ -382,7 +383,7 @@ def test_drive_upload_uses_multipart_related_metadata_first(tmp_path: Path, monk
         drive_results,
         "_get_file_metadata",
         lambda file_id, token: {
-            "id": file_id,
+            "id": file_id, "name": artifact.relative_name, "parents": ["parent"], "trashed": False,
             "size": str(artifact.size_bytes),
             "md5Checksum": artifact.md5,
             "appProperties": {"sha256": artifact.sha256},
@@ -390,6 +391,7 @@ def test_drive_upload_uses_multipart_related_metadata_first(tmp_path: Path, monk
         },
     )
     monkeypatch.setattr(drive_results.requests, "post", post)
+    monkeypatch.setattr(drive_results, "hash_remote_file", lambda *args, **kw: {"verification": "CONTENT_READBACK_SHA256"})
 
     receipt = drive_results._upload_or_verify_file("parent", artifact, "token")
     content_type = captured["headers"]["Content-Type"]
@@ -493,7 +495,7 @@ def test_publish_writes_marker_last_and_is_deterministic_on_retry(tmp_path: Path
     assert proof["drive_folder_id"] == "child-id"
     assert proof["artifact_set_sha256"] == expected_bundle
     assert proof["publication_marker_sha256"] == first["publication_marker_sha256"]
-    assert proof["remote_verification"] == "SIZE_MD5_SHA256_PROPERTY_MATCH"
+    assert proof["remote_verification"] == "CONTENT_READBACK_SHA256"
 
 
 def test_publish_fails_before_network_when_approved_bundle_changes(tmp_path: Path, monkeypatch):

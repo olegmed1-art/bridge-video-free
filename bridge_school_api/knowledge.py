@@ -216,7 +216,7 @@ def _version_query(lane: AuthorityLane) -> str:
               AND (activation.valid_to IS NULL OR now() < activation.valid_to)
             """,
         )
-    return _KNOWLEDGE_VERSIONS_SQL.format(
+    sql = _KNOWLEDGE_VERSIONS_SQL.format(
         activation_fields=(
             "NULL::uuid AS canon_activation_id, NULL::text AS scope_key, "
             "NULL::timestamptz AS activation_valid_from, "
@@ -241,6 +241,17 @@ def _version_query(lane: AuthorityLane) -> str:
             """
         ),
     )
+    if lane is AuthorityLane.WORLD_EXTERNAL:
+        sql = sql.replace("'status', src.status,", """'status', src.status,
+                        'book_asset_verified', EXISTS (
+                            SELECT 1 FROM public.source_asset sa JOIN public.asset a
+                            ON a.asset_id=sa.asset_id WHERE sa.source_id=src.source_id AND sa.relation_type='embodies'
+                              AND src.school_id=ki.school_id AND a.school_id=ki.school_id AND a.checksum_algorithm='sha256'
+                              AND a.asset_id::text=kv.provenance->'source_identity_review'->>'asset_id'
+                              AND a.checksum_value=kv.content->'citation'->>'rendition_sha256'
+                              AND pg_catalog.to_jsonb(a.byte_size)=kv.provenance->'review_receipt'->'source_size_bytes'
+                              AND a.immutable_flag IS TRUE AND a.mime_type='application/pdf'),""")
+    return sql
 
 
 def _retrieval_status(lane: AuthorityLane, count: int) -> str:

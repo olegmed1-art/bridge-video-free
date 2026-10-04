@@ -15,7 +15,7 @@ from bridge_contracts.book_world import build_world_publication
 from database.book_world_persistence import persist_book_world, publish_book_world, retire_book_world
 import bridge_school_api.knowledge as knowledge
 from bridge_school_api.main import app, EXPECTED_SCHOOL
-from test_book_world import reviewed_fixture
+from test_book_world import reviewed_fixture, reviewed_identity_fixture
 
 pytestmark = pytest.mark.skipif(os.environ.get("BOOK_WORLD_PG_TEST") != "1", reason="disposable PostgreSQL test not enabled")
 DSN = "postgresql://postgres@127.0.0.1:5432/book_world_test"
@@ -101,3 +101,224 @@ def test_postgres_persistence_protected_teacher_replay_failure_and_rollback(monk
         assert client.get(path, params={"stable_key": stable_key}, headers={"Authorization": "Bearer synthetic-postgres-test-token"}).status_code == 404
         with pytest.raises(ValueError, match="RETIRED"):
             persist_book_world(conn, bundle, receipt, school_id=school_id, source_id=source_id)
+
+
+
+def legacy_identity_fixture():
+    """Random synthetic hash/IDs, never a production source."""
+    bundle, receipt = reviewed_fixture()
+    from bridge_contracts.book_material import identity
+    source_id = str(uuid4())
+    file_id = "Synthetic_" + uuid4().hex
+    locator = "https://drive.google.com/file/d/" + file_id + "/view"
+    bundle["source"].update(locator=locator, edition_id=str(uuid4()),
+                            rendition_sha256=uuid4().hex + uuid4().hex)
+    bundle["run"]["run_id"] = str(uuid4())
+    receipt["rendition_sha256"] = bundle["source"]["rendition_sha256"]
+    obj = bundle["objects"][0]
+    obj["object_id"] = "BOOK-" + identity(bundle["source"], obj)
+    receipt["claims"][0]["object_id"] = obj["object_id"]
+    with psycopg.connect(DSN, autocommit=True) as setup:
+        setup.execute(Path("tests/fixtures/book_world_postgres.sql").read_text())
+        setup.execute("INSERT INTO public.school VALUES (%s,%s) ON CONFLICT(stable_name) DO NOTHING",
+                      (str(uuid4()), EXPECTED_SCHOOL))
+        school_id = str(setup.execute("SELECT school_id FROM public.school WHERE stable_name=%s",
+                                     (EXPECTED_SCHOOL,)).fetchone()[0])
+        setup.execute("INSERT INTO public.source(source_id,school_id,canonical_locator) VALUES(%s,%s,%s)",
+                      (source_id, school_id, "drive:" + file_id))
+    return bundle, receipt, school_id, source_id, "drive:" + file_id
+
+
+def test_legacy_identity_dry_run_replay_stage_publish_and_visibility_rollback(monkeypatch):
+    from database.book_source_reconciliation import reconcile_book_source_asset
+    bundle, receipt, school_id, source_id, stored = legacy_identity_fixture()
+    with psycopg.connect(DSN) as conn:
+        identity_review = reviewed_identity_fixture(bundle, receipt, school_id, source_id, stored)
+        args = dict(school_id=school_id, source_id=source_id, identity_receipt=identity_review)
+        with pytest.raises(ValueError, match="ASSET_BINDING_REQUIRED"):
+            persist_book_world(conn, bundle, receipt, **args)
+        dry_identity = reconcile_book_source_asset(conn, bundle, receipt, **args, dry_run=True)
+        assert dry_identity["new_asset_rows"] == dry_identity["new_link_rows"] == 1
+        assert not dry_identity["committed"]
+        with psycopg.connect(DSN, autocommit=True) as read:
+            assert read.execute("SELECT count(*) FROM public.source_asset WHERE source_id=%s",
+                                (source_id,)).fetchone()[0] == 0
+        identity_result = reconcile_book_source_asset(conn, bundle, receipt, **args)
+        replay_identity = reconcile_book_source_asset(conn, bundle, receipt, **args)
+        assert identity_result["asset_id"] == replay_identity["asset_id"]
+        assert replay_identity["new_asset_rows"] == replay_identity["new_link_rows"] == 0
+        dry_stage = persist_book_world(conn, bundle, receipt, **args, dry_run=True)
+        assert not dry_stage["committed"]
+        with psycopg.connect(DSN, autocommit=True) as read:
+            assert read.execute("SELECT count(*) FROM public.changeset WHERE changeset_id=%s",
+                                (dry_stage["changeset_id"],)).fetchone()[0] == 0
+        staged = persist_book_world(conn, bundle, receipt, **args)
+        assert staged["version_ids"] == dry_stage["version_ids"]
+        assert persist_book_world(conn, bundle, receipt, **args)["new_versions"] == 0
+        with psycopg.connect(DSN, autocommit=True) as delivery:
+            delivery.execute("UPDATE public.outbox_message SET status='published' WHERE changeset_id=%s",
+                             (staged["changeset_id"],))  # Disposable fixture only.
+        delivered = {"schema": "book-world-delivery-v1", "publication_hash": staged["publication_hash"],
+                     "catalog_receipt_ref": "synthetic-delivery"}
+        pub_args = dict(school_id=school_id, changeset_id=staged["changeset_id"],
+                        delivery_receipt=delivered)
+        dry_pub = publish_book_world(conn, **pub_args, dry_run=True)
+        assert dry_pub["publication"] == "DRY_RUN_NOT_PUBLISHED" and not dry_pub["committed"]
+        with psycopg.connect(DSN, autocommit=True) as read:
+            assert read.execute("SELECT status FROM public.knowledge_version WHERE knowledge_version_id=%s",
+                                (staged["version_ids"][0],)).fetchone()[0] == "staged"
+        publish_book_world(conn, **pub_args)
+        publish_book_world(conn, **pub_args)
+        @contextmanager
+        def connect_test():
+            with psycopg.connect(DSN, row_factory=dict_row) as read:
+                yield read
+        monkeypatch.setattr(knowledge, "connect", connect_test)
+        monkeypatch.setenv("BRIDGE_API_TOKEN", "synthetic-postgres-test-token")
+        key = bundle["objects"][0]["object_id"]
+        client = TestClient(app)
+        request_args = dict(params={"stable_key": key},
+                            headers={"Authorization": "Bearer synthetic-postgres-test-token"})
+        response = client.get("/v1/knowledge/teacher/book", **request_args)
+        assert response.status_code == 200, response.text
+        assert response.json()["citations"][0]["locator"] == bundle["source"]["locator"]
+        assert response.json()["fallback_performed"] is False
+        with psycopg.connect(DSN, autocommit=True) as mutate:
+            mutate.execute("UPDATE public.asset SET immutable_flag=false WHERE asset_id=%s",
+                           (identity_result["asset_id"],))
+        assert client.get("/v1/knowledge/teacher/book", **request_args).status_code == 409
+        with pytest.raises(ValueError, match="ASSET_BINDING_REQUIRED"):
+            publish_book_world(conn, **pub_args)
+        with psycopg.connect(DSN, autocommit=True) as restore:
+            restore.execute("UPDATE public.asset SET immutable_flag=true WHERE asset_id=%s",
+                            (identity_result["asset_id"],))
+        assert retire_book_world(conn, school_id=school_id, version_ids=staged["version_ids"]) == 1
+        assert client.get("/v1/knowledge/teacher/book", **request_args).status_code == 404
+        with psycopg.connect(DSN, autocommit=True) as read:
+            assert read.execute("SELECT canonical_locator FROM public.source WHERE source_id=%s",
+                                (source_id,)).fetchone()[0] == stored
+            assert read.execute("SELECT count(*) FROM public.source_asset WHERE source_id=%s",
+                                (source_id,)).fetchone()[0] == 1
+            assert read.execute("SELECT count(*) FROM public.canon_activation WHERE knowledge_version_id=%s",
+                                (staged["version_ids"][0],)).fetchone()[0] == 0
+
+
+def test_identity_interruption_and_unknown_trigger_roll_back():
+    from database.book_source_reconciliation import reconcile_book_source_asset
+    bundle, receipt, school_id, source_id, stored = legacy_identity_fixture()
+    identity_review = reviewed_identity_fixture(bundle, receipt, school_id, source_id, stored)
+    args = dict(school_id=school_id, source_id=source_id, identity_receipt=identity_review)
+    def fail():
+        raise RuntimeError("synthetic interruption")
+    with psycopg.connect(DSN) as conn:
+        with pytest.raises(RuntimeError, match="synthetic interruption"):
+            reconcile_book_source_asset(conn, bundle, receipt, **args, before_commit=fail)
+        with psycopg.connect(DSN, autocommit=True) as read:
+            assert read.execute("SELECT count(*) FROM public.asset WHERE checksum_value=%s",
+                                (bundle["source"]["rendition_sha256"],)).fetchone()[0] == 0
+        with psycopg.connect(DSN, autocommit=True) as setup:
+            setup.execute("CREATE FUNCTION public.synthetic_asset_guard() RETURNS trigger "
+                          "LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$")
+            setup.execute("CREATE TRIGGER synthetic_asset_guard BEFORE INSERT ON public.asset "
+                          "FOR EACH ROW EXECUTE FUNCTION public.synthetic_asset_guard()")
+        # Deliberately shadow catalogs on the idle caller's session.
+        conn.execute('CREATE TEMP TABLE pg_trigger(tgrelid oid,tgisinternal boolean,tgenabled "char")')
+        conn.execute('CREATE TEMP TABLE pg_rewrite(ev_class oid)')
+        conn.commit()
+        assert conn.execute("SELECT count(*) FROM pg_trigger").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM pg_catalog.pg_trigger "
+                            "WHERE tgrelid='public.asset'::regclass AND NOT tgisinternal").fetchone()[0] > 0
+        conn.rollback()
+        try:
+            with pytest.raises(ValueError, match="IDENTITY_EFFECT_REVIEW_REQUIRED"):
+                reconcile_book_source_asset(conn, bundle, receipt, **args, dry_run=True)
+        finally:
+            with psycopg.connect(DSN, autocommit=True) as cleanup:
+                cleanup.execute("DROP TRIGGER synthetic_asset_guard ON public.asset")
+                cleanup.execute("DROP FUNCTION public.synthetic_asset_guard()")
+        with psycopg.connect(DSN, autocommit=True) as read:
+            assert read.execute("SELECT count(*) FROM public.asset WHERE checksum_value=%s",
+                                (bundle["source"]["rendition_sha256"],)).fetchone()[0] == 0
+
+
+
+@pytest.mark.parametrize("change", ["locator", "source_uuid", "school_uuid", "source_descriptor"])
+def test_identity_review_cannot_be_reused_for_another_registry_binding(change):
+    from database.book_source_reconciliation import reconcile_book_source_asset
+    bundle, receipt, school_id, source_id, stored = legacy_identity_fixture()
+    identity = reviewed_identity_fixture(bundle, receipt, school_id, source_id, stored)
+    candidate = deepcopy(bundle)
+    args = dict(school_id=school_id, source_id=source_id, identity_receipt=identity)
+    if change == "locator":
+        candidate["source"]["locator"] = "https://drive.google.com/file/d/Synthetic_other_file_0123456789/view"
+    if change == "source_descriptor":
+        candidate["source"]["source_id"] = "SYNTHETIC-OTHER-CATALOG-SOURCE"
+    if change == "source_uuid":
+        other_id = str(uuid4())
+        with psycopg.connect(DSN, autocommit=True) as setup:
+            setup.execute("INSERT INTO public.source(source_id,school_id,canonical_locator) VALUES(%s,%s,%s)",
+                          (other_id, school_id, stored))  # Same URL, different registry identity.
+        args["source_id"] = other_id
+    if change == "school_uuid":
+        args["school_id"] = str(uuid4())
+    with psycopg.connect(DSN) as conn:
+        with pytest.raises(ValueError, match="IDENTITY_REVIEW_BINDING"):
+            reconcile_book_source_asset(conn, candidate, receipt, **args)
+    with psycopg.connect(DSN, autocommit=True) as read:
+        assert read.execute("SELECT count(*) FROM public.asset WHERE checksum_value=%s",
+                            (bundle["source"]["rendition_sha256"],)).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("mutation", ["asset", "link", "source", "citation", "citation_delete"])
+def test_publication_holds_identity_rows_against_concurrent_mutation(mutation):
+    from database.book_source_reconciliation import reconcile_book_source_asset
+    bundle, receipt, school_id, source_id, stored = legacy_identity_fixture()
+    identity = reviewed_identity_fixture(bundle, receipt, school_id, source_id, stored)
+    args = dict(school_id=school_id, source_id=source_id, identity_receipt=identity)
+    with psycopg.connect(DSN) as publisher:
+        reconcile_book_source_asset(publisher, bundle, receipt, **args)
+        staged = persist_book_world(publisher, bundle, receipt, **args)
+        with psycopg.connect(DSN, autocommit=True) as delivery:
+            delivery.execute("UPDATE public.outbox_message SET status='published' WHERE changeset_id=%s",
+                             (staged["changeset_id"],))
+        attempted = []
+        def contender_before_commit():
+            with psycopg.connect(DSN, autocommit=True) as contender:
+                contender.execute("SET lock_timeout='150ms'")
+                contender.execute("SET statement_timeout='2s'")
+                statements = {
+                    "asset": ("UPDATE public.asset SET immutable_flag=false WHERE asset_id=%s",
+                              (identity["asset_id"],)),
+                    "link": ("DELETE FROM public.source_asset WHERE source_id=%s AND asset_id=%s "
+                             "AND relation_type='embodies'", (source_id, identity["asset_id"])),
+                    "source": ("UPDATE public.source SET canonical_locator=%s WHERE source_id=%s",
+                               (bundle["source"]["locator"], source_id)),
+                    "citation": ("UPDATE public.knowledge_version_source SET source_locator='{}'::jsonb "
+                                 "WHERE knowledge_version_id=%s AND source_id=%s "
+                                 "AND relation_type='derived_from'", (staged["version_ids"][0], source_id)),
+                    "citation_delete": ("DELETE FROM public.knowledge_version_source "
+                                        "WHERE knowledge_version_id=%s AND source_id=%s "
+                                        "AND relation_type='derived_from'", (staged["version_ids"][0], source_id)),
+                }
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    contender.execute(*statements[mutation])
+                attempted.append(mutation)
+        result = publish_book_world(publisher, school_id=school_id, changeset_id=staged["changeset_id"],
+            delivery_receipt={"schema": "book-world-delivery-v1",
+                              "publication_hash": staged["publication_hash"],
+                              "catalog_receipt_ref": "synthetic-delivery"},
+            before_commit=contender_before_commit)
+        assert result["publication"] == "WORLD_VERIFIED" and attempted == [mutation]
+    with psycopg.connect(DSN, autocommit=True) as read:
+        assert read.execute("SELECT immutable_flag FROM public.asset WHERE asset_id=%s",
+                            (identity["asset_id"],)).fetchone()[0] is True
+        assert read.execute("SELECT count(*) FROM public.source_asset WHERE source_id=%s AND asset_id=%s",
+                            (source_id, identity["asset_id"])).fetchone()[0] == 1
+        assert read.execute("SELECT canonical_locator FROM public.source WHERE source_id=%s",
+                            (source_id,)).fetchone()[0] == stored
+        assert read.execute("SELECT source_locator FROM public.knowledge_version_source "
+                            "WHERE knowledge_version_id=%s AND source_id=%s "
+                            "AND relation_type='derived_from'",
+                            (staged["version_ids"][0], source_id)).fetchone()[0] == build_world_publication(bundle, receipt, identity)["records"][0]["content"]["citation"]
+        assert read.execute("SELECT count(*) FROM public.domain_event WHERE changeset_id=%s "
+                            "AND event_type='BookWorldPublished'", (result["changeset_id"],)).fetchone()[0] == 1

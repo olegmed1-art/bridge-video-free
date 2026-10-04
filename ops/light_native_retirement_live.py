@@ -356,9 +356,9 @@ def write(wheels,credential,controller,runtime,raw,accepted,guard):
         owner.release.validate(retained['runtime'],retained['source'],retained['runtime']['sha256'])
         owner.release.staging.verify_release(owner.execution.plan.source_path(retained['source']),retained['runtime'])
         from ops.native_maintenance_owner_host import loaded_runtime
-        from ops.native_maintenance_owner_attest import parameters
         with cycle.exclusive(owner.ROOT/'issuers',create=False), cycle.exclusive(owner.ROOT/'cycles',create=False):
             with loaded_runtime(wheels) as (psycopg,_):
+                from ops.native_maintenance_owner_attest import parameters
                 with psycopg.connect(**parameters(credential),autocommit=True) as conn:
                     conn.read_only=True
                     def observe(view,proposal):

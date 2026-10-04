@@ -28,8 +28,10 @@ def stored_fixture():
             "content": record["content"], "authority_class": "external", "review_status": "reviewed",
             "version_status": "active", "system_profile": "SYSTEM_NEUTRAL",
             "provenance": {"schema": WORLD_SCHEMA, "review_receipt": receipt,
-                           "version_hash": publication_version(record, receipt)},
-            "sources": [{"source_locator": record["content"]["citation"],
+                           "version_hash": publication_version(record, receipt),
+                           "source_id": "22222222-2222-2222-2222-222222222222"},
+            "sources": [{"source_id": "22222222-2222-2222-2222-222222222222",
+                         "source_locator": record["content"]["citation"],
                          "status": "active",
                          "canonical_locator": value["source"]["locator"]}]}
     return item
@@ -117,3 +119,18 @@ class BookWorldTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+def reviewed_identity_fixture(value, receipt, school_id, source_id, stored_locator):
+    """Synthetic operator review; never a real source/registry attestation."""
+    from bridge_contracts.book_world import world_uuid
+    source = value["source"]
+    return {"schema": "book-source-identity-review-v1", "review_id": "SYNTHETIC-IDENTITY",
+            "reviewer": "synthetic-identity-reviewer", "independence_group": "synthetic-identity-group",
+            "assurance": "I2", "source_descriptor_sha256": digest(source),
+            "school_id": school_id, "registry_source_id": source_id,
+            "stored_locator": stored_locator, "citation_locator": source["locator"],
+            "rendition_sha256": source["rendition_sha256"],
+            "source_size_bytes": receipt["source_size_bytes"], "source_page_count": source["page_count"],
+            "asset_id": world_uuid("asset", school_id, source["rendition_sha256"]), "asset_action": "CREATE"}

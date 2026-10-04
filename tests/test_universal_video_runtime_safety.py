@@ -174,16 +174,15 @@ def test_engine_revision_change_invalidates_completed_reuse(monkeypatch, tmp_pat
     monkeypatch.setenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "revision-b")
     second_processing = _processing_identity()
     assert second_processing["fingerprint"] != first_processing["fingerprint"]
-    prepared, _, existing = _prepare_job_dir(
-        output_root,
-        job,
-        source_fingerprint=inspection["fingerprint"],
-        source_reuse_safe=True,
-        processing_fingerprint=second_processing["fingerprint"],
-    )
-    assert existing is None
-    assert prepared.is_dir()
-    assert not (prepared / "old.txt").exists()
+    with pytest.raises(RuntimeError, match="retain evidence"):
+        _prepare_job_dir(
+            output_root,
+            job,
+            source_fingerprint=inspection["fingerprint"],
+            source_reuse_safe=True,
+            processing_fingerprint=second_processing["fingerprint"],
+        )
+    assert (job_dir / "old.txt").exists()
 
 
 def test_whisper_model_change_invalidates_completed_reuse(monkeypatch, tmp_path: Path):
@@ -221,16 +220,15 @@ def test_same_job_path_with_changed_source_content_is_not_reused(monkeypatch, tm
     second = _inspect_source(job, max_source_bytes=1024)
     assert second["fingerprint"] != first["fingerprint"]
 
-    prepared, _, existing = _prepare_job_dir(
-        output_root,
-        job,
-        source_fingerprint=second["fingerprint"],
-        source_reuse_safe=second["reuse_safe"],
-        processing_fingerprint=processing["fingerprint"],
-    )
-    assert existing is None
-    assert prepared.is_dir()
-    assert not (prepared / "old-frame.jpg").exists()
+    with pytest.raises(RuntimeError, match="retain evidence"):
+        _prepare_job_dir(
+            output_root,
+            job,
+            source_fingerprint=second["fingerprint"],
+            source_reuse_safe=second["reuse_safe"],
+            processing_fingerprint=processing["fingerprint"],
+        )
+    assert (job_dir / "old-frame.jpg").exists()
 
 
 def test_changed_job_hash_cleans_stale_output(monkeypatch, tmp_path: Path):
@@ -253,16 +251,15 @@ def test_changed_job_hash_cleans_stale_output(monkeypatch, tmp_path: Path):
         ),
         encoding="utf-8",
     )
-    job_dir, _, existing = _prepare_job_dir(
-        output_root,
-        job,
-        source_fingerprint=inspection["fingerprint"],
-        source_reuse_safe=inspection["reuse_safe"],
-        processing_fingerprint=processing["fingerprint"],
-    )
-    assert existing is None
-    assert job_dir.is_dir()
-    assert not (job_dir / "old-frame.jpg").exists()
+    with pytest.raises(RuntimeError, match="retain evidence"):
+        _prepare_job_dir(
+            output_root,
+            job,
+            source_fingerprint=inspection["fingerprint"],
+            source_reuse_safe=inspection["reuse_safe"],
+            processing_fingerprint=processing["fingerprint"],
+        )
+    assert (stale / "old-frame.jpg").exists()
 
 
 def test_drive_checksum_makes_reuse_fingerprint_safe(monkeypatch):

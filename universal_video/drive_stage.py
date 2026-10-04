@@ -8,8 +8,9 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from .contract import MAX_SOURCE_BYTES, VideoJob
-from .drive_adapter import access_token, download_file, file_metadata
+from .contract import MAX_SOURCE_BYTES, VideoJob, canonical_job_hash
+from .drive_adapter import access_token, download_file, file_metadata, original_snapshot
+from .durable_drive import SOURCE_RECEIPT, atomic_json, read_receipt
 
 
 class DriveStageError(RuntimeError):
@@ -101,17 +102,39 @@ def stage_drive_job(job: VideoJob, payload: dict[str, Any], media_root: Path) ->
     final = job_dir / f"source{_safe_suffix(drive_name)}"
     partial = job_dir / f".{final.name}.part"
     expected_sha = str(meta.get("sha256Checksum") or "").strip().lower()
-    if final.exists():
+    original = original_snapshot(meta)
+    pin = job_dir / SOURCE_RECEIPT
+    previous = read_receipt(pin) if pin.exists() else None
+    if previous is None and any(job_dir.glob("source*")):
+        raise DriveStageError("existing source has no immutable pin; retain cache for review")
+    job_hash = canonical_job_hash(job)
+    # The receipt is the source binding, not a cache hint. Check it even when
+    # the cached file disappeared or the current metadata chooses a new suffix.
+    if previous is not None:
+        if (previous.get("schema") != "universal-video-source-integrity-v1"
+                or previous.get("job_id") != job.job_id or previous.get("job_hash") != job_hash
+                or previous.get("original") != original
+                or not re.fullmatch(r"[0-9a-f]{64}", str(previous.get("sha256") or ""))):
+            raise DriveStageError("Drive original/job binding changed; existing pin retained",
+                                  error_code="UV_DRIVE_SOURCE_IDENTITY_CHANGED")
+        if expected_sha and expected_sha != previous["sha256"]:
+            raise DriveStageError("Drive original checksum changed; existing pin retained",
+                                  error_code="UV_DRIVE_SOURCE_CHECKSUM_MISMATCH")
+    if final.exists() and previous is not None:
         if final.is_symlink() or not final.is_file():
             raise DriveStageError("existing staged Drive source is not reusable")
-        observed_sha = _verify_staged_bytes(final, declared_size=declared_size, expected_sha=expected_sha)
+        observed_sha = _verify_staged_bytes(final, declared_size=declared_size, expected_sha=previous["sha256"])
+        if expected_sha and observed_sha != expected_sha:
+            raise DriveStageError("Drive source checksum changed")
         downloaded = dict(meta)
         downloaded["_download_sha256"] = observed_sha
     else:
+        if final.is_symlink() or partial.is_symlink():
+            raise DriveStageError("unsafe staged source path")
+        # Never Range-resume an unbound partial; restart from zero privately.
         partial.unlink(missing_ok=True)
         downloaded = download_file(
-            str(job.source["file_id"],
-            ),
+            str(job.source["file_id"]),
             partial,
             token,
             max_bytes=max_bytes,
@@ -119,7 +142,17 @@ def stage_drive_job(job: VideoJob, payload: dict[str, Any], media_root: Path) ->
         )
         with partial.open("rb") as handle:
             os.fsync(handle.fileno())
-        _verify_staged_bytes(partial, declared_size=declared_size, expected_sha=expected_sha)
+        observed_sha = _verify_staged_bytes(partial, declared_size=declared_size,
+                                             expected_sha=previous["sha256"] if previous is not None else expected_sha)
+        if original_snapshot(file_metadata(str(job.source["file_id"]), token)) != original:
+            raise DriveStageError("Drive original changed during download")
+        # Pin before final rename. A crash either reuses matching complete bytes
+        # or restarts an unpublished partial; it cannot rebind an old cache.
+        if previous is None:
+            atomic_json(pin, {"schema": "universal-video-source-integrity-v1",
+                              "original": original, "sha256": observed_sha,
+                              "job_id": job.job_id, "job_hash": job_hash,
+                              "transfer_mode": "RESTART_NO_PARTIAL_RESUME"})
         os.replace(partial, final)
         directory_fd = os.open(job_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
@@ -145,6 +178,8 @@ def stage_drive_job(job: VideoJob, payload: dict[str, Any], media_root: Path) ->
 
 def remove_staged_job(job_dir: Path, media_root: Path) -> None:
     """Remove only a resolved per-job staging directory after a terminal receipt."""
+    if media_root.is_symlink() or (media_root / "drive-ready").is_symlink() or job_dir.is_symlink():
+        raise DriveStageError("unsafe staged cleanup symlink")
     root = (media_root / "drive-ready").resolve()
     resolved = job_dir.resolve()
     try:
