@@ -23,3 +23,14 @@ def test_dynamic_import_is_explicit_obligation(tmp_path):
     result=inventory(tmp_path,roots=("entry",),resources=())
     assert [site["kind"] for site in result["dynamic_import_sites"]]==["__import__","import_module"]
     assert result["source_review_complete"] is False
+
+
+def test_root_only_module_includes_its_package_initializer_dependencies(tmp_path):
+    (tmp_path/"pkg").mkdir()
+    (tmp_path/"pkg/__init__.py").write_text("from . import initializer_guard\n")
+    (tmp_path/"pkg/initializer_guard.py").write_text("import hashlib\n")
+    (tmp_path/"pkg/entry.py").write_text("bound = 1\n")
+    result=inventory(tmp_path,roots=("pkg.entry",),resources=())
+    assert set(result["files"])=={
+        "pkg/__init__.py","pkg/initializer_guard.py","pkg/entry.py"}
+    assert result["external_import_roots"]==["hashlib"]

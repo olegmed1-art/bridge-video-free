@@ -19,7 +19,7 @@ RESOURCES = ("tools/tournament_pilot/package.json", "pyproject.toml", "vercel.js
 def inventory(root, roots=ROOTS, resources=RESOURCES):
     root = Path(root).resolve()
     modules, external, dynamic = {}, set(), []
-    pending = list(roots)
+    pending = []
     def local(name):
         path = root.joinpath(*name.split(".")).with_suffix(".py")
         if path.is_file():
@@ -40,6 +40,8 @@ def inventory(root, roots=ROOTS, resources=RESOURCES):
             path = root.joinpath(*parts[:size], "__init__.py")
             if path.is_file() and package not in modules:
                 pending.append(package)
+    for name in roots:
+        enqueue(name)
     while pending:
         name = pending.pop()
         if name in modules:
