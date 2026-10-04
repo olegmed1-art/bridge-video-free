@@ -45,3 +45,24 @@ WORLD version through retire_book_world, preserving source/asset/links and
 audit evidence. It does not delete shared identity records, undo deliveries,
 or restore retired versions. Restoration and delivery reconciliation require
 their own verified operator procedure.
+
+## Independent identity review and concurrent publication
+
+Claim review alone does not bind registry identity. The separate trusted
+book-source-identity-review-v1 receipt binds the complete source descriptor hash,
+school/source UUIDs, literal stored locator, public citation URL, reviewed PDF
+hash/size/page count, exact asset ID and CREATE/REUSE decision. Never derive it
+from source text or accept it from an unauthenticated caller. It becomes part of
+the publication/version hashes and stored provenance; legacy staging/rendering
+require it. Old claim-review receipts do not implicitly authorize reconciliation.
+
+Publication locks source -> asset/link -> selected versions and rechecks exact
+content/provenance state before writes. All identity locks remain through commit;
+source-UUID link mismatch, changed evidence or missing assets fail closed.
+Catalog reads and lock/hash functions use pg_catalog qualification, so an idle
+session's TEMP relations cannot hide unknown identity triggers/rules.
+
+Forced rollback covers transactional rows, not sequence advancement or external
+effects of functions/triggers. A fixture outbox identity sequence can advance on
+dry-run; production defaults and all trigger/delivery effects require their own
+admission. Dry-run is never a read-only production preflight.

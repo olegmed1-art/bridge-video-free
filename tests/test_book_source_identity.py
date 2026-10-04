@@ -5,7 +5,7 @@ from bridge_contracts.book_source_identity import (
     canonical_book_locator, book_source_matches, is_public_book_locator)
 from bridge_contracts.book_world import render_teacher_book
 from bridge_contracts.book_material import validate_bundle, InvalidBookMaterial
-from test_book_world import stored_fixture, reviewed_fixture
+from test_book_world import stored_fixture, reviewed_fixture, reviewed_identity_fixture
 
 ID = "SyntheticDriveFileId_0123456789"
 HTTPS = "https://drive.google.com/file/d/" + ID + "/view"
@@ -45,9 +45,15 @@ def test_renderer_requires_verified_asset_for_legacy_and_preserves_https():
     # Rebind this synthetic record's signed hash after changing its synthetic URL.
     citation["locator"] = HTTPS
     from bridge_contracts.book_world import publication_version
+    from bridge_contracts.book_source_review import source_from_citation
+    source = source_from_citation(citation, item["provenance"]["review_receipt"])
+    identity = reviewed_identity_fixture(
+        {"source": source}, item["provenance"]["review_receipt"],
+        "11111111-1111-1111-1111-111111111111", item["provenance"]["source_id"], "drive:" + ID)
+    item["provenance"].update(source_identity_review=identity, school_id=identity["school_id"])
     item["provenance"]["version_hash"] = publication_version(
         {"stable_key": item["stable_key"], "content": item["content"]},
-        item["provenance"]["review_receipt"])
+        item["provenance"]["review_receipt"], identity)
     item["sources"][0].update(canonical_locator="drive:" + ID)
     for flag in (None, False, 1):
         invalid = deepcopy(item)
@@ -68,3 +74,11 @@ def test_world_only_asset_read_does_not_change_canon_query():
     for lane in (knowledge.AuthorityLane.ACTIVE_SCHOOL_CANON,
                  knowledge.AuthorityLane.SCHOOL_CANON_CANDIDATE):
         assert "public.asset" not in knowledge._version_query(lane)
+
+
+
+def test_teacher_rejects_source_uuid_link_mismatch():
+    item = stored_fixture()
+    item["sources"][0]["source_id"] = "33333333-3333-3333-3333-333333333333"
+    with pytest.raises(InvalidBookMaterial, match="BOOK_WORLD_SOURCE_LINK"):
+        render_teacher_book(item)

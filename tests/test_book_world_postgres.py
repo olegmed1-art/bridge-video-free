@@ -15,7 +15,7 @@ from bridge_contracts.book_world import build_world_publication
 from database.book_world_persistence import persist_book_world, publish_book_world, retire_book_world
 import bridge_school_api.knowledge as knowledge
 from bridge_school_api.main import app, EXPECTED_SCHOOL
-from test_book_world import reviewed_fixture
+from test_book_world import reviewed_fixture, reviewed_identity_fixture
 
 pytestmark = pytest.mark.skipif(os.environ.get("BOOK_WORLD_PG_TEST") != "1", reason="disposable PostgreSQL test not enabled")
 DSN = "postgresql://postgres@127.0.0.1:5432/book_world_test"
@@ -133,7 +133,8 @@ def test_legacy_identity_dry_run_replay_stage_publish_and_visibility_rollback(mo
     from database.book_source_reconciliation import reconcile_book_source_asset
     bundle, receipt, school_id, source_id, stored = legacy_identity_fixture()
     with psycopg.connect(DSN) as conn:
-        args = dict(school_id=school_id, source_id=source_id)
+        identity_review = reviewed_identity_fixture(bundle, receipt, school_id, source_id, stored)
+        args = dict(school_id=school_id, source_id=source_id, identity_receipt=identity_review)
         with pytest.raises(ValueError, match="ASSET_BINDING_REQUIRED"):
             persist_book_world(conn, bundle, receipt, **args)
         dry_identity = reconcile_book_source_asset(conn, bundle, receipt, **args, dry_run=True)
@@ -204,8 +205,9 @@ def test_legacy_identity_dry_run_replay_stage_publish_and_visibility_rollback(mo
 
 def test_identity_interruption_and_unknown_trigger_roll_back():
     from database.book_source_reconciliation import reconcile_book_source_asset
-    bundle, receipt, school_id, source_id, _ = legacy_identity_fixture()
-    args = dict(school_id=school_id, source_id=source_id)
+    bundle, receipt, school_id, source_id, stored = legacy_identity_fixture()
+    identity_review = reviewed_identity_fixture(bundle, receipt, school_id, source_id, stored)
+    args = dict(school_id=school_id, source_id=source_id, identity_receipt=identity_review)
     def fail():
         raise RuntimeError("synthetic interruption")
     with psycopg.connect(DSN) as conn:
@@ -219,6 +221,14 @@ def test_identity_interruption_and_unknown_trigger_roll_back():
                           "LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$")
             setup.execute("CREATE TRIGGER synthetic_asset_guard BEFORE INSERT ON public.asset "
                           "FOR EACH ROW EXECUTE FUNCTION public.synthetic_asset_guard()")
+        # Deliberately shadow catalogs on the idle caller's session.
+        conn.execute('CREATE TEMP TABLE pg_trigger(tgrelid oid,tgisinternal boolean,tgenabled "char")')
+        conn.execute('CREATE TEMP TABLE pg_rewrite(ev_class oid)')
+        conn.commit()
+        assert conn.execute("SELECT count(*) FROM pg_trigger").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM pg_catalog.pg_trigger "
+                            "WHERE tgrelid='public.asset'::regclass AND NOT tgisinternal").fetchone()[0] > 0
+        conn.rollback()
         try:
             with pytest.raises(ValueError, match="IDENTITY_EFFECT_REVIEW_REQUIRED"):
                 reconcile_book_source_asset(conn, bundle, receipt, **args, dry_run=True)
@@ -229,3 +239,76 @@ def test_identity_interruption_and_unknown_trigger_roll_back():
         with psycopg.connect(DSN, autocommit=True) as read:
             assert read.execute("SELECT count(*) FROM public.asset WHERE checksum_value=%s",
                                 (bundle["source"]["rendition_sha256"],)).fetchone()[0] == 0
+
+
+
+@pytest.mark.parametrize("change", ["locator", "source_uuid", "school_uuid", "source_descriptor"])
+def test_identity_review_cannot_be_reused_for_another_registry_binding(change):
+    from database.book_source_reconciliation import reconcile_book_source_asset
+    bundle, receipt, school_id, source_id, stored = legacy_identity_fixture()
+    identity = reviewed_identity_fixture(bundle, receipt, school_id, source_id, stored)
+    candidate = deepcopy(bundle)
+    args = dict(school_id=school_id, source_id=source_id, identity_receipt=identity)
+    if change == "locator":
+        candidate["source"]["locator"] = "https://drive.google.com/file/d/Synthetic_other_file_0123456789/view"
+    if change == "source_descriptor":
+        candidate["source"]["source_id"] = "SYNTHETIC-OTHER-CATALOG-SOURCE"
+    if change == "source_uuid":
+        other_id = str(uuid4())
+        with psycopg.connect(DSN, autocommit=True) as setup:
+            setup.execute("INSERT INTO public.source(source_id,school_id,canonical_locator) VALUES(%s,%s,%s)",
+                          (other_id, school_id, stored))  # Same URL, different registry identity.
+        args["source_id"] = other_id
+    if change == "school_uuid":
+        args["school_id"] = str(uuid4())
+    with psycopg.connect(DSN) as conn:
+        with pytest.raises(ValueError, match="IDENTITY_REVIEW_BINDING"):
+            reconcile_book_source_asset(conn, candidate, receipt, **args)
+    with psycopg.connect(DSN, autocommit=True) as read:
+        assert read.execute("SELECT count(*) FROM public.asset WHERE checksum_value=%s",
+                            (bundle["source"]["rendition_sha256"],)).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("mutation", ["asset", "link", "source"])
+def test_publication_holds_identity_rows_against_concurrent_mutation(mutation):
+    from database.book_source_reconciliation import reconcile_book_source_asset
+    bundle, receipt, school_id, source_id, stored = legacy_identity_fixture()
+    identity = reviewed_identity_fixture(bundle, receipt, school_id, source_id, stored)
+    args = dict(school_id=school_id, source_id=source_id, identity_receipt=identity)
+    with psycopg.connect(DSN) as publisher:
+        reconcile_book_source_asset(publisher, bundle, receipt, **args)
+        staged = persist_book_world(publisher, bundle, receipt, **args)
+        with psycopg.connect(DSN, autocommit=True) as delivery:
+            delivery.execute("UPDATE public.outbox_message SET status='published' WHERE changeset_id=%s",
+                             (staged["changeset_id"],))
+        attempted = []
+        def contender_before_commit():
+            with psycopg.connect(DSN, autocommit=True) as contender:
+                contender.execute("SET lock_timeout='150ms'")
+                contender.execute("SET statement_timeout='2s'")
+                statements = {
+                    "asset": ("UPDATE public.asset SET immutable_flag=false WHERE asset_id=%s",
+                              (identity["asset_id"],)),
+                    "link": ("DELETE FROM public.source_asset WHERE source_id=%s AND asset_id=%s "
+                             "AND relation_type='embodies'", (source_id, identity["asset_id"])),
+                    "source": ("UPDATE public.source SET canonical_locator=%s WHERE source_id=%s",
+                               (bundle["source"]["locator"], source_id)),
+                }
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    contender.execute(*statements[mutation])
+                attempted.append(mutation)
+        result = publish_book_world(publisher, school_id=school_id, changeset_id=staged["changeset_id"],
+            delivery_receipt={"schema": "book-world-delivery-v1",
+                              "publication_hash": staged["publication_hash"],
+                              "catalog_receipt_ref": "synthetic-delivery"},
+            before_commit=contender_before_commit)
+        assert result["publication"] == "WORLD_VERIFIED" and attempted == [mutation]
+    with psycopg.connect(DSN, autocommit=True) as read:
+        assert read.execute("SELECT immutable_flag FROM public.asset WHERE asset_id=%s",
+                            (identity["asset_id"],)).fetchone()[0] is True
+        assert read.execute("SELECT count(*) FROM public.source_asset WHERE source_id=%s AND asset_id=%s",
+                            (source_id, identity["asset_id"])).fetchone()[0] == 1
+        assert read.execute("SELECT canonical_locator FROM public.source WHERE source_id=%s",
+                            (source_id,)).fetchone()[0] == stored
+        assert read.execute("SELECT count(*) FROM public.domain_event WHERE changeset_id=%s "
+                            "AND event_type='BookWorldPublished'", (result["changeset_id"],)).fetchone()[0] == 1

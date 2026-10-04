@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from .book_source_identity import book_source_matches, needs_asset_binding
+from .book_source_review import source_from_citation, validate_identity_review
 from uuid import NAMESPACE_URL, uuid5
 
 from .book_material import InvalidBookMaterial, SHA, _fields, _require, _text, digest, validate_bundle
@@ -18,7 +19,7 @@ CHECKS = {"source_anchor", "semantic", "conditions", "exceptions", "positive_exa
 MAX_ATOMS = 3
 
 
-def build_world_publication(bundle: dict, receipt: dict) -> dict:
+def build_world_publication(bundle: dict, receipt: dict, identity_receipt=None) -> dict:
     """Prepare, but never publish, a maximum of three independently reviewed atoms."""
     validate_bundle(bundle)
     _fields(receipt, {"schema", "review_id", "reviewer", "independence_group", "assurance",
@@ -30,6 +31,8 @@ def build_world_publication(bundle: dict, receipt: dict) -> dict:
              and receipt["source_page_count"] == source["page_count"]
              and type(receipt["source_page_count"]) is int
              and type(receipt["source_size_bytes"]) is int and receipt["source_size_bytes"] > 0, "SOURCE_PROOF_BINDING")
+    if identity_receipt is not None:
+        validate_identity_review(source, receipt, identity_receipt)
     claims = receipt["claims"]
     _require(isinstance(claims, list) and 0 < len(claims) <= MAX_ATOMS, "ATOM_BUDGET")
     objects = {obj["object_id"]: obj for obj in bundle["objects"]}
@@ -66,12 +69,17 @@ def build_world_publication(bundle: dict, receipt: dict) -> dict:
     result = {"schema": WORLD_SCHEMA, "source": deepcopy(source), "run": deepcopy(bundle["run"]),
               "receipt": deepcopy(receipt), "records": records, "authority_class": "external",
               "system_profile": "SYSTEM_NEUTRAL"}
+    if identity_receipt is not None:
+        result["source_identity_review"] = deepcopy(identity_receipt)
     result["publication_hash"] = digest({k: v for k, v in result.items() if k != "run"})
     return result
 
 
-def publication_version(record: dict, receipt: dict) -> str:
-    return digest({"record": record, "receipt": receipt})
+def publication_version(record: dict, receipt: dict, identity_receipt=None) -> str:
+    value = {"record": record, "receipt": receipt}
+    if identity_receipt is not None:
+        value["source_identity_review"] = identity_receipt
+    return digest(value)
 
 
 def world_uuid(kind: str, school_id: str, key: str) -> str:
@@ -88,18 +96,28 @@ def render_teacher_book(item: dict) -> dict:
     provenance = item.get("provenance") or {}
     _require(provenance.get("schema") == WORLD_SCHEMA and isinstance(provenance.get("review_receipt"), dict), "BOOK_WORLD_PROVENANCE")
     receipt = provenance["review_receipt"]
+    _require(_text(provenance.get("source_id")), "BOOK_WORLD_SOURCE_LINK")
+    identity_review = provenance.get("source_identity_review")
+    if identity_review is not None:
+        _require(_text(provenance.get("school_id")), "BOOK_WORLD_SOURCE_LINK")
+        validate_identity_review(source_from_citation(content["citation"], receipt), receipt,
+                                 identity_review, school_id=provenance.get("school_id"),
+                                 source_id=provenance.get("source_id"))
     _require(provenance.get("version_hash") == publication_version(
-        {"stable_key": item["stable_key"], "content": content}, receipt), "BOOK_WORLD_VERSION_HASH")
+        {"stable_key": item["stable_key"], "content": content}, receipt, identity_review), "BOOK_WORLD_VERSION_HASH")
     citation = content["citation"]
     _require(citation["rendition_sha256"] == receipt.get("rendition_sha256"), "BOOK_WORLD_SOURCE_HASH")
     claims = [c for c in receipt.get("claims", []) if c.get("object_id") == content.get("source_object_id")]
     _require(len(claims) == 1 and claims[0].get("checks") == {k: "PASS" for k in CHECKS}
              and receipt.get("assurance") in {"I2", "I3", "I4"}, "BOOK_WORLD_REVIEW")
     matching = [src for src in item.get("sources", []) if src.get("source_locator") == citation
+                and str(src.get("source_id")) == provenance.get("source_id")
                 and book_source_matches(src.get("canonical_locator"), citation["locator"])
                 and src.get("status") == "active"
-                and (not needs_asset_binding(src.get("canonical_locator"))
-                     or src.get("book_asset_verified") is True)]
+                and (not needs_asset_binding(src.get("canonical_locator")) or identity_review is not None)
+                and (identity_review is None
+                     or (src.get("canonical_locator") == identity_review["stored_locator"]
+                         and src.get("book_asset_verified") is True))]
     _require(len(matching) == 1, "BOOK_WORLD_SOURCE_LINK")
     return {"contract_version": WORLD_SCHEMA, "authority_lane": "WORLD_EXTERNAL",
             "knowledge_version_id": str(item["item_id"]), "stable_key": item["stable_key"],

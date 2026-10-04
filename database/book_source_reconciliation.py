@@ -6,19 +6,22 @@ same two inserts in a forced rollback. Unknown identity-table effects fail close
 from uuid import UUID
 from psycopg.rows import tuple_row
 from bridge_contracts.book_source_identity import book_source_matches
-from bridge_contracts.book_world import build_world_publication, world_uuid
+from bridge_contracts.book_world import build_world_publication
+from bridge_contracts.book_source_review import validate_identity_review
 
 
-def source_locator(cur, school_id, source_id, citation):
+def source_locator(cur, school_id, source_id, citation, *, expected_stored=None):
     cur.execute("SELECT canonical_locator FROM public.source WHERE source_id=%s "
                 "AND school_id=%s AND status='active' FOR SHARE", (source_id, school_id))
     row = cur.fetchone()
     if row is None or not book_source_matches(row[0], citation):
         raise ValueError("BOOK_WORLD_SOURCE_BINDING_MISSING")
+    if expected_stored is not None and row[0] != expected_stored:
+        raise ValueError("BOOK_SOURCE_IDENTITY_REVIEW_BINDING")
     return row[0]
 
 
-def require_source_asset(cur, school_id, source_id, source, receipt):
+def require_source_asset(cur, school_id, source_id, source, receipt, *, asset_id=None):
     cur.execute("""SELECT a.asset_id FROM public.source_asset sa JOIN public.asset a
         ON a.asset_id=sa.asset_id WHERE sa.source_id=%s AND sa.relation_type='embodies' AND a.school_id=%s
         AND a.checksum_algorithm='sha256' AND a.checksum_value=%s
@@ -28,37 +31,42 @@ def require_source_asset(cur, school_id, source_id, source, receipt):
     rows = cur.fetchall()
     if len(rows) != 1:
         raise ValueError("BOOK_SOURCE_ASSET_BINDING_REQUIRED")
-    return str(rows[0][0])
+    found = str(rows[0][0])
+    if asset_id is not None and found != asset_id:
+        raise ValueError("BOOK_SOURCE_ASSET_CONFLICT")
+    return found
 
 
 def reconcile_book_source_asset(connection, bundle, receipt, *, school_id, source_id,
-                                dry_run=False, before_commit=None):
+                                identity_receipt, dry_run=False, before_commit=None):
     """At most one asset and one link; replay inserts neither.
 
     Requires a fully bound trusted source review. Never creates/publishes an atom.
     Errors/dry-runs roll back. On later visibility retirement, retain identity
     evidence rather than deleting shared source/asset records.
     """
-    publication = build_world_publication(bundle, receipt)
+    publication = build_world_publication(bundle, receipt, identity_receipt)
     school_id, source_id = str(UUID(school_id)), str(UUID(source_id))
     if type(dry_run) is not bool or connection.info.transaction_status != 0:
         raise ValueError("BOOK_SOURCE_REQUIRES_IDLE_CONNECTION")
     source = publication["source"]
+    validate_identity_review(source, receipt, identity_receipt, school_id=school_id, source_id=source_id)
     added_asset = added_link = 0
     with connection.transaction(force_rollback=dry_run):
         with connection.cursor(row_factory=tuple_row) as cur:
             cur.execute("SET LOCAL lock_timeout='5s'")
             cur.execute("SET LOCAL statement_timeout='15s'")
-            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+            cur.execute("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(%s,0))",
                         ("book-source-asset:" + source["rendition_sha256"],))
-            source_locator(cur, school_id, source_id, source["locator"])
+            source_locator(cur, school_id, source_id, source["locator"],
+                           expected_stored=identity_receipt["stored_locator"])
             # Prevent concurrent ALTER TABLE while inspecting identity effects.
             cur.execute("LOCK TABLE public.asset,public.source_asset IN ROW EXCLUSIVE MODE")
-            cur.execute("""SELECT EXISTS(SELECT 1 FROM pg_trigger t
-                WHERE t.tgrelid IN ('public.asset'::regclass,'public.source_asset'::regclass)
+            cur.execute("""SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t
+                WHERE t.tgrelid IN ('public.asset'::pg_catalog.regclass,'public.source_asset'::pg_catalog.regclass)
                   AND NOT t.tgisinternal AND t.tgenabled<>'D')
-                OR EXISTS(SELECT 1 FROM pg_rewrite r
-                  WHERE r.ev_class IN ('public.asset'::regclass,'public.source_asset'::regclass))""")
+                OR EXISTS(SELECT 1 FROM pg_catalog.pg_rewrite r
+                  WHERE r.ev_class IN ('public.asset'::pg_catalog.regclass,'public.source_asset'::pg_catalog.regclass))""")
             if cur.fetchone()[0]:
                 raise ValueError("BOOK_SOURCE_IDENTITY_EFFECT_REVIEW_REQUIRED")
             cur.execute("""SELECT asset_id,school_id,byte_size,immutable_flag,mime_type
@@ -70,8 +78,12 @@ def reconcile_book_source_asset(connection, bundle, receipt, *, school_id, sourc
                         school_id, receipt["source_size_bytes"], True, "application/pdf"):
                     raise ValueError("BOOK_SOURCE_ASSET_CONFLICT")
                 asset_id = str(rows[0][0])
+                if asset_id != identity_receipt["asset_id"]:
+                    raise ValueError("BOOK_SOURCE_IDENTITY_DECISION_CONFLICT")
             else:
-                asset_id = world_uuid("asset", school_id, source["rendition_sha256"])
+                if identity_receipt["asset_action"] != "CREATE":
+                    raise ValueError("BOOK_SOURCE_IDENTITY_DECISION_CONFLICT")
+                asset_id = identity_receipt["asset_id"]
                 cur.execute("""INSERT INTO public.asset(asset_id,school_id,asset_type,mime_type,
                     byte_size,checksum_algorithm,checksum_value,immutable_flag)
                     VALUES(%s,%s,'pdf','application/pdf',%s,'sha256',%s,true)""",
@@ -82,7 +94,8 @@ def reconcile_book_source_asset(connection, bundle, receipt, *, school_id, sourc
             added_link = cur.rowcount
             if added_asset not in (0, 1) or added_link not in (0, 1):
                 raise ValueError("BOOK_SOURCE_IDENTITY_BUDGET")
-            require_source_asset(cur, school_id, source_id, source, receipt)
+            require_source_asset(cur, school_id, source_id, source, receipt,
+                                 asset_id=identity_receipt["asset_id"])
             if before_commit:
                 before_commit()
     return {"asset_id": asset_id, "source_id": source_id, "new_asset_rows": added_asset,
