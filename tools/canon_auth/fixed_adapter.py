@@ -41,7 +41,7 @@ class FixedAdapter:
 
     def _begin(self, readonly=False):
         self.conn.execute("SET TRANSACTION ISOLATION LEVEL " +
-                          ("REPEATABLE READ READ ONLY" if readonly else "READ COMMITTED READ WRITE"))
+                          ("READ COMMITTED READ ONLY" if readonly else "READ COMMITTED READ WRITE"))
         self.conn.execute("SET LOCAL statement_timeout='15s'")
         self.conn.execute("SET LOCAL lock_timeout='2s'")
         catalog_path(self.conn)
@@ -102,6 +102,8 @@ class FixedAdapter:
                 self.launch.normal(self.clock())
                 permit.verify(self.launch, stage, self.clock())
                 self._write_path()
+                self.launch.normal(self.clock())
+                permit.verify(self.launch, stage, self.clock())
                 for sql in self.compiled[stage]:
                     self.conn.execute(sql)
                 after = inventory(self.conn, self.compiled, self.school)

@@ -336,8 +336,12 @@ def test_extra_test_run_refuses_before_revoke(fixture):
     a,r,school,l=fixture
     stage(a,"baseline");stage(a,"initial")
     spec=next(s for s in a.compiled["declared_rows"] if s["table"]=="bidding.rule_test_run")
-    a.conn.execute("INSERT INTO bidding.rule_test_run(school_id,rule_test_id,result,result_details,method_version) VALUES (%s,%s,'fail','{}',%s)",
-        (school,spec["values"]["rule_test_id"],spec["values"]["method_version"]))
+    with connect("postgres") as admin:
+        with admin.transaction():
+            admin.execute("ALTER TABLE bidding.rule_test_run DISABLE TRIGGER ALL")
+            admin.execute("INSERT INTO bidding.rule_test_run(school_id,rule_test_id,result,result_details,method_version) VALUES (%s,%s,'fail','{}',%s)",
+                (school,spec["values"]["rule_test_id"],spec["values"]["method_version"]))
+            admin.execute("ALTER TABLE bidding.rule_test_run ENABLE TRIGGER ALL")
     with pytest.raises(Refused,match="foreign_related_row"):
         stage(a,"revoke")
     with pytest.raises(RecoveryUnproven):
@@ -445,3 +449,84 @@ def test_temp_schema_shadow_refuses_without_write(fixture):
     with pytest.raises(Refused,match="trusted_trigger_schema"):
         stage(a,"baseline")
     assert r.inspect()["rows"]==0
+
+
+class ConnectionProxy:
+    def __init__(self,conn):
+        self.conn=conn
+    def __getattr__(self,name):
+        return getattr(self.conn,name)
+
+
+def test_real_transport_loss_after_commit_is_uncertain_and_independently_recovered(fixture):
+    a,r,_,_=fixture
+    real=a.conn
+    class AfterCommit(ConnectionProxy):
+        @contextmanager
+        def transaction(self,**kwargs):
+            with self.conn.transaction(**kwargs):
+                yield
+            if not kwargs.get("force_rollback"):
+                self.conn.close()
+                raise psycopg.OperationalError("fixture_transport_lost_after_commit")
+    a.conn=AfterCommit(real)
+    with pytest.raises(CommitUncertain):
+        stage(a,"baseline")
+    assert r.inspect()["rows"]==2 # committed, despite absent adapter receipt
+    assert r.recover()["rows"]==4
+
+
+def test_real_transport_loss_inside_write_aborts_server_transaction(fixture):
+    a,r,_,_=fixture
+    class DuringWrite(ConnectionProxy):
+        def execute(self,sql,*args,**kwargs):
+            result=self.conn.execute(sql,*args,**kwargs)
+            if sql.startswith("INSERT INTO public.source("):
+                self.conn.close()
+                raise psycopg.OperationalError("fixture_transport_lost_before_commit")
+            return result
+    a.conn=DuringWrite(a.conn)
+    with pytest.raises(CommitUncertain):
+        stage(a,"baseline")
+    assert r.inspect()["rows"]==0
+    assert r.recover()["no_op"] is True
+
+
+def test_committed_stage_receipt_publication_failure_recovers_without_replay(fixture):
+    with api_client() as client:
+        ctrl,obs=controller(fixture,client)
+        original=ctrl.normal.execute
+        def missing(name,p):
+            original(name,p)
+            raise OSError("fixture_receipt_publication_failed")
+        ctrl.normal.execute=missing
+        with pytest.raises(Refused,match="owned_recovery_confirmed"):
+            ctrl.run()
+        assert fixture[0].inspect()["rows"]==4
+        assert fixture[0].inspect()["active"]==0
+
+
+def test_inspection_waiting_for_lock_sees_committed_recovery(fixture):
+    from threading import Event
+    a,r,_,_=fixture
+    full(a)
+    waiting=Event()
+    class ObserveLock(ConnectionProxy):
+        def execute(self,sql,*args,**kwargs):
+            if "pg_advisory_xact_lock(20261004,201)" in sql:
+                waiting.set() # after catalog_path SELECT, before lock wait
+            return self.conn.execute(sql,*args,**kwargs)
+    r.conn=ObserveLock(r.conn)
+    pool=ThreadPoolExecutor(1)
+    try:
+        with a.conn.transaction():
+            a._begin()
+            future=pool.submit(r.inspect)
+            assert waiting.wait(1)
+            a._write_path()
+            for sql in a.compiled["emergency"]:
+                a.conn.execute(sql)
+        observed=future.result(timeout=2)
+        assert (observed["state"],observed["rows"],observed["active"])==("emergency",42,0)
+    finally:
+        pool.shutdown(wait=True)

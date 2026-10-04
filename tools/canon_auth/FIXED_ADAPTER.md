@@ -11,6 +11,8 @@ structured 42-record inventory does not change rendered SQL, deterministic IDs,
 original code SHA C, payload hashes, or row budgets. Golden tests compare all
 original outputs with the immutable baseline compiler.
 
+Read-only inspection uses READ COMMITTED with the same transaction advisory lock,
+so waiting behind a committed recovery cannot return a pre-lock snapshot.
 Under the SAME advisory transaction lock, every declared deterministic ID and
 its typed content, foreign keys, literal source excerpts, original approval C,
 stage history, activation status and original 24-hour expiry are checked.
