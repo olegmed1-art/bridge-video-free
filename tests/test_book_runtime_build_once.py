@@ -10,7 +10,7 @@ import pytest
 from tools.book_runtime_observation import build_once as hook
 from tools.book_runtime_observation import build_entry
 
-NOW = datetime(2026, 10, 4, 16, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 4, 19, 5, tzinfo=timezone.utc)
 SECRET = "synthetic-resident-book-token"
 
 
@@ -20,7 +20,7 @@ def block_network(monkeypatch):
 
 
 def env():
-    return {"VERCEL_GIT_COMMIT_MESSAGE": hook.MARKER + "\nobserved_at=2026-10-04T16:00:00Z\nbase="
+    return {"VERCEL_GIT_COMMIT_MESSAGE": hook.MARKER + "\nobserved_at=2026-10-04T19:05:00Z\nbase="
             + hook.READY_SHA + "\ndeployment=" + hook.READY_DEPLOYMENT + "\nnonce=" + "a" * 32,
             "VERCEL_GIT_COMMIT_SHA": "1" * 40, "VERCEL_ENV": "production", "VERCEL_GIT_COMMIT_REF": "main",
             "VERCEL_PROJECT_ID": hook.PROJECT, "BRIDGE_API_TOKEN": SECRET}
@@ -197,3 +197,20 @@ def test_entry_refuses_success_even_when_observation_returns_zero(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: pytest.fail("canon must never run"))
     assert build_entry.main() == 1
     assert calls == ["book"]
+
+
+@pytest.mark.parametrize("when,accepted", [
+    (datetime(2026, 10, 4, 18, 59, 59, tzinfo=timezone.utc), False),
+    (datetime(2026, 10, 4, 19, 0, 0, tzinfo=timezone.utc), True),
+    (datetime(2026, 10, 4, 19, 29, 59, tzinfo=timezone.utc), True),
+    (datetime(2026, 10, 4, 19, 30, 0, tzinfo=timezone.utc), False),
+])
+def test_absolute_window_boundaries_with_fresh_intent(when, accepted):
+    values = env()
+    values["VERCEL_GIT_COMMIT_MESSAGE"] = values["VERCEL_GIT_COMMIT_MESSAGE"].replace(
+        "2026-10-04T19:05:00Z", when.strftime("%Y-%m-%dT%H:%M:%SZ"))
+    if accepted:
+        assert hook.intent(values, when)["build_sha"] == values["VERCEL_GIT_COMMIT_SHA"]
+    else:
+        with pytest.raises(hook.Rejected, match="INTENT_EXPIRED"):
+            hook.intent(values, when)
