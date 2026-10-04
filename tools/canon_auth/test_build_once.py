@@ -50,12 +50,12 @@ def test_lifecycle_http_only_and_every_phase_pending(tmp_path, capsys):
     flow, sleeps = Flow(), []
     result = b.lifecycle(env, opener=flow, sleep=sleeps.append, now=NOW, claim=tmp_path / "claim")
     lines = [json.loads(s) for s in capsys.readouterr().out.splitlines()]
-    assert [r.get("phase") for r in lines] == [None, "baseline", "active", "revoked", "reactivated", "all_requests"]
+    assert [r.get("phase") for r in lines if r.get("phase") != "poll"] == [None, "baseline", "active", "revoked", "reactivated", "all_requests"]
     assert all(r["status"] == "pending_deployment_correlation" for r in lines)
     assert result == {"status": "pending_external_final_acceptance", "requests": 13}
     assert len(lines[-1]["receipts"]) == flow.n
     assert SECRET not in json.dumps(lines)
-    assert sleeps and all(seconds == 8 for seconds in sleeps)
+    assert sleeps == [16, 8, 8, 8]
 
 
 @pytest.mark.parametrize("message", ["ordinary commit", "", "prefix " + b.MARKER])
@@ -74,7 +74,7 @@ def test_phase_timeout_bounded_and_no_activation_claim(tmp_path, capsys):
     flow = Flow(states=[None] * 20)
     with pytest.raises(v.Rejected, match="phase_deadline_exceeded"):
         b.lifecycle(b.intent(environment()), opener=flow, sleep=lambda _: None, now=NOW, claim=tmp_path / "claim")
-    assert flow.n == 11
+    assert flow.n == 13
     assert '"phase": "active"' not in capsys.readouterr().out
 
 
@@ -107,7 +107,7 @@ def test_network_request_budget():
     assert transport.n == 40
 
 
-@pytest.mark.parametrize("message", [b.MARKER, b.MARKER + "\ntruncated",
+@pytest.mark.parametrize("message", ["CANON_ACCEPTANCE_20261004_ONCE", b.MARKER, b.MARKER + "\ntruncated",
     b.MARKER + "\nobserved_at=2026-10-04T12:00:00Z\nbase=" + "0" * 40])
 def test_malformed_marked_build_fails_closed(message):
     with pytest.raises(v.Rejected, match="build_intent_malformed"):

@@ -1,8 +1,8 @@
 # Bounded canon acceptance on the existing production origin
 
 This module verifies the already deployed teacher at main
-`cf6091f09fa70afc4b25162fbbb2fea0dc36898a`, READY deployment
-`dpl_9tC4HDYrX6WLxgQXpcMm32te8ue3`, through the owner-authorized official origin
+`711ddd648fa74f2b903f9d7127dadc412f94b277`, READY deployment
+`dpl_4sxqMktPVrW8ULuhwqyQNhLmJqdJ`, through the owner-authorized official origin
 https://bridge-video-free.vercel.app. It never uses the protected immutable URL,
 a protection bypass, a new credential, or credential export.
 
@@ -10,7 +10,7 @@ a protection bypass, a new credential, or credential export.
 
 The FastAPI `tool.vercel.scripts.build` hook invokes `build_once`. Ordinary commit
 messages return immediately without credential lookup. Only the exact designated
-merge subject `CANON_ACCEPTANCE_20261004_ONCE` and body containing `observed_at`
+merge subject `CANON_ACCEPTANCE_20261004_AUTHORIZED_RETRY1` and body containing `observed_at`
 and the pinned `base` can start validation, on production/main in the pinned
 project. An incomplete designated message fails closed. Observation age must be
 at most 300 seconds and execution must start before 2026-10-04 18:00 UTC.
@@ -31,9 +31,19 @@ after baseline creation, but cannot alone exclude parallel builds before that.
 
 ## HTTP phases and controller gates
 
+The earlier ONCE build completed with a timeout and zero database writes after
+automatic approval review rejected the baseline transaction. The new marker is
+one separately authorized fresh invocation following explicit owner permission
+evidence. It is not a redeploy/retry of the expired merge commit. Reconcile the
+existing READY again and provide a new observation timestamp. The SQL plan and
+40/42-row scope are unchanged; retry authorization does not broaden that scope.
+
 The resident existing API token is used only in memory and only on this origin.
 Redirects and proxies are disabled. Limits: 40 requests, 8-second socket timeout,
-420-second process deadline, eight polls per phase. No SQL or DB credential is
+420-second process deadline, ten baseline polls at 16-second intervals and eight
+polls at 8-second intervals for each later phase (at most 39 total requests).
+Every waiting-poll receipt is emitted immediately, including on a later timeout.
+No SQL or DB credential is
 used in the build. Overview payloads and raw response bodies are never logged.
 Output contains only fixed statuses, public canon hashes and request receipts.
 
