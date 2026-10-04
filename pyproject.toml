@@ -9,4 +9,4 @@ dependencies = [
 ]
 
 [tool.vercel.scripts]
-build = "python -m tools.book_runtime_observation.build_entry"
+build = "python -m tools.canon_auth.build_once"
