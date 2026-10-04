@@ -1,22 +1,22 @@
-name: Isolated local journal diagnostic
+name: Isolated retirement observer import order
 
 on:
   push:
-    branches: [review/local-journal-diagnostic-20261004]
+    branches: [review/retirement-observer-import-order-20261004]
     paths: [.github/workflows/failed-prepare-retirement-fixtures.yml]
 
 permissions: {}
 concurrency:
-  group: isolated-local-journal-diagnostic
+  group: isolated-retirement-observer-import-order
   cancel-in-progress: false
 
 jobs:
   fixtures:
     if: >-
       github.event.repository.private == false && github.event.created == false &&
-      github.event.before == 'c3c2d43bbbdfa7dea9637533774d2618d2f5df02' &&
+      github.event.before == '08cd157b32a3e34974c4d24706882ef31681891d' &&
       github.run_attempt == 1 &&
-      github.event.head_commit.message == 'ci: verify local journal diagnostic'
+      github.event.head_commit.message == 'ci: verify retirement observer import order'
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +69,7 @@ jobs:
               packed.writestr('candidate.zip', source)
               packed.writestr('revoked-controller.py', old)
               packed.writestr('old-owner-workflow.yml', old_workflow)
+              packed.writestr("old-observer.py", urllib.request.urlopen("https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/08cd157b32a3e34974c4d24706882ef31681891d/ops/light_native_retirement_live.py",timeout=30).read())
           (work/'retirement-test-input.zip').write_bytes(bundle.getvalue())
           archive = zipfile.ZipFile(io.BytesIO(source))
           prefix = 'bridge-video-free-'+sha+'/'
@@ -117,7 +118,7 @@ jobs:
           assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0
           assert set(os.listdir("/sys/class/net"))=={"lo"}
           wire=sys.stdin.buffer.read(25*1024*1024+1);assert len(wire)<=25*1024*1024
-          packed=zipfile.ZipFile(io.BytesIO(wire));assert set(packed.namelist())=={"candidate.zip","revoked-controller.py","old-owner-workflow.yml"}
+          packed=zipfile.ZipFile(io.BytesIO(wire));assert set(packed.namelist())=={"candidate.zip","revoked-controller.py","old-owner-workflow.yml","old-observer.py"}
           raw=packed.read("candidate.zip");assert len(raw)<=24*1024*1024
           old=packed.read("revoked-controller.py")
           assert hashlib.sha256(old).hexdigest()=="3762caa927970b6410a7850c76fa1dcbbfeab214c5470ff98c6b8059b51ffcb4"
@@ -170,6 +171,24 @@ jobs:
           assert failed[0].find("failure") is not None and failed[0].find("error") is None and failed[0].find("skipped") is None
           assert workflow.read_bytes()==safe
           print("OLD_WORKFLOW_CONFIDENTIALITY_REGRESSION_DETECTED",os.uname().machine,flush=True)
+          observer=root/"ops/light_native_retirement_live.py";fixed=observer.read_bytes()
+          old_observer=packed.read("old-observer.py")
+          try:
+              observer.write_bytes(old_observer)
+              red=subprocess.run([sys.executable,"-B","-m","pytest","-q","-p","no:cacheprovider",
+                  "--noconftest","-c","/dev/null","--basetemp=/fixture-data/import-red",
+                  "--junitxml=/tmp/import-red.xml",
+                  "tests/test_light_native_retirement_import_i2.py::test_isolated_packed_observer_import_boundary[success]"],
+                  capture_output=True,text=True,timeout=60)
+          finally:
+              observer.write_bytes(fixed)
+          print(red.stdout,flush=True);print(red.stderr,flush=True)
+          failed=ET.parse("/tmp/import-red.xml").getroot().findall(".//testcase")
+          assert red.returncode==1 and len(failed)==1
+          assert failed[0].find("failure") is not None and failed[0].find("error") is None and failed[0].find("skipped") is None
+          assert "COLD_OBSERVER_IMPORT_BEFORE_DRIVER" in ET.tostring(failed[0],encoding="unicode")
+          assert observer.read_bytes()==fixed
+          print("OLD_OBSERVER_IMPORT_REGRESSION_DETECTED",os.uname().machine,flush=True)
           from contextlib import redirect_stdout
           from unittest.mock import patch
           from tools.canon_auth import build_once
@@ -199,7 +218,7 @@ jobs:
                             "--rootdir="+str(root),"--junitxml=/tmp/retirement.xml",*tests])
           cases=ET.parse("/tmp/retirement.xml").getroot().findall(".//testcase")
           ids={(x.get("classname"),x.get("name")) for x in cases}
-          assert code==0 and len(cases)==843 and len(ids)==len(cases)
+          assert code==0 and len(cases)==848 and len(ids)==len(cases)
           assert all(not any(x.find(k) is not None for k in ("skipped","failure","error")) for x in cases)
-          print("LOCAL_JOURNAL_DIAGNOSTIC_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
+          print("OBSERVER_IMPORT_ORDER_PASS",os.uname().machine,len(cases),"unique cases zero skips",flush=True)
           ' < "$RUNNER_TEMP/retirement-test-input.zip"
