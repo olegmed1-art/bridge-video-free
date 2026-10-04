@@ -49,6 +49,9 @@ def inspect_teacher_connection(conn, *, database="neondb"):
                 # No rows, identifiers or private school contexts leave this module.
                 # Internal activation gate is deliberately inaccessible to app.
                 # The public school catalog calls it as SECURITY DEFINER.
+                if cur.execute("SELECT pg_catalog.has_function_privilege(current_user,"
+                               "'bidding.rule_passes_activation_gates(pg_catalog.uuid)','EXECUTE')").fetchone() != (False,):
+                    raise Refused("internal_gate_privilege_denial_required")
                 gate_denied = False
                 try:
                     with conn.transaction(force_rollback=True):

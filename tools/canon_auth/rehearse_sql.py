@@ -8,7 +8,7 @@ from bridge_school_api import tournament_teacher as t
 from tools.tournament_pilot.rehearsal import local_connect, scalar, api_client, DB, TABLE_BUDGET
 from tools.tournament_pilot.package import envelope
 from .pilot_sql import plan
-from .resident_preflight import inspect_resident, Binding, Refused
+from .resident_preflight import inspect_resident, Binding, Refused, catalog_path
 from .disposable_preflight import inspect_disposable
 from .teacher_behavior import inspect_teacher_connection
 from .resident_rehearsal import revoke_on_failure
@@ -28,6 +28,8 @@ def rehearsal(code_sha):
             raise AssertionError("Loopback non-TLS fixture must not pass the production inventory")
         assert all(inspect_disposable(conn).values())
         with conn.transaction(force_rollback=True):
+            conn.execute("SET TRANSACTION READ ONLY")
+            catalog_path(conn)
             assert scalar(conn, "SELECT EXISTS(SELECT 1 FROM bidding.rule WHERE rule_id=%s)",
                           ("00000000-0000-0000-0000-000000000000",)) is False
             assert scalar(conn, "SELECT bidding.rule_passes_activation_gates(%s)",

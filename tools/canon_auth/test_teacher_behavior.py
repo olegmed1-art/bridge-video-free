@@ -14,6 +14,7 @@ class Connection:
         self.identity = ("neondb", PRINCIPAL, PRINCIPAL)
         self.readonly, self.reads, self.revoke, self.gate, self.catalog, self.exists = "on", True, False, "denied", False, False
         self.fail_rollback = False
+        self.gate_privilege = False
 
     @contextmanager
     def transaction(self, *, force_rollback):
@@ -37,6 +38,7 @@ class Connection:
         elif "transaction_read_only" in sql: self.value = [(self.readonly,)]
         elif "has_table_privilege" in sql: self.value = [(self.reads,)]
         elif "has_column_privilege" in sql: self.value = [(self.revoke,)]
+        elif "has_function_privilege" in sql: self.value = [(self.gate_privilege,)]
         elif "rule_passes_activation_gates" in sql:
             if self.gate == "denied": raise InsufficientPrivilege("synthetic denied")
             self.value = [(self.gate,)]
@@ -64,7 +66,7 @@ def test_fixed_routines_executed_only_readonly_and_report_after_rollback():
     ("identity", ("neondb", "neondb_owner", PRINCIPAL)),
     ("identity", ("neondb", "neondb_owner", "neondb_owner")),
     ("readonly", "off"), ("reads", False), ("revoke", True),
-    ("gate", None), ("gate", True), ("catalog", True), ("exists", True),
+    ("gate", None), ("gate", True), ("gate_privilege", True), ("catalog", True), ("exists", True),
     ("fail_rollback", True)])
 def test_wrong_role_gate_or_privilege_refuses_without_private_values(field, value):
     conn = Connection()
