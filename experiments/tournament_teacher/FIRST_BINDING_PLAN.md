@@ -79,7 +79,7 @@ L1 remains unchanged. Source or binding mismatch fails closed.
    school, locks them for the candidate transaction, and refuses missing/mismatched
    identity. It creates no source. If no verified source exists, stop and prepare
    a separate source-registration action; do not silently expand this import.
-2. Execute only the reviewed candidate action below. It creates no tests, approval,
+2. After separately reviewed source registration if required, execute only the reviewed candidate action below. It creates no tests, approval,
    activation, position or deployed code and is not a working-production claim.
 3. Separately evaluate the two stored candidates with positive, negative, boundary,
    hidden-information and interference fixtures; persist actual outcomes. Review
@@ -100,6 +100,34 @@ L1 remains unchanged. Source or binding mismatch fails closed.
 
 ## Single next production action proposed for review
 
+Action ID: **REGISTER_SRC0096_REFERENCE_V1**. Not executed.
+
+The bounded read-only lookup on 2026-10-04 found no source identity in the
+verified school by exact Drive file ID, SRC-0096 title, or associated asset locator.
+It also found no collision for the two rule/knowledge keys. These checks do not
+prove that differently labeled content cannot exist; recheck before any write.
+
+Review scope: one transaction creating exactly one public.source reference row
+in the privately verified active school. Values: source_type=document,
+title=SRC-0096, canonical_locator=https://drive.google.com/file/d/1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf/view,
+status=active. Keep author_owner, source_date, trust_class and rights_notes NULL;
+do not infer publication rights or canon authority. No file upload or copy.
+Use the database-generated UUID and return it privately. No personal identifiers
+belong in this public plan. Active means the reference exists, not canon approval.
+
+Before the insert, lock the verified school row FOR UPDATE and recheck its active
+state, exact source locator/file ID/title and associated asset locators. Any match,
+ambiguous identity or changed target aborts for reconciliation. Validate one new
+reference and zero rule/version/test/activation changes before commit. Failure
+rolls back the transaction. After commit, withdrawal requires separate review to
+retire only this reference if it remains unreferenced; preserve history.
+
+This action creates no rule, version, activation, approval, position, service,
+resource, key or grant. It does not merge or deploy code. Candidate import below
+is a subsequent separately reviewed action, not part of this proposal.
+
+## Subsequent candidate action (not the next production action)
+
 Action ID: **CANDIDATE_IMPORT_TWO_SHAPE_RULES_V1**.
 Implementation: `first_init.initialize_candidates(connection, verified_school_id,
 verified_source_id)` using the exact reviewed package/code SHA.
@@ -107,7 +135,7 @@ verified_source_id)` using the exact reviewed package/code SHA.
 Preconditions: private school and source IDs resolved and verified; source locator
 and active states match; both rule keys and knowledge stable keys absent; source
 payload hashes above approved for candidate storage; target/schema fingerprint
-rechecked. Current source-ID verification is still a blocker, not an assumed fact.
+rechecked. The required source is absent under the checked identifiers; registration and verification must precede this action.
 
 One transaction; exact intended new rows:
 
@@ -144,7 +172,7 @@ alone does not revoke database activation. No worker restart is involved.
 
 The new CI executes `first_init` against a fresh disposable PostgreSQL18 with the
 unchanged repository migrations and the known 0200 checksum. It uses a real
-application-role SQL connection through the existing ASGI route and authentication
+application-principal SQL connection through the existing ASGI route and authentication
 dependency (auth success alone is stubbed). It tests candidate→eligible→active→revoked
 responses, wrong input/version/scope, missing position, source tampering and malformed
 source locators, and verifies zero teacher-output writes and retained test history.
@@ -152,3 +180,19 @@ Artifacts contain only synthetic/redacted identities. Tests from5945eaeb that we
 unchanged are retained as prior evidence instead of rerunning the entire old suite.
 Success establishes this limited executable path; live deployment and production
 initialization still require the separate reviews above.
+
+
+## Rehearsal correction and capability evidence
+
+Run 37192128465 on c789e8b6 reported success incorrectly: tee masked a Python
+failure before the first HTTP assertion. That run is NOT end-to-end evidence.
+The workflow now uses explicit bash, separate commands and a parsed PASS check;
+preflight rejects the former masking pipeline.
+
+The failed fixture used bridge_school_app, which has no ai schema/table access.
+Read-only privilege probes confirmed the deployed API's distinct existing
+bridge_school_app_principal has ai USAGE and decision_position SELECT, as well as
+school, source and knowledge_version_source SELECT. The disposable bootstrap now
+models those existing ai read grants on that principal only; it never changes
+production privileges or repository migrations. API calls SET ROLE to the actual
+principal name. This evidence does not establish live deployment of the new code.

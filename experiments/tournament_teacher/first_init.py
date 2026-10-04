@@ -25,7 +25,7 @@ def local_connect(*, as_app=False):
     conn = psycopg.connect(host="127.0.0.1",hostaddr="127.0.0.1",port=55432,
         dbname=DB,user=ROLE,password="",passfile="/dev/null",sslmode="disable",autocommit=True)
     if as_app:
-        conn.execute("SET ROLE bridge_school_app")
+        conn.execute("SET ROLE bridge_school_app_principal")
         conn.autocommit = False
         conn.row_factory = dict_row
     return conn

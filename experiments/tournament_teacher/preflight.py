@@ -69,6 +69,10 @@ def main():
     assert len(workflow["jobs"]) == 1
     job = workflow["jobs"]["offline-consumer"]
     assert job["timeout-minutes"] <= 20 and "environment" not in job
+    rehearsal = next(s for s in job["steps"] if s.get("name") == "First binding through real gated teacher API and rollback")
+    assert rehearsal["shell"] == "bash"  # Explicit bash enables -eo pipefail.
+    assert "| tee" not in rehearsal["run"]
+    assert "['status'] == 'PASS'" in rehearsal["run"]
     service = job["services"]["postgres"]
     assert set(job["services"]) == {"postgres"}
     assert service["image"] == "postgres:18"

@@ -36,10 +36,16 @@ def main():
     run("exec","-w","/tmp/tournament-schema","-e","LC_ALL=C","-e",
         "DATABASE_URL=host=/var/run/postgresql dbname=tournament_rehearsal user=tournament_rehearsal_owner",
         cid,"bash","database/scripts/migrate.sh")
-    # Fixture membership permits SET ROLE for the capability-negative test;
-    # it adds no table/function privilege to the worker role itself.
+    # Reproduce the existing API principal's independently provisioned READ
+    # capability, verified with read-only has_*_privilege probes on 2026-10-04.
+    # These grants exist ONLY in this disposable service, never a migration.
+    run("exec",cid,"psql","-U","postgres","-d","tournament_rehearsal","-v","ON_ERROR_STOP=1","-c", """
+        GRANT USAGE ON SCHEMA ai TO bridge_school_app_principal;
+        GRANT SELECT ON ai.decision_position TO bridge_school_app_principal;
+    """)
+    # Fixture membership permits SET ROLE; no capability is added to app/worker.
     run("exec",cid,"psql","-U","postgres","-d","tournament_rehearsal","-v","ON_ERROR_STOP=1","-c",
-        "GRANT bridge_school_worker, bridge_school_app TO tournament_rehearsal_owner WITH INHERIT FALSE, SET TRUE")
+        "GRANT bridge_school_worker, bridge_school_app_principal TO tournament_rehearsal_owner WITH INHERIT FALSE, SET TRUE")
     print("Repository migrations applied as non-superuser owner; no production connection.")
 
 

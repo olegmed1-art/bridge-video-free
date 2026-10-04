@@ -57,7 +57,11 @@ jobs:
       - name: Apply unchanged schema to disposable PostgreSQL 18
         run: python -m experiments.tournament_teacher.postgres_bootstrap '${{ job.services.postgres.id }}'
       - name: First binding through real gated teacher API and rollback
-        run: python -m experiments.tournament_teacher.first_init | tee tournament-first-binding-evidence.json
+        shell: bash
+        run: |
+          python -m experiments.tournament_teacher.first_init > tournament-first-binding-evidence.json
+          python -c "import json; assert json.load(open('tournament-first-binding-evidence.json'))['status'] == 'PASS'"
+          cat tournament-first-binding-evidence.json
       - name: Preserve first binding evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
