@@ -22,13 +22,28 @@ POLICY_KEYS = {'version', 'action', 'source', 'accepted_controller_sha256',
                'predecessor', 'plans', 'authority'}
 
 
+def policy_shape(policy):
+    return (type(policy) is dict and type(policy.get('version')) is int and
+            (policy['version'] == 1 and set(policy) == POLICY_KEYS or
+             policy['version'] == 2 and set(policy) == POLICY_KEYS | {'retirements','retirement_evidence'}))
+
+
 def validate(raw, accepted, controller, runtime, guard):
     require(type(raw) is bytes and len(raw) <= 196608 and owner.sha(raw) == accepted,
             'LANE_ISSUER_NOT_ACCEPTED')
     policy = owner.parse(raw)
-    require(type(policy) is dict and set(policy) == POLICY_KEYS
-            and type(policy['version']) is int and policy['version'] == 1
+    require(policy_shape(policy)
             and policy['action'] == 'issue', 'LANE_ISSUER_SCOPE')
+    if policy['version'] == 2:
+        from ops.light_native_retirement import references, journal_pins
+        require(bool(references(policy['retirements'])) and
+                all(ref['policy_sha256'] != accepted for ref in policy['retirements']),
+                'LANE_RETIREMENT_REFERENCE')
+        require(type(policy['retirement_evidence']) is dict and
+                set(policy['retirement_evidence']) == {x['policy_sha256'] for x in policy['retirements']},
+                'LANE_RETIREMENT_PINS')
+        for pins in policy['retirement_evidence'].values():
+            journal_pins(pins)
     authority = policy['authority']
     require(type(authority) is dict and set(authority) == {'owner', 'coverage', 'delegation', 'evidence'}
             and authority['owner'] == 'olegmed1-art' and authority['coverage'] == COVERAGE
@@ -87,15 +102,20 @@ def derive(policy, accepted, index, predecessor, start):
                    accepted_receipt_sha256=None, accepted_discovery_sha256=None,
                    accepted_permit_sha256=None, accepted_terminal_sha256=None, predecessor=predecessor)
     owner.sequence(prepare)
+    if policy['version'] == 2:
+        prepare.update(version=3, issuer=dict(policy_sha256=accepted, index=index))
     return dict(version=1, action='cycle', prepare=prepare)
 
 
-def progress(directory, policy, accepted, *, unacknowledged=None, stop_before=None):
+def progress(directory, policy, accepted, *, unacknowledged=None, stop_before=None,
+             _read=None, _names=None):
     """Read all entries, refusing holes, partial writes and unknown outcomes."""
     predecessor = policy['predecessor']
+    read = owner.read if _read is None else _read
+    inventory = (lambda path: set(p.name for p in path.iterdir())) if _names is None else _names
     index = 0
     names = {'policy.json'} | {f'{i:04d}' for i in range(len(policy['plans']))}
-    require(set(p.name for p in directory.iterdir()) <= names, 'LANE_ISSUER_HISTORY')
+    require(inventory(directory) <= names, 'LANE_ISSUER_HISTORY')
     for number, entry in enumerate(policy['plans']):
         if number == stop_before:
             break
@@ -105,24 +125,24 @@ def progress(directory, policy, accepted, *, unacknowledged=None, stop_before=No
             continue
         require(number == index, 'LANE_ISSUER_HISTORY')
         owner.install.root_parent(path)
-        names = set(p.name for p in path.iterdir())
+        names = inventory(path)
         missing = number == unacknowledged and names == {'intent.json'}
         require(missing or names == {'intent.json', 'done.json'},
                 'LANE_ISSUER_RECONCILIATION_REQUIRED')
-        intent = owner.parse(owner.read(path/'intent.json'))
+        intent = owner.parse(read(path/'intent.json'))
         require(type(intent) is dict and set(intent) == {'start', 'cycle'}, 'LANE_ISSUER_HISTORY')
         expected = derive(policy, accepted, number, predecessor, intent['start'])
         require(intent['cycle'] == expected, 'LANE_ISSUER_HISTORY')
         prepare = expected['prepare']
         root = cycle.location(prepare)
-        require(owner.read(root/'intent.json') == owner.encoded(expected), 'LANE_ISSUER_HISTORY')
-        result = owner.parse(owner.read(root/'complete.json'))
-        require((missing or owner.parse(owner.read(path/'done.json')) == result)
+        require(read(root/'intent.json') == owner.encoded(expected), 'LANE_ISSUER_HISTORY')
+        result = owner.parse(read(root/'complete.json'))
+        require((missing or owner.parse(read(path/'done.json')) == result)
                 and result.get('audit') == 'LIGHT_LANE_CYCLE'
                 and result.get('state') == 'COMPLETE_HOLD' and result.get('controls_restored') is True
                 and result.get('plan_sha256') == entry['accepted_plan_sha256']
                 and result.get('sequence') == owner.sequence(prepare), 'LANE_ISSUER_HISTORY')
-        terminal = owner.read(owner.ROOT/entry['accepted_plan_sha256']/'terminal.json',
+        terminal = read(owner.ROOT/entry['accepted_plan_sha256']/'terminal.json',
                               result.get('terminal_sha256'))
         require(owner.sha(terminal) == result.get('terminal_sha256'), 'LANE_ISSUER_HISTORY')
         # The isolated preflight freshly verifies restored controls and actual
@@ -133,7 +153,7 @@ def progress(directory, policy, accepted, *, unacknowledged=None, stop_before=No
     return index, predecessor
 
 
-def preflight(policy, accepted, proposed, credential, token, psycopg):
+def preflight(policy, accepted, proposed, credential, token, psycopg, *, guard=None):
     """Live read-only registry/head/predecessor admission; called in driver child."""
     from database.light_native_pilot_intake import Plan
     from database import light_native_pilot_intake as intake
@@ -151,6 +171,10 @@ def preflight(policy, accepted, proposed, credential, token, psycopg):
     observed_target(API(token), plan)
     with psycopg.connect(**parameters(credential), autocommit=True) as conn:
         conn.read_only = True
+        if policy['version'] == 2:
+            from ops.light_native_retirement_live import consume
+            require(guard is not None, 'LANE_RETIREMENT_AUTHORITY')
+            consume(policy, accepted, proposed, conn, guard)
         intake.engine.identity(conn, intake.target())
         counts = conn.execute("""SELECT
           (SELECT count(*) FROM autopilot.task WHERE status IN
@@ -166,7 +190,7 @@ def preflight(policy, accepted, proposed, credential, token, psycopg):
         role = intake.one(conn, "SELECT to_jsonb(r) FROM autopilot.role_registry r WHERE role_id='AUTOPILOT'")
         require(config['enabled'] is False and role['enabled'] is True and role['can_repair'] is True,
                 'LANE_ISSUER_CONTROLS')
-        owner.verify_previous(conn, outer['prepare'])
+        owner.verify_previous(conn, outer['prepare'], readonly=True)
     return dict(audit='LIGHT_LANE_ISSUER_ADMITTED', cycle_sha256=owner.sha(owner.encoded(outer)))
 
 
@@ -180,12 +204,8 @@ def run(wheels, credential, token, controller, runtime, raw, accepted, guard):
     # Separate global issuer lock; cycle's lock still serializes phase work.
     with cycle.exclusive(root):
         # A different policy must not sidestep an interrupted earlier issue.
-        for previous in root.iterdir():
-            if previous.name == 'cycle.lock':
-                continue
-            require(owner.release.source.identifier(previous.name, 64), 'LANE_ISSUER_HISTORY')
-            prior_raw = owner.read(previous/'policy.json', previous.name)
-            progress(previous, owner.parse(prior_raw), previous.name)
+        from ops import light_native_retirement_live as retirement
+        retirement.history_gate(policy, accepted)
         directory = root/accepted
         if not directory.exists():
             owner.install.fresh_directory(directory, 0o700)
@@ -211,7 +231,8 @@ def run(wheels, credential, token, controller, runtime, raw, accepted, guard):
         # Any exception/lost ACK leaves the intent. There is no automatic retry.
         cycle_raw = owner.encoded(outer)
         result = cycle.run(wheels, credential, token, controller, runtime, cycle_raw,
-                           owner.sha(cycle_raw), guard)
+                           owner.sha(cycle_raw), guard,
+                           _issuer=retirement.IssueAuthority(accepted, index, outer['prepare']))
         actual = owner.parse(owner.read(cycle.location(outer['prepare'])/'complete.json'))
         require(result == actual and result.get('state') == 'COMPLETE_HOLD'
                 and result.get('controls_restored') is True, 'LANE_ISSUER_HISTORY')
@@ -290,8 +311,8 @@ def monitor_records(value):
     policy_id = value['policy_sha256']
     directory = owner.ROOT/'issuers'/policy_id
     policy = owner.parse(owner.read(directory/'policy.json', policy_id))
-    require(type(policy) is dict and set(policy) == POLICY_KEYS
-            and policy['action'] == 'issue' and policy['version'] == 1
+    require(policy_shape(policy)
+            and policy['action'] == 'issue'
             and type(policy['plans']) is list and value['index'] < len(policy['plans'])
             and policy['accepted_runtime_sha256'] == value['accepted_runtime_sha256'],
             'LANE_ISSUER_HISTORY')
@@ -299,6 +320,16 @@ def monitor_records(value):
     path = directory/f'{index:04d}'
     owner.install.root_parent(path)
     names = set(p.name for p in path.iterdir())
+    from ops.light_native_retirement import NAME, record
+    if names == {'intent.json', NAME}:
+        require(value['action'] == 'observe-issue' and value['expected_cycle_sha256'] is None,
+                'LANE_ISSUER_RECONCILIATION_REQUIRED')
+        proposal = record(owner.read(path/NAME))
+        require(proposal['policy_sha256'] == policy_id and proposal['index'] == index,
+                'LANE_ISSUER_HISTORY')
+        return dict(policy=policy, path=path, state='RETIREMENT_PROPOSAL_UNACCEPTED',
+                    diagnostic=dict(record_sha256=owner.sha(owner.read(path/NAME)),
+                                    execution_acknowledged=False, incident_closed=False))
     require(names in ({'intent.json'}, {'intent.json', 'done.json'}), 'LANE_ISSUER_HISTORY')
     # Prior entries must be complete, selected entry latest, no future journal.
     require(not any((directory/f'{n:04d}').exists() or (directory/f'{n:04d}').is_symlink()
@@ -403,7 +434,7 @@ def monitor(wheels, credential, token, controller, runtime, raw, accepted, guard
     require((root/'cycle.lock').exists(), 'LANE_ISSUER_HISTORY')
     with cycle.exclusive(root, create=False):
         record = monitor_records(value)
-        if record['state'] == 'INCOMPLETE_REQUIRES_RECONCILIATION':
+        if record['state'] in ('INCOMPLETE_REQUIRES_RECONCILIATION', 'RETIREMENT_PROPOSAL_UNACCEPTED'):
             guard.assert_current()
             require(monitor_records(value) == record, 'LANE_ISSUER_HISTORY')
             return dict(audit='LIGHT_LANE_ISSUER_OBSERVED', state=record['state'],
