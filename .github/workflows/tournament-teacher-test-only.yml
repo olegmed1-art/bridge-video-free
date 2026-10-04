@@ -5,6 +5,8 @@ on:
     branches: ['test/tournament-teacher-canon-20261004']
     paths:
       - 'experiments/tournament_teacher/**'
+      - 'bridge_school_api/ai_teacher.py'
+      - 'bridge_school_api/tournament_teacher_test_adapter.py'
       - '.github/workflows/tournament-teacher-test-only.yml'
 
 permissions:
@@ -23,7 +25,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install test dependencies
-        run: python -m pip install --disable-pip-version-check pytest==8.4.2 PyYAML==6.0.2 fastapi==0.141.1 'psycopg[binary]==3.3.4'
+        run: python -m pip install --disable-pip-version-check pytest==8.4.2 PyYAML==6.0.2 httpx==0.28.1 fastapi==0.141.1 'psycopg[binary]==3.3.4'
       - name: Exact SHA and isolation preflight
         run: |
           git rev-parse HEAD
@@ -34,15 +36,20 @@ jobs:
           tests/test_l1_canonical_registry.py tests/test_l1_canonical_runtime.py
           tests/test_l1_canonical_runtime_v3.py tests/test_l1_canonical_runtime_v4.py
           tests/test_l1_runtime_coverage_audit.py tests/test_knowledge_read_api.py
+          tests/test_ai_api_routes.py tests/test_ai_final_decision_contract.py
       - name: Before and after, explanation and provenance
         run: python -m experiments.tournament_teacher.demo
       - name: Independent exhaustive choice-policy review
         run: python -m experiments.tournament_teacher.independent_review
       - name: All fourteen decisions with hands and source-linked results
         run: python -m experiments.tournament_teacher.coverage > tournament-teacher-evidence.json
+      - name: Existing teacher HTTP API to source-linked answer
+        run: python -m experiments.tournament_teacher.api_demo > tournament-teacher-api-evidence.json
       - name: Preserve synthetic decision evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: tournament-teacher-evidence-${{ github.sha }}
-          path: tournament-teacher-evidence.json
+          path: |
+            tournament-teacher-evidence.json
+            tournament-teacher-api-evidence.json
           retention-days: 7

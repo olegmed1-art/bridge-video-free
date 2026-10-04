@@ -9,6 +9,7 @@ import yaml
 BASE = "1440920191e1778fb9a9ba24e6701937a1a7459c"
 BRANCH = "test/tournament-teacher-canon-20261004"
 WORKFLOW = ".github/workflows/tournament-teacher-test-only.yml"
+API_FILES = {"bridge_school_api/ai_teacher.py", "bridge_school_api/tournament_teacher_test_adapter.py"}
 
 
 def matches(value, patterns):
@@ -28,7 +29,7 @@ def main():
         ["git","ls-files","--others","--exclude-standard"], cwd=root, text=True).splitlines()
     changed = sorted(set(changed))
     assert changed, "No experiment changes"
-    assert all(p == WORKFLOW or p.startswith("experiments/tournament_teacher/") for p in changed)
+    assert all(p == WORKFLOW or p in API_FILES or p.startswith("experiments/tournament_teacher/") for p in changed)
     assert all(Path(p).suffix in {".py",".json",".md",".yml"} for p in changed)
     forbidden = [r"-----BEGIN .*PRIVATE KEY", r"gh[pousr]_[A-Za-z0-9]{20,}",
                  r"github_pat_[A-Za-z0-9_]{20,}", r"AKIA[A-Z0-9]{16}",
@@ -70,7 +71,7 @@ def main():
     assert job["timeout-minutes"] <= 20 and "services" not in job and "environment" not in job
     print(f"Publication scope: {len(changed)} minimal experiment files; baseline {BASE}")
     print("Automatic push workflow: tournament-teacher-test-only only; one job, 10-minute cap; no secrets/services")
-    print("No production, L1, DB or existing workflow files changed; no private source dump")
+    print("Only existing teacher route and offline adapter allowed outside experiment; L1/SQL gates and deployment unchanged")
 
 
 if __name__ == "__main__":

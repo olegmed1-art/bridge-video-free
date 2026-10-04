@@ -9,6 +9,13 @@ and provenance. Version 2 contains 26 rule/companion entries. Decision record
 
 ## Run
 
+The existing teacher API now has an explicit offline integration path. See
+[API integration and exact deployed-target gap](API_INTEGRATION.md), including
+the local source target manifest and rollback. Run
+`python -m experiments.tournament_teacher.api_demo` to exercise the existing
+HTTP endpoint through the actual root ASGI app. This requires the API test
+dependencies (including HTTPX); the standalone consumer remains standard-library only.
+
 ```sh
 python -m experiments.tournament_teacher --test-only < request.json
 python -m experiments.tournament_teacher.demo
@@ -117,8 +124,9 @@ transcripts. Source document: SRC-0096, PDF pages 1-2, corresponding auction blo
 - Existing source statuses are preserved, including `BLOCKED_SOURCE_CONFLICT`
   on both rebids and `DRIVE_CANON_ONLY`. A test recommendation does not clear
   these statuses, approve a version or perform runtime activation.
-- No production route imports this module. L1 registry, evaluator, SQL gates,
-  catalog reader, deployed services and HOLD remain unchanged.
+- The existing teacher-evidence route can lazily load this module only after
+  explicit in-process offline opt-in; it is disabled by default. L1 registry,
+  evaluator, SQL gates, catalog reader, deployed services and HOLD remain unchanged.
 
 Validation goes through `decide` and the executable CLI: positive, negative,
 boundary, malformed input, ambiguity, provenance and disabled-mode cases.

@@ -1,0 +1,341 @@
+{
+  "contract_version": "teacher-evidence-tournament-test-v1",
+  "target": "local-asgi:app:app:POST:/v1/ai/positions/{position_id}/teacher-evidence",
+  "target_status": "SOURCE_TARGET_CONFIRMED_DEPLOYED_BINDING_UNESTABLISHED",
+  "entrypoint": "app:app",
+  "method": "POST",
+  "route": "/v1/ai/positions/{position_id}/teacher-evidence",
+  "auth_dependency": "bridge_school_api.main.require_api_token",
+  "deployed_target": null,
+  "database_position_uuid": null,
+  "database_version_uuid": null,
+  "teacher_key": "tournament-canon-test",
+  "teacher_version": "tournament-teacher-test-v2",
+  "system_profile": "SCHOOL_TOURNAMENT_CURRENT_V1",
+  "source_version": "tour-canon-test-20261004:6f3489ce26bacfe6ce858a343519fe1e20179c857f9f25e5cafa0b937e2441e3",
+  "rules_sha256": "6f3489ce26bacfe6ce858a343519fe1e20179c857f9f25e5cafa0b937e2441e3",
+  "synthetic_uuid_namespace": "05b18e19-0aef-5126-b1b3-0bc781fd8df2",
+  "synthetic_example_position_uuid": "41d7373f-a320-5f83-9ea1-1c385ea7d579",
+  "synthetic_example_input": {
+    "mode": "TOURNAMENT_TEACHER_TEST_ONLY",
+    "system_profile": "SCHOOL_TOURNAMENT_CURRENT_V1",
+    "task": "recommend",
+    "dealer": "N",
+    "actor": "N",
+    "auction": [
+      "1H",
+      "PASS",
+      "1NT",
+      "PASS"
+    ],
+    "hand": [
+      "S2",
+      "S3",
+      "S4",
+      "H2",
+      "H3",
+      "H4",
+      "H5",
+      "H6",
+      "D2",
+      "D3",
+      "D4",
+      "C2",
+      "C3"
+    ],
+    "school_points": {
+      "value": 16,
+      "basis": "SYNTHETIC_SCHOOL_POINTS"
+    }
+  },
+  "rule_bindings": [
+    {
+      "rule_id": "RULE-TOUR-1NT-RSP-2C",
+      "binding_uuid": "d099395d-8362-52fa-b239-581941e00443",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261003-003"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1NT-RSP-2NT",
+      "binding_uuid": "48359698-9a81-5496-80f9-a8978360aeb7",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261003-003"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1NT-RSP-3H",
+      "binding_uuid": "2fcf2787-a542-584d-9126-952d5bbe40e1",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261003-002"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1NT-RSP-3S",
+      "binding_uuid": "17663a9f-4d5c-530a-977b-ed36d51511a9",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261003-002"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1H-1NT-REBID-2NT",
+      "binding_uuid": "9e941831-7040-55ed-ad7e-3d978deceeef",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-008"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "BLOCKED_SOURCE_CONFLICT",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1S-1NT-REBID-2NT",
+      "binding_uuid": "356cd57e-996c-5dfd-adaa-b42de46675c4",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-008"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "BLOCKED_SOURCE_CONFLICT",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1D-1NT-REBID-2H",
+      "binding_uuid": "be35e032-9405-58eb-aa7a-24c23984b94b",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-001"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1D-1NT-REBID-2S",
+      "binding_uuid": "4f7aa11f-de6a-5f7e-a817-12bb0235709a",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-001"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1D-1NT-REBID-PASS",
+      "binding_uuid": "4075767e-8722-591c-833f-f5fe15bb28d3",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-002"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "DRAFT",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1S-RSP-2C",
+      "binding_uuid": "34e438a7-3af2-58a2-8b90-dc33e062b5d2",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-003"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1S-RSP-2D",
+      "binding_uuid": "1fe88df0-28ea-5ab6-a129-ed2ac4a3410a",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-003"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1S-RSP-2H",
+      "binding_uuid": "00e5e1c8-8dbb-597f-b422-16e69542367a",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-003"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1H-1NT-REBID-2S",
+      "binding_uuid": "13e714e5-b2ad-538d-90be-1f485569be5f",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-004"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1S-1NT-REBID-2S",
+      "binding_uuid": "87b13fad-9900-57a7-94c2-4d9bbba0afce",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-005"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1S-1NT-REBID-3S",
+      "binding_uuid": "67372d5b-c9d7-5500-bf31-943af4baac4a",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-005"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1C-1H-REBID-2C",
+      "binding_uuid": "f662e267-f41a-5a9b-b49b-acc79ef0275a",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-006"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1C-1H-REBID-3C",
+      "binding_uuid": "8a2dd02b-7651-5689-b036-69789e87e8ec",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-006"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1C-1H-REBID-1S",
+      "binding_uuid": "46bbf758-acd2-59af-8697-3ffc2236521d",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-007"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-OPEN-1NT",
+      "binding_uuid": "4fec2952-818b-54d2-b2d6-70792f1e1628",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-008"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-OPEN-1H",
+      "binding_uuid": "4e06ff29-8b5e-5ba1-80a1-f6055c6a3e3e",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-008"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-OPEN-1S",
+      "binding_uuid": "f92540fa-5ddb-5b90-bbb0-d43adc76e944",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-008"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-OPEN-2NT",
+      "binding_uuid": "18efe79e-2425-54e6-9430-6eb3d04635ad",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-009"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1D-1H-1S-RSP-3C",
+      "binding_uuid": "52793b53-cd57-55ab-b132-ed8bd9601a9a",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-010"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-1D-1H-1NT-RSP-3C",
+      "binding_uuid": "98934ba2-8da7-5dc3-8b28-c1195be1d3f9",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-010"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-2S-RSP-3C",
+      "binding_uuid": "8e712766-ead2-5a4e-bcc7-51765632f109",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-011",
+        "TDEC-20261003-001"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "ACTIVE",
+      "sync_status": "DRIVE_CANON_ONLY"
+    },
+    {
+      "rule_id": "RULE-TOUR-2S-RSP-3D",
+      "binding_uuid": "e1af375b-2eed-5655-aa7b-5051cd55a4da",
+      "database_rule_uuid": null,
+      "decision_ids": [
+        "TDEC-20261002-011",
+        "TDEC-20261003-001"
+      ],
+      "source_id": "SRC-0096",
+      "rule_status": "DRAFT",
+      "sync_status": "DRIVE_CANON_ONLY"
+    }
+  ]
+}
