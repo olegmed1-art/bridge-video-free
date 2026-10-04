@@ -22,7 +22,8 @@ manifest or old migration client.
 
 Before deployment/activation: prove that this runtime has a supported invocation
 channel and valid owner connection; perform immutable Neon server identity checks
-and all exact plan privileges, including UPDATE status/valid_to on BOTH activation
+and necessary plan privileges, including schema USAGE, school SELECT, explicit
+activation-gate EXECUTE and UPDATE status/valid_to on BOTH activation
 tables. Then prove pilot absence, source/schema/gates, current main/READY and the
 authenticated API baseline. Preserve independent request-ID log correlation
 between each bounded transaction. No new credential, GRANT, ACL, browser login,
@@ -39,11 +40,19 @@ execution/accessibility and fresh privilege proof, not a renewed pilot permissio
 resident_preflight.inspect_resident accepts an already opened connection and
 fresh trusted Binding. It reads no env, DSN, password or credential fingerprint,
 opens no connection, and makes no role/ACL change. A dedicated idle connection,
-TLS, exact owner identity and immutable pg_settings binding are required. Output
-contains capability booleans only and explicitly does NOT admit writes. Missing
-privilege stays missing; no self-elevation.
+TLS with verify-full/root certificate/channel binding (GSS disabled, no
+service/options override), exact owner identity and immutable pg_settings binding
+are required. Effective libpq parameters are filtered by a policy-key allowlist
+before any value is read; password values are never accessed. Compiled defaults
+remain visible. Psycopg may resolve hostaddr automatically: post-connect metadata
+does not prove who supplied it. Expected-hostname TLS and immutable server tags
+authenticate the target. Policy values stay in memory and are never serialized. Output
+contains capability booleans only and explicitly does NOT admit writes. These
+necessary checks do not prove every trigger/constraint or stage can succeed.
+Missing privilege stays missing; no self-elevation.
 
-resident_rehearsal.revoke_on_failure is restricted to the existing loopback
+resident_rehearsal.revoke_on_failure checks both host and effective hostaddr and
+is restricted to the existing loopback
 tournament_rehearsal DB. It recomputes the fixed reviewed SQL plan, refuses to
 start its body without revoke capabilities, and commits an owned-only emergency
 revoke after an injected failed evidence gate. It cannot be used as a production

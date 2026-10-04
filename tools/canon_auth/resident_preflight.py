@@ -30,7 +30,11 @@ def idle(conn):
 
 
 def capabilities(conn):
-    """Exact plan privileges, including both revoke tables, before any activation."""
+    """Necessary plan privileges, including both revoke tables; not write admission."""
+    schemas = all(conn.execute("SELECT has_schema_privilege(current_user,%s,'USAGE')",
+                               (name,)).fetchone()[0] for name in ("public", "bidding", "ai"))
+    school = conn.execute("SELECT has_table_privilege(current_user,'public.school','SELECT')").fetchone()[0]
+    gate = conn.execute("SELECT has_function_privilege(current_user,'bidding.rule_passes_activation_gates(uuid)','EXECUTE')").fetchone()[0]
     rows = conn.execute("""
         SELECT name, has_table_privilege(current_user,name,'SELECT'),
                      has_table_privilege(current_user,name,'INSERT')
@@ -42,8 +46,10 @@ def capabilities(conn):
                               (table, column)).fetchone()[0]
                  for table in ("public.canon_activation", "bidding.runtime_activation")
                  for column in ("status", "valid_to"))
-    return {"plan_table_privileges": len(rows) == len(TABLES) and all(s and i for _, s, i in rows),
-            "plan_update_privileges": all(update), "owned_revoke_privileges": revoke}
+    return {"plan_table_privileges": len(rows) == len(TABLES) and {r[0] for r in rows} == set(TABLES)
+                and all(s and i for _, s, i in rows),
+            "plan_update_privileges": all(update), "owned_revoke_privileges": revoke,
+            "schema_usage": schemas, "school_select": school, "explicit_gate_execute": gate}
 
 
 def inspect_resident(conn, binding):
@@ -53,12 +59,23 @@ def inspect_resident(conn, binding):
     DSN, environment, role grants, arbitrary SQL or secret fingerprints are read.
     """
     idle(conn)
-    if (not isinstance(binding, Binding) or not all((binding.project_id, binding.branch_id,
-                                                    binding.endpoint_id, binding.host))
-            or conn.info.host != binding.host or conn.info.port != 5432
-            or not conn.pgconn.ssl_in_use):
-        raise Refused("resident_transport_binding_required")
     try:
+        if (not isinstance(binding, Binding) or not all((binding.project_id, binding.branch_id,
+                                                        binding.endpoint_id, binding.host))
+                or conn.info.host != binding.host or not conn.pgconn.ssl_in_use
+                or conn.info.port != 5432):
+            raise Refused("resident_transport_binding_required")
+        # get_parameters omits compiled defaults; read effective policy fields only.
+        # Filter keywords BEFORE touching values: raw libpq info includes secrets.
+        allowed = {b"sslmode", b"sslrootcert", b"channel_binding", b"gssencmode", b"options", b"service"}
+        params = {row.keyword.decode("ascii"): row.val.decode("utf-8")
+                  for row in conn.pgconn.info if row.keyword in allowed and row.val is not None}
+        if (params.get("sslmode") != "verify-full" or not params.get("sslrootcert")
+                or params.get("channel_binding") != "require" or params.get("gssencmode") != "disable"
+                or params.get("options") or params.get("service")):
+            # Psycopg resolves hostaddr itself. TLS authenticates the expected
+            # hostname; immutable server tags below authenticate the target.
+            raise Refused("preverified_owner_transport_required")
         with conn.transaction():
             conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             conn.execute("SET LOCAL statement_timeout='5s'")
@@ -66,14 +83,15 @@ def inspect_resident(conn, binding):
             if conn.execute("SELECT current_database(),session_user,current_user").fetchone() != (
                     "neondb", "neondb_owner", "neondb_owner"):
                 raise Refused("existing_owner_connection_required")
-            expected = {"neon.project_id": (binding.project_id, "postmaster"),
-                        "neon.branch_id": (binding.branch_id, "postmaster"),
-                        "neon.endpoint_id": (binding.endpoint_id, "superuser")}
+            expected = {"neon.project_id": (binding.project_id, {"postmaster"}),
+                        "neon.branch_id": (binding.branch_id, {"postmaster"}),
+                        "neon.endpoint_id": (binding.endpoint_id, {"postmaster", "superuser"})}
             rows = conn.execute("""
                 SELECT name,setting,context,source,reset_val,pending_restart
                 FROM pg_catalog.pg_settings WHERE name=ANY(%s)
             """, (list(expected),)).fetchall()
-            if (len(rows) != 3 or any((setting, context) != expected.get(name)
+            if (len(rows) != 3 or {r[0] for r in rows} != set(expected)
+                    or any(setting != expected[name][0] or context not in expected[name][1]
                     or source != "configuration file" or reset != setting or pending
                     for name, setting, context, source, reset, pending in rows)):
                 raise Refused("server_binding_unproven")
@@ -89,7 +107,8 @@ def inspect_resident(conn, binding):
 def inspect_disposable(conn):
     """Only the existing loopback PG18 fixture; not a production fallback."""
     idle(conn)
-    if conn.info.host not in ("127.0.0.1", "localhost") or conn.info.port != 55432:
+    if (conn.info.host not in ("127.0.0.1", "localhost") or conn.info.port != 55432
+            or conn.info.hostaddr not in ("127.0.0.1", "::1")):
         raise Refused("disposable_loopback_required")
     with conn.transaction():
         conn.execute("SET TRANSACTION READ ONLY")
