@@ -205,9 +205,54 @@ resources, not a distributed transaction: after an output I/O failure, retry wit
 fresh output paths; stable staging keys prevent duplicate rows.
 
 The executable regression uses only synthetic full-master files and sidecars.
-An actual bounded-packet smoke is a separate private receipt, not a synthetic
-test or a full-master production demonstration. Actual full-master smoke is not
-claimed by this change and can be run later by the authorized holder of the
-already verified bytes. This intermediate path terminates at disposable local
-SQLite. Production postprocessor, DDS, Drive upload and PostgreSQL hooks are not
-enabled; no new credentials, permissions or database migrations are required.
+Separate private bounded-packet and actual full-master CLI smoke receipts retain
+BLOCKED status, empty accepted inputs and no promotion commands. Those receipts
+validate data handling, not media correctness, identity or canon acceptance.
+The CLI terminates at disposable local SQLite and requires no new credentials,
+permissions or database migrations.
+
+## Opt-in postprocessor preparation
+
+The existing v4.2 postprocessor can prepare one source draft before its quality
+layer when `BRIDGE_VIDEO_SOURCE_DRAFT_SELECTION_PATH` names a local selection
+manifest. Optional `BRIDGE_VIDEO_SOURCE_DRAFT_CONSTRAINTS_PATH` and
+`BRIDGE_VIDEO_SOURCE_DRAFT_SPEAKER_MAP_PATH` name already available private
+sidecars; each supplied sidecar requires its manifest pin. Sidecar configuration
+without a selection is an error. No workflow enables these variables here.
+
+Optional means a file is not required to produce a blocked inspection record.
+Without a speaker map, the existing normalizer reports `DIGEST_INVALID` and
+`PARENT_CANONICAL_DIGEST_MISMATCH` for the absent map-to-master binding, marks
+source integrity `INVALID`, and withholds extracted knowledge (`knowledge=null`).
+The selected transcript and candidate record are retained for inspection. A
+supplied map also does not prove teacher authority or permit canon promotion.
+
+The loader retains the original embedded master JSON bytes after the existing
+PDF/master digest checks. The builder requires `input_kind=full_master`, the
+actual loaded document ID, the actual raw master digest, and an exact match to
+the parsed master. It runs before visual reconstruction adds derived fields.
+It never fabricates source bytes by serializing the working master. Invalid pins,
+selectors or local files fail before quality, staging persistence or artifact
+upload; incomplete evidence with valid file bindings produces a BLOCKED draft.
+
+Quality receives the prepared packet through a separate `source_draft_input`
+argument restricted to the untrusted bounded schema. This route takes precedence
+over preexisting canon contract aliases and cannot call the canon promotion
+pipeline. Existing statement extraction limits and authority denials remain in
+force. The packet digest joins the quality input fingerprint so sidecar or
+selection changes produce a different content identity. Repeating identical
+inputs preserves candidate keys and artifact generation identity.
+
+Draft rows join the existing `candidate_staging_records` collection. If an
+operator later runs the real postprocessor with its existing credentials, its
+existing staging persistence and private Drive artifact upload behavior applies.
+This change does not start such a run or configure any credential. With no new
+local selection, existing behavior is preserved; an explicit analysis request
+without evidence still receives the existing blocked replay gaps.
+
+Synthetic integration tests exercise PDF byte retention, file pins, raw/parsed
+master binding, overlap and boundary blockers, quality routing, and two full
+postprocessor invocations with mocked external adapters and disposable SQLite.
+All six generated artifacts remain byte-identical; the source draft occupies
+one local staging row. This is not a production PostgreSQL or private full-master
+postprocessor execution receipt. Operational rollout remains separately gated.
