@@ -23,7 +23,7 @@ DAY = 24 * 3600
 HOUR = 3600
 TERMINAL_STATUSES = frozenset({"COMPLETED", "REVIEW", "FAILED"})
 COMPLETED_CLEANUP_PROOF_STATUSES = frozenset({"PUBLISHED_VERIFIED"})
-COMPLETED_CLEANUP_REMOTE_VERIFICATION = "SIZE_MD5_SHA256_PROPERTY_MATCH"
+COMPLETED_CLEANUP_REMOTE_VERIFICATION = "CONTENT_READBACK_SHA256"
 MAX_PUBLISHED_RECEIPT_ROOTS = 10
 
 
@@ -181,6 +181,10 @@ def _completed_durable_proof(payload: dict[str, Any] | None, *, job_id: str | No
     if job_id is not None and str(payload.get("job_id") or "") != job_id:
         return False
     publication = payload.get("publication") if isinstance(payload.get("publication"), dict) else {}
+    source = publication.get("source") if isinstance(publication.get("source"), dict) else {}
+    if (source.get("unchanged") is not True or source.get("verification") != COMPLETED_CLEANUP_REMOTE_VERIFICATION
+            or not source.get("sha256_before") or source.get("sha256_before") != source.get("sha256_after")):
+        return False
     conformance = (
         payload.get("conformance")
         if isinstance(payload.get("conformance"), dict)
@@ -209,6 +213,8 @@ def _completed_durable_proof(payload: dict[str, Any] | None, *, job_id: str | No
     remote_artifacts = publication.get("remote_artifacts")
     if not isinstance(remote_artifacts, list) or not remote_artifacts:
         return False
+    if any(r.get("verification") != COMPLETED_CLEANUP_REMOTE_VERIFICATION for r in remote_artifacts):
+        return False
     return True
 
 
@@ -222,6 +228,9 @@ def _completed_receipt_has_durable_proof(done_root: Path, job_id: str, proof_roo
 
 
 def _completed_local_publication_proof(path: Path, job_id: str) -> bool:
+    from .durable_drive import cleanup_proof_matches
+    if cleanup_proof_matches(path, None, job_id=job_id):
+        return True
     manifest = _safe_json(path / "manifest.json")
     if not manifest or str(manifest.get("job_id") or "") != job_id:
         return False
@@ -235,6 +244,10 @@ def _completed_local_publication_proof(path: Path, job_id: str) -> bool:
     if proof.get("job_id") != manifest.get("job_id") or proof.get("job_hash") != manifest.get("job_hash"):
         return False
     if proof.get("remote_verification") != COMPLETED_CLEANUP_REMOTE_VERIFICATION:
+        return False
+    source = proof.get("source") if isinstance(proof.get("source"), dict) else {}
+    if (source.get("unchanged") is not True or source.get("verification") != COMPLETED_CLEANUP_REMOTE_VERIFICATION
+            or not source.get("sha256_before") or source.get("sha256_before") != source.get("sha256_after")):
         return False
     if not str(proof.get("drive_folder_id") or "").strip():
         return False
@@ -309,8 +322,8 @@ def build_cleanup_plan(
                 continue
             age = now - mtime
             if not _terminal_result_dir(path):
-                if age >= policy.abandoned_results_ttl_seconds:
-                    candidates.append(Candidate(path, "results", mtime, size, "abandoned_ttl"))
+                # A crash can leave the only transcript/frames here. Never use
+                # age alone as evidence that unpersisted outputs are disposable.
                 continue
             if not (
                 _completed_receipt_has_durable_proof(spool_root / "done", path.name, proof_roots)
@@ -339,6 +352,10 @@ def build_cleanup_plan(
     media_files: list[tuple[float, Path, int]] = []
     if media_root.is_dir():
         for path in media_root.rglob("*"):
+            if "drive-ready" in path.relative_to(media_root).parts:
+                # Managed source copies have an explicit per-job finalization
+                # gate in the worker; generic TTL must not bypass it.
+                continue
             try:
                 info = path.lstat()
             except OSError:

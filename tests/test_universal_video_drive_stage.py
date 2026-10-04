@@ -33,6 +33,8 @@ def test_drive_is_fully_verified_before_internal_job_is_built(tmp_path: Path, mo
     media = tmp_path / "media"
     media.mkdir()
     metadata = {
+        "id": SOURCE_ID, "version": "1", "parents": ["generic-parent"],
+        "trashed": False, "modifiedTime": "2026-01-01T00:00:00Z",
         "id": SOURCE_ID,
         "name": "lesson.mp4",
         "mimeType": "video/mp4",
@@ -66,6 +68,8 @@ def test_drive_metadata_name_does_not_change_request_identity(tmp_path: Path, mo
     media = tmp_path / "media"
     media.mkdir()
     metadata = {
+        "id": SOURCE_ID, "version": "1", "parents": ["generic-parent"],
+        "trashed": False, "modifiedTime": "2026-01-01T00:00:00Z",
         "id": SOURCE_ID,
         "name": "actual-drive-name.mp4",
         "mimeType": "video/mp4",
@@ -97,6 +101,8 @@ def test_truncated_drive_download_never_leaves_part_or_becomes_a_staged_source(
     media = tmp_path / "media"
     media.mkdir()
     metadata = {
+        "id": SOURCE_ID, "version": "1", "parents": ["generic-parent"],
+        "trashed": False, "modifiedTime": "2026-01-01T00:00:00Z",
         "id": SOURCE_ID,
         "name": "lesson.mp4",
         "mimeType": "video/mp4",
@@ -123,6 +129,8 @@ def test_non_video_drive_mime_is_rejected_before_download(tmp_path: Path, monkey
     media = tmp_path / "media"
     media.mkdir()
     metadata = {
+        "id": SOURCE_ID, "version": "1", "parents": ["generic-parent"],
+        "trashed": False, "modifiedTime": "2026-01-01T00:00:00Z",
         "id": SOURCE_ID,
         "name": "not-a-video.pdf",
         "mimeType": "application/pdf",

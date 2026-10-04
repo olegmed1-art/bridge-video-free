@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 
 import requests
@@ -235,7 +236,10 @@ def download_file(
             raise RuntimeError("Google Drive SHA-256 checksum mismatch after download")
         if expected_md5 and actual_md5.lower() != expected_md5:
             raise RuntimeError("Google Drive MD5 checksum mismatch after download")
-    except Exception:
+        declared_size = int(meta.get("size") or 0)
+        if declared_size <= 0 or written != declared_size:
+            raise RuntimeError("Google Drive download size mismatch")
+    except BaseException:
         destination.unlink(missing_ok=True)
         raise
 
@@ -244,4 +248,46 @@ def download_file(
     return meta
 
 
-__all__ = ["access_token", "download_file", "file_metadata", "list_folder_files"]
+def hash_remote_file(file_id: str, token: str, *, expected_size: int,
+                     expected_sha256: str, deadline_seconds: float = 900) -> dict:
+    """Hash complete remote bytes with bounded memory; never store or mutate Drive.
+
+    No partial/Range resume: interruptions produce no success receipt. An outer
+    worker deadline must additionally bound DNS/connect and process lifetime.
+    """
+    if expected_size < 0 or len(expected_sha256) != 64 or deadline_seconds <= 0:
+        raise RuntimeError("invalid remote read-back bounds")
+    started = time.monotonic()
+    size = 0
+    digest = hashlib.sha256()
+    with requests.get(f"{DRIVE}/files/{file_id}",
+                      headers={"Authorization": f"Bearer {token}"},
+                      params={"alt": "media", "supportsAllDrives": True},
+                      stream=True, timeout=(30, 60)) as response:
+        response.raise_for_status()
+        for chunk in response.iter_content(8 * 1024 * 1024):
+            if time.monotonic() - started > deadline_seconds:
+                raise TimeoutError("Drive read-back deadline exceeded")
+            size += len(chunk)
+            if size > expected_size:
+                raise RuntimeError("Drive read-back size mismatch")
+            digest.update(chunk)
+    observed = digest.hexdigest()
+    if size != expected_size or observed != expected_sha256:
+        raise RuntimeError("Drive read-back size/SHA-256 mismatch")
+    return {"file_id": file_id, "size_bytes": size, "sha256": observed,
+            "verification": "CONTENT_READBACK_SHA256"}
+
+
+def original_snapshot(meta: dict) -> dict:
+    """A complete identity/version snapshot; missing fields never prove integrity."""
+    keys = ("id", "name", "mimeType", "size", "version", "modifiedTime", "parents", "trashed")
+    if any(key not in meta for key in keys) or meta.get("trashed") is not False:
+        raise RuntimeError("Drive original identity/version is incomplete")
+    if not all(str(meta[key]).strip() for key in keys[:6]) or not isinstance(meta["parents"], list):
+        raise RuntimeError("Drive original identity/version is invalid")
+    return {key: (sorted(meta[key]) if key == "parents" else meta[key]) for key in keys}
+
+
+__all__ = ["access_token", "download_file", "file_metadata", "list_folder_files",
+           "hash_remote_file", "original_snapshot"]
