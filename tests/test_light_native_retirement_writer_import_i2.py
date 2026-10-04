@@ -111,7 +111,12 @@ class Connection:
         event('connection-exit')
 
 def connect(**kwargs):
-    assert entered and kwargs == dict(password='synthetic-not-a-credential', autocommit=True)
+    # The real attest function reconstructs all libpq settings, not just the
+    # synthetic password supplied by our earlier credential-parser port.
+    assert entered and kwargs['password'] == 'synthetic-not-a-credential'
+    assert kwargs['autocommit'] is True
+    assert kwargs['sslmode'] == 'verify-full' and kwargs['channel_binding'] == 'require'
+    assert kwargs['connect_timeout'] == 10 and kwargs['options'] == ''
     event('connect')
     if mode == 'connect-failure':
         raise RuntimeError('SYNTHETIC_PRIVATE_CONNECT_FAILURE')
