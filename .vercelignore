@@ -8,3 +8,10 @@
 !vercel.json
 !scripts
 !scripts/vercel_ignore_build.sh
+!tools
+/tools/*
+!/tools/canon_auth
+/tools/canon_auth/*
+!/tools/canon_auth/__init__.py
+!/tools/canon_auth/vercel_validator.py
+!/tools/canon_auth/build_once.py

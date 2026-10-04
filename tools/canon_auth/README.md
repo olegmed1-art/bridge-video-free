@@ -1,64 +1,85 @@
-# One-shot canon authentication diagnostics
+# Bounded canon acceptance on the existing production origin
 
-These tools are dormant: no application imports, public routes, deployment hook,
-project settings, credentials, permissions or production data changes.
+This module verifies the already deployed teacher at main
+`cf6091f09fa70afc4b25162fbbb2fea0dc36898a`, READY deployment
+`dpl_9tC4HDYrX6WLxgQXpcMm32te8ue3`, through the owner-authorized official origin
+https://bridge-video-free.vercel.app. It never uses the protected immutable URL,
+a protection bypass, a new credential, or credential export.
 
-`db_diagnostic` runs only in the uniquely named GitHub diagnostic workflow, on its
-first run and first attempt, on the exact test branch before 2026-10-04 18:00 UTC.
-The workflow checks out a reviewed literal code SHA. It consumes the existing
-`BRIDGE_APP_DATABASE_URL` in that runner and preserves the original smoke
-environment (no VERCEL_ENV rewrite). It reports only fixed target classifications,
-role/database/TLS booleans and a fixed outcome. One connection, read-only session,
-5-second statement timeout, explicit rollback. No secret bytes or fingerprints.
-An authentication failure is a useful diagnostic result, not a reason to rotate.
+## Explicit validation-only build
 
-`vercel_validator` is prepared but NOT wired into a build. Its fixed target is the
-official production API origin https://bridge-video-free.vercel.app, already used
-by the existing client. The owner-authorized assessment confirmed that this origin
-is allowed by the configured Protection scope. This does not authorize access to
-the protected immutable URL, a protection bypass, or API-token extraction.
+The FastAPI `tool.vercel.scripts.build` hook invokes `build_once`. Ordinary commit
+messages return immediately without credential lookup. Only the exact designated
+merge subject `CANON_ACCEPTANCE_20261004_ONCE` and body containing `observed_at`
+and the pinned `base` can start validation, on production/main in the pinned
+project. An incomplete designated message fails closed. Observation age must be
+at most 300 seconds and execution must start before 2026-10-04 18:00 UTC.
 
-The reconciled target is main cf6091f09fa70afc4b25162fbbb2fea0dc36898a and READY
-deployment dpl_9tC4HDYrX6WLxgQXpcMm32te8ue3. Both pins were read from the
-authenticated control plane after retirement PR #2086. A new fresh observation
-is still mandatory at invocation time. No live execution is currently enabled.
+The marked build ALWAYS exits nonzero, including after successful HTTP checks.
+It is validation-only and never promotes a deployment: the existing READY stays
+live. Its expected Vercel ERROR is not an acceptance PASS or a runtime failure.
+A later ordinary commit remains deployable. Only three build modules are included
+by `.vercelignore`; the SQL compiler, tests, source package and diagnostics are
+excluded from the deployment bundle. Application routes and authorization are
+unchanged.
 
-Before any future explicit invocation, an authorized operator must verify and
-record current control-plane READY metadata binding the pinned project,
-deployment, production alias and exact SHA. The script accepts that attestation
-for at most 300 seconds; it cannot independently query the control plane. Its
-CANON_* intent/attestation values are per-invocation non-secret inputs and must
-never be added as project-wide env or a persistent build hook.
+The coordinator must hold concurrent release changes, freshly reconcile the
+alias/READY/SHA immediately before merge, and permit only one marked build. Do
+not redeploy/retry the marked commit. The exclusive temp claim is NOT a durable
+cross-build ledger. The fixed initial position-404 probe rejects later attempts
+after baseline creation, but cannot alone exclude parallel builds before that.
 
-In a permitted build context it makes at most three requests with redirects and
-proxies disabled, eight-second socket timeouts and a 35-second process deadline:
-credential-free health, authenticated overview (payload never logged), and the
-fixed canon request for a synthetic nonexistent position. It emits only
-`pending_deployment_correlation`, never an acceptance PASS. Responses must include
-a valid x-vercel-id. Its suffix after the last `::` is the runtime-log request ID;
-this mapping was checked with a real credential-free production health request.
+## HTTP phases and controller gates
 
-The operator must read alias/deployment metadata again after the request batch,
-and query runtime logs for each receipt using both its request-ID filter and the
-expected deployment ID. Preserve original authenticated tool responses and query
-arguments. `verify_binding.verify` rejects missing/ambiguous matches, changed
-SHA/deployment/origin, mismatched path/status/time or an observation window over
-300 seconds. It validates normalized evidence but cannot authenticate supplied
-JSON. A caller-created JSON assertion is not evidence. The release coordinator
-must prevent concurrent alias changes; do not rely solely on bracketing alias
-reads. The final result proves only an authenticated typed refusal, NOT baseline
-ABSTAIN or active canon meaning. It does not declare legacy GitHub CI green.
+The resident existing API token is used only in memory and only on this origin.
+Redirects and proxies are disabled. Limits: 40 requests, 8-second socket timeout,
+420-second process deadline, eight polls per phase. No SQL or DB credential is
+used in the build. Overview payloads and raw response bodies are never logged.
+Output contains only fixed statuses, public canon hashes and request receipts.
 
-The exclusive temporary claim prevents a second attempt in the same build's temp
-filesystem, including after failure. It is NOT a cross-build one-shot ledger.
-The lack of a build hook and expiring explicit intent prevent automatic checks
-on future builds. A different build would require a separately authorized explicit
-invocation and fresh attestation. No normal deployment is changed to invoke it.
+1. Credential-free health 200, authenticated overview 200, synthetic absent
+   position typed 404. `verify_binding.verify` checks the three receipts.
+2. The external authorized controller creates only source + synthetic position
+   after that proof. Baseline must be ABSTAIN before import.
+3. After correlated baseline, the controller imports/reviews the two approved
+   meanings and activates their existing SQL gates. The API must report 3H
+   SUPPORTED and 3S CONTRADICTED for the fixed 3-1-4-5 hand.
+4. After correlated active evidence, revoke only owned bindings. API: ABSTAIN.
+5. After correlated revoked evidence, create new owned activation rows using the
+   original expiry. API: SUPPORTED / CONTRADICTED again.
 
-Both tools stop on unexpected metadata or response contracts, and never dump raw
-exceptions, bodies, environment, credentials, lengths, hashes or fingerprints of
-credentials. Public canon payload hashes elsewhere are semantic evidence, not
-credential fingerprints. The disposable PostgreSQL rehearsal must not be used
-against production.
+Every request ID is checked for uniqueness before publishing its phase.
+`verify_phase` checks phase contracts and a cross-phase receipt ledger. Preserve
+original authenticated metadata/log tool responses and request-ID/deployment
+query filters; normalized JSON is not self-authenticating. Correlate every phase
+before the next write, then every request including waiting polls via
+`verify_receipts` (at most 420-second bracketing window). No alias-only inference.
+HTTP output stays pending until this independent control-plane correlation.
 
-Validation: `python -m pytest -q tools/canon_auth/test_auth.py`.
+`pilot_sql.plan(school_id, reviewed_code_sha)` is a pure compiler, not a runner.
+The actual school ID and live plan stay outside the public repository. Its SQL
+must first pass `rehearse_sql` against the fixed disposable PostgreSQL 18 service.
+Do not run the disposable rehearsal on production. Each returned stage is one
+transaction, bounded by a 15-second statement timeout and advisory lock. SQL
+constraints and activation gates remain enforced. Original source excerpts and
+TDEC-20261003-002 are preserved. No HCP threshold is inferred from points.
+
+Normal budget: 40 new rows, including five append-only history events and both
+activation generations. Only one synthetic position, no teacher output, search,
+queue or final-decision writes. Expiry is 24 hours from the initial activation
+transaction; reactivation cannot extend it. Emergency revoke updates only owned
+activation IDs and retains history with at most two extra rows (42 total).
+Repeated emergency calls do not create additional audit rows. If a required phase
+or correlation fails, stop progression and revoke any active owned bindings.
+
+## Separate legacy GitHub diagnostic
+
+`db_diagnostic` consumes the existing GitHub DB secret only in its separately
+scoped first-run diagnostic workflow. It checks fixed target metadata and performs
+one read-only connection with rollback; it does not rotate or expose credentials.
+A failed legacy credential is a separate blocker and is never reported as green
+because Vercel acceptance passes. No new diagnostic workflow is installed here.
+
+Validation: `python -m pytest -q tools/canon_auth` plus the isolated PostgreSQL
+workflow. These tests and build receipts are not production acceptance until the
+actual controller stages and pinned-deployment correlations have completed.
