@@ -17,7 +17,7 @@ concurrency:
 jobs:
   ack-regression:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -52,16 +52,22 @@ jobs:
               guard(False)
           finally:
               extra.unlink(missing_ok=True)
+          wrong=pathlib.Path('database/migrations/0402_autopilot_codex_ack_fingerprint_not_null.sql')
+          try:
+              wrong.write_bytes(original)
+              guard(False)
+          finally:
+              wrong.unlink(missing_ok=True)
           guard(True)
-          print('namespace exact-source, tamper and forbidden-range controls PASS')
+          print('namespace exact-source, tamper, wrong-number and forbidden-range controls PASS')
           PY
       - name: Fetch pinned official PostgreSQL image
-        run: timeout 180s docker pull --platform linux/amd64 postgres@sha256:9e73daeb439141c2b11eea2463f5f1a3b269fd90d897b41cddb7cb440f21aa5d
+        run: timeout 120s docker pull --platform linux/amd64 postgres@sha256:9e73daeb439141c2b11eea2463f5f1a3b269fd90d897b41cddb7cb440f21aa5d
       - name: Verify ACK and checksum guards twice in network-none fixtures
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=20s 450s env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp LANG=C.UTF-8 python3 database/tests/ack-fingerprint/run.py
-          timeout --signal=TERM --kill-after=20s 450s env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp LANG=C.UTF-8 python3 database/tests/ack-fingerprint/run.py
+          timeout --signal=TERM --kill-after=20s 150s env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp LANG=C.UTF-8 python3 database/tests/ack-fingerprint/run.py
+          timeout --signal=TERM --kill-after=20s 150s env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp LANG=C.UTF-8 python3 database/tests/ack-fingerprint/run.py
       - name: Cleanup owned disposable containers
         if: always()
         run: |
@@ -70,7 +76,7 @@ jobs:
           if (("${#names[@]}")); then timeout 30s docker rm -f -v "${names[@]}"; fi
   fresh-schema:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 12
     services:
       postgres:
         image: postgres@sha256:9e73daeb439141c2b11eea2463f5f1a3b269fd90d897b41cddb7cb440f21aa5d
@@ -107,8 +113,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$DATABASE_URL" = 'postgresql://bridge_ci_owner:fixture_only@localhost:5432/bridge_school_ci'
-          timeout 600s bash database/scripts/migrate.sh
-          timeout 300s bash -c 'set -euo pipefail; for file in database/tests/*.sql; do psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$file" >/dev/null; done'
-          timeout 120s bash database/scripts/migrate.sh
+          timeout 360s bash database/scripts/migrate.sh
+          timeout 240s bash -c 'set -euo pipefail; for file in database/tests/*.sql; do psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$file" >/dev/null; done'
+          timeout 60s bash database/scripts/migrate.sh
           test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c "SELECT checksum FROM public.schema_migration WHERE migration_key='0401_autopilot_codex_ack_fingerprint_not_null'")" = 'bea4b407a63256f83f5eecbd8b220406070046edb34d87f849d645b39134dcc7'
           test "$(psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c 'SELECT count(*) FROM public.schema_migration WHERE checksum IS NULL')" = 0

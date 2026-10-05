@@ -40,3 +40,8 @@ NULL/replay/concurrency regression; exact artifact digest; target, OID,
 definition, ACL, timestamp, non-NULL conflict and repeated-execution negative
 controls; inverse checksum restoration; unchanged delivery state and catalog.
 All fixtures use disposable PostgreSQL and no production credentials.
+
+The isolated workflow budgets eight runner-minutes for ACK regression and twelve
+for fresh schema (twenty total maximum). Existing repository PR checks remain
+separate required checks. Namespace controls also reject the exact exception
+suffix at another numeric prefix, even with canonical file bytes.
