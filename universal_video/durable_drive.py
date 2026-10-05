@@ -13,6 +13,7 @@ import re
 import stat
 from pathlib import Path
 
+from .comparison_artifacts import verify_comparison_original
 from .drive_adapter import access_token, file_metadata, hash_remote_file, original_snapshot
 from .drive_results import (PublishArtifact, _upload_or_verify_file, _verify_folder,
                             _get_file_metadata, _verify_remote_artifact,
@@ -176,6 +177,7 @@ def finalize_drive_job(result_dir: Path, source_dir: Path, binding: dict, *,
     if source["file_id"] != binding["source_file_id"]:
         raise RuntimeError("Drive source binding mismatch")
     artifacts = collect_compact_artifacts(result_dir)
+    verify_comparison_original(result_dir, source)
     bundle = artifact_set_sha256(artifacts)
     conformance = verify_result(result_dir, expected_job_id=job_id, expected_profile=profile,
                                 expected_job_hash=job_hash,
@@ -202,7 +204,7 @@ def finalize_drive_job(result_dir: Path, source_dir: Path, binding: dict, *,
         name = artifact.relative_name
         role = ("frames" if name.startswith("frames/") else "transcript" if name in
                 {"transcript.jsonl", "transcript.txt", "speaker_diarization.json"} else
-                "analysis" if name == "algorithm_3_1_test.json" else "checks")
+                "analysis" if name == "algorithm_3_1_test.json" or name.startswith("comparison/part-") else "checks")
         # Versioned stable names allow crash recovery without replacing any item.
         remote_name = f"{job_id}-{bundle}-{name.replace('/', '__')}"
         upload = PublishArtifact(artifact.path, remote_name, artifact.size_bytes, artifact.sha256, artifact.md5)
@@ -228,6 +230,8 @@ def finalize_drive_job(result_dir: Path, source_dir: Path, binding: dict, *,
     marker_path = result_dir / ".drive-finalization-marker.json"
     atomic_json(marker_path, receipt)
     marker_bytes = marker_path.read_bytes()
+    if any(a.relative_name.startswith("comparison/") for a in artifacts) and len(marker_bytes) > 1024**2:
+        raise RuntimeError("comparison completion marker exceeds reserved quota")
     marker = PublishArtifact(marker_path, f"{job_id}-{bundle}-PUBLICATION_COMPLETE.json",
                              len(marker_bytes), hashlib.sha256(marker_bytes).hexdigest(),
                              hashlib.md5(marker_bytes, usedforsecurity=False).hexdigest())
@@ -255,6 +259,7 @@ def cleanup_proof_matches(result_dir: Path, source_dir: Path | None, *, job_id: 
         intake = (read_receipt(source_dir / SOURCE_RECEIPT) if source_dir is not None else
                   {"original": source["before"], "sha256": source["sha256_before"]})
         artifacts = collect_compact_artifacts(result_dir)
+        verify_comparison_original(result_dir, source)
         inventory = {a.relative_name: (a.size_bytes, a.sha256) for a in artifacts}
         records = proof["remote_artifacts"]
         remote = {r["relative_name"]: (r["size_bytes"], r["sha256"]) for r in records}
