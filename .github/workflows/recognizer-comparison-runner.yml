@@ -5,6 +5,7 @@ on:
     paths:
       - 'tools/recognizer_compare.py'
       - 'tests/test_recognizer_compare.py'
+      - 'tests/test_recognizer_compare_auction_integration.py'
       - 'docs/recognizer-comparison-runner.md'
       - '.github/workflows/recognizer-comparison-runner.yml'
 
@@ -14,7 +15,7 @@ permissions:
 jobs:
   offline-recorder:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
@@ -25,13 +26,18 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: 546f52d6bab7f836dcb4f6325a6caa79c982f16e
+          ref: 62f2c3c71edf1065f2c917892c3af3533516070d
           path: baseline
           persist-credentials: false
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: 74c98215d433c0383a8cc1021b4a24f9caade8fe
           path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: 65a17e4928132697a158c9e985042c206680c51a
+          path: auction-candidate
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
@@ -47,23 +53,31 @@ jobs:
           EXPECTED_RUNNER: ${{ github.event.pull_request.head.sha }}
         run: |
           test "$(git -C runner rev-parse HEAD)" = "$EXPECTED_RUNNER"
-          test "$(git -C baseline rev-parse HEAD)" = 546f52d6bab7f836dcb4f6325a6caa79c982f16e
+          test "$(git -C baseline rev-parse HEAD)" = 62f2c3c71edf1065f2c917892c3af3533516070d
           test "$(git -C candidate rev-parse HEAD)" = 74c98215d433c0383a8cc1021b4a24f9caade8fe
+          test "$(git -C auction-candidate rev-parse HEAD)" = 65a17e4928132697a158c9e985042c206680c51a
           export RECOGNIZER_BASELINE_ROOT="$PWD/baseline"
+          export RECOGNIZER_BASELINE_SHA=62f2c3c71edf1065f2c917892c3af3533516070d
+          export RECOGNIZER_AUCTION_CANDIDATE_ROOT="$PWD/auction-candidate"
+          export RECOGNIZER_AUCTION_CANDIDATE_SHA=65a17e4928132697a158c9e985042c206680c51a
           export RECOGNIZER_CANDIDATE_ROOT="$PWD/candidate"
           mkdir results
           git -C runner rev-parse HEAD > results/runner-sha.txt
           git -C baseline rev-parse HEAD > results/baseline-sha.txt
           git -C candidate rev-parse HEAD > results/candidate-sha.txt
+          git -C auction-candidate rev-parse HEAD > results/auction-candidate-sha.txt
           cd runner
-          python -B -m pytest -q -ra -p no:cacheprovider tests/test_recognizer_compare.py --junitxml=../results/runner.xml
+          python -B -m pytest -q -ra -p no:cacheprovider tests/test_recognizer_compare.py tests/test_recognizer_compare_auction_integration.py --junitxml=../results/runner.xml
       - name: Refuse skips
         run: |
           python - <<'PY'
           import xml.etree.ElementTree as ET
           cases = list(ET.parse('results/runner.xml').iter('testcase'))
           assert cases and not any(c.find('skipped') is not None for c in cases)
-          print({'executed_controls': len(cases), 'real_video_accuracy_evaluated': False})
+          integration = [c for c in cases if c.get('name') == 'test_candidate3_compare_embedded_auction_pixels_in_separate_offline_workers']
+          assert len(integration) == 1
+          assert all(c.find(tag) is None for c in cases for tag in ('skipped', 'failure', 'error'))
+          print({'executed_controls': len(cases), 'candidate3_integration_executed': True, 'synthetic_card_calibration_stubs': True, 'real_video_accuracy_evaluated': False})
           PY
       - name: Retain only public synthetic test receipts
         if: always()
