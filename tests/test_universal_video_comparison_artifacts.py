@@ -590,6 +590,7 @@ def r3_prepared(tmp_path, *, parent=None, candidate3=True, with_auction=True):
                 occurrence = {"source_id": sealed["inputs"]["video"]["sha256"],
                               "board_occurrence_id": "c" * 64, "anchor_pixel_sha256": "d" * 64,
                               "start_ms": timestamp, "end_ms": timestamp,
+                              "latest_observation_index": 0, "latest_observation_timestamp_ms": timestamp,
                               "canonical_promotion_allowed": False, "complete": False,
                               "status": "PARTIAL", "observations": [observation],
                               "visible_fragments": [dict(reference, calls=[])], "ordered_calls": []}
@@ -734,3 +735,41 @@ def test_r3_durable_retry_and_tamper_invalidate_cleanup(drive_setup, tmp_path):
     assert durable.cleanup_proof_matches(job, source, job_id="job")
     (job / "comparison" / "part-00000.bin").write_bytes(b"changed")
     assert not durable.cleanup_proof_matches(job, source, job_id="job")
+
+
+@pytest.mark.parametrize("mode", ["empty-observations", "unknown-status", "complete-mismatch",
+                                  "fragments-type", "calls-type"])
+def test_r3_occurrence_cannot_claim_evidence_with_empty_or_invalid_inventory(tmp_path, mode):
+    prep = r3_prepared(tmp_path)
+    directory = next(prep[2].glob("candidate/*"))
+    path = directory / "result.json"
+    result = json.loads(path.read_text())
+    occurrence = result["auction_recognition"]["auctions"][0]
+    if mode == "empty-observations":
+        occurrence.update(observations=[], visible_fragments=[], complete=True, status="COMPLETE_CONFIRMED")
+        next(directory.glob("recognizer/auction-evidence/*.png")).unlink()
+    elif mode == "unknown-status":
+        occurrence["status"] = "PASS"
+    elif mode == "complete-mismatch":
+        occurrence["complete"] = True
+    elif mode == "fragments-type":
+        occurrence["visible_fragments"] = None
+    else:
+        occurrence["ordered_calls"] = {}
+    write(path, result)
+    with pytest.raises(RuntimeError):
+        attach(prep)
+    assert not (prep[0] / "comparison").exists()
+
+
+@pytest.mark.parametrize("field,value", [("start_ms", 0), ("latest_observation_index", 1),
+    ("latest_observation_timestamp_ms", 999)])
+def test_r3_occurrence_interval_and_latest_observation_bind(tmp_path, field, value):
+    prep = r3_prepared(tmp_path)
+    directory = next(prep[2].glob("candidate/*"))
+    path = directory / "result.json"
+    result = json.loads(path.read_text())
+    result["auction_recognition"]["auctions"][0][field] = value
+    write(path, result)
+    with pytest.raises(RuntimeError):
+        attach(prep)

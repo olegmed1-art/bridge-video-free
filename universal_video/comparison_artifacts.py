@@ -508,9 +508,16 @@ def validate_auction(files, prefix, binding, auction, status, output):
     referenced = set()
     occurrence_ids = set()
     snapshot_bytes = 0
+    global_timestamp = -1
     for occurrence in occurrences:
         if (not isinstance(occurrence, dict) or occurrence.get("source_id") != binding["input_sha256"]["video"] or
-                occurrence.get("canonical_promotion_allowed") is not False or type(occurrence.get("complete")) is not bool):
+                occurrence.get("canonical_promotion_allowed") is not False or type(occurrence.get("complete")) is not bool or
+                occurrence.get("status") not in {"PARTIAL", "CONFLICT", "REVIEW", "COMPLETE_CONFIRMED", "COMPLETE_NEEDS_CONFIRMATION"} or
+                occurrence["complete"] != (occurrence["status"] == "COMPLETE_CONFIRMED") or
+                not isinstance(occurrence.get("visible_fragments"), list) or
+                not isinstance(occurrence.get("ordered_calls"), list) or
+                (occurrence["complete"] and not occurrence["ordered_calls"])):
+
             fail("auction occurrence binding invalid")
         oid = _hex(occurrence.get("board_occurrence_id"))
         if oid in occurrence_ids:
@@ -522,8 +529,12 @@ def validate_auction(files, prefix, binding, auction, status, output):
         if end < start:
             fail("auction occurrence interval invalid")
         observations = occurrence.get("observations")
-        if not isinstance(observations, list) or len(observations) > 128:
+        if not isinstance(observations, list) or not 1 <= len(observations) <= 128:
             fail("auction snapshot quota")
+        latest_index = _int(occurrence.get("latest_observation_index"), 127)
+        latest_timestamp = _int(occurrence.get("latest_observation_timestamp_ms"), 120000)
+        if latest_index >= len(observations) or latest_timestamp != end:
+            fail("auction latest observation binding invalid")
         by_locator = {}
         last_timestamp = -1
         for observation in observations:
@@ -534,11 +545,11 @@ def validate_auction(files, prefix, binding, auction, status, output):
             digest = _hex(observation.get("frame_sha256"))
             expected = f"auction-{timestamp:010d}-{pixels[:12]}.png"
             path = observation.get("frame_path")
-            if (timestamp <= last_timestamp or not start <= timestamp <= end or not isinstance(path, str) or
+            if (timestamp <= last_timestamp or timestamp <= global_timestamp or not start <= timestamp <= end or not isinstance(path, str) or
                     ".." in PurePosixPath(path).parts or "\\" in path or
                     path != output + "/recognizer/auction-evidence/" + expected):
                 fail("unsafe auction frame locator or timestamp")
-            last_timestamp = timestamp
+            last_timestamp = global_timestamp = timestamp
             name = prefix + "recognizer/auction-evidence/" + expected
             if name in referenced or name not in files or hashlib.sha256(files[name]).hexdigest() != digest:
                 fail("auction snapshot missing, duplicate or changed")
@@ -547,6 +558,9 @@ def validate_auction(files, prefix, binding, auction, status, output):
             if len(referenced) > MAX_AUCTION_SNAPSHOTS or snapshot_bytes > MAX_AUCTION_BYTES:
                 fail("auction evidence quota")
             by_locator[(timestamp, digest, path)] = observation
+        if (observations[0]["timestamp_ms"] != start or
+                observations[latest_index]["timestamp_ms"] > latest_timestamp):
+            fail("auction observation interval binding invalid")
         # Every secondary reference must bind to a retained observation in its occurrence.
         def references(value):
             if isinstance(value, dict):

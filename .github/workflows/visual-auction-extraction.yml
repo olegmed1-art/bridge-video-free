@@ -1,0 +1,93 @@
+name: Visual auction extraction
+
+on:
+  pull_request:
+    paths:
+      - 'bridge_contracts/video_auction.py'
+      - 'bridge_vision/auction_observer.py'
+      - 'bridge_vision/bridgit_*candidate*.py'
+      - 'bridge_runtime_hardening_r26_candidate.py'
+      - 'tests/test_visual_auction_extraction.py'
+      - 'tests/test_bridge_video_auction_contract.py'
+      - 'tests/test_bridge_vision_observation_guards.py'
+      - 'tests/test_r26_candidate_integration.py'
+      - 'tests/recognizer_guard_baseline.txt'
+      - 'docs/visual-auction-extraction.md'
+      - '.github/workflows/visual-auction-extraction.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-synthetic-controls:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: 62f2c3c71edf1065f2c917892c3af3533516070d
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: 1243f2feab9998ca62dfa77a3452881f440657c7
+          path: compat
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install pinned dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          pytest==8.4.1 numpy==2.2.6 opencv-python-headless==4.11.0.86
+          Pillow==11.2.1 requests==2.32.3 google-auth==2.40.3
+          reportlab==4.4.0 PyMuPDF==1.26.0 PyYAML==6.0.2 'psycopg[binary]==3.3.4'
+      - name: Record exact inputs
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git -C candidate rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git -C baseline rev-parse HEAD)" = 62f2c3c71edf1065f2c917892c3af3533516070d
+          test "$(git -C compat rev-parse HEAD)" = 1243f2feab9998ca62dfa77a3452881f440657c7
+          mkdir results
+          git -C candidate rev-parse HEAD > results/candidate-sha.txt
+          git -C baseline rev-parse HEAD > results/baseline-sha.txt
+          git -C compat rev-parse HEAD > results/offline-guard-sha.txt
+      - name: Existing baseline controls
+        working-directory: baseline
+        run: |
+          mapfile -t cases < ../candidate/tests/recognizer_guard_baseline.txt
+          python -B -m pytest -q -ra -p no:cacheprovider "${cases[@]}" --junitxml=../results/baseline.xml
+      - name: Existing controls on candidate
+        working-directory: candidate
+        run: |
+          mapfile -t cases < tests/recognizer_guard_baseline.txt
+          python -B -m pytest -q -ra -p no:cacheprovider "${cases[@]}" --junitxml=../results/candidate.xml
+      - name: Auction pixels, retention and candidate integration
+        working-directory: candidate
+        run: |
+          export RECOGNIZER_COMPARISON_RUNNER_ROOT="$GITHUB_WORKSPACE/compat"
+          python -B -m pytest -q -ra -p no:cacheprovider tests/test_visual_auction_extraction.py tests/test_bridge_video_auction_contract.py tests/test_bridge_vision_observation_guards.py tests/test_r26_candidate_integration.py --junitxml=../results/auction.xml
+      - name: Require executed new controls
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse('results/auction.xml').iter('testcase'))
+          assert cases and not any(c.find('skipped') is not None for c in cases)
+          print({'controls': len(cases), 'real_video_accuracy_evaluated': False})
+          PY
+      - name: Retain only synthetic receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: auction-controls-${{ github.event.pull_request.head.sha }}
+          path: results/
+          retention-days: 14
