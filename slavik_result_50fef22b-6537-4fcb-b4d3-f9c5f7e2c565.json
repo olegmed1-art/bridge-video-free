@@ -1,0 +1,17 @@
+{
+  "dispatch_id": "50fef22b-6537-4fcb-b4d3-f9c5f7e2c565",
+  "expected_head_sha": "4c26b6eda7617563a6372d1fc0eb82beadd4e910",
+  "target_pr": 1994,
+  "task_fingerprint": "3cdfb1975c45a249174ecfe12d9e251ef7b77e35e4fbedad8d7a0b6cbfa7afe9",
+  "status": "SUCCEEDED",
+  "result_code": "AUDIT_FINDINGS_REPORTED",
+  "summary": "Malformed manifest rows can escape error handling and preserve a stale success report; repair validation and regression coverage in the two focus files.",
+  "evidence": [
+    "dds_training/coverage_report.py:69 assumes every tests entry is a mapping with id; null raises AttributeError and a suite row without id raises KeyError.",
+    "dds_training/coverage_report.py:211 does not catch AttributeError or KeyError, so these malformed inputs bypass structured COVERAGE_REPORT_ERROR output.",
+    "Reproduction returned 1 with traceback and left a pre-seeded status=ok output unchanged for tests=[null] and tests=[{suite:fast}].",
+    "dds_training/coverage_report_selftest.py passed and covers empty suite mappings, invalid thresholds, malformed fragments, invalid UTF-8, and suite-scoped arcs.",
+    "Smallest repair scope: validate manifest containers and test rows in coverage_report.py, then add stale-output malformed-manifest cases in coverage_report_selftest.py.",
+    "PYTHONDONTWRITEBYTECODE=1 python3 -B dds_training/coverage_report_selftest.py passed at exact head 4c26b6eda7617563a6372d1fc0eb82beadd4e910."
+  ]
+}
