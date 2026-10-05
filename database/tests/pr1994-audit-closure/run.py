@@ -426,7 +426,14 @@ AS $$ BEGIN UPDATE autopilot.project_planner_state SET decision_count=decision_c
                 if stage == "before_locks":
                     sql(change)
                 else:
-                    background = writer("SELECT pg_sleep(8);")
+                    # Keep the competing transaction open until the closer exits.
+                    background = process("pr1994-fixture-writer")
+                    background.stdin.write("BEGIN; SELECT 1;\n")
+                    background.stdin.flush()
+                    await_condition(
+                        "SELECT count(*) FROM pg_stat_activity "
+                        "WHERE application_name='pr1994-fixture-writer' "
+                        "AND state='idle in transaction';")
                 after_control_commit = snapshot()
                 # Closing this session releases its session advisory lock.
                 holder.stdin.write("\\q\n")
@@ -435,6 +442,12 @@ AS $$ BEGIN UPDATE autopilot.project_planner_state SET decision_count=decision_c
                 _, holder_stderr = holder.communicate(timeout=10)
                 assert holder.returncode == 0, holder_stderr
                 _, closer_stderr = closer.communicate(timeout=15)
+                if background is not None:
+                    assert background.poll() is None, "COMPETING_TRANSACTION_EXITED_EARLY"
+                    assert value(
+                        "SELECT count(*) FROM pg_stat_activity "
+                        "WHERE application_name='pr1994-fixture-writer' "
+                        "AND state='idle in transaction';") == "1", "COMPETING_TRANSACTION_NOT_RETAINED"
                 if legacy:
                     assert closer.returncode == 0, closer_stderr[-2400:]
                     stale = snapshot()
@@ -446,6 +459,9 @@ AS $$ BEGIN UPDATE autopilot.project_planner_state SET decision_count=decision_c
                     assert snapshot() == after_control_commit, "RACE_REJECTION_CHANGED_ROWS"
             finally:
                 if background is not None:
+                    background.stdin.write("ROLLBACK;\n\\q\n")
+                    background.stdin.close()
+                    background.stdin = None
                     _, writer_stderr = background.communicate(timeout=15)
                     assert background.returncode == 0, writer_stderr
                 for proc in (closer, holder):
