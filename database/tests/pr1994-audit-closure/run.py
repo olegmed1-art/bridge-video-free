@@ -300,7 +300,7 @@ INSERT INTO autopilot.native_cli_receipt(dispatch_id,state,provider_task_id,prom
             sql(change)
             denied("PR1994_LIVE_WORK_OR_CONTROL_DRIFT")
         baseline()
-        sql("CREATE OR REPLACE FUNCTION autopilot.role_blocker_requires_owner(p_result_code text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $ SELECT true $;")
+        sql("CREATE OR REPLACE FUNCTION autopilot.role_blocker_requires_owner(p_result_code text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $fixture$ SELECT true $fixture$;")
         denied("PR1994_LIVE_WORK_OR_CONTROL_DRIFT")
         checks.append("live_task_dispatch_native_role_and_owner_gate_guards")
 
