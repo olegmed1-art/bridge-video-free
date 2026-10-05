@@ -105,6 +105,8 @@ def _teacher_role(segment: Mapping[str, Any]) -> tuple[bool, float]:
 
 
 def _segment_interval(segment: Mapping[str, Any]) -> tuple[float, float] | None:
+    if isinstance(segment.get("start"), bool) or isinstance(segment.get("end"), bool):
+        return None
     try:
         start = float(segment.get("start"))
         end = float(segment.get("end"))
@@ -129,6 +131,43 @@ def _card_mentions(text: str) -> list[str]:
         if card not in ordered:
             ordered.append(card)
     return ordered
+
+
+def _direct_card_assertion(text: str, seat: str) -> bool:
+    """Accept a bounded possession statement, not arbitrary card mentions.
+
+    ASR punctuation is optional, so looking only for '?' or 'not' is unsafe.
+    After a present-tense possession prefix, every word must belong to an
+    exact card or a list connector. Any remaining context fails closed.
+    """
+    if "?" in text or "？" in text:
+        return False
+    seat_pattern = next(pattern.pattern for name, pattern in _SEAT_PATTERNS if name == seat)
+    prefix = re.match(
+        rf"^\s*(?:у\s+{seat_pattern}\s+(?:есть\s+)?|"
+        rf"{seat_pattern}\s+(?:has|holds|имеет)\s+)",
+        text, re.I,
+    )
+    if prefix is None:
+        return False
+    body = text[prefix.end():]
+    if re.search(r"[.;:]\s*\S", body):
+        return False
+    spans = sorted({(m.start(), m.end(), card)
+                    for card, pattern in _CARD_PATTERNS for m in pattern.finditer(body)})
+    if not spans:
+        return False
+    # Do not let one glyph/word support two different cards through overlapping
+    # forward/reverse rank-suit matches.
+    for index, (start, end, card) in enumerate(spans):
+        if any(other_start < end and other_end > start and other_card != card
+               for other_start, other_end, other_card in spans[index + 1:]):
+            return False
+    remainder = list(body)
+    for start, end, _card in spans:
+        remainder[start:end] = " " * (end - start)
+    residue = re.sub(r"(?i)\b(?:and|the|a|an|и)\b|[\s,.;:]", "", "".join(remainder))
+    return not residue
 
 
 def extract_teacher_card_declarations(
@@ -188,6 +227,13 @@ def extract_teacher_card_declarations(
                 "evidence_locator": locator,
             })
             continue
+        if not _direct_card_assertion(text, seats[0]):
+            rejected.append({
+                "segment": index,
+                "reason": "NON_ASSERTIVE_CARD_STATEMENT",
+                "evidence_locator": locator,
+            })
+            continue
         start, end = interval
         for card in cards:
             if len(declarations) >= MAX_DECLARATIONS:
@@ -235,11 +281,17 @@ def _timeline_compatible(
     deal_timestamp_seconds: float | None,
     window_seconds: float,
 ) -> bool:
-    if deal_timestamp_seconds is None:
+    interval = _segment_interval(declaration)
+    if deal_timestamp_seconds is None or isinstance(deal_timestamp_seconds, bool) or interval is None:
         return False
-    start = float(declaration["start"])
-    end = float(declaration["end"])
-    return start - window_seconds <= deal_timestamp_seconds <= end + window_seconds
+    try:
+        timestamp = float(deal_timestamp_seconds)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(timestamp) or timestamp < 0:
+        return False
+    start, end = interval
+    return start - window_seconds <= timestamp <= end + window_seconds
 
 
 def reconstruct_deal(

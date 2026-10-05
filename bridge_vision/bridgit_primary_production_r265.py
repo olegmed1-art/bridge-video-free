@@ -45,9 +45,26 @@ ASR_CARD_PROMPT = (
 
 
 def _visual_hands(deal: Mapping[str, Any]) -> dict[str, list[str]]:
+    source = deal.get("visual_hands")
+    if source is None:
+        canonical = deal.get("canonical_deal") or {}
+        provenance = canonical.get("card_provenance") or {} if isinstance(canonical, Mapping) else {}
+        nonvisual = any(
+            cards for seat_sources in provenance.values() if isinstance(seat_sources, Mapping)
+            for kind, cards in seat_sources.items() if kind not in ("VISUAL", "observed_cards")
+        ) if isinstance(provenance, Mapping) else True
+        if (deal.get("hidden_hand_reconstruction_performed")
+                or deal.get("inferred_seats")
+                or (isinstance(canonical, Mapping) and canonical.get("derivations"))
+                or nonvisual
+                or deal.get("reconstruction")):
+            raise ValueError("reconstructed deal requires explicit visual_hands")
+        source = deal.get("hands") or {}
+    if not isinstance(source, Mapping):
+        raise ValueError("visual_hands must be an object")
     result: dict[str, list[str]] = {}
     for seat in ("N", "E", "S", "W"):
-        seat_raw = (deal.get("hands") or {}).get(seat) or {}
+        seat_raw = source.get(seat) or {}
         if isinstance(seat_raw, Mapping):
             result[seat] = [
                 str(rank).upper() + str(suit).upper()
@@ -107,21 +124,26 @@ def install(base, token_func: Callable[[], str]) -> None:
                 (timestamps[value] for value in evidence_ids if value in timestamps),
                 None,
             )
+            observed_hands = _visual_hands(deal)
             reconstruction = reconstruct_deal(
-                _visual_hands(deal),
+                observed_hands,
                 declarations,
                 deal_timestamp_seconds=deal_timestamp,
                 speech_window_seconds=speech_window,
             )
             counts["deal_count"] += 1
+            # Persist the observation boundary even for partial/conflict results:
+            # a repeated pass must start from the same visual evidence.
+            deal["visual_hands"] = observed_hands
             deal["reconstruction"] = reconstruction
             deal["recognizer"]["asr_text_reconstruction_enabled"] = True
             deal["recognizer"]["visual_cards_checked_against_speech"] = False
             deal["recognizer"]["teacher_card_speech_window_seconds"] = speech_window
             if reconstruction["status"] == "RECONSTRUCTED_FULL":
-                deal.setdefault("visual_hands", deal.get("hands"))
                 deal["hands"] = reconstruction["hands_by_suit"]
                 deal["canonical_deal"] = reconstruction["deal"]
+                deal["inferred_seats"] = [item["seat"] for item in reconstruction["deal"]["derivations"]]
+                deal["hidden_hand_reconstruction_performed"] = bool(deal["inferred_seats"])
                 deal["status"] = "EVIDENCE_FUSED_RECONSTRUCTED_FULL"
                 deal["reconstruction_rule"] = (
                     "VISUAL_FIRST; TEACHER_SPEECH_FOR_UNKNOWN_ONLY; "
