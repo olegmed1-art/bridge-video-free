@@ -260,6 +260,11 @@ def validate_files(files, binding):
             comparison.get("status") not in {"CAPTURED_UNSCORED", "REPLAY_ERROR"} or
             seal.get("source_offset_ms") != binding["source_offset_ms"]):
         fail("comparison receipt binding mismatch")
+    # Failed/interrupted producers cannot attest complete retained evidence.
+    # Preserve their entire local tree; never publish a complete-package receipt
+    # or authorize cleanup from partial/error output.
+    if comparison["status"] != "CAPTURED_UNSCORED":
+        fail("incomplete comparison cannot publish or authorize cleanup; evidence retained")
     if seal.get("scope") != "PRIMARY_VISUAL_ONLY; NO_ASR_AUCTION_DDS_OR_PUBLISHER":
         fail("unsupported comparison result scope")
     for name, sha in binding["input_sha256"].items():

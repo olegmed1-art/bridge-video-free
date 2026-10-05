@@ -427,14 +427,18 @@ def test_error_side_cannot_hide_success_evidence_or_bad_results(tmp_path, mode):
     assert not (prep[0] / "comparison").exists()
 
 
-def test_failed_comparison_retains_and_validates_success_side(tmp_path):
+def test_failed_comparison_blocks_publication_and_retains_success_side(tmp_path):
     prep = prepared(tmp_path)
     path = prep[2] / "comparison.json"
     summary = json.loads(path.read_text())
     summary["status"] = "REPLAY_ERROR"
     summary["runs"]["candidate"] = {"status": "TIMEOUT", "exit_code": None}
     write(path, summary)
-    attach(prep)
+    before = {p.relative_to(prep[2]).as_posix(): p.read_bytes() for p in prep[2].rglob("*") if p.is_file()}
+    with pytest.raises(RuntimeError, match="incomplete comparison"):
+        attach(prep)
+    assert before == {p.relative_to(prep[2]).as_posix(): p.read_bytes() for p in prep[2].rglob("*") if p.is_file()}
+    assert not (prep[0] / "comparison").exists()
 
 
 @pytest.mark.parametrize("raw", [
@@ -480,3 +484,60 @@ def test_declared_comparison_still_honors_smaller_per_file_quota(tmp_path):
 def test_decoded_credential_key_normalization(key):
     with pytest.raises(RuntimeError, match="credential-like"):
         comparison.decode(json.dumps({key: "synthetic-private-value"}).encode())
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("null_declaration", [False, True])
+def test_actual_legacy_publish_cli_rejects_comparison_before_drive_access(tmp_path, monkeypatch, dry_run, null_declaration):
+    if null_declaration:
+        job, manifest = _bundle(tmp_path)
+        manifest["comparison_artifacts"] = None
+        write(job / "manifest.json", manifest)
+        report = _verify(job, evidence_phase="GENERATION_FINALIZATION")
+        write(job / "server_review.json", build_server_review(job, report))
+    else:
+        prep = prepared(tmp_path)
+        attach(prep)
+        job, manifest = prep[:2]
+    bundle = outputs.artifact_set_sha256(outputs.collect_compact_artifacts(job))
+    def forbidden(*args, **kwargs):
+        pytest.fail("legacy comparison reached Drive auth or mutation")
+    for name in ("access_token", "probe_destination", "_create_folder", "_upload_or_verify_file"):
+        monkeypatch.setattr(outputs, name, forbidden)
+    argv = ["drive-results", "publish", "--folder-id", "synthetic_destination_01",
+            "--job-dir", str(job), "--expected-job-id", manifest["job_id"],
+            "--expected-profile", manifest["profile"], "--expected-job-hash", manifest["job_hash"],
+            "--expected-source-file-id", manifest["source"]["file_id"],
+            "--expected-artifact-set-sha256", bundle]
+    if dry_run:
+        argv.append("--dry-run")
+    monkeypatch.setattr("sys.argv", argv)
+    with pytest.raises(RuntimeError, match="requires protected durable finalization"):
+        outputs.main()
+    assert not (job / "DURABLE_PUBLICATION_PROOF.json").exists()
+
+
+@pytest.mark.parametrize("state", ["ERROR", "TIMEOUT", "PROCESS_ERROR"])
+def test_failed_worker_without_events_cannot_be_complete_package(tmp_path, state):
+    prep = prepared(tmp_path)
+    directory = next(prep[2].glob("candidate/*"))
+    for path in (directory / "evidence").rglob("*"):
+        if path.is_file():
+            path.unlink()
+    summary_path = prep[2] / "comparison.json"
+    summary = json.loads(summary_path.read_text())
+    summary["status"] = "REPLAY_ERROR"
+    summary["runs"]["candidate"] = {"status": state, "exit_code": 1 if state == "ERROR" else None}
+    write(summary_path, summary)
+    if state == "ERROR":
+        status = {"status": "ERROR", "variant": "candidate", "job_id": "synthetic-first-clip-candidate",
+                  "source_sha": "2" * 40}
+        write(directory / "worker-status.json", status)
+        summary["runs"]["candidate"] = {**status, "exit_code": 1}
+        write(summary_path, summary)
+    else:
+        (directory / "worker-status.json").unlink()
+    with pytest.raises(RuntimeError, match="incomplete comparison"):
+        attach(prep)
+    assert not (prep[0] / "comparison").exists()
+    assert not (prep[0] / durable.FINAL_RECEIPT).exists()

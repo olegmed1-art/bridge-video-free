@@ -105,15 +105,23 @@ Parts route to the existing analysis role; index routes to checks. This code
 creates no folders or grants. The separate folder owner must confirm those
 bindings; no real IDs appear here.
 
-The unchanged finalizer performs create/reuse plus actual remote-byte readback
+The legacy publish CLI rejects all comparison packages, including dry-run
+readiness, before any Drive authorization or folder creation. Only the protected
+durable route may publish them.
+
+The durable finalizer performs create/reuse plus actual remote-byte readback
 for every part/index and the final marker, with stable original-source checks.
 Comparison bytes participate in the complete artifact-set digest, so retry
 reuses identical names and a modified/missing pair blocks cleanup.
 A stale PASS is demoted during revalidation. Done receipt/cleanup intent gates
 remain unchanged; no new cleanup authority is introduced.
 
-CAPTURED_UNSCORED and REPLAY_ERROR are evidence states, not recognition accuracy,
-teacher verification, pedagogical benefit or canon PASS. Visual source evidence
+CAPTURED_UNSCORED is an unscored execution state, not recognition accuracy,
+teacher verification, pedagogical benefit or canon PASS. REPLAY_ERROR,
+ERROR, TIMEOUT and PROCESS_ERROR output cannot establish a complete evidence
+package: packaging/publication/cleanup fail closed and retain the whole local
+tree. A separately reviewed diagnostic/quarantine transport may preserve failed
+output in Drive without granting cleanup; it is not introduced here. Visual source evidence
 is preserved even when the recognizer rejects all pairs. ASR, auction,
 cross-job wrapper-state tests and the full frozen holdout remain separate.
 

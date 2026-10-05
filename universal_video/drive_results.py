@@ -430,6 +430,12 @@ def publish_result(
         max_total_bytes=max_total_bytes,
     )
     manifest = json.loads((job_dir / "manifest.json").read_text(encoding="utf-8"))
+    # This legacy publisher creates its own child folder and has no immutable
+    # original re-read or protected role binding. Typed comparisons require the
+    # durable finalizer, including for dry-run readiness and null declarations.
+    if ("comparison_artifacts" in manifest or
+            any(item.relative_name.startswith("comparison/") for item in artifacts)):
+        raise RuntimeError("comparison publication requires protected durable finalization")
     manifest_hash = next(item.sha256 for item in artifacts if item.relative_name == "manifest.json")
     bundle_hash = artifact_set_sha256(artifacts)
     conformance = verify_result(
