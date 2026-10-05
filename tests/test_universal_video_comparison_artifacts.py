@@ -38,7 +38,7 @@ def prepared(tmp_path, *, parent=None, large=0):
         job, manifest = _bundle(tmp_path)
     else:
         job, manifest = parent
-    manifest.setdefault("source", {})["file_id"] = manifest["source"].get("file_id", "synthetic_original_01")
+    manifest.setdefault("source", {}).setdefault("file_id", "synthetic_original_01")
     manifest["source"]["version"] = "1"
     manifest.setdefault("media", {})["sha256"] = manifest["media"].get("sha256", "d" * 64)
     raw = tmp_path / "raw-comparison"
@@ -87,10 +87,19 @@ def prepared(tmp_path, *, parent=None, large=0):
             {"event": "ACCEPTANCE_RESULT", "attempt": 1, "accepted": False},
         ]
         (evidence / "events.jsonl").write_bytes(b"".join(comparison.encoded(e) for e in events))
+        version = ("bridgit-primary-video-gambler-v2" if variant == "baseline" else
+                   "bridgit-primary-video-gambler-v2-observation-guards-candidate2")
         status = {"status": "RETURNED", "variant": variant, "job_id": case + "-" + variant,
-                  "source_sha": revisions[variant], "attempts": 1}
+                  "source_sha": revisions[variant], "attempts": 1, "version": version,
+                  "result_status": "NO_FULL_LAYOUT_ACCEPTED",
+                  "metadata": {"fps": 30.0, "frame_count": 1800.0, "duration_seconds": 60.0}}
         write(directory / "worker-status.json", status)
-        write(directory / "result.json", {"status": "NO_ACCEPTED_DEALS", "deals": []})
+        write(directory / "result.json",
+              {"version": version, "status": "NO_FULL_LAYOUT_ACCEPTED", "deals": [],
+               "source_size": {"width": 1, "height": 1},
+               "gambler_sprite_sha256": inputs["sprite"]["sha256"],
+               "template_card_size": {"width": 109.0, "height": 147.0},
+               "scan_ms": 1000, "attempt_gap_ms": 15000, "canonical_promotion_allowed": False})
         runs[variant] = {**status, "exit_code": 0}
         write(raw / (variant + "-config.json"),
               {"variant": variant, "job_id": case + "-" + variant, "sha": revisions[variant],
@@ -114,12 +123,16 @@ def prepared(tmp_path, *, parent=None, large=0):
     return job, manifest, raw, args
 
 
-def attach(prep):
+def attach(prep, *, with_review=True):
     job, manifest, raw, args = prep
     declaration = comparison.build_comparison_package(raw, job / "comparison", **args)
     manifest["comparison_artifacts"] = declaration
     write(job / "manifest.json", manifest)
-    return comparison.collect_comparison_paths(job, manifest)
+    paths = comparison.collect_comparison_paths(job, manifest)
+    if with_review and manifest.get("contract") == "universal-video-v1":
+        report = _verify(job, evidence_phase="GENERATION_FINALIZATION")
+        write(job / "server_review.json", build_server_review(job, report))
+    return paths
 
 
 def test_rejected_pairs_are_lossless_and_large_png_uses_existing_file_caps(tmp_path):
@@ -139,7 +152,7 @@ def test_rejected_pairs_are_lossless_and_large_png_uses_existing_file_caps(tmp_p
 
 def test_conformance_and_review_include_same_typed_inventory(tmp_path):
     prep = prepared(tmp_path)
-    attach(prep)
+    attach(prep, with_review=False)
     job = prep[0]
     before = _verify(job, evidence_phase="GENERATION_FINALIZATION")
     assert any(a["relative_name"] == "comparison/index.json" for a in before["artifacts"])
@@ -345,3 +358,79 @@ def test_credential_like_json_is_rejected(tmp_path):
     write(path, {"status": "UNAVAILABLE", "access_token": "synthetic-secret"})
     with pytest.raises(RuntimeError, match="credential-like"):
         attach(prep)
+
+
+@pytest.mark.parametrize("raw", [
+    b'{"\\u0061ccess_token":"synthetic-secret"}',
+    b'{"detail":"\\u0042earer synthetic-secret"}',
+])
+def test_escaped_credentials_cannot_bypass_decoded_json_gate(raw):
+    with pytest.raises(RuntimeError, match="credential-like"):
+        comparison.decode(raw)
+
+
+def test_package_version_must_match_actual_intake_pin_before_writes(drive_setup, tmp_path):
+    job, source, backend, binding = drive_setup
+    manifest = json.loads((job / "manifest.json").read_text())
+    prep = prepared(tmp_path, parent=(job, manifest))
+    attach(prep)
+    pin = durable.read_receipt(source / durable.SOURCE_RECEIPT)
+    pin["original"]["version"] = "2"
+    durable.atomic_json(source / durable.SOURCE_RECEIPT, pin)
+    backend.meta["version"] = "2"
+    with pytest.raises(RuntimeError, match="intake pin mismatch"):
+        durable.finalize_drive_job(job, source, binding, job_id="job",
+                                  profile="transcript_only", job_hash="a" * 64)
+    assert backend.posts == []
+    assert not durable.cleanup_proof_matches(job, source, job_id="job")
+
+
+@pytest.mark.parametrize("mode", ["remove-success-evidence", "wrong-summary", "array-result",
+                                   "missing-screenshot", "changed-screenshot"])
+def test_error_side_cannot_hide_success_evidence_or_bad_results(tmp_path, mode):
+    prep = prepared(tmp_path)
+    raw = prep[2]
+    summary_path = raw / "comparison.json"
+    summary = json.loads(summary_path.read_text())
+    summary["status"] = "REPLAY_ERROR"
+    summary["runs"]["candidate"] = {"status": "TIMEOUT", "exit_code": None}
+    write(summary_path, summary)
+    base = next(raw.glob("baseline/*"))
+    if mode == "remove-success-evidence":
+        for path in sorted(base.rglob("*"), reverse=True):
+            if path.is_file() and path.name != "process.log":
+                path.unlink()
+    elif mode == "wrong-summary":
+        summary["runs"]["baseline"]["attempts"] = 0
+        write(summary_path, summary)
+    elif mode == "array-result":
+        write(base / "result.json", [])
+    else:
+        result = json.loads((base / "result.json").read_text())
+        result["status"] = "PRIMARY_COMPLETE"
+        result["deals"] = [{"timestamp_ms": 0, "canonical_promotion_allowed": False,
+                           "screenshot": "/synthetic/recognizer/primary_0000000000.png",
+                           "screenshot_sha256": sha(png())}]
+        write(base / "result.json", result)
+        status = json.loads((base / "worker-status.json").read_text())
+        status["result_status"] = "PRIMARY_COMPLETE"
+        write(base / "worker-status.json", status)
+        summary["runs"]["baseline"] = {**status, "exit_code": 0}
+        write(summary_path, summary)
+        if mode == "changed-screenshot":
+            screenshot = base / "recognizer" / "primary_0000000000.png"
+            screenshot.parent.mkdir()
+            screenshot.write_bytes(png(1))
+    with pytest.raises(RuntimeError):
+        attach(prep)
+    assert not (prep[0] / "comparison").exists()
+
+
+def test_failed_comparison_retains_and_validates_success_side(tmp_path):
+    prep = prepared(tmp_path)
+    path = prep[2] / "comparison.json"
+    summary = json.loads(path.read_text())
+    summary["status"] = "REPLAY_ERROR"
+    summary["runs"]["candidate"] = {"status": "TIMEOUT", "exit_code": None}
+    write(path, summary)
+    attach(prep)
