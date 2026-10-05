@@ -202,7 +202,7 @@ def finalize_drive_job(result_dir: Path, source_dir: Path, binding: dict, *,
         name = artifact.relative_name
         role = ("frames" if name.startswith("frames/") else "transcript" if name in
                 {"transcript.jsonl", "transcript.txt", "speaker_diarization.json"} else
-                "analysis" if name == "algorithm_3_1_test.json" else "checks")
+                "analysis" if name == "algorithm_3_1_test.json" or name.startswith("comparison/part-") else "checks")
         # Versioned stable names allow crash recovery without replacing any item.
         remote_name = f"{job_id}-{bundle}-{name.replace('/', '__')}"
         upload = PublishArtifact(artifact.path, remote_name, artifact.size_bytes, artifact.sha256, artifact.md5)
