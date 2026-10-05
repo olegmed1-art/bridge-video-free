@@ -541,3 +541,326 @@ def test_failed_worker_without_events_cannot_be_complete_package(tmp_path, state
         attach(prep)
     assert not (prep[0] / "comparison").exists()
     assert not (prep[0] / durable.FINAL_RECEIPT).exists()
+
+
+def r3_prepared(tmp_path, *, parent=None, candidate3=True, with_auction=True):
+    prep = prepared(tmp_path, parent=parent)
+    job, manifest, raw, args = prep
+    sealed = json.loads(args["sealed_manifest_path"].read_text())
+    profile_path = tmp_path / "inputs" / "profile"
+    calibration = {"schema": "bridge-auction-cell-profile/v1",
+                   "reference_pixel_sha256": "a" * 64, "synthetic_calibration": True}
+    write(profile_path, {"auction": calibration} if with_auction else {})
+    sealed["inputs"]["profile"]["sha256"] = sha(profile_path.read_bytes())
+    write(args["sealed_manifest_path"], sealed)
+    args["sealed_manifest_sha256"] = sha(args["sealed_manifest_path"].read_bytes())
+    seal = json.loads((raw / "seal.json").read_text())
+    seal.update(inputs=sealed["inputs"], manifest_sha256=args["sealed_manifest_sha256"],
+                scope=comparison.AUCTION_SCOPE, runner_version=comparison.AUCTION_RUNNER)
+    write(raw / "seal.json", seal)
+    summary = json.loads((raw / "comparison.json").read_text())
+    summary.update(manifest_sha256=args["sealed_manifest_sha256"],
+                   scope=comparison.AUCTION_SCOPE, runner_version=comparison.AUCTION_RUNNER)
+    for variant in ("baseline", "candidate"):
+        directory = next(raw.glob(variant + "/*"))
+        output = "/synthetic/" + variant + "/" + sealed["case_id"] + "-" + variant
+        config = json.loads((raw / (variant + "-config.json")).read_text())
+        config.update(manifest_sha256=args["sealed_manifest_sha256"], output=output,
+                      inputs={n: v for n, v in sealed["inputs"].items() if n != "gold"})
+        write(raw / (variant + "-config.json"), config)
+        status = json.loads((directory / "worker-status.json").read_text())
+        status.update(scope=comparison.AUCTION_SCOPE, runner_version=comparison.AUCTION_RUNNER,
+                      accuracy_evaluated=False, auction_result_status="NOT_REPORTED")
+        if variant == "candidate" and candidate3:
+            result = json.loads((directory / "result.json").read_text())
+            result["version"] = comparison.AUCTION_VERSION
+            status["version"] = comparison.AUCTION_VERSION
+            auction = {"status": "UNAVAILABLE", "reason": "NO_AUCTION_PROFILE", "auctions": []}
+            if with_auction:
+                timestamp = 1000
+                pixels = "b" * 64
+                filename = f"auction-{timestamp:010d}-{pixels[:12]}.png"
+                evidence = directory / "recognizer" / "auction-evidence" / filename
+                evidence.parent.mkdir(parents=True)
+                evidence.write_bytes(png())
+                path = output + "/recognizer/auction-evidence/" + filename
+                reference = {"timestamp_ms": timestamp, "frame_sha256": sha(png()), "frame_path": path}
+                observation = dict(reference, frame_pixel_sha256=pixels, cells=[],
+                                   start_visible=False, orientation_known=False)
+                occurrence = {"source_id": sealed["inputs"]["video"]["sha256"],
+                              "board_occurrence_id": "c" * 64, "anchor_pixel_sha256": "d" * 64,
+                              "start_ms": timestamp, "end_ms": timestamp,
+                              "latest_observation_index": 0, "latest_observation_timestamp_ms": timestamp,
+                              "canonical_promotion_allowed": False, "complete": False,
+                              "status": "PARTIAL", "observations": [observation],
+                              "visible_fragments": [dict(reference, calls=[])], "ordered_calls": []}
+                auction = {"schema": "bridge-visual-auction/v3", "status": "OBSERVED",
+                           "source_id": sealed["inputs"]["video"]["sha256"],
+                           "calibration_profile": calibration,
+                           "profile_sha256": sha(json.dumps(calibration, sort_keys=True).encode()),
+                           "reference_pixel_sha256": calibration["reference_pixel_sha256"],
+                           "coverage_issues": [], "canonical_promotion_allowed": False,
+                           "confidence_kind": "UNCALIBRATED_TEMPLATE_SIMILARITY",
+                           "supported_layout": "CALIBRATED_FIXED_FOUR_COLUMN_TABLE_ONLY",
+                           "auctions": [occurrence]}
+            result["auction_recognition"] = auction
+            status["auction_result_status"] = auction["status"]
+            write(directory / "result.json", result)
+        write(directory / "worker-status.json", status)
+        summary["runs"][variant] = {**status, "exit_code": 0}
+    write(raw / "comparison.json", summary)
+    return prep
+
+
+@pytest.mark.parametrize("candidate3,with_auction", [(True, True), (True, False), (False, True)])
+def test_r3_package_preserves_exact_profile_and_auction_bytes(tmp_path, candidate3, with_auction):
+    prep = r3_prepared(tmp_path, candidate3=candidate3, with_auction=with_auction)
+    paths = attach(prep)
+    index = json.loads(paths[0].read_bytes())
+    stream = b"".join(p.read_bytes() for p in paths[1:])
+    actual = {r["path"]: stream[r["offset"]:r["offset"] + r["size_bytes"]] for r in index["files"]}
+    assert actual["embedded-profile.json"] == (tmp_path / "inputs" / "profile").read_bytes()
+    expected = {p.relative_to(prep[2]).as_posix(): p.read_bytes() for p in prep[2].rglob("*") if p.is_file()}
+    assert all(actual[n] == value for n, value in expected.items())
+    assert index["accuracy_evaluated"] is False
+    assert index["promotion_allowed"] is False
+
+
+@pytest.mark.parametrize("mode", ["missing", "tampered", "extra", "unsafe-path", "wrong-output",
+    "wrong-pixels", "wrong-timestamp", "nested-reference", "duplicate", "profile", "profile-digest",
+    "source", "worker-status", "scope", "runner-version", "truncated", "partial-coverage",
+    "missing-auction", "old-scope", "orphan-baseline", "unavailable-with-calibration"])
+def test_r3_binding_and_incomplete_evidence_fail_closed(tmp_path, mode):
+    prep = r3_prepared(tmp_path)
+    job, manifest, raw, args = prep
+    directory = next(raw.glob("candidate/*"))
+    result_path = directory / "result.json"
+    result = json.loads(result_path.read_text())
+    auction = result["auction_recognition"]
+    occurrence = auction["auctions"][0]
+    obs = occurrence["observations"][0]
+    image = next(directory.glob("recognizer/auction-evidence/*.png"))
+    if mode == "missing":
+        image.unlink()
+    elif mode == "tampered":
+        image.write_bytes(png(1))
+    elif mode == "extra":
+        (image.parent / ("auction-0000002000-" + "e" * 12 + ".png")).write_bytes(png())
+    elif mode == "unsafe-path":
+        obs["frame_path"] = "/synthetic/../" + obs["frame_path"]
+    elif mode == "wrong-output":
+        config_path = raw / "candidate-config.json"
+        config = json.loads(config_path.read_text())
+        config["output"] = "/synthetic/other/candidate/synthetic-first-clip-candidate"
+        write(config_path, config)
+    elif mode == "wrong-pixels":
+        obs["frame_pixel_sha256"] = "f" * 64
+    elif mode == "wrong-timestamp":
+        obs["timestamp_ms"] = 2000
+    elif mode == "nested-reference":
+        occurrence["visible_fragments"][0]["frame_sha256"] = "f" * 64
+    elif mode == "duplicate":
+        occurrence["observations"].append(dict(obs))
+    elif mode == "profile":
+        auction["calibration_profile"]["synthetic_calibration"] = False
+    elif mode == "profile-digest":
+        auction["profile_sha256"] = "f" * 64
+    elif mode == "source":
+        auction["source_id"] = "f" * 64
+    elif mode in {"worker-status", "scope", "runner-version"}:
+        path = directory / "worker-status.json" if mode == "worker-status" else raw / "seal.json"
+        receipt = json.loads(path.read_text())
+        receipt["auction_result_status" if mode == "worker-status" else "scope" if mode == "scope" else "runner_version"] = "UNSUPPORTED"
+        write(path, receipt)
+        if mode == "worker-status":
+            summary = json.loads((raw / "comparison.json").read_text())
+            summary["runs"]["candidate"] = {**receipt, "exit_code": 0}
+            write(raw / "comparison.json", summary)
+    elif mode in {"truncated", "partial-coverage"}:
+        auction["status"] = "TRUNCATED" if mode == "truncated" else "PARTIAL_COVERAGE"
+    elif mode == "missing-auction":
+        result.pop("auction_recognition")
+    elif mode == "old-scope":
+        seal = json.loads((raw / "seal.json").read_text())
+        seal["scope"] = comparison.LEGACY_SCOPE
+        write(raw / "seal.json", seal)
+    elif mode == "orphan-baseline":
+        path = next(raw.glob("baseline/*")) / "recognizer" / "auction-evidence" / image.name
+        path.parent.mkdir(parents=True)
+        path.write_bytes(png())
+    else:
+        result["auction_recognition"] = {"status": "UNAVAILABLE", "reason": "NO_AUCTION_PROFILE", "auctions": []}
+    write(result_path, result)
+    before = {p.relative_to(raw).as_posix(): p.read_bytes() for p in raw.rglob("*") if p.is_file()}
+    with pytest.raises(RuntimeError):
+        attach(prep)
+    assert before == {p.relative_to(raw).as_posix(): p.read_bytes() for p in raw.rglob("*") if p.is_file()}
+    assert not (job / "comparison").exists()
+    assert not (job / durable.FINAL_RECEIPT).exists()
+
+
+@pytest.mark.parametrize("limit", ["bytes", "snapshots"])
+def test_r3_auction_has_separate_quota_without_modifying_source(tmp_path, monkeypatch, limit):
+    prep = r3_prepared(tmp_path)
+    monkeypatch.setattr(comparison, "MAX_AUCTION_BYTES" if limit == "bytes" else "MAX_AUCTION_SNAPSHOTS", 1 if limit == "bytes" else 0)
+    before = next(prep[2].glob("candidate/*/recognizer/auction-evidence/*.png")).read_bytes()
+    with pytest.raises(RuntimeError, match="auction evidence quota"):
+        attach(prep)
+    assert next(prep[2].glob("candidate/*/recognizer/auction-evidence/*.png")).read_bytes() == before
+
+
+def test_r3_unpack_rechecks_sealed_profile_membership(tmp_path):
+    prep = r3_prepared(tmp_path)
+    paths = attach(prep)
+    index = json.loads(paths[0].read_bytes())
+    stream = b"".join(p.read_bytes() for p in paths[1:])
+    files = {r["path"]: stream[r["offset"]:r["offset"] + r["size_bytes"]] for r in index["files"]}
+    files["embedded-profile.json"] = comparison.encoded({"auction": {}})
+    with pytest.raises(RuntimeError, match="sealed embedded profile"):
+        comparison.validate_files(files, index["binding"])
+
+
+def test_r3_durable_retry_and_tamper_invalidate_cleanup(drive_setup, tmp_path):
+    job, source, backend, binding = drive_setup
+    manifest = json.loads((job / "manifest.json").read_text())
+    prep = r3_prepared(tmp_path, parent=(job, manifest))
+    attach(prep)
+    first = durable.finalize_drive_job(job, source, binding, job_id="job",
+                                      profile="transcript_only", job_hash="a" * 64)
+    count = len(backend.posts)
+    again = durable.finalize_drive_job(job, source, binding, job_id="job",
+                                      profile="transcript_only", job_hash="a" * 64)
+    assert first["artifact_set_sha256"] == again["artifact_set_sha256"]
+    assert len(backend.posts) == count
+    assert durable.cleanup_proof_matches(job, source, job_id="job")
+    (job / "comparison" / "part-00000.bin").write_bytes(b"changed")
+    assert not durable.cleanup_proof_matches(job, source, job_id="job")
+
+
+@pytest.mark.parametrize("mode", ["empty-observations", "unknown-status", "complete-mismatch",
+                                  "fragments-type", "calls-type"])
+def test_r3_occurrence_cannot_claim_evidence_with_empty_or_invalid_inventory(tmp_path, mode):
+    prep = r3_prepared(tmp_path)
+    directory = next(prep[2].glob("candidate/*"))
+    path = directory / "result.json"
+    result = json.loads(path.read_text())
+    occurrence = result["auction_recognition"]["auctions"][0]
+    if mode == "empty-observations":
+        occurrence.update(observations=[], visible_fragments=[], complete=True, status="COMPLETE_CONFIRMED")
+        next(directory.glob("recognizer/auction-evidence/*.png")).unlink()
+    elif mode == "unknown-status":
+        occurrence["status"] = "PASS"
+    elif mode == "complete-mismatch":
+        occurrence["complete"] = True
+    elif mode == "fragments-type":
+        occurrence["visible_fragments"] = None
+    else:
+        occurrence["ordered_calls"] = {}
+    write(path, result)
+    with pytest.raises(RuntimeError):
+        attach(prep)
+    assert not (prep[0] / "comparison").exists()
+
+
+@pytest.mark.parametrize("field,value", [("start_ms", 0), ("latest_observation_index", 1),
+    ("latest_observation_timestamp_ms", 999)])
+def test_r3_occurrence_interval_and_latest_observation_bind(tmp_path, field, value):
+    prep = r3_prepared(tmp_path)
+    directory = next(prep[2].glob("candidate/*"))
+    path = directory / "result.json"
+    result = json.loads(path.read_text())
+    result["auction_recognition"]["auctions"][0][field] = value
+    write(path, result)
+    with pytest.raises(RuntimeError):
+        attach(prep)
+
+
+@pytest.mark.parametrize("structure", ["fragment", "call-evidence"])
+@pytest.mark.parametrize("mode", ["missing-path", "missing-hash", "missing-time",
+    "wrong-path", "wrong-hash", "wrong-time", "path-type", "hash-type", "time-type",
+    "bool-time", "not-object", "missing-path-forged-hash", "duplicate", "empty",
+    "cross-occurrence"])
+def test_r3_secondary_reference_schema_and_association_fail_closed(tmp_path, structure, mode):
+    prep = r3_prepared(tmp_path)
+    job, manifest, raw, args = prep
+    directory = next(raw.glob("candidate/*"))
+    path = directory / "result.json"
+    result = json.loads(path.read_text())
+    auction = result["auction_recognition"]
+    occurrence = auction["auctions"][0]
+    observation = occurrence["observations"][0]
+    reference = {k: observation[k] for k in ("timestamp_ms", "frame_sha256", "frame_path")}
+    occurrence["ordered_calls"] = [{"evidence": [dict(reference)]}]
+    rows = occurrence["visible_fragments"] if structure == "fragment" else occurrence["ordered_calls"][0]["evidence"]
+    row = rows[0]
+    if mode.startswith("missing-") and mode != "missing-path-forged-hash":
+        row.pop({"missing-path": "frame_path", "missing-hash": "frame_sha256",
+                 "missing-time": "timestamp_ms"}[mode])
+    elif mode == "missing-path-forged-hash":
+        row.pop("frame_path")
+        row["frame_sha256"] = "f" * 64
+    elif mode == "wrong-path":
+        row["frame_path"] = row["frame_path"].replace("/candidate/", "/baseline/")
+    elif mode == "wrong-hash":
+        row["frame_sha256"] = "f" * 64
+    elif mode == "wrong-time":
+        row["timestamp_ms"] = 2000
+    elif mode == "path-type":
+        row["frame_path"] = []
+    elif mode == "hash-type":
+        row["frame_sha256"] = None
+    elif mode == "time-type":
+        row["timestamp_ms"] = "1000"
+    elif mode == "bool-time":
+        row["timestamp_ms"] = True
+    elif mode == "not-object":
+        rows[0] = None
+    elif mode == "duplicate":
+        rows.append(dict(row))
+    elif mode == "empty":
+        rows.clear()
+    else:
+        # A real retained observation in a DIFFERENT occurrence is still orphan evidence here.
+        other = json.loads(json.dumps(occurrence))
+        other.update(board_occurrence_id="e" * 64, start_ms=2000, end_ms=2000,
+                     latest_observation_timestamp_ms=2000)
+        other_obs = other["observations"][0]
+        other_obs["timestamp_ms"] = 2000
+        other_obs["frame_pixel_sha256"] = "f" * 64
+        image = directory / "recognizer" / "auction-evidence" / ("auction-0000002000-" + "f" * 12 + ".png")
+        image.write_bytes(png())
+        other_obs["frame_path"] = str(image).replace(str(directory), "/synthetic/candidate/synthetic-first-clip-candidate")
+        other_ref = {k: other_obs[k] for k in ("timestamp_ms", "frame_sha256", "frame_path")}
+        other["visible_fragments"] = [dict(other_ref, calls=[])]
+        other["ordered_calls"] = [{"evidence": [dict(other_ref)]}]
+        auction["auctions"].append(other)
+        row.update(other_ref)
+    write(path, result)
+    before = {p.relative_to(raw).as_posix(): p.read_bytes() for p in raw.rglob("*") if p.is_file()}
+    with pytest.raises(RuntimeError, match="auction (secondary|fragment|call|duplicate)|invalid (digest|bounded count)"):
+        attach(prep)
+    assert before == {p.relative_to(raw).as_posix(): p.read_bytes() for p in raw.rglob("*") if p.is_file()}
+    assert not (job / "comparison").exists()
+    assert not (job / durable.FINAL_RECEIPT).exists()
+
+
+def test_r3_valid_secondary_refs_survive_unpack_and_revalidate(tmp_path):
+    prep = r3_prepared(tmp_path)
+    directory = next(prep[2].glob("candidate/*"))
+    path = directory / "result.json"
+    result = json.loads(path.read_text())
+    occurrence = result["auction_recognition"]["auctions"][0]
+    observation = occurrence["observations"][0]
+    reference = {k: observation[k] for k in ("timestamp_ms", "frame_sha256", "frame_path")}
+    occurrence["ordered_calls"] = [{"evidence": [reference]}]
+    write(path, result)
+    paths = attach(prep)
+    index = json.loads(paths[0].read_bytes())
+    stream = b"".join(p.read_bytes() for p in paths[1:])
+    files = {r["path"]: stream[r["offset"]:r["offset"] + r["size_bytes"]] for r in index["files"]}
+    name = next(n for n in files if n.startswith("candidate/") and n.endswith("/result.json"))
+    unpacked = json.loads(files[name])
+    unpacked["auction_recognition"]["auctions"][0]["ordered_calls"][0]["evidence"][0].pop("frame_path")
+    files[name] = comparison.encoded(unpacked)
+    with pytest.raises(RuntimeError, match="reference fields required"):
+        comparison.validate_files(files, index["binding"])

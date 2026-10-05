@@ -20,7 +20,13 @@ RESULT_KIND = "recognizer-comparison-v1"
 PART_BYTES = 4 * 1024**2
 MAX_TOTAL_BYTES = 256 * 1024**2
 MAX_FILES = 4096
+MAX_AUCTION_SNAPSHOTS = 128
+MAX_AUCTION_BYTES = 128 * 1024**2
 MAX_JSON_BYTES = 8 * 1024**2
+LEGACY_SCOPE = "PRIMARY_VISUAL_ONLY; NO_ASR_AUCTION_DDS_OR_PUBLISHER"
+AUCTION_SCOPE = "PRIMARY_VISUAL_WITH_OPTIONAL_EMBEDDED_PROFILE_AUCTION; NO_ASR_DDS_OR_PUBLISHER"
+AUCTION_RUNNER = "recognizer-comparison-v1-auction-scope-r3"
+AUCTION_VERSION = "bridgit-primary-video-gambler-v2-auction-candidate3"
 HEX64 = re.compile(r"[0-9a-f]{64}")
 HEX40 = re.compile(r"[0-9a-f]{40}")
 CASE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -149,7 +155,7 @@ def _json(path):
 
 
 def allowed(name, case):
-    if name in {"seal.json", "comparison.json", "baseline-config.json", "candidate-config.json", "source-clip-binding.json"}:
+    if name in {"seal.json", "comparison.json", "baseline-config.json", "candidate-config.json", "source-clip-binding.json", "embedded-profile.json"}:
         return True
     for variant in ("baseline", "candidate"):
         prefix = variant + "/" + case + "-" + variant + "/"
@@ -159,6 +165,7 @@ def allowed(name, case):
         return bool(
             leaf in {"process.log", "worker-status.json", "result.json", "evidence/events.jsonl"} or
             re.fullmatch(r"recognizer/primary_[0-9]{10}\.png", leaf) or
+            re.fullmatch(r"recognizer/auction-evidence/auction-[0-9]{10}-[0-9a-f]{12}\.png", leaf) or
             re.fullmatch(r"evidence/decoded/[0-9]{5}\.png", leaf) or
             re.fullmatch(r"evidence/attempts/[0-9]{5}/(?:frame-[01]\.png|backend-result\.json)", leaf)
         )
@@ -265,8 +272,22 @@ def validate_files(files, binding):
     # or authorize cleanup from partial/error output.
     if comparison["status"] != "CAPTURED_UNSCORED":
         fail("incomplete comparison cannot publish or authorize cleanup; evidence retained")
-    if seal.get("scope") != "PRIMARY_VISUAL_ONLY; NO_ASR_AUCTION_DDS_OR_PUBLISHER":
+    scope = seal.get("scope")
+    if scope not in {LEGACY_SCOPE, AUCTION_SCOPE}:
         fail("unsupported comparison result scope")
+    auction_scope = scope == AUCTION_SCOPE
+    if auction_scope:
+        for receipt in (seal, comparison):
+            if receipt.get("scope") != AUCTION_SCOPE or receipt.get("runner_version") != AUCTION_RUNNER:
+                fail("comparison auction runner scope/version mismatch")
+        profile_raw = files.get("embedded-profile.json")
+        if profile_raw is None or hashlib.sha256(profile_raw).hexdigest() != binding["input_sha256"]["profile"]:
+            fail("sealed embedded profile missing or changed")
+        profile = decode(profile_raw)
+        if not isinstance(profile, dict):
+            fail("embedded profile object required")
+    elif "embedded-profile.json" in files or any("/auction-evidence/" in n for n in files):
+        fail("auction artifacts require qualified runner scope")
     for name, sha in binding["input_sha256"].items():
         if seal.get("inputs", {}).get(name, {}).get("sha256") != sha:
             fail("comparison sealed input mismatch")
@@ -362,6 +383,9 @@ def validate_files(files, binding):
                     status.get("job_id") != case + "-" + variant or
                     status.get("source_sha") != binding["revisions"][variant]):
                 fail("comparison worker identity mismatch")
+            if auction_scope and (status.get("scope") != AUCTION_SCOPE or
+                    status.get("runner_version") != AUCTION_RUNNER or status.get("accuracy_evaluated") is not False):
+                fail("comparison worker auction scope/version mismatch")
         if run["status"] in {"RETURNED", "ERROR"}:
             if status is None or run != {**status, "exit_code": run.get("exit_code")}:
                 fail("comparison summary and worker receipt mismatch")
@@ -385,7 +409,7 @@ def validate_files(files, binding):
         if prefix + "result.json" in files:
             if status is None:
                 fail("result without worker identity")
-            validate_result(files, prefix, binding, variant, status)
+            validate_result(files, prefix, binding, variant, status, auction_scope=auction_scope, output=config.get("output"))
     runs = comparison.get("runs")
     if not isinstance(runs, dict) or set(runs) != {"baseline", "candidate"}:
         fail("exact comparison run inventory required")
@@ -395,11 +419,11 @@ def validate_files(files, binding):
         fail("comparison summary state mismatch")
 
 
-def validate_result(files, prefix, binding, variant, status):
+def validate_result(files, prefix, binding, variant, status, *, auction_scope=False, output=None):
     result = decode(files[prefix + "result.json"])
     versions = {"baseline": "bridgit-primary-video-gambler-v2",
                 "candidate": "bridgit-primary-video-gambler-v2-observation-guards-candidate2"}
-    if (not isinstance(result, dict) or result.get("version") != versions[variant] or
+    if (not isinstance(result, dict) or result.get("version") not in ({versions[variant], AUCTION_VERSION} if auction_scope and variant == "candidate" else {versions[variant]}) or
             status.get("version") != result["version"] or
             status.get("result_status") != result.get("status") or
             result.get("status") not in {"PRIMARY_COMPLETE", "PRIMARY_PARTIAL_COVERAGE", "NO_FULL_LAYOUT_ACCEPTED"} or
@@ -434,8 +458,147 @@ def validate_result(files, prefix, binding, variant, status):
                 hashlib.sha256(files[name]).hexdigest() != _hex(deal.get("screenshot_sha256"))):
             fail("accepted screenshot missing or changed")
         screenshots.add(name)
-    if screenshots != {n for n in files if n.startswith(prefix + "recognizer/")}:
+    auction_names = {n for n in files if n.startswith(prefix + "recognizer/auction-evidence/")}
+    if result["version"] == AUCTION_VERSION:
+        validate_auction(files, prefix, binding, result.get("auction_recognition"), status, output)
+    elif auction_names or "auction_recognition" in result or (auction_scope and status.get("auction_result_status") != "NOT_REPORTED"):
+        fail("auction evidence requires candidate3 result")
+    if screenshots != {n for n in files if n.startswith(prefix + "recognizer/") and n not in auction_names}:
         fail("primary screenshot complete inventory mismatch")
+
+
+def validate_auction(files, prefix, binding, auction, status, output):
+    """Validate retention/binding only; do not attest visual accuracy or bridge truth."""
+    if (not isinstance(output, str) or len(output) > 4096 or
+            not PurePosixPath(output).is_absolute() or str(PurePosixPath(output)) != output or
+            ".." in PurePosixPath(output).parts or "\\" in output or
+            not output.endswith("/candidate/" + binding["case_id"] + "-candidate")):
+        fail("auction producer output binding invalid")
+    names = {n for n in files if n.startswith(prefix + "recognizer/auction-evidence/")}
+    profile = decode(files["embedded-profile.json"])
+    calibration = profile.get("auction")
+    if calibration is None:
+        if auction != {"status": "UNAVAILABLE", "reason": "NO_AUCTION_PROFILE", "auctions": []} or names:
+            fail("auction without sealed calibration")
+        if status.get("auction_result_status") != "UNAVAILABLE":
+            fail("auction worker/result status mismatch")
+        return
+    if not isinstance(calibration, dict) or calibration.get("schema") != "bridge-auction-cell-profile/v1":
+        fail("unsupported sealed auction calibration")
+    if (not isinstance(auction, dict) or auction.get("schema") != "bridge-visual-auction/v3" or
+            auction.get("status") != "OBSERVED" or
+            auction.get("canonical_promotion_allowed") is not False or
+            status.get("auction_result_status") != auction.get("status") or
+            auction.get("source_id") != binding["input_sha256"]["video"] or
+            auction.get("calibration_profile") != calibration or
+            auction.get("profile_sha256") != hashlib.sha256(json.dumps(calibration, sort_keys=True).encode()).hexdigest() or
+            auction.get("reference_pixel_sha256") != calibration.get("reference_pixel_sha256") or
+            auction.get("confidence_kind") != "UNCALIBRATED_TEMPLATE_SIMILARITY" or
+            auction.get("supported_layout") != "CALIBRATED_FIXED_FOUR_COLUMN_TABLE_ONLY"):
+        fail("auction schema/profile/source/status mismatch or incomplete retention")
+    _hex(auction.get("reference_pixel_sha256"))
+    issues = auction.get("coverage_issues")
+    if not isinstance(issues, list) or len(issues) > 128 or not all(isinstance(x, str) for x in issues):
+        fail("auction coverage inventory invalid")
+    if issues:
+        fail("auction coverage status mismatch")
+    occurrences = auction.get("auctions")
+    if not isinstance(occurrences, list) or len(occurrences) > 128:
+        fail("auction occurrence quota")
+    referenced = set()
+    occurrence_ids = set()
+    snapshot_bytes = 0
+    global_timestamp = -1
+    for occurrence in occurrences:
+        if (not isinstance(occurrence, dict) or occurrence.get("source_id") != binding["input_sha256"]["video"] or
+                occurrence.get("canonical_promotion_allowed") is not False or type(occurrence.get("complete")) is not bool or
+                occurrence.get("status") not in {"PARTIAL", "CONFLICT", "REVIEW", "COMPLETE_CONFIRMED", "COMPLETE_NEEDS_CONFIRMATION"} or
+                occurrence["complete"] != (occurrence["status"] == "COMPLETE_CONFIRMED") or
+                not isinstance(occurrence.get("visible_fragments"), list) or
+                not isinstance(occurrence.get("ordered_calls"), list) or
+                (occurrence["complete"] and not occurrence["ordered_calls"])):
+
+            fail("auction occurrence binding invalid")
+        oid = _hex(occurrence.get("board_occurrence_id"))
+        if oid in occurrence_ids:
+            fail("duplicate auction occurrence")
+        occurrence_ids.add(oid)
+        _hex(occurrence.get("anchor_pixel_sha256"))
+        start = _int(occurrence.get("start_ms"), 120000)
+        end = _int(occurrence.get("end_ms"), 120000)
+        if end < start:
+            fail("auction occurrence interval invalid")
+        observations = occurrence.get("observations")
+        if not isinstance(observations, list) or not 1 <= len(observations) <= 128:
+            fail("auction snapshot quota")
+        latest_index = _int(occurrence.get("latest_observation_index"), 127)
+        latest_timestamp = _int(occurrence.get("latest_observation_timestamp_ms"), 120000)
+        if latest_index >= len(observations) or latest_timestamp != end:
+            fail("auction latest observation binding invalid")
+        by_locator = {}
+        last_timestamp = -1
+        for observation in observations:
+            if not isinstance(observation, dict):
+                fail("auction observation required")
+            timestamp = _int(observation.get("timestamp_ms"), 120000)
+            pixels = _hex(observation.get("frame_pixel_sha256"))
+            digest = _hex(observation.get("frame_sha256"))
+            expected = f"auction-{timestamp:010d}-{pixels[:12]}.png"
+            path = observation.get("frame_path")
+            if (timestamp <= last_timestamp or timestamp <= global_timestamp or not start <= timestamp <= end or not isinstance(path, str) or
+                    ".." in PurePosixPath(path).parts or "\\" in path or
+                    path != output + "/recognizer/auction-evidence/" + expected):
+                fail("unsafe auction frame locator or timestamp")
+            last_timestamp = global_timestamp = timestamp
+            name = prefix + "recognizer/auction-evidence/" + expected
+            if name in referenced or name not in files or hashlib.sha256(files[name]).hexdigest() != digest:
+                fail("auction snapshot missing, duplicate or changed")
+            referenced.add(name)
+            snapshot_bytes += len(files[name])
+            if len(referenced) > MAX_AUCTION_SNAPSHOTS or snapshot_bytes > MAX_AUCTION_BYTES:
+                fail("auction evidence quota")
+            by_locator[(timestamp, digest, path)] = observation
+        if (observations[0]["timestamp_ms"] != start or
+                observations[latest_index]["timestamp_ms"] > latest_timestamp):
+            fail("auction observation interval binding invalid")
+        # Schema locations are mandatory; absent paths must never skip validation.
+        def reference(value, *, exact=False):
+            fields = {"timestamp_ms", "frame_sha256", "frame_path"}
+            if (not isinstance(value, dict) or not fields <= set(value) or
+                    (exact and set(value) != fields)):
+                fail("auction secondary evidence reference fields required")
+            timestamp = _int(value["timestamp_ms"], 120000)
+            digest = _hex(value["frame_sha256"])
+            path = value["frame_path"]
+            if not isinstance(path, str):
+                fail("auction secondary evidence reference path required")
+            key = (timestamp, digest, path)
+            if key not in by_locator:
+                fail("auction secondary evidence reference mismatch")
+            return key
+
+        fragments = occurrence["visible_fragments"]
+        fragment_keys = set()
+        for fragment in fragments:
+            key = reference(fragment)
+            if not isinstance(fragment.get("calls"), list) or key in fragment_keys:
+                fail("auction fragment inventory invalid")
+            fragment_keys.add(key)
+        if fragment_keys != set(by_locator):
+            fail("auction fragment complete inventory mismatch")
+
+        for call in occurrence["ordered_calls"]:
+            if (not isinstance(call, dict) or not isinstance(call.get("evidence"), list) or
+                    not call["evidence"]):
+                fail("auction call evidence inventory required")
+            evidence_keys = set()
+            for item in call["evidence"]:
+                key = reference(item, exact=True)
+                if key in evidence_keys:
+                    fail("duplicate auction call evidence reference")
+                evidence_keys.add(key)
+    if referenced != names:
+        fail("auction snapshot complete inventory mismatch")
 
 
 def build_comparison_package(comparison_dir, destination, *, sealed_manifest_path,
@@ -492,6 +655,15 @@ def build_comparison_package(comparison_dir, destination, *, sealed_manifest_pat
     total += 0 if "source-clip-binding.json" in names else len(clip_receipt)
     if total > MAX_TOTAL_BYTES:
         fail("comparison clip receipt plus bytes quota")
+    if decode(files["seal.json"]).get("scope") == AUCTION_SCOPE:
+        profile_raw = read(manifest["inputs"]["profile"]["path"], MAX_JSON_BYTES)
+        if "embedded-profile.json" in files and files["embedded-profile.json"] != profile_raw:
+            fail("conflicting sealed embedded profile")
+        if "embedded-profile.json" not in files:
+            total += len(profile_raw)
+        if total > MAX_TOTAL_BYTES:
+            fail("comparison embedded profile plus bytes quota")
+        files["embedded-profile.json"] = profile_raw
     validate_files(files, binding)
     # Recheck every source file and tree immediately before committing package.
     if names != inventory_paths(root, case) or any(read(root / n) != files[n] for n in names):

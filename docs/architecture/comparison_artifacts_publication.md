@@ -136,3 +136,16 @@ Local execution is unavailable due executor ACL initialization; no alternate
 desktop/server route is used. CI and independent audit receipts must be reported
 with exact head SHA. None of these tests establishes real IBM auth, a source
 replay, Drive publication or canonical activation.
+
+
+## Runner r3 compatibility (2026-10-05)
+
+The consumer accepts the exact r3 scope and runner version carried by seal, summary and workers. Candidate2 remains supported; only candidate3 may carry typed auction evidence. A new fixed artifact, embedded-profile.json, retains the exact sealed profile bytes and binds them to the existing input profile SHA. The calibration object and its producer digest must agree with this source. These checks do not independently prove calibration pixels or visual accuracy.
+
+Only timestamp/pixel-digest named PNGs under candidate recognizer/auction-evidence are admitted. Every observation and secondary reference binds to retained bytes in its occurrence. The complete inventory must match, with at most 128 snapshots and 128 MiB of auction evidence inside the existing global quota. Recorder counters continue covering decoded/attempt images only. Primary screenshot inventory remains strict.
+
+TRUNCATED, PARTIAL_COVERAGE, REPLAY_ERROR, missing or conflicting evidence cannot publish or authorize cleanup; raw evidence remains local. Retained occurrence uncertainty (PARTIAL/REVIEW/CONFLICT) stays unscored. Candidate3 without embedded calibration may return only the exact NO_AUCTION_PROFILE unavailable object and no auction PNGs. Legacy entrypoint refusal and protected durable finalizer gates remain in force.
+
+Compatibility source prerequisites: auction PR #2122 at 65a17e4928132697a158c9e985042c206680c51a; companion PR #2120 at e203e857ed59fa15e082638627fc6dd8a01b81d9. No merge, runtime installation, IBM start or live Drive qualification is implied by this delta. Rollback: revert this isolated consumer change.
+
+The dedicated comparison-auction-consumer CI uses exact public producer checkouts and the published isolated-worker synthetic auction test, then builds/reassembles the consumer package, verifies every original byte and three auction PNGs, repeats the build for identical package hashes, and executes conformance/server-review collection. Card calibration/event selection remain explicit stubs. Source/clip qualification is a synthetic fixture only. JUnit requires the integration to execute with zero skips; this does not establish real lesson/card accuracy or real Drive delivery.
