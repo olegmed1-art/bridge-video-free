@@ -1,17 +1,13 @@
 """Synthetic TLS PostgreSQL tests. No production credential/endpoint or payload."""
 import importlib.util
 import json
-import os
 from pathlib import Path
 import re
-import shutil
-import subprocess
-import tempfile
-import time
 from types import SimpleNamespace
 import unittest
 import psycopg
 from database import pr1994_stage_a as stage
+from tests.pr1994_stage_a_fixture import SyntheticFixture
 
 ROOT=Path(__file__).resolve().parents[1]
 RAW=(ROOT/'database/scripts/reconcile_pr1994_audit.sql').read_bytes()
@@ -57,33 +53,10 @@ class ClientTests(unittest.TestCase):
 class DatabaseTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temp=Path(tempfile.mkdtemp(prefix='pr1994-stage-a-'))
-        cls.name='stage-a-'+str(os.getpid()); cls.network=cls.name+'-net'
-        cls.cleanup_done=False
-        def run(*args,**kwargs):
-            return subprocess.run(args,check=True,capture_output=True,text=True,timeout=90,**kwargs)
-        cls.run=staticmethod(run)
+        cls.fixture=SyntheticFixture()
         try:
-            run('openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1',
-                '-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost',
-                '-keyout',str(cls.temp/'server.key'),'-out',str(cls.temp/'server.crt'))
-            run('docker','network','create','--internal',cls.network)
-            run('docker','run','-d','--name',cls.name,'--network',cls.network,
-                '-p','127.0.0.1:5432:5432','-e','POSTGRES_PASSWORD=synthetic-only-password',
-                '-v',str(cls.temp)+':/tls','--entrypoint','sh',
-                'postgres@sha256:9e73daeb439141c2b11eea2463f5f1a3b269fd90d897b41cddb7cb440f21aa5d',
-                '-c','chmod 755 /tls; chown postgres:postgres /tls/server.key; chmod 600 /tls/server.key; '
-                     'exec docker-entrypoint.sh postgres -c ssl=on '
-                     '-c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key')
-            cls.kwargs=dict(host='localhost',port=5432,dbname='postgres',user='postgres',
-                password='synthetic-only-password',sslmode='verify-full',
-                sslrootcert=str(cls.temp/'server.crt'),channel_binding='require',
-                connect_timeout=2,options="-c neon.branch_id=fixture-branch")
-            for _ in range(100):
-                try:
-                    c=psycopg.connect(**cls.kwargs,autocommit=True); c.close(); break
-                except psycopg.OperationalError: time.sleep(.2)
-            else: raise RuntimeError('SYNTHETIC_DB_NOT_READY')
+            cls.kwargs=cls.fixture.start()
+            cls.fixture.wait_ready(psycopg.connect,psycopg.OperationalError,cls.kwargs)
             spec=importlib.util.spec_from_file_location('closure_fixture',
                 ROOT/'database/tests/pr1994-audit-closure/run.py')
             module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
@@ -107,35 +80,14 @@ VALUES('00000000-0000-4000-8000-000000000099','fixture-row','BLOCKED','ROW_PAYLO
 """
             cls.binding=stage.Binding('localhost','postgres','fixture-branch','postgres')
         except BaseException:
-            cls.cleanup(); raise
+            cls.fixture.diagnostics()
+            try:
+                cls.fixture.cleanup()
+            except Exception:
+                print('{"fixture_cleanup_failed":true}')
+            raise
     @classmethod
-    def cleanup(cls):
-        if cls.cleanup_done:return
-        container=subprocess.run(['docker','inspect',cls.name],capture_output=True,text=True,timeout=30)
-        if container.returncode==0:
-            volumes=[m['Name'] for m in json.loads(container.stdout)[0]['Mounts'] if m['Type']=='volume']
-            cls.run('docker','rm','-f','-v',cls.name)
-            gone=subprocess.run(['docker','inspect',cls.name],capture_output=True,text=True,timeout=30)
-            if gone.returncode==0 or 'No such object' not in gone.stderr:
-                raise AssertionError('CONTAINER_CLEANUP_NOT_PROVEN')
-            for volume in volumes:
-                gone=subprocess.run(['docker','volume','inspect',volume],capture_output=True,text=True,timeout=30)
-                if gone.returncode==0 or 'No such volume' not in gone.stderr:
-                    raise AssertionError('VOLUME_CLEANUP_NOT_PROVEN')
-        elif 'No such object' not in container.stderr:
-            raise AssertionError('CONTAINER_CLEANUP_UNKNOWN')
-        network=subprocess.run(['docker','network','inspect',cls.network],capture_output=True,text=True,timeout=30)
-        if network.returncode==0:
-            cls.run('docker','network','rm',cls.network)
-            gone=subprocess.run(['docker','network','inspect',cls.network],capture_output=True,text=True,timeout=30)
-            if gone.returncode==0 or 'No such network' not in gone.stderr:
-                raise AssertionError('NETWORK_CLEANUP_NOT_PROVEN')
-        elif 'No such network' not in network.stderr:
-            raise AssertionError('NETWORK_CLEANUP_UNKNOWN')
-        shutil.rmtree(cls.temp); cls.cleanup_done=True
-        print('STAGE_A_FIXTURE_CLEANUP=true')
-    @classmethod
-    def tearDownClass(cls): cls.cleanup()
+    def tearDownClass(cls): cls.fixture.cleanup()
     def setUp(self):
         with psycopg.connect(**self.kwargs,autocommit=True) as c: c.execute(self.schema)
     def connection(self): return psycopg.connect(**self.kwargs,autocommit=True)
