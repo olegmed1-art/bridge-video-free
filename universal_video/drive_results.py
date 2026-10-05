@@ -22,6 +22,7 @@ from typing import Any
 
 import requests
 
+from .comparison_artifacts import collect_comparison_paths
 from .contract import CONTRACT_VERSION
 from .drive_adapter import DRIVE, access_token, hash_remote_file
 from .result_conformance import ResultConformanceError, verify_result
@@ -107,6 +108,7 @@ def collect_compact_artifacts(
     if missing:
         raise RuntimeError(f"required compact artifacts missing: {','.join(missing)}")
 
+    comparison_paths = collect_comparison_paths(job_dir, manifest)
     selected: list[Path] = []
     for name in sorted(TOP_LEVEL_ALLOWLIST | OPTIONAL_TOP_LEVEL_ALLOWLIST):
         path = job_dir / name
@@ -129,6 +131,8 @@ def collect_compact_artifacts(
         if len(frames) > max_frames:
             raise RuntimeError("keyframe count exceeds compact publication cap")
         selected.extend(frames)
+
+    selected.extend(comparison_paths)
 
     if not selected or manifest_path not in selected:
         raise RuntimeError("no compact result artifacts found")
