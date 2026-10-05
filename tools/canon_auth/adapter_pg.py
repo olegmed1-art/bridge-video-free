@@ -14,7 +14,7 @@ from tools.tournament_pilot.rehearsal import DB, ROLE, TABLE_BUDGET, scalar, api
 from tools.tournament_pilot.package import envelope
 from .test_fixed_adapter import launch, permit, NOW
 from .fixed_adapter import FixedAdapter, CommitUncertain, RecoveryUnproven
-from .ownership import KEYS, inventory
+from .ownership import KEYS, inventory, declared_values
 from .resident_preflight import Refused
 from .bounded_controller import BoundedController, PATH
 from .launch_contract import digest, ORIGIN
@@ -192,7 +192,7 @@ def test_every_deterministic_id_foreign_content_refuses_without_updates(fixture,
     full(a);r.recover()
     spec=a.compiled["declared_rows"][index];table=spec["table"];field=FIELDS[table]
     where=" AND ".join(k+"=%s" for k in KEYS[table])
-    params=tuple(spec["values"][k] for k in KEYS[table])
+    params=tuple(declared_values(spec)[k] for k in KEYS[table])
     value="foreign" if field in ("title","hand_pbn") else Jsonb({"foreign":True})
     # Fixture superuser injects corruption, including append-only tables.
     # Operational adapter has no DISABLE TRIGGER/ALTER/cleanup path.
@@ -771,3 +771,86 @@ def test_before_fix_delayed_real_sql_committed_after_cutoff_counterfactual(fixtu
     assert r.recover()["rows"]==4
     record_evidence("before_fix_counterfactual_40ee",{"status":"BUG_REPRODUCED",
         "late_commit":True,"committed_rows":2,"independent_revoke_rows":4})
+
+
+@pytest.mark.parametrize("call", ["3H", "3S"])
+@pytest.mark.parametrize("kind", ["sibling_relation", "changed_relation"])
+def test_full_source_relation_primary_key_refuses_before_revoke(fixture,call,kind):
+    a,r,school,l=fixture
+    stage(a,"baseline");stage(a,"initial")
+    binding=next(b for b in a.compiled["ids"]["bindings"] if b["call"]==call)
+    spec=next(s for s in a.compiled["declared_rows"]
+        if s["table"]=="public.knowledge_version_source"
+        and s["values"]["knowledge_version_id"]==binding["knowledge_version_id"])
+    values=declared_values(spec)
+    with connect("postgres") as admin:
+        with admin.transaction():
+            admin.execute("ALTER TABLE public.knowledge_version_source DISABLE TRIGGER ALL")
+            if kind=="sibling_relation":
+                admin.execute("INSERT INTO public.knowledge_version_source("
+                    "knowledge_version_id,source_id,relation_type,source_locator) "
+                    "SELECT knowledge_version_id,source_id,'supports',source_locator "
+                    "FROM public.knowledge_version_source WHERE knowledge_version_id=%s AND source_id=%s "
+                    "AND relation_type='derived_from'",
+                    (values["knowledge_version_id"],values["source_id"]))
+            else:
+                admin.execute("UPDATE public.knowledge_version_source SET relation_type='supports' "
+                    "WHERE knowledge_version_id=%s AND source_id=%s AND relation_type='derived_from'",
+                    (values["knowledge_version_id"],values["source_id"]))
+            admin.execute("ALTER TABLE public.knowledge_version_source ENABLE TRIGGER ALL")
+    before=a.conn.execute("SELECT pg_catalog.to_jsonb(t) FROM public.knowledge_version_source t "
+        "WHERE knowledge_version_id=%s AND source_id=%s ORDER BY relation_type",
+        (values["knowledge_version_id"],values["source_id"])).fetchall()
+    events=scalar(a.conn,"SELECT count(*) FROM bidding.ingestion_event")
+    canon=a.conn.execute("SELECT canon_activation_id,status FROM public.canon_activation "
+                         "ORDER BY canon_activation_id").fetchall()
+    activations=a.conn.execute("SELECT runtime_activation_id,status FROM bidding.runtime_activation "
+                              "ORDER BY runtime_activation_id").fetchall()
+    with pytest.raises(Refused):
+        stage(a,"revoke")
+    with pytest.raises(RecoveryUnproven):
+        r.recover()
+    assert a.conn.execute("SELECT pg_catalog.to_jsonb(t) FROM public.knowledge_version_source t "
+        "WHERE knowledge_version_id=%s AND source_id=%s ORDER BY relation_type",
+        (values["knowledge_version_id"],values["source_id"])).fetchall()==before
+    assert scalar(a.conn,"SELECT count(*) FROM bidding.ingestion_event")==events
+    assert a.conn.execute("SELECT canon_activation_id,status FROM public.canon_activation "
+                         "ORDER BY canon_activation_id").fetchall()==canon
+    assert a.conn.execute("SELECT runtime_activation_id,status FROM bidding.runtime_activation "
+                          "ORDER BY runtime_activation_id").fetchall()==activations
+
+
+def test_before_fix_source_relation_counterfactual_real_inventory(fixture):
+    import subprocess,types
+    a,r,school,l=fixture
+    stage(a,"baseline");stage(a,"initial")
+    spec=next(s for s in a.compiled["declared_rows"] if s["table"]=="public.knowledge_version_source")
+    with connect("postgres") as admin:
+        admin.execute("INSERT INTO public.knowledge_version_source("
+            "knowledge_version_id,source_id,relation_type,source_locator) "
+            "SELECT knowledge_version_id,source_id,'supports',source_locator "
+            "FROM public.knowledge_version_source WHERE knowledge_version_id=%s AND source_id=%s",
+            (spec["values"]["knowledge_version_id"],spec["values"]["source_id"]))
+    before={table:a.conn.execute("SELECT status FROM "+table+" ORDER BY "+key).fetchall()
+        for table,key in (("public.canon_activation","canon_activation_id"),
+                          ("bidding.runtime_activation","runtime_activation_id"))}
+    source=subprocess.check_output(["git","show",
+        "12fd5acb1fd1448e958b421ecb89031380654758:tools/canon_auth/ownership.py"],text=True)
+    old=types.ModuleType("tools.canon_auth.before_source_pk_fix")
+    old.__package__="tools.canon_auth"
+    exec(compile(source,"immutable_12fd_ownership","exec"),old.__dict__)
+    with a.conn.transaction(force_rollback=True):
+        previous=old.inventory(a.conn,a.compiled,school)
+        assert previous["state"]=="initial" and previous["rows"]==34 and previous["active"]==4
+    with a.conn.transaction(force_rollback=True):
+        with pytest.raises(Refused,match="foreign_related_row"):
+            inventory(a.conn,a.compiled,school)
+    assert scalar(a.conn,"SELECT count(*) FROM public.knowledge_version_source")==3
+    after={table:a.conn.execute("SELECT status FROM "+table+" ORDER BY "+key).fetchall()
+        for table,key in (("public.canon_activation","canon_activation_id"),
+                          ("bidding.runtime_activation","runtime_activation_id"))}
+    assert before==after
+    record_evidence("before_after_full_source_relation_primary_key",
+        {"before_sha":"12fd5acb1fd1448e958b421ecb89031380654758",
+         "before_accepted_rows":34,"actual_source_link_rows":3,
+         "after":"REFUSED_FOREIGN_RELATED_ROW","activation_changes":0})
