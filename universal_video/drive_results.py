@@ -22,6 +22,7 @@ from typing import Any
 
 import requests
 
+from .comparison_artifacts import collect_comparison_paths
 from .contract import CONTRACT_VERSION
 from .drive_adapter import DRIVE, access_token, hash_remote_file
 from .result_conformance import ResultConformanceError, verify_result
@@ -107,6 +108,10 @@ def collect_compact_artifacts(
     if missing:
         raise RuntimeError(f"required compact artifacts missing: {','.join(missing)}")
 
+    comparison_paths = collect_comparison_paths(job_dir, manifest)
+    if comparison_paths:
+        # Reserve bounded completion-marker bytes inside the same global quota.
+        max_total_bytes = min(max_total_bytes, 255 * 1024**2)
     selected: list[Path] = []
     for name in sorted(TOP_LEVEL_ALLOWLIST | OPTIONAL_TOP_LEVEL_ALLOWLIST):
         path = job_dir / name
@@ -130,12 +135,16 @@ def collect_compact_artifacts(
             raise RuntimeError("keyframe count exceeds compact publication cap")
         selected.extend(frames)
 
+    selected.extend(comparison_paths)
+
     if not selected or manifest_path not in selected:
         raise RuntimeError("no compact result artifacts found")
 
     artifacts: list[PublishArtifact] = []
     total = 0
     for path in selected:
+        if not _safe_regular(path, max_bytes=max_file_bytes):
+            raise RuntimeError("compact artifact exceeds safe per-file cap")
         if path.suffix.lower() in RAW_EXTENSIONS:
             raise RuntimeError("raw media publication is forbidden")
         relative = path.relative_to(job_dir).as_posix()
@@ -421,6 +430,12 @@ def publish_result(
         max_total_bytes=max_total_bytes,
     )
     manifest = json.loads((job_dir / "manifest.json").read_text(encoding="utf-8"))
+    # This legacy publisher creates its own child folder and has no immutable
+    # original re-read or protected role binding. Typed comparisons require the
+    # durable finalizer, including for dry-run readiness and null declarations.
+    if ("comparison_artifacts" in manifest or
+            any(item.relative_name.startswith("comparison/") for item in artifacts)):
+        raise RuntimeError("comparison publication requires protected durable finalization")
     manifest_hash = next(item.sha256 for item in artifacts if item.relative_name == "manifest.json")
     bundle_hash = artifact_set_sha256(artifacts)
     conformance = verify_result(
