@@ -1,0 +1,44 @@
+name: IBM short diagnostic reviewed owner
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha: {required: true, type: string}
+      reviewed_archive_sha: {required: true, type: string}
+      reviewed_manifest_sha: {required: true, type: string}
+      run_reviewed: {required: true, type: boolean, default: false}
+permissions:
+  contents: read
+concurrency:
+  group: ibm-vpc-power-controller
+  cancel-in-progress: false
+jobs:
+  ibm-diagnostic-trial:
+    if: ${{ inputs.run_reviewed && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha }}
+    environment: database-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Qualified disposable owner driver
+        run: |
+          set -eu
+          umask 077
+          python3 -m venv "$RUNNER_TEMP/ibm-diagnostic-venv"
+          "$RUNNER_TEMP/ibm-diagnostic-venv/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r ops/ibm_diagnostic_v9/owner_runner_requirements.txt
+      - name: run-diagnostic
+        env:
+          ORACLE_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+          NATIVE_OWNER_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
+          REVIEWED_ARCHIVE_SHA: ${{ inputs.reviewed_archive_sha }}
+          REVIEWED_MANIFEST_SHA: ${{ inputs.reviewed_manifest_sha }}
+          EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
+        run: |
+          set -eu
+          "$RUNNER_TEMP/ibm-diagnostic-venv/bin/python" ops/ibm_diagnostic_v9/owner_setup.py --archive-sha "$REVIEWED_ARCHIVE_SHA" --manifest-sha "$REVIEWED_MANIFEST_SHA" --expected-main "$EXPECTED_MAIN" --run-reviewed
