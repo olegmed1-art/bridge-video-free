@@ -23,10 +23,23 @@ from .durable_drive import (configured_binding, finalize_drive_job, cleanup_proo
 from .finops_observation import build_video_finops_observation, directory_bytes
 from .result_conformance import ResultConformanceError, verify_result
 from .runner import run_job
+from .book_contract import BookJob, strict_json, validate_book_job
+from .book_worker import process_claimed_book, resume_pending_completion
+
 from .runtime_preflight import VideoRuntimeUnavailable, validate_staged_video, validate_video_runtime
 from .server_review import ServerReviewError, build_server_review
 from .workload_lock import shared_workload_lock
 from .drive_cleanup import queue_cleanup, retry_cleanup, preserve_pending_completion
+
+def _spool_job(payload):
+    if isinstance(payload, dict) and payload.get("schema") == "book-single-atom-job-v1":
+        return validate_book_job(payload)
+    return validate_job(payload)
+
+
+def _spool_job_hash(job):
+    return job.job_hash if isinstance(job, BookJob) else canonical_job_hash(job)
+
 
 
 ERROR_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
@@ -374,6 +387,9 @@ def recover_orphaned_jobs(spool_root: Path) -> dict[str, int]:
 
 def _process_one_locked(spool_root: Path) -> bool:
     paths = _dirs(spool_root)
+    media_root = Path(os.getenv("UNIVERSAL_VIDEO_MEDIA_ROOT", "/opt/bridge-school/universal-video/media"))
+    if resume_pending_completion(paths, spool_root, media_root, progress=_write_progress):
+        return True
     candidates: list[tuple[float, str, Path]] = []
     for path in paths["inbox"].glob("*.json"):
         valid, reason = _regular_payload(path)
@@ -386,12 +402,15 @@ def _process_one_locked(spool_root: Path) -> bool:
             return True
         try:
             mtime = path.lstat().st_mtime
-            candidate_payload = json.loads(path.read_text(encoding="utf-8"))
-            candidate_job = validate_job(candidate_payload)
+            candidate_raw = path.read_text(encoding="utf-8")
+            candidate_payload = json.loads(candidate_raw)
+            if isinstance(candidate_payload, dict) and candidate_payload.get("schema") == "book-single-atom-job-v1":
+                candidate_payload = strict_json(candidate_raw)
+            candidate_job = _spool_job(candidate_payload)
             retry_path = paths["progress"] / f"{candidate_job.job_id}.recovery.json"
             if retry_path.exists():
                 retry = read_receipt(retry_path)
-                if (retry.get("job_hash") == canonical_job_hash(candidate_job)
+                if (retry.get("job_hash") == _spool_job_hash(candidate_job)
                         and retry.get("retry_after_unix", 0) > time.time()):
                     continue
         except OSError:
@@ -429,7 +448,13 @@ def _process_one_locked(spool_root: Path) -> bool:
         valid, reason = _regular_payload(claimed)
         if not valid:
             raise RuntimeError(reason or "invalid claimed spool payload")
-        payload = json.loads(claimed.read_text(encoding="utf-8"))
+        claimed_raw = claimed.read_text(encoding="utf-8")
+        payload = json.loads(claimed_raw)
+        if isinstance(payload, dict) and payload.get("schema") == "book-single-atom-job-v1":
+            payload = strict_json(claimed_raw)
+            process_claimed_book(payload, claimed, source.name, paths, spool_root, media_root,
+                                 progress=_write_progress)
+            return True
         intake_job = validate_job(payload)
         intake_identity = {
             "job_id": intake_job.job_id,
