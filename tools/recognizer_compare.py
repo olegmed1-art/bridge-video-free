@@ -36,6 +36,10 @@ class EvidenceError(BaseException):
     """Do not let historical broad Exception handlers conceal recorder failure."""
 
 
+class OfflineIOError(PermissionError):
+    """OSError semantics let libraries treat denied capability probes as absent."""
+
+
 def digest(path):
     h = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -133,7 +137,7 @@ def offline_audit(event, args):
     if event.startswith(("socket.", "subprocess.")) or event in {
         "os.system", "os.posix_spawn", "os.exec", "os.fork", "os.forkpty", "os.spawn",
     }:
-        raise EvidenceError("offline worker refused external I/O: " + event)
+        raise OfflineIOError("offline worker refused external I/O: " + event)
 
 
 def load_runtime(root, variant):
