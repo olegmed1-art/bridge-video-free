@@ -187,7 +187,7 @@ def main():
         sql("ALTER TABLE public.schema_migration ENABLE ROW LEVEL SECURITY;")
         denied({},'ACK_CHECKSUM_UNREVIEWED_REGISTRY')
         sql("ALTER TABLE public.schema_migration DISABLE ROW LEVEL SECURITY;")
-        sql("CREATE FUNCTION public.fixture_registry_trigger() RETURNS trigger LANGUAGE plpgsql AS $ BEGIN RETURN NEW; END $; CREATE TRIGGER fixture_registry_trigger BEFORE UPDATE ON public.schema_migration FOR EACH ROW EXECUTE FUNCTION public.fixture_registry_trigger();")
+        sql("CREATE FUNCTION public.fixture_registry_trigger() RETURNS trigger LANGUAGE plpgsql AS $fixture$ BEGIN RETURN NEW; END $fixture$; CREATE TRIGGER fixture_registry_trigger BEFORE UPDATE ON public.schema_migration FOR EACH ROW EXECUTE FUNCTION public.fixture_registry_trigger();")
         denied({},'ACK_CHECKSUM_UNREVIEWED_TRIGGER')
         sql("DROP TRIGGER fixture_registry_trigger ON public.schema_migration; DROP FUNCTION public.fixture_registry_trigger();")
         sql('ALTER FUNCTION '+SIGNATURE+' OWNER TO postgres;')

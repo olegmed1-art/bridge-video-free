@@ -4,6 +4,8 @@ on:
     branches: [test/restore-0401-checksum-20261005]
     paths:
       - '.github/workflows/ack-source-restoration.yml'
+      - '.github/workflows/migration-namespace-guard.yml'
+      - 'database/MIGRATION_NAMESPACES.md'
       - 'database/migrations/0401_autopilot_codex_ack_fingerprint_not_null.sql'
       - 'database/scripts/reconcile_0401_checksum.sql'
       - 'database/tests/ack-fingerprint/**'
@@ -25,6 +27,34 @@ jobs:
           set -euo pipefail
           echo 'bea4b407a63256f83f5eecbd8b220406070046edb34d87f849d645b39134dcc7  database/migrations/0401_autopilot_codex_ack_fingerprint_not_null.sql' | sha256sum -c -
           python3 -m py_compile database/tests/ack-fingerprint/run.py
+      - name: Exercise exact namespace guard and negative controls
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess
+          path=pathlib.Path('.github/workflows/migration-namespace-guard.yml')
+          text=path.read_text()
+          body=text.split('        run: |\n',1)[1]
+          code='\n'.join(line[10:] for line in body.splitlines())+'\n'
+          def guard(ok):
+              result=subprocess.run(['bash','-c',code],capture_output=True,text=True,timeout=20)
+              assert (result.returncode==0)==ok, result.stdout+result.stderr
+          guard(True)
+          target=pathlib.Path('database/migrations/0401_autopilot_codex_ack_fingerprint_not_null.sql')
+          original=target.read_bytes()
+          try:
+              target.write_bytes(original+b'-- negative artifact tamper\n')
+              guard(False)
+          finally:
+              target.write_bytes(original)
+          extra=pathlib.Path('database/migrations/0499_autopilot_namespace_negative_fixture.sql')
+          try:
+              extra.write_text('-- temporary negative fixture\n')
+              guard(False)
+          finally:
+              extra.unlink(missing_ok=True)
+          guard(True)
+          print('namespace exact-source, tamper and forbidden-range controls PASS')
+          PY
       - name: Fetch pinned official PostgreSQL image
         run: timeout 180s docker pull --platform linux/amd64 postgres@sha256:9e73daeb439141c2b11eea2463f5f1a3b269fd90d897b41cddb7cb440f21aa5d
       - name: Verify ACK and checksum guards twice in network-none fixtures
