@@ -30,13 +30,24 @@ def test_pinned_r3_auction_output_is_lossless_consumer_input(tmp_path, monkeypat
     summary = json.loads((raw / "comparison.json").read_text())
     assert summary["status"] == "CAPTURED_UNSCORED"
     assert summary["runs"]["candidate"]["auction_result_status"] == "OBSERVED"
-    assert all((raw / v / (sealed["case_id"] + "-" + v) / "process.log").read_bytes() == b""
-               for v in ("baseline", "candidate"))
+    log_receipts = []
+    for variant in ("baseline", "candidate"):
+        log = raw / variant / (sealed["case_id"] + "-" + variant) / "process.log"
+        text = log.read_text()
+        log_receipts.append({"variant": variant, "bytes": log.stat().st_size,
+            "sha256": producer.runner.digest(log),
+            "warning_classes": sorted({name for name in
+                ("DeprecationWarning", "UserWarning", "RuntimeWarning", "FutureWarning", "RequestsDependencyWarning")
+                if name in text}),
+            "runtime_markers": sorted({name for name in
+                ("R26", "installed", "PATCH", "OpenCV", "opencv", "cv2", "numpy")
+                if name in text})})
+    print(json.dumps({"synthetic_process_logs": log_receipts}, sort_keys=True))
     parent_root = tmp_path / "parent"
     parent_root.mkdir()
     job, manifest = _bundle(parent_root)
     clip_sha = sealed["inputs"]["video"]["sha256"]
-    source_id = "synthetic_pinned_original_01"
+    source_id = manifest["source"]["file_id"]
     manifest["source"].update(file_id=source_id, version="1")
     manifest["media"]["sha256"] = clip_sha
     clip_path = producer_root / "synthetic-clip-binding.json"
@@ -81,6 +92,6 @@ def test_pinned_r3_auction_output_is_lossless_consumer_input(tmp_path, monkeypat
     print(json.dumps({"synthetic_producer_consumer_executed": True,
         "runner_sha": args["runner_commit"], "baseline_sha": sealed["baseline"]["sha"],
         "candidate_sha": sealed["candidate"]["sha"], "auction_pngs_retained": 3,
-        "same_hash_replay": True, "synthetic_card_calibration_stubs": True,
+        "deterministic_adapter_repackage": True, "synthetic_card_calibration_stubs": True,
         "real_video_accuracy_evaluated": False, "package_sha256": declaration["manifest_sha256"]},
         sort_keys=True))
