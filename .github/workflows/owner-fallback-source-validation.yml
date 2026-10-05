@@ -1,0 +1,125 @@
+name: Workflow credential boundary synthetic CI
+
+# Validation-only branch. Checkout the exact four-file PR commit, not this harness.
+on:
+  create:
+
+permissions:
+  contents: read
+
+jobs:
+  owner-fallback-contract:
+    if: >-
+      github.event_name == 'create' &&
+      github.event.ref_type == 'branch' &&
+      github.event.ref == 'security/owner-fallback-source-validation-20261005'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: 8667ead3586491ea0656cc401020c34491132ec4
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install pinned synthetic dependencies
+        run: python -m pip install --disable-pip-version-check pytest==8.4.2 PyYAML==6.0.2 'psycopg[binary]==3.3.4'
+      - name: Verify exact source, four-file scope, guards, manifest and safe triggers
+        run: |
+          python - <<'PY'
+          import fnmatch, hashlib, json, subprocess
+          from pathlib import Path
+          import yaml
+          from tools.canon_auth import installation_checks as c
+          base = "f513afc4a1a4cae325b7baeeef5f4848dd29a7a5"
+          expected_head = "8667ead3586491ea0656cc401020c34491132ec4"
+          expected_tree = "f37cb45747740d393543f2bde90d4ab2a20c3d9f"
+          git = lambda *a: subprocess.check_output(["git", *a], text=True).strip()
+          assert git("rev-parse", "HEAD") == expected_head
+          assert git("rev-parse", "HEAD^{tree}") == expected_tree
+          subprocess.run(["git", "diff", "--check", base, "HEAD"], check=True)
+          expected = {
+              ".github/workflows/native-maintenance-owner-attest.yml",
+              "tools/canon_auth/installation_checks.py",
+              "tools/canon_auth/test_installed_owner_workflow.py",
+              "tools/canon_auth/installation/manifest.json",
+          }
+          assert set(git("diff", "--name-only", base, "HEAD").splitlines()) == expected
+          source = Path(c.OWNER).read_text()
+          before = subprocess.check_output(["git", "show", base + ":" + c.OWNER], text=True)
+          fallback = "$" + "{{ secrets.LIGHT_MAINTENANCE_DATABASE_URL || secrets.NEON_DATABASE_URL }}"
+          protected = "$" + "{{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}"
+          assert before.count(fallback) == 2
+          assert source == before.replace(fallback, protected)
+          c.validate_installed_workflow(source, c.baseline())
+          try:
+              c.validate_installed_workflow(before, c.baseline())
+          except AssertionError:
+              print("ORIGINAL_REPOSITORY_FALLBACK_REJECTED")
+          else:
+              raise AssertionError("Original fallback was accepted")
+          manifest = json.loads((c.ROOT / "manifest.json").read_text())
+          assert manifest["installation_base"] == c.BASE
+          assert manifest["execution_branch"] == "main"
+          for name, digest in manifest["content_sha256"].items():
+              assert hashlib.sha256(Path(name).read_text().encode()).hexdigest() == digest, name
+          total = 0
+          for workflow in sorted(Path(".github/workflows").glob("*.y*ml")):
+              hooks = c.events(yaml.safe_load(workflow.read_text()))
+              if isinstance(hooks, str): hooks = {hooks: None}
+              if isinstance(hooks, list): hooks = dict.fromkeys(hooks)
+              assert "create" not in hooks, workflow.name
+              if "workflow_run" in hooks:
+                  subscribers = (hooks["workflow_run"] or {}).get("workflows", ["*"])
+                  assert not any(fnmatch.fnmatchcase("Workflow credential boundary synthetic CI", p) for p in subscribers), workflow.name
+              if "pull_request_target" in hooks:
+                  target = hooks["pull_request_target"] or {}
+                  assert "paths" in target, workflow.name
+                  assert not any(fnmatch.fnmatchcase(name, pattern) for name in expected for pattern in target["paths"]), workflow.name
+              total += 1
+          print(json.dumps({"tested_head": expected_head, "tested_tree": expected_tree,
+                            "changed_files": sorted(expected), "workflow_headers_checked": total,
+                            "historical_guards_unchanged": True, "ibm_files_unchanged": True,
+                            "manifest_verified": True}, sort_keys=True))
+          PY
+      - name: Actionlint changed owner workflow with verified binary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl --fail --location --retry 2 --max-time 120 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/owner-actionlint"
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP/owner-actionlint" actionlint
+          "$RUNNER_TEMP/owner-actionlint/actionlint" -shellcheck= -pyflakes= .github/workflows/native-maintenance-owner-attest.yml
+      - name: Regressions without production credentials and with blocked sockets
+        run: |
+          python - <<'PY'
+          import os, socket, unittest
+          path = os.environ.get("PATH", "/usr/bin:/bin")
+          os.environ.clear()
+          os.environ["PATH"] = path
+          os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+          def blocked(*args, **kwargs):
+              raise AssertionError("Network forbidden in synthetic regression suite")
+          socket.create_connection = blocked
+          socket.socket.connect = blocked
+          socket.socket.connect_ex = blocked
+          import pytest
+          result = pytest.main(["-v",
+              "tools/canon_auth/test_owner_probe.py",
+              "tools/canon_auth/test_owner_resident.py",
+              "tools/canon_auth/test_installed_owner_workflow.py"])
+          if result:
+              raise SystemExit(result)
+          suite = unittest.defaultTestLoader.loadTestsFromNames([
+              "tests.test_native_maintenance_owner_attest",
+              "tests.test_native_maintenance_registry_scope",
+              "tests.test_native_cli_connection_parameters",
+          ])
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          raise SystemExit(not result.wasSuccessful())
+          PY
