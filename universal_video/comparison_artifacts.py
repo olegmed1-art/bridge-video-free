@@ -62,7 +62,7 @@ def screen_decoded(value):
                      "password", "apikey", "authorization", "credentials",
                      "credential", "databaseurl", "dsn"}
         for key, item in value.items():
-            if re.sub(r"[_\\s-]", "", key).lower() in forbidden:
+            if re.sub(r"[_\s-]", "", key.lower()) in forbidden:
                 fail("credential-like decoded key is not publishable")
             screen_decoded(key)
             screen_decoded(item)

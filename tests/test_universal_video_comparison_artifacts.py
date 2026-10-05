@@ -474,3 +474,9 @@ def test_declared_comparison_still_honors_smaller_per_file_quota(tmp_path):
     attach(prep)
     with pytest.raises(RuntimeError, match="per-file cap"):
         outputs.collect_compact_artifacts(prep[0], max_file_bytes=1024 * 1024)
+
+
+@pytest.mark.parametrize("key", ["dsn", "clientSecret", "database_url", "access token", "access\ttoken"])
+def test_decoded_credential_key_normalization(key):
+    with pytest.raises(RuntimeError, match="credential-like"):
+        comparison.decode(json.dumps({key: "synthetic-private-value"}).encode())
