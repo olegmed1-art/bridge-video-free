@@ -1,5 +1,6 @@
 """Audit the actual installation delta; never connect, dispatch or read secrets."""
 import ast
+import copy
 import hashlib
 import json
 import re
@@ -33,8 +34,14 @@ def validate_installed_workflow(workflow, original):
     assert inputs["probe_scope"]["options"] == ["maintenance", "canon-readonly"]
     maintenance = dict(value["jobs"]["attest"])
     guard = maintenance.pop("if")
-    old_maintenance = dict(old["jobs"]["attest"])
+    old_maintenance = copy.deepcopy(old["jobs"]["attest"])
     old_guard = old_maintenance.pop("if")
+    # Permit only removal of the historical repository credential fallback.
+    owner_envs = [step["env"] for step in old_maintenance["steps"]
+                  if "NATIVE_OWNER_DATABASE_URL" in step.get("env", {})]
+    assert len(owner_envs) == 1
+    assert owner_envs[0]["NATIVE_OWNER_DATABASE_URL"] == "${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL || secrets.NEON_DATABASE_URL }}"
+    owner_envs[0]["NATIVE_OWNER_DATABASE_URL"] = "${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}"
     assert maintenance == old_maintenance
     # Keep every original main/owner/manual/exact SHA check, adding scope only.
     assert re.sub(r"\s+", " ", guard.replace("inputs.probe_scope == 'maintenance' &&", "")).strip() == re.sub(r"\s+", " ", old_guard).strip()
@@ -67,7 +74,7 @@ def validate_installed_workflow(workflow, original):
     assert len([step for step in job["steps"] if "env" in step]) == 1
     assert job["steps"][-1]["run"] == "python -m tools.canon_auth.owner_probe"
     assert job["steps"][-1]["env"] == {
-        "NATIVE_OWNER_DATABASE_URL": "${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL || secrets.NEON_DATABASE_URL }}",
+        "NATIVE_OWNER_DATABASE_URL": "${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}",
         "GH_TOKEN": "${{ github.token }}", "EXPECTED_MAIN": "${{ inputs.expected_main_sha }}",
         "EXPECTED_PROBE_SHA": "${{ inputs.expected_probe_sha }}", "OWNER_PROBE_SCOPE": "${{ inputs.probe_scope }}"}
 

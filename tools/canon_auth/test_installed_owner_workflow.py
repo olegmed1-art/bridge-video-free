@@ -117,3 +117,16 @@ def test_changed_installed_checkout_action_is_refused(installed):
     value["jobs"]["canon-owner-probe"]["steps"][0]["uses"] = "unreviewed/checkout@main"
     with pytest.raises(AssertionError):
         c.validate_installed_workflow(yaml.safe_dump(value), original)
+
+
+@pytest.mark.parametrize("job_id", ["attest", "canon-owner-probe"])
+def test_repository_owner_fallback_is_refused(installed, job_id):
+    text, _, original = installed
+    value = yaml.safe_load(text)
+    owner_envs = [step["env"] for step in value["jobs"][job_id]["steps"]
+                  if "NATIVE_OWNER_DATABASE_URL" in step.get("env", {})]
+    assert len(owner_envs) == 1
+    owner_envs[0]["NATIVE_OWNER_DATABASE_URL"] = (
+        "${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL || secrets.NEON_DATABASE_URL }}")
+    with pytest.raises(AssertionError):
+        c.validate_installed_workflow(yaml.safe_dump(value), original)
