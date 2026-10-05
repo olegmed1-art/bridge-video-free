@@ -5,7 +5,10 @@
 -- External project/endpoint identity and exclusive DDL window remain owner gates.
 -- No summaries, requests, task payloads or message bodies are read.
 -- Retain the execution result, including any compensating reversal, externally.
-BEGIN;
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+-- Fail before reading if an enclosing transaction already fixed a higher-isolation snapshot.
+-- Override a REPEATABLE READ session default before any statement snapshot.
 SET LOCAL lock_timeout = '2s';
 SET LOCAL statement_timeout = '10s';
 SET LOCAL search_path = pg_catalog;
@@ -142,6 +145,8 @@ BEGIN
     OR current_user IS DISTINCT FROM current_setting('bridge.pr1994.owner') THEN
    RAISE EXCEPTION 'PR1994_TARGET_DRIFT';
  END IF;
+ -- Statistics views may otherwise reuse the earlier transaction snapshot.
+ PERFORM pg_stat_clear_snapshot();
  IF EXISTS (SELECT FROM pg_stat_activity
     WHERE datname=current_database() AND pid<>pg_backend_pid()
       AND backend_type='client backend' AND state IS DISTINCT FROM 'idle')
@@ -266,6 +271,8 @@ BEGIN
  EXECUTE catalog_sql INTO catalog_after;
  SELECT to_jsonb(r) INTO receipt_after FROM autopilot.paused_work_reconcile_receipt r
  WHERE work_item_id=wid AND evidence_token=packet_sha;
+ -- Refresh backend activity again immediately before the postcheck.
+ PERFORM pg_stat_clear_snapshot();
  IF after_meta IS DISTINCT FROM before_meta OR catalog_after IS DISTINCT FROM catalog_before
     OR (to_jsonb(after_w)-ARRAY['state','result_code','completed_at','updated_at'])
        IS DISTINCT FROM (to_jsonb(w)-ARRAY['state','result_code','completed_at','updated_at'])

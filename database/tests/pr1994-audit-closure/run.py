@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import subprocess
 import time
 
@@ -343,6 +344,138 @@ AS $$ BEGIN UPDATE autopilot.project_planner_state SET decision_count=decision_c
         sql("ALTER TABLE autopilot.paused_work_reconcile_receipt ADD CONSTRAINT fixture_reject_close CHECK(action<>'CLOSE_SUPERSEDED');")
         denied("fixture_reject_close")
         checks.append("receipt_insert_failure_rolls_back_prior_item_update")
+
+
+        # Force the unsafe session default, freeze the first statement snapshot,
+        # then commit a child or native-control change before protected table locks.
+        # A fixture-only advisory barrier supplies deterministic ordering.
+        def first_query_race(change, expected, legacy=False, stage="before_locks"):
+            baseline()
+            p = params()
+            holder_name = "pr1994-fixture-barrier"
+            closer_name = "pr1994-fixture-closer"
+            barrier_key = 19942118
+            def process(app, variables=None):
+                args = ["docker", "exec", "-i", "-e", "PGAPPNAME=" + app, name,
+                        "psql", "-X", "-q", "-At", "-U", "postgres",
+                        "-v", "ON_ERROR_STOP=1"]
+                for key, val in (variables or {}).items():
+                    args += ["-v", key + "=" + str(val)]
+                return subprocess.Popen(args, stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        text=True, env=ENV)
+            def await_condition(query):
+                for _ in range(100):
+                    if value(query) == "1":
+                        return
+                    time.sleep(0.05)
+                raise AssertionError("FIXTURE_FIRST_QUERY_BARRIER_NOT_OBSERVED")
+            holder = process(holder_name)
+            closer = None
+            background = None
+            try:
+                holder.stdin.write(f"SELECT pg_advisory_lock({barrier_key});\n")
+                holder.stdin.flush()
+                await_condition(
+                    "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid "
+                    f"WHERE a.application_name='{holder_name}' AND l.locktype='advisory' AND l.granted;")
+                raced_script = script
+                if stage == "before_locks":
+                    if legacy:
+                        raced_script = raced_script.replace(
+                            "BEGIN ISOLATION LEVEL READ COMMITTED;", "BEGIN;", 1)
+                        raced_script = raced_script.replace(
+                            "SET TRANSACTION ISOLATION LEVEL READ COMMITTED;\n", "", 1)
+                    barrier = ("\nDO $signal$ BEGIN RAISE NOTICE 'FIXTURE_BARRIER_READY'; END $signal$;\n"
+                               "SET LOCAL lock_timeout='8s';\n"
+                               f"SELECT pg_advisory_xact_lock({barrier_key});\n"
+                               "SELECT pg_sleep(0.2);\nSET LOCAL lock_timeout='2s';\n")
+                    assert raced_script.count("\nDO $capacity$") == 1
+                    raced_script = raced_script.replace("\nDO $capacity$",
+                                                         barrier + "\nDO $capacity$", 1)
+                else:
+                    if legacy:
+                        pos = raced_script.rindex(" PERFORM pg_stat_clear_snapshot();")
+                        raced_script = (raced_script[:pos] +
+                                        raced_script[pos:].replace(" PERFORM pg_stat_clear_snapshot();", "", 1))
+                    marker = " EXECUTE catalog_sql INTO catalog_after;"
+                    assert raced_script.count(marker) == 1
+                    raced_script = raced_script.replace(
+                        marker, marker + "\n RAISE NOTICE 'FIXTURE_BARRIER_READY';"
+                        "\n PERFORM set_config('lock_timeout','8s',true);"
+                        f"\n PERFORM pg_advisory_xact_lock({barrier_key});"
+                        "\n PERFORM pg_sleep(0.2);"
+                        "\n PERFORM set_config('lock_timeout','2s',true);", 1)
+                closer = process(closer_name, p)
+                closer.stdin.write("SET default_transaction_isolation='repeatable read';\n"
+                                   "SET neon.branch_id='fixture-branch';\n" + raced_script)
+                closer.stdin.close()
+                closer.stdin = None
+                # Observe a client NOTICE rather than issue an active DB query
+                # that could itself trip the conservative writer precheck.
+                deadline = time.monotonic() + 10
+                while True:
+                    remaining = deadline - time.monotonic()
+                    assert remaining > 0, "FIXTURE_CLOSER_BARRIER_TIMEOUT"
+                    readable, _, _ = select.select([closer.stderr], [], [], remaining)
+                    assert readable, "FIXTURE_CLOSER_BARRIER_TIMEOUT"
+                    line = closer.stderr.readline()
+                    assert line, "FIXTURE_CLOSER_EXITED_BEFORE_BARRIER"
+                    if "FIXTURE_BARRIER_READY" in line:
+                        break
+                if stage == "before_locks":
+                    sql(change)
+                else:
+                    background = writer("SELECT pg_sleep(8);")
+                after_control_commit = snapshot()
+                # Closing this session releases its session advisory lock.
+                holder.stdin.write("\\q\n")
+                holder.stdin.close()
+                holder.stdin = None
+                _, holder_stderr = holder.communicate(timeout=10)
+                assert holder.returncode == 0, holder_stderr
+                _, closer_stderr = closer.communicate(timeout=15)
+                if legacy:
+                    assert closer.returncode == 0, closer_stderr[-2400:]
+                    stale = snapshot()
+                    row = next(x for x in stale["project_work_item"] if x["work_item_id"] == WID)
+                    assert row["state"] == "DONE", "LEGACY_RACE_NOT_REPRODUCED"
+                else:
+                    assert closer.returncode != 0, "STALE_SNAPSHOT_CLOSURE_SUCCEEDED"
+                    assert expected in closer_stderr, closer_stderr[-2400:]
+                    assert snapshot() == after_control_commit, "RACE_REJECTION_CHANGED_ROWS"
+            finally:
+                if background is not None:
+                    _, writer_stderr = background.communicate(timeout=15)
+                    assert background.returncode == 0, writer_stderr
+                for proc in (closer, holder):
+                    if proc is not None and proc.poll() is None:
+                        proc.kill()
+                        proc.communicate(timeout=10)
+
+        child_commit = (f"INSERT INTO autopilot.project_work_item"
+                        "(work_item_id,work_key,state,depends_on_work_item_id) "
+                        f"VALUES('{CHILD}','synthetic-race-child','WAITING_DEPENDENCY','{WID}');")
+        control_commit = "UPDATE autopilot.native_cli_config SET enabled=true;"
+        first_query_race(child_commit, "PR1994_LIVE_WORK_OR_CONTROL_DRIFT", legacy=True)
+        first_query_race(child_commit, "PR1994_LIVE_WORK_OR_CONTROL_DRIFT")
+        first_query_race(control_commit, "PR1994_LIVE_WORK_OR_CONTROL_DRIFT")
+        checks.append("repeatable_read_default_child_and_control_commits_before_locks_refuse")
+
+        first_query_race(None, "PR1994_POSTCHECK_SIDE_EFFECT", legacy=True, stage="postcheck")
+        first_query_race(None, "PR1994_POSTCHECK_SIDE_EFFECT", stage="postcheck")
+        checks.append("fresh_postcheck_statistics_detect_writer_started_after_precheck")
+
+        for isolation in ("REPEATABLE READ", "SERIALIZABLE"):
+            baseline()
+            before = snapshot()
+            p = params()
+            result = sql("BEGIN ISOLATION LEVEL " + isolation + ";\nSELECT 1;\n" + script,
+                         variables=p, ok=False)
+            assert result.returncode != 0, "ENCLOSING_SNAPSHOT_CLOSURE_SUCCEEDED"
+            assert "must be called before any query" in result.stderr, result.stderr[-2400:]
+            assert snapshot() == before, "ENCLOSING_SNAPSHOT_REJECTION_CHANGED_ROWS"
+        checks.append("enclosing_higher_isolation_snapshot_refuses_before_case_reads")
 
         for source, expected in (
             ("BEGIN; SELECT 1; SELECT pg_sleep(8); COMMIT;", "PR1994_UNSERIALIZED_WRITER"),
