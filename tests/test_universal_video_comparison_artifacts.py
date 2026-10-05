@@ -773,3 +773,94 @@ def test_r3_occurrence_interval_and_latest_observation_bind(tmp_path, field, val
     write(path, result)
     with pytest.raises(RuntimeError):
         attach(prep)
+
+
+@pytest.mark.parametrize("structure", ["fragment", "call-evidence"])
+@pytest.mark.parametrize("mode", ["missing-path", "missing-hash", "missing-time",
+    "wrong-path", "wrong-hash", "wrong-time", "path-type", "hash-type", "time-type",
+    "bool-time", "not-object", "missing-path-forged-hash", "duplicate", "empty",
+    "cross-occurrence"])
+def test_r3_secondary_reference_schema_and_association_fail_closed(tmp_path, structure, mode):
+    prep = r3_prepared(tmp_path)
+    job, manifest, raw, args = prep
+    directory = next(raw.glob("candidate/*"))
+    path = directory / "result.json"
+    result = json.loads(path.read_text())
+    auction = result["auction_recognition"]
+    occurrence = auction["auctions"][0]
+    observation = occurrence["observations"][0]
+    reference = {k: observation[k] for k in ("timestamp_ms", "frame_sha256", "frame_path")}
+    occurrence["ordered_calls"] = [{"evidence": [dict(reference)]}]
+    rows = occurrence["visible_fragments"] if structure == "fragment" else occurrence["ordered_calls"][0]["evidence"]
+    row = rows[0]
+    if mode.startswith("missing-") and mode != "missing-path-forged-hash":
+        row.pop({"missing-path": "frame_path", "missing-hash": "frame_sha256",
+                 "missing-time": "timestamp_ms"}[mode])
+    elif mode == "missing-path-forged-hash":
+        row.pop("frame_path")
+        row["frame_sha256"] = "f" * 64
+    elif mode == "wrong-path":
+        row["frame_path"] = row["frame_path"].replace("/candidate/", "/baseline/")
+    elif mode == "wrong-hash":
+        row["frame_sha256"] = "f" * 64
+    elif mode == "wrong-time":
+        row["timestamp_ms"] = 2000
+    elif mode == "path-type":
+        row["frame_path"] = []
+    elif mode == "hash-type":
+        row["frame_sha256"] = None
+    elif mode == "time-type":
+        row["timestamp_ms"] = "1000"
+    elif mode == "bool-time":
+        row["timestamp_ms"] = True
+    elif mode == "not-object":
+        rows[0] = None
+    elif mode == "duplicate":
+        rows.append(dict(row))
+    elif mode == "empty":
+        rows.clear()
+    else:
+        # A real retained observation in a DIFFERENT occurrence is still orphan evidence here.
+        other = json.loads(json.dumps(occurrence))
+        other.update(board_occurrence_id="e" * 64, start_ms=2000, end_ms=2000,
+                     latest_observation_timestamp_ms=2000)
+        other_obs = other["observations"][0]
+        other_obs["timestamp_ms"] = 2000
+        other_obs["frame_pixel_sha256"] = "f" * 64
+        image = directory / "recognizer" / "auction-evidence" / ("auction-0000002000-" + "f" * 12 + ".png")
+        image.write_bytes(png())
+        other_obs["frame_path"] = str(image).replace(str(directory), "/synthetic/candidate/synthetic-first-clip-candidate")
+        other_ref = {k: other_obs[k] for k in ("timestamp_ms", "frame_sha256", "frame_path")}
+        other["visible_fragments"] = [dict(other_ref, calls=[])]
+        other["ordered_calls"] = [{"evidence": [dict(other_ref)]}]
+        auction["auctions"].append(other)
+        row.update(other_ref)
+    write(path, result)
+    before = {p.relative_to(raw).as_posix(): p.read_bytes() for p in raw.rglob("*") if p.is_file()}
+    with pytest.raises(RuntimeError, match="auction (secondary|fragment|call|duplicate)|invalid (digest|bounded count)"):
+        attach(prep)
+    assert before == {p.relative_to(raw).as_posix(): p.read_bytes() for p in raw.rglob("*") if p.is_file()}
+    assert not (job / "comparison").exists()
+    assert not (job / durable.FINAL_RECEIPT).exists()
+
+
+def test_r3_valid_secondary_refs_survive_unpack_and_revalidate(tmp_path):
+    prep = r3_prepared(tmp_path)
+    directory = next(prep[2].glob("candidate/*"))
+    path = directory / "result.json"
+    result = json.loads(path.read_text())
+    occurrence = result["auction_recognition"]["auctions"][0]
+    observation = occurrence["observations"][0]
+    reference = {k: observation[k] for k in ("timestamp_ms", "frame_sha256", "frame_path")}
+    occurrence["ordered_calls"] = [{"evidence": [reference]}]
+    write(path, result)
+    paths = attach(prep)
+    index = json.loads(paths[0].read_bytes())
+    stream = b"".join(p.read_bytes() for p in paths[1:])
+    files = {r["path"]: stream[r["offset"]:r["offset"] + r["size_bytes"]] for r in index["files"]}
+    name = next(n for n in files if n.startswith("candidate/") and n.endswith("/result.json"))
+    unpacked = json.loads(files[name])
+    unpacked["auction_recognition"]["auctions"][0]["ordered_calls"][0]["evidence"][0].pop("frame_path")
+    files[name] = comparison.encoded(unpacked)
+    with pytest.raises(RuntimeError, match="reference fields required"):
+        comparison.validate_files(files, index["binding"])

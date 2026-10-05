@@ -561,19 +561,42 @@ def validate_auction(files, prefix, binding, auction, status, output):
         if (observations[0]["timestamp_ms"] != start or
                 observations[latest_index]["timestamp_ms"] > latest_timestamp):
             fail("auction observation interval binding invalid")
-        # Every secondary reference must bind to a retained observation in its occurrence.
-        def references(value):
-            if isinstance(value, dict):
-                if "frame_path" in value:
-                    key = (value.get("timestamp_ms"), value.get("frame_sha256"), value.get("frame_path"))
-                    if key not in by_locator:
-                        fail("auction secondary evidence reference mismatch")
-                for item in value.values():
-                    references(item)
-            elif isinstance(value, list):
-                for item in value:
-                    references(item)
-        references(occurrence)
+        # Schema locations are mandatory; absent paths must never skip validation.
+        def reference(value, *, exact=False):
+            fields = {"timestamp_ms", "frame_sha256", "frame_path"}
+            if (not isinstance(value, dict) or not fields <= set(value) or
+                    (exact and set(value) != fields)):
+                fail("auction secondary evidence reference fields required")
+            timestamp = _int(value["timestamp_ms"], 120000)
+            digest = _hex(value["frame_sha256"])
+            path = value["frame_path"]
+            if not isinstance(path, str):
+                fail("auction secondary evidence reference path required")
+            key = (timestamp, digest, path)
+            if key not in by_locator:
+                fail("auction secondary evidence reference mismatch")
+            return key
+
+        fragments = occurrence["visible_fragments"]
+        fragment_keys = set()
+        for fragment in fragments:
+            key = reference(fragment)
+            if not isinstance(fragment.get("calls"), list) or key in fragment_keys:
+                fail("auction fragment inventory invalid")
+            fragment_keys.add(key)
+        if fragment_keys != set(by_locator):
+            fail("auction fragment complete inventory mismatch")
+
+        for call in occurrence["ordered_calls"]:
+            if (not isinstance(call, dict) or not isinstance(call.get("evidence"), list) or
+                    not call["evidence"]):
+                fail("auction call evidence inventory required")
+            evidence_keys = set()
+            for item in call["evidence"]:
+                key = reference(item, exact=True)
+                if key in evidence_keys:
+                    fail("duplicate auction call evidence reference")
+                evidence_keys.add(key)
     if referenced != names:
         fail("auction snapshot complete inventory mismatch")
 
