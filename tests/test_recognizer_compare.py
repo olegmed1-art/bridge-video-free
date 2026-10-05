@@ -187,13 +187,14 @@ def test_preflight_refuses_invalid_comparisons_before_launch(sealed_case, tmp_pa
         runner.prepare(path, seal, output)
 
 
-def test_comparison_runs_both_processes_even_if_baseline_fails(sealed_case, tmp_path, monkeypatch):
+@pytest.mark.parametrize("baseline_status", ["ERROR", "RETURNED"])
+def test_comparison_runs_both_processes_even_if_baseline_fails(sealed_case, tmp_path, monkeypatch, baseline_status):
     path, _ = sealed_case
     calls = []
     def run(command, **kwargs):
         config = json.loads(Path(command[-1]).read_text())
         calls.append(config)
-        state = {"status": "ERROR" if len(calls) == 1 else "RETURNED"}
+        state = {"status": baseline_status if len(calls) == 1 else "RETURNED"}
         runner.write_json(Path(config["output"]) / "worker-status.json", state)
         return SimpleNamespace(returncode=1 if len(calls) == 1 else 0)
     monkeypatch.setattr(runner.subprocess, "run", run)
@@ -222,3 +223,40 @@ def test_real_pinned_runtime_installs_in_separate_offline_process(variant):
     assert receipt["sha"] == sha
     assert receipt["media_processed"] is False
     assert receipt["module"] == runner.MODULES[variant]
+
+
+def test_worker_audit_blocks_real_python_socket_and_direct_spawn_routes():
+    script = """
+import importlib.util, json, os, socket, subprocess, sys
+spec = importlib.util.spec_from_file_location("runner_under_test", sys.argv[1])
+runner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runner)
+# Create an unconnected UDP socket before installing the hook to exercise sendto.
+udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sys.addaudithook(runner.offline_audit)
+operations = {
+    "socket": lambda: socket.socket(),
+    "udp": lambda: udp.sendto(b"must-not-send", ("127.0.0.1", 9)),
+    "popen": lambda: subprocess.run(["/nonexistent/blocked-command"]),
+    "exec": lambda: os.execv("/nonexistent/blocked-command", ["blocked"]),
+}
+if hasattr(os, "posix_spawn"):
+    operations["spawn"] = lambda: os.posix_spawn("/nonexistent/blocked-command", ["blocked"], {})
+blocked = []
+for name, operation in operations.items():
+    try:
+        operation()
+    except runner.EvidenceError:
+        blocked.append(name)
+    else:
+        raise AssertionError("operation was not blocked: " + name)
+udp.close()
+print(json.dumps(blocked))
+"""
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", script, str(RUNNER)],
+                            text=True, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    blocked = json.loads(result.stdout)
+    assert set(blocked) >= {"socket", "udp", "popen", "exec"}
+    if hasattr(os, "posix_spawn"):
+        assert "spawn" in blocked
