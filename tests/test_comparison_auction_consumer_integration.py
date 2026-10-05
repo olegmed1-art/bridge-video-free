@@ -4,6 +4,12 @@ import json
 import os
 from pathlib import Path
 import pytest
+import sys
+
+# CI imports the consumer from its separate, immutable merged checkout.
+consumer_root = os.environ.get("COMPARISON_CONSUMER_ROOT")
+if consumer_root:
+    sys.path.insert(0, str(Path(consumer_root).resolve()))
 from universal_video import comparison_artifacts as consumer
 from universal_video import drive_results as publisher
 from test_universal_video_result_conformance import _bundle, _verify
@@ -18,7 +24,13 @@ def test_pinned_r3_auction_output_is_lossless_consumer_input(tmp_path, monkeypat
         runner_root / "tests/test_recognizer_compare_auction_integration.py")
     producer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(producer)
-    producer.runner.verify_checkout(runner_root, "e203e857ed59fa15e082638627fc6dd8a01b81d9")
+    runner_sha = os.environ.get("COMPARISON_R3_RUNNER_SHA",
+        "e203e857ed59fa15e082638627fc6dd8a01b81d9")
+    producer.runner.verify_checkout(runner_root, runner_sha)
+    if consumer_root:
+        consumer_sha = os.environ["COMPARISON_CONSUMER_SHA"]
+        producer.runner.verify_checkout(consumer_root, consumer_sha)
+        assert Path(consumer.__file__).resolve().is_relative_to(Path(consumer_root).resolve())
     producer_root = tmp_path / "producer"
     producer_root.mkdir()
     # Published decoder, observer, recorder and offline workers; explicit card stubs only.
@@ -59,7 +71,7 @@ def test_pinned_r3_auction_output_is_lossless_consumer_input(tmp_path, monkeypat
     }))
     args = dict(sealed_manifest_path=sealed_path,
         sealed_manifest_sha256=producer.runner.digest(sealed_path),
-        runner_commit="e203e857ed59fa15e082638627fc6dd8a01b81d9",
+        runner_commit=runner_sha,
         runner_sha256=producer.runner.digest(producer.RUNNER),
         job_id=manifest["job_id"], job_hash=manifest["job_hash"],
         source_file_id=source_id, source_version="1", source_sha256=clip_sha,
