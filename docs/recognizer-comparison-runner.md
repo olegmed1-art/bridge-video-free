@@ -64,7 +64,8 @@ different job IDs and output directories. Each calls the actual revision's
 install function once, then only recognize_video_primary with the production
 adapter settings (scan 1000 ms, attempt gap 15000 ms, card size 109x147).
 The historical r26.3 geometry and retry patches are therefore included.
-Credential requests and Python network/subprocess calls in a child are refused;
+Credential requests and Python socket/exec/spawn calls in a child are refused
+by audit hooks. This is not an OS network sandbox for native extensions;
 no production run/process_job entry point is called.
 
 For a no-media runtime import/install inspection:
@@ -89,15 +90,20 @@ For a no-media runtime import/install inspection:
 - evidence/events.jsonl: durable frame, selector, geometry, backend and acceptance
   events; logical scan time, preceding attempt time and queue depth when available.
   Requested timestamps plus original offset and OpenCV's reported decoder
-  position are distinct. OpenCV position is NOT independently verified source PTS.
+  position are distinct. The source offset is supplied by the manifest author;
+  verify the clip-to-original mapping separately. OpenCV position is NOT
+  independently verified source PTS.
 - comparison.json: both process outcomes, never an automatic accuracy PASS.
   CAPTURED_UNSCORED means both calls returned, even if neither accepted a deal.
   REPLAY_ERROR retains the other version's run and all evidence already written.
 
 The observer copies arrays/files without replacing recognizer inputs or results.
 A recorder failure aborts rather than being swallowed by historical broad catches.
-Limits are 512 frame writes / 512 MiB evidence per child and 120 seconds of media;
-the per-child timeout is 300 seconds by default (maximum 900). Reaching a limit is
+Limits are 512 frame writes, an accumulated PNG counter of 512 MiB, and
+120 seconds of media. The PNG limit is checked after each write (one PNG can
+overshoot before the replay aborts); logs and JSON are not included in that
+counter, so this is not a total disk quota. The
+per-child timeout is 300 seconds by default (maximum 900). Reaching a limit is
 an incomplete replay, never an accuracy pass. Observer I/O changes wall time:
 elapsed_seconds_with_observer is not a production performance benchmark.
 
