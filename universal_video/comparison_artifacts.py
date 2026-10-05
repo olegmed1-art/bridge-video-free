@@ -8,7 +8,6 @@ by the builder. Attach its declaration before generating the server review.
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import math
 import os
@@ -59,8 +58,13 @@ def decode(raw):
         text = raw.decode("utf-8")
         if CREDENTIAL.search(text):
             fail("credential-like text is not publishable")
-        return json.loads(text, object_pairs_hook=_pairs, parse_float=_float,
-                          parse_constant=lambda _: fail("nonfinite JSON"))
+        value = json.loads(text, object_pairs_hook=_pairs, parse_float=_float,
+                           parse_constant=lambda _: fail("nonfinite JSON"))
+        # Escaped JSON keys/values must not bypass the textual refusal gate.
+        canonical = json.dumps(value, ensure_ascii=False, allow_nan=False)
+        if CREDENTIAL.search(canonical):
+            fail("credential-like decoded JSON is not publishable")
+        return value
     except (ValueError, UnicodeError) as exc:
         raise RuntimeError("invalid comparison JSON") from exc
 
@@ -326,19 +330,84 @@ def validate_files(files, binding):
         if not isinstance(run, dict):
             fail("comparison run missing")
         status_name = prefix + "worker-status.json"
-        if comparison["status"] == "CAPTURED_UNSCORED":
-            if status_name not in files or prefix + "result.json" not in files or event_name not in files:
-                fail("returned comparison artifacts missing")
-            status = decode(files[status_name])
-            if not isinstance(status, dict):
-                fail("comparison status object required")
-            _int(status.get("attempts"), 512)
-            if (run.get("status") != "RETURNED" or run.get("exit_code") != 0 or
-                    status.get("status") != "RETURNED" or status.get("variant") != variant or
+        if run.get("status") not in {"RETURNED", "ERROR", "TIMEOUT", "PROCESS_ERROR"}:
+            fail("unsupported comparison child state")
+        status = decode(files[status_name]) if status_name in files else None
+        if status is not None:
+            if (not isinstance(status, dict) or status.get("variant") != variant or
                     status.get("job_id") != case + "-" + variant or
-                    status.get("source_sha") != binding["revisions"][variant] or
-                    status.get("attempts") != len(captured)):
+                    status.get("source_sha") != binding["revisions"][variant]):
+                fail("comparison worker identity mismatch")
+        if run["status"] in {"RETURNED", "ERROR"}:
+            if status is None or run != {**status, "exit_code": run.get("exit_code")}:
+                fail("comparison summary and worker receipt mismatch")
+            if type(run.get("exit_code")) is not int:
+                fail("comparison exit code required")
+        if run["status"] == "RETURNED":
+            if prefix + "result.json" not in files or event_name not in files:
+                fail("returned comparison artifacts missing")
+            _int(status.get("attempts"), 512)
+            if (status.get("status") != "RETURNED" or status.get("attempts") != len(captured)):
                 fail("comparison status count mismatch")
+            duration = (status.get("metadata") or {}).get("duration_seconds")
+            if type(duration) not in {int, float} or not 0 < duration <= 120:
+                fail("comparison media duration missing or over quota")
+        elif run["status"] == "ERROR" and status.get("status") != "ERROR":
+            fail("comparison error receipt mismatch")
+        if prefix + "result.json" in files:
+            if status is None:
+                fail("result without worker identity")
+            validate_result(files, prefix, binding, variant, status)
+    runs = comparison.get("runs")
+    if not isinstance(runs, dict) or set(runs) != {"baseline", "candidate"}:
+        fail("exact comparison run inventory required")
+    returned = all(r.get("status") == "RETURNED" and type(r.get("exit_code")) is int and r["exit_code"] == 0
+                   for r in runs.values())
+    if comparison["status"] != ("CAPTURED_UNSCORED" if returned else "REPLAY_ERROR"):
+        fail("comparison summary state mismatch")
+
+
+def validate_result(files, prefix, binding, variant, status):
+    result = decode(files[prefix + "result.json"])
+    versions = {"baseline": "bridgit-primary-video-gambler-v2",
+                "candidate": "bridgit-primary-video-gambler-v2-observation-guards-candidate2"}
+    if (not isinstance(result, dict) or result.get("version") != versions[variant] or
+            status.get("version") != result["version"] or
+            status.get("result_status") != result.get("status") or
+            result.get("status") not in {"PRIMARY_COMPLETE", "PRIMARY_PARTIAL_COVERAGE", "NO_FULL_LAYOUT_ACCEPTED"} or
+            result.get("canonical_promotion_allowed") is not False or
+            result.get("gambler_sprite_sha256") != binding["input_sha256"]["sprite"] or
+            result.get("scan_ms") != 1000 or type(result.get("scan_ms")) is not int or
+            result.get("attempt_gap_ms") != 15000 or type(result.get("attempt_gap_ms")) is not int or
+            result.get("template_card_size") != {"width": 109.0, "height": 147.0}):
+        fail("invalid primary visual result schema or settings")
+    size = result.get("source_size")
+    if not isinstance(size, dict) or set(size) != {"width", "height"}:
+        fail("primary source size missing")
+    if not all(1 <= _int(n, 16384) <= 16384 for n in size.values()):
+        fail("primary source size invalid")
+    deals = result.get("deals")
+    if not isinstance(deals, list) or len(deals) > 64:
+        fail("primary deal inventory invalid")
+    if bool(deals) != (result["status"] != "NO_FULL_LAYOUT_ACCEPTED"):
+        fail("primary result status/deal mismatch")
+    screenshots = set()
+    for deal in deals:
+        if not isinstance(deal, dict) or deal.get("canonical_promotion_allowed") is not False:
+            fail("primary deal schema invalid")
+        timestamp = _int(deal.get("timestamp_ms"), 120000)
+        expected = f"primary_{timestamp:010d}.png"
+        path = deal.get("screenshot")
+        if (not isinstance(path, str) or ".." in PurePosixPath(path).parts or
+                not path.endswith("/recognizer/" + expected)):
+            fail("unsafe primary screenshot locator")
+        name = prefix + "recognizer/" + expected
+        if (name in screenshots or name not in files or
+                hashlib.sha256(files[name]).hexdigest() != _hex(deal.get("screenshot_sha256"))):
+            fail("accepted screenshot missing or changed")
+        screenshots.add(name)
+    if screenshots != {n for n in files if n.startswith(prefix + "recognizer/")}:
+        fail("primary screenshot complete inventory mismatch")
 
 
 def build_comparison_package(comparison_dir, destination, *, sealed_manifest_path,
@@ -359,6 +428,8 @@ def build_comparison_package(comparison_dir, destination, *, sealed_manifest_pat
     if hashlib.sha256(manifest_raw).hexdigest() != sealed_manifest_sha256:
         fail("sealed comparison manifest changed")
     manifest = decode(manifest_raw)
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("inputs"), dict) or set(manifest["inputs"]) != {"video", "reference", "profile", "sprite", "gold"}:
+        fail("exact sealed comparison inputs required")
     case = manifest.get("case_id")
     if (manifest.get("schema") != RESULT_KIND or manifest.get("gold_frozen_before_outputs") is not True or
             not isinstance(case, str) or not CASE.fullmatch(case)):
@@ -397,6 +468,11 @@ def build_comparison_package(comparison_dir, destination, *, sealed_manifest_pat
     # Recheck every source file and tree immediately before committing package.
     if names != inventory_paths(root, case) or any(read(root / n) != files[n] for n in names):
         fail("comparison tree changed")
+    if (read(sealed_manifest_path, MAX_JSON_BYTES) != manifest_raw or
+            read(clip_binding_path, MAX_JSON_BYTES) != clip_receipt or
+            any(hashlib.sha256(read(item["path"])).hexdigest() != item["sha256"]
+                for item in manifest["inputs"].values())):
+        fail("comparison immutable inputs changed during build")
     checked(destination.parent, directory=True)
     if destination.exists() or destination.is_symlink():
         fail("comparison package destination already exists")
@@ -534,3 +610,15 @@ def collect_comparison_paths(job_dir, manifest):
         fail("comparison complete canonical inventory required")
     validate_files(files, binding)
     return [root / "index.json", *(root / p["file"] for p in parts)]
+
+
+def verify_comparison_original(job_dir, source):
+    """Bind typed package to the independently re-read immutable original pin."""
+    root = Path(job_dir) / "comparison"
+    if not root.exists():
+        return
+    binding = _json(root / "index.json")["binding"]
+    if (binding["source_file_id"] != source["file_id"] or
+            binding["source_version"] != str(source["before"]["version"]) or
+            binding["source_sha256"] != source["sha256_before"]):
+        fail("comparison original intake pin mismatch")
