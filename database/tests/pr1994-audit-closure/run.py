@@ -2,6 +2,7 @@
 
 Synthetic rows only. Three real public work-item trigger functions are used.
 This is not a rehearsal of private production DDL or a production approval.
+Full synthetic-row comparisons do not prove preservation of unseen production payloads.
 """
 import hashlib
 import json
