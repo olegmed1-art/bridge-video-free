@@ -130,8 +130,9 @@ def prepare(manifest_path, expected_hash, output):
 
 
 def offline_audit(event, args):
-    if event in {"socket.connect", "socket.getaddrinfo", "socket.bind",
-                 "subprocess.Popen", "os.system"}:
+    if event.startswith(("socket.", "subprocess.")) or event in {
+        "os.system", "os.posix_spawn", "os.exec", "os.fork", "os.forkpty", "os.spawn",
+    }:
         raise EvidenceError("offline worker refused external I/O: " + event)
 
 
@@ -402,7 +403,8 @@ def compare(manifest, seal, output, timeout=300):
     summary = {
         "schema": SCHEMA, "manifest_sha256": seal,
         "gold_sha256": receipt["gold_sha256"], "runs": results,
-        "status": "CAPTURED_UNSCORED" if all(x.get("status") == "RETURNED" for x in results.values())
+        "status": "CAPTURED_UNSCORED" if all(x.get("status") == "RETURNED" and x.get("exit_code") == 0
+                                             for x in results.values())
                   else "REPLAY_ERROR",
         "accuracy_evaluated": False, "promotion_allowed": False,
         "note": "Returned is not recognition success. Score sealed gold separately, including abstentions.",
