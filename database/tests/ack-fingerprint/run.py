@@ -165,17 +165,49 @@ def main():
             return value("SELECT string_agg(to_jsonb(r)::text,'' ORDER BY migration_key) FROM public.schema_migration r")
         def denied(changes,marker):
             before=registry_snapshot()
+            before_catalog=value(invariant_query)+value("SELECT pg_get_functiondef('"+SIGNATURE+"'::regprocedure)")
             bad=dict(params);bad.update(changes)
             result=sql(reconcile,ok=False,variables=bad)
             assert result.returncode and marker in result.stderr,(marker,result.stderr)
             assert registry_snapshot()==before
             assert fingerprint()==state_before
-            assert value(invariant_query)+value("SELECT pg_get_functiondef('"+SIGNATURE+"'::regprocedure)")==catalog_before
+            assert value(invariant_query)+value("SELECT pg_get_functiondef('"+SIGNATURE+"'::regprocedure)")==before_catalog
         for changes in ({'expected_database':'wrong'},{'expected_branch':'wrong'},{'action':'unknown'}):
             denied(changes,'ACK_CHECKSUM_TARGET_DRIFT')
         for changes in ({'expected_oid':'1'},{'expected_definition_sha256':'0'*64},{'expected_acl_sha256':'0'*64}):
             denied(changes,'ACK_CHECKSUM_CATALOG_DRIFT')
         denied({'expected_applied_at':'2000-01-01T00:00:00Z'},'ACK_CHECKSUM_REGISTRY_DRIFT')
+
+        sql("CREATE RULE fixture_registry_side_effect AS ON UPDATE TO public.schema_migration DO ALSO UPDATE public.schema_migration SET checksum=repeat('e',64) WHERE migration_key='0362_autopilot_target_pr_codex_context';")
+        denied({},'ACK_CHECKSUM_UNREVIEWED_REGISTRY')
+        sql("DROP RULE fixture_registry_side_effect ON public.schema_migration;")
+        sql("CREATE TABLE public.fixture_registry_child () INHERITS(public.schema_migration);")
+        denied({},'ACK_CHECKSUM_UNREVIEWED_REGISTRY')
+        sql("DROP TABLE public.fixture_registry_child;")
+        sql("ALTER TABLE public.schema_migration ENABLE ROW LEVEL SECURITY;")
+        denied({},'ACK_CHECKSUM_UNREVIEWED_REGISTRY')
+        sql("ALTER TABLE public.schema_migration DISABLE ROW LEVEL SECURITY;")
+        sql("CREATE FUNCTION public.fixture_registry_trigger() RETURNS trigger LANGUAGE plpgsql AS $ BEGIN RETURN NEW; END $; CREATE TRIGGER fixture_registry_trigger BEFORE UPDATE ON public.schema_migration FOR EACH ROW EXECUTE FUNCTION public.fixture_registry_trigger();")
+        denied({},'ACK_CHECKSUM_UNREVIEWED_TRIGGER')
+        sql("DROP TRIGGER fixture_registry_trigger ON public.schema_migration; DROP FUNCTION public.fixture_registry_trigger();")
+        sql('ALTER FUNCTION '+SIGNATURE+' OWNER TO postgres;')
+        denied({},'ACK_CHECKSUM_CATALOG_DRIFT')
+        sql('ALTER FUNCTION '+SIGNATURE+' OWNER TO fixture_owner;')
+        sql('ALTER FUNCTION '+SIGNATURE+' SET search_path TO pg_catalog;')
+        denied({},'ACK_CHECKSUM_CATALOG_DRIFT')
+        sql('ALTER FUNCTION '+SIGNATURE+' SET search_path TO pg_catalog, autopilot;')
+        sql('ALTER FUNCTION '+SIGNATURE+' STRICT;')
+        denied({},'ACK_CHECKSUM_CATALOG_DRIFT')
+        sql('ALTER FUNCTION '+SIGNATURE+' CALLED ON NULL INPUT;')
+        sql('ALTER FUNCTION '+SIGNATURE+' SECURITY INVOKER;')
+        denied({},'ACK_CHECKSUM_CATALOG_DRIFT')
+        sql('ALTER FUNCTION '+SIGNATURE+' SECURITY DEFINER;')
+        sql('REVOKE EXECUTE ON FUNCTION '+SIGNATURE+' FROM fixture_callback;')
+        denied({},'ACK_CHECKSUM_CATALOG_DRIFT')
+        sql('GRANT EXECUTE ON FUNCTION '+SIGNATURE+' TO fixture_callback;')
+        assert value(invariant_query)+value("SELECT pg_get_functiondef('"+SIGNATURE+"'::regprocedure)")==catalog_before
+        checks.append('actual_rule_rls_trigger_owner_search_path_strictness_security_acl_drifts_rejected')
+
         checks.append('reconciliation_target_oid_definition_acl_timestamp_negative_controls')
         sql(reconcile,variables=params)
         expected=hashlib.sha256(MIGRATION.read_bytes()).hexdigest()

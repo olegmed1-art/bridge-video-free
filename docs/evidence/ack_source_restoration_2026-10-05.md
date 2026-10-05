@@ -20,7 +20,10 @@ pending migrations.
 reconcile_0401_checksum.sql changes only the checksum of the exact reviewed
 0401 row. Every expected target, timestamp, function OID, definition and ACL
 digest, and owner must be supplied from a fresh separately reviewed snapshot.
-The script rejects target/catalog/registry drift and unreviewed triggers.
+The script rejects target/catalog/registry drift, rewrite rules, inheritance,
+RLS and unreviewed triggers. A SHARE ROW EXCLUSIVE lock temporarily blocks
+other registry writers/DDL, bounded by a two-second lock timeout and ten-second
+statement timeout. This is a write operation requiring the serialized window.
 An already populated checksum is never overwritten by repair. The rollback
 action restores NULL only when the value is the exact canonical digest.
 Both actions preserve the applied timestamp and function definition.

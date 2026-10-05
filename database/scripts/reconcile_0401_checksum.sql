@@ -2,6 +2,7 @@
 BEGIN;
 SET LOCAL lock_timeout = '2s';
 SET LOCAL statement_timeout = '10s';
+SET LOCAL search_path = pg_catalog;
 
 -- All target-specific values must be supplied from a reviewed fresh snapshot.
 SELECT set_config('bridge.reconcile.database', :'expected_database', true),
@@ -12,6 +13,8 @@ SELECT set_config('bridge.reconcile.database', :'expected_database', true),
        set_config('bridge.reconcile.acl', :'expected_acl_sha256', true),
        set_config('bridge.reconcile.applied_at', :'expected_applied_at', true),
        set_config('bridge.reconcile.action', :'action', true);
+
+LOCK TABLE public.schema_migration IN SHARE ROW EXCLUSIVE MODE;
 
 DO $reconcile$
 DECLARE
@@ -28,6 +31,13 @@ BEGIN
        OR current_setting('neon.branch_id', true) IS DISTINCT FROM current_setting('bridge.reconcile.branch')
        OR current_user IS DISTINCT FROM current_setting('bridge.reconcile.owner') THEN
         RAISE EXCEPTION 'ACK_CHECKSUM_TARGET_DRIFT';
+    END IF;
+    IF NOT EXISTS (
+        SELECT FROM pg_class WHERE oid='public.schema_migration'::regclass
+          AND relkind='r' AND NOT relrowsecurity
+    ) OR EXISTS (SELECT FROM pg_rewrite WHERE ev_class='public.schema_migration'::regclass)
+      OR EXISTS (SELECT FROM pg_inherits WHERE inhrelid='public.schema_migration'::regclass OR inhparent='public.schema_migration'::regclass) THEN
+        RAISE EXCEPTION 'ACK_CHECKSUM_UNREVIEWED_REGISTRY';
     END IF;
     IF EXISTS (SELECT FROM pg_event_trigger WHERE evtenabled <> 'D')
        OR EXISTS (SELECT FROM pg_trigger WHERE tgrelid='public.schema_migration'::regclass AND NOT tgisinternal) THEN
@@ -51,7 +61,7 @@ BEGIN
         RAISE EXCEPTION 'ACK_CHECKSUM_CATALOG_DRIFT';
     END IF;
 
-    UPDATE public.schema_migration
+    UPDATE ONLY public.schema_migration
     SET checksum = CASE WHEN direction='repair' THEN canonical ELSE NULL END
     WHERE migration_key='0401_autopilot_codex_ack_fingerprint_not_null'
       AND applied_at=current_setting('bridge.reconcile.applied_at')::timestamptz
