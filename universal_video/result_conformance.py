@@ -1160,7 +1160,10 @@ def verify_result(
     # Typed comparison evidence is part of the server-review and cleanup bundle.
     from .comparison_artifacts import collect_comparison_paths
     try:
-        for path in collect_comparison_paths(job_dir, manifest):
+        comparison_paths = collect_comparison_paths(job_dir, manifest)
+        if comparison_paths:
+            max_total_bytes = min(max_total_bytes, 255 * 1024**2)
+        for path in comparison_paths:
             artifacts.append(_artifact(path, path.relative_to(job_dir).as_posix(),
                                        max_file_bytes=max_file_bytes))
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:

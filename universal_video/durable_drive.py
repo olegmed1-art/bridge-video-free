@@ -230,6 +230,8 @@ def finalize_drive_job(result_dir: Path, source_dir: Path, binding: dict, *,
     marker_path = result_dir / ".drive-finalization-marker.json"
     atomic_json(marker_path, receipt)
     marker_bytes = marker_path.read_bytes()
+    if any(a.relative_name.startswith("comparison/") for a in artifacts) and len(marker_bytes) > 1024**2:
+        raise RuntimeError("comparison completion marker exceeds reserved quota")
     marker = PublishArtifact(marker_path, f"{job_id}-{bundle}-PUBLICATION_COMPLETE.json",
                              len(marker_bytes), hashlib.sha256(marker_bytes).hexdigest(),
                              hashlib.md5(marker_bytes, usedforsecurity=False).hexdigest())

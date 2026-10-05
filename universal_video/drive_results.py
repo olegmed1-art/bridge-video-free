@@ -109,6 +109,9 @@ def collect_compact_artifacts(
         raise RuntimeError(f"required compact artifacts missing: {','.join(missing)}")
 
     comparison_paths = collect_comparison_paths(job_dir, manifest)
+    if comparison_paths:
+        # Reserve bounded completion-marker bytes inside the same global quota.
+        max_total_bytes = min(max_total_bytes, 255 * 1024**2)
     selected: list[Path] = []
     for name in sorted(TOP_LEVEL_ALLOWLIST | OPTIONAL_TOP_LEVEL_ALLOWLIST):
         path = job_dir / name
@@ -140,6 +143,8 @@ def collect_compact_artifacts(
     artifacts: list[PublishArtifact] = []
     total = 0
     for path in selected:
+        if not _safe_regular(path, max_bytes=max_file_bytes):
+            raise RuntimeError("compact artifact exceeds safe per-file cap")
         if path.suffix.lower() in RAW_EXTENSIONS:
             raise RuntimeError("raw media publication is forbidden")
         relative = path.relative_to(job_dir).as_posix()

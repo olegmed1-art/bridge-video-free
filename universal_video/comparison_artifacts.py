@@ -53,6 +53,24 @@ def _float(text):
     return value
 
 
+def screen_decoded(value):
+    if isinstance(value, str):
+        if CREDENTIAL.search(value):
+            fail("credential-like decoded string is not publishable")
+    elif isinstance(value, dict):
+        forbidden = {"accesstoken", "refreshtoken", "clientsecret", "privatekey",
+                     "password", "apikey", "authorization", "credentials",
+                     "credential", "databaseurl", "dsn"}
+        for key, item in value.items():
+            if re.sub(r"[_\\s-]", "", key).lower() in forbidden:
+                fail("credential-like decoded key is not publishable")
+            screen_decoded(key)
+            screen_decoded(item)
+    elif isinstance(value, list):
+        for item in value:
+            screen_decoded(item)
+
+
 def decode(raw):
     try:
         text = raw.decode("utf-8")
@@ -64,6 +82,7 @@ def decode(raw):
         canonical = json.dumps(value, ensure_ascii=False, allow_nan=False)
         if CREDENTIAL.search(canonical):
             fail("credential-like decoded JSON is not publishable")
+        screen_decoded(value)
         return value
     except (ValueError, UnicodeError) as exc:
         raise RuntimeError("invalid comparison JSON") from exc
@@ -343,12 +362,16 @@ def validate_files(files, binding):
                 fail("comparison summary and worker receipt mismatch")
             if type(run.get("exit_code")) is not int:
                 fail("comparison exit code required")
-        if run["status"] == "RETURNED":
+        if run["status"] == "RETURNED" or (status is not None and status.get("status") == "RETURNED"):
             if prefix + "result.json" not in files or event_name not in files:
                 fail("returned comparison artifacts missing")
             _int(status.get("attempts"), 512)
             if (status.get("status") != "RETURNED" or status.get("attempts") != len(captured)):
                 fail("comparison status count mismatch")
+            recorded_pngs = {n for n in files if n.startswith(prefix + "evidence/") and n.endswith(".png")}
+            if (_int(status.get("retained_frames"), 512) != len(recorded_pngs) or
+                    _int(status.get("evidence_bytes"), 512 * 1024**2) != sum(len(files[n]) for n in recorded_pngs)):
+                fail("comparison decoded/attempt evidence counters mismatch")
             duration = (status.get("metadata") or {}).get("duration_seconds")
             if type(duration) not in {int, float} or not 0 < duration <= 120:
                 fail("comparison media duration missing or over quota")

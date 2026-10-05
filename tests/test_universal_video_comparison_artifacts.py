@@ -91,6 +91,7 @@ def prepared(tmp_path, *, parent=None, large=0):
                    "bridgit-primary-video-gambler-v2-observation-guards-candidate2")
         status = {"status": "RETURNED", "variant": variant, "job_id": case + "-" + variant,
                   "source_sha": revisions[variant], "attempts": 1, "version": version,
+                  "retained_frames": 3, "evidence_bytes": 2 * len(image) + len(png()),
                   "result_status": "NO_FULL_LAYOUT_ACCEPTED",
                   "metadata": {"fps": 30.0, "frame_count": 1800.0, "duration_seconds": 60.0}}
         write(directory / "worker-status.json", status)
@@ -434,3 +435,42 @@ def test_failed_comparison_retains_and_validates_success_side(tmp_path):
     summary["runs"]["candidate"] = {"status": "TIMEOUT", "exit_code": None}
     write(path, summary)
     attach(prep)
+
+
+@pytest.mark.parametrize("raw", [
+    b'{"detail":"\\u0042earer\\tsynthetic-secret"}',
+    b'{"detail":"\\u0042earer\\nsynthetic-secret"}',
+])
+def test_escaped_bearer_whitespace_is_screened_as_decoded_string(raw):
+    with pytest.raises(RuntimeError, match="credential-like"):
+        comparison.decode(raw)
+
+
+@pytest.mark.parametrize("mode", ["returned-timeout", "missing-decoded"])
+def test_available_worker_receipt_always_binds_complete_evidence(tmp_path, mode):
+    prep = prepared(tmp_path)
+    raw = prep[2]
+    path = raw / "comparison.json"
+    summary = json.loads(path.read_text())
+    directory = next(raw.glob("candidate/*"))
+    if mode == "returned-timeout":
+        summary["status"] = "REPLAY_ERROR"
+        summary["runs"]["candidate"] = {"status": "TIMEOUT", "exit_code": None}
+        write(path, summary)
+        for file in (directory / "evidence").rglob("*"):
+            if file.is_file():
+                file.unlink()
+    else:
+        events = directory / "evidence" / "events.jsonl"
+        rows = [json.loads(line) for line in events.read_bytes().splitlines()]
+        events.write_bytes(b"".join(comparison.encoded(r) for r in rows if r["event"] != "FRAME_DECODED"))
+        next((directory / "evidence" / "decoded").glob("*.png")).unlink()
+    with pytest.raises(RuntimeError):
+        attach(prep)
+
+
+def test_declared_comparison_still_honors_smaller_per_file_quota(tmp_path):
+    prep = prepared(tmp_path, large=1024 * 1024)
+    attach(prep)
+    with pytest.raises(RuntimeError, match="per-file cap"):
+        outputs.collect_compact_artifacts(prep[0], max_file_bytes=1024 * 1024)

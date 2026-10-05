@@ -18,13 +18,15 @@ are per-child PNG counters, not a bound on the complete two-child tree. Thus
 neither a guaranteed fit nor actual throughput is claimed.
 
 The total existing compact publication cap remains **256 MiB combined across
-transcript, frames, server review and comparison**. No per-file upload limit is
+transcript, frames, server review, comparison and completion marker**. No per-file upload limit is
 raised. Original comparison bytes are concatenated in canonical filename order
 and split into deterministic **4 MiB** binary parts, each below the existing
 5 MiB multipart cap. This supports a large PNG without modifying, recompressing,
 dropping or truncating it. The index is at most 1 MiB, counts at most 4096 files
 and 64 parts, and binds complete byte offsets, sizes and SHA-256.
-Over quota fails closed and retains all original comparison evidence.
+An attached package reserves 1 MiB of that same cap for the completion marker;
+core plus package is capped at 255 MiB, marker at 1 MiB. Over quota fails closed
+and retains all original comparison evidence.
 Parts are opaque; no archive extraction or execution is needed.
 
 Only a declared package at comparison/index.json and exactly numbered parts
@@ -32,7 +34,8 @@ are accepted. No general allow-list is expanded. Undeclared, extra, missing,
 symlinked, hardlinked or traversing paths fail. Duplicate JSON keys,
 nonfinite values and ambiguous names are rejected. Original file hashes and
 every part hash are independently checked again when collecting the package,
-including publication and cleanup proof matching.
+including publication and cleanup proof matching. Decoded JSON keys and string
+values are screened directly, including Unicode escapes and escaped whitespace.
 
 The schema requires actual PAIR_CAPTURED events, both exact attempted PNGs,
 decoded-frame inventories and backend outcomes. Rejected pairs are retained.
