@@ -246,7 +246,7 @@ blocked = []
 for name, operation in operations.items():
     try:
         operation()
-    except runner.EvidenceError:
+    except runner.OfflineIOError:
         blocked.append(name)
     else:
         raise AssertionError("operation was not blocked: " + name)
