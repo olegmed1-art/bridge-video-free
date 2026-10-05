@@ -197,7 +197,7 @@ def test_comparison_runs_both_processes_even_if_baseline_fails(sealed_case, tmp_
         state = {"status": baseline_status if len(calls) == 1 else "RETURNED"}
         runner.write_json(Path(config["output"]) / "worker-status.json", state)
         return SimpleNamespace(returncode=1 if len(calls) == 1 else 0)
-    monkeypatch.setattr(runner.subprocess, "run", run)
+    monkeypatch.setattr(runner, "launch_worker", run)
     assert runner.compare(path, runner.digest(path), tmp_path / "out") == 1
     summary = json.loads((tmp_path / "out/comparison.json").read_text())
     assert [x["variant"] for x in calls] == ["baseline", "candidate"]
@@ -260,3 +260,136 @@ print(json.dumps(blocked))
     assert set(blocked) >= {"socket", "udp", "popen", "exec"}
     if hasattr(os, "posix_spawn"):
         assert "spawn" in blocked
+
+
+@pytest.mark.parametrize("variant,revision", [
+    ("baseline", "3.1-free-r26.3"),
+    ("candidate", "3.1-free-r26.3-observation-guards-candidate2"),
+    ("candidate", "3.1-free-r26.3-auction-candidate3"),
+])
+def test_loader_sets_exact_allowed_revision_before_install(tmp_path, monkeypatch, variant, revision):
+    root = tmp_path / variant
+    module = SimpleNamespace(__file__=str(root / "bridge_vision" / "video.py"))
+    installed = []
+    def install(token):
+        installed.append(os.environ["BRIDGE_REQUESTED_ALGORITHM_REVISION"])
+        with pytest.raises(runner.EvidenceError, match="must never request credentials"):
+            token()
+    runtime = SimpleNamespace(REVISION=revision, install=install)
+    runtime_name = ("bridge_runtime_hardening_r26" if variant == "baseline"
+                    else "bridge_runtime_hardening_r26_candidate")
+    modules = {runtime_name: runtime, runner.MODULES[variant]: module}
+    monkeypatch.setattr(runner.importlib, "import_module", modules.__getitem__)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setenv("BRIDGE_REQUESTED_ALGORITHM_REVISION", "unrelated")
+    assert runner.load_runtime(root, variant) is module
+    assert installed == [revision]
+    assert os.environ["BRIDGE_REQUESTED_ALGORITHM_REVISION"] == revision
+
+
+@pytest.mark.parametrize("variant,revision", [
+    ("baseline", "3.1-free-r26.3-auction-candidate3"),
+    ("candidate", "3.1-free-r26.3"),
+    ("candidate", "3.1-free-r26.3-auction-candidate4"),
+])
+def test_loader_rejects_cross_variant_and_unknown_revisions_before_install(
+        tmp_path, monkeypatch, variant, revision):
+    installed = []
+    runtime = SimpleNamespace(REVISION=revision, install=lambda _: installed.append(True))
+    monkeypatch.setattr(runner.importlib, "import_module", lambda _: runtime)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setenv("BRIDGE_REQUESTED_ALGORITHM_REVISION", "unrelated")
+    with pytest.raises(ValueError, match="unexpected runtime revision"):
+        runner.load_runtime(tmp_path, variant)
+    assert not installed
+
+
+@pytest.mark.parametrize("reported", [False, True])
+def test_compare_candidate3_embedded_profile_keeps_truthful_scope_and_raw_result(
+        sealed_case, tmp_path, monkeypatch, reported):
+    """Runner wiring only: fake recognition/launch, real loader/worker/recorder."""
+    path, manifest = sealed_case
+    embedded = {"schema": "synthetic-runner-wiring-only", "marker": "embedded-auction"}
+    profile = Path(manifest["inputs"]["profile"]["path"])
+    profile.write_text(json.dumps({"auction": embedded}), encoding="utf-8")
+    manifest["inputs"]["profile"]["sha256"] = runner.digest(profile)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    modules, installations, launches, results = {}, [], [], {}
+    for variant in ("baseline", "candidate"):
+        module = fake_module()
+        module.__file__ = str(Path(manifest[variant]["root"]) / "bridge_vision" / "video.py")
+        module.PRIMARY_VIDEO_VERSION = "synthetic-" + variant
+        revision = ("3.1-free-r26.3" if variant == "baseline"
+                    else "3.1-free-r26.3-auction-candidate3")
+        def recognize(video, *, profile_path, variant=variant, **kwargs):
+            assert json.loads(profile_path.read_text(encoding="utf-8"))["auction"] == embedded
+            assert runner.digest(profile_path) == manifest["inputs"]["profile"]["sha256"]
+            result = {"status": "NO_FULL_LAYOUT_ACCEPTED", "deals": []}
+            if variant == "candidate":
+                result["auction_recognition"] = (
+                    {"status": "OBSERVED", "auctions": [{"fixture_only": True}]}
+                    if reported else {"status": "UNAVAILABLE", "reason": "SYNTHETIC_ABSTENTION",
+                                      "auctions": []}
+                )
+            results[variant] = result
+            return result
+        module.recognize_video_primary = recognize
+        def install(token, variant=variant, revision=revision):
+            assert os.environ["BRIDGE_REQUESTED_ALGORITHM_REVISION"] == revision
+            with pytest.raises(runner.EvidenceError):
+                token()
+            installations.append((variant, revision))
+        name = ("bridge_runtime_hardening_r26" if variant == "baseline"
+                else "bridge_runtime_hardening_r26_candidate")
+        modules[name] = SimpleNamespace(REVISION=revision, install=install)
+        modules[runner.MODULES[variant]] = module
+    monkeypatch.setattr(runner.importlib, "import_module", modules.__getitem__)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setenv("BRIDGE_REQUESTED_ALGORITHM_REVISION", "unrelated")
+    monkeypatch.setattr(runner, "video_metadata", lambda *_: {"synthetic": True})
+    # Avoid a permanent audit hook in pytest. Real hooks are exercised separately.
+    hooks = []
+    monkeypatch.setattr(sys, "addaudithook", hooks.append)
+    def launch(command, **kwargs):
+        assert command[1:3] == ["-I", "-B"]
+        config_path = Path(command[-1])
+        config = json.loads(config_path.read_text())
+        launches.append(config)
+        assert "gold" not in config["inputs"]
+        return SimpleNamespace(returncode=runner.worker(config_path))
+    monkeypatch.setattr(runner, "launch_worker", launch)
+    output = tmp_path / "out"
+    assert runner.compare(path, runner.digest(path), output) == 0
+    seal = json.loads((output / "seal.json").read_text())
+    summary = json.loads((output / "comparison.json").read_text())
+    assert summary["status"] == "CAPTURED_UNSCORED"
+    expected_scope = "PRIMARY_VISUAL_WITH_OPTIONAL_EMBEDDED_PROFILE_AUCTION; NO_ASR_DDS_OR_PUBLISHER"
+    for record in (seal, summary, *summary["runs"].values()):
+        assert record["scope"] == expected_scope
+        assert record["runner_version"] == "recognizer-comparison-v1-auction-scope-r3"
+        assert "NO_ASR_AUCTION" not in record["scope"]
+    assert summary["runs"]["baseline"]["auction_result_status"] == "NOT_REPORTED"
+    assert summary["runs"]["candidate"]["auction_result_status"] == (
+        "OBSERVED" if reported else "UNAVAILABLE")
+    assert installations == [
+        ("baseline", "3.1-free-r26.3"),
+        ("candidate", "3.1-free-r26.3-auction-candidate3"),
+    ]
+    assert [config["variant"] for config in launches] == ["baseline", "candidate"]
+    assert hooks == [runner.offline_audit, runner.offline_audit]
+    for config in launches:
+        result = json.loads((Path(config["output"]) / "result.json").read_text())
+        assert result == results[config["variant"]]
+    assert summary["accuracy_evaluated"] is False
+    assert summary["promotion_allowed"] is False
+
+
+def test_worker_launch_hook_does_not_intercept_git_probes(tmp_path, monkeypatch):
+    """Exercise check_output -> shared subprocess.run with a worker hook installed."""
+    original_run = subprocess.run
+    def worker_only(*args, **kwargs):
+        pytest.fail("Git probe reached the worker launch hook")
+    monkeypatch.setattr(runner, "launch_worker", worker_only)
+    assert subprocess.run is original_run
+    assert runner.subprocess.run is original_run
+    assert runner.git(tmp_path, "--version").startswith("git version ")

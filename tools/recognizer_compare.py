@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline, bounded primary-card A/B replay. Never runs a job publisher or DDS."""
+"""Offline, bounded visual A/B replay; optional profile-driven auction, no ASR/DDS/publisher."""
 from __future__ import annotations
 
 import argparse
@@ -19,6 +19,9 @@ import sys
 import time
 
 SCHEMA = "recognizer-comparison-v1"
+RUNNER_VERSION = "recognizer-comparison-v1-auction-scope-r3"
+# A permitted scope, not a claim that a given runtime observed any auction.
+SCOPE = "PRIMARY_VISUAL_WITH_OPTIONAL_EMBEDDED_PROFILE_AUCTION; NO_ASR_DDS_OR_PUBLISHER"
 REVISIONS = {
     "baseline": "3.1-free-r26.3",
     "candidate": "3.1-free-r26.3-observation-guards-candidate2",
@@ -112,7 +115,7 @@ def prepare(manifest_path, expected_hash, output):
         "sealed_at_unix": time.time(), "source_offset_ms": offset,
         "inputs": inputs, "runtimes": {name: manifest[name] for name in REVISIONS},
         "runner_sha256": digest(Path(__file__)),
-        "scope": "PRIMARY_VISUAL_ONLY; NO_ASR_AUCTION_DDS_OR_PUBLISHER",
+        "scope": SCOPE, "runner_version": RUNNER_VERSION,
     }
     write_json(output / "seal.json", receipt)
     configs = {}
@@ -147,8 +150,12 @@ def load_runtime(root, variant):
     name = ("bridge_runtime_hardening_r26" if variant == "baseline"
             else "bridge_runtime_hardening_r26_candidate")
     runtime = importlib.import_module(name)
-    if runtime.REVISION != REVISIONS[variant]:
+    allowed_revisions = {REVISIONS[variant]}
+    if variant == "candidate":
+        allowed_revisions.add("3.1-free-r26.3-auction-candidate3")
+    if runtime.REVISION not in allowed_revisions:
         raise ValueError("unexpected runtime revision")
+    os.environ["BRIDGE_REQUESTED_ALGORITHM_REVISION"] = runtime.REVISION
     def no_token():
         raise EvidenceError("offline comparison must never request credentials")
     runtime.install(no_token)
@@ -346,7 +353,7 @@ def worker(config_path):
     started = time.monotonic()
     status = {"status": "ERROR", "job_id": config["job_id"], "variant": config["variant"],
               "source_sha": config["sha"], "pid": os.getpid(),
-              "scope": "PRIMARY_VISUAL_ONLY", "accuracy_evaluated": False}
+              "scope": SCOPE, "runner_version": RUNNER_VERSION, "accuracy_evaluated": False}
     try:
         verify_checkout(Path(config["root"]), config["sha"])
         inputs = {k: verified_input(v) for k, v in config["inputs"].items()}
@@ -366,6 +373,11 @@ def worker(config_path):
                 scan_ms=1000, attempt_gap_ms=15000, max_deals=64,
             )
             write_json(output / "result.json", result)
+            auction = result.get("auction_recognition")
+            status["auction_result_status"] = (
+                auction.get("status", "NOT_REPORTED") if isinstance(auction, dict)
+                else "NOT_REPORTED"
+            )
             status.update(status="RETURNED", result_status=result.get("status"),
                           attempts=recorder.attempts, retained_frames=recorder.frames,
                           evidence_bytes=recorder.bytes)
@@ -377,6 +389,11 @@ def worker(config_path):
     return 0 if status["status"] == "RETURNED" else 1
 
 
+def launch_worker(command, **kwargs):
+    """Runner-local launch hook; Git checks keep the shared subprocess module."""
+    return subprocess.run(command, **kwargs)
+
+
 def compare(manifest, seal, output, timeout=300):
     receipt, configs = prepare(manifest, seal, output)
     output = Path(output).resolve()
@@ -386,7 +403,7 @@ def compare(manifest, seal, output, timeout=300):
         directory = Path(config["output"])
         try:
             with (directory / "process.log").open("xb") as log:
-                process = subprocess.run(
+                process = launch_worker(
                     [sys.executable, "-I", "-B", str(Path(__file__).resolve()),
                      "_worker", "--config", str(path)],
                     cwd=directory, stdout=log, stderr=subprocess.STDOUT,
@@ -406,6 +423,7 @@ def compare(manifest, seal, output, timeout=300):
             verify_checkout(runtime["root"], runtime["sha"])
     summary = {
         "schema": SCHEMA, "manifest_sha256": seal,
+        "scope": receipt["scope"], "runner_version": RUNNER_VERSION,
         "gold_sha256": receipt["gold_sha256"], "runs": results,
         "status": "CAPTURED_UNSCORED" if all(x.get("status") == "RETURNED" and x.get("exit_code") == 0
                                              for x in results.values())

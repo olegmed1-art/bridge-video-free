@@ -1,15 +1,30 @@
 # Bounded recognizer comparison — offline handoff
 
-This tool captures primary visual-card evidence. It does not run ASR, auction
-extraction, the job publisher, DDS, hidden-hand inference or a production server.
-It does not score accuracy or authorize promotion. No supplied lesson has been
-tested by preparing this runner.
+This tool captures primary visual-card evidence and permits optional visual
+auction extraction from an embedded `profile["auction"]` when the selected runtime
+supports it. It does not run ASR, the job publisher, DDS, hidden-hand inference or
+a production server. It does not score accuracy or authorize promotion. No
+supplied lesson has been tested by preparing this runner.
 
-Compared source snapshots:
+Runner revision: `recognizer-comparison-v1-auction-scope-r3`. Seal, worker status
+and comparison summary use
+`PRIMARY_VISUAL_WITH_OPTIONAL_EMBEDDED_PROFILE_AUCTION; NO_ASR_DDS_OR_PUBLISHER`.
+This describes permitted processing, not successful observation. Each returned
+worker reports `auction_result_status` copied from its raw result, or
+`NOT_REPORTED` when that runtime has no auction result. An absent profile,
+abstention, returned result or permitted scope is not a recognition success.
+
+Original pinned card-comparison snapshots:
 - baseline main: 546f52d6bab7f836dcb4f6325a6caa79c982f16e, r26.3/v2;
 - candidate PR #2103: 74c98215d433c0383a8cc1021b4a24f9caade8fe.
-The live IBM runtime is not attested here. Retain its receipt separately before
-claiming that a replay represents the deployed runtime.
+The candidate loader also accepts the exact opt-in revision
+`3.1-free-r26.3-auction-candidate3` and sets that revision before installation.
+It continues to accept candidate2; baseline accepts only r26.3. The original
+candidate commit above is candidate2 and does not contain candidate3. A candidate3
+replay requires its own clean, separately reviewed exact-SHA checkout in the
+manifest. No candidate3 publication or runtime compatibility is attested by this
+source-only delta. The live IBM runtime is not attested here. Retain its receipt
+separately before claiming that a replay represents the deployed runtime.
 
 ## Inputs and launch
 
@@ -110,8 +125,12 @@ elapsed_seconds_with_observer is not a production performance benchmark.
 The direct primary pass can expose a baseline exception that the full historical
 production adapter would catch as UNAVAILABLE. Treat that as primary-pass evidence,
 not a full application/job result. This runner does not exercise cross-job wrapper
-state, ASR, teacher roles, auction or PDF output; their existing separate tests and
-the acceptance rubric remain required.
+state, ASR, teacher roles or PDF output; their existing separate tests and the
+acceptance rubric remain required. Visual auction extraction can run within the
+primary pass with candidate3 and an embedded calibration profile. Its raw result
+and recognizer-owned evidence remain in the private output. The recorder's PNG
+counter does not include auction-owned evidence; candidate3's own observation
+budget still applies.
 
 Minimum useful real sample: one native continuous 60–90 second segment with two
 distinct complete layouts and a partial/no-card interval, plus six independently
@@ -133,3 +152,38 @@ false completes remains separate and unchanged.
 Keep real clips, frames, transcripts and results in the approved private output
 location. The review/CI contribution contains only code, docs and tiny generated
 control-flow fixtures; it never uploads user media.
+
+
+## Candidate3 regression gates
+
+Test launch hooks patch only `runner.launch_worker`. They leave the shared
+`subprocess.run` unchanged, including calls made internally by
+`subprocess.check_output` during Git checkout validation. A separate control
+installs a rejecting worker hook and exercises a real `git --version` probe.
+
+The ordinary runner suite includes revision allow/reject checks and a compare
+control with an embedded auction profile. That control uses fake recognition and
+launch ports while exercising the real loader, worker, recorder and receipt
+persistence; it is not a pixel recognition test.
+
+The additional test below uses actual runtime installation in two isolated
+offline worker processes, a three-frame lossless synthetic video, the real raw
+scan and AuctionObserver, and the real compare/seal/result path. It substitutes
+only card calibration/assets and card event selection to isolate auction wiring.
+It checks a complete 1S XX auction without accepted hands and retains/hash-checks
+its frame evidence. It does not test production cards, real lesson accuracy or
+the full job pipeline.
+
+Provide all four variables for separately prepared clean checkouts:
+RECOGNIZER_BASELINE_ROOT, RECOGNIZER_BASELINE_SHA,
+RECOGNIZER_AUCTION_CANDIDATE_ROOT, RECOGNIZER_AUCTION_CANDIDATE_SHA.
+The candidate checkout must contain the reviewed main auction patch, including
+its synthetic fixture helpers. Both SHAs must be exact commit IDs. Then run:
+
+    python -B -m pytest -q -ra -p no:cacheprovider tests/test_recognizer_compare_auction_integration.py
+
+Without the explicit candidate3 root this gate skips; a skip is NOT compatibility
+evidence. The existing pinned candidate2 CI job does not execute this additional
+file. Before any compatibility claim, require this gate to execute with zero
+skips and retain its checkout SHAs and test receipt. These tests are authored but
+not executed in the restricted source-handoff session.
