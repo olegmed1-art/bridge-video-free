@@ -1157,6 +1157,14 @@ def verify_result(
             raise ResultConformanceError("keyframe inventory mismatch")
     _validate_frame_evidence(manifest, frame_times)
 
+    # Typed comparison evidence is part of the server-review and cleanup bundle.
+    from .comparison_artifacts import collect_comparison_paths
+    try:
+        for path in collect_comparison_paths(job_dir, manifest):
+            artifacts.append(_artifact(path, path.relative_to(job_dir).as_posix(),
+                                       max_file_bytes=max_file_bytes))
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        raise ResultConformanceError("invalid comparison artifact package") from exc
     base_artifact_set_sha256 = _artifact_set_sha256(artifacts)
     server_review_path = job_dir / SERVER_REVIEW_FILE
     server_final_review_status = "NOT_GENERATED"
