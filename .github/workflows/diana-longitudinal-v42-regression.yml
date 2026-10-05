@@ -1,6 +1,12 @@
 name: diana-longitudinal-v42-regression
 
 on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact reviewed current main SHA
+        required: true
+        type: string
   pull_request:
     paths:
       - 'bridge_report_board_reconstruction.py'
@@ -93,8 +99,16 @@ jobs:
           PY
 
   v42-field-evidence:
+    # Quarantined pending an owner-approved external credential boundary.
+    # See docs/security/WORKFLOW_CREDENTIAL_BOUNDARY_2026-10-04.md.
+    environment: production-operations
     needs: v42-regression
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      false &&
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.expected_main_sha == github.sha
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:
@@ -104,6 +118,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
       - name: Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:

@@ -2,6 +2,11 @@ name: Bridge AI Pilot-100
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact reviewed current main SHA
+        required: true
+        type: string
   pull_request:
     paths:
       - 'scripts/bridge_ai_pilot100.py'
@@ -20,11 +25,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Compile Pilot-100 without database access
+        run: >-
+          python -m py_compile scripts/bridge_ai_pilot100.py
+          bridge_ai_compute_worker.py bridge_school_api/ai_orchestrator.py
+          bridge_school_api/ai_worker.py bridge_school_api/ai_policy.py
+          bridge_school_api/ai_decision.py
+
   pilot100:
+    # Quarantined pending an owner-approved external credential boundary.
+    # See docs/security/WORKFLOW_CREDENTIAL_BOUNDARY_2026-10-04.md.
+    environment: production-operations
+    needs: contract
+    if: >-
+      false &&
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.expected_main_sha == github.sha
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
       BRIDGE_API_TOKEN: github-actions-pilot100
       BRIDGE_API_BASE_URL: http://127.0.0.1:8000
       BEN_API_URL: http://127.0.0.1:8085
@@ -36,6 +64,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
 
       - name: Set up Python 3.12
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -46,12 +75,16 @@ jobs:
         run: python -m pip install --disable-pip-version-check -r requirements-api.txt
 
       - name: Require production database credential
+        env:
+          BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
         shell: bash
         run: |
           set -euo pipefail
           test -n "${BRIDGE_APP_DATABASE_URL:-}" || { echo 'BRIDGE_APP_DATABASE_URL is not configured'; exit 1; }
 
       - name: Start Bridge School API
+        env:
+          BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
         shell: bash
         run: |
           set -euo pipefail
@@ -101,12 +134,16 @@ jobs:
           exit 1
 
       - name: Seed and queue exactly 100 verified-deal benchmark positions
+        env:
+          BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
         shell: bash
         run: |
           set -euo pipefail
           python scripts/bridge_ai_pilot100.py seed | tee /tmp/pilot100-seed.json
 
       - name: Drain Pilot-100 compute queue
+        env:
+          BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
         shell: bash
         run: |
           set -euo pipefail
@@ -116,12 +153,16 @@ jobs:
           done
 
       - name: Verify terminal Pilot-100 results
+        env:
+          BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
         shell: bash
         run: |
           set -euo pipefail
           python scripts/bridge_ai_pilot100.py verify | tee /tmp/pilot100-result.json
 
       - name: Diagnostics on failure
+        env:
+          BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
         if: failure()
         shell: bash
         run: |
