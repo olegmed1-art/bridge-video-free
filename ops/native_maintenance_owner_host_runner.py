@@ -13,9 +13,14 @@ from ops.oracle_autopilot_source_preflight import connection_parameters
 from ops.native_maintenance_store_runner import HOST, loader, source_check
 
 MAX_WIRE = 16 * 1024 * 1024
+SCOPES = ('initial-install', 'initialized-runtime')
 
 
-def bootstrap(repo, source, source_digest, wheel_digest, run, *, candidate=False):
+def bootstrap(repo, source, source_digest, wheel_digest, run, *, candidate=False, scope='initial-install', baseline_sha=None):
+    bundle.check(scope in SCOPES and type(candidate) is bool
+                 and not (candidate and scope == 'initialized-runtime'), 'OWNER_PROBE_SCOPE')
+    bundle.check((scope == 'initialized-runtime' and bundle.identifier(baseline_sha, 64))
+                 or (scope == 'initial-install' and baseline_sha is None), 'OWNER_BASELINE_PIN_REQUIRED')
     lifetime = bundle.git(repo, 'show', source + ':ops/native_maintenance_lifetime.py')
     decoder = bundle.git(repo, 'show', source + ':ops/native_maintenance_bundle.py')
     bundle.check(0 < len(lifetime) <= 32768 and 0 < len(decoder) <= 32768, 'DRIVER_BOOTSTRAP_SIZE')
@@ -29,8 +34,10 @@ def bootstrap(repo, source, source_digest, wheel_digest, run, *, candidate=False
             + 'bundle.check(hashlib.sha256(wheels).hexdigest()==' + repr(wheel_digest) + ",'OWNER_WHEELS_REFUSED')\n"
             + 'with bundle.extracted(payload,' + repr(source) + ',' + repr(source_digest) + ') as root:\n'
             + " sys.path.insert(0,str(root))\n from ops.native_maintenance_owner_host import "
-            + ('candidate_main as main' if candidate else 'main') + '\n'
-            + " main(wheels,value['credential'])\n")
+            + ('initialized_main as main' if scope == 'initialized-runtime'
+               else 'candidate_main as main' if candidate else 'main') + '\n'
+            + (" main(wheels,value['credential']," + repr(baseline_sha) + ")\n"
+               if scope == 'initialized-runtime' else " main(wheels,value['credential'])\n"))
     outer = ('import base64,types\n' + loader('lifetime', lifetime)
              + 'try:\n result=lifetime.managed(' + repr(code) + ','
              + repr(base64.b64encode(lifetime).decode()) + ',' + repr(source) + ',' + repr(run) + ')\n'
@@ -54,8 +61,37 @@ def validate_report(value):
                  'OWNER_HOST_RESULT')
 
 
+def validate_initialized_report(value):
+    expected = dict(audit='NATIVE_OWNER_INITIALIZED_READ_ONLY_PASS',
+                    native_enabled=False, retained_terminal_baseline_matched=True, nonterminal_tasks=0,
+                    snapshot_approved=False, native_initial_install_qualified=False,
+                    native_execution_authorized=False, historical_provenance_verified=False,
+                    incident_reconciled=False, replay_authorized=False,
+                    live_admission=False, production_mutations=False)
+    expected.update(audit='NATIVE_OWNER_HOST_INITIALIZED_READ_ONLY_PASS',
+                    runtime_id=value.get('runtime_id') if type(value) is dict else None,
+                    hold_unchanged=True,
+                    elapsed_ms=value.get('elapsed_ms') if type(value) is dict else None)
+    bundle.check(type(value) is dict and value == expected
+                 and bundle.identifier(value.get('runtime_id'), 64)
+                 and type(value.get('nonterminal_tasks')) is int and value['nonterminal_tasks'] == 0
+                 and all(type(value[k]) is bool for k in (
+                    'native_enabled', 'retained_terminal_baseline_matched', 'snapshot_approved', 'native_initial_install_qualified',
+                    'native_execution_authorized', 'historical_provenance_verified',
+                    'incident_reconciled', 'replay_authorized', 'live_admission',
+                    'production_mutations', 'hold_unchanged'))
+                 and type(value.get('elapsed_ms')) is int and 0 <= value['elapsed_ms'] < 100000,
+                 'OWNER_INITIALIZED_HOST_RESULT')
+
+
 def main():
     bundle.check(len(sys.argv) == 4 and os.environ.get('GITHUB_TRIGGERING_ACTOR') == 'olegmed1-art', 'DRIVER_ARGS')
+    scope = os.environ.get('OWNER_PROBE_SCOPE', 'initial-install')
+    bundle.check(scope in SCOPES, 'OWNER_PROBE_SCOPE')
+    baseline_sha = os.environ.get('OWNER_INITIALIZED_BASELINE_SHA256', '')
+    bundle.check((scope == 'initialized-runtime' and bundle.identifier(baseline_sha, 64))
+                 or (scope == 'initial-install' and not baseline_sha), 'OWNER_BASELINE_PIN_REQUIRED')
+    baseline_sha = baseline_sha or None
     key, known_hosts, wheel_directory = sys.argv[1:]
     source = os.environ.get('EXPECTED_MAIN')
     repo = Path(__file__).resolve().parents[1]
@@ -69,7 +105,7 @@ def main():
                                  driver=base64.b64encode(wheel_payload).decode(), credential=credential))
     bundle.check(len(wire) <= MAX_WIRE, 'DRIVER_WIRE_SIZE')
     run = os.environ.get('GITHUB_RUN_ID', '') + '-' + os.environ.get('GITHUB_RUN_ATTEMPT', '')
-    code = bootstrap(repo, source, bundle.digest(source_payload), bundle.digest(wheel_payload), run)
+    code = bootstrap(repo, source, bundle.digest(source_payload), bundle.digest(wheel_payload), run, scope=scope, baseline_sha=baseline_sha)
     command = ['ssh', '-F', '/dev/null', '-i', key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
                '-o', 'ForwardAgent=no', '-o', 'StrictHostKeyChecking=yes',
                '-o', 'UserKnownHostsFile=' + known_hosts, '-o', 'ConnectTimeout=15',
@@ -80,7 +116,10 @@ def main():
                             env={'PATH': '/usr/bin:/bin'})
     bundle.check(result.returncode == 0 and len(result.stdout) <= 2048, 'DRIVER_HOST_REFUSED')
     value = json.loads(result.stdout, object_pairs_hook=bundle.unique)
-    validate_report(value)
+    if scope == 'initialized-runtime':
+        validate_initialized_report(value)
+    else:
+        validate_report(value)
     source_check(source)
     print(json.dumps(dict(value, source_sha=source), sort_keys=True))
 
