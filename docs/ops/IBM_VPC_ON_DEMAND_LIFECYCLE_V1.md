@@ -57,8 +57,6 @@ The adapter never connects to a database, claims jobs, or calls IBM APIs.
 
 Books and Knowledge/Canon do not yet have a confirmed equivalent durable queue contract in the inspected Autopilot task types. They remain out of automatic IBM admission until their exact sources, statuses, and leases are identified and tested.
 
-Books and Knowledge/Canon do not yet have a confirmed equivalent durable queue contract in the inspected Autopilot task types. They remain out of automatic IBM admission until their exact sources, statuses, and leases are identified and tested.
-
 ## Required production observation sources
 
 Before enabling lifecycle actions, the Light Oracle controller must build a single

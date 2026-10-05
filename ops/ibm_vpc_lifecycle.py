@@ -312,7 +312,7 @@ def decide(
         return {"decision": "HOLD", "reason": "observation_from_future"}
 
     state = observation.get("vpc_status")
-    if state not in KNOWN_VPC_STATES:
+    if not isinstance(state, str) or state not in KNOWN_VPC_STATES:
         return {"decision": "HOLD", "reason": "vpc_status_unknown"}
 
     for field in COMPLETENESS_FIELDS:

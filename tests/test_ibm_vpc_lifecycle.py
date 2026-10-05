@@ -38,6 +38,37 @@ def observation(**overrides):
 
 class IBMVPCLifecycleDecisionTests(unittest.TestCase):
 
+    def test_malformed_vpc_status_returns_hold(self):
+        for state in (None, [], {}, ["running"], 1, True, "", "unknown"):
+            with self.subTest(state=state):
+                self.assertEqual(
+                    {"decision": "HOLD", "reason": "vpc_status_unknown"},
+                    decide(observation(vpc_status=state), now_epoch=1000),
+                )
+
+    def test_cli_malformed_vpc_status_returns_structured_hold(self):
+        import json
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        for state in ([], {}):
+            with self.subTest(state=state):
+                process = subprocess.run(
+                    [sys.executable, "-m", "ops.ibm_vpc_lifecycle",
+                     "--now-epoch", "1000"],
+                    input=json.dumps(observation(vpc_status=state)),
+                    capture_output=True, text=True,
+                    cwd=Path(__file__).resolve().parents[1],
+                    timeout=5,
+                )
+                self.assertEqual(3, process.returncode, process.stderr)
+                self.assertEqual(
+                    {"decision": "HOLD", "reason": "vpc_status_unknown"},
+                    json.loads(process.stdout),
+                )
+                self.assertNotIn("Traceback", process.stderr)
+
     @staticmethod
     def readiness_row(**overrides):
         row = {
