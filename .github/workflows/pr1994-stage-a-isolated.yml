@@ -1,0 +1,24 @@
+name: PR1994 StageA isolated SQL
+on:
+  pull_request:
+    paths:
+      - database/pr1994_stage_a.py
+      - tests/test_pr1994_stage_a.py
+      - .github/workflows/pr1994-stage-a-isolated.yml
+permissions:
+  contents: read
+jobs:
+  synthetic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Install exact client for synthetic fixtures
+        run: python3 -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+      - name: Real TLS synthetic DB and client boundary tests
+        env:
+          PYTHONPATH: .
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 tests/test_pr1994_stage_a.py
