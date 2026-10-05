@@ -1,4 +1,4 @@
-"""Private owner StageA: one connection, client guard, definitions only, rollback.
+"""Definition-only StageA: one connection, client guard, definitions, rollback.
 No connection/credential discovery, application rows, classifier invocation or StageB.
 """
 from dataclasses import dataclass
@@ -97,7 +97,7 @@ def collect(conn, pq, binding, sql_bytes, *, seconds=45):
     started = False
     validated = False
     result = None
-    deadline = time.monotonic() + seconds
+    deadline = None
     def query(statement, values=None):
         require(time.monotonic() < deadline)
         cursor = conn.execute(statement, values)
@@ -106,6 +106,7 @@ def collect(conn, pq, binding, sql_bytes, *, seconds=45):
         return rows
     try:
         require(type(seconds) is int and 1 <= seconds <= 45)
+        deadline = time.monotonic() + seconds
         catalog = catalog_query(sql_bytes)  # Validate source before ANY SQL.
         client_guard(conn,pq,binding)        # IDLE before BEGIN on this connection.
         validated = True
@@ -114,13 +115,16 @@ def collect(conn, pq, binding, sql_bytes, *, seconds=45):
         query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED READ ONLY")
         query("SET LOCAL lock_timeout = '2s'")
         query("SET LOCAL statement_timeout = '5s'")
-        query("SET LOCAL search_path = pg_catalog")
+        query("SET LOCAL search_path = pg_catalog, pg_temp")
         require(query("SELECT current_setting('transaction_read_only'), "
                       "current_setting('transaction_isolation')") == [('on','read committed')])
         identity = query("SELECT current_database()=%s, current_setting('neon.branch_id',true)=%s, "
                          "current_user::text=%s, session_user::text=%s",
                          (binding.database,binding.branch,binding.owner,binding.owner))
         require(identity == [(True,True,True,True)])
+        before = query(catalog)
+        require(len(before)==1 and type(before[0][0]) is str
+                and re.fullmatch(r'[0-9a-f]{64}',before[0][0]))
         relations = [r[0] for r in query(RELATION_QUERY,(list(RELATIONS),))]
         require(len(relations) == 9 and {r['name'] for r in relations} == set(RELATIONS))
         triggers = [r[0] for r in query(TRIGGER_QUERY)]
@@ -131,9 +135,6 @@ def collect(conn, pq, binding, sql_bytes, *, seconds=45):
             rows = query(FUNCTION_QUERY,(body,name))
             require(len(rows) == 1)
             functions.append(rows[0][0])
-        before = query(catalog)
-        require(len(before)==1 and type(before[0][0]) is str
-                and re.fullmatch(r'[0-9a-f]{64}',before[0][0]))
         # A point-in-time drift guard, not exclusion of concurrent DDL.
         require(query(catalog) == before)
         result = dict(stage='A',catalog_sha256=before[0][0],relations=relations,
@@ -151,7 +152,13 @@ def collect(conn, pq, binding, sql_bytes, *, seconds=45):
             result = None
         finally:
             if validated:
-                conn.close()
+                try:
+                    conn.close()
+                    require(conn.closed)
+                except BaseException:
+                    result = None
+    if result is not None and time.monotonic() >= deadline:
+        result = None
     if result is None:
         raise Refused("STAGE_A_REFUSED") from None
     return result

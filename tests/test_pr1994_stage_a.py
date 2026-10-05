@@ -111,9 +111,28 @@ VALUES('00000000-0000-4000-8000-000000000099','fixture-row','BLOCKED','ROW_PAYLO
     @classmethod
     def cleanup(cls):
         if cls.cleanup_done:return
-        subprocess.run(['docker','rm','-f',cls.name],capture_output=True,timeout=30)
-        subprocess.run(['docker','network','rm',cls.network],capture_output=True,timeout=30)
-        shutil.rmtree(cls.temp,ignore_errors=True); cls.cleanup_done=True
+        container=subprocess.run(['docker','inspect',cls.name],capture_output=True,text=True,timeout=30)
+        if container.returncode==0:
+            volumes=[m['Name'] for m in json.loads(container.stdout)[0]['Mounts'] if m['Type']=='volume']
+            cls.run('docker','rm','-f','-v',cls.name)
+            gone=subprocess.run(['docker','inspect',cls.name],capture_output=True,text=True,timeout=30)
+            if gone.returncode==0 or 'No such object' not in gone.stderr:
+                raise AssertionError('CONTAINER_CLEANUP_NOT_PROVEN')
+            for volume in volumes:
+                gone=subprocess.run(['docker','volume','inspect',volume],capture_output=True,text=True,timeout=30)
+                if gone.returncode==0 or 'No such volume' not in gone.stderr:
+                    raise AssertionError('VOLUME_CLEANUP_NOT_PROVEN')
+        elif 'No such object' not in container.stderr:
+            raise AssertionError('CONTAINER_CLEANUP_UNKNOWN')
+        network=subprocess.run(['docker','network','inspect',cls.network],capture_output=True,text=True,timeout=30)
+        if network.returncode==0:
+            cls.run('docker','network','rm',cls.network)
+            gone=subprocess.run(['docker','network','inspect',cls.network],capture_output=True,text=True,timeout=30)
+            if gone.returncode==0 or 'No such network' not in gone.stderr:
+                raise AssertionError('NETWORK_CLEANUP_NOT_PROVEN')
+        elif 'No such network' not in network.stderr:
+            raise AssertionError('NETWORK_CLEANUP_UNKNOWN')
+        shutil.rmtree(cls.temp); cls.cleanup_done=True
         print('STAGE_A_FIXTURE_CLEANUP=true')
     @classmethod
     def tearDownClass(cls): cls.cleanup()
@@ -121,7 +140,9 @@ VALUES('00000000-0000-4000-8000-000000000099','fixture-row','BLOCKED','ROW_PAYLO
         with psycopg.connect(**self.kwargs,autocommit=True) as c: c.execute(self.schema)
     def connection(self): return psycopg.connect(**self.kwargs,autocommit=True)
     def sql(self,q,params=None):
-        with self.connection() as c: return c.execute(q,params).fetchall()
+        with self.connection() as c:
+            cursor=c.execute(q,params)
+            return cursor.fetchall() if cursor.description else []
     def snapshot(self):
         return self.sql("SELECT objective,state,updated_at FROM autopilot.project_work_item ORDER BY work_item_id")
     def test_real_tls_same_connection_catalog_and_rollback(self):
@@ -166,6 +187,46 @@ VALUES('00000000-0000-4000-8000-000000000099','fixture-row','BLOCKED','ROW_PAYLO
 RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'CLASSIFIER_MUST_NOT_RUN'; END $$""")
         result=stage.collect(self.connection(),psycopg.pq,self.binding,RAW)
         self.assertIn('CLASSIFIER_MUST_NOT_RUN',result['functions'][0]['definition'])
+    def test_ddl_between_definition_and_digest_refuses(self):
+        real=self.connection()
+        outer=self
+        class Proxy:
+            def __getattr__(self,name): return getattr(real,name)
+            def execute(self,q,params=None):
+                cursor=real.execute(q,params)
+                if q==stage.FUNCTION_QUERY and params[1]==stage.FUNCTIONS[0]:
+                    outer.sql("""CREATE OR REPLACE FUNCTION autopilot.role_blocker_requires_owner(p_result_code text)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT true $$""")
+                return cursor
+        with self.assertRaises(stage.Refused):
+            stage.collect(Proxy(),psycopg.pq,self.binding,RAW)
+        self.assertTrue(real.closed)
+    def test_close_failure_does_not_egress_exception(self):
+        real=self.connection()
+        class Proxy:
+            def __getattr__(self,name): return getattr(real,name)
+            def close(self):
+                real.close()
+                raise RuntimeError('PRIVATE_CLOSE_ERROR_DO_NOT_EXPORT')
+        with self.assertRaisesRegex(stage.Refused,'^STAGE_A_REFUSED$'):
+            stage.collect(Proxy(),psycopg.pq,self.binding,RAW)
+        self.assertTrue(real.closed)
+    def test_cleanup_deadline_expiry_refuses(self):
+        from unittest.mock import patch
+        real=self.connection(); clock=[0]
+        class Proxy:
+            def __getattr__(self,name): return getattr(real,name)
+            def close(self): real.close(); clock[0]=46
+        with patch.object(stage.time,'monotonic',side_effect=lambda:clock[0]):
+            with self.assertRaises(stage.Refused):
+                stage.collect(Proxy(),psycopg.pq,self.binding,RAW)
+        self.assertTrue(real.closed)
+    def test_output_cap_rolls_back_and_closes(self):
+        self.sql("CREATE OR REPLACE FUNCTION autopilot.role_blocker_requires_owner(p_result_code text) "
+                 "RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT false /*" + "X"*262144 + "*/ $$")
+        c=self.connection()
+        with self.assertRaises(stage.Refused): stage.collect(c,psycopg.pq,self.binding,RAW)
+        self.assertTrue(c.closed)
     def test_overall_deadline_refusal(self):
         c=self.connection()
         with self.assertRaises(stage.Refused): stage.collect(c,psycopg.pq,self.binding,RAW,seconds=0)
