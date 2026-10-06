@@ -1,5 +1,6 @@
 """Run approved autopilot consumers under a server routing lease on trusted main."""
 from __future__ import annotations
+from enum import Enum
 import hashlib
 import json
 import os
@@ -26,6 +27,31 @@ TARGETS = {
     'health': ('AUTOPILOT_HEALTH_DATABASE_URL','bridge_school_health_principal','database.runtime_health_preflight',()),
     'mailbox': ('DATABASE_URL','autopilot_callback_login','ops.github_autopilot_db_route',('--mailbox-read',)),
 }
+
+
+class RoutingStage(Enum):
+    ARGUMENTS = 'ARGUMENTS'
+    CONTEXT = 'CONTEXT'
+    SSH_KEY = 'SSH_KEY'
+    SSH_HOST_KEY = 'SSH_HOST_KEY'
+    LEASE_START = 'LEASE_START'
+    LEASE_HEADER = 'LEASE_HEADER'
+    TARGET_SETUP = 'TARGET_SETUP'
+    CONSUMER = 'CONSUMER'
+    ROUTE_WAIT = 'ROUTE_WAIT'
+    MAILBOX_CONNECT = 'MAILBOX_CONNECT'
+    MAILBOX_QUERY = 'MAILBOX_QUERY'
+    MAILBOX_RESULT = 'MAILBOX_RESULT'
+    UNKNOWN = 'UNKNOWN'
+
+
+_failure_stage = RoutingStage.ARGUMENTS
+
+
+def report_routing_failure():
+    # Never stringify exceptions, arguments, environment values or route records.
+    stage = _failure_stage if type(_failure_stage) is RoutingStage else RoutingStage.UNKNOWN
+    print('AUTOPILOT_DATABASE_ROUTING_FAILED stage='+stage.value, file=sys.stderr)
 
 
 def mask(value):
@@ -119,14 +145,17 @@ def header(process):
 
 
 def execute_under_lease(ssh, selection, environment, work):
+    global _failure_stage
     minimum_epoch = 0
     deadline = time.monotonic()+600
     while time.monotonic()<deadline:
+        _failure_stage = RoutingStage.LEASE_START
         lease = subprocess.Popen(ssh+['-T','-L','127.0.0.1:55432:127.0.0.1:55432',
             'autopilot-db-tunnel@'+HOST,'route-v1'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,bufsize=0)
         child = None
         try:
+            _failure_stage = RoutingStage.LEASE_HEADER
             record = parse_record(header(lease),minimum_epoch)
             if record is None or record['route']['backend']=='paused':
                 if record:
@@ -136,6 +165,7 @@ def execute_under_lease(ssh, selection, environment, work):
                 continue
             route = record['route']
             assert lease.poll() is None
+            _failure_stage = RoutingStage.TARGET_SETUP
             ca = work/'ca.crt'
             ca.write_text(record['ca_pem'])
             ca.chmod(0o600)
@@ -149,6 +179,7 @@ def execute_under_lease(ssh, selection, environment, work):
                 mask(value)
                 child_env[env_name] = value
                 child_env.update(AUTOPILOT_PG_HOST='127.0.0.1',AUTOPILOT_PG_PORT='55432',AUTOPILOT_PG_DATABASE='autopilot')
+            _failure_stage = RoutingStage.CONSUMER
             lease.stdin.write(b'.')
             child = subprocess.Popen([sys.executable,'-m',module,*args],env=child_env,start_new_session=True)
             start = heartbeat = time.monotonic()
@@ -165,10 +196,13 @@ def execute_under_lease(ssh, selection, environment, work):
             if child is not None:
                 stop(child,group=True)
             stop(lease)
+    _failure_stage = RoutingStage.ROUTE_WAIT
     raise RuntimeError('route_paused_timeout')
 
 
 def main(selection):
+    global _failure_stage
+    _failure_stage = RoutingStage.CONTEXT
     assert selection in TARGETS
     assert os.environ.get('GITHUB_ACTIONS')=='true'
     assert os.environ.get('GITHUB_REPOSITORY')=='olegmed1-art/bridge-video-free'
@@ -177,6 +211,7 @@ def main(selection):
         raise SystemExit(128+signum)
     signal.signal(signal.SIGTERM,cancelled)
     signal.signal(signal.SIGINT,cancelled)
+    _failure_stage = RoutingStage.SSH_KEY
     environment = os.environ.copy()
     private = environment.pop('SSH_PRIVATE_KEY')
     os.environ.pop('SSH_PRIVATE_KEY',None)
@@ -188,6 +223,7 @@ def main(selection):
         key.chmod(0o600)
         del private
         subprocess.run(['ssh-keygen','-y','-P','','-f',str(key)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+        _failure_stage = RoutingStage.SSH_HOST_KEY
         scanner = Path(__file__).resolve().parents[1]/'ops/oracle_known_hosts_from_scan.sh'
         subprocess.run(['bash',str(scanner),HOST,'SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go',str(work/'known_hosts')],
                        check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
@@ -199,24 +235,34 @@ def main(selection):
 
 
 def mailbox_read():
+    global _failure_stage
+    _failure_stage = RoutingStage.MAILBOX_CONNECT
     import psycopg
     with psycopg.connect(os.environ['DATABASE_URL'],autocommit=True,connect_timeout=10) as conn:
         with conn.cursor() as cur:
+            _failure_stage = RoutingStage.MAILBOX_QUERY
             cur.execute('SET statement_timeout = 10000')
             cur.execute('SELECT mailbox_pr,used_dispatches,max_dispatches,readiness FROM autopilot.mailbox_rotation_readiness()')
             rows = cur.fetchall()
+            _failure_stage = RoutingStage.MAILBOX_RESULT
             assert len(rows)==1 and len(rows[0])==4
             assert all('\n' not in str(v) and '|' not in str(v) for v in rows[0])
             print('|'.join(str(v) for v in rows[0]))
 
 
-if __name__ == '__main__':
+def cli():
+    global _failure_stage
+    _failure_stage = RoutingStage.ARGUMENTS
     try:
         if sys.argv[1:] == ['--mailbox-read']:
             mailbox_read()
-        else:
-            assert len(sys.argv)==2
-            sys.exit(main(sys.argv[1]))
+            return 0
+        assert len(sys.argv)==2
+        return main(sys.argv[1])
     except Exception:
-        print('AUTOPILOT_DATABASE_ROUTING_FAILED',file=sys.stderr)
-        sys.exit(1)
+        report_routing_failure()
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(cli())
