@@ -11,6 +11,7 @@ on:
       - 'Bridge School Database CI'
       - 'Autopilot publication security CI'
     types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -23,14 +24,95 @@ concurrency:
 
 jobs:
   reconcile:
-    if: github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main'
+    # workflow_run github.ref is the default branch, not the upstream branch.
+    # Only the two existing main dispatch paths may reach production diagnostics.
+    # This event gate is not a replacement for protected secret environments.
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' &&
+      github.sha != '' &&
+      (
+        github.event_name == 'schedule' ||
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.action == 'completed' &&
+          github.event.workflow_run.status == 'completed' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.repository.full_name == github.repository &&
+          github.event.workflow_run.head_repository.full_name == github.repository &&
+          github.event.workflow_run.event == 'workflow_dispatch' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          github.event.workflow_run.head_sha == github.sha &&
+          (
+            github.event.workflow_run.name == 'Issue 881 Exact Canary Contract CI' ||
+            github.event.workflow_run.name == 'Issue 881 Current-Main Authoritative CI'
+          )
+        )
+      )
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Checkout main
+      # GitHub expression string comparisons ignore case. Reject Main/MAIN
+      # before checkout, package installation, project imports or secret steps.
+      - name: Validate case-sensitive event scope
+        shell: bash
+        timeout-minutes: 1
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          EVENT_ACTION: ${{ github.event.action }}
+          UPSTREAM_REPOSITORY: ${{ github.event.workflow_run.repository.full_name }}
+          UPSTREAM_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
+          UPSTREAM_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          UPSTREAM_SHA: ${{ github.event.workflow_run.head_sha }}
+          UPSTREAM_STATUS: ${{ github.event.workflow_run.status }}
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          UPSTREAM_NAME: ${{ github.event.workflow_run.name }}
+        run: |
+          python -I -B - <<'PY'
+          import os
+          import re
+
+
+          def require(condition):
+              if not condition:
+                  raise SystemExit("AUTOPILOT_EVENT_SCOPE_REJECTED")
+
+
+          repository = "olegmed1-art/bridge-video-free"
+          require(os.environ.get("EVENT_REPOSITORY") == repository)
+          require(os.environ.get("EVENT_REF") == "refs/heads/main")
+          sha = os.environ.get("EVENT_SHA", "")
+          require(re.fullmatch(r"[0-9a-f]{40}", sha) is not None)
+          event = os.environ.get("EVENT_NAME")
+          if event == "workflow_run":
+              expected = {
+                  "EVENT_ACTION": "completed",
+                  "UPSTREAM_REPOSITORY": repository,
+                  "UPSTREAM_HEAD_REPOSITORY": repository,
+                  "UPSTREAM_EVENT": "workflow_dispatch",
+                  "UPSTREAM_BRANCH": "main",
+                  "UPSTREAM_SHA": sha,
+                  "UPSTREAM_STATUS": "completed",
+                  "UPSTREAM_CONCLUSION": "success",
+              }
+              require(all(os.environ.get(key) == value for key, value in expected.items()))
+              require(os.environ.get("UPSTREAM_NAME") in {
+                  "Issue 881 Exact Canary Contract CI",
+                  "Issue 881 Current-Main Authoritative CI",
+              })
+          else:
+              require(event in {"schedule", "workflow_dispatch"})
+          PY
+
+      - name: Checkout admitted main SHA
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
