@@ -6,6 +6,19 @@ on:
       reviewed_archive_sha: {required: true, type: string}
       reviewed_manifest_sha: {required: true, type: string}
       run_reviewed: {required: true, type: boolean, default: false}
+      approve_closed_window:
+        description: 'For this reviewed 6min window: no owner console/manual start, rerun/dispatch or Oracle manual start; accept residual queue uncertainty'
+        required: true
+        type: boolean
+        default: false
+      approve_stop_route_hold:
+        description: 'Keep the independent direct ordinary Stop route available through this reviewed window; no completion claim'
+        required: true
+        type: boolean
+        default: false
+      window_policy_sha256: {required: true, type: string}
+      independent_stop_run_id: {required: true, type: string}
+      independent_stop_contract_job_id: {required: true, type: string}
 permissions:
   contents: read
 concurrency:
@@ -13,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   ibm-diagnostic-trial:
-    if: ${{ inputs.run_reviewed && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha }}
+    if: ${{ inputs.run_reviewed && inputs.approve_closed_window && inputs.approve_stop_route_hold && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha }}
     environment: database-production
     runs-on: ubuntu-24.04
     timeout-minutes: 8
