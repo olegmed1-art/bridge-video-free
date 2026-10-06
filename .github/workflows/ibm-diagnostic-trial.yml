@@ -6,6 +6,7 @@ on:
       reviewed_archive_sha: {required: true, type: string}
       reviewed_manifest_sha: {required: true, type: string}
       run_reviewed: {required: true, type: boolean, default: false}
+      collect_only: {required: true, type: boolean, default: false}
       approve_closed_window:
         description: 'For this reviewed 6min window: no owner console/manual start, rerun/dispatch or Oracle manual start; accept residual queue uncertainty'
         required: true
@@ -26,7 +27,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   ibm-diagnostic-trial:
-    if: ${{ (!inputs.run_reviewed || (inputs.approve_closed_window && inputs.approve_stop_route_hold)) && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha }}
+    if: ${{ (!(inputs.run_reviewed && inputs.collect_only) && (!(inputs.run_reviewed || inputs.collect_only) || (inputs.approve_closed_window && inputs.approve_stop_route_hold))) && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha }}
     environment: database-production
     runs-on: ubuntu-24.04
     timeout-minutes: 8
@@ -53,12 +54,14 @@ jobs:
           REVIEWED_MANIFEST_SHA: ${{ inputs.reviewed_manifest_sha }}
           EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
           RUN_REVIEWED: ${{ inputs.run_reviewed }}
+          COLLECT_ONLY: ${{ inputs.collect_only }}
         run: |
           set -eu
           set -- --archive-sha "$REVIEWED_ARCHIVE_SHA" --manifest-sha "$REVIEWED_MANIFEST_SHA" --expected-main "$EXPECTED_MAIN"
-          case "$RUN_REVIEWED" in
-            true) set -- "$@" --run-reviewed ;;
-            false) ;;
+          case "$RUN_REVIEWED:$COLLECT_ONLY" in
+            true:false) set -- "$@" --run-reviewed ;;
+            false:true) set -- "$@" --collect-only ;;
+            false:false) ;;
             *) exit 78 ;;
           esac
           "$RUNNER_TEMP/ibm-diagnostic-venv/bin/python" ops/ibm_diagnostic_v9/owner_setup.py "$@"
