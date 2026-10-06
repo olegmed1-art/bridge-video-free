@@ -1,0 +1,14 @@
+name: StageA owned single-push qualifier DISABLED
+on:
+  push:
+    branches: ['review/stagea-synthetic-one-run-20261006-85f0a892591c']
+    paths: ['.github/workflows/stagea-synthetic-owned-push-85f0a892591c.yml', 'qualification/stagea-synthetic-qualifier-r4/SINGLE_RUN_MARKER.json']
+permissions:
+  contents: read
+jobs:
+  isolated:
+    if: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - run: exit 78
