@@ -1,6 +1,7 @@
 """Linux synthetic native tests. Windows reports SKIP; never a native PASS."""
 import errno
-from contextlib import ExitStack
+import io
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import json
 import os
 import stat
@@ -26,6 +27,26 @@ ACCEPT = dict(outcome="COMMITTED", target_closed=True, sessions_zero=True,
 
 
 from process_supervisor import run_fixture_process
+
+
+# Capability refusals from the trusted existing unshare binary, LANG=C only.
+# Exact one-line diagnostics; unknown errors/return codes remain failures.
+_NAMESPACE_DENIALS = {
+    b"unshare: unshare failed: Operation not permitted",
+    b"unshare: unshare failed: Permission denied",
+    b"unshare: write failed /proc/self/uid_map: Operation not permitted",
+    b"unshare: write failed /proc/self/uid_map: Permission denied",
+    b"unshare: write failed /proc/self/gid_map: Operation not permitted",
+    b"unshare: write failed /proc/self/gid_map: Permission denied",
+    b"unshare: write failed /proc/self/setgroups: Operation not permitted",
+    b"unshare: write failed /proc/self/setgroups: Permission denied",
+}
+
+
+def namespace_capability_denied(result):
+    return (result.returncode == 1 and result.stdout == b"" and
+            any(result.stderr in (diagnostic, diagnostic + b"\n")
+                for diagnostic in _NAMESPACE_DENIALS))
 
 
 @unittest.skipUnless(sys.platform == "linux", "NOT_RUN: native Linux required")
@@ -400,7 +421,7 @@ class NativeFixtureTests(unittest.TestCase):
         env = {"PATH": "/usr/bin:/bin", "LANG": "C"}
         probe = run_fixture_process(prefix + [sys.executable, "-I", "-c", "pass"],
                                     timeout=3, env=env)
-        if probe.returncode != 0 and b"unshare failed" in probe.stderr:
+        if namespace_capability_denied(probe):
             self.skipTest("NOT_RUN: unprivileged isolated namespace denied")
         self.assertEqual(probe.returncode, 0, probe.stderr.decode(errors="replace"))
         child = ("import subprocess,sys,time; "
@@ -500,7 +521,7 @@ class NativeFixtureTests(unittest.TestCase):
         env = {"PATH": "/usr/bin:/bin", "LANG": "C"}
         probe = run_fixture_process(prefix + [sys.executable, "-I", "-c", "pass"],
                                     timeout=3, env=env)
-        if probe.returncode != 0 and b"unshare failed" in probe.stderr:
+        if namespace_capability_denied(probe):
             self.skipTest("NOT_RUN: unprivileged namespaces denied")
         self.assertEqual(probe.returncode, 0)
         child = ("import subprocess,sys,time; "
@@ -511,6 +532,119 @@ class NativeFixtureTests(unittest.TestCase):
                                 timeout=1, env=env)
         self.assertTrue(caught.exception.drain_receipt["all_owned_descendants_drained"])
         self.assertTrue(caught.exception.drain_receipt["echild_verified"])
+
+
+    def test_namespace_classifier_recognizes_observed_uid_map_denial(self):
+        diagnostic = b"unshare: write failed /proc/self/uid_map: Operation not permitted\n"
+        self.assertTrue(namespace_capability_denied(
+            subprocess.CompletedProcess(["unshare"], 1, b"", diagnostic)))
+
+    def test_namespace_classifier_keeps_unknown_failures(self):
+        for diagnostic in (b"unshare: invalid option", b"Traceback: fixture failure",
+                           b"unshare: write failed /proc/self/uid_map: Operation not permitted\nextra failure",
+                           b"\nunshare: write failed /proc/self/uid_map: Operation not permitted\n",
+                           b"unshare: write failed /proc/self/uid_map: Operation not permitted\n\n"):
+            with self.subTest(diagnostic=diagnostic):
+                self.assertFalse(namespace_capability_denied(
+                    subprocess.CompletedProcess(["unshare"], 1, b"", diagnostic)))
+
+    def test_namespace_classifier_never_skips_success_or_killed_child(self):
+        diagnostic = b"unshare: write failed /proc/self/uid_map: Operation not permitted"
+        for code in (0, -9, 77):
+            with self.subTest(code=code):
+                self.assertFalse(namespace_capability_denied(
+                    subprocess.CompletedProcess(["unshare"], code, b"", diagnostic)))
+
+    def test_namespace_classifier_is_used_by_all_four_scenarios(self):
+        scenarios = (
+            self.test_namespace_timeout_kills_descendants_and_reaps_wrapper,
+            self.test_namespace_timeout_receipt_proves_descendant_drain,
+            self.test_actual_directory_bind_visibility_if_namespace_available,
+            self.test_actual_file_bind_inode_pin_if_namespace_available,
+        )
+        diagnostics = (
+            (b"unshare: write failed /proc/self/uid_map: Operation not permitted\n",
+             unittest.SkipTest),
+            (b"unshare failed: unexpected fixture error\n", AssertionError),
+            (b"unshare: unshare failed: Operation not permitted\nextra failure\n",
+             AssertionError),
+        )
+        # Exercise all four real entrypoints with synthetic process results.
+        # No unshare, mount, child process, helper install or live access occurs.
+        for scenario in scenarios:
+            for diagnostic, expected in diagnostics:
+                with self.subTest(scenario=scenario.__name__, diagnostic=diagnostic):
+                    result = subprocess.CompletedProcess(["fixture-unshare"], 1, b"", diagnostic)
+                    with patch.object(self, "namespace_tools",
+                                      return_value=("fixture-unshare", "fixture-mount")), \
+                            patch("test_hba_helper.run_fixture_process",
+                                  return_value=result) as run:
+                        with self.assertRaises(expected):
+                            scenario()
+                        run.assert_called_once()
+
+    def test_actual_bind_classifies_embedded_mount_errors(self):
+        snippets = [value for value in self.actual_bind.__func__.__code__.co_consts
+                    if isinstance(value, str) and "result = subprocess.run([mount," in value]
+        self.assertEqual(len(snippets), 1)
+        child = compile(snippets[0], "<synthetic-bind-child>", "exec")
+        hint = b"       dmesg(1) may have more information after failed mount system call.\n"
+        for file_bind in (False, True):
+            with tempfile.TemporaryDirectory(prefix="hba-synthetic-classifier-", dir="/tmp") as target:
+                target_path = Path(target) / "pg_hba.conf" if file_bind else Path(target)
+                denial = ("mount: " + str(target_path) + ": permission denied.\n").encode()
+                cases = (
+                    (32, b"", denial, 77),
+                    (32, b"", denial + hint, 77),
+                    (32, b"", denial + b"unexpected extra error\n", 78),
+                    (32, b"unexpected output", denial, 78),
+                    (1, b"", denial, 78),
+                    (77, b"", denial, 78),
+                    (-9, b"", denial, 78),
+                    (32, b"", b"mount: wrong filesystem type\n", 78),
+                )
+                for code, stdout, stderr, expected in cases:
+                    with self.subTest(file_bind=file_bind, code=code, stderr=stderr):
+                        result = subprocess.CompletedProcess(["fixture-mount"], code, stdout, stderr)
+                        output, errors = io.StringIO(), io.StringIO()
+                        argv = ["fixture-child", str(Path(__file__).parent.resolve()),
+                                str(self.root), target, "1" if file_bind else "0", "fixture-mount"]
+                        with patch.object(sys, "argv", argv), \
+                                patch.object(sys, "path", list(sys.path)), \
+                                patch("subprocess.run", return_value=result) as mount_run, \
+                                patch.object(h, "SyntheticHelper",
+                                             side_effect=AssertionError("helper must not run")) as helper, \
+                                redirect_stdout(output), redirect_stderr(errors):
+                            with self.assertRaises(SystemExit) as caught:
+                                exec(child, {"__name__": "__synthetic_bind_child__"})
+                        self.assertEqual(caught.exception.code, expected)
+                        mount_run.assert_called_once()
+                        helper.assert_not_called()
+                        if expected == 77:
+                            self.assertEqual(output.getvalue(), "SKIP_BIND_PERMISSION_DENIED\n")
+                            self.assertEqual(errors.getvalue(), "")
+                        else:
+                            self.assertEqual(output.getvalue(), "")
+                            self.assertEqual(errors.getvalue(), stderr.decode(errors="replace"))
+
+    def test_actual_bind_requires_exact_denial_receipt(self):
+        for scenario in (self.test_actual_directory_bind_visibility_if_namespace_available,
+                         self.test_actual_file_bind_inode_pin_if_namespace_available):
+            for code, stdout, stderr, expected in (
+                    (77, b"SKIP_BIND_PERMISSION_DENIED\n", b"", unittest.SkipTest),
+                    (77, b"SKIP_BIND_UNAVAILABLE\n", b"", AssertionError),
+                    (77, b"SKIP_BIND_PERMISSION_DENIED\n", b"extra error", AssertionError),
+                    (78, b"SKIP_BIND_PERMISSION_DENIED\n", b"", AssertionError),
+                    (32, b"", b"mount: wrong filesystem type", AssertionError)):
+                with self.subTest(scenario=scenario.__name__, code=code, stdout=stdout, stderr=stderr):
+                    result = subprocess.CompletedProcess(["fixture-unshare"], code, stdout, stderr)
+                    with patch.object(self, "namespace_tools",
+                                      return_value=("fixture-unshare", "fixture-mount")), \
+                            patch("test_hba_helper.run_fixture_process",
+                                  return_value=result) as run:
+                        with self.assertRaises(expected):
+                            scenario()
+                        run.assert_called_once()
 
     def actual_bind(self, file_bind):
         unshare, mount = self.namespace_tools()
@@ -528,7 +662,13 @@ else:
     source_path, target_path = source, target
 result = subprocess.run([mount,'--bind',str(source_path),str(target_path)], capture_output=True, timeout=5)
 if result.returncode:
-    print('SKIP_BIND_UNAVAILABLE'); sys.exit(77)
+    # util-linux LANG=C EPERM forms only; unknown mount errors stay failures.
+    message = ('mount: '+str(target_path)+': permission denied.\n').encode()
+    hint = b'       dmesg(1) may have more information after failed mount system call.\n'
+    if result.returncode == 32 and result.stdout == b'' and result.stderr in (message, message+hint):
+        print('SKIP_BIND_PERMISSION_DENIED'); sys.exit(77)
+    sys.stderr.write(result.stderr.decode(errors='replace'))
+    sys.exit(78)
 helper = h.SyntheticHelper(source)
 original = helper.original['data']
 try:
@@ -541,12 +681,14 @@ finally:
     helper.close()
 '''
             result = run_fixture_process([unshare, "--user", "--map-root-user", "--mount", "--pid", "--propagation", "private", "--fork", "--kill-child=KILL",
-                                     sys.executable, "-I", "-c", child, str(Path(__file__).parent.resolve()),
+                                     sys.executable, "-I", "-B", "-c", child, str(Path(__file__).parent.resolve()),
                                      str(self.root), target, "1" if file_bind else "0", mount],
                                     timeout=15,
                                     env={"PATH": "/usr/bin:/bin", "LANG": "C"})
-            if (result.returncode == 77 or (result.returncode != 0 and
-                    b"unshare failed" in result.stderr)):
+            if (namespace_capability_denied(result) or
+                    (result.returncode == 77 and
+                     result.stdout == b"SKIP_BIND_PERMISSION_DENIED\n" and
+                     result.stderr == b"")):
                 self.skipTest("NOT_RUN: unprivileged isolated mount namespace denied")
             self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
             self.assertIn(b"PASS_", result.stdout)

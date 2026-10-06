@@ -78,7 +78,7 @@ def preflight():
                     ast.parse(node.value.value, filename=name + ":embedded-child")
     if found_cases != manifest["test_inventory"]:
         raise RuntimeError("Exact test-method inventory mismatch before imports")
-    if sum(map(len, found_cases.values())) != 58:
+    if sum(map(len, found_cases.values())) != 64:
         raise RuntimeError("Unexpected pre-import method count")
     sys.path.insert(0, str(PACKAGE))
 
@@ -103,11 +103,31 @@ def main():
     # Keep SKIP separate, never convert it into a native capability PASS.
     status = ("FAIL" if not result.wasSuccessful() else
               "PASS_WITH_SKIPS" if result.skipped else "PASS")
+    failed = {test.id() for test, _ in result.failures + result.errors}
+    skipped = {test.id() for test, _ in result.skipped}
+    attempted = {test.id() for test in selected}
+    def coverage(method):
+        identifiers = {test.id() for test in selected if test._testMethodName == method}
+        if not identifiers or identifiers & skipped:
+            return "NOT_RUN"
+        if identifiers & failed:
+            return "FAILED_OR_UNKNOWN"
+        return "PASS"
+    native_coverage = {
+        "case_entries_attempted": len(attempted),
+        "directory_bind_visibility": coverage("test_actual_directory_bind_visibility_if_namespace_available"),
+        "file_bind_inode_hazard": coverage("test_actual_file_bind_inode_pin_if_namespace_available"),
+        "escaped_process_group_descendant_drain": coverage("test_real_descendant_drain_including_escaped_process_group"),
+        "namespace_descendant_drain": coverage("test_namespace_timeout_receipt_proves_descendant_drain"),
+        "namespace_skips_are_not_native_proof": True,
+        "failures_do_not_establish_scenario_execution": True,
+    }
     print(json.dumps({"scope": mode, "status": status, "tests_run": result.testsRun,
                       "passes": result.testsRun - len(result.skipped) - len(result.failures) - len(result.errors),
                       "skips_not_run": len(result.skipped), "failures": len(result.failures),
-                      "errors": len(result.errors), "live_eligible": False}))
-    if len(selected) != (54 if mode == "ordinary" else 4):
+                      "errors": len(result.errors), "native_coverage": native_coverage,
+                      "live_eligible": False}))
+    if len(selected) != (60 if mode == "ordinary" else 4):
         raise RuntimeError("Unexpected test method inventory")
     if not result.wasSuccessful():
         raise SystemExit(1)

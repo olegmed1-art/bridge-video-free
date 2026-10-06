@@ -1,11 +1,11 @@
 {
-  "status": "GENERIC_CI_REVIEW_CANDIDATE_NOT_PUBLISHED_NOT_RUN",
-  "source_hash_basis": "Intended UTF-8 source; local disk readback unavailable",
-  "python_ast": "NOT_RUN",
+  "status": "PRIVATE_CAPABILITY_CLASSIFIER_FIX_PROPOSAL_NOT_PUBLISHED_NOT_RUN",
+  "source_hash_basis": "SHA-256 over complete saved Drive raw-file bytes; not a hash of decoded/canonical text. Format: UTF-8 without BOM, LF only, final LF.",
+  "python_ast": "PASS per independent reviewer for the unchanged six Python sources; not executed locally",
   "native_execution": "NOT_RUN",
   "python_files": 6,
-  "test_methods": 58,
-  "ordinary_methods": 54,
+  "test_methods": 64,
+  "ordinary_methods": 60,
   "optional_namespace_methods": 4,
   "privacy_scan": "Intended source checked for known owner metadata/pins/production path/IP/account; none present",
   "files": {
@@ -18,8 +18,8 @@
       "sha256": "9af7d8fd628faea0f66f8e744af451ae9cd5ad82bcb786f9d74a17b531aa9604"
     },
     "ci/hba-synthetic/test_hba_helper.py": {
-      "bytes": 24773,
-      "sha256": "5ca6bd5349ae274dd2da46b68cb109f56b42d1ab1f32dad4a16fcc24e79f24e2"
+      "bytes": 33553,
+      "sha256": "c8b0a8b143e18c3d21f875ac7ebe39b680f3283db748fff6d59dc94fece26e7b"
     },
     "ci/hba-synthetic/test_owner_collector.py": {
       "bytes": 5053,
@@ -30,20 +30,20 @@
       "sha256": "dcf72019ff68c33fe9b92c90e9f8e017345ab0659906d336e31d5ed0fef55ff2"
     },
     "ci/hba-synthetic/run_ci.py": {
-      "bytes": 5668,
-      "sha256": "6534c8fb7df361f3f086c4c2237a3714c129a00d4807d640d1068d16c1fca5e6"
+      "bytes": 6831,
+      "sha256": "779cab942687563aab03061030ab5d527d0d134990d3467968777b2804a27660"
     },
     ".github/workflows/hba-synthetic-review.yml": {
       "bytes": 1865,
       "sha256": "1fafe3fc629b4bf070730728c82b61d9de1f061072000b1380a93a945153614c"
     },
     "ci/hba-synthetic/README.md": {
-      "bytes": 6623,
-      "sha256": "b0af067e27bbeae481d0667c838d3a398ce722ded861f3b79ea19e5c2248fb56"
+      "bytes": 3924,
+      "sha256": "eb421cab89d1119a5d19a55f2c484310c8f44bf408402c7d062d3d6f26985010"
     }
   },
   "publication_gate": "Existing workflow AND integration/Vercel/webhook clearance pending in recognizer review; no duplicate broad scan; do not publish/run.",
-  "revision": 3,
+  "revision": 5,
   "workflow_scope": {
     "initial_attempt_only": true,
     "run_attempt_guard": "github.run_attempt == '1'",
@@ -53,6 +53,8 @@
   },
   "test_inventory": {
     "test_hba_helper.NativeFixtureTests": [
+      "test_actual_bind_classifies_embedded_mount_errors",
+      "test_actual_bind_requires_exact_denial_receipt",
       "test_actual_directory_bind_visibility_if_namespace_available",
       "test_actual_file_bind_inode_pin_if_namespace_available",
       "test_atomic_rename_changes_inode",
@@ -78,6 +80,10 @@
       "test_journal_after_close_refuses_before_write",
       "test_live_entrypoint_refuses",
       "test_lock_validation_after_close_refuses_before_stat",
+      "test_namespace_classifier_is_used_by_all_four_scenarios",
+      "test_namespace_classifier_keeps_unknown_failures",
+      "test_namespace_classifier_never_skips_success_or_killed_child",
+      "test_namespace_classifier_recognizes_observed_uid_map_denial",
       "test_namespace_timeout_kills_descendants_and_reaps_wrapper",
       "test_namespace_timeout_receipt_proves_descendant_drain",
       "test_native_posix_acl_roundtrip",
@@ -116,8 +122,17 @@
     ]
   },
   "generic_review": {
-    "baseline": "Parent confirmed nine files/pins, six Python ASTs, seven embedded snippets, 54+4 inventory and structurally sound supervisor; no execution",
-    "changed_entrypoint_and_workflow_review": "PENDING",
-    "native": "NOT_RUN"
+    "baseline": "Revision3 source reviewed; native run ordinary54PASS/namespace4FAIL; no rerun",
+    "revision4": "Independent review found stale namespace classifier and unconditional mount failure skip; superseded, NOT_RUN",
+    "revision5": "Independent reviewer: classifier fixes appear closed, AST passes, inventory 60 ordinary +4 namespaces. Raw hash metadata corrected; pending final verification. Native execution NOT_RUN."
+  },
+  "hashing_format": {
+    "algorithm": "SHA-256",
+    "input": "raw numeric bytes downloaded from saved file",
+    "encoding": "UTF-8",
+    "bom": false,
+    "line_endings": "LF",
+    "final_lf": true,
+    "normalization": "NONE"
   }
 }
