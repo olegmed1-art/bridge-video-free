@@ -1,0 +1,211 @@
+# UNBOUND PROPOSAL: source commit/tree require authorized creation and independent readback.
+# Intended fifth public-delta path; not published, executable-ready or run.
+name: Autopilot safe diagnostics synthetic contract
+
+on:
+  push:
+    branches:
+      - 'review/autopilot-safe-diagnostics-56313f1'
+    paths:
+      - 'ops/github_autopilot_db_route.py'
+      - 'database/runtime_health_preflight.py'
+      - 'tests/test_oracle_autopilot_health_split.py'
+      - 'tests/test_autopilot_safe_diagnostics.py'
+      - '.github/workflows/autopilot-safe-diagnostics-synthetic.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-safe-diagnostics-synthetic-review
+  cancel-in-progress: false
+
+jobs:
+  synthetic-contract:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/review/autopilot-safe-diagnostics-56313f1' &&
+      github.actor == 'olegmed1-art' &&
+      github.actor_id == '315099490' &&
+      github.triggering_actor == 'olegmed1-art' &&
+      github.run_attempt == 1
+    env:
+      REVIEWED_SOURCE_COMMIT: 'b88dc40150650fce91612af2b65c82cd3557962c'
+      REVIEWED_SOURCE_TREE: 'a274d50cce99997ecdf8aef9d421d2f188cdae95'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Verify exact event scope before checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'olegmed1-art/bridge-video-free'
+          test "$GITHUB_EVENT_NAME" = 'push'
+          test "$GITHUB_REF" = 'refs/heads/review/autopilot-safe-diagnostics-56313f1'
+          test "$GITHUB_ACTOR" = 'olegmed1-art'
+          test "$GITHUB_ACTOR_ID" = '315099490'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'olegmed1-art'
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$REVIEWED_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$REVIEWED_SOURCE_TREE" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Checkout only reviewed sources and synthetic tests
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.REVIEWED_SOURCE_COMMIT }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /ops/github_autopilot_db_route.py
+            /database/runtime_health_preflight.py
+            /tests/test_oracle_autopilot_health_split.py
+            /tests/test_autopilot_safe_diagnostics.py
+            /ops/test_autopilot_github_db_route.py
+            /tests/test_health_dsn_contract.py
+            /oracle_autopilot/database_target.py
+            /oracle_autopilot/__init__.py
+
+      - name: Verify exact checkout and all eight file pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REVIEWED_SOURCE_COMMIT"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$REVIEWED_SOURCE_TREE"
+          printf 'synthetic_source_sha=%s\n' "$REVIEWED_SOURCE_COMMIT"
+          printf 'synthetic_source_tree=%s\n' "$REVIEWED_SOURCE_TREE"
+          printf 'synthetic_launch_sha=%s\n' "$GITHUB_SHA"
+          sha256sum --check <<'PINS'
+          b6ddf691b129723f51e0b7c739dc542ff447dae0931e58f0138ee10ab72c3867  ops/github_autopilot_db_route.py
+          36b19f772722f2151f53ddf30712087b7afebd9449ef85752e1ed3d722de08e2  database/runtime_health_preflight.py
+          0bd0d79466fc2b23e15115ac761542c25073b9403a3b84ea302fc9be496df10a  tests/test_oracle_autopilot_health_split.py
+          c63f573febe7468a95e1e6d70073dcb2a5993bed40469382071efa5f8ab63738  tests/test_autopilot_safe_diagnostics.py
+          8c4aee05e364b850630ed01216a878a801bc9b17bb427871b62f6da7c9cda8a6  ops/test_autopilot_github_db_route.py
+          f4956013d017340659df979d969db4b2722f3516b4eab99a98db1e07c526ee7b  tests/test_health_dsn_contract.py
+          9f0bdd8e5da327ad98273bbe438b77b01e0970c3b3e4b9d83086b55a8a5eb897  oracle_autopilot/database_target.py
+          4173034b6af29a9bbb2b88e6b3d5c1b0c2bcb8203bc8b74ff0f401c9dace9b65  oracle_autopilot/__init__.py
+          PINS
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12.14'
+
+      - name: Install bounded synthetic dependencies
+        timeout-minutes: 2
+        run: >-
+          python -I -B -m pip install --disable-pip-version-check --no-cache-dir
+          --only-binary=:all: --timeout 30 --retries 1
+          'pytest==8.4.2' 'psycopg[binary]==3.3.4'
+
+      - name: Run only the reviewed synthetic contracts
+        timeout-minutes: 6
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -I -B - <<'PY'
+          from collections import Counter
+          from contextlib import redirect_stdout, redirect_stderr
+          from io import StringIO
+          from pathlib import Path
+          import runpy
+          import sys
+          from unittest.mock import patch
+          sys.path.insert(0, str(Path.cwd()))
+          import psycopg
+          import pytest
+
+          EXPECTED = (
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_argument_and_context_failures_emit_only_fixed_stage",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_missing_ssh_key_emits_fixed_stage",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_enum_is_closed_and_invalid_stage_never_stringified",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_exceptions_are_not_rendered_and_return_codes_are_preserved",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_lease_header_failure_keeps_cleanup_and_redacts_exception",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_missing_target_credential_keeps_cleanup_and_fixed_stage",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_mailbox_connection_and_query_errors_never_echo_credentials",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_mailbox_result_failure_and_success_protocol_are_preserved",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_only_whitelisted_numbers_are_logged_even_with_extra_private_fields",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_malformed_details_never_coerce_or_replace_critical_with_pass",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_backlog_malformed_details_are_not_logged",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_numeric_details_do_not_change_existing_severity_decision",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_unknown_signal_never_echoes_its_key_or_details",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_missing_or_empty_required_view_still_fails",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_database_error_outputs_only_fixed_message",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_query_projects_only_allowed_details",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_sensitive_nonnumeric_port_fails_without_traceback_or_database_call",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_host_key_failure_emits_fixed_stage_before_any_lease",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_lease_start_failure_emits_fixed_stage_without_cleanup_of_missing_process",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_consumer_failures_keep_fixed_stage_and_cleanup",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_busy_route_deadline_emits_route_wait_without_starting_consumer",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_mailbox_numeric_boundaries",
+              "tests/test_autopilot_safe_diagnostics.py::DiagnosticContract::test_backlog_numeric_boundaries",
+              "tests/test_oracle_autopilot_health_split.py::SharedHealthSplit::test_school_checks_stay_neon_autopilot_checks_move",
+              "tests/test_oracle_autopilot_health_split.py::SharedHealthSplit::test_neon_route_preserves_original_single_connection",
+              "tests/test_oracle_autopilot_health_split.py::SharedHealthSplit::test_missing_or_unpinned_oracle_dsn_fails_before_any_query",
+              "tests/test_oracle_autopilot_health_split.py::SharedHealthSplit::test_oracle_view_is_mandatory_and_critical_is_not_hidden",
+              "ops/test_autopilot_github_db_route.py::ConsumerRouting::test_dsn_constructed_from_pinned_identity",
+              "ops/test_autopilot_github_db_route.py::ConsumerRouting::test_worker_legacy_quoted_input_has_fixed_oracle_destination",
+              "ops/test_autopilot_github_db_route.py::ConsumerRouting::test_route_fails_closed_and_epoch_never_decreases",
+              "ops/test_autopilot_github_db_route.py::ConsumerRouting::test_completed_paused_process_header_is_read",
+              "ops/test_autopilot_github_db_route.py::ConsumerRouting::test_lease_loss_kills_consumer_group",
+              "ops/test_autopilot_github_db_route.py::ConsumerRouting::test_only_approved_entrypoints_exist",
+          )
+          if len(EXPECTED) != 33 or len(set(EXPECTED)) != 33:
+              raise SystemExit("SYNTHETIC_EXPECTED_IDS_INVALID")
+
+          class ExactContract:
+              def __init__(self):
+                  self.collected = False
+                  self.reports = []
+                  self.xfail_seen = False
+
+              def pytest_collection_finish(self, session):
+                  actual = [item.nodeid for item in session.items]
+                  if Counter(actual) != Counter(EXPECTED):
+                      pytest.exit("SYNTHETIC_NODE_IDS_MISMATCH", returncode=1)
+                  self.collected = True
+
+              def pytest_runtest_logreport(self, report):
+                  self.reports.append((report.nodeid, report.when, report.outcome))
+                  self.xfail_seen |= hasattr(report, "wasxfail")
+
+              def verify(self):
+                  wanted = Counter(
+                      (nodeid, phase, "passed")
+                      for nodeid in EXPECTED
+                      for phase in ("setup", "call", "teardown")
+                  )
+                  if not self.collected or self.xfail_seen or Counter(self.reports) != wanted:
+                      raise SystemExit("SYNTHETIC_CONTRACT_OUTCOMES_MISMATCH")
+
+          contract = ExactContract()
+          # Live DB access is forbidden; individual cases replace this with mocks.
+          with patch.object(psycopg, "connect", side_effect=AssertionError("synthetic_db_access_forbidden")):
+              try:
+                  result = pytest.main([
+                      "-q", "-c", "/dev/null", "--rootdir=.", "--noconftest", "-p", "no:cacheprovider",
+                      "tests/test_autopilot_safe_diagnostics.py",
+                      "tests/test_oracle_autopilot_health_split.py",
+                      "ops/test_autopilot_github_db_route.py",
+                  ], plugins=[contract])
+              except BaseException:
+                  raise SystemExit("SYNTHETIC_PYTEST_ABORTED") from None
+              if result != 0:
+                  raise SystemExit("SYNTHETIC_PYTEST_FAILED")
+              contract.verify()
+              out, err = StringIO(), StringIO()
+              try:
+                  with redirect_stdout(out), redirect_stderr(err):
+                      runpy.run_path("tests/test_health_dsn_contract.py", run_name="__main__")
+              except BaseException:
+                  raise SystemExit("SYNTHETIC_DSN_CONTRACT_FAILED") from None
+              if out.getvalue() != "HEALTH_DSN_CONTRACT: PASS\n":
+                  raise SystemExit("SYNTHETIC_DSN_CONTRACT_MARKER_MISMATCH")
+          print("SYNTHETIC_EXACT_33_NODE_IDS_AND_ALL_PHASES_PASS")
+          print("STANDALONE_HEALTH_DSN_CONTRACT_PASS")
+          print("SYNTHETIC_DIAGNOSTICS_CONTRACT_PASS")
+          PY
