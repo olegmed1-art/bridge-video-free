@@ -430,10 +430,14 @@ def test_drive_folder_with_broad_acl_fails_closed(monkeypatch):
 def test_publish_writes_marker_last_and_is_deterministic_on_retry(tmp_path: Path, monkeypatch):
     job = tmp_path / "publish-job"
     job.mkdir()
+    from universal_video.contract import validate_job, canonical_job_hash
+    request = {"job_id": job.name, "profile": "transcript_only",
+               "source": {"kind": "local_path", "path": str(tmp_path / "original.mp4")}}
+    job_hash = canonical_job_hash(validate_job(request))
     manifest = {
         "status": "COMPLETED",
         "job_id": "publish-job",
-        "job_hash": "a" * 64,
+        "job_hash": job_hash,
         "profile": "transcript_only",
         "source_fingerprint": "b" * 64,
         "processing_fingerprint": "c" * 64,
@@ -475,9 +479,10 @@ def test_publish_writes_marker_last_and_is_deterministic_on_retry(tmp_path: Path
     exact = {
         "expected_job_id": "publish-job",
         "expected_profile": "transcript_only",
-        "expected_job_hash": "a" * 64,
+        "expected_job_hash": job_hash,
         "expected_source_file_id": None,
         "expected_artifact_set_sha256": expected_bundle,
+        "expected_job_payload": request,
     }
     first = publish_result(job, "parent", **exact)
     first_calls = list(calls)
@@ -501,10 +506,14 @@ def test_publish_writes_marker_last_and_is_deterministic_on_retry(tmp_path: Path
 def test_publish_fails_before_network_when_approved_bundle_changes(tmp_path: Path, monkeypatch):
     job = tmp_path / "exact-job"
     job.mkdir()
+    from universal_video.contract import validate_job, canonical_job_hash
+    request = {"job_id": job.name, "profile": "transcript_only",
+               "source": {"kind": "local_path", "path": str(tmp_path / "original.mp4")}}
+    job_hash = canonical_job_hash(validate_job(request))
     manifest = {
         "status": "COMPLETED",
         "job_id": "exact-job",
-        "job_hash": "a" * 64,
+        "job_hash": job_hash,
         "profile": "transcript_only",
     }
     (job / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -517,7 +526,7 @@ def test_publish_fails_before_network_when_approved_bundle_changes(tmp_path: Pat
     def reject_changed_bundle(*args, **kwargs):
         assert kwargs["expected_job_id"] == "exact-job"
         assert kwargs["expected_profile"] == "transcript_only"
-        assert kwargs["expected_job_hash"] == "a" * 64
+        assert kwargs["expected_job_hash"] == job_hash
         assert kwargs["expected_artifact_set_sha256"] == "f" * 64
         raise drive_results.ResultConformanceError("artifact set hash mismatch")
 
@@ -528,9 +537,10 @@ def test_publish_fails_before_network_when_approved_bundle_changes(tmp_path: Pat
             "parent",
             expected_job_id="exact-job",
             expected_profile="transcript_only",
-            expected_job_hash="a" * 64,
+            expected_job_hash=job_hash,
             expected_source_file_id=None,
             expected_artifact_set_sha256="f" * 64,
+            expected_job_payload=request,
         )
     assert network_calls == []
 

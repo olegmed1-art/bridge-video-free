@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .profiles import resolve_profile
+from .comparison_requirement import comparison_required
 
 CONTRACT_VERSION = "universal-video-v1"
 MAX_JOB_BYTES = 256 * 1024
@@ -146,6 +147,10 @@ def validate_job(payload: Any, *, allowed_local_root: str | None = None) -> Vide
         raise VideoContractError("project is too long")
 
     metadata = _mapping(data.get("metadata"), "metadata")
+    try:
+        comparison_required(metadata)  # strict opt-in; metadata already binds the job hash
+    except ValueError as exc:
+        raise VideoContractError(str(exc)) from exc
     options = _mapping(data.get("options"), "options")
     if "max_duration_seconds" in options:
         try:

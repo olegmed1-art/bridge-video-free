@@ -1,0 +1,77 @@
+name: Required comparison synthetic CI
+
+on:
+  pull_request:
+    paths:
+      - 'universal_video/**'
+      - 'tests/test_universal_video_*.py'
+      - '.github/workflows/comparison-required-synthetic-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: comparison-required-synthetic-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify exact event head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install public test dependencies
+        run: python -m pip install -q pytest requests google-auth 'psycopg[binary]==3.3.4'
+      - name: Verify reviewed source bytes
+        run: |
+          sha256sum --check <<'PINS'
+          b1d5e8400a4e481f0dc09b22aad643f6df345549a671d9a031168b5514021e9f  tests/test_universal_video_book_dispatch.py
+          91dea9d7c0794d50d06b82aab6103a6f07ef2ffead587b9d350d2ee1b98fa4aa  tests/test_universal_video_comparison_requirement.py
+          b2d1f4cd9db55d8631b7bf57eb1e9522382d7980fc23353cc5a983d86cd7ac34  tests/test_universal_video_comparison_requirement_boundaries.py
+          dcfa1c7c546aa854654de58df934b09e1d96c227d9395c4c22418d260b2d7f75  tests/test_universal_video_durable_spool.py
+          ab7fc362114487961be05a180052c6a691816ab6c91028df41564a39dd40c1eb  tests/test_universal_video_productionization.py
+          fbd207356f97b66cff11e5bd50f18fc6b97a87ab1161062d0c2598eb3342d771  universal_video/comparison_artifacts.py
+          6bc8ab69a8aba6ff6c220dfad34e0d94f06a3ac873edf21e6c1e20d2e67718e3  universal_video/comparison_requirement.py
+          3f8eb6e16802ba7a12a03b63da531fe3f7412401f0b6552e966b0400a721e714  universal_video/contract.py
+          5b1ee83192d5f1cd5bd0ef12178fcbd31efb6bfc521e2292da0343daaa2663dd  universal_video/drive_results.py
+          595842a5fd674719b8ccc6980ca3527b80799223cbadc11eac50d8b76bbc64e4  universal_video/drive_stage.py
+          3e5a607a894166332f7bdb413f776a85a067a211c3ebd75870dee1cbf58740fd  universal_video/durable_drive.py
+          86000508a8ac6d42d41e6c2221c1a1926860d887c82a23f8b7e12b7931737955  universal_video/spool_worker.py
+          PINS
+      - name: Check syntax and collection of 53 new synthetic cases
+        run: |
+          python -m compileall -q universal_video
+          python -m pytest --collect-only -q \
+            tests/test_universal_video_comparison_requirement.py \
+            tests/test_universal_video_comparison_requirement_boundaries.py \
+            tests/test_universal_video_durable_spool.py::test_required_comparison_blocks_done_publication_and_cleanup \
+            tests/test_universal_video_durable_spool.py::test_required_comparison_accepts_complete_package_before_review \
+            tests/test_universal_video_durable_spool.py::test_required_job_without_drive_registry_still_refuses_completion \
+            tests/test_universal_video_durable_spool.py::test_ordinary_noncompleted_without_registry_keeps_local_receipt \
+            tests/test_universal_video_book_dispatch.py::test_video_required_gate_does_not_change_book_finalization > /tmp/comparison-new-cases.txt
+          cat /tmp/comparison-new-cases.txt
+          grep -Eq '^53 tests collected in ' /tmp/comparison-new-cases.txt
+      - name: Run synthetic cases and original regression suites
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python -m pytest -q \
+            tests/test_universal_video_comparison_requirement.py \
+            tests/test_universal_video_comparison_requirement_boundaries.py \
+            tests/test_universal_video_result_conformance.py \
+            tests/test_universal_video_drive_stage.py \
+            tests/test_universal_video_comparison_artifacts.py \
+            tests/test_universal_video_durable_spool.py \
+            tests/test_universal_video_durable_drive.py \
+            tests/test_universal_video_productionization.py \
+            tests/test_universal_video_book_dispatch.py

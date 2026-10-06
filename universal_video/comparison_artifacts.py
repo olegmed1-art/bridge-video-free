@@ -731,6 +731,9 @@ def collect_comparison_paths(job_dir, manifest):
         if actual_manifest != manifest:
             fail("comparison parent manifest changed")
     if declaration is None:
+        from .comparison_requirement import comparison_required
+        if comparison_required(manifest.get("metadata")):
+            fail("required comparison package missing")
         if root.exists() or root.is_symlink():
             fail("undeclared comparison package")
         return []

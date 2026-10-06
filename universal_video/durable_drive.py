@@ -14,6 +14,7 @@ import stat
 from pathlib import Path
 
 from .comparison_artifacts import verify_comparison_original
+from .comparison_requirement import receipt_requirement, require_comparison_package
 from .drive_adapter import access_token, file_metadata, hash_remote_file, original_snapshot
 from .drive_results import (PublishArtifact, _upload_or_verify_file, _verify_folder,
                             _get_file_metadata, _verify_remote_artifact,
@@ -229,11 +230,14 @@ def finalize_drive_job(result_dir: Path, source_dir: Path, binding: dict, *,
         elif previous_proof.get("status") != "REVALIDATING":
             raise RuntimeError("invalid previous finalization receipt")
         atomic_json(prior, {"schema": "universal-video-drive-finalization-v1", "status": "REVALIDATING"})
-    token = access_token()  # existing resident credentials only
     intake = read_receipt(source_dir / SOURCE_RECEIPT)
     if (intake.get("schema") != "universal-video-source-integrity-v1"
             or intake.get("job_id") != job_id or intake.get("job_hash") != job_hash):
         raise RuntimeError("source pin/job identity mismatch")
+    required = receipt_requirement(intake) if profile != "book_single_atom" else False
+    if profile != "book_single_atom":
+        require_comparison_package(result_dir, expected_required=required)
+    token = access_token()  # existing resident credentials only, after local admission
     source = verify_source(source_dir, token)  # reject changed source before writes
     if source["file_id"] != binding["source_file_id"]:
         raise RuntimeError("Drive source binding mismatch")
@@ -295,6 +299,7 @@ def finalize_drive_job(result_dir: Path, source_dir: Path, binding: dict, *,
     source = verify_source(source_dir, token)
     receipt = {"schema": "universal-video-drive-finalization-v1", "status": "PUBLISHED_VERIFIED",
                "job_id": job_id, "job_hash": job_hash, "profile": profile,
+               **({"comparison_required": True} if required else {}),
                "artifact_set_sha256": bundle, "folders": folders, "source": source,
                "remote_verification": READBACK, "remote_artifacts": records,
                "canonical_promotion_allowed": False}
@@ -335,9 +340,15 @@ def cleanup_proof_matches(result_dir: Path, source_dir: Path | None, *, job_id: 
         proof = read_receipt(result_dir / FINAL_RECEIPT)
         source = proof["source"]
         intake = (read_receipt(source_dir / SOURCE_RECEIPT) if source_dir is not None else
-                  {"original": source["before"], "sha256": source["sha256_before"]})
+                  {"original": source["before"], "sha256": source["sha256_before"],
+                   "comparison_required": receipt_requirement(proof)})
         manifest = read_receipt(result_dir / "manifest.json")
         collect, verify, _, _ = _result_contract(str(manifest.get("profile") or ""))
+        if manifest.get("profile") != "book_single_atom":
+            required = receipt_requirement(intake)
+            if receipt_requirement(proof) != required:
+                return False
+            require_comparison_package(result_dir, expected_required=required)
         if manifest.get("profile") == "book_single_atom":
             verify(result_dir, expected_job_id=job_id, expected_job_hash=manifest.get("job_hash"),
                    expected_source_file_id=proof["source"]["file_id"])

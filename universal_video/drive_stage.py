@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .contract import MAX_SOURCE_BYTES, VideoJob, canonical_job_hash
+from .comparison_requirement import comparison_required, receipt_requirement
 from .drive_adapter import access_token, download_file, file_metadata, original_snapshot
 from .durable_drive import SOURCE_RECEIPT, atomic_json, read_receipt
 
@@ -114,6 +115,7 @@ def stage_drive_job(job: VideoJob, payload: dict[str, Any], media_root: Path) ->
         if (previous.get("schema") != "universal-video-source-integrity-v1"
                 or previous.get("job_id") != job.job_id or previous.get("job_hash") != job_hash
                 or previous.get("original") != original
+                or receipt_requirement(previous) != comparison_required(job.metadata)
                 or not re.fullmatch(r"[0-9a-f]{64}", str(previous.get("sha256") or ""))):
             raise DriveStageError("Drive original/job binding changed; existing pin retained",
                                   error_code="UV_DRIVE_SOURCE_IDENTITY_CHANGED")
@@ -152,6 +154,7 @@ def stage_drive_job(job: VideoJob, payload: dict[str, Any], media_root: Path) ->
             atomic_json(pin, {"schema": "universal-video-source-integrity-v1",
                               "original": original, "sha256": observed_sha,
                               "job_id": job.job_id, "job_hash": job_hash,
+                              "comparison_required": comparison_required(job.metadata),
                               "transfer_mode": "RESTART_NO_PARTIAL_RESUME"})
         os.replace(partial, final)
         directory_fd = os.open(job_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
