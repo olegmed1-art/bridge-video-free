@@ -37,7 +37,8 @@ def spool(tmp_path, monkeypatch):
         folder = root / payload["job_id"]
         folder.mkdir()
         result = {"job_id": payload["job_id"], "job_hash": canonical_job_hash(validate_job(payload, allowed_local_root=str(media))),
-                  "status": "COMPLETED", "profile": "transcript_only", "media": {"sha256": "b" * 64}}
+                  "status": "COMPLETED", "profile": "transcript_only", "media": {"sha256": "b" * 64},
+                  "source": {"kind": "google_drive", "file_id": payload["source"]["file_id"]}}
         (folder / "manifest.json").write_text(json.dumps(result))
         (folder / "transcript.txt").write_text("keep")
         return result

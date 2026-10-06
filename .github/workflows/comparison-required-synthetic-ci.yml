@@ -38,7 +38,7 @@ jobs:
           c2ed89cbeca0f9695f4e95d5774c585960645c953fc45e5220959f362012ea28  tests/test_universal_video_book_dispatch.py
           91dea9d7c0794d50d06b82aab6103a6f07ef2ffead587b9d350d2ee1b98fa4aa  tests/test_universal_video_comparison_requirement.py
           c35e120be10a2b49bdfe030b24bbbe0027df3a2ae8e0d9811dbf29f5eba248d8  tests/test_universal_video_comparison_requirement_boundaries.py
-          dcfa1c7c546aa854654de58df934b09e1d96c227d9395c4c22418d260b2d7f75  tests/test_universal_video_durable_spool.py
+          439c36eed07128e26178338c737f38aace6a3579db15e85532595b936e2d258a  tests/test_universal_video_durable_spool.py
           ab7fc362114487961be05a180052c6a691816ab6c91028df41564a39dd40c1eb  tests/test_universal_video_productionization.py
           fbd207356f97b66cff11e5bd50f18fc6b97a87ab1161062d0c2598eb3342d771  universal_video/comparison_artifacts.py
           6bc8ab69a8aba6ff6c220dfad34e0d94f06a3ac873edf21e6c1e20d2e67718e3  universal_video/comparison_requirement.py
@@ -46,7 +46,7 @@ jobs:
           5b1ee83192d5f1cd5bd0ef12178fcbd31efb6bfc521e2292da0343daaa2663dd  universal_video/drive_results.py
           595842a5fd674719b8ccc6980ca3527b80799223cbadc11eac50d8b76bbc64e4  universal_video/drive_stage.py
           3e5a607a894166332f7bdb413f776a85a067a211c3ebd75870dee1cbf58740fd  universal_video/durable_drive.py
-          86000508a8ac6d42d41e6c2221c1a1926860d887c82a23f8b7e12b7931737955  universal_video/spool_worker.py
+          696cde486fd34d4f2ab4a4278048576fc413d5fc31c9fe2a165347d002f11ad3  universal_video/spool_worker.py
           PINS
       - name: Check syntax and collection of 53 new synthetic cases
         run: |
