@@ -21,6 +21,7 @@ from .drive_stage import DriveStageError, remove_staged_job, stage_drive_job
 from .durable_drive import (configured_binding, finalize_drive_job, cleanup_proof_matches,
                             read_receipt, prepare_compute_recovery)
 from .finops_observation import build_video_finops_observation, directory_bytes
+from .comparison_requirement import comparison_required, require_comparison_package
 from .result_conformance import ResultConformanceError, verify_result
 from .runner import run_job
 from .book_contract import BookJob, strict_json, validate_book_job
@@ -527,6 +528,10 @@ def _process_one_locked(spool_root: Path) -> bool:
         manifest_path = result_dir / "manifest.json"
         if manifest_path.exists() and not reused_finalized_result:
             _atomic_write_json(manifest_path, result)
+        if comparison_required(validated_job.metadata):
+            # Gate review/publication/done/cleanup even without a Drive registry.
+            # Applies equally to new results and publication-only recovery.
+            require_comparison_package(result_dir, expected_required=True)
         if str(result.get("status") or "") == "COMPLETED":
             review_path = result_dir / "server_review.json"
             if not review_path.exists():
@@ -579,9 +584,17 @@ def _process_one_locked(spool_root: Path) -> bool:
         )
         if attestation is not None:
             receipt_payload["runtime_attestation"] = attestation
-        if staged_job_dir is not None and str(result.get("status") or "") == "COMPLETED":
+        if comparison_required(validated_job.metadata) and staged_job_dir is None:
+            raise RuntimeError("required comparison needs a staged Drive source")
+        binding = None
+        if staged_job_dir is not None and (
+                comparison_required(validated_job.metadata)
+                or str(result.get("status") or "") == "COMPLETED"):
             binding = configured_binding(validated_job.job_id, str(validated_job.source["file_id"]),
                                          canonical_job_hash(validated_job))
+            if binding is None and comparison_required(validated_job.metadata):
+                raise RuntimeError("required comparison needs a protected Drive binding")
+        if staged_job_dir is not None and str(result.get("status") or "") == "COMPLETED":
             if binding is not None:
                 retry_path = paths["progress"] / f"{validated_job.job_id}.recovery.json"
                 retry = read_receipt(retry_path) if retry_path.exists() else {}

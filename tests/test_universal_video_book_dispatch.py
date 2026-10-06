@@ -792,6 +792,7 @@ def test_video_comparison_binding_failure_still_blocks_all_output_uploads(tmp_pa
     monkeypatch.setattr(drive, "access_token", lambda: "synthetic-token")
     monkeypatch.setattr(drive, "verify_source", lambda *a: {
         "file_id": "synthetic_original", "before": {"id": "synthetic_original"}})
+    atomic_json(result / "manifest.json", {"metadata": {}})
     monkeypatch.setattr(drive, "collect_compact_artifacts", lambda *a: [])
     comparison = Mock(side_effect=RuntimeError("synthetic comparison-original mismatch"))
     upload = Mock()
@@ -804,3 +805,51 @@ def test_video_comparison_binding_failure_still_blocks_all_output_uploads(tmp_pa
     comparison.assert_called_once()
     upload.assert_not_called()
     assert (staged / drive.SOURCE_RECEIPT).exists()
+
+
+def test_video_required_gate_does_not_change_book_finalization(tmp_path, monkeypatch):
+    from universal_video import durable_drive as drive
+    result = tmp_path / "synthetic-book"
+    job = result_fixture(result)
+    source_dir = tmp_path / "staged"
+    source_dir.mkdir()
+    atomic_json(source_dir / drive.SOURCE_RECEIPT, {
+        "schema": "universal-video-source-integrity-v1",
+        "job_id": job.job_id, "job_hash": job.job_hash, "comparison_required": True})
+    roles = ("school_root", "processing", "book", "source_job", "analysis", "checks")
+    binding = {"source_file_id": job.payload["source"]["drive_file_id"],
+               "folders": {role: "synthetic_" + role for role in roles},
+               "drive_owner_permission_id": "synthetic-owner"}
+    collect, verify, parents, writable = drive._result_contract("book_single_atom")
+    assert collect is book_runner.collect_book_artifacts
+    assert verify is book_runner.verify_book_result
+    assert writable == {"analysis", "checks"} and parents["book"] == "processing"
+    monkeypatch.setattr(drive, "require_comparison_package",
+                        lambda *a, **k: pytest.fail("video requirement entered book path"))
+    monkeypatch.setattr(drive, "access_token", lambda: "synthetic-token")
+    monkeypatch.setattr(drive, "verify_source", lambda *a: {
+        "file_id": binding["source_file_id"], "before": {"id": binding["source_file_id"]},
+        "unchanged": True})
+    remote = {}
+    marker = []
+    def upload(folder, artifact, token):
+        identifier = "synthetic_remote_%d" % len(remote)
+        remote[identifier] = artifact
+        if artifact.relative_name.endswith("PUBLICATION_COMPLETE.json"):
+            marker.append(json.loads(artifact.path.read_bytes()))
+        return {"file_id": identifier, "size_bytes": artifact.size_bytes,
+                "sha256": artifact.sha256, "verification": drive.READBACK}
+    monkeypatch.setattr(drive, "_upload_or_verify_file", upload)
+    monkeypatch.setattr(drive, "_get_file_metadata", lambda *a: {
+        "permissions": [{"id": "synthetic-owner", "type": "user", "role": "owner"}]})
+    monkeypatch.setattr(drive, "_verify_remote_artifact", lambda *a: None)
+    monkeypatch.setattr(drive, "_verify_folder", lambda *a, **k: {})
+    monkeypatch.setattr(drive, "_book_folder_acl", lambda *a: None)
+    proof = drive.finalize_drive_job(
+        result, source_dir, binding, job_id=job.job_id,
+        profile="book_single_atom", job_hash=job.job_hash)
+    assert proof["status"] == "PUBLISHED_VERIFIED"
+    assert proof["profile"] == "book_single_atom"
+    assert "comparison_required" not in proof
+    assert len(marker) == 1 and "comparison_required" not in marker[0]
+    assert result.exists() and source_dir.exists()

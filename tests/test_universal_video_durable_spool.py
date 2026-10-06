@@ -184,3 +184,121 @@ def test_crash_before_manifest_preserves_partial_then_bounded_recovery(spool, mo
     preserved = list((root / "recovery/synthetic-job").glob("partial-*/partial-transcript.txt"))
     assert len(preserved) == 1 and preserved[0].read_text() == "unique partial evidence"
     assert calls == ["compute", "cleanup"]
+
+
+@pytest.mark.parametrize("mode", ["missing", "invalid", "stripped-flag"])
+def test_required_comparison_blocks_done_publication_and_cleanup(spool, monkeypatch, mode):
+    root, source, calls = spool
+    request_path = root / "inbox/synthetic-job.json"
+    request = json.loads(request_path.read_text())
+    request["metadata"] = {"comparison_required": True}
+    request_path.write_text(json.dumps(request))
+    old_stage, old_run = worker.stage_drive_job, worker.run_job
+    def stage(job, payload, media):
+        staged, directory = old_stage(job, payload, media)
+        return {**staged, "metadata": payload["metadata"]}, directory
+    def run(payload, output):
+        result = old_run(payload, output)
+        if mode != "stripped-flag":
+            result["metadata"] = payload["metadata"]
+        if mode == "invalid":
+            result["comparison_artifacts"] = {}
+        (output / payload["job_id"] / "manifest.json").write_text(json.dumps(result))
+        return result
+    monkeypatch.setattr(worker, "stage_drive_job", stage)
+    monkeypatch.setattr(worker, "run_job", run)
+    monkeypatch.setattr(worker, "finalize_drive_job", lambda *a, **kw: pytest.fail("publication bypass"))
+    monkeypatch.setattr(worker, "build_server_review", lambda *a, **kw: pytest.fail("review bypass"))
+    assert worker.process_one(root)
+    assert calls == ["compute"] and source.exists()
+    assert not (root / "done/synthetic-job.json").exists()
+    assert (root / "failed/synthetic-job.json").exists()
+    # Re-admission of retained completed evidence also cannot bypass the gate.
+    request_path.write_text(json.dumps(request))
+    assert worker.process_one(root)
+    assert calls == ["compute"] and source.exists()
+    assert not (root / "done/synthetic-job.json").exists()
+
+
+def test_required_comparison_accepts_complete_package_before_review(spool, monkeypatch):
+    from test_universal_video_comparison_artifacts import prepared, attach
+    root, source, calls = spool
+    request_path = root / "inbox/synthetic-job.json"
+    request = json.loads(request_path.read_text())
+    request["metadata"] = {"comparison_required": True}
+    request_path.write_text(json.dumps(request))
+    old_stage, old_run = worker.stage_drive_job, worker.run_job
+    def stage(job, payload, media):
+        staged, directory = old_stage(job, payload, media)
+        return {**staged, "metadata": payload["metadata"]}, directory
+    def run(payload, output):
+        result = old_run(payload, output)
+        result["metadata"] = payload["metadata"]
+        attach(prepared(root, parent=(output / payload["job_id"], result)), with_review=False)
+        return result
+    monkeypatch.setattr(worker, "stage_drive_job", stage)
+    monkeypatch.setattr(worker, "run_job", run)
+    assert worker.process_one(root)
+    assert calls == ["compute", "cleanup"]
+    assert (root / "done/synthetic-job.json").exists()
+
+
+@pytest.mark.parametrize("package", ["missing", "complete"])
+@pytest.mark.parametrize("status", ["COMPLETED", "REVIEW", "FAILED"])
+def test_required_job_without_drive_registry_still_refuses_completion(spool, monkeypatch, package, status):
+    root, source, calls = spool
+    request_path = root / "inbox/synthetic-job.json"
+    request = json.loads(request_path.read_text())
+    request["metadata"] = {"comparison_required": True}
+    request_path.write_text(json.dumps(request))
+    old_stage, old_run = worker.stage_drive_job, worker.run_job
+    def stage(job, payload, media):
+        staged, directory = old_stage(job, payload, media)
+        return {**staged, "metadata": payload["metadata"]}, directory
+    def run(payload, output):
+        result = old_run(payload, output)
+        result["metadata"] = payload["metadata"]
+        result["status"] = status
+        if package == "complete":
+            from test_universal_video_comparison_artifacts import prepared, attach
+            attach(prepared(root, parent=(output / payload["job_id"], result)), with_review=False)
+        else:
+            (output / payload["job_id"] / "manifest.json").write_text(json.dumps(result))
+        return result
+    monkeypatch.setattr(worker, "stage_drive_job", stage)
+    monkeypatch.setattr(worker, "run_job", run)
+    binding_calls = []
+    def missing_binding(*args):
+        binding_calls.append(args)
+        return None
+    monkeypatch.setattr(worker, "configured_binding", missing_binding)
+    monkeypatch.setattr(worker, "finalize_drive_job", lambda *a, **k: pytest.fail("implicit publication"))
+    assert worker.process_one(root)
+    assert calls == ["compute"] and source.exists()
+    assert (root / "failed/synthetic-job.json").exists()
+    assert not (root / "done/synthetic-job.json").exists()
+    assert len(binding_calls) == (1 if package == "complete" else 0)
+
+
+@pytest.mark.parametrize("status", ["REVIEW", "FAILED"])
+def test_ordinary_noncompleted_without_registry_keeps_local_receipt(spool, monkeypatch, status):
+    root, source, calls = spool
+    old_run = worker.run_job
+    def run(payload, output):
+        result = old_run(payload, output)
+        result["status"] = status
+        (output / payload["job_id"] / "manifest.json").write_text(json.dumps(result))
+        return result
+    monkeypatch.setattr(worker, "run_job", run)
+    monkeypatch.setattr(worker, "configured_binding",
+                        lambda *a: pytest.fail("ordinary noncompleted job requested Drive binding"))
+    monkeypatch.setattr(worker, "finalize_drive_job",
+                        lambda *a, **k: pytest.fail("ordinary noncompleted job published"))
+    monkeypatch.setattr(worker, "cleanup_proof_matches", lambda *a, **k: False)
+    assert worker.process_one(root)
+    done = root / "done/synthetic-job.json"
+    receipt = json.loads(done.read_text())
+    assert receipt["compute_status"] == status
+    assert receipt["result_conformance"]["state"] == "NOT_ELIGIBLE"
+    assert source.exists() and calls == ["compute"]
+    assert not (root / "failed/synthetic-job.json").exists()

@@ -23,9 +23,10 @@ from typing import Any
 import requests
 
 from .comparison_artifacts import collect_comparison_paths
-from .contract import CONTRACT_VERSION
+from .contract import CONTRACT_VERSION, MAX_JOB_BYTES, canonical_job_hash, validate_job
+from .comparison_requirement import comparison_required, require_comparison_package
 from .drive_adapter import DRIVE, access_token, hash_remote_file
-from .result_conformance import ResultConformanceError, verify_result
+from .result_conformance import ResultConformanceError, verify_result, _read_json
 
 UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -416,6 +417,7 @@ def publish_result(
     expected_job_hash: str,
     expected_source_file_id: str | None,
     expected_artifact_set_sha256: str,
+    expected_job_payload: dict[str, Any] | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     max_frames = int(os.getenv("UNIVERSAL_VIDEO_PUBLISH_MAX_FRAMES", "300"))
@@ -436,6 +438,19 @@ def publish_result(
     if ("comparison_artifacts" in manifest or
             any(item.relative_name.startswith("comparison/") for item in artifacts)):
         raise RuntimeError("comparison publication requires protected durable finalization")
+    # A result-only flag is removable. Reconstruct the trusted request whose
+    # identity the caller approved, rather than inferring policy from output.
+    if expected_job_payload is None:
+        raise RuntimeError("trusted job request required for legacy publication")
+    trusted_job = validate_job(expected_job_payload)
+    if (canonical_job_hash(trusted_job) != expected_job_hash
+            or trusted_job.job_id != expected_job_id
+            or trusted_job.profile != expected_profile
+            or trusted_job.source.get("file_id") != expected_source_file_id):
+        raise RuntimeError("trusted job request identity mismatch")
+    if comparison_required(trusted_job.metadata):
+        raise RuntimeError("comparison publication requires protected durable finalization")
+    require_comparison_package(job_dir, expected_required=False)
     manifest_hash = next(item.sha256 for item in artifacts if item.relative_name == "manifest.json")
     bundle_hash = artifact_set_sha256(artifacts)
     conformance = verify_result(
@@ -550,6 +565,8 @@ def main() -> None:
     publish.add_argument("--expected-job-hash", required=True)
     publish.add_argument("--expected-source-file-id")
     publish.add_argument("--expected-artifact-set-sha256", required=True)
+    publish.add_argument("--job-request", type=Path,
+                         help="Frozen trusted job request matching --expected-job-hash; required for publication")
     publish.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.command == "probe-destination":
@@ -565,6 +582,10 @@ def main() -> None:
                 expected_job_hash=args.expected_job_hash,
                 expected_source_file_id=args.expected_source_file_id,
                 expected_artifact_set_sha256=args.expected_artifact_set_sha256,
+                expected_job_payload=(
+                    _read_json(args.job_request, max_bytes=MAX_JOB_BYTES)
+                    if args.job_request is not None else None
+                ),
                 dry_run=args.dry_run,
             ),
             sort_keys=True,
