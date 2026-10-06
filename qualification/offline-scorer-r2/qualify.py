@@ -86,6 +86,56 @@ def privilege_boundary():
     return {"no_new_privs": True, "capability_sets_zero": True,
             "nonroot_ids_verified": True, "supplementary_groups_empty": True}
 
+PROJECT_FILES = {
+    "tools/comparison_score_handoff.py", "tools/comparison_score_coordinator.py",
+    "tests/test_comparison_score_handoff.py", "tests/test_comparison_score_coordinator.py",
+}
+
+def verify_project_sources(root, manifest):
+    project = root.parent.parent
+    rows = manifest["project_source_pins"]
+    require(len(rows) == 4 and {r["path"] for r in rows} == PROJECT_FILES,
+            "exact four project source pins required")
+    actual = set()
+    for name in ("tools", "tests"):
+        directory = project / name
+        require(directory.is_dir() and not directory.is_symlink(), "regular project source directory")
+        for path in directory.rglob("*"):
+            require(not path.is_symlink() and (path.is_dir() or path.is_file()),
+                    "project source entries must be regular")
+            if path.is_file():
+                actual.add(path.relative_to(project).as_posix())
+    require(actual == PROJECT_FILES, "project source inventory missing/extra files")
+    for row in rows:
+        path = project / row["path"]
+        data = path.read_bytes()
+        require(type(row["bytes"]) is int and row["bytes"] >= 0
+                and len(data) == row["bytes"] and digest(data) == row["sha256"],
+                "project source bytes changed: " + row["path"])
+        compile(data, str(path), "exec", dont_inherit=True)
+
+def run_project_suite(path, name, expected):
+    import unittest
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    suite = unittest.defaultTestLoader.loadTestsFromModule(module)
+    def ids(group):
+        for test in group:
+            if isinstance(test, unittest.TestSuite):
+                yield from ids(test)
+            else:
+                yield test.id()
+    collected = list(ids(suite))
+    require(len(collected) == expected and len(set(collected)) == expected,
+            "exact unique project suite collection required: " + name)
+    checks = unittest.TextTestRunner(verbosity=1).run(suite)
+    require(checks.testsRun == expected and checks.wasSuccessful()
+            and not checks.skipped and not checks.expectedFailures and not checks.unexpectedSuccesses,
+            "all project suite controls must execute and pass: " + name)
+    return {"expected": expected, "passed": checks.testsRun,
+            "skipped": 0, "failed": 0, "errors": 0, "xfail": 0}
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest-sha256", required=True)
@@ -127,8 +177,13 @@ def main():
     manifest_bytes = (root / "MANIFEST.json").read_bytes()
     require(digest(manifest_bytes) == args.manifest_sha256, "out-of-band manifest pin mismatch")
     manifest = json.loads(manifest_bytes)
-    require(manifest["schema"] == "generic-scorer-r2-synthetic-qualification/v1" and
-            manifest["expected_cases"] == 68, "qualification manifest schema/support")
+    require(manifest["schema"] == "generic-scorer-r2-synthetic-qualification/v1"
+            and manifest["qualification_revision"] == "v3-coordinator-synthetic"
+            and manifest["expected_cases"] == 68
+            and manifest["harness_guard_regression_cases"] == 4
+            and manifest["project_suite_cases"] == {"integration": 18, "coordinator": 19},
+            "qualification manifest schema/support")
+    verify_project_sources(root, manifest)
     declared = {}
     for item in manifest["files"]:
         key = item["path"]
@@ -185,6 +240,17 @@ def main():
     # Explicit private base avoids shared /tmp/pytest-of-* state.
     with tempfile.TemporaryDirectory(prefix="synthetic-", dir=results) as private_tmp:
         os.chmod(private_tmp, 0o700)
+        # Same process, audit hook, network namespace and resource limits as scorer.
+        os.environ["TMPDIR"] = private_tmp
+        tempfile.tempdir = private_tmp
+        project = root.parent.parent
+        project_checks = {}
+        for name, expected in (("integration", 18), ("coordinator", 19)):
+            filename = ("test_comparison_score_handoff.py" if name == "integration"
+                        else "test_comparison_score_coordinator.py")
+            project_checks[name] = run_project_suite(
+                project / "tests" / filename, "qualified_" + name + "_controls", expected)
+            guard.require_clean()
         xml_path = results / "synthetic.xml"
         code = pytest.main(["-q", "-ra", "-p", "no:cacheprovider", "--strict-markers",
                             "--strict-config", "-W", "error", "-c", str(root / "pytest.ini"),
@@ -198,6 +264,7 @@ def main():
         cases = list(ET.parse(xml_path).iter("testcase"))
         require(len(cases) == 68 and not any(c.find(tag) is not None
                 for c in cases for tag in ("skipped", "failure", "error")), "JUnit qualification failed")
+    verify_project_sources(root, manifest)
     # Revalidate source bytes after pytest and imports.
     for key, item in declared.items():
         require(digest((root / key).read_bytes()) == item["sha256"], "sources changed during qualification")
@@ -212,6 +279,7 @@ def main():
                "dataset": "SYNTHETIC_ONLY", "expected_cases": 68, "passed": 68,
                "network_namespace_distinct": True, "python_external_io_guard": True,
                "denied_io_events": guard.denied_count, "harness_guard_controls": 4,
+               "project_suite_controls": project_checks, "total_controls": 109,
                "privilege_boundary": boundary,
                "skipped": 0, "failed": 0, "errors": 0, "xfail": 0,
                "manifest_sha256": args.manifest_sha256, "python": platform.python_version(),

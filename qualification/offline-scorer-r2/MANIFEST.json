@@ -164,8 +164,8 @@
     },
     {
       "path": "qualify.py",
-      "bytes": 12002,
-      "sha256": "18c8fd114407def4c6bdedeb1753ce68a0aac908a661fbb5a7fa9afd4ff1e5ab"
+      "bytes": 15496,
+      "sha256": "4b3a83c7fdaa9acc4d7b0e52bd201203904373a6b37027d670c818d079b4645d"
     },
     {
       "path": "requirements.lock",
@@ -183,13 +183,39 @@
       "sha256": "90b7831647aee36f77aaf855e21e4d7f7083a6660cad7dabcf0db7ea8c9db97f"
     }
   ],
-  "qualification_revision": "v2-review-repairs",
+  "qualification_revision": "v3-coordinator-synthetic",
   "harness_guard_regression_cases": 4,
   "public_test_copy_byte_identical_private_r2": false,
   "public_test_copy_delta": "Only first module docstring changed; all remaining bytes/logic unchanged.",
   "predecessor_qualification_bundle_sha256": "73c1a43964819d8fde5a302ae67b5439cdfec8aedb35b27f57b754c193e46664",
   "startup_repair": "importlib.util is imported at module level; no function-local importlib binding",
-  "launch_revision": "v4-push-only-exact-branch",
-  "launch_branch": "review/scorer-r2-synthetic-73e54010-20261006",
-  "launch_actor": "olegmed1-art"
+  "launch_revision": "v5-coordinator-push-attempt1",
+  "launch_branch": "review/scorer-coordinator-synthetic-20261006",
+  "launch_actor": "olegmed1-art",
+  "project_source_pins": [
+    {
+      "path": "tools/comparison_score_handoff.py",
+      "bytes": 11193,
+      "sha256": "f64e9e5d48dadb18453c598b02d86badeb15add605b8c20af2091dd30e3792d0"
+    },
+    {
+      "path": "tools/comparison_score_coordinator.py",
+      "bytes": 15534,
+      "sha256": "304c3616e8dd6fef69616b2110ec9ecdfd15611ebb0f1d085f3b3648de0b422f"
+    },
+    {
+      "path": "tests/test_comparison_score_handoff.py",
+      "bytes": 14175,
+      "sha256": "88c482da51cb449115b407887aea671e521bdbe38920a040ca5d2397d09d3473"
+    },
+    {
+      "path": "tests/test_comparison_score_coordinator.py",
+      "bytes": 19020,
+      "sha256": "a3a630b9b5a02831ed7c9925808a37f25ba08f2cb63cc586cc97c7afea536eca"
+    }
+  ],
+  "project_suite_cases": {
+    "integration": 18,
+    "coordinator": 19
+  }
 }

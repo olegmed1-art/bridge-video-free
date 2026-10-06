@@ -1,11 +1,15 @@
-name: Scorer r2 synthetic qualification
+name: Scorer coordinator synthetic qualification
 on:
   push:
     branches:
-      - 'review/scorer-r2-synthetic-73e54010-20261006'
+      - 'review/scorer-coordinator-synthetic-20261006'
     paths:
       - 'qualification/offline-scorer-r2/**'
       - '.github/workflows/scorer-r2-synthetic.yml'
+      - 'tools/comparison_score_handoff.py'
+      - 'tools/comparison_score_coordinator.py'
+      - 'tests/test_comparison_score_handoff.py'
+      - 'tests/test_comparison_score_coordinator.py'
 permissions:
   contents: read
 jobs:
@@ -14,8 +18,10 @@ jobs:
       github.repository == 'olegmed1-art/bridge-video-free' &&
       github.repository_owner == 'olegmed1-art' &&
       github.actor == 'olegmed1-art' &&
+      github.triggering_actor == 'olegmed1-art' &&
+      github.run_attempt == 1 &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/review/scorer-r2-synthetic-73e54010-20261006' &&
+      github.ref == 'refs/heads/review/scorer-coordinator-synthetic-20261006' &&
       github.event.deleted == false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -25,9 +31,14 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
+          sparse-checkout-cone-mode: false
           sparse-checkout: |
-            qualification/offline-scorer-r2
-            .github/workflows/scorer-r2-synthetic.yml
+            /qualification/offline-scorer-r2/
+            /.github/workflows/scorer-r2-synthetic.yml
+            /tools/comparison_score_handoff.py
+            /tools/comparison_score_coordinator.py
+            /tests/test_comparison_score_handoff.py
+            /tests/test_comparison_score_coordinator.py
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12.10'
@@ -44,7 +55,7 @@ jobs:
           set -euo pipefail
           umask 077
           source_root="$GITHUB_WORKSPACE/qualification/offline-scorer-r2"
-          manifest_hash="bcd6ef6a544763be7cdcdafa183c14ce2940a6b17248f1a09254200712f78eef"
+          manifest_hash="7944cb7372467927ac30d7678d62f75da55807377010c6f936201e2c16197b60"
           verify_inventory() {
             # Trusted inline verifier: no code or installer arguments loaded from source_root.
             python -I -B - "$source_root" "$manifest_hash" <<'PY'
@@ -65,8 +76,9 @@ jobs:
           check(hashlib.sha256(mb).hexdigest() == expected, "manifest pin mismatch")
           m = json.loads(mb)
           check(m["schema"] == "generic-scorer-r2-synthetic-qualification/v1"
-                and m["qualification_revision"] == "v2-review-repairs"
-                and m["expected_cases"] == 68 and m["harness_guard_regression_cases"] == 4,
+                and m["qualification_revision"] == "v3-coordinator-synthetic"
+                and m["expected_cases"] == 68 and m["harness_guard_regression_cases"] == 4
+                and m["project_suite_cases"] == {"integration": 18, "coordinator": 19},
                 "manifest revision/support mismatch")
           declared = {}
           for f in m["files"]:
@@ -97,6 +109,29 @@ jobs:
               data = p.read_bytes()
               check(len(data) == f["bytes"] and hashlib.sha256(data).hexdigest() == f["sha256"],
                     "file pin mismatch: " + key)
+          project = root.parent.parent
+          expected_project = {"tools/comparison_score_handoff.py", "tools/comparison_score_coordinator.py",
+                              "tests/test_comparison_score_handoff.py", "tests/test_comparison_score_coordinator.py"}
+          rows = m["project_source_pins"]
+          check(len(rows) == 4 and {r["path"] for r in rows} == expected_project,
+                "exact four project source pins required")
+          actual_project = set()
+          for name in ("tools", "tests"):
+              directory = project / name
+              check(directory.is_dir() and not directory.is_symlink(), "regular project source directory")
+              for p in directory.rglob("*"):
+                  check(not p.is_symlink() and (p.is_dir() or p.is_file()), "nonregular project source entry")
+                  if p.is_file():
+                      actual_project.add(p.relative_to(project).as_posix())
+          check(actual_project == expected_project, "missing/extra project source files")
+          for row in rows:
+              check(type(row["bytes"]) is int and row["bytes"] >= 0
+                    and isinstance(row["sha256"], str)
+                    and re.fullmatch(r"[0-9a-f]{64}", row["sha256"]) is not None,
+                    "invalid project inventory size/digest")
+              data = (project / row["path"]).read_bytes()
+              check(len(data) == row["bytes"] and hashlib.sha256(data).hexdigest() == row["sha256"],
+                    "project source pin mismatch: " + row["path"])
           print("TRUSTED_INLINE_COMPLETE_INVENTORY_VERIFIED")
           PY
           }
