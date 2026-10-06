@@ -238,13 +238,13 @@ def worker_fixture(tmp_path, monkeypatch, drive_setup):
     write(result / "manifest.json", manifest)
     inbox = spool / "inbox" / (request["job_id"] + ".json")
     write(inbox, request)
-    return worker, spool, result, source, backend, registry, calls, inbox
+    return worker, spool, result, source, backend, registry, calls, inbox, request
 
 
 @pytest.mark.parametrize("mode", ["disabled", "failed", "success"])
 def test_worker_missing_failed_comparison_never_publishes_or_cleans(
         tmp_path, monkeypatch, drive_setup, mode):
-    worker, spool, result, source, backend, registry, calls, inbox = worker_fixture(
+    worker, spool, result, source, backend, registry, calls, inbox, request = worker_fixture(
         tmp_path, monkeypatch, drive_setup)
     if mode == "disabled":
         monkeypatch.delenv(producer.CONFIG_ENV)
@@ -262,7 +262,11 @@ def test_worker_missing_failed_comparison_never_publishes_or_cleans(
         assert len(calls) == 1
         assert (spool / "done" / inbox.name).exists()
         assert (result / "server_review.json").exists()
-        assert _verify(result, require_server_review=True)["state"] == "PASS"
+        assert _verify(
+            result, require_server_review=True,
+            expected_job_hash=canonical_job_hash(validate_job(request)),
+            expected_source_file_id=request["source"]["file_id"],
+        )["state"] == "PASS"
         assert durable.read_receipt(result / durable.FINAL_RECEIPT)["status"] == "PUBLISHED_VERIFIED"
         assert backend.posts and not source.exists()
     else:

@@ -35,17 +35,11 @@ jobs:
           set -euo pipefail
           test "$(id -u)" -ne 0
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          test "$(git rev-parse HEAD^)" = "56313f1e19b8a1aff54b1036d2b9a34574854853"
+          test "$(git rev-parse HEAD^)" = "2a1f84c534fdbd91d40bb06743f27d100d6ff28c"
           git diff-tree --no-commit-id --name-only -r HEAD | LC_ALL=C sort > "$RUNNER_TEMP/comparison-actual-files.txt"
           LC_ALL=C sort > "$RUNNER_TEMP/comparison-expected-files.txt" <<'FILES'
           .github/workflows/comparison-source-v7-20261006.yml
-          docs/architecture/comparison_producer.md
           tests/test_universal_video_comparison_producer.py
-          tests/test_universal_video_comparison_sandbox.py
-          tests/test_universal_video_durable_spool.py
-          universal_video/comparison_producer.py
-          universal_video/comparison_sandbox.py
-          universal_video/spool_worker.py
           FILES
           diff -u "$RUNNER_TEMP/comparison-expected-files.txt" "$RUNNER_TEMP/comparison-actual-files.txt"
       - name: Setup public Python runtime
@@ -60,7 +54,7 @@ jobs:
           sha256sum --check <<'PINS'
           024050420c29c9f0d8bed6c4dc4f1253e09521dc7ee92da2fc7fb0c3e5799bd0  docs/architecture/comparison_producer.md
           0e1fc8a4345b2c10bd383d907cd7e07d9589538d2eb57a8f5fd89545c7ef2b21  tests/test_universal_video_comparison_artifacts.py
-          6c6758d5d4b3c2f863cc820f0730a0da2b8ea7b5b0ac596eb108e1dce8fa1345  tests/test_universal_video_comparison_producer.py
+          498bfe994191301dc4accbdad9f348974960e3326ad4f2dcd6be5a9a4e55a33e  tests/test_universal_video_comparison_producer.py
           c35e120be10a2b49bdfe030b24bbbe0027df3a2ae8e0d9811dbf29f5eba248d8  tests/test_universal_video_comparison_requirement_boundaries.py
           91dea9d7c0794d50d06b82aab6103a6f07ef2ffead587b9d350d2ee1b98fa4aa  tests/test_universal_video_comparison_requirement.py
           5aa42cb2f5153b83594581eddd5097cf5016e743bcd1d195fea1404a7b0919d3  tests/test_universal_video_comparison_sandbox.py
