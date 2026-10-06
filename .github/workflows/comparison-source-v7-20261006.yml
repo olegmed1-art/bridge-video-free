@@ -1,0 +1,147 @@
+name: Comparison source synthetic v8 20261006 436ea162
+
+on:
+  push:
+    branches: ['test/comparison-source-v8-20261006-436ea162']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: comparison-source-v8-20261006-436ea162
+  cancel-in-progress: true
+
+jobs:
+  synthetic-source:
+    if: github.event_name == 'push' && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/test/comparison-source-v8-20261006-436ea162'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      PIP_NO_CACHE_DIR: '1'
+    steps:
+      - name: Checkout exact push commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify reviewed base and exact generic file scope
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD^)" = "8dbef6438d775c0e6f688237f6d83b6b460bb822"
+          git diff-tree --no-commit-id --name-only -r HEAD | LC_ALL=C sort > "$RUNNER_TEMP/comparison-actual-files.txt"
+          LC_ALL=C sort > "$RUNNER_TEMP/comparison-expected-files.txt" <<'FILES'
+          .github/workflows/comparison-required-synthetic-ci.yml
+          .github/workflows/comparison-source-v7-20261006.yml
+          docs/architecture/comparison_producer.md
+          tests/test_universal_video_comparison_producer.py
+          tests/test_universal_video_comparison_sandbox.py
+          tests/test_universal_video_durable_spool.py
+          universal_video/comparison_producer.py
+          universal_video/comparison_sandbox.py
+          universal_video/spool_worker.py
+          FILES
+          diff -u "$RUNNER_TEMP/comparison-expected-files.txt" "$RUNNER_TEMP/comparison-actual-files.txt"
+      - name: Setup public Python runtime
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install only public synthetic test dependencies
+        run: python -m pip install --no-cache-dir 'pytest==8.4.2' 'requests==2.34.2' 'google-auth==2.56.3' 'psycopg[binary]==3.3.4'
+      - name: Verify source and suite pins
+        run: |
+          set -euo pipefail
+          sha256sum --check <<'PINS'
+          024050420c29c9f0d8bed6c4dc4f1253e09521dc7ee92da2fc7fb0c3e5799bd0  docs/architecture/comparison_producer.md
+          0e1fc8a4345b2c10bd383d907cd7e07d9589538d2eb57a8f5fd89545c7ef2b21  tests/test_universal_video_comparison_artifacts.py
+          498bfe994191301dc4accbdad9f348974960e3326ad4f2dcd6be5a9a4e55a33e  tests/test_universal_video_comparison_producer.py
+          c35e120be10a2b49bdfe030b24bbbe0027df3a2ae8e0d9811dbf29f5eba248d8  tests/test_universal_video_comparison_requirement_boundaries.py
+          91dea9d7c0794d50d06b82aab6103a6f07ef2ffead587b9d350d2ee1b98fa4aa  tests/test_universal_video_comparison_requirement.py
+          5aa42cb2f5153b83594581eddd5097cf5016e743bcd1d195fea1404a7b0919d3  tests/test_universal_video_comparison_sandbox.py
+          c1c056d700599c2081af9bfd72f2b5eea1b1b1746c8ad8e33836a0689d5f4bab  tests/test_universal_video_drive_stage.py
+          9fe0b13434446bfbf61b30d54246e0a712dcb4d0c8f884df2d652d12ea201fb6  tests/test_universal_video_durable_drive.py
+          439c36eed07128e26178338c737f38aace6a3579db15e85532595b936e2d258a  tests/test_universal_video_durable_spool.py
+          d8536fcfa9850e6de4c192a1dcf0c6f0f03b39421fb564cfc53e1f305af632bd  tests/test_universal_video_operator_rejection_cleanup.py
+          407590f13e8bc7808dfe2d31948c07cc47d62a9c160c93f054fd94e39d3cea67  tests/test_universal_video_result_conformance.py
+          d9a0c821553c56a63bf1530b6efeba0580923a3f69444565fb2b95e1d1f717e6  tests/test_universal_video_source_parts_recovery.py
+          0e1cf1a767e29a967b3c8b727de6bac47efc1e3e67a952d6de630a5bd870a27e  tests/test_universal_video_spool_repair_contract.py
+          26d022364ccc07885d068538d5e151a74ef9ac219aa020e54f4e88428bdadfc2  tests/test_universal_video_spool_repair_helper.py
+          aa9c0573d15ae74aa9f57ae33ac255370bbe7452cddbdfac2ddc9410b7c8d2c1  tests/test_universal_video_spool_security.py
+          770a280399b4a59f8e584de46ea29fc640ab0bb71e09e80ef8cfbb2d3980032a  universal_video/book_runner.py
+          a7b4334c283f2fc24d9de743386e273f7bd667c075a96ce0ab9e4c604a939421  universal_video/comparison_producer.py
+          17a7f9023d43d27be7d53d6fb0edc7aea62b5b7920adaff34746430af5b84e03  universal_video/comparison_sandbox.py
+          696cde486fd34d4f2ab4a4278048576fc413d5fc31c9fe2a165347d002f11ad3  universal_video/spool_worker.py
+          PINS
+      - name: Compile source without imports and verify resident refusal AST
+        run: |
+          python -I -B - <<'PY'
+          import ast
+          from pathlib import Path
+          paths = [
+              "universal_video/comparison_producer.py",
+              "universal_video/spool_worker.py",
+              "universal_video/comparison_sandbox.py",
+              "tests/test_universal_video_comparison_producer.py",
+              "tests/test_universal_video_durable_spool.py",
+              "tests/test_universal_video_comparison_sandbox.py",
+              "tests/test_universal_video_comparison_artifacts.py",
+              "tests/test_universal_video_comparison_requirement.py",
+              "tests/test_universal_video_comparison_requirement_boundaries.py",
+              "tests/test_universal_video_durable_drive.py",
+              "tests/test_universal_video_drive_stage.py",
+              "tests/test_universal_video_result_conformance.py",
+              "tests/test_universal_video_source_parts_recovery.py",
+              "tests/test_universal_video_spool_security.py",
+              "tests/test_universal_video_spool_repair_contract.py",
+              "tests/test_universal_video_spool_repair_helper.py",
+              "tests/test_universal_video_operator_rejection_cleanup.py",
+              "universal_video/book_runner.py",
+          ]
+          for name in paths:
+              compile(Path(name).read_bytes(), name, 'exec')
+          tree = ast.parse(Path('universal_video/comparison_producer.py').read_bytes())
+          functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+          for name in ('_runner_file', '_launch'):
+              body = functions[name].body
+              assert len(body) == 1 and isinstance(body[0], ast.Expr), name
+              call = body[0].value
+              assert isinstance(call, ast.Call) and isinstance(call.func, ast.Name), name
+              assert call.func.id == '_blocked', name
+          print('SOURCE_COMPILED_RESIDENT_REFUSAL_PRESERVED; OS_QUALIFICATION_NOT_RUN')
+          PY
+      - name: Check collection of 81 executor and 29 producer synthetic cases
+        run: |
+          set -euo pipefail
+          python -B -m pytest --collect-only -q -p no:cacheprovider tests/test_universal_video_comparison_sandbox.py > "$RUNNER_TEMP/comparison-executor-collection.txt"
+          cat "$RUNNER_TEMP/comparison-executor-collection.txt"
+          grep -Eq '^81 tests collected in ' "$RUNNER_TEMP/comparison-executor-collection.txt"
+          python -B -m pytest --collect-only -q -p no:cacheprovider tests/test_universal_video_comparison_producer.py > "$RUNNER_TEMP/comparison-producer-collection.txt"
+          cat "$RUNNER_TEMP/comparison-producer-collection.txt"
+          grep -Eq '^29 tests collected in ' "$RUNNER_TEMP/comparison-producer-collection.txt"
+      - name: Run the 14 mock and temporary-fixture regression suites
+        run: |
+          set -euo pipefail
+          python -B -m pytest -q -ra -p no:cacheprovider \
+            tests/test_universal_video_comparison_producer.py \
+            tests/test_universal_video_comparison_artifacts.py \
+            tests/test_universal_video_comparison_requirement.py \
+            tests/test_universal_video_comparison_requirement_boundaries.py \
+            tests/test_universal_video_durable_spool.py \
+            tests/test_universal_video_durable_drive.py \
+            tests/test_universal_video_drive_stage.py \
+            tests/test_universal_video_result_conformance.py \
+            tests/test_universal_video_source_parts_recovery.py \
+            tests/test_universal_video_spool_security.py \
+            tests/test_universal_video_spool_repair_contract.py \
+            tests/test_universal_video_spool_repair_helper.py \
+            tests/test_universal_video_operator_rejection_cleanup.py \
+            tests/test_universal_video_comparison_sandbox.py
+      - name: Record bounded source-test scope
+        run: echo 'SYNTHETIC_SOURCE_TESTS_ONLY; OS_QUALIFICATION_NOT_RUN; RESIDENT_COMPARISON_DISABLED'

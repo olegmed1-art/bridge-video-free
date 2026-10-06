@@ -21,7 +21,8 @@ from .drive_stage import DriveStageError, remove_staged_job, stage_drive_job
 from .durable_drive import (configured_binding, finalize_drive_job, cleanup_proof_matches,
                             read_receipt, prepare_compute_recovery)
 from .finops_observation import build_video_finops_observation, directory_bytes
-from .comparison_requirement import comparison_required, require_comparison_package
+from .comparison_requirement import comparison_required
+from .comparison_producer import ensure_comparison
 from .result_conformance import ResultConformanceError, verify_result
 from .runner import run_job
 from .book_contract import BookJob, strict_json, validate_book_job
@@ -529,9 +530,14 @@ def _process_one_locked(spool_root: Path) -> bool:
         if manifest_path.exists() and not reused_finalized_result:
             _atomic_write_json(manifest_path, result)
         if comparison_required(validated_job.metadata):
-            # Gate review/publication/done/cleanup even without a Drive registry.
-            # Applies equally to new results and publication-only recovery.
-            require_comparison_package(result_dir, expected_required=True)
+            # Producer is independently opt-in; disabled/missing/failed replay
+            # blocks review/publication/done/cleanup and retains all evidence.
+            result = ensure_comparison(
+                result_dir, job_id=validated_job.job_id,
+                job_hash=canonical_job_hash(validated_job),
+                source_file_id=str(validated_job.source.get("file_id") or ""),
+                source_dir=staged_job_dir,
+            )
         if str(result.get("status") or "") == "COMPLETED":
             review_path = result_dir / "server_review.json"
             if not review_path.exists():
