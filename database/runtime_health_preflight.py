@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import sys
 from urllib.parse import parse_qs, urlsplit
 
@@ -21,14 +20,6 @@ EXPECTED_HOSTS = {
 def fail(message: str) -> None:
     print(f"RUNTIME_DB_HEALTH: FAIL: {message}", file=sys.stderr)
     raise SystemExit(1)
-
-
-def safe_db_error(exc: BaseException) -> str:
-    message = str(exc).strip().replace("\n", " | ")
-    message = re.sub(r"postgres(?:ql)?://[^\s]+", "postgresql://[redacted]", message, flags=re.IGNORECASE)
-    message = re.sub(r"(?i)(password\s*=\s*)[^\s]+", r"\1[redacted]", message)
-    message = re.sub(r"(?i)(passfile\s*=\s*)[^\s]+", r"\1[redacted]", message)
-    return message[:1200] or exc.__class__.__name__
 
 
 def _unquote(value: str) -> str:
@@ -49,8 +40,9 @@ def normalize_health_dsn(raw: str) -> str:
     try:
         parsed = urlsplit(value)
         query = parse_qs(parsed.query, keep_blank_values=True)
+        port = parsed.port
     except ValueError:
-        fail("BRIDGE_HEALTH_DATABASE_URL is not a valid PostgreSQL URI")
+        fail("HEALTH_DSN_INVALID_URI")
 
     if parsed.username != EXPECTED_PRINCIPAL:
         fail("BRIDGE_HEALTH_DATABASE_URL uses the wrong database principal")
@@ -58,7 +50,7 @@ def normalize_health_dsn(raw: str) -> str:
         fail("BRIDGE_HEALTH_DATABASE_URL is missing a password")
     if parsed.hostname not in EXPECTED_HOSTS:
         fail("BRIDGE_HEALTH_DATABASE_URL must target the production Neon endpoint")
-    if parsed.port not in (None, 5432):
+    if port not in (None, 5432):
         fail("BRIDGE_HEALTH_DATABASE_URL uses an unexpected port")
     if parsed.path != f"/{EXPECTED_DATABASE}":
         fail("BRIDGE_HEALTH_DATABASE_URL uses the wrong database")
@@ -72,26 +64,74 @@ def normalize_health_dsn(raw: str) -> str:
     return value
 
 
+# Only these JSON members may leave the health view as diagnostic counters.
+AUTOPILOT_COUNTER_QUERY = """
+    SELECT signal_key, severity,
+        CASE signal_key
+            WHEN 'autopilot_mailbox_capacity' THEN jsonb_build_object(
+                'used_dispatches', details->'used_dispatches',
+                'max_dispatches', details->'max_dispatches',
+                'remaining', details->'remaining')
+            WHEN 'autopilot_planner_backlog' THEN jsonb_build_object(
+                'paused_count', details->'paused_count',
+                'open_actionable_count', details->'open_actionable_count')
+        END AS counters
+    FROM public.autopilot_operational_health_signal ORDER BY signal_key
+"""
+AUTOPILOT_SIGNAL_KEYS = frozenset({
+    "autopilot_mailbox_capacity", "autopilot_planner_backlog", "autopilot_mailbox_e2e",
+})
+AUTOPILOT_COUNTER_FIELDS = {
+    "autopilot_mailbox_capacity": ("used_dispatches", "max_dispatches", "remaining"),
+    "autopilot_planner_backlog": ("paused_count", "open_actionable_count"),
+}
+
+
+def autopilot_counter_line(key, details):
+    fields = AUTOPILOT_COUNTER_FIELDS.get(key)
+    if fields is None:
+        return None
+    unavailable = f"RUNTIME_AUTOPILOT_COUNTERS_UNAVAILABLE: signal={key}"
+    if type(details) is not dict:
+        return unavailable
+    values = [details.get(field) for field in fields]
+    if any(type(value) is not int or abs(value) > 2**31-1 for value in values):
+        return unavailable
+    if key == "autopilot_mailbox_capacity":
+        used, maximum, remaining = values
+        # Negative remaining is valid when capacity is exceeded.
+        if used < 0 or not 1 <= maximum <= 100 or remaining != maximum-used:
+            return unavailable
+    elif any(value < 0 for value in values):
+        return unavailable
+    return f"RUNTIME_AUTOPILOT_COUNTERS: signal={key} " + " ".join(
+        f"{field}={value}" for field, value in zip(fields, values)
+    )
+
+
 def check_autopilot_health(cur, *, required=False):
     cur.execute("SELECT to_regclass('public.autopilot_operational_health_signal')")
     if cur.fetchone()[0] is not None:
-        cur.execute(
-            "SELECT signal_key,severity FROM public.autopilot_operational_health_signal ORDER BY signal_key"
-        )
+        cur.execute(AUTOPILOT_COUNTER_QUERY)
         autopilot_signals = cur.fetchall()
         if required and not autopilot_signals:
             fail("Oracle autopilot health view returned no signals")
-        autopilot_critical = [key for key, sev in autopilot_signals if sev == "critical"]
-        autopilot_warning = [key for key, sev in autopilot_signals if sev == "warning"]
+        autopilot_critical = [key for key, sev, _ in autopilot_signals if sev == "critical"]
+        autopilot_warning = [key for key, sev, _ in autopilot_signals if sev == "warning"]
         print(
             "RUNTIME_AUTOPILOT_HEALTH: "
             f"critical={len(autopilot_critical)} warning={len(autopilot_warning)} "
             f"signals={len(autopilot_signals)}"
         )
+        for key, _, counters in autopilot_signals:
+            line = autopilot_counter_line(key, counters)
+            if line is not None:
+                print(line)
         if autopilot_critical:
             fail(
                 "critical Autopilot operational health signal detected: "
-                + ",".join(autopilot_critical)
+                + ",".join(key if key in AUTOPILOT_SIGNAL_KEYS else "unknown_signal"
+                           for key in autopilot_critical)
             )
     else:
         if required:
@@ -142,7 +182,7 @@ def main() -> None:
                     can_create_schema_objects,
                 ) = row
                 if principal != EXPECTED_PRINCIPAL:
-                    fail(f"unexpected principal: {principal}")
+                    fail("unexpected principal")
                 if not is_health:
                     fail(f"principal does not inherit {EXPECTED_CAPABILITY}")
                 if not (can_summary and can_issue):
@@ -191,8 +231,8 @@ def main() -> None:
             "RUNTIME_DB_HEALTH: PASS "
             f"principal={EXPECTED_PRINCIPAL} capability={EXPECTED_CAPABILITY}"
         )
-    except psycopg.Error as exc:
-        fail(f"database connection/query failed: {exc.__class__.__name__}: {safe_db_error(exc)}")
+    except psycopg.Error:
+        fail("database connection/query failed")
 
 
 if __name__ == "__main__":
