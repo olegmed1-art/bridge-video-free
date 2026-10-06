@@ -40,12 +40,16 @@ def unpack(root,raw):
     os.fsync(fd)
    finally:os.close(fd)
 def main(argv=None):
+ import time
+ started=time.monotonic()
  p=argparse.ArgumentParser()
  for name in ("archive-sha","manifest-sha","expected-main"):p.add_argument("--"+name,required=True)
  p.add_argument("--run-reviewed",action="store_true");a=p.parse_args(argv)
  need(re.fullmatch("[0-9a-f]{64}",a.archive_sha) and re.fullmatch("[0-9a-f]{64}",a.manifest_sha) and re.fullmatch("[0-9a-f]{40}",a.expected_main),"INPUT_PINS")
  expected={"GITHUB_REPOSITORY":"olegmed1-art/bridge-video-free","GITHUB_ACTOR":"olegmed1-art","GITHUB_TRIGGERING_ACTOR":"olegmed1-art","GITHUB_EVENT_NAME":"workflow_dispatch","GITHUB_REF":"refs/heads/main","GITHUB_SHA":a.expected_main,"GITHUB_RUN_ATTEMPT":"1","GITHUB_JOB":"ibm-diagnostic-trial"}
  need(all(os.environ.get(k)==v for k,v in expected.items()) and re.fullmatch("[1-9][0-9]{5,14}",os.environ.get("GITHUB_RUN_ID","")),"OWNER_SETUP_CONTEXT")
+ return _supervise(lambda end:_run(a,end),started)
+def _run(a,end):
  key=bytearray(os.environ.pop("ORACLE_SSH_PRIVATE_KEY","").encode());need(32<len(key)<32768,"EXISTING_OWNER_SECRET")
  keyfd=knownfd=None
  try:
@@ -64,11 +68,116 @@ def main(argv=None):
   # Same process holds memory fds; target c.Channel opens parent's /proc fd paths.
   os.environ.update(ORACLE_KEY_PATH="/proc/"+str(os.getpid())+"/fd/"+str(keyfd),ORACLE_KNOWN_HOSTS="/proc/"+str(os.getpid())+"/fd/"+str(knownfd))
   args=["--manifest-sha",a.manifest_sha]+(["--run-reviewed"] if a.run_reviewed else [])
-  return module.entry(args)
+  return module.entry(args,owner_deadline=end)
  finally:
   for i in range(len(key)):key[i]=0
   for fd in (knownfd,keyfd):
    if fd is not None:os.close(fd)
+
+OWNER_BUDGET_SECONDS=420
+STATUS_PHASES=("ARMED","START_REQUESTED","START_ACKNOWLEDGED","RUNNING_OBSERVED")
+def _public_frame(raw):
+ def unique(pairs):
+  out={}
+  for k,v in pairs:need(k not in out,"PUBLIC_DUPLICATE");out[k]=v
+  return out
+ v=json.loads(raw,object_pairs_hook=unique);need(type(v) is dict,"PUBLIC_FRAME")
+ if v.get("kind")=="DIAGNOSTIC_STATUS":
+  need(set(v)=={"kind","phase"} and v["phase"] in STATUS_PHASES,"PUBLIC_STATUS");return v
+ if v.get("kind")=="DIAGNOSTIC_TRIAL_COMPLETE":
+  expected={"kind","diagnostic_completed","power_completion_proven","channel_cleanup_verified","failure_kind","completion_proven","repair_completed","production_guest_mutations","private_result_sha256","private_receipt_retained"}
+  need(set(v)==expected,"PUBLIC_RESULT")
+  for k in ("diagnostic_completed","power_completion_proven","channel_cleanup_verified","completion_proven","repair_completed","private_receipt_retained"):need(type(v[k]) is bool,"PUBLIC_BOOL")
+  need(v["repair_completed"] is False and type(v["production_guest_mutations"]) is int and v["production_guest_mutations"]==0,"PUBLIC_MUTATIONS")
+  need(v["failure_kind"] is None or (type(v["failure_kind"]) is str and re.fullmatch("[A-Za-z][A-Za-z0-9_]{0,63}",v["failure_kind"])),"PUBLIC_FAILURE")
+  need(type(v["private_result_sha256"]) is str and re.fullmatch("[0-9a-f]{64}",v["private_result_sha256"]),"PUBLIC_HASH");return v
+ if v.get("kind")=="VERIFIED_NOT_ARMED":
+  need(set(v)=={"kind","main_sha","runtime_package_sha"} and re.fullmatch("[0-9a-f]{40}",v["main_sha"]) and re.fullmatch("[0-9a-f]{64}",v["runtime_package_sha"]),"PUBLIC_DEFAULT");return v
+ need(v=={"kind":"OWNER_SETUP_REFUSED","completion_proven":False,"power_state":"UNKNOWN"},"PUBLIC_REFUSAL");return v
+def _supervise(target,started,seconds=OWNER_BUDGET_SECONDS):
+ import signal,selectors,time,ctypes
+ need(type(seconds) in (int,float) and 0<seconds<=OWNER_BUDGET_SECONDS,"OWNER_BUDGET")
+ end=started+seconds;reader,writer=os.pipe();parent=os.getpid();pid=None;reaped=False;terminal=False;terminal_frame=None;phase_index=0;seq=0;reason=None;status=None;buf=bytearray()
+ original_blocking=os.get_blocking(1)
+ def emit(v,limit=None):
+  raw=(json.dumps(v,sort_keys=True)+"\n").encode();need(len(raw)<=2048,"PUBLIC_WRITE_LIMIT")
+  until=min(end,time.monotonic()+1) if limit is None else limit
+  s=selectors.DefaultSelector();offset=0
+  try:
+   s.register(1,selectors.EVENT_WRITE)
+   while offset<len(raw):
+    left=until-time.monotonic();need(left>0 and s.select(left),"PUBLIC_WRITE_TIMEOUT")
+    try:n=os.write(1,raw[offset:])
+    except BlockingIOError:continue
+    need(n>0,"PUBLIC_WRITE_ZERO");offset+=n
+  finally:s.close()
+ try:
+  os.set_blocking(1,False)
+  emit({"kind":"DIAGNOSTIC_STATUS","phase":"OWNER_STARTED","seq":0,"elapsed_ms":max(0,int((time.monotonic()-started)*1000))})
+  pid=os.fork()
+  if pid==0:
+   try:
+    os.close(reader);os.setsid()
+    need(ctypes.CDLL(None).prctl(1,signal.SIGKILL)==0 and os.getppid()==parent,"OWNER_PARENT")
+    os.dup2(writer,1);os.close(writer);null=os.open("/dev/null",os.O_WRONLY);os.dup2(null,2);os.close(null)
+    try:code=target(end)
+    except BaseException:
+     print(json.dumps({"kind":"OWNER_SETUP_REFUSED","completion_proven":False,"power_state":"UNKNOWN"}),flush=True);code=78
+    sys.stdout.flush();os._exit(code if type(code) is int and 0<=code<=255 else 78)
+   except BaseException:os._exit(78)
+  os.close(writer);writer=None;os.set_blocking(reader,False);s=selectors.DefaultSelector();s.register(reader,selectors.EVENT_READ);eof=False
+  try:
+   while time.monotonic()<end:
+    if not eof:
+     for _,_ in s.select(min(.05,max(0,end-time.monotonic()))):
+      part=os.read(reader,4096)
+      if not part:eof=True;s.unregister(reader);break
+      buf.extend(part);need(len(buf)<=8192,"PUBLIC_BUFFER")
+      while b"\n" in buf:
+       raw,_,tail=buf.partition(b"\n");buf=bytearray(tail);need(not terminal and len(raw)<=2048,"PUBLIC_ORDER")
+       v=_public_frame(raw)
+       if v["kind"]=="DIAGNOSTIC_STATUS":
+        need(phase_index<len(STATUS_PHASES) and v["phase"]==STATUS_PHASES[phase_index],"PUBLIC_PHASE_ORDER");phase_index+=1;seq+=1
+        v.update(seq=seq,elapsed_ms=max(0,int((time.monotonic()-started)*1000)))
+        emit(v)
+       else:terminal=True;terminal_frame=v
+    if not reaped:
+     child,value=os.waitpid(pid,os.WNOHANG)
+     if child:status=os.waitstatus_to_exitcode(value);pid=None;reaped=True
+    if reaped:
+     if not eof:
+      # Drain only bytes already delivered by the sole child; inherited writers are a refusal.
+      if s.select(0):continue
+     if eof:
+      need(not buf and terminal,"OWNER_CHILD_RESULT")
+      expected=0 if terminal_frame["kind"]=="VERIFIED_NOT_ARMED" or (terminal_frame["kind"]=="DIAGNOSTIC_TRIAL_COMPLETE" and terminal_frame["completion_proven"] and terminal_frame["private_receipt_retained"]) else 78
+      need(status==expected,"OWNER_CHILD_EXIT")
+      emit(terminal_frame);return status
+     reason="CHILD_OUTPUT_OPEN";break
+    if eof:time.sleep(min(.01,max(0,end-time.monotonic())))
+   if reason is None:reason="DEADLINE"
+  finally:s.close()
+ except BaseException:reason="OUTPUT_OR_SUPERVISOR_REFUSED"
+ finally:
+  os.close(reader)
+  if writer is not None:os.close(writer)
+  if pid is not None:
+   try:os.killpg(pid,signal.SIGKILL)
+   except ProcessLookupError:
+    try:os.kill(pid,signal.SIGKILL)
+    except ProcessLookupError:pass
+   cleanup_end=time.monotonic()+1
+   while time.monotonic()<cleanup_end:
+    child,_=os.waitpid(pid,os.WNOHANG)
+    if child:reaped=True;pid=None;break
+    time.sleep(.01)
+  # A blocked log sink cannot suspend child termination; reporting itself is bounded.
+  if reason is not None:
+   try:emit({"kind":"OWNER_DEADLINE_UNKNOWN","reason":reason,"power_state":"UNKNOWN","completion_proven":False,"child_reaped":reaped},min(end+2,time.monotonic()+1))
+   except BaseException:pass
+  os.set_blocking(1,original_blocking)
+ return 78
+
 if __name__=="__main__":
  try:raise SystemExit(main())
- except Exception:print('{"kind":"OWNER_SETUP_REFUSED","live_admission":false}');raise SystemExit(78)
+ except Exception:print(json.dumps(dict(kind="OWNER_SETUP_REFUSED",completion_proven=False,power_state="UNKNOWN")),flush=True);raise SystemExit(78)
