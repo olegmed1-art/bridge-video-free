@@ -69,6 +69,7 @@ def test_legacy_refuses_missing_or_downgraded_trusted_request(tmp_path, monkeypa
 @pytest.mark.parametrize("required", [None, False])
 def test_ordinary_legacy_dry_run_accepts_matching_trusted_request(tmp_path, monkeypatch, required):
     job, manifest, request, args = legacy_fixture(tmp_path, required)
+    (job / "server_review.json").unlink()  # positive path must build a real review
     report = verify_result(job, **{k: args[k] for k in (
         "expected_job_id", "expected_profile", "expected_job_hash", "expected_source_file_id")},
         evidence_phase="GENERATION_FINALIZATION")
