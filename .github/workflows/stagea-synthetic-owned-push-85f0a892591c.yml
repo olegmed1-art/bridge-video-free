@@ -1,14 +1,188 @@
-name: StageA owned single-push qualifier DISABLED
+# PRIVATE REVIEW CANDIDATE ONLY. Not publication or execution authorization.
+name: StageA owner single-push bootstrap diagnostic qualification
 on:
   push:
     branches: ['review/stagea-bootstrap-diagnostic-once-20261006-025821315f6a']
     paths: ['.github/workflows/stagea-synthetic-owned-push-85f0a892591c.yml', 'qualification/stagea-synthetic-qualifier-r4/SINGLE_RUN_MARKER.json']
 permissions:
   contents: read
+concurrency:
+  group: stagea-diagnostic-025821315f6a
+  cancel-in-progress: false
 jobs:
   isolated:
-    if: false
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.actor == 'olegmed1-art' && github.actor_id == '315099490' &&
+      github.triggering_actor == 'olegmed1-art' &&
+      github.ref == 'refs/heads/review/stagea-bootstrap-diagnostic-once-20261006-025821315f6a' && github.run_attempt == '1' &&
+      github.event.before == '1d5e726cd5edf786a6315f7b58d953c04dbe34ed' &&
+      github.event.created == false && github.event.deleted == false && github.event.forced == false &&
+      github.sha == github.event.after && github.workflow_sha == github.sha
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      APPROVED_SOURCE_SHA: 'ec6a7f40aa16bc7c841a0374dcbeb13fd11b19da'
+      PRIVILEGED_SCOPE_APPROVED: 'true'
+      EVENT_NAME: ${{ github.event_name }}
+      RUN_ACTOR: ${{ github.actor }}
+      RUN_ACTOR_ID: ${{ github.actor_id }}
+      TRIGGER_ACTOR: ${{ github.triggering_actor }}
+      RUN_REPOSITORY: ${{ github.repository }}
+      RUN_REF: ${{ github.ref }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
+      RUN_SHA: ${{ github.sha }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      RUN_ID: ${{ github.run_id }}
     steps:
-      - run: exit 78
+      - name: Owner event ref SHA and first-attempt guards
+        shell: bash
+        run: |
+          python3 -I -B -S - <<'PY'
+          import json,os,re
+          from pathlib import Path
+          event=json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_bytes())
+          assert os.environ["EVENT_NAME"]=="push" and os.environ["RUN_ATTEMPT"]=="1"
+          assert os.environ["RUN_ACTOR"]==os.environ["TRIGGER_ACTOR"]=="olegmed1-art"
+          assert os.environ["RUN_ACTOR_ID"]=="315099490"
+          assert os.environ["RUN_REPOSITORY"]=="olegmed1-art/bridge-video-free"
+          assert os.environ["RUN_REF"]==event["ref"]=="refs/heads/review/stagea-bootstrap-diagnostic-once-20261006-025821315f6a"
+          assert event["repository"]["full_name"]=="olegmed1-art/bridge-video-free"
+          assert str(event["repository"]["id"])=="1330085090"
+          assert event["repository"]["owner"]["login"]=="olegmed1-art"
+          assert event["sender"]["login"]=="olegmed1-art" and str(event["sender"]["id"])=="315099490"
+          assert event["created"] is False and event["deleted"] is False and event["forced"] is False
+          assert event["before"]=="1d5e726cd5edf786a6315f7b58d953c04dbe34ed"
+          assert re.fullmatch("[0-9a-f]{40}",event["after"])
+          assert os.environ["RUN_SHA"]==os.environ["WORKFLOW_SHA"]==event["after"]==event["head_commit"]["id"]
+          assert len(event["commits"])==1 and event["commits"][0]["id"]==event["after"]
+          PY
+      - name: Verify exact single transition and changed files
+        shell: bash
+        run: |
+          git init event-source
+          git -C event-source remote add origin https://github.com/olegmed1-art/bridge-video-free.git
+          git -c credential.helper= -c http.extraHeader= -C event-source fetch --depth=2 origin "$RUN_SHA"
+          git -C event-source checkout --detach FETCH_HEAD
+          python3 -I -B -S - <<'PY'
+          import hashlib,json,os,subprocess
+          from pathlib import Path
+          repo=Path("event-source")
+          def git(*args):return subprocess.check_output(["git","-C",str(repo),*args],text=True).strip()
+          def blob(ref,path):return subprocess.check_output(["git","-C",str(repo),"show",ref+":"+path])
+          assert git("rev-parse","HEAD")==os.environ["RUN_SHA"]
+          assert git("rev-list","--parents","-n","1","HEAD").split()==[os.environ["RUN_SHA"],"1d5e726cd5edf786a6315f7b58d953c04dbe34ed"]
+          assert set(git("diff","--name-status","1d5e726cd5edf786a6315f7b58d953c04dbe34ed","HEAD").splitlines())=={"M\t.github/workflows/stagea-synthetic-owned-push-85f0a892591c.yml","M\tqualification/stagea-synthetic-qualifier-r4/SINGLE_RUN_MARKER.json"}
+          assert hashlib.sha256(blob("1d5e726cd5edf786a6315f7b58d953c04dbe34ed",".github/workflows/stagea-synthetic-owned-push-85f0a892591c.yml")).hexdigest()=="193f4e684509a25e8a8970a49a03c5c7ce43280fda5fe985177965fcdf51cf41"
+          assert hashlib.sha256(blob("1d5e726cd5edf786a6315f7b58d953c04dbe34ed","qualification/stagea-synthetic-qualifier-r4/SINGLE_RUN_MARKER.json")).hexdigest()=="c49345ca872ba41b045b6b235982765e6f42c2d6557d5ee3791cdb840d625395"
+          assert hashlib.sha256(blob("HEAD","qualification/stagea-synthetic-qualifier-r4/SINGLE_RUN_MARKER.json")).hexdigest()=="83f102ac2f0cdf54d012b4791f44a7caaf71732406f5369e97f8a00ff1e113a1"
+          marker=json.loads(blob("HEAD","qualification/stagea-synthetic-qualifier-r4/SINGLE_RUN_MARKER.json"))
+          assert marker=={'schema': 'synthetic-single-push-v1', 'state': 'SINGLE_APPROVED_CANDIDATE', 'nonce': '025821315f6a', 'ref': 'refs/heads/review/stagea-bootstrap-diagnostic-once-20261006-025821315f6a', 'source_sha': 'ec6a7f40aa16bc7c841a0374dcbeb13fd11b19da', 'predecessor_sha': '1d5e726cd5edf786a6315f7b58d953c04dbe34ed'}
+          PY
+      - name: Refuse a repeated run or unproven public run inventory
+        shell: bash
+        run: |
+          python3 -I -B -S - <<'PY'
+          import json,os,urllib.parse,urllib.request
+          query=urllib.parse.urlencode({"event":"push","head_sha":os.environ["RUN_SHA"],"per_page":100,"page":1})
+          url="https://api.github.com/repos/olegmed1-art/bridge-video-free/actions/runs?"+query
+          request=urllib.request.Request(url,headers={"Accept":"application/vnd.github+json","User-Agent":"synthetic-owned-single-run-review"})
+          with urllib.request.urlopen(request,timeout=15) as response:
+           raw=response.read(524289)
+          assert len(raw)<=524288
+          value=json.loads(raw)
+          assert value["total_count"]<=100 and len(value["workflow_runs"])==value["total_count"]
+          assert len(value["workflow_runs"])==1  # Refuse unexpected same-head push workflows.
+          matched=[run for run in value["workflow_runs"] if run["head_sha"]==os.environ["RUN_SHA"] and run["event"]=="push"
+                   and run["head_branch"]=="review/stagea-bootstrap-diagnostic-once-20261006-025821315f6a"
+                   and run["path"]==".github/workflows/stagea-synthetic-owned-push-85f0a892591c.yml" and run["workflow_id"]==376194736]
+          assert len(matched)==1
+          run=matched[0]
+          assert str(run["id"])==os.environ["RUN_ID"] and run["run_attempt"]==1
+          assert run["head_branch"]=="review/stagea-bootstrap-diagnostic-once-20261006-025821315f6a"
+          assert run["actor"]["login"]=="olegmed1-art" and str(run["actor"]["id"])=="315099490"
+          # API unavailable, stale or incomplete results fail closed; never substitute a cached success.
+          PY
+      - name: Public fixed source checkout without credentials
+        shell: bash
+        run: |
+          git init qualification-source
+          git -C qualification-source remote add origin https://github.com/olegmed1-art/bridge-video-free.git
+          git -c credential.helper= -c http.extraHeader= -C qualification-source fetch --depth=1 origin "$APPROVED_SOURCE_SHA"
+          git -C qualification-source checkout --detach FETCH_HEAD
+          test "$(git -C qualification-source rev-parse HEAD)" = "$APPROVED_SOURCE_SHA"
+      - name: Verify all source bytes before portable imports
+        shell: bash
+        run: |
+          packet="$GITHUB_WORKSPACE/qualification-source/qualification/stagea-synthetic-qualifier-r4"
+          python3 -I -B -S - "$packet" <<'PY'
+          import hashlib,json,os,stat,sys
+          from pathlib import Path
+          source=Path(sys.argv[1])
+          def checked(path,pin):
+           assert path.is_file() and not path.is_symlink()
+           assert all(not parent.is_symlink() for parent in path.parents)
+           before=path.stat(); raw=path.read_bytes(); after=path.stat()
+           assert stat.S_ISREG(before.st_mode)
+           assert (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)==(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)
+           assert hashlib.sha256(raw).hexdigest()==pin
+           return raw
+          manifest=checked(source/"QUALIFICATION_SOURCE_MANIFEST.json","13529a37b1e7b790d4bd2168ced4dae2e15d72efcfe141cc72db9e95c1395486")
+          files=json.loads(manifest)["files"]
+          assert len(files)==15
+          verified={}
+          for name,pin in files.items():
+           relative=Path(name)
+           assert not relative.is_absolute() and ".." not in relative.parts
+           verified[name]=checked(source/relative,pin)
+          # New regression source is independently pinned before any import.
+          verified["test_bootstrap_diagnostics.py"]=checked(source/"test_bootstrap_diagnostics.py","0cfd8f87d60141bbe1a96bbb4944e97dc064e076e6b0f63e153352dc7beffb60")
+          assert len(verified)==16
+          import tempfile,unittest
+          target=Path(tempfile.mkdtemp(prefix="stagea-verified-portable-"))
+          for name,raw in verified.items():
+           dest=target/name
+           dest.parent.mkdir(parents=True,exist_ok=True)
+           dest.write_bytes(raw)
+          os.chdir(target)
+          sys.path.insert(0,str(target))
+          for names,count in ((["test_candidate_r3","test_preparation_r3"],34),(["test_bootstrap_diagnostics"],17)):
+           suite=unittest.defaultTestLoader.loadTestsFromNames(names)
+           result=unittest.TextTestRunner(verbosity=1).run(suite)
+           assert result.wasSuccessful() and result.testsRun==count and not result.skipped
+           print(json.dumps({"portable_test_count":count,"skips":0,"result":"PASS"},sort_keys=True))
+          PY
+      - name: Single approved candidate root PID1 qualification
+        shell: bash
+        run: |
+          test "$PRIVILEGED_SCOPE_APPROVED" = true
+          packet="$GITHUB_WORKSPACE/qualification-source/qualification/stagea-synthetic-qualifier-r4"
+          sudo -n /usr/bin/env -i PATH=/usr/bin:/bin GITHUB_ACTIONS=true /usr/bin/timeout --signal=KILL 900s /usr/bin/python3 -I -B -S - "$packet" <<'PY'
+          import hashlib,json,os,stat,sys
+          from pathlib import Path
+          source=Path(sys.argv[1])
+          def checked(path,pin):
+           assert path.is_file() and not path.is_symlink()
+           assert all(not parent.is_symlink() for parent in path.parents)
+           before=path.stat(); raw=path.read_bytes(); after=path.stat()
+           assert stat.S_ISREG(before.st_mode)
+           assert (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)==(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)
+           assert hashlib.sha256(raw).hexdigest()==pin
+           return raw
+          manifest=checked(source/"QUALIFICATION_SOURCE_MANIFEST.json","13529a37b1e7b790d4bd2168ced4dae2e15d72efcfe141cc72db9e95c1395486")
+          files=json.loads(manifest)["files"]
+          assert len(files)==15
+          verified={}
+          for name,pin in files.items():
+           relative=Path(name)
+           assert not relative.is_absolute() and ".." not in relative.parts
+           verified[name]=checked(source/relative,pin)
+          assert os.getuid()==0
+          bootstrap=verified["ci_bootstrap.py"]
+          # Execute only already verified bytes in memory, never checkout code by pathname.
+          sys.argv=[str(source/"ci_bootstrap.py"),"--run","--scope-approved","--source-root",str(source),"--runtime-pin","cd08b553ada4b0bbd0b88b6f701f92372d6e05c36ae8787fd78383c106000a56","--suite-pin","ede3ba2fd802dfa1c5a856ac158cc086fc1ed17b2777d4da5da577b9c50b3813","--bootstrap-pin","025821315f6a1a5d380341502929fd9ed3ad24c501e6ece0f9a8c5b4f8ea0ce6"]
+          exec(compile(bootstrap,str(source/"ci_bootstrap.py"),"exec"),{"__name__":"__main__","__file__":str(source/"ci_bootstrap.py")})
+          PY
+# Private candidate: single20minrun; root900s/outer300s/control60s/worker50s plus2s stop.
+# No installs/secrets/root service changes/publication until separate authorization.
