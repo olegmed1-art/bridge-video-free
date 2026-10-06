@@ -1,0 +1,14 @@
+{
+  "files": {
+    "database/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "database/pr1994_stage_a.py": "9fb8a403b5fd043f2d3272214848f6a565816c7a4a6d4d177edde93b863ad6f2",
+    "ops/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ops/native_maintenance_lifetime.py": "f2d69a486a665fcb61255ea1458c63ec77b75e862bea34db6af46533615e8ad6",
+    "stagea_capture.py": "550a326b481dc2f0cd382937aeffea3e2f953edf75d07ed069d70cef0cfd4378",
+    "stagea_control.py": "1c24b8327fd01f1d5f0a247fb1deac31725bdc6bcbd9dab936b84a0f91fe903e",
+    "stagea_fixture_worker.py": "2ff8c770c3240d697b103a2b2105a3542755e277845cf435142b411abff32561",
+    "stagea_synthetic_core.py": "95a650f41ea521aae7c4086a9a5c2ee6de63559ddf4a3d3e2141d7ca06277496",
+    "stagea_watchdog.py": "394fa1bdabf01441b54a8c6e6e08c84b1bfbdcf7381ac785d3b3fe77462ed3d6"
+  },
+  "source_sha": "c36d581c22ca2ba5457e8db5019c5cf697542be4"
+}
