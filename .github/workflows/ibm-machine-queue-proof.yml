@@ -1,0 +1,95 @@
+name: IBM machine queue proof
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ibm-machine-queue-proof.yml'
+      - 'ops/ibm_machine_queue_*.py'
+      - 'tests/test_ibm_machine_queue.py'
+      - 'tests/ibm_machine_queue_fixture.py'
+      - 'docs/operations/IBM_MACHINE_QUEUE_CHANNEL.md'
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact independently reviewed main revision
+        required: true
+        type: string
+      mode:
+        description: Read-only queue qualification or reviewed bounded relay
+        required: true
+        type: choice
+        default: queue-qualify
+        options: [queue-qualify, bounded-relay]
+      expected_package_sha:
+        description: Reviewed opaque package digest; required only for bounded relay
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'bounded-relay' && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && inputs.expected_main_sha == github.sha && 'oracle-instance-workload-mutation' || format('ibm-queue-proof-{0}', github.run_id) }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres@sha256:3f55f8895c4ed50603e2fbdfc72fffeeaba3173321fee5cb825bbbeb30d9d854 # 18.0-bookworm; primary registry verified
+        env: {POSTGRES_PASSWORD: postgres, POSTGRES_DB: neondb}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d neondb"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      MACHINE_QUEUE_SYNTHETIC_POSTGRES: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4' PyYAML==6.0.2
+      - run: python -m unittest -v tests.test_ibm_machine_queue
+
+  owner:
+    needs: contract
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.expected_main_sha == github.sha
+    environment: database-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+      - name: Verify exact main context before credential injection
+        env:
+          EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
+          QUEUE_MODE: ${{ inputs.mode }}
+          EXPECTED_PACKAGE_SHA: ${{ inputs.expected_package_sha }}
+        run: python -c 'import os; from ops.ibm_machine_queue_runner import validate_inputs; from ops.ibm_machine_queue_source import main_source; main,_,_=validate_inputs(os.environ.get("EXPECTED_MAIN"),os.environ.get("QUEUE_MODE"),os.environ.get("EXPECTED_PACKAGE_SHA","")); main_source(main)'
+      - name: Fixed owner queue observer and optional bounded relay
+        env:
+          NATIVE_OWNER_DATABASE_URL: ${{ secrets.LIGHT_MAINTENANCE_DATABASE_URL }}
+          SSH_PRIVATE_KEY: ${{ inputs.mode == 'bounded-relay' && secrets.ORACLE_SSH_PRIVATE_KEY || '' }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
+          EXPECTED_PACKAGE_SHA: ${{ inputs.expected_package_sha }}
+          QUEUE_MODE: ${{ inputs.mode }}
+        run: python -m ops.ibm_machine_queue_runner

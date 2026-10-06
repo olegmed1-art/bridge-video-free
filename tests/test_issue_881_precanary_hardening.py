@@ -1699,6 +1699,31 @@ def test_every_code_triggered_oracle_host_mutator_uses_shared_fence_and_provenan
         assert f"'{relative}'" in runner, relative
 
 
+def _assert_shared_fence_workflow_inventory(shared_workflows: set[str], runner: str) -> None:
+    start = runner.index("protected_gate_paths=(\n")
+    end = runner.index("\n)", start)
+    protected = set(re.findall(r"^\s+'([^']+)'$", runner[start:end], re.MULTILINE))
+    unknown = shared_workflows - protected
+    assert not unknown, f"Unregistered shared-fence workflows: {sorted(unknown)}"
+    assert len(shared_workflows) == 79
+
+
+def test_unknown_80th_shared_fence_workflow_is_refused() -> None:
+    runner = (ROOT / "ops/issue_881_external_precanary_workflow.sh").read_text(encoding="utf-8")
+    shared = {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / ".github/workflows").glob("*.yml")
+        if "oracle-instance-workload-mutation" in path.read_text(encoding="utf-8")
+    }
+    assert len(shared) == 79
+    unknown = ".github/workflows/unreviewed-unknown-80th.yml"
+    assert unknown not in shared
+    shared.add(unknown)
+    assert len(shared) == 80
+    with pytest.raises(AssertionError, match=re.escape(unknown)):
+        _assert_shared_fence_workflow_inventory(shared, runner)
+
+
 def test_every_shared_production_fence_workflow_and_payload_is_provenance_protected() -> None:
     runner = (
         ROOT / "ops/issue_881_external_precanary_workflow.sh"
@@ -1746,7 +1771,20 @@ def test_every_shared_production_fence_workflow_and_payload_is_provenance_protec
             indirect[reference] = payload
             pending.update(repository_shell_references(payload) - set(indirect))
         referenced_payloads.update(indirect)
-    assert len(shared_workflows) == 78
+    _assert_shared_fence_workflow_inventory(shared_workflows, runner)
+    assert '.github/workflows/ibm-machine-queue-proof.yml' in shared_workflows
+    for dependency in (
+        '.github/workflows/ibm-machine-queue-proof.yml',
+        'docs/operations/IBM_MACHINE_QUEUE_CHANNEL.md',
+        'ops/ibm_machine_queue_db.py',
+        'ops/ibm_machine_queue_oracle.py',
+        'ops/ibm_machine_queue_protocol.py',
+        'ops/ibm_machine_queue_runner.py',
+        'ops/ibm_machine_queue_source.py',
+        'tests/ibm_machine_queue_fixture.py',
+        'tests/test_ibm_machine_queue.py',
+    ):
+        assert f"'{dependency}'" in runner
     assert '.github/workflows/light-native-retirement-observe.yml' in shared_workflows
     for dependency in ('ops/light_native_retirement_observe_runner.py',
                        'ops/light_native_retirement_live.py', 'ops/light_native_retirement.py',
