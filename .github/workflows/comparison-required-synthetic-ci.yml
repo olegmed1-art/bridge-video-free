@@ -35,9 +35,9 @@ jobs:
       - name: Verify reviewed source bytes
         run: |
           sha256sum --check <<'PINS'
-          b1d5e8400a4e481f0dc09b22aad643f6df345549a671d9a031168b5514021e9f  tests/test_universal_video_book_dispatch.py
+          c2ed89cbeca0f9695f4e95d5774c585960645c953fc45e5220959f362012ea28  tests/test_universal_video_book_dispatch.py
           91dea9d7c0794d50d06b82aab6103a6f07ef2ffead587b9d350d2ee1b98fa4aa  tests/test_universal_video_comparison_requirement.py
-          b2d1f4cd9db55d8631b7bf57eb1e9522382d7980fc23353cc5a983d86cd7ac34  tests/test_universal_video_comparison_requirement_boundaries.py
+          fa7394afb8e42849ad8b14f3c952d561a147a3fbfd585cfbc0b770d6a5800c5c  tests/test_universal_video_comparison_requirement_boundaries.py
           dcfa1c7c546aa854654de58df934b09e1d96c227d9395c4c22418d260b2d7f75  tests/test_universal_video_durable_spool.py
           ab7fc362114487961be05a180052c6a691816ab6c91028df41564a39dd40c1eb  tests/test_universal_video_productionization.py
           fbd207356f97b66cff11e5bd50f18fc6b97a87ab1161062d0c2598eb3342d771  universal_video/comparison_artifacts.py

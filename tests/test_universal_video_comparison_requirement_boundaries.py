@@ -23,6 +23,8 @@ def legacy_fixture(tmp_path, required):
         manifest["metadata"] = copy.deepcopy(request["metadata"])
     manifest["job_hash"] = canonical_job_hash(validate_job(request))
     write(job / "manifest.json", manifest)
+    # Let collection reach the policy boundary; this placeholder grants no review.
+    write(job / "server_review.json", {"schema": "synthetic-test-placeholder", "state": "NOT_REVIEWED"})
     args = {"expected_job_id": manifest["job_id"], "expected_profile": manifest["profile"],
             "expected_job_hash": manifest["job_hash"],
             "expected_source_file_id": manifest["source"]["file_id"],

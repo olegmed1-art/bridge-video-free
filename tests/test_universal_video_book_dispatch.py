@@ -792,6 +792,7 @@ def test_video_comparison_binding_failure_still_blocks_all_output_uploads(tmp_pa
     monkeypatch.setattr(drive, "access_token", lambda: "synthetic-token")
     monkeypatch.setattr(drive, "verify_source", lambda *a: {
         "file_id": "synthetic_original", "before": {"id": "synthetic_original"}})
+    atomic_json(result / "manifest.json", {"metadata": {}})
     monkeypatch.setattr(drive, "collect_compact_artifacts", lambda *a: [])
     comparison = Mock(side_effect=RuntimeError("synthetic comparison-original mismatch"))
     upload = Mock()
