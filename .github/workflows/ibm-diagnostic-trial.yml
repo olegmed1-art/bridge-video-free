@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   ibm-diagnostic-trial:
-    if: ${{ inputs.run_reviewed && inputs.approve_closed_window && inputs.approve_stop_route_hold && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha }}
+    if: ${{ (!inputs.run_reviewed || (inputs.approve_closed_window && inputs.approve_stop_route_hold)) && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.event_name == 'workflow_dispatch' && inputs.expected_main_sha == github.sha }}
     environment: database-production
     runs-on: ubuntu-24.04
     timeout-minutes: 8
@@ -52,6 +52,13 @@ jobs:
           REVIEWED_ARCHIVE_SHA: ${{ inputs.reviewed_archive_sha }}
           REVIEWED_MANIFEST_SHA: ${{ inputs.reviewed_manifest_sha }}
           EXPECTED_MAIN: ${{ inputs.expected_main_sha }}
+          RUN_REVIEWED: ${{ inputs.run_reviewed }}
         run: |
           set -eu
-          "$RUNNER_TEMP/ibm-diagnostic-venv/bin/python" ops/ibm_diagnostic_v9/owner_setup.py --archive-sha "$REVIEWED_ARCHIVE_SHA" --manifest-sha "$REVIEWED_MANIFEST_SHA" --expected-main "$EXPECTED_MAIN" --run-reviewed
+          set -- --archive-sha "$REVIEWED_ARCHIVE_SHA" --manifest-sha "$REVIEWED_MANIFEST_SHA" --expected-main "$EXPECTED_MAIN"
+          case "$RUN_REVIEWED" in
+            true) set -- "$@" --run-reviewed ;;
+            false) ;;
+            *) exit 78 ;;
+          esac
+          "$RUNNER_TEMP/ibm-diagnostic-venv/bin/python" ops/ibm_diagnostic_v9/owner_setup.py "$@"
