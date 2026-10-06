@@ -1,0 +1,44 @@
+name: Generic HBA synthetic review
+# This candidate is not installed or running. No default/main branch merge.
+# Publication commit has no approved marker; job is skipped before VM allocation.
+# GitHub == ignores string case; reruns (run_attempt > 1) are refused.
+# A later separately authorized owner commit with the case-insensitive marker permits the initial attempt only.
+on:
+  push:
+    branches: [test/hba-generic-linux-ci-20261006]
+permissions:
+  contents: read
+jobs:
+  synthetic:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.event.repository.private == false &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      github.run_attempt == '1' &&
+      github.event.head_commit.message == '[owner-approved] generic hba synthetic validation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout only generic files at triggering commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2, verified pin
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /ci/hba-synthetic/
+            /.github/workflows/hba-synthetic-review.yml
+      - name: Ordinary synthetic tests (no installation or privilege changes)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          env -i PATH=/usr/bin:/bin LANG=C python3 -I -B ci/hba-synthetic/run_ci.py ordinary
+      - name: Optional existing unprivileged namespaces (denial is SKIP)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          env -i PATH=/usr/bin:/bin LANG=C python3 -I -B ci/hba-synthetic/run_ci.py namespaces
