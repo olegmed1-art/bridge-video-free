@@ -50,6 +50,19 @@ def main(argv=None):
  need(all(os.environ.get(k)==v for k,v in expected.items()) and re.fullmatch("[1-9][0-9]{5,14}",os.environ.get("GITHUB_RUN_ID","")),"OWNER_SETUP_CONTEXT")
  return _supervise(lambda end:_run(a,end),started)
 def _run(a,end):
+ event_path=os.environ.get("GITHUB_EVENT_PATH","");need(bool(event_path),"OWNER_DISPATCH_EVENT_REQUIRED")
+ event_fd=os.open(event_path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+ try:
+  event_raw=os.read(event_fd,131073);need(0<len(event_raw)<=131072,"OWNER_DISPATCH_EVENT_LIMIT")
+ finally:os.close(event_fd)
+ def unique(items):
+  out={}
+  for k,v in items:need(k not in out,"OWNER_DISPATCH_DUPLICATE");out[k]=v
+  return out
+ event=json.loads(event_raw,object_pairs_hook=unique);dispatch=event.get("inputs")
+ yes=lambda v:v is True or type(v) is str and v=="true"
+ need(type(dispatch) is dict and yes(dispatch.get("approve_closed_window")) and yes(dispatch.get("approve_stop_route_hold")),"EXPLICIT_OWNER_WINDOW_AND_STOP_APPROVAL_REQUIRED")
+ need(dispatch.get("reviewed_archive_sha")==a.archive_sha and dispatch.get("reviewed_manifest_sha")==a.manifest_sha and dispatch.get("expected_main_sha")==a.expected_main,"OWNER_DISPATCH_PACKET_PINS")
  key=bytearray(os.environ.pop("ORACLE_SSH_PRIVATE_KEY","").encode());need(32<len(key)<32768,"EXISTING_OWNER_SECRET")
  keyfd=knownfd=None
  try:
@@ -60,15 +73,27 @@ def _run(a,end):
   root=Path(tempfile.mkdtemp(prefix="ibm-diagnostic-",dir=os.environ.get("RUNNER_TEMP")))
   unpack(root,raw)
   manifest_raw=(root/"SUCCESSOR-MANIFEST.json").read_bytes();need(hashlib.sha256(manifest_raw).hexdigest()==a.manifest_sha,"MANIFEST_PIN")
-  manifest=json.loads(manifest_raw);need(manifest["main_sha"]==a.expected_main,"SOURCE_MAIN")
-  for name,pin in manifest["files"].items():need(hashlib.sha256((root/name).read_bytes()).hexdigest()==pin,"PRIVATE_CLOSURE")
-  raw=(root/"diagnostic_entry.py").read_bytes()
+  manifest=json.loads(manifest_raw);need(manifest["main_sha"]=='64ed969050882d375e2eff87cb130ee7752aee8b',"FROZEN_RUNTIME_SOURCE")
+  verified_cache={}
+  for name,pin in manifest["files"].items():
+   data=(root/name).read_bytes();need(hashlib.sha256(data).hexdigest()==pin,"PRIVATE_CLOSURE");verified_cache[name]=data
+  identity=types.ModuleType("owner_identity");sys.modules["owner_identity"]=identity;exec(compile(verified_cache["owner_identity.py"],"<verified-owner-identity>","exec"),identity.__dict__)
+  identity.pins(manifest["owner_code_pins"])
+  checkout=Path(os.environ["GITHUB_WORKSPACE"])
+  for path,pin in manifest["owner_code_pins"].items():
+   need(hashlib.sha256((checkout/path).read_bytes()).hexdigest()==pin,"OWNER_CHECKOUT_CODE_PIN")
+  context={k:os.environ.get("GITHUB_"+k.upper()) for k in ("repository","actor","triggering_actor","event_name","ref","sha")}
+  context.update(run_id=int(os.environ.get("GITHUB_RUN_ID","0")),run_attempt=int(os.environ.get("GITHUB_RUN_ATTEMPT","0")))
+  owner_inputs=types.ModuleType("owner_inputs");owner_inputs.__file__="<verified-owner-inputs>";sys.modules["owner_inputs"]=owner_inputs
+  exec(compile(verified_cache["owner_inputs.py"],owner_inputs.__file__,"exec"),owner_inputs.__dict__);owner_inputs.__source_sha256__=manifest["files"]["owner_inputs.py"]
+  fresh_inputs=owner_inputs.DispatchInputsFactory.from_runner(context,dispatch,manifest)
+  raw=verified_cache["diagnostic_entry.py"]
   module=types.ModuleType("reviewed_diagnostic_entry");module.__file__=str(root/"diagnostic_entry.py");sys.modules[module.__name__]=module
   exec(compile(raw,module.__file__,"exec"),module.__dict__)
   # Same process holds memory fds; target c.Channel opens parent's /proc fd paths.
   os.environ.update(ORACLE_KEY_PATH="/proc/"+str(os.getpid())+"/fd/"+str(keyfd),ORACLE_KNOWN_HOSTS="/proc/"+str(os.getpid())+"/fd/"+str(knownfd))
   args=["--manifest-sha",a.manifest_sha]+(["--run-reviewed"] if a.run_reviewed else [])
-  return module.entry(args,owner_deadline=end)
+  return module.entry(args,owner_deadline=end,collect_admit_inputs=fresh_inputs)
  finally:
   for i in range(len(key)):key[i]=0
   for fd in (knownfd,keyfd):
