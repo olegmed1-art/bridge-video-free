@@ -1,0 +1,133 @@
+name: Scorer r2 synthetic qualification
+on:
+  push:
+    branches:
+      - 'review/scorer-r2-synthetic-73e54010-20261006'
+    paths:
+      - 'qualification/offline-scorer-r2/**'
+      - '.github/workflows/scorer-r2-synthetic.yml'
+permissions:
+  contents: read
+jobs:
+  synthetic-only:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.repository_owner == 'olegmed1-art' &&
+      github.actor == 'olegmed1-art' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/review/scorer-r2-synthetic-73e54010-20261006' &&
+      github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout: |
+            qualification/offline-scorer-r2
+            .github/workflows/scorer-r2-synthetic.yml
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+      - name: Verify exact push head
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+      - name: Authenticate complete sources, install wheels, run isolated controls
+        timeout-minutes: 7
+        run: |
+          set -euo pipefail
+          umask 077
+          source_root="$GITHUB_WORKSPACE/qualification/offline-scorer-r2"
+          manifest_hash="bcd6ef6a544763be7cdcdafa183c14ce2940a6b17248f1a09254200712f78eef"
+          verify_inventory() {
+            # Trusted inline verifier: no code or installer arguments loaded from source_root.
+            python -I -B - "$source_root" "$manifest_hash" <<'PY'
+          import hashlib, json, re, stat, sys
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          expected = sys.argv[2]
+          def check(ok, message):
+              if not ok:
+                  raise SystemExit(message)
+          check(sys.version_info[:3] == (3, 12, 10), "exact CPython 3.12.10 required")
+          check(not root.is_symlink(), "source root symlink")
+          root = root.resolve(strict=True)
+          check(root.is_dir(), "source root is not a directory")
+          mp = root / "MANIFEST.json"
+          check(not mp.is_symlink() and stat.S_ISREG(mp.stat().st_mode), "manifest is not regular")
+          mb = mp.read_bytes()
+          check(hashlib.sha256(mb).hexdigest() == expected, "manifest pin mismatch")
+          m = json.loads(mb)
+          check(m["schema"] == "generic-scorer-r2-synthetic-qualification/v1"
+                and m["qualification_revision"] == "v2-review-repairs"
+                and m["expected_cases"] == 68 and m["harness_guard_regression_cases"] == 4,
+                "manifest revision/support mismatch")
+          declared = {}
+          for f in m["files"]:
+              key = f["path"]
+              check(isinstance(key, str) and key and "\\" not in key and ":" not in key
+                    and not key.startswith("/") and
+                    all(p not in {"", ".", ".."} for p in key.split("/"))
+                    and key not in declared, "invalid/duplicate inventory path")
+              check(type(f["bytes"]) is int and f["bytes"] >= 0
+                    and isinstance(f["sha256"], str)
+                    and re.fullmatch(r"[0-9a-f]{64}", f["sha256"]) is not None,
+                    "invalid inventory size/digest")
+              declared[key] = f
+          actual = set()
+          for p in root.rglob("*"):
+              check(not p.is_symlink(), "source symlink forbidden")
+              mode = p.stat().st_mode
+              check(stat.S_ISDIR(mode) or stat.S_ISREG(mode), "nonregular source entry")
+              if stat.S_ISREG(mode) and p != mp:
+                  actual.add(p.relative_to(root).as_posix())
+          check(actual == set(declared), "missing/extra source files")
+          check(len(declared) == 18 and {"requirements.lock", "qualify.py",
+                "test_harness_guards.py", "offline_score.py", "test_offline_score.py"} <= set(declared),
+                "complete qualification inventory required")
+          for key, f in declared.items():
+              p = (root / key).resolve(strict=True)
+              check(p.is_relative_to(root) and stat.S_ISREG(p.stat().st_mode), "inventory path escape")
+              data = p.read_bytes()
+              check(len(data) == f["bytes"] and hashlib.sha256(data).hexdigest() == f["sha256"],
+                    "file pin mismatch: " + key)
+          print("TRUSTED_INLINE_COMPLETE_INVENTORY_VERIFIED")
+          PY
+          }
+          # Verify every pin before requirements.lock is consumed or qualify.py is executed.
+          verify_inventory
+          python -I -B -m venv "$RUNNER_TEMP/scorer-r2-venv"
+          /usr/bin/timeout --signal=TERM --kill-after=5s 180s \
+            "$RUNNER_TEMP/scorer-r2-venv/bin/python" -I -B -m pip --isolated install \
+            --disable-pip-version-check --no-cache-dir --only-binary=:all: --no-deps \
+            --require-hashes -r "$source_root/requirements.lock"
+          "$RUNNER_TEMP/scorer-r2-venv/bin/python" -I -B -m pip --isolated check
+          # Repeat with trusted system Python after installation, immediately before launch.
+          verify_inventory
+          parent_netns="$(readlink /proc/self/ns/net)"
+          qualification_uid="$(id -u)"
+          qualification_gid="$(id -g)"
+          mkdir -m 700 "$RUNNER_TEMP/scorer-r2-run"
+          env -i PATH=/usr/bin:/bin /usr/bin/timeout --signal=TERM --kill-after=5s 190s \
+            /usr/bin/sudo -n /usr/bin/unshare --net -- \
+            /usr/bin/setpriv --no-new-privs --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
+            --reuid="$qualification_uid" --regid="$qualification_gid" --clear-groups \
+            "$RUNNER_TEMP/scorer-r2-venv/bin/python" -I -B "$source_root/qualify.py" \
+            --manifest-sha256 "$manifest_hash" --parent-netns "$parent_netns" \
+            --results "$RUNNER_TEMP/scorer-r2-run/results"
+      - name: Retain generic synthetic receipts only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: scorer-r2-synthetic-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/scorer-r2-run/results/qualification.json
+            ${{ runner.temp }}/scorer-r2-run/results/synthetic.xml
+          if-no-files-found: error
+          retention-days: 7

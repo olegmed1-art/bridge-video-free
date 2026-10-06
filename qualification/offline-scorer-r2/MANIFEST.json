@@ -1,0 +1,195 @@
+{
+  "schema": "generic-scorer-r2-synthetic-qualification/v1",
+  "execution": "NOT_RUN",
+  "expected_cases": 68,
+  "python": "CPython 3.12.10",
+  "dependencies": {
+    "pytest": "8.4.1",
+    "iniconfig": "2.1.0",
+    "packaging": "25.0",
+    "pluggy": "1.6.0",
+    "pygments": "2.20.0"
+  },
+  "scorer_sha256": "2343d67f7f5b2e2631f4c6bf8d6845187113b68b9da54147eb6ffa204fb9db4b",
+  "test_sha256": "90b7831647aee36f77aaf855e21e4d7f7083a6660cad7dabcf0db7ea8c9db97f",
+  "api_source_pins": [
+    {
+      "path": "bridge_vision/gold.py",
+      "commit": "3335e0e87814b1f646ece5bc99ee669ec76c755f",
+      "github_blob_sha": "78694da80a0d5e7ea70e1660d3bf4e73ad76673f",
+      "bytes": 2074,
+      "sha256": "e4e390ea437b620a99770559710a374596758916d3572108926bd5c047ce6136"
+    },
+    {
+      "path": "bridge_contracts/video_deal.py",
+      "commit": "3335e0e87814b1f646ece5bc99ee669ec76c755f",
+      "github_blob_sha": "7c0baf7edfdd15896f4379f61abecb555d32e9fb",
+      "bytes": 5611,
+      "sha256": "db543324c6dfed739f0aa051e28d513df59e7400817edd3c8933213da4cfe482"
+    },
+    {
+      "path": "bridge_contracts/video_auction.py",
+      "commit": "3335e0e87814b1f646ece5bc99ee669ec76c755f",
+      "github_blob_sha": "fe5f897e094a56dda0a4e043a160a6b793747f02",
+      "bytes": 4016,
+      "sha256": "b3faee37bdd8d862e3c8a34ba05162ff10ba83de1e26f27f06aa0bdf061f17b9"
+    },
+    {
+      "path": "bridge_vision/__init__.py",
+      "commit": "3335e0e87814b1f646ece5bc99ee669ec76c755f",
+      "github_blob_sha": "bca505096dca36cabe3df9867f4047a849a169bc",
+      "bytes": 785,
+      "sha256": "6f5aee7de531d9186dcee2e50d4efd8338190db575b1934db7bcac60e7474128"
+    },
+    {
+      "path": "bridge_contracts/__init__.py",
+      "commit": "3335e0e87814b1f646ece5bc99ee669ec76c755f",
+      "github_blob_sha": "4c1fe9828c2025c27d74f7234807f8a3beb31a0e",
+      "bytes": 799,
+      "sha256": "3f74e5a5f18be8043e0fd5138171d212dccbc651a1fc9d6a6f2a659eb540ed3e"
+    },
+    {
+      "path": "bridge_vision/engine.py",
+      "commit": "3335e0e87814b1f646ece5bc99ee669ec76c755f",
+      "github_blob_sha": "c5aadfe9222014aaa0cbb4303b159b3774da6895",
+      "bytes": 8643,
+      "sha256": "c82896bbda05ecac8c2ad76cd258c45b7d30ae31d4ca738a95a2e01115cfd045"
+    },
+    {
+      "path": "bridge_vision/evidence_fusion.py",
+      "commit": "3335e0e87814b1f646ece5bc99ee669ec76c755f",
+      "github_blob_sha": "d2db603a9f7918edfa3337f1b7d448f585e65068",
+      "bytes": 20373,
+      "sha256": "30f2364c7ce853be4b379948339fd0ac3c64fe387c550e17f5bc6622bfa07ec8"
+    },
+    {
+      "path": "bridge_vision/multiframe.py",
+      "commit": "3335e0e87814b1f646ece5bc99ee669ec76c755f",
+      "github_blob_sha": "60b00f76966ee541e0842616dab1a6decfc9db34",
+      "bytes": 11926,
+      "sha256": "c014ef10163ba844b19c5726f78ae34b02385d2ad59a9fdfbc79bbee7a4d6c0d"
+    },
+    {
+      "path": "bridge_vision/profiled_challenger.py",
+      "commit": "3335e0e87814b1f646ece5bc99ee669ec76c755f",
+      "github_blob_sha": "46fb5871ac76b3987ed02b683d9f0fe3f9ed8a9f",
+      "bytes": 52242,
+      "sha256": "7e6dc4de1342220f457ad2c7a6d4216de78d28996e9e0f5ada2b8810f01caeea"
+    },
+    {
+      "path": "bridge_contracts/video_frame.py",
+      "commit": "3335e0e87814b1f646ece5bc99ee669ec76c755f",
+      "github_blob_sha": "adf0f1c0ccbcc5fc7ffc968ac8bc7341d3b2012d",
+      "bytes": 5458,
+      "sha256": "ebce613e753a74f6bfa1a85027d95d152e8755b16dca86cab73f9609bf589e18"
+    },
+    {
+      "path": "bridge_vision/native_cards.py",
+      "commit": "3335e0e87814b1f646ece5bc99ee669ec76c755f",
+      "github_blob_sha": "8071c085b4a49aed654200b45381ea980ed4fc11",
+      "bytes": 6784,
+      "sha256": "d7b5248b013a0632ccb7772262b95a5a8f3adb49a9f2e451a0bef87cd0b99132"
+    }
+  ],
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 8296,
+      "sha256": "85a537c3c2a8fe055415b407d0491c47a035198697c57f3b02ae9a4a39ec16dc"
+    },
+    {
+      "path": "api/bridge_contracts/__init__.py",
+      "bytes": 799,
+      "sha256": "3f74e5a5f18be8043e0fd5138171d212dccbc651a1fc9d6a6f2a659eb540ed3e"
+    },
+    {
+      "path": "api/bridge_contracts/video_auction.py",
+      "bytes": 4016,
+      "sha256": "b3faee37bdd8d862e3c8a34ba05162ff10ba83de1e26f27f06aa0bdf061f17b9"
+    },
+    {
+      "path": "api/bridge_contracts/video_deal.py",
+      "bytes": 5611,
+      "sha256": "db543324c6dfed739f0aa051e28d513df59e7400817edd3c8933213da4cfe482"
+    },
+    {
+      "path": "api/bridge_contracts/video_frame.py",
+      "bytes": 5458,
+      "sha256": "ebce613e753a74f6bfa1a85027d95d152e8755b16dca86cab73f9609bf589e18"
+    },
+    {
+      "path": "api/bridge_vision/__init__.py",
+      "bytes": 785,
+      "sha256": "6f5aee7de531d9186dcee2e50d4efd8338190db575b1934db7bcac60e7474128"
+    },
+    {
+      "path": "api/bridge_vision/engine.py",
+      "bytes": 8643,
+      "sha256": "c82896bbda05ecac8c2ad76cd258c45b7d30ae31d4ca738a95a2e01115cfd045"
+    },
+    {
+      "path": "api/bridge_vision/evidence_fusion.py",
+      "bytes": 20373,
+      "sha256": "30f2364c7ce853be4b379948339fd0ac3c64fe387c550e17f5bc6622bfa07ec8"
+    },
+    {
+      "path": "api/bridge_vision/gold.py",
+      "bytes": 2074,
+      "sha256": "e4e390ea437b620a99770559710a374596758916d3572108926bd5c047ce6136"
+    },
+    {
+      "path": "api/bridge_vision/multiframe.py",
+      "bytes": 11926,
+      "sha256": "c014ef10163ba844b19c5726f78ae34b02385d2ad59a9fdfbc79bbee7a4d6c0d"
+    },
+    {
+      "path": "api/bridge_vision/native_cards.py",
+      "bytes": 6784,
+      "sha256": "d7b5248b013a0632ccb7772262b95a5a8f3adb49a9f2e451a0bef87cd0b99132"
+    },
+    {
+      "path": "api/bridge_vision/profiled_challenger.py",
+      "bytes": 52242,
+      "sha256": "7e6dc4de1342220f457ad2c7a6d4216de78d28996e9e0f5ada2b8810f01caeea"
+    },
+    {
+      "path": "offline_score.py",
+      "bytes": 39672,
+      "sha256": "2343d67f7f5b2e2631f4c6bf8d6845187113b68b9da54147eb6ffa204fb9db4b"
+    },
+    {
+      "path": "pytest.ini",
+      "bytes": 42,
+      "sha256": "42c3f6ca53bbb073bce59483bc76391ef90a1b3205315fb64abc9b142b9011c2"
+    },
+    {
+      "path": "qualify.py",
+      "bytes": 12002,
+      "sha256": "18c8fd114407def4c6bdedeb1753ce68a0aac908a661fbb5a7fa9afd4ff1e5ab"
+    },
+    {
+      "path": "requirements.lock",
+      "bytes": 552,
+      "sha256": "bf1e6e4214d85c38d9210b303d3aa72cbca5e34ee2fad086359be685d628b0ce"
+    },
+    {
+      "path": "test_harness_guards.py",
+      "bytes": 2155,
+      "sha256": "840fb8b06d0a5f09491a363f804a6572dd55b59e08686bfbd57cf1029b2d0def"
+    },
+    {
+      "path": "test_offline_score.py",
+      "bytes": 28560,
+      "sha256": "90b7831647aee36f77aaf855e21e4d7f7083a6660cad7dabcf0db7ea8c9db97f"
+    }
+  ],
+  "qualification_revision": "v2-review-repairs",
+  "harness_guard_regression_cases": 4,
+  "public_test_copy_byte_identical_private_r2": false,
+  "public_test_copy_delta": "Only first module docstring changed; all remaining bytes/logic unchanged.",
+  "predecessor_qualification_bundle_sha256": "73c1a43964819d8fde5a302ae67b5439cdfec8aedb35b27f57b754c193e46664",
+  "startup_repair": "importlib.util is imported at module level; no function-local importlib binding",
+  "launch_revision": "v4-push-only-exact-branch",
+  "launch_branch": "review/scorer-r2-synthetic-73e54010-20261006",
+  "launch_actor": "olegmed1-art"
+}
