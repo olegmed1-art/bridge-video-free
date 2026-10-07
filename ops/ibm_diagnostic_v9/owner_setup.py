@@ -55,6 +55,26 @@ def setup_phase(value):
   need(len(raw)<=512,"PUBLIC_PROGRESS_BUFFER")
   try:os.write(_collect_progress_fd,raw)
   except BlockingIOError:pass
+
+RUNTIME_RECORD_ROLES=frozenset(("NATIVE_INTENT","NATIVE_TERMINAL","CLAIM_PERMIT","CLAIM_REQUEST","PROVIDER_SUBMISSION","PROVIDER_RESULT","PROVIDER_INTENT","QUARANTINE","NON_JSON","UNKNOWN_JSON"))
+RUNTIME_RECORD_SCHEMAS=frozenset(("VALID","INVALID","UNKNOWN","NOT_JSON"))
+RUNTIME_RECORD_LINKS=frozenset(("MATCHED","NOT_REQUIRED","MISSING","CONFLICT","UNRESOLVED","INVALID"))
+def public_runtime_record(v):
+ need(type(v) is dict and all(type(k) is str for k in v) and set(v)=={"kind","index_ordinal","entry_ordinal","role","schema_status","link_status"} and type(v["kind"]) is str and v["kind"]=="COLLECT_RUNTIME_RECORD","PUBLIC_PROGRESS_STATUS")
+ need(type(v["index_ordinal"]) is int and 0<=v["index_ordinal"]<3 and type(v["entry_ordinal"]) is int and 0<=v["entry_ordinal"]<1024,"PUBLIC_PROGRESS_STATUS")
+ for key,values in (("role",RUNTIME_RECORD_ROLES),("schema_status",RUNTIME_RECORD_SCHEMAS),("link_status",RUNTIME_RECORD_LINKS)):
+  need(type(v[key]) is str and v[key] in values,"PUBLIC_PROGRESS_STATUS")
+ return dict(v)
+def collect_runtime_record(v):
+ value=public_runtime_record(v)
+ if _collect_progress_fd is None:return
+ raw=(json.dumps(value,sort_keys=True)+"\n").encode()
+ need(len(raw)<=512,"PUBLIC_PROGRESS_BUFFER")
+ try:n=os.write(_collect_progress_fd,raw)
+ except BlockingIOError:need(False,"PUBLIC_PROGRESS_BUFFER")
+ need(n==len(raw),"PUBLIC_PROGRESS_BUFFER")
+setup_phase.runtime_record=collect_runtime_record
+
 def setup_refusal(error):
  phase=_setup_phase if _setup_phase in SAFE_SETUP_PHASES else "OWNER_CONTEXT"
  if phase in COLLECT_DIAGNOSTIC_PHASES:
@@ -191,6 +211,7 @@ def _public_frame(raw):
   for k,v in pairs:need(k not in out,"PUBLIC_DUPLICATE");out[k]=v
   return out
  v=json.loads(raw,object_pairs_hook=unique);need(type(v) is dict,"PUBLIC_FRAME")
+ if v.get("kind")=="COLLECT_RUNTIME_RECORD":return public_runtime_record(v)
  if v.get("kind")=="COLLECT_DIAGNOSTIC_STATUS":
   need(set(v)=={"kind","phase"} and type(v["phase"]) is str and v["phase"] in COLLECT_DIAGNOSTIC_PHASES,"PUBLIC_PROGRESS_STATUS");return v
  if v.get("kind")=="DIAGNOSTIC_STATUS":
@@ -216,7 +237,7 @@ def _supervise(target,started,seconds=OWNER_BUDGET_SECONDS,*,collect_only=False)
  end=started+seconds;reader,writer=os.pipe();parent=os.getpid();pid=None;reaped=False;terminal=False;terminal_frame=None;phase_index=0;seq=0;reason=None;status=None;buf=bytearray()
  need(type(collect_only) is bool,"PUBLIC_PROGRESS_CHANNEL")
  progress_reader,progress_writer=os.pipe2(os.O_CLOEXEC|os.O_NONBLOCK) if collect_only else (None,None)
- progress_buf=bytearray();progress_eof=not collect_only;progress_count=0;last_collect_phase=None
+ progress_buf=bytearray();progress_eof=not collect_only;progress_count=0;runtime_record_count=0;last_collect_phase=None
  original_blocking=os.get_blocking(1)
  def emit(v,limit=None):
   raw=(json.dumps(v,sort_keys=True)+"\n").encode();need(len(raw)<=2048,"PUBLIC_WRITE_LIMIT")
@@ -261,9 +282,11 @@ def _supervise(target,started,seconds=OWNER_BUDGET_SECONDS,*,collect_only=False)
        while b"\n" in progress_buf:
         raw,_,tail=progress_buf.partition(b"\n");progress_buf=bytearray(tail)
         need(len(raw)<=512,"PUBLIC_PROGRESS_BUFFER");v=_public_frame(raw)
-        need(v["kind"]=="COLLECT_DIAGNOSTIC_STATUS","PUBLIC_PROGRESS_CHANNEL")
+        need(v["kind"] in ("COLLECT_DIAGNOSTIC_STATUS","COLLECT_RUNTIME_RECORD"),"PUBLIC_PROGRESS_CHANNEL")
         progress_count+=1;need(progress_count<=512,"PUBLIC_PROGRESS_LIMIT")
-        last_collect_phase=v["phase"];seq+=1;v.update(seq=seq,elapsed_ms=max(0,int((time.monotonic()-started)*1000)));emit(v)
+        if v["kind"]=="COLLECT_DIAGNOSTIC_STATUS":last_collect_phase=v["phase"]
+        else:runtime_record_count+=1;need(runtime_record_count<=1,"PUBLIC_PROGRESS_LIMIT")
+        seq+=1;v.update(seq=seq,elapsed_ms=max(0,int((time.monotonic()-started)*1000)));emit(v)
        continue
       part=os.read(reader,4096)
       if not part:eof=True;s.unregister(reader);break
@@ -271,7 +294,7 @@ def _supervise(target,started,seconds=OWNER_BUDGET_SECONDS,*,collect_only=False)
       while b"\n" in buf:
        raw,_,tail=buf.partition(b"\n");buf=bytearray(tail);need(not terminal and len(raw)<=2048,"PUBLIC_ORDER")
        v=_public_frame(raw)
-       need(v["kind"]!="COLLECT_DIAGNOSTIC_STATUS","PUBLIC_PROGRESS_CHANNEL")
+       need(v["kind"] not in ("COLLECT_DIAGNOSTIC_STATUS","COLLECT_RUNTIME_RECORD"),"PUBLIC_PROGRESS_CHANNEL")
        if v["kind"]=="DIAGNOSTIC_STATUS":
         need(phase_index<len(STATUS_PHASES) and v["phase"]==STATUS_PHASES[phase_index],"PUBLIC_PHASE_ORDER");phase_index+=1;seq+=1
         v.update(seq=seq,elapsed_ms=max(0,int((time.monotonic()-started)*1000)))
