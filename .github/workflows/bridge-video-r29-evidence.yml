@@ -2,6 +2,7 @@ name: Bridge Video r29 Identity Evidence Contract
 
 on:
   push:
+    branches-ignore: ['test/teacher-postgres-20261007']
     paths:
       - 'bridge_speaker_mapping_r29.py'
       - 'r29_identity_overlay_probe.py'

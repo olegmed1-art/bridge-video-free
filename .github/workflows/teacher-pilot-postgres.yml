@@ -1,0 +1,50 @@
+name: Teacher pilot disposable PostgreSQL
+
+on:
+  push:
+    branches: ['test/teacher-postgres-20261007']
+
+permissions:
+  contents: read
+
+jobs:
+  teacher-postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: teacher_pilot_disposable
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - '127.0.0.1:55432:5432'
+        options: >-
+          --health-cmd "pg_isready -U postgres -d teacher_pilot_disposable"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install pinned test dependencies
+        run: python -m pip install --disable-pip-version-check fastapi==0.141.1 'psycopg[binary]==3.3.4' pytest==8.4.2 httpx==0.28.1 PyYAML==6.0.2
+      - name: Exact source and isolation preflight
+        run: python -m tools.teacher_pilot_pg_preflight
+      - name: Synthetic contracts
+        run: python -m unittest discover -s tests -p 'test_teacher_pilot_public.py'
+      - name: Commit boundary contracts
+        run: python -m unittest discover -s tests -p 'test_teacher_pilot_postgres_contract.py'
+      - name: Existing L1 and API regressions
+        run: python -m pytest -q tests/test_l1_canonical_registry.py tests/test_l1_canonical_runtime.py tests/test_knowledge_read_api.py tests/test_ai_api_routes.py tests/test_ai_final_decision_contract.py
+      - name: Real disposable PostgresStore
+        env:
+          TEACHER_PILOT_DISPOSABLE_PG: '1'
+          TEACHER_PILOT_PG_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: python -m unittest discover -s tests -p 'disposable_teacher_postgres.py'
