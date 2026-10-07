@@ -56,13 +56,15 @@ def setup_phase(value):
   try:os.write(_collect_progress_fd,raw)
   except BlockingIOError:pass
 
-RUNTIME_RECORD_ROLES=frozenset(("NATIVE_INTENT","NATIVE_TERMINAL","CLAIM_PERMIT","CLAIM_REQUEST","PROVIDER_SUBMISSION","PROVIDER_RESULT","PROVIDER_INTENT","QUARANTINE","NON_JSON","UNKNOWN_JSON"))
+RUNTIME_RECORD_ROLES=frozenset(("PILOT_IMAGE_START","PILOT_IMAGE_INTENT","PILOT_IMAGE_RESUMED","NATIVE_INTENT","NATIVE_TERMINAL","CLAIM_PERMIT","CLAIM_REQUEST","PROVIDER_SUBMISSION","PROVIDER_RESULT","PROVIDER_INTENT","QUARANTINE","NON_JSON","UNKNOWN_JSON"))
 RUNTIME_RECORD_SCHEMAS=frozenset(("VALID","INVALID","UNKNOWN","NOT_JSON"))
 RUNTIME_RECORD_LINKS=frozenset(("MATCHED","NOT_REQUIRED","MISSING","CONFLICT","UNRESOLVED","INVALID"))
+RUNTIME_RECORD_FILENAMES=frozenset(("NUMBERED_INTENT","NUMBERED_TERMINAL","QUARANTINE","PERMIT","REQUEST","IMAGE_START","IMAGE_RESTART","IMAGE_RESUMED","PILOT_LOCK","PROVIDER_SUBMISSION","PROVIDER_RESULT","OTHER_JSON","OTHER_NON_JSON"))
 def public_runtime_record(v):
- need(type(v) is dict and all(type(k) is str for k in v) and set(v)=={"kind","index_ordinal","entry_ordinal","role","schema_status","link_status"} and type(v["kind"]) is str and v["kind"]=="COLLECT_RUNTIME_RECORD","PUBLIC_PROGRESS_STATUS")
+ need(type(v) is dict and all(type(k) is str for k in v) and set(v)=={"kind","index_ordinal","entry_ordinal","role","schema_status","link_status","filename_class","depth"} and type(v["kind"]) is str and v["kind"]=="COLLECT_RUNTIME_RECORD","PUBLIC_PROGRESS_STATUS")
  need(type(v["index_ordinal"]) is int and 0<=v["index_ordinal"]<3 and type(v["entry_ordinal"]) is int and 0<=v["entry_ordinal"]<1024,"PUBLIC_PROGRESS_STATUS")
- for key,values in (("role",RUNTIME_RECORD_ROLES),("schema_status",RUNTIME_RECORD_SCHEMAS),("link_status",RUNTIME_RECORD_LINKS)):
+ need(type(v["depth"]) is int and 1<=v["depth"]<=5,"PUBLIC_PROGRESS_STATUS")
+ for key,values in (("role",RUNTIME_RECORD_ROLES),("schema_status",RUNTIME_RECORD_SCHEMAS),("link_status",RUNTIME_RECORD_LINKS),("filename_class",RUNTIME_RECORD_FILENAMES)):
   need(type(v[key]) is str and v[key] in values,"PUBLIC_PROGRESS_STATUS")
  return dict(v)
 def collect_runtime_record(v):
