@@ -41,6 +41,7 @@ STOP_POLL_SECONDS = 180
 HTTP_SECONDS = 10
 START_TOKEN_MIN_SECONDS = WINDOW_SECONDS + STOP_POLL_SECONDS + 120
 MAX_BYTES = 1024 * 1024
+GUEST_DIAGNOSTIC_SECONDS = 38
 
 
 class ControlError(Exception):
@@ -240,9 +241,11 @@ def ordinary_stop(client, *, clock=time.monotonic, sleep=time.sleep, out=emit, s
     return 4
 
 
-def trial(client, *, mode="trial", clock=time.monotonic, sleep=time.sleep, out=emit):
+def trial(client, *, mode="trial", guest_probe=None, clock=time.monotonic, sleep=time.sleep, out=emit):
     if mode not in {"trial", "manual_console_trial"}:
         raise ControlError("trial_mode_invalid")
+    if guest_probe is not None and mode != "trial":
+        raise ControlError("guest_diagnostic_mode_invalid")
     running_limit = RUNNING_SECONDS if mode == "trial" else None
     if not LIVE_START_ENABLED:
         raise ControlError("live_start_locked")
@@ -256,6 +259,7 @@ def trial(client, *, mode="trial", clock=time.monotonic, sleep=time.sleep, out=e
     start_attempted = False
     running_at = None
     reason = "window_expired"
+    diagnostic_failed = guest_probe is not None
     try:
         start_attempted = True
         out("START_SUBMITTING", mode=mode, max_window_seconds=WINDOW_SECONDS, running_window_seconds=running_limit)
@@ -277,6 +281,28 @@ def trial(client, *, mode="trial", clock=time.monotonic, sleep=time.sleep, out=e
                         out("RUNNING_GUEST_WINDOW", seconds=running_limit)
                     else:
                         out("RUNNING_MANUAL_CONSOLE_WINDOW", remaining_seconds=max(0, int(began + WINDOW_SECONDS - clock())))
+                # The optional probe is run by this same controller after Running.
+                # Preparation finished before Start; no chat trigger or waiting process.
+                if guest_probe is not None:
+                    remaining = min(stop_request_by - clock(),
+                                    running_at + running_limit - reserve - clock())
+                    if remaining < GUEST_DIAGNOSTIC_SECONDS + 2:
+                        out("GUEST_DIAGNOSTIC_SKIPPED", reason="insufficient_stop_reserve")
+                        reason = "guest_diagnostic_budget"
+                        break
+                    out("GUEST_DIAGNOSTIC_STARTED", **guest_probe.binding,
+                        max_seconds=GUEST_DIAGNOSTIC_SECONDS)
+                    try:
+                        with wall_deadline(GUEST_DIAGNOSTIC_SECONDS):
+                            verified = guest_probe.run_once()
+                    except Exception:
+                        # Do not render exception arguments, child output or credentials.
+                        verified = False
+                        out("GUEST_DIAGNOSTIC_FAILED", reason="bounded_probe_failed")
+                    diagnostic_failed = verified is not True
+                    out("GUEST_DIAGNOSTIC_RESULT", authenticated=verified is True)
+                    reason = "guest_diagnostic_complete" if verified is True else "guest_diagnostic_failed"
+                    break  # success and failure both lead immediately to finally Stop
                 # Only the explicit manual console mode omits the short RDC timer.
                 # Its absolute deadline remains anchored BEFORE the sole Start POST.
                 if running_limit is not None and clock() >= running_at + running_limit - reserve:
@@ -298,30 +324,45 @@ def trial(client, *, mode="trial", clock=time.monotonic, sleep=time.sleep, out=e
             # Accepted POST is NOT proof that its queued Start has taken effect.
             result = ordinary_stop(client, clock=clock, sleep=sleep, out=out,
                                    start_uncertain=not start_transition_seen)
-    return result
+    return result if result != 0 else (3 if diagnostic_failed else 0)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["trial", "manual_console_trial", "stop"])
     parser.add_argument("--ack", required=True)
+    parser.add_argument("--guest-diagnostic", action="store_true", help="One run-bound ubuntu SSH probe; trial only.")
     args = parser.parse_args(argv)
     expected = {"trial": "OWNER_APPROVED_10MIN_10USD", "manual_console_trial": "OWNER_APPROVED_MANUAL_CONSOLE_10MIN_10USD", "stop": "ORDINARY_STOP_EXACT_IBM"}[args.mode]
     if args.ack != expected:
         emit("BLOCKED", reason="ack_mismatch")
         return 3
+    if args.guest_diagnostic and args.mode != "trial":
+        emit("BLOCKED", reason="guest_diagnostic_mode_invalid")
+        return 3
     if args.mode != "stop" and not LIVE_START_ENABLED:
         emit("BLOCKED", reason="live_start_locked")
         return 3  # before credentials/auth/network
+    guest_probe = None
     try:
+        if args.guest_diagnostic:
+            try:
+                from . import ibm_trial_guest_probe as guest
+            except ImportError:
+                import ibm_trial_guest_probe as guest
+            with wall_deadline(guest.PREPARE_SECONDS):
+                guest_probe = guest.prepare()  # before IBM authentication or Start
         client = Client(authenticate())
-        return trial(client, mode=args.mode) if args.mode != "stop" else ordinary_stop(client, start_uncertain=True)
+        return trial(client, mode=args.mode, guest_probe=guest_probe) if args.mode != "stop" else ordinary_stop(client, start_uncertain=True)
     except ControlError as exc:
         emit("BLOCKED", reason=str(exc))
         return 3
     except Exception:
         emit("BLOCKED", reason="unexpected_local_error")
         return 4
+    finally:
+        if guest_probe is not None:
+            guest_probe.close()
 
 
 if __name__ == "__main__":
