@@ -48,7 +48,7 @@ jobs:
           printf 'mailbox=%s used=%s capacity=%s readiness=%s\n' "$mailbox" "$used" "$capacity" "$readiness"
 
       - name: Prepare bounded draft mailbox PR
-        if: steps.signal.outputs.readiness == 'PREPARE_ROTATION'
+        if: steps.signal.outputs.readiness == 'PREPARE_ROTATION' || steps.signal.outputs.readiness == 'ROTATION_REQUIRED'
         shell: bash
         env:
           MAILBOX: ${{ steps.signal.outputs.mailbox }}
@@ -71,7 +71,7 @@ jobs:
 
           - Source active mailbox: #$MAILBOX
           - Observed dispatch usage: $USED / $CAPACITY
-          - Trigger: PREPARE_ROTATION (80% capacity threshold)
+          - Trigger: ${{ steps.signal.outputs.readiness }} (${{ steps.signal.outputs.readiness == 'ROTATION_REQUIRED' && '100%' || '80%' }} capacity threshold)
           - Scope: repository-side preparation only
           - Production cutover: OWNER-GATED
           - Merge: OWNER-GATED
