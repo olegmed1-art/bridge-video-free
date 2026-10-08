@@ -47,5 +47,37 @@ class SpeakerDiarizationTests(unittest.TestCase):
         self.assertEqual(set(mapping.values()), {"teacher", "student"})
 
 
+class VisualReadinessStatusTests(unittest.TestCase):
+    def test_explicit_incomplete_status_blocks_technical_readiness(self):
+        from diana_longitudinal_quality_v2 import methodology_readiness
+
+        for stage in (1, 2):
+            for status in (f"VISUAL_PASS_{stage}_INCOMPLETE", "incomplete", "not complete"):
+                for wrapped in (False, True):
+                    with self.subTest(stage=stage, status=status, wrapped=wrapped):
+                        master = {"technical_qc": {"visual": {"pass1": "VISUAL_PASS_1_COMPLETE", "pass2": "VISUAL_PASS_2_COMPLETE"}}}
+                        master["transcript"] = [{"text": "synthetic evidence"}]
+                        master["technical_qc"]["visual"][f"pass{stage}"] = (
+                            {"status": status} if wrapped else status
+                        )
+                        result = methodology_readiness(master, [])
+                        self.assertEqual(result["technical_status"], "TECHNICAL_NOT_READY")
+                        self.assertIn(f"VISUAL_PASS_{stage}_INCOMPLETE", result["technical_issues"])
+
+    def test_complete_status_forms_remain_accepted(self):
+        from diana_longitudinal_quality_v2 import methodology_readiness
+
+        for wrapped in (False, True):
+            for generic in (False, True):
+                master = {"technical_qc": {"visual": {"pass1": "VISUAL_PASS_1_COMPLETE", "pass2": "VISUAL_PASS_2_COMPLETE"}}}
+                master["transcript"] = [{"text": "synthetic evidence"}]
+                for stage in (1, 2):
+                    status = " COMPLETE " if generic else f"VISUAL_PASS_{stage}_COMPLETE"
+                    master["technical_qc"]["visual"][f"pass{stage}"] = (
+                        {"status": status} if wrapped else status
+                    )
+                self.assertEqual(methodology_readiness(master, [])["technical_status"], "TECHNICAL_READY")
+
+
 if __name__ == "__main__":
     unittest.main()
