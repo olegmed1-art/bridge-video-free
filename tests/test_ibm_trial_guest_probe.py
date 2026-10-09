@@ -182,5 +182,156 @@ class PreflightAndPinTests(unittest.TestCase):
   self.assertEqual(["host","ssh-ed25519","public"],select("# comment\nhost ssh-rsa public\nhost ssh-ed25519 public\n"))
   with self.assertRaises(AssertionError):select("host ssh-ed25519 public\nhost ssh-ed25519 public\n")
 
+
+class ReadinessTests(unittest.TestCase):
+ """Virtual clocks and fake TCP/SSH only, including controller containment."""
+ def setUp(self):
+  from ops import ibm_ssh_probe_safe as safe
+  import types,stat,errno
+  self.s=safe;self.c=Clock();self.events=[];self.connects=[];self.ssh=[];self.commands=[]
+  self.ready_at=0;self.connection_error=errno.ECONNREFUSED;self.pin_ok=True
+  self.connect_hook=None;self.ssh_hook=None;self.precheck_delay=0
+  def run(argv,**kw):
+   self.commands.append((argv,kw))
+   if argv[0]=="/usr/bin/ssh":
+    self.ssh.append((self.c.now(),argv,kw))
+    if self.ssh_hook:return self.ssh_hook(argv,kw)
+    return types.SimpleNamespace(returncode=0,stdout="1001\n",stderr="")
+   self.c.sleep(self.precheck_delay)
+   value=(safe.HOST+" ssh-ed25519 public\n") if "-F" in argv else "256 "+(safe.EXPECTED if self.pin_ok else "wrong")+" fixture"
+   return types.SimpleNamespace(returncode=0,stdout=value,stderr="")
+  def connect(address,timeout):
+   self.connects.append((self.c.now(),address,timeout))
+   if self.connect_hook:return self.connect_hook(address,timeout)
+   if self.c.now()<self.ready_at:
+    if self.connection_error==errno.ETIMEDOUT:self.c.sleep(timeout)
+    raise OSError(self.connection_error,"PRIVATE_SENTINEL")
+   return contextlib.nullcontext()
+  patches=[mock.patch.object(safe,"time",types.SimpleNamespace(monotonic=self.c.now,sleep=self.c.sleep)),
+   mock.patch.object(safe,"os",types.SimpleNamespace(stat=lambda _:types.SimpleNamespace(st_mode=stat.S_IFREG|0o600),access=lambda *_:True,R_OK=os.R_OK)),
+   mock.patch.object(safe,"socket",types.SimpleNamespace(create_connection=connect)),
+   mock.patch.object(safe,"subprocess",types.SimpleNamespace(run=run,TimeoutExpired=subprocess.TimeoutExpired,SubprocessError=subprocess.SubprocessError)),
+   mock.patch.object(safe,"emit",side_effect=lambda event,**kw:self.events.append(dict(event=event,**kw))),
+   mock.patch.object(socket.socket,"connect",side_effect=AssertionError("LIVE_NETWORK_FORBIDDEN"))]
+  for p in patches:p.start();self.addCleanup(p.stop)
+ def source(self,**kw):return self.s.probe("ubuntu",**kw)
+ def controller(self,*,delay=0,unknown=False,deadline_interrupt=False):
+  client=Client(self.c,delay=delay,unknown=unknown)
+  prepared=g.PreparedProbe(B,"fixture",None,None);prepared.ready=True
+  def remote(phase,timeout):
+   self.assertEqual(("probe",33),(phase,timeout))
+   if deadline_interrupt:raise e.ControlError("wall_deadline_expired")
+   before=len(self.events);code=self.source(deadline=self.c.now()+28)
+   rows=[dict(event="RUN_BOUND_GUEST_DIAGNOSTIC",**B)]+self.events[before:]
+   return code,("\n".join(map(json.dumps,rows))+"\n").encode(),b""
+  prepared.call=mock.Mock(side_effect=remote)
+  with mock.patch.object(e,"wall_deadline",return_value=contextlib.nullcontext()) as wall,contextlib.redirect_stdout(io.StringIO()):
+   code=e.trial(client,guest_probe=prepared,clock=self.c.now,sleep=self.c.sleep,out=lambda *_a,**_kw:None)
+  return code,client,prepared,wall
+ def test_ready_at_seven_seconds_one_ssh_one_stop(self):
+  self.ready_at=7
+  code,client,p,wall=self.controller()
+  self.assertEqual(0,code);self.assertEqual(["start","stop"],client.actions)
+  self.assertEqual(8,len(self.connects));self.assertEqual(1,len(self.ssh));self.assertEqual(7,self.ssh[0][0])
+  self.assertEqual(15,self.ssh[0][2]["timeout"]);self.assertIn("ConnectionAttempts=1",self.ssh[0][1])
+  self.assertIn("StrictHostKeyChecking=yes",self.ssh[0][1]);p.call.assert_called_once();wall.assert_called_once_with(38)
+  self.assertEqual(22,self.c.now())
+ def test_permanent_timeout_zero_ssh_one_stop(self):
+  import errno
+  self.ready_at=float("inf");self.connection_error=errno.ETIMEDOUT
+  code,client,p,_=self.controller()
+  self.assertEqual(3,code);self.assertEqual(["start","stop"],client.actions);self.assertEqual([],self.ssh)
+  self.assertEqual([3,3,2],[x[2] for x in self.connects]);self.assertEqual(25,self.c.now());p.call.assert_called_once()
+  self.assertNotIn("PRIVATE_SENTINEL",json.dumps(self.events))
+ def test_permanent_refusal_bounded_no_ssh(self):
+  self.ready_at=float("inf")
+  self.assertEqual(3,self.source());self.assertEqual(10,len(self.connects));self.assertEqual(10,self.c.now());self.assertEqual([],self.ssh)
+ def test_nontransient_network_error_not_retried(self):
+  import errno
+  self.ready_at=float("inf");self.connection_error=errno.ENETUNREACH
+  self.assertEqual(3,self.source());self.assertEqual(1,len(self.connects));self.assertEqual([],self.ssh)
+ def test_frozen_clock_still_has_finite_attempt_limit(self):
+  self.ready_at=float("inf");self.s.time.sleep=lambda _:None
+  self.assertEqual(3,self.source());self.assertEqual(self.s.TCP_MAX_ATTEMPTS,len(self.connects));self.assertEqual([],self.ssh)
+ def test_smaller_remaining_deadline_caps_tcp_and_reserves_ssh(self):
+  import errno
+  self.ready_at=float("inf");self.connection_error=errno.ETIMEDOUT
+  self.assertEqual(3,self.source(deadline=17));self.assertEqual([2],[x[2] for x in self.connects]);self.assertEqual(2,self.c.now());self.assertEqual([],self.ssh)
+ def test_insufficient_remaining_budget_never_starts_tcp_or_ssh(self):
+  self.assertEqual(3,self.source(deadline=15));self.assertEqual([],self.connects);self.assertEqual([],self.ssh)
+ def test_longer_deadline_cannot_extend_local_cap(self):
+  self.ready_at=float("inf")
+  self.assertEqual(3,self.source(deadline=999));self.assertEqual(10,self.c.now());self.assertEqual([],self.ssh)
+ def test_invalid_or_expired_deadline_no_commands(self):
+  for deadline in [0,-1,float("nan"),float("inf"),True,"28"]:
+   with self.subTest(deadline=deadline):self.assertEqual(3,self.source(deadline=deadline))
+  self.assertEqual([],self.commands);self.assertEqual([],self.connects)
+ def test_precheck_time_consumes_readiness_budget(self):
+  self.precheck_delay=5;self.ready_at=float("inf")
+  self.assertEqual(3,self.source());self.assertEqual([10,11,12],[x[0] for x in self.connects]);self.assertEqual(13,self.c.now())
+ def test_pin_failure_zero_tcp_zero_ssh_then_stop(self):
+  self.pin_ok=False
+  code,client,_,_=self.controller()
+  self.assertEqual(3,code);self.assertEqual(["start","stop"],client.actions);self.assertEqual([],self.connects);self.assertEqual([],self.ssh)
+ def test_forward_clock_jump_late_tcp_success_no_ssh_then_stop(self):
+  def connect(*_):self.c.sleep(29);return contextlib.nullcontext()
+  self.connect_hook=connect
+  code,client,_,_=self.controller()
+  self.assertEqual(3,code);self.assertEqual(["start","stop"],client.actions);self.assertEqual([],self.ssh)
+  self.assertTrue(any(x.get("reason")=="probe_deadline_expired" for x in self.events))
+ def test_backward_clock_jump_no_ssh_then_stop(self):
+  def connect(*_):self.c.t=-1;return contextlib.nullcontext()
+  self.connect_hook=connect
+  code,client,_,_=self.controller()
+  self.assertEqual(3,code);self.assertEqual(["start","stop"],client.actions);self.assertEqual([],self.ssh)
+  self.assertTrue(any(x.get("reason")=="monotonic_clock_regressed" for x in self.events))
+ def test_tcp_success_after_readiness_cutoff_no_ssh(self):
+  def connect(*_):self.c.sleep(11);return contextlib.nullcontext()
+  self.connect_hook=connect
+  self.assertEqual(3,self.source());self.assertEqual([],self.ssh)
+ def test_deadline_interrupt_zero_ssh_one_stop(self):
+  code,client,p,_=self.controller(deadline_interrupt=True)
+  self.assertEqual(3,code);self.assertEqual(["start","stop"],client.actions);self.assertEqual([],self.connects);self.assertEqual([],self.ssh);p.call.assert_called_once()
+ def test_ssh_timeout_is_one_attempt_then_stop(self):
+  def run(argv,kw):self.c.sleep(kw["timeout"]);raise subprocess.TimeoutExpired(argv,kw["timeout"],stderr=b"PRIVATE_SENTINEL")
+  self.ssh_hook=run
+  code,client,p,_=self.controller()
+  self.assertEqual(3,code);self.assertEqual(["start","stop"],client.actions);self.assertEqual(1,len(self.ssh));p.call.assert_called_once()
+  self.assertNotIn("PRIVATE_SENTINEL",json.dumps(self.events))
+ def test_late_ssh_success_not_accepted_or_retried(self):
+  import types
+  def run(*_):self.c.sleep(29);return types.SimpleNamespace(returncode=0,stdout="1001\n",stderr="")
+  self.ssh_hook=run
+  self.assertEqual(3,self.source());self.assertEqual(1,len(self.ssh));self.assertFalse(any(x["event"]=="SSH_AUTHENTICATED" for x in self.events))
+ def test_start_failure_no_tcp_or_ssh_and_one_stop(self):
+  code,client,p,_=self.controller(unknown=True)
+  self.assertEqual(3,code);self.assertEqual(["start","stop"],client.actions);p.call.assert_not_called();self.assertEqual([],self.connects);self.assertEqual([],self.ssh)
+ def test_late_running_cannot_borrow_stop_reserve(self):
+  code,client,p,_=self.controller(delay=530)
+  self.assertEqual(3,code);self.assertEqual(["start","stop"],client.actions);p.call.assert_not_called();self.assertEqual([],self.connects);self.assertEqual([],self.ssh)
+ def test_before_start_preflight_failure_no_power_actions(self):
+  client=Client(self.c)
+  with mock.patch.object(g,"prepare",side_effect=g.ProbeError("preflight_failed")),mock.patch.object(e,"Client",return_value=client),mock.patch.object(e,"authenticate") as auth,contextlib.redirect_stdout(io.StringIO()):
+   self.assertEqual(4,e.main(["trial","--ack","OWNER_APPROVED_10MIN_10USD","--guest-diagnostic"]))
+  auth.assert_not_called();self.assertEqual([],client.actions);self.assertEqual([],self.connects);self.assertEqual([],self.ssh)
+ def test_remote_watchdog_and_parent_death_abort_not_retried(self):
+  tree=ast.parse(g.REMOTE)
+  nodes=[n for n in tree.body if isinstance(n,(ast.ClassDef,ast.FunctionDef)) and n.name in {"RemoteAbort","expired"}]
+  ns={};exec(compile(ast.Module(body=nodes,type_ignores=[]),"offline_abort","exec"),ns)
+  self.assertFalse(issubclass(ns["RemoteAbort"],OSError))
+  for signum in [14,15]:
+   self.connects.clear();self.ssh.clear()
+   self.s.time.sleep=lambda _:None
+   def connect(*_):ns["expired"](signum,None)
+   self.connect_hook=connect
+   with self.subTest(signum=signum),self.assertRaises(ns["RemoteAbort"]):self.source()
+   self.assertEqual(1,len(self.connects));self.assertEqual([],self.ssh)
+ def test_remote_deadline_is_anchored_before_watchdog_and_passed_to_probe(self):
+  self.assertLess(g.REMOTE.index("remote_deadline=time.monotonic()+28"),g.REMOTE.index("signal.setitimer(signal.ITIMER_REAL,28)"))
+  self.assertIn('ns["probe"]("ubuntu",deadline=remote_deadline)',g.REMOTE)
+  self.assertIn(g.GUEST_SOURCE_SHA,g.REMOTE)
+  self.assertEqual((600,120,38,38),(e.WINDOW_SECONDS,e.RUNNING_SECONDS,e.GUEST_DIAGNOSTIC_SECONDS,g.DIAGNOSTIC_SECONDS))
+
+
 if __name__=="__main__":unittest.main()
 

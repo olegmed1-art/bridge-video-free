@@ -19,7 +19,7 @@ REPOSITORY = "olegmed1-art/bridge-video-free"
 REF = "refs/heads/review/ibm-trial-control-20261001"
 ORACLE = "92.5.47.149"
 ORACLE_FP = "SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go"
-GUEST_SOURCE_SHA = "0936a2dcf18ee7bb206af366500b9e972aca275b969745de8cf9f4e319cfcff2"
+GUEST_SOURCE_SHA = "52d18ba9043676fa3ad0f4601ae4e4ed646cf106878beaa716437c3bc232232b"
 PREPARE_SECONDS = 20
 DIAGNOSTIC_SECONDS = 38
 CONSUMED_RUNS = {"37776596059", "37788143504"}
@@ -103,13 +103,15 @@ def memory(raw, name):
         os.close(fd)
         raise
 
-REMOTE = r"""import base64,ctypes,datetime,fcntl,hashlib,json,os,signal,socket,stat,subprocess,sys,types
+REMOTE = r"""import base64,ctypes,datetime,fcntl,hashlib,json,os,signal,socket,stat,subprocess,sys,time,types
 knownfd=None
 timer_owned=False
+class RemoteAbort(Exception):
+ pass
 def out(event,**fields):
  print(json.dumps(dict(event=event,at_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),**fields),sort_keys=True),flush=True)
 def expired(signum,frame):
- raise TimeoutError()
+ raise RemoteAbort()
 def select_known_record(text):
  records=[l.split() for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")]
  assert records and all(not row[0].startswith("@") for row in records)
@@ -123,6 +125,7 @@ def bounded_child(argv,**kwargs):
 try:
  assert hasattr(signal,"setitimer") and signal.getitimer(signal.ITIMER_REAL)[0]==0
  signal.signal(signal.SIGALRM,expired)
+ remote_deadline=time.monotonic()+28
  signal.setitimer(signal.ITIMER_REAL,28)
  timer_owned=True
  parent=os.getppid()
@@ -134,7 +137,7 @@ try:
  assert len(p["head"])==40 and all(c in "0123456789abcdef" for c in p["head"])
  assert socket.gethostname()=="autopilot-lite-vnic" and os.geteuid()==1001
  b=p["source"].encode()
- assert p["source_sha"]=="0936a2dcf18ee7bb206af366500b9e972aca275b969745de8cf9f4e319cfcff2" and hashlib.sha256(b).hexdigest()==p["source_sha"]
+ assert p["source_sha"]=="52d18ba9043676fa3ad0f4601ae4e4ed646cf106878beaa716437c3bc232232b" and hashlib.sha256(b).hexdigest()==p["source_sha"]
  ns={"__name__":"reviewed_probe"}
  exec(compile(b,"reviewed_ibm_ssh_probe.py","exec"),ns)
  assert ns["VERIFIED_USER"]=="ubuntu" and ns["HOST"]=="161.156.86.34"
@@ -157,7 +160,7 @@ try:
   out("ORACLE_ROUTE_READY",run_id=p["run_id"],head=p["head"],attempt=1,user="ubuntu",hostpin="MATCH",guest_network_requests=0,key_contents_read=False)
   sys.exit(0)
  out("RUN_BOUND_GUEST_DIAGNOSTIC",run_id=p["run_id"],head=p["head"],attempt=1)
- sys.exit(ns["probe"]("ubuntu"))
+ sys.exit(ns["probe"]("ubuntu",deadline=remote_deadline))
 except Exception as exc:
  out("ORACLE_ROUTE_BLOCKED",error_type=type(exc).__name__,raw_error_exported=False)
  sys.exit(3)
