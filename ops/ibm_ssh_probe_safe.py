@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepared diagnostic only. No Start/Stop, service changes, credential export or retries.
+"""Prepared diagnostic only. No Start/Stop, service changes, credential export or SSH retries.
 Network use requires a separately coordinated authorized running window.
 """
 import argparse
@@ -7,6 +7,7 @@ import datetime
 import errno
 import hashlib
 import json
+import math
 import os
 import re
 import socket
@@ -19,6 +20,75 @@ KEY = "/home/ubuntu/.ssh/ibm_bridge_ed25519"
 KNOWN = "/home/ubuntu/.ssh/known_hosts"
 EXPECTED = "SHA256:o+7KPm2p4VSZSvFFYzIIzA8iiXfze2hhW9tUM58e00w"
 VERIFIED_USER = "ubuntu"
+PROBE_SECONDS = 28  # must not extend the remote watchdog or controller's 38s cap
+TCP_READINESS_SECONDS = 10
+TCP_CONNECT_SECONDS = 3
+TCP_POLL_SECONDS = 1
+TCP_MAX_ATTEMPTS = 11
+SSH_SECONDS = 15
+
+
+class ProbeDeadlineError(Exception):
+    pass
+
+
+class ProbeBudget:
+    """One monotonic deadline shared by prechecks, TCP readiness and sole SSH."""
+    def __init__(self, deadline):
+        self.last = time.monotonic()
+        if not math.isfinite(self.last):
+            raise ProbeDeadlineError("invalid_monotonic_clock")
+        if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
+            raise ProbeDeadlineError("invalid_probe_deadline")
+        self.deadline = min(self.last + PROBE_SECONDS, deadline) if deadline is not None else self.last + PROBE_SECONDS
+
+    def now(self):
+        now = time.monotonic()
+        if not math.isfinite(now) or now < self.last:
+            raise ProbeDeadlineError("monotonic_clock_regressed")
+        self.last = now
+        if now >= self.deadline:
+            raise ProbeDeadlineError("probe_deadline_expired")
+        return now
+
+    def remaining(self):
+        return self.deadline - self.now()
+
+
+def tcp_ready(budget):
+    """Poll TCP only; reserve the sole SSH attempt and never reset the deadline."""
+    started = budget.now()
+    end = min(started + TCP_READINESS_SECONDS, budget.deadline - SSH_SECONDS)
+    attempts = 0
+    failure, error_number = "TCP_TIMEOUT", None
+    while attempts < TCP_MAX_ATTEMPTS:
+        left = end - budget.now()
+        if left <= 0:
+            break
+        attempts += 1
+        try:
+            with socket.create_connection((HOST, 22), timeout=min(TCP_CONNECT_SECONDS, left)):
+                elapsed = budget.now() - started
+            if budget.now() <= end:
+                emit("TCP_OPEN", elapsed_seconds=round(elapsed, 3), attempts=attempts)
+                return True
+            break  # a late success cannot borrow the reserved SSH time
+        except OSError as exc:
+            error_number = exc.errno
+            failure = {errno.ECONNREFUSED: "TCP_REFUSED", errno.ETIMEDOUT: "TCP_TIMEOUT",
+                       errno.EHOSTUNREACH: "NETWORK_UNREACHABLE", errno.ENETUNREACH: "NETWORK_UNREACHABLE"}.get(exc.errno)
+            failure = failure or ("TCP_TIMEOUT" if isinstance(exc, TimeoutError) else "TCP_CONNECT_FAILURE")
+            # Only early-boot refusal/timeout is eligible for another TCP check.
+            if failure not in {"TCP_REFUSED", "TCP_TIMEOUT"}:
+                break
+        left = end - budget.now()
+        if left <= 0 or attempts >= TCP_MAX_ATTEMPTS:
+            break
+        time.sleep(min(TCP_POLL_SECONDS, left))
+    emit(failure, errno=error_number, elapsed_seconds=round(budget.now() - started, 3))
+    emit("TCP_READINESS_EXHAUSTED", attempts=attempts,
+         elapsed_seconds=round(budget.now() - started, 3))
+    return False
 
 
 def utc():
@@ -59,7 +129,16 @@ def stderr_info(text, user):
                 raw_stderr_exported=False, wrong_user="NOT_ESTABLISHED")
 
 
-def probe(user):
+def probe(user, *, deadline=None):
+    try:
+        return _probe(user, ProbeBudget(deadline))
+    except ProbeDeadlineError as exc:
+        emit("PRECHECK_BLOCKED", reason=str(exc))
+        return 3
+
+
+def _probe(user, budget):
+    budget.remaining()
     if user != VERIFIED_USER:
         emit("PRECHECK_BLOCKED", reason="previously_verified_ubuntu_required")
         return 3
@@ -67,25 +146,18 @@ def probe(user):
     if not stat.S_ISREG(meta.st_mode) or not os.access(KEY, os.R_OK):
         emit("PRECHECK_BLOCKED", reason="existing_key_not_readable", key_contents_read=False)
         return 3
-    found = subprocess.run(["/usr/bin/ssh-keygen", "-F", HOST, "-f", KNOWN], capture_output=True, text=True, timeout=5)
+    found = subprocess.run(["/usr/bin/ssh-keygen", "-F", HOST, "-f", KNOWN], capture_output=True, text=True, timeout=min(5, budget.remaining()))
     records = "\n".join(line for line in found.stdout.splitlines()
                         if line and not line.startswith("#") and "ssh-ed25519" in line)
     pin = subprocess.run(["/usr/bin/ssh-keygen", "-lf", "-", "-E", "sha256"],
-                         input=records + "\n", capture_output=True, text=True, timeout=5)
+                         input=records + "\n", capture_output=True, text=True, timeout=min(5, budget.remaining()))
+    budget.remaining()
     fingerprints = {line.split()[1] for line in pin.stdout.splitlines() if len(line.split()) > 1}
     if not records or fingerprints != {EXPECTED}:
         emit("PRECHECK_BLOCKED", reason="exact_known_host_pin_missing_or_conflicting")
         return 3
     emit("TCP_PROBE_STARTED", user=user, target=HOST, power_mutations=False)
-    started = time.monotonic()
-    try:
-        with socket.create_connection((HOST, 22), timeout=3) as conn:
-            emit("TCP_OPEN", elapsed_seconds=round(time.monotonic() - started, 3))
-    except OSError as exc:
-        label = {errno.ECONNREFUSED: "TCP_REFUSED", errno.ETIMEDOUT: "TCP_TIMEOUT",
-                 errno.EHOSTUNREACH: "NETWORK_UNREACHABLE", errno.ENETUNREACH: "NETWORK_UNREACHABLE"}.get(exc.errno)
-        emit(label or ("TCP_TIMEOUT" if isinstance(exc, TimeoutError) else "TCP_CONNECT_FAILURE"),
-             errno=exc.errno, elapsed_seconds=round(time.monotonic() - started, 3))
+    if not tcp_ready(budget):
         return 3
     args = ["/usr/bin/ssh", "-F", "/dev/null", "-T", "-i", KEY, "-o", "BatchMode=yes",
             "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
@@ -97,16 +169,18 @@ def probe(user):
             "-o", "HostKeyAlgorithms=ssh-ed25519", "-o", "ConnectTimeout=8",
             "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1",
             user + "@" + HOST, "id -u"]
+    timeout = min(SSH_SECONDS, budget.remaining())
     emit("SSH_PROBE_STARTED", user=user)
-    started = time.monotonic()
+    started = budget.now()
     try:
-        result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+        result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=min(timeout, budget.remaining()))
     except subprocess.TimeoutExpired as exc:
         error_text = exc.stderr or b""
         if isinstance(error_text, bytes):
             error_text = error_text.decode("utf-8", errors="replace")
         emit("SSH_WALL_TIMEOUT", elapsed_seconds=round(time.monotonic() - started, 3), **stderr_info(error_text, user))
         return 3
+    budget.remaining()  # do not accept success returned after the shared deadline
     info = stderr_info(result.stderr, user)
     emit("SSH_PROBE_FINISHED", ssh_exit=result.returncode,
          elapsed_seconds=round(time.monotonic() - started, 3), **info)
