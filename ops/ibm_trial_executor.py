@@ -41,7 +41,9 @@ STOP_POLL_SECONDS = 180
 HTTP_SECONDS = 10
 START_TOKEN_MIN_SECONDS = WINDOW_SECONDS + STOP_POLL_SECONDS + 120
 MAX_BYTES = 1024 * 1024
-GUEST_DIAGNOSTIC_SECONDS = 38
+GUEST_DIAGNOSTIC_SECONDS = 338
+GUEST_MIN_DIAGNOSTIC_SECONDS = 38
+DIAGNOSTIC_STOP_SECONDS = 420  # from before Start, retaining 180s for confirmation
 
 
 class ControlError(Exception):
@@ -241,12 +243,46 @@ def ordinary_stop(client, *, clock=time.monotonic, sleep=time.sleep, out=emit, s
     return 4
 
 
+@contextmanager
+def trial_cancellation():
+    """Graceful cancellation enters Stop; repeated signals cannot interrupt containment.
+
+    SIGKILL, runner loss and provider refusal still require the independent Stop lane.
+    Handlers cover only the trial process and are restored afterward.
+    """
+    containing = False
+    requested = False
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    def cancelled(signum, frame):
+        nonlocal requested
+        if not containing and not requested:
+            requested = True  # protect child cleanup while the first signal unwinds
+            raise ControlError("trial_cancelled")
+    def begin_containment():
+        nonlocal containing
+        containing = True
+    try:
+        for sig in previous:
+            signal.signal(sig, cancelled)
+        yield begin_containment
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 def trial(client, *, mode="trial", guest_probe=None, clock=time.monotonic, sleep=time.sleep, out=emit):
     if mode not in {"trial", "manual_console_trial"}:
         raise ControlError("trial_mode_invalid")
     if guest_probe is not None and mode != "trial":
         raise ControlError("guest_diagnostic_mode_invalid")
-    running_limit = RUNNING_SECONDS if mode == "trial" else None
+    original_out = out
+    def out(event, **fields):
+        # A closed log pipe must not prevent ordinary Stop, including its own logs.
+        try:
+            original_out(event, **fields)
+        except (OSError, ValueError):
+            pass
+    running_limit = RUNNING_SECONDS if mode == "trial" and guest_probe is None else None
     if not LIVE_START_ENABLED:
         raise ControlError("live_start_locked")
     client.backup()
@@ -260,70 +296,74 @@ def trial(client, *, mode="trial", guest_probe=None, clock=time.monotonic, sleep
     running_at = None
     reason = "window_expired"
     diagnostic_failed = guest_probe is not None
-    try:
-        start_attempted = True
-        out("START_SUBMITTING", mode=mode, max_window_seconds=WINDOW_SECONDS, running_window_seconds=running_limit)
-        client.action("start")
-        start_uncertain = False
-        out("START_ACCEPTED")
-        # Reserve a trial GET, poll sleep, containment GET and Stop POST.
-        reserve = 3*HTTP_SECONDS + POLL_SECONDS
-        stop_request_by = began + WINDOW_SECONDS - reserve
-        while clock() < stop_request_by:
-            state, _ = client.state()
-            if state in {"starting", "running", "restarting"}:
-                start_transition_seen = True
-            out("TRIAL_STATE", status=state)
-            if state == "running":
-                if running_at is None:
-                    running_at = clock()
-                    if running_limit is not None:
-                        out("RUNNING_GUEST_WINDOW", seconds=running_limit)
-                    else:
-                        out("RUNNING_MANUAL_CONSOLE_WINDOW", remaining_seconds=max(0, int(began + WINDOW_SECONDS - clock())))
-                # The optional probe is run by this same controller after Running.
-                # Preparation finished before Start; no chat trigger or waiting process.
-                if guest_probe is not None:
-                    remaining = min(stop_request_by - clock(),
-                                    running_at + running_limit - reserve - clock())
-                    if remaining < GUEST_DIAGNOSTIC_SECONDS + 2:
-                        out("GUEST_DIAGNOSTIC_SKIPPED", reason="insufficient_stop_reserve")
-                        reason = "guest_diagnostic_budget"
+    with trial_cancellation() as begin_containment:
+        try:
+            start_attempted = True
+            out("START_SUBMITTING", mode=mode, max_window_seconds=WINDOW_SECONDS, running_window_seconds=running_limit)
+            client.action("start")
+            start_uncertain = False
+            out("START_ACCEPTED")
+            # Reserve a trial GET, poll sleep, containment GET and Stop POST.
+            reserve = 3*HTTP_SECONDS + POLL_SECONDS
+            stop_window = DIAGNOSTIC_STOP_SECONDS if guest_probe is not None else WINDOW_SECONDS
+            stop_request_by = began + stop_window - reserve
+            while clock() < stop_request_by:
+                state, _ = client.state()
+                if state in {"starting", "running", "restarting"}:
+                    start_transition_seen = True
+                out("TRIAL_STATE", status=state)
+                if state == "running":
+                    if running_at is None:
+                        running_at = clock()
+                        if running_limit is not None:
+                            out("RUNNING_GUEST_WINDOW", seconds=running_limit)
+                        elif guest_probe is None:
+                            out("RUNNING_MANUAL_CONSOLE_WINDOW", remaining_seconds=max(0, int(began + WINDOW_SECONDS - clock())))
+                    # The optional probe is run by this same controller after Running.
+                    # Preparation finished before Start; no chat trigger or waiting process.
+                    if guest_probe is not None:
+                        remaining = min(GUEST_DIAGNOSTIC_SECONDS, stop_request_by - clock() - 2)
+                        if remaining < GUEST_MIN_DIAGNOSTIC_SECONDS:
+                            out("GUEST_DIAGNOSTIC_SKIPPED", reason="insufficient_stop_reserve")
+                            reason = "guest_diagnostic_budget"
+                            break
+                        out("GUEST_DIAGNOSTIC_STARTED", **guest_probe.binding,
+                            max_seconds=remaining, seconds_since_start=round(clock() - began, 3),
+                            stop_submit_by_seconds=DIAGNOSTIC_STOP_SECONDS,
+                            confirmation_reserve_seconds=WINDOW_SECONDS - DIAGNOSTIC_STOP_SECONDS)
+                        try:
+                            with wall_deadline(remaining):
+                                verified = guest_probe.run_once(max_seconds=remaining)
+                        except Exception:
+                            # Do not render exception arguments, child output or credentials.
+                            verified = False
+                            out("GUEST_DIAGNOSTIC_FAILED", reason="bounded_probe_failed")
+                        diagnostic_failed = verified is not True
+                        out("GUEST_DIAGNOSTIC_RESULT", authenticated=verified is True)
+                        reason = "guest_diagnostic_complete" if verified is True else "guest_diagnostic_failed"
+                        break  # success and failure both lead immediately to finally Stop
+                    # Non-diagnostic standard trials retain the short RDC timer.
+                    # Its absolute deadline remains anchored BEFORE the sole Start POST.
+                    if running_limit is not None and clock() >= running_at + running_limit - reserve:
+                        reason = "guest_window_expired"
                         break
-                    out("GUEST_DIAGNOSTIC_STARTED", **guest_probe.binding,
-                        max_seconds=GUEST_DIAGNOSTIC_SECONDS)
-                    try:
-                        with wall_deadline(GUEST_DIAGNOSTIC_SECONDS):
-                            verified = guest_probe.run_once()
-                    except Exception:
-                        # Do not render exception arguments, child output or credentials.
-                        verified = False
-                        out("GUEST_DIAGNOSTIC_FAILED", reason="bounded_probe_failed")
-                    diagnostic_failed = verified is not True
-                    out("GUEST_DIAGNOSTIC_RESULT", authenticated=verified is True)
-                    reason = "guest_diagnostic_complete" if verified is True else "guest_diagnostic_failed"
-                    break  # success and failure both lead immediately to finally Stop
-                # Only the explicit manual console mode omits the short RDC timer.
-                # Its absolute deadline remains anchored BEFORE the sole Start POST.
-                if running_limit is not None and clock() >= running_at + running_limit - reserve:
-                    reason = "guest_window_expired"
+                elif state in {"stopping", "stopped"} and running_at is not None:
+                    reason = "external_stop_observed"
                     break
-            elif state in {"stopping", "stopped"} and running_at is not None:
-                reason = "external_stop_observed"
-                break
-            elif state in {"failed", "pending", "restarting"}:
-                reason = "unexpected_instance_state"
-                break
-            sleep(POLL_SECONDS)
-    except ControlError as exc:
-        reason = str(exc)
-        out("TRIAL_ABORT", reason=reason, start_outcome_unknown=start_uncertain)
-    finally:
-        if start_attempted:
-            out("TRIAL_CONTAINMENT", reason=reason)
-            # Accepted POST is NOT proof that its queued Start has taken effect.
-            result = ordinary_stop(client, clock=clock, sleep=sleep, out=out,
-                                   start_uncertain=not start_transition_seen)
+                elif state in {"failed", "pending", "restarting"}:
+                    reason = "unexpected_instance_state"
+                    break
+                sleep(POLL_SECONDS)
+        except ControlError as exc:
+            reason = str(exc)
+            out("TRIAL_ABORT", reason=reason, start_outcome_unknown=start_uncertain)
+        finally:
+            if start_attempted:
+                begin_containment()
+                out("TRIAL_CONTAINMENT", reason=reason)
+                # Accepted POST is NOT proof that its queued Start has taken effect.
+                result = ordinary_stop(client, clock=clock, sleep=sleep, out=out,
+                                       start_uncertain=not start_transition_seen)
     return result if result != 0 else (3 if diagnostic_failed else 0)
 
 

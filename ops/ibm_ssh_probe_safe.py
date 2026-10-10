@@ -10,6 +10,7 @@ import json
 import math
 import os
 import re
+import shlex
 import socket
 import stat
 import subprocess
@@ -20,12 +21,167 @@ KEY = "/home/ubuntu/.ssh/ibm_bridge_ed25519"
 KNOWN = "/home/ubuntu/.ssh/known_hosts"
 EXPECTED = "SHA256:o+7KPm2p4VSZSvFFYzIIzA8iiXfze2hhW9tUM58e00w"
 VERIFIED_USER = "ubuntu"
-PROBE_SECONDS = 28  # must not extend the remote watchdog or controller's 38s cap
-TCP_READINESS_SECONDS = 10
+PROBE_SECONDS = 328  # caller may shorten; remote watchdog and controller are stricter
+TCP_READINESS_SECONDS = 300
 TCP_CONNECT_SECONDS = 3
 TCP_POLL_SECONDS = 1
-TCP_MAX_ATTEMPTS = 11
+TCP_MAX_ATTEMPTS = 301
 SSH_SECONDS = 15
+
+
+HOST_SCOPE = "KNOWN_UNITS_TIMERS_AND_CONTAINERS_V1"
+HOST_UNITS = ('assistant-lab.service', 'assistant-lab-observer.service', 'assistant-lab-control.service', 'assistant-lab-control-bridge.service', 'universal-video.service', 'universal-video-container.service', 'universal-video-maintenance.service', 'dds3-mass@10000.service', 'dds3-mass@30000.service', 'bridge-ben.service', 'universal-video-maintenance.timer', 'bridge-ben-healthcheck.service', 'bridge-ben-healthcheck.timer', 'dds3-healthcheck.service', 'dds3-healthcheck.timer', 'dds3-cert-renew.service', 'dds3-cert-renew.timer', 'docker.service', 'docker.socket')
+HOST_CONTAINERS = ('universal-video-container', 'bridge-school-dds3-runtime')
+HOST_OBSERVER = r"""import ctypes,json,os,selectors,signal,subprocess,time
+UNITS=('assistant-lab.service','assistant-lab-observer.service','assistant-lab-control.service','assistant-lab-control-bridge.service','universal-video.service','universal-video-container.service','universal-video-maintenance.service','dds3-mass@10000.service','dds3-mass@30000.service','bridge-ben.service','universal-video-maintenance.timer','bridge-ben-healthcheck.service','bridge-ben-healthcheck.timer','dds3-healthcheck.service','dds3-healthcheck.timer','dds3-cert-renew.service','dds3-cert-renew.timer','docker.service','docker.socket')
+NAMES=('universal-video-container','bridge-school-dds3-runtime')
+START=time.monotonic();END=START+7.5
+class Blocked(Exception):pass
+def aborted(signum,frame):
+ signal.setitimer(signal.ITIMER_REAL,0)
+ raise Blocked()
+def command(args):
+ end=min(END,time.monotonic()+2)
+ if end<=time.monotonic():raise Blocked()
+ parent=os.getpid()
+ def child_setup():
+  if ctypes.CDLL(None).prctl(1,signal.SIGKILL)!=0 or os.getppid()!=parent:os._exit(125)
+ p=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True,preexec_fn=child_setup,env={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C'})
+ sel=selectors.DefaultSelector();raw=bytearray()
+ try:
+  os.set_blocking(p.stdout.fileno(),False);sel.register(p.stdout,selectors.EVENT_READ)
+  while sel.get_map():
+   left=end-time.monotonic()
+   if left<=0 or not sel.select(left):raise Blocked()
+   part=os.read(p.stdout.fileno(),1024)
+   if not part:sel.unregister(p.stdout)
+   raw.extend(part)
+   if len(raw)>4096:raise Blocked()
+  rc=p.wait(timeout=max(.001,end-time.monotonic()))
+  if time.monotonic()>end:raise Blocked()
+  return rc,raw.decode('ascii')
+ finally:
+  sel.close()
+  try:os.killpg(p.pid,signal.SIGKILL)
+  except ProcessLookupError:pass
+  p.wait(timeout=.2);p.stdout.close()
+result={'scope':'KNOWN_UNITS_TIMERS_AND_CONTAINERS_V1','result':'UNKNOWN','uid':None,'units':[],'docker':'UNKNOWN','containers':[]}
+try:
+ parent=os.getppid();assert parent>1
+ signal.signal(signal.SIGTERM,aborted)
+ assert ctypes.CDLL(None).prctl(1,signal.SIGTERM)==0 and os.getppid()==parent
+ assert signal.getitimer(signal.ITIMER_REAL)[0]==0
+ signal.signal(signal.SIGALRM,aborted)
+ signal.setitimer(signal.ITIMER_REAL,7.8)
+ rc,text=command(['/usr/bin/id','-u'])
+ assert rc==0 and text.strip().isdigit() and len(text.strip())<=10
+ result['uid']=int(text.strip());assert 0<=result['uid']<=2147483647
+ rc,text=command(['/usr/bin/systemctl','show','--no-pager','--property=Id,LoadState,ActiveState,SubState',*UNITS])
+ assert rc in (0,1)
+ seen={}
+ for block in text.strip().split('\n\n'):
+  row={}
+  for line in block.splitlines():
+   key,value=line.split('=',1);assert key not in row;row[key]=value
+  assert set(row)=={'Id','LoadState','ActiveState','SubState'} and row['Id'] in UNITS and row['Id'] not in seen
+  seen[row['Id']]=row
+ assert set(seen)==set(UNITS)
+ active=False;unknown=False
+ for name in UNITS:
+  row=seen[name];load=row['LoadState'];state=row['ActiveState'];sub=row['SubState']
+  assert load in ('loaded','not-found','masked','error','bad-setting','merged')
+  assert state in ('active','reloading','inactive','failed','activating','deactivating','maintenance','refreshing')
+  if sub not in ('dead','running','exited','failed','waiting','start','start-pre','start-post','stop','stop-sigterm','stop-sigkill','auto-restart','condition','listening'):sub='other'
+  result['units'].append({'unit':name,'load':load,'active':state,'sub':sub})
+  if name in ('docker.service','docker.socket'):continue
+  active |= state in ('active','reloading','activating','deactivating','refreshing')
+  unknown |= not(state=='inactive' and sub=='dead' and load in ('loaded','not-found','masked')) and not active
+ if active:result['result']='ACTIVE_OR_TRANSITION'
+ elif unknown:result['result']='UNKNOWN'
+ else:result['result']='QUIET_IN_KNOWN_SCOPE'
+ if active:raise Blocked()
+ if os.path.lexists('/usr/bin/docker'):
+  assert not os.path.lexists('/proc/0/bridge-ibm-observer')
+  assert seen['docker.service']['LoadState']=='loaded' and seen['docker.service']['ActiveState']=='active' and seen['docker.service']['SubState']=='running'
+  assert seen['docker.socket']['LoadState'] in ('not-found','masked') and seen['docker.socket']['ActiveState']=='inactive' and seen['docker.socket']['SubState']=='dead'
+  rc,text=command(['/usr/bin/docker','--config','/proc/0/bridge-ibm-observer','--host','unix:///var/run/docker.sock','container','ls','--all','--format','{{.Names}} {{.State}}','--filter','name=^/universal-video-container$','--filter','name=^/bridge-school-dds3-runtime$'])
+  assert rc==0
+  details={}
+  for line in text.splitlines():
+   name,state=line.split()
+   assert name in NAMES and name not in details and state in ('created','running','paused','restarting','removing','exited','dead')
+   details[name]={'name':name,'status':state}
+  result['containers']=[details.get(name,{'name':name,'status':'absent'}) for name in NAMES];result['docker']='OBSERVED'
+  # Existing containers cannot be cleared without inspect; never fetch that data.
+  if details:result['result']='UNKNOWN'
+  if any(row['status'] in ('running','paused','restarting','removing') for row in result['containers']):result['result']='ACTIVE_OR_TRANSITION'
+ else:
+  assert not os.path.exists('/var/run/docker.sock')
+  assert all(seen[name]['LoadState']=='not-found' and seen[name]['ActiveState']=='inactive' and seen[name]['SubState']=='dead' for name in ('docker.service','docker.socket'))
+  result['docker']='NOT_INSTALLED'
+ assert time.monotonic()<END
+except Exception:
+ result['result']='UNKNOWN'
+finally:
+ signal.setitimer(signal.ITIMER_REAL,0)
+result['elapsed_seconds']=round(max(0,time.monotonic()-START),3)
+print(json.dumps(result,separators=(',',':')),flush=True)
+"""
+
+def validate_host_observation(data):
+    """Allowlist a bounded snapshot; never infer host-wide inactivity."""
+    def need(ok):
+        if not ok:raise ValueError("host_observer_schema")
+    need(type(data) is dict and set(data)=={"scope","result","uid","units","docker","containers","elapsed_seconds"})
+    need(data["scope"]==HOST_SCOPE and data["result"] in {"UNKNOWN","ACTIVE_OR_TRANSITION","QUIET_IN_KNOWN_SCOPE"})
+    need(type(data["uid"]) is int and 0<=data["uid"]<=2147483647)
+    need(type(data["elapsed_seconds"]) in (int,float) and math.isfinite(data["elapsed_seconds"]) and 0<=data["elapsed_seconds"]<=8)
+    need(type(data["units"]) is list and len(data["units"])<=len(HOST_UNITS))
+    seen={};active=False;unknown=False
+    for row in data["units"]:
+        need(type(row) is dict and set(row)=={"unit","load","active","sub"})
+        need(type(row["unit"]) is str and row["unit"] in HOST_UNITS and row["unit"] not in seen)
+        need(type(row["load"]) is str and row["load"] in {"loaded","not-found","masked","error","bad-setting","merged"})
+        need(type(row["active"]) is str and row["active"] in {"active","reloading","inactive","failed","activating","deactivating","maintenance","refreshing"})
+        need(type(row["sub"]) is str and row["sub"] in {"dead","running","exited","failed","waiting","start","start-pre","start-post","stop","stop-sigterm","stop-sigkill","auto-restart","condition","listening","other"})
+        seen[row["unit"]]=row
+        if row["unit"] not in {"docker.service","docker.socket"}:
+            active |= row["active"] in {"active","reloading","activating","deactivating","refreshing"}
+            unknown |= not(row["active"]=="inactive" and row["sub"]=="dead" and row["load"] in {"loaded","not-found","masked"})
+    unknown |= set(seen)!=set(HOST_UNITS)
+    need(type(data["docker"]) is str and data["docker"] in {"UNKNOWN","NOT_INSTALLED","OBSERVED"})
+    need(type(data["containers"]) is list and len(data["containers"])<=len(HOST_CONTAINERS))
+    containers={}
+    for row in data["containers"]:
+        need(type(row) is dict and type(row.get("name")) is str and row["name"] in HOST_CONTAINERS and row["name"] not in containers)
+        need(type(row.get("status")) is str and row["status"] in {"absent","created","running","paused","restarting","removing","exited","dead"})
+        need(set(row)=={"name","status"})
+        unknown |= row["status"]!="absent"
+        active |= row["status"] in {"running","paused","restarting","removing"};containers[row["name"]]=row
+    daemon=seen.get("docker.service",{})
+    activation=seen.get("docker.socket",{})
+    socket_safe=activation.get("load") in {"not-found","masked"} and activation.get("active")=="inactive" and activation.get("sub")=="dead"
+    if data["docker"]=="OBSERVED":
+        unknown |= not socket_safe or set(containers)!=set(HOST_CONTAINERS) or not(daemon.get("load")=="loaded" and daemon.get("active")=="active" and daemon.get("sub")=="running")
+    elif data["docker"]=="NOT_INSTALLED":
+        unknown |= bool(containers) or not all(row.get("load")=="not-found" and row.get("active")=="inactive" and row.get("sub")=="dead" for row in (daemon,activation))
+    else:unknown=True
+    label="ACTIVE_OR_TRANSITION" if active else "UNKNOWN" if unknown else "QUIET_IN_KNOWN_SCOPE"
+    # A remote exception/UNKNOWN may not be upgraded by superficially complete data.
+    if data["result"]=="ACTIVE_OR_TRANSITION":label="ACTIVE_OR_TRANSITION"
+    elif data["result"]=="UNKNOWN" and label=="QUIET_IN_KNOWN_SCOPE":label="UNKNOWN"
+    return dict(data,result=label)
+
+
+def parse_host_observation(text):
+    if type(text) is not str or len(text.encode("utf-8"))>4096:raise ValueError("host_observer_limit")
+    def unique(items):
+        row={}
+        for key,value in items:
+            if key in row:raise ValueError("host_observer_schema")
+            row[key]=value
+        return row
+    return validate_host_observation(json.loads(text,object_pairs_hook=unique))
 
 
 class ProbeDeadlineError(Exception):
@@ -168,7 +324,7 @@ def _probe(user, budget):
             "-o", "UserKnownHostsFile=" + KNOWN,
             "-o", "HostKeyAlgorithms=ssh-ed25519", "-o", "ConnectTimeout=8",
             "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1",
-            user + "@" + HOST, "id -u"]
+            user + "@" + HOST, "/usr/bin/python3 -I -B -c " + shlex.quote(HOST_OBSERVER)]
     timeout = min(SSH_SECONDS, budget.remaining())
     emit("SSH_PROBE_STARTED", user=user)
     started = budget.now()
@@ -181,12 +337,24 @@ def _probe(user, budget):
         emit("SSH_WALL_TIMEOUT", elapsed_seconds=round(time.monotonic() - started, 3), **stderr_info(error_text, user))
         return 3
     budget.remaining()  # do not accept success returned after the shared deadline
+    elapsed = budget.now() - started
+    if elapsed > timeout:
+        raise ProbeDeadlineError("ssh_deadline_expired")
     info = stderr_info(result.stderr, user)
     emit("SSH_PROBE_FINISHED", ssh_exit=result.returncode,
-         elapsed_seconds=round(time.monotonic() - started, 3), **info)
-    if result.returncode == 0 and re.fullmatch(r"[0-9]+\n?", result.stdout):
-        emit("SSH_AUTHENTICATED", uid=int(result.stdout), user=user)
-        return 0
+         elapsed_seconds=round(elapsed, 3), **info)
+    if result.returncode == 0:
+        try:
+            observation = parse_host_observation(result.stdout)
+        except (ValueError, TypeError, RecursionError):
+            emit("HOST_OBSERVER_BLOCKED", result_class="INVALID_OR_INCOMPLETE")
+            return 3
+        emit("HOST_OBSERVER_RESULT", observation=observation)
+        emit("SSH_AUTHENTICATED", uid=observation["uid"], user=user)
+        if observation["result"] == "QUIET_IN_KNOWN_SCOPE":
+            return 0
+        emit("HOST_OBSERVER_BLOCKED", result_class=observation["result"])
+        return 3
     emit("SSH_NOT_CONFIRMED", stdout_exported=False)
     return 3
 

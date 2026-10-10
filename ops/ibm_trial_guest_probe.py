@@ -4,6 +4,7 @@ import datetime
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -15,13 +16,22 @@ import stat
 import subprocess
 import time
 
+try:
+    from .ibm_ssh_probe_safe import validate_host_observation
+except ImportError:
+    from ibm_ssh_probe_safe import validate_host_observation
+
 REPOSITORY = "olegmed1-art/bridge-video-free"
 REF = "refs/heads/review/ibm-trial-control-20261001"
 ORACLE = "92.5.47.149"
 ORACLE_FP = "SHA256:XBR1x74uJ41BxmDF7Y9P20GjIjNbrYXqieV4c2MC0Go"
-GUEST_SOURCE_SHA = "52d18ba9043676fa3ad0f4601ae4e4ed646cf106878beaa716437c3bc232232b"
+GUEST_SOURCE_SHA = "7711357b7929dcf42d8e49739b16f2e4489191644a0bfb711259f57f182e3bee"
 PREPARE_SECONDS = 20
-DIAGNOSTIC_SECONDS = 38
+DIAGNOSTIC_SECONDS = 338
+MIN_DIAGNOSTIC_SECONDS = 38
+REMOTE_SECONDS = 328
+TCP_READINESS_SECONDS = 300
+TCP_MAX_ATTEMPTS = 301
 CONSUMED_RUNS = {"37776596059", "37788143504"}
 
 class ProbeError(Exception):
@@ -36,7 +46,7 @@ def emit(event, **fields):
 
 def bounded_process(argv, *, payload=b"", timeout=10, limit=32768):
     """Bound stdin, both outputs, wall time and cleanup; never print process errors."""
-    need(len(payload) <= 16384, "probe_input_limit")
+    need(len(payload) <= 32768, "probe_input_limit")
     child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, start_new_session=True,
                              env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8","LC_ALL":"C.UTF-8"})
@@ -103,7 +113,7 @@ def memory(raw, name):
         os.close(fd)
         raise
 
-REMOTE = r"""import base64,ctypes,datetime,fcntl,hashlib,json,os,signal,socket,stat,subprocess,sys,time,types
+REMOTE = r"""import base64,ctypes,datetime,fcntl,hashlib,json,math,os,signal,socket,stat,subprocess,sys,time,types
 knownfd=None
 timer_owned=False
 class RemoteAbort(Exception):
@@ -125,19 +135,27 @@ def bounded_child(argv,**kwargs):
 try:
  assert hasattr(signal,"setitimer") and signal.getitimer(signal.ITIMER_REAL)[0]==0
  signal.signal(signal.SIGALRM,expired)
- remote_deadline=time.monotonic()+28
+ remote_started=time.monotonic()
+ remote_deadline=remote_started+28
  signal.setitimer(signal.ITIMER_REAL,28)
  timer_owned=True
  parent=os.getppid()
  assert ctypes.CDLL(None).prctl(1,signal.SIGTERM)==0 and os.getppid()==parent
  signal.signal(signal.SIGTERM,expired)
  p=json.load(sys.stdin)
- assert set(p)=={"phase","run_id","attempt","head","source","source_sha"}
+ assert set(p)=={"phase","run_id","attempt","head","source","source_sha","probe_seconds"}
  assert p["phase"] in ("preflight","probe") and p["attempt"]==1 and p["run_id"].isdigit()
+ duration=p["probe_seconds"]
+ assert type(duration) in (int,float) and math.isfinite(duration) and 28<=duration<=328
+ assert p["phase"]!="preflight" or duration==28
+ remote_deadline=remote_started+duration
+ remaining=remote_deadline-time.monotonic()
+ assert 0<remaining<=328
+ signal.setitimer(signal.ITIMER_REAL,remaining)
  assert len(p["head"])==40 and all(c in "0123456789abcdef" for c in p["head"])
  assert socket.gethostname()=="autopilot-lite-vnic" and os.geteuid()==1001
  b=p["source"].encode()
- assert p["source_sha"]=="52d18ba9043676fa3ad0f4601ae4e4ed646cf106878beaa716437c3bc232232b" and hashlib.sha256(b).hexdigest()==p["source_sha"]
+ assert p["source_sha"]=="7711357b7929dcf42d8e49739b16f2e4489191644a0bfb711259f57f182e3bee" and hashlib.sha256(b).hexdigest()==p["source_sha"]
  ns={"__name__":"reviewed_probe"}
  exec(compile(b,"reviewed_ibm_ssh_probe.py","exec"),ns)
  assert ns["VERIFIED_USER"]=="ubuntu" and ns["HOST"]=="161.156.86.34"
@@ -190,6 +208,158 @@ def context():
          and no(inp.get("test_oracle")), "probe_dispatch_inputs")
     return dict(run_id=run_id, attempt=1, head=head)
 
+# These limits are parser bounds, not additional probe time or retry budgets.
+RESPONSE_BYTES = 32768
+RESPONSE_ROWS = 16
+RESPONSE_LINE_BYTES = 4096
+TCP_FAILURES = {"TCP_REFUSED", "TCP_TIMEOUT", "NETWORK_UNREACHABLE", "TCP_CONNECT_FAILURE"}
+SSH_CLASSES = {"HOSTKEY_FAILURE", "LOCAL_KEY_FAILURE", "AUTH_FAILURE", "TCP_REFUSED",
+               "SSH_BANNER_TIMEOUT", "TCP_TIMEOUT", "NETWORK_UNREACHABLE",
+               "CONNECTION_CLOSED", "SSH_NEGOTIATION_FAILURE", "UNCLASSIFIED"}
+RESPONSE_EVENTS = TCP_FAILURES | {
+    "RUN_BOUND_GUEST_DIAGNOSTIC", "TCP_PROBE_STARTED", "TCP_OPEN", "TCP_READINESS_EXHAUSTED",
+    "SSH_PROBE_STARTED", "SSH_PROBE_FINISHED", "SSH_WALL_TIMEOUT", "SSH_AUTHENTICATED",
+    "SSH_NOT_CONFIRMED", "PRECHECK_BLOCKED", "LOCAL_PRECHECK_FAILED", "ORACLE_ROUTE_BLOCKED",
+    "HOST_OBSERVER_RESULT", "HOST_OBSERVER_BLOCKED",
+}
+
+
+def response_rows(raw):
+    """Parse bounded, untrusted JSON lines; never include input in parser errors."""
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            need(key not in result, "probe_response_schema")
+            result[key] = value
+        return result
+
+    def constant(_value):
+        raise ProbeError("probe_response_schema")
+
+    need(type(raw) is bytes and len(raw) <= RESPONSE_BYTES, "probe_response_limit")
+    lines = raw.splitlines()
+    need(0 < len(lines) <= RESPONSE_ROWS and all(0 < len(line) <= RESPONSE_LINE_BYTES for line in lines),
+         "probe_response_limit")
+    try:
+        rows = [json.loads(line.decode("utf-8"), object_pairs_hook=pairs, parse_constant=constant)
+                for line in lines]
+    except (ValueError, UnicodeError, RecursionError):
+        raise ProbeError("probe_response_schema") from None
+    need(all(type(row) is dict and len(row) <= 20 and type(row.get("event")) is str
+             and row["event"] in RESPONSE_EVENTS for row in rows), "probe_response_schema")
+    return rows
+
+
+def diagnostic_receipts(rows, *, remote_seconds=REMOTE_SECONDS):
+    """Validate all evidence before emitting any derived success or failure receipt.
+
+    Only fixed labels, bounded numbers and hashes cross this boundary. In particular,
+    remote timestamps, exception strings and even previously 'safe' stderr lines do not.
+    Durations are the remote monotonic durations, not reconstructed wall-clock timing.
+    """
+    need(type(remote_seconds) in (int, float) and math.isfinite(remote_seconds)
+         and 28 <= remote_seconds <= REMOTE_SECONDS, "probe_budget")
+
+    def elapsed(row):
+        value = row.get("elapsed_seconds")
+        need(type(value) in (int, float) and 0 <= value <= remote_seconds, "probe_response_schema")
+        return value
+
+    def classes(row):
+        value = row.get("error_classes")
+        need(type(value) is list and len(value) <= 1
+             and all(type(x) is str and x in SSH_CLASSES for x in value), "probe_response_schema")
+        return value
+
+    def digest(row):
+        value = row.get("stderr_sha256")
+        need(type(value) is str and re.fullmatch("[0-9a-f]{64}", value) is not None,
+             "probe_response_schema")
+        return value
+
+    events = [r["event"] for r in rows]
+    need(events.count("RUN_BOUND_GUEST_DIAGNOSTIC") == 1, "probe_response_schema")
+    # One probe, one TCP terminal, and one SSH terminal: duplicates are not evidence.
+    terminals = [r for r in rows if r["event"] in {"TCP_OPEN", "TCP_READINESS_EXHAUSTED"}]
+    failures = [r for r in rows if r["event"] in TCP_FAILURES]
+    ssh = [r for r in rows if r["event"] in {"SSH_PROBE_FINISHED", "SSH_WALL_TIMEOUT"}]
+    need(len(terminals) <= 1 and len(failures) <= 1 and len(ssh) <= 1
+         and events.count("TCP_PROBE_STARTED") <= 1 and events.count("SSH_PROBE_STARTED") <= 1,
+         "probe_response_schema")
+    # Preserve the remote sequence; never turn reordered input into plausible evidence.
+    tcp_positions = [i for i, event in enumerate(events)
+                     if event in TCP_FAILURES | {"TCP_OPEN", "TCP_READINESS_EXHAUSTED"}]
+    ssh_positions = [i for i, event in enumerate(events)
+                     if event in {"SSH_PROBE_STARTED", "SSH_PROBE_FINISHED", "SSH_WALL_TIMEOUT",
+                                  "SSH_AUTHENTICATED", "SSH_NOT_CONFIRMED"}]
+    if "TCP_PROBE_STARTED" in events:
+        need(all(events.index("TCP_PROBE_STARTED") < i for i in tcp_positions + ssh_positions),
+             "probe_response_schema")
+    if terminals and ssh_positions:
+        need(events.index(terminals[0]["event"]) < min(ssh_positions), "probe_response_schema")
+    if "SSH_PROBE_STARTED" in events and ssh:
+        need(events.index("SSH_PROBE_STARTED") < events.index(ssh[0]["event"]), "probe_response_schema")
+    receipts = []
+    host_receipts = []
+    need(events.count("HOST_OBSERVER_RESULT") <= 1 and events.count("HOST_OBSERVER_BLOCKED") <= 1, "probe_response_schema")
+    for row in rows:
+        if row["event"]=="HOST_OBSERVER_RESULT":
+            try:observation=validate_host_observation(row.get("observation"))
+            except (ValueError,TypeError):raise ProbeError("probe_response_schema") from None
+            need("SSH_PROBE_FINISHED" in events and events.index("SSH_PROBE_FINISHED")<events.index("HOST_OBSERVER_RESULT"), "probe_response_schema")
+            host_receipts.append(("GUEST_HOST_OBSERVER_RESULT",dict(stage="HOST_OBSERVER",observation=observation)))
+        elif row["event"]=="HOST_OBSERVER_BLOCKED":
+            need(type(row.get("result_class")) is str and row["result_class"] in {"UNKNOWN","ACTIVE_OR_TRANSITION","INVALID_OR_INCOMPLETE"}, "probe_response_schema")
+            host_receipts.append(("GUEST_HOST_OBSERVER_BLOCKED",dict(stage="HOST_OBSERVER",result_class=row["result_class"])))
+    if terminals:
+        row = terminals[0]
+        exhausted = row["event"] == "TCP_READINESS_EXHAUSTED"
+        attempts = row.get("attempts")
+        need(type(attempts) is int and (0 if exhausted else 1) <= attempts <= TCP_MAX_ATTEMPTS,
+             "probe_response_schema")
+        duration = elapsed(row)
+        if exhausted:
+            need(len(failures) == 1 and events.index(failures[0]["event"]) < events.index(row["event"])
+                 and not ssh and "SSH_PROBE_STARTED" not in events and "SSH_AUTHENTICATED" not in events,
+                 "probe_response_schema")
+            need(elapsed(failures[0]) <= duration, "probe_response_schema")
+            result = failures[0]["event"]
+            need(attempts > 0 or result == "TCP_TIMEOUT", "probe_response_schema")
+            retry_exhausted = attempts > 0 and result in {"TCP_REFUSED", "TCP_TIMEOUT"}
+            termination = ("NO_TCP_ATTEMPT" if attempts == 0 else
+                           "RETRY_EXHAUSTED" if retry_exhausted else "NON_RETRYABLE_FAILURE")
+        else:
+            need(not failures and duration <= min(TCP_READINESS_SECONDS, remote_seconds - 15), "probe_response_schema")
+            result, retry_exhausted, termination = "TCP_OPEN", False, "READY"
+        receipts.append(("GUEST_TCP_READINESS_RESULT", dict(
+            stage="TCP_READINESS", attempts=attempts, elapsed_seconds=duration,
+            result_class=result, readiness_exhausted=exhausted,
+            retry_exhausted=retry_exhausted, termination_class=termination)))
+    for row in rows:
+        event = row["event"]
+        if event in TCP_FAILURES:
+            elapsed(row)  # Even a partial failure record must have valid relative timing.
+        if event in {"SSH_PROBE_FINISHED", "SSH_WALL_TIMEOUT"}:
+            # A timed-out subprocess may need a bounded cleanup scheduling margin.
+            need(elapsed(row) <= (16 if event == "SSH_WALL_TIMEOUT" else 15), "probe_response_schema")
+            fields = dict(stage="SSH", result_class=event, error_classes=classes(row),
+                          elapsed_seconds=elapsed(row), stderr_sha256=digest(row),
+                          raw_output_exported=False)
+            if event == "SSH_PROBE_FINISHED":
+                need(type(row.get("ssh_exit")) is int and 0 <= row["ssh_exit"] <= 255,
+                     "probe_response_schema")
+                fields["ssh_exit"] = row["ssh_exit"]
+            receipts.append(("GUEST_SSH_RESULT", fields))
+        if event in TCP_FAILURES | {"PRECHECK_BLOCKED", "LOCAL_PRECHECK_FAILED", "SSH_WALL_TIMEOUT", "ORACLE_ROUTE_BLOCKED"}:
+            stage = ("TCP_READINESS" if event in TCP_FAILURES else
+                     "SSH" if event == "SSH_WALL_TIMEOUT" else "PRECHECK_OR_ROUTE")
+            fields = dict(stage=stage, failure_class=event)
+            if event in TCP_FAILURES:
+                fields["elapsed_seconds"] = elapsed(row)
+            receipts.append(("GUEST_DIAGNOSTIC_BLOCKED", fields))
+    return receipts + host_receipts
+
+
 class PreparedProbe:
     def __init__(self, binding, source, keyfd, knownfd):
         self.binding, self.source = binding, source
@@ -215,7 +385,12 @@ class PreparedProbe:
                 "-o", "ConnectionAttempts=1", "-o", "ConnectTimeout=3",
                 "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1",
                 "ubuntu@"+ORACLE, "/usr/bin/python3 -I -B -c "+shlex.quote(REMOTE)]
-        payload = json.dumps(dict(self.binding, phase=phase, source=self.source, source_sha=GUEST_SOURCE_SHA)).encode()
+        need(phase in {"preflight", "probe"}, "probe_phase")
+        duration = 28 if phase == "preflight" else timeout - 5
+        need(type(duration) in (int, float) and math.isfinite(duration)
+             and 28 <= duration <= REMOTE_SECONDS, "probe_budget")
+        payload = json.dumps(dict(self.binding, phase=phase, source=self.source,
+                                  source_sha=GUEST_SOURCE_SHA, probe_seconds=duration)).encode()
         return bounded_process(argv, payload=payload, timeout=timeout)
 
     def preflight(self):
@@ -238,42 +413,38 @@ class PreparedProbe:
         self.ready = True
         emit("GUEST_ROUTE_PREPARED", **self.binding, guest_network_requests=0)
 
-    def run_once(self):
+    def run_once(self, *, max_seconds=DIAGNOSTIC_SECONDS):
         need(self.ready and not self.attempted, "probe_not_ready_or_replay")
+        need(type(max_seconds) in (int, float) and math.isfinite(max_seconds)
+             and MIN_DIAGNOSTIC_SECONDS <= max_seconds <= DIAGNOSTIC_SECONDS, "probe_budget")
         self.attempted = True  # before any network I/O; failures never retry
-        rc, raw, err = self.call("probe", 33)
+        rc, raw, err = self.call("probe", max_seconds - 5)
+        need(type(raw) is bytes and type(err) is bytes
+             and len(raw) + len(err) <= RESPONSE_BYTES, "probe_response_limit")
+        need(type(rc) is int and -255 <= rc <= 255, "probe_response_schema")
         # The remote source is pinned, but arbitrary output is not exported.
         emit("GUEST_PROBE_CAPTURED", **self.binding, remote_exit=rc, stdout_bytes=len(raw),
              stdout_sha256=hashlib.sha256(raw).hexdigest(), stderr_bytes=len(err),
              stderr_sha256=hashlib.sha256(err).hexdigest(), raw_output_exported=False)
-        rows = [json.loads(line) for line in raw.decode().splitlines()]
-        binding = rows[0] if rows else {}
+        rows = response_rows(raw)
+        binding = rows[0]
         need(binding.get("event") == "RUN_BOUND_GUEST_DIAGNOSTIC"
-             and all(binding.get(k) == v for k,v in self.binding.items()), "probe_response_binding")
-        for row in rows:
-            if row.get("event") == "SSH_PROBE_FINISHED":
-                classes = row.get("error_classes")
-                allowed = {"HOSTKEY_FAILURE","LOCAL_KEY_FAILURE","AUTH_FAILURE","TCP_REFUSED","SSH_BANNER_TIMEOUT","TCP_TIMEOUT","NETWORK_UNREACHABLE","CONNECTION_CLOSED","SSH_NEGOTIATION_FAILURE","UNCLASSIFIED"}
-                need(type(classes) is list and len(classes) <= 1 and all(x in allowed for x in classes), "probe_response_schema")
-                need(type(row.get("ssh_exit")) is int and 0 <= row["ssh_exit"] <= 255, "probe_response_schema")
-                safe_patterns = (
-                    r"ssh: connect to host 161\.156\.86\.34 port 22: (?:Connection refused|Connection timed out|No route to host|Network is unreachable)",
-                    r"ubuntu@161\.156\.86\.34: Permission denied \(publickey(?:,keyboard-interactive)?\)\.",
-                    r"Host key verification failed\.",
-                    r"Connection timed out during banner exchange",
-                    r'Load key "/home/ubuntu/\.ssh/ibm_bridge_ed25519": (?:Permission denied|invalid format|error in libcrypto|incorrect passphrase supplied to decrypt private key)',
-                )
-                exact = row.get("stderr_safe_exact_lines", [])
-                safe = [line for line in exact[:5] if type(line) is str and any(re.fullmatch(pattern, line) for pattern in safe_patterns)] if type(exact) is list else []
-                elapsed = row.get("elapsed_seconds")
-                need(type(elapsed) in (int, float) and 0 <= elapsed <= 38, "probe_response_schema")
-                emit("GUEST_SSH_RESULT", **self.binding, ssh_exit=row["ssh_exit"], error_classes=classes,
-                     elapsed_seconds=elapsed, stderr_safe_exact_lines=safe,
-                     stderr_sha256=row.get("stderr_sha256") if re.fullmatch("[0-9a-f]{64}", str(row.get("stderr_sha256"))) else "UNQUALIFIED")
-            if row.get("event") in {"TCP_REFUSED","TCP_TIMEOUT","NETWORK_UNREACHABLE","TCP_CONNECT_FAILURE","PRECHECK_BLOCKED","LOCAL_PRECHECK_FAILED","SSH_WALL_TIMEOUT"}:
-                emit("GUEST_DIAGNOSTIC_BLOCKED", **self.binding, failure_class=row["event"])
+             and all(type(binding.get(k)) is type(v) and binding.get(k) == v
+                     for k,v in self.binding.items()), "probe_response_binding")
+        receipts = diagnostic_receipts(rows, remote_seconds=max_seconds - 10)
+        for event, fields in receipts:
+            emit(event, **self.binding, **fields)
         auth = [r for r in rows if r.get("event") == "SSH_AUTHENTICATED"]
-        if rc == 0 and len(auth) == 1 and auth[0].get("user") == "ubuntu" and type(auth[0].get("uid")) is int and 0 <= auth[0]["uid"] <= 2147483647:
+        events = [r["event"] for r in rows]
+        chain = ["TCP_PROBE_STARTED", "TCP_OPEN", "SSH_PROBE_STARTED", "SSH_PROBE_FINISHED", "HOST_OBSERVER_RESULT", "SSH_AUTHENTICATED"]
+        complete = (all(events.count(event) == 1 for event in chain)
+                    and [events.index(event) for event in chain] == sorted(events.index(event) for event in chain)
+                    and not set(events) & (TCP_FAILURES | {"TCP_READINESS_EXHAUSTED", "SSH_WALL_TIMEOUT",
+                         "SSH_NOT_CONFIRMED", "PRECHECK_BLOCKED", "LOCAL_PRECHECK_FAILED", "ORACLE_ROUTE_BLOCKED", "HOST_OBSERVER_BLOCKED"})
+                    and next((r.get("ssh_exit") for r in rows if r["event"] == "SSH_PROBE_FINISHED"), None) == 0)
+        observed = [validate_host_observation(r["observation"]) for r in rows if r["event"]=="HOST_OBSERVER_RESULT"]
+        quiet = len(observed)==1 and observed[0]["result"]=="QUIET_IN_KNOWN_SCOPE"
+        if rc == 0 and complete and quiet and len(auth) == 1 and auth[0].get("user") == "ubuntu" and type(auth[0].get("uid")) is int and 0 <= auth[0]["uid"] <= 2147483647 and auth[0]["uid"]==observed[0]["uid"]:
             emit("GUEST_AUTHENTICATED", **self.binding, user="ubuntu", uid=auth[0]["uid"])
             return True
         return False
