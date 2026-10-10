@@ -44,6 +44,8 @@ MAX_BYTES = 1024 * 1024
 GUEST_DIAGNOSTIC_SECONDS = 338
 GUEST_MIN_DIAGNOSTIC_SECONDS = 38
 DIAGNOSTIC_STOP_SECONDS = 420  # from before Start, retaining 180s for confirmation
+UNIT_ISOLATION_SECONDS = 378
+UNIT_ISOLATION_MIN_SECONDS = 115
 
 
 class ControlError(Exception):
@@ -178,6 +180,11 @@ class Client:
                 or instance.get("boot_volume_attachment", {}).get("volume", {}).get("id") != VOLUME_ID
                 or instance.get("profile", {}).get("name") != "bx3dc-8x40"):
             raise ControlError("boot_or_quoted_profile_mismatch")
+        # Returned only after these fresh provider reads; maintenance binds this
+        # alongside the independently checked exact instance state and SSH pin.
+        return dict(instance_id=INSTANCE_ID, instance_name=INSTANCE_NAME,
+                    boot_volume_id=VOLUME_ID, image_id=IMAGE_ID,
+                    image_name=IMAGE_NAME, profile="bx3dc-8x40")
 
     def action(self, action):
         if action not in {"start", "stop"}:
@@ -270,11 +277,13 @@ def trial_cancellation():
             signal.signal(sig, handler)
 
 
-def trial(client, *, mode="trial", guest_probe=None, clock=time.monotonic, sleep=time.sleep, out=emit):
+def trial(client, *, mode="trial", guest_probe=None, maintenance=False, clock=time.monotonic, sleep=time.sleep, out=emit):
     if mode not in {"trial", "manual_console_trial"}:
         raise ControlError("trial_mode_invalid")
     if guest_probe is not None and mode != "trial":
         raise ControlError("guest_diagnostic_mode_invalid")
+    if type(maintenance) is not bool or (maintenance and (mode != "trial" or getattr(guest_probe, "kind", None) != "four_unit_isolation")):
+        raise ControlError("unit_isolation_scope_invalid")
     original_out = out
     def out(event, **fields):
         # A closed log pipe must not prevent ordinary Stop, including its own logs.
@@ -285,10 +294,12 @@ def trial(client, *, mode="trial", guest_probe=None, clock=time.monotonic, sleep
     running_limit = RUNNING_SECONDS if mode == "trial" and guest_probe is None else None
     if not LIVE_START_ENABLED:
         raise ControlError("live_start_locked")
-    client.backup()
+    backup_identity = client.backup()
     state, startable = client.state()
     if state != "stopped" or not startable:
         raise ControlError("start_preflight_not_stopped_startable")
+    if maintenance:
+        guest_probe.bind_identity(backup_identity)
     began = clock()
     start_uncertain = True
     start_transition_seen = False
@@ -322,12 +333,14 @@ def trial(client, *, mode="trial", guest_probe=None, clock=time.monotonic, sleep
                     # The optional probe is run by this same controller after Running.
                     # Preparation finished before Start; no chat trigger or waiting process.
                     if guest_probe is not None:
-                        remaining = min(GUEST_DIAGNOSTIC_SECONDS, stop_request_by - clock() - 2)
-                        if remaining < GUEST_MIN_DIAGNOSTIC_SECONDS:
+                        maximum = UNIT_ISOLATION_SECONDS if maintenance else GUEST_DIAGNOSTIC_SECONDS
+                        minimum = UNIT_ISOLATION_MIN_SECONDS if maintenance else GUEST_MIN_DIAGNOSTIC_SECONDS
+                        remaining = min(maximum, stop_request_by - clock() - 2)
+                        if remaining < minimum:
                             out("GUEST_DIAGNOSTIC_SKIPPED", reason="insufficient_stop_reserve")
                             reason = "guest_diagnostic_budget"
                             break
-                        out("GUEST_DIAGNOSTIC_STARTED", **guest_probe.binding,
+                        out("UNIT_ISOLATION_STARTED" if maintenance else "GUEST_DIAGNOSTIC_STARTED", **guest_probe.binding,
                             max_seconds=remaining, seconds_since_start=round(clock() - began, 3),
                             stop_submit_by_seconds=DIAGNOSTIC_STOP_SECONDS,
                             confirmation_reserve_seconds=WINDOW_SECONDS - DIAGNOSTIC_STOP_SECONDS)
@@ -339,8 +352,12 @@ def trial(client, *, mode="trial", guest_probe=None, clock=time.monotonic, sleep
                             verified = False
                             out("GUEST_DIAGNOSTIC_FAILED", reason="bounded_probe_failed")
                         diagnostic_failed = verified is not True
-                        out("GUEST_DIAGNOSTIC_RESULT", authenticated=verified is True)
-                        reason = "guest_diagnostic_complete" if verified is True else "guest_diagnostic_failed"
+                        if maintenance:
+                            out("UNIT_ISOLATION_RESULT", isolated=verified is True)
+                            reason = "unit_isolation_complete" if verified is True else "unit_isolation_blocked"
+                        else:
+                            out("GUEST_DIAGNOSTIC_RESULT", authenticated=verified is True)
+                            reason = "guest_diagnostic_complete" if verified is True else "guest_diagnostic_failed"
                         break  # success and failure both lead immediately to finally Stop
                     # Non-diagnostic standard trials retain the short RDC timer.
                     # Its absolute deadline remains anchored BEFORE the sole Start POST.
@@ -369,11 +386,11 @@ def trial(client, *, mode="trial", guest_probe=None, clock=time.monotonic, sleep
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["trial", "manual_console_trial", "stop"])
+    parser.add_argument("mode", choices=["trial", "manual_console_trial", "stop", "isolate_units"])
     parser.add_argument("--ack", required=True)
     parser.add_argument("--guest-diagnostic", action="store_true", help="One run-bound ubuntu SSH probe; trial only.")
     args = parser.parse_args(argv)
-    expected = {"trial": "OWNER_APPROVED_10MIN_10USD", "manual_console_trial": "OWNER_APPROVED_MANUAL_CONSOLE_10MIN_10USD", "stop": "ORDINARY_STOP_EXACT_IBM"}[args.mode]
+    expected = {"trial": "OWNER_APPROVED_10MIN_10USD", "manual_console_trial": "OWNER_APPROVED_MANUAL_CONSOLE_10MIN_10USD", "stop": "ORDINARY_STOP_EXACT_IBM", "isolate_units": "OWNER_APPROVED_IBM_FOUR_UNIT_ISOLATION_10MIN_10USD"}[args.mode]
     if args.ack != expected:
         emit("BLOCKED", reason="ack_mismatch")
         return 3
@@ -392,7 +409,16 @@ def main(argv=None):
                 import ibm_trial_guest_probe as guest
             with wall_deadline(guest.PREPARE_SECONDS):
                 guest_probe = guest.prepare()  # before IBM authentication or Start
+        if args.mode == "isolate_units":
+            try:
+                from . import ibm_unit_isolation_probe as isolation
+            except ImportError:
+                import ibm_unit_isolation_probe as isolation
+            with wall_deadline(isolation.PREPARE_SECONDS):
+                guest_probe = isolation.prepare()
         client = Client(authenticate())
+        if args.mode == "isolate_units":
+            return trial(client, guest_probe=guest_probe, maintenance=True)
         return trial(client, mode=args.mode, guest_probe=guest_probe) if args.mode != "stop" else ordinary_stop(client, start_uncertain=True)
     except ControlError as exc:
         emit("BLOCKED", reason=str(exc))

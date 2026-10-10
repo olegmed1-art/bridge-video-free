@@ -6,7 +6,7 @@ on:
       mode:
         description: 'trial_start: short RDC; manual_console_trial: owner console <=10min; trial_stop: independent'
         type: choice
-        options: [status, trial_start, manual_console_trial, trial_stop]
+        options: [status, trial_start, manual_console_trial, trial_stop, isolate_units]
         default: status
       diagnose_ssh:
         description: 'Run one synchronized ubuntu SSH diagnostic inside trial_start; Stop follows immediately'
@@ -28,6 +28,11 @@ on:
       - 'ops/ibm_trial_guest_probe.py'
       - 'ops/ibm_ssh_probe_safe.py'
       - 'tests/test_ibm_trial_guest_probe.py'
+      - 'ops/ibm_unit_isolation.py'
+      - 'ops/ibm_unit_isolation_probe.py'
+      - 'tests/test_ibm_unit_isolation.py'
+      - 'tests/test_ibm_unit_isolation_probe.py'
+      - 'tests/test_ibm_unit_isolation_controller.py'
 
 permissions:
   contents: read
@@ -48,8 +53,8 @@ jobs:
       - name: Validate bounded client contract
         run: |
           set -euo pipefail
-          python -m unittest -v tests.test_ibm_vpc_power tests.test_ibm_vpc_oracle_probe tests.test_ibm_trial_plan tests.test_ibm_trial_executor tests.test_ibm_trial_guest_probe
-          python -m py_compile ops/ibm_vpc_power.py ops/ibm_vpc_oracle_probe.py ops/ibm_trial_executor.py ops/ibm_trial_guest_probe.py ops/ibm_ssh_probe_safe.py
+          python -m unittest -v tests.test_ibm_vpc_power tests.test_ibm_vpc_oracle_probe tests.test_ibm_trial_plan tests.test_ibm_trial_executor tests.test_ibm_trial_guest_probe tests.test_ibm_unit_isolation tests.test_ibm_unit_isolation_probe tests.test_ibm_unit_isolation_controller
+          python -m py_compile ops/ibm_vpc_power.py ops/ibm_vpc_oracle_probe.py ops/ibm_trial_executor.py ops/ibm_trial_guest_probe.py ops/ibm_ssh_probe_safe.py ops/ibm_unit_isolation.py ops/ibm_unit_isolation_probe.py
 
   trial-start:
     # Preparation lock released; parent coordinates the live dispatch separately.
@@ -74,6 +79,23 @@ jobs:
             false|'') python3 ops/ibm_trial_executor.py trial --ack OWNER_APPROVED_10MIN_10USD ;;
             *) exit 78 ;;
           esac
+
+  unit-isolation:
+    # Separate explicit maintenance mode; existing diagnostic remains read-only.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'isolate_units' && inputs.diagnose_ssh == false && inputs.test_oracle == false && github.ref == 'refs/heads/review/ibm-trial-control-20261001' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Isolate exact four units within new owner-approved window
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+          ORACLE_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+        run: python3 ops/ibm_trial_executor.py isolate_units --ack OWNER_APPROVED_IBM_FOUR_UNIT_ISOLATION_10MIN_10USD
 
   manual-console-trial:
     # Separate explicit owner-console window; never extends the short RDC trial.
