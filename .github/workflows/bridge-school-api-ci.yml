@@ -15,6 +15,8 @@ on:
       - 'tests/test_ai_auction_scoring.py'
       - 'tests/test_knowledge_read_api.py'
       - 'tests/test_tournament_auction_stepwise_model_v3.py'
+      - 'tests/test_tournament_shape_exercises.py'
+      - 'tests/test_tournament_strength_proposal.py'
       - 'requirements-api.txt'
       - 'Dockerfile.api'
       - '.github/workflows/bridge-school-api-ci.yml'
@@ -33,6 +35,8 @@ on:
       - 'tests/test_ai_auction_scoring.py'
       - 'tests/test_knowledge_read_api.py'
       - 'tests/test_tournament_auction_stepwise_model_v3.py'
+      - 'tests/test_tournament_shape_exercises.py'
+      - 'tests/test_tournament_strength_proposal.py'
       - 'requirements-api.txt'
       - 'Dockerfile.api'
       - '.github/workflows/bridge-school-api-ci.yml'
@@ -76,6 +80,10 @@ jobs:
           tests/test_ai_auction_scoring.py
           tests/test_knowledge_read_api.py
           tests/test_tournament_auction_stepwise_model_v3.py
+      - name: Verify tournament shape and derived proposal contracts
+        run: |
+          PYTHONPATH=. python -m unittest discover -s tests -p test_tournament_shape_exercises.py -v
+          PYTHONPATH=. python -m unittest discover -s tests -p test_tournament_strength_proposal.py -v
       - name: Import FastAPI application
         run: python -c "from app import app; assert app.title == 'Bridge School API'"
       - name: Build API container
@@ -83,7 +91,7 @@ jobs:
       - name: Verify API container identity and application import
         run: >-
           docker run --rm --network none bridge-school-api:ci
-          python -c "import os; from bridge_school_api.main import app; assert os.getuid() == 65532 and os.getgid() == 65532 and app.title == 'Bridge School API'"
+          python -c "import os; from bridge_school_api.main import app; assert os.getuid() == 65532 and os.getgid() == 65532 and app.title == 'Bridge School API'; from bridge_school_api.tournament_strength_proposal import load_policy; assert load_policy()['status'] == 'PROPOSAL'"
 
   production-smoke:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -79,7 +79,15 @@ class IncidentProbeTests(unittest.TestCase):
     def test_query_overrides_cannot_redirect_probe(self):
         for parameter in ("host=elsewhere.neon.tech", "hostaddr=127.0.0.1", "user=neondb_owner", "service=other"):
             with self.subTest(parameter=parameter), patch.object(probe.psycopg, "connect") as connect:
-                self.assertEqual(self.run_probe(DSN + "&" + parameter, True)["status"], "effective_parameters_rejected")
+                self.assertEqual(self.run_probe(DSN + "&" + parameter, True)["status"], "configuration_failed")
+                connect.assert_not_called()
+
+    def test_effective_parameters_remain_a_second_line_of_defense(self):
+        for parameter in ("host=elsewhere.neon.tech", "hostaddr=127.0.0.1", "user=neondb_owner", "service=other"):
+            with self.subTest(parameter=parameter), \
+                 patch.object(probe, "database_dsn", return_value=DSN + "&" + parameter), \
+                 patch.object(probe.psycopg, "connect") as connect:
+                self.assertEqual(self.run_probe(connect=True)["status"], "effective_parameters_rejected")
                 connect.assert_not_called()
 
     def test_libpq_environment_requires_review(self):

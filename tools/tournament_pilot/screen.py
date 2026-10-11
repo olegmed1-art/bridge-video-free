@@ -9,6 +9,7 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 from uuid import UUID
 
 from bridge_school_api import tournament_teacher as teacher
+from bridge_school_api.tournament_shape_core import ASSESSMENT_VERSION
 from .package import catalog, position, envelope, formal_package
 
 UPSTREAM = "https://bridge-video-free.vercel.app"
@@ -20,27 +21,34 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 def public_answer(result, call):
-    if (not isinstance(result,dict) or result.get("status") not in {"SUPPORTED","CONTRADICTED","ABSTAIN"}
+    if (not isinstance(result,dict) or result.get("status") != "ABSTAIN"
             or "action" not in result or result["action"] is not None
             or any(result.get(k) is not False for k in ("persisted","queued","finalized"))
             or result.get("teacher_version")!=teacher.VERSION or result.get("teacher_system")!=teacher.PROFILE
-            or result.get("scope_key")!=teacher.SCOPE or result.get("assessment_scope")!="shape_meaning_only"
+            or result.get("scope_key")!=teacher.SCOPE or result.get("assessment_scope")!="full_call"
+            or result.get("assessment_mode")!="FULL_CALL" or result.get("assessment_version")!=ASSESSMENT_VERSION
+            or result.get("assessment_complete") is not False or result.get("call_eligibility")!="UNKNOWN"
+            or result.get("call_approved") is not None or result.get("learner_error") is not None
+            or result.get("strength_status")!="UNKNOWN" or result.get("game_guaranteed") is not None
             or result.get("proposed_call")!=call or not isinstance(result.get("source_bindings"),list)):
         raise ValueError("Unexpected answer contract")
     bindings=result["source_bindings"]
-    if result["status"]=="ABSTAIN":
-        if bindings:
-            raise ValueError("Abstention has active bindings")
-    else:
+    if bindings:
         entry=next(e for e in formal_package()["rules"] if e["payload"]["source_rule"]["call"]==call)
         source=entry["payload"]["source_rule"]
         if (len(bindings)!=1 or bindings[0].get("rule_key")!=entry["rule_key"]
                 or bindings[0].get("payload_sha256")!=entry["payload_sha256"]
                 or any(bindings[0].get(k)!=source[k] for k in ("source_url","decision_ids","original_excerpt","teacher_excerpt"))
                 or result.get("observed_shape")!={"S":3,"H":1,"D":4,"C":5}
-                or result["status"]!=("SUPPORTED" if call=="3H" else "CONTRADICTED")):
+                or result.get("shape_status")!=("MATCH" if call=="3H" else "MISMATCH")
+                or result.get("reason")!="STRENGTH_CANON_NOT_CONFIRMED"):
             raise ValueError("Answer does not bind the reviewed canary meaning")
+    elif result.get("shape_status")!="UNKNOWN" or result.get("reason")=="STRENGTH_CANON_NOT_CONFIRMED":
+        raise ValueError("Missing binding cannot establish shape")
     return {"status":result["status"],"reason":result.get("reason"),
+        "assessment_scope":"full_call", "assessment_version":ASSESSMENT_VERSION,
+        "shape_status":result["shape_status"], "strength_status":"UNKNOWN",
+        "call_eligibility":"UNKNOWN", "call_approved":None, "learner_error":None,
         "explanation":result.get("explanation"),"sources":[
             {k:b[k] for k in ("rule_key","decision_ids","original_excerpt","teacher_excerpt")}
             for b in result.get("source_bindings",[])]}
