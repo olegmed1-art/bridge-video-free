@@ -40,6 +40,7 @@ class Fixture:
         self.hook = None
         self.reloads = 0
         self.stop_requested = []
+        self.version = {"type": "s", "data": "255.4-1ubuntu8.8"}
         self.secret = "NEVER_EXPORT_INLINE_SECRET"
         for path in ("etc/systemd/system", "run/systemd/system", "usr/lib/systemd/system", "var/lib", "sys/fs/cgroup", "usr/lib"):
             (self.root / path).mkdir(parents=True, exist_ok=True)
@@ -59,7 +60,8 @@ class Fixture:
             if unit.endswith(".service"):
                 row.update(MainPID="44" if active else "0", ControlPID="0", ExecStop="", ExecStopPost="", TimeoutStopUSec="15s" if unit == m.CONTROL else "20s",
                            KillMode="control-group", KillSignal="15", SendSIGKILL="yes", FinalKillSignal="9",
-                           TimeoutStopFailureMode="terminate", Restart="always")
+                           TimeoutStopFailureMode="terminate", Restart="always",
+                           PrivateTmp="yes" if unit in (m.OBSERVER, m.CONTROL, m.BRIDGE, m.HEALTH) else "no")
             if unit == m.TIMER:
                 row["Triggers"] = m.HEALTH
             if unit == m.HEALTH:
@@ -104,6 +106,12 @@ class Fixture:
             fields = argv[-2].split("=", 1)[1].split(",")
             return ("\n".join(k + "=" + self.rows[unit][k] for k in fields) + "\n").encode()
         if argv[0] == "/usr/bin/busctl":
+            if argv[-1] == "Version":
+                if argv != ["/usr/bin/busctl", "--system", "--json=short", "get-property",
+                            "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+                            "org.freedesktop.systemd1.Manager", "Version"]:
+                    raise AssertionError("Unexpected manager property request")
+                return json.dumps(self.version).encode()
             obj = argv[5].split("/")[-1]
             unit = next(u for u in m.UNITS if obj == "".join(c if c.isalnum() else "_" + format(ord(c), "02x") for c in u))
             if argv[-1] in ("ExecStop", "ExecStopPost"):
@@ -132,6 +140,11 @@ class Fixture:
         return dict(root=self.root, runner=self.runner, clock=self.clock.now,
                     sleep=self.clock.sleep, host_check=lambda fs: None)
 
+    def private_tmp_edges(self):
+        for unit in (m.OBSERVER, m.CONTROL, m.BRIDGE, m.HEALTH):
+            self.rows[unit]["Wants"] = "tmp.mount"
+            self.rows[unit]["After"] += " tmp.mount systemd-tmpfiles-setup.service"
+
 
 class IsolationTests(unittest.TestCase):
     def setUp(self):
@@ -155,10 +168,449 @@ class IsolationTests(unittest.TestCase):
         self.assertFalse(result["changed_units"])
         self.assertFalse(self.fx.stop_requested)
 
+    def graph_preflight(self, reason="UNKNOWN_EDGE"):
+        """The diagnostic may read exact metadata but may perform no writes."""
+        with contextlib.ExitStack() as stack:
+            writes = [stack.enter_context(mock.patch.object(m.RootFS, method))
+                      for method in ("mkdir", "write_new", "restore_record", "unlink_owned")]
+            snapshot = stack.enter_context(mock.patch.object(m.Isolation, "snapshot"))
+            result = self.execute()
+            self.assert_blocked(result, reason)
+            for write in writes + [snapshot]:
+                write.assert_not_called()
+        self.assertIsNone(result["snapshot_id"])
+        self.assertIsNone(result["snapshot_sha256"])
+        self.assertIsNone(result["snapshot_restore_sha256"])
+        self.assertFalse(self.fx.reloads)
+        self.assertTrue(all(c[:2] == ["/usr/bin/systemctl", "show"] or c ==
+                            ["/usr/bin/busctl", "--system", "--json=short", "get-property",
+                             "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+                             "org.freedesktop.systemd1.Manager", "Version"] for c in self.fx.calls))
+        return result
+
+    def unit_show_calls(self):
+        return [c[-1] for c in self.fx.calls if c[:2] == ["/usr/bin/systemctl", "show"]]
+
+    def test_private_tmp_compatibility_adds_exactly_twelve_directed_triples(self):
+        accepted = set()
+        for unit in m.UNITS:
+            for field in m.EDGES:
+                for peer in ("tmp.mount", "systemd-tmpfiles-setup.service"):
+                    with self.subTest(unit=unit, field=field, peer=peer):
+                        row = dict(self.fx.rows[unit])
+                        # Even forged PrivateTmp=yes must not authorize BEN or
+                        # TIMER. The live show never queries it for a timer.
+                        row["PrivateTmp"] = "yes"
+                        row[field] = " ".join(filter(None, (row[field], peer)))
+                        with self.assertRaisesRegex(m.EdgeBlocked, "UNKNOWN_EDGE"):
+                            m.validate_edges(unit, row)
+                        try:
+                            m.validate_edges(unit, row, systemd_255=True)
+                        except m.EdgeBlocked:
+                            pass
+                        else:
+                            accepted.add((unit, field, peer))
+        expected = {(unit, field, peer)
+                    for unit in (m.OBSERVER, m.CONTROL, m.BRIDGE, m.HEALTH)
+                    for field, peer in (("Wants", "tmp.mount"), ("After", "tmp.mount"),
+                                        ("After", "systemd-tmpfiles-setup.service"))}
+        self.assertEqual(12, len(accepted))
+        self.assertEqual(expected, accepted)
+
+    def test_private_tmp_compatibility_requires_yes_and_true_version_gate(self):
+        for unit in (m.OBSERVER, m.CONTROL, m.BRIDGE, m.HEALTH):
+            for field, peer in (("Wants", "tmp.mount"), ("After", "tmp.mount"),
+                                ("After", "systemd-tmpfiles-setup.service")):
+                for private_tmp in (None, "no", "", "true", "YES", "disconnected"):
+                    row = dict(self.fx.rows[unit])
+                    row[field] = peer
+                    if private_tmp is None:
+                        row.pop("PrivateTmp")
+                    else:
+                        row["PrivateTmp"] = private_tmp
+                    with self.subTest(unit=unit, field=field, value=private_tmp):
+                        with self.assertRaisesRegex(m.EdgeBlocked, "UNKNOWN_EDGE"):
+                            m.validate_edges(unit, row, systemd_255=True)
+                for verified in (False, None, 1, "true"):
+                    row = dict(self.fx.rows[unit]); row[field] = peer
+                    with self.subTest(unit=unit, field=field, verified=verified):
+                        with self.assertRaisesRegex(m.EdgeBlocked, "UNKNOWN_EDGE"):
+                            m.validate_edges(unit, row, systemd_255=verified)
+
+    def test_private_tmp_known_edges_isolate_and_preserve_actual_metadata(self):
+        self.fx.private_tmp_edges()
+        originals = {u: (self.fx.root / self.fx.rows[u]["FragmentPath"].lstrip("/")).read_bytes()
+                     for u in m.UNITS}
+        result = self.execute()
+        self.assertEqual("ISOLATED_TARGET_SCOPE", result["result"], result)
+        self.assertIsNone(result["graph_evidence"])
+        self.assertEqual(list(m.STOP_ORDER), self.fx.stop_requested)
+        self.assertEqual(result["snapshot_sha256"], result["snapshot_restore_sha256"])
+        archive = self.fx.root / m.RECOVERY_ROOT.lstrip("/") / result["snapshot_id"]
+        metadata = json.loads((archive / "snapshot.json").read_text())["metadata"]
+        for unit in m.UNITS:
+            if unit == m.TIMER:
+                self.assertNotIn("PrivateTmp", metadata[unit])
+            else:
+                self.assertEqual("no" if unit == m.BEN else "yes", metadata[unit]["PrivateTmp"])
+            self.assertEqual(originals[unit], (self.fx.root / self.fx.rows[unit]["FragmentPath"].lstrip("/")).read_bytes())
+        versions = [c for c in self.fx.calls if c[-1] == "Version"]
+        self.assertEqual(1, len(versions))
+        self.assertNotIn(self.fx.version["data"], json.dumps(result))
+        for cmd in self.fx.calls:
+            if cmd[:2] == ["/usr/bin/systemctl", "show"]:
+                self.assertEqual(cmd[-1] != m.TIMER, "PrivateTmp" in cmd[-2].split("=", 1)[1].split(","))
+            self.assertNotIn("set-property", cmd)
+
+    def test_private_tmp_unknown_peers_keep_bounded_v2_evidence(self):
+        self.fx.private_tmp_edges()
+        self.fx.rows[m.OBSERVER]["Wants"] += " unexpected.mount"
+        self.fx.rows[m.HEALTH]["After"] += " unexpected.service"
+        result = self.graph_preflight()
+        failures = result["graph_evidence"]["failures"]
+        self.assertEqual([(m.OBSERVER, "Wants", ["unexpected.mount"]),
+                          (m.HEALTH, "After", ["unexpected.service"])],
+                         [(f["unit"], f["property"], f["unexpected"]) for f in failures])
+        for failure in failures:
+            raw = self.fx.rows[failure["unit"]][failure["property"]]
+            self.assertEqual(m.digest(raw.encode()), failure["value_sha256"])
+            self.assertEqual(len(raw.split()) - 1, failure["omitted_count"])
+        self.assertFalse(result["graph_evidence"]["truncated"])
+        self.assertEqual(list(m.UNITS), self.unit_show_calls())
+
+    def test_private_tmp_arbitrary_mounts_and_service_names_stay_blocked(self):
+        for unit in (m.OBSERVER, m.CONTROL, m.BRIDGE, m.HEALTH):
+            for field in ("Wants", "After"):
+                for peer in ("var-tmp.mount", "tmp-other.mount", "home.mount",
+                             "systemd-tmpfiles-clean.service", "systemd-tmpfiles-setup-dev.service"):
+                    with self.subTest(unit=unit, field=field, peer=peer):
+                        row = dict(self.fx.rows[unit]); row[field] = peer
+                        with self.assertRaisesRegex(m.EdgeBlocked, "UNKNOWN_EDGE"):
+                            m.validate_edges(unit, row, systemd_255=True)
+
+    def test_private_tmp_wrong_or_malformed_property_blocks_before_mutation(self):
+        self.fx.private_tmp_edges()
+        for unit in (m.OBSERVER, m.CONTROL, m.BRIDGE, m.HEALTH, m.BEN):
+            old = self.fx.rows[unit]["PrivateTmp"]
+            for value in ("true", "false", "YES", "1", "", "disconnected", self.fx.secret):
+                with self.subTest(unit=unit, value=value):
+                    self.fx.rows[unit]["PrivateTmp"] = value
+                    self.graph_preflight("METADATA_INVALID")
+            self.fx.rows[unit]["PrivateTmp"] = old
+        self.fx.rows[m.OBSERVER]["PrivateTmp"] = "no"
+        result = self.graph_preflight()
+        self.assertEqual(["Wants", "After"], [f["property"] for f in result["graph_evidence"]["failures"]])
+
+    def test_private_tmp_missing_property_is_not_defaulted(self):
+        original = self.fx.runner
+        def run(argv, **kwargs):
+            answer = original(argv, **kwargs)
+            if argv[:2] == ["/usr/bin/systemctl", "show"] and argv[-1] == m.OBSERVER:
+                return b"\n".join(line for line in answer.splitlines() if not line.startswith(b"PrivateTmp=")) + b"\n"
+            return answer
+        self.fx.runner = run
+        self.graph_preflight("METADATA_INVALID")
+        self.assertFalse(any(c[-1] == "Version" for c in self.fx.calls))
+
+    def test_private_tmp_unsupported_versions_cannot_authorize_edges(self):
+        self.fx.private_tmp_edges()
+        for version in ("", "254", "256", "1255", "2550", "v255", "systemd 255",
+                        "255.", "255\n", " 255", "255-evil", "255.4 secret", self.fx.secret):
+            with self.subTest(version=version):
+                self.fx.calls.clear()
+                self.fx.version = {"type": "s", "data": version}
+                result = self.graph_preflight()
+                self.assertEqual(8, len(result["graph_evidence"]["failures"]))
+                self.assertEqual(1, sum(c[-1] == "Version" for c in self.fx.calls))
+                self.assertEqual(list(m.UNITS), self.unit_show_calls())
+
+    def test_private_tmp_version_requires_exact_bounded_typed_string(self):
+        self.fx.private_tmp_edges()
+        for value in ({}, {"type": "s"}, {"type": "as", "data": ["255"]},
+                      {"type": "s", "data": ["255"]}, {"type": "s", "data": 255},
+                      {"type": "s", "data": True}, {"type": "s", "data": "255", "extra": "hidden"},
+                      {"type": "s", "data": "255." + "a" * 93}):
+            with self.subTest(value=value):
+                self.fx.version = value
+                result = self.graph_preflight("METADATA_INVALID")
+                self.assertIsNone(result["graph_evidence"])
+
+    def test_private_tmp_version_query_is_exact_bounded_and_cached(self):
+        self.fx.private_tmp_edges()
+        for version in ("255", "255.4", "255.4-1ubuntu8.8"):
+            with self.subTest(version=version):
+                self.fx.calls.clear()
+                self.fx.version = {"type": "s", "data": version}
+                limits = []
+                def run(argv, **kwargs):
+                    limits.append(kwargs)
+                    return self.fx.runner(argv, **kwargs)
+                args = self.fx.kwargs(); args["runner"] = run
+                op = m.Isolation(payload(), **args)
+                for _ in range(2):
+                    for unit in m.UNITS:
+                        op.show(unit)
+                self.assertIs(op.systemd_255, True)
+                self.assertEqual(1, sum(c[-1] == "Version" for c in self.fx.calls))
+                self.assertTrue(all(0 < k["timeout"] <= 3 and k["limit"] == m.MAX_OUTPUT for k in limits))
+                self.assertFalse(any("Environment" in c for c in self.fx.calls))
+                self.assertFalse(any(c[:2] == ["/usr/bin/systemctl", "show"] and c[-1] not in m.UNITS
+                                     for c in self.fx.calls))
+
+    def test_private_tmp_no_or_excluded_roles_do_not_query_manager(self):
+        for unit in (m.OBSERVER, m.CONTROL, m.BRIDGE, m.HEALTH):
+            self.fx.rows[unit]["PrivateTmp"] = "no"
+        self.fx.rows[m.BEN]["PrivateTmp"] = "yes"
+        op = m.Isolation(payload(), **self.fx.kwargs())
+        for unit in m.UNITS:
+            op.show(unit)
+        self.assertFalse(any(c[-1] == "Version" for c in self.fx.calls))
+        self.assertIsNone(op.systemd_255)
+
+    def test_private_tmp_metadata_drift_after_reload_blocks_all_stops(self):
+        def hook(argv):
+            if self.fx.reloads:
+                self.fx.rows[m.OBSERVER]["PrivateTmp"] = "no"
+        self.fx.hook = hook
+        result = self.execute()
+        self.assertEqual("PARTIAL_BLOCKED", result["result"], result)
+        self.assertEqual("FILE_DRIFT", result["reason"], result)
+        self.assertFalse(self.fx.stop_requested)
+
+    def test_private_tmp_companion_drift_after_snapshot_blocks_all_gates(self):
+        original = m.Isolation.snapshot
+        def snapshot(op):
+            original(op)
+            self.fx.rows[m.HEALTH]["PrivateTmp"] = "no"
+        with mock.patch.object(m.Isolation, "snapshot", new=snapshot):
+            self.assert_blocked(self.execute(), "FILE_DRIFT")
+        self.assertFalse(list((self.fx.root / "etc/systemd/system").glob("*.d/*.conf")))
+
+    def test_private_tmp_does_not_authorize_stop_handlers(self):
+        self.fx.private_tmp_edges()
+        for field in ("ExecStop", "ExecStopPost"):
+            with self.subTest(field=field):
+                self.fx.rows[m.OBSERVER][field] = self.fx.secret
+                self.assert_blocked(self.execute(), "STOP_HANDLER")
+                self.fx.rows[m.OBSERVER][field] = ""
+        self.assertFalse(self.fx.reloads)
+        self.assertFalse(list((self.fx.root / "etc/systemd/system").glob("*.d/*.conf")))
+
+    def test_private_tmp_old_snapshot_missing_property_cannot_remove_gates(self):
+        self.fx.private_tmp_edges()
+        result = self.execute()
+        self.assertEqual("ISOLATED_TARGET_SCOPE", result["result"], result)
+        archive = self.fx.root / m.RECOVERY_ROOT.lstrip("/") / result["snapshot_id"]
+        path = archive / "snapshot.json"
+        manifest = json.loads(path.read_text())
+        for row in manifest["metadata"].values():
+            row.pop("PrivateTmp", None)
+        raw = m.canonical(manifest)
+        path.chmod(0o600); path.write_bytes(raw); path.chmod(0o400)
+        p = payload(); p.update(operation="rollback", run_id="987654321", snapshot_id=result["snapshot_id"],
+                                snapshot_sha256=m.digest(raw))
+        with mock.patch.object(m.RootFS, "unlink_owned") as unlink:
+            rolled = m.rollback(p, **self.fx.kwargs())
+        unlink.assert_not_called()
+        self.assertEqual("BLOCKED", rolled["result"], rolled)
+        self.assertEqual("FILE_DRIFT", rolled["reason"], rolled)
+        self.assertEqual(4, len(list((self.fx.root / "etc/systemd/system").glob("*.d/*.conf"))))
+        self.assertEqual(list(m.STOP_ORDER), self.fx.stop_requested)
+
+    def test_private_tmp_rollback_rechecks_version_before_removals(self):
+        self.fx.private_tmp_edges()
+        result = self.execute()
+        self.assertEqual("ISOLATED_TARGET_SCOPE", result["result"], result)
+        self.fx.version = {"type": "s", "data": "256"}
+        self.fx.calls.clear()
+        p = payload(); p.update(operation="rollback", run_id="987654321", snapshot_id=result["snapshot_id"],
+                                snapshot_sha256=result["snapshot_sha256"])
+        with mock.patch.object(m.RootFS, "unlink_owned") as unlink:
+            rolled = m.rollback(p, **self.fx.kwargs())
+        unlink.assert_not_called()
+        self.assertEqual("BLOCKED", rolled["result"], rolled)
+        self.assertEqual("UNKNOWN_EDGE", rolled["reason"], rolled)
+        self.assertEqual(1, sum(c[-1] == "Version" for c in self.fx.calls))
+        self.assertEqual(4, len(list((self.fx.root / "etc/systemd/system").glob("*.d/*.conf"))))
+        self.assertEqual(list(m.STOP_ORDER), self.fx.stop_requested)
+
+    def test_graph_private_tmp_no_edges_remain_blocked_with_exact_multiple_unit_evidence(self):
+        # Without actual PrivateTmp=yes, even the narrow v255 compatibility
+        # cannot accept After edges. Requires=tmp.mount is never permitted.
+        for unit in (m.OBSERVER, m.CONTROL, m.BRIDGE):
+            self.fx.rows[unit]["PrivateTmp"] = "no"
+            self.fx.rows[unit]["Requires"] += " tmp.mount"
+            self.fx.rows[unit]["After"] += " tmp.mount systemd-tmpfiles-setup.service"
+        result = self.graph_preflight()
+        self.assertEqual("bridge.ibm.unit-isolation.receipt.v2", result["schema"])
+        evidence = result["graph_evidence"]
+        self.assertFalse(evidence["truncated"])
+        self.assertEqual(6, len(evidence["failures"]))
+        for unit in (m.OBSERVER, m.CONTROL, m.BRIDGE):
+            failures = [r for r in evidence["failures"] if r["unit"] == unit]
+            self.assertEqual(["Requires", "After"], [r["property"] for r in failures])
+            self.assertEqual(["tmp.mount"], failures[0]["unexpected"])
+            self.assertEqual(["tmp.mount", "systemd-tmpfiles-setup.service"], failures[1]["unexpected"])
+            for row in failures:
+                value = self.fx.rows[unit][row["property"]]
+                self.assertEqual(m.digest(value.encode()), row["value_sha256"])
+                self.assertEqual(len(value.split()), row["token_count"])
+                self.assertEqual(row["token_count"] - len(row["unexpected"]), row["omitted_count"])
+        self.assertEqual(list(m.UNITS), self.unit_show_calls())
+        for state in result["target_states"][:3]:
+            self.assertEqual("unknown", state["active"])
+            self.assertEqual("unknown", state["sub"])
+            self.assertIsNone(state["job_pending"])
+            self.assertIsNone(state["cgroup_empty"])
+
+    def test_graph_evidence_disambiguates_same_legacy_receipt(self):
+        self.fx.rows[m.OBSERVER]["PrivateTmp"] = "no"
+        results = []
+        for field, peer in (("Requires", "tmp.mount"), ("After", "systemd-tmpfiles-setup.service")):
+            old = self.fx.rows[m.OBSERVER][field]
+            self.fx.rows[m.OBSERVER][field] = peer
+            results.append(self.graph_preflight())
+            self.fx.rows[m.OBSERVER][field] = old
+        self.assertNotEqual(results[0]["graph_evidence"], results[1]["graph_evidence"])
+        # v1 had no graph field and refused to retain its first rejected row.
+        # Removing new evidence again loses the property and peer completely.
+        old_receipts = [{k: v for k, v in result.items() if k != "graph_evidence"} for result in results]
+        self.assertEqual(old_receipts[0], old_receipts[1])
+        self.assertEqual("unknown", old_receipts[0]["target_states"][0]["active"])
+
+    def test_graph_collects_all_six_exact_units_before_any_handler_or_write(self):
+        for index, unit in enumerate(m.UNITS):
+            self.fx.rows[unit]["OnFailure"] = "unexpected-" + str(index) + ".service"
+        result = self.graph_preflight()
+        self.assertEqual(list(m.UNITS), [r["unit"] for r in result["graph_evidence"]["failures"]])
+        self.assertEqual(list(m.UNITS), self.unit_show_calls())
+        self.assertTrue(all(r["active"] == "unknown" for r in result["target_states"]))
+
+    def test_graph_all_relations_and_units_still_reject_unknown_members(self):
+        for unit in m.UNITS:
+            for field in m.EDGES:
+                with self.subTest(unit=unit, field=field):
+                    row = dict(self.fx.rows[unit])
+                    row[field] = "unreviewed.service"
+                    evidence = m.GraphEvidence()
+                    with self.assertRaisesRegex(m.EdgeBlocked, "UNKNOWN_EDGE"):
+                        m.validate_edges(unit, row, evidence=evidence)
+                    self.assertTrue(any(r["property"] == field and r["violation"] == "UNEXPECTED_MEMBER"
+                                        for r in evidence.failures))
+
+    def test_graph_duplicate_allowed_member_and_missing_trigger_are_distinct(self):
+        self.fx.rows[m.OBSERVER]["After"] = "basic.target basic.target"
+        self.fx.rows[m.TIMER]["Triggers"] = ""
+        result = self.graph_preflight()
+        failure, trigger = result["graph_evidence"]["failures"]
+        self.assertEqual("DUPLICATE_MEMBER", failure["violation"])
+        self.assertEqual(["basic.target"], failure["unexpected"])
+        self.assertEqual(2, failure["token_count"])
+        self.assertEqual(1, failure["omitted_count"])
+        self.assertEqual("TRIGGER_MISMATCH", trigger["violation"])
+        self.assertEqual("Triggers", trigger["property"])
+        self.assertEqual(0, trigger["token_count"])
+        self.assertEqual([], trigger["unexpected"])
+        self.assertEqual(m.digest(b""), trigger["value_sha256"])
+
+    def test_graph_raw_trigger_equality_is_not_relaxed_by_tokenization(self):
+        for unit, value in ((m.TIMER, " " + m.HEALTH), (m.OBSERVER, " ")):
+            old = self.fx.rows[unit]["Triggers"]
+            self.fx.rows[unit]["Triggers"] = value
+            result = self.graph_preflight()
+            self.assertEqual("TRIGGER_MISMATCH", result["graph_evidence"]["failures"][0]["violation"])
+            self.fx.rows[unit]["Triggers"] = old
+
+    def test_graph_cardinality_and_name_caps_are_explicit(self):
+        names = ["peer-" + str(i) + ".service" for i in range(33)]
+        self.fx.rows[m.OBSERVER]["Requires"] = " ".join(names)
+        result = self.graph_preflight()
+        evidence = result["graph_evidence"]
+        self.assertTrue(evidence["truncated"])
+        self.assertEqual(["CARDINALITY", "UNEXPECTED_MEMBER"], [r["violation"] for r in evidence["failures"]])
+        for failure in evidence["failures"]:
+            self.assertEqual(names[:8], failure["unexpected"])
+            self.assertEqual(33, failure["token_count"])
+            self.assertEqual(25, failure["omitted_count"])
+
+    def test_graph_invalid_values_are_counted_hashed_and_never_echoed(self):
+        invalid = [self.fx.secret, "https://private.example/token", "/bin/sh", "--password=secret",
+                   "$(curl)", "x;y.service", "secret=token.service", "\u0430.service", "bad\\x00.service"]
+        value = " ".join(invalid + ["tmp.mount"])
+        self.fx.rows[m.OBSERVER]["Requires"] = value
+        result = self.graph_preflight()
+        failure = result["graph_evidence"]["failures"][0]
+        self.assertEqual(["tmp.mount"], failure["unexpected"])
+        self.assertEqual(len(invalid) + 1, failure["token_count"])
+        self.assertEqual(len(invalid), failure["omitted_count"])
+        self.assertEqual(m.digest(value.encode()), failure["value_sha256"])
+        self.assertFalse(result["graph_evidence"]["truncated"])
+        for token in invalid:
+            self.assertNotIn(token, json.dumps(result, ensure_ascii=False))
+
+    def test_graph_row_cap_does_not_short_circuit_exact_reads(self):
+        for unit in m.UNITS:
+            for field in m.EDGES:
+                self.fx.rows[unit][field] = "unexpected.service"
+        result = self.graph_preflight()
+        self.assertTrue(result["graph_evidence"]["truncated"])
+        self.assertEqual(16, len(result["graph_evidence"]["failures"]))
+        self.assertEqual(list(m.UNITS), self.unit_show_calls())
+        self.assertLessEqual(len(m.canonical(result["graph_evidence"])), 8192)
+
+    def test_graph_byte_cap_and_receipt_output_cap(self):
+        names = ["u" + str(i) + "-" + "a" * 244 + ".service" for i in range(8)]
+        self.assertTrue(all(len(n) == 255 for n in names))
+        for unit in m.UNITS:
+            for field in ("Requires", "After", "OnFailure"):
+                self.fx.rows[unit][field] = " ".join(names)
+        result = self.graph_preflight()
+        evidence = result["graph_evidence"]
+        self.assertTrue(evidence["truncated"])
+        self.assertLessEqual(len(m.canonical(evidence)), 8192)
+        self.assertLess(len(m.canonical(result)), 16384)
+        self.assertTrue(all(r["omitted_count"] == r["token_count"] - len(r["unexpected"])
+                            for r in evidence["failures"]))
+        self.assertTrue(any(len(r["unexpected"]) < 8 for r in evidence["failures"]))
+        self.assertEqual(16, len(evidence["failures"]))
+        self.assertEqual(set(m.UNITS), {r["unit"] for r in evidence["failures"]})
+        self.assertEqual(list(m.UNITS), self.unit_show_calls())
+
+    def test_graph_evidence_preserved_if_later_metadata_or_deadline_fails(self):
+        for failure in ("METADATA_INVALID", "DEADLINE"):
+            with self.subTest(failure=failure):
+                self.fx.calls.clear()
+                self.fx.clock.t = 0
+                self.fx.rows[m.OBSERVER]["Requires"] = "tmp.mount"
+                if failure == "METADATA_INVALID":
+                    self.fx.rows[m.CONTROL]["ActiveState"] = "raw-secret-metadata"
+                else:
+                    self.fx.rows[m.CONTROL]["ActiveState"] = "active"
+                    def hook(argv):
+                        if argv[-1] == m.OBSERVER:
+                            self.fx.clock.t += 91
+                    self.fx.hook = hook
+                result = self.graph_preflight(failure)
+                self.assertEqual("tmp.mount", result["graph_evidence"]["failures"][0]["unexpected"][0])
+                self.assertNotIn("raw-secret-metadata", json.dumps(result))
+
+    def test_graph_invalid_show_payload_never_becomes_evidence_or_valid_state(self):
+        original = self.fx.runner
+        for corrupt in (lambda b: b + b"Requires=tmp.mount\n",
+                        lambda b: b.replace(b"Requires=\n", b"Requires=bad\xff.service\n"),
+                        lambda b: b.replace(b"Requires=\n", b"Requires=" + b"a" * 8192 + b"\n"),
+                        lambda b: b"x" * (m.MAX_OUTPUT + 1)):
+            self.fx.runner = lambda argv, corrupt=corrupt, **kw: corrupt(original(argv, **kw))
+            result = self.graph_preflight(None)
+            self.assertIn(result["reason"], {"METADATA_INVALID", "COMMAND_LIMIT"})
+            self.assertIsNone(result["graph_evidence"])
+            self.assertTrue(all(r["active"] == "unknown" for r in result["target_states"]))
+
     def test_success_scope_backup_and_order(self):
         originals = {u: (self.fx.root / self.fx.rows[u]["FragmentPath"].lstrip("/")).read_bytes() for u in m.UNITS}
         result = self.execute()
         self.assertEqual("ISOLATED_TARGET_SCOPE", result["result"], result)
+        self.assertIsNone(result["graph_evidence"])
         self.assertEqual(list(m.STOP_ORDER), self.fx.stop_requested)
         self.assertEqual(result["snapshot_sha256"], result["snapshot_restore_sha256"])
         self.assertEqual(64, len(result["snapshot_sha256"]))
@@ -250,6 +702,7 @@ class IsolationTests(unittest.TestCase):
             self.fx.rows[m.OBSERVER][field] = old
 
     def test_busy_or_queued_companion_preflight(self):
+        self.fx.private_tmp_edges()
         for field, value in (("ActiveState", "active"), ("Job", "9"), ("MainPID", "77")):
             old = self.fx.rows[m.HEALTH][field]
             self.fx.rows[m.HEALTH][field] = value
@@ -391,6 +844,7 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual([m.TIMER], self.fx.stop_requested)
 
     def test_companion_after_reload_aborts_before_first_stop(self):
+        self.fx.private_tmp_edges()
         def hook(argv):
             if self.fx.reloads and argv[:2] == ["/usr/bin/systemctl", "show"] and argv[-1] == m.BEN:
                 self.fx.rows[m.BEN]["ActiveState"] = "active"
@@ -486,6 +940,7 @@ class IsolationTests(unittest.TestCase):
             self.assert_blocked(self.execute(), "PATH_UNSAFE")
 
     def test_handler_added_after_reload_blocks_first_stop(self):
+        self.fx.private_tmp_edges()
         def hook(argv):
             if self.fx.reloads:
                 self.fx.rows[m.BRIDGE]["ExecStopPost"] = "/unknown-handler secret"
@@ -559,6 +1014,7 @@ class IsolationTests(unittest.TestCase):
         execute.assert_called_once()
 
     def test_rollback_removes_only_owned_gates_no_starts(self):
+        self.fx.private_tmp_edges()
         result = self.execute()
         self.assertEqual("ISOLATED_TARGET_SCOPE", result["result"], result)
         p = payload(); p.update(operation="rollback", run_id="987654321", snapshot_id=result["snapshot_id"], snapshot_sha256=result["snapshot_sha256"])
@@ -591,6 +1047,23 @@ class IsolationTests(unittest.TestCase):
             source = Path(m.__file__).read_text()
             exec(compile(source, "inert", "exec"), scope)
         self.assertIn("execute", scope)
+
+
+class DiagnosticUnitNameTests(unittest.TestCase):
+    def test_exact_safe_unit_spellings(self):
+        for name in ("tmp.mount", "systemd-tmpfiles-setup.service", "-.mount", "foo@bar.service",
+                     "foo@.service", "sys-devices-virtual-net-eth0.device", r"foo\x2dbar.service",
+                     "a" * 247 + ".service"):
+            with self.subTest(name=name):
+                self.assertTrue(m.is_canonical_unit_name(name))
+
+    def test_noncanonical_or_nonunit_strings_are_rejected(self):
+        for name in (None, True, 3, "", ".service", "a" * 248 + ".service", "a.service\n",
+                     "a.service b.service", "https://secret.service", "/bin/sh.service", "a/b.service",
+                     "\u0430.service", "x@y@z.service", "a.unknown", "TOKEN=secret", "$(id).service",
+                     "secret;curl.service", r"a\x2D.service", r"a\x00.service", r"a\q.service"):
+            with self.subTest(name=name):
+                self.assertFalse(m.is_canonical_unit_name(name))
 
 
 class BoundedCommandTests(unittest.TestCase):

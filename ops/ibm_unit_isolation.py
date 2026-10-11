@@ -35,7 +35,7 @@ import sys
 import time
 
 REQUEST_SCHEMA = "bridge.ibm.unit-isolation.request.v1"
-RECEIPT_SCHEMA = "bridge.ibm.unit-isolation.receipt.v1"
+RECEIPT_SCHEMA = "bridge.ibm.unit-isolation.receipt.v2"
 IDENTITY = {
     "instance_id": "02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2",
     "instance_name": "bridge-school-compute-ibm",
@@ -62,6 +62,11 @@ TARGETS = (OBSERVER, CONTROL, BRIDGE, TIMER)
 STOP_ORDER = (TIMER, BRIDGE, CONTROL, OBSERVER)
 COMPANIONS = (HEALTH, BEN)
 UNITS = TARGETS + COMPANIONS
+PRIVATE_TMP_UNITS = frozenset((OBSERVER, CONTROL, BRIDGE, HEALTH))
+# systemd v255 unit_add_exec_dependencies(), src/core/unit.c L1227-L1241.
+# Only these exact forward edges are justified by an observed PrivateTmp=yes.
+PRIVATE_TMP_EDGES = {"Wants": frozenset(("tmp.mount",)),
+                     "After": frozenset(("tmp.mount", "systemd-tmpfiles-setup.service"))}
 SYSTEM_DIRS = ("/etc/systemd/system", "/run/systemd/system", "/usr/lib/systemd/system")
 RECOVERY_ROOT = "/var/lib/bridge-school-maintenance"
 GUEST_SECONDS = 90
@@ -69,6 +74,15 @@ MAX_FILES = 32
 MAX_BYTES = 256 * 1024
 MAX_INPUT = 8192
 MAX_OUTPUT = 32768
+GRAPH_MAX_FAILURES = 16
+GRAPH_MAX_UNEXPECTED = 8
+GRAPH_MAX_BYTES = 8192
+GRAPH_MAX_TOKENS = 8192  # parse_show's existing per-line bound is stricter.
+UNIT_NAME_MAX = 255
+UNIT_NAME_PATTERN = re.compile(
+    r"(?:[A-Za-z0-9:_.-]|\\x(?!00)[0-9a-f]{2})+"
+    r"(?:@(?:[A-Za-z0-9:_.-]|\\x(?!00)[0-9a-f]{2})*)?"
+    r"\.(?:service|socket|device|mount|automount|swap|target|path|timer|slice|scope)", re.ASCII)
 LIMITATIONS = ["EXPECTED_MACHINE_ID_UNAVAILABLE", "TRANSPORT_IDENTITY_ASSERTION_ONLY",
                "NO_REBOOT_VERIFICATION", "LOADED_GRAPH_ONLY", "DAEMON_RELOAD_GLOBAL_EFFECTS"]
 EDGES = ("Requires", "Requisite", "Wants", "BindsTo", "PartOf", "Upholds",
@@ -81,7 +95,7 @@ COMMON = ("Id", "Names", "LoadState", "ActiveState", "SubState", "UnitFileState"
           "FailureAction", "SuccessAction", "JobTimeoutAction") + EDGES
 SERVICE = ("ControlGroup", "MainPID", "ControlPID", "TimeoutStopUSec",
            "KillMode", "KillSignal", "SendSIGKILL", "FinalKillSignal",
-           "TimeoutStopFailureMode", "Restart")
+           "TimeoutStopFailureMode", "Restart", "PrivateTmp")
 SAFE_STATES = {"active", "inactive", "activating", "deactivating", "reloading", "failed"}
 SAFE_SUB = {"running", "waiting", "dead", "exited", "start", "stop", "stop-sigterm",
             "stop-sigkill", "stop-post", "failed", "auto-restart"}
@@ -99,6 +113,10 @@ class Blocked(Exception):
     """A fixed, safe error code, never raw subprocess/file data."""
 
 
+class EdgeBlocked(Blocked):
+    """Only graph rejections may be collected across initial exact-unit reads."""
+
+
 def need(value, reason):
     if not value:
         raise Blocked(reason)
@@ -110,6 +128,61 @@ def canonical(value):
 
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
+
+
+def is_canonical_unit_name(value):
+    """A diagnostic-only syntax check; never expands the exact edge allowlist.
+
+    No normalization: retain only the exact canonical ASCII spelling, including
+    lower-case systemd hex escapes. Commands, paths, URLs and arbitrary strings
+    cannot pass. This cannot infer whether a syntactically valid name is secret.
+    """
+    return (type(value) is str and len(value) <= UNIT_NAME_MAX
+            and UNIT_NAME_PATTERN.fullmatch(value) is not None)
+
+
+class GraphEvidence:
+    """Bounded metadata-only failure evidence; no configuration or command text."""
+    def __init__(self):
+        self.failures = []
+        self.truncated = False
+
+    def value(self):
+        return {"failures": self.failures, "truncated": self.truncated}
+
+    def add(self, unit, field, violation, raw, candidates):
+        if len(self.failures) >= GRAPH_MAX_FAILURES:
+            self.truncated = True
+            return
+        tokens = raw.split()
+        names = []
+        seen = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if not is_canonical_unit_name(candidate):
+                continue
+            if len(names) >= GRAPH_MAX_UNEXPECTED:
+                self.truncated = True
+                continue
+            names.append(candidate)
+        failure = {"unit": unit, "property": field, "violation": violation,
+                   "token_count": len(tokens), "unexpected": names,
+                   "omitted_count": len(tokens) - len(names),
+                   "value_sha256": digest(raw.encode("utf-8"))}
+        self.failures.append(failure)
+        # Bound the complete canonical object, including keys and escaping.
+        # Prefer preserving another failure's identity and digest to its names.
+        while len(canonical(self.value())) > GRAPH_MAX_BYTES:
+            self.truncated = True
+            donor = max(self.failures, key=lambda item: len(canonical(item["unexpected"])))
+            if donor["unexpected"]:
+                donor["unexpected"].pop()
+                donor["omitted_count"] += 1
+            else:
+                self.failures.pop()
+                break
 
 
 def strict_json(raw):
@@ -464,7 +537,9 @@ def parse_conditions(raw):
     return sorted([row[:4] for row in value["data"]], key=canonical)
 
 
-def validate_edges(unit, row):
+def validate_edges(unit, row, *, evidence=None, systemd_255=False):
+    evidence = GraphEvidence() if evidence is None else evidence
+    failed = False
     ordering = {"basic.target", "sysinit.target", "system.slice", "shutdown.target",
                 "network-online.target", "multi-user.target", "timers.target", "time-set.target",
                 "time-sync.target", "systemd-journald.socket", "-.mount"} | set(UNITS)
@@ -474,7 +549,18 @@ def validate_edges(unit, row):
     reverse = {OBSERVER: {CONTROL, BRIDGE}, CONTROL: {BRIDGE}, BRIDGE: set(), TIMER: set(), HEALTH: set(), BEN: set()}
     for field in EDGES:
         values = row[field].split()
-        need(len(values) <= 32 and len(values) == len(set(values)), "UNKNOWN_EDGE")
+        if len(values) > 32:
+            evidence.add(unit, field, "CARDINALITY", row[field], values)
+            failed = True
+        seen, repeated = set(), set()
+        for value in values:
+            if value in seen:
+                repeated.add(value)
+            seen.add(value)
+        if repeated:
+            evidence.add(unit, field, "DUPLICATE_MEMBER", row[field],
+                         [value for value in values if value in repeated])
+            failed = True
         allowed = set()
         if field in ("Before", "After"):
             allowed = ordering
@@ -492,8 +578,19 @@ def validate_edges(unit, row):
             allowed = {HEALTH}
         elif field == "TriggeredBy" and unit == HEALTH:
             allowed = {TIMER}
-        need(set(values) <= allowed, "UNKNOWN_EDGE")
-    need(row["Triggers"] == HEALTH if unit == TIMER else not row["Triggers"], "UNKNOWN_EDGE")
+        if systemd_255 is True and unit in PRIVATE_TMP_UNITS and row.get("PrivateTmp") == "yes":
+            # Union creates a new set: never mutate shared ordering or admit a
+            # reverse Before edge because an earlier After edge was permitted.
+            allowed = allowed | PRIVATE_TMP_EDGES.get(field, frozenset())
+        if not set(values) <= allowed:
+            evidence.add(unit, field, "UNEXPECTED_MEMBER", row[field],
+                         [value for value in values if value not in allowed])
+            failed = True
+    if not (row["Triggers"] == HEALTH if unit == TIMER else not row["Triggers"]):
+        evidence.add(unit, "Triggers", "TRIGGER_MISMATCH", row["Triggers"], row["Triggers"].split())
+        failed = True
+    if failed:
+        raise EdgeBlocked("UNKNOWN_EDGE")
 
 
 def stop_seconds(value):
@@ -515,6 +612,7 @@ class Isolation:
         self.sleep = sleep
         self.host_check = host_check or local_host_check
         self.rows = {}
+        self.graph_evidence = GraphEvidence()
         self.baseline = {}
         self.conditions = {}
         self.records = []
@@ -528,9 +626,25 @@ class Isolation:
         self.original_paths = set()
         self.gate_paths = {}
         self.created_dirs = []
+        self.systemd_255 = None
 
     def command(self, args, timeout=3):
         return self.runner(args, timeout=min(timeout, self.budget.left()), limit=MAX_OUTPUT)
+
+    def private_tmp_version(self):
+        if self.systemd_255 is None:
+            # Read exactly the running manager's Version. systemctl show of the
+            # manager internally reads all properties, including Environment.
+            # v255 busctl's single string property is typed JSON, not an array.
+            raw = self.command(["/usr/bin/busctl", "--system", "--json=short", "get-property",
+                "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+                "org.freedesktop.systemd1.Manager", "Version"])
+            value = strict_json(raw)
+            need(type(value) is dict and set(value) == {"type", "data"} and value["type"] == "s"
+                 and type(value["data"]) is str and len(value["data"]) <= 96, "METADATA_INVALID")
+            # Cache only a boolean, never raw version text or arbitrary suffixes.
+            self.systemd_255 = re.fullmatch(r"255(?:\.[0-9A-Za-z.+:~_-]+)?", value["data"], re.ASCII) is not None
+        return self.systemd_255
 
     def show(self, unit):
         need(unit in UNITS, "ALIAS_OR_UNIT_MISMATCH")
@@ -555,10 +669,10 @@ class Isolation:
         need(len(drops) <= MAX_FILES and len(drops) == len(set(drops)), "FILE_LIMIT")
         for path in drops:
             unit_path(path, unit, dropin=True)
-        validate_edges(unit, row)
         group = row["ControlGroup"]
         need(group in ("", "/system.slice/" + unit), "PATH_UNSAFE")
         if unit.endswith(".service"):
+            need(row["PrivateTmp"] in {"yes", "no"}, "METADATA_INVALID")
             need(row["MainPID"].isdigit() and row["ControlPID"].isdigit(), "METADATA_INVALID")
             if unit in TARGETS:
                 stop_seconds(row["TimeoutStopUSec"])
@@ -566,6 +680,13 @@ class Isolation:
                      and row["SendSIGKILL"] == "yes" and row["FinalKillSignal"] == "9"
                      and row["TimeoutStopFailureMode"] == "terminate"
                      and row["Restart"] in {"always", "on-failure", "no"}, "STOP_POLICY")
+        # Read Version only when a documented candidate edge needs the extra
+        # exception. Unrelated graph failures retain their diagnostic path.
+        private_tmp_candidate = (unit in PRIVATE_TMP_UNITS and row["PrivateTmp"] == "yes"
+                                 and any(set(row[field].split()) & peers
+                                         for field, peers in PRIVATE_TMP_EDGES.items()))
+        systemd_255 = self.private_tmp_version() if private_tmp_candidate else False
+        validate_edges(unit, row, evidence=self.graph_evidence, systemd_255=systemd_255)
         self.rows[unit] = row
         return row
 
@@ -711,8 +832,11 @@ class Isolation:
         need(self.capture(self.original_paths) == self.records, "FILE_DRIFT")
         for unit, base in self.baseline.items():
             row = self.rows[unit]
-            for field in ("Id", "Names", "FragmentPath", "UnitFileState") + EDGES:
-                need(row[field] == base[field], "FILE_DRIFT")
+            fields = ("Id", "Names", "FragmentPath", "UnitFileState") + EDGES
+            if unit.endswith(".service"):
+                fields += ("PrivateTmp",)
+            for field in fields:
+                need(field in base and row[field] == base[field], "FILE_DRIFT")
             drops = set(row["DropInPaths"].split()) - set(self.gate_paths.values())
             need(drops == set(base["DropInPaths"].split()), "FILE_DRIFT")
         for unit, record in self.own_records.items():
@@ -744,7 +868,15 @@ class Isolation:
         for path in self.gate_paths.values():
             need(not self.fs.exists(path), "COLLISION")
         for unit in UNITS:
-            row = self.show(unit)
+            try:
+                self.show(unit)
+            except EdgeBlocked:
+                # Only this fixed graph failure may continue to the remaining
+                # exact units. show() never promotes a rejected row to rows.
+                continue
+        need(not self.graph_evidence.failures, "UNKNOWN_EDGE")
+        for unit in UNITS:
+            row = self.rows[unit]
             need(row["NeedDaemonReload"] == "no", "FILE_DRIFT")
             if unit in TARGETS:
                 self.stop_handlers(unit)
@@ -852,6 +984,7 @@ class Isolation:
                 "snapshot_restore_sha256": self.restore_sha,
                 "changed_units": [c["unit"] for c in self.changes], "changes": self.changes,
                 "target_states": states, "host_identity": "TRANSPORT_ASSERTION_ONLY",
+                "graph_evidence": self.graph_evidence.value() if self.graph_evidence.failures else None,
                 "limitations": LIMITATIONS}
 
 

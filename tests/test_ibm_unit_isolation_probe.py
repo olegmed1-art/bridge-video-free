@@ -43,14 +43,14 @@ LIMITATIONS = ["EXPECTED_MACHINE_ID_UNAVAILABLE", "TRANSPORT_IDENTITY_ASSERTION_
 
 
 def receipt(result="ISOLATED_TARGET_SCOPE"):
-    return dict(schema="bridge.ibm.unit-isolation.receipt.v1", operation="isolate",
+    return dict(schema="bridge.ibm.unit-isolation.receipt.v2", operation="isolate",
                 **BINDING, result=result, reason="OK" if result == "ISOLATED_TARGET_SCOPE" else "INTERNAL_BLOCKED",
                 snapshot_id="39999999999-aaaaaaaaaaaa", snapshot_sha256="b" * 64,
                 snapshot_restore_sha256="b" * 64, changed_units=list(p.TARGETS),
                 changes=[dict(unit=name, gate="VERIFIED", stop="OBSERVED_INACTIVE") for name in p.TARGETS],
                 target_states=[dict(unit=name, active="inactive", sub="dead",
                                     job_pending=False, cgroup_empty=True) for name in p.TARGETS],
-                host_identity="TRANSPORT_ASSERTION_ONLY", limitations=list(LIMITATIONS))
+                host_identity="TRANSPORT_ASSERTION_ONLY", limitations=list(LIMITATIONS), graph_evidence=None)
 
 
 def chain(row=None):
@@ -240,6 +240,151 @@ class IdentityAttemptAndBudgetTests(OfflineCase):
         with mock.patch.object(p, "bounded_process") as run, self.assertRaisesRegex(p.IsolationError, "transport_closed"):
             obj.call("preflight", 12)
         run.assert_not_called()
+
+
+class GraphEvidenceTests(OfflineCase):
+    def row(self, reason="UNKNOWN_EDGE", result="BLOCKED"):
+        row = receipt(result)
+        row.update(reason=reason, snapshot_id=None, snapshot_sha256=None,
+                   snapshot_restore_sha256=None, changed_units=[], changes=[])
+        row["graph_evidence"] = {"failures": [{
+            "unit": p.TARGETS[0], "property": "Wants", "violation": "UNEXPECTED_MEMBER",
+            "token_count": 2, "unexpected": ["tmp.mount"], "omitted_count": 1,
+            "value_sha256": hashlib.sha256(b"network-online.target tmp.mount").hexdigest()}],
+            "truncated": False}
+        return row
+
+    def check(self, row):
+        return p.validate_receipt(row, BINDING)
+
+    def test_v2_exact_name_evidence_accepted_but_never_success(self):
+        row = self.row()
+        self.assertEqual(row, self.check(row))
+        rows = chain(row); rows[3]["ssh_exit"] = 3
+        result, emitted = self.run_probe(self.probe(rows, rc=3))
+        self.assertFalse(result)
+        self.assertIn(mock.call("UNIT_ISOLATION_VERIFIED_RECEIPT", **BINDING, receipt=row), emitted.call_args_list)
+
+    def test_live_v1_ambiguous_receipt_is_not_accepted_as_v2(self):
+        row = self.row(); row.pop("graph_evidence")
+        row["schema"] = "bridge.ibm.unit-isolation.receipt.v1"
+        with self.assertRaisesRegex(p.IsolationError, "receipt_schema"):
+            self.check(row)
+
+    def test_unknown_edge_requires_nonempty_graph_evidence(self):
+        for value in (None, {"failures": [], "truncated": False}):
+            row = self.row(); row["graph_evidence"] = value
+            with self.subTest(value=value), self.assertRaises(p.IsolationError):
+                self.check(row)
+
+    def test_success_rejects_any_nonnull_graph_evidence(self):
+        row = receipt(); row["graph_evidence"] = self.row()["graph_evidence"]
+        with self.assertRaisesRegex(p.IsolationError, "receipt_graph_success"):
+            self.check(row)
+
+    def test_later_deadline_or_metadata_failure_keeps_prior_graph_evidence(self):
+        for reason in ("DEADLINE", "METADATA_INVALID", "COMMAND_FAILED"):
+            row = self.row(reason=reason)
+            with self.subTest(reason=reason):
+                self.assertEqual(row, self.check(row))
+
+    def test_partial_blocked_retains_graph_evidence_without_green_result(self):
+        row = receipt("PARTIAL_BLOCKED"); row["reason"] = "UNKNOWN_EDGE"
+        row["graph_evidence"] = self.row()["graph_evidence"]
+        self.assertEqual(row, self.check(row))
+        self.assertFalse(self.run_probe(self.probe(chain(row), rc=3))[0])
+
+    def test_graph_top_level_fields_are_closed(self):
+        for value in (True, [], "private", {"failures": [], "truncated": 0},
+                      dict(self.row()["graph_evidence"], raw="PRIVATE_SENTINEL")):
+            row = self.row(); row["graph_evidence"] = value
+            with self.subTest(value=value), self.assertRaises(p.IsolationError):
+                self.check(row)
+
+    def test_graph_row_fields_are_closed(self):
+        original = self.row()["graph_evidence"]["failures"][0]
+        for key in original:
+            row = self.row(); del row["graph_evidence"]["failures"][0][key]
+            with self.subTest(missing=key), self.assertRaises(p.IsolationError):
+                self.check(row)
+        row = self.row(); row["graph_evidence"]["failures"][0]["Environment"] = "PRIVATE_SENTINEL"
+        with self.assertRaises(p.IsolationError): self.check(row)
+
+    def test_graph_units_properties_and_violation_enum_are_closed(self):
+        for key, value in (("unit", "ssh.service"), ("unit", True), ("property", "Environment"),
+                           ("property", "ExecStart"), ("violation", "safe"), ("violation", True)):
+            row = self.row(); row["graph_evidence"]["failures"][0][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(p.IsolationError):
+                self.check(row)
+
+    def test_graph_counts_are_exact_integers_with_consistent_omission(self):
+        for key, value in (("token_count", True), ("token_count", -1), ("token_count", 8193),
+                           ("token_count", "2"), ("omitted_count", True), ("omitted_count", -1),
+                           ("omitted_count", 2), ("omitted_count", 8193)):
+            row = self.row(); row["graph_evidence"]["failures"][0][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(p.IsolationError):
+                self.check(row)
+
+    def test_graph_names_refuse_commands_urls_paths_controls_and_oversize(self):
+        for name in ("/etc/private.service", "https://a.service", "a.service;id", "a service",
+                     "a\n.service", "a\x00.service", "a*.service", "x"*256+".service", "a.unknown",
+                     "a@b@c.service", "a\\x00.service", "a\\xZZ.service", True):
+            row = self.row(); row["graph_evidence"]["failures"][0]["unexpected"] = [name]
+            with self.subTest(name=name), self.assertRaises(p.IsolationError):
+                self.check(row)
+
+    def test_graph_names_accept_exact_canonical_metadata_only(self):
+        for name in ("tmp.mount", "-.mount", "systemd-tmpfiles-setup.service", "var-tmp.mount",
+                     "worker@.service", "worker@slot-1.service", "dev-disk\\x2dname.device"):
+            row = self.row(); row["graph_evidence"]["failures"][0]["unexpected"] = [name]
+            with self.subTest(name=name): self.assertEqual(row, self.check(row))
+
+    def test_graph_names_and_rows_cannot_duplicate(self):
+        row = self.row(); edge = row["graph_evidence"]["failures"][0]
+        edge.update(unexpected=["tmp.mount", "tmp.mount"], omitted_count=0)
+        with self.assertRaises(p.IsolationError): self.check(row)
+        row = self.row(); row["graph_evidence"]["failures"] *= 2
+        with self.assertRaises(p.IsolationError): self.check(row)
+
+    def test_graph_item_caps_and_canonical_byte_cap_are_enforced(self):
+        row = self.row(); edge = row["graph_evidence"]["failures"][0]
+        edge.update(token_count=9, unexpected=["x%d.service" % i for i in range(9)], omitted_count=0)
+        with self.assertRaises(p.IsolationError): self.check(row)
+        row = self.row(); row["graph_evidence"]["failures"] *= 17
+        with self.assertRaises(p.IsolationError): self.check(row)
+        row = self.row(); edge = row["graph_evidence"]["failures"][0]
+        edge.update(token_count=8, unexpected=["x"*220+str(i)+".service" for i in range(8)], omitted_count=0)
+        row["graph_evidence"]["failures"] = [dict(edge, property=k) for k in p.host_contract.EDGES[:6]]
+        with self.assertRaisesRegex(p.IsolationError, "receipt_graph_limit"): self.check(row)
+
+    def test_graph_hashes_and_truncated_flag_are_strict(self):
+        for value in (True, "a"*63, "A"*64, "g"*64, "private"):
+            row = self.row(); row["graph_evidence"]["failures"][0]["value_sha256"] = value
+            with self.subTest(value=value), self.assertRaises(p.IsolationError): self.check(row)
+        for flag in (True, False):
+            row = self.row(); row["graph_evidence"]["truncated"] = flag
+            self.assertEqual(row, self.check(row))
+        row = self.row(); row["graph_evidence"]["truncated"] = 1
+        with self.assertRaises(p.IsolationError): self.check(row)
+
+    def test_graph_violation_counts_and_trigger_property_are_consistent(self):
+        for violation in ("CARDINALITY", "DUPLICATE_MEMBER", "UNEXPECTED_MEMBER"):
+            row = self.row(); edge = row["graph_evidence"]["failures"][0]
+            edge.update(violation=violation, token_count=0, unexpected=[], omitted_count=0)
+            with self.subTest(violation=violation), self.assertRaises(p.IsolationError): self.check(row)
+        row = self.row(); row["graph_evidence"]["failures"][0]["violation"] = "TRIGGER_MISMATCH"
+        with self.assertRaises(p.IsolationError): self.check(row)
+        row["graph_evidence"]["failures"][0]["property"] = "Triggers"
+        self.assertEqual(row, self.check(row))
+
+    def test_graph_tamper_breaks_canonical_capture_binding(self):
+        rows = chain(self.row()); rows[4]["receipt"]["graph_evidence"]["failures"][0]["unexpected"] = ["opt.mount"]
+        with mock.patch.object(p, "emit") as emitted, self.assertRaisesRegex(p.IsolationError, "receipt_capture_binding"):
+            self.probe(rows, rc=3).run_once()
+        self.assertFalse(any(c.args and c.args[0] == "UNIT_ISOLATION_VERIFIED_RECEIPT" for c in emitted.call_args_list))
+
+    def test_sixth_window_and_status_run_ids_are_consumed(self):
+        self.assertTrue({"38067558312", "38067935244"} <= p.CONSUMED_RUNS)
 
 
 class ReceiptTests(OfflineCase):

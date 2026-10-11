@@ -24,7 +24,7 @@ except ImportError:
     import ibm_trial_guest_probe as read_only
     import ibm_unit_isolation as host_contract
 
-HOST_SOURCE_SHA = "b388d41dd1b873fd30920c610201105388a929aa3bfb4be6fcc52485ee711783"
+HOST_SOURCE_SHA = "70746f3c235cf9157e7a451511c70ce3ec2da378dc7f4118d238cebd59d0dc36"
 SAFE_SOURCE_SHA = "7711357b7929dcf42d8e49739b16f2e4489191644a0bfb711259f57f182e3bee"
 PREPARE_SECONDS = 20
 MAINTENANCE_SECONDS = 378
@@ -44,7 +44,7 @@ IDENTITY = dict(instance_id="02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2",
 TRANSPORT = dict(ibm_host="161.156.86.34", ibm_hostkey_sha256="SHA256:o+7KPm2p4VSZSvFFYzIIzA8iiXfze2hhW9tUM58e00w",
                  oracle_host=read_only.ORACLE, oracle_hostkey_sha256=read_only.ORACLE_FP,
                  strict_host_key_checking="yes", known_hosts_source="sealed-pinned-record")
-CONSUMED_RUNS = read_only.CONSUMED_RUNS | {"38065148168", "38064916368", "37939530764"}
+CONSUMED_RUNS = read_only.CONSUMED_RUNS | {"38065148168", "38064916368", "37939530764", "38067558312", "38067935244"}
 
 class IsolationError(Exception):
     pass
@@ -263,13 +263,55 @@ def context():
     need(inputs.get("mode") == "isolate_units" and no(inputs.get("diagnose_ssh")) and no(inputs.get("test_oracle")), "dispatch_inputs")
     return dict(run_id=run_id, attempt=1, head=head)
 
+def validate_graph_evidence(value, result, reason):
+    if value is None:
+        need(reason != "UNKNOWN_EDGE", "receipt_graph_missing")
+        return
+    need(result in {"BLOCKED", "PARTIAL_BLOCKED"}, "receipt_graph_success")
+    need(type(value) is dict and set(value) == {"failures", "truncated"}
+         and type(value["truncated"]) is bool, "receipt_graph_schema")
+    need(len(host_contract.canonical(value)) <= 8192, "receipt_graph_limit")
+    rows = value["failures"]
+    need(type(rows) is list and 1 <= len(rows) <= 16, "receipt_graph_rows")
+    seen = set()
+    for edge in rows:
+        need(type(edge) is dict and set(edge) == {"unit", "property", "violation", "token_count",
+             "unexpected", "omitted_count", "value_sha256"}, "receipt_graph_row")
+        need(type(edge["unit"]) is str and edge["unit"] in host_contract.UNITS
+             and type(edge["property"]) is str and edge["property"] in host_contract.EDGES,
+             "receipt_graph_scope")
+        need(type(edge["violation"]) is str and edge["violation"] in {
+             "UNEXPECTED_MEMBER", "DUPLICATE_MEMBER", "CARDINALITY", "TRIGGER_MISMATCH"},
+             "receipt_graph_violation")
+        key = (edge["unit"], edge["property"], edge["violation"])
+        need(key not in seen, "receipt_graph_duplicate")
+        seen.add(key)
+        count, names, omitted = edge["token_count"], edge["unexpected"], edge["omitted_count"]
+        need(type(count) is int and 0 <= count <= 8192 and type(omitted) is int
+             and type(names) is list and len(names) <= 8, "receipt_graph_count")
+        need(all(type(name) is str and host_contract.is_canonical_unit_name(name) for name in names)
+             and len(names) == len(set(names)), "receipt_graph_names")
+        need(omitted == count - len(names) and 0 <= omitted <= 8192, "receipt_graph_count")
+        need(type(edge["value_sha256"]) is str and re.fullmatch("[0-9a-f]{64}", edge["value_sha256"]),
+             "receipt_graph_hash")
+        if edge["violation"] == "CARDINALITY":
+            need(count > 32, "receipt_graph_violation")
+        elif edge["violation"] == "DUPLICATE_MEMBER":
+            need(count >= 2, "receipt_graph_violation")
+        elif edge["violation"] == "UNEXPECTED_MEMBER":
+            need(count >= 1, "receipt_graph_violation")
+        else:
+            need(edge["property"] == "Triggers", "receipt_graph_violation")
+
+
 def validate_receipt(row, binding):
-    keys = {"schema","operation","run_id","head","attempt","result","reason","snapshot_id","snapshot_sha256","changed_units","target_states","host_identity","snapshot_restore_sha256","limitations","changes"}
+    keys = {"schema","operation","run_id","head","attempt","result","reason","snapshot_id","snapshot_sha256","changed_units","target_states","host_identity","snapshot_restore_sha256","limitations","changes","graph_evidence"}
     need(type(row) is dict and set(row) == keys, "receipt_schema")
-    need(row["schema"] == "bridge.ibm.unit-isolation.receipt.v1" and row["operation"] == "isolate", "receipt_schema")
+    need(row["schema"] == "bridge.ibm.unit-isolation.receipt.v2" and row["operation"] == "isolate", "receipt_schema")
     need(all(type(row[k]) is type(v) and row[k] == v for k,v in binding.items()), "receipt_binding")
     need(type(row["result"]) is str and row["result"] in {"ISOLATED_TARGET_SCOPE","BLOCKED","PARTIAL_BLOCKED"}, "receipt_result")
     need(type(row["reason"]) is str and row["reason"] in host_contract.REASONS, "receipt_reason")
+    validate_graph_evidence(row["graph_evidence"], row["result"], row["reason"])
     need(row["host_identity"] == "TRANSPORT_ASSERTION_ONLY", "receipt_identity")
     need(type(row["limitations"]) is list and row["limitations"] == host_contract.LIMITATIONS, "receipt_limitations")
     need(row["snapshot_restore_sha256"] is None or (type(row["snapshot_restore_sha256"]) is str and re.fullmatch("[0-9a-f]{64}",row["snapshot_restore_sha256"])), "receipt_restore")
