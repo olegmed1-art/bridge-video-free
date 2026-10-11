@@ -35,7 +35,7 @@ import sys
 import time
 
 REQUEST_SCHEMA = "bridge.ibm.unit-isolation.request.v1"
-RECEIPT_SCHEMA = "bridge.ibm.unit-isolation.receipt.v4"
+RECEIPT_SCHEMA = "bridge.ibm.unit-isolation.receipt.v5"
 IDENTITY = {
     "instance_id": "02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2",
     "instance_name": "bridge-school-compute-ibm",
@@ -61,6 +61,8 @@ BEN = "bridge-ben.service"
 TARGETS = (OBSERVER, CONTROL, BRIDGE, TIMER)
 STOP_ORDER = (TIMER, BRIDGE, CONTROL, OBSERVER)
 COMPANIONS = (HEALTH, BEN)
+GATE_UNITS = TARGETS + (BEN,)
+PENDING_GATE_SECONDS = 45
 COMPANION_PHASES = ("PREFLIGHT", "AFTER_SNAPSHOT", "BEFORE_GATE", "BEFORE_RELOAD",
                     "AFTER_RELOAD", "BEFORE_STOP", "WAIT_STOP", "AFTER_STOP", "FINAL_VERIFY",
                     "ROLLBACK_PREFLIGHT", "ROLLBACK_BEFORE_REMOVE", "ROLLBACK_AFTER_RELOAD")
@@ -74,7 +76,7 @@ PRIVATE_TMP_EDGES = {"Wants": frozenset(("tmp.mount",)),
                      "After": frozenset(("tmp.mount", "systemd-tmpfiles-setup.service"))}
 SYSTEM_DIRS = ("/etc/systemd/system", "/run/systemd/system", "/usr/lib/systemd/system")
 RECOVERY_ROOT = "/var/lib/bridge-school-maintenance"
-GUEST_SECONDS = 90
+GUEST_SECONDS = 240
 MAX_FILES = 32
 MAX_BYTES = 256 * 1024
 MAX_INPUT = 8192
@@ -110,7 +112,8 @@ REASONS = {"OK", "REQUEST_INVALID", "HOST_MISMATCH", "ROOT_REQUIRED", "DEADLINE"
            "COMPANION_BUSY", "UNIT_BUSY", "PATH_UNSAFE", "FILE_LIMIT", "FILE_DRIFT",
            "COLLISION", "ARCHIVE_FAILED", "RESTORE_MISMATCH", "GATE_NOT_EFFECTIVE",
            "CGROUP_NOT_EMPTY", "STOP_INCOMPLETE", "BUDGET_INSUFFICIENT", "INTERNAL_BLOCKED",
-           "ROLLBACK_INVALID", "ROLLBACK_DRIFT", "CONFIG_ONLY_RESTORED"}
+           "ROLLBACK_INVALID", "ROLLBACK_DRIFT", "CONFIG_ONLY_RESTORED",
+           "PENDING_GATE_RACE", "PENDING_GATE_TIMEOUT", "PENDING_GATE_UNVERIFIED"}
 REASON_CODES = frozenset(REASONS)
 
 
@@ -831,6 +834,9 @@ class Isolation:
         self.graph_evidence = GraphEvidence()
         self.companion_evidence = None
         self.job_evidence = None
+        self.ben_gate = None
+        self.ben_gate_journaled = False
+        self.pending_end = None
         self.baseline = {}
         self.conditions = {}
         self.records = []
@@ -847,7 +853,12 @@ class Isolation:
         self.systemd_255 = None
 
     def command(self, args, timeout=3):
-        return self.runner(args, timeout=min(timeout, self.budget.left()), limit=MAX_OUTPUT)
+        left = self.budget.left()
+        if self.pending_end is not None:
+            pending_left = self.pending_end - self.budget.clock()
+            need(pending_left > 0, "PENDING_GATE_TIMEOUT")
+            left = min(left, pending_left)
+        return self.runner(args, timeout=min(timeout, left), limit=MAX_OUTPUT)
 
     def private_tmp_version(self):
         if self.systemd_255 is None:
@@ -1088,13 +1099,142 @@ class Isolation:
     def check_gates(self):
         need(not self.fs.exists(self.allow), "GATE_NOT_EFFECTIVE")
         expected = ["ConditionPathExists", False, False, self.allow]
-        for unit in TARGETS:
-            self.stop_handlers(unit)
+        for unit in self.own_records:
+            if unit in TARGETS:
+                self.stop_handlers(unit)
             current = self.effective_conditions(unit)
             need(current == sorted(self.conditions[unit] + [expected], key=canonical), "GATE_NOT_EFFECTIVE")
             need(self.gate_paths[unit] in self.rows[unit]["DropInPaths"].split(), "GATE_NOT_EFFECTIVE")
             need(self.rows[unit]["NeedDaemonReload"] == "no", "GATE_NOT_EFFECTIVE")
             need(self.fs.record(self.gate_paths[unit]) == self.own_records[unit], "FILE_DRIFT")
+
+    def create_gate(self, unit):
+        need(unit in self.gate_paths and unit not in self.own_records, "COLLISION")
+        path = self.gate_paths[unit]
+        change = {"unit": unit, "gate": "INTENDED", "stop": "NOT_REQUESTED"}
+        self.changes.append(change)
+        directory = str(PurePosixPath(path).parent)
+        self.journal("GATE_INTENT", unit=unit, path=path, sha256=digest(self.gate_data),
+                     directory_was_absent=not self.fs.exists(directory))
+        if not self.fs.exists(directory):
+            self.fs.mkdir(directory, mode=0o755)
+            self.created_dirs.append(directory)
+        self.fs.write_new(path, self.gate_data, mode=0o644)
+        change["gate"] = "CREATED"
+        record = self.fs.record(path)
+        need(record["sha256"] == digest(self.gate_data), "FILE_DRIFT")
+        self.own_records[unit] = record
+        self.journal("GATE_CREATED", unit=unit, record=record)
+        if unit == BEN:
+            self.ben_gate_journaled = True
+
+    def pending_marker(self):
+        raw = strict_json(self.property(BEN, "Service", "ExecStartPre"))
+        need(type(raw) is dict and set(raw) == {"type", "data"} and raw["type"] == "a(sasbttttuii)", "PENDING_GATE_UNVERIFIED")
+        need(job_handler(raw["data"]) == [{"action": "DOCKER_REMOVE_BEN_FORCE", "ignore_failure": True}], "PENDING_GATE_UNVERIFIED")
+        markers = []
+        for unit in (BEN, HEALTH):
+            value = strict_json(self.property(unit, "Unit", "InactiveExitTimestampMonotonic"))
+            need(type(value) is dict and set(value) == {"type", "data"} and value["type"] == "t"
+                 and type(value["data"]) is int and 0 <= value["data"] <= 18446744073709551615,
+                 "PENDING_GATE_UNVERIFIED")
+            markers.append(value["data"])
+        # v255 serializes these unit timestamps across daemon-reload. Unlike
+        # ExecStartPre status, they cannot reset when command arrays reload.
+        # Leaving inactive (even a short HEALTH/ExecStartPre cycle) changes them;
+        # a skipped Condition leaves them unchanged. Values stay internal.
+        return tuple(markers)
+
+    def pending_quiet_check(self, identifier, marker, *, allow_skipped=False):
+        health = self.show(HEALTH)
+        need(health["ActiveState"] == "inactive" and health["SubState"] == "dead" and not health["Job"]
+             and health["MainPID"] == "0" and health["ControlPID"] == "0", "PENDING_GATE_RACE")
+        self.cgroup_empty(health["ControlGroup"])
+        row = self.show(BEN)
+        need(row["ActiveState"] == "inactive" and row["SubState"] == "dead" and row["Job"] in (("", str(identifier)) if allow_skipped else (str(identifier),))
+             and row["MainPID"] == "0" and row["ControlPID"] == "0", "PENDING_GATE_RACE")
+        need(self.pending_marker() == marker, "PENDING_GATE_RACE")
+        self.cgroup_empty(row["ControlGroup"])
+        return row
+
+    def prepare_pending_ben(self):
+        row = self.rows[BEN]
+        if not (row["ActiveState"] == "inactive" and row["SubState"] == "dead" and row["MainPID"] == "0"
+                and row["ControlPID"] == "0" and row["Job"] and len(row["Job"]) <= 10 and int(row["Job"]) <= 4294967295):
+            return
+        identifier = int(row["Job"])
+        self.ben_gate = dict(unit=BEN, boot_job_id=identifier, status="ADMISSION_BLOCKED", timer_stopped=False,
+                             execution_unchanged=None, condition_skipped=None, production_release_required=False)
+        try:
+            need(self.private_tmp_version(), "PENDING_GATE_UNVERIFIED")
+            reader = JobDiagnostic(self, identifier)
+            job = reader.job(identifier)
+            before = reader.dependencies(identifier, "GetBefore")
+            need(job["type"] == "start" and job["state"] == "waiting"
+                 and len(before) == 1 and before[0]["unit"] == "docker.service"
+                 and before[0]["type"] == "start" and before[0]["state"] == "running", "PENDING_GATE_UNVERIFIED")
+            marker = self.pending_marker()
+            self.pending_quiet_check(identifier, marker)
+        except Blocked as exc:
+            if str(exc) in {"CANCELLED", "PARENT_LOST", "DEADLINE", "PENDING_GATE_RACE", "CGROUP_NOT_EMPTY"}:
+                raise
+            raise Blocked("PENDING_GATE_UNVERIFIED") from None
+        except Exception:
+            raise Blocked("PENDING_GATE_UNVERIFIED") from None
+        self.gate_paths[BEN] = "/etc/systemd/system/" + BEN + ".d/90-bridge-ibm-isolation-" + self.change_id + ".conf"
+        need(not self.fs.exists(self.gate_paths[BEN]), "COLLISION")
+        self.baseline = {u: dict(r) for u, r in self.rows.items()}
+        self.conditions = {u: self.effective_conditions(u) for u in GATE_UNITS}
+        self.original_paths = self.inventory()
+        # Explicit preparation budget plus original AL stop reserve; never reset
+        # guest/controller time. This is a condition gate, not BEN Stop/Cancel.
+        self.budget.left(PENDING_GATE_SECONDS + self.remaining_stop_budget() + 20)
+        self.snapshot()
+        end = min(self.budget.end - self.remaining_stop_budget() - 10, self.budget.clock() + PENDING_GATE_SECONDS)
+        self.pending_end = end
+        def check_time():
+            need(self.budget.clock() < end, "PENDING_GATE_TIMEOUT")
+        self.ben_gate["status"] = "PREPARING"
+        for unit in (BEN, TIMER):
+            check_time(); self.pending_quiet_check(identifier, marker); self.drift()
+            if unit == BEN:
+                # Conservative before write: a completed write followed by a
+                # failed fsync/record/journal still needs reviewed recovery.
+                self.ben_gate["production_release_required"] = True
+            self.create_gate(unit)
+        check_time(); self.pending_quiet_check(identifier, marker)
+        self.journal("PENDING_BEN_RELOAD_INTENT", unit=BEN, boot_job_id=identifier)
+        self.command(["/usr/bin/systemctl", "daemon-reload"], timeout=5)
+        for unit in UNITS:
+            self.show(unit)
+        self.pending_quiet_check(identifier, marker, allow_skipped=True); self.drift(); self.check_gates()
+        timer = self.show(TIMER)
+        need(not timer["Job"] and timer["ActiveState"] in {"active", "inactive"}, "PENDING_GATE_RACE")
+        change = next(c for c in self.changes if c["unit"] == TIMER)
+        if timer["ActiveState"] == "active":
+            check_time(); self.pending_quiet_check(identifier, marker, allow_skipped=True)
+            self.journal("STOP_INTENT", unit=TIMER); change["stop"] = "REQUESTED"
+            self.command(["/usr/bin/systemctl", "--job-mode=fail", "--no-block", "stop", TIMER])
+        while True:
+            check_time(); row = self.pending_quiet_check(identifier, marker, allow_skipped=True)
+            timer = self.show(TIMER)
+            need(timer["ActiveState"] in {"active", "inactive", "deactivating"}, "PENDING_GATE_RACE")
+            if timer["ActiveState"] == "inactive" and timer["SubState"] == "dead" and not timer["Job"]:
+                change["stop"] = "OBSERVED_INACTIVE"; self.ben_gate["timer_stopped"] = True
+            if self.ben_gate["timer_stopped"] and not row["Job"]:
+                break
+            self.sleep(min(.2, max(0, end - self.budget.clock())))
+        raw = strict_json(self.property(BEN, "Unit", "Conditions"))
+        parse_conditions(canonical(raw))
+        own = ["ConditionPathExists", False, False, self.allow, -1]
+        need(own in raw["data"], "PENDING_GATE_UNVERIFIED")
+        self.pending_quiet_check(identifier, marker, allow_skipped=True); self.drift(); self.check_gates()
+        self.ben_gate.update(status="GATED_QUIET", execution_unchanged=True, condition_skipped=True)
+        for change in self.changes:
+            change["gate"] = "VERIFIED"
+        self.journal("PENDING_BEN_GATED_QUIET", unit=BEN, boot_job_id=identifier,
+                     production_release_required=True, ben_stop_requested=False)
+        self.pending_end = None
 
     def preflight(self):
         validate_request(self.p)
@@ -1121,36 +1261,26 @@ class Isolation:
                 self.stop_handlers(unit)
                 need(not row["Job"] and row["ActiveState"] in {"active", "inactive"}, "UNIT_BUSY")
                 need((row["ActiveState"], row["SubState"]) in {("active", "waiting" if unit == TIMER else "running"), ("inactive", "dead")}, "UNIT_BUSY")
+        self.prepare_pending_ben()
         self.companions("PREFLIGHT")
-        self.baseline = {u: dict(r) for u, r in self.rows.items()}
-        self.conditions = {u: self.effective_conditions(u) for u in TARGETS}
-        self.original_paths = self.inventory()
+        if self.snapshot_id is None:
+            self.baseline = {u: dict(r) for u, r in self.rows.items()}
+            self.conditions = {u: self.effective_conditions(u) for u in TARGETS}
+            self.original_paths = self.inventory()
         self.budget.left(self.remaining_stop_budget())
 
     def isolate(self):
         self.preflight()
-        self.snapshot()
+        if self.snapshot_id is None:
+            self.snapshot()
         self.companions("AFTER_SNAPSHOT")
         self.drift()
         self.budget.left(self.remaining_stop_budget())
         for unit in TARGETS:
             self.companions("BEFORE_GATE")
             self.drift()
-            path = self.gate_paths[unit]
-            change = {"unit": unit, "gate": "INTENDED", "stop": "NOT_REQUESTED"}
-            self.changes.append(change)
-            directory = str(PurePosixPath(path).parent)
-            self.journal("GATE_INTENT", unit=unit, path=path, sha256=digest(self.gate_data),
-                         directory_was_absent=not self.fs.exists(directory))
-            if not self.fs.exists(directory):
-                self.fs.mkdir(directory, mode=0o755)
-                self.created_dirs.append(directory)
-            self.fs.write_new(path, self.gate_data, mode=0o644)
-            change["gate"] = "CREATED"
-            record = self.fs.record(path)
-            need(record["sha256"] == digest(self.gate_data), "FILE_DRIFT")
-            self.own_records[unit] = record
-            self.journal("GATE_CREATED", unit=unit, record=record)
+            if unit not in self.own_records:
+                self.create_gate(unit)
         self.companions("BEFORE_RELOAD")
         self.journal("RELOAD_INTENT")
         self.command(["/usr/bin/systemctl", "daemon-reload"], timeout=5)
@@ -1204,7 +1334,29 @@ class Isolation:
         self.journal("ISOLATED_TARGET_SCOPE")
         return self.receipt("ISOLATED_TARGET_SCOPE", "OK")
 
+    def ben_gate_receipt(self):
+        if self.ben_gate is None:
+            return None
+        value = dict(self.ben_gate)
+        path = "/etc/systemd/system/" + BEN + ".d/90-bridge-ibm-isolation-" + self.change_id + ".conf"
+        value.update(gate_path=path, gate_presence="UNKNOWN", recovery="NOT_APPLICABLE")
+        if value["production_release_required"]:
+            value["recovery"] = "REVIEW_REQUIRED"
+            try:
+                value["gate_presence"] = "PRESENT" if self.fs.exists(path) else "ABSENT"
+                if (value["gate_presence"] == "PRESENT" and self.ben_gate_journaled
+                        and BEN in self.own_records and self.fs.record(path) == self.own_records[BEN]):
+                    value["recovery"] = "SNAPSHOT_BOUND_CONFIG_ONLY"
+            except (Exception, KeyboardInterrupt):
+                # A deadline/read error never converts uncertain ownership into
+                # absence or recoverability. No server/helper command is run.
+                value["gate_presence"] = "UNKNOWN"
+        return value
+
     def receipt(self, result, reason):
+        ben_gate = self.ben_gate_receipt()
+        if result == "ISOLATED_TARGET_SCOPE" and ben_gate is not None and ben_gate["recovery"] != "SNAPSHOT_BOUND_CONFIG_ONLY":
+            result, reason = "PARTIAL_BLOCKED", "FILE_DRIFT"
         states = []
         for unit in TARGETS:
             row = self.rows.get(unit, {})
@@ -1226,6 +1378,7 @@ class Isolation:
                 "graph_evidence": self.graph_evidence.value() if self.graph_evidence.failures else None,
                 "companion_evidence": self.companion_evidence if reason == "COMPANION_BUSY" else None,
                 "job_evidence": self.job_evidence if reason == "COMPANION_BUSY" else None,
+                "ben_gate": ben_gate,
                 "limitations": LIMITATIONS}
 
 
@@ -1240,7 +1393,7 @@ def execute(payload, **kwargs):
         return operation.receipt("PARTIAL_BLOCKED" if operation.changes else "BLOCKED", "INTERNAL_BLOCKED")
 
 
-def rollback(payload, **kwargs):
+def rollback(payload, *, release_ben_only=False, **kwargs):
     """Separately authorized future window only; remove own verified gates, never start.
 
     A fresh controller run must supply the prior snapshot ID and digest. Unknown
@@ -1249,6 +1402,7 @@ def rollback(payload, **kwargs):
     """
     op = Isolation(payload, **kwargs)
     try:
+        need(type(release_ben_only) is bool, "ROLLBACK_INVALID")
         validate_request(payload, rollback=True)
         op.host_check(op.fs)
         op.snapshot_id = payload["snapshot_id"]
@@ -1264,12 +1418,13 @@ def rollback(payload, **kwargs):
         op.change_id = op.snapshot_id
         op.allow = "/etc/systemd/system/.bridge-ibm-isolation-" + op.change_id + ".allow"
         op.gate_data = ("[Unit]\nConditionPathExists=" + op.allow + "\n").encode()
-        op.gate_paths = {u: "/etc/systemd/system/" + u + ".d/90-bridge-ibm-isolation-" + op.change_id + ".conf" for u in TARGETS}
+        op.gate_paths = {u: "/etc/systemd/system/" + u + ".d/90-bridge-ibm-isolation-" + op.change_id + ".conf" for u in GATE_UNITS}
         op.records = manifest["records"]
         need(type(op.records) is list and 0 < len(op.records) <= MAX_FILES, "ROLLBACK_INVALID")
         op.baseline = manifest["metadata"]
         need(type(op.baseline) is dict and set(op.baseline) == set(UNITS), "ROLLBACK_INVALID")
         op.conditions = manifest["conditions"]
+        need(type(op.conditions) is dict and set(op.conditions) in (set(TARGETS), set(GATE_UNITS)), "ROLLBACK_INVALID")
         op.original_paths = {r["path"] for r in op.records}
         need(len(op.original_paths) == len(op.records), "ROLLBACK_INVALID")
         # Prove archive and restoration again, with an exclusive new staging dir.
@@ -1287,7 +1442,7 @@ def rollback(payload, **kwargs):
             event = strict_json(event_raw)
             need(event["seq"] == op.journal_index and event["previous_sha256"] == previous, "ROLLBACK_INVALID")
             if event["event"] == "GATE_INTENT":
-                need(event["unit"] in TARGETS and event["path"] == op.gate_paths[event["unit"]]
+                need(event["unit"] in GATE_UNITS and event["path"] == op.gate_paths[event["unit"]]
                      and event["sha256"] == digest(op.gate_data), "ROLLBACK_INVALID")
                 intents.add(event["unit"])
             if event["event"] == "GATE_CREATED":
@@ -1295,6 +1450,10 @@ def rollback(payload, **kwargs):
                 need(unit in intents and unit not in op.own_records and event["record"]["path"] == op.gate_paths[unit]
                      and event["record"]["sha256"] == digest(op.gate_data), "ROLLBACK_INVALID")
                 op.own_records[unit] = event["record"]
+            if event["event"] == "ROLLBACK_REMOVED":
+                removed = event["unit"]
+                need(removed in op.own_records, "ROLLBACK_INVALID")
+                del op.own_records[removed]; intents.remove(removed)
             previous = digest(event_raw)
             op.journal_index += 1
         op.journal_hash = previous
@@ -1305,7 +1464,13 @@ def rollback(payload, **kwargs):
             need(op.cgroup_empty(row["ControlGroup"]), "CGROUP_NOT_EMPTY")
         op.companions("ROLLBACK_PREFLIGHT")
         op.drift()
+        if release_ben_only:
+            need(BEN in op.own_records, "ROLLBACK_INVALID")
+        restored_units = []
         for unit, record in list(op.own_records.items()):
+            if release_ben_only and unit != BEN:
+                continue
+            restored_units.append(unit)
             op.companions("ROLLBACK_BEFORE_REMOVE")
             op.drift()
             op.journal("ROLLBACK_INTENT", unit=unit, path=op.gate_paths[unit], sha256=record["sha256"])
@@ -1321,7 +1486,7 @@ def rollback(payload, **kwargs):
             need(row["ActiveState"] == "inactive" and row["SubState"] == "dead" and not row["Job"], "UNIT_BUSY")
         op.companions("ROLLBACK_AFTER_RELOAD")
         op.drift()
-        for unit in TARGETS:
+        for unit in restored_units:
             need(op.effective_conditions(unit) == op.conditions[unit], "ROLLBACK_DRIFT")
         op.journal("CONFIG_ONLY_RESTORED")
         return op.receipt("ROLLED_BACK_CONFIG_ONLY", "CONFIG_ONLY_RESTORED")
@@ -1331,8 +1496,18 @@ def rollback(payload, **kwargs):
         return op.receipt("PARTIAL_BLOCKED" if op.changes else "BLOCKED", "INTERNAL_BLOCKED")
 
 
+def release_ben_gate(payload, **kwargs):
+    """Explicit future production-release: restore BEN config only, never Start.
+
+    Requires the original snapshot/hash and all units freshly quiet. Current
+    production main/transport does not invoke this separately reviewed action.
+    Other owned Assistant Lab/timer gates remain in place.
+    """
+    return rollback(payload, release_ben_only=True, **kwargs)
+
+
 def main(payload=None):
-    """Production entrypoint: 90s from entry, parent death and signals fail closed.
+    """Production entrypoint: 240s from entry, parent death and signals fail closed.
 
     The transport embeds this reviewed source using python -I -B -c, then calls
     main with __name__='__main__'. Input JSON is bounded stdin; no CLI path input.

@@ -53,7 +53,7 @@ class IsolationControllerTests(unittest.TestCase):
         return code,actions,budgets,bindings,events,clock.now()-(started or 0)
 
     def test_start_anchored_matrix_and_single_stop(self):
-        for running in (0,6,60,180,240,260,265,270,300,385,400,600):
+        for running in (0,115,120,240,385,600):
             for io_seconds in (0,5,10):
                 with self.subTest(running=running,io=io_seconds):
                     code,actions,budgets,proofs,events,total=self.run_case(running=running,io_seconds=io_seconds,success=False)
@@ -61,17 +61,29 @@ class IsolationControllerTests(unittest.TestCase):
                     self.assertLessEqual(actions[1][1]-actions[0][1],420)
                     self.assertLessEqual(total,600);self.assertLessEqual(len(budgets),1)
                     self.assertEqual([p.IDENTITY],proofs)
-                    for budget in budgets:self.assertGreaterEqual(budget,115);self.assertLessEqual(budget,378)
+                    for budget in budgets:self.assertGreaterEqual(budget,265);self.assertLessEqual(budget,378)
                     self.assertEqual('STOPPED_OBSERVED',events[-1]['event'])
     def test_late_running_never_resets_budget(self):
-        code,actions,budgets,_,events,_=self.run_case(running=240)
-        self.assertEqual([143],budgets);self.assertEqual(0,code)
+        code,actions,budgets,_,events,_=self.run_case(running=115)
+        self.assertEqual([268],budgets);self.assertEqual(0,code)
         row=next(r for r in events if r['event']=='UNIT_ISOLATION_STARTED')
-        self.assertEqual((240,420,180),(row['seconds_since_start'],row['stop_submit_by_seconds'],row['confirmation_reserve_seconds']))
+        self.assertEqual((115,420,180),(row['seconds_since_start'],row['stop_submit_by_seconds'],row['confirmation_reserve_seconds']))
         self.assertFalse(any(r['event']=='GUEST_DIAGNOSTIC_RESULT' for r in events))
     def test_insufficient_repair_reserve_skips_and_stops(self):
-        code,actions,budgets,_,events,_=self.run_case(running=270)
+        code,actions,budgets,_,events,_=self.run_case(running=120)
         self.assertEqual(3,code);self.assertEqual([],budgets);self.assertEqual(['start','stop'],[a for a,_ in actions])
+    def test_delayed_start_response_and_running_keep_the_same_stop_deadline(self):
+        self.assertEqual((265,378,420,600),
+                         (e.UNIT_ISOLATION_MIN_SECONDS,e.UNIT_ISOLATION_SECONDS,
+                          e.DIAGNOSTIC_STOP_SECONDS,e.WINDOW_SECONDS))
+        self.assertEqual(p.MIN_MAINTENANCE_SECONDS,e.UNIT_ISOLATION_MIN_SECONDS)
+        for running,budget,elapsed in ((0,363,20),(90,288,95)):
+            code,actions,budgets,_,events,total=self.run_case(running=running,io_seconds=10)
+            self.assertEqual(0,code);self.assertEqual([budget],budgets)
+            self.assertEqual(393,actions[1][1]-actions[0][1]);self.assertLessEqual(total,600)
+            row=next(r for r in events if r['event']=='UNIT_ISOLATION_STARTED')
+            self.assertEqual(elapsed,row['seconds_since_start'])
+            self.assertEqual((420,180),(row['stop_submit_by_seconds'],row['confirmation_reserve_seconds']))
     def test_success_requires_isolation_not_just_auth(self):
         for success in (True,False,None,1):
             code,actions,_,_,events,_=self.run_case(success=success)

@@ -442,7 +442,7 @@ class IsolationTests(unittest.TestCase):
             self.fx.rows[unit]["Requires"] += " tmp.mount"
             self.fx.rows[unit]["After"] += " tmp.mount systemd-tmpfiles-setup.service"
         result = self.graph_preflight()
-        self.assertEqual("bridge.ibm.unit-isolation.receipt.v4", result["schema"])
+        self.assertEqual("bridge.ibm.unit-isolation.receipt.v5", result["schema"])
         evidence = result["graph_evidence"]
         self.assertFalse(evidence["truncated"])
         self.assertEqual(6, len(evidence["failures"]))
@@ -588,7 +588,7 @@ class IsolationTests(unittest.TestCase):
                     self.fx.rows[m.CONTROL]["ActiveState"] = "active"
                     def hook(argv):
                         if argv[-1] == m.OBSERVER:
-                            self.fx.clock.t += 91
+                            self.fx.clock.t += m.GUEST_SECONDS + 1
                     self.fx.hook = hook
                 result = self.graph_preflight(failure)
                 self.assertEqual("tmp.mount", result["graph_evidence"]["failures"][0]["unexpected"][0])
@@ -722,6 +722,14 @@ class IsolationTests(unittest.TestCase):
                     with mock.patch.object(m.RootFS, "write_new", side_effect=AssertionError("NO_WRITES")) as writes, \
                          mock.patch.object(m.RootFS, "mkdir", side_effect=AssertionError("NO_MKDIR")) as mkdir:
                         result = self.execute()
+                    if unit == m.BEN and field == "Job":
+                        self.assert_blocked(result, "PENDING_GATE_UNVERIFIED")
+                        self.assertEqual("ADMISSION_BLOCKED", result["ben_gate"]["status"])
+                        self.assertIsNone(result["companion_evidence"])
+                        self.assertIsNone(result["snapshot_id"])
+                        writes.assert_not_called(); mkdir.assert_not_called()
+                        self.fx.rows[unit][field] = old
+                        continue
                     self.assert_blocked(result, "COMPANION_BUSY")
                     evidence = result["companion_evidence"]
                     self.assertEqual(unit, evidence["unit"])
@@ -1115,8 +1123,8 @@ class IsolationTests(unittest.TestCase):
         with mock.patch.object(m.os, "geteuid", return_value=0), mock.patch.object(m.os, "getppid", return_value=42), mock.patch.object(m.platform, "system", return_value="Linux"), mock.patch.object(m.signal, "getitimer", return_value=(0.0, 0.0)), mock.patch.object(m.signal, "setitimer") as timer, mock.patch.object(m.signal, "signal"), mock.patch.object(m.ctypes, "CDLL", return_value=lib), mock.patch.object(m, "execute", return_value=expected) as execute, contextlib.redirect_stdout(stdout):
             self.assertEqual(3, m.main(payload()))
         self.assertEqual((1, signal.SIGTERM), lib.args)
-        self.assertGreater(timer.call_args_list[0].args[1], 88)
-        self.assertLessEqual(timer.call_args_list[0].args[1], 89)
+        self.assertGreater(timer.call_args_list[0].args[1], m.GUEST_SECONDS - 2)
+        self.assertLessEqual(timer.call_args_list[0].args[1], m.GUEST_SECONDS - 1)
         self.assertEqual((signal.ITIMER_REAL, 0), timer.call_args_list[-1].args)
         execute.assert_called_once()
 
@@ -1297,7 +1305,8 @@ class BenJobDiagnosticTests(unittest.TestCase):
         self.fx = JobFixture(self.tmp.name)
 
     def execute(self):
-        with mock.patch.object(m.RootFS,"write_new",side_effect=AssertionError("NO_WRITE")), \
+        with mock.patch.object(m.Isolation, "prepare_pending_ben", return_value=None), \
+             mock.patch.object(m.RootFS,"write_new",side_effect=AssertionError("NO_WRITE")), \
              mock.patch.object(m.RootFS,"mkdir",side_effect=AssertionError("NO_WRITE")):
             result = m.execute(payload(), **self.fx.kwargs())
         self.assertEqual("COMPANION_BUSY",result["reason"])
@@ -1348,7 +1357,7 @@ class BenJobDiagnosticTests(unittest.TestCase):
 
     def test_remaining_guest_budget_is_not_reset(self):
         op=m.Isolation(payload(),**self.fx.kwargs());op.rows=copy.deepcopy(self.fx.rows)
-        self.fx.clock.t=89.5;deadline=op.budget.end
+        self.fx.clock.t=m.GUEST_SECONDS-.5;deadline=op.budget.end
         d=m.JobDiagnostic(op,7);self.assertEqual(deadline,d.end)
         self.fx.diag_hook=lambda argv: b"x"*32769
         d.collect();self.assertEqual(deadline,op.budget.end)
@@ -1397,13 +1406,15 @@ class BenJobDiagnosticTests(unittest.TestCase):
     def test_cancellation_and_parent_loss_are_not_swallowed(self):
         for reason in ("CANCELLED","PARENT_LOST"):
             self.fx.diag_hook=lambda argv,r=reason: (_ for _ in ()).throw(m.Blocked(r))
-            result=m.execute(payload(),**self.fx.kwargs())
+            with mock.patch.object(m.Isolation, "prepare_pending_ben", return_value=None):
+                result=m.execute(payload(),**self.fx.kwargs())
             self.assertEqual(reason,result["reason"]);self.assertIsNone(result["job_evidence"])
             self.assertFalse(self.fx.stop_requested)
 
     def test_collector_does_not_run_for_health_or_other_failed_predicates(self):
         self.fx.rows[m.HEALTH]["Job"]="3"
-        result=m.execute(payload(),**self.fx.kwargs())
+        with mock.patch.object(m.Isolation, "prepare_pending_ben", return_value=None):
+            result=m.execute(payload(),**self.fx.kwargs())
         self.assertEqual("COMPANION_BUSY",result["reason"]);self.assertIsNone(result["job_evidence"])
         self.assertEqual([],self.fx.diag_calls)
         self.fx.rows[m.HEALTH]["Job"]="";self.fx.rows[m.BEN]["ActiveState"]="active"
@@ -1420,6 +1431,306 @@ class BenJobDiagnosticTests(unittest.TestCase):
             with self.assertRaises(p.IsolationError):p.validate_receipt(row,dict(run_id=payload()["run_id"],head=payload()["head"],attempt=1))
         row=copy.deepcopy(original);row["reason"]="OK";row["result"]="ISOLATED_TARGET_SCOPE"
         with self.assertRaises(p.IsolationError):p.validate_receipt(row,dict(run_id=payload()["run_id"],head=payload()["head"],attempt=1))
+
+
+class PendingGateFixture(JobFixture):
+    """Queued BEN waiting for Docker, with reload-stable unit timestamps."""
+    def __init__(self, root):
+        super().__init__(root)
+        self.conditions[m.BEN] = []
+        self.skipped_conditions = []
+        self.inactive_exit = {m.BEN: 101, m.HEALTH: 202}
+        self.exec_status = [31, 32, 33, 34, 35, 36, 37]
+        self.skip_pending = True
+        self.condition_result = -1
+        self.reload_hook = None
+        self.marker_reads = {m.BEN: 0, m.HEALTH: 0}
+
+    def runner(self, argv, **kwargs):
+        if argv[0] == "/usr/bin/busctl" and argv[-1] in ("ExecStartPre", "InactiveExitTimestampMonotonic"):
+            self.calls.append(list(argv)); self.clock.t += .002
+            if self.hook:
+                self.hook(argv)
+            if argv[-1] == "ExecStartPre":
+                return json.dumps({"type": "a(sasbttttuii)", "data": [["/usr/bin/docker",
+                    ["/usr/bin/docker", "rm", "-f", "bridge-ben"], True, *self.exec_status]]}).encode()
+            unit = next(u for u in (m.BEN, m.HEALTH) if argv[5] == m.job_unit_path(u))
+            self.marker_reads[unit] += 1
+            return json.dumps({"type": "t", "data": self.inactive_exit[unit]}).encode()
+        if argv == ["/usr/bin/systemctl", "--job-mode=fail", "--no-block", "stop", m.TIMER]:
+            self.calls.append(list(argv)); self.clock.t += .002
+            self.stop_requested.append(m.TIMER); self.stop(m.TIMER)
+            return b""
+        answer = super().runner(argv, **kwargs)
+        if argv == ["/usr/bin/systemctl", "daemon-reload"]:
+            directory = self.root / "etc/systemd/system" / (m.BEN + ".d")
+            drops = sorted(directory.glob("*.conf")) if directory.exists() else []
+            self.rows[m.BEN]["DropInPaths"] = " ".join("/" + str(p.relative_to(self.root)) for p in drops)
+            self.conditions[m.BEN] = [r for r in self.conditions[m.BEN] if ".bridge-ibm-isolation-" not in r[3]]
+            for path in drops:
+                for line in path.read_text().splitlines():
+                    if line.startswith("ConditionPathExists="):
+                        self.conditions[m.BEN].append(["ConditionPathExists", False, False, line.split("=", 1)[1], 0])
+            # v255 rebuilds the ExecStartPre array; its execution status resets.
+            self.exec_status = [0] * 7
+            if self.skip_pending and drops and self.rows[m.BEN]["Job"] == "7":
+                self.rows[m.BEN]["Job"] = ""
+                self.conditions[m.BEN][-1][-1] = self.condition_result
+                self.skipped_conditions.append(list(self.conditions[m.BEN][-1]))
+            if self.reload_hook:
+                self.reload_hook()
+        return answer
+
+
+class PendingBenGateTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.fx = PendingGateFixture(self.tmp.name)
+        network = mock.patch("socket.socket.connect", side_effect=AssertionError("LIVE_NETWORK_FORBIDDEN"))
+        network.start(); self.addCleanup(network.stop)
+
+    def execute(self):
+        result = m.execute(payload(), **self.fx.kwargs())
+        self.assertNotIn(self.fx.secret, json.dumps(result))
+        self.assertLess(len(m.canonical(result)), m.MAX_OUTPUT)
+        self.assert_no_ben_mutation()
+        return result
+
+    def assert_no_ben_mutation(self):
+        self.assertNotIn(m.BEN, self.fx.stop_requested)
+        for command in self.fx.calls:
+            self.assertNotEqual("/usr/bin/docker", command[0])
+            self.assertFalse(any(action in command for action in ("cancel", "Cancel", "CancelJob", "StopUnit", "KillUnit")))
+            if command[0] == "/usr/bin/systemctl" and "stop" in command:
+                self.assertIn(command[-1], m.STOP_ORDER)
+            self.assertFalse(any(action in command for action in ("start", "restart", "disable", "mask")))
+
+    def gates(self):
+        return sorted((self.fx.root / "etc/systemd/system").glob("*.d/*.conf"))
+
+    def archive(self, result):
+        return self.fx.root / m.RECOVERY_ROOT.lstrip("/") / result["snapshot_id"]
+
+    def ben_gate_path(self, result):
+        return "/etc/systemd/system/" + m.BEN + ".d/90-bridge-ibm-isolation-" + result["snapshot_id"] + ".conf"
+
+    def rollback_payload(self, result, run_id="987654321"):
+        p = payload()
+        p.update(operation="rollback", run_id=run_id, snapshot_id=result["snapshot_id"],
+                 snapshot_sha256=result["snapshot_sha256"])
+        return p
+
+    def test_pending_job_is_condition_skipped_then_exact_five_gates_isolate(self):
+        originals = {u: (self.fx.root / self.fx.rows[u]["FragmentPath"].lstrip("/")).read_bytes() for u in m.UNITS}
+        self.fx.conditions[m.BEN] = [["ConditionVirtualization", False, True, "container", 1]]
+        result = self.execute()
+        self.assertEqual(("ISOLATED_TARGET_SCOPE", "OK"), (result["result"], result["reason"]), result)
+        self.assertEqual(dict(unit=m.BEN, boot_job_id=7, status="GATED_QUIET", timer_stopped=True,
+            execution_unchanged=True, condition_skipped=True, production_release_required=True,
+            gate_path=self.ben_gate_path(result), gate_presence="PRESENT",
+            recovery="SNAPSHOT_BOUND_CONFIG_ONLY"), result["ben_gate"])
+        self.assertTrue((self.fx.root / result["ben_gate"]["gate_path"].lstrip("/")).is_file())
+        self.assertEqual([m.BEN, m.TIMER, m.OBSERVER, m.CONTROL, m.BRIDGE], result["changed_units"])
+        self.assertEqual(list(m.STOP_ORDER), self.fx.stop_requested)
+        self.assertEqual([0] * 7, self.fx.exec_status)
+        self.assertEqual({m.BEN: 101, m.HEALTH: 202}, self.fx.inactive_exit)
+        self.assertTrue(all(n > 1 for n in self.fx.marker_reads.values()))
+        self.assertEqual("", self.fx.rows[m.BEN]["Job"])
+        self.assertEqual("NOT_REQUESTED", next(c for c in result["changes"] if c["unit"] == m.BEN)["stop"])
+        self.assertEqual(set(m.GATE_UNITS), {p.parent.name[:-2] for p in self.gates()})
+        allow = "/etc/systemd/system/.bridge-ibm-isolation-" + result["snapshot_id"] + ".allow"
+        self.assertFalse((self.fx.root / allow.lstrip("/")).exists())
+        self.assertTrue(all(p.read_bytes() == ("[Unit]\nConditionPathExists=" + allow + "\n").encode() for p in self.gates()))
+        self.assertIn(["ConditionPathExists", False, False, allow, -1], self.fx.skipped_conditions)
+        raw = (self.archive(result) / "snapshot.json").read_bytes()
+        manifest = json.loads(raw)
+        self.assertEqual(m.digest(raw), result["snapshot_sha256"])
+        self.assertEqual(result["snapshot_sha256"], result["snapshot_restore_sha256"])
+        self.assertEqual(set(m.GATE_UNITS), set(manifest["conditions"]))
+        self.assertEqual("7", manifest["metadata"][m.BEN]["Job"])
+        self.assertEqual("active", manifest["metadata"][m.TIMER]["ActiveState"])
+        expected_paths = {self.fx.rows[u]["FragmentPath"] for u in m.UNITS}
+        expected_paths.add("/etc/systemd/system/multi-user.target.wants/" + m.OBSERVER)
+        self.assertEqual(expected_paths, {r["path"] for r in manifest["records"]})
+        for unit, before in originals.items():
+            self.assertEqual(before, (self.fx.root / self.fx.rows[unit]["FragmentPath"].lstrip("/")).read_bytes())
+        events = [json.loads(p.read_text()) for p in sorted(self.archive(result).glob("journal-*.json"))]
+        timer_stop = next(i for i, e in enumerate(events) if e["event"] == "STOP_INTENT" and e["unit"] == m.TIMER)
+        lab_gate = next(i for i, e in enumerate(events) if e["event"] == "GATE_INTENT" and e["unit"] == m.OBSERVER)
+        self.assertLess(timer_stop, lab_gate)
+
+    def test_job_disappearance_requires_an_observed_false_condition(self):
+        self.fx.condition_result = 0
+        result = self.execute()
+        self.assertEqual(("PARTIAL_BLOCKED", "PENDING_GATE_UNVERIFIED"), (result["result"], result["reason"]), result)
+        self.assertEqual([m.BEN, m.TIMER], result["changed_units"])
+        self.assertEqual([m.TIMER], self.fx.stop_requested)
+        self.assertIsNone(result["ben_gate"]["condition_skipped"])
+        self.assertEqual(2, len(self.gates()))
+
+    def test_admission_failure_after_observing_pending_job_never_falls_back(self):
+        for fault in ("vanished_job", "ben_marker", "health_marker", "health_job", "job_read_failed"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as root:
+                self.fx = PendingGateFixture(root)
+                before = m.JobDiagnostic.dependencies
+                def dependencies(reader, identifier, method):
+                    value = before(reader, identifier, method)
+                    if fault == "vanished_job":
+                        self.fx.rows[m.BEN]["Job"] = ""
+                    elif fault == "health_job":
+                        self.fx.rows[m.HEALTH]["Job"] = "13"
+                    return value
+                def hook(argv):
+                    if argv[-1] == "InactiveExitTimestampMonotonic":
+                        unit = next(u for u in (m.BEN, m.HEALTH) if argv[5] == m.job_unit_path(u))
+                        if self.fx.marker_reads[unit] == 1 and fault == ("ben_marker" if unit == m.BEN else "health_marker"):
+                            self.fx.inactive_exit[unit] += 1
+                            self.fx.rows[m.BEN]["Job"] = ""
+                self.fx.hook = hook
+                with mock.patch.object(m.JobDiagnostic, "dependencies", dependencies), \
+                     mock.patch.object(m.RootFS, "write_new", side_effect=AssertionError("NO_ADMISSION_WRITE")) as writes, \
+                     mock.patch.object(m.RootFS, "mkdir", side_effect=AssertionError("NO_ADMISSION_MKDIR")) as mkdir, \
+                     contextlib.ExitStack() as stack:
+                    if fault == "job_read_failed":
+                        stack.enter_context(mock.patch.object(m.JobDiagnostic, "job", side_effect=m.Blocked("COMMAND_FAILED")))
+                    result = self.execute()
+                self.assertEqual("BLOCKED", result["result"], result)
+                self.assertEqual("PENDING_GATE_UNVERIFIED" if fault == "job_read_failed" else "PENDING_GATE_RACE", result["reason"], result)
+                self.assertIsNone(result["snapshot_id"])
+                self.assertEqual([], result["changes"])
+                self.assertIsNone(result["companion_evidence"])
+                self.assertFalse(self.fx.stop_requested); self.assertEqual(0, self.fx.reloads)
+                writes.assert_not_called(); mkdir.assert_not_called()
+
+    def test_ben_activation_after_gate_write_or_reload_blocks_without_ben_stop(self):
+        for phase in ("after_write", "after_reload"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as root:
+                self.fx = PendingGateFixture(root)
+                def activate():
+                    self.fx.rows[m.BEN].update(ActiveState="active", SubState="running", MainPID="88", Job="")
+                    self.fx.inactive_exit[m.BEN] += 1
+                write = m.RootFS.write_new
+                def write_then_activate(fs, path, data, **kwargs):
+                    value = write(fs, path, data, **kwargs)
+                    if "/" + m.BEN + ".d/" in path:
+                        activate()
+                    return value
+                with contextlib.ExitStack() as stack:
+                    if phase == "after_write":
+                        stack.enter_context(mock.patch.object(m.RootFS, "write_new", write_then_activate))
+                    else:
+                        self.fx.reload_hook = activate
+                    result = self.execute()
+                self.assertEqual(("PARTIAL_BLOCKED", "PENDING_GATE_RACE"), (result["result"], result["reason"]), result)
+                self.assertTrue(result["ben_gate"]["production_release_required"])
+                self.assertEqual(1 if phase == "after_write" else 2, len(self.gates()))
+                self.assertFalse(self.fx.stop_requested)
+
+    def test_short_ben_or_health_activation_across_reload_changes_durable_marker(self):
+        for unit in (m.BEN, m.HEALTH):
+            with self.subTest(unit=unit), tempfile.TemporaryDirectory() as root:
+                self.fx = PendingGateFixture(root)
+                self.fx.reload_hook = lambda: self.fx.inactive_exit.__setitem__(unit, self.fx.inactive_exit[unit] + 1)
+                result = self.execute()
+                self.assertEqual(("PARTIAL_BLOCKED", "PENDING_GATE_RACE"), (result["result"], result["reason"]), result)
+                self.assertEqual("inactive", self.fx.rows[unit]["ActiveState"])
+                self.assertEqual([0] * 7, self.fx.exec_status)
+                self.assertEqual(2, len(self.gates())); self.assertFalse(self.fx.stop_requested)
+
+    def test_pending_job_preparation_times_out_in_45_seconds(self):
+        self.fx.skip_pending = False
+        started = []
+        snapshot = m.Isolation.snapshot
+        def record_preparation_start(op):
+            snapshot(op); started.append(self.fx.clock.now())
+        with mock.patch.object(m.Isolation, "snapshot", record_preparation_start):
+            result = self.execute()
+        self.assertEqual(("PARTIAL_BLOCKED", "PENDING_GATE_TIMEOUT"), (result["result"], result["reason"]), result)
+        self.assertEqual([m.TIMER], self.fx.stop_requested)
+        self.assertEqual(2, len(self.gates()))
+        self.assertGreaterEqual(self.fx.clock.now() - started[0], m.PENDING_GATE_SECONDS)
+        self.assertLess(self.fx.clock.now() - started[0], m.PENDING_GATE_SECONDS + .01)
+        self.assertLess(self.fx.clock.now(), m.GUEST_SECONDS)
+        self.assertTrue(result["ben_gate"]["production_release_required"])
+
+    def test_partial_ben_write_requires_release_and_unjournalled_gate_blocks_recovery(self):
+        write = m.RootFS.write_new
+        def fail_after_write(fs, path, data, **kwargs):
+            write(fs, path, data, **kwargs)
+            if "/" + m.BEN + ".d/" in path:
+                raise m.Blocked("ARCHIVE_FAILED")
+        with mock.patch.object(m.RootFS, "write_new", fail_after_write):
+            result = self.execute()
+        self.assertEqual(("PARTIAL_BLOCKED", "ARCHIVE_FAILED"), (result["result"], result["reason"]), result)
+        self.assertTrue(result["ben_gate"]["production_release_required"])
+        self.assertEqual([m.BEN], result["changed_units"])
+        self.assertEqual([dict(unit=m.BEN, gate="INTENDED", stop="NOT_REQUESTED")], result["changes"])
+        self.assertEqual(self.ben_gate_path(result), result["ben_gate"]["gate_path"])
+        self.assertEqual(("PRESENT", "REVIEW_REQUIRED"),
+                         (result["ben_gate"]["gate_presence"], result["ben_gate"]["recovery"]))
+        self.assertTrue((self.fx.root / result["ben_gate"]["gate_path"].lstrip("/")).is_file())
+        self.assertEqual(1, len(self.gates())); self.assertFalse(self.fx.stop_requested)
+        for unit in m.UNITS:
+            self.fx.stop(unit)
+        before = self.gates()[0].read_bytes()
+        for number, recovery in enumerate((m.rollback, m.release_ben_gate)):
+            recovered = recovery(self.rollback_payload(result, str(987654321 + number)), **self.fx.kwargs())
+            self.assertEqual(("BLOCKED", "ROLLBACK_INVALID"), (recovered["result"], recovered["reason"]), recovered)
+            self.assertEqual([], recovered["changed_units"])
+            self.assertEqual(before, self.gates()[0].read_bytes())
+        self.assertEqual(0, self.fx.reloads); self.assert_no_ben_mutation()
+
+    def test_partial_write_receipt_read_failure_reports_unknown_and_requires_review(self):
+        write = m.RootFS.write_new
+        exists = m.RootFS.exists
+        written = []
+        def fail_after_write(fs, path, data, **kwargs):
+            write(fs, path, data, **kwargs)
+            if "/" + m.BEN + ".d/" in path:
+                written.append(path)
+                raise m.Blocked("ARCHIVE_FAILED")
+        def receipt_read_error(fs, path):
+            if path in written:
+                raise OSError("OFFLINE_RECEIPT_READ_FAILURE")
+            return exists(fs, path)
+        with mock.patch.object(m.RootFS, "write_new", fail_after_write), \
+             mock.patch.object(m.RootFS, "exists", receipt_read_error):
+            result = self.execute()
+        self.assertEqual(("PARTIAL_BLOCKED", "ARCHIVE_FAILED"), (result["result"], result["reason"]), result)
+        self.assertEqual([m.BEN], result["changed_units"])
+        self.assertEqual([dict(unit=m.BEN, gate="INTENDED", stop="NOT_REQUESTED")], result["changes"])
+        self.assertTrue(result["ben_gate"]["production_release_required"])
+        self.assertEqual(self.ben_gate_path(result), result["ben_gate"]["gate_path"])
+        self.assertEqual(("UNKNOWN", "REVIEW_REQUIRED"),
+                         (result["ben_gate"]["gate_presence"], result["ben_gate"]["recovery"]))
+        self.assertTrue((self.fx.root / result["ben_gate"]["gate_path"].lstrip("/")).is_file())
+        self.assertFalse(self.fx.stop_requested); self.assertEqual(0, self.fx.reloads)
+
+    def test_complete_rollback_restores_all_five_gates_without_start(self):
+        result = self.execute()
+        self.assertEqual("ISOLATED_TARGET_SCOPE", result["result"], result)
+        self.fx.stop_requested.clear()
+        restored = m.rollback(self.rollback_payload(result), **self.fx.kwargs())
+        self.assertEqual(("ROLLED_BACK_CONFIG_ONLY", "CONFIG_ONLY_RESTORED"), (restored["result"], restored["reason"]), restored)
+        self.assertEqual(set(m.GATE_UNITS), set(restored["changed_units"]))
+        self.assertEqual([], self.gates()); self.assertFalse(self.fx.stop_requested)
+        self.assertTrue(all(not self.fx.conditions[u] for u in m.GATE_UNITS))
+        self.assert_no_ben_mutation()
+
+    def test_ben_only_release_preserves_four_gates_then_remaining_rollback(self):
+        result = self.execute()
+        self.assertEqual("ISOLATED_TARGET_SCOPE", result["result"], result)
+        self.fx.stop_requested.clear()
+        released = m.release_ben_gate(self.rollback_payload(result), **self.fx.kwargs())
+        self.assertEqual("ROLLED_BACK_CONFIG_ONLY", released["result"], released)
+        self.assertEqual([m.BEN], released["changed_units"])
+        self.assertEqual(set(m.TARGETS), {p.parent.name[:-2] for p in self.gates()})
+        self.assertFalse(self.fx.conditions[m.BEN]); self.assertFalse(self.fx.stop_requested)
+        restored = m.rollback(self.rollback_payload(result, "987654322"), **self.fx.kwargs())
+        self.assertEqual("ROLLED_BACK_CONFIG_ONLY", restored["result"], restored)
+        self.assertEqual(set(m.TARGETS), set(restored["changed_units"]))
+        self.assertEqual([], self.gates()); self.assertFalse(self.fx.stop_requested)
+        self.assert_no_ben_mutation()
 
 
 if __name__ == "__main__":

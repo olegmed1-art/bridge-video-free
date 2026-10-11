@@ -24,14 +24,14 @@ except ImportError:
     import ibm_trial_guest_probe as read_only
     import ibm_unit_isolation as host_contract
 
-HOST_SOURCE_SHA = "28ee77ac35e0a7e0a36ca61a60af4f35d92eaadab9341c8caccf1ab249de00ff"
+HOST_SOURCE_SHA = "14d39ed6b4193e2be588c60d7b5100f95687087fc81ebae1d6fa13dafbdfcca8"
 SAFE_SOURCE_SHA = "7711357b7929dcf42d8e49739b16f2e4489191644a0bfb711259f57f182e3bee"
 PREPARE_SECONDS = 20
 MAINTENANCE_SECONDS = 378
-MIN_MAINTENANCE_SECONDS = 115
+MIN_MAINTENANCE_SECONDS = 265  # two 5s transport reserves plus the sole SSH
 REMOTE_SECONDS = 368
-GUEST_SECONDS = 90
-SSH_SECONDS = 105
+GUEST_SECONDS = 240
+SSH_SECONDS = 255  # 15s over the guest's entrypoint-relative deadline
 INPUT_BYTES = 131072
 OUTPUT_BYTES = 32768
 TARGETS = ("assistant-lab-observer.service", "assistant-lab-control.service",
@@ -204,7 +204,7 @@ try:
  need(set(p)=={'phase','binding','safe_source','host_source','host_sha','seconds','request'})
  binding=p['binding'];need(set(binding)=={'run_id','attempt','head'} and type(binding['run_id']) is str and re.fullmatch('[1-9][0-9]{0,19}',binding['run_id']) is not None and type(binding['attempt']) is int and binding['attempt']==1 and len(binding['head'])==40 and all(c in '0123456789abcdef' for c in binding['head']))
  need(p['phase'] in ('preflight','isolate') and type(p['seconds']) in (int,float) and math.isfinite(p['seconds']))
- need((p['phase']=='preflight' and p['seconds']==28 and p['request'] is None) or (p['phase']=='isolate' and 105<=p['seconds']<=368))
+ need((p['phase']=='preflight' and p['seconds']==28 and p['request'] is None) or (p['phase']=='isolate' and 255<=p['seconds']<=368))
  deadline=began+p['seconds'];need(deadline>time.monotonic());signal.setitimer(signal.ITIMER_REAL,deadline-time.monotonic())
  need(socket.gethostname()=='autopilot-lite-vnic' and os.geteuid()==1001)
  safe=p['safe_source'].encode();host=p['host_source'].encode()
@@ -221,15 +221,15 @@ try:
  req=p['request'];need(type(req) is dict and req['operation']=='isolate' and all(req[k]==v and type(req[k]) is type(v) for k,v in binding.items()))
  out('RUN_BOUND_UNIT_ISOLATION',**binding)
  # These in-memory maintenance-specific budgets do not modify the read-only source.
- ns['PROBE_SECONDS']=368;ns['SSH_SECONDS']=105;ns['TCP_READINESS_SECONDS']=300;ns['emit']=out
+ ns['PROBE_SECONDS']=368;ns['SSH_SECONDS']=255;ns['TCP_READINESS_SECONDS']=300;ns['emit']=out
  budget=ns['ProbeBudget'](deadline)
- need(budget.remaining()>=105)
+ need(budget.remaining()>=255)
  ready=ns['tcp_ready'](budget)
  if not ready:sys.exit(3)
- need(budget.remaining()>=105)
+ need(budget.remaining()>=255)
  argv=['/usr/bin/ssh','-F','/dev/null','-T','-i',ns['KEY'],'-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes','-o','UpdateHostKeys=no','-o','GlobalKnownHostsFile=/dev/null','-o','VerifyHostKeyDNS=no','-o','CheckHostIP=no','-o','AddKeysToAgent=no','-o','ForwardAgent=no','-o','ClearAllForwardings=yes','-o','ConnectionAttempts=1','-o','UserKnownHostsFile=/proc/'+str(os.getpid())+'/fd/'+str(knownfd),'-o','HostKeyAlgorithms=ssh-ed25519','-o','ConnectTimeout=8','-o','ServerAliveInterval=5','-o','ServerAliveCountMax=1','ubuntu@'+ns['HOST'],'/usr/bin/sudo -n /usr/bin/python3 -I -B -c '+shlex.quote(host.decode())]
  start=time.monotonic();out('ISOLATION_SSH_STARTED',**binding)
- rc,stdout,stderr=run(argv,json.dumps(req,separators=(',',':')).encode(),seconds=105,limit=16384)
+ rc,stdout,stderr=run(argv,json.dumps(req,separators=(',',':')).encode(),seconds=255,limit=16384)
  out('ISOLATION_SSH_FINISHED',**binding,ssh_exit=rc,elapsed_seconds=round(time.monotonic()-start,3),stdout_bytes=len(stdout),stderr_bytes=len(stderr),stdout_sha256=hashlib.sha256(stdout).hexdigest(),stderr_sha256=hashlib.sha256(stderr).hexdigest(),raw_output_exported=False)
  if rc not in (0,3):sys.exit(3)
  receipt=parse(stdout);need(type(receipt) is dict)
@@ -406,10 +406,46 @@ def validate_job_evidence(value, companion, result, reason):
               and len(value["policies"]) == 2 and len(value["final_states"]) == 3)
 
 
+def validate_ben_gate(value, row):
+    ben = host_contract.BEN
+    changed = any(c["unit"] == ben for c in row["changes"])
+    if value is None:
+        need(not changed and not row["reason"].startswith("PENDING_GATE_"), "receipt_ben_gate")
+        return
+    keys = {"unit", "boot_job_id", "status", "timer_stopped", "execution_unchanged",
+            "condition_skipped", "production_release_required", "gate_path", "gate_presence", "recovery"}
+    need(type(value) is dict and set(value) == keys and value["unit"] == ben, "receipt_ben_gate")
+    need(type(value["boot_job_id"]) is int and 1 <= value["boot_job_id"] <= 4294967295, "receipt_ben_gate")
+    need(type(value["status"]) is str and value["status"] in {"ADMISSION_BLOCKED", "PREPARING", "GATED_QUIET"}, "receipt_ben_gate")
+    need(type(value["timer_stopped"]) is bool and type(value["production_release_required"]) is bool
+         and all(value[k] is None or type(value[k]) is bool for k in ("execution_unchanged", "condition_skipped")), "receipt_ben_gate")
+    expected_path = "/etc/systemd/system/" + ben + ".d/90-bridge-ibm-isolation-" + row["run_id"] + "-" + row["head"][:12] + ".conf"
+    need(type(value["gate_path"]) is str and value["gate_path"] == expected_path, "receipt_ben_gate")
+    need(type(value["gate_presence"]) is str and value["gate_presence"] in {"PRESENT", "ABSENT", "UNKNOWN"}
+         and type(value["recovery"]) is str and value["recovery"] in {"NOT_APPLICABLE", "REVIEW_REQUIRED", "SNAPSHOT_BOUND_CONFIG_ONLY"}, "receipt_ben_gate")
+    if value["production_release_required"]:
+        need(value["recovery"] != "NOT_APPLICABLE", "receipt_ben_gate")
+    else:
+        need(value["gate_presence"] == "UNKNOWN" and value["recovery"] == "NOT_APPLICABLE", "receipt_ben_gate")
+    if value["recovery"] == "SNAPSHOT_BOUND_CONFIG_ONLY":
+        need(changed and value["gate_presence"] == "PRESENT", "receipt_ben_gate")
+    need(not changed or value["production_release_required"], "receipt_ben_gate")
+    if value["status"] == "ADMISSION_BLOCKED":
+        need(row["result"] == "BLOCKED" and not row["changes"] and not value["timer_stopped"]
+             and not value["production_release_required"], "receipt_ben_gate")
+    if value["status"] == "GATED_QUIET":
+        need(changed and value["timer_stopped"] and value["production_release_required"]
+             and value["execution_unchanged"] is True and value["condition_skipped"] is True,
+             "receipt_ben_gate")
+    else:
+        need(row["result"] != "ISOLATED_TARGET_SCOPE" and value["execution_unchanged"] is None
+             and value["condition_skipped"] is None, "receipt_ben_gate")
+
+
 def validate_receipt(row, binding):
-    keys = {"schema","operation","run_id","head","attempt","result","reason","snapshot_id","snapshot_sha256","changed_units","target_states","host_identity","snapshot_restore_sha256","limitations","changes","graph_evidence","companion_evidence","job_evidence"}
+    keys = {"schema","operation","run_id","head","attempt","result","reason","snapshot_id","snapshot_sha256","changed_units","target_states","host_identity","snapshot_restore_sha256","limitations","changes","graph_evidence","companion_evidence","job_evidence","ben_gate"}
     need(type(row) is dict and set(row) == keys, "receipt_schema")
-    need(row["schema"] == "bridge.ibm.unit-isolation.receipt.v4" and row["operation"] == "isolate", "receipt_schema")
+    need(row["schema"] == "bridge.ibm.unit-isolation.receipt.v5" and row["operation"] == "isolate", "receipt_schema")
     need(all(type(row[k]) is type(v) and row[k] == v for k,v in binding.items()), "receipt_binding")
     need(type(row["result"]) is str and row["result"] in {"ISOLATED_TARGET_SCOPE","BLOCKED","PARTIAL_BLOCKED"}, "receipt_result")
     need(type(row["reason"]) is str and row["reason"] in host_contract.REASONS, "receipt_reason")
@@ -419,18 +455,21 @@ def validate_receipt(row, binding):
     need(row["host_identity"] == "TRANSPORT_ASSERTION_ONLY", "receipt_identity")
     need(type(row["limitations"]) is list and row["limitations"] == host_contract.LIMITATIONS, "receipt_limitations")
     need(row["snapshot_restore_sha256"] is None or (type(row["snapshot_restore_sha256"]) is str and re.fullmatch("[0-9a-f]{64}",row["snapshot_restore_sha256"])), "receipt_restore")
-    need(type(row["changes"]) is list and len(row["changes"])<=4, "receipt_changes")
+    need(type(row["changes"]) is list and len(row["changes"])<=5, "receipt_changes")
     change_seen=set()
     for change in row["changes"]:
         need(type(change) is dict and set(change)=={"unit","gate","stop"},"receipt_changes")
-        need(type(change["unit"]) is str and change["unit"] in TARGETS and change["unit"] not in change_seen,"receipt_changes")
+        need(type(change["unit"]) is str and change["unit"] in host_contract.GATE_UNITS and change["unit"] not in change_seen,"receipt_changes")
         change_seen.add(change["unit"])
         need(type(change["gate"]) is str and change["gate"] in {"INTENDED","CREATED","VERIFIED","REMOVED"} and type(change["stop"]) is str and change["stop"] in {"NOT_REQUESTED","REQUESTED","OBSERVED_INACTIVE"},"receipt_changes")
+        if change["unit"] == host_contract.BEN:
+            need(change["stop"] == "NOT_REQUESTED" and change["gate"] != "REMOVED", "receipt_ben_stop")
     need(row["snapshot_id"] is None or (type(row["snapshot_id"]) is str and re.fullmatch("[a-zA-Z0-9_-]{1,100}",row["snapshot_id"])), "receipt_snapshot")
     need(row["snapshot_id"] in (None,binding["run_id"]+"-"+binding["head"][:12]), "receipt_snapshot_binding")
     need(row["snapshot_sha256"] is None or (type(row["snapshot_sha256"]) is str and re.fullmatch("[0-9a-f]{64}",row["snapshot_sha256"])), "receipt_snapshot")
-    need(type(row["changed_units"]) is list and len(row["changed_units"]) <= 4 and all(type(n) is str and n in TARGETS for n in row["changed_units"]) and len(set(row["changed_units"])) == len(row["changed_units"]), "receipt_changes")
+    need(type(row["changed_units"]) is list and len(row["changed_units"]) <= 5 and all(type(n) is str and n in host_contract.GATE_UNITS for n in row["changed_units"]) and len(set(row["changed_units"])) == len(row["changed_units"]), "receipt_changes")
     need(change_seen==set(row["changed_units"]),"receipt_changes")
+    validate_ben_gate(row["ben_gate"], row)
     need(type(row["target_states"]) is list and len(row["target_states"]) <= 4, "receipt_states")
     seen = set()
     for state in row["target_states"]:
@@ -440,8 +479,11 @@ def validate_receipt(row, binding):
         need(type(state["active"]) is str and state["active"] in host_contract.SAFE_STATES|{"unknown"} and type(state["sub"]) is str and state["sub"] in host_contract.SAFE_SUB|{"unknown"}, "receipt_state")
         need((state["job_pending"] is None or type(state["job_pending"]) is bool) and (state["cgroup_empty"] is None or type(state["cgroup_empty"]) is bool), "receipt_state")
     if row["result"] == "ISOLATED_TARGET_SCOPE":
-        need(row["reason"] == "OK" and row["snapshot_restore_sha256"] is not None and row["snapshot_restore_sha256"]==row["snapshot_sha256"] and change_seen==set(TARGETS) and all(c["gate"]=="VERIFIED" and c["stop"]=="OBSERVED_INACTIVE" for c in row["changes"]), "receipt_incomplete")
-        need(row["snapshot_id"] is not None and row["snapshot_sha256"] is not None and set(row["changed_units"]) == set(TARGETS) and seen == set(TARGETS), "receipt_incomplete")
+        expected_units = set(TARGETS) | ({host_contract.BEN} if row["ben_gate"] is not None else set())
+        need(row["ben_gate"] is None or (row["ben_gate"]["status"] == "GATED_QUIET"
+             and row["ben_gate"]["gate_presence"] == "PRESENT" and row["ben_gate"]["recovery"] == "SNAPSHOT_BOUND_CONFIG_ONLY"), "receipt_ben_gate")
+        need(row["reason"] == "OK" and row["snapshot_restore_sha256"] is not None and row["snapshot_restore_sha256"]==row["snapshot_sha256"] and change_seen==expected_units and all(c["gate"]=="VERIFIED" and c["stop"]==("NOT_REQUESTED" if c["unit"]==host_contract.BEN else "OBSERVED_INACTIVE") for c in row["changes"]), "receipt_incomplete")
+        need(row["snapshot_id"] is not None and row["snapshot_sha256"] is not None and set(row["changed_units"]) == expected_units and seen == set(TARGETS), "receipt_incomplete")
         need(all(s["active"] == "inactive" and s["sub"] == "dead" and s["job_pending"] is False and s["cgroup_empty"] is True for s in row["target_states"]), "receipt_not_isolated")
     return row
 
@@ -472,7 +514,7 @@ class PreparedIsolation:
                 "ubuntu@"+read_only.ORACLE,"/usr/bin/python3 -I -B -c "+shlex.quote(remote_source())]
         request = None
         seconds = 28 if phase == "preflight" else timeout - 5
-        need(phase in {"preflight","isolate"} and ((phase == "preflight" and timeout == 12) or (105 <= seconds <= REMOTE_SECONDS)), "remote_budget")
+        need(phase in {"preflight","isolate"} and ((phase == "preflight" and timeout == 12) or (SSH_SECONDS <= seconds <= REMOTE_SECONDS)), "remote_budget")
         if phase == "isolate":
             need(self.identity_bound, "fresh_api_identity_required")
             request = dict(schema="bridge.ibm.unit-isolation.request.v1",operation="isolate",**self.binding,identity=IDENTITY,transport=TRANSPORT)
@@ -504,7 +546,9 @@ class PreparedIsolation:
         if events != chain:
             return False
         tcp=rows[1]
-        need(set(tcp)=={"event","elapsed_seconds","attempts"} and type(tcp['attempts']) is int and 1<=tcp['attempts']<=301 and type(tcp['elapsed_seconds']) in (int,float) and math.isfinite(tcp['elapsed_seconds']) and 0<=tcp['elapsed_seconds']<=300,"tcp_receipt")
+        # TCP can use only the same shortened remote deadline, with SSH reserved.
+        tcp_seconds = min(300, max_seconds - 10 - SSH_SECONDS)
+        need(set(tcp)=={"event","elapsed_seconds","attempts"} and type(tcp['attempts']) is int and 1<=tcp['attempts']<=301 and type(tcp['elapsed_seconds']) in (int,float) and math.isfinite(tcp['elapsed_seconds']) and 0<=tcp['elapsed_seconds']<=round(tcp_seconds,3),"tcp_receipt")
         need(exact(rows[2],dict(event="ISOLATION_SSH_STARTED",**self.binding)),"ssh_binding")
         finished=rows[3]
         need(set(finished)==set(self.binding)|{"event","ssh_exit","elapsed_seconds","stdout_bytes","stderr_bytes","stdout_sha256","stderr_sha256","raw_output_exported"} and all(type(finished[k]) is type(v) and finished[k]==v for k,v in self.binding.items()),"ssh_receipt")

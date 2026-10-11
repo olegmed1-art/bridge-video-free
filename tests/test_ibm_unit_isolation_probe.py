@@ -43,14 +43,14 @@ LIMITATIONS = ["EXPECTED_MACHINE_ID_UNAVAILABLE", "TRANSPORT_IDENTITY_ASSERTION_
 
 
 def receipt(result="ISOLATED_TARGET_SCOPE"):
-    return dict(schema="bridge.ibm.unit-isolation.receipt.v4", operation="isolate",
+    return dict(schema="bridge.ibm.unit-isolation.receipt.v5", operation="isolate",
                 **BINDING, result=result, reason="OK" if result == "ISOLATED_TARGET_SCOPE" else "INTERNAL_BLOCKED",
                 snapshot_id="39999999999-aaaaaaaaaaaa", snapshot_sha256="b" * 64,
                 snapshot_restore_sha256="b" * 64, changed_units=list(p.TARGETS),
                 changes=[dict(unit=name, gate="VERIFIED", stop="OBSERVED_INACTIVE") for name in p.TARGETS],
                 target_states=[dict(unit=name, active="inactive", sub="dead",
                                     job_pending=False, cgroup_empty=True) for name in p.TARGETS],
-                host_identity="TRANSPORT_ASSERTION_ONLY", limitations=list(LIMITATIONS), graph_evidence=None, companion_evidence=None, job_evidence=None)
+                host_identity="TRANSPORT_ASSERTION_ONLY", limitations=list(LIMITATIONS), graph_evidence=None, companion_evidence=None, job_evidence=None, ben_gate=None)
 
 
 def chain(row=None):
@@ -165,7 +165,7 @@ class IdentityAttemptAndBudgetTests(OfflineCase):
         self.assertFalse(obj.attempted); obj.call.assert_not_called()
         obj.call = p.PreparedIsolation.call.__get__(obj)
         with mock.patch.object(p, "bounded_process") as run, self.assertRaisesRegex(p.IsolationError, "fresh_api_identity_required"):
-            obj.call("isolate", 110)
+            obj.call("isolate", 260)
         run.assert_not_called()
 
     def test_every_identity_field_and_extra_fields_are_checked(self):
@@ -213,14 +213,17 @@ class IdentityAttemptAndBudgetTests(OfflineCase):
             obj.call.assert_called_once()
 
     def test_minimum_and_maximum_budgets(self):
-        self.assertEqual((115, 378), (p.MIN_MAINTENANCE_SECONDS, p.MAINTENANCE_SECONDS))
-        for seconds in (115, 115.5, 378):
-            obj = self.probe()
+        self.assertEqual((265, 378, 368, 255, 240),
+                         (p.MIN_MAINTENANCE_SECONDS, p.MAINTENANCE_SECONDS,
+                          p.REMOTE_SECONDS, p.SSH_SECONDS, p.GUEST_SECONDS))
+        for seconds in (265, 265.5, 378):
+            rows = chain(); rows[1]["elapsed_seconds"] = 0
+            obj = self.probe(rows)
             self.assertTrue(self.run_probe(obj, max_seconds=seconds)[0])
             obj.call.assert_called_once_with("isolate", seconds-5)
 
     def test_invalid_budget_never_consumes_or_launches(self):
-        for seconds in (0, 114.999, 378.001, -1, True, False, "378", None, math.nan, math.inf):
+        for seconds in (0, 264.999, 378.001, -1, True, False, "378", None, math.nan, math.inf):
             obj = self.probe()
             with self.subTest(seconds=seconds), self.assertRaisesRegex(p.IsolationError, "maintenance_budget"):
                 obj.run_once(max_seconds=seconds)
@@ -666,7 +669,7 @@ class ResponseTests(OfflineCase):
 
     def test_tcp_attempts_elapsed_and_unknown_fields_are_strict(self):
         for change in (dict(attempts=True), dict(attempts=0), dict(attempts=302), dict(elapsed_seconds=True),
-                       dict(elapsed_seconds=-1), dict(elapsed_seconds=300.001), dict(elapsed_seconds=math.inf),
+                       dict(elapsed_seconds=-1), dict(elapsed_seconds=113.001), dict(elapsed_seconds=math.inf),
                        dict(private="PRIVATE_SENTINEL")):
             rows = chain(); rows[1].update(change)
             with self.subTest(change=change), self.assertRaises(p.IsolationError):
@@ -675,7 +678,7 @@ class ResponseTests(OfflineCase):
     def test_ssh_receipt_types_bounds_and_private_fields_are_strict(self):
         for change in (dict(ssh_exit=True), dict(stdout_bytes=True), dict(stderr_bytes=-1),
                        dict(stdout_bytes=16385), dict(stdout_sha256="x"*64), dict(stderr_sha256=True),
-                       dict(elapsed_seconds=True), dict(elapsed_seconds=105.001),
+                       dict(elapsed_seconds=True), dict(elapsed_seconds=255.001),
                        dict(raw_output_exported=True), dict(private="PRIVATE_SENTINEL")):
             rows = chain(); rows[3].update(change)
             with self.subTest(change=change), self.assertRaises(p.IsolationError):
@@ -685,6 +688,15 @@ class ResponseTests(OfflineCase):
         rows = chain(); rows[4]["private_key"] = "PRIVATE_SENTINEL"
         with self.assertRaises(p.IsolationError):
             self.run_probe(self.probe(rows))
+
+    def test_tcp_receipt_cannot_borrow_the_sole_ssh_reserve(self):
+        for maximum, elapsed in ((378, 113), (300, 35), (265, 0)):
+            rows = chain(); rows[1]["elapsed_seconds"] = elapsed
+            rows[3]["elapsed_seconds"] = 255
+            self.assertTrue(self.run_probe(self.probe(rows), max_seconds=maximum)[0])
+            rows[1]["elapsed_seconds"] = elapsed + .001
+            with self.subTest(maximum=maximum), self.assertRaisesRegex(p.IsolationError, "tcp_receipt"):
+                self.run_probe(self.probe(rows), max_seconds=maximum)
 
     def test_raw_stderr_is_hashed_and_never_reflected(self):
         obj = self.probe(rc=3, err=b"PRIVATE_SENTINEL")
@@ -728,7 +740,7 @@ class PreflightSourceAndCommandTests(OfflineCase):
         obj = p.PreparedIsolation(dict(BINDING), "safe", "host", 71, 72)
         obj.bind_identity(dict(p.IDENTITY))
         with mock.patch.object(p, "bounded_process", return_value=(0, b"", b"")) as run:
-            obj.call("isolate", 110)
+            obj.call("isolate", 260)
         argv = run.call_args.args[0]; kwargs = run.call_args.kwargs
         self.assertEqual(["/usr/bin/ssh", "-F", "/dev/null", "-T", "-i"], argv[:5])
         self.assertEqual("/proc/"+str(os.getpid())+"/fd/71", argv[5])
@@ -741,7 +753,7 @@ class PreflightSourceAndCommandTests(OfflineCase):
         self.assertEqual(1, argv.count("-i")); self.assertEqual("ubuntu@"+p.read_only.ORACLE, argv[-2])
         self.assertEqual(["/usr/bin/python3", "-I", "-B", "-c", p.remote_source()], shlex.split(argv[-1]))
         payload = json.loads(kwargs["payload"])
-        self.assertEqual(105, payload["seconds"]); self.assertEqual(110, kwargs["timeout"])
+        self.assertEqual(255, payload["seconds"]); self.assertEqual(260, kwargs["timeout"])
         self.assertEqual(dict(schema="bridge.ibm.unit-isolation.request.v1", operation="isolate", **BINDING,
                               identity=p.IDENTITY, transport=p.TRANSPORT), payload["request"])
         self.assertLessEqual(len(kwargs["payload"]), 131072)
@@ -753,6 +765,19 @@ class PreflightSourceAndCommandTests(OfflineCase):
         payload = json.loads(run.call_args.kwargs["payload"])
         self.assertIsNone(payload["request"]); self.assertEqual(28, payload["seconds"])
         self.assertFalse(obj.identity_bound)
+
+    def test_outer_call_shortens_the_remote_budget_without_resetting_it(self):
+        obj = p.PreparedIsolation(dict(BINDING), "safe", "host", 71, 72)
+        obj.bind_identity(dict(p.IDENTITY))
+        for timeout, remote_seconds in ((260, 255), (373, 368)):
+            with mock.patch.object(p, "bounded_process", return_value=(0, b"", b"")) as run:
+                obj.call("isolate", timeout)
+            self.assertEqual(remote_seconds, json.loads(run.call_args.kwargs["payload"])["seconds"])
+            self.assertEqual(timeout, run.call_args.kwargs["timeout"])
+        for timeout in (259.999, 373.001):
+            with mock.patch.object(p, "bounded_process") as run, self.assertRaisesRegex(p.IsolationError, "remote_budget"):
+                obj.call("isolate", timeout)
+            run.assert_not_called()
 
     def test_source_pins_match_both_reviewed_local_modules(self):
         root = Path(p.__file__).parent
@@ -785,23 +810,66 @@ class PreflightSourceAndCommandTests(OfflineCase):
                       "signal.setitimer(signal.ITIMER_REAL,28)", "signal.setitimer(signal.ITIMER_REAL,deadline-time.monotonic())",
                       "sys.stdin.buffer.read(131073)", "need(len(raw)<=131072)", "F_SEAL_WRITE", "F_SEAL_SHRINK",
                       "F_SEAL_GROW", "F_SEAL_SEAL", "os.killpg(p.pid,signal.SIGKILL)",
-                      "105<=p['seconds']<=368", "seconds=105,limit=16384"):
+                      "255<=p['seconds']<=368", "seconds=255,limit=16384"):
             self.assertIn(value, source)
         self.assertNotIn("@HOST_SHA@", source); self.assertNotIn("@SAFE_SHA@", source)
 
 
+class MaintenanceTCPBudgetTests(OfflineCase):
+    def helpers(self, remote_seconds, precheck_seconds=3):
+        ns = {"__name__": "offline_readonly_helpers"}
+        exec(compile(Path(p.__file__).with_name("ibm_ssh_probe_safe.py").read_text(),
+                     "offline_readonly_helpers", "exec"), ns)
+        # Apply the same maintenance-only overrides used by the Oracle route.
+        ns.update(PROBE_SECONDS=p.REMOTE_SECONDS, SSH_SECONDS=p.SSH_SECONDS,
+                  TCP_READINESS_SECONDS=300, emit=mock.Mock())
+        clock = types.SimpleNamespace(value=37)
+        def sleep(seconds):
+            clock.value += seconds
+        ns["time"] = types.SimpleNamespace(monotonic=lambda: clock.value, sleep=sleep)
+        deadline = clock.value + remote_seconds
+        sleep(precheck_seconds)
+        budget = ns["ProbeBudget"](deadline)
+        return ns, budget, clock, sleep, deadline
+
+    def test_tcp_exhaustion_preserves_255_seconds_from_the_original_deadline(self):
+        for remote_seconds, precheck_seconds in ((368, 3), (290, 3), (255, 0)):
+            ns, budget, clock, sleep, deadline = self.helpers(remote_seconds, precheck_seconds)
+            def unavailable(address, *, timeout):
+                self.assertEqual((p.TRANSPORT["ibm_host"], 22), address)
+                sleep(timeout)
+                raise TimeoutError()
+            with mock.patch.object(socket, "create_connection", side_effect=unavailable) as tcp:
+                self.assertFalse(ns["tcp_ready"](budget))
+            self.assertEqual(deadline, budget.deadline)
+            self.assertEqual(255, budget.remaining())
+            self.assertEqual(37 + remote_seconds - 255, clock.value)
+            self.assertEqual(remote_seconds > 255, bool(tcp.call_count))
+            self.assertTrue(all(0 < call.kwargs["timeout"] <= 3 for call in tcp.call_args_list))
+
+    def test_late_tcp_success_cannot_borrow_the_255_second_ssh_reserve(self):
+        ns, budget, clock, sleep, deadline = self.helpers(368)
+        def late_connection(address, *, timeout):
+            clock.value = deadline - 255 + .25
+            return contextlib.nullcontext()
+        with mock.patch.object(socket, "create_connection", side_effect=late_connection):
+            self.assertFalse(ns["tcp_ready"](budget))
+        self.assertEqual(deadline, budget.deadline)
+        self.assertFalse(any(call.args[0] == "TCP_OPEN" for call in ns["emit"].call_args_list))
+
+
 class RemoteRouteTests(OfflineCase):
     """Run the Oracle script with fake OS, keyscan, TCP and IBM SSH only."""
-    def remote(self, phase="isolate", bad_pin=False, marked=False, host_rc=0):
+    def remote(self, phase="isolate", bad_pin=False, marked=False, host_rc=0, seconds=368):
         public = base64.b64encode(b"fake-ed25519-public-key").decode()
         fingerprint = "SHA256:"+base64.b64encode(hashlib.sha256(base64.b64decode(public)).digest()).decode().rstrip("=")
         safe = "\n".join(["HOST='161.156.86.34'", "VERIFIED_USER='ubuntu'", "KEY='/existing/owner-key'", "KNOWN='/existing/known-hosts'",
                            "EXPECTED="+repr("SHA256:wrong" if bad_pin else fingerprint),
-                           "class ProbeBudget:", " def __init__(self, deadline):self.deadline=deadline",
-                           " def remaining(self):return 120", "def tcp_ready(budget):", " emit('TCP_OPEN',elapsed_seconds=0,attempts=1);return True"])
+                           "import time", "class ProbeBudget:", " def __init__(self, deadline):self.deadline=deadline",
+                           " def remaining(self):return self.deadline-time.monotonic()", "def tcp_ready(budget):", " emit('TCP_OPEN',elapsed_seconds=0,attempts=1);return True"])
         host = "reviewed_host_fixture = 'quote-safe'\n"
         payload = dict(phase=phase, binding=BINDING, safe_source=safe, host_source=host,
-                       host_sha=hashlib.sha256(host.encode()).hexdigest(), seconds=28 if phase == "preflight" else 105,
+                       host_sha=hashlib.sha256(host.encode()).hexdigest(), seconds=28 if phase == "preflight" else seconds,
                        request=None if phase == "preflight" else dict(operation="isolate", **BINDING))
         source = p.REMOTE_TEMPLATE.replace("@SAFE_SHA@", hashlib.sha256(safe.encode()).hexdigest()).replace("@HOST_SHA@", payload["host_sha"])
         tree = ast.parse(source)
@@ -823,6 +891,8 @@ class RemoteRouteTests(OfflineCase):
              mock.patch.object(os, "access", return_value=True), mock.patch.object(os, "memfd_create", return_value=81), \
              mock.patch.object(os, "fchmod"), mock.patch.object(os, "write", side_effect=lambda fd, raw: len(raw)), \
              mock.patch.object(os, "close"), mock.patch.object(fcntl, "fcntl"), \
+             mock.patch.multiple(fcntl, F_ADD_SEALS=1033, F_SEAL_WRITE=8, F_SEAL_SHRINK=2,
+                                 F_SEAL_GROW=4, F_SEAL_SEAL=1, create=True), \
              contextlib.redirect_stdout(io.StringIO()) as out:
             libc.return_value.prctl.return_value = 0
             with self.assertRaises(SystemExit) as exit_result:
@@ -845,7 +915,7 @@ class RemoteRouteTests(OfflineCase):
             self.assertIn(option, argv)
         self.assertTrue(any(token.startswith("UserKnownHostsFile=/proc/") for token in argv))
         self.assertEqual(["RUN_BOUND_UNIT_ISOLATION", "TCP_OPEN", "ISOLATION_SSH_STARTED", "ISOLATION_SSH_FINISHED", "UNIT_ISOLATION_RECEIPT"], [row["event"] for row in rows])
-        self.assertEqual(105, run.call_args.kwargs["seconds"]); self.assertEqual(16384, run.call_args.kwargs["limit"])
+        self.assertEqual(255, run.call_args.kwargs["seconds"]); self.assertEqual(16384, run.call_args.kwargs["limit"])
         self.assertEqual(mock.call(signal.ITIMER_REAL, 0), timer.call_args_list[-1])
 
     def test_wrong_or_marked_pin_prevents_any_ibm_ssh(self):
@@ -854,6 +924,18 @@ class RemoteRouteTests(OfflineCase):
                 rc, rows, run, timer = self.remote(**kwargs)
                 self.assertEqual(3, rc); self.assertEqual(1, run.call_count)
                 self.assertEqual("ISOLATION_ROUTE_BLOCKED", rows[-1]["event"])
+
+    def test_remote_admission_rejects_short_budgets_before_keyscan_or_ibm_ssh(self):
+        for seconds in (254.999, 368.001):
+            rc, rows, run, timer = self.remote(seconds=seconds)
+            self.assertEqual(3, rc); run.assert_not_called()
+            self.assertEqual("ISOLATION_ROUTE_BLOCKED", rows[-1]["event"])
+
+    def test_prechecks_at_the_minimum_budget_cannot_shrink_the_sole_ssh(self):
+        rc, rows, run, timer = self.remote(seconds=255)
+        self.assertEqual(3, rc); self.assertEqual(1, run.call_count)
+        self.assertEqual("ISOLATION_ROUTE_BLOCKED", rows[-1]["event"])
+        self.assertFalse(any(row["event"] == "ISOLATION_SSH_STARTED" for row in rows))
 
     def test_rc3_host_receipt_is_exported_without_repeating_ibm_ssh(self):
         rc, rows, run, timer = self.remote(host_rc=3)
@@ -1004,3 +1086,51 @@ class SandboxedProcessCleanupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class PendingBenGateReceiptTests(OfflineCase):
+    def gated(self):
+        row = receipt()
+        row['ben_gate'] = dict(unit=p.host_contract.BEN, boot_job_id=156,
+            status='GATED_QUIET', timer_stopped=True, execution_unchanged=True,
+            condition_skipped=True, production_release_required=True, gate_path='/etc/systemd/system/'+p.host_contract.BEN+'.d/90-bridge-ibm-isolation-'+BINDING['run_id']+'-'+BINDING['head'][:12]+'.conf', gate_presence='PRESENT', recovery='SNAPSHOT_BOUND_CONFIG_ONLY')
+        row['changed_units'].append(p.host_contract.BEN)
+        row['changes'].append(dict(unit=p.host_contract.BEN, gate='VERIFIED', stop='NOT_REQUESTED'))
+        return row
+
+    def test_original_four_and_new_five_gate_receipts_validate(self):
+        self.assertIsNone(p.validate_receipt(receipt(), BINDING)['ben_gate'])
+        self.assertEqual('GATED_QUIET', p.validate_receipt(self.gated(), BINDING)['ben_gate']['status'])
+
+    def test_success_requires_exact_completed_gate_proof(self):
+        for field, value in [('unit','unknown.service'), ('boot_job_id',True), ('boot_job_id',0),
+                ('status','PREPARING'), ('timer_stopped',False), ('execution_unchanged',None),
+                ('condition_skipped',False), ('production_release_required',False), ('gate_path','/tmp/foreign'), ('gate_presence','ABSENT'), ('recovery','REVIEW_REQUIRED')]:
+            with self.subTest(field=field, value=value):
+                row=self.gated();row['ben_gate'][field]=value
+                with self.assertRaises(p.IsolationError): p.validate_receipt(row, BINDING)
+        row=self.gated();row['ben_gate']['raw_handler']='SECRET'
+        with self.assertRaises(p.IsolationError): p.validate_receipt(row, BINDING)
+
+    def test_ben_stop_or_unbound_gate_is_rejected(self):
+        for stop in ('REQUESTED','OBSERVED_INACTIVE'):
+            row=self.gated();row['changes'][-1]['stop']=stop
+            with self.assertRaises(p.IsolationError): p.validate_receipt(row, BINDING)
+        row=self.gated();row['ben_gate']=None
+        with self.assertRaises(p.IsolationError): p.validate_receipt(row, BINDING)
+
+    def test_partial_write_keeps_release_warning_and_original_stop_status(self):
+        row=self.gated();row.update(result='PARTIAL_BLOCKED',reason='ARCHIVE_FAILED')
+        row['changes']=[dict(unit=p.host_contract.BEN,gate='INTENDED',stop='NOT_REQUESTED')]
+        row['changed_units']=[p.host_contract.BEN]
+        row['ben_gate'].update(status='PREPARING',timer_stopped=False,execution_unchanged=None,condition_skipped=None, recovery='REVIEW_REQUIRED')
+        self.assertTrue(p.validate_receipt(row,BINDING)['ben_gate']['production_release_required'])
+        row['ben_gate']['production_release_required']=False
+        with self.assertRaises(p.IsolationError): p.validate_receipt(row,BINDING)
+
+    def test_admission_failure_cannot_claim_isolation_or_changes(self):
+        row=receipt();row.update(result='BLOCKED',reason='PENDING_GATE_RACE',changes=[],changed_units=[])
+        row['ben_gate']=dict(unit=p.host_contract.BEN,boot_job_id=156,status='ADMISSION_BLOCKED',
+            timer_stopped=False,execution_unchanged=None,condition_skipped=None,production_release_required=False, gate_path='/etc/systemd/system/'+p.host_contract.BEN+'.d/90-bridge-ibm-isolation-'+BINDING['run_id']+'-'+BINDING['head'][:12]+'.conf', gate_presence='UNKNOWN', recovery='NOT_APPLICABLE')
+        self.assertEqual('BLOCKED',p.validate_receipt(row,BINDING)['result'])
+        row['ben_gate']['production_release_required']=True
+        with self.assertRaises(p.IsolationError):p.validate_receipt(row,BINDING)
