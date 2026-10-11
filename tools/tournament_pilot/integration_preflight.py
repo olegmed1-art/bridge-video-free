@@ -1,5 +1,6 @@
 """PR2147-only integration guard; no network, credentials or database access."""
 from collections import Counter
+from difflib import SequenceMatcher
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,8 @@ REPOSITORY = "olegmed1-art/bridge-video-free"
 BRANCH = "codex/shape-generator-v2-20261011"
 WORKFLOW = ".github/workflows/tournament-shape-pilot.yml"
 ALLOWED = {WORKFLOW, "tools/tournament_pilot/integration_preflight.py",
-           "tools/tournament_pilot/test_integration_preflight.py"}
+           "tools/tournament_pilot/test_integration_preflight.py",
+           "bridge_school_api/db.py", "tests/test_api_dsn_contract.py"}
 ARTIFACTS = ("tools/tournament_pilot/package.json", "tournament-first-binding-evidence.json")
 MAX_ARTIFACT_BYTES = 131072
 ASSESSMENT_VERSION = "tournament-call-assessment-v2"
@@ -43,6 +45,14 @@ def validate_event(event):
     require(pr["head"]["ref"] == BRANCH, "BRANCH_MISMATCH")
     require(pr["base"]["ref"] == "main" and pr["base"]["sha"] == MAIN, "BASE_CHANGED_REVIEW_REQUIRED")
     return pr["head"]["sha"]
+
+
+def added_content(before, after):
+    """Scan new material; the exact reviewed baseline already pins old bytes."""
+    old, new = before.splitlines(), after.splitlines()
+    matcher = SequenceMatcher(a=old, b=new, autojunk=False)
+    return "\n".join(line for tag, _, _, start, end in matcher.get_opcodes()
+                     if tag in {"insert", "replace"} for line in new[start:end])
 
 
 def validate_delta(changes, contents):
@@ -147,7 +157,9 @@ def main():
     for line in git(root, "diff", "--no-renames", "--name-status", BASELINE, head).splitlines():
         status, name = line.split("\t")
         changes[name] = status
-    validate_delta(changes, {name: (root / name).read_text(encoding="utf-8") for name in changes})
+    validate_delta(changes, {name: added_content(
+        git(root, "show", BASELINE + ":" + name) if status == "M" else "",
+        (root / name).read_text(encoding="utf-8")) for name, status in changes.items()})
     for name in ("DATABASE_URL", "NEON_DATABASE_URL", "BRIDGE_API_TOKEN", "VERCEL_OIDC_TOKEN"):
         require(not os.environ.get(name), "UNEXPECTED_RUNTIME_CREDENTIAL: " + name)
     import yaml

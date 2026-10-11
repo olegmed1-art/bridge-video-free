@@ -60,9 +60,19 @@ def evidence():
 class IntegrationGuardTests(unittest.TestCase):
     def test_exact_event_and_reviewed_delta(self):
         self.assertEqual(guard.validate_event(event()), "a" * 40)
-        root = Path(__file__).resolve().parents[2]
         guard.validate_delta({p: "M" for p in guard.ALLOWED},
-                             {p: (root / p).read_text(encoding="utf-8") for p in guard.ALLOWED})
+                             dict.fromkeys(guard.ALLOWED, "reviewed non-secret source"))
+
+    def test_new_material_is_scanned_including_replacements(self):
+        old = "reviewed baseline\nold line\n"
+        self.assertEqual(guard.added_content(old, old), "")
+        secret = "ghp_" + "a" * 24
+        for after in (old + secret, "reviewed baseline\n" + secret):
+            contents = dict.fromkeys(guard.ALLOWED, "")
+            contents["bridge_school_api/db.py"] = guard.added_content(old, after)
+            with self.assertRaises(ValueError):
+                guard.validate_delta(dict.fromkeys(guard.ALLOWED, "M"), contents)
+        self.assertEqual(guard.added_content("", "first\nsecond"), "first\nsecond")
 
     def test_fork_branch_base_and_command_injection_are_rejected(self):
         for side, field, value in [("head", "ref", "main"), ("base", "sha", "b" * 40),

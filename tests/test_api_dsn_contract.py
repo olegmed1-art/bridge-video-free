@@ -72,6 +72,17 @@ def main() -> None:
         ]
         for value in bad_values:
             expect_reject(value)
+
+        # URI authority/path must remain authoritative after libpq parses the
+        # query. Cover percent decoding, empty values and repeated parameters.
+        for environment in ("production", "preview"):
+            os.environ["VERCEL_ENV"] = environment
+            for key in ("host", "hostaddr", "port", "user", "password", "dbname",
+                        "service", "servicefile", "passfile", "options",
+                        "sslpassword", "%68ost", "unknown"):
+                for value in ("", "unexpected", "unexpected&" + key + "=second"):
+                    expect_reject(production + "&" + key + "=" + value)
+            expect_reject(production + "&channel_binding=disable")
     finally:
         if original_env is None:
             os.environ.pop("VERCEL_ENV", None)
