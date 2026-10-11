@@ -35,7 +35,10 @@ import sys
 import time
 
 REQUEST_SCHEMA = "bridge.ibm.unit-isolation.request.v1"
-RECEIPT_SCHEMA = "bridge.ibm.unit-isolation.receipt.v5"
+RECEIPT_SCHEMA = "bridge.ibm.unit-isolation.receipt.v6"
+RESUME_SNAPSHOT_ID = "38123951485-e599b3b39325"
+RESUME_SNAPSHOT_SHA256 = "1bd1490b28c4b184729bc31b7650f83dd372af1fe545e434c4695971f0626c92"
+RESUME_ORIGINAL_HEAD = "e599b3b39325de4f05ec8dc7631295c1d6085984"
 IDENTITY = {
     "instance_id": "02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2",
     "instance_name": "bridge-school-compute-ibm",
@@ -208,19 +211,24 @@ def strict_json(raw):
         raise Blocked("REQUEST_INVALID") from None
 
 
-def validate_request(p, *, rollback=False):
+def validate_request(p, *, rollback=False, resume=False):
     keys = {"schema", "operation", "run_id", "attempt", "head", "identity", "transport"}
-    if rollback:
+    need(not (rollback and resume), "REQUEST_INVALID")
+    if rollback or resume:
         keys |= {"snapshot_id", "snapshot_sha256"}
     need(type(p) is dict and set(p) == keys, "REQUEST_INVALID")
-    need(p["schema"] == REQUEST_SCHEMA and p["operation"] == ("rollback" if rollback else "isolate"), "REQUEST_INVALID")
+    need(p["schema"] == REQUEST_SCHEMA and p["operation"] == ("rollback" if rollback else "resume" if resume else "isolate"), "REQUEST_INVALID")
     need(type(p["run_id"]) is str and re.fullmatch(r"[1-9][0-9]{0,19}", p["run_id"]), "REQUEST_INVALID")
     need(type(p["attempt"]) is int and p["attempt"] == 1, "REQUEST_INVALID")
     need(type(p["head"]) is str and re.fullmatch(r"[0-9a-f]{40}", p["head"]), "REQUEST_INVALID")
     need(p["identity"] == IDENTITY and p["transport"] == TRANSPORT, "REQUEST_INVALID")
-    if rollback:
+    if rollback or resume:
         need(type(p["snapshot_id"]) is str and re.fullmatch(r"[1-9][0-9]{0,19}-[0-9a-f]{12}", p["snapshot_id"]), "ROLLBACK_INVALID")
         need(type(p["snapshot_sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", p["snapshot_sha256"]), "ROLLBACK_INVALID")
+    if resume:
+        need(p["snapshot_id"] == RESUME_SNAPSHOT_ID and p["snapshot_sha256"] == RESUME_SNAPSHOT_SHA256
+             and p["run_id"] != RESUME_SNAPSHOT_ID.split("-")[0] and p["head"] != RESUME_ORIGINAL_HEAD,
+             "ROLLBACK_INVALID")
     return p
 
 
@@ -851,6 +859,11 @@ class Isolation:
         self.gate_paths = {}
         self.created_dirs = []
         self.systemd_255 = None
+        self.continuation = None
+        self.loaded_events = []
+        self.drift_checks = 0
+        self.drift_order = {}
+        self.drift_failure = None
 
     def command(self, args, timeout=3):
         left = self.budget.left()
@@ -980,6 +993,10 @@ class Isolation:
         need(not self.fs.read(path + "/cgroup.procs", 4096).strip(), "CGROUP_NOT_EMPTY")
         return True
 
+    def expected_gate_paths(self):
+        units = set(self.own_records) | {c["unit"] for c in self.changes if c["gate"] == "REMOVED"}
+        return {self.gate_paths[u] for u in units}
+
     def inventory(self):
         paths = set()
         for unit, row in self.rows.items():
@@ -1013,7 +1030,7 @@ class Isolation:
                         if self.fs.exists(path):
                             paths.add(path)
         need(len(paths) <= MAX_FILES, "FILE_LIMIT")
-        return paths - set(self.gate_paths.values())
+        return paths - self.expected_gate_paths()
 
     def capture(self, paths):
         records = []
@@ -1076,21 +1093,75 @@ class Isolation:
         proof = {**manifest, "records": restored}
         need(digest(canonical(proof)) == self.snapshot_sha, "RESTORE_MISMATCH")
 
+    def drift_compare(self, expected, actual, kind, unit=None, field=None):
+        if expected == actual:
+            return
+        if self.drift_failure is None:
+            self.drift_failure = dict(kind=kind, unit=unit, property=field,
+                baseline_sha256=digest(canonical(expected)), current_sha256=digest(canonical(actual)))
+        raise Blocked("FILE_DRIFT")
+
+    def drift_evidence(self):
+        if not self.drift_checks:
+            return None
+        rows = list(self.drift_order.values())
+        return dict(checks=self.drift_checks, order_only=rows[:8], omitted_count=max(0, len(rows)-8),
+                    first_failure=self.drift_failure)
+
     def drift(self):
+        self.drift_checks += 1
+        need(self.drift_checks <= 100000, "FILE_LIMIT")
         need(not self.fs.exists(self.allow), "COLLISION")
-        need(self.inventory() == self.original_paths, "FILE_DRIFT")
-        need(self.capture(self.original_paths) == self.records, "FILE_DRIFT")
+        self.drift_compare(sorted(self.original_paths), sorted(self.inventory()), "INVENTORY")
+        try:
+            current = self.capture(self.original_paths)
+        except Blocked as exc:
+            if str(exc) == "FILE_DRIFT" and self.drift_failure is None:
+                self.drift_failure = dict(kind="CONFIG_READ", unit=None, property=None,
+                    baseline_sha256=digest(canonical(self.records)), current_sha256=None)
+            raise
+        except OSError:
+            self.drift_failure = self.drift_failure or dict(kind="CONFIG_READ", unit=None, property=None,
+                baseline_sha256=digest(canonical(self.records)), current_sha256=None)
+            raise Blocked("FILE_DRIFT") from None
+        for before, after in zip(self.records, current):
+            if before != after:
+                path = before["path"]
+                unit = next((u for u in UNITS if path.endswith("/" + u) or "/" + u + ".d/" in path), None)
+                self.drift_compare(before, after, "CONFIG_RECORDS", unit)
+        self.drift_compare(self.records, current, "CONFIG_RECORDS")
         for unit, base in self.baseline.items():
             row = self.rows[unit]
             fields = ("Id", "Names", "FragmentPath", "UnitFileState") + EDGES
             if unit.endswith(".service"):
                 fields += ("PrivateTmp",)
             for field in fields:
-                need(field in base and row[field] == base[field], "FILE_DRIFT")
-            drops = set(row["DropInPaths"].split()) - set(self.gate_paths.values())
-            need(drops == set(base["DropInPaths"].split()), "FILE_DRIFT")
+                need(field in base, "FILE_DRIFT")
+                if field in EDGES:
+                    # v255 dbus-unit.c property_get_dependencies iterates a
+                    # Hashmap. Only these validated dependency sets lack order.
+                    before, after = base[field].split(), row[field].split()
+                    need(len(before) <= 32 and len(before) == len(set(before)), "METADATA_INVALID")
+                    self.drift_compare(sorted(before), sorted(after), "UNIT_PROPERTY", unit, field)
+                    if base[field] != row[field]:
+                        self.drift_order.setdefault((unit, field), dict(unit=unit, property=field,
+                            baseline_sha256=digest(canonical(base[field])), current_sha256=digest(canonical(row[field]))))
+                else:
+                    self.drift_compare(base[field], row[field], "UNIT_PROPERTY", unit, field)
+            # Own additive files are expected. Preserve the relative order of
+            # every pre-existing drop-in; Exec arrays are never normalized.
+            drops = [p for p in row["DropInPaths"].split() if p not in self.expected_gate_paths()]
+            self.drift_compare(base["DropInPaths"].split(), drops, "DROPIN_ORDER", unit, "DropInPaths")
         for unit, record in self.own_records.items():
-            need(self.fs.record(self.gate_paths[unit]) == record, "FILE_DRIFT")
+            try:
+                current = self.fs.record(self.gate_paths[unit])
+            except (Blocked, OSError) as exc:
+                if isinstance(exc, OSError) or str(exc) == "FILE_DRIFT":
+                    self.drift_failure = self.drift_failure or dict(kind="OWNED_GATE", unit=unit, property=None,
+                        baseline_sha256=digest(canonical(record)), current_sha256=None)
+                    raise Blocked("FILE_DRIFT") from None
+                raise
+            self.drift_compare(record, current, "OWNED_GATE", unit)
 
     def remaining_stop_budget(self):
         return sum(stop_seconds(self.baseline[u]["TimeoutStopUSec"])
@@ -1236,6 +1307,103 @@ class Isolation:
                      production_release_required=True, ben_stop_requested=False)
         self.pending_end = None
 
+    def resume(self):
+        """Continue only the pinned partial pass; preserve original archive/gates."""
+        validate_request(self.p, resume=True)
+        self.host_check(self.fs)
+        self.snapshot_id = self.change_id = RESUME_SNAPSHOT_ID
+        self.snapshot_sha = RESUME_SNAPSHOT_SHA256
+        self.continuation = dict(snapshot_id=RESUME_SNAPSHOT_ID, original_head=RESUME_ORIGINAL_HEAD,
+                                 prior_journal_event=None, retained_gates=[], stage="REQUEST_BOUND")
+        self.changes = [dict(unit=u, gate="INHERITED_UNVERIFIED", stop="NOT_REQUESTED") for u in (BEN, TIMER)]
+        self.ben_gate = dict(unit=BEN, boot_job_id=211, status="PREPARING", timer_stopped=False,
+                            execution_unchanged=None, condition_skipped=None, production_release_required=True)
+        load_recovery_snapshot(self, self.p, prefix="resume")
+        need(self.original_request["head"] == RESUME_ORIGINAL_HEAD
+             and self.original_request["run_id"] == RESUME_SNAPSHOT_ID.split("-")[0]
+             and set(self.conditions) == set(GATE_UNITS), "ROLLBACK_INVALID")
+        names = [e["event"] for e in self.loaded_events]
+        prefix = ["SNAPSHOT_RESTORED", "GATE_INTENT", "GATE_CREATED", "GATE_INTENT", "GATE_CREATED"]
+        need(names in (prefix, prefix + ["PENDING_BEN_RELOAD_INTENT"])
+             and set(self.own_records) == {BEN, TIMER}, "ROLLBACK_INVALID")
+        need([self.loaded_events[i].get("unit") for i in range(1, 5)] == [BEN, BEN, TIMER, TIMER], "ROLLBACK_INVALID")
+        first = self.loaded_events[0]
+        need(first.get("snapshot_sha256") == self.snapshot_sha and first.get("restore_sha256") == self.snapshot_sha
+             and first.get("intended_gates") == self.gate_paths and first.get("gate_sha256") == digest(self.gate_data), "ROLLBACK_INVALID")
+        old_job = self.baseline[BEN]["Job"]
+        need(type(old_job) is str and re.fullmatch(r"[1-9][0-9]{0,9}", old_job)
+             and int(old_job) <= 4294967295, "ROLLBACK_INVALID")
+        if names[-1] == "PENDING_BEN_RELOAD_INTENT":
+            last = self.loaded_events[-1]
+            need(last.get("unit") == BEN and last.get("boot_job_id") == int(old_job), "ROLLBACK_INVALID")
+        self.ben_gate["boot_job_id"] = int(old_job)  # Historical ID only; never queried on this boot.
+        self.ben_gate_journaled = True
+        self.continuation["prior_journal_event"] = names[-1]
+        for unit, path in self.gate_paths.items():
+            if unit not in self.own_records:
+                need(not self.fs.exists(path), "COLLISION")
+        for unit in UNITS:
+            row = self.show(unit)
+            need(row["NeedDaemonReload"] == "no", "FILE_DRIFT")
+            if unit in TARGETS:
+                self.stop_handlers(unit)
+                need(not row["Job"] and (row["ActiveState"], row["SubState"]) in
+                     {("inactive", "dead"), ("active", "waiting" if unit == TIMER else "running")}, "UNIT_BUSY")
+        need(self.private_tmp_version(), "PENDING_GATE_UNVERIFIED")
+        self.drift(); self.check_gates()
+        self.continuation.update(retained_gates=[BEN, TIMER], stage="VERIFIED")
+        for change in self.changes:
+            change["gate"] = "CREATED"
+        # This boot has its own job and monotonic timestamps. Prior-boot values
+        # establish provenance only and are never reused as live observations.
+        row = self.rows[BEN]
+        current_job = int(row["Job"] or "0")
+        if current_job:
+            need(current_job <= 4294967295, "PENDING_GATE_UNVERIFIED")
+            reader = JobDiagnostic(self, current_job)
+            job = reader.job(current_job); before = reader.dependencies(current_job, "GetBefore")
+            need(job["type"] == "start" and job["state"] == "waiting" and len(before) == 1
+                 and before[0]["unit"] == "docker.service" and before[0]["type"] == "start"
+                 and before[0]["state"] == "running", "PENDING_GATE_UNVERIFIED")
+        marker = self.pending_marker()
+        self.pending_quiet_check(current_job, marker, allow_skipped=True)
+        self.budget.left(PENDING_GATE_SECONDS + self.remaining_stop_budget() + 20)
+        self.pending_end = min(self.budget.end - self.remaining_stop_budget() - 10,
+                               self.budget.clock() + PENDING_GATE_SECONDS)
+        self.journal("CONTINUATION_BOUND", run_id=self.p["run_id"], head=self.p["head"],
+                     snapshot_sha256=self.snapshot_sha, drift_evidence=self.drift_evidence())
+        timer = self.show(TIMER)
+        need(not timer["Job"] and timer["ActiveState"] in {"active", "inactive"}, "PENDING_GATE_RACE")
+        change = next(c for c in self.changes if c["unit"] == TIMER)
+        if timer["ActiveState"] == "active":
+            self.pending_quiet_check(current_job, marker, allow_skipped=True)
+            self.drift(); self.check_gates(); self.budget.left(self.remaining_stop_budget() + 10)
+            self.journal("STOP_INTENT", unit=TIMER); change["stop"] = "REQUESTED"
+            self.command(["/usr/bin/systemctl", "--job-mode=fail", "--no-block", "stop", TIMER])
+        while True:
+            need(self.budget.clock() < self.pending_end, "PENDING_GATE_TIMEOUT")
+            row = self.pending_quiet_check(current_job, marker, allow_skipped=True)
+            timer = self.show(TIMER)
+            need(timer["ActiveState"] in {"active", "inactive", "deactivating"}, "PENDING_GATE_RACE")
+            if timer["ActiveState"] == "inactive" and timer["SubState"] == "dead" and not timer["Job"]:
+                change["stop"] = "OBSERVED_INACTIVE"; self.ben_gate["timer_stopped"] = True
+            if self.ben_gate["timer_stopped"] and not row["Job"]:
+                break
+            self.sleep(min(.2, max(0, self.pending_end - self.budget.clock())))
+        raw = strict_json(self.property(BEN, "Unit", "Conditions")); parse_conditions(canonical(raw))
+        need(["ConditionPathExists", False, False, self.allow, -1] in raw["data"], "PENDING_GATE_UNVERIFIED")
+        self.pending_quiet_check(current_job, marker, allow_skipped=True)
+        self.drift(); self.check_gates()
+        self.ben_gate.update(status="GATED_QUIET", execution_unchanged=True, condition_skipped=True)
+        for change in self.changes:
+            change["gate"] = "VERIFIED"
+        self.pending_end = None
+        self.companions("PREFLIGHT"); self.budget.left(self.remaining_stop_budget() + 10)
+        self.continuation["stage"] = "RESUMING"
+        self.journal("CONTINUATION_PREPARED", run_id=self.p["run_id"], head=self.p["head"],
+                     retained_gates=[BEN, TIMER], ben_stop_requested=False)
+        return self.finish_isolation()
+
     def preflight(self):
         validate_request(self.p)
         self.host_check(self.fs)
@@ -1273,12 +1441,16 @@ class Isolation:
         self.preflight()
         if self.snapshot_id is None:
             self.snapshot()
+        return self.finish_isolation()
+
+    def finish_isolation(self):
         self.companions("AFTER_SNAPSHOT")
         self.drift()
         self.budget.left(self.remaining_stop_budget())
         for unit in TARGETS:
             self.companions("BEFORE_GATE")
             self.drift()
+            self.budget.left(self.remaining_stop_budget() + 10)
             if unit not in self.own_records:
                 self.create_gate(unit)
         self.companions("BEFORE_RELOAD")
@@ -1332,6 +1504,8 @@ class Isolation:
             self.check_gates()
             self.sleep(.1)
         self.journal("ISOLATED_TARGET_SCOPE")
+        if self.continuation is not None:
+            self.continuation["stage"] = "COMPLETE"
         return self.receipt("ISOLATED_TARGET_SCOPE", "OK")
 
     def ben_gate_receipt(self):
@@ -1368,7 +1542,7 @@ class Isolation:
         # Invalid untrusted request values are never reflected.
         valid_run = p.get("run_id") if type(p.get("run_id")) is str and re.fullmatch(r"[1-9][0-9]{0,19}", p["run_id"]) else None
         valid_head = p.get("head") if type(p.get("head")) is str and re.fullmatch(r"[0-9a-f]{40}", p["head"]) else None
-        return {"schema": RECEIPT_SCHEMA, "operation": "rollback" if p.get("operation") == "rollback" else "isolate",
+        return {"schema": RECEIPT_SCHEMA, "operation": p.get("operation") if p.get("operation") in ("rollback", "resume") else "isolate",
                 "run_id": valid_run, "head": valid_head, "attempt": 1,
                 "result": result, "reason": reason if reason in REASONS else "INTERNAL_BLOCKED",
                 "snapshot_id": self.snapshot_id, "snapshot_sha256": self.snapshot_sha,
@@ -1379,6 +1553,7 @@ class Isolation:
                 "companion_evidence": self.companion_evidence if reason == "COMPANION_BUSY" else None,
                 "job_evidence": self.job_evidence if reason == "COMPANION_BUSY" else None,
                 "ben_gate": ben_gate,
+                "drift_evidence": self.drift_evidence(), "continuation": self.continuation,
                 "limitations": LIMITATIONS}
 
 
@@ -1386,12 +1561,70 @@ def execute(payload, **kwargs):
     """Execute one bounded isolation; injectable root/runner are offline-test seams."""
     operation = Isolation(payload, **kwargs)
     try:
-        return operation.isolate()
+        return operation.resume() if type(payload) is dict and payload.get("operation") == "resume" else operation.isolate()
     except Blocked as exc:
         return operation.receipt("PARTIAL_BLOCKED" if operation.changes else "BLOCKED", str(exc))
     except (Exception, KeyboardInterrupt):
         return operation.receipt("PARTIAL_BLOCKED" if operation.changes else "BLOCKED", "INTERNAL_BLOCKED")
 
+
+def load_recovery_snapshot(op, payload, prefix="rollback"):
+    need(prefix in {"rollback", "resume"}, "ROLLBACK_INVALID")
+    op.snapshot_id = payload["snapshot_id"]
+    op.archive = RECOVERY_ROOT + "/" + op.snapshot_id
+    op.snapshot_sha = payload["snapshot_sha256"]
+    raw = op.fs.read(op.archive + "/snapshot.json", 2 * MAX_BYTES)
+    need(digest(raw) == op.snapshot_sha, "ROLLBACK_INVALID")
+    manifest = strict_json(raw)
+    need(type(manifest) is dict and set(manifest) == {"schema", "request", "records", "metadata", "conditions"}
+         and manifest["schema"] == "bridge.ibm.unit-isolation.snapshot.v1", "ROLLBACK_INVALID")
+    original = validate_request(manifest["request"])
+    op.original_request = original
+    need(op.snapshot_id == original["run_id"] + "-" + original["head"][:12], "ROLLBACK_INVALID")
+    op.change_id = op.snapshot_id
+    op.allow = "/etc/systemd/system/.bridge-ibm-isolation-" + op.change_id + ".allow"
+    op.gate_data = ("[Unit]\nConditionPathExists=" + op.allow + "\n").encode()
+    op.gate_paths = {u: "/etc/systemd/system/" + u + ".d/90-bridge-ibm-isolation-" + op.change_id + ".conf" for u in GATE_UNITS}
+    op.records = manifest["records"]
+    need(type(op.records) is list and 0 < len(op.records) <= MAX_FILES, "ROLLBACK_INVALID")
+    op.baseline = manifest["metadata"]
+    need(type(op.baseline) is dict and set(op.baseline) == set(UNITS), "ROLLBACK_INVALID")
+    op.conditions = manifest["conditions"]
+    need(type(op.conditions) is dict and set(op.conditions) in (set(TARGETS), set(GATE_UNITS)), "ROLLBACK_INVALID")
+    op.original_paths = {r["path"] for r in op.records}
+    need(len(op.original_paths) == len(op.records), "ROLLBACK_INVALID")
+    # Prove archive and restoration again, with an exclusive new staging dir.
+    stage = op.archive + "/" + prefix + "-restore-" + payload["run_id"] + "-" + payload["head"][:12]
+    op.fs.mkdir(stage)
+    op.verify_archive(manifest, stage)
+    op.restore_sha = op.snapshot_sha
+    previous = None
+    intents = set()
+    for name, directory, link in op.fs.listdir(op.archive, limit=128):
+        if not re.fullmatch(r"journal-[0-9]{3}\.json", name):
+            continue
+        need(not directory and not link, "ROLLBACK_INVALID")
+        event_raw = op.fs.read(op.archive + "/" + name, MAX_OUTPUT)
+        event = strict_json(event_raw)
+        op.loaded_events.append(event)
+        need(event["seq"] == op.journal_index and event["previous_sha256"] == previous, "ROLLBACK_INVALID")
+        if event["event"] == "GATE_INTENT":
+            need(event["unit"] in GATE_UNITS and event["path"] == op.gate_paths[event["unit"]]
+                 and event["sha256"] == digest(op.gate_data), "ROLLBACK_INVALID")
+            intents.add(event["unit"])
+        if event["event"] == "GATE_CREATED":
+            unit = event["unit"]
+            need(unit in intents and unit not in op.own_records and event["record"]["path"] == op.gate_paths[unit]
+                 and event["record"]["sha256"] == digest(op.gate_data), "ROLLBACK_INVALID")
+            op.own_records[unit] = event["record"]
+        if event["event"] == "ROLLBACK_REMOVED":
+            removed = event["unit"]
+            need(removed in op.own_records, "ROLLBACK_INVALID")
+            del op.own_records[removed]; intents.remove(removed)
+        previous = digest(event_raw)
+        op.journal_index += 1
+    op.journal_hash = previous
+    need(intents == set(op.own_records) and bool(intents), "ROLLBACK_INVALID")
 
 def rollback(payload, *, release_ben_only=False, **kwargs):
     """Separately authorized future window only; remove own verified gates, never start.
@@ -1405,59 +1638,7 @@ def rollback(payload, *, release_ben_only=False, **kwargs):
         need(type(release_ben_only) is bool, "ROLLBACK_INVALID")
         validate_request(payload, rollback=True)
         op.host_check(op.fs)
-        op.snapshot_id = payload["snapshot_id"]
-        op.archive = RECOVERY_ROOT + "/" + op.snapshot_id
-        op.snapshot_sha = payload["snapshot_sha256"]
-        raw = op.fs.read(op.archive + "/snapshot.json", 2 * MAX_BYTES)
-        need(digest(raw) == op.snapshot_sha, "ROLLBACK_INVALID")
-        manifest = strict_json(raw)
-        need(type(manifest) is dict and set(manifest) == {"schema", "request", "records", "metadata", "conditions"}
-             and manifest["schema"] == "bridge.ibm.unit-isolation.snapshot.v1", "ROLLBACK_INVALID")
-        original = validate_request(manifest["request"])
-        need(op.snapshot_id == original["run_id"] + "-" + original["head"][:12], "ROLLBACK_INVALID")
-        op.change_id = op.snapshot_id
-        op.allow = "/etc/systemd/system/.bridge-ibm-isolation-" + op.change_id + ".allow"
-        op.gate_data = ("[Unit]\nConditionPathExists=" + op.allow + "\n").encode()
-        op.gate_paths = {u: "/etc/systemd/system/" + u + ".d/90-bridge-ibm-isolation-" + op.change_id + ".conf" for u in GATE_UNITS}
-        op.records = manifest["records"]
-        need(type(op.records) is list and 0 < len(op.records) <= MAX_FILES, "ROLLBACK_INVALID")
-        op.baseline = manifest["metadata"]
-        need(type(op.baseline) is dict and set(op.baseline) == set(UNITS), "ROLLBACK_INVALID")
-        op.conditions = manifest["conditions"]
-        need(type(op.conditions) is dict and set(op.conditions) in (set(TARGETS), set(GATE_UNITS)), "ROLLBACK_INVALID")
-        op.original_paths = {r["path"] for r in op.records}
-        need(len(op.original_paths) == len(op.records), "ROLLBACK_INVALID")
-        # Prove archive and restoration again, with an exclusive new staging dir.
-        stage = op.archive + "/rollback-restore-" + payload["run_id"] + "-" + payload["head"][:12]
-        op.fs.mkdir(stage)
-        op.verify_archive(manifest, stage)
-        op.restore_sha = op.snapshot_sha
-        previous = None
-        intents = set()
-        for name, directory, link in op.fs.listdir(op.archive, limit=128):
-            if not re.fullmatch(r"journal-[0-9]{3}\.json", name):
-                continue
-            need(not directory and not link, "ROLLBACK_INVALID")
-            event_raw = op.fs.read(op.archive + "/" + name, MAX_OUTPUT)
-            event = strict_json(event_raw)
-            need(event["seq"] == op.journal_index and event["previous_sha256"] == previous, "ROLLBACK_INVALID")
-            if event["event"] == "GATE_INTENT":
-                need(event["unit"] in GATE_UNITS and event["path"] == op.gate_paths[event["unit"]]
-                     and event["sha256"] == digest(op.gate_data), "ROLLBACK_INVALID")
-                intents.add(event["unit"])
-            if event["event"] == "GATE_CREATED":
-                unit = event["unit"]
-                need(unit in intents and unit not in op.own_records and event["record"]["path"] == op.gate_paths[unit]
-                     and event["record"]["sha256"] == digest(op.gate_data), "ROLLBACK_INVALID")
-                op.own_records[unit] = event["record"]
-            if event["event"] == "ROLLBACK_REMOVED":
-                removed = event["unit"]
-                need(removed in op.own_records, "ROLLBACK_INVALID")
-                del op.own_records[removed]; intents.remove(removed)
-            previous = digest(event_raw)
-            op.journal_index += 1
-        op.journal_hash = previous
-        need(intents == set(op.own_records) and bool(intents), "ROLLBACK_INVALID")
+        load_recovery_snapshot(op, payload)
         for unit in UNITS:
             row = op.show(unit)
             need(row["ActiveState"] == "inactive" and row["SubState"] == "dead" and not row["Job"], "UNIT_BUSY")
@@ -1511,8 +1692,8 @@ def main(payload=None):
 
     The transport embeds this reviewed source using python -I -B -c, then calls
     main with __name__='__main__'. Input JSON is bounded stdin; no CLI path input.
-    Production transport only invokes isolate; rollback requires a separately
-    reviewed, freshly bound future controller window.
+    Production transport only invokes the exact snapshot-bound continuation;
+    rollback/release require a separately reviewed future controller window.
     """
     started = _SCRIPT_STARTED if _SCRIPT_STARTED is not None else time.monotonic()
     original_handlers = {}
@@ -1534,7 +1715,9 @@ def main(payload=None):
             raw = sys.stdin.buffer.read(MAX_INPUT + 1)
             need(len(raw) <= MAX_INPUT, "REQUEST_INVALID")
             payload = strict_json(raw)
-        # Rollback is intentionally unavailable through the current main path.
+        # This publication continues only the exact preserved pass. Initial
+        # isolation/rollback/release are not exposed by its production route.
+        validate_request(payload, resume=True)
         receipt = execute(payload, started=started)
     except Blocked as exc:
         receipt = Isolation(payload).receipt("BLOCKED", str(exc))

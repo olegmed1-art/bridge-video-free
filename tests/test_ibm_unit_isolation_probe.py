@@ -43,18 +43,38 @@ LIMITATIONS = ["EXPECTED_MACHINE_ID_UNAVAILABLE", "TRANSPORT_IDENTITY_ASSERTION_
 
 
 def receipt(result="ISOLATED_TARGET_SCOPE"):
-    return dict(schema="bridge.ibm.unit-isolation.receipt.v5", operation="isolate",
+    return dict(schema="bridge.ibm.unit-isolation.receipt.v6", operation="isolate",
                 **BINDING, result=result, reason="OK" if result == "ISOLATED_TARGET_SCOPE" else "INTERNAL_BLOCKED",
                 snapshot_id="39999999999-aaaaaaaaaaaa", snapshot_sha256="b" * 64,
                 snapshot_restore_sha256="b" * 64, changed_units=list(p.TARGETS),
                 changes=[dict(unit=name, gate="VERIFIED", stop="OBSERVED_INACTIVE") for name in p.TARGETS],
                 target_states=[dict(unit=name, active="inactive", sub="dead",
                                     job_pending=False, cgroup_empty=True) for name in p.TARGETS],
-                host_identity="TRANSPORT_ASSERTION_ONLY", limitations=list(LIMITATIONS), graph_evidence=None, companion_evidence=None, job_evidence=None, ben_gate=None)
+                host_identity="TRANSPORT_ASSERTION_ONLY", limitations=list(LIMITATIONS), graph_evidence=None, companion_evidence=None, job_evidence=None, ben_gate=None, drift_evidence=None, continuation=None)
+
+
+def resume_receipt(result="ISOLATED_TARGET_SCOPE"):
+    row = receipt(result)
+    row.update(operation="resume", snapshot_id=p.RESUME_SNAPSHOT_ID,
+               snapshot_sha256=p.RESUME_SNAPSHOT_SHA256, snapshot_restore_sha256=p.RESUME_SNAPSHOT_SHA256,
+               continuation=dict(snapshot_id=p.RESUME_SNAPSHOT_ID, original_head=p.RESUME_ORIGINAL_HEAD,
+                                 prior_journal_event=None, retained_gates=[], stage="REQUEST_BOUND"))
+    if result == "ISOLATED_TARGET_SCOPE":
+        row["continuation"].update(prior_journal_event="PENDING_BEN_RELOAD_INTENT",
+                                   retained_gates=[p.host_contract.BEN, p.host_contract.TIMER], stage="COMPLETE")
+        row["drift_evidence"] = dict(checks=2, order_only=[], omitted_count=0, first_failure=None)
+        row["changed_units"].append(p.host_contract.BEN)
+        row["changes"].append(dict(unit=p.host_contract.BEN, gate="VERIFIED", stop="NOT_REQUESTED"))
+        row["ben_gate"] = dict(unit=p.host_contract.BEN, boot_job_id=156, status="GATED_QUIET",
+                               timer_stopped=True, execution_unchanged=True, condition_skipped=True,
+                               production_release_required=True,
+                               gate_path="/etc/systemd/system/"+p.host_contract.BEN+".d/90-bridge-ibm-isolation-"+p.RESUME_SNAPSHOT_ID+".conf",
+                               gate_presence="PRESENT", recovery="SNAPSHOT_BOUND_CONFIG_ONLY")
+    return row
 
 
 def chain(row=None):
-    row = receipt() if row is None else row
+    row = resume_receipt() if row is None else row
     host_raw = (json.dumps(row, sort_keys=True, separators=(",", ":"))+"\n").encode()
     return [dict(event="RUN_BOUND_UNIT_ISOLATION", **BINDING),
             dict(event="TCP_OPEN", elapsed_seconds=.2, attempts=1),
@@ -114,7 +134,7 @@ class RunBindingTests(OfflineCase):
                 self.ctx(dict(ENV, **{key: value}))
 
     def test_all_consumed_live_runs_are_refused(self):
-        self.assertTrue({"38065148168", "38064916368", "37939530764", "37776596059", "37788143504"} <= p.CONSUMED_RUNS)
+        self.assertTrue({"38065148168", "38064916368", "37939530764", "37776596059", "37788143504", "38123951485"} <= p.CONSUMED_RUNS)
         for run in p.CONSUMED_RUNS:
             with self.subTest(run=run), self.assertRaisesRegex(p.IsolationError, "run_attempt"):
                 self.ctx(dict(ENV, GITHUB_RUN_ID=run))
@@ -128,7 +148,7 @@ class RunBindingTests(OfflineCase):
                 self.ctx(dict(ENV, **{key: value}))
 
     def test_checkout_head_is_exact_lowercase_and_matches_git(self):
-        for head in ("A" * 40, "a" * 39, "g" * 40, "a" * 41):
+        for head in ("A" * 40, "a" * 39, "g" * 40, "a" * 41, p.RESUME_ORIGINAL_HEAD):
             with self.subTest(head=head), self.assertRaises(p.IsolationError):
                 self.ctx(dict(ENV, GITHUB_SHA=head))
         with self.assertRaisesRegex(p.IsolationError, "checkout_binding"):
@@ -165,7 +185,7 @@ class IdentityAttemptAndBudgetTests(OfflineCase):
         self.assertFalse(obj.attempted); obj.call.assert_not_called()
         obj.call = p.PreparedIsolation.call.__get__(obj)
         with mock.patch.object(p, "bounded_process") as run, self.assertRaisesRegex(p.IsolationError, "fresh_api_identity_required"):
-            obj.call("isolate", 260)
+            obj.call("resume", 260)
         run.assert_not_called()
 
     def test_every_identity_field_and_extra_fields_are_checked(self):
@@ -202,7 +222,7 @@ class IdentityAttemptAndBudgetTests(OfflineCase):
         obj.call.assert_called_once()
 
     def test_rejected_or_malformed_response_consumes_attempt(self):
-        for rows, rc in [(chain(receipt("BLOCKED")), 3), ([dict(event="UNKNOWN")], 0)]:
+        for rows, rc in [(chain(resume_receipt("BLOCKED")), 3), ([dict(event="UNKNOWN")], 0)]:
             obj = self.probe(rows, rc)
             try:
                 self.run_probe(obj)
@@ -220,7 +240,7 @@ class IdentityAttemptAndBudgetTests(OfflineCase):
             rows = chain(); rows[1]["elapsed_seconds"] = 0
             obj = self.probe(rows)
             self.assertTrue(self.run_probe(obj, max_seconds=seconds)[0])
-            obj.call.assert_called_once_with("isolate", seconds-5)
+            obj.call.assert_called_once_with("resume", seconds-5)
 
     def test_invalid_budget_never_consumes_or_launches(self):
         for seconds in (0, 264.999, 378.001, -1, True, False, "378", None, math.nan, math.inf):
@@ -247,7 +267,7 @@ class IdentityAttemptAndBudgetTests(OfflineCase):
 
 class GraphEvidenceTests(OfflineCase):
     def row(self, reason="UNKNOWN_EDGE", result="BLOCKED"):
-        row = receipt(result)
+        row = resume_receipt(result)
         row.update(reason=reason, snapshot_id=None, snapshot_sha256=None,
                    snapshot_restore_sha256=None, changed_units=[], changes=[])
         row["graph_evidence"] = {"failures": [{
@@ -292,7 +312,7 @@ class GraphEvidenceTests(OfflineCase):
                 self.assertEqual(row, self.check(row))
 
     def test_partial_blocked_retains_graph_evidence_without_green_result(self):
-        row = receipt("PARTIAL_BLOCKED"); row["reason"] = "UNKNOWN_EDGE"
+        row = resume_receipt("PARTIAL_BLOCKED"); row["reason"] = "UNKNOWN_EDGE"
         row["graph_evidence"] = self.row()["graph_evidence"]
         self.assertEqual(row, self.check(row))
         self.assertFalse(self.run_probe(self.probe(chain(row), rc=3))[0])
@@ -392,7 +412,7 @@ class GraphEvidenceTests(OfflineCase):
 
 class CompanionEvidenceTests(OfflineCase):
     def row(self, unit=None):
-        row = receipt("BLOCKED")
+        row = resume_receipt("BLOCKED")
         row.update(reason="COMPANION_BUSY", snapshot_id=None, snapshot_sha256=None,
                    snapshot_restore_sha256=None, changed_units=[], changes=[])
         row["companion_evidence"] = dict(
@@ -501,7 +521,7 @@ class ReceiptTests(OfflineCase):
         row = receipt(); self.assertEqual(row, self.check(row))
 
     def test_blocked_unknown_states_are_valid_evidence_but_never_success(self):
-        row = receipt("BLOCKED")
+        row = resume_receipt("BLOCKED")
         row.update(snapshot_id=None, snapshot_sha256=None, snapshot_restore_sha256=None,
                    changed_units=[], changes=[])
         for state in row["target_states"]:
@@ -611,12 +631,161 @@ class ReceiptTests(OfflineCase):
                 self.check(row)
 
 
+class SnapshotResumeReceiptTests(OfflineCase):
+    def check(self, row):
+        return p.validate_receipt(row, BINDING)
+
+    def test_completed_resume_uses_original_snapshot_and_new_run_binding(self):
+        row = resume_receipt()
+        self.assertEqual(row, self.check(row))
+        self.assertEqual(BINDING["head"], row["head"])
+        self.assertNotEqual(row["head"], row["continuation"]["original_head"])
+        self.assertEqual(p.RESUME_SNAPSHOT_ID, p.host_contract.RESUME_SNAPSHOT_ID)
+        self.assertEqual(p.RESUME_SNAPSHOT_SHA256, p.host_contract.RESUME_SNAPSHOT_SHA256)
+        self.assertEqual(p.RESUME_ORIGINAL_HEAD, p.host_contract.RESUME_ORIGINAL_HEAD)
+        self.assertTrue(self.run_probe(self.probe(chain(row)))[0])
+
+    def test_actual_run_rejects_valid_internal_isolate_receipt(self):
+        row = receipt()
+        self.assertEqual(row, self.check(row))
+        with mock.patch.object(p, "emit") as emitted, self.assertRaisesRegex(p.IsolationError, "receipt_resume_binding"):
+            self.probe(chain(row)).run_once()
+        self.assertFalse(any(call.args[0] == "UNIT_ISOLATION_VERIFIED_RECEIPT" for call in emitted.call_args_list))
+
+    def test_snapshot_binding_and_resume_gate_path_are_exact(self):
+        cases = [("snapshot_id", BINDING["run_id"]+"-"+BINDING["head"][:12]),
+                 ("snapshot_sha256", "c"*64), ("snapshot_restore_sha256", "c"*64)]
+        for key, value in cases:
+            row = resume_receipt(); row[key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(p.IsolationError, "receipt_snapshot_binding"):
+                self.check(row)
+        row = resume_receipt()
+        row["ben_gate"]["gate_path"] = "/etc/systemd/system/"+p.host_contract.BEN+".d/90-bridge-ibm-isolation-"+BINDING["run_id"]+"-"+BINDING["head"][:12]+".conf"
+        with self.assertRaisesRegex(p.IsolationError, "receipt_ben_gate"):
+            self.check(row)
+        row = resume_receipt(); row["schema"] = "bridge.ibm.unit-isolation.receipt.v5"
+        with self.assertRaisesRegex(p.IsolationError, "receipt_schema"):
+            self.check(row)
+
+    def test_continuation_fields_are_closed_bound_and_complete_for_success(self):
+        changes = [("snapshot_id", "foreign"), ("original_head", BINDING["head"]),
+                   ("prior_journal_event", "SECRET /private/path"), ("prior_journal_event", None),
+                   ("retained_gates", [p.host_contract.TIMER, p.host_contract.BEN]),
+                   ("retained_gates", [p.host_contract.BEN]), ("retained_gates", [p.host_contract.HEALTH]),
+                   ("stage", "VERIFIED"), ("stage", "SECRET"), ("raw_journal", "SECRET")]
+        for key, value in changes:
+            row = resume_receipt(); row["continuation"][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(p.IsolationError):
+                self.check(row)
+        for key in resume_receipt()["continuation"]:
+            row = resume_receipt(); del row["continuation"][key]
+            with self.subTest(missing=key), self.assertRaises(p.IsolationError):
+                self.check(row)
+
+    def test_safe_early_blocked_resume_does_not_claim_snapshot_verification(self):
+        row = resume_receipt("BLOCKED")
+        row.update(reason="REQUEST_INVALID", snapshot_id=None, snapshot_sha256=None,
+                   snapshot_restore_sha256=None, changes=[], changed_units=[], continuation=None)
+        self.assertEqual(row, self.check(row))
+        rows = chain(row); rows[3]["ssh_exit"] = 3
+        result, emitted = self.run_probe(self.probe(rows, rc=3))
+        self.assertFalse(result)
+        self.assertEqual(row, emitted.call_args.kwargs["receipt"])
+        for changes in (dict(snapshot_id=p.RESUME_SNAPSHOT_ID), dict(result="PARTIAL_BLOCKED"),
+                        dict(changes=receipt()["changes"], changed_units=list(p.TARGETS))):
+            bad = dict(row, **changes)
+            with self.subTest(changes=changes), self.assertRaises(p.IsolationError):
+                self.check(bad)
+
+    def test_inherited_unverified_gates_remain_failure_evidence(self):
+        row = resume_receipt("PARTIAL_BLOCKED")
+        row["continuation"].update(retained_gates=[p.host_contract.BEN, p.host_contract.TIMER])
+        row["changes"] = [dict(unit=p.host_contract.TIMER, gate="INHERITED_UNVERIFIED", stop="NOT_REQUESTED")]
+        row["changed_units"] = [p.host_contract.TIMER]
+        self.assertEqual(row, self.check(row))
+        row["operation"] = "isolate"; row["continuation"] = None
+        with self.assertRaisesRegex(p.IsolationError, "receipt_changes"):
+            self.check(row)
+
+
+class DriftEvidenceReceiptTests(OfflineCase):
+    def check(self, row):
+        return p.validate_receipt(row, BINDING)
+
+    def order_row(self):
+        return dict(unit=p.host_contract.BEN, property="After", baseline_sha256="b"*64, current_sha256="c"*64)
+
+    def failure_row(self):
+        return dict(kind="UNIT_PROPERTY", unit=p.host_contract.BEN, property="LoadState",
+                    baseline_sha256="b"*64, current_sha256="c"*64)
+
+    def test_bounded_order_only_evidence_is_valid_without_raw_values(self):
+        row = resume_receipt(); row["drift_evidence"]["order_only"] = [self.order_row()]
+        self.assertEqual(row, self.check(row))
+        row["drift_evidence"].update(checks=100000, omitted_count=132)
+        self.assertEqual(row, self.check(row))
+
+    def test_drift_failure_is_retained_but_cannot_be_success(self):
+        row = resume_receipt(); row["drift_evidence"]["first_failure"] = self.failure_row()
+        with self.assertRaisesRegex(p.IsolationError, "receipt_drift_evidence"):
+            self.check(row)
+        row.update(result="PARTIAL_BLOCKED", reason="FILE_DRIFT")
+        self.assertEqual(row, self.check(row))
+        row["drift_evidence"]["first_failure"] = dict(kind="CONFIG_READ", unit=None, property=None,
+                                                      baseline_sha256=None, current_sha256=None)
+        self.assertEqual(row, self.check(row))
+
+    def test_resume_success_requires_positive_strict_bounded_checks(self):
+        row = resume_receipt(); row["drift_evidence"] = None
+        with self.assertRaisesRegex(p.IsolationError, "receipt_drift_missing"):
+            self.check(row)
+        for key, value in [("checks", True), ("checks", 0), ("checks", 100001),
+                           ("omitted_count", True), ("omitted_count", -1), ("omitted_count", 133),
+                           ("order_only", True), ("raw_value", "SECRET")]:
+            row = resume_receipt(); row["drift_evidence"][key] = value
+            with self.subTest(key=key, value=value), self.assertRaisesRegex(p.IsolationError, "receipt_drift_evidence"):
+                self.check(row)
+        for key in resume_receipt()["drift_evidence"]:
+            row = resume_receipt(); del row["drift_evidence"][key]
+            with self.subTest(missing=key), self.assertRaisesRegex(p.IsolationError, "receipt_drift_evidence"):
+                self.check(row)
+
+    def test_order_rows_reject_private_fields_unknown_scope_types_and_duplicates(self):
+        for key, value in [("unit", "/etc/private"), ("property", "ExecStart"),
+                           ("baseline_sha256", "B"*64), ("current_sha256", None),
+                           ("raw_value", "SECRET")]:
+            row = resume_receipt(); order = self.order_row(); order[key] = value
+            row["drift_evidence"]["order_only"] = [order]
+            with self.subTest(key=key), self.assertRaisesRegex(p.IsolationError, "receipt_drift_evidence"):
+                self.check(row)
+        for values in ([self.order_row()]*2, [self.order_row()]*9, [None]):
+            row = resume_receipt(); row["drift_evidence"]["order_only"] = values
+            with self.subTest(values=values), self.assertRaisesRegex(p.IsolationError, "receipt_drift_evidence"):
+                self.check(row)
+
+    def test_failure_rows_reject_forged_diagnostics_and_raw_paths(self):
+        for key, value in [("kind", "RAW_COMMAND"), ("unit", "/etc/systemd/private"),
+                           ("property", "Environment"), ("baseline_sha256", True),
+                           ("current_sha256", "g"*64), ("raw_value", "SECRET")]:
+            row = resume_receipt("PARTIAL_BLOCKED")
+            failure = self.failure_row(); failure[key] = value
+            row["drift_evidence"] = dict(checks=1, order_only=[], omitted_count=0, first_failure=failure)
+            with self.subTest(key=key), self.assertRaisesRegex(p.IsolationError, "receipt_drift_evidence"):
+                self.check(row)
+
+    def test_drift_tamper_breaks_canonical_capture_binding(self):
+        rows = chain(); rows[-1]["receipt"]["drift_evidence"]["checks"] += 1
+        with mock.patch.object(p, "emit") as emitted, self.assertRaisesRegex(p.IsolationError, "receipt_capture_binding"):
+            self.probe(rows).run_once()
+        self.assertFalse(any(call.args[0] == "UNIT_ISOLATION_VERIFIED_RECEIPT" for call in emitted.call_args_list))
+
+
 class ResponseTests(OfflineCase):
     def test_exact_success_chain_exports_only_validated_receipt(self):
         obj = self.probe(); result, emit = self.run_probe(obj)
         self.assertTrue(result)
         self.assertEqual(["UNIT_ISOLATION_CAPTURED", "UNIT_ISOLATION_VERIFIED_RECEIPT"], [call.args[0] for call in emit.call_args_list])
-        self.assertEqual(receipt(), emit.call_args_list[-1].kwargs["receipt"])
+        self.assertEqual(resume_receipt(), emit.call_args_list[-1].kwargs["receipt"])
 
     def test_chain_missing_reordered_duplicated_or_extra_events_fail_closed(self):
         rows = chain()
@@ -661,7 +830,7 @@ class ResponseTests(OfflineCase):
 
     def test_partial_and_blocked_rc3_receipts_are_verified_as_failure_evidence(self):
         for result in ("BLOCKED", "PARTIAL_BLOCKED"):
-            rows = chain(receipt(result)); rows[3]["ssh_exit"] = 3
+            rows = chain(resume_receipt(result)); rows[3]["ssh_exit"] = 3
             success, emit = self.run_probe(self.probe(rows, rc=3))
             self.assertFalse(success)
             self.assertEqual("UNIT_ISOLATION_VERIFIED_RECEIPT", emit.call_args.args[0])
@@ -719,6 +888,13 @@ class ResponseTests(OfflineCase):
 
 
 class PreflightSourceAndCommandTests(OfflineCase):
+    def test_initial_isolate_transport_is_not_an_available_phase(self):
+        obj = p.PreparedIsolation(dict(BINDING), "safe", "host", 71, 72)
+        obj.bind_identity(dict(p.IDENTITY))
+        with mock.patch.object(p, "bounded_process") as run, self.assertRaisesRegex(p.IsolationError, "remote_budget"):
+            obj.call("isolate", 260)
+        run.assert_not_called()
+
     def test_preflight_requires_exact_bound_ready_record_without_stderr(self):
         expected = dict(event="ISOLATION_ROUTE_READY", **BINDING, hostpin="MATCH", guest_network_requests=0)
         obj = self.probe(); obj.ready = False
@@ -740,7 +916,7 @@ class PreflightSourceAndCommandTests(OfflineCase):
         obj = p.PreparedIsolation(dict(BINDING), "safe", "host", 71, 72)
         obj.bind_identity(dict(p.IDENTITY))
         with mock.patch.object(p, "bounded_process", return_value=(0, b"", b"")) as run:
-            obj.call("isolate", 260)
+            obj.call("resume", 260)
         argv = run.call_args.args[0]; kwargs = run.call_args.kwargs
         self.assertEqual(["/usr/bin/ssh", "-F", "/dev/null", "-T", "-i"], argv[:5])
         self.assertEqual("/proc/"+str(os.getpid())+"/fd/71", argv[5])
@@ -754,8 +930,9 @@ class PreflightSourceAndCommandTests(OfflineCase):
         self.assertEqual(["/usr/bin/python3", "-I", "-B", "-c", p.remote_source()], shlex.split(argv[-1]))
         payload = json.loads(kwargs["payload"])
         self.assertEqual(255, payload["seconds"]); self.assertEqual(260, kwargs["timeout"])
-        self.assertEqual(dict(schema="bridge.ibm.unit-isolation.request.v1", operation="isolate", **BINDING,
-                              identity=p.IDENTITY, transport=p.TRANSPORT), payload["request"])
+        self.assertEqual(dict(schema="bridge.ibm.unit-isolation.request.v1", operation="resume", **BINDING,
+                              identity=p.IDENTITY, transport=p.TRANSPORT,
+                              snapshot_id=p.RESUME_SNAPSHOT_ID, snapshot_sha256=p.RESUME_SNAPSHOT_SHA256), payload["request"])
         self.assertLessEqual(len(kwargs["payload"]), 131072)
 
     def test_preflight_has_no_ibm_request(self):
@@ -771,12 +948,12 @@ class PreflightSourceAndCommandTests(OfflineCase):
         obj.bind_identity(dict(p.IDENTITY))
         for timeout, remote_seconds in ((260, 255), (373, 368)):
             with mock.patch.object(p, "bounded_process", return_value=(0, b"", b"")) as run:
-                obj.call("isolate", timeout)
+                obj.call("resume", timeout)
             self.assertEqual(remote_seconds, json.loads(run.call_args.kwargs["payload"])["seconds"])
             self.assertEqual(timeout, run.call_args.kwargs["timeout"])
         for timeout in (259.999, 373.001):
             with mock.patch.object(p, "bounded_process") as run, self.assertRaisesRegex(p.IsolationError, "remote_budget"):
-                obj.call("isolate", timeout)
+                obj.call("resume", timeout)
             run.assert_not_called()
 
     def test_source_pins_match_both_reviewed_local_modules(self):
@@ -786,12 +963,13 @@ class PreflightSourceAndCommandTests(OfflineCase):
 
     def test_actual_reviewed_source_payload_fits_128_kib(self):
         root = Path(p.__file__).parent
-        payload = json.dumps(dict(phase="isolate", binding=BINDING,
+        payload = json.dumps(dict(phase="resume", binding=BINDING,
                                  safe_source=(root/"ibm_ssh_probe_safe.py").read_text(),
                                  host_source=(root/"ibm_unit_isolation.py").read_text(),
                                  host_sha=p.HOST_SOURCE_SHA, seconds=368,
-                                 request=dict(schema="bridge.ibm.unit-isolation.request.v1", operation="isolate",
-                                              **BINDING, identity=p.IDENTITY, transport=p.TRANSPORT))).encode()
+                                 request=dict(schema="bridge.ibm.unit-isolation.request.v1", operation="resume",
+                                              **BINDING, identity=p.IDENTITY, transport=p.TRANSPORT,
+                                              snapshot_id=p.RESUME_SNAPSHOT_ID, snapshot_sha256=p.RESUME_SNAPSHOT_SHA256))).encode()
         self.assertLessEqual(len(payload), p.INPUT_BYTES)
 
     def test_source_mismatch_stops_before_credentials_or_network(self):
@@ -813,6 +991,8 @@ class PreflightSourceAndCommandTests(OfflineCase):
                       "255<=p['seconds']<=368", "seconds=255,limit=16384"):
             self.assertIn(value, source)
         self.assertNotIn("@HOST_SHA@", source); self.assertNotIn("@SAFE_SHA@", source)
+        self.assertNotIn("@RESUME_SNAPSHOT_ID@", source); self.assertNotIn("@RESUME_SNAPSHOT_SHA256@", source)
+        self.assertNotIn("@RESUME_ORIGINAL_HEAD@", source)
 
 
 class MaintenanceTCPBudgetTests(OfflineCase):
@@ -860,7 +1040,8 @@ class MaintenanceTCPBudgetTests(OfflineCase):
 
 class RemoteRouteTests(OfflineCase):
     """Run the Oracle script with fake OS, keyscan, TCP and IBM SSH only."""
-    def remote(self, phase="isolate", bad_pin=False, marked=False, host_rc=0, seconds=368):
+    def remote(self, phase="resume", bad_pin=False, marked=False, host_rc=0, seconds=368,
+               request_changes=None, binding_changes=None):
         public = base64.b64encode(b"fake-ed25519-public-key").decode()
         fingerprint = "SHA256:"+base64.b64encode(hashlib.sha256(base64.b64decode(public)).digest()).decode().rstrip("=")
         safe = "\n".join(["HOST='161.156.86.34'", "VERIFIED_USER='ubuntu'", "KEY='/existing/owner-key'", "KNOWN='/existing/known-hosts'",
@@ -868,16 +1049,23 @@ class RemoteRouteTests(OfflineCase):
                            "import time", "class ProbeBudget:", " def __init__(self, deadline):self.deadline=deadline",
                            " def remaining(self):return self.deadline-time.monotonic()", "def tcp_ready(budget):", " emit('TCP_OPEN',elapsed_seconds=0,attempts=1);return True"])
         host = "reviewed_host_fixture = 'quote-safe'\n"
-        payload = dict(phase=phase, binding=BINDING, safe_source=safe, host_source=host,
+        binding = dict(BINDING, **(binding_changes or {}))
+        payload = dict(phase=phase, binding=binding, safe_source=safe, host_source=host,
                        host_sha=hashlib.sha256(host.encode()).hexdigest(), seconds=28 if phase == "preflight" else seconds,
-                       request=None if phase == "preflight" else dict(operation="isolate", **BINDING))
-        source = p.REMOTE_TEMPLATE.replace("@SAFE_SHA@", hashlib.sha256(safe.encode()).hexdigest()).replace("@HOST_SHA@", payload["host_sha"])
+                       request=None if phase == "preflight" else dict(schema="bridge.ibm.unit-isolation.request.v1",
+                           operation="resume", **binding, identity=p.IDENTITY, transport=p.TRANSPORT,
+                           snapshot_id=p.RESUME_SNAPSHOT_ID, snapshot_sha256=p.RESUME_SNAPSHOT_SHA256))
+        if request_changes is not None:
+            payload["request"].update(request_changes)
+        source = (p.REMOTE_TEMPLATE.replace("@SAFE_SHA@", hashlib.sha256(safe.encode()).hexdigest()).replace("@HOST_SHA@", payload["host_sha"])
+                  .replace("@RESUME_SNAPSHOT_ID@", p.RESUME_SNAPSHOT_ID).replace("@RESUME_SNAPSHOT_SHA256@", p.RESUME_SNAPSHOT_SHA256)
+                  .replace("@RESUME_ORIGINAL_HEAD@", p.RESUME_ORIGINAL_HEAD))
         tree = ast.parse(source)
         # Supply fake bounded run and shared modules; never execute an SSH child.
         tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))
                      and not (isinstance(node, ast.FunctionDef) and node.name == "run")]
         run = mock.Mock(side_effect=[(0, (("@revoked " if marked else "")+"161.156.86.34 ssh-ed25519 "+public+"\n").encode(), b""),
-                                     (host_rc, (json.dumps(receipt("BLOCKED" if host_rc else "ISOLATED_TARGET_SCOPE"), sort_keys=True, separators=(",", ":"))+"\n").encode(), b"")])
+                                     (host_rc, (json.dumps(resume_receipt("BLOCKED" if host_rc else "ISOLATED_TARGET_SCOPE"), sort_keys=True, separators=(",", ":"))+"\n").encode(), b"")])
         fake_sys = types.SimpleNamespace(stdin=types.SimpleNamespace(buffer=io.BytesIO(json.dumps(payload).encode())), exit=sys.exit)
         ns = dict(base64=base64, ctypes=ctypes, fcntl=fcntl, hashlib=hashlib, json=json, math=math,
                   os=os, re=re, shlex=shlex, signal=signal, socket=socket, stat=stat, subprocess=subprocess,
@@ -903,6 +1091,31 @@ class RemoteRouteTests(OfflineCase):
         rc, rows, run, timer = self.remote("preflight")
         self.assertEqual(0, rc); self.assertEqual([dict(event="ISOLATION_ROUTE_READY", **BINDING, hostpin="MATCH", guest_network_requests=0)], rows)
         self.assertEqual(1, run.call_count); self.assertEqual("/usr/bin/ssh-keygen", run.call_args.args[0][0])
+
+    def test_initial_isolate_phase_is_rejected_before_any_transport(self):
+        rc, rows, run, _ = self.remote(phase="isolate")
+        self.assertEqual(3, rc); run.assert_not_called()
+        self.assertEqual("ISOLATION_ROUTE_BLOCKED", rows[-1]["event"])
+
+    def test_prior_run_head_and_wrong_typed_binding_cannot_prepare_or_resume(self):
+        for phase in ("preflight", "resume"):
+            for changes in (dict(run_id="38123951485"), dict(head=p.RESUME_ORIGINAL_HEAD),
+                            dict(head=["a"]*40), dict(attempt=True)):
+                with self.subTest(phase=phase, changes=changes):
+                    rc, rows, run, _ = self.remote(phase=phase, binding_changes=changes)
+                    self.assertEqual(3, rc); run.assert_not_called()
+                    self.assertEqual("ISOLATION_ROUTE_BLOCKED", rows[-1]["event"])
+
+    def test_wrong_operation_snapshot_hash_or_run_never_reaches_ibm(self):
+        for changes in (dict(operation="isolate"), dict(operation="rollback"),
+                        dict(snapshot_id=BINDING["run_id"]+"-"+BINDING["head"][:12]),
+                        dict(snapshot_sha256="c"*64), dict(snapshot_id=None),
+                        dict(head=p.RESUME_ORIGINAL_HEAD), dict(attempt=True), dict(raw_journal="SECRET")):
+            with self.subTest(changes=changes):
+                rc, rows, run, _ = self.remote(request_changes=changes)
+                self.assertEqual(3, rc); self.assertEqual(1, run.call_count)
+                self.assertEqual("ISOLATION_ROUTE_BLOCKED", rows[-1]["event"])
+                self.assertFalse(any(row["event"] == "ISOLATION_SSH_STARTED" for row in rows))
 
     def test_exactly_one_pinned_ibm_ssh_uses_sudo_n_and_existing_key(self):
         rc, rows, run, timer = self.remote()

@@ -14,6 +14,7 @@ import unittest
 from unittest import mock
 
 from ops import ibm_unit_isolation as m
+from ops import ibm_unit_isolation_probe as probe
 
 
 class Clock:
@@ -28,6 +29,13 @@ class Clock:
 def payload():
     return {"schema": m.REQUEST_SCHEMA, "operation": "isolate", "run_id": "123456789",
             "attempt": 1, "head": "a" * 40, "identity": dict(m.IDENTITY), "transport": dict(m.TRANSPORT)}
+
+
+def resume_payload():
+    p = payload()
+    p.update(operation="resume", snapshot_id=m.RESUME_SNAPSHOT_ID,
+             snapshot_sha256=m.RESUME_SNAPSHOT_SHA256)
+    return p
 
 
 class Fixture:
@@ -442,7 +450,7 @@ class IsolationTests(unittest.TestCase):
             self.fx.rows[unit]["Requires"] += " tmp.mount"
             self.fx.rows[unit]["After"] += " tmp.mount systemd-tmpfiles-setup.service"
         result = self.graph_preflight()
-        self.assertEqual("bridge.ibm.unit-isolation.receipt.v5", result["schema"])
+        self.assertEqual("bridge.ibm.unit-isolation.receipt.v6", result["schema"])
         evidence = result["graph_evidence"]
         self.assertFalse(evidence["truncated"])
         self.assertEqual(6, len(evidence["failures"]))
@@ -1118,15 +1126,25 @@ class IsolationTests(unittest.TestCase):
                 self.args = args
                 return 0
         lib = Lib()
-        expected = m.Isolation(payload(), **self.fx.kwargs()).receipt("BLOCKED", "HOST_MISMATCH")
+        p = resume_payload()
+        expected = m.Isolation(p, **self.fx.kwargs()).receipt("BLOCKED", "HOST_MISMATCH")
         stdout = io.StringIO()
         with mock.patch.object(m.os, "geteuid", return_value=0), mock.patch.object(m.os, "getppid", return_value=42), mock.patch.object(m.platform, "system", return_value="Linux"), mock.patch.object(m.signal, "getitimer", return_value=(0.0, 0.0)), mock.patch.object(m.signal, "setitimer") as timer, mock.patch.object(m.signal, "signal"), mock.patch.object(m.ctypes, "CDLL", return_value=lib), mock.patch.object(m, "execute", return_value=expected) as execute, contextlib.redirect_stdout(stdout):
-            self.assertEqual(3, m.main(payload()))
+            self.assertEqual(3, m.main(p))
         self.assertEqual((1, signal.SIGTERM), lib.args)
         self.assertGreater(timer.call_args_list[0].args[1], m.GUEST_SECONDS - 2)
         self.assertLessEqual(timer.call_args_list[0].args[1], m.GUEST_SECONDS - 1)
         self.assertEqual((signal.ITIMER_REAL, 0), timer.call_args_list[-1].args)
         execute.assert_called_once()
+
+    def test_main_rejects_initial_isolation_before_execute(self):
+        lib = mock.Mock()
+        lib.prctl.return_value = 0
+        stdout = io.StringIO()
+        with mock.patch.object(m.os, "geteuid", return_value=0), mock.patch.object(m.os, "getppid", return_value=42), mock.patch.object(m.platform, "system", return_value="Linux"), mock.patch.object(m.signal, "getitimer", return_value=(0.0, 0.0)), mock.patch.object(m.signal, "setitimer"), mock.patch.object(m.signal, "signal"), mock.patch.object(m.ctypes, "CDLL", return_value=lib), mock.patch.object(m, "execute") as execute, contextlib.redirect_stdout(stdout):
+            self.assertEqual(3, m.main(payload()))
+        self.assertEqual("REQUEST_INVALID", json.loads(stdout.getvalue())["reason"])
+        execute.assert_not_called()
 
     def test_rollback_removes_only_owned_gates_no_starts(self):
         self.fx.private_tmp_edges()
@@ -1480,6 +1498,244 @@ class PendingGateFixture(JobFixture):
             if self.reload_hook:
                 self.reload_hook()
         return answer
+
+
+def legacy_raw_drift(op):
+    """Published e599 comparator, used only to reproduce its partial archive."""
+    m.need(not op.fs.exists(op.allow), "COLLISION")
+    m.need(op.inventory() == op.original_paths, "FILE_DRIFT")
+    m.need(op.capture(op.original_paths) == op.records, "FILE_DRIFT")
+    for unit, base in op.baseline.items():
+        row = op.rows[unit]
+        fields = ("Id", "Names", "FragmentPath", "UnitFileState") + m.EDGES
+        if unit.endswith(".service"):
+            fields += ("PrivateTmp",)
+        for field in fields:
+            m.need(field in base and row[field] == base[field], "FILE_DRIFT")
+        drops = set(row["DropInPaths"].split()) - set(op.gate_paths.values())
+        m.need(drops == set(base["DropInPaths"].split()), "FILE_DRIFT")
+    for unit, record in op.own_records.items():
+        m.need(op.fs.record(op.gate_paths[unit]) == record, "FILE_DRIFT")
+
+
+class SnapshotResumeTests(unittest.TestCase):
+    """Real temporary snapshots and ownership journals; every command is fake."""
+    def setUp(self):
+        network = mock.patch("socket.socket.connect", side_effect=AssertionError("LIVE_NETWORK_FORBIDDEN"))
+        network.start(); self.addCleanup(network.stop)
+
+    def partial(self, root, field="After", *, dropins=False):
+        self.fx = PendingGateFixture(root)
+        if dropins:
+            directory = self.fx.root / "etc/systemd/system" / (m.OBSERVER + ".d")
+            directory.mkdir()
+            paths = []
+            for name in ("10-existing.conf", "20-existing.conf"):
+                path = directory / name
+                path.write_text("[Unit]\nDescription=existing\n")
+                paths.append("/" + str(path.relative_to(self.fx.root)))
+            self.fx.rows[m.OBSERVER]["DropInPaths"] = " ".join(paths)
+        self.before_order = self.fx.rows[m.OBSERVER][field]
+        self.fx.reload_hook = lambda: self.fx.rows[m.OBSERVER].__setitem__(
+            field, " ".join(reversed(self.fx.rows[m.OBSERVER][field].split())))
+        original = payload()
+        original.update(run_id=m.RESUME_SNAPSHOT_ID.split("-")[0], head=m.RESUME_ORIGINAL_HEAD)
+        with mock.patch.object(m.Isolation, "drift", legacy_raw_drift):
+            result = m.execute(original, **self.fx.kwargs())
+        self.assertEqual(("PARTIAL_BLOCKED", "FILE_DRIFT"), (result["result"], result["reason"]), result)
+        self.assertEqual([m.BEN, m.TIMER], result["changed_units"])
+        self.assertTrue(all(c["gate"] == "CREATED" and c["stop"] == "NOT_REQUESTED" for c in result["changes"]))
+        self.assertFalse(self.fx.stop_requested)
+        self.assertEqual(m.RESUME_SNAPSHOT_ID, result["snapshot_id"])
+        self.archive = self.fx.root / m.RECOVERY_ROOT.lstrip("/") / result["snapshot_id"]
+        self.snapshot_bytes = (self.archive / "snapshot.json").read_bytes()
+        self.prefix_bytes = {p.name: p.read_bytes() for p in sorted(self.archive.glob("journal-*.json"))}
+        self.assertEqual(["SNAPSHOT_RESTORED", "GATE_INTENT", "GATE_CREATED", "GATE_INTENT", "GATE_CREATED", "PENDING_BEN_RELOAD_INTENT"],
+                         [json.loads(raw)["event"] for raw in self.prefix_bytes.values()])
+        self.old_gates = {p: p.read_bytes() for p in self.gates()}
+        self.assertEqual(2, len(self.old_gates))
+        # Fresh boot: old job and monotonic timestamps are historical only.
+        self.fx.stop(m.TIMER)
+        self.fx.rows[m.BEN]["Job"] = ""
+        self.fx.clock = Clock()
+        self.fx.inactive_exit = {m.BEN: 8001, m.HEALTH: 9002}
+        self.fx.marker_reads = {m.BEN: 0, m.HEALTH: 0}
+        self.fx.calls.clear(); self.fx.diag_calls.clear(); self.fx.stop_requested.clear()
+        self.fx.reloads = 0; self.fx.reload_hook = None
+        self.fixture_sha = m.digest(self.snapshot_bytes)
+        self.assertEqual(result["snapshot_sha256"], self.fixture_sha)
+        self.p = resume_payload()
+        self.p["snapshot_sha256"] = self.fixture_sha
+        self.gate_writes = []
+        return result
+
+    def gates(self):
+        return sorted((self.fx.root / "etc/systemd/system").glob("*.d/90-bridge-ibm-isolation-*.conf"))
+
+    def execute(self, *, started=None):
+        write = m.RootFS.write_new
+        current_boot_job = self.fx.rows[m.BEN]["Job"]
+        def track_write(fs, path, data, **kwargs):
+            if path.endswith(".conf"):
+                self.gate_writes.append(path)
+            return write(fs, path, data, **kwargs)
+        with mock.patch.object(m, "RESUME_SNAPSHOT_SHA256", self.fixture_sha), \
+             mock.patch.object(probe, "RESUME_SNAPSHOT_SHA256", self.fixture_sha), \
+             mock.patch.object(m.RootFS, "write_new", track_write):
+            kwargs = self.fx.kwargs()
+            if started is not None:
+                kwargs["started"] = started
+            result = m.execute(self.p, **kwargs)
+            self.assertIs(result, probe.validate_receipt(result,
+                {key: self.p[key] for key in ("run_id", "head", "attempt")}))
+        self.assertNotIn(self.fx.secret, json.dumps(result))
+        self.assertLess(len(m.canonical(result)), m.MAX_OUTPUT)
+        self.assertNotIn(m.BEN, self.fx.stop_requested)
+        for argv in self.fx.calls:
+            self.assertNotEqual("/usr/bin/docker", argv[0])
+            self.assertFalse(any(action in argv for action in ("start", "restart", "cancel", "Cancel", "CancelJob", "StopUnit", "KillUnit", "disable", "mask")))
+            if not current_boot_job:
+                self.assertFalse(any("/job/7" in part for part in argv))
+        return result
+
+    def assert_no_al_mutation(self, result, reason):
+        self.assertIn(result["result"], ("BLOCKED", "PARTIAL_BLOCKED"), result)
+        self.assertEqual(reason, result["reason"], result)
+        self.assertFalse(self.gate_writes)
+        self.assertFalse(set(self.fx.stop_requested) & {m.OBSERVER, m.CONTROL, m.BRIDGE})
+        self.assertEqual(2, len(self.gates()))
+        self.assertEqual(self.snapshot_bytes, (self.archive / "snapshot.json").read_bytes())
+
+    def test_original_partial_resumes_with_three_missing_gates_and_fresh_boot_evidence(self):
+        for field in ("After", "RequiredBy"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as root:
+                self.partial(root, field)
+                after_order = self.fx.rows[m.OBSERVER][field]
+                result = self.execute()
+                self.assertEqual(("ISOLATED_TARGET_SCOPE", "OK"), (result["result"], result["reason"]), result)
+                self.assertEqual("resume", result["operation"])
+                self.assertEqual(dict(snapshot_id=m.RESUME_SNAPSHOT_ID, original_head=m.RESUME_ORIGINAL_HEAD,
+                    prior_journal_event="PENDING_BEN_RELOAD_INTENT", retained_gates=[m.BEN, m.TIMER], stage="COMPLETE"), result["continuation"])
+                self.assertEqual([m.OBSERVER, m.CONTROL, m.BRIDGE],
+                    [Path(path).parent.name[:-2] for path in self.gate_writes])
+                self.assertEqual(list(m.STOP_ORDER[1:]), self.fx.stop_requested)
+                self.assertEqual([m.BEN, m.TIMER, m.OBSERVER, m.CONTROL, m.BRIDGE], result["changed_units"])
+                self.assertEqual(5, len(self.gates()))
+                self.assertTrue(all(m.RESUME_SNAPSHOT_ID in str(path) for path in self.gates()))
+                self.assertEqual(self.snapshot_bytes, (self.archive / "snapshot.json").read_bytes())
+                for name, raw in self.prefix_bytes.items():
+                    self.assertEqual(raw, (self.archive / name).read_bytes())
+                for path, raw in self.old_gates.items():
+                    self.assertEqual(raw, path.read_bytes())
+                evidence = result["drift_evidence"]
+                self.assertGreater(evidence["checks"], 1)
+                self.assertIsNone(evidence["first_failure"])
+                self.assertEqual(0, evidence["omitted_count"])
+                self.assertEqual([dict(unit=m.OBSERVER, property=field,
+                    baseline_sha256=m.digest(m.canonical(self.before_order)), current_sha256=m.digest(m.canonical(after_order)))], evidence["order_only"])
+                self.assertEqual({m.BEN: 8001, m.HEALTH: 9002}, self.fx.inactive_exit)
+                self.assertTrue(all(count > 1 for count in self.fx.marker_reads.values()))
+                self.assertEqual(7, result["ben_gate"]["boot_job_id"])
+                self.assertTrue(result["ben_gate"]["condition_skipped"])
+                self.assertEqual(self.fixture_sha, result["snapshot_restore_sha256"])
+
+    def test_resume_stops_active_timer_before_al_writes_and_retains_original_stop_order(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.partial(root)
+            self.fx.rows[m.TIMER].update(ActiveState="active", SubState="waiting")
+            result = self.execute()
+            self.assertEqual("ISOLATED_TARGET_SCOPE", result["result"], result)
+            self.assertEqual(list(m.STOP_ORDER), self.fx.stop_requested)
+            events = [json.loads(p.read_bytes()) for p in sorted(self.archive.glob("journal-*.json"))]
+            timer_stop = next(i for i, e in enumerate(events) if e["event"] == "STOP_INTENT" and e["unit"] == m.TIMER)
+            first_al_gate = next(i for i, e in enumerate(events) if e["event"] == "GATE_INTENT" and e["unit"] == m.OBSERVER)
+            self.assertLess(timer_stop, first_al_gate)
+
+    def test_resume_order_normalization_preserves_configuration_and_metadata_refusals(self):
+        faults = {"bytes": ("FILE_DRIFT", "CONFIG_RECORDS"), "mode": ("FILE_DRIFT", "CONFIG_RECORDS"),
+                  "unknown_file": ("FILE_DRIFT", "INVENTORY"), "dropin_order": ("FILE_DRIFT", "DROPIN_ORDER"),
+                  "dependency_change": ("FILE_DRIFT", "UNIT_PROPERTY"), "private_tmp": ("FILE_DRIFT", "UNIT_PROPERTY"),
+                  "scalar": ("FILE_DRIFT", "UNIT_PROPERTY"), "names": ("ALIAS_OR_UNIT_MISMATCH", None),
+                  "duplicate_dependency": ("UNKNOWN_EDGE", None)}
+        for fault, (reason, kind) in faults.items():
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as root:
+                self.partial(root, dropins=fault == "dropin_order")
+                path = self.fx.root / self.fx.rows[m.CONTROL]["FragmentPath"].lstrip("/")
+                row = self.fx.rows[m.OBSERVER]
+                if fault == "bytes":
+                    path.write_bytes(path.read_bytes() + b"# changed\n")
+                elif fault == "mode":
+                    path.chmod(0o600)
+                elif fault == "unknown_file":
+                    directory = self.fx.root / "etc/systemd/system" / (m.CONTROL + ".d")
+                    directory.mkdir(); (directory / "10-unknown.conf").write_text("[Unit]\nDescription=unknown\n")
+                elif fault == "dropin_order":
+                    row["DropInPaths"] = " ".join(reversed(row["DropInPaths"].split()))
+                elif fault == "dependency_change":
+                    row["After"] = "basic.target"
+                elif fault == "private_tmp":
+                    row["PrivateTmp"] = "no"
+                elif fault == "scalar":
+                    row["UnitFileState"] = "disabled"
+                elif fault == "names":
+                    row["Names"] = m.OBSERVER + " alias.service"
+                else:
+                    row["After"] += " basic.target"
+                result = self.execute()
+                self.assert_no_al_mutation(result, reason)
+                self.assertFalse(self.fx.stop_requested)
+                if kind:
+                    failure = result["drift_evidence"]["first_failure"]
+                    self.assertEqual(kind, failure["kind"])
+                    self.assertEqual({"kind", "unit", "property", "baseline_sha256", "current_sha256"}, set(failure))
+
+    def test_resume_snapshot_and_ownership_provenance_fail_before_al_mutation(self):
+        for fault in ("wrong_snapshot", "wrong_hash", "missing_ownership", "unknown_prior_stage", "owned_gate_bytes"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as root:
+                self.partial(root)
+                if fault == "wrong_snapshot":
+                    self.p["snapshot_id"] = "123456789-" + "b" * 12
+                elif fault == "wrong_hash":
+                    self.p["snapshot_sha256"] = "0" * 64
+                elif fault == "missing_ownership":
+                    (self.archive / "journal-004.json").unlink()
+                elif fault == "unknown_prior_stage":
+                    previous = self.prefix_bytes["journal-005.json"]
+                    (self.archive / "journal-006.json").write_bytes(m.canonical(dict(seq=6,
+                        previous_sha256=m.digest(previous), event="UNKNOWN_PRIOR_STAGE")))
+                else:
+                    next(iter(self.old_gates)).write_bytes(b"[Unit]\nDescription=changed\n")
+                result = self.execute()
+                self.assert_no_al_mutation(result, "FILE_DRIFT" if fault == "owned_gate_bytes" else "ROLLBACK_INVALID")
+                self.assertFalse(self.fx.stop_requested)
+                self.assertEqual(0, self.fx.reloads)
+
+    def test_resume_current_boot_races_timeout_and_absolute_budget_remain_fail_closed(self):
+        for fault in ("ben_marker", "health_marker", "health_job", "ben_active", "pending_timeout", "deadline", "reserve"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as root:
+                self.partial(root)
+                started = None
+                if fault in ("ben_marker", "health_marker"):
+                    unit = m.BEN if fault == "ben_marker" else m.HEALTH
+                    def hook(argv, unit=unit):
+                        if argv[-1] == "InactiveExitTimestampMonotonic" and argv[5] == m.job_unit_path(unit) and self.fx.marker_reads[unit] == 1:
+                            self.fx.inactive_exit[unit] += 1
+                    self.fx.hook = hook
+                elif fault == "health_job":
+                    self.fx.rows[m.HEALTH]["Job"] = "13"
+                elif fault == "ben_active":
+                    self.fx.rows[m.BEN].update(ActiveState="active", SubState="running", MainPID="88")
+                elif fault == "pending_timeout":
+                    self.fx.rows[m.BEN]["Job"] = "7"
+                else:
+                    started = -m.GUEST_SECONDS if fault == "deadline" else -150
+                result = self.execute(started=started)
+                reason = "PENDING_GATE_TIMEOUT" if fault == "pending_timeout" else "DEADLINE" if fault == "deadline" else "BUDGET_INSUFFICIENT" if fault == "reserve" else "PENDING_GATE_RACE"
+                self.assert_no_al_mutation(result, reason)
+                self.assertFalse(self.fx.stop_requested)
+                if fault == "pending_timeout":
+                    self.assertGreaterEqual(self.fx.clock.now(), m.PENDING_GATE_SECONDS)
+                    self.assertLess(self.fx.clock.now(), m.PENDING_GATE_SECONDS + 1)
 
 
 class PendingBenGateTests(unittest.TestCase):
