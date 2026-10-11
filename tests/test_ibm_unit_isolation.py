@@ -49,7 +49,8 @@ class Fixture:
         self.reloads = 0
         self.stop_requested = []
         self.version = {"type": "s", "data": "255.4-1ubuntu8.8"}
-        self.secret = "NEVER_EXPORT_INLINE_SECRET"
+        # Public test-only canary, never a credential; proves unit text stays out of receipts.
+        self.redaction_canary = "PUBLIC_FIXTURE_ONLY_REDACTION_CANARY"
         for path in ("etc/systemd/system", "run/systemd/system", "usr/lib/systemd/system", "var/lib", "sys/fs/cgroup", "usr/lib"):
             (self.root / path).mkdir(parents=True, exist_ok=True)
         (self.root / "usr/lib/os-release").write_text('ID=ubuntu\nVERSION_ID="24.04"\n')
@@ -83,7 +84,7 @@ class Fixture:
             if unit == m.CONTROL:
                 row["RequiredBy"] = m.BRIDGE
             self.rows[unit] = row
-            (self.root / row["FragmentPath"].lstrip("/")).write_text("[Unit]\nDescription=fixture\n[Service]\nEnvironment=" + self.secret + "\n")
+            (self.root / row["FragmentPath"].lstrip("/")).write_text("[Unit]\nDescription=fixture\n[Service]\nEnvironment=" + self.redaction_canary + "\n")
             if active and unit != m.TIMER:
                 group = self.root / ("sys/fs/cgroup" + row["ControlGroup"])
                 group.mkdir(parents=True)
@@ -165,7 +166,7 @@ class IsolationTests(unittest.TestCase):
 
     def execute(self, p=None):
         result = m.execute(payload() if p is None else p, **self.fx.kwargs())
-        self.assertNotIn(self.fx.secret, json.dumps(result))
+        self.assertNotIn(self.fx.redaction_canary, json.dumps(result))
         self.assertLess(len(m.canonical(result)), m.MAX_OUTPUT)
         return result
 
@@ -300,7 +301,7 @@ class IsolationTests(unittest.TestCase):
         self.fx.private_tmp_edges()
         for unit in (m.OBSERVER, m.CONTROL, m.BRIDGE, m.HEALTH, m.BEN):
             old = self.fx.rows[unit]["PrivateTmp"]
-            for value in ("true", "false", "YES", "1", "", "disconnected", self.fx.secret):
+            for value in ("true", "false", "YES", "1", "", "disconnected", self.fx.redaction_canary):
                 with self.subTest(unit=unit, value=value):
                     self.fx.rows[unit]["PrivateTmp"] = value
                     self.graph_preflight("METADATA_INVALID")
@@ -323,7 +324,7 @@ class IsolationTests(unittest.TestCase):
     def test_private_tmp_unsupported_versions_cannot_authorize_edges(self):
         self.fx.private_tmp_edges()
         for version in ("", "254", "256", "1255", "2550", "v255", "systemd 255",
-                        "255.", "255\n", " 255", "255-evil", "255.4 secret", self.fx.secret):
+                        "255.", "255\n", " 255", "255-evil", "255.4 secret", self.fx.redaction_canary):
             with self.subTest(version=version):
                 self.fx.calls.clear()
                 self.fx.version = {"type": "s", "data": version}
@@ -398,7 +399,7 @@ class IsolationTests(unittest.TestCase):
         self.fx.private_tmp_edges()
         for field in ("ExecStop", "ExecStopPost"):
             with self.subTest(field=field):
-                self.fx.rows[m.OBSERVER][field] = self.fx.secret
+                self.fx.rows[m.OBSERVER][field] = self.fx.redaction_canary
                 self.assert_blocked(self.execute(), "STOP_HANDLER")
                 self.fx.rows[m.OBSERVER][field] = ""
         self.assertFalse(self.fx.reloads)
@@ -542,7 +543,7 @@ class IsolationTests(unittest.TestCase):
             self.assertEqual(25, failure["omitted_count"])
 
     def test_graph_invalid_values_are_counted_hashed_and_never_echoed(self):
-        invalid = [self.fx.secret, "https://private.example/token", "/bin/sh", "--password=secret",
+        invalid = [self.fx.redaction_canary, "https://private.example/token", "/bin/sh", "--password=secret",
                    "$(curl)", "x;y.service", "secret=token.service", "\u0430.service", "bad\\x00.service"]
         value = " ".join(invalid + ["tmp.mount"])
         self.fx.rows[m.OBSERVER]["Requires"] = value
@@ -625,7 +626,7 @@ class IsolationTests(unittest.TestCase):
         archive = self.fx.root / m.RECOVERY_ROOT.lstrip("/") / result["snapshot_id"]
         self.assertEqual(0o700, archive.stat().st_mode & 0o777)
         self.assertEqual(0o400, (archive / "snapshot.json").stat().st_mode & 0o777)
-        self.assertIn(self.fx.secret.encode(), __import__('base64').b64decode(json.loads((archive / "snapshot.json").read_text())["records"][0]["data"]))
+        self.assertIn(self.fx.redaction_canary.encode(), __import__('base64').b64decode(json.loads((archive / "snapshot.json").read_text())["records"][0]["data"]))
         for unit in m.TARGETS:
             gate = list((self.fx.root / "etc/systemd/system" / (unit + ".d")).glob("*.conf"))[0]
             self.assertEqual(2, len(gate.read_text().splitlines()))
@@ -1588,7 +1589,7 @@ class SnapshotResumeTests(unittest.TestCase):
             result = m.execute(self.p, **kwargs)
             self.assertIs(result, probe.validate_receipt(result,
                 {key: self.p[key] for key in ("run_id", "head", "attempt")}))
-        self.assertNotIn(self.fx.secret, json.dumps(result))
+        self.assertNotIn(self.fx.redaction_canary, json.dumps(result))
         self.assertLess(len(m.canonical(result)), m.MAX_OUTPUT)
         self.assertNotIn(m.BEN, self.fx.stop_requested)
         for argv in self.fx.calls:
@@ -1747,7 +1748,7 @@ class PendingBenGateTests(unittest.TestCase):
 
     def execute(self):
         result = m.execute(payload(), **self.fx.kwargs())
-        self.assertNotIn(self.fx.secret, json.dumps(result))
+        self.assertNotIn(self.fx.redaction_canary, json.dumps(result))
         self.assertLess(len(m.canonical(result)), m.MAX_OUTPUT)
         self.assert_no_ben_mutation()
         return result

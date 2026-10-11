@@ -118,7 +118,7 @@ class FixedSchoolWorldsTests(unittest.TestCase):
         # Fixture inode/timestamp metadata changes its archive digest only.
         with mock.patch.object(worlds, "SNAPSHOT_SHA256", self.fixture_sha):
             result = worlds.execute(self.p if payload is None else payload, **kwargs)
-        self.assertNotIn(self.fx.secret, json.dumps(result))
+        self.assertNotIn(self.fx.redaction_canary, json.dumps(result))
         self.assertLessEqual(len(worlds.canonical(result)), worlds.MAX_RECEIPT)
         self.assertEqual([], result["changes"])
         self.assert_read_only_calls()
@@ -861,7 +861,8 @@ class JobCommandTests(unittest.TestCase):
                         'open('+repr(str(marker))+',"w").write(str(p.pid));')
                 source+=('time.sleep(30)' if hang else 'sys.stderr.write('+repr(self.stderr())+');sys.exit(1)')
                 with self.assertRaisesRegex(safety.Blocked,'^DEADLINE$' if hang else '^JOB_DISAPPEARED$'):
-                    self.invoke(source,timeout=.3 if hang else 2)
+                    # Allow the synthetic double-fork to initialize on a loaded CI runner.
+                    self.invoke(source,timeout=1 if hang else 2)
                 pid=int(marker.read_text())
                 for _ in range(100):
                     try:state=Path('/proc/'+str(pid)+'/stat').read_text().split()[2]

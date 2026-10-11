@@ -219,7 +219,7 @@ class BundleAndPinnedRouteTests(OfflineCase):
         pins={'ops/ibm_unit_isolation_probe.py':'e2b7194fdeef79563442c9a2a30e364fd39356fbdcf2eddc77cac2b18eebe6a5',
               'ops/ibm_ssh_probe_safe.py':p.SAFE_SOURCE_SHA,
               'ops/ibm_unit_isolation.py':p.SOURCE_PINS['ibm_unit_isolation'],
-              'ops/ibm_trial_guest_probe.py':'78ee98cfed0a6055e15ee8645763324a63722695f8e9c5955691545a0c3960d9'}
+              'ops/ibm_trial_guest_probe.py':'cc3b31f566d79a3290b7ef611e977d34ee830fd7de8020a36fadf82d0c926e36'}
         for path,sha in pins.items():self.assertEqual(sha,hashlib.sha256(Path(path).read_bytes()).hexdigest())
         self.assertEqual(32768,p.isolation.OUTPUT_BYTES)
         self.assertEqual((265,378,368,255,240),(p.MIN_MAINTENANCE_SECONDS,p.MAINTENANCE_SECONDS,p.REMOTE_SECONDS,p.SSH_SECONDS,p.GUEST_SECONDS))

@@ -155,5 +155,5 @@ class IsolationControllerTests(unittest.TestCase):
         self.assertIn("inputs.mode == 'stop' && 'ibm-vpc-independent-stop'",workflow)
         self.assertNotIn('continue-on-error',workflow)
     def test_read_only_probe_and_guest_collector_unchanged(self):
-        expected={'ops/ibm_ssh_probe_safe.py':'7711357b7929dcf42d8e49739b16f2e4489191644a0bfb711259f57f182e3bee','ops/ibm_trial_guest_probe.py':'78ee98cfed0a6055e15ee8645763324a63722695f8e9c5955691545a0c3960d9'}
+        expected={'ops/ibm_ssh_probe_safe.py':'7711357b7929dcf42d8e49739b16f2e4489191644a0bfb711259f57f182e3bee','ops/ibm_trial_guest_probe.py':'cc3b31f566d79a3290b7ef611e977d34ee830fd7de8020a36fadf82d0c926e36'}
         for path,digest in expected.items():self.assertEqual(digest,hashlib.sha256(Path(path).read_bytes()).hexdigest())

@@ -475,4 +475,3 @@ def prepare():
             if fd is not None:
                 os.close(fd)
         raise
-
