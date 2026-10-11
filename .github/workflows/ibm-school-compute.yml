@@ -1,0 +1,112 @@
+name: IBM school supervised on-demand compute
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Fixed synthetic worlds, read-only status, or independent ordinary Stop'
+        type: choice
+        options: [status, school_worlds, stop]
+        default: status
+  pull_request:
+    paths:
+      - '.github/workflows/ibm-school-compute.yml'
+      - 'ops/ibm_*.py'
+      - 'tests/test_ibm_*.py'
+      - 'bridge_school_api/ai_worlds.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  # Share power ownership with the earlier review lane. Stop never queues behind it.
+  group: ${{ github.event_name == 'pull_request' && format('ibm-school-compute-contract-{0}', github.event.pull_request.number) || inputs.mode == 'stop' && 'ibm-vpc-independent-stop' || inputs.mode == 'status' && 'ibm-school-compute-status' || 'ibm-vpc-power-controller' }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'school_worlds' && github.ref == 'refs/heads/main' && github.actor == 'olegmed1-art' && github.triggering_actor == 'olegmed1-art') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Offline controller, transport, workload and lifecycle contracts
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v tests.test_ibm_vpc_power tests.test_ibm_vpc_oracle_probe tests.test_ibm_trial_executor tests.test_ibm_trial_guest_probe tests.test_ibm_unit_isolation tests.test_ibm_unit_isolation_probe tests.test_ibm_unit_isolation_controller tests.test_ibm_school_worlds tests.test_ibm_school_worlds_probe tests.test_ibm_school_worlds_controller tests.test_ibm_worlds_validator tests.test_ibm_school_compute_receipt
+          python3 -m py_compile ops/ibm_trial_executor.py ops/ibm_trial_guest_probe.py ops/ibm_ssh_probe_safe.py ops/ibm_unit_isolation.py ops/ibm_unit_isolation_probe.py ops/ibm_school_worlds.py ops/ibm_school_worlds_probe.py ops/ibm_worlds_validator.py ops/ibm_school_compute_receipt.py
+
+  school-worlds:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'school_worlds' && github.ref == 'refs/heads/main' && github.actor == 'olegmed1-art' && github.triggering_actor == 'olegmed1-art' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Fixed workload and bounded ordinary Stop
+        id: controller
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+          ORACLE_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir "$RUNNER_TEMP/ibm-school-compute-control"
+          # Preserve the reviewed controller's own signal/Stop handling. Cancel,
+          # timeout or runner loss still requires the supervising operator's Stop.
+          set +e
+          python3 -u ops/ibm_trial_executor.py school_worlds --ack OWNER_APPROVED_IBM_SCHOOL_WORLDS_10MIN_10USD | tee "$RUNNER_TEMP/ibm-school-compute-control/controller.jsonl"
+          codes=("${PIPESTATUS[@]}")
+          printf 'controller_exit=%s\ncapture_exit=%s\n' "${codes[0]}" "${codes[1]}" >> "$GITHUB_OUTPUT"
+          if [ "${codes[0]}" -ne 0 ]; then exit "${codes[0]}"; fi
+          exit "${codes[1]}"
+      - name: Bind computation artifacts to completed provider containment
+        if: ${{ always() }}
+        env:
+          CONTROLLER_EXIT: ${{ steps.controller.outputs.controller_exit }}
+          CAPTURE_EXIT: ${{ steps.controller.outputs.capture_exit }}
+        run: python3 ops/ibm_school_compute_receipt.py --controller-exit "$CONTROLLER_EXIT" --capture-exit "$CAPTURE_EXIT"
+      - name: Upload verified worlds and lifecycle evidence, never raw control logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ibm-school-worlds-${{ github.run_id }}
+          path: ${{ runner.temp }}/ibm-school-compute-artifact
+          retention-days: 7
+          include-hidden-files: false
+          if-no-files-found: error
+
+  stop:
+    # Independent invocation, token and direct GitHub -> IBM path; no contract or SSH dependency.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'stop' && github.ref == 'refs/heads/main' && github.actor == 'olegmed1-art' && github.triggering_actor == 'olegmed1-art' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Ordinary Stop of the exact existing IBM instance
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+        run: python3 ops/ibm_trial_executor.py stop --ack ORDINARY_STOP_EXACT_IBM
+
+  status:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'status' && github.ref == 'refs/heads/main' && github.actor == 'olegmed1-art' && github.triggering_actor == 'olegmed1-art' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Read exact existing IBM state without power mutation
+        env:
+          IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+        run: python3 ops/ibm_vpc_power.py status --region eu-de --instance-id 02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2 --instance-name bridge-school-compute-ibm
