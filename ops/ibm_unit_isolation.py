@@ -35,7 +35,7 @@ import sys
 import time
 
 REQUEST_SCHEMA = "bridge.ibm.unit-isolation.request.v1"
-RECEIPT_SCHEMA = "bridge.ibm.unit-isolation.receipt.v3"
+RECEIPT_SCHEMA = "bridge.ibm.unit-isolation.receipt.v4"
 IDENTITY = {
     "instance_id": "02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2",
     "instance_name": "bridge-school-compute-ibm",
@@ -607,6 +607,217 @@ def stop_seconds(value):
     return duration
 
 
+JOB_DIAG_SECONDS = 20
+JOB_DIAG_BYTES = 12288
+JOB_DIAG_INPUT_BYTES = 131072  # Includes bounded_command's final 4096-byte detection chunk.
+JOB_DIAG_CALLS = 16
+JOB_DIAG_CALL_BYTES = 4096
+JOB_DIAG_UNITS = frozenset(UNITS) | frozenset((
+    "docker.service", "docker.socket", "network-online.target", "network.target",
+    "systemd-networkd-wait-online.service", "NetworkManager-wait-online.service",
+    "basic.target", "sysinit.target", "system.slice", "shutdown.target", "multi-user.target",
+    "timers.target", "time-set.target", "time-sync.target", "systemd-journald.socket",
+    "-.mount", "tmp.mount", "systemd-tmpfiles-setup.service"))
+JOB_DIAG_TYPES = frozenset(("start", "verify-active", "stop", "reload", "restart", "try-restart", "reload-or-start"))
+JOB_DIAG_EXEC = ("ExecCondition", "ExecStartPre", "ExecStart", "ExecStartPost", "ExecStop", "ExecStopPost")
+JOB_DIAG_GRAPH = ("Before", "After", "Requires", "Wants", "Triggers", "TriggeredBy")
+JOB_DIAG_HANDLER_CODES = frozenset(("UNKNOWN", "DOCKER_STOP_BEN_10S", "DOCKER_REMOVE_BEN_FORCE",
+                                  "DOCKER_RUN_BEN_PINNED", "HEALTHCHECK_EXECUTABLE_ONLY"))
+JOB_DIAG_POLICY = (("Type", "s"), ("Restart", "s"), ("RestartUSec", "t"),
+    ("TimeoutStartUSec", "t"), ("TimeoutStopUSec", "t"), ("TimeoutStopFailureMode", "s"),
+    ("KillMode", "s"), ("KillSignal", "i"), ("SendSIGKILL", "b"), ("FinalKillSignal", "i"))
+JOB_DIAG_STAGES = frozenset(("job", "before", "after", "policy_ben", "policy_health",
+    "blocker_0", "blocker_1", "blocker_2", "blocker_3", "final_ben", "final_health", "final_timer"))
+JOB_DIAG_ERRORS = frozenset(("READ_FAILED", "TIMEOUT", "LIMIT", "METADATA_INVALID"))
+
+
+def job_unit_path(unit):
+    need(unit in JOB_DIAG_UNITS, "METADATA_INVALID")
+    return "/org/freedesktop/systemd1/unit/" + "".join(
+        c if c.isalnum() else "_" + format(ord(c), "02x") for c in unit)
+
+
+def job_id(value):
+    need(type(value) is int and 0 <= value <= 4294967295, "METADATA_INVALID")
+    return value
+
+
+def job_enum(value, allowed):
+    need(type(value) is str and len(value) <= 255, "METADATA_INVALID")
+    return value if value in allowed else "UNKNOWN"
+
+
+def job_handler(raw):
+    # No free-form argv, credential path, shell text or environment is exported.
+    need(type(raw) is list and len(raw) <= 8, "METADATA_INVALID")
+    result = []
+    for row in raw:
+        need(type(row) is list and len(row) == 10 and type(row[0]) is str and type(row[1]) is list
+             and len(row[1]) <= 64 and all(type(a) is str and len(a) <= 1024 for a in row[1])
+             and type(row[2]) is bool and all(type(n) is int for n in row[3:]), "METADATA_INVALID")
+        path, argv = row[:2]
+        code = "UNKNOWN"
+        if path == "/usr/bin/docker" and argv == [path, "stop", "-t", "10", BEN.removesuffix(".service")]:
+            code = "DOCKER_STOP_BEN_10S"
+        elif path == "/usr/bin/docker" and argv == [path, "rm", "-f", "bridge-ben"]:
+            code = "DOCKER_REMOVE_BEN_FORCE"
+        elif path == "/usr/local/sbin/bridge-ben-healthcheck" and argv == [path]:
+            code = "HEALTHCHECK_EXECUTABLE_ONLY"
+        prefix = ["/usr/bin/docker", "run", "--rm", "--name", "bridge-ben", "--pull=never", "--read-only",
+                  "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--pids-limit=256", "--memory=6g",
+                  "--memory-swap=6g", "--cpus=2.0", "--shm-size=512m", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=1g",
+                  "--tmpfs", "/logs:rw,nosuid,nodev,noexec,size=64m", "--tmpfs", "/app/logs:rw,nosuid,nodev,noexec,size=64m",
+                  "-p", "127.0.0.1:8085:8085"]
+        if path == "/usr/bin/docker" and len(argv) == len(prefix) + 1 and argv[:-1] == prefix and re.fullmatch(
+                r"ghcr\.io/lorserker/ben@sha256:[0-9a-f]{64}", argv[-1]):
+            code = "DOCKER_RUN_BEN_PINNED"
+        result.append({"action": code, "ignore_failure": row[2]})
+    return result
+
+
+class JobDiagnostic:
+    """Observe one already refused BEN job. Never resumes maintenance."""
+    def __init__(self, op, observed):
+        self.op, self.clock = op, op.budget.clock
+        self.end = min(op.budget.end, self.clock() + JOB_DIAG_SECONDS)
+        self.calls = self.bytes = 0
+        self.value = dict(status="PARTIAL", observed_job_id=job_id(observed), started_ms=self.elapsed(),
+            finished_ms=self.elapsed(), job=None, before=None, after=None, policies=[], blockers=[],
+            final_states=[], context=[], errors=[], race=None)
+
+    def elapsed(self):
+        return max(0, min(COMPANION_ELAPSED_MAX_MS, int((self.clock() - (self.op.budget.end - GUEST_SECONDS)) * 1000)))
+
+    def command(self, args):
+        left = self.end - self.clock()
+        need(left > 0, "DEADLINE")
+        need(self.calls < JOB_DIAG_CALLS and self.bytes + JOB_DIAG_CALL_BYTES + 4096 <= JOB_DIAG_INPUT_BYTES, "COMMAND_LIMIT")
+        self.calls += 1
+        # Reserve the whole combined stdout/stderr allowance before spawning;
+        # failures, discarded stderr and the final detection read all count.
+        allowance = JOB_DIAG_CALL_BYTES
+        self.bytes += allowance + 4096
+        raw = self.op.runner(["/usr/bin/busctl", "--system", "--no-pager", "--json=short"] + args,
+            timeout=min(3, left), limit=allowance)
+        need(type(raw) is bytes, "METADATA_INVALID")
+        need(len(raw) <= allowance, "COMMAND_LIMIT")
+        need(self.clock() < self.end, "DEADLINE")
+        return raw
+
+    def properties(self, path, interface, specs):
+        raw = self.command(["get-property", "org.freedesktop.systemd1", path,
+                            "org.freedesktop.systemd1." + interface] + [k for k, _ in specs])
+        lines = raw.splitlines()
+        need(len(lines) == len(specs), "METADATA_INVALID")
+        values = {}
+        for line, (name, signature) in zip(lines, specs):
+            value = strict_json(line)
+            need(type(value) is dict and set(value) == {"type", "data"} and value["type"] == signature, "METADATA_INVALID")
+            data = value["data"]
+            need((signature not in {"s", "u", "t", "i", "b"}) or
+                 type(data) is {"s": str, "u": int, "t": int, "i": int, "b": bool}[signature], "METADATA_INVALID")
+            values[name] = data
+        return values
+
+    def job(self, identifier):
+        row = self.properties("/org/freedesktop/systemd1/job/" + str(identifier), "Job",
+                              (("Id", "u"), ("Unit", "(so)"), ("JobType", "s"), ("State", "s")))
+        need(row["Id"] == identifier and row["Unit"] == [BEN, job_unit_path(BEN)], "METADATA_INVALID")
+        return {"id": identifier, "unit": BEN, "type": job_enum(row["JobType"], JOB_DIAG_TYPES),
+                "state": job_enum(row["State"], {"waiting", "running"})}
+
+    def dependencies(self, identifier, method):
+        value = strict_json(self.command(["call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1/job/" + str(identifier),
+                                         "org.freedesktop.systemd1.Job", method]))
+        need(type(value) is dict and set(value) == {"type", "data"} and value["type"] == "a(usssoo)"
+             and type(value["data"]) is list and len(value["data"]) == 1 and type(value["data"][0]) is list, "METADATA_INVALID")
+        rows = value["data"][0]  # busctl call returns a tuple of output arguments.
+        need(len(rows) <= 16, "COMMAND_LIMIT")
+        result = []
+        for row in rows:
+            need(type(row) is list and len(row) == 6, "METADATA_INVALID")
+            jid = job_id(row[0]); need(jid > 0 and row[4] == "/org/freedesktop/systemd1/job/" + str(jid), "METADATA_INVALID")
+            unit = job_enum(row[1], JOB_DIAG_UNITS)
+            need(type(row[5]) is str and len(row[5]) <= 1024, "METADATA_INVALID")
+            if unit != "UNKNOWN":
+                need(row[5] == job_unit_path(unit), "METADATA_INVALID")
+            result.append(dict(id=jid, unit=unit, type=job_enum(row[2], JOB_DIAG_TYPES),
+                               state=job_enum(row[3], {"waiting", "running"})))
+        need(len({r["id"] for r in result}) == len(result), "METADATA_INVALID")
+        return result
+
+    def policy(self, unit):
+        row = self.properties(job_unit_path(unit), "Service", JOB_DIAG_POLICY + tuple((n, "a(sasbttttuii)") for n in JOB_DIAG_EXEC))
+        durations = {}
+        for name in ("RestartUSec", "TimeoutStartUSec", "TimeoutStopUSec"):
+            need(0 <= row[name] <= 18446744073709551615, "METADATA_INVALID")
+            durations[name] = row[name] if row[name] <= 86400000000 else "LONG_OR_INFINITE"
+        need(all(-2147483648 <= row[k] <= 2147483647 for k in ("KillSignal", "FinalKillSignal")), "METADATA_INVALID")
+        return dict(unit=unit, type=job_enum(row["Type"], {"simple", "exec", "forking", "oneshot", "dbus", "notify", "notify-reload", "idle"}),
+            restart=job_enum(row["Restart"], {"no", "always", "on-success", "on-failure", "on-abnormal", "on-watchdog", "on-abort"}),
+            durations=durations, kill_mode=job_enum(row["KillMode"], {"control-group", "mixed", "process", "none"}),
+            kill_signal=row["KillSignal"], final_kill_signal=row["FinalKillSignal"], send_sigkill=row["SendSIGKILL"],
+            stop_failure_mode=job_enum(row["TimeoutStopFailureMode"], {"terminate", "abort", "kill"}),
+            handlers={name: job_handler(row[name]) for name in JOB_DIAG_EXEC})
+
+    def state(self, unit, *, pids=False):
+        row = self.properties(job_unit_path(unit), "Unit", (("Id", "s"), ("ActiveState", "s"), ("SubState", "s"), ("Job", "(uo)")))
+        need(row["Id"] == unit and type(row["Job"]) is list and len(row["Job"]) == 2, "METADATA_INVALID")
+        jid = job_id(row["Job"][0])
+        need(row["Job"][1] == ("/org/freedesktop/systemd1/job/" + str(jid) if jid else "/"), "METADATA_INVALID")
+        result = dict(unit=unit, active=job_enum(row["ActiveState"], SAFE_STATES), sub=job_enum(row["SubState"], SAFE_SUB),
+                      job_id=jid, main_pid_nonzero=None, control_pid_nonzero=None)
+        if pids:
+            data = self.properties(job_unit_path(unit), "Service", (("MainPID", "u"), ("ControlPID", "u")))
+            result.update(main_pid_nonzero=job_id(data["MainPID"]) != 0, control_pid_nonzero=job_id(data["ControlPID"]) != 0)
+        return result
+
+    def step(self, stage, key, call, *, append=False):
+        try:
+            value = call()
+            target = self.value[key] + [value] if append else value
+            trial = dict(self.value, **{key: target})
+            need(len(canonical(trial)) <= JOB_DIAG_BYTES - 2048, "COMMAND_LIMIT")
+            self.value[key] = target
+        except Blocked as exc:
+            if str(exc) in {"CANCELLED", "PARENT_LOST"}:
+                raise
+            code = {"DEADLINE": "TIMEOUT", "COMMAND_LIMIT": "LIMIT", "COMMAND_FAILED": "READ_FAILED"}.get(str(exc), "METADATA_INVALID")
+            self.value["errors"].append(dict(stage=stage, code=code))
+        except Exception:
+            self.value["errors"].append(dict(stage=stage, code="READ_FAILED"))
+
+    def collect(self):
+        identifier = self.value["observed_job_id"]
+        for unit in (BEN, HEALTH, TIMER):
+            if unit not in self.op.rows:
+                continue
+            row = self.op.rows[unit]
+            self.value["context"].append(dict(unit=unit, active=row["ActiveState"], sub=row["SubState"],
+                job_pending=bool(row["Job"]), graph={field: [job_enum(n, JOB_DIAG_UNITS) for n in row[field].split()] for field in JOB_DIAG_GRAPH}))
+        self.step("job", "job", lambda: self.job(identifier))
+        self.step("before", "before", lambda: self.dependencies(identifier, "GetBefore"))
+        self.step("after", "after", lambda: self.dependencies(identifier, "GetAfter"))
+        for unit, stage in ((BEN, "policy_ben"), (HEALTH, "policy_health")):
+            self.step(stage, "policies", lambda u=unit: self.policy(u), append=True)
+        seen = set()
+        for dependency in self.value["before"] or []:
+            unit = dependency["unit"]
+            if unit == "UNKNOWN" or unit in seen:
+                continue
+            if len(seen) == 4:
+                self.value["errors"].append(dict(stage="before", code="LIMIT")); break
+            self.step("blocker_" + str(len(seen)), "blockers", lambda u=unit: self.state(u), append=True)
+            seen.add(unit)
+        for unit, stage in ((BEN, "final_ben"), (HEALTH, "final_health"), (TIMER, "final_timer")):
+            self.step(stage, "final_states", lambda u=unit: self.state(u, pids=u != TIMER), append=True)
+        final = next((row for row in self.value["final_states"] if row["unit"] == BEN), None)
+        self.value["race"] = final["job_id"] != identifier if final else None
+        self.value["finished_ms"] = self.elapsed()
+        self.value["status"] = "PARTIAL" if self.value["errors"] else "COMPLETE"
+        return self.value
+
+
 class Isolation:
     def __init__(self, payload, *, root="/", runner=None, clock=time.monotonic,
                  sleep=time.sleep, host_check=None, started=None):
@@ -619,6 +830,7 @@ class Isolation:
         self.rows = {}
         self.graph_evidence = GraphEvidence()
         self.companion_evidence = None
+        self.job_evidence = None
         self.baseline = {}
         self.conditions = {}
         self.records = []
@@ -737,6 +949,12 @@ class Isolation:
                     "active": row["ActiveState"], "sub": row["SubState"],
                     "job_pending": failed[2], "main_pid_nonzero": failed[3], "control_pid_nonzero": failed[4],
                     "failed_predicates": [name for name, value in zip(COMPANION_PREDICATES, failed) if value]}
+                if (unit == BEN and phase == "PREFLIGHT" and self.p.get("operation") == "isolate"
+                        and failed == (False, False, True, False, False)
+                        and len(row["Job"]) <= 10 and int(row["Job"]) <= 4294967295):
+                    # Observe only this exact refusal. Never resume maintenance,
+                    # cancel a systemd job, or treat a later disappearance as safe.
+                    self.job_evidence = JobDiagnostic(self, int(row["Job"])).collect()
                 raise
             need(self.cgroup_empty(row["ControlGroup"]), "COMPANION_BUSY")
 
@@ -1007,6 +1225,7 @@ class Isolation:
                 "target_states": states, "host_identity": "TRANSPORT_ASSERTION_ONLY",
                 "graph_evidence": self.graph_evidence.value() if self.graph_evidence.failures else None,
                 "companion_evidence": self.companion_evidence if reason == "COMPANION_BUSY" else None,
+                "job_evidence": self.job_evidence if reason == "COMPANION_BUSY" else None,
                 "limitations": LIMITATIONS}
 
 

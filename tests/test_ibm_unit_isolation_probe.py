@@ -43,14 +43,14 @@ LIMITATIONS = ["EXPECTED_MACHINE_ID_UNAVAILABLE", "TRANSPORT_IDENTITY_ASSERTION_
 
 
 def receipt(result="ISOLATED_TARGET_SCOPE"):
-    return dict(schema="bridge.ibm.unit-isolation.receipt.v3", operation="isolate",
+    return dict(schema="bridge.ibm.unit-isolation.receipt.v4", operation="isolate",
                 **BINDING, result=result, reason="OK" if result == "ISOLATED_TARGET_SCOPE" else "INTERNAL_BLOCKED",
                 snapshot_id="39999999999-aaaaaaaaaaaa", snapshot_sha256="b" * 64,
                 snapshot_restore_sha256="b" * 64, changed_units=list(p.TARGETS),
                 changes=[dict(unit=name, gate="VERIFIED", stop="OBSERVED_INACTIVE") for name in p.TARGETS],
                 target_states=[dict(unit=name, active="inactive", sub="dead",
                                     job_pending=False, cgroup_empty=True) for name in p.TARGETS],
-                host_identity="TRANSPORT_ASSERTION_ONLY", limitations=list(LIMITATIONS), graph_evidence=None, companion_evidence=None)
+                host_identity="TRANSPORT_ASSERTION_ONLY", limitations=list(LIMITATIONS), graph_evidence=None, companion_evidence=None, job_evidence=None)
 
 
 def chain(row=None):

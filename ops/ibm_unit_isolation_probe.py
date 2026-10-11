@@ -24,7 +24,7 @@ except ImportError:
     import ibm_trial_guest_probe as read_only
     import ibm_unit_isolation as host_contract
 
-HOST_SOURCE_SHA = "041ca0448ede3882bfd871a3ecc08dc5cbe0daaafcfb632fedb4e663da2c5f2a"
+HOST_SOURCE_SHA = "28ee77ac35e0a7e0a36ca61a60af4f35d92eaadab9341c8caccf1ab249de00ff"
 SAFE_SOURCE_SHA = "7711357b7929dcf42d8e49739b16f2e4489191644a0bfb711259f57f182e3bee"
 PREPARE_SECONDS = 20
 MAINTENANCE_SECONDS = 378
@@ -325,15 +325,97 @@ def validate_companion_evidence(value, result, reason):
          and value["failed_predicates"] == expected, "receipt_companion_predicates")
 
 
+def validate_job_evidence(value, companion, result, reason):
+    if value is None:
+        return
+    h = host_contract
+    def check(ok):
+        need(ok, "receipt_job_evidence")
+    def integer(v, lo=0, hi=4294967295):
+        return type(v) is int and lo <= v <= hi
+    def enum(v, choices):
+        return type(v) is str and v in choices
+    def state(row, *, pids):
+        check(type(row) is dict and set(row) == {"unit", "active", "sub", "job_id", "main_pid_nonzero", "control_pid_nonzero"})
+        check(enum(row["unit"], h.JOB_DIAG_UNITS) and enum(row["active"], h.SAFE_STATES | {"UNKNOWN"})
+              and enum(row["sub"], h.SAFE_SUB | {"UNKNOWN"}) and integer(row["job_id"]))
+        check(all(type(row[k]) is bool if pids else row[k] is None for k in ("main_pid_nonzero", "control_pid_nonzero")))
+    def job(row):
+        check(type(row) is dict and set(row) == {"id", "unit", "type", "state"})
+        check(integer(row["id"], 1) and enum(row["unit"], h.JOB_DIAG_UNITS | {"UNKNOWN"})
+              and enum(row["type"], h.JOB_DIAG_TYPES | {"UNKNOWN"}) and enum(row["state"], {"waiting", "running", "UNKNOWN"}))
+    check(result == "BLOCKED" and reason == "COMPANION_BUSY" and type(companion) is dict
+          and companion["unit"] == h.BEN and companion["phase"] == "PREFLIGHT"
+          and companion["failed_predicates"] == ["JOB_PENDING"])
+    check(type(value) is dict and set(value) == {"status", "observed_job_id", "started_ms", "finished_ms", "job", "before", "after",
+          "policies", "blockers", "final_states", "context", "errors", "race"})
+    check(len(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()) <= h.JOB_DIAG_BYTES)
+    check(enum(value["status"], {"COMPLETE", "PARTIAL"}) and integer(value["observed_job_id"], 1))
+    check(integer(value["started_ms"], companion["elapsed_ms"], h.COMPANION_ELAPSED_MAX_MS)
+          and integer(value["finished_ms"], value["started_ms"], h.COMPANION_ELAPSED_MAX_MS))
+    if value["job"] is not None:
+        job(value["job"]); check(value["job"]["id"] == value["observed_job_id"] and value["job"]["unit"] == h.BEN)
+    for name in ("before", "after"):
+        rows = value[name]
+        if rows is not None:
+            check(type(rows) is list and len(rows) <= 16)
+            for row in rows: job(row)
+            check(len({r["id"] for r in rows}) == len(rows))
+    check(type(value["policies"]) is list and len(value["policies"]) <= 2)
+    for row in value["policies"]:
+        check(type(row) is dict and set(row) == {"unit", "type", "restart", "durations", "kill_mode", "kill_signal", "final_kill_signal", "send_sigkill", "stop_failure_mode", "handlers"})
+        check(enum(row["unit"], h.COMPANIONS) and enum(row["type"], {"simple", "exec", "forking", "oneshot", "dbus", "notify", "notify-reload", "idle", "UNKNOWN"})
+              and enum(row["restart"], {"no", "always", "on-success", "on-failure", "on-abnormal", "on-watchdog", "on-abort", "UNKNOWN"})
+              and enum(row["kill_mode"], {"control-group", "mixed", "process", "none", "UNKNOWN"})
+              and enum(row["stop_failure_mode"], {"terminate", "abort", "kill", "UNKNOWN"}) and type(row["send_sigkill"]) is bool)
+        check(integer(row["kill_signal"], -2147483648, 2147483647) and integer(row["final_kill_signal"], -2147483648, 2147483647))
+        check(type(row["durations"]) is dict and set(row["durations"]) == {"RestartUSec", "TimeoutStartUSec", "TimeoutStopUSec"})
+        check(all(integer(v, 0, 86400000000) or v == "LONG_OR_INFINITE" for v in row["durations"].values()))
+        check(type(row["handlers"]) is dict and set(row["handlers"]) == set(h.JOB_DIAG_EXEC))
+        for commands in row["handlers"].values():
+            check(type(commands) is list and len(commands) <= 8)
+            for command in commands:
+                check(type(command) is dict and set(command) == {"action", "ignore_failure"}
+                      and enum(command["action"], h.JOB_DIAG_HANDLER_CODES) and type(command["ignore_failure"]) is bool)
+    check(len({r["unit"] for r in value["policies"]}) == len(value["policies"]))
+    check(type(value["blockers"]) is list and len(value["blockers"]) <= 4)
+    for row in value["blockers"]:
+        state(row, pids=False)
+        check(any(r["unit"] == row["unit"] for r in value["before"] or []))
+    check(len({r["unit"] for r in value["blockers"]}) == len(value["blockers"]))
+    check(type(value["final_states"]) is list and len(value["final_states"]) <= 3)
+    for row in value["final_states"]:
+        check(type(row) is dict and row.get("unit") in (h.BEN, h.HEALTH, h.TIMER)); state(row, pids=row["unit"] != h.TIMER)
+    check(len({r["unit"] for r in value["final_states"]}) == len(value["final_states"]))
+    final = next((r for r in value["final_states"] if r["unit"] == h.BEN), None)
+    check(type(value["race"]) is bool and value["race"] == (final["job_id"] != value["observed_job_id"]) if final else value["race"] is None)
+    check(type(value["context"]) is list and len(value["context"]) <= 3)
+    for row in value["context"]:
+        check(type(row) is dict and set(row) == {"unit", "active", "sub", "job_pending", "graph"})
+        check(enum(row["unit"], (h.BEN, h.HEALTH, h.TIMER)) and enum(row["active"], h.SAFE_STATES)
+              and enum(row["sub"], h.SAFE_SUB) and type(row["job_pending"]) is bool)
+        check(type(row["graph"]) is dict and set(row["graph"]) == set(h.JOB_DIAG_GRAPH))
+        check(all(type(v) is list and len(v) <= 32 and all(enum(n, h.JOB_DIAG_UNITS | {"UNKNOWN"}) for n in v) for v in row["graph"].values()))
+    check(len({r["unit"] for r in value["context"]}) == len(value["context"]))
+    check(type(value["errors"]) is list and len(value["errors"]) <= 12)
+    for row in value["errors"]:
+        check(type(row) is dict and set(row) == {"stage", "code"} and enum(row["stage"], h.JOB_DIAG_STAGES) and enum(row["code"], h.JOB_DIAG_ERRORS))
+    check((value["status"] == "PARTIAL") == bool(value["errors"]))
+    if value["status"] == "COMPLETE":
+        check(value["job"] is not None and value["before"] is not None and value["after"] is not None
+              and len(value["policies"]) == 2 and len(value["final_states"]) == 3)
+
+
 def validate_receipt(row, binding):
-    keys = {"schema","operation","run_id","head","attempt","result","reason","snapshot_id","snapshot_sha256","changed_units","target_states","host_identity","snapshot_restore_sha256","limitations","changes","graph_evidence","companion_evidence"}
+    keys = {"schema","operation","run_id","head","attempt","result","reason","snapshot_id","snapshot_sha256","changed_units","target_states","host_identity","snapshot_restore_sha256","limitations","changes","graph_evidence","companion_evidence","job_evidence"}
     need(type(row) is dict and set(row) == keys, "receipt_schema")
-    need(row["schema"] == "bridge.ibm.unit-isolation.receipt.v3" and row["operation"] == "isolate", "receipt_schema")
+    need(row["schema"] == "bridge.ibm.unit-isolation.receipt.v4" and row["operation"] == "isolate", "receipt_schema")
     need(all(type(row[k]) is type(v) and row[k] == v for k,v in binding.items()), "receipt_binding")
     need(type(row["result"]) is str and row["result"] in {"ISOLATED_TARGET_SCOPE","BLOCKED","PARTIAL_BLOCKED"}, "receipt_result")
     need(type(row["reason"]) is str and row["reason"] in host_contract.REASONS, "receipt_reason")
     validate_graph_evidence(row["graph_evidence"], row["result"], row["reason"])
     validate_companion_evidence(row["companion_evidence"], row["result"], row["reason"])
+    validate_job_evidence(row["job_evidence"], row["companion_evidence"], row["result"], row["reason"])
     need(row["host_identity"] == "TRANSPORT_ASSERTION_ONLY", "receipt_identity")
     need(type(row["limitations"]) is list and row["limitations"] == host_contract.LIMITATIONS, "receipt_limitations")
     need(row["snapshot_restore_sha256"] is None or (type(row["snapshot_restore_sha256"]) is str and re.fullmatch("[0-9a-f]{64}",row["snapshot_restore_sha256"])), "receipt_restore")

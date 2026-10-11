@@ -442,7 +442,7 @@ class IsolationTests(unittest.TestCase):
             self.fx.rows[unit]["Requires"] += " tmp.mount"
             self.fx.rows[unit]["After"] += " tmp.mount systemd-tmpfiles-setup.service"
         result = self.graph_preflight()
-        self.assertEqual("bridge.ibm.unit-isolation.receipt.v3", result["schema"])
+        self.assertEqual("bridge.ibm.unit-isolation.receipt.v4", result["schema"])
         evidence = result["graph_evidence"]
         self.assertFalse(evidence["truncated"])
         self.assertEqual(6, len(evidence["failures"]))
@@ -757,7 +757,9 @@ class IsolationTests(unittest.TestCase):
                     op.companions(phase)
                 evidence = op.companion_evidence
                 self.assertEqual(phase, evidence["phase"])
-                self.assertEqual(int((self.fx.clock.now() - 98.0) * 1000), evidence["elapsed_ms"])
+                self.assertLessEqual(evidence["elapsed_ms"], int((self.fx.clock.now() - 98.0) * 1000))
+                if phase != "PREFLIGHT":
+                    self.assertEqual(int((self.fx.clock.now() - 98.0) * 1000), evidence["elapsed_ms"])
                 self.assertEqual(deadline, op.budget.end)
                 self.assertEqual(m.BEN, evidence["unit"])
 
@@ -1232,6 +1234,192 @@ class BoundedCommandTests(unittest.TestCase):
                 time.sleep(.01)
             else:
                 self.fail('Owned descendant remained running')
+
+
+class JobFixture(Fixture):
+    """Exact busctl v255 wire format; no systemd or network calls."""
+    def __init__(self, root):
+        super().__init__(root)
+        self.rows[m.BEN]["Job"] = "7"
+        self.diag_calls = []
+        self.diag_hook = None
+        self.dependencies = [[12, "docker.service", "start", "running", "/org/freedesktop/systemd1/job/12", m.job_unit_path("docker.service")]]
+        self.exec_overrides = {}
+
+    def runner(self, argv, **kwargs):
+        if argv[:4] != ["/usr/bin/busctl", "--system", "--no-pager", "--json=short"]:
+            return super().runner(argv, **kwargs)
+        self.calls.append(list(argv)); self.diag_calls.append((list(argv), dict(kwargs))); self.clock.t += .002
+        if self.diag_hook:
+            override = self.diag_hook(argv)
+            if override is not None:
+                return override
+        action, destination, path, interface = argv[4:8]
+        assert destination == "org.freedesktop.systemd1"
+        if action == "call":
+            assert interface == "org.freedesktop.systemd1.Job" and path == "/org/freedesktop/systemd1/job/7"
+            assert argv[8:] in (["GetBefore"], ["GetAfter"])
+            return json.dumps(dict(type="a(usssoo)", data=[self.dependencies if argv[8] == "GetBefore" else []])).encode()
+        assert action == "get-property"
+        rows = []
+        for field in argv[8:]:
+            if interface == "org.freedesktop.systemd1.Job":
+                assert path == "/org/freedesktop/systemd1/job/7"
+                signature, value = {"Id": ("u", 7), "Unit": ("(so)", [m.BEN,m.job_unit_path(m.BEN)]),
+                                    "JobType": ("s", "start"), "State": ("s", "waiting")}[field]
+            else:
+                unit = next(u for u in m.JOB_DIAG_UNITS if path == m.job_unit_path(u))
+                row = self.rows.get(unit, dict(ActiveState="active", SubState="running", Job="12", MainPID="0", ControlPID="0"))
+                if interface == "org.freedesktop.systemd1.Unit":
+                    jid = int(row["Job"] or "0")
+                    signature, value = {"Id":("s",unit), "ActiveState":("s",row["ActiveState"]), "SubState":("s",row["SubState"]),
+                        "Job":("(uo)",[jid,"/org/freedesktop/systemd1/job/"+str(jid) if jid else "/"])}[field]
+                else:
+                    assert interface == "org.freedesktop.systemd1.Service"
+                    if field in m.JOB_DIAG_EXEC:
+                        signature = "a(sasbttttuii)"
+                        argv0 = ["/usr/bin/docker", "stop", "-t", "10", "bridge-ben"] if unit == m.BEN and field == "ExecStop" else None
+                        value = [[argv0[0],argv0,False,0,0,0,0,0,0,0]] if argv0 else []
+                        value = self.exec_overrides.get((unit,field),value)
+                    else:
+                        signature, value = {"Type":("s","simple" if unit==m.BEN else "oneshot"), "Restart":("s","on-failure"),
+                            "RestartUSec":("t",3000000), "TimeoutStartUSec":("t",240000000), "TimeoutStopUSec":("t",30000000),
+                            "TimeoutStopFailureMode":("s","terminate"), "KillMode":("s","control-group"), "KillSignal":("i",15),
+                            "SendSIGKILL":("b",True), "FinalKillSignal":("i",9), "MainPID":("u",int(row["MainPID"])),
+                            "ControlPID":("u",int(row["ControlPID"]))}[field]
+            rows.append(json.dumps(dict(type=signature,data=value)))
+        return ("\n".join(rows)+"\n").encode()
+
+
+class BenJobDiagnosticTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.fx = JobFixture(self.tmp.name)
+
+    def execute(self):
+        with mock.patch.object(m.RootFS,"write_new",side_effect=AssertionError("NO_WRITE")), \
+             mock.patch.object(m.RootFS,"mkdir",side_effect=AssertionError("NO_WRITE")):
+            result = m.execute(payload(), **self.fx.kwargs())
+        self.assertEqual("COMPANION_BUSY",result["reason"])
+        self.assertEqual([],result["changes"]); self.assertIsNone(result["snapshot_id"])
+        self.assertFalse(self.fx.stop_requested); self.assertEqual(0,self.fx.reloads)
+        self.assertLessEqual(len(self.fx.diag_calls),m.JOB_DIAG_CALLS)
+        from ops import ibm_unit_isolation_probe as probe
+        probe.validate_receipt(result,dict(run_id=payload()["run_id"],head=payload()["head"],attempt=1))
+        return result
+
+    def test_exact_job_dependency_handlers_and_no_mutation(self):
+        result=self.execute(); d=result["job_evidence"]
+        self.assertEqual("COMPLETE",d["status"])
+        self.assertEqual(dict(id=7,unit=m.BEN,type="start",state="waiting"),d["job"])
+        self.assertEqual("docker.service",d["before"][0]["unit"])
+        self.assertEqual([],d["after"]);self.assertFalse(d["race"])
+        self.assertEqual([dict(action="DOCKER_STOP_BEN_10S",ignore_failure=False)],d["policies"][0]["handlers"]["ExecStop"])
+        self.assertTrue(all(c[0][4] in ("get-property","call") for c in self.fx.diag_calls))
+        self.assertTrue(all(0<c[1]["timeout"]<=3 and c[1]["limit"]<=m.MAX_OUTPUT for c in self.fx.diag_calls))
+        self.assertLess(len(m.canonical(d)),m.JOB_DIAG_BYTES)
+
+    def test_vanished_job_keeps_original_refusal_and_captures_other_facts(self):
+        def hook(argv):
+            if argv[7]=="org.freedesktop.systemd1.Job":
+                self.fx.rows[m.BEN]["Job"]=""
+                raise m.Blocked("COMMAND_FAILED")
+        self.fx.diag_hook=hook
+        d=self.execute()["job_evidence"]
+        self.assertEqual("PARTIAL",d["status"]);self.assertIsNone(d["job"])
+        self.assertTrue(d["race"]);self.assertEqual(0,d["final_states"][0]["job_id"])
+        self.assertEqual(2,len(d["policies"]))
+
+    def test_replaced_job_is_never_queried_or_retried(self):
+        def hook(argv):
+            if argv[7]=="org.freedesktop.systemd1.Job":self.fx.rows[m.BEN]["Job"]="8"
+        self.fx.diag_hook=hook
+        d=self.execute()["job_evidence"];self.assertTrue(d["race"])
+        self.assertFalse(any("/org/freedesktop/systemd1/job/8" in c[0] for c in self.fx.diag_calls))
+
+    def test_timeout_preserves_absolute_deadline_and_blocks_all_later_commands(self):
+        def hook(argv):
+            self.fx.clock.t+=21
+            raise m.Blocked("DEADLINE")
+        self.fx.diag_hook=hook
+        d=self.execute()["job_evidence"]
+        self.assertEqual(1,len(self.fx.diag_calls));self.assertEqual("PARTIAL",d["status"])
+        self.assertTrue(all(e["code"]=="TIMEOUT" for e in d["errors"]))
+
+    def test_remaining_guest_budget_is_not_reset(self):
+        op=m.Isolation(payload(),**self.fx.kwargs());op.rows=copy.deepcopy(self.fx.rows)
+        self.fx.clock.t=89.5;deadline=op.budget.end
+        d=m.JobDiagnostic(op,7);self.assertEqual(deadline,d.end)
+        self.fx.diag_hook=lambda argv: b"x"*32769
+        d.collect();self.assertEqual(deadline,op.budget.end)
+        self.assertTrue(all(c[1]["timeout"]<=.5 for c in self.fx.diag_calls))
+
+    def test_failed_output_and_hidden_stderr_reserve_the_full_read_allowance(self):
+        op=m.Isolation(payload(),**self.fx.kwargs());op.rows=copy.deepcopy(self.fx.rows)
+        diagnostic=m.JobDiagnostic(op,7)
+        def failure(argv):raise m.Blocked("COMMAND_LIMIT")
+        self.fx.diag_hook=failure
+        for _ in range(m.JOB_DIAG_CALLS):
+            diagnostic.step("job","job",lambda:diagnostic.job(7))
+        self.assertEqual(m.JOB_DIAG_INPUT_BYTES,diagnostic.bytes)
+        self.assertEqual(m.JOB_DIAG_CALLS,len(self.fx.diag_calls))
+        diagnostic.step("job","job",lambda:diagnostic.job(7))
+        self.assertEqual(m.JOB_DIAG_CALLS,len(self.fx.diag_calls))
+        self.assertTrue(all(c[1]["limit"]==4096 for c in self.fx.diag_calls))
+
+    def test_output_and_dependency_limits_are_explicit(self):
+        self.fx.dependencies*=17
+        d=self.execute()["job_evidence"]
+        self.assertIn(dict(stage="before",code="LIMIT"),d["errors"])
+        self.assertIsNone(d["before"])
+
+    def test_raw_overoutput_and_unknown_arguments_are_not_exported(self):
+        secret="SENTINEL_PRIVATE_TOKEN=/home/ubuntu/.ssh/credential"
+        self.fx.exec_overrides[(m.BEN,"ExecStop")]=[["/usr/bin/docker",["/usr/bin/docker","stop",secret],False,0,0,0,0,0,0,0]]
+        result=self.execute();self.assertNotIn(secret,json.dumps(result))
+        self.assertEqual("UNKNOWN",result["job_evidence"]["policies"][0]["handlers"]["ExecStop"][0]["action"])
+
+    def test_unknown_unit_and_type_are_redacted_without_querying_unknown_path(self):
+        self.fx.dependencies=[[12,"secret-account.service","private-job","private-state","/org/freedesktop/systemd1/job/12","/private/path"]]
+        result=self.execute();text=json.dumps(result)
+        self.assertNotIn("secret-account",text);self.assertNotIn("private-",text);self.assertNotIn("/private",text)
+        self.assertEqual("UNKNOWN",result["job_evidence"]["before"][0]["unit"])
+        self.assertFalse(result["job_evidence"]["blockers"])
+
+    def test_wrong_identity_and_wire_shape_remain_partial(self):
+        def hook(argv):
+            if argv[7]=="org.freedesktop.systemd1.Job" and argv[4]=="get-property":
+                return b'{"type":"u","data":true}\n{"type":"(so)","data":["wrong.service","/"]}\n{"type":"s","data":"start"}\n{"type":"s","data":"waiting"}\n'
+        self.fx.diag_hook=hook
+        d=self.execute()["job_evidence"]
+        self.assertIn(dict(stage="job",code="METADATA_INVALID"),d["errors"])
+
+    def test_cancellation_and_parent_loss_are_not_swallowed(self):
+        for reason in ("CANCELLED","PARENT_LOST"):
+            self.fx.diag_hook=lambda argv,r=reason: (_ for _ in ()).throw(m.Blocked(r))
+            result=m.execute(payload(),**self.fx.kwargs())
+            self.assertEqual(reason,result["reason"]);self.assertIsNone(result["job_evidence"])
+            self.assertFalse(self.fx.stop_requested)
+
+    def test_collector_does_not_run_for_health_or_other_failed_predicates(self):
+        self.fx.rows[m.HEALTH]["Job"]="3"
+        result=m.execute(payload(),**self.fx.kwargs())
+        self.assertEqual("COMPANION_BUSY",result["reason"]);self.assertIsNone(result["job_evidence"])
+        self.assertEqual([],self.fx.diag_calls)
+        self.fx.rows[m.HEALTH]["Job"]="";self.fx.rows[m.BEN]["ActiveState"]="active"
+        result=m.execute(payload(),**self.fx.kwargs())
+        self.assertIsNone(result["job_evidence"]);self.assertEqual([],self.fx.diag_calls)
+
+    def test_receipt_tampering_cannot_export_arbitrary_data_or_promote_failure(self):
+        from ops import ibm_unit_isolation_probe as p
+        original=self.execute()
+        for mutate in (lambda d:d.update(extra="PRIVATE"),lambda d:d["job"].update(unit="private.service"),
+                       lambda d:d.update(status="COMPLETE",errors=[dict(stage="job",code="READ_FAILED")]),
+                       lambda d:d.update(race=True),lambda d:d["policies"][0]["handlers"]["ExecStop"][0].update(action="PRIVATE")):
+            row=copy.deepcopy(original);mutate(row["job_evidence"])
+            with self.assertRaises(p.IsolationError):p.validate_receipt(row,dict(run_id=payload()["run_id"],head=payload()["head"],attempt=1))
+        row=copy.deepcopy(original);row["reason"]="OK";row["result"]="ISOLATED_TARGET_SCOPE"
+        with self.assertRaises(p.IsolationError):p.validate_receipt(row,dict(run_id=payload()["run_id"],head=payload()["head"],attempt=1))
 
 
 if __name__ == "__main__":
