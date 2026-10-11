@@ -282,8 +282,11 @@ def trial(client, *, mode="trial", guest_probe=None, maintenance=False, clock=ti
         raise ControlError("trial_mode_invalid")
     if guest_probe is not None and mode != "trial":
         raise ControlError("guest_diagnostic_mode_invalid")
-    if type(maintenance) is not bool or (maintenance and (mode != "trial" or getattr(guest_probe, "kind", None) != "four_unit_isolation")):
+    if type(maintenance) is not bool or (maintenance and (mode != "trial" or getattr(guest_probe, "kind", None) not in {"four_unit_isolation", "school_worlds"})):
         raise ControlError("unit_isolation_scope_invalid")
+    if getattr(guest_probe, "kind", None) == "school_worlds" and not maintenance:
+        raise ControlError("school_worlds_scope_invalid")
+    school_worlds = maintenance and getattr(guest_probe, "kind", None) == "school_worlds"
     original_out = out
     def out(event, **fields):
         # A closed log pipe must not prevent ordinary Stop, including its own logs.
@@ -340,7 +343,7 @@ def trial(client, *, mode="trial", guest_probe=None, maintenance=False, clock=ti
                             out("GUEST_DIAGNOSTIC_SKIPPED", reason="insufficient_stop_reserve")
                             reason = "guest_diagnostic_budget"
                             break
-                        out("UNIT_ISOLATION_STARTED" if maintenance else "GUEST_DIAGNOSTIC_STARTED", **guest_probe.binding,
+                        out("SCHOOL_WORLDS_STARTED" if school_worlds else "UNIT_ISOLATION_STARTED" if maintenance else "GUEST_DIAGNOSTIC_STARTED", **guest_probe.binding,
                             max_seconds=remaining, seconds_since_start=round(clock() - began, 3),
                             stop_submit_by_seconds=DIAGNOSTIC_STOP_SECONDS,
                             confirmation_reserve_seconds=WINDOW_SECONDS - DIAGNOSTIC_STOP_SECONDS)
@@ -352,7 +355,10 @@ def trial(client, *, mode="trial", guest_probe=None, maintenance=False, clock=ti
                             verified = False
                             out("GUEST_DIAGNOSTIC_FAILED", reason="bounded_probe_failed")
                         diagnostic_failed = verified is not True
-                        if maintenance:
+                        if school_worlds:
+                            out("SCHOOL_WORLDS_RESULT", generated=verified is True)
+                            reason = "school_worlds_complete" if verified is True else "school_worlds_blocked"
+                        elif maintenance:
                             out("UNIT_ISOLATION_RESULT", isolated=verified is True)
                             reason = "unit_isolation_complete" if verified is True else "unit_isolation_blocked"
                         else:
@@ -386,11 +392,11 @@ def trial(client, *, mode="trial", guest_probe=None, maintenance=False, clock=ti
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["trial", "manual_console_trial", "stop", "isolate_units"])
+    parser.add_argument("mode", choices=["trial", "manual_console_trial", "stop", "isolate_units", "school_worlds"])
     parser.add_argument("--ack", required=True)
     parser.add_argument("--guest-diagnostic", action="store_true", help="One run-bound ubuntu SSH probe; trial only.")
     args = parser.parse_args(argv)
-    expected = {"trial": "OWNER_APPROVED_10MIN_10USD", "manual_console_trial": "OWNER_APPROVED_MANUAL_CONSOLE_10MIN_10USD", "stop": "ORDINARY_STOP_EXACT_IBM", "isolate_units": "OWNER_APPROVED_IBM_FOUR_UNIT_ISOLATION_10MIN_10USD"}[args.mode]
+    expected = {"trial": "OWNER_APPROVED_10MIN_10USD", "manual_console_trial": "OWNER_APPROVED_MANUAL_CONSOLE_10MIN_10USD", "stop": "ORDINARY_STOP_EXACT_IBM", "isolate_units": "OWNER_APPROVED_IBM_FOUR_UNIT_ISOLATION_10MIN_10USD", "school_worlds": "OWNER_APPROVED_IBM_SCHOOL_WORLDS_10MIN_10USD"}[args.mode]
     if args.ack != expected:
         emit("BLOCKED", reason="ack_mismatch")
         return 3
@@ -416,8 +422,15 @@ def main(argv=None):
                 import ibm_unit_isolation_probe as isolation
             with wall_deadline(isolation.PREPARE_SECONDS):
                 guest_probe = isolation.prepare()
+        if args.mode == "school_worlds":
+            try:
+                from . import ibm_school_worlds_probe as school
+            except ImportError:
+                import ibm_school_worlds_probe as school
+            with wall_deadline(school.PREPARE_SECONDS):
+                guest_probe = school.prepare()
         client = Client(authenticate())
-        if args.mode == "isolate_units":
+        if args.mode in {"isolate_units", "school_worlds"}:
             return trial(client, guest_probe=guest_probe, maintenance=True)
         return trial(client, mode=args.mode, guest_probe=guest_probe) if args.mode != "stop" else ordinary_stop(client, start_uncertain=True)
     except ControlError as exc:
