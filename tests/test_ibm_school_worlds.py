@@ -97,12 +97,21 @@ class FixedSchoolWorldsTests(unittest.TestCase):
 
     def execute(self, *, generator=None, started=None, payload=None, **overrides):
         kwargs = self.fx.kwargs()
-        kwargs.pop("sleep")  # The worlds entrypoint deliberately has no sleep hook.
         if generator is not None:
             kwargs["generator"] = generator
         if started is not None:
             kwargs["started"] = started
         kwargs.update(overrides)
+        old_runner=kwargs['runner']
+        def runner(argv, **kw):
+            if argv[0]=='/usr/bin/busctl' and argv[-1]=='InactiveExitTimestampMonotonic':
+                unit=next((u for u in safety.UNITS if argv[5]==safety.job_unit_path(u)),None)
+                if unit not in (safety.BEN,safety.HEALTH):
+                    self.fx.calls.append(list(argv));self.fx.clock.t+=.002
+                    if self.fx.hook:self.fx.hook(argv)
+                    return json.dumps(dict(type='t',data=getattr(self,'worlds_markers',{}).get(unit,0))).encode()
+            return old_runner(argv,**kw)
+        kwargs['runner']=runner
         # Fixture inode/timestamp metadata changes its archive digest only.
         with mock.patch.object(worlds, "SNAPSHOT_SHA256", self.fixture_sha):
             result = worlds.execute(self.p if payload is None else payload, **kwargs)
@@ -181,8 +190,8 @@ class FixedSchoolWorldsTests(unittest.TestCase):
             restores.append(path)
             return restore(fs, record, path)
 
-        def verified(op):
-            verify_quiet(op)
+        def verified(op,*args,**kwargs):
+            verify_quiet(op,*args,**kwargs)
             trace.append("quiet-and-all-five-gates")
 
         def real_generator(**kwargs):
@@ -479,7 +488,7 @@ class FixedSchoolWorldsTests(unittest.TestCase):
                 verify_quiet = worlds.verify_quiet
                 calls = []
 
-                def final_race(op):
+                def final_race(op,*args,**kwargs):
                     calls.append(True)
                     if len(calls) == 3:
                         if fault == "unit":
@@ -490,7 +499,7 @@ class FixedSchoolWorldsTests(unittest.TestCase):
                             self.corrupt_archive_file(self.archive / sorted(self.journal_before)[-1])
                         else:
                             self.fx.clock.t += worlds.SECONDS
-                    verify_quiet(op)
+                    verify_quiet(op,*args,**kwargs)
 
                 with mock.patch.object(worlds, "verify_quiet", side_effect=final_race):
                     result = self.execute(generator=self.repeated_good)
@@ -604,6 +613,125 @@ class FixedSchoolWorldsTests(unittest.TestCase):
                 self.assert_immutable_evidence()
 
 
+    def boot_runner(self,unit,*,kind='start',state='waiting',manager='255.4'):
+        self.fx.rows[unit]['Job']='7'
+        self.worlds_markers={u:0 for u in safety.UNITS if u not in (safety.BEN,safety.HEALTH)}
+        self.condition_times={u:100 for u in safety.UNITS}
+        original=self.fx.runner
+        def run(argv,**kwargs):
+            if argv[0]=='/usr/bin/busctl' and argv[-1]=='ConditionTimestampMonotonic':
+                self.fx.calls.append(list(argv));self.fx.clock.t+=.002
+                target=next(u for u in safety.UNITS if argv[5]==safety.job_unit_path(u))
+                return json.dumps(dict(type='t',data=self.condition_times[target])).encode()
+            if argv[0]=='/usr/bin/busctl' and argv[5]=='/org/freedesktop/systemd1/job/7':
+                self.fx.calls.append(list(argv));self.fx.clock.t+=.002
+                values=[('u',7),('(so)',[unit,safety.job_unit_path(unit)]),('s',kind),('s',state)]
+                return ('\n'.join(json.dumps(dict(type=t,data=v)) for t,v in values)+'\n').encode()
+            if argv[0]=='/usr/bin/busctl' and argv[-1]=='Version':
+                self.fx.calls.append(list(argv));self.fx.clock.t+=.002
+                return json.dumps(dict(type='s',data=manager)).encode()
+            return original(argv,**kwargs)
+        return run
+
+    def skip_boot_job(self,unit,*,fresh=True):
+        self.fx.rows[unit]['Job']=''
+        for row in self.fx.conditions[unit]:
+            if row[0]=='ConditionPathExists' and '.bridge-ibm-isolation-' in row[3]:row[-1]=-1
+        if fresh:self.condition_times[unit]+=1
+
+    def test_verified_gated_boot_jobs_skip_then_generate_for_each_exact_gated_unit(self):
+        for index,unit in enumerate(safety.GATE_UNITS):
+            with self.subTest(unit=unit):
+                if index:self.make_fixture()
+                runner=self.boot_runner(unit);slept=[]
+                def sleep(seconds):
+                    slept.append(seconds);self.fx.clock.sleep(seconds);self.skip_boot_job(unit)
+                result=self.execute(runner=runner,sleep=sleep)
+                self.assertEqual(('WORLD_GENERATED','OK'),(result['result'],result['reason']),result)
+                self.assertTrue(slept);self.assert_immutable_evidence()
+                g=result['guard_evidence']
+                self.assertEqual(('COMPLETE','VERIFIED',None,[]),(g['phase'],g['gate_check'],g['unit'],g['failed_predicates']))
+                self.assertEqual('SETTLED',g['settle']['status'])
+                job=g['settle']['jobs'][0]
+                self.assertEqual((unit,7,'start','removed',True,True),(job['unit'],job['job_id'],job['type'],job['state'],job['execution_unchanged'],job['condition_skipped']))
+                self.assertGreater(job['condition_after_us'],job['condition_before_us'])
+                self.assertLessEqual(g['settle']['elapsed_ms'],25000)
+                self.assertTrue(all(row['observed'] and row['job_id']==0 and row['cgroup_empty'] for row in g['states']))
+
+    def test_boot_settle_never_admits_health_active_wrong_job_or_unverified_gate(self):
+        cases=('health','active','gate','type','running','version')
+        for index,fault in enumerate(cases):
+            with self.subTest(fault=fault):
+                if index:self.make_fixture()
+                unit=safety.HEALTH if fault=='health' else safety.BEN
+                runner=self.boot_runner(unit,kind='stop' if fault=='type' else 'start',
+                    state='running' if fault=='running' else 'waiting',manager='254' if fault=='version' else '255')
+                if fault=='active':self.fx.rows[unit]['ActiveState']='active'
+                if fault=='gate':self.fx.conditions[safety.BEN]=[]
+                generator=mock.Mock(side_effect=self.repeated_good);sleep=mock.Mock()
+                result=self.execute(runner=runner,sleep=sleep,generator=generator)
+                self.assertEqual('BLOCKED',result['result'],result);generator.assert_not_called();sleep.assert_not_called()
+                self.assertIsNone(result['artifact']);self.assertIsNone(result['output_scope'])
+                g=result['guard_evidence'];self.assertTrue(g['failed_predicates'])
+                if fault in {'health','active','gate','type','running'}:self.assertEqual(unit,g['unit'])
+                if fault=='health':self.assertIn('UNGATED_UNIT',g['failed_predicates'])
+                if fault=='gate':self.assertEqual('FAILED',g['gate_check'])
+                self.assert_read_only_calls()
+
+    def test_condition_completion_immediately_after_job_reply_keeps_earlier_baseline(self):
+        original=self.boot_runner(safety.BEN);completed=[]
+        def runner(argv,**kwargs):
+            raw=original(argv,**kwargs)
+            if argv[0]=='/usr/bin/busctl' and argv[5]=='/org/freedesktop/systemd1/job/7' and not completed:
+                completed.append(True);self.skip_boot_job(safety.BEN)
+            return raw
+        sleep=mock.Mock(side_effect=AssertionError('NO_WAIT_NEEDED'))
+        result=self.execute(runner=runner,sleep=sleep)
+        self.assertEqual(('WORLD_GENERATED','OK'),(result['result'],result['reason']),result)
+        job=result['guard_evidence']['settle']['jobs'][0]
+        self.assertEqual((100,101,True),(job['condition_before_us'],job['condition_after_us'],job['condition_skipped']))
+        sleep.assert_not_called();self.assert_immutable_evidence()
+
+    def test_boot_wait_race_revival_replacement_stale_condition_and_timeout_block(self):
+        cases=('revival','marker','replacement','stale_condition','gate','timeout')
+        for index,fault in enumerate(cases):
+            with self.subTest(fault=fault):
+                if index:self.make_fixture()
+                runner=self.boot_runner(safety.BEN)
+                def sleep(seconds):
+                    self.fx.clock.sleep(seconds)
+                    if fault=='revival':self.fx.rows[safety.BEN].update(ActiveState='active',SubState='running',MainPID='7')
+                    elif fault=='marker':self.fx.inactive_exit[safety.BEN]+=1
+                    elif fault=='replacement':self.fx.rows[safety.BEN]['Job']='8'
+                    elif fault=='stale_condition':self.skip_boot_job(safety.BEN,fresh=False)
+                    elif fault=='gate':self.fx.conditions[safety.BEN]=[]
+                generator=mock.Mock(side_effect=self.repeated_good)
+                result=self.execute(runner=runner,sleep=sleep,generator=generator)
+                expected={'revival':'UNIT_BUSY','marker':'BOOT_EXECUTION_CHANGED','replacement':'BOOT_JOB_CHANGED',
+                    'stale_condition':'BOOT_CONDITION_UNPROVEN','gate':'GATE_NOT_EFFECTIVE','timeout':'BOOT_SETTLE_TIMEOUT'}[fault]
+                self.assertEqual(('BLOCKED',expected),(result['result'],result['reason']),result)
+                generator.assert_not_called();self.assertIsNone(result['artifact']);self.assertIsNone(result['output_scope'])
+                self.assertEqual(safety.BEN,result['guard_evidence']['unit'])
+                self.assertTrue(result['guard_evidence']['failed_predicates'])
+                if fault in {'revival','marker'}:
+                    self.assertIs(False,result['guard_evidence']['settle']['jobs'][0]['execution_unchanged'])
+                self.assertLessEqual(result['elapsed_ms'],60000)
+                self.assert_read_only_calls()
+
+    def test_guard_evidence_clears_stale_later_rows_after_final_metadata_failure(self):
+        original=worlds.verify_quiet;calls=[]
+        def corrupt(op,g,**kwargs):
+            calls.append(True)
+            if len(calls)==3:self.fx.rows[safety.OBSERVER]['Names']='UNKNOWN_ALIAS'
+            return original(op,g,**kwargs)
+        with mock.patch.object(worlds,'verify_quiet',side_effect=corrupt):
+            result=self.execute(generator=self.repeated_good)
+        self.assertEqual('BLOCKED',result['result']);g=result['guard_evidence']
+        self.assertEqual(('FINAL_VERIFY',safety.OBSERVER,'NOT_VERIFIED'),(g['phase'],g['unit'],g['gate_check']))
+        self.assertTrue(all(row['observed'] is False and row['active'] is None for row in g['states']))
+        self.assertTrue(g['failed_predicates']);self.assertEqual([],result['gates_verified'])
+
+
 class ReadOnlyRunnerTests(unittest.TestCase):
     def test_service_mutations_and_other_executables_never_reach_underlying_runner(self):
         runner = mock.Mock(return_value=b"offline")
@@ -647,8 +775,11 @@ class MainLifecycleTests(unittest.TestCase):
 
         library = mock.Mock()
         library.prctl.return_value = prctl_result
-        blocked = dict(schema=worlds.RECEIPT_SCHEMA, result="BLOCKED", reason="REQUEST_INVALID", artifact=None)
-        successful = dict(schema=worlds.RECEIPT_SCHEMA, result="WORLD_GENERATED", reason="OK", artifact=None)
+        blocked = dict(schema=worlds.RECEIPT_SCHEMA, result="BLOCKED", reason="REQUEST_INVALID", artifact=None,
+                       stage="REQUEST",guard_evidence=worlds.new_guard())
+        successful = dict(schema=worlds.RECEIPT_SCHEMA, result="WORLD_GENERATED", reason="OK", artifact=None,
+                          stage="COMPLETE",guard_evidence=worlds.new_guard())
+        successful['guard_evidence']['phase']='COMPLETE'
 
         def execute(p, **_kwargs):
             if p is None:
