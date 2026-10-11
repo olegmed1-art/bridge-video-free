@@ -9,6 +9,9 @@ import copy
 import hashlib
 import io
 import json
+import os
+import sys
+import time
 from pathlib import Path
 import signal
 import tempfile
@@ -625,6 +628,7 @@ class FixedSchoolWorldsTests(unittest.TestCase):
                 return json.dumps(dict(type='t',data=self.condition_times[target])).encode()
             if argv[0]=='/usr/bin/busctl' and argv[5]=='/org/freedesktop/systemd1/job/7':
                 self.fx.calls.append(list(argv));self.fx.clock.t+=.002
+                if self.fx.rows[unit]['Job']!='7':raise worlds.MissingJob(0,b'')
                 values=[('u',7),('(so)',[unit,safety.job_unit_path(unit)]),('s',kind),('s',state)]
                 return ('\n'.join(json.dumps(dict(type=t,data=v)) for t,v in values)+'\n').encode()
             if argv[0]=='/usr/bin/busctl' and argv[-1]=='Version':
@@ -718,6 +722,61 @@ class FixedSchoolWorldsTests(unittest.TestCase):
                 self.assertLessEqual(result['elapsed_ms'],60000)
                 self.assert_read_only_calls()
 
+    def disappearing_job_runner(self,*,property_index=0,fault=None,disappear_on=3):
+        original=self.boot_runner(safety.BEN);self.job_reads=[]
+        self.condition_times[safety.BEN]=0
+        def runner(argv,**kwargs):
+            raw=original(argv,**kwargs)
+            if worlds.exact_job_read(argv):
+                self.job_reads.append(tuple(argv))
+                if len(self.job_reads)==disappear_on:
+                    self.skip_boot_job(safety.BEN,fresh=fault!='stale_condition')
+                    if fault=='revival':self.fx.rows[safety.BEN].update(ActiveState='active',SubState='running',MainPID='7')
+                    if fault=='marker':self.fx.inactive_exit[safety.BEN]+=1
+                    if fault=='replacement':self.fx.rows[safety.BEN]['Job']='8'
+                    if fault=='still_present':self.fx.rows[safety.BEN]['Job']='7'
+                    if fault=='health':self.fx.rows[safety.HEALTH]['Job']='8'
+                    if fault=='gate':self.fx.conditions[safety.BEN]=[]
+                    if fault in {'COMMAND_FAILED','COMMAND_LIMIT','DEADLINE'}:raise safety.Blocked(fault)
+                    prefix=b''.join(raw.splitlines(keepends=True)[:property_index])
+                    if fault=='bad_prefix':prefix=b'{"type":"u","data":999}\n'
+                    raise worlds.MissingJob(property_index,prefix)
+            return raw
+        return runner
+
+    def test_real_job_disappears_during_each_property_then_fresh_skip_generates(self):
+        for index in range(4):
+            with self.subTest(property_index=index):
+                if index:self.make_fixture()
+                result=self.execute(runner=self.disappearing_job_runner(property_index=index))
+                self.assertEqual(('WORLD_GENERATED','OK'),(result['result'],result['reason']),result)
+                self.assertEqual(3,len(self.job_reads))
+                g=result['guard_evidence'];job=g['settle']['jobs'][0]
+                self.assertEqual(('SETTLED',3),(g['settle']['status'],g['settle']['polls']))
+                self.assertEqual((0,1,True,'removed'),(job['condition_before_us'],job['condition_after_us'],job['condition_skipped'],job['state']))
+                self.assertEqual(2,len([a for a in self.fx.calls if a[-1]=='ConditionTimestampMonotonic']))
+                self.assert_immutable_evidence()
+
+    def test_missing_at_initial_admission_never_creates_start_waiting_provenance(self):
+        generator=mock.Mock(side_effect=self.repeated_good)
+        result=self.execute(runner=self.disappearing_job_runner(disappear_on=1),generator=generator)
+        self.assert_blocked(result,'JOB_DISAPPEARED',before_scope=True)
+        self.assertEqual([],result['guard_evidence']['settle']['jobs']);generator.assert_not_called()
+
+    def test_missing_job_refresh_keeps_every_safety_predicate_and_other_failures_block(self):
+        faults={'revival':'UNIT_BUSY','marker':'BOOT_EXECUTION_CHANGED','replacement':'BOOT_JOB_CHANGED',
+            'still_present':'BOOT_JOB_CHANGED','health':'UNIT_BUSY','gate':'GATE_NOT_EFFECTIVE',
+            'stale_condition':'BOOT_CONDITION_UNPROVEN','bad_prefix':'BOOT_JOB_INVALID',
+            'COMMAND_FAILED':'COMMAND_FAILED','COMMAND_LIMIT':'COMMAND_LIMIT','DEADLINE':'BOOT_SETTLE_TIMEOUT'}
+        for index,(fault,reason) in enumerate(faults.items()):
+            with self.subTest(fault=fault):
+                if index:self.make_fixture()
+                generator=mock.Mock(side_effect=self.repeated_good)
+                result=self.execute(runner=self.disappearing_job_runner(property_index=1,fault=fault),generator=generator)
+                self.assert_blocked(result,reason,before_scope=True);generator.assert_not_called()
+                self.assertIn(reason,result['guard_evidence']['failed_predicates'])
+                self.assert_immutable_evidence()
+
     def test_guard_evidence_clears_stale_later_rows_after_final_metadata_failure(self):
         original=worlds.verify_quiet;calls=[]
         def corrupt(op,g,**kwargs):
@@ -758,6 +817,61 @@ class ReadOnlyRunnerTests(unittest.TestCase):
         for argv in allowed:
             self.assertEqual(b"offline", guarded(argv, timeout=1, limit=12))
         self.assertEqual([mock.call(argv, timeout=1, limit=12) for argv in allowed], runner.call_args_list)
+
+
+class JobCommandTests(unittest.TestCase):
+    argv=['/usr/bin/busctl','--system','--json=short','get-property','org.freedesktop.systemd1',
+        '/org/freedesktop/systemd1/job/149','org.freedesktop.systemd1.Job',*worlds.JOB_PROPERTIES]
+
+    def invoke(self,source,*,timeout=2,limit=4096):
+        popen=worlds.subprocess.Popen
+        def controlled(args,**kwargs):
+            self.assertTrue(kwargs['start_new_session'])
+            self.assertIn('prctl(1,signal.SIGKILL)',args[-1])
+            replacement=[sys.executable,'-I','-B','-c',source]
+            args=list(args);args[-1]=args[-1].replace(repr(self.argv),repr(replacement))
+            return popen(args,**kwargs)
+        with mock.patch.object(worlds.subprocess,'Popen',side_effect=controlled):
+            return worlds.bounded_job_command(self.argv,timeout=timeout,limit=limit)
+
+    def stderr(self,name='Id',path=None):
+        return "Failed to get property "+name+" on interface org.freedesktop.systemd1.Job: Unknown object '"+(path or self.argv[5])+"'.\n"
+
+    def test_exact_exit1_unknown_object_and_partial_output_are_classified_only(self):
+        for index,name in enumerate(worlds.JOB_PROPERTIES):
+            with self.subTest(property=name),self.assertRaises(worlds.MissingJob) as caught:
+                self.invoke('import sys;sys.stdout.write("partial");sys.stderr.write('+repr(self.stderr(name))+');sys.exit(1)')
+            self.assertEqual((index,b'partial','JOB_DISAPPEARED'),(caught.exception.index,caught.exception.prefix,str(caught.exception)))
+        for error,code in ((self.stderr()+'extra\n',1),(self.stderr(path='/org/freedesktop/systemd1/job/150'),1),
+             ('Access denied\n',1),('Permission denied\n',1),(self.stderr(),2),(self.stderr(),0),('',1)):
+            with self.subTest(error=error,code=code),self.assertRaisesRegex(safety.Blocked,'^COMMAND_FAILED$'):
+                self.invoke('import sys;sys.stderr.write('+repr(error)+');sys.exit('+str(code)+')')
+        self.assertEqual(b'{}\n',self.invoke('print("{}")'))
+        with self.assertRaisesRegex(safety.Blocked,'^COMMAND_FAILED$'):
+            self.invoke('import os,signal;os.kill(os.getpid(),signal.SIGTERM)')
+
+    def test_job_output_limit_timeout_and_owned_descendants_cleanup(self):
+        with self.assertRaisesRegex(safety.Blocked,'^COMMAND_LIMIT$'):
+            self.invoke('import sys;sys.stderr.write("x"*10000)',limit=512)
+        for hang in (False,True):
+            with self.subTest(hang=hang),tempfile.TemporaryDirectory() as tmp:
+                marker=Path(tmp)/'pid'
+                source=('import subprocess,sys,time;p=subprocess.Popen(['+repr(sys.executable)+',"-c","import time;time.sleep(30)"],'
+                        'stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);'
+                        'open('+repr(str(marker))+',"w").write(str(p.pid));')
+                source+=('time.sleep(30)' if hang else 'sys.stderr.write('+repr(self.stderr())+');sys.exit(1)')
+                with self.assertRaisesRegex(safety.Blocked,'^DEADLINE$' if hang else '^JOB_DISAPPEARED$'):
+                    self.invoke(source,timeout=.3 if hang else 2)
+                pid=int(marker.read_text())
+                for _ in range(100):
+                    try:state=Path('/proc/'+str(pid)+'/stat').read_text().split()[2]
+                    except (FileNotFoundError,ProcessLookupError):break
+                    if state=='Z':break
+                    time.sleep(.01)
+                else:self.fail('Owned job-reader descendant remained running')
+        with mock.patch.object(worlds.subprocess,'Popen') as launch,self.assertRaisesRegex(safety.Blocked,'READ_ONLY_COMMAND_REQUIRED'):
+            worlds.bounded_job_command(['/usr/bin/systemctl','stop',safety.BEN],timeout=1)
+        launch.assert_not_called()
 
 
 class MainLifecycleTests(unittest.TestCase):

@@ -123,6 +123,7 @@ class ContextTests(OfflineCase):
             with self.subTest(key=key),self.assertRaises(p.WorldsError):self.ctx(dict(ENV,**{key:value}))
         self.assertIn("38125459269",p.CONSUMED_RUNS)
         self.assertIn("38127229051",p.CONSUMED_RUNS)
+        self.assertIn("38128881557",p.CONSUMED_RUNS)
         for run in p.CONSUMED_RUNS:
             with self.subTest(run=run),self.assertRaises(p.WorldsError):self.ctx(dict(ENV,GITHUB_RUN_ID=run))
         with self.assertRaisesRegex(p.WorldsError,"checkout_binding"):self.ctx(head="b"*40)
@@ -302,6 +303,64 @@ class OneShotAndArtifactTests(OfflineCase):
         self.assertNotIn(DATA,str(emitted.call_args_list))
         with self.assertRaisesRegex(p.WorldsError,'not_ready_or_replay'):obj.run_once()
         obj.call.assert_called_once()
+
+    def test_actual_disappearing_job_receipts_capture_and_export_without_relaxing_guards(self):
+        from tests.test_ibm_school_worlds import FixedSchoolWorldsTests
+        cases = [(dict(property_index=index), "OK") for index in range(4)]
+        cases.append((dict(disappear_on=1), "JOB_DISAPPEARED"))
+        cases.extend((dict(property_index=1, fault=fault), reason) for fault, reason in {
+            "COMMAND_FAILED": "COMMAND_FAILED", "COMMAND_LIMIT": "COMMAND_LIMIT",
+            "DEADLINE": "BOOT_SETTLE_TIMEOUT", "revival": "UNIT_BUSY",
+            "marker": "BOOT_EXECUTION_CHANGED", "replacement": "BOOT_JOB_CHANGED",
+            "still_present": "BOOT_JOB_CHANGED", "health": "UNIT_BUSY",
+            "gate": "GATE_NOT_EFFECTIVE", "stale_condition": "BOOT_CONDITION_UNPROVEN",
+            "bad_prefix": "BOOT_JOB_INVALID",
+        }.items())
+        for options, reason in cases:
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as output:
+                harness = FixedSchoolWorldsTests(methodName="runTest")
+                self.addCleanup(harness.doCleanups); harness.setUp()
+                row = harness.execute(runner=harness.disappearing_job_runner(**options))
+                success = reason == "OK"
+                self.assertEqual(("WORLD_GENERATED" if success else "BLOCKED", reason),
+                                 (row["result"], row["reason"]))
+                harness.assert_immutable_evidence()
+                binding = {key: row[key] for key in B}
+                obj = p.PreparedWorlds(binding, "safe fixture", "host fixture", 71, 72)
+                obj.ready = True; obj.bind_identity(dict(p.IDENTITY))
+                obj.call = mock.Mock(return_value=(0 if success else 3, encoded(chain(row)), b""))
+                with mock.patch.object(p, "RESUME_SNAPSHOT_SHA256", harness.fixture_sha), \
+                     mock.patch.dict(os.environ, {"RUNNER_TEMP": output}):
+                    ok, emitted = self.run_probe(obj)
+                    self.assertEqual(success, ok)
+                    if success:
+                        # A raced-away object alone cannot replace retained
+                        # admission and fresh condition/quiet-state evidence.
+                        guard = row["guard_evidence"]
+                        self.assertEqual(("COMPLETE", "VERIFIED", "SETTLED"),
+                                         (guard["phase"], guard["gate_check"], guard["settle"]["status"]))
+                        job = guard["settle"]["jobs"][0]
+                        self.assertEqual(("start", "removed", True, True),
+                                         (job["type"], job["state"], job["execution_unchanged"], job["condition_skipped"]))
+                        self.assertGreater(job["condition_after_us"], job["condition_before_us"])
+                        for mutation in (dict(condition_skipped=False), dict(execution_unchanged=False),
+                                         dict(condition_after_us=job["condition_before_us"])):
+                            bad = copy.deepcopy(row); bad["guard_evidence"]["settle"]["jobs"][0].update(mutation)
+                            with self.assertRaises(p.WorldsError):
+                                p.validate_receipt(bad, binding)
+                root = Path(obj.output_path)
+                exported = json.loads((root/"receipt.json").read_bytes())
+                self.assertEqual(row["guard_evidence"], exported["guard_evidence"])
+                self.assertEqual(reason, exported["reason"])
+                self.assertNotIn(DATA, str(emitted.call_args_list))
+                if success:
+                    self.assertEqual(WORLDS, (root/"worlds.json").read_bytes())
+                    self.assertEqual({"worlds.json", "worlds.pbn", "input.json", "receipt.json", "manifest.json"},
+                                     {item.name for item in root.iterdir()})
+                    self.assertNotIn("data", exported["artifact"])
+                else:
+                    self.assertEqual({"receipt.json", "manifest.json"}, {item.name for item in root.iterdir()})
+                    self.assertIsNone(exported["artifact"])
 
     def test_valid_blocked_receipt_is_saved_without_worlds(self):
         obj=self.probe(chain(receipt('BLOCKED')),rc=3)
@@ -512,6 +571,37 @@ class GuardReceiptTests(OfflineCase):
         exported = json.loads((Path(obj.output_path)/"receipt.json").read_bytes())
         self.assertEqual(guard, exported["guard_evidence"])
         self.assertEqual({"receipt.json", "manifest.json"}, {item.name for item in Path(obj.output_path).iterdir()})
+
+    def test_job_read_blocked_categories_are_exact_and_cannot_authorize_success(self):
+        categories = {"COMMAND_FAILED", "COMMAND_LIMIT", "JOB_DISAPPEARED"}
+        self.assertTrue(categories <= p.host_contract.REASONS)
+        self.assertTrue(categories <= p.host_contract.GUARD_PREDICATES)
+        for reason in sorted(categories):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as output:
+                row = receipt("BLOCKED")
+                guard = guard_evidence()
+                guard.update(phase="SETTLING", unit=p.host_contract.safety.BEN,
+                             failed_predicates=[reason])
+                guard["states"][-1]["job_id"] = 17
+                guard["settle"].update(status="BLOCKED")
+                row.update(reason=reason, guard_evidence=guard)
+                obj = self.probe(chain(row), rc=3)
+                with mock.patch.dict(os.environ, {"RUNNER_TEMP": output}):
+                    self.assertFalse(self.run_probe(obj)[0])
+                exported = json.loads((Path(obj.output_path)/"receipt.json").read_bytes())
+                self.assertEqual(reason, exported["reason"])
+                self.assertEqual(guard, exported["guard_evidence"])
+                self.assertEqual({"receipt.json", "manifest.json"},
+                                 {item.name for item in Path(obj.output_path).iterdir()})
+                with self.assertRaises(p.WorldsError):
+                    self.validate(reason=reason)
+                for malformed in (reason.lower(), reason + " ", reason + "_RAW"):
+                    bad = copy.deepcopy(row); bad["reason"] = malformed
+                    with self.assertRaisesRegex(p.WorldsError, "receipt_reason"):
+                        p.validate_receipt(bad, B)
+                    bad = copy.deepcopy(row); bad["guard_evidence"]["failed_predicates"] = [malformed]
+                    with self.assertRaisesRegex(p.WorldsError, "receipt_guard_evidence"):
+                        p.validate_receipt(bad, B)
 
 
 if __name__=='__main__':unittest.main()

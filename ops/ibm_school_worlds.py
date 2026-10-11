@@ -15,6 +15,8 @@ import json
 import os
 import platform
 import re
+import selectors
+import subprocess
 import signal
 import sys
 import zlib
@@ -48,7 +50,7 @@ REASONS = frozenset(('OK','REQUEST_INVALID','ROOT_REQUIRED','PARENT_LOST','DEADL
     'SNAPSHOT_INVALID','UNIT_BUSY','CGROUP_NOT_EMPTY','GATE_NOT_EFFECTIVE','FILE_DRIFT','COLLISION',
     'INVALID_RESULT','ARTIFACT_INVALID','READ_ONLY_COMMAND_REQUIRED','PATH_UNSAFE','ARCHIVE_FAILED',
     'FILE_LIMIT','RESTORE_MISMATCH','METADATA_INVALID','SAFETY_GUARD_BLOCKED','INTERNAL_BLOCKED',
-    'BOOT_SETTLE_TIMEOUT','BOOT_JOB_INVALID','BOOT_JOB_CHANGED','BOOT_EXECUTION_CHANGED','BOOT_CONDITION_UNPROVEN'))
+    'BOOT_SETTLE_TIMEOUT','BOOT_JOB_INVALID','BOOT_JOB_CHANGED','BOOT_EXECUTION_CHANGED','BOOT_CONDITION_UNPROVEN','COMMAND_FAILED','COMMAND_LIMIT','JOB_DISAPPEARED'))
 
 def canonical(value):
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)+'\n').encode()
@@ -70,6 +72,97 @@ def validate_request(payload):
         and type(payload['transport']) is dict and payload['transport']==safety.TRANSPORT,'REQUEST_INVALID')
     require(payload['snapshot_id']==SNAPSHOT_ID and payload['snapshot_sha256']==SNAPSHOT_SHA256,'REQUEST_INVALID')
     return payload
+
+JOB_PROPERTIES=('Id','Unit','JobType','State')
+
+class MissingJob(safety.Blocked):
+    def __init__(self,index,prefix):
+        super().__init__('JOB_DISAPPEARED')
+        self.index=index;self.prefix=prefix
+
+def exact_job_read(argv):
+    return (len(argv)==11 and argv[:5]==['/usr/bin/busctl','--system','--json=short','get-property','org.freedesktop.systemd1']
+        and re.fullmatch(r'/org/freedesktop/systemd1/job/[1-9][0-9]{0,9}',argv[5]) is not None
+        and int(argv[5].rsplit('/',1)[1])<=4294967295
+        and argv[6]=='org.freedesktop.systemd1.Job' and tuple(argv[7:])==JOB_PROPERTIES)
+
+def bounded_job_command(argv, *, timeout, limit=safety.MAX_OUTPUT):
+    """Exact Job reads only; categorize bounded stderr, never export it.
+
+    The Python exec shim installs PDEATHSIG before exec. start_new_session gives
+    this command a distinct group; timeout cleanup cannot kill ssh/systemd/units.
+    """
+    require(timeout > 0 and timeout <= 3 and limit <= safety.MAX_OUTPUT, "DEADLINE")
+    require(exact_job_read(argv), 'READ_ONLY_COMMAND_REQUIRED')
+    limit=min(limit,4096)
+    parent = os.getpid()
+    boot = ("import ctypes,os,signal; p=" + str(parent) + ";"
+            "assert ctypes.CDLL(None).prctl(1,signal.SIGKILL)==0 and os.getppid()==p;"
+            "a=" + repr(list(argv)) + ";os.execv(a[0],a)")
+    selector = selectors.DefaultSelector()
+    try:
+        child = subprocess.Popen([sys.executable, "-I", "-B", "-c", boot],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 start_new_session=True,
+                                 env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+                                      "SYSTEMD_PAGER": "", "SYSTEMD_COLORS": "0"})
+    except BaseException:
+        selector.close()
+        raise
+    output = bytearray(); error = bytearray()
+    size = 0
+    end = time.monotonic() + timeout
+    try:
+        for stream, label in ((child.stdout, "out"), (child.stderr, "err")):
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, label)
+        while selector.get_map():
+            left = end - time.monotonic()
+            require(left > 0, "DEADLINE")
+            for key, _ in selector.select(min(left, .1)):
+                part = os.read(key.fd, 4096)
+                if not part:
+                    selector.unregister(key.fileobj)
+                else:
+                    size += len(part)
+                    require(size <= limit, "COMMAND_LIMIT")
+                    if key.data == "out":
+                        output.extend(part)
+                    else:
+                        error.extend(part)
+        # Observe exit without reaping: the leader's zombie keeps its PID/PGID
+        # unavailable for reuse until all owned descendants have been killed.
+        while True:
+            require(time.monotonic() < end, "DEADLINE")
+            status = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+            if status is not None:
+                break
+            time.sleep(min(.01, max(0, end - time.monotonic())))
+        if status.si_code == os.CLD_EXITED and status.si_status == 1:
+            for index,name in enumerate(JOB_PROPERTIES):
+                expected=("Failed to get property "+name+" on interface org.freedesktop.systemd1.Job: "
+                          "Unknown object '"+argv[5]+"'.\n").encode()
+                if bytes(error)==expected:raise MissingJob(index,bytes(output))
+        require(status.si_code == os.CLD_EXITED and status.si_status == 0 and not error, "COMMAND_FAILED")
+        return bytes(output)
+    except subprocess.TimeoutExpired:
+        raise safety.Blocked("DEADLINE") from None
+    finally:
+        selector.close()
+        # Always clean the anchored group, including a closed-stdio descendant
+        # of a successfully exited leader. Never reap before this killpg.
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        child.wait(timeout=1)
+        child.stdout.close()
+        child.stderr.close()
+
+
+def bounded_read_command(argv,*,timeout,limit):
+    if exact_job_read(argv):return bounded_job_command(argv,timeout=timeout,limit=limit)
+    return safety.bounded_command(argv,timeout=timeout,limit=limit)
 
 def readonly_runner(runner):
     """Even a future accidental call to reused maintenance cannot mutate units."""
@@ -109,6 +202,7 @@ def marker(op,unit,name='InactiveExitTimestampMonotonic'):
     return value['data']
 
 def collect_states(op,g):
+    g['gate_check']='NOT_VERIFIED'
     # Clear every old row before any new read, including unread later units.
     for item in g['states']:
         item.update(observed=False,active=None,sub=None,job_id=None,main_pid_nonzero=None,
@@ -159,22 +253,30 @@ def check_state_predicates(g, *, pending_allowed):
         if bad:guard_fail(g,unit,bad,'CGROUP_NOT_EMPTY' if bad==['CGROUP_NOT_EMPTY'] else 'UNIT_BUSY')
 
 
+def read_waiting_job(op,g,unit,identifier):
+    g['unit']=unit
+    missing=None
+    try:
+        raw=op.command(['/usr/bin/busctl','--system','--json=short','get-property','org.freedesktop.systemd1',
+            '/org/freedesktop/systemd1/job/'+str(identifier),'org.freedesktop.systemd1.Job',*JOB_PROPERTIES])
+    except MissingJob as exc:
+        missing=exc;raw=exc.prefix
+    count=missing.index if missing is not None else 4
+    lines=raw.splitlines();require(len(lines)==count,'BOOT_JOB_INVALID')
+    expected=[identifier,[unit,safety.job_unit_path(unit)],'start','waiting']
+    for index,(line,kind) in enumerate(zip(lines,('u','(so)','s','s'))):
+        value=safety.strict_json(line)
+        require(type(value) is dict and set(value)=={'type','data'} and value['type']==kind
+            and type(value['data']) is type(expected[index]) and value['data']==expected[index],'BOOT_JOB_INVALID')
+    if missing is not None:raise missing
+
+
 def waiting_start_job(op,g,unit,identifier):
     g['unit']=unit
     condition_before=marker(op,unit,'ConditionTimestampMonotonic')
-    raw=op.command(['/usr/bin/busctl','--system','--json=short','get-property','org.freedesktop.systemd1',
-        '/org/freedesktop/systemd1/job/'+str(identifier),'org.freedesktop.systemd1.Job','Id','Unit','JobType','State'])
-    lines=raw.splitlines();require(len(lines)==4,'BOOT_JOB_INVALID')
-    values=[]
-    for line,kind in zip(lines,('u','(so)','s','s')):
-        value=safety.strict_json(line)
-        require(type(value) is dict and set(value)=={'type','data'} and value['type']==kind,'BOOT_JOB_INVALID')
-        values.append(value['data'])
-    require(type(values[0]) is int and values[0]==identifier
-        and values[1]==[unit,safety.job_unit_path(unit)] and values[2:] == ['start','waiting'],'BOOT_JOB_INVALID')
+    read_waiting_job(op,g,unit,identifier)
     return dict(unit=unit,job_id=identifier,type='start',state='waiting',execution_unchanged=True,condition_skipped=False,
         condition_before_us=condition_before,condition_after_us=None)
-
 
 def require_skipped(op,g,unit,job):
     g['unit']=unit
@@ -205,7 +307,7 @@ def verify_quiet(op,g,*,phase,settle=False,sleep=time.sleep):
     previous_end=op.pending_end;op.pending_end=end
     g['phase']='SETTLING';g['settle']['status']='WAITING'
     try:
-        jobs={}
+        jobs={};missing_job=None
         for unit,identifier in pending.items():
             jobs[unit]=waiting_start_job(op,g,unit,identifier)
             g['settle']['jobs'].append(jobs[unit])
@@ -222,6 +324,10 @@ def verify_quiet(op,g,*,phase,settle=False,sleep=time.sleep):
                         or item['inactive_exit_us']!=op.worlds_execution_markers[item['unit']]):
                     jobs[item['unit']]['execution_unchanged']=False
             check_state_predicates(g,pending_allowed=True)
+            if missing_job is not None:
+                for item in g['states']:
+                    if item['job_id']:
+                        guard_fail(g,item['unit'],['JOB_PENDING','BOOT_JOB_CHANGED'],'BOOT_JOB_CHANGED')
             done=True
             for item in g['states']:
                 unit=item['unit'];g['unit']=unit
@@ -234,13 +340,19 @@ def verify_quiet(op,g,*,phase,settle=False,sleep=time.sleep):
                     continue
                 if jid:
                     require(jid==pending[unit],'BOOT_JOB_CHANGED')
-                    waiting_start_job(op,g,unit,jid);done=False
+                    try:read_waiting_job(op,g,unit,jid)
+                    except MissingJob:
+                        # One immediate fresh epoch; all six must now be quiet.
+                        # Initial admission never enters this recovery branch.
+                        missing_job=unit;done=False;break
+                    done=False
                 else:
                     require_skipped(op,g,unit,jobs[unit])
                     jobs[unit].update(state='removed',condition_skipped=True)
             if done:
                 check_state_predicates(g,pending_allowed=False)
                 g['settle']['status']='SETTLED';g['unit']=None;return
+            if missing_job is not None:continue
             left=end-op.budget.clock();require(left>0,'BOOT_SETTLE_TIMEOUT')
             sleep(min(.5,left))
     except BaseException as exc:
@@ -271,7 +383,7 @@ def execute(payload, *, root='/', runner=None, clock=time.monotonic, host_check=
         def tick():
             require(clock()-began<SECONDS-1,'DEADLINE')
         tick()
-        op=safety.Isolation(payload,root=root,runner=readonly_runner(runner or safety.bounded_command),
+        op=safety.Isolation(payload,root=root,runner=readonly_runner(runner or bounded_read_command),
             clock=clock,host_check=host_check,started=began)
         op.budget.end=min(op.budget.end,began+SECONDS-1)
         op.host_check(op.fs)
