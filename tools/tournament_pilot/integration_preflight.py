@@ -16,7 +16,8 @@ BRANCH = "codex/shape-generator-v2-20261011"
 WORKFLOW = ".github/workflows/tournament-shape-pilot.yml"
 ALLOWED = {WORKFLOW, "tools/tournament_pilot/integration_preflight.py",
            "tools/tournament_pilot/test_integration_preflight.py",
-           "bridge_school_api/db.py", "tests/test_api_dsn_contract.py"}
+           "bridge_school_api/db.py", "tests/test_api_dsn_contract.py",
+           "tests/test_runtime_app_incident_probe.py"}
 ARTIFACTS = ("tools/tournament_pilot/package.json", "tournament-first-binding-evidence.json")
 MAX_ARTIFACT_BYTES = 131072
 ASSESSMENT_VERSION = "tournament-call-assessment-v2"
