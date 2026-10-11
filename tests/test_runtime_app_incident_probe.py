@@ -1,6 +1,8 @@
+import io
 import json
 import os
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import MagicMock, patch
 
 from bridge_school_api import incident_db_probe as probe
@@ -19,6 +21,31 @@ class IncidentProbeTests(unittest.TestCase):
         self.assertNotIn(SECRET, json.dumps(result))
         self.assertNotIn("postgresql://", json.dumps(result))
         return result
+
+    def test_missing_production_environment_never_connects(self):
+        with patch.dict(os.environ, {"BRIDGE_APP_DATABASE_URL": DSN}, clear=True), \
+             patch.object(probe.psycopg, "connect") as connect:
+            self.assertEqual(probe.probe(True)["status"], "production_environment_required")
+            connect.assert_not_called()
+
+    def test_cli_propagates_preflight_failure(self):
+        statuses = {
+            "production_environment_required": 1,
+            "source_endpoint_requires_review": 1,
+            "configuration_failed": 1,
+            "authentication_failed": 1,
+            "connection_timeout": 1,
+            "session_contract_failed": 1,
+            "pass": 0,
+        }
+        for status, expected_code in statuses.items():
+            with self.subTest(status=status), \
+                 patch("sys.argv", ["incident_db_probe", "--connect"]), \
+                 patch.object(probe, "probe", return_value={"status": status}) as check, \
+                 redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(probe.main(), expected_code)
+                check.assert_called_once_with(True)
+                self.assertEqual(json.loads(output.getvalue()), {"status": status})
 
     def test_default_does_not_connect(self):
         with patch.object(probe.psycopg, "connect") as connect:
