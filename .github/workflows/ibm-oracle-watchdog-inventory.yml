@@ -1,0 +1,66 @@
+name: Oracle existing IBM watchdog read-only inventory
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: 'Exact current main SHA reviewed for this read-only inventory'
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - '.github/workflows/ibm-oracle-watchdog-inventory.yml'
+      - 'ops/ibm_oracle_watchdog_inventory.py'
+      - 'tests/test_ibm_oracle_watchdog_inventory.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('oracle-ibm-inventory-contract-{0}', github.event.pull_request.number) || 'oracle-existing-ibm-readonly-inventory' }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == 'olegmed1-art' && github.actor_id == '315099490' && github.triggering_actor == 'olegmed1-art' && github.run_attempt == 1) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Offline command, budget, redaction and admission contracts
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v tests.test_ibm_oracle_watchdog_inventory
+          python3 -m py_compile ops/ibm_oracle_watchdog_inventory.py
+
+  inventory:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == 'olegmed1-art' && github.actor_id == '315099490' && github.triggering_actor == 'olegmed1-art' && github.run_attempt == 1 }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Inventory existing Oracle unit metadata without service or provider actions
+        env:
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          ORACLE_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir "$RUNNER_TEMP/oracle-ibm-watchdog-inventory"
+          python3 -I -B -u ops/ibm_oracle_watchdog_inventory.py > "$RUNNER_TEMP/oracle-ibm-watchdog-inventory/receipt.json"
+      - name: Preserve sanitized bounded inventory evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: oracle-ibm-watchdog-inventory-${{ github.run_id }}
+          path: ${{ runner.temp }}/oracle-ibm-watchdog-inventory/receipt.json
+          retention-days: 7
+          include-hidden-files: false
+          if-no-files-found: error
