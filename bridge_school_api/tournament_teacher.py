@@ -10,6 +10,10 @@ from uuid import UUID
 from .bidding_catalog_reader import read_school_catalog
 from .db import connect
 from .ai_teacher import TeacherEvidence as LegacyTeacherEvidence, record_teacher_evidence
+from .tournament_shape_core import (
+    KEY, VERSION, PROFILE, SCOPE, CANARY_KEY, CANARY_HAND,
+    PAYLOAD_HASHES as PAYLOAD_HASHES, digest as digest, evaluate,
+)
 
 router = APIRouter(prefix="/v1/ai",tags=["bridge-ai-teacher"])
 
@@ -27,11 +31,6 @@ def assess_or_record(position_id: UUID, evidence: TeacherEvidence):
             or any(key.lower().replace("_", "").startswith("canon") for key in (evidence.model_extra or {}))):
         return answer(position_id,evidence)
     return record_teacher_evidence(position_id,evidence)
-
-from .tournament_shape_core import (
-    KEY, VERSION, PROFILE, SCOPE, CANARY_KEY, CANARY_HAND, PAYLOAD_HASHES,
-    digest, evaluate,
-)
 
 
 def answer(position_id, evidence):

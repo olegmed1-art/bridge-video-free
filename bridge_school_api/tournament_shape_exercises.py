@@ -15,7 +15,7 @@ import random
 from typing import Any, Mapping, Sequence
 
 from .ai_worlds import RANKS, SUITS, WorldConstraints, WorldGenerationError, parse_hand_pbn
-from .tournament_shape_core import PROFILE, SCOPE, VERSION, evaluate
+from .tournament_shape_core import PROFILE, VERSION, evaluate
 
 GENERATOR_VERSION = "tournament-shape-exercises-v2"
 MAX_EXCLUDED_HANDS = 10_000

@@ -245,9 +245,13 @@ class ShapeGenerationTests(unittest.TestCase):
         candidates = [[], [catalog()[0], catalog()[0]], [{}]]
         for field, value in [("scope_key", "other"), ("method_version", "stale"),
                              ("school_id", UUID(int=999)), ("hand_constraints", {"singleton": "S"})]:
-            rows = catalog(); rows[0][field] = value; candidates.append(rows)
+            rows = catalog()
+            rows[0][field] = value
+            candidates.append(rows)
         for key, value in [("recommend_supported", True), ("contract", "other")]:
-            rows = catalog(); rows[0]["compiled_payload"][key] = value; candidates.append(rows)
+            rows = catalog()
+            rows[0]["compiled_payload"][key] = value
+            candidates.append(rows)
         for rows in candidates:
             result = generate(catalog=rows)
             self.assertEqual(result.status, "ABSTAIN")
@@ -433,7 +437,8 @@ class AdapterContractTests(unittest.TestCase):
                 targets = adapter.available_targets_from_school_catalog(FakeConnection(), school_id=SCHOOL)
                 self.assertEqual([t["proposed_call"] for t in targets], expected)
                 self.assertFalse(any("hand_pbn" in t for t in targets))
-        stale = catalog(); stale[0]["method_version"] = "expired"
+        stale = catalog()
+        stale[0]["method_version"] = "expired"
         with patch.object(adapter, "_read_catalog", return_value=stale):
             self.assertEqual(adapter.available_targets_from_school_catalog(FakeConnection(), school_id=SCHOOL), [])
         with patch.object(adapter, "_read_catalog", return_value=catalog()):
