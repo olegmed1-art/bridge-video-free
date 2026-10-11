@@ -43,14 +43,14 @@ LIMITATIONS = ["EXPECTED_MACHINE_ID_UNAVAILABLE", "TRANSPORT_IDENTITY_ASSERTION_
 
 
 def receipt(result="ISOLATED_TARGET_SCOPE"):
-    return dict(schema="bridge.ibm.unit-isolation.receipt.v2", operation="isolate",
+    return dict(schema="bridge.ibm.unit-isolation.receipt.v3", operation="isolate",
                 **BINDING, result=result, reason="OK" if result == "ISOLATED_TARGET_SCOPE" else "INTERNAL_BLOCKED",
                 snapshot_id="39999999999-aaaaaaaaaaaa", snapshot_sha256="b" * 64,
                 snapshot_restore_sha256="b" * 64, changed_units=list(p.TARGETS),
                 changes=[dict(unit=name, gate="VERIFIED", stop="OBSERVED_INACTIVE") for name in p.TARGETS],
                 target_states=[dict(unit=name, active="inactive", sub="dead",
                                     job_pending=False, cgroup_empty=True) for name in p.TARGETS],
-                host_identity="TRANSPORT_ASSERTION_ONLY", limitations=list(LIMITATIONS), graph_evidence=None)
+                host_identity="TRANSPORT_ASSERTION_ONLY", limitations=list(LIMITATIONS), graph_evidence=None, companion_evidence=None)
 
 
 def chain(row=None):
@@ -385,6 +385,109 @@ class GraphEvidenceTests(OfflineCase):
 
     def test_sixth_window_and_status_run_ids_are_consumed(self):
         self.assertTrue({"38067558312", "38067935244"} <= p.CONSUMED_RUNS)
+
+
+class CompanionEvidenceTests(OfflineCase):
+    def row(self, unit=None):
+        row = receipt("BLOCKED")
+        row.update(reason="COMPANION_BUSY", snapshot_id=None, snapshot_sha256=None,
+                   snapshot_restore_sha256=None, changed_units=[], changes=[])
+        row["companion_evidence"] = dict(
+            unit=unit or p.host_contract.HEALTH, phase="PREFLIGHT", elapsed_ms=1234,
+            active="active", sub="running", job_pending=False,
+            main_pid_nonzero=True, control_pid_nonzero=False,
+            failed_predicates=["ACTIVE_STATE", "SUB_STATE", "MAIN_PID_NONZERO"])
+        return row
+
+    def check(self, row):
+        return p.validate_receipt(row, BINDING)
+
+    def test_both_companions_export_validated_evidence_without_success(self):
+        for unit in p.host_contract.COMPANIONS:
+            row = self.row(unit)
+            self.assertEqual(row, self.check(row))
+            result, emit = self.run_probe(self.probe(chain(row), rc=3))
+            self.assertFalse(result)
+            self.assertEqual(row, emit.call_args_list[-1].kwargs["receipt"])
+            self.assertLess(len(json.dumps(row["companion_evidence"])), 1024)
+
+    def test_busy_requires_evidence_and_other_reasons_require_null(self):
+        row = self.row(); row["companion_evidence"] = None
+        with self.assertRaisesRegex(p.IsolationError, "receipt_companion_missing"):
+            self.check(row)
+        for reason in ("OK", "CGROUP_NOT_EMPTY", "METADATA_INVALID", "CANCELLED", "DEADLINE"):
+            row = self.row(); row["reason"] = reason
+            with self.subTest(reason=reason), self.assertRaisesRegex(p.IsolationError, "receipt_companion_result"):
+                self.check(row)
+        row = self.row(); row["result"] = "ISOLATED_TARGET_SCOPE"
+        with self.assertRaisesRegex(p.IsolationError, "receipt_companion_result"):
+            self.check(row)
+        row = receipt("BLOCKED"); row["reason"] = "CGROUP_NOT_EMPTY"
+        self.assertEqual(row, self.check(row))
+
+    def test_missing_extra_raw_and_wrong_shaped_fields_are_rejected(self):
+        for key in self.row()["companion_evidence"]:
+            row = self.row(); del row["companion_evidence"][key]
+            with self.subTest(missing=key), self.assertRaises(p.IsolationError):
+                self.check(row)
+        for key in ("MainPID", "ControlPID", "raw_stdout", "Environment", "ExecStart", "cgroup_procs", "config"):
+            row = self.row(); row["companion_evidence"][key] = "PRIVATE_SENTINEL"
+            with self.subTest(extra=key), self.assertRaises(p.IsolationError):
+                self.check(row)
+        for value in (True, 1, "PRIVATE_SENTINEL", [], {}):
+            row = self.row(); row["companion_evidence"] = value
+            with self.subTest(value=value), self.assertRaises(p.IsolationError):
+                self.check(row)
+
+    def test_unit_phase_state_and_boolean_values_are_closed(self):
+        cases = [("unit", p.host_contract.OBSERVER), ("unit", "unknown.service"), ("unit", True),
+                 ("phase", "PRIVATE_SENTINEL"), ("phase", True), ("active", "unknown"),
+                 ("active", "PRIVATE_SENTINEL"), ("sub", "PRIVATE_SENTINEL")]
+        for key in ("job_pending", "main_pid_nonzero", "control_pid_nonzero"):
+            cases.extend((key, value) for value in (0, 1, "yes", None, []))
+        for key, value in cases:
+            row = self.row(); row["companion_evidence"][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(p.IsolationError):
+                self.check(row)
+
+    def test_elapsed_is_strict_bounded_integer_and_not_a_deadline(self):
+        for value in (True, False, -1, 600001, 1.5, float("nan"), float("inf"), "1234", None, []):
+            row = self.row(); row["companion_evidence"]["elapsed_ms"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(p.IsolationError, "receipt_companion_time"):
+                self.check(row)
+        for value in (0, 90000, 600000):
+            row = self.row(); row["companion_evidence"]["elapsed_ms"] = value
+            self.assertEqual(row, self.check(row))
+
+    def test_predicates_must_exactly_match_observed_fields_in_fixed_order(self):
+        correct = self.row()["companion_evidence"]["failed_predicates"]
+        for value in ([], correct[:-1], correct + [correct[0]], list(reversed(correct)),
+                      ["ACTIVE_STATE", "SUB_STATE", "PRIVATE_SENTINEL"], True, "ACTIVE_STATE"):
+            row = self.row(); row["companion_evidence"]["failed_predicates"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(p.IsolationError, "receipt_companion_predicates"):
+                self.check(row)
+        row = self.row()
+        row["companion_evidence"].update(active="inactive", sub="dead", main_pid_nonzero=False, failed_predicates=[])
+        with self.assertRaisesRegex(p.IsolationError, "receipt_companion_predicates"):
+            self.check(row)
+
+    def test_companion_evidence_tamper_breaks_capture_hash_binding(self):
+        rows = chain(self.row())
+        rows[-1]["receipt"]["companion_evidence"]["unit"] = p.host_contract.BEN
+        with mock.patch.object(p, "emit") as emitted, self.assertRaisesRegex(p.IsolationError, "receipt_capture_binding"):
+            self.probe(rows, rc=3).run_once()
+        self.assertFalse(any(c.args and c.args[0] == "UNIT_ISOLATION_VERIFIED_RECEIPT" for c in emitted.call_args_list))
+
+    def test_v2_receipt_is_not_silently_promoted(self):
+        row = self.row(); row["schema"] = "bridge.ibm.unit-isolation.receipt.v2"
+        with self.assertRaisesRegex(p.IsolationError, "receipt_schema"):
+            self.check(row)
+
+    def test_partial_blocked_keeps_evidence_without_becoming_green(self):
+        row = self.row(); row["result"] = "PARTIAL_BLOCKED"
+        row["companion_evidence"]["phase"] = "AFTER_RELOAD"
+        self.assertEqual(row, self.check(row))
+        self.assertFalse(self.run_probe(self.probe(chain(row), rc=3))[0])
 
 
 class ReceiptTests(OfflineCase):

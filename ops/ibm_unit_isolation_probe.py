@@ -24,7 +24,7 @@ except ImportError:
     import ibm_trial_guest_probe as read_only
     import ibm_unit_isolation as host_contract
 
-HOST_SOURCE_SHA = "70746f3c235cf9157e7a451511c70ce3ec2da378dc7f4118d238cebd59d0dc36"
+HOST_SOURCE_SHA = "041ca0448ede3882bfd871a3ecc08dc5cbe0daaafcfb632fedb4e663da2c5f2a"
 SAFE_SOURCE_SHA = "7711357b7929dcf42d8e49739b16f2e4489191644a0bfb711259f57f182e3bee"
 PREPARE_SECONDS = 20
 MAINTENANCE_SECONDS = 378
@@ -304,14 +304,36 @@ def validate_graph_evidence(value, result, reason):
             need(edge["property"] == "Triggers", "receipt_graph_violation")
 
 
+def validate_companion_evidence(value, result, reason):
+    if value is None:
+        need(reason != "COMPANION_BUSY", "receipt_companion_missing")
+        return
+    need(result in {"BLOCKED", "PARTIAL_BLOCKED"} and reason == "COMPANION_BUSY", "receipt_companion_result")
+    keys = {"unit", "phase", "elapsed_ms", "active", "sub", "job_pending",
+            "main_pid_nonzero", "control_pid_nonzero", "failed_predicates"}
+    need(type(value) is dict and set(value) == keys, "receipt_companion_schema")
+    need(type(value["unit"]) is str and value["unit"] in host_contract.COMPANIONS, "receipt_companion_unit")
+    need(type(value["phase"]) is str and value["phase"] in host_contract.COMPANION_PHASES, "receipt_companion_phase")
+    need(type(value["elapsed_ms"]) is int and 0 <= value["elapsed_ms"] <= host_contract.COMPANION_ELAPSED_MAX_MS, "receipt_companion_time")
+    need(type(value["active"]) is str and value["active"] in host_contract.SAFE_STATES
+         and type(value["sub"]) is str and value["sub"] in host_contract.SAFE_SUB, "receipt_companion_state")
+    need(all(type(value[name]) is bool for name in ("job_pending", "main_pid_nonzero", "control_pid_nonzero")), "receipt_companion_state")
+    failed = (value["active"] != "inactive", value["sub"] != "dead", value["job_pending"],
+              value["main_pid_nonzero"], value["control_pid_nonzero"])
+    expected = [name for name, condition in zip(host_contract.COMPANION_PREDICATES, failed) if condition]
+    need(type(value["failed_predicates"]) is list and bool(expected)
+         and value["failed_predicates"] == expected, "receipt_companion_predicates")
+
+
 def validate_receipt(row, binding):
-    keys = {"schema","operation","run_id","head","attempt","result","reason","snapshot_id","snapshot_sha256","changed_units","target_states","host_identity","snapshot_restore_sha256","limitations","changes","graph_evidence"}
+    keys = {"schema","operation","run_id","head","attempt","result","reason","snapshot_id","snapshot_sha256","changed_units","target_states","host_identity","snapshot_restore_sha256","limitations","changes","graph_evidence","companion_evidence"}
     need(type(row) is dict and set(row) == keys, "receipt_schema")
-    need(row["schema"] == "bridge.ibm.unit-isolation.receipt.v2" and row["operation"] == "isolate", "receipt_schema")
+    need(row["schema"] == "bridge.ibm.unit-isolation.receipt.v3" and row["operation"] == "isolate", "receipt_schema")
     need(all(type(row[k]) is type(v) and row[k] == v for k,v in binding.items()), "receipt_binding")
     need(type(row["result"]) is str and row["result"] in {"ISOLATED_TARGET_SCOPE","BLOCKED","PARTIAL_BLOCKED"}, "receipt_result")
     need(type(row["reason"]) is str and row["reason"] in host_contract.REASONS, "receipt_reason")
     validate_graph_evidence(row["graph_evidence"], row["result"], row["reason"])
+    validate_companion_evidence(row["companion_evidence"], row["result"], row["reason"])
     need(row["host_identity"] == "TRANSPORT_ASSERTION_ONLY", "receipt_identity")
     need(type(row["limitations"]) is list and row["limitations"] == host_contract.LIMITATIONS, "receipt_limitations")
     need(row["snapshot_restore_sha256"] is None or (type(row["snapshot_restore_sha256"]) is str and re.fullmatch("[0-9a-f]{64}",row["snapshot_restore_sha256"])), "receipt_restore")

@@ -442,7 +442,7 @@ class IsolationTests(unittest.TestCase):
             self.fx.rows[unit]["Requires"] += " tmp.mount"
             self.fx.rows[unit]["After"] += " tmp.mount systemd-tmpfiles-setup.service"
         result = self.graph_preflight()
-        self.assertEqual("bridge.ibm.unit-isolation.receipt.v2", result["schema"])
+        self.assertEqual("bridge.ibm.unit-isolation.receipt.v3", result["schema"])
         evidence = result["graph_evidence"]
         self.assertFalse(evidence["truncated"])
         self.assertEqual(6, len(evidence["failures"]))
@@ -709,6 +709,105 @@ class IsolationTests(unittest.TestCase):
             self.assert_blocked(self.execute(), "COMPANION_BUSY")
             self.fx.rows[m.HEALTH][field] = old
 
+    def test_companion_evidence_identifies_both_units_and_all_five_predicates(self):
+        cases = (("ActiveState", "active", "ACTIVE_STATE"), ("SubState", "exited", "SUB_STATE"),
+                 ("Job", "9", "JOB_PENDING"), ("MainPID", "77", "MAIN_PID_NONZERO"),
+                 ("ControlPID", "88", "CONTROL_PID_NONZERO"))
+        for unit in m.COMPANIONS:
+            for field, value, predicate in cases:
+                with self.subTest(unit=unit, field=field):
+                    old = self.fx.rows[unit][field]
+                    self.fx.rows[unit][field] = value
+                    self.fx.calls.clear()
+                    with mock.patch.object(m.RootFS, "write_new", side_effect=AssertionError("NO_WRITES")) as writes, \
+                         mock.patch.object(m.RootFS, "mkdir", side_effect=AssertionError("NO_MKDIR")) as mkdir:
+                        result = self.execute()
+                    self.assert_blocked(result, "COMPANION_BUSY")
+                    evidence = result["companion_evidence"]
+                    self.assertEqual(unit, evidence["unit"])
+                    self.assertEqual("PREFLIGHT", evidence["phase"])
+                    self.assertEqual([predicate], evidence["failed_predicates"])
+                    self.assertIs(type(evidence["elapsed_ms"]), int)
+                    self.assertGreaterEqual(evidence["elapsed_ms"], 0)
+                    self.assertLess(evidence["elapsed_ms"], m.GUEST_SECONDS * 1000)
+                    self.assertIsNone(result["snapshot_id"])
+                    self.assertIsNone(result["graph_evidence"])
+                    writes.assert_not_called(); mkdir.assert_not_called()
+                    shows = [c[-1] for c in self.fx.calls if c[:2] == ["/usr/bin/systemctl", "show"]]
+                    self.assertEqual(list(m.UNITS) + ([m.HEALTH] if unit == m.HEALTH else list(m.COMPANIONS)), shows)
+                    self.fx.rows[unit][field] = old
+
+    def test_companion_evidence_preserves_first_failure_and_exact_predicate_order(self):
+        for unit in m.COMPANIONS:
+            self.fx.rows[unit].update(ActiveState="active", SubState="running", Job="9", MainPID="77", ControlPID="88")
+        result = self.execute()
+        self.assert_blocked(result, "COMPANION_BUSY")
+        self.assertEqual(m.HEALTH, result["companion_evidence"]["unit"])
+        self.assertEqual(list(m.COMPANION_PREDICATES), result["companion_evidence"]["failed_predicates"])
+        self.assertFalse(any(c["unit"] in m.COMPANIONS for c in result["changes"]))
+
+    def test_companion_clock_origin_and_every_declared_phase_are_diagnostic_only(self):
+        self.fx.rows[m.BEN]["Job"] = "7"
+        for phase in m.COMPANION_PHASES:
+            with self.subTest(phase=phase):
+                self.fx.clock.t = 100.0
+                op = m.Isolation(payload(), started=98.0, **self.fx.kwargs())
+                deadline = op.budget.end
+                with self.assertRaisesRegex(m.Blocked, "COMPANION_BUSY"):
+                    op.companions(phase)
+                evidence = op.companion_evidence
+                self.assertEqual(phase, evidence["phase"])
+                self.assertEqual(int((self.fx.clock.now() - 98.0) * 1000), evidence["elapsed_ms"])
+                self.assertEqual(deadline, op.budget.end)
+                self.assertEqual(m.BEN, evidence["unit"])
+
+    def test_cgroup_refusal_still_has_distinct_reason_and_no_busy_state_evidence(self):
+        for unit in m.COMPANIONS:
+            with self.subTest(unit=unit), tempfile.TemporaryDirectory() as root:
+                fx = Fixture(root)
+                group = "/system.slice/" + unit
+                fx.rows[unit]["ControlGroup"] = group
+                target = Path(root) / ("sys/fs/cgroup" + group)
+                target.mkdir(parents=True)
+                (target / "cgroup.events").write_text("populated 1\nfrozen 0\n")
+                (target / "cgroup.procs").write_text("99\n")
+                result = m.execute(payload(), **fx.kwargs())
+                self.assertEqual("BLOCKED", result["result"])
+                self.assertEqual("CGROUP_NOT_EMPTY", result["reason"])
+                self.assertIsNone(result["companion_evidence"])
+                self.assertIsNone(result["snapshot_id"])
+                self.assertFalse(result["changes"])
+                self.assertFalse(fx.stop_requested)
+
+    def test_after_snapshot_busy_evidence_does_not_promote_to_success_or_mutate(self):
+        original = m.Isolation.snapshot
+        def snapshot(op):
+            original(op)
+            self.fx.rows[m.BEN]["ControlPID"] = "88"
+        with mock.patch.object(m.Isolation, "snapshot", snapshot):
+            result = self.execute()
+        self.assert_blocked(result, "COMPANION_BUSY")
+        self.assertEqual("AFTER_SNAPSHOT", result["companion_evidence"]["phase"])
+        self.assertEqual(m.BEN, result["companion_evidence"]["unit"])
+        self.assertIsNotNone(result["snapshot_id"])
+
+    def test_signal_reason_is_not_relabelled_as_companion_busy(self):
+        original = m.need
+        def need(value, reason):
+            if reason == "COMPANION_BUSY":
+                raise m.Blocked("CANCELLED")
+            return original(value, reason)
+        with mock.patch.object(m, "need", need):
+            result = self.execute()
+        self.assert_blocked(result, "CANCELLED")
+        self.assertIsNone(result["companion_evidence"])
+
+    def test_nonbusy_receipts_do_not_export_stale_companion_evidence(self):
+        op = m.Isolation(payload(), **self.fx.kwargs())
+        op.companion_evidence = {"private": "NEVER_EXPORT"}
+        for reason in ("DEADLINE", "CANCELLED", "CGROUP_NOT_EMPTY", "INTERNAL_BLOCKED"):
+            self.assertIsNone(op.receipt("BLOCKED", reason)["companion_evidence"])
+
     def test_root_and_os_required_before_any_write(self):
         with mock.patch.object(m.os, "geteuid", return_value=1000):
             with self.assertRaisesRegex(m.Blocked, "ROOT_REQUIRED"):
@@ -842,6 +941,8 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual("PARTIAL_BLOCKED", result["result"])
         self.assertEqual("COMPANION_BUSY", result["reason"])
         self.assertEqual([m.TIMER], self.fx.stop_requested)
+        self.assertEqual("WAIT_STOP", result["companion_evidence"]["phase"])
+        self.assertEqual(m.HEALTH, result["companion_evidence"]["unit"])
 
     def test_companion_after_reload_aborts_before_first_stop(self):
         self.fx.private_tmp_edges()
@@ -853,6 +954,8 @@ class IsolationTests(unittest.TestCase):
         result = self.execute()
         self.assertEqual("COMPANION_BUSY", result["reason"])
         self.assertFalse(self.fx.stop_requested)
+        self.assertEqual("AFTER_RELOAD", result["companion_evidence"]["phase"])
+        self.assertEqual(m.BEN, result["companion_evidence"]["unit"])
 
     def test_hung_stop_bounded_and_no_later_stops(self):
         self.fx.stop = lambda unit: None
@@ -976,6 +1079,8 @@ class IsolationTests(unittest.TestCase):
         result = self.execute()
         self.assertEqual("COMPANION_BUSY", result["reason"], result)
         self.assertEqual([m.TIMER, m.BRIDGE], self.fx.stop_requested)
+        self.assertEqual("WAIT_STOP", result["companion_evidence"]["phase"])
+        self.assertEqual(m.BEN, result["companion_evidence"]["unit"])
 
     def test_missing_metadata_is_not_defaulted_to_success(self):
         original = self.fx.runner

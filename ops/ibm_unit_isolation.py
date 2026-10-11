@@ -35,7 +35,7 @@ import sys
 import time
 
 REQUEST_SCHEMA = "bridge.ibm.unit-isolation.request.v1"
-RECEIPT_SCHEMA = "bridge.ibm.unit-isolation.receipt.v2"
+RECEIPT_SCHEMA = "bridge.ibm.unit-isolation.receipt.v3"
 IDENTITY = {
     "instance_id": "02c7_4463831b-c1a7-45a7-84f4-c0388c8e03b2",
     "instance_name": "bridge-school-compute-ibm",
@@ -61,6 +61,11 @@ BEN = "bridge-ben.service"
 TARGETS = (OBSERVER, CONTROL, BRIDGE, TIMER)
 STOP_ORDER = (TIMER, BRIDGE, CONTROL, OBSERVER)
 COMPANIONS = (HEALTH, BEN)
+COMPANION_PHASES = ("PREFLIGHT", "AFTER_SNAPSHOT", "BEFORE_GATE", "BEFORE_RELOAD",
+                    "AFTER_RELOAD", "BEFORE_STOP", "WAIT_STOP", "AFTER_STOP", "FINAL_VERIFY",
+                    "ROLLBACK_PREFLIGHT", "ROLLBACK_BEFORE_REMOVE", "ROLLBACK_AFTER_RELOAD")
+COMPANION_PREDICATES = ("ACTIVE_STATE", "SUB_STATE", "JOB_PENDING", "MAIN_PID_NONZERO", "CONTROL_PID_NONZERO")
+COMPANION_ELAPSED_MAX_MS = 600000  # Export bound only; never a runtime deadline.
 UNITS = TARGETS + COMPANIONS
 PRIVATE_TMP_UNITS = frozenset((OBSERVER, CONTROL, BRIDGE, HEALTH))
 # systemd v255 unit_add_exec_dependencies(), src/core/unit.c L1227-L1241.
@@ -613,6 +618,7 @@ class Isolation:
         self.host_check = host_check or local_host_check
         self.rows = {}
         self.graph_evidence = GraphEvidence()
+        self.companion_evidence = None
         self.baseline = {}
         self.conditions = {}
         self.records = []
@@ -712,11 +718,26 @@ class Isolation:
                  and value["type"] == "a(sasbttttuii)" and type(value["data"]) is list, "METADATA_INVALID")
             need(value["data"] == [], "STOP_HANDLER")
 
-    def companions(self):
+    def companions(self, phase="PREFLIGHT"):
         for unit in COMPANIONS:
             row = self.show(unit)
-            need(row["ActiveState"] == "inactive" and row["SubState"] == "dead" and not row["Job"]
-                 and row["MainPID"] == "0" and row["ControlPID"] == "0", "COMPANION_BUSY")
+            try:
+                need(row["ActiveState"] == "inactive" and row["SubState"] == "dead" and not row["Job"]
+                     and row["MainPID"] == "0" and row["ControlPID"] == "0", "COMPANION_BUSY")
+            except Blocked as exc:
+                if str(exc) != "COMPANION_BUSY":
+                    raise
+                # Only retain the already validated row at the original refusal.
+                # No further host command, cgroup read, wait or maintenance retry.
+                failed = (row["ActiveState"] != "inactive", row["SubState"] != "dead",
+                          bool(row["Job"]), row["MainPID"] != "0", row["ControlPID"] != "0")
+                self.companion_evidence = {
+                    "unit": unit, "phase": phase,
+                    "elapsed_ms": int((self.budget.clock() - (self.budget.end - GUEST_SECONDS)) * 1000),
+                    "active": row["ActiveState"], "sub": row["SubState"],
+                    "job_pending": failed[2], "main_pid_nonzero": failed[3], "control_pid_nonzero": failed[4],
+                    "failed_predicates": [name for name, value in zip(COMPANION_PREDICATES, failed) if value]}
+                raise
             need(self.cgroup_empty(row["ControlGroup"]), "COMPANION_BUSY")
 
     def cgroup_empty(self, group):
@@ -882,7 +903,7 @@ class Isolation:
                 self.stop_handlers(unit)
                 need(not row["Job"] and row["ActiveState"] in {"active", "inactive"}, "UNIT_BUSY")
                 need((row["ActiveState"], row["SubState"]) in {("active", "waiting" if unit == TIMER else "running"), ("inactive", "dead")}, "UNIT_BUSY")
-        self.companions()
+        self.companions("PREFLIGHT")
         self.baseline = {u: dict(r) for u, r in self.rows.items()}
         self.conditions = {u: self.effective_conditions(u) for u in TARGETS}
         self.original_paths = self.inventory()
@@ -891,11 +912,11 @@ class Isolation:
     def isolate(self):
         self.preflight()
         self.snapshot()
-        self.companions()
+        self.companions("AFTER_SNAPSHOT")
         self.drift()
         self.budget.left(self.remaining_stop_budget())
         for unit in TARGETS:
-            self.companions()
+            self.companions("BEFORE_GATE")
             self.drift()
             path = self.gate_paths[unit]
             change = {"unit": unit, "gate": "INTENDED", "stop": "NOT_REQUESTED"}
@@ -912,12 +933,12 @@ class Isolation:
             need(record["sha256"] == digest(self.gate_data), "FILE_DRIFT")
             self.own_records[unit] = record
             self.journal("GATE_CREATED", unit=unit, record=record)
-        self.companions()
+        self.companions("BEFORE_RELOAD")
         self.journal("RELOAD_INTENT")
         self.command(["/usr/bin/systemctl", "daemon-reload"], timeout=5)
         for unit in UNITS:
             self.show(unit)
-        self.companions()
+        self.companions("AFTER_RELOAD")
         self.drift()
         self.check_gates()
         for change in self.changes:
@@ -925,7 +946,7 @@ class Isolation:
         self.journal("GATES_EFFECTIVE")
         self.budget.left(self.remaining_stop_budget())
         for unit in STOP_ORDER:
-            self.companions()
+            self.companions("BEFORE_STOP")
             row = self.show(unit)
             self.drift()
             self.check_gates()
@@ -940,7 +961,7 @@ class Isolation:
                 stop_end = min(self.budget.end, self.budget.clock() + (stop_seconds(row["TimeoutStopUSec"]) + 2 if unit.endswith(".service") else 3))
                 while True:
                     self.budget.left()
-                    self.companions()
+                    self.companions("WAIT_STOP")
                     row = self.show(unit)
                     if row["ActiveState"] == "inactive" and row["SubState"] == "dead" and not row["Job"]:
                         break
@@ -952,9 +973,9 @@ class Isolation:
                 need(row["MainPID"] == "0" and row["ControlPID"] == "0", "STOP_INCOMPLETE")
             change["stop"] = "OBSERVED_INACTIVE"
             self.journal("STOP_OBSERVED", unit=unit)
-            self.companions()
+            self.companions("AFTER_STOP")
         for _ in range(2):
-            self.companions()
+            self.companions("FINAL_VERIFY")
             for unit in TARGETS:
                 row = self.show(unit)
                 need(row["ActiveState"] == "inactive" and row["SubState"] == "dead" and not row["Job"], "STOP_INCOMPLETE")
@@ -985,6 +1006,7 @@ class Isolation:
                 "changed_units": [c["unit"] for c in self.changes], "changes": self.changes,
                 "target_states": states, "host_identity": "TRANSPORT_ASSERTION_ONLY",
                 "graph_evidence": self.graph_evidence.value() if self.graph_evidence.failures else None,
+                "companion_evidence": self.companion_evidence if reason == "COMPANION_BUSY" else None,
                 "limitations": LIMITATIONS}
 
 
@@ -1062,10 +1084,10 @@ def rollback(payload, **kwargs):
             row = op.show(unit)
             need(row["ActiveState"] == "inactive" and row["SubState"] == "dead" and not row["Job"], "UNIT_BUSY")
             need(op.cgroup_empty(row["ControlGroup"]), "CGROUP_NOT_EMPTY")
-        op.companions()
+        op.companions("ROLLBACK_PREFLIGHT")
         op.drift()
         for unit, record in list(op.own_records.items()):
-            op.companions()
+            op.companions("ROLLBACK_BEFORE_REMOVE")
             op.drift()
             op.journal("ROLLBACK_INTENT", unit=unit, path=op.gate_paths[unit], sha256=record["sha256"])
             op.changes.append({"unit": unit, "gate": "INTENDED", "stop": "NOT_REQUESTED"})
@@ -1078,7 +1100,7 @@ def rollback(payload, **kwargs):
         for unit in UNITS:
             row = op.show(unit)
             need(row["ActiveState"] == "inactive" and row["SubState"] == "dead" and not row["Job"], "UNIT_BUSY")
-        op.companions()
+        op.companions("ROLLBACK_AFTER_RELOAD")
         op.drift()
         for unit in TARGETS:
             need(op.effective_conditions(unit) == op.conditions[unit], "ROLLBACK_DRIFT")
