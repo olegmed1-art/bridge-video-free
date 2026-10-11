@@ -14,6 +14,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from bridge_school_api import tournament_teacher as teacher
+from bridge_school_api.tournament_shape_core import ASSESSMENT_VERSION
 from .package import formal_package, position, envelope, cases, check_schema
 DB = "tournament_rehearsal"
 ROLE = "tournament_rehearsal_owner"
@@ -142,10 +143,16 @@ def rehearsal():
                     if kind!=case_kind:
                         continue
                     pos=position(school,shape,change)
-                    result=teacher.evaluate(pos,b["call"],[row])
+                    result=teacher.evaluate(pos,b["call"],[row],assessment_mode="SHAPE_ONLY")
+                    # Immutable fixtures describe shape only; never full bid eligibility.
+                    shape_expected={"SUPPORTED":"MATCH","CONTRADICTED":"MISMATCH","ABSTAIN":"UNKNOWN"}[expected]
+                    expected="ABSTAIN" if expected=="ABSTAIN" else "PARTIAL"
                     assert result["status"]==expected,(name,result)
+                    assert result["shape_status"]==shape_expected
+                    assert result["call_approved"] is None and result["learner_error"] is None
                     fixtures.append({"case":name,"position":{k:str(v) if isinstance(v,type(school)) else v for k,v in pos.items()},"expected":expected})
-                    observed.append({"case":name,"observed":result["status"],"expected":expected})
+                    observed.append({"case":name,"observed":result["status"],"expected":expected,
+                                     "shape_status":result["shape_status"],"assessment_version":ASSESSMENT_VERSION})
                 test=scalar(conn,"INSERT INTO bidding.rule_test(school_id,rule_id,test_key,test_type,fixture,expected,method_version) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING rule_test_id",
                     (school,b["rule_id"],kind,kind,Jsonb({"cases":fixtures}),Jsonb({"all_cases_match":True}),teacher.VERSION))
                 conn.execute("INSERT INTO bidding.rule_test_run(school_id,rule_test_id,result,result_details,method_version) VALUES (%s,%s,'pass',%s,%s)",
@@ -172,8 +179,11 @@ def rehearsal():
             expiry=scalar(conn,"SELECT now()+interval '24 hours'")
             activate(conn,bindings,school,expiry)
             event(conn,run,3,"first_activation",bindings)
-            assert assess(client)["status"]=="SUPPORTED"
-            assert assess(client,"3S")["status"]=="CONTRADICTED"
+            assert assess(client)["status"]=="ABSTAIN"
+            assert assess(client)["reason"]=="STRENGTH_CANON_NOT_CONFIRMED"
+            assert assess(client)["shape_status"]=="MATCH"
+            assert assess(client,"3S")["status"]=="ABSTAIN"
+            assert assess(client,"3S")["shape_status"]=="MISMATCH"
             # Same valid stored position, but not the approved canary -> refusal.
             conn.execute("UPDATE ai.decision_position SET stable_key='other-valid-position' WHERE position_id=%s",(pid,))
             assert assess(client)["reason"]=="PILOT_POSITION_ONLY"
@@ -197,16 +207,21 @@ def rehearsal():
                 def click():
                     request=Request(origin+"/assess",data=b'{"call":"3H"}',headers={"Origin":origin,"Content-Type":"application/json","X-Pilot-Nonce":nonce})
                     return json.load(urlopen(request))
-                assert click()["status"]=="SUPPORTED"
+                assert click()["status"]=="ABSTAIN"
+                assert click()["reason"]=="STRENGTH_CANON_NOT_CONFIRMED"
+                assert click()["shape_status"]=="MATCH"
                 with conn.transaction():
                     for b in bindings:
                         conn.execute("UPDATE bidding.runtime_activation SET status='revoked',valid_to=clock_timestamp() WHERE runtime_activation_id=%s",(b["runtime_activation_id"],))
                         conn.execute("UPDATE public.canon_activation SET status='revoked',valid_to=clock_timestamp() WHERE canon_activation_id=%s",(b["canon_activation_id"],))
                     event(conn,run,4,"owned_bindings_revoked",bindings)
                 assert click()["status"]=="ABSTAIN"
+                assert click()["shape_status"]=="UNKNOWN"
                 activate(conn,bindings,school,expiry)
                 event(conn,run,5,"reactivated_same_expiry",bindings)
-                assert click()["status"]=="SUPPORTED"
+                assert click()["status"]=="ABSTAIN"
+                assert click()["reason"]=="STRENGTH_CANON_NOT_CONFIRMED"
+                assert click()["shape_status"]=="MATCH"
                 screen.shutdown();thread.join(timeout=5)
         conn.execute("UPDATE bidding.ingestion_run SET status='completed',finished_at=clock_timestamp() WHERE ingestion_run_id=%s",(run,))
         actual={t:scalar(conn,"SELECT count(*) FROM "+t)-baseline[t] for t in TABLE_BUDGET}
@@ -216,7 +231,8 @@ def rehearsal():
         assert scalar(conn,"SELECT count(*) FROM ai.search_run WHERE position_id=%s",(pid,))==0
         assert scalar(conn,"SELECT count(*) FROM ai.final_decision WHERE position_id=%s",(pid,))==0
         return dict(status="PASS",row_budget=actual,total_pilot_rows=40,extra_synthetic_school_fixture=1,semantic_cases=evaluations,
-            authenticated_api=True,other_position="ABSTAIN",screen_lifecycle=["SUPPORTED","ABSTAIN","SUPPORTED"],
+            authenticated_api=True,other_position="ABSTAIN",screen_lifecycle=["ABSTAIN","ABSTAIN","ABSTAIN"],
+            screen_shape_lifecycle=["MATCH","UNKNOWN","MATCH"],assessment_version=ASSESSMENT_VERSION,
             auth_missing=401,auth_wrong=403,teacher_output_writes=0,search_runs=0,final_decisions=0,
             ttl_hours=24,reactivation_extends_expiry=False)
 

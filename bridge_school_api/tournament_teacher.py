@@ -79,6 +79,9 @@ def answer(position_id, evidence):
                 result.update(status="ABSTAIN",reason="SOURCE_BINDING_MISMATCH",source_bindings=[])
                 result.pop("explanation",None)
                 result.pop("forcing_status",None)
+                for field in ("observed_shape", "observed_hcp", "required_conditions", "missing_conditions"):
+                    result.pop(field, None)
+                result["shape_status"] = "UNKNOWN"
             else:
                 binding["database_source_id"] = str(matches[0]["source_id"])
     return dict(position_id=str(position_id),teacher_key=KEY,**result)

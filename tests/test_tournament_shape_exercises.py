@@ -32,7 +32,7 @@ def context(**changes):
 
 def generate(**changes):
     args = {"context": context(), "call": "3H", "canon_version": VERSION,
-            "catalog": catalog(), "seed": 7, "count": 12}
+            "catalog": catalog(), "seed": 7, "count": 12, "assessment_mode": "SHAPE_ONLY"}
     args.update(changes)
     return generator.generate_shape_exercises(**args)
 
@@ -132,8 +132,9 @@ class ShapeGenerationTests(unittest.TestCase):
                         hand = ".".join("AKQJT98765432"[:length] for length in shape)
                         expected = oracle(hand, call)
                         self.assertEqual(generator.inspect_shape(hand, call)[0], expected)
-                        answer = evaluate(context() | {"hand_pbn": hand}, call, rows)
-                        self.assertEqual(answer["status"], "SUPPORTED" if expected else "CONTRADICTED")
+                        answer = evaluate(context() | {"hand_pbn": hand}, call, rows, assessment_mode="SHAPE_ONLY")
+                        self.assertEqual(answer["status"], "PARTIAL")
+                        self.assertEqual(answer["shape_status"], "MATCH" if expected else "MISMATCH")
                         self.assertIsNone(answer["action"])
                         self.assertIsNone(answer["point_threshold"])
                         total += 1
@@ -173,7 +174,8 @@ class ShapeGenerationTests(unittest.TestCase):
 
     def test_only_safe_projection_is_delivered(self):
         required = {"exercise_id", "task", "hand_pbn", "system_profile", "dealer", "seat", "auction",
-                    "proposed_call", "question", "response_options", "limitation"}
+                    "proposed_call", "question", "response_options", "limitation",
+                    "assessment_mode", "assessment_version", "call_eligibility"}
         for task in generate().student_exercises():
             self.assertEqual(set(task), required)
             self.assertEqual(task["response_options"], ["Да", "Нет"])
@@ -258,9 +260,9 @@ class ShapeGenerationTests(unittest.TestCase):
             self.assertEqual(result.exercises, ())
 
     def test_independent_evaluator_disagreement_blocks_generation(self):
-        def disagrees(position, call, rows):
-            result = evaluate(position, call, rows)
-            result["status"] = "SUPPORTED" if result["status"] == "CONTRADICTED" else "CONTRADICTED"
+        def disagrees(position, call, rows, **kwargs):
+            result = evaluate(position, call, rows, **kwargs)
+            result["shape_status"] = "MATCH" if result["shape_status"] == "MISMATCH" else "MISMATCH"
             return result
         with patch.object(generator, "evaluate", disagrees):
             batch = generate()
@@ -273,15 +275,15 @@ class ShapeGenerationTests(unittest.TestCase):
             for task in batch.exercises:
                 s,h,d,c = map(len, task.hand_pbn.split("."))
                 response = task.assess_response(True, catalog=catalog())
-                self.assertEqual(response["status"], "INCORRECT")
+                self.assertEqual(response["status"], "PARTIAL_INCORRECT")
                 self.assertEqual(len(response["violated_conditions"]), int(h != 1)+int(s != 3)+int({d,c}!={4,5}))
-                self.assertIn("Сила руки", response["explanation"])
-                self.assertEqual(task.assess_response(False, catalog=catalog())["status"], "CORRECT")
+                self.assertIn("Числовое условие силы", response["explanation"])
+                self.assertEqual(task.assess_response(False, catalog=catalog())["status"], "PARTIAL_CORRECT")
                 self.assertFalse(response["persisted"])
 
     def test_feedback_rechecks_binding_and_never_grades_unknown(self):
         task = generate(count=1, positive_count=1).exercises[0]
-        self.assertEqual(task.assess_response(True, catalog=catalog())["status"], "CORRECT")
+        self.assertEqual(task.assess_response(True, catalog=catalog())["status"], "PARTIAL_CORRECT")
         for rows in ([], catalog()):
             if rows:
                 rows[0]["runtime_activation_id"] = UUID(int=999)
@@ -316,7 +318,7 @@ class ShapeGenerationTests(unittest.TestCase):
         self.assertEqual(row["status"], "candidate")
         self.assertFalse(row["rubric"]["hcp_assessed"])
         assessed = task.assessment_fields(False, catalog=catalog())
-        self.assertEqual(assessed["exercise_attempt_assessment"]["result"]["status"], "INCORRECT")
+        self.assertEqual(assessed["exercise_attempt_assessment"]["result"]["status"], "PARTIAL_INCORRECT")
         self.assertEqual(assessed["exercise_attempt_assessment"]["assessment_purpose"], "learning")
         self.assertEqual(task.exercise_version_fields(catalog=[])["status"], "ABSTAIN")
         self.assertEqual(task.assessment_fields(True, catalog=[])["status"], "ABSTAIN")
@@ -327,6 +329,125 @@ class ShapeGenerationTests(unittest.TestCase):
         tampered = replace(task, _expected=False)
         self.assertEqual(tampered.assess_response(False, catalog=catalog())["status"], "ABSTAIN")
         self.assertEqual(tampered.exercise_version_fields(catalog=catalog())["status"], "ABSTAIN")
+
+
+class StrengthBoundaryTests(unittest.TestCase):
+    def test_reported_7_and_11_hcp_hands_never_approve_a_call(self):
+        for hand, call, hcp in (("A73.3.J942.Q7654", "3H", 7),
+                                ("J.AQ8.J632.K9865", "3S", 11)):
+            full = evaluate(context(hand_pbn=hand), call, catalog(call))
+            self.assertEqual(full["status"], "ABSTAIN")
+            self.assertEqual(full["reason"], "STRENGTH_CANON_NOT_CONFIRMED")
+            self.assertEqual(full["observed_hcp"], hcp)
+            self.assertEqual(full["shape_status"], "MATCH")
+            self.assertEqual(full["strength_status"], "UNKNOWN")
+            self.assertEqual(full["required_conditions"]["game_strength"], "UNKNOWN")
+            self.assertFalse(full["assessment_complete"])
+            self.assertIsNone(full["learner_error"])
+            self.assertIsNone(full["call_approved"])
+            self.assertIsNone(full["game_guaranteed"])
+            self.assertEqual(full["strength_policy"]["status"], "UNCONFIRMED")
+            self.assertIsNone(full["strength_policy"]["source_binding"])
+            self.assertIsNone(full["strength_policy"]["version"])
+            partial = evaluate(context(hand_pbn=hand), call, catalog(call), assessment_mode="SHAPE_ONLY")
+            self.assertEqual(partial["status"], "PARTIAL")
+            self.assertEqual(partial["call_eligibility"], "UNKNOWN")
+            self.assertIsNone(partial["call_approved"])
+
+    def test_no_hcp_boundary_is_invented_from_fg(self):
+        # Factual HCP boundaries; these are not invented eligibility thresholds.
+        for hand, hcp in (("T987.987.987.987", 0), ("AKQJ.AKQ.AKQ.AKQ", 37),
+                          ("AKQ.2.5432.65432", 9), ("AKQ.J.5432.65432", 10),
+                          ("AKQ.Q.5432.65432", 11)):
+            for call in ("3H", "3S"):
+                result = evaluate(context(hand_pbn=hand), call, catalog(call))
+                self.assertEqual(result["observed_hcp"], hcp)
+                self.assertEqual(result["status"], "ABSTAIN")
+                self.assertEqual(result["strength_status"], "UNKNOWN")
+                self.assertIsNone(result["learner_error"])
+
+    def test_actual_default_generation_returns_no_positive_or_negative_bid_examples(self):
+        for call in ("3H", "3S"):
+            batch = generator.generate_shape_exercises(context=context(), call=call,
+                canon_version=VERSION, catalog=catalog(call), seed=7)
+            self.assertEqual((batch.status, batch.reason, batch.exercises),
+                             ("ABSTAIN", "STRENGTH_CANON_NOT_CONFIRMED", ()))
+
+    def test_partial_feedback_and_prepared_records_cannot_grade_full_call(self):
+        for call in ("3H", "3S"):
+            for matches in (0, 1):
+                task = generate(call=call, catalog=catalog(call), count=1, positive_count=matches).exercises[0]
+                for response in (True, False):
+                    result = task.assess_response(response, catalog=catalog(call))
+                    self.assertTrue(result["status"].startswith("PARTIAL_"))
+                    self.assertEqual(result["shape_response_error"], response != bool(matches))
+                    self.assertIsNone(result["learner_error"])
+                    self.assertIsNone(result["call_approved"])
+                    self.assertFalse(result["assessment_complete"])
+                    self.assertIn("не гарантия числа взяток", result["explanation"])
+                    prepared = task.assessment_fields(response, catalog=catalog(call))
+                    self.assertEqual(prepared["exercise_attempt_assessment"]["result"], result)
+                version = task.exercise_version_fields(catalog=catalog(call))["exercise_version"]
+                self.assertEqual(version["rubric"]["call_eligibility"], "UNKNOWN")
+                self.assertEqual(version["provenance"]["assessment_mode"], "SHAPE_ONLY")
+                self.assertEqual(version["method_version"], task._assessment_version)
+                self.assertNotEqual(version["method_version"], VERSION)
+
+    def test_partial_to_full_or_legacy_replay_abstains_before_feedback_and_preparation(self):
+        from dataclasses import replace
+        task = generate(count=1, positive_count=1).exercises[0]
+        for changes in ({"_assessment_mode": "FULL_CALL"}, {"_assessment_mode": None},
+                        {"_assessment_mode": "unknown"}, {"_assessment_version": None},
+                        {"_assessment_version": "tour-1nt-shape-assessment-v1"}):
+            replay = replace(task, **changes)
+            for result in (replay.assess_response(False, catalog=catalog()),
+                           replay.exercise_version_fields(catalog=catalog()),
+                           replay.assessment_fields(False, catalog=catalog())):
+                self.assertEqual(result["status"], "ABSTAIN")
+                self.assertIsNone(result["learner_error"])
+
+    def test_mode_is_explicit_and_closed(self):
+        for mode in (None, "", "SUPPORTED", "shape_only", [], {}):
+            full = evaluate(context(hand_pbn="A73.3.J942.Q7654"), "3H", catalog(), assessment_mode=mode)
+            self.assertEqual(full["reason"], "UNSUPPORTED_ASSESSMENT_MODE")
+            self.assertEqual(generate(assessment_mode=mode).reason, "UNSUPPORTED_ASSESSMENT_MODE")
+
+    def test_unknown_strength_does_not_bypass_shape_source_or_version_guards(self):
+        for mode in ("FULL_CALL", "SHAPE_ONLY"):
+            for field, value in (("method_version", "stale"), ("scope_key", "other")):
+                rows = catalog()
+                rows[0][field] = value
+                result = evaluate(context(hand_pbn="A73.3.J942.Q7654"), "3H", rows, assessment_mode=mode)
+                self.assertEqual(result["reason"], "CANON_VERSION_OR_PAYLOAD_MISMATCH")
+                self.assertEqual(result["shape_status"], "UNKNOWN")
+                self.assertEqual(result["source_bindings"], [])
+                self.assertNotIn("observed_hcp", result)
+            rows = catalog()
+            rows[0]["compiled_payload"]["strength_min_hcp"] = 10
+            result = evaluate(context(hand_pbn="A73.3.J942.Q7654"), "3H", rows, assessment_mode=mode)
+            self.assertEqual(result["reason"], "CANON_VERSION_OR_PAYLOAD_MISMATCH")
+
+    def test_legacy_identity_is_not_reused(self):
+        from hashlib import sha256
+        task = generate(count=1, positive_count=1).exercises[0]
+        old = sha256(f"tournament-shape-exercises-v2:{VERSION}:{PROFILE}:3H:{generator.hand_fingerprint(task.hand_pbn)}".encode()).hexdigest()
+        self.assertNotEqual(task.exercise_id, old)
+
+    def test_default_adapter_advertises_no_full_call_capability(self):
+        with patch.object(adapter, "_read_catalog", return_value=catalog("3H") + catalog("3S")):
+            self.assertEqual(adapter.available_targets_from_school_catalog(FakeConnection(), school_id=SCHOOL), [])
+            partial = adapter.available_targets_from_school_catalog(FakeConnection(), school_id=SCHOOL,
+                                                                     assessment_mode="SHAPE_ONLY")
+            self.assertEqual(len(partial), 2)
+            self.assertTrue(all(t["call_eligibility"] == "UNKNOWN" for t in partial))
+            public = {k: v for k, v in context().items() if k not in {"school_id", "school_status"}}
+            batch = adapter.generate_from_school_catalog(FakeConnection(), school_id=SCHOOL,
+                        public_context=public, call="3H", canon_version=VERSION, seed=7)
+            self.assertEqual(batch.status, "ABSTAIN")
+            self.assertEqual(batch.exercises, ())
+            public["assessment_mode"] = "SHAPE_ONLY"
+            self.assertEqual(adapter.generate_from_school_catalog(FakeConnection(), school_id=SCHOOL,
+                        public_context=public, call="3H", canon_version=VERSION, seed=7).status, "OUT_OF_SCOPE")
 
 
 class FakeConnection:
@@ -355,7 +476,7 @@ class FakeConnection:
 class AdapterContractTests(unittest.TestCase):
     def request(self, connection, **changes):
         public = {k:v for k,v in context().items() if k not in {"school_id", "school_status"}}
-        args = dict(school_id=SCHOOL, public_context=public, call="3H", canon_version=VERSION, seed=9)
+        args = dict(school_id=SCHOOL, public_context=public, call="3H", canon_version=VERSION, seed=9, assessment_mode="SHAPE_ONLY")
         args.update(changes)
         return adapter.generate_from_school_catalog(connection, **args)
 
@@ -398,7 +519,7 @@ class AdapterContractTests(unittest.TestCase):
             reader.assert_called_once_with(connection, SCHOOL)
             result = adapter.assess_from_school_catalog(connection, school_id=SCHOOL,
                         exercise=batch.exercises[0], response=True)
-            self.assertIn(result["status"], {"CORRECT", "INCORRECT"})
+            self.assertIn(result["status"], {"PARTIAL_CORRECT", "PARTIAL_INCORRECT"})
         self.assertEqual(connection.queries[0][0], "SET TRANSACTION READ ONLY")
         self.assertTrue(all(sql.lstrip().startswith(("SELECT", "SET TRANSACTION READ ONLY")) for sql,_ in connection.queries))
 
@@ -434,15 +555,15 @@ class AdapterContractTests(unittest.TestCase):
         for rows, expected in [(catalog("3H"), ["3H"]),
                                (catalog("3H") + catalog("3S"), ["3H", "3S"]), ([], [])]:
             with patch.object(adapter, "_read_catalog", return_value=rows):
-                targets = adapter.available_targets_from_school_catalog(FakeConnection(), school_id=SCHOOL)
+                targets = adapter.available_targets_from_school_catalog(FakeConnection(), school_id=SCHOOL, assessment_mode="SHAPE_ONLY")
                 self.assertEqual([t["proposed_call"] for t in targets], expected)
                 self.assertFalse(any("hand_pbn" in t for t in targets))
         stale = catalog()
         stale[0]["method_version"] = "expired"
         with patch.object(adapter, "_read_catalog", return_value=stale):
-            self.assertEqual(adapter.available_targets_from_school_catalog(FakeConnection(), school_id=SCHOOL), [])
+            self.assertEqual(adapter.available_targets_from_school_catalog(FakeConnection(), school_id=SCHOOL, assessment_mode="SHAPE_ONLY"), [])
         with patch.object(adapter, "_read_catalog", return_value=catalog()):
-            self.assertEqual(adapter.available_targets_from_school_catalog(FakeConnection(source_valid=False), school_id=SCHOOL), [])
+            self.assertEqual(adapter.available_targets_from_school_catalog(FakeConnection(source_valid=False), school_id=SCHOOL, assessment_mode="SHAPE_ONLY"), [])
 
     def test_revocation_between_generation_and_submission_abstains(self):
         with patch.object(adapter, "_read_catalog", side_effect=[catalog(), []]):

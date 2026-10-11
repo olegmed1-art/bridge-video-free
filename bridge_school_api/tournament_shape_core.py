@@ -15,7 +15,7 @@ def digest(payload):
     return sha256(json.dumps(payload,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode()).hexdigest()
 
 
-def evaluate(position, call, catalog):
+def _evaluate_shape(position, call, catalog):
     result = dict(status="ABSTAIN",action=None,proposed_call=call,
                   assessment_scope="shape_meaning_only",scope_key=SCOPE,
                   teacher_version=VERSION,teacher_system=PROFILE,
@@ -74,3 +74,60 @@ def evaluate(position, call, catalog):
                       source_url=source["source_url"],decision_ids=source["decision_ids"],
                       original_excerpt=source["original_excerpt"],teacher_excerpt=source["teacher_excerpt"])])
     return stop("SHAPE_MEANING_ONLY_POINTS_AND_PRIORITY_NOT_ASSERTED")
+
+
+# Assessment semantics are versioned separately from the immutable shape canon.
+ASSESSMENT_VERSION = "tournament-call-assessment-v2"
+FULL_CALL = "FULL_CALL"
+SHAPE_ONLY = "SHAPE_ONLY"
+
+
+def evaluate(position, call, catalog, *, assessment_mode=FULL_CALL):
+    """Never approve a bid from shape alone or infer an unconfirmed HCP floor.
+
+    The pinned catalog only establishes shape and forcing meaning. It contains
+    no executable strength predicate. Full assessment therefore fails closed;
+    explicit SHAPE_ONLY can return a partial shape verdict, never SUPPORTED.
+    No hypothetical partner cards or double-dummy result are consulted.
+    """
+    base = dict(status="ABSTAIN", action=None, proposed_call=call,
+                assessment_scope="full_call", scope_key=SCOPE,
+                teacher_version=VERSION, teacher_system=PROFILE,
+                assessment_version=ASSESSMENT_VERSION,
+                assessment_mode=assessment_mode, assessment_complete=False,
+                call_approved=None, call_eligibility="UNKNOWN", learner_error=None,
+                shape_status="UNKNOWN", strength_status="UNKNOWN",
+                strength_policy={"status": "UNCONFIRMED", "version": None,
+                                 "source_binding": None},
+                game_guaranteed=None, persisted=False, queued=False,
+                finalized=False, source_bindings=[])
+    if assessment_mode not in (FULL_CALL, SHAPE_ONLY):
+        return base | {"reason": "UNSUPPORTED_ASSESSMENT_MODE"}
+    result = _evaluate_shape(position, call, catalog)
+    result = result | base | {"reason": result["reason"],
+                             "source_bindings": result["source_bindings"]}
+    if not result["source_bindings"]:
+        return result
+    shape = result["observed_shape"]
+    fits = (shape[call[-1]] == 1 and sorted(shape.values()) == [1, 3, 4, 5]
+            and sorted((shape["D"], shape["C"])) == [4, 5])
+    result.update(shape_status="MATCH" if fits else "MISMATCH",
+                  observed_hcp=sum({"A": 4, "K": 3, "Q": 2, "J": 1}.get(rank, 0)
+                                   for rank in position["hand_pbn"].upper()),
+                  required_conditions={"shape": "MATCH" if fits else "MISMATCH",
+                                       "game_strength": "UNKNOWN"},
+                  missing_conditions=["CONFIRMED_GAME_STRENGTH_PREDICATE"])
+    explanation = (
+        "Форма руки " + ("соответствует" if fits else "не соответствует") +
+        " соглашению. Наблюдаемая сила: " + str(result["observed_hcp"]) +
+        " HCP. Числовое условие силы для этой заявки в связанном каноне не подтверждено. "
+        "Допустимость заявки не установлена. Форсирование до гейма — обязательство продолжать "
+        "торговлю до гейма, а не гарантия числа взяток."
+    )
+    if assessment_mode == SHAPE_ONLY:
+        result.update(status="PARTIAL", assessment_scope="shape_meaning_only",
+                      strength_status="NOT_ASSESSED", reason="EXPLICIT_SHAPE_ONLY_CHECK",
+                      explanation="Проверяется только форма. " + explanation)
+    else:
+        result.update(reason="STRENGTH_CANON_NOT_CONFIRMED", explanation=explanation)
+    return result

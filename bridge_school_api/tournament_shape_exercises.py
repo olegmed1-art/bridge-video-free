@@ -15,15 +15,15 @@ import random
 from typing import Any, Mapping, Sequence
 
 from .ai_worlds import RANKS, SUITS, WorldConstraints, WorldGenerationError, parse_hand_pbn
-from .tournament_shape_core import PROFILE, VERSION, evaluate
+from .tournament_shape_core import ASSESSMENT_VERSION, FULL_CALL, SHAPE_ONLY, PROFILE, VERSION, evaluate
 
-GENERATOR_VERSION = "tournament-shape-exercises-v2"
+GENERATOR_VERSION = "tournament-shape-exercises-v3"
 MAX_EXCLUDED_HANDS = 10_000
 MAX_HISTORY_HAND_CHARS = 32
 # Reserve history parsing and candidate sampling together before either starts.
 # Each unit handles one bounded hand; shape enumeration is fixed at 14**3.
 MAX_HAND_WORK_UNITS = 12_000
-LIMITATION = "Оценивается только соответствие формы руки смыслу соглашения. Сила руки и лучший выбор заявки здесь не оцениваются."
+LIMITATION = "Проверяется только форма руки. Сила руки и допустимость заявки не установлены: числовой порог силы в связанном каноне не подтверждён."
 _CONTEXT_FIELDS = {
     "school_id", "school_status", "input_status", "decision_type", "system_us",
     "dealer", "seat", "auction_json", "cards_played_json", "dummy_pbn",
@@ -51,19 +51,24 @@ class ShapeExercise:
     _seed: int = field(repr=False)
     _difficulty: str = field(repr=False)
     _target_error: str = field(repr=False)
+    _assessment_mode: str | None = field(default=None, repr=False)
+    _assessment_version: str | None = field(default=None, repr=False)
     _database_source_id: str | None = field(default=None, repr=False)
 
     def student_view(self) -> dict[str, Any]:
         return {
             "exercise_id": self.exercise_id,
             "task": "SHAPE_MEANING_ONLY",
+            "assessment_mode": self._assessment_mode,
+            "assessment_version": self._assessment_version,
+            "call_eligibility": "UNKNOWN",
             "hand_pbn": self.hand_pbn,
             "system_profile": self._context["system_us"],
             "dealer": self._context["dealer"],
             "seat": self._context["seat"],
             "auction": list(self._context["auction_json"]),
             "proposed_call": self.proposed_call,
-            "question": "Соответствует ли заявка форме руки, предусмотренной соглашением?",
+            "question": "Соответствует ли только распределение карт форме, предусмотренной соглашением?",
             "response_options": ["Да", "Нет"],
             "limitation": LIMITATION,
         }
@@ -77,23 +82,36 @@ class ShapeExercise:
         """
         if type(response) is not bool:
             raise ShapeGenerationError("response must be a boolean")
-        result = _assessment(self._context, self.hand_pbn, self.proposed_call, catalog)
-        if result.get("status") not in {"SUPPORTED", "CONTRADICTED"}:
+        if self._assessment_mode != SHAPE_ONLY or self._assessment_version != ASSESSMENT_VERSION:
+            return {"status": "ABSTAIN", "learner_error": None, "reason": "EXERCISE_ASSESSMENT_CONTRACT_MISMATCH"}
+        result = _assessment(self._context, self.hand_pbn, self.proposed_call, catalog,
+                             assessment_mode=self._assessment_mode)
+        if result.get("status") != "PARTIAL":
             return {"status": "ABSTAIN", "learner_error": None, "reason": result.get("reason")}
         if result["source_bindings"][0] != self._binding:
             return {"status": "ABSTAIN", "learner_error": None, "reason": "CANON_BINDING_CHANGED"}
         expected, violations = inspect_shape(self.hand_pbn, self.proposed_call)
-        if expected != self._expected or (result["status"] == "SUPPORTED") != expected:
+        if expected != self._expected or (result["shape_status"] == "MATCH") != expected:
             return {"status": "ABSTAIN", "learner_error": None, "reason": "ASSESSOR_DISAGREEMENT"}
         if expected:
             explanation = "В названном мажоре синглет, в другом мажоре три карты, в минорах пять и четыре карты."
         else:
             explanation = " ".join(violations)
         return {
-            "status": "CORRECT" if response == expected else "INCORRECT",
-            "learner_error": response != expected,
+            "status": "PARTIAL_CORRECT" if response == expected else "PARTIAL_INCORRECT",
+            "learner_error": None,
+            "shape_response_error": response != expected,
+            "call_approved": None,
+            "call_eligibility": "UNKNOWN",
+            "assessment_complete": False,
+            "assessment_mode": self._assessment_mode,
+            "assessment_version": self._assessment_version,
+            "observed_hcp": result["observed_hcp"],
+            "strength_status": result["strength_status"],
+            "strength_policy": deepcopy(result["strength_policy"]),
+            "game_guaranteed": None,
             "expected_response": expected,
-            "explanation": explanation + " " + LIMITATION,
+            "explanation": explanation + " " + result["explanation"],
             "violated_conditions": list(violations),
             "assessment_scope": "shape_meaning_only",
             "source_binding": deepcopy(self._binding),
@@ -110,8 +128,8 @@ class ShapeExercise:
         """
         expected, _ = inspect_shape(self.hand_pbn, self.proposed_call)
         checked = self.assess_response(expected, catalog=catalog)
-        if checked["status"] != "CORRECT":
-            return {"status": "ABSTAIN", "reason": checked.get("reason", "ASSESSMENT_UNAVAILABLE")}
+        if checked["status"] != "PARTIAL_CORRECT":
+            return {"status": "ABSTAIN", "learner_error": None, "reason": checked.get("reason", "ASSESSMENT_UNAVAILABLE")}
         return {
             "status": "PREPARED",
             "exercise_version": {
@@ -119,11 +137,15 @@ class ShapeExercise:
                 "expected_solution": {"response": expected, "explanation": checked["explanation"]},
                 "rubric": {"assessment_scope": "shape_meaning_only", "response_type": "boolean",
                            "conditions": ["named_major_singleton", "other_major_three", "minors_five_four"],
-                           "hcp_assessed": False, "best_call_assessed": False},
+                           "hcp_assessed": False, "best_call_assessed": False,
+                           "assessment_mode": SHAPE_ONLY, "assessment_complete": False,
+                           "call_eligibility": "UNKNOWN", "strength_policy": checked["strength_policy"]},
                 "generated_by": GENERATOR_VERSION,
-                "method_version": VERSION,
+                "method_version": ASSESSMENT_VERSION,
                 "provenance": {"derived": True, "seed": self._seed, "difficulty": self._difficulty,
                                "requested_error_focus": self._target_error,
+                               "assessment_mode": self._assessment_mode,
+                               "assessment_version": self._assessment_version,
                                "hand_fingerprint": hand_fingerprint(self.hand_pbn),
                                "database_source_id": self._database_source_id,
                                "canon_binding": deepcopy(self._binding)},
@@ -202,10 +224,10 @@ def _in_scope(context: Mapping[str, Any], call: str, canon_version: str) -> bool
     )
 
 
-def _assessment(context, hand, call, catalog) -> dict[str, Any]:
+def _assessment(context, hand, call, catalog, *, assessment_mode=FULL_CALL) -> dict[str, Any]:
     try:
-        result = evaluate(dict(context, hand_pbn=hand), call, catalog)
-        if result.get("status") in {"SUPPORTED", "CONTRADICTED"} and len(result.get("source_bindings", [])) != 1:
+        result = evaluate(dict(context, hand_pbn=hand), call, catalog, assessment_mode=assessment_mode)
+        if result.get("status") == "PARTIAL" and len(result.get("source_bindings", [])) != 1:
             return {"status": "ABSTAIN", "reason": "NO_UNIQUE_CANON_BINDING"}
         return result
     except (KeyError, TypeError, ValueError, AttributeError):
@@ -276,11 +298,15 @@ def generate_shape_exercises(
     *, context: Mapping[str, Any], call: str, canon_version: str,
     catalog: Sequence[Mapping[str, Any]], seed: int, count: int = 6,
     positive_count: int | None = None, difficulty: str = "CLOSE",
-    target_error: str = "ANY",
+    target_error: str = "ANY", assessment_mode: str = FULL_CALL,
     suit_length_constraints: Mapping[str, Any] | None = None,
     excluded_hands: Sequence[str] = (), max_attempts: int | None = None,
 ) -> ShapeBatch:
-    """Generate a balanced, shuffled mix of fresh positive and nearby hands.
+    """Generate explicit partial shape exercises; full-call assessment fails closed.
+
+    A positive case means a shape match only, never an approved bid. Until an
+    executable strength canon is confirmed, default FULL_CALL returns ABSTAIN.
+    SHAPE_ONLY must be selected by the teaching caller and stays in provenance.
 
     count/positive_count, seed, difficulty and labels are private controls, not
     learner prompt fields. Exclude all previously shown hands to prevent repeats
@@ -293,6 +319,8 @@ def generate_shape_exercises(
     10000 ASCII PBN strings of 32 characters and 12000 combined history entries
     plus reserved sampling attempts are accepted. Larger requests fail closed.
     """
+    if assessment_mode not in (FULL_CALL, SHAPE_ONLY):
+        return ShapeBatch("ABSTAIN", "UNSUPPORTED_ASSESSMENT_MODE")
     if not _in_scope(context, call, canon_version):
         return ShapeBatch("OUT_OF_SCOPE", "PROFILE_VERSION_OR_PUBLIC_CONTEXT_MISMATCH")
     if type(seed) is not int or type(count) is not int or not 1 <= count <= 100:
@@ -337,16 +365,17 @@ def generate_shape_exercises(
             if fingerprint in seen:
                 continue
             agrees, violations = inspect_shape(hand, call)
-            result = _assessment(context, hand, call, catalog)
-            if result.get("status") not in {"SUPPORTED", "CONTRADICTED"}:
+            result = _assessment(context, hand, call, catalog, assessment_mode=assessment_mode)
+            if result.get("status") != "PARTIAL":
                 return ShapeBatch("ABSTAIN", result.get("reason", "CANON_ASSESSMENT_UNAVAILABLE"), attempts=attempts)
-            if agrees != label or (result["status"] == "SUPPORTED") != agrees:
+            if agrees != label or (result["shape_status"] == "MATCH") != agrees:
                 return ShapeBatch("ABSTAIN", "ASSESSOR_DISAGREEMENT", attempts=attempts)
             seen.add(fingerprint)
             # No seed or case label is encoded in the public identity.
-            identity = sha256(f"{GENERATOR_VERSION}:{VERSION}:{PROFILE}:{call}:{fingerprint}".encode()).hexdigest()
+            identity = sha256(f"{GENERATOR_VERSION}:{ASSESSMENT_VERSION}:{assessment_mode}:{VERSION}:{PROFILE}:{call}:{fingerprint}".encode()).hexdigest()
             exercises.append(ShapeExercise(identity, hand, call, deepcopy(dict(context)),
-                             agrees, violations, deepcopy(result["source_bindings"][0]), seed, difficulty, target_error))
+                             agrees, violations, deepcopy(result["source_bindings"][0]), seed, difficulty, target_error,
+                             _assessment_mode=assessment_mode, _assessment_version=ASSESSMENT_VERSION))
             break
         else:
             return ShapeBatch("GENERATION_EXHAUSTED", "NO_FRESH_HAND_WITHIN_BUDGET", attempts=attempts)

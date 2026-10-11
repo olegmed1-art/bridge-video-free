@@ -11,7 +11,7 @@ from dataclasses import replace
 from typing import Any, Mapping
 from uuid import UUID
 
-from .tournament_shape_core import PROFILE, SCOPE, VERSION
+from .tournament_shape_core import ASSESSMENT_VERSION, FULL_CALL, PROFILE, SCOPE, VERSION
 from .tournament_shape_exercises import ShapeBatch, ShapeExercise, generate_shape_exercises
 
 
@@ -53,7 +53,8 @@ def _school_active(connection, school_id):
     return row is not None and row.get("status") == "active"
 
 
-def available_targets_from_school_catalog(connection, *, school_id: UUID) -> list[dict[str, Any]]:
+def available_targets_from_school_catalog(connection, *, school_id: UUID,
+                                          assessment_mode: str = FULL_CALL) -> list[dict[str, Any]]:
     """Teacher-facing capabilities from executable ACTIVE rows, not site labels.
 
     The SQL reader already filters activation status, validity interval, School
@@ -72,7 +73,8 @@ def available_targets_from_school_catalog(connection, *, school_id: UUID) -> lis
     targets = []
     for call in ("3H", "3S"):
         probe = generate_shape_exercises(context=context, call=call, canon_version=VERSION,
-                                         catalog=rows, seed=0, count=1, positive_count=1)
+                                         catalog=rows, seed=0, count=1, positive_count=1,
+                                         assessment_mode=assessment_mode)
         if probe.status != "GENERATED":
             continue
         binding = probe.exercises[0]._binding
@@ -80,7 +82,9 @@ def available_targets_from_school_catalog(connection, *, school_id: UUID) -> lis
             continue
         targets.append({"task": "SHAPE_MEANING_ONLY", "proposed_call": call,
                         "system_profile": PROFILE, "scope_key": SCOPE,
-                        "canon_version": VERSION, "rule_key": binding["rule_key"]})
+                        "canon_version": VERSION, "rule_key": binding["rule_key"],
+                        "assessment_mode": assessment_mode, "assessment_version": ASSESSMENT_VERSION,
+                        "assessment_complete": False, "call_eligibility": "UNKNOWN"})
     return targets
 
 
@@ -98,7 +102,7 @@ def generate_from_school_catalog(connection, *, school_id: UUID,
     if not isinstance(school_id, UUID) or not isinstance(public_context, Mapping) or set(public_context) != expected:
         return ShapeBatch("OUT_OF_SCOPE", "INVALID_PUBLIC_CONTEXT")
     if set(generation) - {"call", "canon_version", "seed", "count", "positive_count", "difficulty",
-                         "suit_length_constraints", "excluded_hands", "max_attempts", "target_error"}:
+                         "suit_length_constraints", "excluded_hands", "max_attempts", "target_error", "assessment_mode"}:
         return ShapeBatch("OUT_OF_SCOPE", "UNSUPPORTED_GENERATION_INPUT")
     connection.execute("SET TRANSACTION READ ONLY")
     if not _school_active(connection, school_id):

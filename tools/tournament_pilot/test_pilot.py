@@ -36,9 +36,12 @@ def test_all_560_distributions_against_explicit_four_allowed_shapes(call):
             for d in range(14-s-h):
                 shape=(s,h,d,13-s-h-d)
                 answer=teacher.evaluate(position(SCHOOL,shape),call,[row])
-                assert answer["status"]==("SUPPORTED" if shape in allowed else "CONTRADICTED")
+                assert answer["status"]=="ABSTAIN"
+                assert answer["reason"]=="STRENGTH_CANON_NOT_CONFIRMED"
+                assert answer["shape_status"]==("MATCH" if shape in allowed else "MISMATCH")
+                assert answer["call_approved"] is None and answer["learner_error"] is None
                 assert answer["action"] is None and answer["point_threshold"] is None
-                assert answer["assessment_scope"]=="shape_meaning_only"
+                assert answer["assessment_scope"]=="full_call"
                 total+=1
     assert total==560
 
@@ -113,9 +116,11 @@ def test_screen_access_and_provenance(screen):
     assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
     nonce=re.search(r'nonce="([^"]+)"',page.text).group(1)
     headers={"Origin":screen,"X-Pilot-Nonce":nonce}
-    for call,status in [("3H","SUPPORTED"),("3S","CONTRADICTED")]:
+    for call,status in [("3H","MATCH"),("3S","MISMATCH")]:
         response=httpx.post(screen+"/assess",json={"call":call},headers=headers)
-        assert response.status_code==200 and response.json()["status"]==status
+        assert response.status_code==200 and response.json()["status"]=="ABSTAIN"
+        assert response.json()["shape_status"]==status
+        assert response.json()["reason"]=="STRENGTH_CANON_NOT_CONFIRMED"
         assert response.json()["sources"][0]["decision_ids"]==["TDEC-20261003-002"]
         assert "database_source_id" not in response.text
     assert httpx.post(screen+"/assess",json={"call":"3NT"},headers=headers).status_code==422
@@ -198,7 +203,10 @@ def test_screen_rejects_unbound_positive_answer(change):
     from .screen import public_answer
     from .package import catalog as fixture_catalog
     result=teacher.evaluate(position(UUID(int=101)),"3H",[fixture_catalog("3H")])
-    assert public_answer(result,"3H")["status"]=="SUPPORTED"
+    assert public_answer(result,"3H")["status"]=="ABSTAIN"
+    assert public_answer(result,"3H")["call_approved"] is None
+    with pytest.raises(ValueError): public_answer(result | {"status":"SUPPORTED"},"3H")
+    with pytest.raises(ValueError): public_answer(result | {"assessment_scope":"shape_meaning_only"},"3H")
     with pytest.raises(ValueError): public_answer(result|change,"3H")
     with pytest.raises(ValueError): public_answer({"status":"SUPPORTED","persisted":False},"3H")
 
