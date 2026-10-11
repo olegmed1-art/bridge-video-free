@@ -1,0 +1,66 @@
+name: Oracle user namespace atomic-write and lock qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: 'Exact current main SHA reviewed for this bounded namespace qualification'
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - '.github/workflows/ibm-oracle-lease-qualification.yml'
+      - 'ops/ibm_oracle_lease_qualification.py'
+      - 'tests/test_ibm_oracle_lease_qualification.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('oracle-ibm-qualification-contract-{0}', github.event.pull_request.number) || 'oracle-ibm-namespace-qualification' }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == 'olegmed1-art' && github.actor_id == '315099490' && github.triggering_actor == 'olegmed1-art' && github.run_attempt == 1) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Offline ownership, no-clobber, crash, lock and budget contracts
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v tests.test_ibm_oracle_lease_qualification
+          python3 -m py_compile ops/ibm_oracle_lease_qualification.py
+
+  qualification:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'olegmed1-art/bridge-video-free' && github.ref == 'refs/heads/main' && github.actor == 'olegmed1-art' && github.actor_id == '315099490' && github.triggering_actor == 'olegmed1-art' && github.run_attempt == 1 }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Qualify only a new retained user-owned test directory
+        env:
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          ORACLE_SSH_PRIVATE_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir "$RUNNER_TEMP/oracle-ibm-lease-qualification"
+          python3 -I -B -u ops/ibm_oracle_lease_qualification.py > "$RUNNER_TEMP/oracle-ibm-lease-qualification/receipt.json"
+      - name: Preserve sanitized bounded qualification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: oracle-ibm-lease-qualification-${{ github.run_id }}
+          path: ${{ runner.temp }}/oracle-ibm-lease-qualification/receipt.json
+          retention-days: 7
+          include-hidden-files: false
+          if-no-files-found: error
