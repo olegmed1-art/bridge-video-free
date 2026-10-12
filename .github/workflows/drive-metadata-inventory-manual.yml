@@ -1,0 +1,149 @@
+name: Bounded Drive metadata inventory (manual only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: 'Exact reviewed main revision containing this hook and merged collector'
+        type: string
+        required: true
+      acknowledge_metadata_only:
+        description: 'Authorize one bounded metadata capture of the fixed Diana folder'
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bounded-drive-metadata-diana
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'olegmed1-art/bridge-video-free' && github.repository_id == '1330085090' && github.ref == 'refs/heads/main' && github.actor == 'olegmed1-art' && github.actor_id == '315099490' && github.triggering_actor == 'olegmed1-art' && github.run_attempt == 1 && inputs.acknowledge_metadata_only }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      REVIEWED_COMMIT: '3a961557232aa3fad423c9958a9a34e86b6e041d'
+      EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out only the reviewed collector revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ env.REVIEWED_COMMIT }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12.14'
+      - name: Install pinned Drive audit dependencies without credentials
+        timeout-minutes: 2
+        # Keep the existing audit's direct versions and pin their full closure.
+        run: |
+          python -m pip install --disable-pip-version-check --only-binary=:all: \
+            --no-deps --timeout=30 --retries=1 \
+            requests==2.32.5 google-auth==2.48.0 \
+            charset-normalizer==3.5.2 idna==3.20 urllib3==2.8.0 certifi==2026.7.22 \
+            pyasn1-modules==0.4.2 pyasn1==0.6.4 rsa==4.9.1 \
+            cryptography==50.0.2 cffi==2.1.1 pycparser==3.11
+          python -m pip check
+          python -c 'import requests, google.auth.transport.requests, google.oauth2.credentials'
+      - name: Require reviewed code merged into the exact current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_MAIN_SHA"
+          test "$(git rev-parse HEAD)" = "$REVIEWED_COMMIT"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN_SHA"
+          git merge-base --is-ancestor "$REVIEWED_COMMIT" "$EXPECTED_MAIN_SHA"
+          sha256sum --check <<'PINS'
+          fb3f3131fbe35275805a4436d7e5c3028f647304757faa88d1aebd00ee7bea75  universal_video/metadata_inventory.py
+          b87f6dc7b9dac17c6ab45617014c5a2c93f6e82633447f734b9d3cc6de64b502  universal_video/drive_adapter.py
+          PINS
+      - name: Capture metadata and emit only sanitized validity, counts and digest
+        # This is the ONLY credential-bearing step. No artifact upload or cache.
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+          python - <<'PY'
+          import json, os, re, shutil, signal, subprocess, sys, tempfile
+
+          public = {"capture_status": "ERROR", "counts": None, "inventory_sha256": None,
+                    "plan_valid": None, "execution_allowed": False}
+          exit_code = 1
+          def interrupted(_signum, _frame):
+              raise SystemExit(1)
+          signal.signal(signal.SIGTERM, interrupted)
+          signal.signal(signal.SIGINT, interrupted)
+          try:
+              if not os.environ.get("GOOGLE_DRIVE_OAUTH_JSON"):
+                  raise ValueError("missing existing authorization")
+              if not shutil.rmtree.avoids_symlink_attacks:
+                  raise ValueError("private cleanup unsupported")
+              # Only this newly created owner-only tree is ever removed. The
+              # collector preserves its 6 GET / 500 item / 120s / 8MiB limits.
+              with tempfile.TemporaryDirectory(prefix="bridge-metadata-", dir="/tmp") as private:
+                  process = None
+                  try:
+                      process = subprocess.Popen(
+                          [sys.executable, "-m", "universal_video.metadata_inventory",
+                           "--folder-id", "1Fr-H2NgBKEpp3q_H4FzNmQwCV6bj2x6b",
+                           "--private-dir", private],
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                          start_new_session=True)
+                      output, _ = process.communicate(timeout=125)
+                      if len(output) > 2048:
+                          raise ValueError("invalid receipt")
+                      receipt = json.loads(output)
+                      expected = {"schema", "status", "code", "counts",
+                                  "inventory_sha256", "execution_allowed"}
+                      if (set(receipt) != expected or
+                          receipt["schema"] != "universal-video-metadata-receipt-v1" or
+                          receipt["execution_allowed"] is not False or
+                          receipt["status"] not in {"COMPLETE", "BLOCKED", "ERROR"}):
+                          raise ValueError("invalid receipt")
+                      counts = receipt["counts"]
+                      if counts is not None:
+                          if (not isinstance(counts, dict) or set(counts) != {
+                              "get_requests", "pages_received", "items_received",
+                              "response_bytes", "video_items", "trashed_items"} or
+                              any(type(n) is not int or not 0 <= n <= 2 * 8388608
+                                  for n in counts.values())):
+                              raise ValueError("invalid counts")
+                      digest = receipt["inventory_sha256"]
+                      complete = receipt["status"] == "COMPLETE"
+                      if ((complete and (counts is None or receipt["code"] != "OK" or
+                           not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest))) or
+                          (not complete and digest is not None) or
+                          process.returncode != {"COMPLETE": 0, "BLOCKED": 2, "ERROR": 1}[receipt["status"]]):
+                          raise ValueError("invalid completion")
+                      public.update(capture_status=receipt["status"], counts=counts,
+                                    inventory_sha256=digest)
+                      exit_code = process.returncode
+                  finally:
+                      if process is not None:
+                          # A dead supervisor can leave its OAuth/HTTP child
+                          # alive; always reap this invocation's entire group.
+                          try:
+                              os.killpg(process.pid, signal.SIGKILL)
+                          except ProcessLookupError:
+                              pass
+                          process.wait(timeout=2)
+              # plan_valid stays null: output/work folder IDs and explicit
+              # source selection are not approved inputs to this metadata hook.
+          except BaseException:
+              public.update(capture_status="ERROR", counts=None, inventory_sha256=None)
+              exit_code = 1
+          print(json.dumps(public, sort_keys=True, separators=(",", ":")))
+          raise SystemExit(exit_code)
+          PY
