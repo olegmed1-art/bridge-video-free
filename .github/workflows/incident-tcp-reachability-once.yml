@@ -1,0 +1,143 @@
+name: Incident 1911 credential-free TCP once
+
+# This file is published only on the exact new diagnostic branch, never main.
+# Creating that branch is the single authorized launch; pushes do not rerun it.
+on: create
+
+permissions: {}
+
+concurrency:
+  group: incident-1911-tcp-once-20261012
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.event.ref_type == 'branch' &&
+      github.event.ref == 'codex-incident-1911-tcp-once-20261012' &&
+      github.run_attempt == 1 && github.run_number == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: One bounded credential-free observation
+        shell: bash
+        env:
+          META_EVENT: ${{ github.event_name }}
+          META_REPOSITORY: ${{ github.repository }}
+          META_REF_TYPE: ${{ github.event.ref_type }}
+          META_BRANCH: ${{ github.event.ref }}
+          META_ATTEMPT: ${{ github.run_attempt }}
+          META_RUN_NUMBER: ${{ github.run_number }}
+          META_SHA: ${{ github.sha }}
+          META_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if timeout --signal=KILL 50s env -i PATH="$PATH" \
+              META_EVENT="$META_EVENT" META_REPOSITORY="$META_REPOSITORY" \
+              META_REF_TYPE="$META_REF_TYPE" META_BRANCH="$META_BRANCH" \
+              META_ATTEMPT="$META_ATTEMPT" META_RUN_NUMBER="$META_RUN_NUMBER" \
+              META_SHA="$META_SHA" META_WORKFLOW_SHA="$META_WORKFLOW_SHA" \
+              python3 -I -B - <<'PY' 2>/dev/null
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+          import tempfile
+          import urllib.request
+          
+          def emit(status):
+              print(json.dumps({"schema": "incident-1911-tcp-bootstrap-v1", "status": status}))
+          
+          def main():
+              expected = {
+                  "META_EVENT": "create",
+                  "META_REPOSITORY": "olegmed1-art/bridge-video-free",
+                  "META_REF_TYPE": "branch",
+                  "META_BRANCH": "codex-incident-1911-tcp-once-20261012",
+                  "META_ATTEMPT": "1",
+                  "META_RUN_NUMBER": "1",
+              }
+              sha = os.environ.get("META_SHA", "")
+              if not all(os.environ.get(k) == v for k, v in expected.items()) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+                  emit("scope_rejected")
+                  return 1
+              if os.environ.get("META_WORKFLOW_SHA") != sha:
+                  emit("scope_rejected")
+                  return 1
+              files = [
+                  (sha, "scripts/diagnostics/incident_tcp_reachability.py", "204d90bdcae1e41745d75c1a7d8cc387eaa550febcef6ef5d884b7dda2f17481"),
+                  ("d49feb4cb333b041928a5d37efb56a9f97dd1822", "bridge_school_api/db.py", "1c391cd0bfde393994db6b3b2f71af7843f5ed48b79e5476eced02113338234a"),
+              ]
+              with tempfile.TemporaryDirectory(prefix="incident-tcp-") as folder:
+                  root = Path(folder)
+                  for ref, relative, expected_hash in files:
+                      url = "https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/" + ref + "/" + relative
+                      try:
+                          with urllib.request.urlopen(url, timeout=5) as response:
+                              data = response.read(65537).replace(b"\r\n", b"\n")
+                          if len(data) > 65536 or hashlib.sha256(data).hexdigest() != expected_hash:
+                              emit("source_integrity_rejected")
+                              return 1
+                          target = root / relative
+                          target.parent.mkdir(parents=True, exist_ok=True)
+                          target.write_bytes(data)
+                      except Exception:
+                          emit("source_fetch_failed")
+                          return 1
+                  try:
+                      run = subprocess.run([sys.executable, "-I", "-B", str(root / files[0][1]), "--run-once"],
+                                           env={}, capture_output=True, timeout=25, check=False)
+                  except subprocess.TimeoutExpired:
+                      emit("diagnostic_deadline_exceeded")
+                      return 1
+                  except Exception:
+                      emit("diagnostic_start_failed")
+                      return 1
+                  # Defense in depth: even a diagnostic bug cannot print a host, address,
+                  # raw exception, arbitrary key or secret through the child output.
+                  keys = {"schema", "status", "credentials_used", "protocol_bytes_sent", "dns_budget_seconds",
+                          "tcp_timeout_seconds", "max_addresses_per_family", "target", "dns_status", "dns_elapsed_ms",
+                          "families", "family", "resolved_address_count", "rejected_address_count", "attempts",
+                          "elapsed_ms", "control_dns", "ipv4_record_count", "ipv6_record_count", "tcp_attempted"}
+                  strings = {"incident-1911-tcp-once-v1", "observed", "configuration_rejected", "diagnostic_failed",
+                             "reviewed_expected_pooler", "resolved", "not_needed", "ipv4", "ipv6",
+                             "dns_name_or_record_absent", "dns_temporary_failure", "dns_resolver_failure",
+                             "dns_deadline_exceeded", "connected_no_payload", "timeout", "refused", "network_unreachable",
+                             "host_unreachable", "reset", "family_unsupported", "local_address_unavailable",
+                             "local_permission_denied", "unknown"}
+                  def safe(value):
+                      if isinstance(value, dict):
+                          return all(k in keys and safe(v) for k, v in value.items())
+                      if isinstance(value, list):
+                          return len(value) <= 2 and all(safe(v) for v in value)
+                      if type(value) is str:
+                          return value in strings
+                      return type(value) is bool or type(value) is int and 0 <= value <= 60000
+                  try:
+                      result = json.loads(run.stdout)
+                      valid = isinstance(result, dict) and result.get("schema") == "incident-1911-tcp-once-v1" and safe(result)
+                  except Exception:
+                      valid = False
+                  if not valid:
+                      emit("diagnostic_output_rejected")
+                      return 1
+                  print(json.dumps(result, sort_keys=True))
+                  return 0 if run.returncode == 0 and result.get("status") == "observed" else 1
+          
+          try:
+              code = main()
+          except Exception:
+              emit("bootstrap_failed")
+              code = 1
+          raise SystemExit(code)
+          PY
+          then
+            exit 0
+          else
+            printf '%s\n' '{"schema":"incident-1911-tcp-bootstrap-v1","status":"bounded_job_failed"}'
+            exit 1
+          fi
