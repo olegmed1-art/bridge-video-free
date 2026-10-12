@@ -215,3 +215,112 @@ def test_runtime_rejects_other_system_profiles() -> None:
 
     assert error.value.status_code == 404
     assert error.value.detail["code"] == "RUNTIME_PROFILE_GAP"
+
+
+_STAGING_URL = '/v1/knowledge/internal/video-staging/11111111-1111-1111-1111-111111111111'
+_LOCAL_TOKEN = 'local-security-contract-test-only'
+
+
+def _staging_fault_response(monkeypatch, error):
+    from fastapi.testclient import TestClient
+
+    class Connection:
+        @contextmanager
+        def transaction(self):
+            raise error
+            yield
+
+    @contextmanager
+    def connect():
+        yield Connection()
+
+    monkeypatch.setenv('BRIDGE_API_TOKEN', _LOCAL_TOKEN)
+    monkeypatch.setattr(knowledge, 'connect', connect)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        return client.get(_STAGING_URL, headers={'Authorization': 'Bearer ' + _LOCAL_TOKEN})
+
+
+@pytest.mark.parametrize('message', [
+    'SYNTHETIC_PRIVATE_EXCEPTION_MARKER',
+    'PRIVATE_' + 'X' * 8192,
+    '\u0421\u0415\u041a\u0420\u0415\u0422\u041d\u042b\u0419_\u041c\u0410\u0420\u041a\u0415\u0420',
+    'Traceback (most recent call last):\n/private/synthetic.py:42 PRIVATE_MARKER',
+    'postgresql://synthetic:PRIVATE_MARKER@example.invalid/private',
+    'SOURCE_HASH_BINDING_MISMATCH_PRIVATE_MARKER',
+    '',
+])
+@pytest.mark.parametrize('blocked_error', [False, True])
+def test_internal_staging_never_returns_arbitrary_exception_text(monkeypatch, message, blocked_error):
+    from bridge_contracts.video_teacher_read import _Blocked
+    error = _Blocked(message) if blocked_error else ValueError(message)
+    response = _staging_fault_response(monkeypatch, error)
+    assert response.status_code == 200
+    assert response.json() == {
+        'schema': 'video-school-internal-staging-read-v1', 'status': 'BLOCKED',
+        'gaps': ['READ_CONTRACT_INCOMPLETE'], 'accepted_canon': [],
+        'canon_write_allowed': False, 'student_delivery_allowed': False,
+    }
+    assert 'no-store' in response.headers['Cache-Control']
+
+
+@pytest.mark.parametrize('code', [
+    'READ_ONLY_CONNECTION_REQUIRED', 'REPEATABLE_READ_REQUIRED',
+    'SOURCE_HASH_BINDING_MISMATCH', 'REPLAY_HASH_MISMATCH', 'READ_BINDING_STALE_OR_REVOKED',
+])
+def test_internal_staging_preserves_known_diagnostic_codes(monkeypatch, code):
+    response = _staging_fault_response(monkeypatch, ValueError(code))
+    assert response.status_code == 200
+    assert response.json()['gaps'] == [code]
+    assert response.json()['status'] == 'BLOCKED'
+    assert response.json()['accepted_canon'] == []
+
+
+def test_internal_staging_does_not_format_exception_or_join_multiple_args(monkeypatch):
+    class UnformattableError(ValueError):
+        def __str__(self):
+            raise AssertionError('exception formatting must not be used')
+    response = _staging_fault_response(monkeypatch, UnformattableError('PRIVATE_MARKER'))
+    assert response.status_code == 200
+    assert response.json()['gaps'] == ['READ_CONTRACT_INCOMPLETE']
+    response = _staging_fault_response(monkeypatch, ValueError('READ_ONLY_CONNECTION_REQUIRED', 'PRIVATE_MARKER'))
+    assert response.json()['gaps'] == ['READ_CONTRACT_INCOMPLETE']
+
+
+def test_internal_staging_keeps_driver_error_generic(monkeypatch):
+    import psycopg
+    response = _staging_fault_response(monkeypatch, psycopg.OperationalError('PRIVATE_DRIVER_MARKER'))
+    assert response.status_code == 200
+    assert response.json()['gaps'] == ['READ_CONTRACT_INCOMPLETE']
+    assert 'PRIVATE_DRIVER_MARKER' not in response.text
+
+
+def test_internal_staging_auth_rejects_before_connection(monkeypatch):
+    from fastapi.testclient import TestClient
+    calls = []
+
+    def unexpected_connect():
+        calls.append(True)
+        raise AssertionError('unauthorized connection')
+
+    monkeypatch.setenv('BRIDGE_API_TOKEN', _LOCAL_TOKEN)
+    monkeypatch.setattr(knowledge, 'connect', unexpected_connect)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.get(_STAGING_URL).status_code == 401
+        assert client.get(_STAGING_URL, headers={'Authorization': 'Bearer wrong'}).status_code == 403
+    assert calls == []
+
+
+def test_internal_staging_connection_failure_uses_existing_safe_handler(monkeypatch, caplog):
+    import psycopg
+    from fastapi.testclient import TestClient
+
+    def failed_connect():
+        raise psycopg.OperationalError('SYNTHETIC_PRIVATE_CONNECTION_MARKER')
+
+    monkeypatch.setenv('BRIDGE_API_TOKEN', _LOCAL_TOKEN)
+    monkeypatch.setattr(knowledge, 'connect', failed_connect)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(_STAGING_URL, headers={'Authorization': 'Bearer ' + _LOCAL_TOKEN})
+    assert response.status_code == 503
+    assert response.json() == {'detail': 'service unavailable'}
+    assert 'SYNTHETIC_PRIVATE_CONNECTION_MARKER' not in response.text + caplog.text

@@ -17,6 +17,27 @@ from database.video_candidate_persistence import RECEIPT_SCHEMA, RECEIPT_TYPE, _
 from database.video_staging_lineage import exact_lineage, fixed_school_id
 
 
+# Public diagnostics are application constants, never formatted exception text.
+# A new domain code needs explicit review here before it can cross the API boundary.
+_PUBLIC_BLOCK_CODES = (
+    'CANDIDATE_ID_INVALID', 'CANDIDATE_NOT_AVAILABLE', 'CANDIDATE_NOT_CURRENT_STAGING',
+    'DISCLOSURE_BINDING_MISSING', 'EXACT_RESULT_BINDING_REQUIRED',
+    'EXACT_SOURCE_RUN_ASSET_BINDING_MISMATCH', 'FIXED_SCHOOL_UNAVAILABLE',
+    'FULL_STAGING_REPLAY_REQUIRED', 'INTERVAL_INVALID', 'PAYLOAD_HASH_MISMATCH',
+    'READ_BINDING_MISMATCH', 'READ_BINDING_STALE_OR_REVOKED',
+    'READ_ONLY_CONNECTION_REQUIRED', 'REPEATABLE_READ_REQUIRED',
+    'REPLAY_CANDIDATE_BINDING_MISMATCH', 'REPLAY_HASH_MISMATCH', 'REPLAY_LINEAGE_MISMATCH',
+    'REPLAY_MEMBER_NOT_UNIQUE_OR_INVALID', 'REPLAY_OUTPUT_LINK_MISSING',
+    'REPLAY_RECEIPT_HASH_MISMATCH', 'REPLAY_RECEIPT_MISSING', 'REPLAY_RECEIPT_UNSAFE',
+    'REPLAY_SNAPSHOT_INTEGRITY_MISMATCH', 'REPLAY_SNAPSHOT_NOT_UNIQUE',
+    'SCOPE_BINDING_MISMATCH', 'SOURCE_BINDING_MISSING', 'SOURCE_HASH_BINDING_MISMATCH',
+    'SOURCE_JOB_BINDING_MISMATCH', 'SOURCE_LOCATOR_MISMATCH', 'SOURCE_NATIVE_IDENTITY_MISSING',
+    'SOURCE_RUN_BINDING_MISMATCH', 'SOURCE_RUN_BINDING_MISSING', 'SOURCE_RUN_NOT_CURRENT',
+    'STAGE_UNSUPPORTED', 'TEXT_HASH_MISMATCH', 'TEXT_INVALID', 'TRUSTED_READ_BINDING_MISSING',
+    'UNSAFE_STAGING_REPLAY',
+)
+
+
 def _as_dict(values):
     return {k.strip(): str(v) if isinstance(v, UUID) else v for k, v in zip(_COLUMNS.split(','), values)}
 
@@ -105,9 +126,8 @@ def read_internal_school_video_candidate(connection, candidate_id):
                                               and re.fullmatch(r'[A-Z][A-Z0-9_]{0,95}', g['code'])]
                 return result
     except (_Blocked, ValueError) as exc:
-        code = str(exc)
-        if not code or not all(c.isupper() or c == '_' for c in code):
-            code = 'READ_CONTRACT_INCOMPLETE'
+        code = next((public_code for public_code in _PUBLIC_BLOCK_CODES
+                     if exc.args == (public_code,)), 'READ_CONTRACT_INCOMPLETE')
     except (KeyError, TypeError, AttributeError, psycopg.Error):
         code = 'READ_CONTRACT_INCOMPLETE'
     return {'schema': 'video-school-internal-staging-read-v1', 'status': 'BLOCKED', 'gaps': [code],
