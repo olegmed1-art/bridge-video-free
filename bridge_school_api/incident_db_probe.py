@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 from urllib.parse import urlsplit
 
 import psycopg
@@ -23,8 +24,56 @@ from bridge_school_api.db import (
 )
 
 
+_SAFE_SQLSTATES = frozenset({
+    "08000", "08001", "08003", "08004", "08006", "08007", "08P01",
+    "28000", "28P01", "42501", "25006", "53300", "53400",
+    "57014", "57P01", "57P02", "57P03",
+})
+_SAFE_EXCEPTION_CLASSES = (
+    (psycopg.errors.ConnectionTimeout, "ConnectionTimeout"),
+    (psycopg.OperationalError, "OperationalError"),
+    (psycopg.InterfaceError, "InterfaceError"),
+    (psycopg.DatabaseError, "DatabaseError"),
+    (psycopg.Error, "Error"),
+    (TimeoutError, "TimeoutError"),
+    (RuntimeError, "RuntimeError"),
+)
+
+
+def _elapsed_ms(started_ns: int) -> int:
+    # Monotonic duration only; bounded by the existing ten-minute CI job budget.
+    return min(600_000, max(0, (time.monotonic_ns() - started_ns) // 1_000_000))
+
+
+def _failure(exc: Exception, phase: str, started_ns: int) -> dict[str, object]:
+    # Never use arbitrary exception class names, attributes or server text as
+    # output. Unknown SQLSTATEs are deliberately not echoed, even if five chars.
+    try:
+        code = getattr(exc, "sqlstate", None)
+    except Exception:
+        code = None
+    sqlstate = code if type(code) is str and code in _SAFE_SQLSTATES else None
+    exception_class = next((name for kind, name in _SAFE_EXCEPTION_CLASSES if isinstance(exc, kind)), "Exception")
+    try:
+        message = str(exc).lower()
+    except Exception:
+        message = ""
+    prefix = "connection" if phase == "connect" else phase
+    status = prefix + "_failed"
+    if phase == "connect" and (sqlstate in {"28000", "28P01"} or "authentication failed" in message):
+        status = "authentication_failed"
+    elif isinstance(exc, (TimeoutError, psycopg.errors.ConnectionTimeout)) or "timeout" in message or "timed out" in message:
+        status = prefix + "_timeout"
+    # Categories remain hints. The phase identifies a code operation, never a
+    # proven DNS/TCP/TLS/authentication substage of psycopg.connect().
+    return {"status": status, "phase": phase, "phase_elapsed_ms": _elapsed_ms(started_ns),
+            "exception_class": exception_class, "sqlstate": sqlstate}
+
+
 def probe(connect: bool = False) -> dict[str, object]:
-    result: dict[str, object] = {"probe": "incident-1911-v2", "connected": False}
+    # connected records successful return from connect(), not an open session at
+    # report time. Cleanup is attempted for every established connection.
+    result: dict[str, object] = {"probe": "incident-1911-v3", "connected": False}
     if os.environ.get("VERCEL_ENV") != "production":
         return {**result, "status": "production_environment_required"}
     if any(key.startswith("PG") for key in os.environ):
@@ -68,29 +117,51 @@ def probe(connect: bool = False) -> dict[str, object]:
         return {**result, "status": "source_endpoint_requires_review"}
     if not connect:
         return {**result, "status": "configuration_pass_connection_not_tested"}
+    started_ns = phase_started_ns = time.monotonic_ns()
+    phase = "connect"
+    conn = None
+    failure = None
+    cleanup_errors = []
     try:
-        with psycopg.connect(
+        conn = psycopg.connect(
             dsn,
             connect_timeout=10,
             application_name="incident-1911-readonly-probe",
             options="-c default_transaction_read_only=on -c statement_timeout=5000",
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT current_user, current_database(), current_setting('transaction_read_only')")
-                row = cur.fetchone()
-            # Even the read-only diagnostic transaction is explicitly rolled back.
-            conn.rollback()
-        matches = row == (EXPECTED_PRINCIPAL, EXPECTED_DATABASE, "on")
-        return {**result, "connected": True, "status": "pass" if matches else "session_contract_failed"}
+        )
+        result["connected"] = True
+        phase = "query"
+        phase_started_ns = time.monotonic_ns()
+        with conn.cursor() as cur:
+            cur.execute("SELECT current_user, current_database(), current_setting('transaction_read_only')")
+            row = cur.fetchone()
+        if row != (EXPECTED_PRINCIPAL, EXPECTED_DATABASE, "on"):
+            failure = {"status": "session_contract_failed", "phase": "query",
+                       "phase_elapsed_ms": _elapsed_ms(phase_started_ns),
+                       "exception_class": None, "sqlstate": None}
     except Exception as exc:
-        # Never serialize an exception, DSN, password, or arbitrary server text.
-        message = str(exc).lower()
-        category = "connection_failed"
-        if "authentication failed" in message:
-            category = "authentication_failed"
-        elif "timeout" in message:
-            category = "connection_timeout"
-        return {**result, "status": category}
+        failure = _failure(exc, phase, phase_started_ns)
+    finally:
+        if conn is not None:
+            # Explicit cleanup has no context-manager success commit. Attempt
+            # both operations once, retaining the first failure if cleanup fails.
+            for phase in ("rollback", "close"):
+                phase_started_ns = time.monotonic_ns()
+                try:
+                    if phase == "rollback":
+                        conn.rollback()
+                    else:
+                        conn.close()
+                except Exception as exc:
+                    error = _failure(exc, phase, phase_started_ns)
+                    if failure is None:
+                        failure = error
+                    else:
+                        cleanup_errors.append(error)
+    result["elapsed_ms"] = _elapsed_ms(started_ns)
+    if failure is not None:
+        return {**result, **failure, "cleanup_errors": cleanup_errors}
+    return {**result, "phase": "complete", "status": "pass"}
 
 
 def main() -> int:
