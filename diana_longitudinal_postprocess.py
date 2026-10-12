@@ -482,7 +482,7 @@ def _summary_markdown(payload: Mapping[str, Any]) -> str:
     ]) + "\n"
 
 
-def _persist_staging_if_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _persist_staging_if_configured(payload: Mapping[str, Any], *, persisted_result=None) -> dict[str, Any]:
     raw_dsn = os.getenv("BRIDGE_WORKER_DATABASE_URL", "").strip()
     requested = os.getenv("BRIDGE_PERSIST_DATABASE", "false").strip().casefold() == "true"
     if not requested:
@@ -491,7 +491,7 @@ def _persist_staging_if_configured(payload: Mapping[str, Any]) -> dict[str, Any]
         return {"status": "SKIPPED_DATABASE_URL_MISSING"}
     try:
         from database.video_candidate_persistence import persist_quality_candidates
-        return persist_quality_candidates(raw_dsn, payload)
+        return persist_quality_candidates(raw_dsn, payload, persisted_result=persisted_result)
     except Exception as exc:
         # Candidate persistence must not invalidate already completed immutable
         # media evidence.  The receipt records the real blocker for retry.

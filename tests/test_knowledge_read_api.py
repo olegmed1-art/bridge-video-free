@@ -93,7 +93,7 @@ def test_knowledge_routes_are_mounted_with_api_token_dependency() -> None:
     assert {
         route.path for route in mounted[0].original_router.routes
     } == {"/v1/knowledge/query", "/v1/knowledge/runtime/l1", "/v1/knowledge/teacher/book",
-          "/v1/knowledge/validation/runtime-identity"}
+              "/v1/knowledge/validation/runtime-identity", "/v1/knowledge/internal/video-staging/{candidate_id}"}
 
 
 def test_source_lane_reads_only_approved_source_facts(monkeypatch) -> None:

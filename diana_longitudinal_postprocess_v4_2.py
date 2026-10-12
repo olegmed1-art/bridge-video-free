@@ -15,6 +15,7 @@ import diana_longitudinal_postprocess as base
 from bridge_report_board_reconstruction import reconstruct_report_visual_deals
 from bridge_contracts.video_dds_pinned_executor import execute_digest_pinned_dds3
 from bridge_contracts.video_replay_input import build_replay_input, read_json, sha256, ReplayInputError
+from bridge_contracts.video_local_evidence import reader_from_environment
 from diana_longitudinal_quality_v4_2 import (
     QUALITY_METHOD_VERSION,
     QUALITY_SCHEMA_VERSION,
@@ -87,7 +88,7 @@ def _stable_database_summary(runtime: Mapping[str, Any] | None, candidate_record
     # Stable failure state is material and belongs in the artifact; volatile row
     # counts/analysis_run_id do not.
     if status not in {'PERSISTED', 'NOT_REQUESTED'}:
-        for key in ('required_migration', 'error_class', 'detail'):
+        for key in ('required_migration', 'error_class', 'detail', 'gaps'):
             if runtime.get(key) is not None:
                 result[key] = runtime.get(key)
     return result
@@ -168,24 +169,28 @@ def _reconstruct_from_master_pdf(token: str, master: Mapping[str, Any], master_p
         return reconstruct_report_visual_deals(path, master)
 
 
-def main() -> int:
+def main(*, persisted_result=None) -> int:
     job_id = os.environ.get('BRIDGE_JOB_ID', '').strip()
     result_folder = os.environ.get('BRIDGE_OUTPUT_FOLDER_ID', '').strip()
     work_folder = os.environ.get('BRIDGE_WORK_FOLDER_ID', '').strip()
     if not job_id or not result_folder:
         raise RuntimeError('LONGITUDINAL_JOB_AND_OUTPUT_FOLDER_REQUIRED')
     source_draft_files = _source_draft_files(os.environ)
+    replay_evidence_reader = reader_from_environment(os.environ)
     token = base.user_oauth_token()
     if not token:
         raise RuntimeError('BLOCKED_ACCESS: Drive OAuth unavailable')
 
     done_item, done = base._latest_done(token, job_id)
     source_draft_input = None
-    if source_draft_files is None:
+    if source_draft_files is None and replay_evidence_reader is None:
         master, master_pdf = base._load_master(token, done)
     else:
         master, master_pdf, raw_master = base._load_master_with_raw(token, done)
-        source_draft_input = _prepare_source_draft(master, master_pdf, raw_master, source_draft_files)
+        if replay_evidence_reader is not None:
+            replay_evidence_reader.bind_master(raw_master)
+        if source_draft_files is not None:
+            source_draft_input = _prepare_source_draft(master, master_pdf, raw_master, source_draft_files)
     if master.get('job_id') != job_id:
         raise RuntimeError('LONGITUDINAL_JOB_ID_MISMATCH')
 
@@ -209,6 +214,7 @@ def main() -> int:
         dds_request_executor=execute_digest_pinned_dds3,
         correction_receipt_resolver=_trusted_correction_receipt_resolver(),
         source_draft_input=source_draft_input,
+        replay_evidence_reader=replay_evidence_reader,
     )
     curriculum = base._curriculum(working_master, lesson, quality)
     gaps = list(working_master.get('knowledge_gaps') or [])
@@ -265,7 +271,10 @@ def main() -> int:
     }
 
     # Persist before artifact sealing; only a stable summary enters content identity.
-    runtime_database = base._persist_staging_if_configured(payload)
+    # Exact prior worker result is a server orchestration dependency, not a
+    # claim loaded from the generated analysis artifact or environment JSON.
+    runtime_database = (base._persist_staging_if_configured(payload, persisted_result=persisted_result)
+                        if persisted_result is not None else base._persist_staging_if_configured(payload))
     payload['database_staging'] = _stable_database_summary(
         runtime_database,
         int((quality.get('counts') or {}).get('staging_records') or 0),
