@@ -2,7 +2,7 @@ import io
 import json
 import os
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import MagicMock, patch
 
 from bridge_school_api import incident_db_probe as probe
@@ -14,6 +14,12 @@ DSN = (f"postgresql://{probe.EXPECTED_PRINCIPAL}:{SECRET}@{probe.PRODUCTION_HOST
 
 
 class IncidentProbeTests(unittest.TestCase):
+    def setUp(self):
+        guard = patch.object(probe.psycopg, "connect", side_effect=AssertionError("real connections forbidden"))
+        self.connection_guard = guard.start()
+        self.addCleanup(guard.stop)
+        self.addCleanup(self.connection_guard.assert_not_called)
+
     def run_probe(self, dsn=DSN, connect=False, extra=None):
         env = {"VERCEL_ENV": "production", "BRIDGE_APP_DATABASE_URL": dsn, **(extra or {})}
         with patch.dict(os.environ, env, clear=True):
@@ -103,6 +109,145 @@ class IncidentProbeTests(unittest.TestCase):
             self.assertNotIn("postgresql://", rendered)
             self.assertNotIn(probe.PRODUCTION_HOST, rendered)
 
+    @staticmethod
+    def fake_connection():
+        conn = MagicMock()
+        cursor = conn.cursor.return_value.__enter__.return_value
+        cursor.fetchone.return_value = (probe.EXPECTED_PRINCIPAL, probe.EXPECTED_DATABASE, "on")
+        return conn, cursor
+
+    def test_each_failure_phase_preserves_connection_established_fact(self):
+        for phase in ("connect", "query", "rollback", "close"):
+            with self.subTest(phase=phase):
+                conn, cursor = self.fake_connection()
+                error = TimeoutError("synthetic timeout " + DSN)
+                if phase != "connect":
+                    target = cursor.execute if phase == "query" else getattr(conn, phase)
+                    target.side_effect = error
+                with patch.object(probe.psycopg, "connect", return_value=conn,
+                                  side_effect=error if phase == "connect" else None) as connect:
+                    result = self.run_probe(connect=True)
+                self.assertEqual(result["phase"], phase)
+                self.assertEqual(result["connected"], phase != "connect")
+                self.assertEqual(result["status"], ("connection" if phase == "connect" else phase) + "_timeout")
+                self.assertEqual(result["exception_class"], "TimeoutError")
+                self.assertIsNone(result["sqlstate"])
+                self.assertEqual(result["cleanup_errors"], [])
+                self.assertIs(type(result["elapsed_ms"]), int)
+                self.assertIs(type(result["phase_elapsed_ms"]), int)
+                connect.assert_called_once()
+                if phase != "connect":
+                    conn.rollback.assert_called_once()
+                    conn.close.assert_called_once()
+                conn.commit.assert_not_called()
+                conn.__enter__.assert_not_called()
+
+    def test_query_failure_is_not_replaced_by_cleanup_errors(self):
+        conn, cursor = self.fake_connection()
+        cursor.execute.side_effect = RuntimeError("query timeout " + DSN)
+        conn.rollback.side_effect = RuntimeError("rollback timeout " + DSN)
+        conn.close.side_effect = RuntimeError("close timeout " + DSN)
+        with patch.object(probe.psycopg, "connect", return_value=conn):
+            result = self.run_probe(connect=True)
+        self.assertEqual((result["phase"], result["status"]), ("query", "query_timeout"))
+        self.assertTrue(result["connected"])
+        self.assertEqual([e["phase"] for e in result["cleanup_errors"]], ["rollback", "close"])
+        conn.rollback.assert_called_once()
+        conn.close.assert_called_once()
+        conn.commit.assert_not_called()
+
+    def test_rollback_failure_is_not_replaced_by_close_error(self):
+        conn, _ = self.fake_connection()
+        conn.rollback.side_effect = RuntimeError("rollback failed " + DSN)
+        conn.close.side_effect = RuntimeError("close failed " + DSN)
+        with patch.object(probe.psycopg, "connect", return_value=conn):
+            result = self.run_probe(connect=True)
+        self.assertEqual(result["phase"], "rollback")
+        self.assertEqual(result["status"], "rollback_failed")
+        self.assertEqual([e["phase"] for e in result["cleanup_errors"]], ["close"])
+
+    def test_wrong_session_is_not_replaced_by_cleanup_errors(self):
+        for failed_cleanup in ((), ("rollback",), ("close",), ("rollback", "close")):
+            with self.subTest(failed_cleanup=failed_cleanup):
+                conn, cursor = self.fake_connection()
+                cursor.fetchone.return_value = ("wrong-principal", "wrong-database", "off")
+                for phase in failed_cleanup:
+                    getattr(conn, phase).side_effect = RuntimeError("timeout " + DSN)
+                with patch.object(probe.psycopg, "connect", return_value=conn):
+                    result = self.run_probe(connect=True)
+                self.assertEqual(result["status"], "session_contract_failed")
+                self.assertEqual(result["phase"], "query")
+                self.assertTrue(result["connected"])
+                self.assertIsNone(result["exception_class"])
+                self.assertIsNone(result["sqlstate"])
+                self.assertEqual([e["phase"] for e in result["cleanup_errors"]], list(failed_cleanup))
+                conn.rollback.assert_called_once()
+                conn.close.assert_called_once()
+                conn.commit.assert_not_called()
+
+    def test_safe_exception_family_and_explicit_sqlstate_allowlist(self):
+        for code in ("ABCDE", DSN, "28P01\n" + SECRET, b"28P01", None, 28000):
+            with self.subTest(code=repr(code)):
+                error_type = type(SECRET, (RuntimeError,), {"sqlstate": code})
+                with patch.object(probe.psycopg, "connect", side_effect=error_type(DSN)):
+                    result = self.run_probe(connect=True)
+                self.assertEqual(result["exception_class"], "RuntimeError")
+                self.assertIsNone(result["sqlstate"])
+        with patch.object(probe.psycopg, "connect", side_effect=probe.psycopg.errors.InvalidPassword(DSN)):
+            result = self.run_probe(connect=True)
+        self.assertEqual(result["sqlstate"], "28P01")
+        self.assertEqual(result["exception_class"], "OperationalError")
+        self.assertEqual(result["status"], "authentication_failed")
+
+    def test_unrenderable_error_and_throwing_sqlstate_do_not_escape(self):
+        class UnexpectedError(Exception):
+            @property
+            def sqlstate(self):
+                raise RuntimeError(DSN)
+
+            def __str__(self):
+                raise RuntimeError(DSN)
+
+        with patch.object(probe.psycopg, "connect", side_effect=UnexpectedError()):
+            result = self.run_probe(connect=True)
+        self.assertEqual(result["status"], "connection_failed")
+        self.assertEqual(result["exception_class"], "Exception")
+        self.assertIsNone(result["sqlstate"])
+
+    def test_elapsed_distinguishes_failure_phase_from_cleanup(self):
+        conn, cursor = self.fake_connection()
+        cursor.execute.side_effect = RuntimeError("timeout")
+        ticks = [0, 2, 5, 6, 7, 11]  # start, query, failure, rollback, close, end
+        with patch.object(probe.psycopg, "connect", return_value=conn), \
+             patch.object(probe.time, "monotonic_ns", side_effect=[n * 1_000_000 for n in ticks]):
+            result = self.run_probe(connect=True)
+        self.assertEqual(result["phase_elapsed_ms"], 3)
+        self.assertEqual(result["elapsed_ms"], 11)
+
+    def test_elapsed_is_nonnegative_and_bounded(self):
+        for clock, expected in ((-1, 0), (10**30, 600_000)):
+            with self.subTest(clock=clock), patch.object(probe.time, "monotonic_ns", return_value=clock):
+                self.assertEqual(probe._elapsed_ms(0), expected)
+
+    def test_cli_phase_errors_fail_without_stdout_or_stderr_leaks(self):
+        for phase in ("connect", "query", "rollback", "close"):
+            conn, cursor = self.fake_connection()
+            error = RuntimeError("timeout " + DSN)
+            if phase != "connect":
+                (cursor.execute if phase == "query" else getattr(conn, phase)).side_effect = error
+            with self.subTest(phase=phase), \
+                 patch.dict(os.environ, {"VERCEL_ENV": "production", "BRIDGE_APP_DATABASE_URL": DSN}, clear=True), \
+                 patch("sys.argv", ["incident_db_probe", "--connect"]), \
+                 patch.object(probe.psycopg, "connect", return_value=conn,
+                              side_effect=error if phase == "connect" else None), \
+                 redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(probe.main(), 1)
+            payload = json.loads(out.getvalue())
+            self.assertEqual(payload["phase"], phase)
+            for forbidden in (SECRET, DSN, probe.PRODUCTION_HOST, "postgresql://"):
+                self.assertNotIn(forbidden, out.getvalue() + err.getvalue())
+            self.assertEqual(err.getvalue(), "")
+
     def test_query_overrides_cannot_redirect_probe(self):
         for parameter in ("host=elsewhere.neon.tech", "hostaddr=127.0.0.1", "user=neondb_owner", "service=other"):
             with self.subTest(parameter=parameter), patch.object(probe.psycopg, "connect") as connect:
@@ -132,8 +277,16 @@ class IncidentProbeTests(unittest.TestCase):
         conn.cursor.return_value.__enter__.return_value.fetchone.return_value = (probe.EXPECTED_PRINCIPAL, probe.EXPECTED_DATABASE, "on")
         with patch.object(probe.psycopg, "connect", return_value=conn) as connect:
             self.assertEqual(self.run_probe(connect=True)["status"], "pass")
-            self.assertIn("default_transaction_read_only=on", connect.call_args.kwargs["options"])
+            connect.assert_called_once_with(
+                DSN, connect_timeout=10, application_name="incident-1911-readonly-probe",
+                options="-c default_transaction_read_only=on -c statement_timeout=5000",
+            )
+            conn.cursor.return_value.__enter__.return_value.execute.assert_called_once_with(
+                "SELECT current_user, current_database(), current_setting('transaction_read_only')"
+            )
             conn.rollback.assert_called_once()
+            conn.close.assert_called_once()
+            conn.commit.assert_not_called()
 
     def test_wrong_session_fails(self):
         conn = MagicMock()
