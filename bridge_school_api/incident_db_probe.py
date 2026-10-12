@@ -38,6 +38,38 @@ _SAFE_EXCEPTION_CLASSES = (
     (TimeoutError, "TimeoutError"),
     (RuntimeError, "RuntimeError"),
 )
+_DIAGNOSTIC_PHRASES = (
+    ("dns", ("could not translate host name", "name or service not known",
+             "temporary failure in name resolution", "nodename nor servname provided")),
+    ("tcp", ("connection refused", "network is unreachable", "no route to host",
+             "connection reset by peer")),
+    ("tls", ("ssl error:", "ssl syscall error:", "certificate verify failed",
+             "ssl handshake failed", "tls handshake failed", "server does not support ssl",
+             "ssl connection has been closed unexpectedly")),
+    ("channel_binding", ("channel binding required", "channel binding is required",
+                         "channel binding mismatch")),
+    ("auth", ("authentication failed", "no password supplied", "no pg_hba.conf entry")),
+    ("server", ("server closed the connection unexpectedly", "database system is starting up",
+                "database system is shutting down", "database system is in recovery mode",
+                "terminating connection due to administrator command", "too many connections",
+                "remaining connection slots are reserved")),
+    ("timeout", ("timeout expired", "timed out", "statement timeout", "connection timeout")),
+)
+
+
+def _diagnostic_markers(message: str, exc: Exception, sqlstate: str | None) -> list[str]:
+    # Fixed hints only, not a root-cause verdict. libpq may aggregate multiple
+    # attempts: collect every recognized category, never select only the first.
+    found = {marker for marker, phrases in _DIAGNOSTIC_PHRASES
+             if any(phrase in message for phrase in phrases)}
+    if sqlstate in {"28000", "28P01"}:
+        found.add("auth")
+    if sqlstate in {"53300", "53400", "57P01", "57P02", "57P03"}:
+        found.add("server")
+    if isinstance(exc, (TimeoutError, psycopg.errors.ConnectionTimeout)):
+        found.add("timeout")
+    # No arbitrary message, host, address, SQLSTATE or exception name is copied.
+    return [marker for marker, _ in _DIAGNOSTIC_PHRASES if marker in found] or ["unknown"]
 
 
 def _elapsed_ms(started_ns: int) -> int:
@@ -48,11 +80,17 @@ def _elapsed_ms(started_ns: int) -> int:
 def _failure(exc: Exception, phase: str, started_ns: int) -> dict[str, object]:
     # Never use arbitrary exception class names, attributes or server text as
     # output. Unknown SQLSTATEs are deliberately not echoed, even if five chars.
+    sqlstate_unreadable = False
     try:
         code = getattr(exc, "sqlstate", None)
     except Exception:
         code = None
+        sqlstate_unreadable = True
     sqlstate = code if type(code) is str and code in _SAFE_SQLSTATES else None
+    # present means a non-None value was observed. filtered also covers an
+    # unreadable attribute: (False, True) must not be interpreted as absent.
+    sqlstate_present = code is not None
+    sqlstate_filtered = sqlstate_unreadable or (sqlstate_present and sqlstate is None)
     exception_class = next((name for kind, name in _SAFE_EXCEPTION_CLASSES if isinstance(exc, kind)), "Exception")
     try:
         message = str(exc).lower()
@@ -67,13 +105,15 @@ def _failure(exc: Exception, phase: str, started_ns: int) -> dict[str, object]:
     # Categories remain hints. The phase identifies a code operation, never a
     # proven DNS/TCP/TLS/authentication substage of psycopg.connect().
     return {"status": status, "phase": phase, "phase_elapsed_ms": _elapsed_ms(started_ns),
-            "exception_class": exception_class, "sqlstate": sqlstate}
+            "exception_class": exception_class, "sqlstate": sqlstate,
+            "sqlstate_present": sqlstate_present, "sqlstate_filtered": sqlstate_filtered,
+            "diagnostic_markers": _diagnostic_markers(message, exc, sqlstate)}
 
 
 def probe(connect: bool = False) -> dict[str, object]:
     # connected records successful return from connect(), not an open session at
     # report time. Cleanup is attempted for every established connection.
-    result: dict[str, object] = {"probe": "incident-1911-v3", "connected": False}
+    result: dict[str, object] = {"probe": "incident-1911-v4", "connected": False}
     if os.environ.get("VERCEL_ENV") != "production":
         return {**result, "status": "production_environment_required"}
     if any(key.startswith("PG") for key in os.environ):
@@ -138,7 +178,9 @@ def probe(connect: bool = False) -> dict[str, object]:
         if row != (EXPECTED_PRINCIPAL, EXPECTED_DATABASE, "on"):
             failure = {"status": "session_contract_failed", "phase": "query",
                        "phase_elapsed_ms": _elapsed_ms(phase_started_ns),
-                       "exception_class": None, "sqlstate": None}
+                       "exception_class": None, "sqlstate": None,
+                       "sqlstate_present": False, "sqlstate_filtered": False,
+                       "diagnostic_markers": ["unknown"]}
     except Exception as exc:
         failure = _failure(exc, phase, phase_started_ns)
     finally:

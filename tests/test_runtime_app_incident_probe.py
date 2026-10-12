@@ -213,6 +213,125 @@ class IncidentProbeTests(unittest.TestCase):
         self.assertEqual(result["status"], "connection_failed")
         self.assertEqual(result["exception_class"], "Exception")
         self.assertIsNone(result["sqlstate"])
+        self.assertFalse(result["sqlstate_present"])
+        self.assertTrue(result["sqlstate_filtered"])
+        self.assertEqual(result["diagnostic_markers"], ["unknown"])
+
+    def test_diagnostic_markers_are_fixed_narrow_hints(self):
+        fixtures = (
+            ('could not translate host name "test.invalid" to address', ["dns"]),
+            ("connection to server at 203.0.113.7 failed: Connection refused", ["tcp"]),
+            ("SSL error: certificate verify failed", ["tls"]),
+            ("channel binding required, but server did not offer it", ["channel_binding"]),
+            ('password authentication failed for user "synthetic-user"', ["auth"]),
+            ("FATAL: the database system is starting up", ["server"]),
+            ("connection to server at 2001:db8::7 failed: timeout expired", ["timeout"]),
+            ("dns tcp tls channelbinding auth server timeout", ["unknown"]),
+            ("unrecognized or localized message", ["unknown"]),
+        )
+        for message, expected in fixtures:
+            with self.subTest(expected=expected):
+                result = probe._failure(RuntimeError(message + " " + DSN), "connect", probe.time.monotonic_ns())
+                self.assertEqual(result["diagnostic_markers"], expected)
+                self.assertFalse(result["sqlstate_present"])
+                self.assertFalse(result["sqlstate_filtered"])
+                for forbidden in (SECRET, DSN, "test.invalid", "203.0.113.7", "2001:db8::7", "synthetic-user"):
+                    self.assertNotIn(forbidden, json.dumps(result))
+
+    def test_multiple_attempt_messages_keep_all_distinct_markers(self):
+        attempts = [
+            'could not translate host name "test.invalid" to address',
+            'connection to server at 203.0.113.7 failed: Connection refused',
+            'SSL error: certificate verify failed',
+            'channel binding is required, but was not used',
+            'password authentication failed',
+            'FATAL: the database system is starting up',
+            'connection to server at 2001:db8::7 failed: Operation timed out',
+            'Connection refused',
+            'unrecognized additional attempt',
+        ]
+        for lines in (attempts, list(reversed(attempts))):
+            result = probe._failure(RuntimeError("\n".join(lines)), "connect", probe.time.monotonic_ns())
+            self.assertEqual(result["diagnostic_markers"],
+                             ["dns", "tcp", "tls", "channel_binding", "auth", "server", "timeout"])
+            self.assertNotIn("203.0.113.7", json.dumps(result))
+            self.assertNotIn("2001:db8::7", json.dumps(result))
+
+    def test_markers_from_driver_type_and_sqlstate_do_not_overclaim(self):
+        fixtures = (
+            (TimeoutError(SECRET), ["timeout"]),
+            (probe.psycopg.errors.ConnectionTimeout(SECRET), ["timeout"]),
+            (probe.psycopg.errors.InvalidPassword(SECRET), ["auth"]),
+            (probe.psycopg.errors.CannotConnectNow(SECRET), ["server"]),
+            (probe.psycopg.errors.ConnectionFailure(SECRET), ["unknown"]),
+            (probe.psycopg.errors.QueryCanceled(SECRET), ["unknown"]),
+        )
+        for error, expected in fixtures:
+            with self.subTest(expected=expected):
+                result = probe._failure(error, "connect", probe.time.monotonic_ns())
+                self.assertEqual(result["diagnostic_markers"], expected)
+                self.assertNotIn(SECRET, json.dumps(result))
+
+    def test_sqlstate_presence_and_filtering_are_distinct(self):
+        class StringSubclass(str):
+            pass
+
+        fixtures = (
+            (None, None, False, False),
+            ("28P01", "28P01", True, False),
+            ("ZZ999", None, True, True),
+            ("", None, True, True),
+            (b"28P01", None, True, True),
+            (StringSubclass("28P01"), None, True, True),
+            (False, None, True, True),
+            ([SECRET], None, True, True),
+            ("28P01\n" + DSN, None, True, True),
+        )
+        for code, safe, present, filtered in fixtures:
+            with self.subTest(present=present, filtered=filtered):
+                error = RuntimeError(SECRET)
+                error.sqlstate = code
+                result = probe._failure(error, "connect", probe.time.monotonic_ns())
+                self.assertEqual(result["sqlstate"], safe)
+                self.assertIs(result["sqlstate_present"], present)
+                self.assertIs(result["sqlstate_filtered"], filtered)
+                self.assertNotIn(SECRET, json.dumps(result))
+
+    def test_markers_preserve_primary_and_cleanup_error_evidence(self):
+        conn, cursor = self.fake_connection()
+        cursor.execute.side_effect = RuntimeError("statement timeout " + DSN)
+        conn.rollback.side_effect = RuntimeError("SSL error: " + DSN)
+        conn.close.side_effect = RuntimeError("Connection refused " + DSN)
+        with patch.object(probe.psycopg, "connect", return_value=conn):
+            result = self.run_probe(connect=True)
+        self.assertEqual((result["phase"], result["diagnostic_markers"]), ("query", ["timeout"]))
+        self.assertEqual([(e["phase"], e["diagnostic_markers"]) for e in result["cleanup_errors"]],
+                         [("rollback", ["tls"]), ("close", ["tcp"])])
+
+    def test_cli_marker_fields_never_emit_raw_diagnostics(self):
+        for phase in ("connect", "query", "rollback", "close"):
+            conn, cursor = self.fake_connection()
+            error = RuntimeError('could not translate host name "test.invalid": SSL error: ' + DSN + " 203.0.113.7")
+            error.sqlstate = "28P01\n" + SECRET
+            if phase != "connect":
+                (cursor.execute if phase == "query" else getattr(conn, phase)).side_effect = error
+            with self.subTest(phase=phase), \
+                 patch.dict(os.environ, {"VERCEL_ENV": "production", "BRIDGE_APP_DATABASE_URL": DSN}, clear=True), \
+                 patch("sys.argv", ["incident_db_probe", "--connect"]), \
+                 patch.object(probe.psycopg, "connect", return_value=conn,
+                              side_effect=error if phase == "connect" else None), \
+                 redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(probe.main(), 1)
+            payload = json.loads(out.getvalue())
+            self.assertEqual(payload["probe"], "incident-1911-v4")
+            self.assertEqual(payload["phase"], phase)
+            self.assertEqual(payload["diagnostic_markers"], ["dns", "tls"])
+            self.assertTrue(payload["sqlstate_present"])
+            self.assertTrue(payload["sqlstate_filtered"])
+            self.assertIsNone(payload["sqlstate"])
+            for forbidden in (SECRET, DSN, "test.invalid", "203.0.113.7", probe.PRODUCTION_HOST, "postgresql://"):
+                self.assertNotIn(forbidden, out.getvalue() + err.getvalue())
+            self.assertEqual(err.getvalue(), "")
 
     def test_elapsed_distinguishes_failure_phase_from_cleanup(self):
         conn, cursor = self.fake_connection()
