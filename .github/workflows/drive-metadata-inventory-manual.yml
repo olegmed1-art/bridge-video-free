@@ -62,9 +62,11 @@ jobs:
           git fetch --no-tags origin main:refs/remotes/origin/main
           test "$(git rev-parse refs/remotes/origin/main)" = "$EXPECTED_MAIN_SHA"
           git merge-base --is-ancestor "$REVIEWED_COMMIT" "$EXPECTED_MAIN_SHA"
+          # Expected hashes come from exact Git blobs at REVIEWED_COMMIT (LF).
+          # Runtime checks the checkout bytes without normalization.
           sha256sum --check <<'PINS'
           fb3f3131fbe35275805a4436d7e5c3028f647304757faa88d1aebd00ee7bea75  universal_video/metadata_inventory.py
-          b87f6dc7b9dac17c6ab45617014c5a2c93f6e82633447f734b9d3cc6de64b502  universal_video/drive_adapter.py
+          685687f28ef223dde67a0f331adf27329fffb543b6aa6496673d31b4019fc66a  universal_video/drive_adapter.py
           PINS
       - name: Capture metadata and emit only sanitized validity, counts and digest
         # This is the ONLY credential-bearing step. No artifact upload or cache.
