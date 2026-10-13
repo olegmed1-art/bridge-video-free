@@ -12,7 +12,13 @@ from unittest import mock
 from ops import ibm_school_compute_receipt as e
 from ops import ibm_school_worlds_probe as p
 from ops import ibm_worlds_validator as v
-from tests.test_ibm_school_worlds_probe import B, RESULT, WORLDS, receipt
+from tests.test_ibm_school_worlds_probe import B, RESULT, WORLDS, receipt as legacy_receipt
+
+
+def receipt():
+    row=legacy_receipt()
+    row['generator_sha256']=p.bundle_revision(p.CONSTRAINT_KEYS_REVISION).source_pins['ibm_worlds_generator']
+    return row
 
 
 class LifecycleTests(unittest.TestCase):
@@ -21,7 +27,7 @@ class LifecycleTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         with mock.patch.dict(os.environ, RUNNER_TEMP=str(self.root)):
-            p.persist_receipt(receipt(), B, worlds=WORLDS, result=RESULT, independent=v.validate_result(RESULT))
+            p.persist_receipt(receipt(), B, worlds=WORLDS, result=RESULT, independent=v.validate_result(RESULT),revision=p.CONSTRAINT_KEYS_REVISION)
         self.worlds = self.root / "ibm-school-worlds"
         self.control = self.root / "ibm-school-compute-control"
         self.control.mkdir(mode=0o700)
@@ -49,7 +55,7 @@ class LifecycleTests(unittest.TestCase):
         return b"".join(v.canonical_json_bytes(row) for row in (self.rows if rows is None else rows))
 
     def check(self, rows=None, **kw):
-        return e.build_receipt(self.raw(rows), B, self.worlds, kw.get("controller_exit", 0), kw.get("capture_exit", 0))
+        return e.build_receipt(self.raw(rows), B, self.worlds, kw.get("controller_exit", 0), kw.get("capture_exit", 0),revision=p.CONSTRAINT_KEYS_REVISION)
 
     def test_valid_compute_and_containment_bind_all_five_artifacts(self):
         value = self.check()
@@ -86,7 +92,7 @@ class LifecycleTests(unittest.TestCase):
             code = controller.trial(Provider(), guest_probe=Guest(), maintenance=True,
                                     clock=clock.now, sleep=clock.sleep)
         self.assertEqual(0, code)
-        result = e.build_receipt(output.getvalue().encode(), B, self.worlds, code, 0)
+        result = e.build_receipt(output.getvalue().encode(), B, self.worlds, code, 0,revision=p.CONSTRAINT_KEYS_REVISION)
         self.assertEqual("COMPUTE_CONTAINED", result["result"])
 
     def test_process_failure_missing_exit_or_tee_failure_cannot_succeed(self):
@@ -151,7 +157,7 @@ class LifecycleTests(unittest.TestCase):
                     self.raw() + b'{"event":"OTHER","secret":"PRIVATE_SENTINEL"}\n', self.raw()[:-1],
                     b"x" * (e.MAX_LOG + 1), self.raw().replace(b'"max_seconds":378', b'"max_seconds":NaN')]
         for raw in variants:
-            value = e.build_receipt(raw, B, self.worlds, 0, 0)
+            value = e.build_receipt(raw, B, self.worlds, 0, 0,revision=p.CONSTRAINT_KEYS_REVISION)
             self.assertEqual("INCOMPLETE", value["result"])
             self.assertNotIn("PRIVATE_SENTINEL", json.dumps(value))
         rows = copy.deepcopy(self.rows); rows[-1]["secret"] = "PRIVATE_SENTINEL"
@@ -181,7 +187,7 @@ class LifecycleTests(unittest.TestCase):
 
     def cli(self, codes=("0", "0")):
         with mock.patch.object(p, "context", return_value=dict(B)), mock.patch.dict(os.environ, RUNNER_TEMP=str(self.root)), contextlib.redirect_stdout(io.StringIO()) as output:
-            code = e.main(["--controller-exit", codes[0], "--capture-exit", codes[1]])
+            code = e.main(["--controller-exit", codes[0], "--capture-exit", codes[1], "--revision", p.CONSTRAINT_KEYS_REVISION])
         return code, output.getvalue()
 
     def test_cli_publishes_only_validated_five_files_and_lifecycle(self):

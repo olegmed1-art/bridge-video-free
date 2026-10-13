@@ -119,13 +119,18 @@ class SchoolWorldsControllerTests(unittest.TestCase):
         provider.backup.assert_not_called();provider.action.assert_not_called()
 
     def test_cli_prepares_before_iam_and_closes_after_controller(self):
-        order=[];guest=mock.Mock()
-        with mock.patch.object(p,'prepare',side_effect=lambda:order.append('prepare') or guest), \
-             mock.patch.object(e,'authenticate',side_effect=lambda:order.append('iam') or 'fake'), \
-             mock.patch.object(e,'trial',side_effect=lambda *a,**kw:order.append('trial') or 0) as trial,contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(0,e.main(['school_worlds','--ack',ACK]))
-        self.assertEqual(['prepare','iam','trial'],order);guest.close.assert_called_once()
-        self.assertTrue(trial.call_args.kwargs['maintenance'])
+        for options,revision in (([],p.LEGACY_BUNDLE_REVISION),
+                                 (['--revision',p.LEGACY_BUNDLE_REVISION],p.LEGACY_BUNDLE_REVISION),
+                                 (['--revision',p.CONSTRAINT_KEYS_REVISION],p.CONSTRAINT_KEYS_REVISION)):
+            order=[];guest=mock.Mock()
+            with self.subTest(options=options), \
+                 mock.patch.object(p,'prepare',side_effect=lambda **kw:order.append('prepare') or guest) as prepare, \
+                 mock.patch.object(e,'authenticate',side_effect=lambda:order.append('iam') or 'fake'), \
+                 mock.patch.object(e,'trial',side_effect=lambda *a,**kw:order.append('trial') or 0) as trial,contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0,e.main(['school_worlds','--ack',ACK,*options]))
+            self.assertEqual(['prepare','iam','trial'],order);guest.close.assert_called_once()
+            prepare.assert_called_once_with(revision=revision)
+            self.assertTrue(trial.call_args.kwargs['maintenance'])
 
     def test_prepare_failure_has_no_iam_and_iam_failure_closes_route(self):
         with mock.patch.object(p,'prepare',side_effect=p.WorldsError('PRIVATE_SENTINEL')), \
@@ -152,6 +157,9 @@ class SchoolWorldsControllerTests(unittest.TestCase):
                      'ibm-school-worlds-${{ github.run_id }}','retention-days: 7','include-hidden-files: false'):
             self.assertIn(text,block)
         self.assertEqual(1,block.count('ops/ibm_trial_executor.py school_worlds'))
+        for command in ('ops/ibm_trial_executor.py school_worlds', 'ops/ibm_school_compute_receipt.py'):
+            line=next(line for line in block.splitlines() if command in line)
+            self.assertIn('--revision normalized-constraints-v2',line)
         self.assertLess(block.index('ops/ibm_trial_executor.py school_worlds'),block.index('actions/upload-artifact@'))
         self.assertNotIn('continue-on-error',block)
         self.assertIn("inputs.mode == 'stop' && 'ibm-vpc-independent-stop'",workflow)

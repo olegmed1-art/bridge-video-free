@@ -120,15 +120,20 @@ def duplicate_score_declarer(
     """Return duplicate score from declarer's perspective.
 
     ``result_delta`` is over/under tricks relative to the contract: 0 made exactly,
-    positive for overtricks, negative for undertricks.
+    positive for overtricks, negative for undertricks. It must be an exact integer
+    value (or integer string) yielding a total of 0 through 13 tricks.
     """
     if isinstance(result_delta, bool):
         raise DuplicateScoringError("boolean is not a valid result delta")
     try:
         delta = int(result_delta)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise DuplicateScoringError(f"invalid result delta: {result_delta!r}") from exc
+    if not isinstance(result_delta, str) and result_delta != delta:
+        raise DuplicateScoringError(f"result delta must be an integer: {result_delta!r}")
     parsed = parse_contract(contract)
+    if not 0 <= 6 + parsed.level + delta <= 13:
+        raise DuplicateScoringError("result delta must yield between 0 and 13 total tricks")
 
     if delta < 0:
         undertricks = -delta
@@ -266,7 +271,7 @@ def validate_tournament_fact_scores(source: Mapping[str, Any]) -> dict[str, Any]
                 board_number=board,
                 contract=row["contract"],
                 declarer=row["declarer"],
-                result_delta=int(row["result_delta"]),
+                result_delta=row["result_delta"],
                 vulnerability=row["vulnerability"],
                 target_side=row["pair_direction"],
                 published_score=int(row["pair_score"]),
