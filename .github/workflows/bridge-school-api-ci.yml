@@ -101,7 +101,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: api-static
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 2
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -137,10 +137,13 @@ jobs:
           BRIDGE_API_TOKEN: github-actions-smoke-token
         run: |
           set -euo pipefail
-          uvicorn app:app --host 127.0.0.1 --port 8000 >/tmp/bridge-school-api.log 2>&1 &
+          # Only this CI process fails on its first DB connection error.
+          python -c "from bridge_school_api import db; db.CONNECT_ATTEMPTS = 1; import uvicorn; uvicorn.run('app:app', host='127.0.0.1', port=8000, workers=1)" >/tmp/bridge-school-api.log 2>&1 &
           echo $! >/tmp/bridge-school-api.pid
           for attempt in $(seq 1 30); do
-            if curl --fail --silent --connect-timeout 2 --max-time 5 http://127.0.0.1:8000/healthz >/tmp/health.json; then
+            # Wait for the local listener without invoking a database route.
+            if (: >/dev/tcp/127.0.0.1/8000) 2>/dev/null; then
+              curl --fail --silent --connect-timeout 2 --max-time 5 http://127.0.0.1:8000/healthz >/tmp/health.json
               exit 0
             fi
             sleep 1
