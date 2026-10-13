@@ -4,6 +4,13 @@ on:
   pull_request:
     paths:
       - 'bridge_school_api/**'
+      - 'database/video_staging_read.py'
+      - 'database/video_staging_lineage.py'
+      - 'database/video_candidate_persistence.py'
+      - 'database/video_result_persistence.py'
+      - 'database/source_identity_persistence.py'
+      - 'database/runtime_worker_preflight.py'
+      - 'tests/test_api_runtime_bundle.py'
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_smoke_workflow_contract.py'
       - 'tests/test_runtime_app_incident_probe.py'
@@ -25,6 +32,13 @@ on:
     branches: [main]
     paths:
       - 'bridge_school_api/**'
+      - 'database/video_staging_read.py'
+      - 'database/video_staging_lineage.py'
+      - 'database/video_candidate_persistence.py'
+      - 'database/video_result_persistence.py'
+      - 'database/source_identity_persistence.py'
+      - 'database/runtime_worker_preflight.py'
+      - 'tests/test_api_runtime_bundle.py'
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_smoke_workflow_contract.py'
       - 'tests/test_runtime_app_incident_probe.py'
@@ -96,6 +110,11 @@ jobs:
         run: >-
           docker run --rm --network none bridge-school-api:ci
           python -c "import os; from bridge_school_api.main import app; assert os.getuid() == 65532 and os.getgid() == 65532 and app.title == 'Bridge School API'; from bridge_school_api.tournament_strength_proposal import load_policy; assert load_policy()['status'] == 'PROPOSAL'"
+      - name: Verify actual API image staging route without database or network
+        run: >-
+          docker run --rm --network none
+          -v "$PWD/tests/test_api_runtime_bundle.py:/tmp/test_api_runtime_bundle.py:ro"
+          bridge-school-api:ci python -I -B /tmp/test_api_runtime_bundle.py --smoke /app
 
   production-smoke:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
