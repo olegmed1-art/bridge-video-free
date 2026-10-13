@@ -10,6 +10,7 @@ import sqlite3
 
 from bridge_contracts.video_canon_replay import canonical_json, replay_result_bundle
 from bridge_contracts.video_replay_input import build_replay_input, read_json, ReplayInputError
+from bridge_contracts.video_local_evidence import LocalEvidenceReader
 
 
 def stage_local(connection: sqlite3.Connection, result: dict) -> dict:
@@ -44,14 +45,24 @@ def main() -> None:
     parser.add_argument("--constraints", type=Path, help="Existing private constraints, pinned by selection")
     parser.add_argument("--speaker-map", type=Path, help="Existing map claims, pinned by selection; never a resolver")
     parser.add_argument("--prepared-output", type=Path, help="Fresh path for the builder's bounded input")
+    parser.add_argument("--evidence-index", type=Path, help="Opt-in local byte inventory; does not establish identity or authority")
+    parser.add_argument("--evidence-index-sha256", help="Raw SHA256 of the separately selected evidence inventory")
     args = parser.parse_args()
+    if bool(args.evidence_index) != bool(args.evidence_index_sha256):
+        parser.error("--evidence-index and --evidence-index-sha256 must be supplied together")
     if not args.selection and any((args.constraints, args.speaker_map, args.prepared_output)):
         parser.error("builder options require --selection")
     if args.selection and not args.prepared_output:
         parser.error("--selection requires --prepared-output for a reviewable source-bound input")
-    inputs = [p for p in (args.bundle, args.selection, args.constraints, args.speaker_map) if p]
+    inputs = [p for p in (args.bundle, args.selection, args.constraints, args.speaker_map, args.evidence_index) if p]
     outputs = [p for p in (args.output, args.prepared_output) if p]
-    paths = inputs + outputs + ([args.local_staging_db] if args.local_staging_db else [])
+    if args.local_staging_db:
+        # Derive and open the same canonical database name: SQLite may resolve
+        # a symlink before choosing journal/WAL/SHM sidecar paths.
+        args.local_staging_db = args.local_staging_db.resolve()
+    database_paths = ([args.local_staging_db, *(Path(str(args.local_staging_db) + suffix)
+        for suffix in ('-journal', '-wal', '-shm'))] if args.local_staging_db else [])
+    paths = inputs + outputs + database_paths
     for i, path in enumerate(paths):
         for other in paths[:i]:
             if path.resolve() == other.resolve() or (path.exists() and other.exists() and os.path.samefile(path, other)):
@@ -59,15 +70,20 @@ def main() -> None:
     if any(path.exists() for path in outputs):
         parser.error("output already exists; use fresh receipt paths")
     try:
+        reader = LocalEvidenceReader(args.evidence_index, args.evidence_index_sha256) if args.evidence_index else None
+        if reader:
+            reader.protect_outputs(outputs + database_paths)
         if args.selection:
             bundle = build_replay_input(args.bundle.read_bytes(), read_json(args.selection.read_bytes()),
                 constraints_bytes=args.constraints.read_bytes() if args.constraints else None,
                 speaker_map_bytes=args.speaker_map.read_bytes() if args.speaker_map else None)
         else:
             bundle = read_json(args.bundle.read_bytes())
-        result = replay_result_bundle(bundle)
+        result = reader.replay(bundle) if reader else replay_result_bundle(bundle)
     except (ReplayInputError, ValueError) as exc:
         parser.error(str(exc))
+    except OSError:
+        parser.error("LOCAL_INPUT_READ_FAILED")
     if args.local_staging_db:
         with closing(sqlite3.connect(str(args.local_staging_db))) as connection:
             stage_local(connection, result)

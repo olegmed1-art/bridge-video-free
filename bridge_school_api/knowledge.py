@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from uuid import UUID
+
+import psycopg
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -20,6 +23,16 @@ from .l1_canonical_runtime_v4 import ENGINE_VERSION, evaluate
 router = APIRouter(prefix="/v1/knowledge", tags=["knowledge-read"])
 
 CONTRACT_VERSION = "CANON_KB_READ_V1"
+
+
+@router.get('/internal/video-staging/{candidate_id}')
+def internal_video_staging(candidate_id: UUID) -> dict:
+    """Existing protected service router; no student or canon publication."""
+    from database.video_staging_read import read_internal_school_video_candidate
+    with connect() as conn:
+        conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+        conn.read_only = True
+        return read_internal_school_video_candidate(conn, str(candidate_id))
 
 
 class AuthorityLane(StrEnum):
