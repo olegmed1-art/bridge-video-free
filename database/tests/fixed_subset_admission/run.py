@@ -9,7 +9,8 @@ until a future authorized invocation records actual case evidence.
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, wait
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
@@ -123,6 +124,10 @@ class CommitAckDropRelay:
     def __init__(self):
         self.armed,self.dropped,self.stopped=threading.Event(),threading.Event(),threading.Event()
         self.errors,self.sockets,self.threads=[],[],[]
+        self.listener,self.thread=None,None
+
+    def start(self):
+        # The harness owns this object before any socket/thread is allocated.
         self.listener=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         self.listener.bind(('127.0.0.1',0)); self.listener.listen(1); self.listener.settimeout(5)
         self.port=self.listener.getsockname()[1]
@@ -170,15 +175,23 @@ class CommitAckDropRelay:
             if not self.stopped.is_set(): self.errors.append(type(exc).__name__+': '+str(exc))
 
     def close(self):
-        self.stopped.set(); self.listener.close()
+        self.stopped.set()
+        errors=[]
+        if self.listener is not None:
+            try: self.listener.close()
+            except OSError as exc: errors.append(str(exc))
         for peer in self.sockets:
             try: peer.shutdown(socket.SHUT_RDWR)
             except OSError: pass
-            peer.close()
-        self.thread.join(3)
-        for thread in self.threads: thread.join(3)
-        require(not self.thread.is_alive() and not any(t.is_alive() for t in self.threads),
+            try: peer.close()
+            except OSError as exc: errors.append(str(exc))
+        threads=([self.thread] if self.thread is not None else [])+self.threads
+        deadline=time.monotonic()+6
+        for thread in threads:
+            if thread.ident is not None: thread.join(max(0,deadline-time.monotonic()))
+        require(not any(t.is_alive() for t in threads),
                 'relay thread did not stop')
+        require(not errors,'relay close failed: '+repr(errors))
 
 
 class Harness:
@@ -191,7 +204,12 @@ class Harness:
         from psycopg import sql
         self.pg, self.row, self.jsonb, self.sql = psycopg, dict_row, Jsonb, sql
         self.config, self.evidence = config, evidence
-        self.connections, self.log, self.pool = {}, [], ThreadPoolExecutor(max_workers=2)
+        self.connections,self.log={},[]
+        self.futures,self.threads,self.operation_threads,self.relays=[],[],[],[]
+        self.connection_history,self.variants=[],[]
+        self.peak_connections=0
+        self.peak_backend_connections=0
+        self.closing=False
         self.case_id = None
         self.credentials = {}
         self.migration = self.find_migration()
@@ -216,13 +234,68 @@ class Harness:
         require(len(paths) == 1, 'exactly one 0060 migration required; implementation absent/ambiguous')
         return paths[0]
 
-    def connect(self, name):
+    def connect(self, name, *, options=None):
+        require(not self.closing,'harness is closing')
         require(name not in self.connections and len(self.connections) < 8, 'connection cap exceeded')
-        options = dict(self.config)
-        if name != 'admin':
-            options.update(self.credentials[name])
+        if 'admin' in self.connections:
+            deadline=time.monotonic()+3
+            while True:
+                live=self.scalar('admin','SELECT count(*) FROM pg_stat_activity WHERE datname=current_database()')
+                if live<8: break
+                require(time.monotonic()<deadline,'backend connection cap exceeded')
+                time.sleep(.05)
+            self.peak_backend_connections=max(self.peak_backend_connections,live+1)
+        else:
+            self.peak_backend_connections=max(self.peak_backend_connections,1)
+        if options is None:
+            options = dict(self.config)
+            if name != 'admin': options.update(self.credentials[name])
         self.connections[name] = self.pg.connect(**options, autocommit=True, row_factory=self.row)
+        self.connection_history.append({'session':name,'pid':self.pid(name)})
+        self.peak_connections=max(self.peak_connections,len(self.connections))
+        self.log.append({'connection_opened':name,'pid':self.pid(name),'live_connections':len(self.connections)})
         return self.connections[name]
+
+    def close_connection(self,name):
+        connection=self.connections.get(name)
+        if connection is not None:
+            connection.close()
+            require(connection.closed,'connection did not close: '+name)
+            del self.connections[name]
+
+    def bounded(self,call,timeout,label):
+        """A diagnostic/cleanup timeout cannot strand a non-daemon Python worker."""
+        outcome=[]; done=threading.Event()
+        def perform():
+            try: outcome.append((True,call()))
+            except BaseException as exc: outcome.append((False,exc))
+            finally: done.set()
+        thread=threading.Thread(target=perform,name='fixedsubset-'+label,daemon=True)
+        self.operation_threads.append(thread); thread.start()
+        require(done.wait(max(0,timeout)),label+' timed out')
+        if not outcome[0][0]: raise outcome[0][1]
+        return outcome[0][1]
+
+    @contextmanager
+    def variant(self,variant_id,*,unchanged=False):
+        require(not any(v['id']==variant_id and v['case']==self.case_id for v in self.variants),
+                'duplicate variant identifier: '+variant_id)
+        row={'id':variant_id,'case':self.case_id,'status':'RUNNING','sql_start':len(self.log)}
+        self.variants.append(row)
+        try:
+            before=self.snapshot() if unchanged else None
+            if unchanged: row['before_sha256']=digest(before)
+            yield row
+            if unchanged:
+                after=self.snapshot(); row['after_sha256']=digest(after)
+                require(after==before,'variant changed persisted state: '+variant_id)
+            row['status']='PASS'
+        except BaseException as exc:
+            row.update(status='FAIL',error_type=type(exc).__name__,error=str(exc))
+            raise
+        finally:
+            row['sql_end']=len(self.log)
+            self.log.append({'variant':dict(row)})
 
     def q(self, name, statement, params=()):
         params = tuple(self.jsonb(p) if isinstance(p, (dict, list)) else p for p in params)
@@ -274,8 +347,14 @@ class Harness:
         self.q('admin', 'GRANT bridge_school_app,bridge_school_worker TO fixedsubset_legacy')
 
     def reset(self, *, managed=True):
-        for name, connection in self.connections.items():
-            connection.execute('ROLLBACK')
+        require(all(f.done() for f in self.futures),'reset with active test statements')
+        for name in self.connections:
+            self.q(name,'ROLLBACK')
+            self.q(name,'SELECT pg_advisory_unlock_all()')
+            self.q(name,'UNLISTEN *')
+            self.q(name,'RESET ALL')
+            self.q(name,"SET statement_timeout='65s'")
+            self.q(name,"SET lock_timeout='60s'")
         # Only subsequent successful cases use reset; first case started clean.
         self.q('admin', 'DROP SCHEMA IF EXISTS admission_test CASCADE')
         self.q('admin', 'DROP SCHEMA IF EXISTS video_queue CASCADE')
@@ -306,7 +385,16 @@ class Harness:
         return self.connections[name].info.backend_pid
 
     def submit(self, call):
-        return self.pool.submit(call)
+        require(not self.closing and sum(not f.done() for f in self.futures)<2,
+                'concurrent statement cap exceeded or harness closing')
+        future=Future(); self.futures.append(future)
+        def run():
+            if not future.set_running_or_notify_cancel(): return
+            try: future.set_result(call())
+            except BaseException as exc: future.set_exception(exc)
+        thread=threading.Thread(target=run,name='fixedsubset-statement',daemon=True)
+        self.threads.append(thread); thread.start()
+        return future
 
     def blocked(self, waiter, blocker, timeout=8):
         stop = time.monotonic()+timeout
@@ -454,12 +542,71 @@ class Harness:
             time.sleep(.05)
         raise AssertionError('server observation did not expire')
 
+    def failure_evidence(self):
+        """Best effort bounded capture; the caller retains the original exception."""
+        def capture():
+            return {'state':self.snapshot(),
+                    'activity':self.q('admin',"SELECT pid,state,xact_start,wait_event_type,wait_event FROM pg_stat_activity WHERE datname=current_database()"),
+                    'locks':self.q('admin',"SELECT pid,locktype,mode,granted FROM pg_locks WHERE pid IN (SELECT value::int FROM jsonb_array_elements_text(%s::jsonb))",
+                                   ([r['pid'] for r in self.connection_history],))}
+        return self.bounded(capture,5,'failure-evidence')
+
     def close(self):
-        for connection in self.connections.values():
-            try: connection.cancel()
-            except Exception: pass
-        self.pool.shutdown(wait=True,cancel_futures=True)
-        for connection in self.connections.values(): connection.close()
+        self.closing=True
+        deadline=time.monotonic()+45
+        result={'status':'RUNNING','errors':[],'connections':[],'peak_connections':self.peak_connections}
+        result['peak_backend_connections']=self.peak_backend_connections
+        def attempt(label,call,limit=3):
+            if time.monotonic()>=deadline:
+                result['errors'].append({'stage':label,'error':'cleanup deadline exhausted'})
+                return None
+            try: return self.bounded(call,min(limit,max(0,deadline-time.monotonic())),label)
+            except BaseException as exc:
+                result['errors'].append({'stage':label,'error_type':type(exc).__name__,'error':str(exc)})
+        for future in self.futures: future.cancel()
+        for name,connection in list(self.connections.items()):
+            # psycopg>=3.2 provides bounded cancellation; do not fall back to
+            # potentially unbounded legacy cancel() during failure cleanup.
+            attempt('cancel-'+name,lambda c=connection:c.cancel_safe(timeout=2))
+        wait(self.futures,timeout=min(5,max(0,deadline-time.monotonic())))
+        for relay in self.relays: attempt('relay-close',relay.close,7)
+        for name in list(self.connections):
+            if name=='admin': continue
+            attempt('close-'+name,lambda n=name:self.close_connection(n))
+            result['connections'].append({'session':name,'closed':name not in self.connections})
+        admin=self.connections.get('admin')
+        if admin is not None:
+            def census():
+                self.q('admin','ROLLBACK')
+                self.q('admin',"SET statement_timeout='1s'")
+                self.q('admin',"SET lock_timeout='1s'")
+                self.q('admin','SELECT pg_advisory_unlock_all()')
+                self.q('admin','UNLISTEN *')
+                # Reuse the administrative slot. No ninth observer is opened.
+                until=min(deadline,time.monotonic()+3)
+                while True:
+                    peers=self.q('admin',"SELECT pid,state,xact_start FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()")
+                    locks=self.q('admin',"SELECT pid,locktype,mode FROM pg_locks WHERE locktype='advisory' AND pid IN (SELECT value::int FROM jsonb_array_elements_text(%s::jsonb))",([r['pid'] for r in self.connection_history],))
+                    prepared=self.q('admin','SELECT gid FROM pg_prepared_xacts WHERE database=current_database()')
+                    if not peers and not locks and not prepared: break
+                    require(time.monotonic()<until,'remaining backend/lock/prepared transaction')
+                    time.sleep(.05)
+                return {'other_backends':peers,'advisory_locks':locks,'prepared_transactions':prepared}
+            result['database_census']=attempt('cleanup-census',census,5)
+            attempt('close-admin',lambda:self.close_connection('admin'))
+            result['connections'].append({'session':'admin','closed':'admin' not in self.connections})
+        elif self.connection_history:
+            result['errors'].append({'stage':'cleanup-census','error':'admin unavailable; backend cleanup unverified'})
+        for thread in self.threads+self.operation_threads:
+            if thread.ident is not None:
+                thread.join(min(.2,max(0,deadline-time.monotonic())))
+        result['pending_futures']=sum(not f.done() for f in self.futures)
+        result['alive_threads']=[t.name for t in self.threads+self.operation_threads if t.is_alive()]
+        result['remaining_connections']=list(self.connections)
+        if result['pending_futures'] or result['alive_threads'] or result['remaining_connections']:
+            result['errors'].append({'stage':'resources','error':'cleanup incomplete'})
+        result['status']='FAIL' if result['errors'] else 'PASS'
+        return result
 
     def fixture_change(self, table, statement, params=()):
         """Deliberate impossible/history fixture state, never an API acceptance."""
@@ -470,8 +617,12 @@ class Harness:
             self.q('admin',statement,params)
             self.q('admin',self.sql.SQL('ALTER TABLE video_queue.{} ENABLE TRIGGER ALL').format(self.sql.Identifier(table)))
             self.q('admin','COMMIT')
-        except Exception:
-            self.q('admin','ROLLBACK')
+        except BaseException as primary:
+            try:
+                self.q('admin','ROLLBACK')
+            except BaseException as secondary:
+                primary.add_note('fixture rollback also failed: '+type(secondary).__name__+': '+str(secondary))
+                self.log.append({'fixture_rollback_error':str(secondary),'error_type':type(secondary).__name__})
             raise
         self.log.append({'fixture_only':'privileged synthetic state mutation','table':table})
 
@@ -600,20 +751,19 @@ def f01(h):
 
 def f04(h):
     h.reset(); f=h.fixture()
-    h.connections.pop('admit1').close()
+    h.close_connection('admit1')
     relay=CommitAckDropRelay()
-    try:
-        options={**h.config,**h.credentials['admit1'],'port':relay.port}
-        h.connections['admit1']=h.pg.connect(**options,autocommit=True,row_factory=h.row)
-        h.q('admit1','BEGIN'); tentative=h.admit(f)
-        relay.armed.set()
-        h.expect_error(lambda:h.q('admit1','COMMIT'))
-        require(relay.dropped.wait(3),'COMMIT acknowledgement was not intercepted')
-        require(not relay.errors,'wire relay failed: '+repr(relay.errors))
-    finally:
-        connection=h.connections.pop('admit1',None)
-        if connection is not None: connection.close()
-        relay.close()
+    h.relays.append(relay); relay.start()
+    options={**h.config,**h.credentials['admit1'],'port':relay.port}
+    h.connect('admit1',options=options)
+    h.q('admit1','BEGIN'); tentative=h.admit(f)
+    relay.armed.set()
+    h.expect_error(lambda:h.q('admit1','COMMIT'))
+    require(relay.dropped.wait(3),'COMMIT acknowledgement was not intercepted')
+    require(not relay.errors,'wire relay failed: '+repr(relay.errors))
+    # An unexpected error above goes straight to harness cleanup. A finally
+    # exception must never replace the original test/transport failure.
+    h.close_connection('admit1'); relay.close()
     h.connect('admit1')
     before=h.snapshot()
     one=h.recover(f)['binding']; two=h.recover(f,'admit2')['binding']
@@ -655,29 +805,29 @@ def l01(h):
 
 def l02(h):
     for commit_old in (True,False):
-        h.reset(managed=False)
-        h.q('admin','CREATE SCHEMA admission_test')
-        h.q('admin',"CREATE FUNCTION admission_test.legacy_pause() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(60060,pg_backend_pid()); RETURN NEW; END $$")
-        h.q('admin','CREATE TRIGGER legacy_pause BEFORE INSERT ON video_queue.job FOR EACH ROW EXECUTE FUNCTION admission_test.legacy_pause()')
-        h.q('admin','SELECT pg_advisory_lock(60060,%s)',(h.pid('legacy'),))
-        h.q('legacy','BEGIN'); writer=h.submit(lambda:h.legacy(key='legacy-inflight'))
-        h.blocked('legacy','admin')
-        # Temporarily reuse the otherwise idle admit2 slot with the explicit admin
-        # credentials solely for migration, preserving the eight-connection cap.
-        h.connections.pop('admit2').close()
-        h.connections['cutover']=h.pg.connect(**h.config,autocommit=True,row_factory=h.row)
-        migration=h.submit(lambda:h.q('cutover',migration_text(h.migration)))
-        h.blocked('cutover','legacy')
-        h.q('admin','SELECT pg_advisory_unlock(60060,%s)',(h.pid('legacy'),))
-        writer.result(10); h.q('legacy','COMMIT' if commit_old else 'ROLLBACK')
-        migration.result(15); h.connections.pop('cutover').close()
-        h.q('admin','DROP SCHEMA admission_test CASCADE'); h.apply_managed(migrate=False)
-        f=h.fixture()
-        if commit_old:
-            h.expect_error(lambda:h.admit(f),codes=('SOURCE_RESERVED','SOURCE_ALREADY','RESERVATION_CONFLICT'))
-            require(h.scalar('admin','SELECT cardinality(historical_job_ids) FROM video_queue.source_reservation WHERE source_identity=%s',('google_drive:privateVideo00000001',))==1,'cutover omitted committed writer')
-        else:h.verify_binding(f,h.admit(f))
-
+        with h.variant('L02_COMMIT' if commit_old else 'L02_ROLLBACK'):
+            h.reset(managed=False)
+            h.q('admin','CREATE SCHEMA admission_test')
+            h.q('admin',"CREATE FUNCTION admission_test.legacy_pause() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(60060,pg_backend_pid()); RETURN NEW; END $$")
+            h.q('admin','CREATE TRIGGER legacy_pause BEFORE INSERT ON video_queue.job FOR EACH ROW EXECUTE FUNCTION admission_test.legacy_pause()')
+            h.q('admin','SELECT pg_advisory_lock(60060,%s)',(h.pid('legacy'),))
+            h.q('legacy','BEGIN'); writer=h.submit(lambda:h.legacy(key='legacy-inflight'))
+            h.blocked('legacy','admin')
+            # A standalone managed=False reset has no admit2. Reuse its slot only
+            # when it exists; every connection still passes through the shared cap.
+            h.close_connection('admit2')
+            h.connect('cutover',options=h.config)
+            migration=h.submit(lambda:h.q('cutover',migration_text(h.migration)))
+            h.blocked('cutover','legacy')
+            h.q('admin','SELECT pg_advisory_unlock(60060,%s)',(h.pid('legacy'),))
+            writer.result(10); h.q('legacy','COMMIT' if commit_old else 'ROLLBACK')
+            migration.result(15); h.close_connection('cutover')
+            h.q('admin','DROP SCHEMA admission_test CASCADE'); h.apply_managed(migrate=False)
+            f=h.fixture()
+            if commit_old:
+                h.expect_error(lambda:h.admit(f),codes=('SOURCE_RESERVED','SOURCE_ALREADY','RESERVATION_CONFLICT'))
+                require(h.scalar('admin','SELECT cardinality(historical_job_ids) FROM video_queue.source_reservation WHERE source_identity=%s',('google_drive:privateVideo00000001',))==1,'cutover omitted committed writer')
+            else:h.verify_binding(f,h.admit(f))
 
 def l03(h):
     h.reset(managed=False)
@@ -716,40 +866,380 @@ def grant_probe(h, tables):
         h.q('admin',h.sql.SQL('GRANT SELECT,INSERT,UPDATE,DELETE ON video_queue.{} TO fixedsubset_attacker').format(h.sql.Identifier(table)))
 
 
+# Explicit acceptance inventory, independent of the loops that execute probes.
+# A missing/duplicate/non-PASS variant prevents its case from receiving PASS.
+REQUIRED_VARIANTS = {
+    'G01_DIRECT_DML_GUARD': (
+        'G01_unbound_batch',
+        'G01_missing_reservation',
+        'G01_wrong_reservation_owner',
+        'G01_missing_observation',
+        'G01_complete_untrusted_fields',
+        'G01_invented_batch_binding',
+    ),
+    'G02_IMMUTABLE_IDENTITY_MUTATIONS': (
+        'G02_job_job_id',
+        'G02_job_batch_id',
+        'G02_job_sequence',
+        'G02_job_source_file_id',
+        'G02_job_source_name',
+        'G02_job_source_mime_type',
+        'G02_job_source_size_bytes',
+        'G02_job_source_checksum',
+        'G02_job_stable_job_key',
+        'G02_job_is_canary',
+        'G02_job_created_at',
+        'G02_job_delete',
+        'G02_batch_batch_id',
+        'G02_batch_request_key',
+        'G02_batch_source_kind',
+        'G02_batch_source_folder_id',
+        'G02_batch_output_folder_id',
+        'G02_batch_work_folder_id',
+        'G02_batch_processing_profile',
+        'G02_batch_algorithm_revision',
+        'G02_batch_result_mode',
+        'G02_batch_inventory_sha256',
+        'G02_batch_expected_count',
+        'G02_batch_total_size_bytes',
+        'G02_batch_canary_source_file_id',
+        'G02_batch_canonical_promotion_allowed',
+        'G02_batch_database_persistence_allowed',
+        'G02_batch_created_at',
+        'G02_batch_delete',
+        'G02_subset_admission_request_key',
+        'G02_subset_admission_approval_id',
+        'G02_subset_admission_observation_id',
+        'G02_subset_admission_contract_sha256',
+        'G02_subset_admission_queue_manifest_sha256',
+        'G02_subset_admission_plan_sha256',
+        'G02_subset_admission_subset_sha256',
+        'G02_subset_admission_state',
+        'G02_subset_admission_batch_id',
+        'G02_subset_admission_binding',
+        'G02_subset_admission_binding_sha256',
+        'G02_subset_admission_created_at',
+        'G02_subset_admission_finalized_at',
+        'G02_subset_admission_delete',
+        'G02_source_reservation_source_identity',
+        'G02_source_reservation_admission_request_key',
+        'G02_source_reservation_source_fingerprint',
+        'G02_source_reservation_batch_id',
+        'G02_source_reservation_job_id',
+        'G02_source_reservation_historical_job_ids',
+        'G02_source_reservation_created_at',
+        'G02_source_reservation_delete',
+        'G02_heartbeat_preserves_binding',
+    ),
+    'G04_GUC_FORGERY_NOT_AUTHORITY': (
+        'G04_extra_source',
+        'G04_duplicate_job_identity',
+        'G04_foreign_job_identity',
+        'G04_foreign_batch_identity',
+        'G04_forged_worker_claim',
+    ),
+    'G05_APPROVAL_FULL_CONTENT_VALIDATION': (
+        'G05_canonical_0',
+        'G05_canonical_1',
+        'G05_canonical_2',
+        'G05_canonical_3',
+        'G05_canonical_4',
+        'G05_canonical_5',
+        'G05_canonical_6',
+        'G05_numeric_domain_0',
+        'G05_numeric_domain_1',
+        'G05_numeric_domain_2',
+        'G05_intake_missing_files',
+        'G05_intake_missing_enqueue_manifest',
+        'G05_intake_missing_plan_sha256',
+        'G05_intake_flag',
+        'G05_intake_manifest_name',
+        'G05_intake_manifest_checksum',
+        'G05_intake_manifest_order',
+        'G05_intake_manifest_sequence',
+        'G05_intake_source_fingerprint',
+        'G05_intake_source_duplicate',
+        'G05_intake_source_removed',
+        'G05_intake_source_added',
+        'G05_intake_wrong_canary',
+        'G05_intake_invalid_plan_anchor',
+        'G05_intake_scalar_plan_sha256',
+        'G05_intake_scalar_enqueue_manifest_output_folder_id',
+        'G05_intake_scalar_enqueue_manifest_work_folder_id',
+        'G05_intake_scalar_files_0_parent',
+        'G05_intake_scalar_files_0_version',
+        'G05_intake_scalar_files_0_modifiedTime',
+        'G05_intake_scalar_files_0_name',
+        'G05_intake_scalar_files_0_mime_type',
+        'G05_intake_cost_fraction',
+        'G05_intake_cost_float_integer',
+        'G05_intake_cost_exponent',
+        'G05_plan_provenance_mismatch',
+        'G05_persisted_missing_files',
+        'G05_persisted_flag',
+        'G05_persisted_manifest_name',
+        'G05_persisted_manifest_checksum',
+        'G05_persisted_manifest_order',
+        'G05_persisted_source_removed',
+        'G05_persisted_source_added',
+        'G05_persisted_invalid_plan_anchor',
+        'G05_persisted_hash_only',
+        'G05_persisted_json_bytes_disagree',
+        'G05_persisted_plan_pin',
+        'G05_persisted_revoked',
+    ),
+    'S08_OBSERVATION_TRUST_BINDING': (
+        'S08_admission_unknown',
+        'S08_admission_null',
+        'S08_admission_cross_approval',
+        'S08_duplicate_nonce_same_approval',
+        'S08_collector_missing_source',
+        'S08_collector_extra_source',
+        'S08_collector_duplicate_source',
+        'S08_collector_wrong_parent',
+        'S08_collector_trashed',
+        'S08_collector_future',
+        'S08_collector_expired',
+        'S08_untrusted_collector_acl',
+        'S08_untrusted_update_acl',
+        'S08_untrusted_collector_guard',
+        'S08_untrusted_update_guard',
+        'S08_admission_scope_contract_sha256',
+        'S08_admission_scope_request_key',
+        'S08_admission_scope_approval_id',
+        'S08_consumed_observation_new_request_replay',
+        'S08_attempt_scope_lease_token',
+        'S08_attempt_scope_attempt_count',
+        'S08_attempt_scope_job_id',
+        'S08_attempt_scope_worker_key',
+        'S08_attempt_scope_approval_id',
+        'S08_attempt_scope_contract_sha256',
+        'S08_attempt_scope_request_key',
+        'S08_attempt_scope_consumed_at',
+        'S08_attempt_missing_source',
+        'S08_recovery_observation_independent',
+    ),
+    'W02_LEASE_RETRY_BUDGET_AND_LIVENESS': (
+        'W02_null_token_heartbeat',
+        'W02_null_token_retry',
+        'W02_null_token_finish',
+        'W02_null_token_attempt',
+        'W02_null_token_recovery',
+        'W02_stale_token_heartbeat',
+        'W02_stale_token_retry',
+        'W02_stale_token_finish',
+        'W02_stale_token_attempt',
+        'W02_stale_token_recovery',
+        'W02_wrong_owner_heartbeat',
+        'W02_wrong_owner_retry',
+        'W02_wrong_owner_finish',
+        'W02_wrong_owner_attempt',
+        'W02_wrong_owner_recovery',
+        'W02_expired_token_heartbeat',
+        'W02_expired_token_retry',
+        'W02_expired_token_finish',
+        'W02_expired_token_attempt',
+        'W02_expired_token_recovery',
+        'W02_wrong_attempt_domain_heartbeat',
+        'W02_wrong_attempt_domain_retry',
+        'W02_wrong_attempt_domain_finish',
+        'W02_wrong_attempt_domain_attempt',
+        'W02_wrong_attempt_domain_recovery',
+        'W02_wrong_observation_attempt_attempt',
+        'W02_wrong_observation_attempt_finish',
+        'W02_current_lease_without_observation_heartbeat',
+        'W02_current_lease_without_observation_retry',
+        'W02_reclaim_second_attempt',
+        'W02_claim_third_attempt',
+        'W02_raw_max4_acl',
+        'W02_raw_max4_guard',
+        'W02_attempt_counter_reset',
+        'W02_third_retry_terminal',
+        'W02_managed_exhausted_QUEUED',
+        'W02_managed_exhausted_LEASED',
+        'W02_historical_exhausted_QUEUED',
+        'W02_historical_exhausted_LEASED',
+    ),
+}
+
+
+def grant_guard_probe(h, session, tables):
+    """Test DML privilege only; never add a capability or definer membership."""
+    require(session in ('admit1','worker','approver'),'unexpected guard probe principal')
+    role=h.credentials[session]['user']
+    require(h.scalar(session,'SELECT session_user')==role,'guard probe must use genuine LOGIN')
+    require(not h.scalar('admin','SELECT rolsuper OR rolbypassrls OR rolcreaterole FROM pg_roles WHERE rolname=%s',(role,)),
+            'privileged principal cannot prove runtime guard')
+    for table in tables:
+        require(table in ('job','batch','subset_admission','source_reservation','subset_approval'),'unexpected guard probe table')
+        h.q('admin',h.sql.SQL('GRANT SELECT,INSERT,UPDATE,DELETE ON video_queue.{} TO {}').format(h.sql.Identifier(table),h.sql.Identifier(role)))
+
+
+def expect_guard(h, call, code):
+    error=h.expect_error(call,codes=(code,),states=('P0001',))
+    require(error['message']==code,'wrong guard reached: '+error['message'])
+
+
+def insert_job_probe(h, session, row, **changes):
+    candidate={**row,**changes}
+    return h.q(session,'INSERT INTO video_queue.job SELECT (jsonb_populate_record(NULL::video_queue.job,%s::jsonb)).*',(candidate,))
+
+
+def rehash_approval(value, *, fingerprints=False):
+    """Rehash affected layers without repairing the semantic mutation itself."""
+    value=deepcopy(value)
+    if 'files' in value:
+        if fingerprints:
+            for row in value['files']:
+                row['source_fingerprint']=digest({k:v for k,v in row.items() if k not in
+                    ('name','trashed','source_fingerprint','duration_ms','estimated_cost_usd')})
+        value['subset_sha256']=digest(value['files'])
+    if isinstance(value.get('enqueue_manifest'),dict):
+        manifest=value['enqueue_manifest']
+        if 'files' in manifest: manifest['inventory_sha256']=digest(manifest['files'])
+        keys=('plan_sha256','subset_sha256','subset_sequence','processing_profile','algorithm_revision','canary_source_file_id')
+        if all(k in value for k in keys): manifest['request_key']='subset-v1:'+digest({k:value[k] for k in keys})
+        value['queue_manifest_sha256']=digest(manifest)
+    value['contract_sha256']=digest({k:v for k,v in value.items() if k!='contract_sha256'})
+    return value
+
+
+def approval_mutations(source):
+    """Pure named inputs; PostgreSQL, not this producer, decides acceptance."""
+    variants=[]
+    for key in ('files','enqueue_manifest','plan_sha256'):
+        value=deepcopy(source); value.pop(key)
+        variants.append(('missing_'+key,rehash_approval(value),'SUBSET_CONTRACT_INVALID'))
+    for change,code in (
+        ('flag','SUBSET_CONTRACT_INVALID'),('manifest_name','SUBSET_QUEUE_PROJECTION_INVALID'),
+        ('manifest_checksum','SUBSET_QUEUE_PROJECTION_INVALID'),('manifest_order','SUBSET_QUEUE_PROJECTION_INVALID'),
+        ('manifest_sequence','SUBSET_QUEUE_PROJECTION_INVALID'),('source_fingerprint','SUBSET_FINGERPRINT_INVALID'),
+        ('source_duplicate','SUBSET_SOURCE_INVALID'),('source_removed','SUBSET_QUEUE_PROJECTION_INVALID'),
+        ('source_added','SUBSET_MANIFEST_INVALID'),('wrong_canary','SUBSET_MANIFEST_INVALID'),
+        ('invalid_plan_anchor','SUBSET_CONTRACT_INVALID')):
+        value=deepcopy(source); files=value['files']; queue=value['enqueue_manifest']['files']
+        if change=='flag': value['execution_allowed']=True
+        elif change=='manifest_name': queue[0]['name']='Not approved.mp4'
+        elif change=='manifest_checksum': queue[0]['checksum']='md5:'+'a'*32
+        elif change=='manifest_order': queue.reverse()  # Keep original sequence labels: not another valid exact manifest.
+        elif change=='manifest_sequence': queue[0]['sequence']=9
+        elif change=='source_fingerprint': files[0]['source_fingerprint']='0'*64
+        elif change=='source_duplicate': files.append(deepcopy(files[-1]))
+        elif change=='source_removed': files.pop()
+        elif change=='source_added':
+            extra=deepcopy(files[-1]); extra.update(file_id='privateVideo00000003',source_identity='google_drive:privateVideo00000003')
+            files.append(extra)
+            value=rehash_approval(value,fingerprints=True)
+        elif change=='wrong_canary': value['canary_source_file_id']=value['enqueue_manifest']['canary_source_file_id']='privateVideo00000003'
+        else: value['plan_sha256']='invalid-plan-anchor'
+        variants.append((change,rehash_approval(value),code))
+    for path,replacement,code in (
+        (('plan_sha256',),int('1'*64),'SUBSET_CONTRACT_INVALID'),
+        (('enqueue_manifest','output_folder_id'),123456789012,'SUBSET_MANIFEST_INVALID'),
+        (('enqueue_manifest','work_folder_id'),123456789013,'SUBSET_MANIFEST_INVALID'),
+        (('files',0,'parent'),None,'SUBSET_SOURCE_INVALID'),
+        (('files',0,'version'),17,'SUBSET_SOURCE_INVALID'),
+        (('files',0,'modifiedTime'),20261010,'SUBSET_SOURCE_INVALID'),
+        (('files',0,'name'),None,'SUBSET_SOURCE_INVALID'),
+        (('files',0,'mime_type'),123,'SUBSET_SOURCE_INVALID')):
+        value=deepcopy(source); target=value
+        for part in path[:-1]: target=target[part]
+        target[path[-1]]=replacement
+        variants.append(('scalar_'+'_'.join(map(str,path)),rehash_approval(value,fingerprints=True),code))
+    for label,cost,code in (('fraction',1.5,'SUBSET_CANONICAL_INTEGER_DOMAIN'),
+                            ('float_integer',1.0,'SUBSET_CANONICAL_INTEGER_DOMAIN'),
+                            ('exponent',1e30,'SUBSET_CANONICAL_BYTES_MISMATCH')):
+        value=deepcopy(source); value['files'][0]['estimated_cost_usd']=cost
+        variants.append(('cost_'+label,rehash_approval(value),code))
+    return variants
+
+
+def worker_probe(h, operation, claim, *, token, owner, observation):
+    """No truthy fallback: NULL/stale tokens must reach the real SQL boundary."""
+    args=(claim['job_id'],token,owner)
+    if operation=='heartbeat': return h.q('worker','SELECT video_queue.heartbeat_subset_job(%s,%s,%s,900)',args)
+    if operation=='retry': return h.q('worker','SELECT * FROM video_queue.retry_subset_job(%s,%s,%s,%s,1)',args+('UV_RETRY',))
+    if operation=='finish': return h.q('worker','SELECT * FROM video_queue.finish_subset_job(%s,%s,%s,%s,%s::jsonb,%s,NULL)',args+('REVIEW_READY',h.output(claim),observation))
+    require(operation=='attempt','unknown worker probe')
+    return h.q('worker','SELECT video_queue.authorize_subset_attempt(%s,%s,%s,%s)',args+(observation,))
+
+
 def g01(h):
-    h.reset(); f=h.fixture(); binding=h.admit(f)
-    grant_probe(h,('job',))
-    before=h.snapshot()
-    statement="INSERT INTO video_queue.job(batch_id,sequence,source_file_id,source_name,source_mime_type,source_size_bytes,source_checksum,stable_job_key,is_canary,status) VALUES (%s,3,'privateVideo00000003','Lesson 3.mp4','video/mp4',2000000,NULL,substr(encode(public.digest(convert_to('bridge-video|drive|privateVideo00000003','UTF8'),'sha256'),'hex'),1,32),false,'PENDING_CANARY')"
-    h.expect_error(lambda:h.q('attacker',statement,(binding['batch_id'],)),codes=('SUBSET_',))
-    unchanged(h,before,'direct INSERT with DML grant bypassed persisted reservation')
+    for damage in ('unbound_batch','missing_reservation','wrong_reservation_owner','missing_observation'):
+        h.reset(); f=h.fixture(); binding=h.admit(f)
+        other=h.fixture((3,4)); other_binding=h.admit(other)
+        row=h.scalar('admin','SELECT to_jsonb(j) FROM video_queue.job j WHERE batch_id=%s ORDER BY sequence LIMIT 1',(binding['batch_id'],))
+        grant_guard_probe(h,'admit1',('job','subset_admission'))
+        if damage=='unbound_batch':
+            h.fixture_change('subset_admission','DELETE FROM video_queue.subset_admission WHERE request_key=%s',(f['request_key'],))
+        else:
+            # A privileged fixture opens the draft state only to reach the
+            # intended reservation/observation clause with real runtime guards.
+            h.fixture_change('subset_admission',"UPDATE video_queue.subset_admission SET state='DRAFT',batch_id=NULL,binding=NULL,binding_sha256=NULL,finalized_at=NULL WHERE request_key=%s",(f['request_key'],))
+            if damage=='missing_reservation':
+                h.fixture_change('source_reservation','DELETE FROM video_queue.source_reservation WHERE source_identity=%s',('google_drive:'+row['source_file_id'],))
+            elif damage=='wrong_reservation_owner':
+                h.fixture_change('source_reservation','UPDATE video_queue.source_reservation SET admission_request_key=%s WHERE source_identity=%s',(other['request_key'],'google_drive:'+row['source_file_id']))
+            else:
+                h.fixture_change('source_observation','DELETE FROM video_queue.source_observation WHERE observation_id=%s',(f['observation_id'],))
+        with h.variant('G01_'+damage,unchanged=True):
+            if damage=='missing_observation':
+                # Complete job/reservation/binding metadata cannot replace the
+                # absent trusted observation; test the deferred final proof.
+                expect_guard(h,lambda:h.q('admit1',"UPDATE video_queue.subset_admission SET state='FINALIZED',batch_id=%s,binding=%s::jsonb,binding_sha256=%s,finalized_at=clock_timestamp() WHERE request_key=%s",(binding['batch_id'],binding,binding['binding_sha256'],f['request_key'])),
+                    'SUBSET_OBSERVATION_BINDING_HOLD')
+            else:
+                expect_guard(h,lambda:insert_job_probe(h,'admit1',row,job_id=str(uuid4())), 'SUBSET_LEGACY_INSERT_HOLD')
+    h.reset(); f=h.fixture(); binding=h.admit(f); grant_probe(h,('job',))
+    row=h.scalar('admin','SELECT to_jsonb(j) FROM video_queue.job j WHERE batch_id=%s ORDER BY sequence LIMIT 1',(binding['batch_id'],))
+    with h.variant('G01_complete_untrusted_fields',unchanged=True):
+        expect_guard(h,lambda:insert_job_probe(h,'attacker',row,job_id=str(uuid4())), 'SUBSET_CAPABILITY_DENIED')
+    grant_guard_probe(h,'admit1',('job',))
+    with h.variant('G01_invented_batch_binding',unchanged=True):
+        expect_guard(h,lambda:insert_job_probe(h,'admit1',row,job_id=str(uuid4()),batch_id=str(uuid4())), 'SUBSET_LEGACY_INSERT_HOLD')
 
 
 def g02(h):
     f,b,c=ordinary(h)
-    h.q('admin','GRANT SELECT,UPDATE,DELETE ON video_queue.job,video_queue.batch TO fixedsubset_worker')
-    h.q('admin','GRANT SELECT,UPDATE,DELETE ON video_queue.subset_admission,video_queue.source_reservation TO fixedsubset_admit1')
-    before=h.snapshot()
-    edits=[
-      ('UPDATE video_queue.job SET source_file_id=%s WHERE job_id=%s',('privateVideo00000003',c['job_id'])),
-      ('UPDATE video_queue.job SET stable_job_key=%s WHERE job_id=%s',('0'*32,c['job_id'])),
-      ('UPDATE video_queue.job SET source_name=%s WHERE job_id=%s',('Renamed.mp4',c['job_id'])),
-      ('UPDATE video_queue.job SET source_size_bytes=2000001 WHERE job_id=%s',(c['job_id'],)),
-      ('UPDATE video_queue.job SET source_checksum=%s WHERE job_id=%s',('md5:'+'a'*32,c['job_id'])),
-      ('UPDATE video_queue.job SET is_canary=false WHERE job_id=%s',(c['job_id'],)),
-      ('UPDATE video_queue.batch SET algorithm_revision=%s WHERE batch_id=%s',('other_revision',b['batch_id'])),
-      ('UPDATE video_queue.batch SET output_folder_id=%s WHERE batch_id=%s',('otherFolder000001',b['batch_id'])),
-      ('UPDATE video_queue.subset_admission SET binding=%s::jsonb WHERE request_key=%s',({},f['request_key'])),
-      ('DELETE FROM video_queue.source_reservation WHERE source_identity=%s',('google_drive:'+c['source_file_id'],)),
-      ('UPDATE video_queue.source_reservation SET admission_request_key=%s WHERE source_identity=%s',('other-key','google_drive:'+c['source_file_id'])),
-      ('DELETE FROM video_queue.job WHERE job_id=%s',(c['job_id'],)),
-    ]
-    for sql,args in edits:
-        session='admit1' if 'video_queue.subset_' in sql or 'video_queue.source_reservation' in sql else 'worker'
-        h.expect_error(lambda:h.q(session,sql,args),codes=('SUBSET_',))
-        unchanged(h,before,'identity mutation changed persisted rows')
-    h.q('worker','SELECT video_queue.heartbeat_subset_job(%s,%s,%s,900)',(c['job_id'],c['lease_token'],WORKER))
-    require(h.recover(f)['binding']==b,'legitimate heartbeat changed immutable receipt')
+    other=h.fixture((3,4)); foreign=h.admit(other)
+    grant_guard_probe(h,'worker',('job','batch'))
+    grant_guard_probe(h,'admit1',('subset_admission','source_reservation'))
+    edits={
+        'job':dict(job_id=str(uuid4()),batch_id=foreign['batch_id'],sequence=9,source_file_id='privateVideo00000003',
+            source_name='Renamed.mp4',source_mime_type='video/avi',source_size_bytes=2000001,
+            source_checksum='md5:'+'a'*32,stable_job_key='0'*32,is_canary=False,created_at='2000-01-01T00:00:00Z'),
+        'batch':dict(batch_id=str(uuid4()),request_key='changed-key',source_kind='changed-kind',
+            source_folder_id='otherSource000001',output_folder_id='otherOutput000001',work_folder_id='otherWork00000001',
+            processing_profile='different_profile',algorithm_revision='other_revision',result_mode='PRODUCTION',
+            inventory_sha256='0'*64,expected_count=3,total_size_bytes=6000000,canary_source_file_id='privateVideo00000002',
+            canonical_promotion_allowed=True,database_persistence_allowed=True,created_at='2000-01-01T00:00:00Z'),
+        'subset_admission':dict(request_key='subset-v1:'+'e'*64,approval_id=other['approval_id'],observation_id=other['observation_id'],
+            contract_sha256='0'*64,queue_manifest_sha256='0'*64,plan_sha256='0'*64,subset_sha256='0'*64,
+            state='DRAFT',batch_id=foreign['batch_id'],binding={},binding_sha256='0'*64,
+            created_at='2000-01-01T00:00:00Z',finalized_at='2000-01-01T00:00:00Z'),
+        'source_reservation':dict(source_identity='google_drive:privateVideo00000009',admission_request_key=other['request_key'],
+            source_fingerprint='0'*64,batch_id=foreign['batch_id'],job_id=foreign['jobs'][0]['job_id'],
+            historical_job_ids=None,created_at='2000-01-01T00:00:00Z'),
+    }
+    keys={'job':('job_id',c['job_id']),'batch':('batch_id',b['batch_id']),
+          'subset_admission':('request_key',f['request_key']),'source_reservation':('source_identity','google_drive:'+c['source_file_id'])}
+    for table,fields in edits.items():
+        session='worker' if table in ('job','batch') else 'admit1'; key,identity=keys[table]
+        for field,value in fields.items():
+            # historical_job_ids requires an actual non-null uuid[] change,
+            # not the unchanged JSON NULL default and not a JSONB array cast.
+            expression='ARRAY[%s::uuid]' if field=='historical_job_ids' else '%s'
+            if field=='historical_job_ids': value=c['job_id']
+            query=h.sql.SQL('UPDATE video_queue.{} SET {}='+expression+' WHERE {}=%s').format(h.sql.Identifier(table),h.sql.Identifier(field),h.sql.Identifier(key))
+            expected='SUBSET_RESERVATION_MISMATCH_HOLD' if table=='source_reservation' else 'SUBSET_IMMUTABLE_HOLD'
+            with h.variant('G02_'+table+'_'+field,unchanged=True):
+                expect_guard(h,lambda:h.q(session,query,(value,identity)),expected)
+        with h.variant('G02_'+table+'_delete',unchanged=True):
+            query=h.sql.SQL('DELETE FROM video_queue.{} WHERE {}=%s').format(h.sql.Identifier(table),h.sql.Identifier(key))
+            expect_guard(h,lambda:h.q(session,query,(identity,)),'SUBSET_IMMUTABLE_HOLD')
+    with h.variant('G02_heartbeat_preserves_binding'):
+        worker_probe(h,'heartbeat',c,token=c['lease_token'],owner=WORKER,observation=None)
+        require(h.recover(f)['binding']==b,'legitimate heartbeat changed immutable receipt')
 
 
 def g03(h):
@@ -795,83 +1285,73 @@ def g03(h):
 def g04(h):
     h.reset(); f=h.fixture(); b=h.admit(f); grant_probe(h,('job',))
     h.q('attacker',"SELECT set_config('video_queue.admission_authorized','true',false),set_config('video_queue.request_key',%s,false),set_config('video_queue.worker_version','v2',false)",(f['request_key'],))
-    before=h.snapshot()
-    h.expect_error(lambda:h.q('attacker',"INSERT INTO video_queue.job(batch_id,sequence,source_file_id,source_name,source_mime_type,source_size_bytes,stable_job_key,is_canary,status) VALUES (%s,3,'privateVideo00000003','Lesson 3.mp4','video/mp4',2000000,%s,false,'PENDING_CANARY')",(b['batch_id'],hashlib.sha256(b'bridge-video|drive|privateVideo00000003').hexdigest()[:32])),codes=('SUBSET_',))
-    h.expect_error(lambda:h.claim('attacker'),states=('42501',))
-    unchanged(h,before,'caller settings authorized work')
+    other=h.fixture((3,4)); foreign=h.admit(other)
+    row=h.scalar('admin','SELECT to_jsonb(j) FROM video_queue.job j WHERE batch_id=%s ORDER BY sequence LIMIT 1',(b['batch_id'],))
+    h.q('attacker',"SELECT set_config('video_queue.admission_id',%s,false),set_config('video_queue.contract_sha256',%s,false)",(f['approval_id'],f['contract']['contract_sha256']))
+    for label,changes in (
+        ('extra_source',dict(job_id=str(uuid4()),sequence=3,source_file_id='privateVideo00000009',stable_job_key='0'*32)),
+        ('duplicate_job_identity',{}),
+        ('foreign_job_identity',dict(job_id=foreign['jobs'][0]['job_id'])),
+        ('foreign_batch_identity',dict(job_id=str(uuid4()),batch_id=foreign['batch_id']))):
+        with h.variant('G04_'+label,unchanged=True):
+            expect_guard(h,lambda:insert_job_probe(h,'attacker',row,**changes),'SUBSET_CAPABILITY_DENIED')
+    with h.variant('G04_forged_worker_claim',unchanged=True):
+        h.expect_error(lambda:h.claim('attacker'),states=('42501',))
 
 
 def g05(h):
     h.reset(); f=h.fixture(); source=f['contract']
     vectors=[None,False,0,-9223372036854775808,18446744073709551615,
-             {'z':[None,False,True,10**80], 'a':'quote=" slash=\\\n\t\r\b\f control=\u0001'},
+             {'z':[None,False,True,10**80],'a':'quote=" slash=\\\n\t\r\b\f control=\u0001'},
              {'\U0001f600':'non-BMP \U0001d11e','\u0431':'\u041c\u043e\u0441\u043a\u0432\u0430','\u00e9':'e\u0301','\u4e2d':'\u6587'}]
     for number,vector in enumerate(vectors):
-        encoded=canonical(vector)
-        row=h.one('admin','SELECT video_queue.subset_json(%s::jsonb) canonical,video_queue.subset_sha(%s::jsonb) sha256',(encoded,encoded))
-        require(row['canonical']==encoded and row['sha256']==digest(vector),'SQL/Python canonical vector mismatch')
-        h.log.append({'canonical_vector':number,'status':'PASS','sha256':row['sha256']})
-    for raw in ('1.5','1.0','1e-1'):
-        h.expect_error(lambda:h.q('admin','SELECT video_queue.subset_json(%s::jsonb)',(raw,)),codes=('SUBSET_CANONICAL_INTEGER_DOMAIN',))
-    variants=[]
-    for key in ('files','enqueue_manifest','plan_sha256'):
-        value=deepcopy(source); value.pop(key); variants.append(value)
-    for change in ('flag','manifest_name','source_fingerprint','source_extra','manifest_sequence','wrong_canary'):
-        value=deepcopy(source)
-        if change=='flag':value['execution_allowed']=True
-        elif change=='manifest_name':value['enqueue_manifest']['files'][0]['name']='Not approved.mp4'
-        elif change=='source_fingerprint':value['files'][0]['source_fingerprint']='0'*64
-        elif change=='source_extra':value['files'].append(deepcopy(value['files'][0]))
-        elif change=='manifest_sequence':value['enqueue_manifest']['files'][0]['sequence']=9
-        else:value['canary_source_file_id']='privateVideo00000003'
-        value['subset_sha256']=digest(value['files'])
-        value['enqueue_manifest']['inventory_sha256']=digest(value['enqueue_manifest']['files'])
-        request_core={k:value[k] for k in ('plan_sha256','subset_sha256','subset_sequence','processing_profile','algorithm_revision','canary_source_file_id')}
-        value['enqueue_manifest']['request_key']='subset-v1:'+digest(request_core)
-        value['queue_manifest_sha256']=digest(value['enqueue_manifest'])
-        value['contract_sha256']=digest({k:v for k,v in value.items() if k!='contract_sha256'})
-        variants.append(value)
-    before=h.snapshot()
-    for value in variants:
-        h.expect_error(lambda:h.scalar('approver','SELECT video_queue.approve_subset(%s::uuid,%s,%s::jsonb,clock_timestamp()+interval \'1 hour\')',
-                       (str(uuid4()),canonical(value),{'approved_by':'synthetic','approval_reference':'invalid-contract','plan_sha256':source['plan_sha256']})),codes=('SUBSET_',))
-        unchanged(h,before,'invalid full approval accepted or partially persisted')
-    # Recompute every affected digest/request anchor so wrong JSON scalar types
-    # reach their semantic clause instead of merely failing stale hashes.
-    for path,replacement,error in (
-        (('plan_sha256',),int('1'*64),'SUBSET_CONTRACT_INVALID'),
-        (('enqueue_manifest','output_folder_id'),123456789012,'SUBSET_MANIFEST_INVALID'),
-        (('enqueue_manifest','work_folder_id'),123456789013,'SUBSET_MANIFEST_INVALID'),
-        (('files',0,'parent'),None,'SUBSET_SOURCE_INVALID'),
-        (('files',0,'version'),17,'SUBSET_SOURCE_INVALID'),
-        (('files',0,'modifiedTime'),20261010,'SUBSET_SOURCE_INVALID'),
-        (('files',0,'name'),None,'SUBSET_SOURCE_INVALID'),
-        (('files',0,'mime_type'),123,'SUBSET_SOURCE_INVALID'),
-    ):
-        value=deepcopy(source); target=value
-        for part in path[:-1]: target=target[part]
-        target[path[-1]]=replacement
-        for row in value['files']:
-            row['source_fingerprint']=digest({k:v for k,v in row.items() if k not in ('name','trashed','source_fingerprint','duration_ms','estimated_cost_usd')})
-        value['subset_sha256']=digest(value['files'])
-        core={k:value[k] for k in ('plan_sha256','subset_sha256','subset_sequence','processing_profile','algorithm_revision','canary_source_file_id')}
-        value['enqueue_manifest']['request_key']='subset-v1:'+digest(core)
-        value['queue_manifest_sha256']=digest(value['enqueue_manifest'])
-        value['contract_sha256']=digest({k:v for k,v in value.items() if k!='contract_sha256'})
-        h.expect_error(lambda:h.scalar('approver','SELECT video_queue.approve_subset(%s::uuid,%s,%s::jsonb,clock_timestamp()+interval \'1 hour\')',
-            (str(uuid4()),canonical(value),{'approved_by':'synthetic','approval_reference':'wrong-scalar','plan_sha256':value['plan_sha256']})),codes=(error,))
-        unchanged(h,before,'self-rehashed wrong scalar approval accepted')
-        h.log.append({'approval_scalar_variant':'.'.join(map(str,path)),'expected_rejection':error})
-    for cost,error in ((1.5,'SUBSET_CANONICAL_INTEGER_DOMAIN'),(1.0,'SUBSET_CANONICAL_INTEGER_DOMAIN'),(1e30,'SUBSET_CANONICAL_BYTES_MISMATCH')):
-        value=deepcopy(source); value['files'][0]['estimated_cost_usd']=cost
-        value['subset_sha256']=digest(value['files'])
-        core={k:value[k] for k in ('plan_sha256','subset_sha256','subset_sequence','processing_profile','algorithm_revision','canary_source_file_id')}
-        value['enqueue_manifest']['request_key']='subset-v1:'+digest(core)
-        value['queue_manifest_sha256']=digest(value['enqueue_manifest'])
-        value['contract_sha256']=digest({k:v for k,v in value.items() if k!='contract_sha256'})
-        h.expect_error(lambda:h.scalar('approver','SELECT video_queue.approve_subset(%s::uuid,%s,%s::jsonb,clock_timestamp()+interval \'1 hour\')',
-            (str(uuid4()),canonical(value),{'approved_by':'synthetic','approval_reference':'noninteger-cost','plan_sha256':value['plan_sha256']})),codes=(error,))
-        unchanged(h,before,'restricted canonical cost domain was bypassed')
+        with h.variant('G05_canonical_'+str(number),unchanged=True):
+            encoded=canonical(vector)
+            row=h.one('admin','SELECT video_queue.subset_json(%s::jsonb) canonical,video_queue.subset_sha(%s::jsonb) sha256',(encoded,encoded))
+            require(row['canonical']==encoded and row['sha256']==digest(vector),'SQL/Python canonical vector mismatch')
+    for number,raw in enumerate(('1.5','1.0','1e-1')):
+        with h.variant('G05_numeric_domain_'+str(number),unchanged=True):
+            expect_guard(h,lambda:h.q('admin','SELECT video_queue.subset_json(%s::jsonb)',(raw,)),'SUBSET_CANONICAL_INTEGER_DOMAIN')
+    variants=approval_mutations(source)
+    for label,value,code in variants:
+        with h.variant('G05_intake_'+label,unchanged=True):
+            expect_guard(h,lambda:h.scalar('approver','SELECT video_queue.approve_subset(%s::uuid,%s,%s::jsonb,clock_timestamp()+interval \'1 hour\')',
+                (str(uuid4()),canonical(value),{'approved_by':'synthetic','approval_reference':'invalid-full-approval','plan_sha256':value.get('plan_sha256',source['plan_sha256'])})),code)
+    changed=deepcopy(source); changed['plan_sha256']='f'*64; changed=rehash_approval(changed)
+    with h.variant('G05_plan_provenance_mismatch',unchanged=True):
+        # A syntactically valid SHA alone is not an independently pinned plan.
+        expect_guard(h,lambda:h.scalar('approver','SELECT video_queue.approve_subset(%s::uuid,%s,%s::jsonb,clock_timestamp()+interval \'1 hour\')',
+            (str(uuid4()),canonical(changed),{'approved_by':'synthetic','approval_reference':'wrong-plan-anchor','plan_sha256':source['plan_sha256']})), 'SUBSET_APPROVAL_INVALID')
+    persisted={'missing_files','manifest_name','manifest_checksum','manifest_order','source_removed','source_added','invalid_plan_anchor','flag'}
+    for label,value,code in variants:
+        if label not in persisted: continue
+        h.reset(); f=h.fixture()
+        request=value['enqueue_manifest']['request_key']
+        h.fixture_change('subset_approval','UPDATE video_queue.subset_approval SET contract=%s::jsonb,contract_bytes=%s,contract_sha256=%s,queue_manifest_sha256=%s,subset_sha256=%s,request_key=%s WHERE approval_id=%s',
+            (value,canonical(value),value['contract_sha256'],value['queue_manifest_sha256'],value['subset_sha256'],request,f['approval_id']))
+        damaged={**f,'contract':value,'request_key':request}
+        with h.variant('G05_persisted_'+label,unchanged=True):
+            expect_guard(h,lambda:h.admit(damaged),code)
+            require(h.recover(damaged)['status']=='NOT_FOUND','malformed persisted approval created a binding')
+    for damage in ('hash_only','json_bytes_disagree','plan_pin','revoked'):
+        h.reset(); f=h.fixture()
+        if damage=='hash_only':
+            value={'contract_sha256':f['contract']['contract_sha256'],'queue_manifest_sha256':f['contract']['queue_manifest_sha256']}
+            h.fixture_change('subset_approval','UPDATE video_queue.subset_approval SET contract=%s::jsonb,contract_bytes=%s WHERE approval_id=%s',(value,canonical(value),f['approval_id']))
+            code='SUBSET_CONTRACT_INVALID'
+        elif damage=='json_bytes_disagree':
+            value=deepcopy(f['contract']); value['files'][0]['name']='Changed.mp4'; value['enqueue_manifest']['files'][0]['name']='Changed.mp4'
+            value=rehash_approval(value)
+            h.fixture_change('subset_approval','UPDATE video_queue.subset_approval SET contract=%s::jsonb WHERE approval_id=%s',(value,f['approval_id']))
+            code='SUBSET_DIGEST_MISMATCH_HOLD'
+        elif damage=='plan_pin':
+            h.fixture_change('subset_approval','UPDATE video_queue.subset_approval SET plan_sha256=%s WHERE approval_id=%s',('f'*64,f['approval_id']))
+            code='SUBSET_APPROVAL_CONTENT_HOLD'
+        else:
+            h.q('approver','SELECT video_queue.revoke_subset_approval(%s)',(f['approval_id'],)); code='SUBSET_APPROVAL_NOT_ACTIVE'
+        with h.variant('G05_persisted_'+damage,unchanged=True):
+            expect_guard(h,lambda:h.admit(f),code)
+            require(h.recover(f)['status']=='NOT_FOUND','invalid persisted authority created a binding')
 
 
 def r01(h):
@@ -941,22 +1421,64 @@ def s07(h):
 
 
 def s08(h):
-    h.reset(); f=h.fixture(); before=h.snapshot()
-    for oid in (str(uuid4()),None):
-        h.expect_error(lambda:h.admit(f,observation_id=oid),codes=('SUBSET_',))
-        unchanged(h,before,'invalid observation changed admission')
-    other=h.fixture((3,4)); before=h.snapshot()
-    h.expect_error(lambda:h.admit(f,observation_id=other['observation_id']),codes=('SUBSET_',))
-    unchanged(h,before,'cross-contract observation accepted')
-    b=h.admit(f); h.runtime(f,True); c=h.claim()[0]
-    for field,value in (('lease_token',str(uuid4())),('attempt_count',2),('job_id',str(uuid4())),('worker_key','other-worker')):
+    h.reset(); f=h.fixture(); other=h.fixture((3,4))
+    for label,oid in (('unknown',str(uuid4())),('null',None),('cross_approval',other['observation_id'])):
+        with h.variant('S08_admission_'+label,unchanged=True):
+            expect_guard(h,lambda:h.admit(f,observation_id=oid),'SUBSET_OBSERVATION_SCOPE')
+    nonce=h.scalar('admin','SELECT nonce FROM video_queue.source_observation WHERE observation_id=%s',(f['observation_id'],))
+    with h.variant('S08_duplicate_nonce_same_approval',unchanged=True):
+        h.expect_error(lambda:h.scalar('collector','SELECT video_queue.observe_subset(%s,%s,%s,%s::jsonb,clock_timestamp(),%s,NULL,NULL,NULL,NULL)',
+            (str(uuid4()),f['approval_id'],'ADMISSION',f['raw'],nonce)),states=('23505',),constraint='source_observation_approval_id_nonce_key')
+    raw_cases=[]
+    raw_cases.append(('missing_source',deepcopy(f['raw'][:1]),'SUBSET_SOURCE_SET_MISMATCH'))
+    raw_cases.append(('extra_source',deepcopy(f['raw']+other['raw'][:1]),'SUBSET_SOURCE_SET_MISMATCH'))
+    raw_cases.append(('duplicate_source',[deepcopy(f['raw'][0]),deepcopy(f['raw'][0])],'SUBSET_SOURCE_REVISION_CHANGED'))
+    for name,patch in (('wrong_parent',{'parents':['otherFolder000001']}),('trashed',{'trashed':True})):
+        raw=deepcopy(f['raw']); raw[0].update(patch); raw_cases.append((name,raw,'SUBSET_SOURCE_REVISION_CHANGED'))
+    for label,raw,code in raw_cases:
+        with h.variant('S08_collector_'+label,unchanged=True):
+            expect_guard(h,lambda:h.observe(f,raw=raw),code)
+    for label,age in (('future',-5),('expired',31)):
+        with h.variant('S08_collector_'+label,unchanged=True):
+            expect_guard(h,lambda:h.observe(f,age=age),'SUBSET_OBSERVATION_EXPIRED')
+    h.q('admin','GRANT USAGE ON SCHEMA video_queue TO fixedsubset_attacker')
+    with h.variant('S08_untrusted_collector_acl',unchanged=True):
+        h.expect_error(lambda:h.observe(f,session='attacker'),states=('42501',))
+    with h.variant('S08_untrusted_update_acl',unchanged=True):
+        h.expect_error(lambda:h.q('attacker','UPDATE video_queue.source_observation SET observed_at=clock_timestamp(),nonce=gen_random_uuid() WHERE observation_id=%s',(f['observation_id'],)),states=('42501',))
+    grant_probe(h,('source_observation',))
+    untrusted=h.scalar('admin','SELECT to_jsonb(o) FROM video_queue.source_observation o WHERE observation_id=%s',(f['observation_id'],))
+    untrusted.update(observation_id=str(uuid4()),nonce=str(uuid4()),collected_by='fixedsubset_collector')
+    h.q('attacker',"SELECT set_config('video_queue.observation_trusted','true',false),set_config('video_queue.collector','fixedsubset_collector',false)")
+    with h.variant('S08_untrusted_collector_guard',unchanged=True):
+        expect_guard(h,lambda:h.q('attacker','INSERT INTO video_queue.source_observation SELECT (jsonb_populate_record(NULL::video_queue.source_observation,%s::jsonb)).*',(untrusted,)), 'SUBSET_CAPABILITY_DENIED')
+    with h.variant('S08_untrusted_update_guard',unchanged=True):
+        expect_guard(h,lambda:h.q('attacker','UPDATE video_queue.source_observation SET observed_at=clock_timestamp(),expires_at=clock_timestamp()+interval \'30 seconds\' WHERE observation_id=%s',(f['observation_id'],)), 'SUBSET_IMMUTABLE_HOLD')
+    for field,value in (('contract_sha256','0'*64),('request_key',other['request_key']),('approval_id',other['approval_id'])):
+        obs=h.observe(f)
+        h.fixture_change('source_observation',h.sql.SQL('UPDATE video_queue.source_observation SET {}=%s WHERE observation_id=%s').format(h.sql.Identifier(field)),(value,obs))
+        with h.variant('S08_admission_scope_'+field,unchanged=True):
+            expect_guard(h,lambda:h.admit(f,observation_id=obs),'SUBSET_OBSERVATION_SCOPE')
+    # Refresh original admission evidence only before any attempt to admit it;
+    # no failed-observation rollback assertion is hidden by a refresh.
+    f['observation_id']=h.observe(f); b=h.admit(f)
+    with h.variant('S08_consumed_observation_new_request_replay',unchanged=True):
+        expect_guard(h,lambda:h.admit(other,observation_id=f['observation_id']),'SUBSET_OBSERVATION_SCOPE')
+        require(h.recover(f)['binding']==b,'nonce replay denial damaged committed recovery')
+    h.runtime(f,True); c=h.claim()[0]
+    for field,value in (('lease_token',str(uuid4())),('attempt_count',2),('job_id',str(uuid4())),
+                        ('worker_key','other-worker'),('approval_id',other['approval_id']),
+                        ('contract_sha256','0'*64),('request_key',other['request_key']),('consumed_at','2000-01-01T00:00:00Z')):
         obs=h.observe(f,claim=c)
         h.fixture_change('source_observation',h.sql.SQL('UPDATE video_queue.source_observation SET {}=%s WHERE observation_id=%s').format(h.sql.Identifier(field)),(value,obs))
-        before=h.snapshot(); h.expect_error(lambda:h.attempt(f,c,obs=obs),codes=('SUBSET_',))
-        unchanged(h,before,'attempt scope mismatch accepted')
-    # Server timestamp checks at collector boundary, including future timestamps.
-    h.expect_error(lambda:h.observe(f,claim=c,age=-5),codes=('SUBSET_',))
-    h.expect_error(lambda:h.observe(f,claim=c,age=31),codes=('SUBSET_',))
+        with h.variant('S08_attempt_scope_'+field,unchanged=True):
+            expect_guard(h,lambda:h.attempt(f,c,obs=obs),'SUBSET_OBSERVATION_SCOPE')
+    obs=h.observe(f,claim=c)
+    h.fixture_change('source_observation','UPDATE video_queue.source_observation SET sources=%s::jsonb WHERE observation_id=%s',([],obs))
+    with h.variant('S08_attempt_missing_source',unchanged=True):
+        expect_guard(h,lambda:h.attempt(f,c,obs=obs),'SUBSET_SOURCE_REVISION_CHANGED')
+    with h.variant('S08_recovery_observation_independent',unchanged=True):
+        require(h.recover(f)['binding']==b,'observation denials changed immutable receipt')
 
 
 def s09(h):
@@ -1014,6 +1536,7 @@ def w01(h):
     h.arm('admit1','subset_admission',{'state':'FINALIZED'},operation='UPDATE')
     h.q('admit1','BEGIN'); pending=h.submit(lambda:h.admit(draft)); h.blocked('admit1','admin')
     eligible=h.fixture((40,41),runtime=True); binding=h.admit(eligible,'admit2')
+    later=h.fixture((50,51),runtime=True); later_binding=h.admit(later,'admit2')
     for phase in ('while_draft_uncommitted','after_commit'):
         before=h.snapshot()
         h.expect_error(lambda:h.claim('legacy'),states=('42501',))
@@ -1022,8 +1545,19 @@ def w01(h):
         h.expect_error(lambda:h.claim('legacy'),states=('42501',))
         unchanged(h,before,'legacy worker claimed or modified a managed job')
         if phase=='while_draft_uncommitted':
-            claim=h.claim(); require(len(claim)==1 and str(claim[0]['batch_id'])==binding['batch_id'],
-                                     'selector starved behind older ineligible jobs')
+            with h.variant('W01_SKIP_LOCKED_ELIGIBLE'):
+                h.q('admin','BEGIN')
+                h.q('admin','SELECT job_id FROM video_queue.job WHERE batch_id=%s AND is_canary FOR UPDATE',
+                    (binding['batch_id'],))
+                # Proves actual SKIP LOCKED behavior, independent of SQL aliases.
+                skipped=h.submit(h.claim).result(8)
+                require(len(skipped)==1 and str(skipped[0]['batch_id'])==later_binding['batch_id'],
+                        'claim blocked or selected held/ineligible work')
+                h.q('admin','COMMIT')
+                claim=h.claim()
+                require(len(claim)==1 and str(claim[0]['batch_id'])==binding['batch_id'],
+                        'claim failed to select previously locked eligible work')
+                h.verify_binding(eligible,binding); h.verify_binding(later,later_binding)
             h.release('admit1'); pending.result(10); h.q('admit1','COMMIT')
     require(h.scalar('admin','SELECT to_jsonb(j) FROM video_queue.job j WHERE job_id=%s',(old['job_id'],))==old,
             'claim mutated historical ineligible job')
@@ -1038,60 +1572,86 @@ def w01(h):
         ('SELECT video_queue.heartbeat_subset_job(%s,%s,%s,900)',(c['job_id'],c['lease_token'],WORKER))):
         h.expect_error(lambda statement=statement,params=params:h.q('legacy',statement,params),states=('42501',))
     definition=h.scalar('admin',"SELECT pg_get_functiondef('video_queue.claim_job(text,integer,text,text)'::regprocedure)")
-    require(re.search(r'SELECT j\.\* INTO v_job[\s\S]+WHERE video_queue\.subset_worker_eligible[\s\S]+FOR UPDATE OF j SKIP LOCKED',definition),
-            'eligibility missing from real SKIP LOCKED selector')
+    # Definition hash is provenance only; behavioral assertions above are the oracle.
     h.log.append({'selector_function_sha256':hashlib.sha256(definition.encode()).hexdigest()})
 
 
 def w02(h):
-    f,b,c1=ordinary(h); old_obs=h.observe(f,claim=c1); h.attempt(f,c1,obs=old_obs)
-    h.lease_expire(c1); c2=h.claim()[0]
-    require(c2['job_id']==c1['job_id'] and c2['attempt_count']==2 and c2['lease_token']!=c1['lease_token'],
-            'reclaim did not rotate token/increment existing job')
-    post=h.observe(f,claim=c2)
-    invalid_calls=[
-        lambda:h.q('worker','SELECT video_queue.heartbeat_subset_job(%s,%s,%s,900)',(c1['job_id'],c1['lease_token'],WORKER)),
-        lambda:h.attempt(f,c1,obs=old_obs),
-        lambda:h.q('worker','SELECT video_queue.authorize_subset_attempt(%s,NULL,%s,%s)',(c2['job_id'],WORKER,post)),
-        lambda:h.q('worker','SELECT video_queue.heartbeat_subset_job(%s,NULL,%s,900)',(c2['job_id'],WORKER)),
-        lambda:h.q('worker','SELECT * FROM video_queue.retry_subset_job(%s,NULL,%s,%s,1)',(c2['job_id'],WORKER,'UV_RETRY')),
-        lambda:h.q('worker','SELECT * FROM video_queue.finish_subset_job(%s,NULL,%s,%s,%s::jsonb,%s,NULL)',(c2['job_id'],WORKER,'REVIEW_READY',h.output(c2),post)),
-    ]
-    for call in invalid_calls:
-        before=h.snapshot(); h.expect_error(call,codes=('SUBSET_LEASE_LOST',))
-        unchanged(h,before,'stale/null lease modified persisted state')
-    h.attempt(f,c2,obs=post); h.retry(c2); h.ready_retry(c2); c3=h.claim()[0]
-    require(c3['job_id']==c1['job_id'] and c3['attempt_count']==3,'third attempt mapping invalid')
+    operations=('heartbeat','retry','finish','attempt')
+    for defect in ('null_token','stale_token','wrong_owner','expired_token','wrong_attempt_domain'):
+        f,b,c=ordinary(h); original=c
+        if defect=='stale_token':
+            h.lease_expire(c); c=h.claim()[0]
+            require(c['job_id']==original['job_id'] and c['attempt_count']==2 and c['lease_token']!=original['lease_token'], 'stale-token fixture did not actually rotate a lease')
+        h.attempt(f,c); post=h.observe(f,claim=c)
+        token=None if defect=='null_token' else original['lease_token'] if defect=='stale_token' else c['lease_token']
+        owner='other-worker' if defect=='wrong_owner' else WORKER
+        if defect=='expired_token': h.lease_expire(c)
+        if defect=='wrong_attempt_domain':
+            h.fixture_change('job','UPDATE video_queue.job SET attempt_count=4 WHERE job_id=%s',(c['job_id'],))
+        for operation in operations:
+            with h.variant('W02_'+defect+'_'+operation,unchanged=True):
+                expect_guard(h,lambda:worker_probe(h,operation,c,token=token,owner=owner,observation=post), 'SUBSET_LEASE_LOST')
+        with h.variant('W02_'+defect+'_recovery',unchanged=True):
+            require(h.recover(f)['binding']==b,'lease denial modified immutable binding')
+    # In-range observation-attempt mismatch is meaningful only for APIs that
+    # accept an observation. Heartbeat/retry have no claimed attempt parameter.
+    f,b,c=ordinary(h); h.attempt(f,c); post=h.observe(f,claim=c)
+    h.fixture_change('source_observation','UPDATE video_queue.source_observation SET attempt_count=2 WHERE observation_id=%s',(post,))
+    for operation in ('attempt','finish'):
+        with h.variant('W02_wrong_observation_attempt_'+operation,unchanged=True):
+            expect_guard(h,lambda:worker_probe(h,operation,c,token=c['lease_token'],owner=WORKER,observation=post),'SUBSET_OBSERVATION_SCOPE')
+    with h.variant('W02_current_lease_without_observation_heartbeat'):
+        worker_probe(h,'heartbeat',c,token=c['lease_token'],owner=WORKER,observation=None)
+        require(h.recover(f)['binding']==b,'heartbeat changed binding')
+    with h.variant('W02_current_lease_without_observation_retry'):
+        require(h.retry(c)['job_status']=='QUEUED','current-lease retry should not require observation')
+        require(h.scalar('admin','SELECT consumed_at IS NULL FROM video_queue.source_observation WHERE observation_id=%s',(post,)), 'lease-only APIs consumed a mismatched observation')
+    f,b,c1=ordinary(h); h.attempt(f,c1); h.lease_expire(c1)
+    with h.variant('W02_reclaim_second_attempt'):
+        c2=h.claim()[0]
+        require(c2['job_id']==c1['job_id'] and c2['attempt_count']==2 and c2['lease_token']!=c1['lease_token'], 'reclaim did not rotate token/increment existing job')
+    h.attempt(f,c2); h.retry(c2); h.ready_retry(c2)
+    with h.variant('W02_claim_third_attempt'):
+        c3=h.claim()[0]
+        require(c3['job_id']==c1['job_id'] and c3['attempt_count']==3 and c3['lease_token'] not in (c1['lease_token'],c2['lease_token']), 'third attempt mapping invalid')
     h.attempt(f,c3)
-    before=h.snapshot()
-    h.expect_error(lambda:h.q('worker','SELECT * FROM video_queue.retry_job(%s,%s,%s,%s,4,1)',(c3['job_id'],c3['lease_token'],WORKER,'UV_RETRY')),states=('42501',))
-    unchanged(h,before,'revoked raw retry path remained accessible')
-    # Deliberately grant the historical path to the scoped test login: the
-    # permanent guard still must reject max=4, independently of EXECUTE ACLs.
+    with h.variant('W02_raw_max4_acl',unchanged=True):
+        h.expect_error(lambda:h.q('worker','SELECT * FROM video_queue.retry_job(%s,%s,%s,%s,4,1)',(c3['job_id'],c3['lease_token'],WORKER,'UV_RETRY')),states=('42501',))
     h.q('admin','GRANT EXECUTE ON FUNCTION video_queue.retry_job(uuid,uuid,text,text,integer,integer) TO fixedsubset_worker')
-    h.expect_error(lambda:h.q('worker','SELECT * FROM video_queue.retry_job(%s,%s,%s,%s,4,1)',(c3['job_id'],c3['lease_token'],WORKER,'UV_RETRY')),codes=('SUBSET_',))
-    unchanged(h,before,'raw max=4 requeued an exhausted managed job')
+    with h.variant('W02_raw_max4_guard',unchanged=True):
+        expect_guard(h,lambda:h.q('worker','SELECT * FROM video_queue.retry_job(%s,%s,%s,%s,4,1)',(c3['job_id'],c3['lease_token'],WORKER,'UV_RETRY')), 'SUBSET_ATTEMPT_OR_RELEASE_HOLD')
+    # On failure the harness owns cleanup; never mask its primary error with
+    # a second failing statement in finally.
     h.q('admin','REVOKE EXECUTE ON FUNCTION video_queue.retry_job(uuid,uuid,text,text,integer,integer) FROM fixedsubset_worker')
-    h.q('admin','GRANT SELECT,UPDATE ON video_queue.job TO fixedsubset_worker')
-    h.expect_error(lambda:h.q('worker','UPDATE video_queue.job SET attempt_count=0 WHERE job_id=%s',(c3['job_id'],)),codes=('SUBSET_',))
-    unchanged(h,before,'attempt counter reset accepted')
-    h.q('admin','REVOKE SELECT,UPDATE ON video_queue.job FROM fixedsubset_worker')
-    ended=h.retry(c3); require(ended['job_status']=='FAILED','fixed retry wrapper did not terminate attempt3')
-    require(h.claim()==[],'fourth attempt claimed')
-    require(h.recover(f)['binding']==b,'retry modified immutable admission')
-    require(h.scalar('admin','SELECT count(*) FROM video_queue.source_reservation')==2,'retry released reservations')
-    # Both historical impossible QUEUED-at-3 and crashed third lease must reach
-    # FAILED; neither may starve a later eligible independent admission.
+    grant_guard_probe(h,'worker',('job',))
+    with h.variant('W02_attempt_counter_reset',unchanged=True):
+        expect_guard(h,lambda:h.q('worker','UPDATE video_queue.job SET attempt_count=0 WHERE job_id=%s',(c3['job_id'],)), 'SUBSET_ATTEMPT_OR_RELEASE_HOLD')
+    with h.variant('W02_third_retry_terminal'):
+        ended=h.retry(c3)
+        require(ended['job_status']=='FAILED' and ended['batch_status']=='CANARY_BLOCKED','fixed retry wrapper did not terminate attempt3')
+        require(h.claim()==[],'fourth attempt claimed')
+        require(h.recover(f)['binding']==b,'retry modified immutable admission')
+        require(h.scalar('admin','SELECT count(*) FROM video_queue.source_reservation')==2,'retry released reservations')
     for state in ('QUEUED','LEASED'):
         f,b,c=ordinary(h)
         h.fixture_change('job',"UPDATE video_queue.job SET attempt_count=3,status=%s,lease_owner=CASE WHEN %s='LEASED' THEN lease_owner END,lease_token=CASE WHEN %s='LEASED' THEN lease_token END,lease_expires_at=CASE WHEN %s='LEASED' THEN clock_timestamp()-interval '1 second' END WHERE job_id=%s",(state,state,state,state,c['job_id']))
         good=h.fixture((5,6),runtime=True); good_binding=h.admit(good)
-        claimed=h.claim(); require(len(claimed)==1 and str(claimed[0]['batch_id'])==good_binding['batch_id'],
-                                   'exhausted row starved eligible work')
-        row=h.one('admin','SELECT status,attempt_count,error_code FROM video_queue.job WHERE job_id=%s',(c['job_id'],))
-        require(row['status']=='FAILED' and row['attempt_count']==3 and row['error_code']=='UV_WORKER_CRASH_RETRY_EXHAUSTED',
-                'exhausted job not terminalized at three')
-        require(h.recover(f)['binding']==b,'exhaustion changed binding')
+        with h.variant('W02_managed_exhausted_'+state):
+            claimed=h.claim()
+            require(len(claimed)==1 and str(claimed[0]['batch_id'])==good_binding['batch_id'],'exhausted row starved eligible work')
+            row=h.one('admin','SELECT status,attempt_count,error_code FROM video_queue.job WHERE job_id=%s',(c['job_id'],))
+            require(row==dict(status='FAILED',attempt_count=3,error_code='UV_WORKER_CRASH_RETRY_EXHAUSTED'), 'exhausted job not terminalized at three')
+            require(h.recover(f)['binding']==b,'exhaustion changed binding')
+    for state in ('QUEUED','LEASED'):
+        h.reset(managed=False); legacy=h.legacy(numbers=(90,),key='historical-exhausted')
+        h.q('admin',"UPDATE video_queue.job SET status=%s,attempt_count=3,lease_owner=CASE WHEN %s='LEASED' THEN %s END,lease_token=CASE WHEN %s='LEASED' THEN %s::uuid END,lease_expires_at=CASE WHEN %s='LEASED' THEN clock_timestamp()-interval '1 second' END WHERE batch_id=%s",(state,state,WORKER,state,str(uuid4()),state,legacy['batch_id']))
+        old=h.scalar('admin','SELECT to_jsonb(j) FROM video_queue.job j WHERE batch_id=%s',(legacy['batch_id'],))
+        h.apply_managed(); good=h.fixture((5,6),runtime=True); binding=h.admit(good)
+        with h.variant('W02_historical_exhausted_'+state):
+            claimed=h.claim()
+            require(len(claimed)==1 and str(claimed[0]['batch_id'])==binding['batch_id'],'historical exhausted row starved managed work')
+            require(h.scalar('admin','SELECT to_jsonb(j) FROM video_queue.job j WHERE job_id=%s',(old['job_id'],))==old, 'unbound history was claimed or rewritten')
 
 
 def a01(h):
@@ -1179,10 +1739,67 @@ def t01(h):
 CASES=dict(zip(CASE_IDS,(c01,c02,c03,c04,c05,f01,f04,f05,l01,l02,l03,l04,
                        g01,g02,g03,g04,g05,r01,r03,r04,s01,s07,s08,s09,s10,
                        w01,w02,a01,t01),strict=True))
+REQUIRED_VARIANTS.update({
+    'L02_PREEXISTING_LEGACY_WRITER_CUTOVER':('L02_COMMIT','L02_ROLLBACK'),
+    'W01_LEGACY_WORKER_AND_ELIGIBILITY':('W01_SKIP_LOCKED_ELIGIBLE',),
+})
 
 
 def save_json(path,value):
     path.write_text(json.dumps(value,ensure_ascii=False,indent=2,default=str)+'\n',encoding='utf-8')
+
+
+def remember_error(report,exc,stage):
+    item={'stage':stage,'error_type':type(exc).__name__,'error':str(exc)}
+    report['status']='FAIL'
+    if 'error' not in report:
+        report.update(item)
+    else:
+        report.setdefault('secondary_errors',[]).append(item)
+
+
+def save_evidence(path,value,report):
+    try:
+        save_json(path,value)
+        return True
+    except BaseException as exc:
+        remember_error(report,exc,'evidence:'+path.name)
+        return False
+
+
+def run_case(harness,record,evidence,report):
+    """Fail fast, retain the original exception and every available evidence item."""
+    harness.case_id=record['id']; began=time.monotonic(); harness.log=[]
+    record.update(status='RUNNING',sql_executed=True)
+    try:
+        CASES[record['id']](harness)
+        expected=REQUIRED_VARIANTS.get(record['id'],())
+        completed=[v for v in harness.variants if v['case']==record['id']]
+        require({v['id'] for v in completed}==set(expected)
+                and all(v['status']=='PASS' for v in completed),
+                'required variant evidence incomplete: '+record['id'])
+        clock=harness.scalar('admin','SELECT clock_timestamp()')
+        state=harness.snapshot()
+        require(save_evidence(evidence/(record['id']+'.state.json'),state,report),'state evidence not saved')
+        record.update(status='PASS',finished_server_clock=str(clock))
+    except BaseException as exc:
+        record.update(status='FAIL',error_type=type(exc).__name__,error=str(exc))
+        remember_error(report,exc,'case:'+record['id'])
+        # Publish the original failure before attempting any diagnostic query.
+        save_evidence(evidence/'results.json',report,report)
+        try:
+            failure=harness.failure_evidence()
+            save_evidence(evidence/(record['id']+'.failure-state.json'),failure,report)
+        except BaseException as diagnostic:
+            record['failure_capture_error']={'error_type':type(diagnostic).__name__,'error':str(diagnostic)}
+    finally:
+        record['elapsed_seconds']=round(time.monotonic()-began,3)
+        record['variants']=[dict(v) for v in harness.variants if v['case']==record['id']]
+        if not save_evidence(evidence/(record['id']+'.sql.json'),harness.log,report):
+            record['status']='FAIL'
+        if not save_evidence(evidence/'results.json',report,report): record['status']='FAIL'
+        print(record['id']+': '+record['status'],flush=True)
+    return record['status']=='PASS'
 
 
 def main(argv=None):
@@ -1219,7 +1836,8 @@ def main(argv=None):
     report={'schema':'fixed-subset-postgres-execution/v1','status':'NOT_RUN','sql_executed':False,
             'case_count':29,'cases':cases,'started_at':datetime.now(timezone.utc).isoformat(),
             'endpoint':{'host':'127.0.0.1','port':5432,'database':'fixedsubset_test'},
-            'limits':{'max_connections':8,'parallel_test_cases':1},
+            'limits':{'max_connections':8,'connection_scope':'harness LOGIN sessions including admin/cutover/relay',
+                      'parallel_test_cases':1,'parallel_test_statements':2,'cleanup_seconds':45},
             'source_hashes':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in (PLAN_PATH,FIXTURE_PATH,HERE/'run.py',HERE/'helpers.sql')},
             'limitations':['Freshness is checked at the final locked authorization point, not guaranteed at every COMMIT.',
@@ -1236,37 +1854,29 @@ def main(argv=None):
         report['migration_expanded_hashes']={str(p.relative_to(ROOT)):hashlib.sha256(migration_text(p).encode()).hexdigest() for p in paths}
         save_json(evidence/'setup.json',harness.log); harness.log=[]
         for record in cases:
-            harness.case_id=record['id']; began=time.monotonic(); harness.log=[]
-            record.update(status='RUNNING',sql_executed=True)
-            try:
-                CASES[record['id']](harness)
-                record.update(status='PASS',finished_server_clock=str(harness.scalar('admin','SELECT clock_timestamp()')))
-                save_json(evidence/(record['id']+'.state.json'),harness.snapshot())
-            except Exception as exc:
-                record.update(status='FAIL',error_type=type(exc).__name__,error=str(exc))
-                raise
-            finally:
-                record['elapsed_seconds']=round(time.monotonic()-began,3)
-                save_json(evidence/(record['id']+'.sql.json'),harness.log)
-                save_json(evidence/'results.json',report)
-                print(record['id']+': '+record['status'],flush=True)
+            if not run_case(harness,record,evidence,report): break
         require(len(cases)==29 and all(c['status']=='PASS' for c in cases),'incomplete execution cannot pass')
         report['status']='PASS'
-    except Exception as exc:
-        report.update(status='FAIL',error_type=type(exc).__name__,error=str(exc))
+    except BaseException as exc:
+        remember_error(report,exc,'execution')
         if harness is not None:
             report['sql_executed']=report['sql_executed'] or bool(harness.log)
         for record in cases:
             if record['status']=='NOT_RUN': record['reason']='run stopped after setup/case failure; no reset conceals failing state'
         if harness is not None and not any(c['status']=='FAIL' for c in cases):
-            save_json(evidence/'setup-failure.sql.json',harness.log)
+            save_evidence(evidence/'setup-failure.sql.json',harness.log,report)
     finally:
         if harness is not None:
-            try: harness.close()
-            except Exception as exc:
-                report.update(status='FAIL',cleanup_error=type(exc).__name__+': '+str(exc))
+            try:
+                report['cleanup']=harness.close()
+                if report['cleanup']['status']!='PASS':
+                    remember_error(report,RuntimeError('cleanup did not complete'),'cleanup')
+            except BaseException as exc:
+                remember_error(report,exc,'cleanup')
+            save_evidence(evidence/'cleanup.sql.json',harness.log,report)
+            save_evidence(evidence/'cleanup.json',report.get('cleanup',{'status':'UNKNOWN'}),report)
         report['finished_at']=datetime.now(timezone.utc).isoformat()
-        save_json(evidence/'results.json',report)
+        save_evidence(evidence/'results.json',report,report)
     print(json.dumps({'status':report['status'],'passed':sum(c['status']=='PASS' for c in cases),
                       'failed':sum(c['status']=='FAIL' for c in cases),'not_run':sum(c['status']=='NOT_RUN' for c in cases),
                       'results':str(evidence/'results.json')}))
