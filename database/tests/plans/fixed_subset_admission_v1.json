@@ -1,0 +1,4247 @@
+{
+  "schema": "fixed-subset-admission-postgresql-test-plan/v1",
+  "status": "DESIGN_ONLY",
+  "sql_executed": false,
+  "postgres_test_status": "NOT_RUN",
+  "production_authorization": false,
+  "execution_allowed": false,
+  "release_allowed": false,
+  "no_live_io": true,
+  "scope": "Declarative real-PostgreSQL acceptance matrix for a future atomic admission transaction and recovery boundary; no executable harness, migration, connection, credentials, publication, media processing, or cloud action.",
+  "governance": {
+    "mode": "ASSURED",
+    "current_evidence": "E1: local SQL source inspection and synthetic JSON; no PostgreSQL E2/E3 proof",
+    "independent_assurance": "NOT_RUN; I2 or higher required before adopting the production design",
+    "sources": [
+      "AGENTS.md",
+      "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md",
+      "docs/TECHNICAL_GOVERNANCE.md",
+      "ops/governance/governance-state.json"
+    ]
+  },
+  "sources": [
+    "database/migrations/0056_universal_video_queue.sql",
+    "database/migrations/0057_universal_video_canary_review_gate.sql",
+    "database/migrations/0058_universal_video_terminal_v2_gate.sql",
+    "database/migrations/0058_universal_video_terminal_v2_gate/001_apply_terminal_v2.sql",
+    "database/migrations/0058_universal_video_terminal_v2_gate/002_require_terminal_revisions.sql",
+    "database/migrations/0059_universal_video_terminal_size_guard.sql",
+    "database/tests/041_universal_video_queue.sql",
+    "database/tests/042_issue_881_canary_gate.sql",
+    "database/tests/043_universal_video_terminal_size_guard.sql",
+    "tests/test_universal_video_subset_admission_fake.py",
+    "tests/test_universal_video_subset_contract.py"
+  ],
+  "prerequisites": [
+    {
+      "id": "P01",
+      "status": "ABSENT",
+      "requirement": "Future server functions absent: video_queue.admit_approved_subset(uuid,text,text,text,uuid) and video_queue.recover_subset_admission(text,text,text). This plan does not implement them."
+    },
+    {
+      "id": "P02",
+      "status": "ABSENT",
+      "requirement": "Implement server-owned subset_approval containing the complete approved contract and exact queue manifest, subset_admission immutable header/binding, source_reservation global primary key google_drive:<file_id>, and trusted source_observation. Caller hashes alone are not approval or observation evidence."
+    },
+    {
+      "id": "P03",
+      "status": "ABSENT",
+      "requirement": "Reuse the existing request-key transaction lock. Recover an exact committed binding or return legacy/conflict HOLD before freshness checks or new reservations. For a new admission, lock approval and trusted observation, INSERT a transient admission draft, then reserve ALL exact source_identity keys through the immediate primary key in canonical COLLATE C insertion order, including initially absent keys. All reservation/unique-index waits finish BEFORE the final clock_timestamp freshness/authorization check. SELECT FOR UPDATE alone cannot lock absent source keys. If INSERT ON CONFLICT does not insert, read the owner in a separate READ COMMITTED statement with a new snapshot; never rely on a stale single-CTE fallback lookup. Conflicts are explicit; no silent skipping/filtering. Only after this gate invoke existing enqueue_drive_batch in the SAME transaction, verify exact actual jobs and persist the complete immutable binding. Any exception rolls all drafts/reservations/enqueue/consumption/binding writes back. No new source advisory-lock namespace."
+    },
+    {
+      "id": "P04",
+      "status": "ABSENT",
+      "requirement": "Revoke legacy app EXECUTE on enqueue_drive_batch, protect all base-table DML, and install triggers requiring persisted trusted reservation/approval linkage and immutable identity. No session GUC, custom setting, caller role name, client boolean, checksum, or caller-provided timestamp may authorize insertion."
+    },
+    {
+      "id": "P05",
+      "status": "ABSENT",
+      "requirement": "Cutover must stop/drain every legacy and new writer, wait for earlier writer transactions, backfill permanent tombstones for every historical source from all job statuses, preserve duplicate history provenance, install guards and revocations before reopening. Unknown history or an active legacy writer keeps cutover blocked."
+    },
+    {
+      "id": "P06",
+      "status": "ABSENT",
+      "requirement": "Future worker server boundary checks trusted source observation tied to contract, job UUID, non-null lease token, exact attempt, worker, server timestamp and nonce immediately before processing every attempt. A claim alone is not media-processing permission. Retry/reclaim/claim enforce a server maximum of three attempts independent of caller p_max_attempts. Legacy worker credentials must not claim managed rows after commit. The existing claim selector needs an eligibility predicate for finalized authorized rollout rows, avoiding claim-then-rollback starvation. Prevent attempt_count decrease/reset."
+    },
+    {
+      "id": "P07",
+      "status": "NOT_RUN",
+      "requirement": "Use an explicitly provisioned disposable PostgreSQL database only, with pgcrypto, required base roles, migrations 0056,0057,0058 including both subfiles, optional 0059, and the reviewed FUTURE admission migration. Pin PostgreSQL version, migration checksums and role ACLs in evidence. No DSN is embedded or inferred by this JSON."
+    },
+    {
+      "id": "P08",
+      "status": "ABSENT",
+      "requirement": "Future test support under admission_test is not implemented here. It seeds synthetic server-owned approvals/observations as a privileged fixture principal; supplies deterministic failpoints/barriers; maps invoke_attempt_gate to the ACTUAL future worker server boundary without replacing it by a Python fake. Its helper SQL is a design dependency, not a production API."
+    },
+    {
+      "id": "P09",
+      "status": "NOT_RUN",
+      "requirement": "Per-case fresh disposable state; actual independent PostgreSQL connections and roles. The coordinator uses barriers/pg_blocking_pids to prove interleaving rather than relying on thread scheduling or sleeps. Set finite statement/lock timeouts. Capture query results, SQLSTATE, constraint names, backend IDs and commit acknowledgements."
+    },
+    {
+      "id": "P10",
+      "status": "REQUIRED",
+      "requirement": "JSON parsing/static checks may run under bare pytest without any DB/network. No pytest import/collection hook, autouse fixture or DSN environment lookup may run this SQL; no executable test harness is part of this change. A separately authorized future integration runner must fail closed when any prerequisite is absent."
+    }
+  ],
+  "design_contract": {
+    "admission_signature": "video_queue.admit_approved_subset(p_approval_id uuid,p_request_key text,p_contract_sha256 text,p_queue_manifest_sha256 text,p_observation_id uuid) RETURNS jsonb",
+    "recovery_signature": "video_queue.recover_subset_admission(p_request_key text,p_contract_sha256 text,p_queue_manifest_sha256 text) RETURNS jsonb",
+    "admission_success": "Exact rich persisted_binding_contract JSON only, including embedded binding_sha256; never the lease compatibility projection or mutable progress fields.",
+    "recovery_success": "Return precisely the persisted immutable binding; do not call enqueue, refresh source metadata, require original observation freshness, or compare mutable status as immutable identity.",
+    "recovery_not_found": {
+      "status": "NOT_FOUND",
+      "when": "No header, queue row, reservation or historical request evidence exists. Observation and approval still required for a separate admission call."
+    },
+    "recovery_hold": {
+      "status": "HOLD",
+      "when": "Legacy/unbound request, mismatched caller digests, incomplete/corrupt mapping, uncertain historical provenance or partial state. No re-enqueue or repair on read."
+    },
+    "error_status": "Proposed stable VIDEO_ADMISSION_* design codes below are expected semantics, not implemented or observed PostgreSQL results. Existing VIDEO_QUEUE_* names are quoted from checked-in SQL. Capture actual SQLSTATE as well; unspecified future SQLSTATE must be frozen before execution.",
+    "immutable_header_columns": [
+      "admission_id",
+      "approval_id",
+      "request_key",
+      "plan_sha256",
+      "subset_sha256",
+      "contract_sha256",
+      "queue_manifest_sha256",
+      "batch_id",
+      "binding",
+      "binding_canonical_bytes",
+      "binding_sha256",
+      "server_commit_receipt"
+    ],
+    "proposed_table_column_contract": {
+      "subset_approval": [
+        "approval_id",
+        "request_key",
+        "contract_sha256",
+        "queue_manifest_sha256",
+        "plan_sha256",
+        "subset_sha256",
+        "full_contract",
+        "contract_canonical_bytes",
+        "queue_manifest",
+        "queue_manifest_canonical_bytes",
+        "approver_identity",
+        "approval_provenance",
+        "approved_plan_capture_reference",
+        "approved_at",
+        "status",
+        "expires_at",
+        "revoked_at"
+      ],
+      "subset_admission": [
+        "admission_id",
+        "approval_id",
+        "request_key",
+        "plan_sha256",
+        "subset_sha256",
+        "contract_sha256",
+        "queue_manifest_sha256",
+        "batch_id",
+        "binding",
+        "binding_canonical_bytes",
+        "binding_sha256",
+        "server_commit_receipt"
+      ],
+      "source_reservation": [
+        "source_identity",
+        "admission_id",
+        "request_key",
+        "source_fingerprint",
+        "batch_id",
+        "job_id",
+        "reservation_kind",
+        "historical_job_ids",
+        "historical_provenance"
+      ],
+      "source_observation": [
+        "observation_id",
+        "approval_id",
+        "contract_sha256",
+        "request_key",
+        "observed_at",
+        "expires_at",
+        "purpose",
+        "nonce",
+        "scope",
+        "sources",
+        "job_id",
+        "source_file_id",
+        "lease_token",
+        "attempt_count",
+        "worker_key",
+        "collector_provenance",
+        "consumed_at",
+        "consumed_by_admission_id"
+      ]
+    },
+    "reservation_policy": "source_identity PRIMARY KEY equals google_drive:<file_id>. Committed reservations and HISTORICAL_HOLD tombstones cannot be released, deleted, reassigned or replaced on failure, retry, canary review, source revision/name change or a new request key.",
+    "observation_policy": "Rows, scope, timestamp and nonce are issued by the trusted collector. Verify exact source set and approved name/revision/fingerprint. At the final locked authorization point AFTER all lock waits require observed_at <= clock_timestamp() AND clock_timestamp() < expires_at, with 0 < expires_at-observed_at <= 30 seconds. The envelope begins at the oldest constituent read. This is not an absolute COMMIT-time freshness guarantee: SET CONSTRAINTS ALL IMMEDIATE followed by idle can make the evidence stale before COMMIT. The trusted caller owns the outer transaction, commits once promptly and exposes the receipt only after successful COMMIT. Fresh trusted observation and lease checks remain mandatory before every processing attempt. Caller payloads/GUCs cannot establish trust.",
+    "persisted_binding_contract": {
+      "schema": "universal-video-admission-binding-v1",
+      "exact_top_level_keys": [
+        "schema",
+        "approval_id",
+        "request_key",
+        "batch_id",
+        "jobs",
+        "plan_sha256",
+        "subset_sha256",
+        "contract_sha256",
+        "queue_manifest_sha256",
+        "execution_allowed",
+        "release_allowed",
+        "database_persistence_allowed",
+        "canonical_promotion_allowed",
+        "binding_sha256"
+      ],
+      "exact_job_keys": [
+        "file_id",
+        "job_id",
+        "sequence",
+        "source_identity",
+        "source_fingerprint"
+      ],
+      "job_order": "Ascending exact queue-manifest sequence; unique actual job_id and file_id; bijection with all actual jobs and permanent reservations of the admitted batch.",
+      "digest_rule": "binding_sha256 = SHA256(canonical UTF-8 JSON of every exact top-level field except binding_sha256); header digest equals embedded binding_sha256.",
+      "disabled_flags": {
+        "execution_allowed": false,
+        "release_allowed": false,
+        "database_persistence_allowed": false,
+        "canonical_promotion_allowed": false
+      },
+      "authoritative_reference": "universal_video/admission_binding.py::build_binding",
+      "note": "This full rich shape is the persisted binding returned by admission/recovery. project_lease_binding produces a separate five-key compatibility projection only after complete rich binding revalidation."
+    },
+    "lease_binding_projection": {
+      "exact_top_level_keys": [
+        "contract_sha256",
+        "queue_manifest_sha256",
+        "request_key",
+        "batch_id",
+        "jobs"
+      ],
+      "exact_job_keys": [
+        "file_id",
+        "job_id"
+      ],
+      "persisted_binding": false,
+      "reference": "universal_video/admission_binding.py::project_lease_binding",
+      "purpose": "Existing subset_contract.check_attempt compatibility only, after full rich immutable binding revalidation."
+    },
+    "proposed_column_semantics": "Names describe absent future schema, not implemented DDL. Approval stores verified canonical contract/manifest bytes and parsed data, hashes, trusted approver/plan/capture provenance and mutable expiry/revocation authorization. Admission stores immutable plan/subset/contract/manifest hashes and exact rich binding bytes/hash/commit receipt. ADMITTED reservations retain immutable request/admission, approved source_fingerprint and actual batch_id/job_id; HISTORICAL_HOLD instead preserves provenance to all historical jobs and never fabricates an approved fingerprint or managed mapping. Observation sources retain exact native metadata/fingerprint records, oldest constituent server timestamp, scope and trusted collector provenance.",
+    "reservation_acquisition": {
+      "sequence": [
+        "Existing request-key lock; committed immutable recovery or legacy HOLD before freshness/reservations.",
+        "Lock and validate server approval and trusted observation authority/scope.",
+        "INSERT transient admission draft in the same transaction.",
+        "INSERT ALL exact source_identity reservations in ascending COLLATE C order; immediate PK handles both existing and absent keys.",
+        "Resolve every reservation wait and conflict; then perform the final locked clock_timestamp freshness/authorization check.",
+        "Nested existing enqueue, exact actual job mapping, rich binding finalization and structural validation; one outer COMMIT."
+      ],
+      "absent_key_rule": "SELECT FOR UPDATE on source_reservation is insufficient for an absent key. Immediate PK insertion establishes exclusion; no extra source advisory-lock namespace is proposed.",
+      "conflict_rule": "A different committed owner or HISTORICAL_HOLD is an explicit conflict, never an omitted source. If a conflicting transaction rolls back, the waiting insert may acquire the key, but it must still pass the final freshness gate after that wait.",
+      "conflict_snapshot_rule": "At READ COMMITTED, an INSERT ON CONFLICT outcome may observe a conflicting row not visible to that statement snapshot. Owner lookup therefore uses a separate subsequent SQL statement/new snapshot, not an INSERT+SELECT fallback in one stale CTE. Missing/inconsistent owner evidence fails closed; no blind enqueue.",
+      "conflict_owner_lookup": {
+        "sql": "SELECT admission_id,request_key,reservation_kind FROM video_queue.source_reservation WHERE source_identity=$1::text;",
+        "parameters": [
+          "conflicting source_identity"
+        ],
+        "expected": "Run as a separate READ COMMITTED statement after the INSERT conflict has resolved; exact owner/tombstone, or fail closed if ownership cannot be established."
+      }
+    }
+  },
+  "fixture_data": {
+    "terminal_fixture": "tests/fixtures/universal_video_terminal_sql_v2.json",
+    "source_folder_id": "sourceFolder000001",
+    "output_folder_id": "outputFolder000001",
+    "work_folder_id": "workFolder00000001",
+    "processing_profile": "bridge_3_1_free",
+    "algorithm_revision": "3.1-free-r25.16",
+    "raw_sources": [
+      {
+        "id": "privateVideo00000001",
+        "name": "Lesson 1.mp4",
+        "parents": [
+          "sourceFolder000001"
+        ],
+        "mimeType": "video/mp4",
+        "size": "2000000",
+        "version": "17",
+        "modifiedTime": "2026-10-10T10:00:00Z",
+        "trashed": false,
+        "md5Checksum": null
+      },
+      {
+        "id": "privateVideo00000002",
+        "name": "Lesson 2.mp4",
+        "parents": [
+          "sourceFolder000001"
+        ],
+        "mimeType": "video/mp4",
+        "size": "2000000",
+        "version": "17",
+        "modifiedTime": "2026-10-10T10:00:00Z",
+        "trashed": false,
+        "md5Checksum": null
+      },
+      {
+        "id": "privateVideo00000003",
+        "name": "Lesson 3.mp4",
+        "parents": [
+          "sourceFolder000001"
+        ],
+        "mimeType": "video/mp4",
+        "size": "2000000",
+        "version": "17",
+        "modifiedTime": "2026-10-10T10:00:00Z",
+        "trashed": false,
+        "md5Checksum": null
+      },
+      {
+        "id": "privateVideo00000004",
+        "name": "Lesson 4.mp4",
+        "parents": [
+          "sourceFolder000001"
+        ],
+        "mimeType": "video/mp4",
+        "size": "2000000",
+        "version": "17",
+        "modifiedTime": "2026-10-10T10:00:00Z",
+        "trashed": false,
+        "md5Checksum": null
+      }
+    ],
+    "approvals": {
+      "A": {
+        "sources": [
+          1,
+          2
+        ],
+        "canary": 1,
+        "purpose": "first two-source subset"
+      },
+      "A_same": {
+        "sources": [
+          1,
+          2
+        ],
+        "same_approval_and_request_as": "A",
+        "purpose": "identical concurrent/recovery caller"
+      },
+      "B_overlap": {
+        "sources": [
+          1,
+          3
+        ],
+        "canary": 1,
+        "purpose": "different contract and deterministic request key, shared source 1"
+      },
+      "C_disjoint": {
+        "sources": [
+          3,
+          4
+        ],
+        "canary": 3,
+        "purpose": "different contract/key, no shared source"
+      },
+      "R_forward": {
+        "sources": [
+          1,
+          2
+        ],
+        "canary": 1,
+        "queue_order": [
+          1,
+          2
+        ],
+        "purpose": "first reversed-lock-order contender"
+      },
+      "R_reverse": {
+        "sources": [
+          1,
+          2
+        ],
+        "canary": 2,
+        "queue_order": [
+          2,
+          1
+        ],
+        "purpose": "different approved contract/key; synthetic names chosen so pure queue normalization is exactly [2,1]"
+      }
+    },
+    "construction": "Future privileged fixture setup builds full canonical contracts from the synthetic raw rows with the existing PURE batch_plan.build_batch_plan and subset_contract.build_subset_contract, stores full_contract and exact enqueue_manifest in subset_approval, and recomputes every hash on the server. R_reverse changes synthetic display names before building, never blindly reverses a hashed manifest. Fixture seed support must not create an approval from only caller digests.",
+    "parameter_binding": "$1..$N are typed parameters resolved by the future runner from named synthetic fixtures/captured SQL results. They are not psql variables, shell substitutions, real IDs or unresolved SQL literals.",
+    "synthetic_only": true,
+    "additional_symbolic_fixtures": {
+      "invalid_approval_variant": "Each deliberately malformed privileged approval fixture in G05; retain explicit generated approval_id,request_key,contract_sha256,queue_manifest_sha256,observation_id.",
+      "historical_source_readmission_variant": "Fresh valid full approved contract/manifest using historical source 1 with changed revision/profile/key; explicitly generated five admission arguments.",
+      "changed_source_readmission_variant": "Fresh valid full approved contract/manifest still using already reserved source 1 after source changes; explicitly generated five admission arguments.",
+      "legacy_overlap_fixture": "Pre-cutover synthetic legacy key distinct from A, exact A folders/profile/revision and one-source-1 manifest; nine explicit enqueue fields including canonical files inventory digest.",
+      "legacy_inflight_fixture": "Synthetic historical legacy request held during cutover; same one-source-1 metadata and all nine explicit enqueue fields.",
+      "legacy_recovery_fixture": "Legacy existing request key and explicit claimed contract/manifest hashes; absence of committed rich binding must return HOLD even when both hashes are supplied.",
+      "damaged_binding_variant": "Each independently seeded corrupt binding fixture; exact request key and caller contract/manifest hashes preserved from the undamaged committed fixture.",
+      "invalid_observation_variant": "Each invalid observation UUID in S08. Missing-row case uses a deliberately absent UUID; other variants refer to separately seeded rows. No synthesized trust.",
+      "A.refreshed_observation_id": "Captured from the fresh trusted observation SQL only after the failed transaction snapshot and unconsumed-observation assertions have succeeded."
+    }
+  },
+  "sessions": {
+    "ADMIN": {
+      "role": "disposable_fixture_admin",
+      "purpose": "privileged setup and invariant inspection only; never represents the application"
+    },
+    "S1": {
+      "role": "future_subset_admission_caller",
+      "purpose": "first independent admission connection"
+    },
+    "S2": {
+      "role": "future_subset_admission_caller",
+      "purpose": "second independent admission connection"
+    },
+    "OBSERVER": {
+      "role": "disposable_fixture_observer",
+      "purpose": "independent committed-state and lock inspection"
+    },
+    "LEGACY": {
+      "role": "bridge_school_app",
+      "purpose": "existing legacy enqueue caller, revoked after cutover"
+    },
+    "WORKER": {
+      "role": "future_subset_worker_v2",
+      "purpose": "dedicated authenticated upgraded worker; old credentials cannot assume this role"
+    },
+    "COLLECTOR": {
+      "role": "future_trusted_source_collector",
+      "purpose": "persist synthetic trusted observation through fixture adapter"
+    },
+    "ATTACKER": {
+      "role": "disposable_untrusted_app",
+      "purpose": "no privileged memberships, owner, superuser or BYPASSRLS"
+    },
+    "GUARDED_WRITER": {
+      "role": "disposable_guard_probe",
+      "purpose": "test-only limited job DML grant, not owner/superuser; verifies triggers still reject even if a routine DML privilege is accidentally granted"
+    },
+    "OLD_WORKER": {
+      "role": "bridge_school_worker",
+      "purpose": "actual old credential identity; must not claim or mutate managed jobs even after commit"
+    }
+  },
+  "execution_protocol": {
+    "isolation": "READ COMMITTED required baseline. Repeat concurrency groups at SERIALIZABLE; bounded 40001 retry must retry the whole transaction and preserve at-most-one binding. 40P01 deadlock is a test failure for reversed-order case.",
+    "transaction_sql": [
+      "BEGIN ISOLATION LEVEL READ COMMITTED;",
+      "SET LOCAL statement_timeout = '15s';",
+      "SET LOCAL lock_timeout = '10s';"
+    ],
+    "barrier_policy": "Use coordinator-controlled test-only failpoint instrumentation around real production statements. The coordinator holds advisory locks; instrumented sessions emit reached events then wait on those locks. Hooks cannot bypass auth/constraints or commit nested work and must be absent from production. No fake queue, mutex-only model, GUC trust or arbitrary sleep counts as evidence.",
+    "barrier_helper_signatures_absent": [
+      "admission_test.arm_pause(target_backend_pid integer,stage text,barrier_key bigint)",
+      "admission_test.arm_fault(target_backend_pid integer,stage text,error_sqlstate text)",
+      "admission_test.seed_case(case_spec jsonb)",
+      "admission_test.issue_observation(approval_id uuid,observation_spec jsonb) RETURNS uuid",
+      "admission_test.invoke_attempt_gate(job_id uuid,lease_token uuid,worker_key text,attempt_count integer,observation_id uuid) RETURNS jsonb",
+      "admission_test.snapshot(request_keys text[],source_ids text[]) RETURNS jsonb",
+      "admission_test.complete_cutover(cutover_spec jsonb)",
+      "admission_test.invoke_retry_boundary(job_id uuid,lease_token uuid,worker_key text,requested_max integer)",
+      "admission_test.revoke_approval(approval_id uuid)"
+    ],
+    "session_identification_sql": "SELECT pg_backend_pid() AS backend_pid, session_user, current_user;",
+    "wait_evidence_sql": "SELECT pid,wait_event_type,wait_event,pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE pid=ANY($1::integer[]);",
+    "snapshots": "Use snapshot SQL in assertions, capture before and after rejection/rollback. Exclude sequence counters and external statement telemetry from atomicity assertions; PostgreSQL sequences need not roll back. Include batch/job/event/admission/reservation persisted row data, not aggregate counts alone.",
+    "cleanup": "Discard only the explicitly provisioned disposable database through its separately authorized lifecycle; no production cleanup SQL or connection provided here.",
+    "result_capture": "Each case remains NOT_RUN until real PostgreSQL evidence contains version, migration hashes, role, statement, parameters provenance, actual results/errors, barrier proof and invariant snapshots.",
+    "fixture_helper_rule": "Any admission_test helper is absent/unimplemented planning notation. It may orchestrate or seed a disposable test but MUST call or inspect the real production boundary. A helper that simulates admission, retry, source authorization, cutover or locks cannot count as PostgreSQL proof.",
+    "session_step_rule": "Setup states are established before the listed schedule. Steps with dispatch=async are sent without blocking the coordinator; dependent COMMIT waits for the paused statement result after the named barrier is released. Error statements use savepoints/subtransactions or end with ROLLBACK before the next independent variant. Each variant executes in a fresh seeded database state.",
+    "parameter_expansion_rule": "All SQL steps list one explicit symbolic parameter reference per positional $n. No wildcard expansion or prose parameter packing is permitted. Fixture producers must resolve every symbolic field and verify its type before any future integration run; unresolved fixture data is a prerequisite failure, not a default. Signature positions are admission [approval_id,request_key,contract_sha256,queue_manifest_sha256,observation_id], recovery [request_key,contract_sha256,queue_manifest_sha256], legacy enqueue [request_key,source_folder_id,output_folder_id,work_folder_id,processing_profile,algorithm_revision,canary_source_file_id,inventory_sha256,files].",
+    "freshness_limit": "Deferred structural constraints enforce complete binding; they cannot guarantee freshness at every COMMIT. SET CONSTRAINTS ALL IMMEDIATE may fire a deferred trigger while evidence is fresh and leave no pending check after an idle period. Authorization freshness is checked at the final locked authorization point. The test plan documents this limit instead of promising unconditional stale-COMMIT rejection.",
+    "deferred_commit_rule": "Admission SQL functions cannot commit. The trusted thin caller owns the outer transaction, commits once and exposes the binding only after COMMIT. Deferred checks enforce structural completeness. Their timing is not a guaranteed final clock check if a caller forces them immediate; a later attempt requires new source/lease evidence."
+  },
+  "known_current_gaps": [
+    {
+      "source": "0056 enqueue_drive_batch",
+      "finding": "Request-key advisory lock prevents same-key duplicate inserts only. No global cross-batch source uniqueness or persisted approval/reservation exists."
+    },
+    {
+      "source": "0056 enqueue_drive_batch existing-key branch",
+      "finding": "Existing request compares inventory hash, count and aggregate metadata; it does not prove exact stored job rows equal the approved manifest."
+    },
+    {
+      "source": "0056 retry_job",
+      "finding": "p_max_attempts permits 1..10; attempt 3 with max_attempts=4 requeues, and claim_job has no attempt cap for QUEUED rows. A fourth normal retry is therefore possible."
+    },
+    {
+      "source": "0056 retry_job lease check",
+      "finding": "lease_token <> p_lease_token permits SQL UNKNOWN for null token when all other terms are false. Proposed guard must reject null explicitly; heartbeat and SQL0058 finish have different predicates."
+    },
+    {
+      "source": "tests/test_universal_video_subset_contract.py terminal()",
+      "finding": "The fake uses terminal receipt /v2 and incomplete artifact objects, whereas SQL0058 requires receipt /v1, full source identity, flags, locators, positive sizes, revisions and binding hashes."
+    },
+    {
+      "source": "tests/test_universal_video_subset_admission_fake.py",
+      "finding": "Python lock/rollback model is not PostgreSQL concurrency, ACL or trigger evidence; source/status-dependent recovery there is unsuitable for immutable committed binding recovery."
+    },
+    {
+      "source": "0058 002 revision CHECK",
+      "finding": "NOT VALID exempts old rows from initial scan but checks new/updated REVIEW_READY rows."
+    },
+    {
+      "source": "0058 and 0059",
+      "finding": "0058 requires positive numeric artifact sizes; 0059 adds integral values and upper bounds. Do not attribute 0059 limits to 0058."
+    }
+  ],
+  "assertions": {
+    "unique_request_header": {
+      "sql": "SELECT count(*) = 1 AS ok FROM video_queue.subset_admission WHERE request_key=$1::text;",
+      "parameters": [
+        "request_key"
+      ],
+      "expected": true
+    },
+    "single_batch": {
+      "sql": "SELECT count(*)=1 AS ok FROM video_queue.batch WHERE request_key=$1::text;",
+      "parameters": [
+        "request_key"
+      ],
+      "expected": true
+    },
+    "no_global_duplicate_reservation": {
+      "sql": "SELECT NOT EXISTS(SELECT source_identity FROM video_queue.source_reservation GROUP BY source_identity HAVING count(*)>1) AS ok;",
+      "expected": true
+    },
+    "reservations_exact": {
+      "sql": "SELECT array_agg(r.source_identity ORDER BY r.source_identity) = $2::text[] AS ok FROM video_queue.source_reservation r JOIN video_queue.subset_admission a ON a.admission_id=r.admission_id WHERE a.request_key=$1::text;",
+      "parameters": [
+        "request_key",
+        "sorted google_drive:<file_id> identities"
+      ],
+      "expected": true
+    },
+    "exact_jobs_not_just_count": {
+      "sql": "WITH approved AS (SELECT (f->>'sequence')::integer AS sequence,f->>'file_id' AS file_id,f->>'name' AS name,f->>'mime_type' AS mime_type,(f->>'size_bytes')::bigint AS size_bytes,f->>'checksum' AS checksum FROM video_queue.subset_approval a CROSS JOIN LATERAL jsonb_array_elements(a.queue_manifest->'files') f WHERE a.approval_id=$1::uuid), actual AS (SELECT j.sequence,j.source_file_id AS file_id,j.source_name AS name,j.source_mime_type AS mime_type,j.source_size_bytes AS size_bytes,j.source_checksum AS checksum FROM video_queue.job j JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=$2::text) SELECT NOT EXISTS((SELECT * FROM approved EXCEPT SELECT * FROM actual) UNION ALL (SELECT * FROM actual EXCEPT SELECT * FROM approved)) AS ok;",
+      "parameters": [
+        "approval_id",
+        "request_key"
+      ],
+      "expected": true
+    },
+    "binding_maps_real_jobs": {
+      "sql": "WITH h AS (SELECT * FROM video_queue.subset_admission WHERE request_key=$1::text), mapped AS (SELECT (x->>'job_id')::uuid AS job_id,x->>'file_id' AS file_id,(x->>'sequence')::integer AS sequence,x->>'source_identity' AS source_identity,x->>'source_fingerprint' AS source_fingerprint FROM h CROSS JOIN LATERAL jsonb_array_elements(h.binding->'jobs') x), actual AS (SELECT j.job_id,j.source_file_id AS file_id,j.sequence,'google_drive:'||j.source_file_id AS source_identity,f->>'source_fingerprint' AS source_fingerprint FROM video_queue.job j JOIN h ON h.batch_id=j.batch_id JOIN video_queue.subset_approval p ON p.approval_id=h.approval_id CROSS JOIN LATERAL jsonb_array_elements(p.full_contract->'files') f WHERE f->>'file_id'=j.source_file_id), reserved AS (SELECT r.job_id,j.source_file_id AS file_id,j.sequence,r.source_identity,r.source_fingerprint FROM video_queue.source_reservation r JOIN h ON h.admission_id=r.admission_id AND h.request_key=r.request_key AND h.batch_id=r.batch_id JOIN video_queue.job j ON j.job_id=r.job_id AND j.batch_id=r.batch_id AND r.source_identity='google_drive:'||j.source_file_id) SELECT (SELECT count(*) FROM h)=1 AND (SELECT count(*) FROM actual)>0 AND NOT EXISTS((SELECT * FROM mapped EXCEPT SELECT * FROM actual) UNION ALL (SELECT * FROM actual EXCEPT SELECT * FROM mapped) UNION ALL (SELECT * FROM mapped EXCEPT SELECT * FROM reserved) UNION ALL (SELECT * FROM reserved EXCEPT SELECT * FROM mapped)) AND (SELECT count(*) FROM mapped)=(SELECT count(DISTINCT job_id) FROM mapped) AND (SELECT count(*) FROM mapped)=(SELECT count(DISTINCT file_id) FROM mapped) AND (SELECT count(*) FROM actual)=(SELECT count(*) FROM video_queue.job j JOIN h ON h.batch_id=j.batch_id) AS ok;",
+      "parameters": [
+        "request_key"
+      ],
+      "expected": true,
+      "scope": "Compare each rich binding entry against the actual queue job, full approved source fingerprint and permanent reservation mapping; the five-key lease projection is not sufficient evidence."
+    },
+    "binding_hash": {
+      "sql": "SELECT a.binding_sha256 IS NOT NULL AND a.binding_sha256 = a.binding->>'binding_sha256' AND a.binding_sha256 = encode(public.digest(convert_to(video_queue.canonical_json_text(a.binding - 'binding_sha256'),'UTF8'),'sha256'),'hex') AS ok FROM video_queue.subset_admission a WHERE a.request_key=$1::text;",
+      "parameters": [
+        "request_key"
+      ],
+      "expected": true,
+      "codec_note": "Matches admission_binding.build_binding: hash the rich binding core with binding_sha256 excluded, then require both the header digest and embedded digest to equal that hash. This canonical_json_text SQL is a proposed check; cross-runtime canonicalization vectors must pass before activation."
+    },
+    "immutable_snapshot": {
+      "sql": "SELECT jsonb_build_object('header',jsonb_build_object('admission_id',a.admission_id,'approval_id',a.approval_id,'request_key',a.request_key,'plan_sha256',a.plan_sha256,'subset_sha256',a.subset_sha256,'contract_sha256',a.contract_sha256,'queue_manifest_sha256',a.queue_manifest_sha256,'batch_id',a.batch_id,'binding',a.binding,'binding_canonical_bytes',a.binding_canonical_bytes,'binding_sha256',a.binding_sha256,'server_commit_receipt',a.server_commit_receipt),'batch_identity',jsonb_build_object('batch_id',b.batch_id,'request_key',b.request_key,'source_kind',b.source_kind,'source_folder_id',b.source_folder_id,'output_folder_id',b.output_folder_id,'work_folder_id',b.work_folder_id,'processing_profile',b.processing_profile,'algorithm_revision',b.algorithm_revision,'inventory_sha256',b.inventory_sha256,'expected_count',b.expected_count,'total_size_bytes',b.total_size_bytes,'canary_source_file_id',b.canary_source_file_id,'result_mode',b.result_mode,'canonical_promotion_allowed',b.canonical_promotion_allowed,'database_persistence_allowed',b.database_persistence_allowed,'created_at',b.created_at),'jobs',(SELECT jsonb_agg(jsonb_build_object('job_id',j.job_id,'batch_id',j.batch_id,'source_file_id',j.source_file_id,'stable_job_key',j.stable_job_key,'sequence',j.sequence,'source_name',j.source_name,'source_mime_type',j.source_mime_type,'source_size_bytes',j.source_size_bytes,'source_checksum',j.source_checksum,'is_canary',j.is_canary,'created_at',j.created_at) ORDER BY j.sequence) FROM video_queue.job j WHERE j.batch_id=a.batch_id),'reservations',(SELECT jsonb_agg(jsonb_build_object('source_identity',r.source_identity,'admission_id',r.admission_id,'request_key',r.request_key,'source_fingerprint',r.source_fingerprint,'batch_id',r.batch_id,'job_id',r.job_id,'reservation_kind',r.reservation_kind,'historical_job_ids',r.historical_job_ids,'historical_provenance',r.historical_provenance) ORDER BY r.source_identity) FROM video_queue.source_reservation r WHERE r.admission_id=a.admission_id)) AS immutable_state FROM video_queue.subset_admission a JOIN video_queue.batch b USING(batch_id) WHERE a.request_key=$1::text;",
+      "parameters": [
+        "request_key"
+      ],
+      "expected": "JSONB-equal before/after recovery, worker transitions or rejected mutations. Includes full immutable queue-manifest identity/flags, actual batch/job mapping and approved fingerprints; excludes mutable status, leases, attempts, output, error, retry/updated/completed timestamps and authorization revocation state."
+    },
+    "full_snapshot": {
+      "sql": "SELECT jsonb_build_object('batches',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY b.batch_id),'[]'::jsonb) FROM video_queue.batch b WHERE b.request_key=ANY($1::text[])),'jobs',(SELECT coalesce(jsonb_agg(to_jsonb(j) ORDER BY j.job_id),'[]'::jsonb) FROM video_queue.job j JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'events',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY e.event_id),'[]'::jsonb) FROM video_queue.job_event e JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'headers',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.request_key),'[]'::jsonb) FROM video_queue.subset_admission a WHERE a.request_key=ANY($1::text[])),'reservations',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.source_identity),'[]'::jsonb) FROM video_queue.source_reservation r WHERE r.source_identity=ANY($2::text[])),'observations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY o.observation_id),'[]'::jsonb) FROM video_queue.source_observation o WHERE o.request_key=ANY($1::text[]))) AS state;",
+      "parameters": [
+        "request_keys",
+        "source_identities"
+      ],
+      "expected": "JSONB-equal before/after rejected statements, including original source_observation rows and consumed_at/consumed_by_admission_id. Capture failure snapshot before issuing a replacement observation. PostgreSQL sequence allocations are excluded."
+    },
+    "canary_only": {
+      "sql": "SELECT count(*) FILTER(WHERE j.is_canary AND j.status='QUEUED')=1 AND count(*) FILTER(WHERE NOT j.is_canary AND j.status='PENDING_CANARY')=count(*)-1 AS ok FROM video_queue.job j JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=$1::text;",
+      "parameters": [
+        "request_key"
+      ],
+      "expected": true
+    },
+    "no_partial_loser": {
+      "sql": "SELECT NOT EXISTS(SELECT FROM video_queue.subset_admission WHERE request_key=$1::text) AND NOT EXISTS(SELECT FROM video_queue.batch WHERE request_key=$1::text) AND NOT EXISTS(SELECT FROM video_queue.source_reservation WHERE source_identity=ANY($2::text[])) AS ok;",
+      "parameters": [
+        "loser request_key",
+        "loser-only source identities (exclude sources owned by winner)"
+      ],
+      "expected": true
+    },
+    "no_fourth_attempt": {
+      "sql": "SELECT NOT EXISTS(SELECT FROM video_queue.job j JOIN video_queue.subset_admission a ON a.batch_id=j.batch_id WHERE j.attempt_count>3) AND NOT EXISTS(SELECT FROM video_queue.job_event e JOIN video_queue.job j ON j.job_id=e.job_id AND j.batch_id=e.batch_id JOIN video_queue.subset_admission a ON a.batch_id=j.batch_id WHERE e.event_type IN ('CLAIMED','RECLAIMED') AND (e.details->>'attempt')::integer>3) AS ok;",
+      "expected": true,
+      "scope": "Only jobs and events attached to managed subset_admission batches. Legacy historical jobs with >3 attempts may be preserved under HISTORICAL_HOLD tombstones; they must remain ineligible and are not a failure of this managed-attempt assertion."
+    },
+    "zero_release": {
+      "sql": "SELECT b.status='CANARY_REVIEW' AND b.completed_at IS NULL AND (SELECT count(*) FROM video_queue.job j WHERE j.batch_id=b.batch_id AND NOT j.is_canary AND j.status='PENDING_CANARY')=b.expected_count-1 AND NOT EXISTS(SELECT FROM video_queue.job_event e WHERE e.batch_id=b.batch_id AND e.details->>'released_jobs' IS NOT NULL AND (e.details->>'released_jobs')::integer<>0) AS ok FROM video_queue.batch b WHERE b.request_key=$1::text;",
+      "parameters": [
+        "request_key"
+      ],
+      "expected": true
+    },
+    "permanent_reservations": {
+      "sql": "SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.source_identity),'[]'::jsonb) = $2::jsonb AS ok FROM video_queue.source_reservation r WHERE r.source_identity=ANY($1::text[]);",
+      "parameters": [
+        "source_identities",
+        "previous reservation snapshot"
+      ],
+      "expected": true
+    },
+    "no_partial_visibility": {
+      "sql": "SELECT NOT EXISTS(SELECT FROM video_queue.batch b WHERE b.request_key=$1::text) AND NOT EXISTS(SELECT FROM video_queue.subset_admission a WHERE a.request_key=$1::text) AND NOT EXISTS(SELECT FROM video_queue.source_reservation r WHERE r.source_identity=ANY($2::text[])) AS ok;",
+      "parameters": [
+        "uncommitted request key",
+        "source identities with no prior committed history"
+      ],
+      "expected": true
+    },
+    "observation_consumption_unchanged": {
+      "sql": "SELECT coalesce(jsonb_agg(jsonb_build_object('observation_id',o.observation_id,'nonce',o.nonce,'consumed_at',o.consumed_at,'consumed_by_admission_id',o.consumed_by_admission_id) ORDER BY o.observation_id),'[]'::jsonb) AS observation_consumption FROM video_queue.source_observation o WHERE o.request_key=ANY($1::text[]);",
+      "parameters": [
+        "request_keys"
+      ],
+      "expected": "Exactly equal to the captured pre-call value after failed admission rollback or any recovery. Recovery never consumes or renews observations."
+    },
+    "failed_observation_unconsumed": {
+      "sql": "SELECT consumed_at IS NULL AND consumed_by_admission_id IS NULL AS ok FROM video_queue.source_observation WHERE observation_id=$1::uuid;",
+      "parameters": [
+        "original admission observation_id"
+      ],
+      "expected": true
+    },
+    "binding_shape": {
+      "sql": "SELECT (SELECT count(*) FROM jsonb_object_keys(a.binding))=14 AND a.binding ?& ARRAY['schema','approval_id','request_key','batch_id','jobs','plan_sha256','subset_sha256','contract_sha256','queue_manifest_sha256','execution_allowed','release_allowed','database_persistence_allowed','canonical_promotion_allowed','binding_sha256'] AND a.binding->>'schema'='universal-video-admission-binding-v1' AND a.binding->>'approval_id'=a.approval_id::text AND a.binding->>'request_key'=a.request_key AND a.binding->>'batch_id'=a.batch_id::text AND a.binding->>'plan_sha256'=a.plan_sha256 AND a.binding->>'subset_sha256'=a.subset_sha256 AND a.binding->>'contract_sha256'=a.contract_sha256 AND a.binding->>'queue_manifest_sha256'=a.queue_manifest_sha256 AND a.binding->'execution_allowed' IS NOT DISTINCT FROM 'false'::jsonb AND a.binding->'release_allowed' IS NOT DISTINCT FROM 'false'::jsonb AND a.binding->'database_persistence_allowed' IS NOT DISTINCT FROM 'false'::jsonb AND a.binding->'canonical_promotion_allowed' IS NOT DISTINCT FROM 'false'::jsonb AND jsonb_typeof(a.binding->'jobs')='array' AND NOT EXISTS(SELECT FROM jsonb_array_elements(a.binding->'jobs') WITH ORDINALITY AS item(value,ordinality) WHERE (SELECT count(*) FROM jsonb_object_keys(item.value))<>5 OR NOT item.value ?& ARRAY['file_id','job_id','sequence','source_identity','source_fingerprint'] OR (item.value->>'sequence')::integer<>item.ordinality OR item.value->>'source_identity' IS DISTINCT FROM 'google_drive:'||(item.value->>'file_id')) AS ok FROM video_queue.subset_admission a WHERE a.request_key=$1::text;",
+      "parameters": [
+        "request_key"
+      ],
+      "expected": true
+    }
+  },
+  "cases": [
+    {
+      "id": "C01_CONCURRENT_IDENTICAL",
+      "group": "concurrency",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Seed A, fresh trusted admission observation; two real connections use identical 5 arguments.",
+      "steps": [
+        {
+          "session": "S1",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "A.approval_id",
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256",
+            "A.observation_id"
+          ],
+          "capture": "binding_1"
+        },
+        {
+          "session": "S2",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "S2",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "A.approval_id",
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256",
+            "A.observation_id"
+          ],
+          "dispatch": "async",
+          "must_block_until": "S1 commits"
+        },
+        {
+          "session": "OBSERVER",
+          "sql": "SELECT pid,wait_event_type,wait_event,pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE pid=ANY($1::integer[]);",
+          "parameters": [
+            "[S2.pid]"
+          ],
+          "assert": "pg_blocking_pids identifies S1"
+        },
+        {
+          "session": "S1",
+          "sql": "COMMIT;",
+          "parameters": []
+        },
+        {
+          "session": "S2",
+          "sql": "COMMIT;",
+          "parameters": [],
+          "capture": "binding_2 from completed admission"
+        }
+      ],
+      "barriers": [
+        "BOTH_CONNECTED",
+        "S1_RESULT_UNCOMMITTED",
+        "S2_CONFIRMED_BLOCKED",
+        "S1_COMMIT"
+      ],
+      "expected": [
+        "Exactly one committed admission, batch and two jobs. Both calls return JSONB-equal immutable binding. No second ENQUEUED event set. Recovery path may accept already-consumed/stale observation only for the existing exact binding."
+      ],
+      "assertions": [
+        "unique_request_header",
+        "single_batch",
+        "no_global_duplicate_reservation",
+        "reservations_exact",
+        "exact_jobs_not_just_count",
+        "binding_maps_real_jobs",
+        "binding_hash",
+        "canary_only",
+        {
+          "sql": "SELECT count(*)=2 AS ok FROM video_queue.job_event e JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=$1::text AND e.event_type='ENQUEUED';",
+          "parameters": [
+            "A.request_key"
+          ],
+          "expected": true
+        },
+        "binding_shape"
+      ]
+    },
+    {
+      "id": "C02_OVERLAPPING_DIFFERENT_KEYS",
+      "group": "concurrency",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Seed A=[1,2], B_overlap=[1,3], independent fresh observations. The shared source 1 initially has no reservation row; exclusion must come from immediate PK insertion, not an absent-row SELECT FOR UPDATE.",
+      "steps": [
+        {
+          "session": "S1",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "A.approval_id",
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256",
+            "A.observation_id"
+          ],
+          "dispatch": "async",
+          "pause_at": "after_reservations"
+        },
+        {
+          "session": "S2",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "S2",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "B_overlap.approval_id",
+            "B_overlap.request_key",
+            "B_overlap.contract_sha256",
+            "B_overlap.queue_manifest_sha256",
+            "B_overlap.observation_id"
+          ],
+          "dispatch": "async",
+          "must_block_until": "S1 resolves source reservation"
+        },
+        {
+          "session": "OBSERVER",
+          "sql": "SELECT pid,wait_event_type,wait_event,pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE pid=ANY($1::integer[]);",
+          "parameters": [
+            "[S2.pid]"
+          ]
+        },
+        {
+          "session": "S1",
+          "sql": "COMMIT;",
+          "parameters": [],
+          "after": "release S1 after_reservations barrier and await binding"
+        },
+        {
+          "session": "S2",
+          "sql": "ROLLBACK;",
+          "parameters": [],
+          "after": "capture admission rejection"
+        }
+      ],
+      "barriers": [
+        "S1_AFTER_RESERVATIONS",
+        "S2_WAITING_SHARED_SOURCE",
+        "RELEASE_S1"
+      ],
+      "expected": [
+        "One winner; loser VIDEO_ADMISSION_SOURCE_RESERVED. Neither a partial B header/batch nor loser-only source 3 reservation survives. Repeat swapping S1/S2 to prove both schedules."
+      ],
+      "assertions": [
+        "unique_request_header",
+        "single_batch",
+        "no_global_duplicate_reservation",
+        "reservations_exact",
+        "exact_jobs_not_just_count",
+        "binding_maps_real_jobs",
+        "binding_hash",
+        "canary_only",
+        "no_partial_loser",
+        "binding_shape"
+      ],
+      "variants": [
+        {
+          "variant_id": "RESERVING_TRANSACTION_ROLLS_BACK_AFTER_WAITER_OBSERVATION_EXPIRES",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Fresh disposable fixture: valid A=[1,2] and B_overlap=[1,3] approvals and trusted observations. No source reservations exist. S1 pauses after inserting its complete draft/reservation set and before its final freshness gate. S2 begins while its observation is fresh and waits on the immediate PK conflict for source 1. Test-only pause instrumentation is not a source advisory-lock mechanism.",
+          "steps": [
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT jsonb_build_object('batches',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY b.batch_id),'[]'::jsonb) FROM video_queue.batch b WHERE b.request_key=ANY($1::text[])),'jobs',(SELECT coalesce(jsonb_agg(to_jsonb(j) ORDER BY j.job_id),'[]'::jsonb) FROM video_queue.job j JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'events',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY e.event_id),'[]'::jsonb) FROM video_queue.job_event e JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'headers',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.request_key),'[]'::jsonb) FROM video_queue.subset_admission a WHERE a.request_key=ANY($1::text[])),'reservations',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.source_identity),'[]'::jsonb) FROM video_queue.source_reservation r WHERE r.source_identity=ANY($2::text[])),'observations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY o.observation_id),'[]'::jsonb) FROM video_queue.source_observation o WHERE o.request_key=ANY($1::text[]))) AS state;",
+              "parameters": [
+                "request keys [A.request_key,B_overlap.request_key]",
+                "source identities [google_drive:privateVideo00000001,google_drive:privateVideo00000002,google_drive:privateVideo00000003]"
+              ],
+              "capture": "overlap_rollback.before"
+            },
+            {
+              "session": "ADMIN",
+              "sql": "SELECT admission_test.arm_pause($1::integer,$2::text,$3::bigint);",
+              "parameters": [
+                "S1.pid",
+                "after_reservations_before_final_freshness",
+                "existing test-only barrier key 88001"
+              ]
+            },
+            {
+              "session": "S1",
+              "sql": "BEGIN;",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "SET LOCAL statement_timeout='60s';",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "SET LOCAL lock_timeout='55s';",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid);",
+              "parameters": [
+                "A.approval_id",
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256",
+                "A.observation_id"
+              ],
+              "dispatch": "async",
+              "pause_at": "after_reservations_before_final_freshness"
+            },
+            {
+              "session": "S2",
+              "sql": "BEGIN ISOLATION LEVEL READ COMMITTED;",
+              "parameters": []
+            },
+            {
+              "session": "S2",
+              "sql": "SET LOCAL statement_timeout='60s';",
+              "parameters": []
+            },
+            {
+              "session": "S2",
+              "sql": "SET LOCAL lock_timeout='55s';",
+              "parameters": []
+            },
+            {
+              "session": "S2",
+              "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid);",
+              "parameters": [
+                "B_overlap.approval_id",
+                "B_overlap.request_key",
+                "B_overlap.contract_sha256",
+                "B_overlap.queue_manifest_sha256",
+                "B_overlap.observation_id"
+              ],
+              "dispatch": "async",
+              "must_block_until": "S1 ends; immediate source_reservation PK conflict"
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT pid,wait_event_type,wait_event,pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE pid=ANY($1::integer[]);",
+              "parameters": [
+                "[S2.pid]"
+              ],
+              "assert": "pg_blocking_pids identifies S1; lock evidence locates the unique-index/transaction wait during source_reservation insertion"
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT clock_timestamp() >= expires_at AS expired FROM video_queue.source_observation WHERE observation_id=$1::uuid;",
+              "parameters": [
+                "B_overlap.observation_id"
+              ],
+              "coordinator_barrier": "wait for expired=true using the real server clock; no timestamp rewrite"
+            },
+            {
+              "session": "ADMIN",
+              "sql": "SELECT pg_cancel_backend($1::integer) AS cancelled;",
+              "parameters": [
+                "S1.pid"
+              ],
+              "expected": true,
+              "note": "Disposable integration-test connection only: cancel the paused uncommitted admission statement, then roll back its transaction."
+            },
+            {
+              "session": "S1",
+              "sql": "ROLLBACK;",
+              "parameters": [],
+              "after": "S1 cancellation observed; this releases all of its uncommitted PK reservations"
+            },
+            {
+              "session": "S2",
+              "sql": "ROLLBACK;",
+              "parameters": [],
+              "after": "Capture VIDEO_ADMISSION_OBSERVATION_STALE after S2 acquired the formerly conflicting reservation key and reached the final freshness gate; do not accept timeout/deadlock as the intended result."
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT jsonb_build_object('batches',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY b.batch_id),'[]'::jsonb) FROM video_queue.batch b WHERE b.request_key=ANY($1::text[])),'jobs',(SELECT coalesce(jsonb_agg(to_jsonb(j) ORDER BY j.job_id),'[]'::jsonb) FROM video_queue.job j JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'events',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY e.event_id),'[]'::jsonb) FROM video_queue.job_event e JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'headers',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.request_key),'[]'::jsonb) FROM video_queue.subset_admission a WHERE a.request_key=ANY($1::text[])),'reservations',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.source_identity),'[]'::jsonb) FROM video_queue.source_reservation r WHERE r.source_identity=ANY($2::text[])),'observations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY o.observation_id),'[]'::jsonb) FROM video_queue.source_observation o WHERE o.request_key=ANY($1::text[]))) AS state;",
+              "parameters": [
+                "request keys [A.request_key,B_overlap.request_key]",
+                "source identities [google_drive:privateVideo00000001,google_drive:privateVideo00000002,google_drive:privateVideo00000003]"
+              ],
+              "expected": "JSONB-equal overlap_rollback.before before any refreshed observation or retry; neither transaction leaves drafts, reservations, jobs, events, bindings or consumed observations"
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT consumed_at IS NULL AND consumed_by_admission_id IS NULL AS ok FROM video_queue.source_observation WHERE observation_id=$1::uuid;",
+              "parameters": [
+                "B_overlap.observation_id"
+              ],
+              "expected": true
+            },
+            {
+              "session": "S2",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text);",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "expect": "NOT_FOUND"
+            },
+            {
+              "session": "S2",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text);",
+              "parameters": [
+                "B_overlap.request_key",
+                "B_overlap.contract_sha256",
+                "B_overlap.queue_manifest_sha256"
+              ],
+              "expect": "NOT_FOUND"
+            }
+          ],
+          "barriers": [
+            "S1_INSERTED_ALL_PK_RESERVATIONS_BEFORE_FRESHNESS",
+            "S2_PK_WAIT_CONFIRMED",
+            "S2_OBSERVATION_EXPIRED",
+            "S1_CANCELLED_AND_ROLLED_BACK",
+            "S2_ACQUIRED_KEY_THEN_FAILED_FRESHNESS",
+            "BOTH_ROLLED_BACK_BEFORE_SNAPSHOT"
+          ],
+          "expected": [
+            "The initial reserving contender rolls back, so the waiter can obtain the source PK; this does not authorize enqueue with an expired observation. Every reservation wait occurs before final freshness. Both transactions leave no partial state or consumed observation. Canonical PK insertion order and separate-statement conflict-owner lookup remain required."
+          ],
+          "assertions": [
+            "full_snapshot",
+            "no_partial_loser",
+            "failed_observation_unconsumed",
+            "observation_consumption_unchanged",
+            "no_global_duplicate_reservation"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C03_DISJOINT_PROGRESS",
+      "group": "concurrency",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Seed A=[1,2], C_disjoint=[3,4].",
+      "steps": [
+        {
+          "session": "S1",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "A.approval_id",
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256",
+            "A.observation_id"
+          ],
+          "dispatch": "async",
+          "pause_at": "after_reservations"
+        },
+        {
+          "session": "S2",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "S2",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "C_disjoint.approval_id",
+            "C_disjoint.request_key",
+            "C_disjoint.contract_sha256",
+            "C_disjoint.queue_manifest_sha256",
+            "C_disjoint.observation_id"
+          ],
+          "capture": "C.binding",
+          "must_complete_before": "release S1 pause"
+        },
+        {
+          "session": "S2",
+          "sql": "COMMIT;",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "COMMIT;",
+          "parameters": [],
+          "after": "release S1 pause and await A.binding"
+        }
+      ],
+      "barriers": [
+        "S1_AFTER_RESERVATIONS",
+        "S2_COMMITTED_WHILE_S1_PAUSED",
+        "RELEASE_S1"
+      ],
+      "expected": [
+        "Both commit exact independent bindings; no global admission mutex prevents disjoint progress."
+      ],
+      "assertions": [
+        "unique_request_header",
+        "single_batch",
+        "no_global_duplicate_reservation",
+        "reservations_exact",
+        "exact_jobs_not_just_count",
+        "binding_maps_real_jobs",
+        "binding_hash",
+        "canary_only",
+        "binding_shape"
+      ]
+    },
+    {
+      "id": "C04_REVERSED_MULTI_SOURCE_ORDER",
+      "group": "concurrency",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Seed R_forward queue order [1,2] and R_reverse queue order [2,1] from different approved full contracts. Reservation lock order must always be source_identity COLLATE C.",
+      "steps": [
+        {
+          "session": "S1",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "S2",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "R_forward.approval_id",
+            "R_forward.request_key",
+            "R_forward.contract_sha256",
+            "R_forward.queue_manifest_sha256",
+            "R_forward.observation_id"
+          ],
+          "dispatch": "async",
+          "pause_at": "after_first_source_lock"
+        },
+        {
+          "session": "S2",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "R_reverse.approval_id",
+            "R_reverse.request_key",
+            "R_reverse.contract_sha256",
+            "R_reverse.queue_manifest_sha256",
+            "R_reverse.observation_id"
+          ],
+          "dispatch": "async",
+          "must_block_until": "first canonical source lock released"
+        },
+        {
+          "session": "OBSERVER",
+          "sql": "SELECT pid,wait_event_type,wait_event,pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE pid=ANY($1::integer[]);",
+          "parameters": [
+            "[S1.pid,S2.pid]"
+          ]
+        },
+        {
+          "session": "S1",
+          "sql": "COMMIT;",
+          "parameters": [],
+          "after": "release S1 barrier and await binding"
+        },
+        {
+          "session": "S2",
+          "sql": "ROLLBACK;",
+          "parameters": [],
+          "after": "capture source-reserved rejection"
+        }
+      ],
+      "barriers": [
+        "FIRST_CANONICAL_SOURCE_LOCK_HELD",
+        "CONTENDER_BLOCKED",
+        "NO_CYCLE",
+        "RELEASE"
+      ],
+      "expected": [
+        "Exactly one winner; no 40P01 and no lock cycle. Reversed input order never changes canonical acquisition order or manifest sequence. Repeat with S2 first."
+      ],
+      "assertions": [
+        "unique_request_header",
+        "single_batch",
+        "no_global_duplicate_reservation",
+        "reservations_exact",
+        "exact_jobs_not_just_count",
+        "binding_maps_real_jobs",
+        "binding_hash",
+        "canary_only",
+        "binding_shape"
+      ]
+    },
+    {
+      "id": "C05_SAME_KEY_DIFFERENT_ANCHOR",
+      "group": "identity",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Seed/admit A. Use its request key with altered contract hash; repeat altered manifest hash, wrong approval UUID and null digest.",
+      "steps": [
+        {
+          "session": "S1",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "A.approval_id",
+            "A.request_key",
+            "different_valid_sha256",
+            "A.queue_manifest_sha256",
+            "A.observation_id"
+          ],
+          "expect_error": "VIDEO_ADMISSION_APPROVAL_MISMATCH or VIDEO_ADMISSION_REQUEST_CONFLICT; freeze exact code in implementation"
+        },
+        {
+          "session": "S1",
+          "sql": "ROLLBACK;",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+          "parameters": [
+            "A.request_key",
+            "different_valid_sha256",
+            "A.queue_manifest_sha256"
+          ],
+          "expect": "HOLD"
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "No mutation and no alternate binding returned."
+      ],
+      "assertions": [
+        "full_snapshot",
+        "immutable_snapshot"
+      ]
+    },
+    {
+      "id": "F01_PRECOMMIT_FAILURES",
+      "group": "fault_atomicity",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Independent rollback faults after reserve, after enqueue, immediately before binding.",
+      "variants": [
+        {
+          "variant_id": "F01_AFTER_RESERVATION",
+          "group": "fault_atomicity",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Seed A; ADMIN arms a test-only exception SQLSTATE P0001 at after_reservations. Snapshot all five stores before S1. Capture all six stores, including original observation consumption, before the attempt.",
+          "steps": [
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT jsonb_build_object('batches',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY b.batch_id),'[]'::jsonb) FROM video_queue.batch b WHERE b.request_key=ANY($1::text[])),'jobs',(SELECT coalesce(jsonb_agg(to_jsonb(j) ORDER BY j.job_id),'[]'::jsonb) FROM video_queue.job j JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'events',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY e.event_id),'[]'::jsonb) FROM video_queue.job_event e JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'headers',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.request_key),'[]'::jsonb) FROM video_queue.subset_admission a WHERE a.request_key=ANY($1::text[])),'reservations',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.source_identity),'[]'::jsonb) FROM video_queue.source_reservation r WHERE r.source_identity=ANY($2::text[])),'observations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY o.observation_id),'[]'::jsonb) FROM video_queue.source_observation o WHERE o.request_key=ANY($1::text[]))) AS state;",
+              "parameters": [
+                "A.request_key[]",
+                "A.source_identities"
+              ],
+              "capture": "F01_AFTER_RESERVATION.before_failure"
+            },
+            {
+              "session": "ADMIN",
+              "sql": "SELECT admission_test.arm_fault($1::integer,$2::text,'P0001');",
+              "parameters": [
+                "S1.pid",
+                "after_reservations"
+              ]
+            },
+            {
+              "session": "S1",
+              "sql": "BEGIN;",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+              "parameters": [
+                "A.approval_id",
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256",
+                "A.observation_id"
+              ],
+              "expect_error": "injected P0001"
+            },
+            {
+              "session": "S1",
+              "sql": "ROLLBACK;",
+              "parameters": []
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT jsonb_build_object('batches',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY b.batch_id),'[]'::jsonb) FROM video_queue.batch b WHERE b.request_key=ANY($1::text[])),'jobs',(SELECT coalesce(jsonb_agg(to_jsonb(j) ORDER BY j.job_id),'[]'::jsonb) FROM video_queue.job j JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'events',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY e.event_id),'[]'::jsonb) FROM video_queue.job_event e JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'headers',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.request_key),'[]'::jsonb) FROM video_queue.subset_admission a WHERE a.request_key=ANY($1::text[])),'reservations',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.source_identity),'[]'::jsonb) FROM video_queue.source_reservation r WHERE r.source_identity=ANY($2::text[])),'observations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY o.observation_id),'[]'::jsonb) FROM video_queue.source_observation o WHERE o.request_key=ANY($1::text[]))) AS state;",
+              "parameters": [
+                "A.request_key[]",
+                "A.source_identities"
+              ],
+              "expected": "JSONB-equal F01_AFTER_RESERVATION.before_failure BEFORE any new observation or retry"
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT consumed_at IS NULL AND consumed_by_admission_id IS NULL AS ok FROM video_queue.source_observation WHERE observation_id=$1::uuid;",
+              "parameters": [
+                "A.observation_id"
+              ],
+              "expected": true
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "expect": "NOT_FOUND"
+            },
+            {
+              "session": "ADMIN",
+              "sql": "SELECT admission_test.issue_observation($1::uuid,$2::jsonb);",
+              "parameters": [
+                "A.approval_id",
+                "fresh trusted unchanged sources, new server nonce"
+              ],
+              "capture": "A.refreshed_observation_id"
+            },
+            {
+              "session": "S1",
+              "sql": "BEGIN;",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+              "parameters": [
+                "A.approval_id",
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256",
+                "A.refreshed_observation_id"
+              ],
+              "capture": "binding_after_retry"
+            },
+            {
+              "session": "S1",
+              "sql": "COMMIT;",
+              "parameters": []
+            }
+          ],
+          "barriers": [
+            "INJECT_AT_AFTER_RESERVATIONS"
+          ],
+          "expected": [
+            "Before retry, no durable reservations/header/batch/jobs/events remain and all baseline rows unchanged; after retry exactly one complete admission. No independent enqueue connection is permitted."
+          ],
+          "assertions": [
+            "full_snapshot",
+            "no_partial_loser",
+            "unique_request_header",
+            "single_batch",
+            "no_global_duplicate_reservation",
+            "reservations_exact",
+            "exact_jobs_not_just_count",
+            "binding_maps_real_jobs",
+            "binding_hash",
+            "canary_only",
+            "observation_consumption_unchanged",
+            "failed_observation_unconsumed",
+            "binding_shape"
+          ]
+        },
+        {
+          "variant_id": "F02_AFTER_ENQUEUE",
+          "group": "fault_atomicity",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Seed A; ADMIN arms a test-only exception SQLSTATE P0001 at after_enqueue. Snapshot all five stores before S1. Capture all six stores, including original observation consumption, before the attempt.",
+          "steps": [
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT jsonb_build_object('batches',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY b.batch_id),'[]'::jsonb) FROM video_queue.batch b WHERE b.request_key=ANY($1::text[])),'jobs',(SELECT coalesce(jsonb_agg(to_jsonb(j) ORDER BY j.job_id),'[]'::jsonb) FROM video_queue.job j JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'events',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY e.event_id),'[]'::jsonb) FROM video_queue.job_event e JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'headers',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.request_key),'[]'::jsonb) FROM video_queue.subset_admission a WHERE a.request_key=ANY($1::text[])),'reservations',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.source_identity),'[]'::jsonb) FROM video_queue.source_reservation r WHERE r.source_identity=ANY($2::text[])),'observations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY o.observation_id),'[]'::jsonb) FROM video_queue.source_observation o WHERE o.request_key=ANY($1::text[]))) AS state;",
+              "parameters": [
+                "A.request_key[]",
+                "A.source_identities"
+              ],
+              "capture": "F02_AFTER_ENQUEUE.before_failure"
+            },
+            {
+              "session": "ADMIN",
+              "sql": "SELECT admission_test.arm_fault($1::integer,$2::text,'P0001');",
+              "parameters": [
+                "S1.pid",
+                "after_enqueue"
+              ]
+            },
+            {
+              "session": "S1",
+              "sql": "BEGIN;",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+              "parameters": [
+                "A.approval_id",
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256",
+                "A.observation_id"
+              ],
+              "expect_error": "injected P0001"
+            },
+            {
+              "session": "S1",
+              "sql": "ROLLBACK;",
+              "parameters": []
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT jsonb_build_object('batches',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY b.batch_id),'[]'::jsonb) FROM video_queue.batch b WHERE b.request_key=ANY($1::text[])),'jobs',(SELECT coalesce(jsonb_agg(to_jsonb(j) ORDER BY j.job_id),'[]'::jsonb) FROM video_queue.job j JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'events',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY e.event_id),'[]'::jsonb) FROM video_queue.job_event e JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'headers',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.request_key),'[]'::jsonb) FROM video_queue.subset_admission a WHERE a.request_key=ANY($1::text[])),'reservations',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.source_identity),'[]'::jsonb) FROM video_queue.source_reservation r WHERE r.source_identity=ANY($2::text[])),'observations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY o.observation_id),'[]'::jsonb) FROM video_queue.source_observation o WHERE o.request_key=ANY($1::text[]))) AS state;",
+              "parameters": [
+                "A.request_key[]",
+                "A.source_identities"
+              ],
+              "expected": "JSONB-equal F02_AFTER_ENQUEUE.before_failure BEFORE any new observation or retry"
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT consumed_at IS NULL AND consumed_by_admission_id IS NULL AS ok FROM video_queue.source_observation WHERE observation_id=$1::uuid;",
+              "parameters": [
+                "A.observation_id"
+              ],
+              "expected": true
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "expect": "NOT_FOUND"
+            },
+            {
+              "session": "ADMIN",
+              "sql": "SELECT admission_test.issue_observation($1::uuid,$2::jsonb);",
+              "parameters": [
+                "A.approval_id",
+                "fresh trusted unchanged sources, new server nonce"
+              ],
+              "capture": "A.refreshed_observation_id"
+            },
+            {
+              "session": "S1",
+              "sql": "BEGIN;",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+              "parameters": [
+                "A.approval_id",
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256",
+                "A.refreshed_observation_id"
+              ],
+              "capture": "binding_after_retry"
+            },
+            {
+              "session": "S1",
+              "sql": "COMMIT;",
+              "parameters": []
+            }
+          ],
+          "barriers": [
+            "INJECT_AT_AFTER_ENQUEUE"
+          ],
+          "expected": [
+            "Before retry, no durable reservations/header/batch/jobs/events remain and all baseline rows unchanged; after retry exactly one complete admission. No independent enqueue connection is permitted."
+          ],
+          "assertions": [
+            "full_snapshot",
+            "no_partial_loser",
+            "unique_request_header",
+            "single_batch",
+            "no_global_duplicate_reservation",
+            "reservations_exact",
+            "exact_jobs_not_just_count",
+            "binding_maps_real_jobs",
+            "binding_hash",
+            "canary_only",
+            "observation_consumption_unchanged",
+            "failed_observation_unconsumed",
+            "binding_shape"
+          ]
+        },
+        {
+          "variant_id": "F03_BEFORE_BINDING",
+          "group": "fault_atomicity",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Seed A; ADMIN arms a test-only exception SQLSTATE P0001 at before_binding. Snapshot all five stores before S1. Capture all six stores, including original observation consumption, before the attempt.",
+          "steps": [
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT jsonb_build_object('batches',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY b.batch_id),'[]'::jsonb) FROM video_queue.batch b WHERE b.request_key=ANY($1::text[])),'jobs',(SELECT coalesce(jsonb_agg(to_jsonb(j) ORDER BY j.job_id),'[]'::jsonb) FROM video_queue.job j JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'events',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY e.event_id),'[]'::jsonb) FROM video_queue.job_event e JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'headers',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.request_key),'[]'::jsonb) FROM video_queue.subset_admission a WHERE a.request_key=ANY($1::text[])),'reservations',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.source_identity),'[]'::jsonb) FROM video_queue.source_reservation r WHERE r.source_identity=ANY($2::text[])),'observations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY o.observation_id),'[]'::jsonb) FROM video_queue.source_observation o WHERE o.request_key=ANY($1::text[]))) AS state;",
+              "parameters": [
+                "A.request_key[]",
+                "A.source_identities"
+              ],
+              "capture": "F03_BEFORE_BINDING.before_failure"
+            },
+            {
+              "session": "ADMIN",
+              "sql": "SELECT admission_test.arm_fault($1::integer,$2::text,'P0001');",
+              "parameters": [
+                "S1.pid",
+                "before_binding"
+              ]
+            },
+            {
+              "session": "S1",
+              "sql": "BEGIN;",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+              "parameters": [
+                "A.approval_id",
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256",
+                "A.observation_id"
+              ],
+              "expect_error": "injected P0001"
+            },
+            {
+              "session": "S1",
+              "sql": "ROLLBACK;",
+              "parameters": []
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT jsonb_build_object('batches',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY b.batch_id),'[]'::jsonb) FROM video_queue.batch b WHERE b.request_key=ANY($1::text[])),'jobs',(SELECT coalesce(jsonb_agg(to_jsonb(j) ORDER BY j.job_id),'[]'::jsonb) FROM video_queue.job j JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'events',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY e.event_id),'[]'::jsonb) FROM video_queue.job_event e JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'headers',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.request_key),'[]'::jsonb) FROM video_queue.subset_admission a WHERE a.request_key=ANY($1::text[])),'reservations',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.source_identity),'[]'::jsonb) FROM video_queue.source_reservation r WHERE r.source_identity=ANY($2::text[])),'observations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY o.observation_id),'[]'::jsonb) FROM video_queue.source_observation o WHERE o.request_key=ANY($1::text[]))) AS state;",
+              "parameters": [
+                "A.request_key[]",
+                "A.source_identities"
+              ],
+              "expected": "JSONB-equal F03_BEFORE_BINDING.before_failure BEFORE any new observation or retry"
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT consumed_at IS NULL AND consumed_by_admission_id IS NULL AS ok FROM video_queue.source_observation WHERE observation_id=$1::uuid;",
+              "parameters": [
+                "A.observation_id"
+              ],
+              "expected": true
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "expect": "NOT_FOUND"
+            },
+            {
+              "session": "ADMIN",
+              "sql": "SELECT admission_test.issue_observation($1::uuid,$2::jsonb);",
+              "parameters": [
+                "A.approval_id",
+                "fresh trusted unchanged sources, new server nonce"
+              ],
+              "capture": "A.refreshed_observation_id"
+            },
+            {
+              "session": "S1",
+              "sql": "BEGIN;",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+              "parameters": [
+                "A.approval_id",
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256",
+                "A.refreshed_observation_id"
+              ],
+              "capture": "binding_after_retry"
+            },
+            {
+              "session": "S1",
+              "sql": "COMMIT;",
+              "parameters": []
+            }
+          ],
+          "barriers": [
+            "INJECT_AT_BEFORE_BINDING"
+          ],
+          "expected": [
+            "Before retry, no durable reservations/header/batch/jobs/events remain and all baseline rows unchanged; after retry exactly one complete admission. No independent enqueue connection is permitted."
+          ],
+          "assertions": [
+            "full_snapshot",
+            "no_partial_loser",
+            "unique_request_header",
+            "single_batch",
+            "no_global_duplicate_reservation",
+            "reservations_exact",
+            "exact_jobs_not_just_count",
+            "binding_maps_real_jobs",
+            "binding_hash",
+            "canary_only",
+            "observation_consumption_unchanged",
+            "failed_observation_unconsumed",
+            "binding_shape"
+          ]
+        }
+      ],
+      "expected": [
+        "Run every listed variant against real PostgreSQL; a variant is not PASS without its own session, statement and barrier evidence."
+      ],
+      "assertions": []
+    },
+    {
+      "id": "F04_COMMIT_RESPONSE_LOST",
+      "group": "fault_atomicity",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Seed A. The future integration transport drops the COMMIT acknowledgement after PostgreSQL commits; do not simulate by rolling back the client-side model.",
+      "steps": [
+        {
+          "session": "S1",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "A.approval_id",
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256",
+            "A.observation_id"
+          ],
+          "capture": "expected_binding_before_lost_response"
+        },
+        {
+          "session": "S1",
+          "sql": "COMMIT;",
+          "parameters": [],
+          "fault": "after_commit_before_client_ack; disconnect S1"
+        },
+        {
+          "session": "OBSERVER",
+          "sql": "SELECT count(*)=1 AS ok FROM video_queue.batch WHERE request_key=$1::text;",
+          "parameters": [
+            "A.request_key"
+          ],
+          "assert": "committed state exists"
+        },
+        {
+          "session": "S2",
+          "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+          "parameters": [
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256"
+          ],
+          "capture": "recovered_binding"
+        },
+        {
+          "session": "S2",
+          "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+          "parameters": [
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256"
+          ],
+          "capture": "second_recovery"
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "Both recoveries equal committed binding exactly; no enqueue, lease, retry, release or timestamp mutation; total ENQUEUED events unchanged."
+      ],
+      "assertions": [
+        "unique_request_header",
+        "single_batch",
+        "binding_maps_real_jobs",
+        "binding_hash",
+        "full_snapshot",
+        "immutable_snapshot",
+        "observation_consumption_unchanged",
+        "binding_shape"
+      ]
+    },
+    {
+      "id": "F05_PARTIAL_STATE_INVISIBLE",
+      "group": "fault_atomicity",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Seed A. Repeat pause after_reservations, after_enqueue and before_binding.",
+      "steps": [
+        {
+          "session": "ADMIN",
+          "sql": "SELECT admission_test.arm_pause($1::integer,$2::text,$3::bigint);",
+          "parameters": [
+            "S1.pid",
+            "each pause stage",
+            88001
+          ]
+        },
+        {
+          "session": "S1",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "A.approval_id",
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256",
+            "A.observation_id"
+          ],
+          "dispatch": "async",
+          "pause_at": "selected stage"
+        },
+        {
+          "session": "OBSERVER",
+          "sql": "SELECT NOT EXISTS(SELECT FROM video_queue.batch b WHERE b.request_key=$1::text) AND NOT EXISTS(SELECT FROM video_queue.subset_admission a WHERE a.request_key=$1::text) AND NOT EXISTS(SELECT FROM video_queue.source_reservation r WHERE r.source_identity=ANY($2::text[])) AS ok;",
+          "parameters": [
+            "A.request_key",
+            "A.source_identities"
+          ],
+          "expected": true
+        },
+        {
+          "session": "S1",
+          "sql": "ROLLBACK;",
+          "parameters": [],
+          "after": "cancel paused statement or inject exception; release barrier"
+        }
+      ],
+      "barriers": [
+        "WRITES_MADE_BUT_UNCOMMITTED",
+        "OBSERVER_READ_COMPLETE",
+        "ABORT"
+      ],
+      "expected": [
+        "Independent reader sees no partial committed objects at any stage. Notifications ENQUEUED are not delivered before commit; rollback emits no queue-ready notification."
+      ],
+      "assertions": [
+        "no_partial_visibility",
+        "full_snapshot"
+      ]
+    },
+    {
+      "id": "L01_LEGACY_BOTH_ORDERS",
+      "group": "legacy_race",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Both interleavings of legacy enqueue and new admission; execute each variant separately.",
+      "variants": [
+        {
+          "variant_id": "L01_LEGACY_FIRST",
+          "group": "legacy_race",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Post-cutover guards are active. LEGACY is still the real bridge_school_app role with enqueue EXECUTE revoked. Schedule LEGACY_FIRST; use different keys with source 1 overlap.",
+          "steps": [
+            {
+              "session": "LEGACY",
+              "sql": "BEGIN;",
+              "parameters": []
+            },
+            {
+              "session": "LEGACY",
+              "sql": "SELECT * FROM video_queue.enqueue_drive_batch($1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::text,$8::text,$9::jsonb);",
+              "parameters": [
+                "legacy_overlap_fixture.request_key",
+                "legacy_overlap_fixture.source_folder_id",
+                "legacy_overlap_fixture.output_folder_id",
+                "legacy_overlap_fixture.work_folder_id",
+                "legacy_overlap_fixture.processing_profile",
+                "legacy_overlap_fixture.algorithm_revision",
+                "legacy_overlap_fixture.canary_source_file_id",
+                "legacy_overlap_fixture.inventory_sha256",
+                "legacy_overlap_fixture.files"
+              ],
+              "expect_sqlstate": "42501"
+            },
+            {
+              "session": "LEGACY",
+              "sql": "ROLLBACK;",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "BEGIN;",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+              "parameters": [
+                "A.approval_id",
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256",
+                "A.observation_id"
+              ]
+            },
+            {
+              "session": "S1",
+              "sql": "COMMIT;",
+              "parameters": []
+            }
+          ],
+          "barriers": [
+            "LEGACY_FIRST",
+            "LEGACY_EXECUTE_DENIED"
+          ],
+          "expected": [
+            "Legacy cannot enqueue any row in either order; new admission succeeds exactly once. Test the real connection principal, not only SET ROLE as owner."
+          ],
+          "assertions": [
+            "unique_request_header",
+            "single_batch",
+            "exact_jobs_not_just_count",
+            "reservations_exact",
+            "no_partial_loser"
+          ]
+        },
+        {
+          "variant_id": "L01_NEW_FIRST",
+          "group": "legacy_race",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Post-cutover guards are active. LEGACY is still the real bridge_school_app role with enqueue EXECUTE revoked. Schedule NEW_FIRST; use different keys with source 1 overlap.",
+          "steps": [
+            {
+              "session": "S1",
+              "sql": "BEGIN;",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+              "parameters": [
+                "A.approval_id",
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256",
+                "A.observation_id"
+              ],
+              "dispatch": "async",
+              "pause_at": "after_reservations"
+            },
+            {
+              "session": "LEGACY",
+              "sql": "BEGIN;",
+              "parameters": []
+            },
+            {
+              "session": "LEGACY",
+              "sql": "SELECT * FROM video_queue.enqueue_drive_batch($1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::text,$8::text,$9::jsonb);",
+              "parameters": [
+                "legacy_overlap_fixture.request_key",
+                "legacy_overlap_fixture.source_folder_id",
+                "legacy_overlap_fixture.output_folder_id",
+                "legacy_overlap_fixture.work_folder_id",
+                "legacy_overlap_fixture.processing_profile",
+                "legacy_overlap_fixture.algorithm_revision",
+                "legacy_overlap_fixture.canary_source_file_id",
+                "legacy_overlap_fixture.inventory_sha256",
+                "legacy_overlap_fixture.files"
+              ],
+              "expect_sqlstate": "42501"
+            },
+            {
+              "session": "LEGACY",
+              "sql": "ROLLBACK;",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "COMMIT;",
+              "parameters": [],
+              "after": "release pause; await binding"
+            }
+          ],
+          "barriers": [
+            "NEW_FIRST",
+            "LEGACY_EXECUTE_DENIED"
+          ],
+          "expected": [
+            "Legacy cannot enqueue any row in either order; new admission succeeds exactly once. Test the real connection principal, not only SET ROLE as owner."
+          ],
+          "assertions": [
+            "unique_request_header",
+            "single_batch",
+            "exact_jobs_not_just_count",
+            "reservations_exact",
+            "no_partial_loser"
+          ]
+        }
+      ],
+      "expected": [
+        "Run every listed variant against real PostgreSQL; a variant is not PASS without its own session, statement and barrier evidence."
+      ],
+      "assertions": []
+    },
+    {
+      "id": "L02_PREEXISTING_LEGACY_WRITER_CUTOVER",
+      "group": "historical_cutover",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Disposable pre-cutover baseline: legacy function EXECUTE still present. Admit API is not open. L begins a legacy enqueue and holds it uncommitted before job INSERT. ADMIN starts the proposed cutover protocol.",
+      "steps": [
+        {
+          "session": "LEGACY",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "LEGACY",
+          "sql": "SELECT * FROM video_queue.enqueue_drive_batch($1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::text,$8::text,$9::jsonb);",
+          "parameters": [
+            "legacy_inflight_fixture.request_key",
+            "legacy_inflight_fixture.source_folder_id",
+            "legacy_inflight_fixture.output_folder_id",
+            "legacy_inflight_fixture.work_folder_id",
+            "legacy_inflight_fixture.processing_profile",
+            "legacy_inflight_fixture.algorithm_revision",
+            "legacy_inflight_fixture.canary_source_file_id",
+            "legacy_inflight_fixture.inventory_sha256",
+            "legacy_inflight_fixture.files"
+          ],
+          "dispatch": "async",
+          "pause_at": "before_job_insert"
+        },
+        {
+          "session": "ADMIN",
+          "sql": "LOCK TABLE video_queue.batch,video_queue.job IN ACCESS EXCLUSIVE MODE;",
+          "parameters": [],
+          "transaction": "inside separately begun future cutover transaction",
+          "dispatch": "async",
+          "must_block_until": "legacy transaction exits"
+        },
+        {
+          "session": "OBSERVER",
+          "sql": "SELECT pid,wait_event_type,wait_event,pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE pid=ANY($1::integer[]);",
+          "parameters": [
+            "[ADMIN.pid]"
+          ],
+          "assert": "legacy writer is a blocker"
+        },
+        {
+          "session": "LEGACY",
+          "sql": "COMMIT;",
+          "parameters": [],
+          "after": "release legacy pause; complete enqueue"
+        },
+        {
+          "session": "ADMIN",
+          "sql": "SELECT admission_test.complete_cutover($1::jsonb);",
+          "parameters": [
+            "all writers stopped/drained; reviewed future cutover adapter"
+          ],
+          "note": "ABSENT helper runs proposed tombstone backfill+guards+revocation as one protected cutover, not implemented by this plan"
+        },
+        {
+          "session": "ADMIN",
+          "sql": "COMMIT;",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "A.approval_id",
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256",
+            "A.observation_id"
+          ],
+          "expect_error": "VIDEO_ADMISSION_SOURCE_RESERVED"
+        }
+      ],
+      "barriers": [
+        "LEGACY_PAUSED_BEFORE_INSERT",
+        "CUTOVER_CONFIRMED_BLOCKED",
+        "LEGACY_COMMIT",
+        "BACKFILL_AND_GUARDS_BEFORE_REOPEN"
+      ],
+      "expected": [
+        "Cutover cannot report READY before the old transaction resolves. Its committed sources are included in historical tombstones, so later admission fails. Repeat old writer ROLLBACK, then ensure no tombstone for noncommitted sources and new admission succeeds."
+      ],
+      "assertions": [
+        "permanent_reservations",
+        "no_partial_loser"
+      ]
+    },
+    {
+      "id": "L03_HISTORICAL_DUPLICATES_ALL_STATUSES",
+      "group": "historical_cutover",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Pre-cutover fixture: same source ID occurs in multiple batches with statuses PENDING_CANARY,QUEUED,LEASED,REVIEW_READY,AMBIGUOUS,FAILED; include terminal batch statuses and old request keys. All writers stopped/drained.",
+      "steps": [
+        {
+          "session": "ADMIN",
+          "sql": "SELECT admission_test.seed_case($1::jsonb);",
+          "parameters": [
+            "historical_duplicates_all_statuses"
+          ]
+        },
+        {
+          "session": "ADMIN",
+          "sql": "SELECT admission_test.complete_cutover($1::jsonb);",
+          "parameters": [
+            "complete historical inventory; no claims while cutover runs"
+          ]
+        },
+        {
+          "session": "OBSERVER",
+          "sql": "SELECT r.source_identity,r.reservation_kind,r.historical_job_ids FROM video_queue.source_reservation r WHERE r.source_identity=$1::text;",
+          "parameters": [
+            "google_drive:privateVideo00000001"
+          ],
+          "assert": "one HISTORICAL_HOLD tombstone with every historical job UUID, no arbitrarily chosen winner"
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "historical_source_readmission_variant.approval_id",
+            "historical_source_readmission_variant.request_key",
+            "historical_source_readmission_variant.contract_sha256",
+            "historical_source_readmission_variant.queue_manifest_sha256",
+            "historical_source_readmission_variant.observation_id"
+          ],
+          "expect_error": "VIDEO_ADMISSION_SOURCE_RESERVED"
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+          "parameters": [
+            "legacy_recovery_fixture.request_key",
+            "legacy_recovery_fixture.contract_sha256",
+            "legacy_recovery_fixture.queue_manifest_sha256"
+          ],
+          "expect": "HOLD"
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "Duplicates preserve historical jobs and provenance without silently rewriting or adopting them. Every historical source gets one permanent reservation/tombstone; incomplete reconciliation prevents opening admission."
+      ],
+      "assertions": [
+        "no_global_duplicate_reservation",
+        "permanent_reservations",
+        "full_snapshot"
+      ]
+    },
+    {
+      "id": "L04_LEGACY_REQUEST_HOLD",
+      "group": "recovery",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Seed historical batch and jobs with request key matching an approval but no admission header; include corrupt partial variants only via privileged fixture before guard installation.",
+      "steps": [
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+          "parameters": [
+            "legacy request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256"
+          ],
+          "expect": "HOLD"
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "A.approval_id",
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256",
+            "A.observation_id"
+          ],
+          "expect_error": "VIDEO_ADMISSION_LEGACY_REQUEST_HOLD"
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "Do not infer admission from aggregate queue counts/hash/status. Never blindly re-enqueue, backfill binding on read, or reserve more sources for this key."
+      ],
+      "assertions": [
+        "full_snapshot",
+        "observation_consumption_unchanged"
+      ]
+    },
+    {
+      "id": "G01_DIRECT_DML_GUARD",
+      "group": "guards",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Seed A but do not admit. GUARDED_WRITER gets only test-limited job INSERT/UPDATE permissions without ownership, bypass privileges or header/reservation write. Seed an unbound batch through ADMIN.",
+      "steps": [
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "INSERT INTO video_queue.job(batch_id,sequence,source_file_id,source_name,source_mime_type,source_size_bytes,source_checksum,stable_job_key,is_canary,status) VALUES ($1::uuid,1,'privateVideo00000001','Lesson 1.mp4','video/mp4',2000000,NULL,substr(encode(public.digest(convert_to('bridge-video|drive|privateVideo00000001','UTF8'),'sha256'),'hex'),1,32),true,'QUEUED');",
+          "parameters": [
+            "unbound batch UUID"
+          ],
+          "expect_error": "VIDEO_ADMISSION_RESERVATION_REQUIRED"
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "ROLLBACK;",
+          "parameters": []
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "A realistic direct INSERT rejected by persisted-reservation guard despite a DML grant. Repeat with invented admission_id in any future job binding column, wrong reservation owner, exact source reserved by another header, missing observation, and complete but untrusted client fields. Each remains rejected."
+      ],
+      "assertions": [
+        "full_snapshot"
+      ]
+    },
+    {
+      "id": "G02_IMMUTABLE_IDENTITY_MUTATIONS",
+      "group": "guards",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Admit A. Snapshot all immutable header, batch, job and reservation fields. Each UPDATE below is a separate savepoint under GUARDED_WRITER with the corresponding test-only DML privilege.",
+      "steps": [
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "UPDATE video_queue.job SET source_file_id='privateVideo00000003' WHERE job_id=$1::uuid;",
+          "parameters": [
+            "A.job_1"
+          ],
+          "expect_error": "immutable identity guard"
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "UPDATE video_queue.job SET stable_job_key=repeat('0',32) WHERE job_id=$1::uuid;",
+          "parameters": [
+            "A.job_1"
+          ],
+          "expect_error": "immutable identity guard"
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "UPDATE video_queue.job SET source_checksum='md5:'||repeat('1',32) WHERE job_id=$1::uuid;",
+          "parameters": [
+            "A.job_1"
+          ],
+          "expect_error": "immutable identity guard"
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "UPDATE video_queue.job SET source_name='Renamed.mp4',source_size_bytes=2000001,is_canary=false WHERE job_id=$1::uuid;",
+          "parameters": [
+            "A.job_1"
+          ],
+          "expect_error": "immutable identity guard"
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "UPDATE video_queue.batch SET algorithm_revision='alternate_revision',output_folder_id='outputChanged000001' WHERE batch_id=$1::uuid;",
+          "parameters": [
+            "A.batch_id"
+          ],
+          "expect_error": "immutable identity guard"
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "UPDATE video_queue.subset_admission SET binding=$2::jsonb WHERE request_key=$1::text;",
+          "parameters": [
+            "A.request_key",
+            "altered jobs or digests"
+          ],
+          "expect_error": "immutable admission guard"
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "DELETE FROM video_queue.source_reservation WHERE source_identity=$1::text;",
+          "parameters": [
+            "google_drive:privateVideo00000001"
+          ],
+          "expect_error": "permanent reservation guard"
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "UPDATE video_queue.source_reservation SET admission_id=$2::uuid WHERE source_identity=$1::text;",
+          "parameters": [
+            "google_drive:privateVideo00000001",
+            "other admission UUID"
+          ],
+          "expect_error": "permanent reservation guard"
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "Every attempted immutable identity mutation rejected, including changes to job_id,batch_id,sequence,source_mime_type,request_key,folder/profile/inventory/count/canary fields and header digests/approval_id. Lifecycle status/lease changes through authorized worker functions must still work."
+      ],
+      "assertions": [
+        "immutable_snapshot",
+        "full_snapshot",
+        "permanent_reservations"
+      ]
+    },
+    {
+      "id": "G03_PRIVILEGES_AND_BYPASS",
+      "group": "permissions",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Use actual restricted connections, no superuser or owner. Inspect ACL and SECURITY DEFINER identity without reading credentials.",
+      "steps": [
+        {
+          "session": "ADMIN",
+          "sql": "SELECT has_function_privilege('bridge_school_app','video_queue.enqueue_drive_batch(text,text,text,text,text,text,text,text,jsonb)','EXECUTE') AS legacy_execute,has_function_privilege('bridge_school_worker','video_queue.admit_approved_subset(uuid,text,text,text,uuid)','EXECUTE') AS worker_admit;",
+          "parameters": [],
+          "expected": {
+            "legacy_execute": false,
+            "worker_admit": false
+          }
+        },
+        {
+          "session": "ADMIN",
+          "sql": "SELECT rolname,rolsuper,rolbypassrls,rolcreaterole FROM pg_roles WHERE rolname=ANY($1::text[]);",
+          "parameters": [
+            "all application/worker/collector/runtime roles"
+          ],
+          "assert": "all false; no membership in owner or admission-definer role"
+        },
+        {
+          "session": "ADMIN",
+          "sql": "SELECT p.oid::regprocedure,p.prosecdef,p.proconfig,r.rolname AS owner FROM pg_proc p JOIN pg_roles r ON r.oid=p.proowner WHERE p.oid=ANY($1::regprocedure[]);",
+          "parameters": [
+            "new admit/recover and existing worker/enqueue signatures"
+          ],
+          "assert": "reviewed owner; fixed safe search_path excludes attacker-writable schemas; no PUBLIC EXECUTE"
+        },
+        {
+          "session": "ATTACKER",
+          "sql": "INSERT INTO video_queue.source_observation(observation_id,approval_id,contract_sha256,observed_at,nonce,sources) VALUES (gen_random_uuid(),$1::uuid,$2::text,clock_timestamp(),gen_random_uuid(),'[]'::jsonb);",
+          "parameters": [
+            "A.approval_id",
+            "A.contract_sha256"
+          ],
+          "expect_sqlstate": "42501"
+        },
+        {
+          "session": "ATTACKER",
+          "sql": "SET ROLE future_admission_definer;",
+          "parameters": [],
+          "expect_sqlstate": "42501"
+        },
+        {
+          "session": "ATTACKER",
+          "sql": "SET session_replication_role = replica;",
+          "parameters": [],
+          "expect_sqlstate": "42501"
+        },
+        {
+          "session": "ATTACKER",
+          "sql": "ALTER TABLE video_queue.job DISABLE TRIGGER ALL;",
+          "parameters": [],
+          "expect_sqlstate": "42501"
+        },
+        {
+          "session": "ATTACKER",
+          "sql": "TRUNCATE video_queue.source_reservation;",
+          "parameters": [],
+          "expect_sqlstate": "42501"
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "No role ownership/membership, SECURITY DEFINER, direct DML, trigger disable, RLS bypass or PUBLIC grant can bypass admission."
+      ],
+      "assertions": [
+        "full_snapshot"
+      ]
+    },
+    {
+      "id": "G04_GUC_FORGERY_NOT_AUTHORITY",
+      "group": "permissions",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Admit A and snapshot it. Use GUARDED_WRITER with limited job insert grant to distinguish the trigger boundary from ACL rejection.",
+      "steps": [
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "SELECT set_config('video_queue.admission_authorized','true',true),set_config('video_queue.admission_id',$1::text,true),set_config('video_queue.contract_sha256',$2::text,true);",
+          "parameters": [
+            "A.admission_id",
+            "A.contract_sha256"
+          ]
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "INSERT INTO video_queue.job(batch_id,sequence,source_file_id,source_name,source_mime_type,source_size_bytes,source_checksum,stable_job_key,is_canary,status) VALUES ($1::uuid,3,'privateVideo00000003','Lesson 3.mp4','video/mp4',2000000,NULL,substr(encode(public.digest(convert_to('bridge-video|drive|privateVideo00000003','UTF8'),'sha256'),'hex'),1,32),false,'PENDING_CANARY');",
+          "parameters": [
+            "A.batch_id"
+          ],
+          "expect_error": "VIDEO_ADMISSION_RESERVATION_REQUIRED or exact-manifest guard"
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "ROLLBACK;",
+          "parameters": []
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "Forged custom session settings provide no authority; no source 3 job or reservation created. Repeat with exact approved source but duplicate/foreign job identity."
+      ],
+      "assertions": [
+        "full_snapshot",
+        "immutable_snapshot"
+      ]
+    },
+    {
+      "id": "G05_APPROVAL_FULL_CONTENT_VALIDATION",
+      "group": "approval",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Seed deliberately malformed approval copies only through privileged pre-guard fixture, all carrying internally rehashed JSON. No SQL implementation may trust merely supplied digests.",
+      "steps": [
+        {
+          "session": "ADMIN",
+          "sql": "SELECT admission_test.seed_case($1::jsonb);",
+          "parameters": [
+            "variants: missing full contract; changed manifest name/file order/sequence/checksum; wrong plan anchor; added/removed source; hash-only row; revoked approval; wrong canary; false->true flags"
+          ]
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "invalid_approval_variant.approval_id",
+            "invalid_approval_variant.request_key",
+            "invalid_approval_variant.contract_sha256",
+            "invalid_approval_variant.queue_manifest_sha256",
+            "invalid_approval_variant.observation_id"
+          ],
+          "expect_error": "VIDEO_ADMISSION_APPROVAL_INVALID or VIDEO_ADMISSION_APPROVAL_MISMATCH"
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+          "parameters": [
+            "variant.request_key",
+            "variant.contract_sha256",
+            "variant.queue_manifest_sha256"
+          ],
+          "expect": "NOT_FOUND if no persisted queue/history; otherwise HOLD"
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "Every invalid full approval/manifest rejected before any reservation or enqueue. Valid hashes over unauthorized content are not approval."
+      ],
+      "assertions": [
+        "full_snapshot",
+        "no_partial_loser"
+      ]
+    },
+    {
+      "id": "R01_RECOVERY_MUTABLE_STATUS",
+      "group": "recovery",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "RUNNING and CANARY_REVIEW recovery both return the exact stored immutable binding.",
+      "variants": [
+        {
+          "variant_id": "R01_RUNNING",
+          "group": "recovery",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Admit A and save binding; transition through real claim_job. Capture immutable snapshot.",
+          "steps": [
+            {
+              "session": "WORKER",
+              "sql": "SELECT * FROM video_queue.claim_job($1::text,900,$2::text,$3::text);",
+              "parameters": [
+                "synthetic-worker",
+                "bridge_3_1_free",
+                "3.1-free-r25.16"
+              ],
+              "capture": "active claim"
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "capture": "recovered"
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT status=$2::text AS ok FROM video_queue.batch WHERE request_key=$1::text;",
+              "parameters": [
+                "A.request_key",
+                "RUNNING"
+              ],
+              "expected": true
+            }
+          ],
+          "barriers": [],
+          "expected": [
+            "Recovery returns exact original binding despite legitimate mutable status changes. No fresh source observation, worker lease or another enqueue is requested."
+          ],
+          "assertions": [
+            "immutable_snapshot",
+            "binding_hash",
+            "binding_shape"
+          ]
+        },
+        {
+          "variant_id": "R02_CANARY_REVIEW",
+          "group": "recovery",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Admit A and save binding; transition through real claim_job then finish_job using complete SQL0058 fixture. Capture immutable snapshot.",
+          "steps": [
+            {
+              "session": "WORKER",
+              "sql": "SELECT * FROM video_queue.claim_job($1::text,900,$2::text,$3::text);",
+              "parameters": [
+                "synthetic-worker",
+                "bridge_3_1_free",
+                "3.1-free-r25.16"
+              ],
+              "capture": "active claim"
+            },
+            {
+              "session": "WORKER",
+              "sql": "SELECT * FROM video_queue.finish_job($1::uuid,$2::uuid,'synthetic-worker','REVIEW_READY',$3::jsonb,NULL);",
+              "parameters": [
+                "claimed job_id",
+                "claimed token",
+                "terminal_fixture.output"
+              ],
+              "expect": {
+                "job_status": "REVIEW_READY",
+                "batch_status": "CANARY_REVIEW",
+                "released_jobs": 0
+              }
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "capture": "recovered"
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT status=$2::text AS ok FROM video_queue.batch WHERE request_key=$1::text;",
+              "parameters": [
+                "A.request_key",
+                "CANARY_REVIEW"
+              ],
+              "expected": true
+            }
+          ],
+          "barriers": [],
+          "expected": [
+            "Recovery returns exact original binding despite legitimate mutable status changes. No fresh source observation, worker lease or another enqueue is requested."
+          ],
+          "assertions": [
+            "immutable_snapshot",
+            "binding_hash",
+            "zero_release",
+            "binding_shape"
+          ]
+        }
+      ],
+      "expected": [
+        "Run every listed variant against real PostgreSQL; a variant is not PASS without its own session, statement and barrier evidence."
+      ],
+      "assertions": [
+        "observation_consumption_unchanged"
+      ]
+    },
+    {
+      "id": "R03_SOURCE_CHANGED_AFTER_COMMIT",
+      "group": "recovery",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Admit A. Trusted collector later observes renamed/revised/deleted/moved source, or observation has expired. Queue may be RUNNING or CANARY_REVIEW.",
+      "steps": [
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+          "parameters": [
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256"
+          ],
+          "capture": "recovered original binding"
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "changed_source_readmission_variant.approval_id",
+            "changed_source_readmission_variant.request_key",
+            "changed_source_readmission_variant.contract_sha256",
+            "changed_source_readmission_variant.queue_manifest_sha256",
+            "changed_source_readmission_variant.observation_id"
+          ],
+          "expect_error": "VIDEO_ADMISSION_SOURCE_RESERVED"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid) AS result;",
+          "parameters": [
+            "A.job_id",
+            "active lease token",
+            "synthetic-worker",
+            "exact active attempt",
+            "trusted changed-source observation"
+          ],
+          "expect": "HOLD / VIDEO_ADMISSION_SOURCE_CHANGED"
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "Recovery returns immutable committed binding without revalidating changed remote metadata. A new admission and processing/resume remain blocked; recovery grants no execution or release authority."
+      ],
+      "assertions": [
+        "immutable_snapshot",
+        "full_snapshot",
+        "permanent_reservations",
+        "observation_consumption_unchanged"
+      ]
+    },
+    {
+      "id": "R04_ABSENT_AND_CORRUPT_BINDING",
+      "group": "recovery",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Independent subcases: wholly absent key; header with missing batch; legacy batch with no header; header with missing/extra/foreign job mapping; binding hash mismatch; missing/misowned reservation. Corrupt states are privileged disposable fixtures prepared before guards, not production repair operations.",
+      "steps": [
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+          "parameters": [
+            "unknown key",
+            "synthetic contract hash",
+            "synthetic manifest hash"
+          ],
+          "expect": "NOT_FOUND"
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+          "parameters": [
+            "damaged_binding_variant.request_key",
+            "damaged_binding_variant.contract_sha256",
+            "damaged_binding_variant.queue_manifest_sha256"
+          ],
+          "expect": "HOLD"
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "NOT_FOUND only for genuinely absent history; all partial/corrupt states HOLD with no enqueue, reservation acquisition, field repair or returned operational authority."
+      ],
+      "assertions": [
+        "full_snapshot",
+        "observation_consumption_unchanged"
+      ]
+    },
+    {
+      "id": "S01_SOURCE_CHANGE_EVERY_ATTEMPT",
+      "group": "source_freshness",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Six source-version/same-size/null-checksum variants before attempt one and between attempts.",
+      "variants": [
+        {
+          "variant_id": "S_BEFORE_FIRST_ATTEMPT_VERSION_ONLY",
+          "group": "source_freshness",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Admit A with null-checksum sources, then claim first canary and issue a fresh observation whose source metadata mutation is: version changes 17 -> 18, unchanged size and null checksum.",
+          "steps": [
+            {
+              "session": "COLLECTOR",
+              "sql": "SELECT admission_test.issue_observation($1::uuid,$2::jsonb);",
+              "parameters": [
+                "A.approval_id",
+                {
+                  "mutation": "version changes 17 -> 18, unchanged size and null checksum",
+                  "bind": [
+                    "contract_sha256",
+                    "job_id",
+                    "lease_token",
+                    "attempt_count",
+                    "worker_key"
+                  ],
+                  "server_time": "clock_timestamp()",
+                  "nonce": "new server nonce"
+                }
+              ],
+              "capture": "changed_observation"
+            },
+            {
+              "session": "WORKER",
+              "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid) AS result;",
+              "parameters": [
+                "A.job_id",
+                "active lease token",
+                "synthetic-worker",
+                1,
+                "changed_observation"
+              ],
+              "expect": "HOLD / VIDEO_ADMISSION_SOURCE_CHANGED"
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "expect": "original immutable binding"
+            }
+          ],
+          "barriers": [],
+          "expected": [
+            "Zero processing authorization. Do not infer unchanged source from size equality or checksum=null. Committed reservations survive; source is not re-admitted or silently rebound."
+          ],
+          "assertions": [
+            "immutable_snapshot",
+            "permanent_reservations"
+          ]
+        },
+        {
+          "variant_id": "S_BEFORE_FIRST_ATTEMPT_SAME_SIZE_REPLACEMENT",
+          "group": "source_freshness",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Admit A with null-checksum sources, then claim first canary and issue a fresh observation whose source metadata mutation is: modifiedTime changes, version changes 17 -> 18, same 2000000-byte size; old source checksum remains null.",
+          "steps": [
+            {
+              "session": "COLLECTOR",
+              "sql": "SELECT admission_test.issue_observation($1::uuid,$2::jsonb);",
+              "parameters": [
+                "A.approval_id",
+                {
+                  "mutation": "modifiedTime changes, version changes 17 -> 18, same 2000000-byte size; old source checksum remains null",
+                  "bind": [
+                    "contract_sha256",
+                    "job_id",
+                    "lease_token",
+                    "attempt_count",
+                    "worker_key"
+                  ],
+                  "server_time": "clock_timestamp()",
+                  "nonce": "new server nonce"
+                }
+              ],
+              "capture": "changed_observation"
+            },
+            {
+              "session": "WORKER",
+              "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid) AS result;",
+              "parameters": [
+                "A.job_id",
+                "active lease token",
+                "synthetic-worker",
+                1,
+                "changed_observation"
+              ],
+              "expect": "HOLD / VIDEO_ADMISSION_SOURCE_CHANGED"
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "expect": "original immutable binding"
+            }
+          ],
+          "barriers": [],
+          "expected": [
+            "Zero processing authorization. Do not infer unchanged source from size equality or checksum=null. Committed reservations survive; source is not re-admitted or silently rebound."
+          ],
+          "assertions": [
+            "immutable_snapshot",
+            "permanent_reservations"
+          ]
+        },
+        {
+          "variant_id": "S_BEFORE_FIRST_ATTEMPT_NULL_CHECKSUM_REVISION",
+          "group": "source_freshness",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Admit A with null-checksum sources, then claim first canary and issue a fresh observation whose source metadata mutation is: checksum remains null; changed version or modifiedTime still constitutes mismatch.",
+          "steps": [
+            {
+              "session": "COLLECTOR",
+              "sql": "SELECT admission_test.issue_observation($1::uuid,$2::jsonb);",
+              "parameters": [
+                "A.approval_id",
+                {
+                  "mutation": "checksum remains null; changed version or modifiedTime still constitutes mismatch",
+                  "bind": [
+                    "contract_sha256",
+                    "job_id",
+                    "lease_token",
+                    "attempt_count",
+                    "worker_key"
+                  ],
+                  "server_time": "clock_timestamp()",
+                  "nonce": "new server nonce"
+                }
+              ],
+              "capture": "changed_observation"
+            },
+            {
+              "session": "WORKER",
+              "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid) AS result;",
+              "parameters": [
+                "A.job_id",
+                "active lease token",
+                "synthetic-worker",
+                1,
+                "changed_observation"
+              ],
+              "expect": "HOLD / VIDEO_ADMISSION_SOURCE_CHANGED"
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "expect": "original immutable binding"
+            }
+          ],
+          "barriers": [],
+          "expected": [
+            "Zero processing authorization. Do not infer unchanged source from size equality or checksum=null. Committed reservations survive; source is not re-admitted or silently rebound."
+          ],
+          "assertions": [
+            "immutable_snapshot",
+            "permanent_reservations"
+          ]
+        },
+        {
+          "variant_id": "S_BETWEEN_ATTEMPTS_VERSION_ONLY",
+          "group": "source_freshness",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Admit A with null-checksum sources, then complete a permitted first attempt retry transition, obtain second active lease and issue a fresh observation whose source metadata mutation is: version changes 17 -> 18, unchanged size and null checksum.",
+          "steps": [
+            {
+              "session": "COLLECTOR",
+              "sql": "SELECT admission_test.issue_observation($1::uuid,$2::jsonb);",
+              "parameters": [
+                "A.approval_id",
+                {
+                  "mutation": "version changes 17 -> 18, unchanged size and null checksum",
+                  "bind": [
+                    "contract_sha256",
+                    "job_id",
+                    "lease_token",
+                    "attempt_count",
+                    "worker_key"
+                  ],
+                  "server_time": "clock_timestamp()",
+                  "nonce": "new server nonce"
+                }
+              ],
+              "capture": "changed_observation"
+            },
+            {
+              "session": "WORKER",
+              "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid) AS result;",
+              "parameters": [
+                "A.job_id",
+                "active lease token",
+                "synthetic-worker",
+                2,
+                "changed_observation"
+              ],
+              "expect": "HOLD / VIDEO_ADMISSION_SOURCE_CHANGED"
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "expect": "original immutable binding"
+            }
+          ],
+          "barriers": [],
+          "expected": [
+            "Zero processing authorization. Do not infer unchanged source from size equality or checksum=null. Committed reservations survive; source is not re-admitted or silently rebound."
+          ],
+          "assertions": [
+            "immutable_snapshot",
+            "permanent_reservations"
+          ]
+        },
+        {
+          "variant_id": "S_BETWEEN_ATTEMPTS_SAME_SIZE_REPLACEMENT",
+          "group": "source_freshness",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Admit A with null-checksum sources, then complete a permitted first attempt retry transition, obtain second active lease and issue a fresh observation whose source metadata mutation is: modifiedTime changes, version changes 17 -> 18, same 2000000-byte size; old source checksum remains null.",
+          "steps": [
+            {
+              "session": "COLLECTOR",
+              "sql": "SELECT admission_test.issue_observation($1::uuid,$2::jsonb);",
+              "parameters": [
+                "A.approval_id",
+                {
+                  "mutation": "modifiedTime changes, version changes 17 -> 18, same 2000000-byte size; old source checksum remains null",
+                  "bind": [
+                    "contract_sha256",
+                    "job_id",
+                    "lease_token",
+                    "attempt_count",
+                    "worker_key"
+                  ],
+                  "server_time": "clock_timestamp()",
+                  "nonce": "new server nonce"
+                }
+              ],
+              "capture": "changed_observation"
+            },
+            {
+              "session": "WORKER",
+              "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid) AS result;",
+              "parameters": [
+                "A.job_id",
+                "active lease token",
+                "synthetic-worker",
+                2,
+                "changed_observation"
+              ],
+              "expect": "HOLD / VIDEO_ADMISSION_SOURCE_CHANGED"
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "expect": "original immutable binding"
+            }
+          ],
+          "barriers": [],
+          "expected": [
+            "Zero processing authorization. Do not infer unchanged source from size equality or checksum=null. Committed reservations survive; source is not re-admitted or silently rebound."
+          ],
+          "assertions": [
+            "immutable_snapshot",
+            "permanent_reservations"
+          ]
+        },
+        {
+          "variant_id": "S_BETWEEN_ATTEMPTS_NULL_CHECKSUM_REVISION",
+          "group": "source_freshness",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Admit A with null-checksum sources, then complete a permitted first attempt retry transition, obtain second active lease and issue a fresh observation whose source metadata mutation is: checksum remains null; changed version or modifiedTime still constitutes mismatch.",
+          "steps": [
+            {
+              "session": "COLLECTOR",
+              "sql": "SELECT admission_test.issue_observation($1::uuid,$2::jsonb);",
+              "parameters": [
+                "A.approval_id",
+                {
+                  "mutation": "checksum remains null; changed version or modifiedTime still constitutes mismatch",
+                  "bind": [
+                    "contract_sha256",
+                    "job_id",
+                    "lease_token",
+                    "attempt_count",
+                    "worker_key"
+                  ],
+                  "server_time": "clock_timestamp()",
+                  "nonce": "new server nonce"
+                }
+              ],
+              "capture": "changed_observation"
+            },
+            {
+              "session": "WORKER",
+              "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid) AS result;",
+              "parameters": [
+                "A.job_id",
+                "active lease token",
+                "synthetic-worker",
+                2,
+                "changed_observation"
+              ],
+              "expect": "HOLD / VIDEO_ADMISSION_SOURCE_CHANGED"
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "expect": "original immutable binding"
+            }
+          ],
+          "barriers": [],
+          "expected": [
+            "Zero processing authorization. Do not infer unchanged source from size equality or checksum=null. Committed reservations survive; source is not re-admitted or silently rebound."
+          ],
+          "assertions": [
+            "immutable_snapshot",
+            "permanent_reservations"
+          ]
+        }
+      ],
+      "expected": [
+        "Run every listed variant against real PostgreSQL; a variant is not PASS without its own session, statement and barrier evidence."
+      ],
+      "assertions": []
+    },
+    {
+      "id": "S07_UNCHANGED_NULL_CHECKSUM",
+      "group": "source_freshness",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Admit A and obtain current non-null token. Fresh trusted exact metadata, including required version=17 and modifiedTime, has null checksum.",
+      "steps": [
+        {
+          "session": "COLLECTOR",
+          "sql": "SELECT admission_test.issue_observation($1::uuid,$2::jsonb);",
+          "parameters": [
+            "A.approval_id",
+            "exact approved sources; active job/token/attempt; fresh server time+nonce"
+          ],
+          "capture": "observation"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid) AS result;",
+          "parameters": [
+            "A.job_id",
+            "active token",
+            "synthetic-worker",
+            1,
+            "observation"
+          ],
+          "expect": "boundary consistency success, still no media invoked by this SQL test"
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "Null checksum alone is not a rejection and is never converted to a fabricated checksum. Exact required revision/fingerprint plus trusted current lease/observation still required."
+      ],
+      "assertions": [
+        "immutable_snapshot",
+        "permanent_reservations"
+      ]
+    },
+    {
+      "id": "S08_OBSERVATION_TRUST_BINDING",
+      "group": "observation",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Independent variants: unknown observation UUID; wrong approval/contract; reused nonce for a new admission; caller future/old timestamp; missing/extra/duplicate source; wrong parent; trashed; wrong job/token/attempt; observation created by unauthorized principal. Only trusted fixture admin may seed impossible states.",
+      "steps": [
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "A.approval_id",
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256",
+            "invalid_observation_variant.observation_id"
+          ],
+          "expect_error": "VIDEO_ADMISSION_OBSERVATION_INVALID"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid) AS result;",
+          "parameters": [
+            "A.job_id",
+            "active token",
+            "synthetic-worker",
+            "active attempt",
+            "wrong job/token/attempt observation"
+          ],
+          "expect": "HOLD / observation mismatch"
+        },
+        {
+          "session": "ATTACKER",
+          "sql": "UPDATE video_queue.source_observation SET observed_at=clock_timestamp(),nonce=gen_random_uuid() WHERE observation_id=$1::uuid;",
+          "parameters": [
+            "old observation"
+          ],
+          "expect_sqlstate": "42501"
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "No client-supplied freshness or GUC/JSON trust; no queue/reservation effects. Nonce replay of a new request rejected; exact committed recovery remains available independently."
+      ],
+      "assertions": [
+        "full_snapshot",
+        "immutable_snapshot"
+      ]
+    },
+    {
+      "id": "S09_STALE_AFTER_ADMISSION_LOCK_WAIT",
+      "group": "observation",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Fresh trusted admission observation has 30-second max age. ADMIN holds the actual request/source lock needed by S1; S1 begins while observation is fresh.",
+      "steps": [
+        {
+          "session": "ADMIN",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "ADMIN",
+          "sql": "SELECT pg_advisory_xact_lock(hashtextextended($1::text,0));",
+          "parameters": [
+            "A.request_key"
+          ],
+          "note": "Require reviewed future lock-key mapping. If it differs, bind this to the actual production request lock; a random unrelated lock is not evidence."
+        },
+        {
+          "session": "S1",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "SET LOCAL statement_timeout='60s';",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "SET LOCAL lock_timeout='55s';",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid) AS binding;",
+          "parameters": [
+            "A.approval_id",
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256",
+            "A.observation_id"
+          ],
+          "dispatch": "async",
+          "must_block_until": "ADMIN unlocks"
+        },
+        {
+          "session": "OBSERVER",
+          "sql": "SELECT pid,wait_event_type,wait_event,pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE pid=ANY($1::integer[]);",
+          "parameters": [
+            "[S1.pid]"
+          ],
+          "assert": "ADMIN is blocker"
+        },
+        {
+          "session": "OBSERVER",
+          "sql": "SELECT clock_timestamp()>observed_at+interval '30 seconds' AS expired FROM video_queue.source_observation WHERE observation_id=$1::uuid;",
+          "parameters": [
+            "A.observation_id"
+          ],
+          "coordinator_barrier": "real server clock crossed expiry; do not mutate observed_at"
+        },
+        {
+          "session": "ADMIN",
+          "sql": "COMMIT;",
+          "parameters": [],
+          "after": "expired=true"
+        },
+        {
+          "session": "S1",
+          "sql": "ROLLBACK;",
+          "parameters": [],
+          "after": "capture VIDEO_ADMISSION_OBSERVATION_STALE"
+        }
+      ],
+      "barriers": [
+        "OBSERVATION_FRESH",
+        "S1_ACTUALLY_BLOCKED",
+        "SERVER_EXPIRY_CROSSED",
+        "UNLOCK"
+      ],
+      "expected": [
+        "Freshness is checked after waiting with clock_timestamp, not transaction-start CURRENT_TIMESTAMP. No reservation, queue rows or binding commit."
+      ],
+      "assertions": [
+        "full_snapshot",
+        "no_partial_loser"
+      ],
+      "variants": [
+        {
+          "variant_id": "SET_CONSTRAINTS_IMMEDIATE_THEN_EXPIRY_LIMIT",
+          "status": "NOT_RUN",
+          "sql_executed": false,
+          "setup": "Fresh A observation. Admission returns a tentative complete binding inside an open transaction. Test-only caller deliberately delays commit to demonstrate the documented limit; trusted caller normally commits promptly.",
+          "steps": [
+            {
+              "session": "S1",
+              "sql": "BEGIN;",
+              "parameters": []
+            },
+            {
+              "session": "S1",
+              "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid);",
+              "parameters": [
+                "A.approval_id",
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256",
+                "A.observation_id"
+              ],
+              "capture": "tentative binding"
+            },
+            {
+              "session": "S1",
+              "sql": "SET CONSTRAINTS ALL IMMEDIATE;",
+              "parameters": [],
+              "assert": "structural and currently deferred checks run while evidence is fresh"
+            },
+            {
+              "session": "OBSERVER",
+              "sql": "SELECT clock_timestamp() >= expires_at AS expired FROM video_queue.source_observation WHERE observation_id=$1::uuid;",
+              "parameters": [
+                "A.observation_id"
+              ],
+              "coordinator_barrier": "wait for real server clock expiry; do not mutate timestamp"
+            },
+            {
+              "session": "S1",
+              "sql": "COMMIT;",
+              "parameters": [],
+              "expect": "No guaranteed SQL rejection based only on expiry: COMMIT may succeed. Record actual outcome; structural bijection must still hold."
+            },
+            {
+              "session": "S2",
+              "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text);",
+              "parameters": [
+                "A.request_key",
+                "A.contract_sha256",
+                "A.queue_manifest_sha256"
+              ],
+              "expect": "original rich binding if COMMIT succeeded; NOT_FOUND if actual implementation independently rejected and rolled back"
+            },
+            {
+              "session": "WORKER",
+              "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid);",
+              "parameters": [
+                "committed A actual job_id",
+                "current v2 lease token",
+                "synthetic-worker",
+                "current attempt",
+                "expired observation_id"
+              ],
+              "expect": "HOLD: expired/wrong-scope admission evidence is never sufficient for an attempt; a new trusted attempt observation is mandatory"
+            }
+          ],
+          "barriers": [
+            "FINAL_LOCKED_AUTHORIZATION_FRESH",
+            "DEFERRED_CHECKS_FORCED_IMMEDIATE",
+            "SERVER_EXPIRY_CROSSED",
+            "COMMIT_OUTCOME_RECORDED"
+          ],
+          "expected": [
+            "Demonstrates a timing limitation, not a guaranteed stale-COMMIT failure. Successful commit preserves complete immutable mapping and permanent reservations. Recovery remains a fact-of-admission read and grants no work permission."
+          ],
+          "assertions": [
+            "binding_maps_real_jobs",
+            "binding_hash",
+            "immutable_snapshot",
+            "permanent_reservations",
+            "binding_shape"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S10_STALE_AFTER_WORKER_LOCK_WAIT",
+      "group": "observation",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Current active lease lasts >60s. Fresh worker observation bound to token and attempt. ADMIN locks job before worker gate.",
+      "steps": [
+        {
+          "session": "ADMIN",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "ADMIN",
+          "sql": "SELECT job_id FROM video_queue.job WHERE job_id=$1::uuid FOR UPDATE;",
+          "parameters": [
+            "A.job_id"
+          ]
+        },
+        {
+          "session": "WORKER",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "WORKER",
+          "sql": "SET LOCAL statement_timeout='60s';",
+          "parameters": []
+        },
+        {
+          "session": "WORKER",
+          "sql": "SET LOCAL lock_timeout='55s';",
+          "parameters": []
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid) AS result;",
+          "parameters": [
+            "A.job_id",
+            "active token",
+            "synthetic-worker",
+            1,
+            "fresh observation"
+          ],
+          "dispatch": "async"
+        },
+        {
+          "session": "OBSERVER",
+          "sql": "SELECT clock_timestamp()>observed_at+interval '30 seconds' AS expired FROM video_queue.source_observation WHERE observation_id=$1::uuid;",
+          "parameters": [
+            "worker observation"
+          ],
+          "coordinator_barrier": "wait until true; no modified fixture clock"
+        },
+        {
+          "session": "ADMIN",
+          "sql": "COMMIT;",
+          "parameters": []
+        },
+        {
+          "session": "WORKER",
+          "sql": "ROLLBACK;",
+          "parameters": [],
+          "after": "capture stale observation rejection"
+        }
+      ],
+      "barriers": [
+        "JOB_LOCK_HELD",
+        "WORKER_GATE_BLOCKED",
+        "OBSERVATION_EXPIRES",
+        "UNLOCK"
+      ],
+      "expected": [
+        "Revalidate both lease and observation after all locks; no processing authorization is returned based on statement-start freshness."
+      ],
+      "assertions": [
+        "immutable_snapshot",
+        "permanent_reservations"
+      ]
+    },
+    {
+      "id": "W01_LEGACY_WORKER_AND_ELIGIBILITY",
+      "group": "worker_boundary",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Admit and COMMIT A. In separate runs seed an older unbound legacy QUEUED job ahead of A, an incomplete/uncommitted admission, a held/revoked approval, and a rollout-ineligible batch. Authenticate OLD_WORKER using its actual old connection identity.",
+      "steps": [
+        {
+          "session": "OLD_WORKER",
+          "sql": "SELECT * FROM video_queue.claim_job($1::text,900,$2::text,$3::text);",
+          "parameters": [
+            "synthetic-worker",
+            "bridge_3_1_free",
+            "3.1-free-r25.16"
+          ],
+          "expect": "42501 after intended EXECUTE revocation; no managed row ever returned"
+        },
+        {
+          "session": "OLD_WORKER",
+          "sql": "SET ROLE future_subset_worker_v2;",
+          "parameters": [],
+          "expect_sqlstate": "42501"
+        },
+        {
+          "session": "OLD_WORKER",
+          "sql": "SELECT set_config('video_queue.worker_version','v2',false),set_config('video_queue.admission_authorized','true',false);",
+          "parameters": []
+        },
+        {
+          "session": "OLD_WORKER",
+          "sql": "SELECT * FROM video_queue.claim_job($1::text,900,$2::text,$3::text);",
+          "parameters": [
+            "new-worker-key-string",
+            "bridge_3_1_free",
+            "3.1-free-r25.16"
+          ],
+          "expect": "same denial; worker_key/GUC does not authenticate v2"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT * FROM video_queue.claim_job($1::text,900,$2::text,$3::text);",
+          "parameters": [
+            "synthetic-worker",
+            "bridge_3_1_free",
+            "3.1-free-r25.16"
+          ],
+          "capture": "eligible A canary claim",
+          "assert": "skips older ineligible rows in the actual SQL selector"
+        },
+        {
+          "session": "ADMIN",
+          "sql": "SELECT pg_get_functiondef('video_queue.claim_job(text,integer,text,text)'::regprocedure);",
+          "parameters": [],
+          "assert": "review evidence identifies eligibility predicate inside existing SELECT FOR UPDATE SKIP LOCKED, not generic claim followed by rollback"
+        }
+      ],
+      "barriers": [
+        "ADMISSION_COMMITTED",
+        "OLD_CREDENTIAL_DENIED",
+        "INELIGIBLE_OLDER_ROW_PRESENT",
+        "V2_CLAIMS_ELIGIBLE"
+      ],
+      "expected": [
+        "Old role cannot claim/heartbeat/retry/finish managed rows through any public, inherited or alternate SECURITY DEFINER path before or after admission commit. V2 claim makes progress past oldest ineligible legacy rows without claiming/retrying them, and never exposes uncommitted/draft admission."
+      ],
+      "assertions": [
+        "immutable_snapshot",
+        "permanent_reservations",
+        {
+          "sql": "SELECT attempt_count=0 AND lease_token IS NULL AS ok FROM video_queue.job WHERE job_id=$1::uuid;",
+          "parameters": [
+            "older ineligible legacy job"
+          ],
+          "expected": true
+        }
+      ]
+    },
+    {
+      "id": "W02_LEASE_RETRY_BUDGET_AND_LIVENESS",
+      "group": "worker_boundary",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Independent lease/budget variants use the actual v2 role and real server guards. Preserve permanent reservations throughout. Privileged test-only expiration changes are allowed on synthetic rows; never forge a production token.",
+      "steps": [
+        {
+          "session": "WORKER",
+          "sql": "SELECT * FROM video_queue.claim_job($1::text,900,$2::text,$3::text);",
+          "parameters": [
+            "synthetic-worker",
+            "bridge_3_1_free",
+            "3.1-free-r25.16"
+          ],
+          "capture": "job/token1/attempt1"
+        },
+        {
+          "session": "ADMIN",
+          "sql": "UPDATE video_queue.job SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE job_id=$1::uuid;",
+          "parameters": [
+            "A.job_id"
+          ],
+          "fixture_only": true
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT * FROM video_queue.claim_job($1::text,900,$2::text,$3::text);",
+          "parameters": [
+            "synthetic-worker",
+            "bridge_3_1_free",
+            "3.1-free-r25.16"
+          ],
+          "capture": "same job/token2/attempt2",
+          "assert": "token2 differs from token1"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT video_queue.heartbeat_job($1::uuid,$2::uuid,'synthetic-worker',900);",
+          "parameters": [
+            "A.job_id",
+            "token1"
+          ],
+          "expect_error": "VIDEO_QUEUE_LEASE_LOST"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid) AS result;",
+          "parameters": [
+            "A.job_id",
+            "token1",
+            "synthetic-worker",
+            1,
+            "old observation"
+          ],
+          "expect": "HOLD / lease lost"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT * FROM video_queue.retry_job($1::uuid,NULL::uuid,'synthetic-worker','UV_SYNTHETIC_RETRY',3,1);",
+          "parameters": [
+            "A.job_id"
+          ],
+          "expect_error": "null-token rejected by future boundary; current SQL0056 alone is insufficient"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT * FROM video_queue.finish_job($1::uuid,NULL::uuid,'synthetic-worker','REVIEW_READY',$2::jsonb,NULL);",
+          "parameters": [
+            "A.job_id",
+            "complete terminal fixture"
+          ],
+          "expect_error": "VIDEO_QUEUE_LEASE_LOST"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT admission_test.invoke_retry_boundary($1::uuid,$2::uuid,'synthetic-worker',3);",
+          "parameters": [
+            "A.job_id",
+            "token2"
+          ],
+          "expect": "fixed maximum=3; retry remains existing job"
+        },
+        {
+          "session": "ADMIN",
+          "sql": "UPDATE video_queue.job SET next_attempt_at=clock_timestamp()-interval '1 second' WHERE job_id=$1::uuid;",
+          "parameters": [
+            "A.job_id"
+          ],
+          "fixture_only": true
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT * FROM video_queue.claim_job($1::text,900,$2::text,$3::text);",
+          "parameters": [
+            "synthetic-worker",
+            "bridge_3_1_free",
+            "3.1-free-r25.16"
+          ],
+          "capture": "same job/token3/attempt3"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT * FROM video_queue.retry_job($1::uuid,$2::uuid,'synthetic-worker','UV_SYNTHETIC_RETRY',4,1);",
+          "parameters": [
+            "A.job_id",
+            "token3"
+          ],
+          "expect": "old raw path denied or exhausted requeue guard rejects; never QUEUED attempt3"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT admission_test.invoke_retry_boundary($1::uuid,$2::uuid,'synthetic-worker',3);",
+          "parameters": [
+            "A.job_id",
+            "token3"
+          ],
+          "expect": "FAILED and canary batch CANARY_BLOCKED"
+        },
+        {
+          "session": "GUARDED_WRITER",
+          "sql": "UPDATE video_queue.job SET attempt_count=0 WHERE job_id=$1::uuid;",
+          "parameters": [
+            "A.job_id"
+          ],
+          "expect_error": "attempt counter cannot decrease or reset"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT * FROM video_queue.claim_job($1::text,900,$2::text,$3::text);",
+          "parameters": [
+            "synthetic-worker",
+            "bridge_3_1_free",
+            "3.1-free-r25.16"
+          ],
+          "expect": "no fourth lease; in queued-exhausted fixture, the next eligible job progresses"
+        }
+      ],
+      "barriers": [],
+      "expected": [
+        "Repeat token cases for NULL, stale, wrong owner, wrong attempt and expired token in heartbeat/retry/finish/attempt gate. Repeat crash expiry at attempt3: FAILED/UV_WORKER_CRASH_RETRY_EXHAUSTED without attempt4. Seed QUEUED attempt_count=3 historical row before guard installation: it must be terminalized or skipped without blocking later eligible jobs; claim-then-rollback starvation fails. Attempts remain monotonically increasing <=3; raw retry max4 must not bypass fixed-3 boundary."
+      ],
+      "assertions": [
+        "no_fourth_attempt",
+        "immutable_snapshot",
+        "permanent_reservations"
+      ]
+    },
+    {
+      "id": "A01_REVOCATION_RACES",
+      "group": "approval",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Run both lock orders for revocation versus admission, then both orders for revocation versus attempt permit. The same approval row lock must serialize all three operations.",
+      "steps": [
+        {
+          "session": "ADMIN",
+          "sql": "BEGIN;",
+          "parameters": []
+        },
+        {
+          "session": "ADMIN",
+          "sql": "SELECT approval_id FROM video_queue.subset_approval WHERE approval_id=$1::uuid FOR UPDATE;",
+          "parameters": [
+            "A.approval_id"
+          ]
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.admit_approved_subset($1::uuid,$2::text,$3::text,$4::text,$5::uuid);",
+          "parameters": [
+            "A.approval_id",
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256",
+            "A.observation_id"
+          ],
+          "dispatch": "async",
+          "assert": "waits on ADMIN approval row"
+        },
+        {
+          "session": "ADMIN",
+          "sql": "SELECT admission_test.revoke_approval($1::uuid);",
+          "parameters": [
+            "A.approval_id"
+          ]
+        },
+        {
+          "session": "ADMIN",
+          "sql": "COMMIT;",
+          "parameters": []
+        },
+        {
+          "session": "S1",
+          "sql": "ROLLBACK;",
+          "parameters": [],
+          "after": "admission returns VIDEO_ADMISSION_APPROVAL_REVOKED"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT admission_test.invoke_attempt_gate($1::uuid,$2::uuid,$3::text,$4::integer,$5::uuid) AS result;",
+          "parameters": [
+            "A.job_id",
+            "active token",
+            "synthetic-worker",
+            "active attempt",
+            "fresh trusted observation"
+          ],
+          "expect": "HOLD when revoked before attempt permission"
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text) AS result;",
+          "parameters": [
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256"
+          ],
+          "expect": "if admission won earlier, original binding survives revocation"
+        }
+      ],
+      "barriers": [
+        "APPROVAL_ROW_LOCK_HELD",
+        "CONTENDER_CONFIRMED_BLOCKED",
+        "COMMIT_WINNER",
+        "OBSERVE_LOSER"
+      ],
+      "expected": [
+        "Revocation-first blocks new admission/attempt permission. Admission-first commits one binding, revocation waits, subsequent processing permission is blocked; recovery still returns fact of admission. Attempt-first may return only while its lock/permit is valid; revocation thereafter blocks subsequent permits/terminal authorization. Record exact authorization point and do not claim instantaneous cancellation of already-started external work."
+      ],
+      "assertions": [
+        "full_snapshot",
+        "immutable_snapshot",
+        "permanent_reservations"
+      ]
+    },
+    {
+      "id": "T01_COMPLETE_SQL0058_TERMINAL_AND_MUTATIONS",
+      "group": "terminal_boundary",
+      "status": "NOT_RUN",
+      "sql_executed": false,
+      "setup": "Admit A, use v2 worker claim and current trusted attempt permission. Bind parameters [actual job_id,actual lease_token,synthetic-worker,terminal_fixture.output]. Verify hash and metadata consistency via the actual SQL0058 canonicalizer before trying finish. Use a SAVEPOINT per mutation and a fresh full persisted snapshot; every test keeps the same valid lease after rejection.",
+      "steps": [
+        {
+          "session": "ADMIN",
+          "sql": "SELECT encode(public.digest(convert_to(video_queue.canonical_json_text($1::jsonb->'artifact_manifest'),'UTF8'),'sha256'),'hex')=$1::jsonb->>'artifact_manifest_sha256' AND encode(public.digest(convert_to(video_queue.canonical_json_text(($1::jsonb->'terminal_receipt')-'evidence_sha256'),'UTF8'),'sha256'),'hex')=$1::jsonb->>'terminal_evidence_sha256' AS ok;",
+          "parameters": [
+            "terminal_fixture.output"
+          ],
+          "expected": true
+        },
+        {
+          "session": "WORKER",
+          "sql": "SAVEPOINT bad_terminal;",
+          "repeat": "each malformed variant"
+        },
+        {
+          "session": "WORKER",
+          "sql_template_refs": [
+            "terminal_semantic_mutation_rehash when rehash=true",
+            "terminal_raw_mutation when rehash=false"
+          ],
+          "template_substitution": "Replace {{mutation_sql}} with that variant's SQL expression only; all $1..$4 stay bound parameters.",
+          "parameters": [
+            "actual job_id",
+            "active token",
+            "synthetic-worker",
+            "terminal_fixture.output"
+          ],
+          "repeat": "each malformed variant",
+          "expected": "the exact named error/constraint; not merely any exception"
+        },
+        {
+          "session": "WORKER",
+          "sql": "ROLLBACK TO SAVEPOINT bad_terminal;",
+          "repeat": "after expected rejection"
+        },
+        {
+          "session": "ADMIN",
+          "sql": "SELECT jsonb_build_object('batches',(SELECT coalesce(jsonb_agg(to_jsonb(b) ORDER BY b.batch_id),'[]'::jsonb) FROM video_queue.batch b WHERE b.request_key=ANY($1::text[])),'jobs',(SELECT coalesce(jsonb_agg(to_jsonb(j) ORDER BY j.job_id),'[]'::jsonb) FROM video_queue.job j JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'events',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY e.event_id),'[]'::jsonb) FROM video_queue.job_event e JOIN video_queue.batch b USING(batch_id) WHERE b.request_key=ANY($1::text[])),'headers',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.request_key),'[]'::jsonb) FROM video_queue.subset_admission a WHERE a.request_key=ANY($1::text[])),'reservations',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY r.source_identity),'[]'::jsonb) FROM video_queue.source_reservation r WHERE r.source_identity=ANY($2::text[])),'observations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY o.observation_id),'[]'::jsonb) FROM video_queue.source_observation o WHERE o.request_key=ANY($1::text[]))) AS state;",
+          "parameters": [
+            "A.request_key[]",
+            "A.source_identities"
+          ],
+          "expected": "unchanged from before variant; no job/batch/event/reservation/header mutation"
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT * FROM video_queue.finish_job($1::uuid,$2::uuid,$3::text,'REVIEW_READY',$4::jsonb,NULL);",
+          "parameters": [
+            "actual job_id",
+            "active token",
+            "synthetic-worker",
+            "terminal_fixture.output"
+          ],
+          "expected": {
+            "job_status": "REVIEW_READY",
+            "batch_status": "CANARY_REVIEW",
+            "released_jobs": 0
+          }
+        },
+        {
+          "session": "WORKER",
+          "sql": "SELECT * FROM video_queue.claim_job('synthetic-worker',900,'bridge_3_1_free','3.1-free-r25.16');",
+          "expected": "zero rows for pending remainder of this canary-held batch"
+        },
+        {
+          "session": "S1",
+          "sql": "SELECT video_queue.recover_subset_admission($1::text,$2::text,$3::text);",
+          "parameters": [
+            "A.request_key",
+            "A.contract_sha256",
+            "A.queue_manifest_sha256"
+          ],
+          "expected": "same immutable binding"
+        }
+      ],
+      "malformed_variants": [
+        {
+          "id": "wrong_manifest_schema",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,schema_version}','\"wrong/v1\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "wrong_manifest_job",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,job_id}','\"00000000000000000000000000000000\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "wrong_manifest_source",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,source_file_id}','\"privateVideo00000003\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "wrong_manifest_revision",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,algorithm_revision}','\"different-revision\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "manifest_mode",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,result_mode}','\"PRODUCTION\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "source_id",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,source_identity,file_id}','\"privateVideo00000003\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "source_name",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,source_identity,name}','\"Renamed.mp4\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "source_mime",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,source_identity,mime_type}','\"video/avi\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "source_size",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,source_identity,size_bytes}','2000001'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "source_size_string",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,source_identity,size_bytes}','\"2000000\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "source_parent",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,source_identity,parent_folder_id}','\"otherFolder000001\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "source_checksum",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,source_identity,checksum}',to_jsonb('md5:'||repeat('a',32)),true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "wrong_receipt_schema_v2",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,schema_version}','\"universal-video-terminal-receipt/v2\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_status",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,status}','\"FAIL\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_job",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,job_id}','\"00000000000000000000000000000000\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_source",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,source_file_id}','\"privateVideo00000003\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_artifact_count",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,artifact_count}','1'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_artifact_count_string",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,artifact_count}','\"2\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_count",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts}',($4::jsonb#>'{artifact_manifest,artifacts}') - 1,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "manifest_canonical_promotion_allowed",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,canonical_promotion_allowed}','true'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_canonical_promotion_allowed",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,canonical_promotion_allowed}','true'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "manifest_database_persistence_allowed",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,database_persistence_allowed}','true'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_database_persistence_allowed",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,database_persistence_allowed}','true'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "manifest_publication",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,publication_state}','\"PUBLISHED\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_publication",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,publication_state}','\"PUBLISHED\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_source_identity_verified",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,source_identity_verified}','false'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_string_source_identity_verified",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,source_identity_verified}','\"true\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_drive_readback_verified",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,drive_readback_verified}','false'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_string_drive_readback_verified",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,drive_readback_verified}','\"true\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_result_readback_verified",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,result_readback_verified}','false'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_string_result_readback_verified",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,result_readback_verified}','\"true\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_checksum_verified",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,checksum_verified}','false'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "receipt_string_checksum_verified",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt,checksum_verified}','\"true\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_0_kind",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,kind}','\"wrong_kind\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_0_drive_id",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,drive_id}','\"otherArtifact00001\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_0_locator",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,locator}','\"gdrive:file:otherArtifact00001\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_0_mime_type",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,mime_type}','\"application/octet-stream\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_0_parent_id",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,parent_id}','\"wrongFolder000001\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_0_sha256",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,sha256}',to_jsonb(repeat('f',64)),true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_0_size_bytes",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,size_bytes}','0'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_0_size_string",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,size_bytes}','\"100\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_0_negative_size",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,size_bytes}','-1'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_0_null_size",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,size_bytes}','null'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_0_missing_version",
+          "mutation_sql": "$4::jsonb #- '{artifact_manifest,artifacts,0,version}'",
+          "rehash": true,
+          "expected_sqlstate": "23514",
+          "expected_constraint": "video_job_terminal_revision_check"
+        },
+        {
+          "id": "artifact_0_empty_version",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,version}','\"\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "video_job_terminal_revision_check"
+        },
+        {
+          "id": "artifact_0_missing_modified_time",
+          "mutation_sql": "$4::jsonb #- '{artifact_manifest,artifacts,0,modified_time}'",
+          "rehash": true,
+          "expected_sqlstate": "23514",
+          "expected_constraint": "video_job_terminal_revision_check"
+        },
+        {
+          "id": "artifact_0_empty_modified_time",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,modified_time}','\"\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "video_job_terminal_revision_check"
+        },
+        {
+          "id": "artifact_0_nonnumeric_version",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,version}','\"revision-x\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "video_job_terminal_revision_check"
+        },
+        {
+          "id": "artifact_1_kind",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,kind}','\"wrong_kind\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_1_drive_id",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,drive_id}','\"otherArtifact00001\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_1_locator",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,locator}','\"gdrive:file:otherArtifact00001\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_1_mime_type",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,mime_type}','\"application/octet-stream\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_1_parent_id",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,parent_id}','\"wrongFolder000001\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_1_sha256",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,sha256}',to_jsonb(repeat('f',64)),true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_1_size_bytes",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,size_bytes}','0'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_1_size_string",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,size_bytes}','\"100\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_1_negative_size",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,size_bytes}','-1'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_1_null_size",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,size_bytes}','null'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_1_missing_version",
+          "mutation_sql": "$4::jsonb #- '{artifact_manifest,artifacts,1,version}'",
+          "rehash": true,
+          "expected_sqlstate": "23514",
+          "expected_constraint": "video_job_terminal_revision_check"
+        },
+        {
+          "id": "artifact_1_empty_version",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,version}','\"\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "video_job_terminal_revision_check"
+        },
+        {
+          "id": "artifact_1_missing_modified_time",
+          "mutation_sql": "$4::jsonb #- '{artifact_manifest,artifacts,1,modified_time}'",
+          "rehash": true,
+          "expected_sqlstate": "23514",
+          "expected_constraint": "video_job_terminal_revision_check"
+        },
+        {
+          "id": "artifact_1_empty_modified_time",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,modified_time}','\"\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "video_job_terminal_revision_check"
+        },
+        {
+          "id": "artifact_1_nonnumeric_version",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,version}','\"revision-x\"'::jsonb,true)",
+          "rehash": true,
+          "expected_error": "video_job_terminal_revision_check"
+        },
+        {
+          "id": "missing_artifact_locators",
+          "mutation_sql": "$4::jsonb - 'artifact_locators'",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "null_artifact_locators",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_locators}','null'::jsonb,true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "missing_terminal_receipt",
+          "mutation_sql": "$4::jsonb - 'terminal_receipt'",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "null_terminal_receipt",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_receipt}','null'::jsonb,true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "missing_artifact_manifest",
+          "mutation_sql": "$4::jsonb - 'artifact_manifest'",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "null_artifact_manifest",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest}','null'::jsonb,true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "missing_terminal_evidence_sha256",
+          "mutation_sql": "$4::jsonb - 'terminal_evidence_sha256'",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "null_terminal_evidence_sha256",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_evidence_sha256}','null'::jsonb,true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "missing_artifact_manifest_sha256",
+          "mutation_sql": "$4::jsonb - 'artifact_manifest_sha256'",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "null_artifact_manifest_sha256",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest_sha256}','null'::jsonb,true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "missing_ai_done_drive_id",
+          "mutation_sql": "$4::jsonb - 'ai_done_drive_id'",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "null_ai_done_drive_id",
+          "mutation_sql": "jsonb_set($4::jsonb,'{ai_done_drive_id}','null'::jsonb,true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "missing_master_pdf_drive_id",
+          "mutation_sql": "$4::jsonb - 'master_pdf_drive_id'",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "null_master_pdf_drive_id",
+          "mutation_sql": "jsonb_set($4::jsonb,'{master_pdf_drive_id}','null'::jsonb,true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_ids_collide",
+          "mutation_sql": "jsonb_set($4::jsonb,'{ai_done_drive_id}',$4::jsonb->'master_pdf_drive_id',true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "artifact_id_is_source",
+          "mutation_sql": "jsonb_set($4::jsonb,'{master_pdf_drive_id}',$4::jsonb->'source_file_id',true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "wrong_locator",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_locators,ai_done}','\"wrongArtifact00001\"'::jsonb,true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "wrong_top_identity",
+          "mutation_sql": "jsonb_set($4::jsonb,'{source_file_id}','\"privateVideo00000003\"'::jsonb,true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_IDENTITY_MISMATCH"
+        },
+        {
+          "id": "forged_manifest_hash",
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest_sha256}',to_jsonb(repeat('0',64)),true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "forged_evidence_hash",
+          "mutation_sql": "jsonb_set($4::jsonb,'{terminal_evidence_sha256}',to_jsonb(repeat('0',64)),true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_RESULT_CONTRACT_INVALID"
+        },
+        {
+          "id": "wrong_output_mode",
+          "mutation_sql": "jsonb_set($4::jsonb,'{result_mode}','\"PRODUCTION\"'::jsonb,true)",
+          "rehash": false,
+          "expected_error": "VIDEO_QUEUE_FINISH_ARGUMENT_INVALID"
+        }
+      ],
+      "optional_0059_variants": [
+        {
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,size_bytes}','1.5'::jsonb)",
+          "expected_sqlstate": "23514",
+          "expected_constraint": "video_job_terminal_size_check",
+          "rehash": true
+        },
+        {
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,0,size_bytes}','536870913'::jsonb)",
+          "expected_sqlstate": "23514",
+          "expected_constraint": "video_job_terminal_size_check",
+          "rehash": true
+        },
+        {
+          "mutation_sql": "jsonb_set($4::jsonb,'{artifact_manifest,artifacts,1,size_bytes}','8388609'::jsonb)",
+          "expected_sqlstate": "23514",
+          "expected_constraint": "video_job_terminal_size_check",
+          "rehash": true
+        }
+      ],
+      "barriers": [
+        "MUTATION_REHASH_COMPLETE",
+        "EXPECTED_REJECTION",
+        "ROLLBACK_TO_SAVEPOINT",
+        "SNAPSHOT_UNCHANGED",
+        "VALID_CANARY_FINISH"
+      ],
+      "expected": [
+        "All required SQL0058 artifact revision/size/receipt fields covered; fully rehashed semantic mutations must fail the intended condition, not an incidental stale hash. Missing container/hash cases deliberately remain raw. Positive fixture only becomes SQL-valid evidence after a real run. Successful canary never releases remainder; repeat with one-source subset to ensure CANARY_REVIEW and released_jobs=0 still hold."
+      ],
+      "assertions": [
+        "zero_release",
+        "immutable_snapshot",
+        "permanent_reservations",
+        "full_snapshot"
+      ]
+    }
+  ],
+  "sql_templates": {
+    "terminal_semantic_mutation_rehash": "WITH mutated AS (SELECT {{mutation_sql}} AS out), manifest_hash AS (SELECT out,encode(public.digest(convert_to(video_queue.canonical_json_text(out->'artifact_manifest'),'UTF8'),'sha256'),'hex') AS h FROM mutated), linked AS (SELECT jsonb_set(jsonb_set(out,'{artifact_manifest_sha256}',to_jsonb(h)),'{terminal_receipt,artifact_manifest_sha256}',to_jsonb(h)) AS out FROM manifest_hash), receipt_hash AS (SELECT out,encode(public.digest(convert_to(video_queue.canonical_json_text((out->'terminal_receipt')-'evidence_sha256'),'UTF8'),'sha256'),'hex') AS h FROM linked), ready AS (SELECT jsonb_set(jsonb_set(out,'{terminal_evidence_sha256}',to_jsonb(h)),'{terminal_receipt,evidence_sha256}',to_jsonb(h)) AS out FROM receipt_hash) SELECT f.* FROM ready CROSS JOIN LATERAL video_queue.finish_job($1::uuid,$2::uuid,$3::text,'REVIEW_READY',ready.out,NULL) f;",
+    "terminal_raw_mutation": "SELECT * FROM video_queue.finish_job($1::uuid,$2::uuid,$3::text,'REVIEW_READY',{{mutation_sql}},NULL);"
+  },
+  "required_evidence_before_pass": [
+    "Actual PostgreSQL test execution NOT_RUN at authoring time",
+    "Version and checksum-pinned future migration implementation",
+    "Real independent connections, actual role credentials and barrier/lock records",
+    "Assertions for every variant including rejection atomicity and no orphan persisted rows",
+    "Independent assurance >=I2; no production promotion inferred from synthetic fixture or offline pytest"
+  ],
+  "counts": {
+    "top_level_scenarios": 29,
+    "terminal_malformed_variants": 84
+  },
+  "review_freeze": {
+    "status": "FROZEN_FOR_REVIEW",
+    "scope": "Only this declarative JSON test plan changed in final reconciliation; no SQL execution or live I/O.",
+    "offline_checks": [
+      "JSON parsed",
+      "SQL parameter count/contiguity",
+      "assertion references",
+      "29 scenario bound",
+      "rich binding schema/digest aligned with admission_binding.py",
+      "managed-only retry invariant",
+      "observation consumption atomicity",
+      "freshness limitation explicitly documented",
+      "Immediate PK insertion covers absent source keys in canonical order",
+      "All reservation waits precede final freshness",
+      "READ COMMITTED conflict-owner lookup requires separate statement",
+      "C02 rollback/expired-waiter variant added"
+    ],
+    "postgres_test_status": "NOT_RUN"
+  }
+}

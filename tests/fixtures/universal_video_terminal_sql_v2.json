@@ -1,0 +1,174 @@
+{
+  "schema": "universal-video-terminal-sql-fixture/v2",
+  "synthetic_only": true,
+  "sql_executed": false,
+  "postgres_test_status": "NOT_RUN",
+  "proof_status": "SYNTHETIC_OFFLINE_ONLY",
+  "purpose": "A complete REVIEW_READY payload shaped for the real SQL0058 gate. It is not evidence of any source, artifact, lease, readback, publication, or PostgreSQL execution.",
+  "sql_sources": [
+    "database/migrations/0056_universal_video_queue.sql",
+    "database/migrations/0058_universal_video_terminal_v2_gate/001_apply_terminal_v2.sql",
+    "database/migrations/0058_universal_video_terminal_v2_gate/002_require_terminal_revisions.sql"
+  ],
+  "compatibility_notes": [
+    "SQL0058 is the terminal-v2 gate, but it requires terminal_receipt.schema_version universal-video-terminal-receipt/v1, not /v2.",
+    "The terminal_revision NOT VALID constraint still checks every newly inserted or updated REVIEW_READY row.",
+    "ASCII strings, booleans, null and integer numbers deliberately avoid unresolved cross-runtime Unicode/numeric canonicalization cases.",
+    "The embedded synthetic byte strings only make artifact sizes and hashes reproducible; they are not real rendered video-analysis deliverables.",
+    "All *_verified=true values inside the payload are synthetic test inputs, never real readback attestations.",
+    "The fixture uses null source checksum deliberately. SQL0058 compares null-safe; it does not establish source revision freshness.",
+    "Expected acceptance requires the exact synthetic batch/job identity below, an active matching lease, and no unrelated future guard failure. PostgreSQL acceptance has not been tested."
+  ],
+  "synthetic_artifact_bytes": {
+    "master_pdf": {
+      "encoding": "utf-8",
+      "text": "%PDF-1.4\n% Synthetic SQL contract fixture only; no video content.\n%%EOF\n"
+    },
+    "ai_done": {
+      "encoding": "utf-8",
+      "text": "{\"schema_version\":\"synthetic-sql-fixture/v1\",\"status\":\"SYNTHETIC_ONLY\",\"publication_state\":\"NOT_PUBLISHED\"}\n"
+    }
+  },
+  "queue_setup": {
+    "request_key": "sql0058-synthetic-terminal-v2",
+    "source_folder_id": "sourceFolder000001",
+    "output_folder_id": "outputFolder000001",
+    "work_folder_id": "workFolder00000001",
+    "processing_profile": "bridge_3_1_free",
+    "algorithm_revision": "3.1-free-r25.16",
+    "canary_source_file_id": "privateVideo00000001",
+    "files": [
+      {
+        "sequence": 1,
+        "file_id": "privateVideo00000001",
+        "name": "Lesson 1.mp4",
+        "mime_type": "video/mp4",
+        "size_bytes": 2000000,
+        "checksum": null
+      },
+      {
+        "sequence": 2,
+        "file_id": "privateVideo00000002",
+        "name": "Lesson 2.mp4",
+        "mime_type": "video/mp4",
+        "size_bytes": 2000000,
+        "checksum": null
+      }
+    ],
+    "inventory_sha256": "adb481b5179b84472ea45b2eb0efa3b9eaf1eed9082a1db89f9e82b923c4eceb"
+  },
+  "claim": {
+    "job_id": "00000000-0000-4000-8000-000000000001",
+    "batch_id": "00000000-0000-4000-8000-000000000100",
+    "lease_token": "00000000-0000-4000-8000-000000000200",
+    "attempt_count": 1,
+    "sequence": 1,
+    "is_canary": true,
+    "source_folder_id": "sourceFolder000001",
+    "output_folder_id": "outputFolder000001",
+    "work_folder_id": "workFolder00000001",
+    "processing_profile": "bridge_3_1_free",
+    "algorithm_revision": "3.1-free-r25.16",
+    "source_file_id": "privateVideo00000001",
+    "source_name": "Lesson 1.mp4",
+    "source_mime_type": "video/mp4",
+    "source_size_bytes": 2000000,
+    "source_checksum": null,
+    "stable_job_key": "c0ca840b130b6f61ed92dfa8a22c9b58"
+  },
+  "worker_key": "synthetic-worker",
+  "outcome": "REVIEW_READY",
+  "error_code": null,
+  "output": {
+    "result_mode": "SHADOW_REVIEW_ONLY",
+    "canonical_promotion_allowed": false,
+    "database_persistence_allowed": false,
+    "publication_state": "NOT_PUBLISHED",
+    "source_file_id": "privateVideo00000001",
+    "stable_job_key": "c0ca840b130b6f61ed92dfa8a22c9b58",
+    "algorithm_revision": "3.1-free-r25.16",
+    "master_pdf_drive_id": "syntheticMaster001",
+    "master_pdf_sha256": "c9b784fca0f40df1d9e4fbf99bbe4b191f56286d8e8aec3ee36efd9b9da92bb8",
+    "ai_done_drive_id": "syntheticAiDone001",
+    "ai_done_sha256": "99d427f37ed7b84589db8d3529fa4d97eb8c0a904e08115484fa10fcc9ace619",
+    "artifact_locators": {
+      "master_pdf": "syntheticMaster001",
+      "ai_done": "syntheticAiDone001"
+    },
+    "artifact_manifest": {
+      "schema_version": "universal-video-artifact-manifest/v1",
+      "job_id": "c0ca840b130b6f61ed92dfa8a22c9b58",
+      "source_file_id": "privateVideo00000001",
+      "algorithm_revision": "3.1-free-r25.16",
+      "result_mode": "SHADOW_REVIEW_ONLY",
+      "canonical_promotion_allowed": false,
+      "database_persistence_allowed": false,
+      "publication_state": "NOT_PUBLISHED",
+      "source_identity": {
+        "file_id": "privateVideo00000001",
+        "name": "Lesson 1.mp4",
+        "mime_type": "video/mp4",
+        "size_bytes": 2000000,
+        "parent_folder_id": "sourceFolder000001",
+        "checksum": null
+      },
+      "artifacts": [
+        {
+          "kind": "master_pdf",
+          "drive_id": "syntheticMaster001",
+          "locator": "gdrive:file:syntheticMaster001",
+          "name": "Synthetic review.pdf",
+          "mime_type": "application/pdf",
+          "parent_id": "outputFolder000001",
+          "size_bytes": 72,
+          "modified_time": "2026-10-12T12:00:01Z",
+          "version": "101",
+          "sha256": "c9b784fca0f40df1d9e4fbf99bbe4b191f56286d8e8aec3ee36efd9b9da92bb8"
+        },
+        {
+          "kind": "ai_done",
+          "drive_id": "syntheticAiDone001",
+          "locator": "gdrive:file:syntheticAiDone001",
+          "name": "AI_DONE_c0ca840b130b6f61ed92dfa8a22c9b58.json",
+          "mime_type": "application/json",
+          "parent_id": "outputFolder000001",
+          "size_bytes": 108,
+          "modified_time": "2026-10-12T12:00:02Z",
+          "version": "102",
+          "sha256": "99d427f37ed7b84589db8d3529fa4d97eb8c0a904e08115484fa10fcc9ace619"
+        }
+      ]
+    },
+    "artifact_manifest_sha256": "78807213ffb96f24a0193b8a9c833b853a44c63990930f19cb1602affcadff92",
+    "terminal_receipt": {
+      "schema_version": "universal-video-terminal-receipt/v1",
+      "status": "PASS",
+      "job_id": "c0ca840b130b6f61ed92dfa8a22c9b58",
+      "source_file_id": "privateVideo00000001",
+      "source_identity_verified": true,
+      "drive_readback_verified": true,
+      "result_readback_verified": true,
+      "checksum_verified": true,
+      "artifact_count": 2,
+      "artifact_manifest_sha256": "78807213ffb96f24a0193b8a9c833b853a44c63990930f19cb1602affcadff92",
+      "canonical_promotion_allowed": false,
+      "database_persistence_allowed": false,
+      "publication_state": "NOT_PUBLISHED",
+      "evidence_sha256": "a0d717f00212796c67f874382348bc9495166c302a98ee2dfe5635ef52e4898b"
+    },
+    "terminal_evidence_sha256": "a0d717f00212796c67f874382348bc9495166c302a98ee2dfe5635ef52e4898b"
+  },
+  "expected_sql_result": {
+    "job_status": "REVIEW_READY",
+    "batch_status": "CANARY_REVIEW",
+    "released_jobs": 0,
+    "pending_canary_jobs": 1
+  },
+  "sql_verification_plan": {
+    "status": "NOT_RUN",
+    "bind_parameters": "Supply fixture.output as $4::jsonb and the actual claimed job_id, lease_token and worker_key as $1..$3. Rebuild job-related fields/hashes only if the source identity changes; IDs allocated by PostgreSQL need not equal the illustrative claim UUIDs.",
+    "hash_assertions_sql": "SELECT encode(public.digest(convert_to(video_queue.canonical_json_text($1::jsonb->'artifact_manifest'),'UTF8'),'sha256'),'hex') = $1::jsonb->>'artifact_manifest_sha256' AS manifest_hash_matches, encode(public.digest(convert_to(video_queue.canonical_json_text(($1::jsonb->'terminal_receipt') - 'evidence_sha256'),'UTF8'),'sha256'),'hex') = $1::jsonb->>'terminal_evidence_sha256' AS receipt_hash_matches;",
+    "finish_sql": "SELECT * FROM video_queue.finish_job($1::uuid,$2::uuid,$3::text,'REVIEW_READY',$4::jsonb,NULL);",
+    "transaction_note": "Future disposable PostgreSQL test only: install the prerequisites, seed synthetic rows with valid server authorization, claim a canary, finish inside a transaction, verify immutable/reservation snapshots and zero release, then roll back or discard the disposable database. This JSON is not an executable test or migration."
+  }
+}
