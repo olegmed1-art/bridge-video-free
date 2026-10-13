@@ -25,6 +25,7 @@ from database import outbox_publisher as publisher
 
 
 CI_DSN = os.environ.get("DATABASE_URL", "")
+CI_ADMIN_DSN = os.environ.get("ADMIN_DATABASE_URL", "")
 REAL_CONNECT = psycopg.connect
 BLOCKED = {"publication_authorization_status": "blocked"}
 
@@ -44,16 +45,17 @@ class OutboxPublisherPostgresTests(unittest.TestCase):
                 or not CI_DSN
                 or not re.fullmatch(r"[0-9a-f]{40}", os.environ.get("OUTBOX_GUARD_SOURCE_SHA", ""))):
             raise RuntimeError("EXACT_EPHEMERAL_CI_DATABASE_AND_SOURCE_REQUIRED")
-        try:
-            route = conninfo_to_dict(CI_DSN)
-        except psycopg.ProgrammingError:
-            raise RuntimeError("EXACT_EPHEMERAL_CI_ROUTE_REQUIRED") from None
-        # Use the harness credential without copying or logging it in this test.
-        # Reject extra libpq route/options fields as well as any other endpoint.
-        route.pop("password", None)
-        if route != {"host": "localhost", "port": "5432",
-                     "dbname": "bridge_school_ci", "user": "bridge_ci_owner"}:
-            raise RuntimeError("EXACT_EPHEMERAL_CI_ROUTE_REQUIRED")
+        for dsn, principal in ((CI_DSN, "bridge_ci_owner"), (CI_ADMIN_DSN, "postgres")):
+            try:
+                route = conninfo_to_dict(dsn)
+            except psycopg.ProgrammingError:
+                raise RuntimeError("EXACT_EPHEMERAL_CI_ROUTE_REQUIRED") from None
+            # Use harness credentials without copying or logging them in this test.
+            # Reject extra libpq route/options fields as well as any other endpoint.
+            route.pop("password", None)
+            if route != {"host": "localhost", "port": "5432",
+                         "dbname": "bridge_school_ci", "user": principal}:
+                raise RuntimeError("EXACT_EPHEMERAL_CI_ROUTE_REQUIRED")
         with REAL_CONNECT(CI_DSN, connect_timeout=3) as conn:
             identity = conn.execute("SELECT current_database(),session_user,inet_server_port(),"
                                     "current_setting('server_version_num')::int").fetchone()
@@ -67,18 +69,31 @@ class OutboxPublisherPostgresTests(unittest.TestCase):
             evidence("ephemeral_identity", postgres_version_num=identity[3],
                      owner_is_superuser=False, worker_outbox_update=True,
                      worker_event_update=False)
+        with cls.connect(worker=True):
+            evidence("worker_session", session_and_current_user_are_worker=True,
+                     effective_role_is_superuser=False)
 
-    def connect(self, *, worker=False, autocommit=False, cursor_factory=psycopg.Cursor):
+    @classmethod
+    def connect(cls, *, worker=False, autocommit=False, cursor_factory=psycopg.Cursor):
         conn = REAL_CONNECT(
-            CI_DSN, connect_timeout=3, autocommit=autocommit,
+            CI_ADMIN_DSN if worker else CI_DSN, connect_timeout=3, autocommit=autocommit,
             options="-c statement_timeout=10000 -c lock_timeout=8000",
             cursor_factory=cursor_factory,
         )
-        if worker:
-            conn.execute("SET ROLE bridge_school_worker")
-            conn.commit()
-            assert conn.execute("SELECT current_user").fetchone()[0] == "bridge_school_worker"
-            conn.commit()
+        try:
+            if worker:
+                # The managed-style migration owner cannot SET ROLE worker.
+                # Reduce only this disposable admin session; do not grant membership
+                # or change any role/table ACL. All test SQL uses worker privileges.
+                conn.execute("SET SESSION AUTHORIZATION bridge_school_worker")
+                conn.commit()
+                identity = conn.execute("SELECT session_user,current_user,"
+                    "(SELECT rolsuper FROM pg_roles WHERE rolname=current_user)").fetchone()
+                assert identity == ("bridge_school_worker", "bridge_school_worker", False)
+                conn.commit()
+        except BaseException:
+            conn.close()
+            raise
         return conn
 
     def setUp(self):
