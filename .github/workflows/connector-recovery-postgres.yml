@@ -1,7 +1,7 @@
 name: Connector recovery disposable PostgreSQL 18
 on:
   push:
-    branches: [codex-connector-recovery-pg18-ci1]
+    branches: [codex-connector-recovery-pg18-ci2]
 permissions:
   contents: read
 concurrency:
@@ -14,7 +14,7 @@ jobs:
       github.event.repository.private == false &&
       github.actor == github.repository_owner &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/codex-connector-recovery-pg18-ci1' &&
+      github.ref == 'refs/heads/codex-connector-recovery-pg18-ci2' &&
       github.event.created == true && github.event.deleted == false &&
       github.event.forced == false && github.run_attempt == 1
     runs-on: ubuntu-24.04
@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 361ebd42899ce265e8bf7f50717fcda1641670e9
+          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = f8c50c8bb23928692297256dbf4f6dc611f6b09c
           mkdir -p "$RUNNER_TEMP/connector-recovery-evidence" "$RUNNER_TEMP/connector-recovery-home"
           git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/connector-recovery-evidence/source.txt"
           git diff --name-only HEAD^ HEAD > "$RUNNER_TEMP/connector-recovery-evidence/changed-files.txt"

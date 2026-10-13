@@ -119,8 +119,21 @@ def prepare(stage, out):
     state = query("SELECT jsonb_build_object('version',current_setting('server_version_num'),'owner',current_user,'schemas',(SELECT count(*) FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname NOT IN ('public','information_schema')),'public_tables',(SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'),'roles',(SELECT count(*) FROM pg_roles WHERE rolname !~ '^pg_' AND rolname<>'postgres'))", admin=True)
     assert 180000 <= int(state['version']) < 190000 and state['owner']=='postgres'
     assert state['schemas']==state['public_tables']==state['roles']==0
-    execute(["CREATE EXTENSION pgcrypto", "CREATE ROLE neondb_owner LOGIN PASSWORD 'neondb_owner' CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS",
+    execute(["CREATE EXTENSION pgcrypto WITH SCHEMA public", "CREATE ROLE neondb_owner LOGIN PASSWORD 'neondb_owner' CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION NOBYPASSRLS",
              'ALTER DATABASE neondb OWNER TO neondb_owner', 'ALTER SCHEMA public OWNER TO neondb_owner'],admin=True)
+    bootstrap=query("""SELECT jsonb_build_object(
+      'session_user',session_user,'current_user',current_user,
+      'superuser',(SELECT rolsuper FROM pg_roles WHERE rolname=current_user),
+      'createrole',(SELECT rolcreaterole FROM pg_roles WHERE rolname=current_user),
+      'pgcrypto_schema',(SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='pgcrypto'),
+      'pgcrypto_version',(SELECT extversion FROM pg_extension WHERE extname='pgcrypto'),
+      'public_digest_text',to_regprocedure('public.digest(text,text)') IS NOT NULL,
+      'public_digest_bytea',to_regprocedure('public.digest(bytea,text)') IS NOT NULL)""")
+    assert bootstrap['session_user']==bootstrap['current_user']=='neondb_owner'
+    assert bootstrap['createrole'] and not bootstrap['superuser']
+    assert bootstrap['pgcrypto_schema']=='public' and bootstrap['pgcrypto_version']=='1.4'
+    assert bootstrap['public_digest_text'] and bootstrap['public_digest_bytea']
+    write(out/'bootstrap-namespace-owner.json',bootstrap)
     execute(['CREATE ROLE bridge_school_reader NOLOGIN', 'CREATE ROLE bridge_school_app NOLOGIN',
              'CREATE ROLE bridge_school_worker NOLOGIN', 'CREATE ROLE synthetic_unlisted NOLOGIN',
              'GRANT bridge_school_reader TO bridge_school_app', 'GRANT bridge_school_app TO bridge_school_worker',
