@@ -1,7 +1,7 @@
 name: Managed owner disposable PostgreSQL 18
 on:
   push:
-    branches: [codex-managed-owner-pg18-ci1]
+    branches: [codex-managed-owner-pg18-ci2]
 permissions:
   contents: read
 concurrency:
@@ -14,7 +14,7 @@ jobs:
       github.event.repository.private == false &&
       github.actor == github.repository_owner &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/codex-managed-owner-pg18-ci1' &&
+      github.ref == 'refs/heads/codex-managed-owner-pg18-ci2' &&
       github.event.created == true && github.event.deleted == false &&
       github.event.forced == false && github.run_attempt == 1
     runs-on: ubuntu-24.04
@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = d49feb4cb333b041928a5d37efb56a9f97dd1822
+          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 1aecad68976ce63341340371edffc530710ca8b4
           mkdir -p "$RUNNER_TEMP/managed-owner-evidence" "$RUNNER_TEMP/managed-owner-home"
           git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/managed-owner-evidence/source.txt"
           git diff --name-only HEAD^ HEAD > "$RUNNER_TEMP/managed-owner-evidence/changed-files.txt"
@@ -69,7 +69,7 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y postgresql-client >/dev/null
           fi
-          python -m pip install 'pytest==8.4.2' 'requests==2.34.2' 'google-auth==2.61.0' 'PyYAML==6.0.3'
+          python -m pip install 'pytest==8.4.2' 'requests==2.34.2' 'google-auth==2.61.0' 'PyYAML==6.0.3' 'psycopg[binary]==3.3.4'
           python --version > "$RUNNER_TEMP/managed-owner-evidence/python.txt"
           psql --version > "$RUNNER_TEMP/managed-owner-evidence/psql.txt"
           python -m pip freeze > "$RUNNER_TEMP/managed-owner-evidence/packages.txt"

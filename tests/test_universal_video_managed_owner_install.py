@@ -360,7 +360,7 @@ def test_one_shot_ci_has_no_deploy_secrets_or_paid_storage():
     text = (ROOT / ".github/workflows/managed-owner-postgres.yml").read_text()
     workflow = yaml.safe_load(text)
     trigger = workflow.get("on", workflow.get(True))
-    assert trigger == {"push": {"branches": ["codex-managed-owner-pg18-ci1"]}}
+    assert trigger == {"push": {"branches": ["codex-managed-owner-pg18-ci2"]}}
     assert workflow["permissions"] == {"contents": "read"}
     assert set(workflow["jobs"]) == {"managed-owner"}
     job = workflow["jobs"]["managed-owner"]
