@@ -1,11 +1,15 @@
 import io
 import json
 import os
+import random
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from bridge_school_api import incident_db_probe as probe
+from bridge_school_api.incident_error_detail import (
+    MAX_MESSAGE_CHARS, MAX_REPORTED_ATTEMPTS, connection_error_detail, has_explicit_timeout,
+)
 
 
 SECRET = "synthetic-password-must-not-appear"
@@ -117,13 +121,13 @@ class IncidentProbeTests(unittest.TestCase):
         return conn, cursor
 
     def test_each_failure_phase_preserves_connection_established_fact(self):
-        for phase in ("connect", "query", "rollback", "close"):
+        for phase in ("connect", "transaction_setup", "query", "rollback", "close"):
             with self.subTest(phase=phase):
                 conn, cursor = self.fake_connection()
                 error = TimeoutError("synthetic timeout " + DSN)
                 if phase != "connect":
-                    target = cursor.execute if phase == "query" else getattr(conn, phase)
-                    target.side_effect = error
+                    target = cursor.execute if phase in {"transaction_setup", "query"} else getattr(conn, phase)
+                    target.side_effect = [None, error] if phase == "query" else error
                 with patch.object(probe.psycopg, "connect", return_value=conn,
                                   side_effect=error if phase == "connect" else None) as connect:
                     result = self.run_probe(connect=True)
@@ -144,9 +148,9 @@ class IncidentProbeTests(unittest.TestCase):
 
     def test_query_failure_is_not_replaced_by_cleanup_errors(self):
         conn, cursor = self.fake_connection()
-        cursor.execute.side_effect = RuntimeError("query timeout " + DSN)
-        conn.rollback.side_effect = RuntimeError("rollback timeout " + DSN)
-        conn.close.side_effect = RuntimeError("close timeout " + DSN)
+        cursor.execute.side_effect = [None, RuntimeError("query timed out " + DSN)]
+        conn.rollback.side_effect = RuntimeError("rollback timed out " + DSN)
+        conn.close.side_effect = RuntimeError("close timed out " + DSN)
         with patch.object(probe.psycopg, "connect", return_value=conn):
             result = self.run_probe(connect=True)
         self.assertEqual((result["phase"], result["status"]), ("query", "query_timeout"))
@@ -272,6 +276,23 @@ class IncidentProbeTests(unittest.TestCase):
                 self.assertEqual(result["diagnostic_markers"], expected)
                 self.assertNotIn(SECRET, json.dumps(result))
 
+    def test_aggregate_connect_hints_do_not_turn_parameter_names_into_timeouts(self):
+        message = aggregate([
+            (probe.PRODUCTION_HOST, '192.0.2.10', STARTUP + ' ' + SECRET),
+            (probe.PRODUCTION_HOST, '2001:db8::1', UNREACHABLE),
+        ])
+        with patch.object(probe.psycopg, 'connect', side_effect=probe.psycopg.OperationalError(message)):
+            result = self.run_probe(connect=True)
+        self.assertEqual(result['status'], 'connection_failed')
+        self.assertEqual(result['phase'], 'connect')
+        self.assertEqual(result['diagnostic_markers'], ['tcp'])
+        self.assertFalse(result['connected'])
+        self.assertEqual(result['error_detail']['reported_attempt_count'], 2)
+        self.assertEqual([a['reasons'] for a in result['error_detail']['attempts']],
+                         [['startup_parameter_rejected'], ['network_unreachable']])
+        for forbidden in ('192.0.2.10', '2001:db8::1', probe.PRODUCTION_HOST):
+            self.assertNotIn(forbidden, json.dumps(result))
+
     def test_sqlstate_presence_and_filtering_are_distinct(self):
         class StringSubclass(str):
             pass
@@ -299,7 +320,7 @@ class IncidentProbeTests(unittest.TestCase):
 
     def test_markers_preserve_primary_and_cleanup_error_evidence(self):
         conn, cursor = self.fake_connection()
-        cursor.execute.side_effect = RuntimeError("statement timeout " + DSN)
+        cursor.execute.side_effect = [None, RuntimeError("canceling statement due to statement timeout " + DSN)]
         conn.rollback.side_effect = RuntimeError("SSL error: " + DSN)
         conn.close.side_effect = RuntimeError("Connection refused " + DSN)
         with patch.object(probe.psycopg, "connect", return_value=conn):
@@ -309,12 +330,13 @@ class IncidentProbeTests(unittest.TestCase):
                          [("rollback", ["tls"]), ("close", ["tcp"])])
 
     def test_cli_marker_fields_never_emit_raw_diagnostics(self):
-        for phase in ("connect", "query", "rollback", "close"):
+        for phase in ("connect", "transaction_setup", "query", "rollback", "close"):
             conn, cursor = self.fake_connection()
             error = RuntimeError('could not translate host name "test.invalid": SSL error: ' + DSN + " 203.0.113.7")
             error.sqlstate = "28P01\n" + SECRET
             if phase != "connect":
-                (cursor.execute if phase == "query" else getattr(conn, phase)).side_effect = error
+                target = cursor.execute if phase in {"transaction_setup", "query"} else getattr(conn, phase)
+                target.side_effect = [None, error] if phase == "query" else error
             with self.subTest(phase=phase), \
                  patch.dict(os.environ, {"VERCEL_ENV": "production", "BRIDGE_APP_DATABASE_URL": DSN}, clear=True), \
                  patch("sys.argv", ["incident_db_probe", "--connect"]), \
@@ -323,7 +345,7 @@ class IncidentProbeTests(unittest.TestCase):
                  redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
                 self.assertEqual(probe.main(), 1)
             payload = json.loads(out.getvalue())
-            self.assertEqual(payload["probe"], "incident-1911-v4")
+            self.assertEqual(payload["probe"], "incident-1911-v5")
             self.assertEqual(payload["phase"], phase)
             self.assertEqual(payload["diagnostic_markers"], ["dns", "tls"])
             self.assertTrue(payload["sqlstate_present"])
@@ -335,8 +357,8 @@ class IncidentProbeTests(unittest.TestCase):
 
     def test_elapsed_distinguishes_failure_phase_from_cleanup(self):
         conn, cursor = self.fake_connection()
-        cursor.execute.side_effect = RuntimeError("timeout")
-        ticks = [0, 2, 5, 6, 7, 11]  # start, query, failure, rollback, close, end
+        cursor.execute.side_effect = [None, RuntimeError("timed out")]
+        ticks = [0, 1, 2, 5, 6, 7, 11]  # start, setup, query, failure, rollback, close, end
         with patch.object(probe.psycopg, "connect", return_value=conn), \
              patch.object(probe.time, "monotonic_ns", side_effect=[n * 1_000_000 for n in ticks]):
             result = self.run_probe(connect=True)
@@ -349,11 +371,12 @@ class IncidentProbeTests(unittest.TestCase):
                 self.assertEqual(probe._elapsed_ms(0), expected)
 
     def test_cli_phase_errors_fail_without_stdout_or_stderr_leaks(self):
-        for phase in ("connect", "query", "rollback", "close"):
+        for phase in ("connect", "transaction_setup", "query", "rollback", "close"):
             conn, cursor = self.fake_connection()
             error = RuntimeError("timeout " + DSN)
             if phase != "connect":
-                (cursor.execute if phase == "query" else getattr(conn, phase)).side_effect = error
+                target = cursor.execute if phase in {"transaction_setup", "query"} else getattr(conn, phase)
+                target.side_effect = [None, error] if phase == "query" else error
             with self.subTest(phase=phase), \
                  patch.dict(os.environ, {"VERCEL_ENV": "production", "BRIDGE_APP_DATABASE_URL": DSN}, clear=True), \
                  patch("sys.argv", ["incident_db_probe", "--connect"]), \
@@ -398,11 +421,12 @@ class IncidentProbeTests(unittest.TestCase):
             self.assertEqual(self.run_probe(connect=True)["status"], "pass")
             connect.assert_called_once_with(
                 DSN, connect_timeout=10, application_name="incident-1911-readonly-probe",
-                options="-c default_transaction_read_only=on -c statement_timeout=5000",
             )
-            conn.cursor.return_value.__enter__.return_value.execute.assert_called_once_with(
-                "SELECT current_user, current_database(), current_setting('transaction_read_only')"
-            )
+            self.assertIs(conn.read_only, True)
+            self.assertEqual(conn.cursor.return_value.__enter__.return_value.execute.call_args_list, [
+                call("SET LOCAL statement_timeout = 5000"),
+                call("SELECT current_user, current_database(), current_setting('transaction_read_only')"),
+            ])
             conn.rollback.assert_called_once()
             conn.close.assert_called_once()
             conn.commit.assert_not_called()
@@ -413,6 +437,300 @@ class IncidentProbeTests(unittest.TestCase):
         conn.cursor.return_value.__enter__.return_value.fetchone.return_value = ("neondb_owner", probe.EXPECTED_DATABASE, "off")
         with patch.object(probe.psycopg, "connect", return_value=conn):
             self.assertEqual(self.run_probe(connect=True)["status"], "session_contract_failed")
+
+
+
+HOST = 'synthetic-pooler.invalid'
+BANNER = 'Multiple connection attempts failed. All failures were:'
+STARTUP = 'connection failed: ERROR: unsupported startup parameter in options: statement_timeout'
+UNREACHABLE = 'connection is bad: Network is unreachable'
+
+
+def aggregate(attempts):
+    # The documented psycopg 3.3.4 aggregation: final error, then all failures.
+    return '\n'.join([attempts[-1][2], BANNER] + [
+        f'- host: {host!r}, port: {"5432"!r}, hostaddr: {address!r}: {body}'
+        for host, address, body in attempts])
+
+
+class DetailTests(unittest.TestCase):
+    def parse(self, message, **kwargs):
+        result = connection_error_detail(message, expected_host=HOST, **kwargs)
+        rendered = json.dumps(result)
+        for secret in (HOST, '192.0.2.10', '2001:db8::1', 'CANARY_secret_928', 'postgresql://'):
+            self.assertNotIn(secret, rendered)
+        return result
+
+    def test_startup_ipv4_unreachable_ipv6_separated_and_prefix_not_counted(self):
+        result = self.parse(aggregate([(HOST, '192.0.2.10', STARTUP),
+                                       (HOST, '2001:db8::1', UNREACHABLE)]))
+        self.assertEqual(result['aggregate_format'], 'multiple')
+        self.assertEqual(result['reported_attempt_count'], 2)
+        first, last = result['attempts']
+        self.assertEqual(first['family'], 'ipv4')
+        self.assertTrue(first['host_matches_expected'])
+        self.assertEqual(first['reasons'], ['startup_parameter_rejected'])
+        self.assertEqual(first['startup_parameters'], ['statement_timeout'])
+        self.assertEqual(first['timeout_evidence'], 'identifier_only')
+        self.assertEqual(last['family'], 'ipv6')
+        self.assertEqual(last['reasons'], ['network_unreachable'])
+        self.assertEqual(last['timeout_evidence'], 'none')
+
+    def test_order_and_duplicate_addresses_are_preserved(self):
+        cases = [(HOST, '2001:db8::1', UNREACHABLE), (HOST, '192.0.2.10', STARTUP),
+                 (HOST, '192.0.2.10', 'connection refused')]
+        result = self.parse(aggregate(cases))
+        self.assertEqual(result['reported_attempt_count'], 3)
+        self.assertEqual([x['family'] for x in result['attempts']], ['ipv6', 'ipv4', 'ipv4'])
+        self.assertEqual([x['ordinal'] for x in result['attempts']], [1, 2, 3])
+
+    def test_single_message_does_not_invent_address_attempts(self):
+        result = self.parse('connection to server at "' + HOST + '" (192.0.2.10), port 5432 failed: timed out')
+        self.assertEqual(result['aggregate_format'], 'single')
+        self.assertIsNone(result['reported_attempt_count'])
+        self.assertEqual(result['attempts'], [])
+        self.assertEqual(result['message_hints']['reasons'], ['explicit_timeout'])
+
+    def test_identifiers_and_token_are_not_expiration(self):
+        for message, expected in [('statement_timeout', 'identifier_only'),
+                                  ('connect_timeout=10', 'identifier_only'),
+                                  ('timeout', 'token_only'), ('timeout setting invalid', 'token_only'),
+                                  ('connection timeout setting invalid', 'token_only'),
+                                  ('statement_timeout expired', 'identifier_only')]:
+            with self.subTest(message=message):
+                result = self.parse(message)
+                self.assertFalse(has_explicit_timeout(message))
+                self.assertEqual(result['message_hints']['timeout_evidence'], expected)
+                self.assertEqual(result['message_hints']['reasons'], ['unknown'])
+
+    def test_explicit_timeout_and_exception_type_are_distinguished(self):
+        for message in ('timeout expired', 'Connection timed out', 'canceling statement due to statement timeout'):
+            self.assertEqual(self.parse(message)['message_hints']['timeout_evidence'], 'explicit_phrase')
+        result = self.parse('CANARY_secret_928', timeout_exception=True)
+        self.assertEqual(result['message_hints']['timeout_evidence'], 'exception_type')
+        result = self.parse(aggregate([(HOST, '192.0.2.10', STARTUP),
+                                      (HOST, '2001:db8::1', 'CANARY_secret_928')]), timeout_exception=True)
+        self.assertEqual(result['message_hints']['timeout_evidence'], 'exception_type')
+        self.assertEqual(result['attempts'][0]['timeout_evidence'], 'identifier_only')
+        self.assertEqual(result['attempts'][1]['timeout_evidence'], 'none')
+
+    def test_startup_parameters_are_allowlisted(self):
+        for parameter, expected in [('statement_timeout', 'statement_timeout'),
+                                    ('default_transaction_read_only', 'default_transaction_read_only'),
+                                    ('CANARY_secret_928', 'other'), ('', 'unknown')]:
+            result = self.parse('unsupported startup parameter in options: ' + parameter)
+            self.assertEqual(result['message_hints']['startup_parameters'], [expected])
+        self.assertEqual(self.parse('default_transaction_read_only=on')['message_hints']['startup_parameters'], [])
+
+    def test_aggregate_with_multiline_errors_and_crlf(self):
+        body = STARTUP + '\nDETAIL: CANARY_secret_928\n'
+        text = aggregate([(HOST, '192.0.2.10', body), (HOST, '2001:db8::1', UNREACHABLE)])
+        self.assertEqual(self.parse(text.replace('\n', '\r\n'))['reported_attempt_count'], 2)
+
+    def test_unknown_family_host_and_escaped_repr(self):
+        text = aggregate([('other.invalid', None, 'unknown'), (HOST, 'not-an-ip', 'unknown'),
+                          ('quote\'\\CANARY_secret_928', 'fe80::1%CANARY_secret_928', 'unknown')])
+        result = self.parse(text)
+        self.assertEqual(result['reported_attempt_count'], 3)
+        self.assertEqual([x['family'] for x in result['attempts']], ['unknown'] * 3)
+        self.assertEqual([x['host_matches_expected'] for x in result['attempts']], [False, True, False])
+
+    def test_broken_or_ambiguous_framing_fails_closed(self):
+        valid = aggregate([(HOST, '192.0.2.10', STARTUP), (HOST, '2001:db8::1', UNREACHABLE)])
+        cases = [valid.replace(BANNER, BANNER + '\n' + BANNER),
+                 valid.replace('All failures were:', 'Different version:'),
+                 valid.replace("port: '5432'", "port: 'CANARY_secret_928'", 1),
+                 valid.replace('- host:', '- host', 1),
+                 valid.replace('hostaddr:', 'different_field:', 1),
+                 'prefix mismatch\n' + valid,
+                 aggregate([(HOST, '192.0.2.10', STARTUP)]),
+                 valid.replace(BANNER + '\n', BANNER + '\nforeign preamble\n')]
+        for message in cases:
+            with self.subTest(message=message):
+                result = self.parse(message)
+                self.assertEqual(result['aggregate_format'], 'unrecognized')
+                self.assertIsNone(result['reported_attempt_count'])
+                self.assertEqual(result['attempts'], [])
+
+    def test_controls_nonstring_size_and_attempt_limits(self):
+        for message in (None, 'x' * (MAX_MESSAGE_CHARS + 1), '\x00timed out', '\u2028timed out', '\rbroken'):
+            result = self.parse(message)
+            self.assertEqual(result['aggregate_format'], 'unrecognized')
+            self.assertEqual(result['attempts'], [])
+        for count in (MAX_REPORTED_ATTEMPTS, MAX_REPORTED_ATTEMPTS + 1):
+            result = self.parse(aggregate([(HOST, '192.0.2.10', 'connection refused')] * count))
+            self.assertEqual(result['reported_attempt_count'], count if count == MAX_REPORTED_ATTEMPTS else None)
+        self.assertEqual(self.parse('x' * MAX_MESSAGE_CHARS)['aggregate_format'], 'single')
+
+    def test_fixed_reason_categories_and_redaction(self):
+        text = ('postgresql://CANARY_secret_928@' + HOST + '/private\nconnection refused\n'
+                'network is unreachable\nno route to host\nconnection reset by peer\n'
+                'certificate verify failed\nchannel binding required\nauthentication failed\n'
+                'could not translate host name\nunsupported startup parameter: CANARY_secret_928')
+        result = self.parse(text)
+        self.assertEqual(result['message_hints']['reasons'], [
+            'network_unreachable', 'no_route', 'refused', 'reset', 'dns', 'tls',
+            'channel_binding', 'auth', 'startup_parameter_rejected'])
+
+    def test_deterministic_malformed_text_never_copies_input(self):
+        rng = random.Random(1911)
+        for _ in range(100):
+            text = 'CANARY_secret_928' + ''.join(rng.choice("ab'\\:\n\r-()123") for _ in range(100))
+            self.parse(text)
+
+
+
+SET = 'SET LOCAL statement_timeout = 5000'
+SELECT = "SELECT current_user, current_database(), current_setting('transaction_read_only')"
+
+
+class OrderedConnection:
+    def __init__(self, driver, events, row, faults=()):
+        self.driver, self.events, self.row, self.faults = driver, events, row, faults
+        self._read_only = None
+
+    def event(self, name):
+        self.events.append(name)
+        if name in self.faults:
+            raise self.driver.OperationalError(SECRET)
+
+    @property
+    def read_only(self):
+        return self._read_only
+
+    @read_only.setter
+    def read_only(self, value):
+        if value is not True:
+            raise AssertionError('read_only must be true')
+        self.event('read_only')
+        self._read_only = value
+
+    def cursor(self):
+        self.event('cursor')
+        connection = self
+
+        class Cursor:
+            def __enter__(self):
+                connection.event('cursor_enter')
+                return self
+
+            def __exit__(self, *args):
+                connection.event('cursor_exit')
+                return False
+
+            def execute(self, sql):
+                if connection.read_only is not True:
+                    raise AssertionError('statement before read_only')
+                if sql not in (SET, SELECT):
+                    raise AssertionError('unexpected SQL')
+                connection.event('set_local' if sql == SET else 'select')
+
+            def fetchone(self):
+                connection.event('fetch')
+                return connection.row
+
+        return Cursor()
+
+    def rollback(self):
+        self.event('rollback')
+
+    def close(self):
+        self.event('close')
+
+    def commit(self):
+        raise AssertionError('commit forbidden')
+
+
+
+class TransactionTests(unittest.TestCase):
+    setUp = IncidentProbeTests.setUp
+    run_probe = IncidentProbeTests.run_probe
+    driver = probe.psycopg
+
+    def run_case(self, faults=(), row=None):
+        events = []
+        if row is None:
+            row = (probe.EXPECTED_PRINCIPAL, probe.EXPECTED_DATABASE, "on")
+        conn = OrderedConnection(self.driver, events, row, faults)
+
+        def connect(*args, **kwargs):
+            conn.event('connect')
+            return conn
+
+        with patch.object(self.driver, 'connect', side_effect=connect) as connect_call:
+            result = self.run_probe(connect=True)
+        connect_call.assert_called_once_with(DSN, connect_timeout=10,
+                                             application_name='incident-1911-readonly-probe')
+        return result, events
+
+    def test_success_order_and_no_startup_options(self):
+        result, events = self.run_case()
+        self.assertEqual(events, ['connect', 'read_only', 'cursor', 'cursor_enter',
+                                  'set_local', 'select', 'fetch', 'cursor_exit', 'rollback', 'close'])
+        self.assertEqual(result['status'], 'pass')
+        self.assertEqual(result['probe'], 'incident-1911-v5')
+
+    def test_connect_failure_has_parser_and_no_transaction_or_cleanup(self):
+        # Startup rejection is only synthetic input here, never a live diagnosis.
+        events = []
+        error = self.driver.OperationalError('unsupported startup parameter in options: statement_timeout')
+        def connect(*args, **kwargs):
+            events.append('connect')
+            raise error
+        with patch.object(self.driver, 'connect', side_effect=connect) as call:
+            result = self.run_probe(connect=True)
+        call.assert_called_once()
+        self.assertEqual(events, ['connect'])
+        self.assertFalse(result['connected'])
+        self.assertEqual(result['phase'], 'connect')
+        self.assertEqual(result['status'], 'connection_failed')
+        self.assertEqual(result['error_detail']['message_hints']['startup_parameters'], ['statement_timeout'])
+
+    def test_setup_failure_never_reaches_select_and_always_cleans_up(self):
+        for fault in ('read_only', 'cursor', 'cursor_enter', 'set_local'):
+            with self.subTest(fault=fault):
+                result, events = self.run_case((fault,))
+                self.assertEqual(result['phase'], 'transaction_setup')
+                self.assertEqual(result['status'], 'transaction_setup_failed')
+                self.assertTrue(result['connected'])
+                self.assertNotIn('select', events)
+                self.assertNotIn('fetch', events)
+                self.assertEqual(events[-2:], ['rollback', 'close'])
+                self.assertEqual(events.count('rollback'), 1)
+                self.assertEqual(events.count('close'), 1)
+                self.assertNotIn('error_detail', result)
+
+    def test_select_and_fetch_failure_preserve_query_phase(self):
+        for fault in ('select', 'fetch', 'cursor_exit'):
+            with self.subTest(fault=fault):
+                result, events = self.run_case((fault,))
+                self.assertEqual(result['phase'], 'query')
+                self.assertEqual(result['status'], 'query_failed')
+                self.assertEqual(events[-2:], ['rollback', 'close'])
+
+    def test_setup_failure_is_primary_when_both_cleanup_operations_fail(self):
+        result, events = self.run_case(('set_local', 'rollback', 'close'))
+        self.assertEqual(result['phase'], 'transaction_setup')
+        self.assertEqual([x['phase'] for x in result['cleanup_errors']], ['rollback', 'close'])
+        self.assertNotIn('select', events)
+        self.assertEqual(events.count('rollback'), 1)
+        self.assertEqual(events.count('close'), 1)
+
+    def test_cleanup_failure_after_success_never_commits_or_reports_pass(self):
+        for faults, phase, secondary in [(('rollback',), 'rollback', []),
+                                         (('close',), 'close', []),
+                                         (('rollback', 'close'), 'rollback', ['close'])]:
+            with self.subTest(faults=faults):
+                result, events = self.run_case(faults)
+                self.assertEqual(result['phase'], phase)
+                self.assertEqual(result['status'], phase + '_failed')
+                self.assertEqual([x['phase'] for x in result['cleanup_errors']], secondary)
+                self.assertEqual(events[-2:], ['rollback', 'close'])
+
+    def test_read_only_off_is_a_contract_failure_with_cleanup(self):
+        result, events = self.run_case(row=(probe.EXPECTED_PRINCIPAL, probe.EXPECTED_DATABASE, 'off'))
+        self.assertEqual(result['status'], 'session_contract_failed')
+        self.assertEqual(events[-2:], ['rollback', 'close'])
 
 
 if __name__ == "__main__":

@@ -23,6 +23,10 @@ from bridge_school_api.db import (
     database_dsn,
 )
 
+from bridge_school_api.incident_error_detail import (
+    MAX_MESSAGE_CHARS, connection_error_detail, has_explicit_timeout,
+)
+
 
 _SAFE_SQLSTATES = frozenset({
     "08000", "08001", "08003", "08004", "08006", "08007", "08P01",
@@ -53,7 +57,7 @@ _DIAGNOSTIC_PHRASES = (
                 "database system is shutting down", "database system is in recovery mode",
                 "terminating connection due to administrator command", "too many connections",
                 "remaining connection slots are reserved")),
-    ("timeout", ("timeout expired", "timed out", "statement timeout", "connection timeout")),
+    ("timeout", ()),  # Added only for an explicit expiration phrase or timeout type.
 )
 
 
@@ -66,7 +70,7 @@ def _diagnostic_markers(message: str, exc: Exception, sqlstate: str | None) -> l
         found.add("auth")
     if sqlstate in {"53300", "53400", "57P01", "57P02", "57P03"}:
         found.add("server")
-    if isinstance(exc, (TimeoutError, psycopg.errors.ConnectionTimeout)):
+    if isinstance(exc, (TimeoutError, psycopg.errors.ConnectionTimeout)) or has_explicit_timeout(message):
         found.add("timeout")
     # No arbitrary message, host, address, SQLSTATE or exception name is copied.
     return [marker for marker, _ in _DIAGNOSTIC_PHRASES if marker in found] or ["unknown"]
@@ -93,27 +97,35 @@ def _failure(exc: Exception, phase: str, started_ns: int) -> dict[str, object]:
     sqlstate_filtered = sqlstate_unreadable or (sqlstate_present and sqlstate is None)
     exception_class = next((name for kind, name in _SAFE_EXCEPTION_CLASSES if isinstance(exc, kind)), "Exception")
     try:
-        message = str(exc).lower()
+        raw_message = str(exc)
+        message = raw_message.lower() if len(raw_message) <= MAX_MESSAGE_CHARS else ""
     except Exception:
+        raw_message = None
         message = ""
     prefix = "connection" if phase == "connect" else phase
     status = prefix + "_failed"
     if phase == "connect" and (sqlstate in {"28000", "28P01"} or "authentication failed" in message):
         status = "authentication_failed"
-    elif isinstance(exc, (TimeoutError, psycopg.errors.ConnectionTimeout)) or "timeout" in message or "timed out" in message:
+    elif isinstance(exc, (TimeoutError, psycopg.errors.ConnectionTimeout)) or has_explicit_timeout(message):
         status = prefix + "_timeout"
     # Categories remain hints. The phase identifies a code operation, never a
     # proven DNS/TCP/TLS/authentication substage of psycopg.connect().
-    return {"status": status, "phase": phase, "phase_elapsed_ms": _elapsed_ms(started_ns),
+    failure = {"status": status, "phase": phase, "phase_elapsed_ms": _elapsed_ms(started_ns),
             "exception_class": exception_class, "sqlstate": sqlstate,
             "sqlstate_present": sqlstate_present, "sqlstate_filtered": sqlstate_filtered,
             "diagnostic_markers": _diagnostic_markers(message, exc, sqlstate)}
+    if phase == "connect":
+        failure["error_detail"] = connection_error_detail(
+            raw_message, expected_host=PRODUCTION_HOST,
+            timeout_exception=isinstance(exc, (TimeoutError, psycopg.errors.ConnectionTimeout)),
+        )
+    return failure
 
 
 def probe(connect: bool = False) -> dict[str, object]:
     # connected records successful return from connect(), not an open session at
     # report time. Cleanup is attempted for every established connection.
-    result: dict[str, object] = {"probe": "incident-1911-v4", "connected": False}
+    result: dict[str, object] = {"probe": "incident-1911-v5", "connected": False}
     if os.environ.get("VERCEL_ENV") != "production":
         return {**result, "status": "production_environment_required"}
     if any(key.startswith("PG") for key in os.environ):
@@ -167,12 +179,19 @@ def probe(connect: bool = False) -> dict[str, object]:
             dsn,
             connect_timeout=10,
             application_name="incident-1911-readonly-probe",
-            options="-c default_transaction_read_only=on -c statement_timeout=5000",
         )
         result["connected"] = True
-        phase = "query"
+        phase = "transaction_setup"
         phase_started_ns = time.monotonic_ns()
+        # With autocommit=False, psycopg starts BEGIN READ ONLY before the
+        # first cursor command, without transaction settings in startup options.
+        conn.read_only = True
         with conn.cursor() as cur:
+            # BEGIN/SET rely on the existing outer watchdog. The 5000 ms limit
+            # protects the SELECT after SET LOCAL applies in this transaction.
+            cur.execute("SET LOCAL statement_timeout = 5000")
+            phase = "query"
+            phase_started_ns = time.monotonic_ns()
             cur.execute("SELECT current_user, current_database(), current_setting('transaction_read_only')")
             row = cur.fetchone()
         if row != (EXPECTED_PRINCIPAL, EXPECTED_DATABASE, "on"):
