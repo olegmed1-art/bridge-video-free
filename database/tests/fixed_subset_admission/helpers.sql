@@ -10,14 +10,14 @@ CREATE TABLE admission_test.probe_control (
 );
 CREATE FUNCTION admission_test.probe() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,admission_test AS $$
-DECLARE c admission_test.probe_control%ROWTYPE; payload jsonb;
+DECLARE v_control admission_test.probe_control%ROWTYPE; v_payload jsonb;
 BEGIN
-    payload := CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
-    SELECT * INTO c FROM admission_test.probe_control
-      WHERE backend_pid=pg_backend_pid() AND relation_name=TG_TABLE_NAME
-        AND operation=TG_OP;
-    IF FOUND AND payload @> c.match_fields THEN
-        IF c.action='FAULT' THEN
+    v_payload := CASE WHEN TG_OP='DELETE' THEN to_jsonb(OLD) ELSE to_jsonb(NEW) END;
+    SELECT q_control.* INTO v_control FROM admission_test.probe_control AS q_control
+      WHERE q_control.backend_pid=pg_backend_pid() AND q_control.relation_name=TG_TABLE_NAME
+        AND q_control.operation=TG_OP;
+    IF FOUND AND v_payload @> v_control.match_fields THEN
+        IF v_control.action='FAULT' THEN
             RAISE EXCEPTION 'ADMISSION_TEST_INJECTED_FAULT' USING ERRCODE='P0001';
         END IF;
         -- Controller holds this test-only session lock. The production admission
