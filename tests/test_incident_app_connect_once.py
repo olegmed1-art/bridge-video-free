@@ -94,10 +94,11 @@ class ProbeTests(unittest.TestCase):
             result, output = self.run_probe(True)
         self.assertEqual(observed, ['incident-1911-runtime-v1'])
         call.assert_called_once_with(self.dsn, connect_timeout=10,
-            application_name='incident-1911-readonly-probe',
-            options='-c default_transaction_read_only=on -c statement_timeout=5000')
-        conn.cursor.return_value.__enter__.return_value.execute.assert_called_once_with(
-            "SELECT current_user, current_database(), current_setting('transaction_read_only')")
+            application_name='incident-1911-readonly-probe')
+        self.assertTrue(conn.read_only)
+        self.assertEqual(conn.cursor.return_value.__enter__.return_value.execute.call_args_list,
+            [unittest.mock.call('SET LOCAL statement_timeout = 5000'),
+             unittest.mock.call("SELECT current_user, current_database(), current_setting('transaction_read_only')")])
         conn.rollback.assert_called_once_with()
         conn.close.assert_called_once_with()
         conn.commit.assert_not_called()
@@ -140,7 +141,7 @@ class ProbeTests(unittest.TestCase):
 
     def test_query_failure_and_cleanup_errors_are_redacted(self):
         conn = self.connection()
-        conn.cursor.return_value.__enter__.return_value.execute.side_effect = self.driver.Error(SECRET)
+        conn.cursor.return_value.__enter__.return_value.execute.side_effect = [None, self.driver.Error(SECRET)]
         conn.rollback.side_effect = self.driver.Error(SECRET)
         conn.close.side_effect = self.driver.Error(SECRET)
         with patch.object(self.driver, 'connect', return_value=conn):
@@ -202,6 +203,55 @@ class ProbeTests(unittest.TestCase):
                  isinstance(x.func, ast.Attribute) and isinstance(x.func.value, ast.Name) and
                  x.func.value.id == 'psycopg' and x.func.attr == 'connect']
         self.assertEqual(len(calls), 1)
+
+    def test_startup_option_error_is_not_a_timeout_and_never_retries(self):
+        for message in ('unsupported startup parameter in options: statement_timeout',
+                        'connect_timeout setting invalid', 'timeout setting invalid'):
+            with patch.object(self.driver, 'connect', side_effect=self.driver.OperationalError(message)) as call:
+                result, _ = self.run_probe(True)
+            call.assert_called_once()
+            self.assertFalse(result['connected'])
+            self.assertEqual(result['status'], 'connection_failed')
+            self.assertNotIn('timeout', result['diagnostic_markers'])
+            self.assertEqual(result['error_detail']['attempts'], [])
+
+    def test_actual_timeout_hints_still_set_timeout_status(self):
+        for error in (self.driver.OperationalError('timeout expired'),
+                      self.driver.errors.ConnectionTimeout(SECRET), TimeoutError(SECRET)):
+            with patch.object(self.driver, 'connect', side_effect=error):
+                result, _ = self.run_probe(True)
+            self.assertEqual(result['status'], 'connection_timeout')
+            self.assertIn('timeout', result['diagnostic_markers'])
+
+    def test_aggregate_details_survive_redaction_but_not_unrelated_query_phase(self):
+        from test_incident_error_detail import aggregate, STARTUP, UNREACHABLE
+        error = self.driver.OperationalError(aggregate([
+            (self.probe.PRODUCTION_HOST, '192.0.2.10', STARTUP),
+            (self.probe.PRODUCTION_HOST, '2001:db8::1', UNREACHABLE)]))
+        with patch.object(self.driver, 'connect', side_effect=error):
+            result, _ = self.run_probe(True)
+        self.assertEqual(result['status'], 'connection_failed')
+        self.assertEqual(result['diagnostic_markers'], ['tcp'])
+        self.assertEqual(result['error_detail']['reported_attempt_count'], 2)
+        self.assertEqual([x['family'] for x in result['error_detail']['attempts']], ['ipv4', 'ipv6'])
+        conn = self.connection()
+        conn.cursor.return_value.__enter__.return_value.execute.side_effect = [None, error]
+        with patch.object(self.driver, 'connect', return_value=conn):
+            result, _ = self.run_probe(True)
+        self.assertNotIn('error_detail', result)
+        conn.rollback.assert_called_once()
+        conn.close.assert_called_once()
+
+    def test_unreadable_and_oversized_exception_messages_are_safe(self):
+        class Unreadable(self.driver.OperationalError):
+            def __str__(self):
+                raise RuntimeError(SECRET)
+        for error, issue in ((Unreadable(), 'unreadable_input'),
+                             (self.driver.OperationalError('timed out ' + SECRET * 2000), 'input_limit')):
+            with patch.object(self.driver, 'connect', side_effect=error):
+                result, _ = self.run_probe(True)
+            self.assertEqual(result['status'], 'connection_failed')
+            self.assertEqual(result['error_detail']['parse_issue'], issue)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,64 @@
+name: Incident 1911 one read-only transaction
+on: create
+permissions:
+  contents: read
+jobs:
+  readonly_transaction_once:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.event.repository.full_name == 'olegmed1-art/bridge-video-free' &&
+      github.event_name == 'create' && github.event.ref_type == 'branch' &&
+      github.event.ref == 'codex-incident-1911-readonly-tx-once-20261013' &&
+      github.ref_name == 'codex-incident-1911-readonly-tx-once-20261013' &&
+      github.ref == 'refs/heads/codex-incident-1911-readonly-tx-once-20261013' &&
+      github.workflow_sha == github.sha && github.run_number == 1 && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Checkout exact event commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up the previously observed application Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12.15'
+          check-latest: false
+      - name: Verify synthetic diagnostic boundaries without a secret
+        shell: bash
+        run: |
+          PYTHONPATH="$PWD:$PWD/tests" python -B -m unittest \
+            test_incident_error_detail.DetailTests \
+            test_incident_app_connect_once.ProbeTests \
+            test_incident_readonly_transaction.TransactionTests
+      - name: Prepare isolated pinned client without a secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python -m venv .incident-app-client
+          timeout --kill-after=2s 20s .incident-app-client/bin/python -m pip --isolated install \
+            --disable-pip-version-check --no-cache-dir --no-index --no-deps \
+            --only-binary=:all: --require-hashes --retries 0 --timeout 5 \
+            -r scripts/diagnostics/app-connect-once-requirements.txt
+      - name: One application connect and read-only identity query
+        shell: bash
+        env:
+          VERCEL_ENV: production
+          BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if test -z "${BRIDGE_APP_DATABASE_URL:-}"; then
+            echo '{"schema":"incident-1911-launch-v1","status":"secret_missing","connect_started":false}'
+            exit 1
+          fi
+          # No xtrace, raw exception log, API server, health check, or retry.
+          set +e
+          timeout --kill-after=5s 20s .incident-app-client/bin/python -B -u \
+            -m bridge_school_api.incident_db_probe --connect --runtime-metadata 2>/dev/null
+          rc=$?
+          set -e
+          printf '{"schema":"incident-1911-launch-v1","exit_code":%d}\n' "$rc"
+          exit "$rc"
