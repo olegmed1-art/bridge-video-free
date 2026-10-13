@@ -6,6 +6,8 @@ not provision credentials, expose an HTTP route, or authorize a deployment.
 from __future__ import annotations
 
 import argparse
+import ipaddress
+import sys
 import json
 import os
 import time
@@ -110,7 +112,48 @@ def _failure(exc: Exception, phase: str, started_ns: int) -> dict[str, object]:
             "diagnostic_markers": _diagnostic_markers(message, exc, sqlstate)}
 
 
-def probe(connect: bool = False) -> dict[str, object]:
+def _runtime_metadata(params: dict) -> dict[str, object]:
+    # Never copy arbitrary runtime strings or connection parameters to output.
+    from psycopg import pq
+    if sys.version_info[:2] != (3, 12) or psycopg.__version__ != "3.3.4":
+        raise ValueError("runtime")
+    impl = pq.__impl__
+    if impl not in {"binary", "c", "python"}:
+        raise ValueError("implementation")
+    versions = (pq.version(), pq.__build_version__)
+    if any(type(v) is not int or not 0 < v < 1_000_000 for v in versions):
+        raise ValueError("libpq version")
+    mode = params.get("sslmode")
+    if mode not in {"require", "verify-full"}:
+        raise ValueError("sslmode")
+    return {"schema": "incident-1911-runtime-v1",
+            "python": list(sys.version_info[:3]), "psycopg": "3.3.4",
+            "pq_impl": impl, "libpq_runtime": versions[0], "libpq_build": versions[1],
+            "sslmode": mode, "channel_binding_required": params.get("channel_binding") == "require"}
+
+
+def _tcp_subtypes(exc: Exception) -> list[str]:
+    try:
+        message = str(exc).lower()
+    except Exception:
+        message = ""
+    phrases = (("refused", "connection refused"),
+               ("unreachable", "network is unreachable"),
+               ("no_route", "no route to host"),
+               ("reset", "connection reset by peer"))
+    # Aggregated client errors can contain more than one hint; not wire phases.
+    return [label for label, phrase in phrases if phrase in message] or ["unknown"]
+
+
+def _address_family(conn) -> str:
+    try:
+        address = ipaddress.ip_address(conn.info.hostaddr)
+        return "ipv4" if address.version == 4 else "ipv6"
+    except Exception:
+        return "unknown"
+
+
+def probe(connect: bool = False, *, runtime_metadata: bool = False) -> dict[str, object]:
     # connected records successful return from connect(), not an open session at
     # report time. Cleanup is attempted for every established connection.
     result: dict[str, object] = {"probe": "incident-1911-v4", "connected": False}
@@ -157,6 +200,13 @@ def probe(connect: bool = False) -> dict[str, object]:
         return {**result, "status": "source_endpoint_requires_review"}
     if not connect:
         return {**result, "status": "configuration_pass_connection_not_tested"}
+    if runtime_metadata:
+        try:
+            metadata = _runtime_metadata(params)
+        except Exception:
+            return {**result, "status": "runtime_metadata_unavailable"}
+        # Flush BEFORE connect, so a watchdog timeout still leaves safe metadata.
+        print(json.dumps(metadata, sort_keys=True), flush=True)
     started_ns = phase_started_ns = time.monotonic_ns()
     phase = "connect"
     conn = None
@@ -170,11 +220,20 @@ def probe(connect: bool = False) -> dict[str, object]:
             options="-c default_transaction_read_only=on -c statement_timeout=5000",
         )
         result["connected"] = True
+        if runtime_metadata:
+            result["address_family"] = _address_family(conn)
         phase = "query"
         phase_started_ns = time.monotonic_ns()
         with conn.cursor() as cur:
             cur.execute("SELECT current_user, current_database(), current_setting('transaction_read_only')")
             row = cur.fetchone()
+        if runtime_metadata:
+            valid_row = isinstance(row, (tuple, list)) and len(row) == 3
+            result["session_checks"] = {
+                "principal_matches": bool(valid_row and row[0] == EXPECTED_PRINCIPAL),
+                "database_matches": bool(valid_row and row[1] == EXPECTED_DATABASE),
+                "read_only": bool(valid_row and row[2] == "on"),
+            }
         if row != (EXPECTED_PRINCIPAL, EXPECTED_DATABASE, "on"):
             failure = {"status": "session_contract_failed", "phase": "query",
                        "phase_elapsed_ms": _elapsed_ms(phase_started_ns),
@@ -183,6 +242,8 @@ def probe(connect: bool = False) -> dict[str, object]:
                        "diagnostic_markers": ["unknown"]}
     except Exception as exc:
         failure = _failure(exc, phase, phase_started_ns)
+        if runtime_metadata:
+            failure["tcp_subtypes"] = _tcp_subtypes(exc)
     finally:
         if conn is not None:
             # Explicit cleanup has no context-manager success commit. Attempt
@@ -209,9 +270,11 @@ def probe(connect: bool = False) -> dict[str, object]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--connect", action="store_true", help="perform one read-only connection probe")
+    parser.add_argument("--runtime-metadata", action="store_true",
+                        help="emit bounded client metadata before the single connection")
     args = parser.parse_args()
-    result = probe(args.connect)
-    print(json.dumps(result, sort_keys=True))
+    result = probe(args.connect, runtime_metadata=True) if args.runtime_metadata else probe(args.connect)
+    print(json.dumps(result, sort_keys=True), flush=True)
     return 0 if result["status"] in {"pass", "configuration_pass_connection_not_tested"} else 1
 
 
