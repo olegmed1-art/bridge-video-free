@@ -93,22 +93,20 @@ def world_uuid(kind: str, school_id: str, key: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"bridge-book-world:{kind}:{school_id}:{key}"))
 
 
-def render_teacher_book(item: dict) -> dict:
-    """Render a stored, reviewed WORLD row. Never silently falls back to a preview."""
-    _require(isinstance(item, dict), "BOOK_WORLD_REQUIRED")
-    content = item.get("content")
+def validate_book_world_evidence(content: dict, provenance: dict) -> None:
+    """Check stored evidence before publication or reading, without changing state.
+
+    This validates structure and review binding, not receipt authenticity, stored
+    source links, version identity or permission to activate a knowledge version.
+    """
     _require(isinstance(content, dict) and content.get("schema") == WORLD_SCHEMA, "BOOK_WORLD_REQUIRED")
-    _require(item.get("authority_class") == "external" and item.get("review_status") == "reviewed"
-             and item.get("version_status") == "active" and item.get("system_profile") == "SYSTEM_NEUTRAL", "BOOK_WORLD_NOT_ACTIVE")
     _fields(content, {"schema", "source_object_id", "statement", "domain", "conditions",
                       "exceptions", "citation", "verification", "origin"}, "BOOK_WORLD_CONTENT")
-    _require(all(_text(content[k]) for k in ("source_object_id", "statement", "verification", "origin"))
-             and _text(item.get("stable_key")) and item.get("item_id") is not None, "BOOK_WORLD_CONTENT")
+    _require(all(_text(content[k]) for k in ("source_object_id", "statement", "verification", "origin")), "BOOK_WORLD_CONTENT")
     _require(content["domain"] in ("CARD_PLAY", "DEFENSE"), "BOOK_WORLD_DOMAIN")
     for field in ("conditions", "exceptions"):
         _require(isinstance(content[field], list) and bool(content[field])
                  and all(_text(value) for value in content[field]), "BOOK_WORLD_CONTENT")
-    provenance = item.get("provenance")
     _require(isinstance(provenance, dict) and provenance.get("schema") == WORLD_SCHEMA
              and isinstance(provenance.get("review_receipt"), dict), "BOOK_WORLD_PROVENANCE")
     receipt = provenance["review_receipt"]
@@ -154,12 +152,26 @@ def render_teacher_book(item: dict) -> dict:
         validate_identity_review(source_from_citation(citation, receipt), receipt,
                                  identity_review, school_id=provenance.get("school_id"),
                                  source_id=provenance.get("source_id"))
-    _require(provenance.get("version_hash") == publication_version(
-        {"stable_key": item["stable_key"], "content": content}, receipt, identity_review), "BOOK_WORLD_VERSION_HASH")
     _require(citation["rendition_sha256"] == receipt.get("rendition_sha256"), "BOOK_WORLD_SOURCE_HASH")
     claims = [c for c in review_claims if c["object_id"] == content["source_object_id"]]
     _require(len(claims) == 1 and claims[0].get("checks") == {k: "PASS" for k in CHECKS}
              and receipt.get("assurance") in {"I2", "I3", "I4"}, "BOOK_WORLD_REVIEW")
+
+
+def render_teacher_book(item: dict) -> dict:
+    """Render a stored, reviewed WORLD row. Never silently falls back to a preview."""
+    _require(isinstance(item, dict), "BOOK_WORLD_REQUIRED")
+    content = item.get("content")
+    _require(isinstance(content, dict) and content.get("schema") == WORLD_SCHEMA, "BOOK_WORLD_REQUIRED")
+    _require(item.get("authority_class") == "external" and item.get("review_status") == "reviewed"
+             and item.get("version_status") == "active" and item.get("system_profile") == "SYSTEM_NEUTRAL", "BOOK_WORLD_NOT_ACTIVE")
+    _require(_text(item.get("stable_key")) and item.get("item_id") is not None, "BOOK_WORLD_CONTENT")
+    provenance = item.get("provenance")
+    validate_book_world_evidence(content, provenance)
+    receipt, citation = provenance["review_receipt"], content["citation"]
+    identity_review = provenance.get("source_identity_review")
+    _require(provenance.get("version_hash") == publication_version(
+        {"stable_key": item["stable_key"], "content": content}, receipt, identity_review), "BOOK_WORLD_VERSION_HASH")
     sources = item.get("sources")
     _require(isinstance(sources, list) and bool(sources)
              and all(isinstance(src, dict) and isinstance(src.get("source_locator"), dict)
