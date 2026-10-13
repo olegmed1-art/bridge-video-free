@@ -45,6 +45,22 @@ and a negative/boundary example. Keep full text, crops, private evidence and rea
 corpus fixtures outside public Git. A review can exclude defective positions;
 it must not invent missing cards or silently repair original diagrams.
 
+The v1 WORLD projection has no graph representation. Any staging relation touching
+a selected atom, in either direction (including self-links or an unselected other
+endpoint), blocks preparation with `BOOK_WORLD_RELATIONS_UNSUPPORTED`. This
+includes `CONTRADICTS`, `COUNTEREXAMPLE_OF`, `SUPERSEDES` and the other staging
+relation types; no relation is silently treated as safe to discard. Keep the
+original bundle and its relations in staging for reconciliation. Relations only
+between unselected objects do not block an unrelated selected atom. Relation-free
+publication and version hashes retain their existing identity; this guard does
+not migrate or repair already stored WORLD versions.
+
+The teacher renderer checks nested content, citation, provenance, review claims
+and source-link structures before using them. Malformed stored evidence raises a
+contract error and the protected route returns `409 BOOK_WORLD_EVIDENCE_INVALID`,
+without preview fallback or a broad exception handler. A structurally valid hash
+does not replace these checks or attest the authenticity of a review receipt.
+
 ## Migration and authorization
 
 No schema migration, new service, new key, network change or GRANT is needed by

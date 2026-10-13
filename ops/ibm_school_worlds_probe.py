@@ -6,6 +6,7 @@ Only reviewed, hash-pinned compressed Python modules are sent, entirely in memor
 No credentials or raw artifact data are emitted in logs.
 """
 import base64
+from dataclasses import dataclass
 import hashlib
 import json
 import math
@@ -14,6 +15,7 @@ from pathlib import Path
 import re
 import shlex
 import time
+from types import MappingProxyType
 import zlib
 
 try:
@@ -103,15 +105,53 @@ for name,source in verified:
 '''
 
 
-def bundled_host_source(*, root=None):
+LEGACY_BUNDLE_REVISION = 'legacy-v1'
+CONSTRAINT_KEYS_REVISION = 'normalized-constraints-v2'
+CONSTRAINT_KEYS_MANIFEST_SHA256 = 'ae14d5c809235299f609243b46d4c3bfb84805defd52660c233fd8ee2e202daa'
+
+
+@dataclass(frozen=True)
+class BundleRevision:
+    name: str
+    source_pins: object
+    source_records: tuple
+    module_paths: object
+    host_source_sha: str
+
+
+def bundle_revision(revision=LEGACY_BUNDLE_REVISION):
+    """Select reviewed public bytes by a fixed revision name, never infer it from artifacts."""
+    need(type(revision) is str, 'bundle_revision')
+    if revision == LEGACY_BUNDLE_REVISION:
+        return BundleRevision(revision,MappingProxyType(dict(SOURCE_PINS)),SOURCE_RECORDS,
+                              MappingProxyType(dict(MODULE_PATHS)),HOST_SOURCE_SHA)
+    need(revision == CONSTRAINT_KEYS_REVISION, 'bundle_revision')
+    with Path(__file__).with_name('ibm_school_worlds_bundle_v2.json').open('rb') as stream:
+        raw=stream.read(BUNDLE_BYTES+1)
+    need(len(raw)<=BUNDLE_BYTES and hashlib.sha256(raw).hexdigest()==CONSTRAINT_KEYS_MANIFEST_SHA256,
+         'bundle_manifest_pin')
+    manifest=strict_json(raw)
+    need(manifest['schema']=='bridge.ibm.school-worlds.bundle-revision.v1'
+         and manifest['revision']==revision and manifest['parent_host_source_sha256']==HOST_SOURCE_SHA
+         and manifest['generator_identity_authority']=='source_pins.ibm_worlds_generator'
+         and manifest['module_paths']==dict(MODULE_PATHS,ibm_school_worlds='ops/ibm_school_worlds_v2.py'),
+         'bundle_manifest_binding')
+    return BundleRevision(revision,MappingProxyType(manifest['source_pins']),
+                          tuple(tuple(row) for row in manifest['source_records']),
+                          MappingProxyType(manifest['module_paths']),manifest['host_source_sha256'])
+
+
+def bundled_host_source(*, root=None, revision=LEGACY_BUNDLE_REVISION):
+    spec=bundle_revision(revision)
+    pins=dict(spec.source_pins);records=spec.source_records
     root = Path(__file__).resolve().parents[1] if root is None else Path(root)
-    need(type(SOURCE_RECORDS) is tuple and tuple(row[0] for row in SOURCE_RECORDS) == tuple(SOURCE_PINS), "bundle_records")
+    need(type(records) is tuple and tuple(row[0] for row in records) == tuple(pins), "bundle_records")
     compressed_total = source_total = 0
-    for name, size, sha, csize, csha, data in SOURCE_RECORDS:
-        path = MODULE_PATHS[name]
+    for name, size, sha, csize, csha, data in records:
+        path = spec.module_paths[name]
         source = (root / path).read_bytes()
-        need(0 < len(source) <= MODULE_BYTES and hashlib.sha256(source).hexdigest() == SOURCE_PINS[name], "source_pin")
-        need(type(size) is int and len(source) == size and sha == SOURCE_PINS[name]
+        need(0 < len(source) <= MODULE_BYTES and hashlib.sha256(source).hexdigest() == pins[name], "source_pin")
+        need(type(size) is int and len(source) == size and sha == pins[name]
              and type(csize) is int and 0 < csize <= MODULE_COMPRESSED_BYTES
              and type(data) is str and len(data) <= 65536, "bundle_records")
         compressed = base64.b64decode(data, validate=True)
@@ -122,8 +162,8 @@ def bundled_host_source(*, root=None):
         compressed_total += len(compressed)
         source_total += len(source)
         need(compressed_total <= BUNDLE_COMPRESSED_BYTES and source_total <= BUNDLE_BYTES, "bundle_limit")
-    source = BUNDLE_TEMPLATE.replace("@PINS@", repr(SOURCE_PINS)).replace("@RECORDS@", repr(SOURCE_RECORDS))
-    need(hashlib.sha256(source.encode()).hexdigest() == HOST_SOURCE_SHA, "bundle_source_pin")
+    source = BUNDLE_TEMPLATE.replace("@PINS@", repr(pins)).replace("@RECORDS@", repr(records))
+    need(hashlib.sha256(source.encode()).hexdigest() == spec.host_source_sha, "bundle_source_pin")
     return source
 
 
@@ -228,8 +268,8 @@ finally:
  if knownfd is not None:os.close(knownfd)
 '''
 
-def remote_source():
-    return (REMOTE_TEMPLATE.replace("@HOST_SHA@", HOST_SOURCE_SHA).replace("@SAFE_SHA@", SAFE_SOURCE_SHA)
+def remote_source(*, revision=LEGACY_BUNDLE_REVISION):
+    return (REMOTE_TEMPLATE.replace("@HOST_SHA@", bundle_revision(revision).host_source_sha).replace("@SAFE_SHA@", SAFE_SOURCE_SHA)
             .replace("@RESUME_SNAPSHOT_ID@", RESUME_SNAPSHOT_ID)
             .replace("@RESUME_SNAPSHOT_SHA256@", RESUME_SNAPSHOT_SHA256)
             .replace("@RESUME_ORIGINAL_HEAD@", RESUME_ORIGINAL_HEAD)
@@ -365,8 +405,9 @@ def validate_guard_evidence(value, receipt):
     check(len(validator.canonical_json_bytes(value)) <= 8192)
 
 
-def validate_receipt(row, binding):
+def validate_receipt(row, binding, *, revision=LEGACY_BUNDLE_REVISION):
     """No receipt-derived text is exported before exact schema/pin validation."""
+    spec=bundle_revision(revision)
     need(type(row) is dict and set(row) == RECEIPT_KEYS, "receipt_schema")
     need(row["schema"] == host_contract.RECEIPT_SCHEMA and row["operation"] == "generate_worlds", "receipt_schema")
     need(all(type(row[k]) is type(v) and row[k] == v for k, v in binding.items()), "receipt_binding")
@@ -374,7 +415,7 @@ def validate_receipt(row, binding):
     need(type(row["result"]) is str and row["result"] in {"WORLD_GENERATED", "BLOCKED"}, "receipt_result")
     need(type(row["reason"]) is str and row["reason"] in host_contract.REASONS, "receipt_reason")
     need(type(row["python_version"]) is str and re.fullmatch(r"[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,3}", row["python_version"]), "receipt_python_version")
-    need(row["generator_sha256"] == SOURCE_PINS["ibm_worlds_generator"] and row["input_sha256"] == validator.INPUT_SHA256, "receipt_source_binding")
+    need(row["generator_sha256"] == spec.source_pins["ibm_worlds_generator"] and row["input_sha256"] == validator.INPUT_SHA256, "receipt_source_binding")
     need(type(row["elapsed_ms"]) is int and 0 <= row["elapsed_ms"] <= host_contract.SECONDS * 1000, "receipt_elapsed")
     need(type(row["stage"]) is str and row["stage"] in STAGES and row["changes"] == [], "receipt_scope")
     need(type(row["gates_verified"]) is list and row["gates_verified"] in ([], list(host_contract.safety.GATE_UNITS)), "receipt_gates")
@@ -435,7 +476,19 @@ def safe_receipt(receipt):
     return row
 
 
-def persist_receipt(receipt, binding, *, worlds=None, result=None, independent=None):
+def export_manifest(receipt, binding, files, independent, *, revision=LEGACY_BUNDLE_REVISION):
+    """The selected source identity is shared by export and lifecycle admission."""
+    spec=bundle_revision(revision)
+    return dict(schema="bridge.ibm.school-worlds.export.v1", source_commit=binding["head"],
+                run_id=binding["run_id"], attempt=binding["attempt"], result=receipt["result"],
+                snapshot_id=RESUME_SNAPSHOT_ID, snapshot_sha256=RESUME_SNAPSHOT_SHA256,
+                input_sha256=validator.INPUT_SHA256, generator_sha256=spec.source_pins["ibm_worlds_generator"],
+                reviewed_sources=dict(spec.source_pins), host_bundle_sha256=spec.host_source_sha,
+                files={name: dict(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()) for name, raw in files.items()},
+                validation=independent, purpose="COMPUTE_VERIFICATION_AND_TRAINING_INPUT_ONLY", service_changes=[])
+
+
+def persist_receipt(receipt, binding, *, worlds=None, result=None, independent=None, revision=LEGACY_BUNDLE_REVISION):
     """Fresh runner-only directory and exclusive inert artifact files, never overwrite."""
     parent = Path(os.environ.get("RUNNER_TEMP", ""))
     need(parent.is_absolute() and parent.resolve(strict=True) == parent and parent.is_dir()
@@ -449,13 +502,7 @@ def persist_receipt(receipt, binding, *, worlds=None, result=None, independent=N
     if worlds is not None:
         need(result is not None and independent is not None, "runner_output_unverified")
         files.update({"worlds.json": worlds, "worlds.pbn": validator.render_pbn(result), "input.json": validator.INPUT_BYTES})
-    manifest = dict(schema="bridge.ibm.school-worlds.export.v1", source_commit=binding["head"],
-                    run_id=binding["run_id"], attempt=binding["attempt"], result=receipt["result"],
-                    snapshot_id=RESUME_SNAPSHOT_ID, snapshot_sha256=RESUME_SNAPSHOT_SHA256,
-                    input_sha256=validator.INPUT_SHA256, generator_sha256=SOURCE_PINS["ibm_worlds_generator"],
-                    reviewed_sources=SOURCE_PINS, host_bundle_sha256=HOST_SOURCE_SHA,
-                    files={name: dict(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()) for name, raw in files.items()},
-                    validation=independent, purpose="COMPUTE_VERIFICATION_AND_TRAINING_INPUT_ONLY", service_changes=[])
+    manifest = export_manifest(receipt,binding,files,independent,revision=revision)
     files["manifest.json"] = validator.canonical_json_bytes(manifest)
     for name, raw in files.items():
         fd = os.open(destination / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -474,7 +521,9 @@ def persist_receipt(receipt, binding, *, worlds=None, result=None, independent=N
 class PreparedWorlds:
     kind = "school_worlds"
 
-    def __init__(self, binding, safe_source, host_source, keyfd, knownfd):
+    def __init__(self, binding, safe_source, host_source, keyfd, knownfd, *, revision=LEGACY_BUNDLE_REVISION):
+        self.revision=revision
+        self.bundle=bundle_revision(revision)
         self.binding, self.safe_source, self.host_source = binding, safe_source, host_source
         self.keyfd, self.knownfd = keyfd, knownfd
         self.ready, self.attempted, self.identity_bound = False, False, False
@@ -496,7 +545,7 @@ class PreparedWorlds:
                 "-o", "UpdateHostKeys=no", "-o", "VerifyHostKeyDNS=no", "-o", "CheckHostIP=no",
                 "-o", "AddKeysToAgent=no", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes",
                 "-o", "ConnectionAttempts=1", "-o", "ConnectTimeout=3", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1",
-                "ubuntu@"+read_only.ORACLE, "/usr/bin/python3 -I -B -c "+shlex.quote(remote_source())]
+                "ubuntu@"+read_only.ORACLE, "/usr/bin/python3 -I -B -c "+shlex.quote(remote_source(revision=self.revision))]
         request = None
         seconds = 28 if phase == "preflight" else timeout - 5
         need(phase in {"preflight", "generate_worlds"} and ((phase == "preflight" and timeout == 12)
@@ -507,7 +556,7 @@ class PreparedWorlds:
                            identity=IDENTITY, transport=TRANSPORT, snapshot_id=RESUME_SNAPSHOT_ID,
                            snapshot_sha256=RESUME_SNAPSHOT_SHA256)
         payload = json.dumps(dict(phase=phase, binding=self.binding, safe_source=self.safe_source,
-                                  host_source=self.host_source, host_sha=HOST_SOURCE_SHA, seconds=seconds, request=request)).encode()
+                                  host_source=self.host_source, host_sha=self.bundle.host_source_sha, seconds=seconds, request=request)).encode()
         need(len(payload) <= INPUT_BYTES, "input_limit")
         return bounded_process(argv, payload=payload, timeout=timeout, limit=OUTPUT_BYTES)
 
@@ -565,7 +614,7 @@ class PreparedWorlds:
         holder = rows[4]
         need(set(holder) == set(self.binding) | {"event", "receipt"}
              and all(type(holder[k]) is type(v) and holder[k] == v for k, v in self.binding.items()), "receipt_binding")
-        receipt = validate_receipt(holder["receipt"], self.binding)
+        receipt = validate_receipt(holder["receipt"], self.binding, revision=self.revision)
         canonical = validator.canonical_json_bytes(receipt)
         need(len(canonical) <= GUEST_RECEIPT_BYTES and finished["stdout_bytes"] == len(canonical)
              and finished["stdout_sha256"] == hashlib.sha256(canonical).hexdigest()
@@ -578,15 +627,15 @@ class PreparedWorlds:
             worlds, result, independent = artifact_result(receipt["artifact"])
             need(validator.canonical_json_bytes(validation_base(receipt["validation"], receipt["python_version"]))
                  == validator.canonical_json_bytes(independent), "receipt_validation")
-        self.output_path = persist_receipt(receipt, self.binding, worlds=worlds, result=result, independent=independent)
+        self.output_path = persist_receipt(receipt, self.binding, worlds=worlds, result=result, independent=independent, revision=self.revision)
         emit("SCHOOL_WORLDS_VERIFIED_RECEIPT", **self.binding, receipt=safe_receipt(receipt), artifact_path=self.output_path)
         return success
 
 
-def prepare():
+def prepare(*, revision=LEGACY_BUNDLE_REVISION):
     binding = context()
     source = Path(__file__).with_name("ibm_ssh_probe_safe.py").read_text()
-    host = bundled_host_source()
+    host = bundled_host_source(revision=revision)
     need(hashlib.sha256(source.encode()).hexdigest() == SAFE_SOURCE_SHA, "source_pin")
     raw = bytearray(os.environ.pop("ORACLE_SSH_PRIVATE_KEY", "").replace("\r", "").encode())
     need(32 < len(raw) < 32768, "existing_owner_key_missing")
@@ -601,7 +650,7 @@ def prepare():
         fp = "SHA256:"+base64.b64encode(hashlib.sha256(base64.b64decode(records[0][2], validate=True)).digest()).decode().rstrip('=')
         need(fp == read_only.ORACLE_FP, "oracle_hostpin")
         knownfd = read_only.memory(scanned, "oracle-public-trust")
-        probe = PreparedWorlds(binding, source, host, keyfd, knownfd)
+        probe = PreparedWorlds(binding, source, host, keyfd, knownfd, revision=revision)
         probe.preflight()
         return probe
     except BaseException:
