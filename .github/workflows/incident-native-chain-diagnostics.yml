@@ -1,0 +1,76 @@
+name: Incident 1911 chain diagnostics isolated native phase preflight
+on: create
+permissions: {}
+jobs:
+  preflight:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.event.repository.full_name == 'olegmed1-art/bridge-video-free' &&
+      github.event_name == 'create' && github.event.ref_type == 'branch' &&
+      github.event.ref == 'codex-incident-1911-native-chain-diagnostics-20261013' &&
+      github.ref_name == 'codex-incident-1911-native-chain-diagnostics-20261013' &&
+      github.ref == 'refs/heads/codex-incident-1911-native-chain-diagnostics-20261013' &&
+      github.workflow_sha == github.sha && github.run_number == 1 && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Stage public pinned artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          timeout --kill-after=2s 35s python3 -I -S -B - <<'PY'
+          import hashlib, os, re, sys, urllib.request
+          from pathlib import Path
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  raise ValueError("redirect")
+          try:
+              sha = os.environ.get("GITHUB_SHA", "")
+              if not re.fullmatch("[a-f0-9]{40}", sha) or os.environ.get("GITHUB_WORKFLOW_SHA") != sha:
+                  raise ValueError("context")
+              root = Path.cwd() / ".native-phase-preflight"
+              root.mkdir()
+              pins = {'bootstrap.py': {'sha256': '49687d767a270147b264e814a4df25350c05c6b718f61e32d3df9cf8bbcb3203', 'bytes': 3954}, 'package-lock.json': {'sha256': '1c35fa667c6d800d6404349847ab16043a105144289ae61020153b6096f21f10', 'bytes': 2575}}
+              for name, pin in pins.items():
+                  url = "https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/" + sha + "/scripts/diagnostics/native_phase_preflight/" + name
+                  with urllib.request.build_opener(NoRedirect()).open(url, timeout=4) as response:
+                      if response.status != 200 or response.geturl() != url:
+                          raise ValueError("response")
+                      data = response.read(pin["bytes"] + 1)
+                  if len(data) != pin["bytes"] or hashlib.sha256(data).hexdigest() != pin["sha256"]:
+                      raise ValueError("integrity")
+                  with (root / name).open("xb") as output:
+                      output.write(data)
+              os.execv(sys.executable, [sys.executable, "-I", "-S", "-B", str(root / "bootstrap.py")])
+          except BaseException:
+              print('{"status":"public_loader_failed"}')
+              raise SystemExit(1)
+          PY
+      - name: Isolated ABI emulation, no connections
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          ulimit -c 0
+          echo '{"schema":"native-preflight-launch-v2","state":"STARTED"}'
+          set +e
+          timeout --kill-after=2s 45s sudo -n unshare --net \
+            /usr/bin/setpriv --reuid="$(id -u)" --regid="$(id -g)" \
+            --clear-groups --no-new-privs \
+            /usr/bin/env -i LC_ALL=C.UTF-8 "$(command -v python3)" -I -S -B \
+            "$PWD/.native-phase-preflight/runner.py" "$(readlink /proc/self/ns/net)" "$(id -u)" 2>/dev/null
+          result=$?
+          set -e
+          printf '{"schema":"native-preflight-launch-v3","returncode":%d}\n' "$result"
+          if [[ -f "$PWD/.native-phase-preflight/runner-entered.flag" ]]; then
+            echo '{"schema":"native-preflight-launch-v2","harness_entry":"observed"}'
+          else
+            echo '{"schema":"native-preflight-launch-v2","harness_entry":"not_observed","status":"ISOLATION_OR_ENTRY_FAILED"}'
+          fi
+          case "$result" in
+            0) echo '{"schema":"native-preflight-launch-v2","exit":"zero"}' ;;
+            124|137) echo '{"schema":"native-preflight-launch-v2","exit":"timeout_or_kill"}' ;;
+            *) echo '{"schema":"native-preflight-launch-v2","exit":"nonzero"}' ;;
+          esac
+          exit "$result"
