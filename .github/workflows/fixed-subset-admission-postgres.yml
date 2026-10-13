@@ -5,9 +5,7 @@ name: Fixed subset admission disposable PostgreSQL
 on:
   push:
     branches:
-      - codex-atomic-subset-postgres-20261013-fix1
-    paths:
-      - .github/workflows/fixed-subset-admission-postgres.yml
+      - codex-atomic-subset-postgres-5fa36233-ci1
 
 permissions:
   contents: read
@@ -24,7 +22,7 @@ jobs:
       github.repository == 'olegmed1-art/bridge-video-free' &&
       github.actor == github.repository_owner &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/codex-atomic-subset-postgres-20261013-fix1' &&
+      github.ref == 'refs/heads/codex-atomic-subset-postgres-5fa36233-ci1' &&
       github.event.created == true && github.event.deleted == false &&
       github.event.forced == false && github.run_attempt == 1
     runs-on: ubuntu-24.04
@@ -36,11 +34,16 @@ jobs:
           POSTGRES_DB: fixedsubset_test
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: fixedsubset-local-only
+          # Global server cap, shared by all databases, admin and health probes.
+          # No additional superuser/reserved or replication connection pool.
+          POSTGRES_INITDB_ARGS: >-
+            -c max_connections=8 -c superuser_reserved_connections=0
+            -c reserved_connections=0 -c max_wal_senders=0
         ports:
           - '127.0.0.1:5432:5432'
         options: >-
           --cpus 2 --memory 1536m
-          --health-cmd "pg_isready -U postgres -d fixedsubset_test"
+          --health-cmd "test -f /tmp/fixedsubset-ready || (pg_isready -h 127.0.0.1 -U postgres -d fixedsubset_test && touch /tmp/fixedsubset-ready)"
           --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - name: Require the authorized new-branch event
@@ -56,12 +59,13 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          fetch-depth: 1
+          fetch-depth: 2
       - name: Verify checkout
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 717a4d92bc51bfc76f3e6455911e8b9900d83beb
+          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 5fa36233e435b0ce252e000789c8c74d3c08b9c1
+          test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/fixed-subset-admission-postgres.yml
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
@@ -81,7 +85,40 @@ jobs:
             database/migrations/0060_fixed_subset_admission.sql \
             database/rollback/0060_fixed_subset_admission.sql \
             database/tests/fixed_subset_admission/run.py \
+            database/tests/fixed_subset_admission/helpers.sql \
+            .github/workflows/fixed-subset-admission-postgres.yml \
             > "$RUNNER_TEMP/fixedsubset-evidence/source-sha256.txt"
+      - name: Verify global eight-connection server boundary
+        run: |
+          set -euo pipefail
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/fixedsubset-home" \
+            PYTHONDONTWRITEBYTECODE=1 \
+            python - "$RUNNER_TEMP/fixedsubset-evidence/connection-cap.json" <<'PY'
+          import json
+          import sys
+          import psycopg
+          expected = dict(max_connections='8', superuser_reserved_connections='0',
+                          reserved_connections='0', max_wal_senders='0')
+          with psycopg.connect(host='127.0.0.1', hostaddr='127.0.0.1', port=5432,
+                  dbname='fixedsubset_test', user='postgres', password='fixedsubset-local-only',
+                  sslmode='disable', gssencmode='disable', connect_timeout=3, autocommit=True,
+                  options='-c statement_timeout=3000 -c lock_timeout=3000',
+                  application_name='fixedsubset-cap-preflight') as connection:
+              rows = connection.execute("SELECT name,setting,context,pending_restart FROM pg_settings WHERE name IN ('max_connections','superuser_reserved_connections','reserved_connections','max_wal_senders')").fetchall()
+              actual = {name: setting for name, setting, _, _ in rows}
+              assert actual == expected
+              assert all(context == 'postmaster' and not pending for _, _, context, pending in rows)
+              count = connection.execute("SELECT count(*) FROM pg_stat_activity WHERE backend_type IN ('client backend','walsender')").fetchone()[0]
+              assert 1 <= count <= 8
+              evidence = dict(status='PASS', settings=actual, global_client_count=count,
+                              scope='all databases, admin, healthcheck and observers',
+                              enforcement='server max_connections; no extra replication slots')
+          assert connection.closed
+          evidence['preflight_connection_closed_before_harness'] = True
+          with open(sys.argv[1], 'w', encoding='utf-8') as output:
+              json.dump(evidence, output, indent=2)
+              output.write('\n')
+          PY
       - name: Run exactly the two previously skipped POSIX checks
         run: |
           set -euo pipefail
@@ -104,12 +141,64 @@ jobs:
       - name: Run the 29 real scenarios on this service only
         run: |
           set -euo pipefail
-          env -i PATH="$PATH" HOME="$RUNNER_TEMP/fixedsubset-home" \
+          # SIGINT reaches the runner's primary-error/finally path. Its 5s
+          # diagnostics + 45s cleanup fit within the 55s forced-stop reserve.
+          # A forced kill has incomplete evidence and can never pass acceptance.
+          timeout --signal=INT --kill-after=55s 840s \
+            env -i PATH="$PATH" HOME="$RUNNER_TEMP/fixedsubset-home" \
             PYTHONPATH="$GITHUB_WORKSPACE" PYTHONDONTWRITEBYTECODE=1 \
             python database/tests/fixed_subset_admission/run.py \
               --execute \
               --dsn 'postgresql://postgres:fixedsubset-local-only@127.0.0.1:5432/fixedsubset_test' \
               --evidence-dir "$RUNNER_TEMP/fixedsubset-evidence"
+      - name: Require one complete 29-case 182-variant and two-POSIX result
+        if: always()
+        run: |
+          set -euo pipefail
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/fixedsubset-home" \
+            PYTHONDONTWRITEBYTECODE=1 \
+            python - "$RUNNER_TEMP/fixedsubset-evidence" <<'PY'
+          import importlib.util
+          import json
+          from pathlib import Path
+          import sys
+          import xml.etree.ElementTree as ET
+          evidence = Path(sys.argv[1])
+          spec = importlib.util.spec_from_file_location('offline_case_inventory', 'database/tests/fixed_subset_admission/run.py')
+          runner = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(runner)
+          result = json.loads((evidence / 'results.json').read_text())
+          assert result['status'] == 'PASS' and result['sql_executed'] is True
+          assert result['case_count'] == len(result['cases']) == 29
+          assert [c['id'] for c in result['cases']] == list(runner.CASE_IDS)
+          assert all(c['status'] == 'PASS' and c['sql_executed'] is True for c in result['cases'])
+          variants = []
+          for case in result['cases']:
+              actual = case['variants']
+              required = runner.REQUIRED_VARIANTS.get(case['id'], ())
+              assert len(actual) == len(required)
+              assert {v['id'] for v in actual} == set(required)
+              assert all(v['case'] == case['id'] and v['status'] == 'PASS' for v in actual)
+              variants.extend(v['id'] for v in actual)
+          assert len(variants) == len(set(variants)) == 182
+          cleanup = result['cleanup']
+          assert cleanup['status'] == 'PASS' and not cleanup['errors']
+          assert not cleanup['remaining_connections'] and not cleanup['alive_threads']
+          assert cleanup['pending_futures'] == 0
+          assert cleanup['database_census'] == dict(other_backends=[], advisory_locks=[], prepared_transactions=[])
+          cap = json.loads((evidence / 'connection-cap.json').read_text())
+          assert cap['status'] == 'PASS' and cap['preflight_connection_closed_before_harness'] is True
+          assert cap['settings'] == dict(max_connections='8', superuser_reserved_connections='0', reserved_connections='0', max_wal_senders='0')
+          suites = list(ET.parse(evidence / 'posix.xml').getroot().iter('testsuite'))
+          assert sum(int(s.attrib['tests']) for s in suites) == 2
+          assert all(int(s.attrib[key]) == 0 for s in suites for key in ('failures', 'errors', 'skipped'))
+          names = [case.attrib['name'] for suite in suites for case in suite.findall('testcase')]
+          assert len(names) == 2 and set(names) == {
+              'test_private_directory_rejects_permissions_and_symlinks',
+              'test_successful_supervised_capture_is_private_and_not_overwritten'}
+          (evidence / 'acceptance.json').write_text(json.dumps(dict(status='PASS', sql_cases=29,
+              named_variants=182, posix_passed=2, global_connection_cap=8, cleanup='PASS'), indent=2)+'\n')
+          PY
       - name: Preserve synthetic results even on failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
