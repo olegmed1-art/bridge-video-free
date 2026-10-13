@@ -59,6 +59,7 @@ RUNNER_ARGV = ("python", "-m", "universal_video.runner", ROOT + "/media/pilot.jo
 DOWNSTREAM = ("bridge_context", "bridge_positions", "dds3_optional",
               "educational_candidates", "teacher", "PDF")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+MAX_RECEIPT_BYTES = 256 * 1024  # Separate control-file cap, not the media quota.
 LIVE_GAPS = (
     "LIVE_EXECUTOR_NOT_IMPLEMENTED",
     "LINUX_OUTPUT_ENFORCEMENT_NOT_TESTED_ON_HOST",
@@ -569,6 +570,75 @@ def _write_new(path: Path, value: bytes) -> None:
         os.fsync(stream.fileno())
 
 
+class _WriteGuard:
+    """Single-owner sink: pre-write byte cap and cooperative clock checks.
+
+    No guarded data write or fsync starts after an observed cutoff; cleanup
+    still closes every opened stream. A blocked write/fsync/close
+    cannot be interrupted here: the outer lifecycle deadline remains required.
+    This is not a quota for native runner/ffmpeg writes or concurrent writers.
+    """
+    def __init__(self, max_bytes, deadline_epoch, clock, *, prefix):
+        require(type(max_bytes) is int and max_bytes > 0, "INVALID_WRITE_CAP")
+        require(type(deadline_epoch) in (int, float) and math.isfinite(deadline_epoch),
+                "INVALID_WRITE_DEADLINE")
+        self.maximum, self.used = max_bytes, 0
+        self.deadline, self.clock, self.last = deadline_epoch, clock, None
+        self.prefix = prefix
+
+    def check(self):
+        now = self.clock()
+        require(type(now) in (int, float) and math.isfinite(now)
+                and (self.last is None or now >= self.last), "INVALID_WRITE_CLOCK")
+        self.last = now
+        require(now < self.deadline, self.prefix + "_DEADLINE")
+        return now
+
+    def write(self, stream, raw):
+        require(type(raw) is bytes and len(raw) <= self.maximum - self.used,
+                self.prefix + "_BYTES_LIMIT")
+        offset = 0
+        while offset < len(raw):
+            self.check()
+            block = raw[offset:offset + 64 * 1024]
+            written = stream.write(block)
+            require(type(written) is int and 0 < written <= len(block), "SINK_SHORT_WRITE")
+            self.used += written
+            offset += written
+            self.check()
+
+    def sync(self, stream):
+        self.check()
+        os.fsync(stream.fileno())
+        self.check()
+
+
+def _bounded_json(value: object, maximum: int) -> bytes:
+    # Bound the serialized receipt before opening a sink. This is a disk-byte
+    # bound, not a bound on JSON encoder CPU or individual string allocations.
+    result = bytearray()
+    encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    for fragment in encoder.iterencode(value):
+        raw = fragment.encode("utf-8")
+        require(len(raw) <= maximum - len(result), "RECEIPT_BYTES_LIMIT")
+        result.extend(raw)
+    return bytes(result)
+
+
+def _write_bounded_new(path: Path, raw: bytes, *, max_bytes: int,
+                       deadline_epoch: float, clock) -> float:
+    guard = _WriteGuard(max_bytes, deadline_epoch, clock, prefix="RECEIPT_WRITE")
+    require(type(raw) is bytes and len(raw) <= max_bytes, "RECEIPT_BYTES_LIMIT")
+    guard.check()
+    safe_path(path.parent, directory=True)
+    guard.check()
+    # Caller owns the private parent; never replace a file or follow a leaf link.
+    with path.open("xb", buffering=0) as stream:
+        guard.write(stream, raw)
+        guard.sync(stream)
+    return guard.check()  # Includes close latency, not syscall cancellation.
+
+
 def _inventory(plan: Plan, limits: Limits) -> dict[str, str]:
     inventory = tree_hashes(plan.scope / "output", max_bytes=limits.max_output_bytes,
                             max_files=limits.max_output_files)
@@ -792,8 +862,25 @@ def run_pilot(request: Request, *, executor: Executor, clock=time.time) -> dict:
                               "finalization_deadline_epoch": finalization_deadline,
                               "export_deadline_epoch": plan.export_deadline_epoch,
                               "stop_deadline_epoch": request.limits.deadline_epoch,
-                              "observed_elapsed_seconds": observed_elapsed}
-        _write_new(plan.scope / "adapter-receipt.json", encoded(receipt))
+                              "observed_elapsed_seconds": observed_elapsed,
+                              "receipt_persisted_observed_epoch": None}
+        cap = min(MAX_RECEIPT_BYTES, request.limits.max_file_bytes)
+        receipt["receipt_persistence"] = {"status": "CANDIDATE_ONLY", "byte_cap": cap,
+                                          "deadline_enforcement": "COOPERATIVE_ONLY",
+                                          "restart_acceptance": "EXTERNAL_VERIFIER_REQUIRED"}
+        # Even fully written bytes are NOT a restart-readable deadline PASS:
+        # fsync/close can stall after the last check. Never put an authoritative
+        # success marker on disk; the existing durable UNKNOWN attempt survives.
+        candidate = {**receipt, "state": "UNKNOWN", "candidate_state": receipt["state"]}
+        try:
+            raw = _bounded_json(candidate, cap)
+            receipt["timings"]["receipt_persisted_observed_epoch"] = _write_bounded_new(
+                plan.scope / "adapter-receipt.json", raw, max_bytes=cap,
+                deadline_epoch=finalization_deadline, clock=sample_clock)
+        except Exception as exc:
+            receipt["state"] = "UNKNOWN"
+            receipt.setdefault("error_code", str(exc) if isinstance(exc, PilotBlocked) else type(exc).__name__)
+            receipt["receipt_persistence"]["status"] = "UNCONFIRMED_RETAIN_UNKNOWN_ATTEMPT"
     return receipt
 
 
@@ -1136,7 +1223,8 @@ def capture_bounded_logs(stdout_fd: int, stderr_fd: int, destination: Path, *, m
 
     The caller owns the pipes, container, deadline and Stop response. On any
     exception its existing finally/containment path must run; never retry work.
-    Saved log prefix remains available even if the child floods or the pipe dies.
+    Saved prefix remains on error; its fsync durability may be unconfirmed.
+    In-flight blocking syscalls still need the owner's external deadline.
     """
     require(type(max_bytes) is int and 0 < max_bytes <= 4 * 1024**2 and stdout_fd != stderr_fd
             and all(type(fd) is int and fd >= 0 for fd in (stdout_fd, stderr_fd)),
@@ -1144,30 +1232,40 @@ def capture_bounded_logs(stdout_fd: int, stderr_fd: int, destination: Path, *, m
     safe_path(destination, directory=True)
     captured = {"stdout": bytearray(), "stderr": bytearray()}
     files = {}
+    guard = _WriteGuard(max_bytes, deadline_epoch, clock, prefix="LOG_CAPTURE")
     try:
         with selectors.DefaultSelector() as selector:
             for fd, name in ((stdout_fd, "stdout"), (stderr_fd, "stderr")):
+                guard.check()
                 files[name] = (destination / (name + ".log")).open("xb", buffering=0)
                 selector.register(fd, selectors.EVENT_READ, name)
             while selector.get_map():
-                remaining = deadline_epoch - clock()
-                require(math.isfinite(remaining) and remaining > 0, "LOG_CAPTURE_DEADLINE")
+                remaining = deadline_epoch - guard.check()
                 for key, _events in selector.select(min(1.0, remaining)):
+                    guard.check()  # select may wake at or after the cutoff.
                     room = max_bytes - sum(map(len, captured.values()))
                     chunk = os.read(key.fd, min(64 * 1024, room + 1))
+                    guard.check()  # Never write bytes obtained after the cutoff.
                     if not chunk:
                         selector.unregister(key.fd)
                         continue
                     prefix = chunk[:room]
-                    require(files[key.data].write(prefix) == len(prefix), "LOG_SINK_SHORT_WRITE")
+                    guard.write(files[key.data], prefix)
                     captured[key.data].extend(prefix)
                     require(len(chunk) <= room, "LOG_BYTES_LIMIT")
-        require(clock() <= deadline_epoch, "LOG_CAPTURE_DEADLINE")
-        return bytes(captured["stdout"]), bytes(captured["stderr"])
-    finally:
         for stream in files.values():
-            os.fsync(stream.fileno())
-            stream.close()
+            guard.sync(stream)
+    finally:
+        close_error = None
+        for stream in files.values():
+            try:
+                stream.close()
+            except BaseException as exc:
+                close_error = close_error or exc
+        if close_error is not None:
+            raise close_error
+    guard.check()
+    return bytes(captured["stdout"]), bytes(captured["stderr"])
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import tempfile
@@ -276,6 +277,10 @@ class IBMPilotTests(unittest.TestCase):
             self.assertEqual(receipt["stages"][stage], "DEFERRED")
         scope = self.request.parent / ("pilot-" + self.request.run_id)
         self.assertTrue((scope / "adapter-receipt.json").is_file())
+        candidate = pilot.strict_json((scope / "adapter-receipt.json").read_text())
+        self.assertEqual(candidate["state"], "UNKNOWN")
+        self.assertEqual(candidate["candidate_state"], "SYNTHETIC_TECHNICAL_BUNDLE")
+        self.assertEqual(candidate["receipt_persistence"]["restart_acceptance"], "EXTERNAL_VERIFIER_REQUIRED")
         self.assertTrue((scope / "pilot.job.json").is_file())
         for leaf in pilot.SPOOL_LEAVES:
             self.assertEqual(list((scope / "spool" / leaf).iterdir()), [])
@@ -568,29 +573,30 @@ class IBMPilotTests(unittest.TestCase):
 
     def test_compute_deadline_exceeded_is_unknown_and_retained(self):
         times = iter([NOW, NOW, NOW, 1801, 1801])
-        receipt = pilot.run_pilot(self.request, executor=self.executor, clock=lambda: next(times))
+        receipt = pilot.run_pilot(self.request, executor=self.executor, clock=lambda: next(times, 1801))
         self.assertEqual(receipt["state"], "UNKNOWN")
         self.assertEqual(receipt["error_code"], "COMPUTE_DEADLINE_EXCEEDED")
         self.assertEqual(receipt["delivery"], "UNVERIFIED_RETAIN_ALL")
 
     def test_finalization_preserves_stop_reserve(self):
         times = iter([NOW, NOW, NOW, NOW, 1901])
-        receipt = pilot.run_pilot(self.request, executor=self.executor, clock=lambda: next(times))
+        receipt = pilot.run_pilot(self.request, executor=self.executor, clock=lambda: next(times, 1901))
         self.assertEqual(receipt["state"], "UNKNOWN")
         self.assertEqual(receipt["error_code"], "FINALIZATION_DEADLINE_EXCEEDED")
         self.assertEqual(receipt["timings"]["finalization_deadline_epoch"], 1800)
 
     def test_finalization_cannot_spend_external_export_reserve(self):
-        for finished, success in ((1800, True), (1800.001, False), (1899, False), (1900, False)):
+        for finished, success in ((1799.999, True), (1800, False), (1800.001, False), (1899, False), (1900, False)):
             with self.subTest(finished=finished):
                 case = IBMPilotTests()
                 case.setUp()
                 try:
                     times = iter([NOW, NOW, NOW, 1799, finished])
-                    receipt = pilot.run_pilot(case.request, executor=case.executor, clock=lambda: next(times))
+                    receipt = pilot.run_pilot(case.request, executor=case.executor, clock=lambda: next(times, finished))
                     self.assertEqual(receipt["state"], "SYNTHETIC_TECHNICAL_BUNDLE" if success else "UNKNOWN")
                     if not success:
-                        self.assertEqual(receipt["error_code"], "FINALIZATION_DEADLINE_EXCEEDED")
+                        self.assertEqual(receipt["error_code"], "RECEIPT_WRITE_DEADLINE" if finished == 1800
+                                         else "FINALIZATION_DEADLINE_EXCEEDED")
                     self.assertEqual(receipt["export"], {"status": "DEFERRED", "deadline_epoch": 1900,
                                                          "reserved_seconds": 100})
                     self.assertEqual(receipt["timings"]["stop_deadline_epoch"], 2000)
@@ -615,13 +621,16 @@ class IBMPilotTests(unittest.TestCase):
                         values = [NOW] * 5
                         values[index] = value
                         times = iter(values)
-                        receipt = pilot.run_pilot(case.request, executor=case.executor, clock=lambda: next(times))
+                        receipt = pilot.run_pilot(case.request, executor=case.executor, clock=lambda: next(times, values[-1]))
                         self.assertEqual(receipt["state"], "UNKNOWN")
                         self.assertEqual(receipt["error_code"], "INVALID_FINAL_CLOCK" if index == 4
                                          else "INVALID_OR_BACKWARD_CLOCK")
                         self.assertEqual(case.executor.calls, 0 if index < 3 else 1)
                         saved = case.request.parent / ("pilot-" + case.request.run_id) / "adapter-receipt.json"
-                        self.assertEqual(pilot.strict_json(saved.read_text())["state"], "UNKNOWN")
+                        if saved.exists():
+                            self.assertEqual(pilot.strict_json(saved.read_text())["state"], "UNKNOWN")
+                        attempt = next(case.request.parent.glob(".ibm-video-*.attempt.json"))
+                        self.assertEqual(pilot.strict_json(attempt.read_text())["state"], "UNKNOWN")
                         with self.assertRaisesRegex(pilot.PilotBlocked, "DUPLICATE_OR_UNKNOWN"):
                             case.run_pilot()
                     finally:
@@ -649,6 +658,41 @@ class IBMPilotTests(unittest.TestCase):
     def test_log_overflow(self):
         self.executor.execution_change = lambda e: replace(e, stderr=b"x" * (self.request.limits.max_log_bytes + 1))
         self.assertEqual(self.run_pilot()["error_code"], "LOG_BYTES_LIMIT")
+
+    def test_receipt_overflow_is_rejected_before_creating_sink(self):
+        # SYNTHETIC regression: native output is small; only receipt grows.
+        finish = pilot._finish_bundle
+        cap = self.request.limits.max_file_bytes
+        def oversized(*args):
+            return {**finish(*args), "synthetic_padding": "x" * (cap + 1)}
+        with patch.object(pilot, "_finish_bundle", side_effect=oversized):
+            receipt = self.run_pilot()
+        self.assertEqual(receipt["state"], "UNKNOWN")
+        self.assertFalse((self.request.parent / ("pilot-" + self.request.run_id)
+                          / "adapter-receipt.json").exists())
+        attempt = next(self.request.parent.glob(".ibm-video-*.attempt.json"))
+        self.assertEqual(pilot.strict_json(attempt.read_text())["state"], "UNKNOWN")
+
+    def test_late_receipt_fsync_never_leaves_authoritative_success(self):
+        now = [NOW]
+        write, sync = pilot._write_bounded_new, pilot.os.fsync
+        def late_sync(fd):
+            sync(fd)
+            now[0] = 1800  # A syscall can return late; the guard cannot preempt it.
+        def write_late(*args, **kwargs):
+            with patch.object(pilot.os, "fsync", side_effect=late_sync):
+                return write(*args, **kwargs)
+        with patch.object(pilot, "_write_bounded_new", side_effect=write_late):
+            receipt = pilot.run_pilot(self.request, executor=self.executor, clock=lambda: now[0])
+        self.assertEqual(receipt["state"], "UNKNOWN")
+        self.assertEqual(receipt["error_code"], "RECEIPT_WRITE_DEADLINE")
+        saved = self.request.parent / ("pilot-" + self.request.run_id) / "adapter-receipt.json"
+        candidate = pilot.strict_json(saved.read_text())
+        self.assertEqual(candidate["state"], "UNKNOWN")
+        self.assertEqual(candidate["candidate_state"], "SYNTHETIC_TECHNICAL_BUNDLE")
+        self.assertLessEqual(saved.stat().st_size, pilot.MAX_RECEIPT_BYTES)
+        with self.assertRaisesRegex(pilot.PilotBlocked, "DUPLICATE_OR_UNKNOWN"):
+            self.run_pilot()
 
     def test_timeout_reserves_and_no_duplicate_even_new_run_id(self):
         self.executor.before_execute = lambda _: (_ for _ in ()).throw(TimeoutError("DO NOT PERSIST PRIVATE LOG"))
@@ -998,7 +1042,7 @@ class LinuxEnforcementTests(unittest.TestCase):
             with self.assertRaisesRegex(pilot.PilotBlocked, "OUTPUT_MOUNT_INVALID"):
                 self.native_mounted_capacity(mountpoint, image)
 
-    def capture(self, chunks, *, cap=12, clock=lambda: NOW):
+    def capture(self, chunks, *, cap=12, clock=lambda: NOW, on_select=None):
         class Selector:
             def __init__(inner):
                 inner.mapping = {}
@@ -1013,6 +1057,8 @@ class LinuxEnforcementTests(unittest.TestCase):
             def get_map(inner):
                 return inner.mapping
             def select(inner, timeout):
+                if on_select:
+                    on_select()
                 return [(key, 1) for key in list(inner.mapping.values())]
         buffers = {fd: bytearray(value) for fd, value in chunks.items()}
         def read(fd, maximum):
@@ -1039,6 +1085,155 @@ class LinuxEnforcementTests(unittest.TestCase):
         with self.assertRaisesRegex(pilot.PilotBlocked, "LOG_CAPTURE_DEADLINE"):
             self.capture({10: b"private", 11: b"error"}, clock=lambda: 1800)
         self.assertEqual(sum(p.stat().st_size for p in (self.root / "logs").iterdir()), 0)
+
+    def test_log_deadline_after_selector_blocks_before_read_or_write(self):
+        # SYNTHETIC selector wakeup reaches the cutoff before any pipe I/O.
+        now = [NOW]
+        with self.assertRaisesRegex(pilot.PilotBlocked, "LOG_CAPTURE_DEADLINE"):
+            self.capture({10: b"private", 11: b"error"}, clock=lambda: now[0],
+                         on_select=lambda: now.__setitem__(0, 1800))
+        self.assertEqual(sum(p.stat().st_size for p in (self.root / "logs").iterdir()), 0)
+
+    def test_log_first_sync_failure_still_closes_both_sinks(self):
+        opened, original = [], Path.open
+        def track(path, *args, **kwargs):
+            stream = original(path, *args, **kwargs)
+            if path.suffix == ".log":
+                opened.append(stream)
+            return stream
+        with patch.object(Path, "open", track), patch.object(pilot.os, "fsync", side_effect=OSError("synthetic")) as sync:
+            with self.assertRaises(OSError):
+                self.capture({10: b"a", 11: b"b"})
+        self.assertEqual(sync.call_count, 1)
+        self.assertEqual(len(opened), 2)
+        self.assertTrue(all(stream.closed for stream in opened))
+
+    def test_log_first_sync_reaches_cutoff_no_second_sync_and_no_success(self):
+        now, opened, original = [NOW], [], Path.open
+        def track(path, *args, **kwargs):
+            stream = original(path, *args, **kwargs)
+            if path.suffix == ".log":
+                opened.append(stream)
+            return stream
+        with patch.object(Path, "open", track), patch.object(pilot.os, "fsync", side_effect=lambda _: now.__setitem__(0, 1800)) as sync:
+            with self.assertRaisesRegex(pilot.PilotBlocked, "LOG_CAPTURE_DEADLINE"):
+                self.capture({10: b"a", 11: b"b"}, clock=lambda: now[0])
+        self.assertEqual(sync.call_count, 1)
+        self.assertEqual(len(opened), 2)
+        self.assertTrue(all(stream.closed for stream in opened))
+
+
+class BoundedWriterTests(unittest.TestCase):
+    """Small synthetic sink tests; no process, provider or native media writer."""
+    @unittest.skipUnless(sys.platform == "linux", "requires real Linux symlink semantics")
+    def test_linux_isolated_receipt_symlink_and_deadline(self):
+        # Real local Linux files/symlinks in a disposable directory; no media,
+        # process, mount, container, network or provider. CI must not skip this.
+        with tempfile.TemporaryDirectory(prefix="ibm-receipt-linux-") as folder:
+            root = Path(folder)
+            self.assertEqual(root.resolve().parent, Path(tempfile.gettempdir()).resolve())
+            outside = root / "untouched.json"
+            outside.write_bytes(b"UNCHANGED")
+            scope = root / "owned"
+            scope.mkdir()
+            leaf = scope / "adapter-receipt.json"
+            leaf.symlink_to(outside)
+            raw = pilot.encoded({"state": "UNKNOWN", "candidate_state": "SYNTHETIC_TECHNICAL_BUNDLE"})
+            with self.assertRaises(FileExistsError):
+                pilot._write_bounded_new(leaf, raw, max_bytes=len(raw), deadline_epoch=1800, clock=lambda: NOW)
+            self.assertEqual(outside.read_bytes(), b"UNCHANGED")
+            ancestor = root / "scope-alias"
+            ancestor.symlink_to(scope, target_is_directory=True)
+            with self.assertRaisesRegex(pilot.PilotBlocked, "SYMLINK"):
+                pilot._write_bounded_new(ancestor / "new.json", raw, max_bytes=len(raw),
+                                         deadline_epoch=1800, clock=lambda: NOW)
+            self.assertFalse((scope / "new.json").exists())
+            expired = scope / "expired.json"
+            with self.assertRaisesRegex(pilot.PilotBlocked, "RECEIPT_WRITE_DEADLINE"):
+                pilot._write_bounded_new(expired, raw, max_bytes=len(raw), deadline_epoch=NOW, clock=lambda: NOW)
+            self.assertFalse(expired.exists())
+            candidate = scope / "candidate.json"
+            self.assertEqual(pilot._write_bounded_new(candidate, raw, max_bytes=len(raw),
+                             deadline_epoch=1800, clock=lambda: NOW), NOW)
+            self.assertEqual(candidate.read_bytes(), raw)
+            self.assertEqual(pilot.strict_json(candidate.read_text())["state"], "UNKNOWN")
+            self.assertEqual(outside.read_bytes(), b"UNCHANGED")
+
+    def test_shared_cap_blocks_before_write_and_short_writes_are_completed(self):
+        class ShortSink(io.BytesIO):
+            def write(self, raw):
+                return super().write(raw[:2])
+        first, second = ShortSink(), io.BytesIO()
+        guard = pilot._WriteGuard(5, 1800, lambda: NOW, prefix="TEST")
+        guard.write(first, b"abcd")
+        with self.assertRaisesRegex(pilot.PilotBlocked, "TEST_BYTES_LIMIT"):
+            guard.write(second, b"ef")
+        self.assertEqual(second.getvalue(), b"")
+        guard.write(second, b"e")
+        self.assertEqual(first.getvalue() + second.getvalue(), b"abcde")
+        self.assertEqual(guard.used, 5)
+
+    def test_zero_or_invalid_short_write_fails_without_loop(self):
+        for written in (0, None, True, -1, 4):
+            with self.subTest(written=written):
+                sink = SimpleNamespace(write=lambda _: written)
+                guard = pilot._WriteGuard(3, 1800, lambda: NOW, prefix="TEST")
+                with self.assertRaisesRegex(pilot.PilotBlocked, "SINK_SHORT_WRITE"):
+                    guard.write(sink, b"abc")
+
+    def test_expired_or_invalid_clock_never_calls_write(self):
+        for value in (1800, 1801, True, float("nan"), float("inf")):
+            with self.subTest(value=value):
+                sink = io.BytesIO()
+                guard = pilot._WriteGuard(3, 1800, lambda: value, prefix="TEST")
+                with self.assertRaises(pilot.PilotBlocked):
+                    guard.write(sink, b"abc")
+                self.assertEqual(sink.getvalue(), b"")
+        values = iter([NOW, NOW, NOW - 1])
+        sink = io.BytesIO()
+        guard = pilot._WriteGuard(3, 1800, lambda: next(values), prefix="TEST")
+        guard.write(sink, b"a")
+        with self.assertRaisesRegex(pilot.PilotBlocked, "INVALID_WRITE_CLOCK"):
+            guard.write(sink, b"b")
+        self.assertEqual(sink.getvalue(), b"a")
+
+    def test_inflight_write_can_return_late_but_no_next_chunk_is_submitted(self):
+        now = [NOW]
+        class LateSink(io.BytesIO):
+            def write(self, raw):
+                now[0] = 1800
+                return super().write(raw)
+        sink = LateSink()
+        guard = pilot._WriteGuard(65537, 1800, lambda: now[0], prefix="TEST")
+        with self.assertRaisesRegex(pilot.PilotBlocked, "TEST_DEADLINE"):
+            guard.write(sink, b"x" * 65537)
+        # Explicit limitation: bytes submitted before the cutoff may land late.
+        self.assertEqual(len(sink.getvalue()), 65536)
+
+    def test_utf8_receipt_cap_counts_bytes_before_creating_a_file(self):
+        with self.assertRaisesRegex(pilot.PilotBlocked, "RECEIPT_BYTES_LIMIT"):
+            pilot._bounded_json({"text": "\u00e9" * 8}, 20)
+        with patch.object(Path, "open") as opened:
+            with self.assertRaisesRegex(pilot.PilotBlocked, "RECEIPT_BYTES_LIMIT"):
+                pilot._write_bounded_new(Path("unused"), b"abcd", max_bytes=3,
+                                         deadline_epoch=1800, clock=lambda: NOW)
+            opened.assert_not_called()
+
+    def test_receipt_close_latency_is_checked_before_return(self):
+        now = [NOW]
+        class ClosingSink(io.BytesIO):
+            def fileno(self):
+                return 123
+            def __exit__(self, *args):
+                super().__exit__(*args)
+                now[0] = 1800
+        sink = ClosingSink()
+        with patch.object(Path, "open", return_value=sink), patch.object(pilot, "safe_path"), \
+             patch.object(pilot.os, "fsync"):
+            with self.assertRaisesRegex(pilot.PilotBlocked, "RECEIPT_WRITE_DEADLINE"):
+                pilot._write_bounded_new(Path("unused"), b"abc", max_bytes=3,
+                                         deadline_epoch=1800, clock=lambda: now[0])
+        self.assertTrue(sink.closed)
 
 
 if __name__ == "__main__":
