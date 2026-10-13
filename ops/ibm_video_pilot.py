@@ -251,6 +251,9 @@ class Request:
     model_hashes: tuple[tuple[str, str], ...]
     limits: Limits
     source_commit: str = BASELINE
+    # Bounded producer evidence, not an authenticated verifier attestation.
+    # Its exact bytes are bound by clip.evidence_sha256 and the admission.
+    clip_evidence_json: bytes = b""
 
 
 @dataclass(frozen=True)
@@ -288,6 +291,7 @@ class Plan:
     compute_deadline_epoch: float
     job_json: bytes
     job_hash: str
+    export_deadline_epoch: float
     # No host env inheritance, including PATH, DOCKER_HOST or DOCKER_CONTEXT.
     client_env: tuple[tuple[str, str], ...] = ()
 
@@ -387,9 +391,47 @@ def _limits(limits: Limits, now: float) -> float:
                         (limits.max_log_bytes, 4 * 1024**2)):
         require(type(number) is int and 0 < number <= cap, "INVALID_OUTPUT_CAP")
     require(limits.max_file_bytes <= limits.max_output_bytes, "INVALID_OUTPUT_CAP")
-    deadline = limits.deadline_epoch - limits.export_reserve_seconds - limits.stop_reserve_seconds
+    export_deadline = limits.deadline_epoch - limits.stop_reserve_seconds
+    deadline = export_deadline - limits.export_reserve_seconds
+    # Positive inputs alone do not prove representable, non-overlapping windows.
+    require(math.isfinite(deadline) and math.isfinite(export_deadline)
+            and deadline < export_deadline < limits.deadline_epoch
+            and export_deadline - deadline >= limits.export_reserve_seconds
+            and limits.deadline_epoch - export_deadline >= limits.stop_reserve_seconds,
+            "UNREPRESENTABLE_DEADLINE_WINDOWS")
     require(deadline > now, "NO_COMPUTE_WINDOW")
     return deadline
+
+
+def _clip_evidence(clip: Clip, raw: bytes) -> None:
+    """Bind a supplied document to bytes and a half-open seconds mapping.
+
+    This checks consistency only. A producer can assert false facts; live
+    execution still requires the independent source/PTS verifier in LIVE_GAPS.
+    No source video is opened or downloaded by this document check.
+    """
+    require(type(raw) is bytes and 0 < len(raw) <= 16 * 1024, "CLIP_EVIDENCE_REQUIRED_OR_TOO_LARGE")
+    require(hashlib.sha256(raw).hexdigest() == clip.evidence_sha256, "CLIP_EVIDENCE_HASH_MISMATCH")
+    try:
+        evidence = strict_json(raw.decode("utf-8"))
+        require(type(evidence["source"]["size_bytes"]) is int and
+                type(evidence["clip"]["size_bytes"]) is int, "CLIP_EVIDENCE_BYTES_INVALID")
+        numeric = (evidence["source"]["size_bytes"], evidence["source"]["duration_seconds"],
+                   evidence["clip"]["size_bytes"], evidence["clip"]["duration_seconds"],
+                   *evidence["mapping"]["source"], *evidence["mapping"]["clip"])
+        require(all(type(n) in (int, float) and math.isfinite(n) for n in numeric),
+                "CLIP_EVIDENCE_NUMERIC_INVALID")
+    except (ValueError, TypeError, KeyError, UnicodeError, OverflowError, RecursionError) as exc:
+        raise PilotBlocked("CLIP_EVIDENCE_INVALID") from exc
+    expected = {"schema": "ibm-video-clip-evidence-v1", "provenance": clip.provenance,
+                "source": {"drive_id": clip.drive_id, "size_bytes": clip.source_bytes,
+                           "sha256": clip.source_sha256, "duration_seconds": clip.source_duration_seconds},
+                "clip": {"size_bytes": clip.size_bytes, "sha256": clip.sha256,
+                         "duration_seconds": clip.duration_seconds},
+                "mapping": {"time_unit": "seconds", "interval": "half_open",
+                            "source": [clip.source_start_pts, clip.source_end_pts],
+                            "clip": [clip.clip_start_pts, clip.clip_end_pts]}}
+    require(evidence == expected, "CLIP_EVIDENCE_BINDING_MISMATCH")
 
 
 def _inputs(request: Request, observation: Observation) -> dict[str, tuple]:
@@ -431,6 +473,9 @@ def _inputs(request: Request, observation: Observation) -> dict[str, tuple]:
     pts = (c.source_start_pts, c.source_end_pts, c.clip_start_pts, c.clip_end_pts)
     require(all(type(n) in (int, float) and math.isfinite(n) for n in (*pts, c.duration_seconds)),
             "INVALID_PTS")
+    require(type(observation.pts) is tuple and len(observation.pts) == 4 and
+            all(type(n) in (int, float) and math.isfinite(n)
+                for n in (*observation.pts, observation.duration_seconds)), "INVALID_OBSERVED_PTS")
     require(pts == (START, END, 0.0, END - START) and observation.pts == pts,
             "CLIP_PTS_MAPPING_MISMATCH")
     require(0 < c.duration_seconds <= 70 and abs(c.duration_seconds - (END - START)) <= 0.001 and
@@ -442,6 +487,7 @@ def _inputs(request: Request, observation: Observation) -> dict[str, tuple]:
     require(clip[:2] == (c.size_bytes, c.sha256) == (observation.clip_bytes, observation.clip_sha256),
             "CLIP_BYTES_HASH_MISMATCH")
     require(type(c.size_bytes) is int and c.size_bytes > 0, "INVALID_CLIP_SIZE")
+    _clip_evidence(c, request.clip_evidence_json)
     models = tree_hashes(request.asr_model, max_bytes=8 * 1024**3, max_files=128)
     require({"model.bin", "config.json", "tokenizer.json"} <= models.keys(), "ASR_CACHE_INCOMPLETE")
     require(models == dict(request.model_hashes) and len(models) == len(request.model_hashes),
@@ -493,7 +539,8 @@ def build_plan(request: Request, observation: Observation, *, now: float) -> Pla
     mounts += [Mount(str(request.speaker_cache / name), SPEAKER + "/" + name, True)
                for name in sorted(SPEAKER_HASHES)]
     return Plan(name, scope, request.image_id, RUNNER_ARGV, tuple(sorted(environment().items())),
-                tuple(mounts), deadline, encoded(payload), canonical_job_hash(job))
+                tuple(mounts), deadline, encoded(payload), canonical_job_hash(job),
+                request.limits.deadline_epoch - request.limits.stop_reserve_seconds)
 
 
 def validate_plan(plan: Plan, request: Request, observation: Observation, *, now: float) -> None:
@@ -639,7 +686,8 @@ def run_pilot(request: Request, *, executor: Executor, clock=time.time) -> dict:
     require(not attempt.exists(), "DUPLICATE_OR_UNKNOWN_ATTEMPT")
     observation = executor.observe(request)
     require(observation.synthetic is True, "SYNTHETIC_EXECUTOR_REQUIRED")
-    plan = build_plan(request, observation, now=clock())
+    admitted_at = clock()
+    plan = build_plan(request, observation, now=admitted_at)
     identities = _inputs(request, observation)
     _write_new(attempt, encoded({"schema": "ibm-video-pilot-attempt-v1", "state": "UNKNOWN",
                                "run_id": request.run_id, "retry_allowed": False,
@@ -658,12 +706,25 @@ def run_pilot(request: Request, *, executor: Executor, clock=time.time) -> dict:
                          "budget_ceiling_usd": request.limits.budget_usd},
                "stages": {stage: "BLOCKED" for stage in resolve_profile("bridge_lesson").stages},
                "delivery": "UNVERIFIED_RETAIN_ALL", "cleanup": "NOT_ATTEMPTED",
+               "export": {"status": "DEFERRED", "deadline_epoch": plan.export_deadline_epoch,
+                          "reserved_seconds": request.limits.export_reserve_seconds},
                "roles": "UNKNOWN", "person_identity": "NOT_INFERRED"}
     receipt["stages"].update({stage: "DEFERRED" for stage in DOWNSTREAM})
     execution = None
     observed_elapsed = peak_memory = None
-    started = clock()
+    last_clock = admitted_at
+
+    def sample_clock():
+        nonlocal last_clock
+        value = clock()
+        require(type(value) in (int, float) and math.isfinite(value) and value >= last_clock,
+                "INVALID_OR_BACKWARD_CLOCK")
+        last_clock = value
+        return value
+
+    started = None
     try:
+        started = sample_clock()
         dirs, placeholders = _scratch_layout()
         for leaf in sorted(dirs, key=lambda name: (name.count("/"), name)):
             (plan.scope / leaf).mkdir()
@@ -673,14 +734,14 @@ def run_pilot(request: Request, *, executor: Executor, clock=time.time) -> dict:
         _write_new(plan.scope / "pilot.job.json", plan.job_json)
         job_identity = file_identity(plan.scope / "pilot.job.json", cap=256 * 1024)
         require(identities == _inputs(request, executor.observe(request)), "INPUT_RACE")
-        require(clock() < plan.compute_deadline_epoch, "DEADLINE_BEFORE_START")
+        require(sample_clock() < plan.compute_deadline_epoch, "DEADLINE_BEFORE_START")
         execution = executor.execute_one(plan, request.limits)
         require(isinstance(execution, Execution), "LOST_EXECUTION_RECEIPT")
         require(execution.created_new is True and execution.owner == plan.name and
                 isinstance(execution.container_id, str) and HEX64.fullmatch(execution.container_id) is not None,
                 "CONTAINER_OWNERSHIP_UNPROVED")
         require(execution.stopped is True, "CONTAINER_STOP_UNPROVED")
-        require(clock() <= plan.compute_deadline_epoch, "COMPUTE_DEADLINE_EXCEEDED")
+        require(sample_clock() <= plan.compute_deadline_epoch, "COMPUTE_DEADLINE_EXCEEDED")
         require(type(execution.elapsed_seconds) in (int, float) and math.isfinite(execution.elapsed_seconds)
                 and 0 <= execution.elapsed_seconds <= plan.compute_deadline_epoch - started,
                 "EXECUTION_TIMING_INVALID")
@@ -715,16 +776,22 @@ def run_pilot(request: Request, *, executor: Executor, clock=time.time) -> dict:
                 except Exception:
                     receipt["cleanup"] = "UNKNOWN_RETAIN_RESULTS"
                     receipt["state"] = "UNKNOWN"
-        finished = clock()
-        finalization_deadline = request.limits.deadline_epoch - request.limits.stop_reserve_seconds
-        if type(finished) not in (int, float) or not math.isfinite(finished) or finished < started:
+        # Verification/cleanup are local preparation, not external delivery.
+        # They must not consume the export window while delivery is unverified.
+        finalization_deadline = plan.compute_deadline_epoch
+        try:
+            finished = sample_clock()
+        except Exception:
             finished = None
             receipt["state"], receipt["error_code"] = "UNKNOWN", "INVALID_FINAL_CLOCK"
-        elif finished > finalization_deadline:
-            receipt["state"], receipt["error_code"] = "UNKNOWN", "FINALIZATION_DEADLINE_EXCEEDED"
+        if finished is not None and finished > finalization_deadline:
+            receipt["state"] = "UNKNOWN"
+            receipt.setdefault("error_code", "FINALIZATION_DEADLINE_EXCEEDED")
         receipt["timings"] = {"started_epoch": started, "finished_epoch": finished,
                               "compute_deadline_epoch": plan.compute_deadline_epoch,
                               "finalization_deadline_epoch": finalization_deadline,
+                              "export_deadline_epoch": plan.export_deadline_epoch,
+                              "stop_deadline_epoch": request.limits.deadline_epoch,
                               "observed_elapsed_seconds": observed_elapsed}
         _write_new(plan.scope / "adapter-receipt.json", encoded(receipt))
     return receipt

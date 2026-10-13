@@ -42,6 +42,15 @@ REPO = Path(__file__).resolve().parents[1]
 NOW = 1000.0
 
 
+def synthetic_clip_evidence(clip):
+    return {"schema": "ibm-video-clip-evidence-v1", "provenance": "SYNTHETIC_FIXTURE",
+            "source": {"drive_id": pilot.DRIVE_ID, "size_bytes": pilot.SOURCE_BYTES,
+                       "sha256": pilot.SOURCE_SHA256, "duration_seconds": pilot.SOURCE_SECONDS},
+            "clip": {"size_bytes": clip.size_bytes, "sha256": clip.sha256, "duration_seconds": 70.0},
+            "mapping": {"time_unit": "seconds", "interval": "half_open",
+                        "source": [1250.0, 1320.0], "clip": [0.0, 70.0]}}
+
+
 class SyntheticExecutor:
     synthetic = True
 
@@ -169,6 +178,8 @@ class IBMPilotTests(unittest.TestCase):
                           hashlib.sha256(clip_path.read_bytes()).hexdigest(), 70.0,
                           1250.0, 1320.0, 0.0, 70.0, pilot.DRIVE_ID, pilot.SOURCE_BYTES,
                           pilot.SOURCE_SHA256, pilot.SOURCE_SECONDS, "SYNTHETIC_FIXTURE", "e" * 64)
+        evidence = pilot.encoded(synthetic_clip_evidence(clip))
+        clip = replace(clip, evidence_sha256=hashlib.sha256(evidence).hexdigest())
         model = inputs / "asr"
         model.mkdir()
         for name in ("model.bin", "config.json", "tokenizer.json"):
@@ -188,7 +199,8 @@ class IBMPilotTests(unittest.TestCase):
                               None, "a" * 64, "b" * 64, "c" * 64)
         self.request = pilot.Request("1" * 32, parent, source, clip, model, speaker,
                                      "sha256:" + "f" * 64, code,
-                                     tuple(sorted(pilot.tree_hashes(model, max_bytes=1024**2, max_files=128).items())), limits)
+                                     tuple(sorted(pilot.tree_hashes(model, max_bytes=1024**2, max_files=128).items())), limits,
+                                     clip_evidence_json=evidence)
         self.request = replace(self.request, limits=replace(limits, admission_sha256=pilot.admission_fingerprint(self.request)))
         self.executor = SyntheticExecutor(self.request)
 
@@ -349,6 +361,74 @@ class IBMPilotTests(unittest.TestCase):
         self.assertEqual(plan.client_env, ())
         self.assertFalse(any("secret" in arg for arg in plan.docker_create_argv()))
 
+    def evidence_request(self, raw):
+        request = replace(self.request, clip_evidence_json=raw,
+                          clip=replace(self.request.clip, evidence_sha256=hashlib.sha256(raw).hexdigest()))
+        return replace(request, limits=replace(request.limits, admission_sha256=pilot.admission_fingerprint(request)))
+
+    def test_clip_evidence_requires_actual_bounded_document_and_hash(self):
+        for raw in (b"", b"x" * (16 * 1024 + 1), "not bytes"):
+            with self.subTest(raw_type=type(raw).__name__, size=len(raw)):
+                self.assert_blocked("CLIP_EVIDENCE_REQUIRED_OR_TOO_LARGE",
+                                    request=replace(self.request, clip_evidence_json=raw))
+        self.assert_blocked("CLIP_EVIDENCE_HASH_MISMATCH",
+                            request=replace(self.request, clip_evidence_json=self.request.clip_evidence_json + b" "))
+        # Whitespace is permitted, but its exact bytes must have their own pin.
+        self.assertEqual(self.plan(self.evidence_request(self.request.clip_evidence_json + b"\n")).export_deadline_epoch, 1900)
+
+    def test_clip_evidence_rejects_malformed_duplicate_and_nonfinite_json(self):
+        for raw in (b"\xff", b"{", b"null", b"[]", b'{"schema":1,"schema":2}',
+                    b'{"mapping":NaN}', b"[" * 1500 + b"]" * 1500):
+            with self.subTest(raw=raw[:40]):
+                self.assert_blocked("CLIP_EVIDENCE_INVALID", request=self.evidence_request(raw))
+
+    def test_clip_evidence_rehashed_different_source_clip_or_pts_is_rejected(self):
+        mutations = (("source", "drive_id", "different-source"),
+                     ("source", "size_bytes", pilot.SOURCE_BYTES + 1),
+                     ("source", "sha256", "0" * 64),
+                     ("source", "duration_seconds", pilot.SOURCE_SECONDS + 1),
+                     ("clip", "sha256", "0" * 64), ("clip", "size_bytes", 1),
+                     ("clip", "duration_seconds", 69),
+                     ("mapping", "source", [1250, 1321]),
+                     ("mapping", "clip", [1, 71]),
+                     ("mapping", "time_unit", "milliseconds"),
+                     ("mapping", "interval", "closed"),
+                     ("mapping", "source", [1250, 1320, 1330]))
+        for section, key, value in mutations:
+            with self.subTest(section=section, key=key):
+                doc = synthetic_clip_evidence(self.request.clip)
+                doc[section][key] = value
+                self.assert_blocked("CLIP_EVIDENCE_BINDING_MISMATCH",
+                                    request=self.evidence_request(pilot.encoded(doc)))
+        for key, value in (("schema", "unknown"), ("provenance", "CLAIMED"), ("extra", "ignored?")):
+            with self.subTest(key=key):
+                doc = {**synthetic_clip_evidence(self.request.clip), key: value}
+                self.assert_blocked("CLIP_EVIDENCE_BINDING_MISMATCH",
+                                    request=self.evidence_request(pilot.encoded(doc)))
+
+    def test_boolean_zero_pts_is_not_a_timestamp_in_evidence_or_observation(self):
+        doc = synthetic_clip_evidence(self.request.clip)
+        doc["mapping"]["clip"][0] = False
+        self.assert_blocked("CLIP_EVIDENCE_INVALID", request=self.evidence_request(pilot.encoded(doc)))
+        for value in (False, float("nan"), float("inf"), "0"):
+            with self.subTest(value=value):
+                self.executor.observation_change = lambda observation: replace(
+                    observation, pts=(1250, 1320, value, 70))
+                self.assert_blocked("INVALID_OBSERVED_PTS")
+
+    def test_clip_evidence_byte_counts_are_integers(self):
+        for section in ("source", "clip"):
+            doc = synthetic_clip_evidence(self.request.clip)
+            doc[section]["size_bytes"] = float(doc[section]["size_bytes"])
+            with self.subTest(section=section):
+                self.assert_blocked("CLIP_EVIDENCE_INVALID", request=self.evidence_request(pilot.encoded(doc)))
+
+    def test_changed_document_digest_needs_new_admission(self):
+        raw = self.request.clip_evidence_json + b"\n"
+        request = replace(self.request, clip_evidence_json=raw,
+                          clip=replace(self.request.clip, evidence_sha256=hashlib.sha256(raw).hexdigest()))
+        self.assert_blocked("ADMISSION_BINDING_MISMATCH", request=request)
+
     def test_deadline_budget_and_enforcement_gates(self):
         for changes, code in (({"deadline_epoch": 1100}, "NO_COMPUTE_WINDOW"),
                               ({"export_reserve_seconds": 0}, "RESERVE_REQUIRED"),
@@ -498,7 +578,54 @@ class IBMPilotTests(unittest.TestCase):
         receipt = pilot.run_pilot(self.request, executor=self.executor, clock=lambda: next(times))
         self.assertEqual(receipt["state"], "UNKNOWN")
         self.assertEqual(receipt["error_code"], "FINALIZATION_DEADLINE_EXCEEDED")
-        self.assertEqual(receipt["timings"]["finalization_deadline_epoch"], 1900)
+        self.assertEqual(receipt["timings"]["finalization_deadline_epoch"], 1800)
+
+    def test_finalization_cannot_spend_external_export_reserve(self):
+        for finished, success in ((1800, True), (1800.001, False), (1899, False), (1900, False)):
+            with self.subTest(finished=finished):
+                case = IBMPilotTests()
+                case.setUp()
+                try:
+                    times = iter([NOW, NOW, NOW, 1799, finished])
+                    receipt = pilot.run_pilot(case.request, executor=case.executor, clock=lambda: next(times))
+                    self.assertEqual(receipt["state"], "SYNTHETIC_TECHNICAL_BUNDLE" if success else "UNKNOWN")
+                    if not success:
+                        self.assertEqual(receipt["error_code"], "FINALIZATION_DEADLINE_EXCEEDED")
+                    self.assertEqual(receipt["export"], {"status": "DEFERRED", "deadline_epoch": 1900,
+                                                         "reserved_seconds": 100})
+                    self.assertEqual(receipt["timings"]["stop_deadline_epoch"], 2000)
+                    self.assertEqual(receipt["delivery"], "UNVERIFIED_RETAIN_ALL")
+                finally:
+                    case.doCleanups()
+
+    def test_rounded_away_deadline_reserves_are_not_admitted(self):
+        for changes in ({"deadline_epoch": 1e20, "export_reserve_seconds": 1, "stop_reserve_seconds": 1},
+                        {"deadline_epoch": 1e20, "export_reserve_seconds": 1, "stop_reserve_seconds": 1e6}):
+            with self.subTest(changes=changes):
+                self.assert_blocked("UNREPRESENTABLE_DEADLINE_WINDOWS", request=replace(
+                    self.request, limits=replace(self.request.limits, **changes)))
+
+    def test_invalid_or_backward_clock_retains_serializable_unknown(self):
+        for index in (1, 2, 3, 4):
+            for value in (True, float("nan"), float("inf"), -float("inf"), NOW - 1):
+                with self.subTest(index=index, value=value):
+                    case = IBMPilotTests()
+                    case.setUp()
+                    try:
+                        values = [NOW] * 5
+                        values[index] = value
+                        times = iter(values)
+                        receipt = pilot.run_pilot(case.request, executor=case.executor, clock=lambda: next(times))
+                        self.assertEqual(receipt["state"], "UNKNOWN")
+                        self.assertEqual(receipt["error_code"], "INVALID_FINAL_CLOCK" if index == 4
+                                         else "INVALID_OR_BACKWARD_CLOCK")
+                        self.assertEqual(case.executor.calls, 0 if index < 3 else 1)
+                        saved = case.request.parent / ("pilot-" + case.request.run_id) / "adapter-receipt.json"
+                        self.assertEqual(pilot.strict_json(saved.read_text())["state"], "UNKNOWN")
+                        with self.assertRaisesRegex(pilot.PilotBlocked, "DUPLICATE_OR_UNKNOWN"):
+                            case.run_pilot()
+                    finally:
+                        case.doCleanups()
 
     def test_invalid_executor_metrics_still_persist_unknown_receipt(self):
         for field, value in (("elapsed_seconds", float("nan")), ("elapsed_seconds", float("inf")),
