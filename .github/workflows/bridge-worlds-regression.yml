@@ -1,0 +1,28 @@
+name: Bridge worlds regression
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'bridge_school_api/ai_worlds.py'
+      - 'tests/test_ai_worlds_constraints.py'
+      - '.github/workflows/bridge-worlds-regression.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  normalized-constraint-keys:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12.14'
+      - name: Reject normalized constraint key collisions
+        env:
+          PYTHONPATH: .
+        run: python tests/test_ai_worlds_constraints.py -v
