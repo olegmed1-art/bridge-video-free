@@ -1,7 +1,7 @@
 name: Managed owner disposable PostgreSQL 18
 on:
   push:
-    branches: [codex-managed-owner-pg18-ci2]
+    branches: [codex-managed-owner-pg18-ci3]
 permissions:
   contents: read
 concurrency:
@@ -14,7 +14,7 @@ jobs:
       github.event.repository.private == false &&
       github.actor == github.repository_owner &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/codex-managed-owner-pg18-ci2' &&
+      github.ref == 'refs/heads/codex-managed-owner-pg18-ci3' &&
       github.event.created == true && github.event.deleted == false &&
       github.event.forced == false && github.run_attempt == 1
     runs-on: ubuntu-24.04
@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 1aecad68976ce63341340371edffc530710ca8b4
+          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 4e638a1919e5cf3a8fe47584d82c753f0c315ae9
           mkdir -p "$RUNNER_TEMP/managed-owner-evidence" "$RUNNER_TEMP/managed-owner-home"
           git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/managed-owner-evidence/source.txt"
           git diff --name-only HEAD^ HEAD > "$RUNNER_TEMP/managed-owner-evidence/changed-files.txt"
@@ -83,17 +83,18 @@ jobs:
             --basetemp="$RUNNER_TEMP/managed-owner-pytest" \
             --junitxml="$RUNNER_TEMP/managed-owner-evidence/unit.xml" \
             tests/test_universal_video_managed_owner_install.py \
+            tests/test_universal_video_runtime_fixture.py \
             tests/test_universal_video_admission_binding.py \
             tests/test_universal_video_admission_client.py \
             tests/test_universal_video_subset_contract.py
-      - name: One PG18 installation as the ordinary owner
+      - name: One complete isolated PG18 preflight
         run: |
           set -euo pipefail
           timeout --signal=INT --kill-after=20s 840s \
             env -i PATH="$PATH" HOME="$RUNNER_TEMP/managed-owner-home" \
             PYTHONPATH="$GITHUB_WORKSPACE" PYTHONDONTWRITEBYTECODE=1 \
             python database/tests/fixed_subset_admission/managed_owner_install.py \
-            --execute --evidence "$RUNNER_TEMP/managed-owner-evidence/runner"
+            --execute --full-preflight --evidence "$RUNNER_TEMP/managed-owner-evidence/runner"
       - name: Capture final database census
         if: always()
         timeout-minutes: 1
@@ -148,20 +149,31 @@ jobs:
           import json, os, pathlib, xml.etree.ElementTree as ET
           out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "managed-owner-evidence"
           r = json.loads((out / "runner/results.json").read_text())
-          assert r["status"] == "PASS_OWNER_INSTALL_ONLY"
+          assert r["status"] == "PASS_FULL_ISOLATED_PREFLIGHT"
           assert r["invariant_041"] == "PASS_BEFORE_AND_AFTER_CUTOVER"
-          assert r["production_preflight"] == "NOT_RUN_FULL_SUITE"
+          assert r["production_preflight"] == "PASS_DISPOSABLE_ONLY"
+          expected = sorted(p.name for p in pathlib.Path("database/tests").glob("*.sql"))
+          assert len(expected) == 116 and sorted(r["sql_inventory"]) == expected
+          assert [x["name"] for x in r["sql_results"]] == expected
+          assert all(x["status"] == "PASS" for x in r["sql_results"])
+          assert r["synthetic_subject_cleanup"] == "PASS"
+          for number, count in (("042", 42), ("043", 20)):
+              f = json.loads((out / "runner/fixtures" / (number+".json")).read_text())
+              assert f["status"] == f["approval_cleanup"]["status"] == "PASS"
+              assert len(f["cases"]) == count and all(x["status"] == "PASS" for x in f["cases"])
           assert len(r["negative_cases"]) == 7 and all(x["status"]=="PASS" for x in r["negative_cases"])
           assert len(r["acl_negative_cases"]) == 2 and all(x["status"]=="PASS" for x in r["acl_negative_cases"])
+          assert len(r["acl_043_negative_cases"]) == 3 and all(x["status"]=="PASS" for x in r["acl_043_negative_cases"])
           census = json.loads((out / "final-census.json").read_text())
           assert 180000 <= int(census["version"]) < 190000
           assert all(census[k] == 0 for k in ("other_clients","advisory_locks","prepared"))
           assert json.loads((out / "service-cleanup.json").read_text())["status"] == "PASS"
           suites = list(ET.parse(out / "unit.xml").getroot().iter("testsuite"))
-          assert sum(int(s.attrib["tests"]) for s in suites) == 242
+          assert sum(int(s.attrib["tests"]) for s in suites) == 275
           assert all(int(s.attrib[k]) == 0 for s in suites for k in ("errors","failures","skipped"))
-          (out / "acceptance.json").write_text(json.dumps({"status":"PASS_SCOPED_PG18_OWNER_AND_041",
-              "full_production_suite":"NOT_RUN","cleanup":"PASS","unit_pass":242})+"\n")
+          (out / "acceptance.json").write_text(json.dumps({"status":"PASS_FULL_ISOLATED_PREFLIGHT",
+              "sql_files_pass":116,"production_target_acl":"UNKNOWN",
+              "cleanup":"PASS","unit_pass":275})+"\n")
           PY
       - name: Preserve bounded evidence in logs without paid artifact storage
         if: always()

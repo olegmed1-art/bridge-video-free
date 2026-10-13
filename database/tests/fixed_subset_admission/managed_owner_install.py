@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -360,7 +361,54 @@ class Runner:
         expect_result(result)
         return result
 
-    def execute(self):
+    def full_preflight(self, report):
+        fixture_path = self.root / "database/tests/fixed_subset_admission/runtime_fixture.py"
+        spec = importlib.util.spec_from_file_location("runtime_fixture", fixture_path)
+        fixture = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fixture)
+        paths = sorted((self.root / "database/tests").glob("*.sql"))
+        require(len(paths) == 116, "SQL inventory changed; reconcile the full preflight")
+        report["sql_inventory"] = {p.name: sha(p.read_bytes()) for p in paths}
+        report["sql_results"] = [{"name": p.name, "status": "NOT_RUN"} for p in paths]
+        expect_result(self.psql("create_synthetic_runtime_subjects", fixture.actor_setup_sql()))
+        primary_error = None
+        try:
+            # Every file in the production glob runs, in the same order. A test
+            # failure is recorded and does not silently omit later known tests.
+            # Each psql session exits, rolling back its open transaction on error.
+            for path, case in zip(paths, report["sql_results"]):
+                result = self.command("full_sql_" + path.name,
+                    ["psql", OWNER_DSN, "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
+                     "-v", "VERBOSITY=verbose", "-f", str(path)],
+                    extra_env={"FIXED_SUBSET_DISPOSABLE_PREFLIGHT": "1",
+                        "FIXED_SUBSET_FIXTURE_EVIDENCE": str(self.evidence / "fixtures"),
+                        "PYTHONPATH": str(self.root), "PYTHONDONTWRITEBYTECODE": "1"})
+                case.update(status="PASS" if result.returncode == 0 else "FAIL",
+                            returncode=result.returncode)
+            failures = [c["name"] for c in report["sql_results"] if c["status"] != "PASS"]
+            require(not failures, "Full preflight failed: " + ", ".join(failures))
+            for number in ("042", "043"):
+                evidence = json.loads((self.evidence / "fixtures" / (number+".json")).read_text())
+                require(evidence["status"] == "PASS" and evidence["approval_cleanup"]["status"] == "PASS",
+                        "runtime fixture evidence incomplete: " + number)
+            # The unchanged 043 rollback/reapply intentionally clears the 0059
+            # checksum. The normal production rerun reconciles that one marker.
+            self.migrate("full_suite_migration_rerun_as_M", self.root / "database/migrations")
+            require(self.read("full_suite_missing_checksums", "SELECT count(*) FROM schema_migration WHERE checksum IS NULL;") == 0,
+                    "missing migration checksums after full suite")
+            report["production_preflight"] = "PASS_DISPOSABLE_ONLY"
+        except BaseException as error:
+            primary_error = error
+            raise
+        finally:
+            cleanup = self.psql("drop_synthetic_runtime_subjects", fixture.actor_cleanup_sql())
+            report["synthetic_subject_cleanup"] = "PASS" if cleanup.returncode == 0 else "FAIL"
+            if primary_error is None:
+                expect_result(cleanup)
+            elif cleanup.returncode != 0:
+                primary_error.add_note("Synthetic role cleanup failed; destroy disposable service")
+
+    def execute(self, *, full_preflight=False):
         source = (self.root / "database/migrations" / MIGRATION).read_bytes()
         cases = negative_cases(source.decode("utf-8"))
         migrations = self.root / "database/migrations"
@@ -423,7 +471,21 @@ class Runner:
                 require(self.read(name + "_rollback", SNAPSHOT_SQL, admin=True) == committed,
                         "ACL negative did not roll back: " + name)
                 report["acl_negative_cases"].append({"name": name, "status": "PASS"})
-            report["status"] = "PASS_OWNER_INSTALL_ONLY"
+            if full_preflight:
+                shared_acl = (self.root / "database/tests/043_universal_video_terminal_size_guard.sql").read_text(encoding="utf-8").split("SELECT EXISTS", 1)[0]
+                report["acl_043_negative_cases"] = []
+                for name, mutation, message in [
+                    ("043_legacy_enqueue", "GRANT EXECUTE ON FUNCTION video_queue.enqueue_drive_batch(text,text,text,text,text,text,text,text,jsonb) TO bridge_school_app;", "fixed-subset queue capabilities mismatch"),
+                    ("043_legacy_finish", "GRANT EXECUTE ON FUNCTION video_queue.finish_job(uuid,uuid,text,text,jsonb,text) TO bridge_school_worker;", "fixed-subset queue capabilities mismatch"),
+                    ("043_direct_worker_write", "GRANT UPDATE ON video_queue.job TO bridge_school_worker;", "worker has forbidden direct job mutation"),
+                ]:
+                    expect_result(self.psql(name, "BEGIN;\n" + mutation + "\n" + shared_acl + "ROLLBACK;\n"),
+                                  state="P0001", message=message)
+                    require(self.read(name+"_rollback", SNAPSHOT_SQL, admin=True) == committed,
+                            "043 ACL negative changed catalog/rows: " + name)
+                    report["acl_043_negative_cases"].append({"name": name, "status": "PASS"})
+                self.full_preflight(report)
+            report["status"] = "PASS_FULL_ISOLATED_PREFLIGHT" if full_preflight else "PASS_OWNER_INSTALL_ONLY"
             return report
         except BaseException as error:
             primary_error = error
@@ -443,6 +505,7 @@ class Runner:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--full-preflight", action="store_true")
     parser.add_argument("--evidence", type=Path, default=Path("managed-owner-evidence"))
     args = parser.parse_args(argv)
     if not args.execute:
@@ -453,7 +516,7 @@ def main(argv=None):
             "production_preflight": "NOT_RUN_FULL_SUITE"}))
         return 0
     require(os.name == "posix", "future runner requires isolated POSIX CI")
-    report = Runner(ROOT, args.evidence.resolve()).execute()
+    report = Runner(ROOT, args.evidence.resolve()).execute(full_preflight=args.full_preflight)
     print(json.dumps({key: report[key] for key in ("status", "production_preflight")}))
     return 0
 
