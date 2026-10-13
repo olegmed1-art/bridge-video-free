@@ -93,6 +93,7 @@ def build_quality_layer(
     dds_request_executor: DDSRequestExecutor | None = None,
     correction_receipt_resolver: CorrectionReceiptResolver | None = None,
     source_draft_input: Mapping[str, Any] | None = None,
+    replay_evidence_reader=None,
 ) -> dict[str, Any]:
     # A prepared draft is always the untrusted bounded schema. Never route an
     # arbitrary bundle through this opt-in argument to a promotion pipeline.
@@ -211,7 +212,18 @@ def build_quality_layer(
     learning_candidate = working.get("video_canon_learning_candidate")
     assertions = working.get("video_canon_assertions")
     verifications = working.get("video_canon_verification_bundles")
-    if source_draft_input is not None:
+    if replay_evidence_reader is not None:
+        # Explicit reader opt-in always terminates at staging, even with a
+        # complete legacy auto-pipeline bundle. Bounded drafts stay untrusted.
+        auto_pipeline = replay_evidence_reader.replay(source_draft_input if source_draft_input is not None else working)
+        incremental['input_fingerprint'] = digest({
+            'quality_input_fingerprint': incremental.get('input_fingerprint'),
+            'evidence_replay_sha256': auto_pipeline['replay_sha256'],
+        })
+        incremental['evidence_replay_sha256'] = auto_pipeline['replay_sha256']
+        if source_draft_input is not None:
+            incremental['source_draft_input_sha256'] = digest(source_draft_input)
+    elif source_draft_input is not None:
         auto_pipeline = replay_result_bundle(source_draft_input)
         source_draft_sha = digest(source_draft_input)
         incremental['input_fingerprint'] = digest({

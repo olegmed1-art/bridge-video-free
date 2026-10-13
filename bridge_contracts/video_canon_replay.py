@@ -34,6 +34,10 @@ TrustedEvidenceResolver = Callable[[str], Mapping[str, Any] | None]
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
+class TrustedEvidenceUnavailable(ValueError):
+    """A reader could not establish evidence; never expose its private details."""
+
+
 def _bound_parent_evidence(bundle, learning, assertion, resolver):
     """Resolve a parent outside caller JSON; never trust a manifest in the bundle."""
     provenance = bundle.get("replay_provenance")
@@ -87,6 +91,8 @@ def _bound_parent_evidence(bundle, learning, assertion, resolver):
             "parent_artifact_sha256": parent_sha, "parent_hash_domain": "RAW_BYTES_SHA256",
             "trusted_manifest_sha256": manifest_hash,
         }, None
+    except TrustedEvidenceUnavailable:
+        return None, "INDEPENDENT_PARENT_EVIDENCE_UNAVAILABLE"
     except Exception:
         # Resolver failures and malformed external evidence are gaps, not a
         # reason to trust caller labels or disclose private backend errors.

@@ -6,6 +6,14 @@ on:
       - 'app.py'
       - 'bridge_school_api/**'
       - 'bridge_contracts/**'
+      - 'database/video_staging_read.py'
+      - 'database/video_staging_lineage.py'
+      - 'database/video_candidate_persistence.py'
+      - 'database/video_result_persistence.py'
+      - 'database/source_identity_persistence.py'
+      - 'database/runtime_worker_preflight.py'
+      - 'Dockerfile.api'
+      - 'tests/test_api_runtime_bundle.py'
       - 'assistant_lab/contract.py'
       - 'assistant_lab/dispatch.py'
       - 'tests/test_api_dsn_contract.py'
@@ -27,6 +35,14 @@ on:
       - 'app.py'
       - 'bridge_school_api/**'
       - 'bridge_contracts/**'
+      - 'database/video_staging_read.py'
+      - 'database/video_staging_lineage.py'
+      - 'database/video_candidate_persistence.py'
+      - 'database/video_result_persistence.py'
+      - 'database/source_identity_persistence.py'
+      - 'database/runtime_worker_preflight.py'
+      - 'Dockerfile.api'
+      - 'tests/test_api_runtime_bundle.py'
       - 'assistant_lab/contract.py'
       - 'assistant_lab/dispatch.py'
       - 'tests/test_api_dsn_contract.py'
@@ -83,3 +99,5 @@ jobs:
         run: PYTHONPATH=. python tests/test_vercel_oidc_context.py
       - name: Import FastAPI application
         run: python -c "from bridge_school_api.main import app; assert app.title == 'Bridge School API'"
+      - name: Verify packaged staging route without database or network
+        run: python tests/test_api_runtime_bundle.py -v

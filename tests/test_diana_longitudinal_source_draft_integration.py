@@ -170,6 +170,12 @@ class SourceDraftPostprocessTests(unittest.TestCase):
         self.assertEqual(build_quality_layer(master)['video_canon_auto_pipeline']['status'], 'BLOCKED')
 
     def test_main_file_inputs_to_quality_to_disposable_staging_repeat(self):
+        self._check_main_file_inputs_to_quality_to_disposable_staging_repeat()
+
+    def test_main_evidence_reader_opt_in_to_disposable_staging_repeat(self):
+        self._check_main_file_inputs_to_quality_to_disposable_staging_repeat(with_reader=True)
+
+    def _check_main_file_inputs_to_quality_to_disposable_staging_repeat(self, with_reader=False):
         master, source, metadata, files = fixture(True)
         artifacts, summaries, persisted = {}, [], []
         with tempfile.TemporaryDirectory() as temp, closing(sqlite3.connect(':memory:')) as connection, ExitStack() as stack:
@@ -178,6 +184,16 @@ class SourceDraftPostprocessTests(unittest.TestCase):
                 path = Path(temp) / (key + '.json')
                 path.write_bytes(content)
                 env['BRIDGE_VIDEO_SOURCE_DRAFT_' + key.upper() + '_PATH'] = str(path)
+            if with_reader:
+                (Path(temp) / 'master.raw.json').write_bytes(source)
+                inventory = {'schema': 'video-local-evidence-index-v1',
+                    'parent': {'path': 'master.raw.json', 'raw_sha256': sha256(source), 'canonical_sha256': digest(master)},
+                    'source': {'path': None, 'video_file_id': master['source']['driveId'], 'sha256': master['source']['sha256']},
+                    'frames': []}
+                index = Path(temp) / 'index.json'
+                index.write_bytes(raw(inventory))
+                env['BRIDGE_VIDEO_REPLAY_EVIDENCE_INDEX_PATH'] = str(index)
+                env['BRIDGE_VIDEO_REPLAY_EVIDENCE_INDEX_SHA256'] = sha256(raw(inventory))
             stack.enter_context(patch.dict(os.environ, env, clear=True))
             stack.enter_context(patch.object(post.base, 'user_oauth_token', return_value='synthetic'))
             stack.enter_context(patch.object(post.base, '_latest_done', return_value=({'id': 'synthetic-done'}, {})))
@@ -197,6 +213,12 @@ class SourceDraftPostprocessTests(unittest.TestCase):
                 self.assertEqual(replay['status'], 'BLOCKED')
                 self.assertEqual(replay['candidates'][0]['candidate_type'], 'video_source_knowledge_draft')
                 self.assertIn(replay['candidates'][0], quality['candidate_staging_records'])
+                for row in replay['candidates']:
+                    self.assertEqual(row['payload_hash'], digest(row['payload']))
+                if with_reader:
+                    self.assertIn('SOURCE_MEDIA_BYTES_MISSING', {g['code'] for g in replay['gaps']})
+                    self.assertTrue(any(r['candidate_type'] == 'video_artifact_source_observation' for r in replay['candidates']))
+                    self.assertIn('evidence_replay_sha256', quality['incremental_processing'])
                 counts = stage_local(connection, replay)
                 persisted.append(counts)
                 return {'status': 'PERSISTED', **counts, 'candidate_records': len(quality['candidate_staging_records']),
@@ -217,8 +239,9 @@ class SourceDraftPostprocessTests(unittest.TestCase):
                 summaries.append(json.loads(output.getvalue()))
             self.assertEqual(summaries[0]['generation_key'], summaries[1]['generation_key'])
             self.assertEqual(len(artifacts), 6)
-            self.assertEqual(persisted, [{'inserted': 1, 'existing': 0}, {'inserted': 0, 'existing': 1}])
-            self.assertEqual(connection.execute('SELECT count(*) FROM replay_staging').fetchone()[0], 1)
+            count = 3 if with_reader else 1
+            self.assertEqual(persisted, [{'inserted': count, 'existing': 0}, {'inserted': 0, 'existing': count}])
+            self.assertEqual(connection.execute('SELECT count(*) FROM replay_staging').fetchone()[0], count)
             for key, content in files.items():
                 self.assertEqual((Path(temp) / (key + '.json')).read_bytes(), content)
 
