@@ -332,3 +332,107 @@ def test_existing_http_service_auth_and_real_sql_read(real, dsn, monkeypatch):
         assert response.status_code==200
         assert response.json()['source_id']==real['persisted']['source_id']
         assert response.json()['status']=='READABLE_STAGING'
+
+
+# Exercise the actual runtime smoke fixture against the unchanged migration
+# registry. Do not auto-register its revision: that would mask a fixture mismatch.
+_RUNTIME_SMOKE_TABLES = (
+    'changeset', 'ingestion_run', 'learning_interaction', 'episode', 'asset',
+    'media_asset', 'asset_location', 'source', 'source_asset', 'ingestion_item',
+    'transcript', 'transcript_segment', 'analysis_run', 'analysis_run_input',
+    'artifact', 'artifact_version', 'analysis_run_output', 'domain_event',
+    'outbox_message', 'storage_verification',
+)
+
+
+def _runtime_smoke_counts(conn):
+    return {
+        table: conn.execute(
+            psycopg.sql.SQL('SELECT count(*) FROM public.{}').format(
+                psycopg.sql.Identifier(table)
+            )
+        ).fetchone()[0]
+        for table in _RUNTIME_SMOKE_TABLES
+    }
+
+
+def test_runtime_smoke_registered_fixture_and_repeated_rollback(dsn):
+    from database.runtime_worker_persistence_smoke import smoke_inputs
+    master, done = smoke_inputs()
+    with worker(dsn) as conn:
+        expected = conn.execute(
+            """SELECT av.algorithm_version_id
+                 FROM public.algorithm a
+                 JOIN public.algorithm_version av USING (algorithm_id)
+                 JOIN public.school s USING (school_id)
+                WHERE s.stable_name=%s AND s.status='active'
+                  AND a.stable_key='bridge-video-master-analysis'
+                  AND av.version_label='3.1-free-r25.13-checkpoint'""",
+            (SCHOOL_STABLE_NAME,),
+        ).fetchall()
+        assert len(expected) == 1, 'unchanged migration 0053 must register the fixture revision'
+        before = _runtime_smoke_counts(conn)
+        results = [
+            persist_video_result_on_connection(conn, master, done, rollback=True)
+            for _ in range(2)
+        ]
+        for result in results:
+            assert result['algorithm_version_id'] == str(expected[0][0])
+            assert result['rolled_back'] is True and result['persisted'] is False
+            assert result['segments'] == 2
+            assert result['publication_authorization_status'] == 'blocked'
+            assert result['quality_confirmation_status'] == 'pending'
+        assert results[0] == results[1]
+        assert _runtime_smoke_counts(conn) == before
+
+
+def test_runtime_smoke_unregistered_revision_remains_blocked(dsn):
+    from database.runtime_worker_persistence_smoke import smoke_inputs
+    master, done = smoke_inputs()
+    master['algorithmRevision'] = 'runtime-persistence-smoke'
+    with worker(dsn) as conn:
+        before = _runtime_smoke_counts(conn)
+        with pytest.raises(RuntimeError, match='registered algorithm_version_id required'):
+            persist_video_result_on_connection(conn, master, done, rollback=True)
+        assert _runtime_smoke_counts(conn) == before
+
+
+def test_runtime_smoke_keeps_registered_candidate_gates(dsn):
+    from database.runtime_worker_persistence_smoke import smoke_inputs
+    master, done = smoke_inputs()
+    with worker(dsn) as conn:
+        before = _runtime_smoke_counts(conn)
+        # Inspect the rows inside an enclosing rollback transaction only.
+        with conn.transaction(force_rollback=True):
+            result = persist_video_result_on_connection(conn, master, done)
+            state = conn.execute(
+                """SELECT run_status, technical_record_status,
+                          quality_confirmation_status, publication_authorization_status
+                     FROM public.analysis_run WHERE analysis_run_id=%s""",
+                (result['analysis_run_id'],),
+            ).fetchone()
+            assert state == ('running', 'recorded', 'pending', 'blocked')
+            artifact = conn.execute(
+                """SELECT a.status, av.status FROM public.artifact a
+                     JOIN public.artifact_version av USING (artifact_id)
+                    WHERE av.generated_by_analysis_run_id=%s""",
+                (result['analysis_run_id'],),
+            ).fetchone()
+            assert artifact == ('staging', 'candidate')
+            # The runtime worker cannot invoke the confirmation helper at all.
+            with pytest.raises(psycopg.errors.InsufficientPrivilege, match='bridge_video_has_independent_pass'):
+                with conn.transaction():
+                    conn.execute(
+                        "UPDATE public.analysis_run SET quality_confirmation_status='confirmed' WHERE analysis_run_id=%s",
+                        (result['analysis_run_id'],),
+                    )
+            # On this disposable DB only, its owner can reach the semantic
+            # guard. It must still reject confirmation without META evidence.
+            with pytest.raises(psycopg.errors.RaiseException, match='independent META PASS'):
+                with conn.transaction():
+                    conn.execute('RESET ROLE')
+                    conn.execute(
+                        "UPDATE public.analysis_run SET quality_confirmation_status='confirmed' WHERE analysis_run_id=%s",
+                        (result['analysis_run_id'],),
+                    )
+        assert _runtime_smoke_counts(conn) == before
