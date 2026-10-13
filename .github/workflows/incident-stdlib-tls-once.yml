@@ -1,0 +1,56 @@
+name: Incident 1911 one stdlib TLS probe
+on: create
+permissions: {}
+jobs:
+  tls_once:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.event.repository.full_name == 'olegmed1-art/bridge-video-free' &&
+      github.event_name == 'create' && github.event.ref_type == 'branch' &&
+      github.event.ref == 'codex-incident-1911-stdlib-tls-once-20261013' &&
+      github.ref_name == 'codex-incident-1911-stdlib-tls-once-20261013' &&
+      github.ref == 'refs/heads/codex-incident-1911-stdlib-tls-once-20261013' &&
+      github.workflow_sha == github.sha && github.run_number == 1 && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Stage three public pinned files
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          /usr/bin/timeout --signal=TERM --kill-after=2s 20s /usr/bin/python3 -I -S -B - <<'PY'
+          import hashlib, os, re, urllib.request
+          from pathlib import Path
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  raise ValueError("redirect")
+          try:
+              sha = os.environ.get("GITHUB_SHA", "")
+              if not re.fullmatch("[a-f0-9]{40}", sha) or os.environ.get("GITHUB_WORKFLOW_SHA") != sha:
+                  raise ValueError("context")
+              root = Path.cwd() / ".stdlib-tls-once"
+              root.mkdir()
+              pins = {'probe.py': {'path': 'scripts/diagnostics/stdlib_tls_once/probe.py', 'bytes': 19613, 'sha256': '9eaf3fb91a2ba30f49a50eaa250a4d5e62ebd3af2ddb608a999d47e17ec7d5d5'}, 'entry.py': {'path': 'scripts/diagnostics/stdlib_tls_once/entry.py', 'bytes': 1200, 'sha256': '66abd53f26a037305558876681a311bb4f2d8cf4ee3787aa7ef2ba2ec248654a'}, 'launch.sh': {'path': 'scripts/diagnostics/stdlib_tls_once/launch.sh', 'bytes': 733, 'sha256': '349ba638c5d9f5e0874ed57f52435ea11b4d622a2d57bb5ceb2603d134bb2d5a'}}
+              for name, pin in pins.items():
+                  url = "https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/" + sha + "/" + pin["path"]
+                  with urllib.request.build_opener(NoRedirect()).open(url, timeout=4) as response:
+                      if response.status != 200 or response.geturl() != url:
+                          raise ValueError("response")
+                      data = response.read(pin["bytes"] + 1)
+                  if len(data) != pin["bytes"] or hashlib.sha256(data).hexdigest() != pin["sha256"]:
+                      raise ValueError("integrity")
+                  with (root / name).open("xb") as output:
+                      output.write(data)
+                  (root / name).chmod(0o444)
+              print('{"schema":"stdlib-tls-staging-v1","status":"staged","files":3}')
+          except BaseException:
+              print('{"schema":"stdlib-tls-staging-v1","status":"staging_failed"}')
+              raise SystemExit(1)
+          PY
+      - name: One bounded TLS attempt
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PWD/.stdlib-tls-once"
+          /usr/bin/bash ./launch.sh
