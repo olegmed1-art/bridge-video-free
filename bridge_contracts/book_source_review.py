@@ -1,6 +1,6 @@
 """Separate trusted identity review; never derived from book text or an HTTP client."""
 from uuid import UUID, NAMESPACE_URL, uuid5
-from .book_material import _fields, _require, _text, digest
+from .book_material import InvalidBookMaterial, _fields, _require, _text, digest
 from .book_source_identity import book_source_matches
 
 _FIELDS = {"schema", "review_id", "reviewer", "independence_group", "assurance",
@@ -27,7 +27,7 @@ def validate_identity_review(source, review, identity, *, school_id=None,
         try:
             _require(str(UUID(identity[key])) == identity[key], "BOOK_SOURCE_IDENTITY_REVIEW_BINDING")
         except (ValueError, TypeError, AttributeError):
-            raise ValueError("BOOK_SOURCE_IDENTITY_REVIEW_BINDING") from None
+            raise InvalidBookMaterial("BOOK_SOURCE_IDENTITY_REVIEW_BINDING") from None
     _require(identity["source_descriptor_sha256"] == digest(source)
              and identity["citation_locator"] == source["locator"]
              and book_source_matches(identity["stored_locator"], identity["citation_locator"])
