@@ -365,9 +365,12 @@ jobs:
 
       - name: Rehearse session and journalled executor from verified source package
         shell: bash
+        env:
+          CHECKED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          sudo -n env ADMIN_DATABASE_URL="$ADMIN_DATABASE_URL" GITHUB_SHA="$GITHUB_SHA" \
+          test "$(git rev-parse HEAD)" = "$CHECKED_SOURCE_SHA"
+          sudo -n env ADMIN_DATABASE_URL="$ADMIN_DATABASE_URL" GITHUB_SHA="$CHECKED_SOURCE_SHA" \
             PYTHONPATH="$PWD:$(python -m site --user-site)" \
             "$(command -v python)" database/fixtures/native_maintenance_bundle_rehearsal.py
 
