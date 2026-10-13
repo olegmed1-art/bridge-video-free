@@ -1,8 +1,9 @@
 from fastapi.testclient import TestClient
+import pytest
 
 import bridge_school_api.knowledge as knowledge
 from bridge_school_api.main import app
-from test_book_world import stored_fixture
+from test_book_world import malformed_teacher_items, stored_fixture
 from test_knowledge_read_api import FakeCursor, install_fake_connect
 
 
@@ -37,3 +38,17 @@ def test_book_teacher_does_not_fallback_on_missing_ambiguous_or_invalid_rows(mon
         response = client.get("/v1/knowledge/teacher/book", params={"stable_key": item["stable_key"]},
                               headers={"Authorization": "Bearer synthetic-test-token"})
         assert response.status_code == status
+
+
+@pytest.mark.parametrize("label,item", list(malformed_teacher_items()), ids=lambda value: value if isinstance(value, str) else None)
+def test_book_teacher_malformed_evidence_is_409(monkeypatch, label, item):
+    monkeypatch.setenv("BRIDGE_API_TOKEN", "synthetic-test-token")
+    cursor = FakeCursor(rows=[item])
+    install_fake_connect(monkeypatch, cursor)
+    response = TestClient(app).get("/v1/knowledge/teacher/book",
+        params={"stable_key": item["stable_key"]},
+        headers={"Authorization": "Bearer synthetic-test-token"})
+    assert response.status_code == 409
+    assert response.json() == {"detail": "BOOK_WORLD_EVIDENCE_INVALID"}
+    assert response.headers["cache-control"] == "private, no-store, max-age=0"
+    assert len(cursor.executions) == 1

@@ -7,6 +7,7 @@ from an unauthenticated endpoint or from text embedded in a book.
 from __future__ import annotations
 
 from copy import deepcopy
+import sys
 from .book_source_identity import book_source_matches, needs_asset_binding
 from .book_source_review import source_from_citation, validate_identity_review
 from uuid import NAMESPACE_URL, uuid5
@@ -17,13 +18,16 @@ WORLD_SCHEMA = "book-world-reviewed-v1"
 CHECKS = {"source_anchor", "semantic", "conditions", "exceptions", "positive_example",
           "counterexample", "errata", "internal_rights", "semantic_dedup"}
 MAX_ATOMS = 3
+REVIEW_FIELDS = {"schema", "review_id", "reviewer", "independence_group", "assurance",
+                 "rendition_sha256", "source_size_bytes", "source_page_count", "claims"}
+CLAIM_REVIEW_FIELDS = {"object_id", "content_sha256", "anchor_sha256", "verification",
+                       "checks", "positive_example_ref", "counterexample_ref", "review_evidence_ref"}
 
 
 def build_world_publication(bundle: dict, receipt: dict, identity_receipt=None) -> dict:
     """Prepare, but never publish, a maximum of three independently reviewed atoms."""
     validate_bundle(bundle)
-    _fields(receipt, {"schema", "review_id", "reviewer", "independence_group", "assurance",
-                      "rendition_sha256", "source_size_bytes", "source_page_count", "claims"}, "REVIEW_FIELDS")
+    _fields(receipt, REVIEW_FIELDS, "REVIEW_FIELDS")
     _require(receipt["schema"] == "book-source-review-v1" and receipt["assurance"] in {"I2", "I3", "I4"}, "INDEPENDENT_REVIEW_REQUIRED")
     _require(all(_text(receipt[k]) for k in ("review_id", "reviewer", "independence_group")), "REVIEW_IDENTITY")
     source = bundle["source"]
@@ -36,13 +40,16 @@ def build_world_publication(bundle: dict, receipt: dict, identity_receipt=None) 
     claims = receipt["claims"]
     _require(isinstance(claims, list) and 0 < len(claims) <= MAX_ATOMS, "ATOM_BUDGET")
     objects = {obj["object_id"]: obj for obj in bundle["objects"]}
+    # v1 has no relation projection. Never strip context from either endpoint,
+    # including a selected atom whose other endpoint is not selected for review.
+    related = {rel[key] for rel in bundle["relations"] for key in ("from_id", "to_id")}
     records, selected = [], set()
     for claim in claims:
-        _fields(claim, {"object_id", "content_sha256", "anchor_sha256", "verification",
-                        "checks", "positive_example_ref", "counterexample_ref", "review_evidence_ref"}, "CLAIM_REVIEW_FIELDS")
+        _fields(claim, CLAIM_REVIEW_FIELDS, "CLAIM_REVIEW_FIELDS")
         object_id = claim["object_id"]
         _require(isinstance(object_id, str) and object_id in objects and object_id not in selected, "REVIEW_OBJECT_ID")
         selected.add(object_id)
+        _require(object_id not in related, "BOOK_WORLD_RELATIONS_UNSUPPORTED")
         obj = objects[object_id]
         _require(len(object_id) <= 200, "STABLE_KEY_BUDGET")
         _require(obj["kind"] == "ATOM" and obj["rights"] == "INTERNAL_ALLOWED"
@@ -88,29 +95,76 @@ def world_uuid(kind: str, school_id: str, key: str) -> str:
 
 def render_teacher_book(item: dict) -> dict:
     """Render a stored, reviewed WORLD row. Never silently falls back to a preview."""
+    _require(isinstance(item, dict), "BOOK_WORLD_REQUIRED")
     content = item.get("content")
     _require(isinstance(content, dict) and content.get("schema") == WORLD_SCHEMA, "BOOK_WORLD_REQUIRED")
     _require(item.get("authority_class") == "external" and item.get("review_status") == "reviewed"
              and item.get("version_status") == "active" and item.get("system_profile") == "SYSTEM_NEUTRAL", "BOOK_WORLD_NOT_ACTIVE")
-    _require(content.get("domain") in {"CARD_PLAY", "DEFENSE"}, "BOOK_WORLD_DOMAIN")
-    provenance = item.get("provenance") or {}
-    _require(provenance.get("schema") == WORLD_SCHEMA and isinstance(provenance.get("review_receipt"), dict), "BOOK_WORLD_PROVENANCE")
+    _fields(content, {"schema", "source_object_id", "statement", "domain", "conditions",
+                      "exceptions", "citation", "verification", "origin"}, "BOOK_WORLD_CONTENT")
+    _require(all(_text(content[k]) for k in ("source_object_id", "statement", "verification", "origin"))
+             and _text(item.get("stable_key")) and item.get("item_id") is not None, "BOOK_WORLD_CONTENT")
+    _require(content["domain"] in ("CARD_PLAY", "DEFENSE"), "BOOK_WORLD_DOMAIN")
+    for field in ("conditions", "exceptions"):
+        _require(isinstance(content[field], list) and bool(content[field])
+                 and all(_text(value) for value in content[field]), "BOOK_WORLD_CONTENT")
+    provenance = item.get("provenance")
+    _require(isinstance(provenance, dict) and provenance.get("schema") == WORLD_SCHEMA
+             and isinstance(provenance.get("review_receipt"), dict), "BOOK_WORLD_PROVENANCE")
     receipt = provenance["review_receipt"]
+    _fields(receipt, REVIEW_FIELDS, "BOOK_WORLD_REVIEW")
+    _require(receipt["schema"] == "book-source-review-v1"
+             and all(_text(receipt[k]) for k in ("review_id", "reviewer", "independence_group", "rendition_sha256"))
+             and receipt["assurance"] in ("I2", "I3", "I4")
+             and type(receipt["source_page_count"]) is int and receipt["source_page_count"] > 0
+             and type(receipt["source_size_bytes"]) is int and receipt["source_size_bytes"] > 0, "BOOK_WORLD_REVIEW")
+    review_claims = receipt["claims"]
+    _require(isinstance(review_claims, list) and 0 < len(review_claims) <= MAX_ATOMS, "BOOK_WORLD_REVIEW")
+    for claim in review_claims:
+        _fields(claim, CLAIM_REVIEW_FIELDS, "BOOK_WORLD_REVIEW")
+        _require(all(_text(claim[k]) for k in CLAIM_REVIEW_FIELDS - {"checks"}), "BOOK_WORLD_REVIEW")
+        _fields(claim["checks"], CHECKS, "BOOK_WORLD_REVIEW")
+        _require(all(value == "PASS" for value in claim["checks"].values()), "BOOK_WORLD_REVIEW")
+    citation = content["citation"]
+    _fields(citation, {"source_id", "edition_id", "title", "locator", "rendition_sha256",
+                       "pdf_page_index", "printed_page_label", "bbox", "bbox_units",
+                       "segment_sha256", "segment_hash_method"}, "BOOK_WORLD_CITATION")
+    _require(all(_text(citation[k]) for k in ("source_id", "edition_id", "title", "locator"))
+             and all(isinstance(citation[k], str) and SHA.fullmatch(citation[k])
+                     for k in ("rendition_sha256", "segment_sha256"))
+             and type(citation["pdf_page_index"]) is int
+             and 0 <= citation["pdf_page_index"] < receipt["source_page_count"]
+             and (citation["printed_page_label"] is None or _text(citation["printed_page_label"]))
+             and citation["bbox_units"] in ("NORMALIZED_TOP_LEFT", "PDF_POINTS_TOP_LEFT")
+             and citation["segment_hash_method"] in ("CROP_BYTES_SHA256", "RENDER_BYTES_SHA256", "NORMALIZED_TEXT_UTF8_SHA256"),
+             "BOOK_WORLD_CITATION")
+    box = citation["bbox"]
+    _require(isinstance(box, list) and len(box) == 4
+             and all(type(v) in (int, float) and 0 <= v <= sys.float_info.max for v in box)
+             and box[0] < box[2] and box[1] < box[3]
+             and (citation["bbox_units"] != "NORMALIZED_TOP_LEFT" or all(v <= 1 for v in box)), "BOOK_WORLD_CITATION")
     _require(_text(provenance.get("source_id")), "BOOK_WORLD_SOURCE_LINK")
     identity_review = provenance.get("source_identity_review")
     if identity_review is not None:
+        _require(isinstance(identity_review, dict)
+                 and all(_text(identity_review.get(k)) for k in
+                         ("assurance", "asset_action", "school_id", "registry_source_id", "asset_id")),
+                 "BOOK_SOURCE_IDENTITY_REVIEW_REQUIRED")
         _require(_text(provenance.get("school_id")), "BOOK_WORLD_SOURCE_LINK")
-        validate_identity_review(source_from_citation(content["citation"], receipt), receipt,
+        validate_identity_review(source_from_citation(citation, receipt), receipt,
                                  identity_review, school_id=provenance.get("school_id"),
                                  source_id=provenance.get("source_id"))
     _require(provenance.get("version_hash") == publication_version(
         {"stable_key": item["stable_key"], "content": content}, receipt, identity_review), "BOOK_WORLD_VERSION_HASH")
-    citation = content["citation"]
     _require(citation["rendition_sha256"] == receipt.get("rendition_sha256"), "BOOK_WORLD_SOURCE_HASH")
-    claims = [c for c in receipt.get("claims", []) if c.get("object_id") == content.get("source_object_id")]
+    claims = [c for c in review_claims if c["object_id"] == content["source_object_id"]]
     _require(len(claims) == 1 and claims[0].get("checks") == {k: "PASS" for k in CHECKS}
              and receipt.get("assurance") in {"I2", "I3", "I4"}, "BOOK_WORLD_REVIEW")
-    matching = [src for src in item.get("sources", []) if src.get("source_locator") == citation
+    sources = item.get("sources")
+    _require(isinstance(sources, list) and bool(sources)
+             and all(isinstance(src, dict) and isinstance(src.get("source_locator"), dict)
+                     for src in sources), "BOOK_WORLD_SOURCE_LINK")
+    matching = [src for src in sources if src.get("source_locator") == citation
                 and str(src.get("source_id")) == provenance.get("source_id")
                 and book_source_matches(src.get("canonical_locator"), citation["locator"])
                 and src.get("status") == "active"
