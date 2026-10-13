@@ -1,0 +1,120 @@
+name: Fixed subset admission disposable PostgreSQL
+
+# Prepared locally only. Creating the exact reviewed branch with one normal git
+# push is BOTH publication and execution. No PR, main, dispatch or schedule event.
+on:
+  push:
+    branches:
+      - codex-atomic-subset-postgres-20261012
+    paths:
+      - .github/workflows/fixed-subset-admission-postgres.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixed-subset-admission-disposable
+  cancel-in-progress: false
+
+jobs:
+  postgres-contract:
+    # Job gate runs before allocating the service. Subsequent pushes and reruns
+    # cannot turn the one authorized initial execution into an implicit retry.
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.actor == github.repository_owner &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/codex-atomic-subset-postgres-20261012' &&
+      github.event.created == true && github.event.deleted == false &&
+      github.event.forced == false && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16.15-bookworm
+        env:
+          POSTGRES_DB: fixedsubset_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fixedsubset-local-only
+        ports:
+          - '127.0.0.1:5432:5432'
+        options: >-
+          --cpus 2 --memory 1536m
+          --health-cmd "pg_isready -U postgres -d fixedsubset_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - name: Require the authorized new-branch event
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          test "$EVENT_BEFORE" = 0000000000000000000000000000000000000000
+          [[ "$EVENT_AFTER" =~ ^[0-9a-f]{40}$ ]]
+          test "$EVENT_AFTER" = "$GITHUB_SHA"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify checkout
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 717a4d92bc51bfc76f3e6455911e8b9900d83beb
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install public test dependencies
+        run: python -m pip install 'psycopg[binary]==3.3.4' 'requests==2.34.2' 'pytest==8.4.2' 'google-auth==2.61.0'
+      - name: Record test runtime and migration hashes
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fixedsubset-evidence" "$RUNNER_TEMP/fixedsubset-home"
+          git rev-parse HEAD > "$RUNNER_TEMP/fixedsubset-evidence/commit.txt"
+          python --version > "$RUNNER_TEMP/fixedsubset-evidence/python.txt"
+          python -m pip freeze > "$RUNNER_TEMP/fixedsubset-evidence/packages.txt"
+          sha256sum database/migrations/0056_universal_video_queue.sql \
+            database/migrations/0057_universal_video_canary_review_gate.sql \
+            database/migrations/0058_universal_video_terminal_v2_gate/*.sql \
+            database/migrations/0059_universal_video_terminal_size_guard.sql \
+            database/migrations/0060_fixed_subset_admission.sql \
+            database/rollback/0060_fixed_subset_admission.sql \
+            database/tests/fixed_subset_admission/run.py \
+            > "$RUNNER_TEMP/fixedsubset-evidence/source-sha256.txt"
+      - name: Run exactly the two previously skipped POSIX checks
+        run: |
+          set -euo pipefail
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/fixedsubset-home" \
+            PYTHONPATH="$GITHUB_WORKSPACE" PYTHONDONTWRITEBYTECODE=1 \
+            PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+            python -m pytest -q -p no:cacheprovider \
+              --basetemp="$RUNNER_TEMP/fixedsubset-posix-temp" \
+              --junitxml="$RUNNER_TEMP/fixedsubset-evidence/posix.xml" \
+              tests/test_universal_video_metadata_inventory.py::test_private_directory_rejects_permissions_and_symlinks \
+              tests/test_universal_video_metadata_inventory.py::test_successful_supervised_capture_is_private_and_not_overwritten
+          python - "$RUNNER_TEMP/fixedsubset-evidence/posix.xml" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          root = ET.parse(sys.argv[1]).getroot()
+          suites = list(root.iter('testsuite'))
+          assert sum(int(s.attrib['tests']) for s in suites) == 2
+          assert all(int(s.attrib[key]) == 0 for s in suites for key in ('failures', 'errors', 'skipped'))
+          PY
+      - name: Run the 29 real scenarios on this service only
+        run: |
+          set -euo pipefail
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/fixedsubset-home" \
+            PYTHONPATH="$GITHUB_WORKSPACE" PYTHONDONTWRITEBYTECODE=1 \
+            python database/tests/fixed_subset_admission/run.py \
+              --execute \
+              --dsn 'postgresql://postgres:fixedsubset-local-only@127.0.0.1:5432/fixedsubset_test' \
+              --evidence-dir "$RUNNER_TEMP/fixedsubset-evidence"
+      - name: Preserve synthetic results even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fixed-subset-postgres-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/fixedsubset-evidence
+          if-no-files-found: warn
+          retention-days: 7
