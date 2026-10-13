@@ -1,0 +1,187 @@
+name: Managed owner disposable PostgreSQL 18
+on:
+  push:
+    branches: [codex-managed-owner-pg18-ci1]
+permissions:
+  contents: read
+concurrency:
+  group: managed-owner-pg18-disposable
+  cancel-in-progress: false
+jobs:
+  managed-owner:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.event.repository.private == false &&
+      github.actor == github.repository_owner &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/codex-managed-owner-pg18-ci1' &&
+      github.event.created == true && github.event.deleted == false &&
+      github.event.forced == false && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c
+        env:
+          POSTGRES_DB: bridge_school_preflight
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_INITDB_ARGS: >-
+            -c max_connections=8 -c superuser_reserved_connections=0
+            -c reserved_connections=0 -c max_wal_senders=0
+        ports:
+          - '127.0.0.1:5432:5432'
+        options: >-
+          --cpus 2 --memory 1536m
+          --health-cmd "test -f /tmp/managed-owner-ready || (pg_isready -h 127.0.0.1 -U postgres -d bridge_school_preflight && touch /tmp/managed-owner-ready)"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - name: Require one initial push
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          test "$EVENT_BEFORE" = 0000000000000000000000000000000000000000
+          test "$EVENT_AFTER" = "$GITHUB_SHA"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Verify source and create evidence directory
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = d49feb4cb333b041928a5d37efb56a9f97dd1822
+          mkdir -p "$RUNNER_TEMP/managed-owner-evidence" "$RUNNER_TEMP/managed-owner-home"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/managed-owner-evidence/source.txt"
+          git diff --name-only HEAD^ HEAD > "$RUNNER_TEMP/managed-owner-evidence/changed-files.txt"
+          git diff --name-only HEAD^ HEAD -z | xargs -0 sha256sum > "$RUNNER_TEMP/managed-owner-evidence/source-sha256.txt"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install public test dependencies
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          if ! command -v psql >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y postgresql-client >/dev/null
+          fi
+          python -m pip install 'pytest==8.4.2' 'requests==2.34.2' 'google-auth==2.61.0' 'PyYAML==6.0.3'
+          python --version > "$RUNNER_TEMP/managed-owner-evidence/python.txt"
+          psql --version > "$RUNNER_TEMP/managed-owner-evidence/psql.txt"
+          python -m pip freeze > "$RUNNER_TEMP/managed-owner-evidence/packages.txt"
+      - name: Offline unit and regression checks
+        run: |
+          set -euo pipefail
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/managed-owner-home" \
+            PYTHONPATH="$GITHUB_WORKSPACE" PYTHONDONTWRITEBYTECODE=1 \
+            PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+            python -m pytest -q -p no:cacheprovider \
+            --basetemp="$RUNNER_TEMP/managed-owner-pytest" \
+            --junitxml="$RUNNER_TEMP/managed-owner-evidence/unit.xml" \
+            tests/test_universal_video_managed_owner_install.py \
+            tests/test_universal_video_admission_binding.py \
+            tests/test_universal_video_admission_client.py \
+            tests/test_universal_video_subset_contract.py
+      - name: One PG18 installation as the ordinary owner
+        run: |
+          set -euo pipefail
+          timeout --signal=INT --kill-after=20s 840s \
+            env -i PATH="$PATH" HOME="$RUNNER_TEMP/managed-owner-home" \
+            PYTHONPATH="$GITHUB_WORKSPACE" PYTHONDONTWRITEBYTECODE=1 \
+            python database/tests/fixed_subset_admission/managed_owner_install.py \
+            --execute --evidence "$RUNNER_TEMP/managed-owner-evidence/runner"
+      - name: Capture final database census
+        if: always()
+        timeout-minutes: 1
+        run: |
+          mkdir -p "$RUNNER_TEMP/managed-owner-evidence"
+          env -i PATH="$PATH" PGCONNECT_TIMEOUT=5 PGOPTIONS='-c statement_timeout=5000' \
+            timeout 15s psql 'postgresql://postgres:postgres@127.0.0.1:5432/bridge_school_preflight' \
+            -X -A -t -v ON_ERROR_STOP=1 -c \
+            "SELECT jsonb_build_object('version',current_setting('server_version_num'),'other_clients',(SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()),'advisory_locks',(SELECT count(*) FROM pg_locks WHERE locktype='advisory'),'prepared',(SELECT count(*) FROM pg_prepared_xacts));" \
+            > "$RUNNER_TEMP/managed-owner-evidence/final-census.json" \
+            2> "$RUNNER_TEMP/managed-owner-evidence/final-census.stderr"
+      - name: Destroy only this disposable service and its storage
+        if: always()
+        timeout-minutes: 2
+        env:
+          PG_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, re, subprocess
+          out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "managed-owner-evidence"
+          out.mkdir(exist_ok=True)
+          result = {"status": "FAIL_OR_UNKNOWN", "commands": []}
+          def call(*args):
+              r = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=25)
+              result["commands"].append({"args": args, "code": r.returncode, "stdout": r.stdout, "stderr": r.stderr})
+              return r
+          try:
+              cid = os.environ["PG_SERVICE_ID"]
+              assert re.fullmatch(r"[0-9a-f]{64}", cid)
+              inspect = call("inspect", cid)
+              assert inspect.returncode == 0
+              data = json.loads(inspect.stdout)[0]
+              assert data["Config"]["Image"] == "postgres:18-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c"
+              networks = list(data["NetworkSettings"]["Networks"])
+              assert len(networks) == 1 and networks[0].startswith("github_network_")
+              volumes = [m["Name"] for m in data["Mounts"] if m["Type"] == "volume"]
+              result.update(container_id=cid, networks=networks, volumes=volumes, image_id=data["Image"])
+              assert call("rm", "--force", "--volumes", cid).returncode == 0
+              assert call("inspect", cid).returncode != 0
+              for volume in volumes:
+                  assert call("volume", "inspect", volume).returncode != 0
+              assert call("network", "rm", networks[0]).returncode == 0
+              assert call("network", "inspect", networks[0]).returncode != 0
+              result["status"] = "PASS"
+          finally:
+              (out / "service-cleanup.json").write_text(json.dumps(result, indent=2)+"\n")
+          PY
+      - name: Accept only complete scoped evidence
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, xml.etree.ElementTree as ET
+          out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "managed-owner-evidence"
+          r = json.loads((out / "runner/results.json").read_text())
+          assert r["status"] == "PASS_OWNER_INSTALL_ONLY"
+          assert r["invariant_041"] == "PASS_BEFORE_AND_AFTER_CUTOVER"
+          assert r["production_preflight"] == "NOT_RUN_FULL_SUITE"
+          assert len(r["negative_cases"]) == 7 and all(x["status"]=="PASS" for x in r["negative_cases"])
+          assert len(r["acl_negative_cases"]) == 2 and all(x["status"]=="PASS" for x in r["acl_negative_cases"])
+          census = json.loads((out / "final-census.json").read_text())
+          assert 180000 <= int(census["version"]) < 190000
+          assert all(census[k] == 0 for k in ("other_clients","advisory_locks","prepared"))
+          assert json.loads((out / "service-cleanup.json").read_text())["status"] == "PASS"
+          suites = list(ET.parse(out / "unit.xml").getroot().iter("testsuite"))
+          assert sum(int(s.attrib["tests"]) for s in suites) == 242
+          assert all(int(s.attrib[k]) == 0 for s in suites for k in ("errors","failures","skipped"))
+          (out / "acceptance.json").write_text(json.dumps({"status":"PASS_SCOPED_PG18_OWNER_AND_041",
+              "full_production_suite":"NOT_RUN","cleanup":"PASS","unit_pass":242})+"\n")
+          PY
+      - name: Preserve bounded evidence in logs without paid artifact storage
+        if: always()
+        run: |
+          python - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib
+          out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "managed-owner-evidence"
+          files = {}
+          for p in sorted(out.rglob("*")):
+              if p.is_file():
+                  data = p.read_bytes()
+                  assert len(data) <= 16*1024*1024
+                  files[str(p.relative_to(out))] = {"sha256":hashlib.sha256(data).hexdigest(),
+                      "base64":base64.b64encode(data).decode()}
+          raw = json.dumps(files, sort_keys=True).encode()
+          packed = gzip.compress(raw, mtime=0)
+          assert len(packed) <= 2*1024*1024
+          encoded = base64.b64encode(packed).decode()
+          print("OWNER_EVIDENCE_BEGIN", hashlib.sha256(packed).hexdigest(), len(packed))
+          for i in range(0,len(encoded),3000):
+              print("OWNER_EVIDENCE_CHUNK",i//3000,encoded[i:i+3000])
+          print("OWNER_EVIDENCE_END")
+          PY

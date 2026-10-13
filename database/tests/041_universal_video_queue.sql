@@ -1,4 +1,80 @@
 \set ON_ERROR_STOP on
+-- Preserve the pre-0060 behavior regression, but assert the intended least
+-- privilege contract after the fixed-subset cutover. Never restore old grants.
+SELECT EXISTS (SELECT FROM schema_migration
+    WHERE migration_key='0060_fixed_subset_admission') AS fixed_subset_installed \gset
+\if :fixed_subset_installed
+BEGIN;
+-- MANAGED ACL MUTATION ANCHOR (regression fixtures only)
+DO $managed_acl$
+DECLARE v_role text;
+BEGIN
+    IF (SELECT count(*) FROM pg_roles WHERE rolname IN
+        ('video_subset_owner','video_subset_approver','video_subset_collector',
+         'video_subset_admitter','video_subset_worker_v2')) <> 5 THEN
+        RAISE EXCEPTION 'SUBSET_RUNTIME_ROLE_MISSING';
+    END IF;
+    FOREACH v_role IN ARRAY ARRAY['video_subset_owner','video_subset_approver',
+        'video_subset_collector','video_subset_admitter','video_subset_worker_v2'] LOOP
+        IF EXISTS (SELECT FROM pg_roles WHERE rolname=v_role
+            AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls))
+            OR has_schema_privilege(v_role,'video_queue','CREATE') THEN
+            RAISE EXCEPTION 'SUBSET_RUNTIME_ROLE_UNSAFE';
+        END IF;
+    END LOOP;
+    FOREACH v_role IN ARRAY ARRAY['video_subset_approver','video_subset_collector',
+        'video_subset_admitter','video_subset_worker_v2',
+        'bridge_school_app','bridge_school_worker','bridge_school_reader'] LOOP
+        IF NOT has_schema_privilege(v_role,'video_queue','USAGE')
+            OR has_schema_privilege(v_role,'video_queue','CREATE')
+            OR pg_has_role(v_role,'video_subset_owner','MEMBER') THEN
+            RAISE EXCEPTION 'SUBSET_RUNTIME_SCHEMA_OR_MEMBERSHIP';
+        END IF;
+        IF EXISTS (SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname='video_queue' AND c.relkind IN ('r','p')
+            AND (has_table_privilege(v_role,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+              OR has_any_column_privilege(v_role,c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))) THEN
+            RAISE EXCEPTION 'SUBSET_RUNTIME_DIRECT_TABLE_ACCESS';
+        END IF;
+    END LOOP;
+    IF EXISTS (
+        WITH expected(role_name,signature) AS (VALUES
+          ('video_subset_approver','video_queue.approve_subset(uuid,text,jsonb,timestamp with time zone)'),
+          ('video_subset_approver','video_queue.set_subset_runtime(uuid,boolean)'),
+          ('video_subset_approver','video_queue.revoke_subset_approval(uuid)'),
+          ('video_subset_collector','video_queue.observe_subset(uuid,uuid,text,jsonb,timestamp with time zone,uuid,uuid,uuid,integer,text)'),
+          ('video_subset_admitter','video_queue.admit_approved_subset(uuid,text,text,text,uuid)'),
+          ('video_subset_admitter','video_queue.recover_subset_admission(text,text,text)'),
+          ('video_subset_worker_v2','video_queue.claim_job(text,integer,text,text)'),
+          ('video_subset_worker_v2','video_queue.authorize_subset_attempt(uuid,uuid,text,uuid)'),
+          ('video_subset_worker_v2','video_queue.heartbeat_subset_job(uuid,uuid,text,integer)'),
+          ('video_subset_worker_v2','video_queue.retry_subset_job(uuid,uuid,text,text,integer)'),
+          ('video_subset_worker_v2','video_queue.finish_subset_job(uuid,uuid,text,text,jsonb,uuid,text)'),
+          ('bridge_school_worker','video_queue.precanary_idle_snapshot()')
+        ), actual AS (
+          SELECT r.rolname::text AS role_name,p.oid::regprocedure::text AS signature
+            FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace CROSS JOIN pg_roles r
+           WHERE n.nspname='video_queue' AND r.rolname IN
+             ('video_subset_approver','video_subset_collector','video_subset_admitter',
+              'video_subset_worker_v2','bridge_school_app','bridge_school_worker','bridge_school_reader')
+             AND has_function_privilege(r.oid,p.oid,'EXECUTE')
+        )
+        (SELECT * FROM actual EXCEPT SELECT * FROM expected)
+        UNION ALL
+        (SELECT * FROM expected EXCEPT SELECT * FROM actual)
+    ) THEN
+        RAISE EXCEPTION 'SUBSET_RUNTIME_EXECUTE_MATRIX';
+    END IF;
+    IF EXISTS (SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace,
+        LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+        WHERE n.nspname='video_queue' AND p.proowner='video_subset_owner'::regrole
+          AND a.grantee=0 AND a.privilege_type='EXECUTE') THEN
+        RAISE EXCEPTION 'SUBSET_RUNTIME_PUBLIC_EXECUTE';
+    END IF;
+END $managed_acl$;
+ROLLBACK;
+\else
+\set ON_ERROR_STOP on
 BEGIN;
 
 DO $$
@@ -244,3 +320,4 @@ BEGIN
 END $$;
 
 ROLLBACK;
+\endif
