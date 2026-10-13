@@ -61,6 +61,30 @@ contract error and the protected route returns `409 BOOK_WORLD_EVIDENCE_INVALID`
 without preview fallback or a broad exception handler. A structurally valid hash
 does not replace these checks or attest the authenticity of a review receipt.
 
+`publish_book_world` applies the same stored content/provenance validation before
+traversing nested evidence or writing any publication changeset, activation, event
+or outbox row. The complete batch must pass; a valid recomputed version hash cannot
+admit malformed evidence. Existing source/asset locks, source links, locked version
+snapshot/hash checks and lifecycle authorization remain separate requirements.
+
+Local admission regression: `tests/test_book_world_admission.py` uses the authored
+synthetic material from `test_book_material_staging.py`, with test-only review and
+delivery receipts. It covers malformed second-row evidence with a valid first row,
+valid teacher citation/version preservation, and incident relations rejected before
+connection use. Its scripted cursor does not establish PostgreSQL transaction or
+locking behavior, actual PDF extraction, source rights or genuine review/delivery.
+The producer's M0/unreviewed output still requires a separate trusted source review;
+successful technical reproduction cannot supply that approval.
+
+The disposable PostgreSQL counterpart in `tests/test_book_world_postgres.py`
+stages two candidates and damages the second in database order. Fresh-connection
+snapshots must retain both staged versions and all evidence/audit rows after
+rejection, with no publication changeset, event or outbox row. A separate injected
+failure after publication writes must roll back the same batch. Restoring the
+synthetic evidence must allow publication, stable cited teacher answers and replay.
+The existing `Book WORLD contract` CI service database runs these opt-in tests;
+it uses synthetic delivery fixtures and does not attest real source delivery.
+
 ## Migration and authorization
 
 No schema migration, new service, new key, network change or GRANT is needed by

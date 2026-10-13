@@ -13,7 +13,10 @@ from .book_source_reconciliation import source_locator, require_source_asset
 from bridge_contracts.book_source_review import validate_identity_review, source_from_citation
 
 from bridge_contracts.book_material import canonical_json, digest
-from bridge_contracts.book_world import build_world_publication, publication_version, world_uuid, WORLD_SCHEMA
+from bridge_contracts.book_world import (
+    build_world_publication, publication_version, validate_book_world_evidence,
+    world_uuid, WORLD_SCHEMA,
+)
 
 
 def persist_book_world(connection, bundle: dict, receipt: dict, *, school_id: str,
@@ -155,6 +158,9 @@ def publish_book_world(connection, *, school_id: str, changeset_id: str,
                 raise ValueError("BOOK_WORLD_PUBLICATION_SCOPE")
             expected_state = {}
             for version_id, content, provenance in candidates:
+                # A matching hash does not make malformed evidence teachable.
+                # Validate every candidate before any publication write.
+                validate_book_world_evidence(content, provenance)
                 if provenance.get("source_id") != source_id:
                     raise ValueError("BOOK_WORLD_PUBLICATION_SOURCE_MISMATCH")
                 identity_review = provenance.get("source_identity_review")

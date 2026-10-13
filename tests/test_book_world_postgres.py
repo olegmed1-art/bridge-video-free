@@ -10,15 +10,153 @@ import psycopg
 from psycopg.rows import dict_row
 from fastapi.testclient import TestClient
 
-from bridge_contracts.book_material import digest
-from bridge_contracts.book_world import build_world_publication
+from bridge_contracts.book_material import InvalidBookMaterial, canonical_json, digest, identity
+from bridge_contracts.book_world import build_world_publication, publication_version, world_uuid
 from database.book_world_persistence import persist_book_world, publish_book_world, retire_book_world
 import bridge_school_api.knowledge as knowledge
 from bridge_school_api.main import app, EXPECTED_SCHOOL
 from test_book_world import reviewed_fixture, reviewed_identity_fixture
+from test_book_material_staging import bundle as material_bundle, record
 
 pytestmark = pytest.mark.skipif(os.environ.get("BOOK_WORLD_PG_TEST") != "1", reason="disposable PostgreSQL test not enabled")
 DSN = "postgresql://postgres@127.0.0.1:5432/book_world_test"
+
+
+@pytest.mark.parametrize("malformed", ["conditions_null", "provenance_list", "claims_string"])
+def test_publication_admission_and_transaction_are_atomic_for_two_candidates(monkeypatch, malformed):
+    bundle, receipt = reviewed_fixture()
+    bundle["objects"].append(material_bundle([record(page=1)])["objects"][0])
+    bundle["source"]["edition_id"] = str(uuid4())
+    bundle["run"]["run_id"] = str(uuid4())
+    template = deepcopy(receipt["claims"][0])
+    receipt["claims"] = []
+    for obj in bundle["objects"]:
+        obj["object_id"] = "BOOK-" + identity(bundle["source"], obj)
+        receipt["claims"].append({**deepcopy(template), "object_id": obj["object_id"],
+                                  "anchor_sha256": digest(obj["anchor"])})
+    publication = build_world_publication(bundle, receipt)
+    source_id = str(uuid4())
+    with psycopg.connect(DSN, autocommit=True) as setup:
+        setup.execute(Path("tests/fixtures/book_world_postgres.sql").read_text())
+        setup.execute("INSERT INTO public.school VALUES (%s,%s) ON CONFLICT (stable_name) DO NOTHING",
+                      (str(uuid4()), EXPECTED_SCHOOL))
+        school_id = str(setup.execute("SELECT school_id FROM public.school WHERE stable_name=%s",
+                                     (EXPECTED_SCHOOL,)).fetchone()[0])
+        setup.execute("INSERT INTO public.source(source_id,school_id,canonical_locator) VALUES (%s,%s,%s)",
+                      (source_id, school_id, bundle["source"]["locator"]))
+
+    @contextmanager
+    def connect_test():
+        with psycopg.connect(DSN, row_factory=dict_row) as read:
+            yield read
+    monkeypatch.setattr(knowledge, "connect", connect_test)
+    monkeypatch.setenv("BRIDGE_API_TOKEN", "synthetic-postgres-test-token")
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer synthetic-postgres-test-token"}
+    path = "/v1/knowledge/teacher/book"
+
+    with psycopg.connect(DSN) as publisher:
+        staged = persist_book_world(publisher, bundle, receipt, school_id=school_id, source_id=source_id)
+        versions = sorted(staged["version_ids"])
+        assert staged["new_versions"] == len(versions) == 2
+        publish_id = world_uuid("publish", school_id, staged["changeset_id"])
+        args = dict(school_id=school_id, changeset_id=staged["changeset_id"],
+            delivery_receipt={"schema": "book-world-delivery-v1",
+                "publication_hash": staged["publication_hash"], "catalog_receipt_ref": "synthetic-delivery"})
+
+        def snapshot():
+            # Fresh connection observes committed state, including any accidental partial commit.
+            with psycopg.connect(DSN, autocommit=True) as read:
+                return {
+                    "versions": read.execute("SELECT knowledge_version_id,status,content,provenance "
+                        "FROM public.knowledge_version WHERE knowledge_version_id=ANY(%s::uuid[]) "
+                        "ORDER BY knowledge_version_id", (versions,)).fetchall(),
+                    "links": read.execute("SELECT * FROM public.knowledge_version_source "
+                        "WHERE knowledge_version_id=ANY(%s::uuid[]) ORDER BY knowledge_version_id",
+                        (versions,)).fetchall(),
+                    "changesets": read.execute("SELECT * FROM public.changeset "
+                        "WHERE changeset_id=ANY(%s::uuid[]) ORDER BY changeset_id",
+                        ([staged["changeset_id"], publish_id],)).fetchall(),
+                    "events": read.execute("SELECT * FROM public.domain_event "
+                        "WHERE changeset_id=ANY(%s::uuid[]) ORDER BY event_id",
+                        ([staged["changeset_id"], publish_id],)).fetchall(),
+                    "outbox": read.execute("SELECT * FROM public.outbox_message "
+                        "WHERE changeset_id=ANY(%s::uuid[]) ORDER BY outbox_id",
+                        ([staged["changeset_id"], publish_id],)).fetchall(),
+                    "canon": read.execute("SELECT * FROM public.canon_activation "
+                        "WHERE knowledge_version_id=ANY(%s::uuid[])", (versions,)).fetchall(),
+                }
+
+        with psycopg.connect(DSN, autocommit=True) as fixture:
+            # Simulated delivery applies only to this disposable fixture's recorded event.
+            fixture.execute("UPDATE public.outbox_message SET status='published' WHERE changeset_id=%s",
+                            (staged["changeset_id"],))
+            content, provenance, key = fixture.execute(
+                "SELECT kv.content,kv.provenance,ki.stable_key FROM public.knowledge_version kv "
+                "JOIN public.knowledge_item ki USING (knowledge_item_id) WHERE knowledge_version_id=%s",
+                (versions[1],)).fetchone()  # ORDER BY UUID makes the first candidate valid.
+            original_content, original_provenance = deepcopy(content), deepcopy(provenance)
+            if malformed == "conditions_null":
+                content["conditions"] = None
+            elif malformed == "provenance_list":
+                provenance = ["synthetic-malformed"]
+            else:
+                provenance["review_receipt"]["claims"] = "synthetic-malformed"
+            if isinstance(provenance, dict):
+                provenance["version_hash"] = publication_version(
+                    {"stable_key": key, "content": content}, provenance["review_receipt"])
+            fixture.execute("UPDATE public.knowledge_version SET content=%s::jsonb,provenance=%s::jsonb "
+                            "WHERE knowledge_version_id=%s", (canonical_json(content), canonical_json(provenance), versions[1]))
+        damaged = snapshot()
+        assert all(row[1] == "staged" for row in damaged["versions"])
+        assert len(damaged["changesets"]) == len(damaged["events"]) == len(damaged["outbox"]) == 1
+        assert damaged["canon"] == []
+        with pytest.raises(InvalidBookMaterial):
+            publish_book_world(publisher, **args)
+        assert publisher.info.transaction_status == 0
+        assert snapshot() == damaged
+        for projected in publication["records"]:
+            assert client.get(path, params={"stable_key": projected["stable_key"]}, headers=headers).status_code == 404
+
+        with psycopg.connect(DSN, autocommit=True) as fixture:
+            fixture.execute("UPDATE public.knowledge_version SET content=%s::jsonb,provenance=%s::jsonb "
+                "WHERE knowledge_version_id=%s", (canonical_json(original_content), canonical_json(original_provenance), versions[1]))
+        restored = snapshot()
+
+        def fail_after_publication_writes():
+            assert publisher.execute("SELECT count(*) FROM public.knowledge_version "
+                "WHERE knowledge_version_id=ANY(%s::uuid[]) AND status='active'", (versions,)).fetchone()[0] == 2
+            assert publisher.execute("SELECT count(*) FROM public.changeset WHERE changeset_id=%s "
+                "AND status='committed'", (publish_id,)).fetchone()[0] == 1
+            assert publisher.execute("SELECT count(*) FROM public.domain_event WHERE changeset_id=%s "
+                "AND event_type='BookWorldPublished'", (publish_id,)).fetchone()[0] == 1
+            assert publisher.execute("SELECT count(*) FROM public.outbox_message WHERE changeset_id=%s",
+                (publish_id,)).fetchone()[0] == 1
+            raise RuntimeError("synthetic failure after publication writes")
+
+        with pytest.raises(RuntimeError, match="synthetic failure after publication writes"):
+            publish_book_world(publisher, **args, before_commit=fail_after_publication_writes)
+        assert publisher.info.transaction_status == 0
+        assert snapshot() == restored
+        result = publish_book_world(publisher, **args)
+        assert result["publication"] == "WORLD_VERIFIED"
+        assert sorted(result["version_ids"]) == versions
+        committed = snapshot()
+        assert all(row[1] == "active" for row in committed["versions"])
+        assert len(committed["changesets"]) == len(committed["events"]) == len(committed["outbox"]) == 2
+        assert committed["links"] == restored["links"] and committed["canon"] == []
+        assert [row[2:] for row in committed["versions"]] == [row[2:] for row in restored["versions"]]
+        publish_book_world(publisher, **args)
+        assert snapshot() == committed
+        for projected in publication["records"]:
+            response = client.get(path, params={"stable_key": projected["stable_key"]}, headers=headers)
+            assert response.status_code == 200, response.text
+            answer = response.json()
+            expected_id = world_uuid("version", school_id,
+                projected["stable_key"] + ":" + publication_version(projected, receipt))
+            assert answer["knowledge_version_id"] == expected_id
+            assert answer["citations"] == [projected["content"]["citation"]]
+            assert answer["fallback_performed"] is answer["canon_activation_performed"] is False
 
 
 def test_real_postgres_runtime_identity_queries_are_read_only_and_rolled_back():
