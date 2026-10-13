@@ -1,0 +1,140 @@
+name: Subset crash retry disposable PostgreSQL 18
+on:
+  push:
+    branches: [codex-subset-crash-retry-pg18-ci1]
+    paths:
+      - '.github/workflows/subset-crash-retry-postgres.yml'
+      - 'database/tests/subset_crash_retry/acceptance.py'
+      - 'database/tests/subset_crash_retry/README.md'
+      - 'database/tests/subset_crash_retry/worker-v2.patch'
+permissions:
+  contents: read
+concurrency:
+  group: subset-crash-retry-pg18-disposable
+  cancel-in-progress: false
+jobs:
+  acceptance:
+    if: >-
+      github.repository == 'olegmed1-art/bridge-video-free' &&
+      github.event.repository.private == false &&
+      github.actor == github.repository_owner &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/codex-subset-crash-retry-pg18-ci1' &&
+      github.event.created == true && github.event.deleted == false &&
+      github.event.forced == false && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:18-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c
+        env:
+          POSTGRES_DB: subset_crash_retry_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_INITDB_ARGS: >-
+            -c max_connections=8 -c superuser_reserved_connections=0
+            -c reserved_connections=0 -c max_wal_senders=0
+        ports:
+          - '127.0.0.1:5432:5432'
+        options: >-
+          --cpus 2 --memory 1536m
+          --health-cmd "test -f /tmp/subset-crash-retry-ready || (pg_isready -h 127.0.0.1 -U postgres -d subset_crash_retry_ci && touch /tmp/subset-crash-retry-ready)"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - name: Require one initial push
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          test "$EVENT_BEFORE" = 0000000000000000000000000000000000000000
+          test "$EVENT_AFTER" = "$GITHUB_SHA"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Verify candidate identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 1489af80e9a10b8de8726f845aaf1ea07a700731
+          git rev-parse HEAD HEAD^{tree}
+          git diff --name-only HEAD^ HEAD
+          git diff --name-only HEAD^ HEAD -z | xargs -0 sha256sum
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 744d068a2cddfb8347411c8e4fb2bd69d19c09ab
+          path: _schema
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout: |
+            database/migrations
+            database/tests/fixed_subset_admission/runtime_fixture.py
+            universal_video
+          sparse-checkout-cone-mode: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 1489af80e9a10b8de8726f845aaf1ea07a700731
+          path: _worker
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Apply exact reviewed worker V2 as a test input
+        run: |
+          set -euo pipefail
+          echo 'f2394f9c5dd9b6e829a9b85462496754f3b1e0594b9c93aa0f777752e5a5e96c  database/tests/subset_crash_retry/worker-v2.patch' | sha256sum --check
+          git -C _worker apply --check "$GITHUB_WORKSPACE/database/tests/subset_crash_retry/worker-v2.patch"
+          git -C _worker apply "$GITHUB_WORKSPACE/database/tests/subset_crash_retry/worker-v2.patch"
+          git -C _worker diff --stat
+          sha256sum _worker/universal_video/subset_worker.py _worker/universal_video/neon_worker.py _worker/transcript_stage_checkpoint_v1.py
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install public test dependencies
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          if ! command -v psql >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y postgresql-client >/dev/null
+          fi
+          python -m pip install 'psycopg[binary]==3.3.4' 'requests==2.32.5'
+          python --version
+          psql --version
+          python -m pip freeze
+      - name: Exact SQL crash retry acceptance
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          test "$(git -C _schema rev-parse HEAD)" = 744d068a2cddfb8347411c8e4fb2bd69d19c09ab
+          sha256sum _schema/database/migrations/005{6,7,8,9}*.sql \
+            _schema/database/migrations/0058_universal_video_terminal_v2_gate/*.sql \
+            _schema/database/migrations/0060_fixed_subset_admission.sql \
+            _schema/database/tests/fixed_subset_admission/runtime_fixture.py
+          timeout --signal=INT --kill-after=10s 300s \
+            env -i PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 \
+              SUBSET_CRASH_RETRY_DISPOSABLE=1 \
+              python database/tests/subset_crash_retry/acceptance.py --execute
+      - name: Destroy only this disposable PostgreSQL service
+        if: always()
+        timeout-minutes: 2
+        env:
+          PG_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          python - <<'PY'
+          import json, os, re, subprocess
+          cid = os.environ["PG_SERVICE_ID"]
+          assert re.fullmatch(r"[0-9a-f]{64}", cid)
+          def call(*args):
+              return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=25)
+          inspected = call("inspect", cid)
+          assert inspected.returncode == 0
+          data = json.loads(inspected.stdout)[0]
+          assert data["Config"]["Image"] == "postgres:18-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c"
+          assert all(n.startswith("github_network_") for n in data["NetworkSettings"]["Networks"])
+          volumes = [m["Name"] for m in data["Mounts"] if m["Type"] == "volume"]
+          assert call("rm", "--force", "--volumes", cid).returncode == 0
+          assert call("inspect", cid).returncode != 0
+          assert all(call("volume", "inspect", v).returncode != 0 for v in volumes)
+          print('SUBSET_CRASH_RETRY_CLEANUP {"status":"PASS","service_destroyed":true}')
+          PY

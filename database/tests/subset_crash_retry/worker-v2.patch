@@ -1,0 +1,1284 @@
+diff --git a/transcript_stage_checkpoint_v1.py b/transcript_stage_checkpoint_v1.py
+index 609af54..94658c0 100644
+--- a/transcript_stage_checkpoint_v1.py
++++ b/transcript_stage_checkpoint_v1.py
+@@ -10,6 +10,7 @@ from __future__ import annotations
+ 
+ import copy
+ import json
++import math
+ import os
+ from pathlib import Path
+ from typing import Any, Callable
+@@ -42,7 +43,8 @@ def _valid_segments(value: Any) -> bool:
+             end = float(item.get("end"))
+         except (TypeError, ValueError):
+             return False
+-        if start < 0 or end < start or start + 1e-6 < prior_start:
++        if (not math.isfinite(start) or not math.isfinite(end)
++                or start < 0 or end < start or start + 1e-6 < prior_start):
+             return False
+         if not str(item.get("text") or "").strip():
+             return False
+@@ -52,7 +54,8 @@ def _valid_segments(value: Any) -> bool:
+ 
+ def _load_checkpoint(base, token, video: Path, duration: float, job_id: str, revision: str):
+     folder_id = os.getenv("BRIDGE_WORK_FOLDER_ID", "").strip()
+-    if not folder_id:
++    source_drive_id = os.getenv("BRIDGE_ORIGINAL_SOURCE_DRIVE_ID", "").strip()
++    if not folder_id or not source_drive_id or not math.isfinite(duration) or duration <= 0:
+         return None
+     name = _checkpoint_name(job_id, revision)
+     candidates = base.io.search(
+@@ -63,7 +66,6 @@ def _load_checkpoint(base, token, video: Path, duration: float, job_id: str, rev
+     if not candidates:
+         return None
+ 
+-    source_drive_id = os.getenv("BRIDGE_ORIGINAL_SOURCE_DRIVE_ID", "").strip()
+     source_sha = base.io.sha(video).lower()
+     for item in candidates:
+         payload = _read_json(base, token, item)
+@@ -78,7 +80,7 @@ def _load_checkpoint(base, token, video: Path, duration: float, job_id: str, rev
+         if str(payload.get("algorithmRevision") or "") != revision:
+             continue
+         recorded_source_id = str(payload.get("sourceDriveId") or "")
+-        if source_drive_id and recorded_source_id and recorded_source_id != source_drive_id:
++        if recorded_source_id != source_drive_id:
+             continue
+         if str(payload.get("sourceSha256") or "").lower() != source_sha:
+             continue
+@@ -86,7 +88,8 @@ def _load_checkpoint(base, token, video: Path, duration: float, job_id: str, rev
+             recorded_duration = float(payload.get("durationSeconds"))
+         except (TypeError, ValueError):
+             continue
+-        if abs(recorded_duration - float(duration)) > 0.05:
++        if (not math.isfinite(recorded_duration) or recorded_duration <= 0
++                or abs(recorded_duration - duration) > 0.05):
+             continue
+         segments = payload.get("segments")
+         info = payload.get("info")
+@@ -105,7 +108,8 @@ def _load_checkpoint(base, token, video: Path, duration: float, job_id: str, rev
+ 
+ def _save_checkpoint(base, token, video: Path, duration: float, job_id: str, revision: str, segments, info, warnings):
+     folder_id = os.getenv("BRIDGE_WORK_FOLDER_ID", "").strip()
+-    if not folder_id:
++    source_drive_id = os.getenv("BRIDGE_ORIGINAL_SOURCE_DRIVE_ID", "").strip()
++    if not folder_id or not source_drive_id or not math.isfinite(duration) or duration <= 0:
+         return None
+     name = _checkpoint_name(job_id, revision)
+     payload = {
+@@ -113,7 +117,7 @@ def _save_checkpoint(base, token, video: Path, duration: float, job_id: str, rev
+         "status": "TRANSCRIPT_STAGE_COMPLETE",
+         "job_id": job_id,
+         "algorithmRevision": revision,
+-        "sourceDriveId": os.getenv("BRIDGE_ORIGINAL_SOURCE_DRIVE_ID") or None,
++        "sourceDriveId": source_drive_id,
+         "sourceSha256": base.io.sha(video).lower(),
+         "durationSeconds": float(duration),
+         "segments": segments,
+diff --git a/universal_video/neon_worker.py b/universal_video/neon_worker.py
+index 50c49c8..ea97968 100644
+--- a/universal_video/neon_worker.py
++++ b/universal_video/neon_worker.py
+@@ -14,6 +14,7 @@ from bridge_worker_3_1_free import stable_job_id
+ from .drive_adapter import access_token, file_metadata
+ from .route_receipt_v2 import discover_route_receipt
+ from .runtime_preflight import validate_video_runtime
++from .subset_worker import SubsetWorkerAdapter
+ from .terminal_evidence_v2 import (
+     build_terminal_evidence,
+     reverify_terminal_output_live,
+@@ -208,10 +209,14 @@ def _failure(exc: BaseException) -> tuple[str, str]:
+ 
+ 
+ class _Heartbeat:
+-    def __init__(self, database_url: str, claim: Mapping[str, Any], worker_key: str) -> None:
++    def __init__(
++        self, database_url: str, claim: Mapping[str, Any], worker_key: str, *,
++        heartbeat_call: Callable[..., Any] | None = None,
++    ) -> None:
+         self.database_url = database_url
+         self.claim = claim
+         self.worker_key = worker_key
++        self.heartbeat_call = heartbeat_call or heartbeat_job
+         self.stop = threading.Event()
+         self.error: BaseException | None = None
+         self.thread = threading.Thread(target=self._run, name="video-queue-heartbeat", daemon=True)
+@@ -219,7 +224,7 @@ class _Heartbeat:
+     def _run(self) -> None:
+         while not self.stop.wait(300):
+             try:
+-                heartbeat_job(
++                self.heartbeat_call(
+                     self.database_url,
+                     job_id=str(self.claim["job_id"]),
+                     lease_token=str(self.claim["lease_token"]),
+@@ -245,14 +250,24 @@ def process_claim(
+     worker_key: str,
+     *,
+     processor: Callable[[Mapping[str, Any]], Mapping[str, Any]] = stable_review_processor,
++    subset_adapter: SubsetWorkerAdapter | None = None,
+ ) -> dict[str, Any]:
+     output = _base_output(claim)
+     outcome = "REVIEW_READY"
+     error_code: str | None = None
+     initial_source: dict[str, Any] | None = None
++    before_work_observation_id: str | None = None
+ 
+-    with _Heartbeat(database_url, claim, worker_key) as heartbeat:
++    with _Heartbeat(
++        database_url, claim, worker_key,
++        heartbeat_call=subset_adapter.heartbeat_job if subset_adapter is not None else None,
++    ) as heartbeat:
+         with _processing_timeout():
++            if subset_adapter is not None:
++                # Keep collector/authorization errors outside the processor retry path.
++                before_work_observation_id = subset_adapter.before_work(database_url, claim, worker_key)
++                if heartbeat.error is not None:
++                    raise NeonVideoWorkerError("VIDEO_QUEUE_HEARTBEAT_LOST") from heartbeat.error
+             try:
+                 initial_source = verify_claimed_source(claim, access_token())
+                 output.update(dict(processor(claim)))
+@@ -278,7 +293,8 @@ def process_claim(
+                 raise NeonVideoWorkerError("VIDEO_QUEUE_HEARTBEAT_LOST") from heartbeat.error
+ 
+             if outcome == "FAILED":
+-                return retry_job(
++                retry = subset_adapter.retry_job if subset_adapter is not None else retry_job
++                return retry(
+                     database_url,
+                     job_id=str(claim["job_id"]),
+                     lease_token=str(claim["lease_token"]),
+@@ -287,6 +303,13 @@ def process_claim(
+                     max_attempts=3,
+                     base_delay_seconds=60,
+                 )
++            if subset_adapter is not None:
++                assert before_work_observation_id is not None
++                return subset_adapter.finish_job(
++                    database_url, claim, worker_key,
++                    before_work_observation_id=before_work_observation_id,
++                    outcome=outcome, output=output, error_code=error_code,
++                )
+             return finish_job(
+                 database_url,
+                 job_id=str(claim["job_id"]),
+@@ -303,6 +326,7 @@ def process_one_neon(
+     database_url: str | None = None,
+     worker_key: str | None = None,
+     processor: Callable[[Mapping[str, Any]], Mapping[str, Any]] = stable_review_processor,
++    subset_adapter: SubsetWorkerAdapter | None = None,
+ ) -> bool:
+     with shared_workload_lock():
+         validate_video_runtime()
+@@ -317,7 +341,7 @@ def process_one_neon(
+         )
+         if claim is None:
+             return False
+-        process_claim(dsn, claim, key, processor=processor)
++        process_claim(dsn, claim, key, processor=processor, subset_adapter=subset_adapter)
+         return True
+ 
+ 
+diff --git a/universal_video/subset_worker.py b/universal_video/subset_worker.py
+new file mode 100644
+--- /dev/null
++++ b/universal_video/subset_worker.py
+@@ -0,0 +1,165 @@
++"""Explicit opt-in client for the installed 0060 worker API.
++
++The caller must supply a collector bridge that returns committed ATTEMPT
++observation IDs. This module neither collects observations nor issues approvals.
++Constructing it does not change the resident entrypoint or enable runtime.
++"""
++from __future__ import annotations
++
++import json
++from datetime import datetime
++from typing import Any, Literal, Mapping, Protocol
++from uuid import UUID
++
++
++class SubsetWorkerError(RuntimeError):
++    pass
++
++
++SAFETY_FLAGS = (
++    "execution_allowed", "release_allowed", "database_persistence_allowed",
++    "canonical_promotion_allowed",
++)
++
++
++def _timestamp(value: Any) -> bool:
++    return isinstance(value, datetime) and value.utcoffset() is not None
++
++
++class ObservationProvider(Protocol):
++    def __call__(
++        self, claim: Mapping[str, Any], worker_key: str, *,
++        boundary: Literal["before_work", "before_finish"],
++    ) -> str:
++        """Return a fresh, committed ATTEMPT observation for this exact lease."""
++        ...
++
++
++def _execute(database_url: str, sql: str, params: tuple[Any, ...]) -> dict[str, Any]:
++    from psycopg import connect
++    from psycopg.rows import dict_row
++
++    with connect(
++        database_url, row_factory=dict_row, connect_timeout=8,
++        options="-c statement_timeout=10000 -c lock_timeout=2000",
++        application_name="universal-video-subset-worker",
++    ) as conn:
++        with conn.cursor() as cur:
++            cur.execute(sql, params)
++            row = cur.fetchone()
++            if row is None:
++                raise SubsetWorkerError("VIDEO_SUBSET_RESPONSE_MISSING")
++    # Do not report success before the connection context commits.
++    if not isinstance(row, Mapping):
++        raise SubsetWorkerError("VIDEO_SUBSET_RESPONSE_INVALID")
++    return dict(row)
++
++
++class SubsetWorkerAdapter:
++    def __init__(self, observation_provider: ObservationProvider) -> None:
++        if not callable(observation_provider):
++            raise SubsetWorkerError("VIDEO_SUBSET_OBSERVATION_PROVIDER_REQUIRED")
++        self.observation_provider = observation_provider
++
++    def _observe(
++        self, claim: Mapping[str, Any], worker_key: str,
++        boundary: Literal["before_work", "before_finish"],
++    ) -> str:
++        value = self.observation_provider(dict(claim), worker_key, boundary=boundary)
++        try:
++            return str(UUID(str(value)))
++        except (ValueError, TypeError, AttributeError) as exc:
++            raise SubsetWorkerError("VIDEO_SUBSET_OBSERVATION_ID_INVALID") from exc
++
++    def before_work(
++        self, database_url: str, claim: Mapping[str, Any], worker_key: str,
++    ) -> str:
++        observation_id = self._observe(claim, worker_key, "before_work")
++        row = _execute(
++            database_url,
++            "SELECT video_queue.authorize_subset_attempt(%s, %s, %s, %s) AS authorization",
++            (str(claim["job_id"]), str(claim["lease_token"]), worker_key, observation_id),
++        )
++        receipt = row.get("authorization")
++        expected = {
++            "status": "SOURCE_AND_LEASE_VERIFIED",
++            "job_id": str(claim["job_id"]),
++            "lease_token": str(claim["lease_token"]),
++            "attempt_count": claim["attempt_count"],
++            "observation_id": observation_id,
++        }
++        if (set(row) != {"authorization"} or not isinstance(receipt, dict)
++                or any(receipt.get(k) != v for k, v in expected.items())
++                or type(receipt.get("attempt_count")) is not int
++                or any(receipt.get(flag) is not False for flag in SAFETY_FLAGS)):
++            raise SubsetWorkerError("VIDEO_SUBSET_AUTHORIZATION_MISMATCH")
++        return observation_id
++
++    def heartbeat_job(
++        self, database_url: str, *, job_id: str, lease_token: str,
++        worker_key: str, extend_seconds: int = 900,
++    ) -> Any:
++        row = _execute(
++            database_url,
++            "SELECT video_queue.heartbeat_subset_job(%s, %s, %s, %s) AS lease_expires_at",
++            (job_id, lease_token, worker_key, extend_seconds),
++        )
++        if set(row) != {"lease_expires_at"} or not _timestamp(row["lease_expires_at"]):
++            raise SubsetWorkerError("VIDEO_SUBSET_HEARTBEAT_RESPONSE_INVALID")
++        return row["lease_expires_at"]
++
++    def retry_job(
++        self, database_url: str, *, job_id: str, lease_token: str,
++        worker_key: str, error_code: str, max_attempts: int = 3,
++        base_delay_seconds: int = 60,
++    ) -> dict[str, Any]:
++        # 0060 fixes the limit at three; its SQL signature has no max_attempts.
++        if max_attempts != 3:
++            raise SubsetWorkerError("VIDEO_SUBSET_RETRY_LIMIT_FIXED")
++        row = _execute(
++            database_url,
++            "SELECT * FROM video_queue.retry_subset_job(%s, %s, %s, %s, %s)",
++            (job_id, lease_token, worker_key, error_code, base_delay_seconds),
++        )
++        if (set(row) != {"job_status", "batch_status", "retry_after"}
++                or type(row["job_status"]) is not str or type(row["batch_status"]) is not str
++                or row["job_status"] not in {"QUEUED", "FAILED"}
++                or (row["job_status"] == "QUEUED" and (
++                    row["batch_status"] != "RUNNING" or not _timestamp(row["retry_after"])))
++                or (row["job_status"] == "FAILED" and (
++                    row["batch_status"] not in {"CANARY_BLOCKED", "RUNNING", "REVIEW"}
++                    or row["retry_after"] is not None))):
++            raise SubsetWorkerError("VIDEO_SUBSET_RETRY_RESPONSE_INVALID")
++        if row["retry_after"] is not None:
++            row["retry_after"] = row["retry_after"].isoformat()
++        return row
++
++    def finish_job(
++        self, database_url: str, claim: Mapping[str, Any], worker_key: str, *,
++        before_work_observation_id: str, outcome: str, output: Mapping[str, Any],
++        error_code: str | None = None,
++    ) -> dict[str, Any]:
++        observation_id = self._observe(claim, worker_key, "before_finish")
++        if UUID(observation_id) == UUID(before_work_observation_id):
++            raise SubsetWorkerError("VIDEO_SUBSET_DISTINCT_OBSERVATION_REQUIRED")
++        # finish_subset_job consumes the new observation itself, atomically with finish.
++        row = _execute(
++            database_url,
++            "SELECT * FROM video_queue.finish_subset_job(%s, %s, %s, %s, %s::jsonb, %s, %s)",
++            (str(claim["job_id"]), str(claim["lease_token"]), worker_key, outcome,
++             json.dumps(dict(output), allow_nan=False), observation_id, error_code),
++        )
++        canary_status = "CANARY_REVIEW" if outcome == "REVIEW_READY" else "CANARY_BLOCKED"
++        allowed_batch = {canary_status, "RUNNING", "REVIEW"}
++        if claim.get("is_canary") is True:
++            allowed_batch = {canary_status}
++        elif claim.get("is_canary") is False:
++            allowed_batch = {"RUNNING", "REVIEW"}
++        if (set(row) != {"job_status", "batch_status", "released_jobs"}
++                or outcome not in {"REVIEW_READY", "AMBIGUOUS", "FAILED"}
++                or row["job_status"] != outcome
++                or type(row["batch_status"]) is not str or row["batch_status"] not in allowed_batch
++                or type(row["released_jobs"]) is not int or row["released_jobs"] != 0):
++            # COMMIT may already have succeeded. Never resubmit this transition here.
++            raise SubsetWorkerError("VIDEO_SUBSET_FINISH_RESPONSE_INVALID")
++        return row
+diff --git a/tests/test_universal_video_subset_worker.py b/tests/test_universal_video_subset_worker.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_universal_video_subset_worker.py
+@@ -0,0 +1,286 @@
++"""Offline worker orchestration tests; no collector, issuer or database service."""
++import json
++import socket
++import sys
++from contextlib import nullcontext
++from datetime import datetime, timezone
++from types import SimpleNamespace
++from unittest.mock import Mock
++
++import pytest
++
++from universal_video import neon_worker as worker
++from universal_video.subset_worker import SubsetWorkerAdapter, SubsetWorkerError
++
++
++JOB = "00000000-0000-0000-0000-000000000001"
++LEASE = "00000000-0000-0000-0000-000000000002"
++PRE = "00000000-0000-0000-0000-000000000003"
++POST = "00000000-0000-0000-0000-000000000004"
++NOW = datetime(2026, 10, 13, tzinfo=timezone.utc)
++
++
++@pytest.fixture
++def offline(monkeypatch):
++    item = dict(job_id=JOB, lease_token=LEASE, attempt_count=1, is_canary=True,
++                source_file_id="offline-source", stable_job_key="offline-stable",
++                algorithm_revision=worker.APPROVED_REVISION)
++    state = SimpleNamespace(events=[], calls=[], connections=[], fail=None,
++                            commit_fail=None, receipt_change={}, observations=[PRE, POST])
++
++    def denied(*_a, **_k):
++        raise AssertionError("offline test attempted network access")
++
++    monkeypatch.setattr(socket, "create_connection", denied)
++    monkeypatch.setattr(socket.socket, "connect", denied)
++
++    class Connection:
++        def __enter__(self):
++            return self
++
++        def __exit__(self, error, *_):
++            if error is not None:
++                state.events.append("rollback:" + self.name)
++            elif state.commit_fail == self.name:
++                raise RuntimeError("commit acknowledgement unavailable")
++            else:
++                state.events.append("commit:" + self.name)
++
++        def cursor(self):
++            return Cursor(self)
++
++    class Cursor:
++        def __init__(self, conn):
++            self.conn = conn
++
++        def __enter__(self):
++            return self
++
++        def __exit__(self, *_):
++            return False
++
++        def execute(self, sql, params):
++            self.name = self.conn.name = sql.split("video_queue.")[1].split("(")[0]
++            self.params = params
++            state.calls.append((self.name, sql, params))
++            state.events.append(self.name)
++            if self.name == state.fail:
++                raise RuntimeError("subset API rejected request")
++
++        def fetchone(self):
++            if self.name == "authorize_subset_attempt":
++                return {"authorization": dict(
++                    {"status": "SOURCE_AND_LEASE_VERIFIED", "job_id": JOB,
++                     "lease_token": LEASE, "attempt_count": 1,
++                     "observation_id": self.params[3],
++                     "execution_allowed": False, "release_allowed": False,
++                     "database_persistence_allowed": False,
++                     "canonical_promotion_allowed": False}, **state.receipt_change)}
++            if self.name == "heartbeat_subset_job":
++                return {"lease_expires_at": NOW}
++            if self.name == "retry_subset_job":
++                return dict(job_status="QUEUED", batch_status="RUNNING", retry_after=NOW)
++            if self.name == "finish_subset_job":
++                batch_status = "CANARY_REVIEW" if self.params[3] == "REVIEW_READY" else "CANARY_BLOCKED"
++                return dict(job_status=self.params[3], batch_status=batch_status, released_jobs=0)
++            raise AssertionError("unexpected SQL: " + self.name)
++
++    def connect(dsn, **kwargs):
++        assert dsn == "postgresql://offline.invalid/test"
++        state.connections.append(kwargs)
++        return Connection()
++
++    dict_row = object()
++    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=connect))
++    monkeypatch.setitem(sys.modules, "psycopg.rows", SimpleNamespace(dict_row=dict_row))
++    state.dict_row = dict_row
++    monkeypatch.setattr(worker, "_processing_timeout", nullcontext)
++    monkeypatch.setattr(worker, "shared_workload_lock", nullcontext)
++    monkeypatch.setattr(worker, "validate_video_runtime", lambda: None)
++    monkeypatch.setattr(worker, "claim_job", Mock(return_value=item))
++    monkeypatch.setattr(worker, "access_token", lambda: "offline-token")
++    monkeypatch.setattr(worker, "verify_claimed_source",
++                        lambda *_: state.events.append("source_read") or {"version": "1"})
++    monkeypatch.setattr(worker, "verify_terminal_output_live",
++                        lambda *_: state.events.append("terminal_readback"))
++
++    class ImmediateHeartbeat(worker._Heartbeat):
++        def __enter__(self):
++            # Exercise the real heartbeat dispatch once without wall-clock waits.
++            self.stop = SimpleNamespace(wait=Mock(side_effect=[False, True]))
++            self._run()
++            return self
++
++        def __exit__(self, *_):
++            pass
++
++    monkeypatch.setattr(worker, "_Heartbeat", ImmediateHeartbeat)
++    for name in ("heartbeat_job", "retry_job", "finish_job"):
++        monkeypatch.setattr(worker, name, Mock(side_effect=AssertionError("legacy fallback")))
++
++    def observe(claim, key, *, boundary):
++        assert claim == item and key == "worker-offline"
++        state.events.append(boundary)
++        return state.observations.pop(0)
++
++    def processor(_):
++        state.events.append("processor")
++        return {"offline_artifact": True}
++
++    state.adapter = SubsetWorkerAdapter(observe)
++    state.item = item
++    state.processor = processor
++    state.run = lambda **kw: worker.process_claim(
++        "postgresql://offline.invalid/test", item, "worker-offline",
++        processor=kw.pop("processor", processor), subset_adapter=state.adapter, **kw)
++    return state
++
++
++def test_one_job_lifecycle_uses_subset_only_and_two_observations(offline):
++    assert worker.process_one_neon(
++        database_url="postgresql://offline.invalid/test", worker_key="worker-offline",
++        processor=offline.processor, subset_adapter=offline.adapter,
++    ) is True
++    assert offline.events == [
++        "heartbeat_subset_job", "commit:heartbeat_subset_job", "before_work",
++        "authorize_subset_attempt", "commit:authorize_subset_attempt", "source_read",
++        "processor", "terminal_readback", "source_read",
++        "before_finish", "finish_subset_job", "commit:finish_subset_job",
++    ]
++    worker.claim_job.assert_called_once_with(
++        "postgresql://offline.invalid/test", "worker-offline", lease_seconds=900,
++        processing_profile=worker.APPROVED_PROFILE, algorithm_revision=worker.APPROVED_REVISION)
++    assert offline.calls[0][2] == (JOB, LEASE, "worker-offline", 900)
++    assert offline.calls[1][2] == (JOB, LEASE, "worker-offline", PRE)
++    finish = offline.calls[2][2]
++    assert finish[:4] == (JOB, LEASE, "worker-offline", "REVIEW_READY")
++    assert finish[5:] == (POST, None)
++    assert json.loads(finish[4])["publication_state"] == "NOT_PUBLISHED"
++    assert json.loads(finish[4])["database_persistence_allowed"] is False
++    assert all(c == dict(row_factory=offline.dict_row, connect_timeout=8,
++                        options="-c statement_timeout=10000 -c lock_timeout=2000",
++                        application_name="universal-video-subset-worker")
++               for c in offline.connections)
++
++
++def test_empty_claim_does_not_request_observations(offline):
++    worker.claim_job.return_value = None
++    assert worker.process_one_neon(
++        database_url="postgresql://offline.invalid/test", worker_key="worker-offline",
++        processor=offline.processor, subset_adapter=offline.adapter,
++    ) is False
++    assert offline.events == []
++
++
++def test_processor_failure_uses_fixed_subset_retry_signature(offline):
++    result = offline.run(processor=Mock(side_effect=RuntimeError("temporary failure")))
++    assert result == dict(job_status="QUEUED", batch_status="RUNNING", retry_after=NOW.isoformat())
++    assert offline.calls[-1][0] == "retry_subset_job"
++    assert offline.calls[-1][2] == (JOB, LEASE, "worker-offline", "UV_ITEM_FAILED", 60)
++    assert "before_finish" not in offline.events
++
++
++def test_content_ambiguity_uses_subset_finish(offline):
++    result = offline.run(processor=Mock(side_effect=RuntimeError("VISUAL_GAP_CHECK_FAILED")))
++    assert result["job_status"] == "AMBIGUOUS"
++    assert offline.calls[-1][2][3] == "AMBIGUOUS"
++    assert offline.calls[-1][2][-2:] == (POST, "UV_CONTENT_AMBIGUOUS")
++
++
++@pytest.mark.parametrize("change", [{"job_id": POST}, {"lease_token": POST},
++                                   {"attempt_count": 2}, {"observation_id": POST},
++                                   {"status": "REJECTED"}])
++def test_wrong_authorization_never_starts_processor(offline, change):
++    offline.receipt_change = change
++    with pytest.raises(SubsetWorkerError, match="AUTHORIZATION_MISMATCH"):
++        offline.run()
++    assert "processor" not in offline.events
++    assert "before_finish" not in offline.events
++
++
++@pytest.mark.parametrize("api", ["authorize_subset_attempt", "heartbeat_subset_job",
++                                 "finish_subset_job", "retry_subset_job"])
++def test_subset_error_has_no_legacy_fallback(offline, api):
++    offline.fail = api
++    processor = Mock(side_effect=RuntimeError("processor failure")) if api == "retry_subset_job" else offline.processor
++    with pytest.raises(RuntimeError):
++        offline.run(processor=processor)
++    if api in ("authorize_subset_attempt", "heartbeat_subset_job"):
++        assert "processor" not in offline.events
++    worker.heartbeat_job.assert_not_called()
++    worker.retry_job.assert_not_called()
++    worker.finish_job.assert_not_called()
++
++
++@pytest.mark.parametrize("api", ["authorize_subset_attempt", "finish_subset_job"])
++def test_commit_error_is_not_reported_as_success(offline, api):
++    offline.commit_fail = api
++    with pytest.raises(RuntimeError, match="commit acknowledgement"):
++        offline.run()
++    if api == "authorize_subset_attempt":
++        assert "processor" not in offline.events
++    assert "commit:" + api not in offline.events
++    worker.finish_job.assert_not_called()
++
++
++@pytest.mark.parametrize("observations,message", [(["invalid"], "ID_INVALID"),
++                                                ([PRE, "invalid"], "ID_INVALID"),
++                                                ([PRE, PRE], "DISTINCT_OBSERVATION")])
++def test_invalid_or_reused_observation_is_rejected(offline, observations, message):
++    offline.observations = observations
++    with pytest.raises(SubsetWorkerError, match=message):
++        offline.run()
++    assert not any(name == "finish_subset_job" for name, _, _ in offline.calls)
++
++
++@pytest.mark.parametrize("boundary", ["before_work", "before_finish"])
++def test_collector_boundary_failure_never_falls_back(offline, boundary):
++    observe = offline.adapter.observation_provider
++
++    def unavailable(claim, key, **kwargs):
++        if kwargs["boundary"] == boundary:
++            raise RuntimeError("collector unavailable")
++        return observe(claim, key, **kwargs)
++
++    offline.adapter.observation_provider = unavailable
++    with pytest.raises(RuntimeError, match="collector unavailable"):
++        offline.run()
++    if boundary == "before_work":
++        assert "processor" not in offline.events and "source_read" not in offline.events
++    assert not any(name == "finish_subset_job" for name, _, _ in offline.calls)
++    worker.retry_job.assert_not_called()
++    worker.finish_job.assert_not_called()
++
++
++def test_missing_provider_and_changed_retry_bound_are_rejected(offline):
++    with pytest.raises(SubsetWorkerError, match="PROVIDER_REQUIRED"):
++        SubsetWorkerAdapter(None)
++    with pytest.raises(SubsetWorkerError, match="RETRY_LIMIT_FIXED"):
++        offline.adapter.retry_job("unused", job_id=JOB, lease_token=LEASE,
++                                  worker_key="worker-offline", error_code="UV_ITEM_FAILED", max_attempts=4)
++    assert offline.calls == []
++
++
++@pytest.mark.parametrize("failure", [False, True])
++def test_default_path_retains_legacy_calls(offline, failure):
++    worker.heartbeat_job.side_effect = None
++    worker.retry_job.side_effect = None
++    worker.retry_job.return_value = {"job_status": "QUEUED"}
++    worker.finish_job.side_effect = None
++    worker.finish_job.return_value = {"job_status": "REVIEW_READY"}
++    processor = Mock(side_effect=RuntimeError("failure")) if failure else offline.processor
++    result = worker.process_claim("legacy-dsn", offline.item, "legacy-worker", processor=processor)
++    worker.heartbeat_job.assert_called_once_with(
++        "legacy-dsn", job_id=JOB, lease_token=LEASE, worker_key="legacy-worker", extend_seconds=900)
++    if failure:
++        assert result == {"job_status": "QUEUED"}
++        worker.retry_job.assert_called_once_with(
++            "legacy-dsn", job_id=JOB, lease_token=LEASE, worker_key="legacy-worker",
++            error_code="UV_ITEM_FAILED", max_attempts=3, base_delay_seconds=60)
++        worker.finish_job.assert_not_called()
++    else:
++        assert result == {"job_status": "REVIEW_READY"}
++        assert worker.finish_job.call_args.kwargs["outcome"] == "REVIEW_READY"
++        worker.retry_job.assert_not_called()
++    assert offline.calls == []
++    assert not any(event.startswith("before_") for event in offline.events)
+diff --git a/tests/test_universal_video_batch_retry.py b/tests/test_universal_video_batch_retry.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_universal_video_batch_retry.py
+@@ -0,0 +1,249 @@
++"""Offline post-admission retry boundaries; no admission or live queue is run.
++
++Exercise the real checkpoint and result lookup against synthetic Drive storage.
++The transaction tests exercise the Python adapter, not PostgreSQL lease fencing.
++"""
++from __future__ import annotations
++
++import copy
++import hashlib
++import json
++import re
++import socket
++import subprocess
++from types import SimpleNamespace
++from unittest.mock import Mock
++
++import psycopg
++import pytest
++import requests
++
++import transcript_stage_checkpoint_v1 as checkpoint
++from bridge_output_scoped_idempotency import existing_same_revision_done
++from universal_video import video_queue
++
++
++REVISION = "3.1-free-r25.15"  # Transcript stage inherited by the r25.16 worker.
++RESULT_REVISION = "3.1-free-r25.16"
++SEGMENTS = [{"start": 0.0, "end": 1.0, "text": "synthetic bridge lesson"}]
++
++
++@pytest.fixture(autouse=True)
++def offline(monkeypatch):
++    forbidden = Mock(side_effect=AssertionError("external side effect in offline test"))
++    for owner, name in (
++        (socket, "create_connection"), (socket.socket, "connect"),
++        (requests.sessions.Session, "request"), (subprocess, "Popen"),
++        (psycopg, "connect"),
++    ):
++        monkeypatch.setattr(owner, name, forbidden)
++    yield
++    forbidden.assert_not_called()
++
++
++@pytest.fixture
++def stage(tmp_path, monkeypatch):
++    monkeypatch.setenv("BRIDGE_WORK_FOLDER_ID", "synthetic-work")
++    monkeypatch.setenv("BRIDGE_OUTPUT_FOLDER_ID", "synthetic-output")
++    monkeypatch.setenv("BRIDGE_ORIGINAL_SOURCE_DRIVE_ID", "synthetic-source-1")
++    records = {}
++
++    def upload(_token, folder, name, payload):
++        item_id = f"record-{len(records) + 1}"
++        records[item_id] = {
++            "id": item_id, "folder": folder, "name": name,
++            "body": json.dumps(payload),
++        }
++        return {"id": item_id}
++
++    def search(_token, query):
++        folder = re.search(r"'([^']+)' in parents", query).group(1)
++        name = re.search(r"name='([^']+)'", query).group(1)
++        return [dict(item) for item in records.values()
++                if item["folder"] == folder and item["name"] == name]
++
++    io = SimpleNamespace(
++        search=Mock(side_effect=search), upload_json=Mock(side_effect=upload),
++        sha=lambda path: hashlib.sha256(path.read_bytes()).hexdigest(), safe=Mock(),
++    )
++    compute = Mock(side_effect=lambda *args: (copy.deepcopy(SEGMENTS), {"qc": "PASS"}, []))
++
++    def fresh_worker():
++        monkeypatch.setattr(checkpoint, "_INSTALLED", False)
++        base = SimpleNamespace(io=io, obtain_transcript=compute,
++                               _read_text=lambda _token, item: records[item["id"]]["body"])
++        checkpoint.install(base, REVISION)
++        return base
++
++    video = tmp_path / "source.mp4"
++    video.write_bytes(b"synthetic source bytes, never decoded")
++    return SimpleNamespace(base=fresh_worker(), restart=fresh_worker, video=video,
++                           records=records, io=io, compute=compute, upload=upload)
++
++
++def obtain(stage, job="job-1"):
++    return stage.base.obtain_transcript("synthetic-token", "source-folder", "source.mp4",
++                                        stage.video, stage.video.parent, 2.0, job)
++
++
++@pytest.mark.parametrize("boundary", ["before_checkpoint", "after_checkpoint", "after_result"])
++def test_bounded_batch_resumes_saved_stage_and_reuses_terminal_result(stage, monkeypatch, boundary):
++    # Two already-admitted identities; this test neither admits nor releases jobs.
++    batch = ("job-1", "job-2")
++
++    def attempt(job):
++        semantic = SimpleNamespace(base=stage.base)
++        done = existing_same_revision_done(semantic, "synthetic-token", job, RESULT_REVISION)
++        if done is not None:
++            return done
++        obtain(stage, job)
++        done = {"status": "AI_DONE", "job_id": job, "algorithmRevision": RESULT_REVISION,
++                "masterPdf": {"driveId": f"synthetic-pdf-{job}"}}
++        stage.io.upload_json("synthetic-token", "synthetic-output", f"AI_DONE_{job}.json", done)
++        stage.io.upload_json("synthetic-token", "synthetic-output", f"METHODOLOGY_READY_{job}.json",
++                             {"status": "METHODOLOGY_READY", "job_id": job,
++                              "algorithmRevision": RESULT_REVISION,
++                              "masterPdfDriveId": done["masterPdf"]["driveId"]})
++        return done
++
++    def interrupted_upload(token, folder, name, payload):
++        at_checkpoint = name.startswith("TRANSCRIPT_STAGE_CHECKPOINT_")
++        if boundary == "before_checkpoint" and at_checkpoint:
++            raise SystemExit("synthetic crash before checkpoint write")
++        receipt = stage.upload(token, folder, name, payload)
++        if (boundary == "after_checkpoint" and at_checkpoint) or (
++            boundary == "after_result" and name.startswith("METHODOLOGY_READY_")
++        ):
++            raise SystemExit("synthetic crash after durable write, before acknowledgement")
++        return receipt
++
++    stage.io.upload_json.side_effect = interrupted_upload
++    with pytest.raises(SystemExit, match="synthetic crash"):
++        attempt(batch[0])
++    assert stage.compute.call_count == 1
++    saved_bytes = {key: item["body"] for key, item in stage.records.items()}
++    stage.io.upload_json.side_effect = stage.upload
++    stage.base = stage.restart()  # Lose worker memory; retain only synthetic service records.
++    first_result = attempt(batch[0])
++    assert stage.compute.call_count == (2 if boundary == "before_checkpoint" else 1)
++    assert all(stage.records[key]["body"] == body for key, body in saved_bytes.items())
++    monkeypatch.setenv("BRIDGE_ORIGINAL_SOURCE_DRIVE_ID", "synthetic-source-2")
++    second_result = attempt(batch[1])
++    calls = (stage.compute.call_count, stage.io.upload_json.call_count)
++    assert attempt(batch[1]) == second_result
++    monkeypatch.setenv("BRIDGE_ORIGINAL_SOURCE_DRIVE_ID", "synthetic-source-1")
++    assert attempt(batch[0]) == first_result
++    assert (stage.compute.call_count, stage.io.upload_json.call_count) == calls
++    assert stage.compute.call_count == (3 if boundary == "before_checkpoint" else 2)
++    for prefix in ("TRANSCRIPT_STAGE_CHECKPOINT_", "AI_DONE_", "METHODOLOGY_READY_"):
++        assert sum(item["name"].startswith(prefix) for item in stage.records.values()) == len(batch)
++
++
++@pytest.mark.parametrize("change", [
++    {"sourceDriveId": None}, {"sourceDriveId": ""}, {"sourceDriveId": "different-source"},
++    {"sourceSha256": "a" * 64}, {"algorithmRevision": "other-revision"},
++    {"job_id": "other-job"}, {"status": "IN_PROGRESS"},
++    {"durationSeconds": float("nan")}, {"durationSeconds": float("inf")},
++    {"durationSeconds": 3.0},
++    {"segments": [{"start": float("nan"), "end": 1.0, "text": "invalid"}]},
++    {"segments": [{"start": 0.0, "end": float("inf"), "text": "invalid"}]},
++])
++def test_retry_recomputes_untrusted_checkpoint_instead_of_accepting_it(stage, change):
++    obtain(stage)
++    record = next(iter(stage.records.values()))
++    payload = json.loads(record["body"])
++    payload.update(change)
++    record["body"] = json.dumps(payload)
++    preserved = record["body"]
++    stage.base = stage.restart()
++    segments, info, _warnings = obtain(stage)
++    assert stage.compute.call_count == 2
++    assert segments == SEGMENTS
++    assert info["transcriptStageCheckpoint"]["status"] == "CREATED"
++    assert record["body"] == preserved  # Invalid evidence remains available for diagnosis.
++
++
++def test_retry_reuses_checkpoint_without_mutating_saved_evidence(stage):
++    obtain(stage)
++    saved = copy.deepcopy(stage.records)
++    stage.base = stage.restart()
++    segments, info, warnings = obtain(stage)
++    assert info["transcriptStageCheckpoint"]["status"] == "REUSED"
++    segments[0]["text"] = "caller mutation"
++    info["qc"] = "caller mutation"
++    warnings.append("caller mutation")
++    again = obtain(stage)
++    assert again[0] == SEGMENTS and again[1]["qc"] == "PASS" and again[2] == []
++    assert stage.compute.call_count == 1 and stage.records == saved
++
++
++@pytest.mark.parametrize("source_id", [None, "", " "])
++def test_retry_without_current_source_identity_neither_reuses_nor_saves(stage, monkeypatch, source_id):
++    obtain(stage)
++    saved = copy.deepcopy(stage.records)
++    if source_id is None:
++        monkeypatch.delenv("BRIDGE_ORIGINAL_SOURCE_DRIVE_ID")
++    else:
++        monkeypatch.setenv("BRIDGE_ORIGINAL_SOURCE_DRIVE_ID", source_id)
++    stage.base = stage.restart()
++    segments, info, _warnings = obtain(stage)
++    assert stage.compute.call_count == 2 and segments == SEGMENTS
++    assert "transcriptStageCheckpoint" not in info
++    assert stage.records == saved and stage.io.upload_json.call_count == 1
++
++
++@pytest.mark.parametrize("duration", [float("nan"), float("inf"), float("-inf"), 0.0, -1.0])
++def test_invalid_observed_duration_is_not_saved_as_resumable_evidence(stage, duration):
++    segments, info, _warnings = stage.base.obtain_transcript(
++        "synthetic-token", "source-folder", "source.mp4", stage.video,
++        stage.video.parent, duration, "job-1",
++    )
++    assert segments == SEGMENTS and stage.compute.call_count == 1
++    assert "transcriptStageCheckpoint" not in info
++    stage.io.upload_json.assert_not_called()
++    assert stage.records == {}
++
++
++@pytest.mark.parametrize("boundary", ["before_commit", "lost_commit_reply", "success"])
++def test_finish_submits_once_and_never_reports_success_before_commit(monkeypatch, boundary):
++    # Transport double: commit ambiguity must propagate, not trigger another submission.
++    # This does NOT implement or claim to prove the server's lease/SQL state machine.
++    receipt = {"job_status": "REVIEW_READY", "batch_status": "CANARY_REVIEW", "released_jobs": 0}
++    events = []
++    cursor = Mock()
++    cursor.__enter__ = Mock(return_value=cursor)
++    cursor.__exit__ = Mock(return_value=False)
++    cursor.fetchone.side_effect = lambda: (events.append("row"), receipt)[1]
++
++    class Connection:
++        def __enter__(self):
++            return self
++
++        def cursor(self):
++            return cursor
++
++        def __exit__(self, *_args):
++            if boundary == "before_commit":
++                events.append("rollback")
++                raise ConnectionError("synthetic pre-commit failure")
++            events.append("commit")
++            if boundary == "lost_commit_reply":
++                raise ConnectionError("synthetic commit reply lost")
++
++    connect = Mock(return_value=Connection())
++    monkeypatch.setattr(psycopg, "connect", connect)
++    kwargs = dict(job_id="job-1", lease_token="lease-1", worker_key="worker-1",
++                  outcome="REVIEW_READY", output={"synthetic": True})
++    if boundary == "success":
++        assert video_queue.finish_job("postgresql://offline.invalid/db", **kwargs) == receipt
++        events.append("returned")
++        assert events == ["row", "commit", "returned"]
++    else:
++        with pytest.raises(ConnectionError, match="synthetic"):
++            video_queue.finish_job("postgresql://offline.invalid/db", **kwargs)
++        assert events == ["row", "rollback" if boundary == "before_commit" else "commit"]
++    connect.assert_called_once()
++    cursor.execute.assert_called_once()
++    statement, params = cursor.execute.call_args.args
++    assert statement == "SELECT * FROM video_queue.finish_job(%s,%s,%s,%s,%s,%s)"
++    assert params[:4] == ("job-1", "lease-1", "worker-1", "REVIEW_READY")
+diff --git a/tests/test_worker_subset_crash_retry_review.py b/tests/test_worker_subset_crash_retry_review.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_worker_subset_crash_retry_review.py
+@@ -0,0 +1,276 @@
++"""Independent client replay tests for the exact opt-in adapter candidate.
++
++The real process_one_neon/process_claim/SubsetWorkerAdapter/SQL client execute.
++Scripted transaction outcomes stand in for PostgreSQL; they are NOT DB proof.
++ASR, terminal verification, Drive, Linux locks and timers remain offline doubles.
++"""
++import copy
++from collections import deque
++from contextlib import nullcontext
++from datetime import datetime, timezone
++from types import SimpleNamespace
++from unittest.mock import Mock
++from uuid import UUID
++
++import psycopg
++import pytest
++
++from bridge_output_scoped_idempotency import existing_same_revision_done
++from universal_video import neon_worker as worker
++from universal_video.subset_worker import SubsetWorkerAdapter
++from test_universal_video_batch_retry import stage, obtain
++from test_universal_video_neon_queue import claim as sample_claim
++
++
++def uid(number):
++    return str(UUID(int=number))
++
++
++def claimed(attempt=1):
++    value = sample_claim()
++    value.update(lease_token=uid(100 + attempt), attempt_count=attempt,
++                 output_folder_id="synthetic-output", work_folder_id="synthetic-work")
++    return value
++
++
++def claim_step(value):
++    return dict(name="claim_job", row=value)
++
++
++def authorize(value, observation, *, failure=None):
++    return dict(name="authorize_subset_attempt", failure=failure,
++                row={"authorization": {
++                    "status": "SOURCE_AND_LEASE_VERIFIED", "job_id": value["job_id"],
++                    "lease_token": value["lease_token"], "attempt_count": value["attempt_count"],
++                    "observation_id": observation,
++                    "execution_allowed": False, "release_allowed": False,
++                    "database_persistence_allowed": False, "canonical_promotion_allowed": False,
++                }})
++
++
++def finish(*, failure=None):
++    return dict(name="finish_subset_job", failure=failure,
++                row={"job_status": "REVIEW_READY", "batch_status": "CANARY_REVIEW", "released_jobs": 0})
++
++
++@pytest.fixture
++def client(stage, monkeypatch):
++    steps, observations, calls, events = deque(), deque(), [], []
++
++    class Connection:
++        def __enter__(self):
++            return self
++
++        def __exit__(self, error, *_):
++            if error is not None:
++                events.append((self.step["name"], "rollback"))
++            elif self.step.get("failure") == "before_commit":
++                events.append((self.step["name"], "rollback"))
++                raise ConnectionError("synthetic failure before commit")
++            else:
++                events.append((self.step["name"], "commit"))
++                if self.step.get("failure") == "lost_commit_reply":
++                    raise ConnectionError("synthetic committed, reply lost")
++
++        def cursor(self):
++            connection = self
++
++            class Cursor:
++                def __enter__(self):
++                    return self
++
++                def __exit__(self, *_):
++                    return False
++
++                def execute(self, sql, params):
++                    name = sql.split("video_queue.")[1].split("(")[0]
++                    assert steps, f"unplanned/repeated SQL call: {name}"
++                    connection.step = steps.popleft()
++                    assert name == connection.step["name"]
++                    calls.append((name, params))
++                    if connection.step.get("failure") == "lease_lost":
++                        raise RuntimeError("SUBSET_LEASE_LOST")
++
++                def fetchone(self):
++                    return copy.deepcopy(connection.step["row"])
++
++            return Cursor()
++
++    monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: Connection())
++    monkeypatch.setattr(worker, "shared_workload_lock", nullcontext)
++    monkeypatch.setattr(worker, "_processing_timeout", nullcontext)
++    monkeypatch.setattr(worker, "validate_video_runtime", lambda: None)
++    monkeypatch.setattr(worker, "access_token", lambda: "synthetic-token")
++    source_reads = Mock(return_value={"version": "1"})
++    monkeypatch.setattr(worker, "verify_claimed_source", source_reads)
++    monkeypatch.setattr(worker, "verify_terminal_output_live", lambda *args: None)
++    forbidden = Mock(side_effect=AssertionError("legacy fallback"))
++    for name in ("heartbeat_job", "retry_job", "finish_job"):
++        monkeypatch.setattr(worker, name, forbidden)
++
++    def observe(value, key, *, boundary):
++        assert observations, "unplanned observation retry"
++        expected, expected_boundary, observation = observations.popleft()
++        assert value == expected and key == "review-worker" and boundary == expected_boundary
++        events.append((boundary, value["lease_token"], observation))
++        return observation
++
++    control = SimpleNamespace(interrupt=None, processor_calls=0)
++
++    def processor(value):
++        control.processor_calls += 1
++        with worker._stable_environment(value):
++            existing = existing_same_revision_done(SimpleNamespace(base=stage.base), "synthetic-token",
++                                                   value["stable_job_key"], worker.APPROVED_REVISION)
++            if existing is not None:
++                return existing
++            obtain(stage, value["stable_job_key"])
++            if control.interrupt == "checkpoint":
++                raise SystemExit("synthetic crash after checkpoint")
++            if control.interrupt == "technical":
++                raise RuntimeError("synthetic recoverable processor failure")
++            result = {"status": "AI_DONE", "job_id": value["stable_job_key"],
++                      "algorithmRevision": worker.APPROVED_REVISION,
++                      "masterPdf": {"driveId": "synthetic-result-pdf"}}
++            stage.io.upload_json("synthetic-token", "synthetic-output",
++                                 f"AI_DONE_{value['stable_job_key']}.json", result)
++            stage.io.upload_json("synthetic-token", "synthetic-output",
++                                 f"METHODOLOGY_READY_{value['stable_job_key']}.json",
++                                 {"status": "METHODOLOGY_READY", "job_id": value["stable_job_key"],
++                                  "algorithmRevision": worker.APPROVED_REVISION,
++                                  "masterPdfDriveId": "synthetic-result-pdf"})
++            if control.interrupt == "result":
++                raise SystemExit("synthetic crash after result receipts")
++            return result
++
++    adapter = SubsetWorkerAdapter(observe)
++    invoke = lambda: worker.process_one_neon(database_url="postgresql://offline.invalid/review",
++                                             worker_key="review-worker", processor=processor,
++                                             subset_adapter=adapter)
++    yield SimpleNamespace(steps=steps, observations=observations, calls=calls, events=events,
++                          control=control, invoke=invoke, stage=stage, source_reads=source_reads,
++                          adapter=adapter, processor=processor)
++    forbidden.assert_not_called()
++    assert not steps and not observations, "expected client transitions were not reached"
++
++
++def resumed_success(client, value, pre, post):
++    client.steps.extend([claim_step(value), authorize(value, pre), finish(), claim_step(None)])
++    client.observations.extend([(value, "before_work", pre), (value, "before_finish", post)])
++    client.control.interrupt = None
++    client.stage.base = client.stage.restart()
++    assert client.invoke() is True
++    calls = client.control.processor_calls
++    assert client.invoke() is False  # Scripted server says completed canary/sibling held.
++    assert client.control.processor_calls == calls
++
++
++def test_authorization_commit_reply_loss_does_not_start_work_or_reuse_observation(client):
++    first, second = claimed(), claimed(2)
++    client.steps.extend([claim_step(first), authorize(first, uid(201), failure="lost_commit_reply"),
++                         claim_step(None)])
++    client.observations.append((first, "before_work", uid(201)))
++    with pytest.raises(ConnectionError, match="reply lost"):
++        client.invoke()
++    assert client.control.processor_calls == client.source_reads.call_count == 0
++    assert client.invoke() is False  # Existing live lease cannot be claimed again.
++    resumed_success(client, second, uid(202), uid(203))
++    assert client.stage.compute.call_count == 1
++    authorizations = [params for name, params in client.calls if name == "authorize_subset_attempt"]
++    assert [(p[1], p[3]) for p in authorizations] == [(first["lease_token"], uid(201)),
++                                                    (second["lease_token"], uid(202))]
++    assert sum(name == "finish_subset_job" for name, _ in client.calls) == 1
++
++
++@pytest.mark.parametrize("boundary", ["checkpoint", "result", "technical"])
++def test_real_worker_reclaims_and_reuses_completed_stage(client, boundary):
++    first, second = claimed(), claimed(2)
++    client.steps.extend([claim_step(first), authorize(first, uid(211))])
++    client.observations.append((first, "before_work", uid(211)))
++    client.control.interrupt = boundary
++    if boundary == "technical":
++        client.steps.append(dict(name="retry_subset_job", row={"job_status": "QUEUED",
++                                                               "batch_status": "RUNNING",
++                                                               "retry_after": datetime(2026, 10, 13, 12, 1,
++                                                                                       tzinfo=timezone.utc)}))
++        assert client.invoke() is True
++        assert client.calls[-1][1] == (first["job_id"], first["lease_token"], "review-worker",
++                                       "UV_ITEM_FAILED", 60)
++    else:
++        with pytest.raises(SystemExit, match="synthetic crash"):
++            client.invoke()
++        assert not any(name == "retry_subset_job" for name, _ in client.calls)
++    assert client.stage.compute.call_count == 1
++    assert not any(name == "finish_subset_job" for name, _ in client.calls)
++    saved = copy.deepcopy(client.stage.records)
++    resumed_success(client, second, uid(212), uid(213))
++    assert client.stage.compute.call_count == 1
++    assert all(client.stage.records[key] == record for key, record in saved.items())
++    completions = [p for name, p in client.calls if name == "finish_subset_job"]
++    assert len(completions) == 1 and completions[0][1] == second["lease_token"]
++    assert completions[0][5] == uid(213)
++
++
++@pytest.mark.parametrize("boundary", ["before_commit", "lost_commit_reply"])
++def test_finish_ambiguity_is_not_retried_by_adapter_or_reported_as_success(client, boundary):
++    first, second = claimed(), claimed(2)
++    client.steps.extend([claim_step(first), authorize(first, uid(221)), finish(failure=boundary)])
++    client.observations.extend([(first, "before_work", uid(221)), (first, "before_finish", uid(222))])
++    with pytest.raises(ConnectionError, match="synthetic"):
++        client.invoke()
++    assert sum(name == "finish_subset_job" for name, _ in client.calls) == 1
++    assert not any(name == "retry_subset_job" for name, _ in client.calls)
++    saved = copy.deepcopy(client.stage.records)
++    if boundary == "before_commit":
++        resumed_success(client, second, uid(223), uid(224))
++    else:
++        # Committed terminal outcome is authoritative in this scripted response.
++        client.steps.append(claim_step(None))
++        assert client.invoke() is False
++        client.steps.append(authorize(first, uid(225), failure="lease_lost"))
++        client.observations.append((first, "before_work", uid(225)))
++        with pytest.raises(RuntimeError, match="LEASE_LOST"):
++            worker.process_claim("postgresql://offline.invalid/review", first, "review-worker",
++                                 processor=client.processor, subset_adapter=client.adapter)
++        assert client.control.processor_calls == 1
++    assert client.stage.records == saved and client.stage.compute.call_count == 1
++    assert client.events.count(("finish_subset_job", "commit")) == 1
++
++
++def test_stale_finish_rejection_propagates_without_retry_or_legacy_fallback(client):
++    value = claimed()
++    client.steps.extend([claim_step(value), authorize(value, uid(231)), finish(failure="lease_lost")])
++    client.observations.extend([(value, "before_work", uid(231)), (value, "before_finish", uid(232))])
++    with pytest.raises(RuntimeError, match="LEASE_LOST"):
++        client.invoke()
++    assert client.calls[-1][0] == "finish_subset_job"
++    assert not any(name == "retry_subset_job" for name, _ in client.calls)
++    assert ("finish_subset_job", "commit") not in client.events
++    assert client.stage.compute.call_count == 1
++
++
++@pytest.mark.parametrize("response", [
++    {},
++    {"job_status": "FAILED", "batch_status": "CANARY_REVIEW", "released_jobs": 0},
++    {"job_status": "REVIEW_READY", "batch_status": "CANARY_REVIEW", "released_jobs": 1},
++])
++def test_unexpected_finish_receipt_must_not_be_reported_as_success(client, response):
++    # Fault injection of an incompatible API response, not an observation about 0060 SQL.
++    value = claimed()
++    step = finish()
++    step["row"] = response
++    client.steps.extend([claim_step(value), authorize(value, uid(241)), step])
++    client.observations.extend([(value, "before_work", uid(241)), (value, "before_finish", uid(242))])
++    with pytest.raises(RuntimeError):
++        client.invoke()
++
++
++def test_contradictory_authorization_safety_flags_must_stop_before_work(client):
++    value = claimed()
++    step = authorize(value, uid(251))
++    step["row"]["authorization"]["canonical_promotion_allowed"] = True
++    client.steps.append(step)
++    client.observations.append((value, "before_work", uid(251)))
++    from universal_video.subset_worker import SubsetWorkerError
++    with pytest.raises(SubsetWorkerError, match="AUTHORIZATION"):
++        client.adapter.before_work("postgresql://offline.invalid/review", value, "review-worker")
+diff --git a/tests/test_subset_worker_response_contract.py b/tests/test_subset_worker_response_contract.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_subset_worker_response_contract.py
+@@ -0,0 +1,101 @@
++"""Reject incompatible subset response shapes; no SQL or service is invoked."""
++from datetime import datetime, timezone
++from unittest.mock import Mock
++
++import pytest
++
++from universal_video import subset_worker as api
++
++JOB = "00000000-0000-0000-0000-000000000001"
++LEASE = "00000000-0000-0000-0000-000000000002"
++PRE = "00000000-0000-0000-0000-000000000003"
++POST = "00000000-0000-0000-0000-000000000004"
++NOW = datetime(2026, 10, 13, tzinfo=timezone.utc)
++CLAIM = dict(job_id=JOB, lease_token=LEASE, attempt_count=1, is_canary=True)
++AUTH = dict(status="SOURCE_AND_LEASE_VERIFIED", job_id=JOB, lease_token=LEASE,
++            attempt_count=1, observation_id=PRE, execution_allowed=False,
++            release_allowed=False, database_persistence_allowed=False,
++            canonical_promotion_allowed=False)
++
++
++@pytest.mark.parametrize("flag", ["execution_allowed", "release_allowed",
++                                  "database_persistence_allowed", "canonical_promotion_allowed"])
++@pytest.mark.parametrize("value", [None, True, 0])
++def test_every_authorization_flag_must_be_boolean_false(monkeypatch, flag, value):
++    receipt = {**AUTH, flag: value}
++    if value is None:
++        del receipt[flag]
++    call = Mock(return_value={"authorization": receipt})
++    monkeypatch.setattr(api, "_execute", call)
++    with pytest.raises(api.SubsetWorkerError, match="AUTHORIZATION"):
++        api.SubsetWorkerAdapter(lambda *_a, **_k: PRE).before_work("offline", CLAIM, "worker")
++    call.assert_called_once()
++
++
++def test_boolean_attempt_is_not_an_integer_receipt(monkeypatch):
++    monkeypatch.setattr(api, "_execute", Mock(return_value={"authorization": {**AUTH, "attempt_count": True}}))
++    with pytest.raises(api.SubsetWorkerError, match="AUTHORIZATION"):
++        api.SubsetWorkerAdapter(lambda *_a, **_k: PRE).before_work("offline", CLAIM, "worker")
++
++
++@pytest.mark.parametrize("value", [None, False, NOW.isoformat(), NOW.replace(tzinfo=None)])
++def test_heartbeat_requires_a_timezone_aware_timestamp(monkeypatch, value):
++    call = Mock(return_value={"lease_expires_at": value})
++    monkeypatch.setattr(api, "_execute", call)
++    with pytest.raises(api.SubsetWorkerError, match="HEARTBEAT_RESPONSE"):
++        api.SubsetWorkerAdapter(lambda *_a, **_k: PRE).heartbeat_job(
++            "offline", job_id=JOB, lease_token=LEASE, worker_key="worker")
++    call.assert_called_once()
++
++
++@pytest.mark.parametrize("row", [
++    {},
++    dict(job_status="QUEUED", batch_status="RUNNING", retry_after=None),
++    dict(job_status="QUEUED", batch_status="RUNNING", retry_after="later"),
++    dict(job_status="QUEUED", batch_status="RUNNING", retry_after=NOW.replace(tzinfo=None)),
++    dict(job_status="QUEUED", batch_status="CANARY_BLOCKED", retry_after=NOW),
++    dict(job_status="FAILED", batch_status="CANARY_BLOCKED", retry_after=NOW),
++    dict(job_status="FAILED", batch_status="CANARY_REVIEW", retry_after=None),
++    dict(job_status="REVIEW_READY", batch_status="REVIEW", retry_after=None),
++])
++def test_retry_response_must_match_queued_or_exhausted_contract(monkeypatch, row):
++    call = Mock(return_value=row)
++    monkeypatch.setattr(api, "_execute", call)
++    with pytest.raises(api.SubsetWorkerError, match="RETRY_RESPONSE"):
++        api.SubsetWorkerAdapter(lambda *_a, **_k: PRE).retry_job(
++            "offline", job_id=JOB, lease_token=LEASE, worker_key="worker", error_code="UV_ITEM_FAILED")
++    call.assert_called_once()
++
++
++@pytest.mark.parametrize("batch", ["CANARY_BLOCKED", "RUNNING", "REVIEW"])
++def test_exhausted_retry_accepts_null_retry_time(monkeypatch, batch):
++    row = dict(job_status="FAILED", batch_status=batch, retry_after=None)
++    monkeypatch.setattr(api, "_execute", Mock(return_value=row))
++    assert api.SubsetWorkerAdapter(lambda *_a, **_k: PRE).retry_job(
++        "offline", job_id=JOB, lease_token=LEASE, worker_key="worker", error_code="UV_ITEM_FAILED") == row
++
++
++@pytest.mark.parametrize("change", [
++    {"released_jobs": False}, {"released_jobs": "0"}, {"released_jobs": -1},
++    {"batch_status": None}, {"batch_status": "CANARY_BLOCKED"},
++    {"batch_status": "REVIEW"}, {"batch_status": ["CANARY_REVIEW"]},
++])
++def test_canary_finish_rejects_wrong_types_or_batch_state_without_resubmit(monkeypatch, change):
++    call = Mock(return_value={"job_status": "REVIEW_READY", "batch_status": "CANARY_REVIEW",
++                              "released_jobs": 0, **change})
++    monkeypatch.setattr(api, "_execute", call)
++    with pytest.raises(api.SubsetWorkerError, match="FINISH_RESPONSE"):
++        api.SubsetWorkerAdapter(lambda *_a, **_k: POST).finish_job(
++            "offline", CLAIM, "worker", before_work_observation_id=PRE,
++            outcome="REVIEW_READY", output={})
++    call.assert_called_once()
++
++
++@pytest.mark.parametrize("outcome,batch", [("REVIEW_READY", "RUNNING"),
++                                           ("AMBIGUOUS", "REVIEW"), ("FAILED", "RUNNING")])
++def test_noncanary_finish_accepts_compatible_batch_status(monkeypatch, outcome, batch):
++    row = dict(job_status=outcome, batch_status=batch, released_jobs=0)
++    monkeypatch.setattr(api, "_execute", Mock(return_value=row))
++    assert api.SubsetWorkerAdapter(lambda *_a, **_k: POST).finish_job(
++        "offline", {**CLAIM, "is_canary": False}, "worker", before_work_observation_id=PRE,
++        outcome=outcome, output={}) == row
