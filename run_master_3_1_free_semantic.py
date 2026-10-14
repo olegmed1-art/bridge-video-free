@@ -309,7 +309,13 @@ def _existing_same_revision_done(token, job_id):
 
 def _database_persistence_enabled():
     value = os.environ.get("BRIDGE_PERSIST_DATABASE")
-    return True if value is None else value.strip().lower() == "true"
+    mode = os.environ.get("BRIDGE_PERSISTENCE_MODE")
+    # An absent mode preserves legacy callers; a named mode must be recognized.
+    if mode == "explicit_v1":
+        return value is not None and value.strip().lower() == "true"
+    if mode is None or mode == "legacy":
+        return True if value is None else value.strip().lower() == "true"
+    raise ValueError("UNKNOWN_BRIDGE_PERSISTENCE_MODE")
 
 
 def process_job(token):

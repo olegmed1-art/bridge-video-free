@@ -20,6 +20,7 @@ from run_drive_3_1_free_oidc import user_oauth_token
 
 from bridge_neon_persistence import _load_embedded_master
 from database.outbox_publisher import publish_changeset_outbox
+from database.outbox_publication_decision import publish_if_authorized
 from database.runtime_worker_preflight import normalize_dsn
 from database.video_result_persistence import persist_video_result
 
@@ -99,9 +100,10 @@ def main() -> None:
             master = _load_embedded_master(token, done)
             _verify_master_identity(master, job_id)
             result = persist_video_result(raw_dsn, master, done)
-            publish_changeset_outbox(raw_dsn, str(result["changeset_id"]))
+            outbox = publish_if_authorized(raw_dsn, result, publish_changeset_outbox)
             ok += 1
-            print(json.dumps({"stage": "BACKFILL_ITEM", "job_id": job_id, "status": "ok"}))
+            print(json.dumps({"stage": "BACKFILL_ITEM", "job_id": job_id,
+                              "status": "ok", "outbox_publication_state": outbox["publication_state"]}))
         except Exception as exc:
             failed += 1
             errors.append({"job_id": job_id, "error": type(exc).__name__})
