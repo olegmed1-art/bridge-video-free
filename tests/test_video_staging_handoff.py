@@ -138,6 +138,67 @@ class VideoStagingHandoffTests(unittest.TestCase):
             persist_quality_handoff("isolated-dsn", payload(), actual,
                                     writer=lambda *_a, **_k: self.fail("writer was called"))
 
+    def test_writer_success_without_durable_receipt_is_not_acknowledged(self):
+        with self.assertRaisesRegex(RuntimeError, "VIDEO_STAGING_RECEIPT_MISSING"):
+            persist_quality_handoff(
+                "isolated-dsn", payload(), persisted(),
+                writer=lambda *_a, **_k: {"status": "PERSISTED", "candidate_records": 1},
+            )
+
+    def test_postprocess_exit_or_missing_receipt_is_not_acknowledged(self):
+        env = {"BRIDGE_PERSIST_DATABASE": "true", "BRIDGE_OUTPUT_FOLDER_ID": "output",
+               "BRIDGE_LESSON_NUMBER": "1"}
+        for exit_code, receipt, expected in (
+            (1, {"status": "PERSISTED", "replay_receipt_id": "receipt"},
+             "VIDEO_STAGING_POSTPROCESS_FAILED"),
+            (0, {"status": "PERSISTED", "candidate_records": 1},
+             "VIDEO_STAGING_RECEIPT_MISSING"),
+        ):
+            with self.subTest(exit_code=exit_code), self.assertRaisesRegex(RuntimeError, expected):
+                stage_completed_result(
+                    persisted(), environment=env,
+                    postprocess=lambda *, persisted_result, staging_receipt: (
+                        staging_receipt.update(receipt) or exit_code),
+                )
+
+    def test_queue_gate_requires_database_output_and_lesson(self):
+        for env in (
+            {"BRIDGE_PERSIST_DATABASE": "false", "BRIDGE_OUTPUT_FOLDER_ID": "output",
+             "BRIDGE_LESSON_NUMBER": "1"},
+            {"BRIDGE_PERSIST_DATABASE": "true", "BRIDGE_OUTPUT_FOLDER_ID": "",
+             "BRIDGE_LESSON_NUMBER": "1"},
+            {"BRIDGE_PERSIST_DATABASE": "true", "BRIDGE_OUTPUT_FOLDER_ID": "output",
+             "BRIDGE_LESSON_NUMBER": ""},
+        ):
+            with self.subTest(env=env):
+                result = stage_completed_result(
+                    persisted(), environment=env,
+                    postprocess=lambda **_k: self.fail("postprocess was called"),
+                )
+                self.assertEqual(result["knowledge_staging"]["status"], "NOT_REQUESTED")
+
+    def test_blocked_no_replay_keeps_explicit_non_persisted_status(self):
+        env = {"BRIDGE_PERSIST_DATABASE": "true", "BRIDGE_OUTPUT_FOLDER_ID": "output",
+               "BRIDGE_LESSON_NUMBER": "1"}
+
+        def stage(*, persisted_result, staging_receipt):
+            staging_receipt.update(status="BLOCKED_NO_REPLAY", replay_receipt_id=None)
+            return 0
+
+        result = stage_completed_result(persisted(), environment=env, postprocess=stage)
+        self.assertEqual(result["knowledge_staging"], {"status": "BLOCKED_NO_REPLAY"})
+
+    def test_uncommitted_video_result_cannot_enter_queue_handoff(self):
+        actual = persisted()
+        actual["persisted"] = False
+        with self.assertRaisesRegex(RuntimeError, "DATABASE_PERSIST_NOT_COMPLETED"):
+            stage_completed_result(
+                actual,
+                environment={"BRIDGE_PERSIST_DATABASE": "true",
+                             "BRIDGE_OUTPUT_FOLDER_ID": "output", "BRIDGE_LESSON_NUMBER": "1"},
+                postprocess=lambda **_k: self.fail("postprocess was called"),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
