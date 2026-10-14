@@ -227,7 +227,10 @@ def process_job(token):
     existing = _existing_same_revision_done(token, job_id)
     if existing is not None:
         base.io.safe(job_id=job_id, stage="ALREADY_DONE", exit_code=0)
-        persist_completed_drive_job(token)
+        # A completed Drive receipt does not override the explicit DB gate.
+        # The same gate already protects previous.process_job for fresh work.
+        if previous._database_persistence_enabled():
+            persist_completed_drive_job(token)
         return existing
     return previous.process_job(token)
 

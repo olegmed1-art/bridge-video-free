@@ -10,11 +10,14 @@ from database.runtime_worker_preflight import normalize_dsn
 
 
 def publish_changeset_outbox(raw_dsn: str, changeset_id: str | uuid.UUID) -> dict[str, object]:
-    """Publish every outbox row for one committed changeset, idempotently.
+    """Publish one committed changeset only when every event is allowed.
 
     ``public.publish_outbox_event`` owns event-position allocation and rejects
     non-committed changesets. Replaying this helper is safe: already-published
-    rows retain their existing partition-local event position.
+    rows retain their existing partition-local event position. An event payload
+    with ``publication_authorization_status="blocked"`` rejects the entire batch
+    before any publication call, including retries of already-published events.
+    Missing, null, or unrecognized status is also fail-closed for the batch.
     """
     dsn = normalize_dsn(raw_dsn)
     if not dsn:
@@ -29,15 +32,34 @@ def publish_changeset_outbox(raw_dsn: str, changeset_id: str | uuid.UUID) -> dic
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT outbox_id
-                  FROM public.outbox_message
-                 WHERE changeset_id=%s
-                 ORDER BY created_at, outbox_id
+                WITH locked_outbox AS MATERIALIZED (
+                    SELECT outbox_id, event_id, created_at
+                      FROM public.outbox_message
+                     WHERE changeset_id=%s
+                     ORDER BY created_at, outbox_id
+                     FOR UPDATE
+                )
+                SELECT o.outbox_id, e.event_id,
+                       e.payload->>'publication_authorization_status'
+                  FROM locked_outbox o
+                  LEFT JOIN public.domain_event e ON e.event_id=o.event_id
+                 ORDER BY o.created_at, o.outbox_id
                 """,
                 (change_id,),
             )
-            outbox_ids = [row[0] for row in cursor.fetchall()]
-            for outbox_id in outbox_ids:
+            outbox_rows = cursor.fetchall()
+            # Lock outbox bindings before the join so a worker cannot rebind an
+            # event between the status check and publish_outbox_event's reread.
+            # A missing/invisible event is not a legacy event without a status.
+            if any(event_id is None for _, event_id, _ in outbox_rows):
+                raise RuntimeError("OUTBOX_EVENT_UNAVAILABLE")
+            # Check the whole batch first: a later blocked event must not allow
+            # earlier rows to reach the publication boundary. Do not log payloads.
+            if any(status == "blocked" for _, _, status in outbox_rows):
+                raise RuntimeError("OUTBOX_PUBLICATION_AUTHORIZATION_BLOCKED")
+            if any(status != "allowed" for _, _, status in outbox_rows):
+                raise RuntimeError("OUTBOX_PUBLICATION_AUTHORIZATION_UNKNOWN")
+            for outbox_id, _, _ in outbox_rows:
                 cursor.execute(
                     "SELECT public.publish_outbox_event(%s)",
                     (outbox_id,),
