@@ -1,0 +1,27 @@
+name: Oracle Light production backup source guard
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/oracle-light-production-backup-preflight.yml
+      - ops/oracle_light_production_backup_preflight.py
+      - ops/test_oracle_light_production_backup_preflight.py
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/oracle-light-production-backup-preflight.yml
+      - ops/oracle_light_production_backup_preflight.py
+      - ops/test_oracle_light_production_backup_preflight.py
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python -m py_compile ops/oracle_light_production_backup_preflight.py ops/test_oracle_light_production_backup_preflight.py
+      - run: python ops/test_oracle_light_production_backup_preflight.py
