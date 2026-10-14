@@ -136,6 +136,15 @@ def test_041_runtime_acl_tracks_scoped_claim():
     assert c.function_acl_matrix() in sql
 
 
+def test_installer_rejects_unknown_default_function_recipient(staged):
+    guard=c.function_default_acl_safe()
+    assert "aclexplode(d.defaclacl)" in guard
+    assert "a.grantee<>d.defaclrole" in guard
+    assert "d.defaclnamespace=0" in guard
+    assertions=[s for s in c.install_payload()['sql_statements'] if 'INSTALL_EXACT_FUNCTION_ACL' in s]
+    assert len(assertions)==1 and guard in assertions[0]
+
+
 def test_repair_external_history_matches_and_is_never_a_pending_migration():
     raw=(CODE/(r.KEY+'.sql')).read_bytes()
     rows=[line.split('\t') for line in (REPO/'database/external_migration_history.tsv').read_text().splitlines() if line.startswith(r.KEY+'\t')]

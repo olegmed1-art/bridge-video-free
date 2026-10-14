@@ -46,6 +46,16 @@ def function_acl_matrix(*, recovered=False):
                 (SELECT * FROM expected EXCEPT SELECT * FROM actual)))"""
 
 
+def function_default_acl_safe():
+    """No inherited EXECUTE recipient for future queue functions."""
+    return """NOT EXISTS(SELECT FROM pg_default_acl d
+      CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+      WHERE d.defaclrole=session_user::regrole AND d.defaclobjtype='f'
+        AND (d.defaclnamespace=0 OR d.defaclnamespace='video_queue'::regnamespace)
+        AND (a.grantee<>d.defaclrole OR a.grantor<>d.defaclrole
+             OR a.privilege_type<>'EXECUTE' OR a.is_grantable))"""
+
+
 def split_sql(text):
     """Lexical split for the two SHA-pinned PG files, not arbitrary SQL routing."""
     out, start, i = [], 0, 0
@@ -214,7 +224,7 @@ def install_payload():
                     require(f"(SELECT checksum={recovery.quote(PINNED[key])} FROM public.schema_migration WHERE migration_key={recovery.quote(key)})", "INSTALL_CHECKSUM")]
     managed_test = (ROOT / "source/database/tests/041_universal_video_queue.sql").read_text()
     managed_acl = managed_test[managed_test.index("DO $managed_acl$"):managed_test.index("END $managed_acl$;") + len("END $managed_acl$;")]
-    queries += [managed_acl, require(function_acl_matrix(), "INSTALL_EXACT_FUNCTION_ACL"), require("NOT EXISTS(SELECT FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='video_queue' AND a.attacl IS NOT NULL)", "INSTALL_COLUMN_ACL"),
+    queries += [managed_acl, require(f"{function_acl_matrix()} AND {function_default_acl_safe()}", "INSTALL_EXACT_FUNCTION_ACL"), require("NOT EXISTS(SELECT FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='video_queue' AND a.attacl IS NOT NULL)", "INSTALL_COLUMN_ACL"),
                 require("NOT EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace CROSS JOIN LATERAL aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a WHERE n.nspname='video_queue' AND c.relname IN ('subset_approval','source_observation','subset_admission','source_reservation') AND (c.relowner<>'video_subset_owner'::regrole OR a.grantee<>c.relowner))", "INSTALL_NEW_TABLE_OWNER_OR_ACL"),
                 TEMP_GRANT, require(inert_subset(), "INSTALL_RUNTIME_NOT_INERT"), require(reservation_map(), "INSTALL_RESERVATION_MAP"),
                 require(f"{old_digest}=(SELECT data->'before_old_data' FROM pg_temp.uv_receipt)", "INSTALL_OLD_ROWS_CHANGED"),
