@@ -37,11 +37,12 @@ across calls; no automatic retries. This package does not stop/resume workers.
 0060 creates five persistent NOLOGIN roles: `video_subset_owner`,
 `video_subset_approver`, `video_subset_collector`, `video_subset_admitter`,
 `video_subset_worker_v2`. PostgreSQL retains bootstrap ADMIN-only memberships for
-the creator. Four new tables and24 functions including replaced `claim_job` move
-to the definer owner. Capability roles receive exactly11 API EXECUTE grants and
-schema USAGE; no LOGIN memberships are provisioned. The definer gains legacy
-table SELECT/INSERT/UPDATE, sequence USAGE/SELECT and four legacy function EXECUTE
-grants. Five legacy API grants are cut off; six guards are added to old batch/job.
+the creator. Four new tables and 25 functions including replaced `claim_job` and
+`subset_claim_job` move to the definer owner. Capability roles receive exactly
+12 API EXECUTE grants and schema USAGE; no LOGIN memberships are provisioned.
+The definer gains legacy table SELECT/INSERT/UPDATE, sequence USAGE/SELECT and
+four legacy function EXECUTE grants. Five legacy API grants are cut off; six
+guards are added to old batch/job.
 These are material persistent installer changes, not a read-only operation.
 
 The installer temporarily grants definer membership with INHERIT/SET and schema

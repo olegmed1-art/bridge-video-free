@@ -55,12 +55,13 @@ branch `br-aged-mud-b1i64914`, endpoint `ep-noisy-pine-b1pe30sf`, database
 identity, not a resident worker or collector identity. The target and migration
 state require fresh read-only reconciliation before any later activation; the
 last supplied production record said 0059/0060 were not installed.
-The corrected synthetic recovery CI at SHA
-`744d068a2cddfb8347411c8e4fb2bd69d19c09ab`, run `38394164538`,
-completed successfully with installer, verifier, preserving recovery, 16
-negative controls and cleanup. It did not install anything in production.
-That CI predates the scoped-claim addition to 0060, so it is not a runtime
-proof of this amended migration or its recovery.
+The synthetic PostgreSQL 18 recovery CI at commit
+`f0df703a828de0e9db9a225c7d2d42b72acea2c4`, run `38583418643`,
+completed successfully for the scoped-claim 0060 SQL SHA-256
+`27932f2b5f22f383d9f84341c0ae6e88dc346c7940ec92490edc0a3d37358dfe`.
+It verified installer, verifier, data-preserving recovery, 23 unit checks,
+16 negative controls, legacy ACL/ownership restoration and cleanup. It did not
+exercise Neon transport or install anything in production.
 
 ## One-batch sequence and stop conditions
 
