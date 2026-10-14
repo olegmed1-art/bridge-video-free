@@ -10,6 +10,7 @@ import os
 import uuid
 
 import psycopg
+from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
 
@@ -56,9 +57,54 @@ def expected_error(db, sql, params, message):
         raise AssertionError(f"expected {message}")
 
 
+def test_terminal_size_guard(db):
+    row = db.execute("""SELECT pg_get_constraintdef(oid), convalidated
+      FROM pg_constraint WHERE conrelid='video_queue.job'::regclass
+        AND conname='video_job_terminal_size_check'""").fetchone()
+    assert row is not None and row[1] is False, "0059 size guard missing or validated"
+    definition = row[0].removesuffix(" NOT VALID")
+    assert definition.startswith("CHECK (") and ";" not in definition
+
+    # Copy the installed catalog predicate, rather than mirroring its Python
+    # logic. A temporary relation avoids the admission and lease APIs while
+    # proving that PostgreSQL enforces the actual 0059 boundary expression.
+    db.execute("""CREATE TEMP TABLE subset_fixture_terminal_guard
+      (status text NOT NULL, output jsonb NOT NULL) ON COMMIT DROP""")
+    db.execute(sql.SQL("""ALTER TABLE pg_temp.subset_fixture_terminal_guard
+      ADD CONSTRAINT video_job_terminal_size_check {}""").format(sql.SQL(definition)))
+
+    cases = (
+        (1, 1, True), (536870912, 8388608, True),
+        (0, 1024, False), (536870913, 1024, False),
+        (2048, 0, False), (2048, 8388609, False),
+        (1.5, 1024, False), (2048, 1.5, False),
+        (None, 1024, False), (2048, "1024", False),
+    )
+    for pdf_size, ai_size, allowed in cases:
+        output = json.dumps({"artifact_manifest": {"artifacts": [
+            {"size_bytes": pdf_size}, {"size_bytes": ai_size}]}})
+        db.execute("SAVEPOINT subset_fixture_size_case")
+        try:
+            try:
+                db.execute("""INSERT INTO pg_temp.subset_fixture_terminal_guard
+                  (status, output) VALUES ('REVIEW_READY',%s::jsonb)""", (output,))
+                assert allowed, f"invalid terminal sizes accepted: {pdf_size}, {ai_size}"
+            except psycopg.errors.CheckViolation as exc:
+                assert not allowed and exc.diag.constraint_name == "video_job_terminal_size_check", str(exc)
+        finally:
+            db.execute("ROLLBACK TO SAVEPOINT subset_fixture_size_case")
+            db.execute("RELEASE SAVEPOINT subset_fixture_size_case")
+
+    # The size predicate is scoped to REVIEW_READY; unrelated terminal states
+    # retain their earlier behavior under the same installed constraint.
+    db.execute("""INSERT INTO pg_temp.subset_fixture_terminal_guard
+      (status, output) VALUES ('FAILED','{}'::jsonb)""")
+    assert db.execute("SELECT count(*) FROM pg_temp.subset_fixture_terminal_guard").fetchone()[0] == 1
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--scenario", required=True, choices=("042",))
+    parser.add_argument("--scenario", required=True, choices=("042", "043"))
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     if not args.execute:
@@ -87,6 +133,16 @@ def main():
         assert 180000 <= version < 190000 and identity == "bridge_ci_owner"
         assert checksum == EXPECTED_0060
         before = snapshot(db)
+
+        if args.scenario == "043":
+            test_terminal_size_guard(db)
+            db.rollback()
+            assert snapshot(db) == before, "043 fixture changed queue data or roles"
+            db.rollback()
+            print(json.dumps({"scenario": "043", "status": "PASS_INSTALLED_SIZE_GUARD",
+                              "catalog_constraint": "video_job_terminal_size_check",
+                              "size_cases": 10, "exact_snapshot_equal": True}))
+            return
 
         # CI owner created the NOLOGIN roles but has no inherited runtime right.
         # Mirror the connector's transient, non-SET membership within a rollback.
