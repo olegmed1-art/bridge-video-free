@@ -1,6 +1,7 @@
 -- Disposable CI database only. Minimal existing-schema surface; no production DDL.
 CREATE TABLE IF NOT EXISTS public.school (
- school_id uuid PRIMARY KEY, stable_name text UNIQUE NOT NULL);
+ school_id uuid PRIMARY KEY, stable_name text UNIQUE NOT NULL,
+ status text NOT NULL DEFAULT 'active');
 CREATE TABLE IF NOT EXISTS public.source (
  source_id uuid PRIMARY KEY, school_id uuid NOT NULL REFERENCES public.school,
  canonical_locator text NOT NULL, title text, source_type text DEFAULT 'book', status text DEFAULT 'active');

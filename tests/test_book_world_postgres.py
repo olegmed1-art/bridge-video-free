@@ -1,9 +1,12 @@
 """Independent PostgreSQL engine rehearsal; opt-in disposable local CI DB only."""
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import os
 from pathlib import Path
-from uuid import uuid4
+from queue import Queue
+import time
+from uuid import UUID, uuid4
 
 import pytest
 import psycopg
@@ -38,7 +41,7 @@ def test_publication_admission_and_transaction_are_atomic_for_two_candidates(mon
     source_id = str(uuid4())
     with psycopg.connect(DSN, autocommit=True) as setup:
         setup.execute(Path("tests/fixtures/book_world_postgres.sql").read_text())
-        setup.execute("INSERT INTO public.school VALUES (%s,%s) ON CONFLICT (stable_name) DO NOTHING",
+        setup.execute("INSERT INTO public.school(school_id,stable_name) VALUES (%s,%s) ON CONFLICT (stable_name) DO NOTHING",
                       (str(uuid4()), EXPECTED_SCHOOL))
         school_id = str(setup.execute("SELECT school_id FROM public.school WHERE stable_name=%s",
                                      (EXPECTED_SCHOOL,)).fetchone()[0])
@@ -176,7 +179,7 @@ def test_postgres_persistence_protected_teacher_replay_failure_and_rollback(monk
     school_id, source_id = str(uuid4()), str(uuid4())
     with psycopg.connect(DSN, autocommit=True) as setup:
         setup.execute(Path("tests/fixtures/book_world_postgres.sql").read_text())
-        setup.execute("INSERT INTO public.school VALUES (%s,%s) ON CONFLICT (stable_name) DO NOTHING", (school_id, EXPECTED_SCHOOL))
+        setup.execute("INSERT INTO public.school(school_id,stable_name) VALUES (%s,%s) ON CONFLICT (stable_name) DO NOTHING", (school_id, EXPECTED_SCHOOL))
         school_id = str(setup.execute("SELECT school_id FROM public.school WHERE stable_name=%s", (EXPECTED_SCHOOL,)).fetchone()[0])
         setup.execute("INSERT INTO public.source (source_id,school_id,canonical_locator,title) VALUES (%s,%s,%s,%s)",
                       (source_id, school_id, bundle["source"]["locator"], bundle["source"]["title"]))
@@ -258,7 +261,7 @@ def legacy_identity_fixture():
     receipt["claims"][0]["object_id"] = obj["object_id"]
     with psycopg.connect(DSN, autocommit=True) as setup:
         setup.execute(Path("tests/fixtures/book_world_postgres.sql").read_text())
-        setup.execute("INSERT INTO public.school VALUES (%s,%s) ON CONFLICT(stable_name) DO NOTHING",
+        setup.execute("INSERT INTO public.school(school_id,stable_name) VALUES (%s,%s) ON CONFLICT(stable_name) DO NOTHING",
                       (str(uuid4()), EXPECTED_SCHOOL))
         school_id = str(setup.execute("SELECT school_id FROM public.school WHERE stable_name=%s",
                                      (EXPECTED_SCHOOL,)).fetchone()[0])
@@ -339,6 +342,120 @@ def test_legacy_identity_dry_run_replay_stage_publish_and_visibility_rollback(mo
                                 (source_id,)).fetchone()[0] == 1
             assert read.execute("SELECT count(*) FROM public.canon_activation WHERE knowledge_version_id=%s",
                                 (staged["version_ids"][0],)).fetchone()[0] == 0
+
+
+def test_missing_book_source_and_asset_bind_in_one_transaction():
+    from database.book_source_reconciliation import (
+        new_book_source_id, reconcile_book_source_asset,
+    )
+    bundle, receipt, school_id, old_source_id, _ = legacy_identity_fixture()
+    with psycopg.connect(DSN, autocommit=True) as setup:
+        setup.execute("DELETE FROM public.source WHERE source_id=%s", (old_source_id,))
+    source_id = new_book_source_id(school_id, bundle["source"]["locator"])
+    identity = reviewed_identity_fixture(
+        bundle, receipt, school_id, source_id, bundle["source"]["locator"])
+    args = dict(school_id=school_id, source_id=source_id,
+                identity_receipt=identity, register_missing_source=True)
+    with psycopg.connect(DSN) as conn:
+        # The adapter must override a caller's snapshot isolation before its
+        # advisory lock, so later source lookup sees concurrent commits.
+        conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+        dry = reconcile_book_source_asset(conn, bundle, receipt, **args, dry_run=True)
+        assert (dry["new_source_rows"], dry["new_asset_rows"], dry["new_link_rows"]) == (1, 1, 1)
+        with psycopg.connect(DSN, autocommit=True) as read:
+            assert read.execute("SELECT count(*) FROM public.source WHERE source_id=%s",
+                                (source_id,)).fetchone()[0] == 0
+        def interrupted():
+            raise RuntimeError("synthetic source-binding interruption")
+        with pytest.raises(RuntimeError, match="source-binding interruption"):
+            reconcile_book_source_asset(conn, bundle, receipt, **args, before_commit=interrupted)
+        with psycopg.connect(DSN, autocommit=True) as read:
+            assert read.execute("SELECT count(*) FROM public.source WHERE source_id=%s",
+                                (source_id,)).fetchone()[0] == 0
+        first = reconcile_book_source_asset(conn, bundle, receipt, **args)
+        replay = reconcile_book_source_asset(conn, bundle, receipt, **args)
+        assert (first["new_source_rows"], first["new_asset_rows"], first["new_link_rows"]) == (1, 1, 1)
+        assert (replay["new_source_rows"], replay["new_asset_rows"], replay["new_link_rows"]) == (0, 0, 0)
+        assert first["source_id"] == replay["source_id"] == source_id
+    with psycopg.connect(DSN, autocommit=True) as read:
+        assert read.execute("SELECT source_type,title,canonical_locator FROM public.source "
+                            "WHERE source_id=%s AND school_id=%s", (source_id, school_id)).fetchone() == (
+                                "book", bundle["source"]["title"], bundle["source"]["locator"])
+        assert read.execute("SELECT count(*) FROM public.source_asset WHERE source_id=%s "
+                            "AND asset_id=%s AND relation_type='embodies'",
+                            (source_id, identity["asset_id"])).fetchone()[0] == 1
+        assert read.execute("SELECT count(*) FROM public.canon_activation ca "
+                            "JOIN public.knowledge_version_source kvs "
+                            "ON kvs.knowledge_version_id=ca.knowledge_version_id "
+                            "WHERE kvs.source_id=%s", (source_id,)).fetchone()[0] == 0
+
+
+def test_source_registration_allows_update_only_guard():
+    from database.book_source_reconciliation import new_book_source_id, reconcile_book_source_asset
+    bundle, receipt, school_id, old_source_id, _ = legacy_identity_fixture()
+    source_id = new_book_source_id(school_id, bundle["source"]["locator"])
+    identity = reviewed_identity_fixture(bundle, receipt, school_id, source_id,
+                                         bundle["source"]["locator"])
+    with psycopg.connect(DSN, autocommit=True) as setup:
+        setup.execute("DELETE FROM public.source WHERE source_id=%s", (old_source_id,))
+        setup.execute("CREATE OR REPLACE FUNCTION public.synthetic_book_update_guard() "
+                      "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$")
+        setup.execute("CREATE TRIGGER synthetic_book_update_guard BEFORE UPDATE ON public.source "
+                      "FOR EACH ROW EXECUTE FUNCTION public.synthetic_book_update_guard()")
+    try:
+        with psycopg.connect(DSN) as conn:
+            result = reconcile_book_source_asset(conn, bundle, receipt, school_id=school_id,
+                source_id=source_id, identity_receipt=identity, register_missing_source=True)
+            assert result["new_source_rows"] == 1
+    finally:
+        with psycopg.connect(DSN, autocommit=True) as cleanup:
+            cleanup.execute("DROP TRIGGER IF EXISTS synthetic_book_update_guard ON public.source")
+            cleanup.execute("DROP FUNCTION IF EXISTS public.synthetic_book_update_guard()")
+
+
+def test_source_registration_sees_noncooperating_writer_after_table_lock():
+    from database.book_source_reconciliation import new_book_source_id, reconcile_book_source_asset
+    bundle, receipt, school_id, old_source_id, _ = legacy_identity_fixture()
+    source_id = new_book_source_id(school_id, bundle["source"]["locator"])
+    identity = reviewed_identity_fixture(bundle, receipt, school_id, source_id,
+                                         bundle["source"]["locator"])
+    with psycopg.connect(DSN, autocommit=True) as setup:
+        setup.execute("DELETE FROM public.source WHERE source_id=%s", (old_source_id,))
+    competitor_id = str(uuid4())
+    registrar_pids = Queue()
+
+    def register():
+        with psycopg.connect(DSN) as conn:
+            conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+            registrar_pids.put(conn.info.backend_pid)
+            return reconcile_book_source_asset(conn, bundle, receipt, school_id=school_id,
+                source_id=source_id, identity_receipt=identity, register_missing_source=True)
+
+    with psycopg.connect(DSN) as blocker:
+        blocker.execute("LOCK TABLE public.source IN SHARE ROW EXCLUSIVE MODE")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(register)
+            registrar_pid = registrar_pids.get(timeout=5)
+            deadline = time.monotonic() + 5
+            while not blocker.execute(
+                "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_locks WHERE pid=%s "
+                "AND relation='public.source'::regclass AND mode='ShareRowExclusiveLock' "
+                "AND NOT granted)", (registrar_pid,)).fetchone()[0]:
+                assert time.monotonic() < deadline, "registrar did not reach the source lock"
+                time.sleep(0.05)
+            blocker.execute("INSERT INTO public.source(source_id,school_id,canonical_locator,title) "
+                            "VALUES(%s,%s,%s,%s)",
+                            (competitor_id, school_id, bundle["source"]["locator"],
+                             bundle["source"]["title"]))
+            blocker.commit()
+            with pytest.raises(ValueError, match="BOOK_SOURCE_REGISTRY_CONFLICT"):
+                future.result(timeout=10)
+    with psycopg.connect(DSN, autocommit=True) as read:
+        assert read.execute("SELECT source_id FROM public.source WHERE school_id=%s "
+                            "AND canonical_locator=%s", (school_id,
+                            bundle["source"]["locator"])).fetchall() == [(UUID(competitor_id),)]
+        assert read.execute("SELECT count(*) FROM public.asset WHERE checksum_value=%s",
+                            (bundle["source"]["rendition_sha256"],)).fetchone()[0] == 0
 
 
 def test_identity_interruption_and_unknown_trigger_roll_back():
