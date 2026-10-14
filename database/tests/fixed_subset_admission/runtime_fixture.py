@@ -106,7 +106,7 @@ def main():
         expected_error(db, """SELECT * FROM video_queue.enqueue_drive_batch(
           %s,'source-folder-123456','output-folder-123456','work-folder-123456',
           %s,%s,%s,repeat('a',64),
-          jsonb_build_array(jsonb_build_object('sequence',1,'file_id',%s,
+          jsonb_build_array(jsonb_build_object('sequence',1,'file_id',%s::text,
             'name','canary.mp4','mime_type','video/mp4','size_bytes',12339062,
             'checksum','md5:'||repeat('1',32))))""",
             (source, PROFILE, REVISION, source, source), "SUBSET_LEGACY_INSERT_HOLD")
