@@ -15,6 +15,7 @@ from database.outbox_publication_decision import publish_if_authorized
 from database.run_checkpoint_persistence import record_checkpoint
 from database.source_identity_persistence import ensure_drive_source_identity
 from database.video_result_persistence import persist_video_result
+from video_completed_staging_handoff import stage_completed_result
 
 
 def _validated_drive_id(value: str) -> str:
@@ -135,4 +136,4 @@ def persist_completed_drive_job(token: str):
         outbox_published=outbox["published_count"],
         outbox_publication_state=outbox["publication_state"],
     )
-    return result
+    return stage_completed_result(result)
