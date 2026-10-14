@@ -13,6 +13,7 @@ from bridge_worker_3_1_free import stable_job_id
 
 from .drive_adapter import access_token, file_metadata
 from .route_receipt_v2 import discover_route_receipt
+from .queue_staging_handoff import ExactLeaseStagingHandoff
 from .runtime_preflight import validate_video_runtime
 from .terminal_evidence_v2 import (
     build_terminal_evidence,
@@ -250,7 +251,12 @@ def process_claim(
     *,
     processor: Callable[[Mapping[str, Any]], Mapping[str, Any]] = stable_review_processor,
     subset_adapter: Any = None,
+    staging_handoff: ExactLeaseStagingHandoff | None = None,
 ) -> dict[str, Any]:
+    if staging_handoff is not None and not isinstance(staging_handoff, ExactLeaseStagingHandoff):
+        raise NeonVideoWorkerError("VIDEO_STAGING_EXACT_LEASE_AUTHORIZATION_REQUIRED")
+    if staging_handoff is not None and staging_handoff.writer_dsn == database_url:
+        raise NeonVideoWorkerError("VIDEO_STAGING_SEPARATE_WRITER_REQUIRED")
     output = _base_output(claim)
     outcome = "REVIEW_READY"
     error_code: str | None = None
@@ -266,6 +272,8 @@ def process_claim(
                         database_url, claim, worker_key)
                 output.update(dict(processor(claim)))
                 output.update(_base_output(claim))
+                # Processor output is not proof of a committed staging receipt.
+                output.pop("knowledge_staging", None)
             except Exception as exc:
                 outcome, error_code = _failure(exc)
                 output["error_type"] = type(exc).__name__
@@ -279,6 +287,12 @@ def process_claim(
                     final_source = verify_claimed_source(claim, access_token())
                     if initial_source is None or final_source != initial_source:
                         raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_CHANGED_DURING_PROCESSING")
+                    if staging_handoff is not None:
+                        output["knowledge_staging"] = staging_handoff(
+                            claim, worker_key, access_token())
+                        post_staging_source = verify_claimed_source(claim, access_token())
+                        if post_staging_source != initial_source:
+                            raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_CHANGED_DURING_STAGING")
                 except Exception as exc:
                     outcome, error_code = _failure(exc)
                     output["error_type"] = type(exc).__name__

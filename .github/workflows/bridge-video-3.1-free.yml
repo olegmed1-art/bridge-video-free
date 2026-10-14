@@ -205,7 +205,7 @@ jobs:
               'bridge_neon_persistence.py': '16e66f086b3fe12f67286c2af99e07f63553153ae9adcf979559f8e324126568',
               'video_completed_staging_handoff.py': '6e530ef7a0810aaed756ba7041eaf8fcc07937c8c0bc0266f766e89574e4e1fa',
               'database/video_staging_handoff.py': 'b995b83e1ce2a4ef007b86a43094de76a93bc1c4575f0170b015638c6b2b0756',
-              'database/video_candidate_persistence.py': '7ce1c5832d3158ab931c444082ef1dedea8bedee939cb1d94747ea4f7be315ed',
+              'database/video_candidate_persistence.py': 'e4d02fdbf09b5fd581c31bf2c5db12d494151e3839631ddc8866782be6215d00',
               'diana_longitudinal_postprocess_v3.py': '40ae09740a214f6f1c9970d3597500b5f9a83fc5f1937fe9a014b264e79012c5',
               'diana_longitudinal_postprocess_v4_2.py': 'c3eb0c0d4e0a344b760e35148f28e03d56de7aed8a365b1b004c476fa23860ae',
               'database/backfill_video_results.py': '0f48a594302185ff66490d270fd5bc3c896f618cb45beaf7baa1d5114d103024',

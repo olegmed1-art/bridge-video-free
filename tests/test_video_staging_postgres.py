@@ -26,6 +26,7 @@ from database.video_candidate_persistence import persist_quality_candidates_on_c
 from database.video_staging_handoff import persist_quality_handoff
 from database.video_result_persistence import persist_video_result_on_connection, SCHOOL_STABLE_NAME
 from database.video_staging_read import read_internal_school_video_candidate
+from database.video_staging_receipt_read import read_committed_receipt_on_connection
 from diana_longitudinal_quality_v4_2 import build_quality_layer
 
 
@@ -172,6 +173,20 @@ def test_real_retry_is_idempotent(real, dsn):
     assert repeated['inserted'] == 0
     assert repeated['candidate_ids'] == real['written']['candidate_ids']
     assert repeated['replay_receipt_id'] == real['written']['replay_receipt_id']
+
+
+def test_combined_queue_receipt_readback_on_separate_readonly_connection(real, dsn):
+    with reader(dsn) as conn:
+        witness = read_committed_receipt_on_connection(
+            conn, receipt_id=real['written']['replay_receipt_id'],
+            analysis_run_id=real['persisted']['analysis_run_id'],
+            source_id=real['persisted']['source_id'])
+    assert witness == {
+        'status': 'COMMITTED_RECEIPT',
+        'receipt_id': real['written']['replay_receipt_id'],
+        'analysis_run_id': real['persisted']['analysis_run_id'],
+        'source_id': real['persisted']['source_id'],
+    }
 
 
 def test_completed_result_handoff_reuses_sql_receipt_and_rejects_wrong_lineage(real, dsn):
