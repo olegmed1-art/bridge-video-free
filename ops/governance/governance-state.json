@@ -27,7 +27,19 @@
       "SIMPLIFY",
       "PARTIALLY_RETIRE",
       "REPLACE"
-    ]
+    ],
+    "first_operational_audit": {
+      "performed_at": "2026-09-27",
+      "outcome": "ADJUST",
+      "status": "REPORT_WITH_EVIDENCE_GAPS",
+      "report": "docs/governance/RESTRICTIONS_AUDIT_2026-09-27.md",
+      "limitations": [
+        "No complete governance-hours ledger",
+        "No complete director-escalation count",
+        "No comprehensive all-service or canon audit"
+      ],
+      "new_pilot_gate": false
+    }
   },
   "governance_modes": [
     "LIGHTWEIGHT",

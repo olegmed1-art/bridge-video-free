@@ -34,7 +34,15 @@
         "governance_overhead_exceeds_value_without_risk_reduction"
       ],
       "tracker": "https://github.com/olegmed1-art/bridge-video-free/issues/611",
-      "canonical_state": "ops/governance/governance-state.json"
+      "canonical_state": "ops/governance/governance-state.json",
+      "operational_audit": {
+        "date": "2026-09-27",
+        "outcome": "ADJUST",
+        "report": "docs/governance/RESTRICTIONS_AUDIT_2026-09-27.md",
+        "status": "REPORT_WITH_EVIDENCE_GAPS",
+        "tracker": "https://github.com/olegmed1-art/bridge-video-free/issues/620",
+        "issue_closed": false
+      }
     },
     {
       "portfolio_id": "SCHOOL-CANONICAL-BIDDING-ENGINE",
@@ -75,7 +83,7 @@
       "urgency": "HIGH",
       "strategic_rank": "S1",
       "governance_mode": "ASSURED",
-      "status": "ACTIVE_SHADOW_BUILD",
+      "status": "LIGHT_NATIVE_RECOVERY_HOLD_LOADER_CODE_MERGED",
       "problem_statement": "External waits currently end an ordinary ChatGPT turn and force the school director to act as a manual scheduler by repeatedly sending continuation commands without making a substantive decision.",
       "benefit_hypothesis": "A durable Oracle-resident event-driven controller using Neon as canonical state, with existing Vercel, GitHub and Oracle adapters, will continue eligible technical tasks to factual completion or a real owner boundary while reducing model turns and director intervention.",
       "target_users": [
@@ -104,7 +112,19 @@
         "cost_cannot_be_bounded_before_execution"
       ],
       "tracker": "https://github.com/olegmed1-art/bridge-video-free/issues/782",
-      "project_state": "ops/autopilot/project-state.json"
+      "project_state": "ops/autopilot/project-state.json",
+      "previous_status": "ACTIVE_SHADOW_BUILD",
+      "current_tracker": "https://github.com/olegmed1-art/bridge-video-free/issues/1946",
+      "status_evidence": {
+        "reviewed_at": "2026-09-27",
+        "sources": [
+          "https://github.com/olegmed1-art/bridge-video-free/issues/1946#issuecomment-5853047394",
+          "https://github.com/olegmed1-art/bridge-video-free/pull/2019"
+        ],
+        "scope": "Published receipts and merged code; runtime deployment not attested"
+      },
+      "benefit_review_status": "OVERDUE_NO_OUTCOME_LOCATED",
+      "next_outcome": "Reviewed deployment/rollback controller, bounded native rollout, then one retained pilot result"
     }
   ],
   "service_portfolio": [
@@ -183,5 +203,7 @@
     "Classify all other currently active P0/P1 issues as FULL_MODEL, LIGHTWEIGHT or EXEMPT_WITH_REASON.",
     "Add remaining permanent school services after primary-source verification.",
     "Bind portfolio entries to machine-readable Observatory metrics where available."
-  ]
+  ],
+  "last_reconciled_at": "2026-09-27",
+  "reconciliation_scope": "Governance review and Autopilot documentary evidence only; last_verified_at remains the previous whole-portfolio observation."
 }
