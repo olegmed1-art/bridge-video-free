@@ -20,7 +20,14 @@ REVISION = "3.1-free-r25.16"
 
 
 def snapshot(db):
-    return db.execute("""SELECT jsonb_build_object(
+    # The migration owner retains ADMIN-only membership after installation,
+    # not SELECT on the subset-owned reservation table. A savepoint lends
+    # read access only for this snapshot and restores the exact role catalog.
+    db.execute("SAVEPOINT subset_fixture_snapshot")
+    try:
+        db.execute("""GRANT video_subset_owner TO CURRENT_USER
+          WITH ADMIN FALSE, INHERIT TRUE, SET FALSE GRANTED BY CURRENT_USER""")
+        value = db.execute("""SELECT jsonb_build_object(
       'batch',(SELECT count(*) FROM video_queue.batch),
       'job',(SELECT count(*) FROM video_queue.job),
       'events',(SELECT count(*) FROM video_queue.job_event),
@@ -31,6 +38,12 @@ def snapshot(db):
                            FROM pg_auth_members a
                            WHERE a.roleid='video_subset_worker_v2'::regrole
                              AND a.member=current_user::regrole))""").fetchone()[0]
+    finally:
+        db.execute("ROLLBACK TO SAVEPOINT subset_fixture_snapshot")
+        db.execute("RELEASE SAVEPOINT subset_fixture_snapshot")
+    assert not db.execute("""SELECT pg_has_role(current_user,
+      'video_subset_owner','USAGE')""").fetchone()[0]
+    return value
 
 
 def expected_error(db, sql, params, message):
