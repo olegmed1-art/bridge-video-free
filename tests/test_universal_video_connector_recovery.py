@@ -129,6 +129,13 @@ def test_complete_function_acl_has_no_grantee_allowlist_filter():
     assert '=24' in c.function_acl_matrix(recovered=True)
 
 
+def test_041_runtime_acl_tracks_scoped_claim():
+    sql=(REPO/'database/tests/041_universal_video_queue.sql').read_text()
+    managed=sql.split('DO $managed_acl$',1)[1].split('END $managed_acl$',1)[0]
+    assert "('video_subset_worker_v2','video_queue.subset_claim_job(uuid,text,integer,text,text)')" in managed
+    assert c.function_acl_matrix() in sql
+
+
 def test_repair_external_history_matches_and_is_never_a_pending_migration():
     raw=(CODE/(r.KEY+'.sql')).read_bytes()
     rows=[line.split('\t') for line in (REPO/'database/external_migration_history.tsv').read_text().splitlines() if line.startswith(r.KEY+'\t')]

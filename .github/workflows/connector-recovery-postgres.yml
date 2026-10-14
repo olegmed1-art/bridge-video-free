@@ -1,7 +1,7 @@
 name: Connector recovery disposable PostgreSQL 18
 on:
   push:
-    branches: [codex/sync-subset-recovery-pg18-20261014]
+    branches: [codex/sync-subset-recovery-pg18-matrix-fix-20261014]
 permissions:
   contents: read
 concurrency:
@@ -14,7 +14,7 @@ jobs:
       github.event.repository.private == false &&
       github.actor == github.repository_owner &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/codex/sync-subset-recovery-pg18-20261014' &&
+      github.ref == 'refs/heads/codex/sync-subset-recovery-pg18-matrix-fix-20261014' &&
       github.event.created == true && github.event.deleted == false &&
       github.event.forced == false && github.run_attempt == 1
     runs-on: ubuntu-24.04
@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = b07fb3e4c5a6b7bdb1fd116a9202c4fe075a12f6
+          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 479de8de678849de480e4bcf5c7af18039593ac7
           mkdir -p "$RUNNER_TEMP/connector-recovery-evidence" "$RUNNER_TEMP/connector-recovery-home"
           git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/connector-recovery-evidence/source.txt"
           git diff --name-only HEAD^ HEAD > "$RUNNER_TEMP/connector-recovery-evidence/changed-files.txt"
@@ -154,10 +154,10 @@ jobs:
           assert all(census[k] == 0 for k in ("other_clients", "advisory_locks", "prepared"))
           assert json.loads((out / "service-cleanup.json").read_text())["status"] == "PASS"
           suites = list(ET.parse(out / "unit.xml").getroot().iter("testsuite"))
-          assert sum(int(s.attrib["tests"]) for s in suites) == 21
+          assert sum(int(s.attrib["tests"]) for s in suites) == 22
           assert all(int(s.attrib[k]) == 0 for s in suites for k in ("errors", "failures", "skipped"))
           (out / "acceptance.json").write_text(json.dumps({"status":"PASS_ISOLATED_CONNECTOR_RECOVERY",
-              "negative_pass":16,"cleanup":"PASS","unit_pass":21,"production_execution_allowed":False})+"\n")
+              "negative_pass":16,"cleanup":"PASS","unit_pass":22,"production_execution_allowed":False})+"\n")
           PY
       - name: Preserve bounded evidence in logs without paid artifact storage
         if: always()

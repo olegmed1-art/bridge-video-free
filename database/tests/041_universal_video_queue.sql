@@ -47,6 +47,7 @@ BEGIN
           ('video_subset_admitter','video_queue.admit_approved_subset(uuid,text,text,text,uuid)'),
           ('video_subset_admitter','video_queue.recover_subset_admission(text,text,text)'),
           ('video_subset_worker_v2','video_queue.claim_job(text,integer,text,text)'),
+          ('video_subset_worker_v2','video_queue.subset_claim_job(uuid,text,integer,text,text)'),
           ('video_subset_worker_v2','video_queue.authorize_subset_attempt(uuid,uuid,text,uuid)'),
           ('video_subset_worker_v2','video_queue.heartbeat_subset_job(uuid,uuid,text,integer)'),
           ('video_subset_worker_v2','video_queue.retry_subset_job(uuid,uuid,text,text,integer)'),
@@ -73,14 +74,14 @@ BEGIN
         RAISE EXCEPTION 'SUBSET_RUNTIME_PUBLIC_EXECUTE';
     END IF;
 END $managed_acl$;
-DO $assert$ BEGIN IF NOT coalesce(((WITH names(name) AS (VALUES ('admit_approved_subset'),('approve_subset'),('authorize_subset_attempt'),('claim_job'),('finish_subset_job'),('heartbeat_subset_job'),('observe_subset'),('recover_subset_admission'),('retry_subset_job'),('revoke_subset_approval'),('set_subset_runtime'),('subset_assert_final'),('subset_build_binding'),('subset_capability'),('subset_deferred_guard'),('subset_disabled'),('subset_guard'),('subset_json'),('subset_lock_lease'),('subset_observed_sources'),('subset_sha'),('subset_shape'),('subset_validate_contract'),('subset_worker_eligible')), owned AS (
+DO $assert$ BEGIN IF NOT coalesce(((WITH names(name) AS (VALUES ('admit_approved_subset'),('approve_subset'),('authorize_subset_attempt'),('claim_job'),('finish_subset_job'),('heartbeat_subset_job'),('observe_subset'),('recover_subset_admission'),('retry_subset_job'),('revoke_subset_approval'),('set_subset_runtime'),('subset_assert_final'),('subset_build_binding'),('subset_capability'),('subset_claim_job'),('subset_deferred_guard'),('subset_disabled'),('subset_guard'),('subset_json'),('subset_lock_lease'),('subset_observed_sources'),('subset_sha'),('subset_shape'),('subset_validate_contract'),('subset_worker_eligible')), owned AS (
  SELECT p.* FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
  WHERE n.nspname='video_queue' AND p.proowner='video_subset_owner'::regrole),
  expected AS (SELECT oid,proowner AS grantee,proowner AS grantor,'EXECUTE'::text AS privilege_type,false AS is_grantable FROM owned
-  UNION ALL SELECT p.oid,c.role_name::regrole::oid,p.proowner,'EXECUTE'::text,false FROM owned p JOIN (VALUES ('approve_subset','video_subset_approver'),('set_subset_runtime','video_subset_approver'),('revoke_subset_approval','video_subset_approver'),('observe_subset','video_subset_collector'),('admit_approved_subset','video_subset_admitter'),('recover_subset_admission','video_subset_admitter'),('claim_job','video_subset_worker_v2'),('authorize_subset_attempt','video_subset_worker_v2'),('heartbeat_subset_job','video_subset_worker_v2'),('retry_subset_job','video_subset_worker_v2'),('finish_subset_job','video_subset_worker_v2')) c(name,role_name) ON c.name=p.proname), actual AS (
+  UNION ALL SELECT p.oid,c.role_name::regrole::oid,p.proowner,'EXECUTE'::text,false FROM owned p JOIN (VALUES ('approve_subset','video_subset_approver'),('set_subset_runtime','video_subset_approver'),('revoke_subset_approval','video_subset_approver'),('observe_subset','video_subset_collector'),('admit_approved_subset','video_subset_admitter'),('recover_subset_admission','video_subset_admitter'),('claim_job','video_subset_worker_v2'),('subset_claim_job','video_subset_worker_v2'),('authorize_subset_attempt','video_subset_worker_v2'),('heartbeat_subset_job','video_subset_worker_v2'),('retry_subset_job','video_subset_worker_v2'),('finish_subset_job','video_subset_worker_v2')) c(name,role_name) ON c.name=p.proname), actual AS (
  SELECT p.oid,a.grantee,a.grantor,a.privilege_type,a.is_grantable FROM owned p,
  LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a)
- SELECT (SELECT count(*) FROM owned)=24
+ SELECT (SELECT count(*) FROM owned)=25
  AND NOT EXISTS(SELECT FROM names LEFT JOIN owned ON owned.proname=names.name GROUP BY names.name HAVING count(owned.oid)<>1)
  AND NOT EXISTS((SELECT * FROM actual EXCEPT SELECT * FROM expected) UNION ALL
                 (SELECT * FROM expected EXCEPT SELECT * FROM actual)))),false) THEN RAISE EXCEPTION 'SUBSET_EXACT_FUNCTION_ACL'; END IF; END $assert$;
