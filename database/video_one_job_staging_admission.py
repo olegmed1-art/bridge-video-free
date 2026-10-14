@@ -18,7 +18,8 @@ def stage_admitted_candidate_on_connection(
     """Hold the SQL admission/lease lock through candidate write and attestation.
 
     Caller owns the connection and its commit. A nested writer transaction is a
-    savepoint, so the receipt must be newly inserted in this same outer xact.
+    savepoint. SQL may rebind a previously committed deterministic receipt only
+    after validating this attempt's live lease and unchanged receipt identity.
     """
     if writer is None:
         from database.video_candidate_persistence import persist_quality_candidates_on_connection

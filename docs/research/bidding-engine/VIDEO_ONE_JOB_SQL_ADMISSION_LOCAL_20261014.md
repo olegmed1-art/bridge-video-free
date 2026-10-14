@@ -10,33 +10,90 @@ The draft SQL is `database/proposals/0061_one_job_staging_admission_v1.sql`,
 outside the migration runner. The adapter
 `database/video_one_job_staging_admission.py` is opt-in and unused by the
 resident. It calls SQL admission before candidate inserts, holds the live job
-row lock across the staging transaction, and attests the newly inserted replay
-receipt before commit. An expired/revoked lease, different attempt, source
+row lock across the staging transaction, and attests the replay receipt before
+commit. An expired/revoked lease, different attempt, source
 fingerprint, job, batch, subset contract, or manifest fails closed. The
-attestation stores the exact lease and attempt. The finish function requires
-that attestation and the 0060 post-work observation; v1 rejects receipt reuse
-across attempts, even when the original candidate is otherwise idempotent.
+attestation stores the immutable receipt identity separately from each exact
+lease and attempt. After a crash between staging commit and finish, a new
+attempt may rebind the same deterministic receipt only after the current
+lease and source revision pass again. A different job, admission, run, source,
+revision, or payload hash is rejected. The finish function requires the
+current attempt attestation and the 0060 post-work observation.
 
 The batch and subset manifest continue to say `SHADOW_REVIEW_ONLY` and
 `database_persistence_allowed=false`. A separate one-job admission record is
 the explicit exception. Only its versioned finish function can replace that
 job's output with `REPLAY_CANDIDATE_STAGING_ONLY`, `true` for technical database
-persistence, `false` for canon promotion, and `NOT_PUBLISHED`. It delegates the
-ordinary transition and observation checks to 0060 in the same transaction.
-The original 0056/0060 finish contracts are unchanged.
+persistence, `false` for canon promotion, and `NOT_PUBLISHED`. The proposal
+replaces `video_job_output_shadow_check` with a versioned constraint that
+accepts the old shadow form and the narrow staging form only on `REVIEW_READY`.
+The new finish function makes its own atomic transition and uses the existing
+0060 post-work observation function; it never presents a false shadow output
+to the old finish function. The original 0056/0060 finish contracts are
+unchanged. This one-job finish never releases pending sibling jobs;
+`released_jobs=0` even for an admitted canary.
 
 Activation blockers and minimum access changes for review:
 
 1. The 0060 objects are owned by `video_subset_owner` with private EXECUTE and
-   table ACLs. Installation must be run by an authorized owner able to create
-   the new objects with that owner, or use a reviewed temporary owner SET grant
-   that is revoked in the installation transaction. The local draft does not
-   create or obtain that membership. A future installer must explicitly set
-   `OWNER TO video_subset_owner` for both tables and three functions, revoke
-   all default/public grants, and grant only the new `assert`, `attest`, and
-   `finish` EXECUTE signatures to `video_subset_worker_v2`. An approver-only
-   admission creation/enable/revoke API also needs owner implementation and
-   EXECUTE only for `video_subset_approver`; worker must have no admission DML.
+   table ACLs. Installation must use an authorized owner context; the local
+   draft obtains no membership. The owner of `video_queue.job` must replace
+   `video_job_output_shadow_check` with `video_job_output_mode_v1_check` after
+   checking existing rows. Transfer ownership of the three new tables and
+   four new functions to `video_subset_owner`; revoke PUBLIC defaults. Give
+   `EXECUTE` on `assert_one_job_staging_v1(uuid,uuid,uuid,text,integer,text)`
+   and `attest_one_job_staging_receipt_v1(uuid,uuid,uuid,text,integer,text,uuid,uuid,uuid,text)`
+   **only** to `bridge_school_worker_principal`, and `EXECUTE` on
+   `finish_one_job_staging_v1(uuid,uuid,uuid,text,integer,text,uuid,uuid,jsonb)`
+   **only** to `video_subset_worker_v2`. The internal
+   `check_one_job_staging_scope_v1` gets no runtime EXECUTE grant. Existing
+   `video_queue` schema USAGE is inherited by the writer from
+   `bridge_school_worker`; no queue-worker membership is granted to it.
+   The owner transfer, after a separately approved installer obtains the
+   required ownership context, is exactly:
+
+   ```sql
+   ALTER TABLE video_queue.one_job_staging_admission_v1 OWNER TO video_subset_owner;
+   ALTER TABLE video_queue.one_job_staging_receipt_v1 OWNER TO video_subset_owner;
+   ALTER TABLE video_queue.one_job_staging_receipt_attempt_v1 OWNER TO video_subset_owner;
+   ALTER FUNCTION video_queue.check_one_job_staging_scope_v1(
+       uuid,uuid,uuid,text,integer,text,text) OWNER TO video_subset_owner;
+   ALTER FUNCTION video_queue.assert_one_job_staging_v1(
+       uuid,uuid,uuid,text,integer,text) OWNER TO video_subset_owner;
+   ALTER FUNCTION video_queue.attest_one_job_staging_receipt_v1(
+       uuid,uuid,uuid,text,integer,text,uuid,uuid,uuid,text) OWNER TO video_subset_owner;
+   ALTER FUNCTION video_queue.finish_one_job_staging_v1(
+       uuid,uuid,uuid,text,integer,text,uuid,uuid,jsonb) OWNER TO video_subset_owner;
+   ```
+
+   The proposed additional function-owner reads are exactly:
+
+   ```sql
+   GRANT SELECT (analysis_candidate_id,analysis_run_id,source_id,candidate_type,status,
+       promotion_status,method_version,payload_hash,stable_key,payload)
+       ON public.analysis_candidate TO video_subset_owner;
+   GRANT SELECT (analysis_run_id,parameters_snapshot)
+       ON public.analysis_run TO video_subset_owner;
+   GRANT SELECT (source_id,canonical_locator)
+       ON public.source TO video_subset_owner;
+   GRANT SELECT (analysis_run_id,output_entity_id,output_entity_type,output_role,
+       status,artifact_version_id,publication_id)
+       ON public.analysis_run_output TO video_subset_owner;
+   GRANT EXECUTE ON FUNCTION video_queue.assert_one_job_staging_v1(
+       uuid,uuid,uuid,text,integer,text),
+       video_queue.attest_one_job_staging_receipt_v1(
+       uuid,uuid,uuid,text,integer,text,uuid,uuid,uuid,text)
+       TO bridge_school_worker_principal;
+   GRANT EXECUTE ON FUNCTION video_queue.finish_one_job_staging_v1(
+       uuid,uuid,uuid,text,integer,text,uuid,uuid,jsonb)
+       TO video_subset_worker_v2;
+   ```
+
+   These are review-only statements, not applied changes. Before installation,
+   confirm whether any columns already have effective grants and omit redundant
+   grants. An approver-only
+   admission create/enable/revoke API remains to be designed, with EXECUTE
+   only for `video_subset_approver`; worker gets no admission table DML.
 2. Current `bridge_school_worker` has direct DML on result and candidate
    tables. Therefore this adapter is a cooperative transaction check, not a
    database-enforced one-job writer boundary. For a strict boundary, the
@@ -55,10 +112,13 @@ Activation blockers and minimum access changes for review:
    strict writer boundary above before this is production safe.
 4. The SQL draft has not been parsed or executed by PostgreSQL here. A
    disposable PG 18 database with migrations through 0060, synthetic sources,
-   and actual worker/approver role tests is required. Test wrong job, batch,
+   and actual writer/queue/approver login tests is required. Test wrong job, batch,
    manifest, revision, lease, attempt, expiry, revocation, receipt hash/link,
-   duplicate receipt, post-work observation, and transaction rollback. Compare
+   same-receipt/new-lease retry, conflicting reuse, post-work observation,
+   staging constraint, and transaction rollback. Compare
    `pg_catalog` effective ACLs before considering any migration.
 
-Local stdlib tests check adapter ordering and rollback for lost lease, invalid
-scope, and old receipt. They do not prove SQL or production behavior.
+Six local stdlib tests check adapter ordering, lost lease, invalid scope,
+receipt identity/retry behavior under a fake SQL boundary, and the presence
+of the separate SQL role and finish paths. They do not prove SQL execution or
+production behavior.
