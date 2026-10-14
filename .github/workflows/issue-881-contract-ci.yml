@@ -1,6 +1,8 @@
 name: Issue 881 Exact Canary Contract CI
 
 on:
+  # The external pre-canary gate requires successful evidence on every candidate
+  # head, including changes outside UV paths. Keep this trigger unfiltered.
   pull_request:
   workflow_dispatch:
 
@@ -29,6 +31,7 @@ jobs:
           python -m universal_video.precanary imports
           python -m universal_video.precanary synthetic-result-contract
           python -m pytest -q \
+            tests/test_issue_881_required_workflow_triggers.py \
             tests/test_universal_video_issue_881_readiness.py \
             tests/test_universal_video_neon_queue.py \
             tests/test_universal_video_terminal_evidence_v2.py \
