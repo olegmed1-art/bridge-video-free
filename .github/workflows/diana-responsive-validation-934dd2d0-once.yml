@@ -1,0 +1,357 @@
+name: Diana 23-26 responsive recognizer validation da646515
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize]
+    paths: ['.github/workflows/diana-responsive-validation-934dd2d0-once.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diana-23-26-autonomous-finalize
+  cancel-in-progress: false
+
+jobs:
+  recognize:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      ALGORITHM_SHA: da646515201191ff8ace13dcc0eb9108d9ee2fad
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Select verified Oracle credential
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/diana-autonomous-finalize"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" true
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy exact code, canary, and process four videos
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh_base=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=240 \
+            "$ORACLE_USER@$ORACLE_HOST")
+          "${ssh_base[@]}" "ALGORITHM_SHA='$ALGORITHM_SHA' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          export ALGORITHM_SHA
+          root=/home/ubuntu/bridge-school-private-media/diana-23-26
+          source_repo="$root/recognition-diana23/pr1106-527fe65"
+          short="${ALGORITHM_SHA:0:8}"
+          code="$root/autonomous-code-$short"
+          results="$root/autonomous-results-$short"
+          test -d "$root"
+          test -d "$source_repo/.git" || test -f "$source_repo/.git"
+          test "$(stat -c %s "$root/diana-23.mp4")" = 652603861
+          test "$(stat -c %s "$root/diana-24.mp4")" = 388557680
+          test "$(stat -c %s "$root/diana-25-2021-09-13.mp4")" = 643234068
+          test "$(stat -c %s "$root/diana-26.mp4")" = 792572437
+          available_kb="$(df -Pk "$root" | awk 'NR==2 {print $4}')"
+          test "$available_kb" -ge 10485760
+          if pgrep -af 'bridge_vision_autonomous_video.py|ffmpeg' | grep -v "$$" >/dev/null; then
+            echo AUTONOMOUS_PREFLIGHT_COMPETING_PROCESS
+            exit 31
+          fi
+          if [[ -e "$code" ]]; then
+            test "$(git -C "$code" rev-parse HEAD)" = "$ALGORITHM_SHA"
+            test -z "$(git -C "$code" status --porcelain)"
+          else
+            git -C "$source_repo" fetch --no-tags origin "$ALGORITHM_SHA"
+            git -C "$source_repo" worktree add --detach "$code" "$ALGORITHM_SHA"
+          fi
+          test "$(git -C "$code" rev-parse HEAD)" = "$ALGORITHM_SHA"
+          test -z "$(git -C "$code" status --porcelain)"
+          venv="$root/recognition-diana23/pixel-venv"
+          test -x "$venv/bin/python"
+          PYTHONPATH="$code" "$venv/bin/python" -c 'import cv2,numpy; import bridge_vision.bridgit_autonomous_deals'
+          mkdir -p "$results"
+          chmod 0700 "$results"
+          original="$root/recognition-diana23/oleg-template-review/visible-hand-profile-v1.json"
+          runtime="$root/recognition-diana23/visible-hand-profile-v1.runtime.json"
+          install -m 0600 "$original" "$runtime"
+          test "$(sha256sum "$original" | cut -d' ' -f1)" = "$(sha256sum "$runtime" | cut -d' ' -f1)"
+
+          ROOT="$root" PYTHONPATH="$code" "$venv/bin/python" - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          from tools.bridge_vision_autonomous_video import _json
+          from bridge_vision.bridgit_played_card_observer import (
+              build_card_scale_policy,
+              build_suit_bank,
+              build_table_geometry_bank,
+          )
+          from bridge_vision.bridgit_visible_hand_observer import build_rank_bank, decode_frame, parse_profile
+
+          root = Path(os.environ['ROOT'])
+          profile_files = (
+              root / 'recognition-diana23/visible-hand-profile-v1.runtime.json',
+              root / 'recognition-diana24-canary-v1/profile.json',
+              root / 'recognition-diana25-canary-v1/profile.json',
+              root / 'recognition-diana26-canary-v1/profile.json',
+          )
+          for profile_file in profile_files:
+              profile = parse_profile(_json(profile_file))
+              references = {}
+              for reference_id, (raw_path, expected_sha) in profile.references.items():
+                  payload = (profile_file.parent / raw_path).read_bytes()
+                  assert hashlib.sha256(payload).hexdigest() == expected_sha
+                  references[reference_id] = decode_frame(payload, profile)
+              rank_bank = build_rank_bank(profile, references)
+              suit_bank = build_suit_bank(profile, references)
+              geometry_bank = build_table_geometry_bank(profile, references)
+              scale_policy = build_card_scale_policy(profile, geometry_bank)
+              assert rank_bank and suit_bank and geometry_bank['samples']['VERTICAL_STACK']
+              assert scale_policy['policy_sha256']
+              print(f'AUTONOMOUS_PROFILE_PREFLIGHT_PASS profile={profile_file.name} ranks={len(rank_bank)} suits={len(suit_bank)} geometry={geometry_bank["bank_sha256"][:12]}')
+          PY
+
+          ROOT="$root" CODE="$code" VENV="$venv" PYTHONPATH="$code" "$venv/bin/python" - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          from tools.bridge_vision_autonomous_video import _json
+          from bridge_vision.bridgit_played_card_observer import (
+              build_suit_bank,
+              build_table_geometry_bank,
+              observe_played_cards,
+          )
+          from bridge_vision.bridgit_visible_hand_observer import build_rank_bank, decode_frame, observe_frame, parse_profile
+
+          root = Path(os.environ['ROOT'])
+          profile_file = root / 'recognition-diana23/visible-hand-profile-v1.runtime.json'
+          profile = parse_profile(_json(profile_file))
+          references = {}
+          for reference_id, (raw_path, expected_sha) in profile.references.items():
+              payload = (profile_file.parent / raw_path).read_bytes()
+              assert hashlib.sha256(payload).hexdigest() == expected_sha
+              references[reference_id] = decode_frame(payload, profile)
+          rank_bank = build_rank_bank(profile, references)
+          suit_bank = build_suit_bank(profile, references)
+          geometry_bank = build_table_geometry_bank(profile, references)
+          frames = sorted((root / 'recognition-diana23/oleg-template-review/canary-frames').glob('*.png'))
+          assert len(frames) >= 6, len(frames)
+          seen = set()
+          confidences = []
+          hand_counts = []
+          for frame_index, path in enumerate(frames):
+              image = decode_frame(path.read_bytes(), profile)
+              hands = observe_frame(image, rank_bank, profile)
+              played = observe_played_cards(
+                  image,
+                  rank_bank,
+                  suit_bank,
+                  profile,
+                  geometry_bank=geometry_bank,
+                  visible_hand_cards=hands['cards'],
+              )
+              assert hands['status'] != 'CONFLICT'
+              assert played['status'] != 'CONFLICT'
+              hand_counts.append(len(hands['cards']))
+              print(json.dumps({
+                  'canary_frame_index': frame_index,
+                  'hand_count': len(hands['cards']),
+                  'played_status': played['status'],
+                  'played_cards': sorted((card['card'], card['seat']) for card in played['cards']),
+                  'rejections': [
+                      {'reason': item['reason'], 'region': item.get('region')}
+                      for item in played.get('rejected', [])
+                  ],
+                  'layout': ({
+                      'center': played['layout_geometry']['center'],
+                      'horizontal_half_axis': played['layout_geometry']['horizontal_half_axis'],
+                      'vertical_half_axis': played['layout_geometry']['vertical_half_axis'],
+                      'anchors': {
+                          seat: {
+                              'x': item['x'],
+                              'y': item['y'],
+                              'region': item['region'],
+                          }
+                          for seat, item in played['layout_geometry']['anchors'].items()
+                      },
+                  } if played.get('layout_geometry') is not None else None),
+                  'played_geometry_proven': played.get('layout_geometry') is not None,
+              }, sort_keys=True))
+              for card in played['cards']:
+                  seen.add((card['card'], card['seat']))
+                  confidences.append(float(card['confidence']))
+          assert ('4D', 'N') in seen, seen
+          assert ('AD', 'W') in seen, seen
+          assert ('2D', 'E') in seen, seen
+          assert confidences and min(confidences) >= 0.95, min(confidences or [0])
+          assert min(hand_counts) >= 24, hand_counts
+          print(f'AUTONOMOUS_PIXEL_CANARY_PASS frames={len(frames)} min_confidence={min(confidences):.6f}')
+          PY
+
+          profiles=(
+            recognition-diana23/visible-hand-profile-v1.runtime.json
+            recognition-diana24-canary-v1/profile.json
+            recognition-diana25-canary-v1/profile.json
+            recognition-diana26-canary-v1/profile.json
+          )
+          videos=(diana-23.mp4 diana-24.mp4 diana-25-2021-09-13.mp4 diana-26.mp4)
+          names=(diana-23 diana-24 diana-25 diana-26)
+          for index in 0 1 2 3; do
+            output="$results/${names[$index]}.json"
+            log="$results/${names[$index]}.log"
+            if [[ -s "$output" ]]; then
+              RECEIPT="$output" EXPECTED_VIDEO="${videos[$index]}" "$venv/bin/python" - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = json.loads(Path(os.environ['RECEIPT']).read_text(encoding='utf-8'))
+          claimed = receipt['receipt_sha256']
+          material = dict(receipt)
+          material.pop('receipt_sha256')
+          actual = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+          assert actual == claimed
+          assert receipt['source']['filename'] == os.environ['EXPECTED_VIDEO']
+          assert receipt['uses_language_model'] is False
+          assert receipt['requires_screenshot_review'] is False
+          assert receipt['canonical_promotion_allowed'] is False
+          PY
+              echo "AUTONOMOUS_RESUME_RECEIPT=${names[$index]}"
+              continue
+            fi
+            PYTHONPATH="$code" "$venv/bin/python" "$code/tools/bridge_vision_autonomous_video.py" \
+              --job-root "$root" \
+              --profile "${profiles[$index]}" \
+              --video "${videos[$index]}" \
+              --output "${output#$root/}" \
+              --sample-ms 200 \
+              --max-sampled-frames 100000 >"$log" 2>&1
+            chmod 0600 "$output" "$log"
+            test -s "$output"
+          done
+
+          ROOT="$root" RESULTS="$results" "$venv/bin/python" - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          results = Path(os.environ['RESULTS'])
+          videos = []
+          pbn_lines = []
+          for path in sorted(results.glob('diana-*.json')):
+              receipt = json.loads(path.read_text(encoding='utf-8'))
+              claimed = receipt['receipt_sha256']
+              material = dict(receipt)
+              material.pop('receipt_sha256')
+              actual = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+              assert actual == claimed
+              assert receipt['profile']['card_pixel_scale_source'] == 'EXACT_VERIFIED_PROFILE_PLUS_LIVE_REVIEWED_CARDBACK_WIDTH'
+              assert receipt['played_layout']['uses_fixed_screen_center'] is False
+              assert receipt['played_layout']['responsive_policy'] == 'RECOMPUTE_LIVE_SEAT_AXES_EVERY_FRAME'
+              assert receipt['uses_language_model'] is False
+              assert receipt['requires_screenshot_review'] is False
+              assert receipt['canonical_promotion_allowed'] is False
+              deals = []
+              for deal in receipt['reconstruction']['deals']:
+                  item = {
+                      'deal_identity': deal['deal_identity'],
+                      'status': deal['status'],
+                      'observed_card_count': deal['observed_card_count'],
+                      'derived_card_count': sum(
+                          len(item.get('derived_cards', []))
+                          for item in (deal.get('deal') or {}).get('card_provenance', {}).values()
+                      ),
+                      'pbn': deal['pbn'],
+                  }
+                  deals.append(item)
+                  if deal['pbn'] is not None:
+                      pbn_lines.append(f"{path.stem}\t{deal['deal_identity']}\t{deal['status']}\t{deal['pbn']}")
+              videos.append({
+                  'video': receipt['source']['filename'],
+                  'video_sha256': receipt['source']['sha256'],
+                  'receipt_sha256': claimed,
+                  'sampled_frame_count': receipt['sampling']['sampled_frame_count'],
+                  'direct_visual_frame_count': receipt['sampling']['direct_visual_frame_count'],
+                  'status_counts': receipt['reconstruction']['status_counts'],
+                  'deal_count': receipt['reconstruction']['deal_count'],
+                  'pbn_validation': receipt['pbn_validation'],
+                  'deals': deals,
+              })
+          assert len(videos) == 4, len(videos)
+          summary = {
+              'schema': 'diana-23-26-autonomous-summary/v1',
+              'algorithm_sha': os.environ.get('ALGORITHM_SHA', '6e871d9bd38817a334f685749836ef417c1600c4'),
+              'result_scope': 'SHADOW_ONLY',
+              'uses_language_model': False,
+              'requires_screenshot_review': False,
+              'videos': videos,
+          }
+          encoded = json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True).encode() + b'\n'
+          (results / 'summary.json').write_bytes(encoded)
+          (results / 'complete-deals.pbn.tsv').write_text('\n'.join(pbn_lines) + ('\n' if pbn_lines else ''), encoding='utf-8')
+          os.chmod(results / 'summary.json', 0o600)
+          os.chmod(results / 'complete-deals.pbn.tsv', 0o600)
+          print(f'AUTONOMOUS_FOUR_VIDEO_PASS videos={len(videos)} complete_deals={len(pbn_lines)}')
+          PY
+          echo ORACLE_INSTANCE_STOP_REQUESTED=NO
+          REMOTE
+
+      - name: Retrieve autonomous summary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          short="${ALGORITHM_SHA:0:8}"
+          remote="/home/ubuntu/bridge-school-private-media/diana-23-26/autonomous-results-$short"
+          out="$RUNNER_TEMP/diana-autonomous-results"
+          mkdir -p "$out"
+          scp -q -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST:$remote/summary.json" "$out/summary.json"
+          scp -q -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST:$remote/complete-deals.pbn.tsv" "$out/complete-deals.pbn.tsv"
+          python3 -m json.tool "$out/summary.json" >/dev/null
+          echo "artifact_path=$out" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: diana-23-26-autonomous-${{ env.ALGORITHM_SHA }}
+          path: ${{ env.artifact_path }}
+          if-no-files-found: error
+          retention-days: 7
