@@ -178,6 +178,14 @@ class NativeFourSeatCardDetector:
             min_card_confidence=self.min_card_confidence,
             seat_dead_zone=self.seat_dead_zone,
         )
+        # Preserve bounded low-level channel evidence. Without it, a real
+        # pixel backend's incomplete/low-confidence observations disappear at
+        # the geometry adapter and cannot be counted as ambiguous in review.
+        graphic_evidence = payload.get("graphic_evidence") if isinstance(payload, Mapping) else None
+        if graphic_evidence is not None:
+            if not isinstance(graphic_evidence, Mapping):
+                raise NativeCardDetectorError("graphic_evidence must be an object")
+            evidence["graphic_evidence"] = dict(graphic_evidence)
         accepted = evidence["accepted"]
         confidence = min((float(item["confidence"]) for item in accepted), default=0.0)
         return {"hands": hands, "confidence": confidence, "evidence": evidence}
