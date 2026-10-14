@@ -168,6 +168,15 @@ class OutboxPublisherTests(unittest.TestCase):
         self.assertTrue(self.connection.rolled_back)
         self.assertEqual(self.connection.snapshot(), before)
 
+    def assert_unknown_without_publication(self):
+        before = self.connection.snapshot()
+        with self.assertRaisesRegex(RuntimeError, "^OUTBOX_PUBLICATION_AUTHORIZATION_UNKNOWN$"):
+            self.publish()
+        self.assertEqual(self.connection.publication_calls, [])
+        self.assertEqual(self.connection.commit_calls, 0)
+        self.assertTrue(self.connection.rolled_back)
+        self.assertEqual(self.connection.snapshot(), before)
+
     def test_pending_blocked_technical_event_never_reaches_publication(self):
         self.connection.seed(1, {
             **BLOCKED, "quality_confirmation_status": "pending",
@@ -220,8 +229,8 @@ class OutboxPublisherTests(unittest.TestCase):
         self.assertEqual(self.connection.publication_calls, [key])
         self.assertEqual(self.connection.commit_calls, 1)
 
-    def test_legacy_missing_status_remains_publishable_and_idempotent(self):
-        key = self.connection.seed(1, {"assessment_status": "quarantined"})
+    def test_allowed_status_remains_publishable_and_idempotent(self):
+        key = self.connection.seed(1, {"publication_authorization_status": "allowed"})
         first = self.publish()
         second = self.publish()
         self.assertEqual(first, second)
@@ -235,15 +244,47 @@ class OutboxPublisherTests(unittest.TestCase):
 
     def test_blocked_event_from_other_changeset_does_not_leak_into_selection(self):
         self.connection.seed(1, BLOCKED, changeset=OTHER_CHANGESET)
-        key = self.connection.seed(2, {})
+        key = self.connection.seed(2, {"publication_authorization_status": "allowed"})
         self.assertEqual(self.publish()["published_count"], 1)
         self.assertEqual(self.connection.publication_calls, [key])
 
-    def test_other_explicit_values_keep_previous_behavior_not_authorization(self):
-        # This scoped patch rejects exactly 'blocked'; it is not a full status policy.
-        for index, status in enumerate((None, "revoked", "unknown", "", "BLOCKED"), 1):
-            self.connection.seed(index, {"publication_authorization_status": status})
-        self.assertEqual(self.publish()["published_count"], 5)
+    def test_mixed_allowed_and_unknown_batch_rejects_before_first_publication(self):
+        self.connection.seed(1, {"publication_authorization_status": "allowed"})
+        self.connection.seed(2, {"publication_authorization_status": "unknown"})
+        self.assert_unknown_without_publication()
+        self.assert_unknown_without_publication()  # retry cannot publish either row
+
+    def test_allowed_summary_cannot_override_unknown_event_in_changeset(self):
+        self.connection.seed(1, {"publication_authorization_status": "allowed"})
+        self.connection.seed(2, {"publication_authorization_status": "unknown"})
+        decision_source = SOURCE.with_name("outbox_publication_decision.py")
+        spec = importlib.util.spec_from_file_location("_outbox_decision_test", decision_source)
+        decision = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(decision)
+        before = self.connection.snapshot()
+        with self.assertRaisesRegex(RuntimeError, "^OUTBOX_PUBLICATION_AUTHORIZATION_UNKNOWN$"):
+            decision.publish_if_authorized(
+                "offline-test-only",
+                {"changeset_id": str(CHANGESET), "publication_authorization_status": "allowed"},
+                self.publisher.publish_changeset_outbox,
+            )
+        self.assertEqual(self.connection.publication_calls, [])
+        self.assertEqual(self.connection.snapshot(), before)
+
+    def test_missing_null_and_other_values_are_not_authorization(self):
+        payloads = [{"assessment_status": "quarantined"}] + [
+            {"publication_authorization_status": status}
+            for status in (None, "revoked", "unknown", "", "BLOCKED")
+        ]
+        for index, payload in enumerate(payloads, 1):
+            with self.subTest(payload=payload):
+                changeset = uuid.UUID(int=CHANGESET.int + 10 + index)
+                self.connection.seed(index, payload, changeset=changeset)
+                before = self.connection.snapshot()
+                with self.assertRaisesRegex(RuntimeError, "^OUTBOX_PUBLICATION_AUTHORIZATION_UNKNOWN$"):
+                    self.publisher.publish_changeset_outbox("offline-test-only", changeset)
+                self.assertEqual(self.connection.publication_calls, [])
+                self.assertEqual(self.connection.snapshot(), before)
 
     def test_selection_error_cannot_become_success_or_publication(self):
         self.connection.seed(1, {})
@@ -255,7 +296,7 @@ class OutboxPublisherTests(unittest.TestCase):
         self.assertTrue(self.connection.rolled_back)
 
     def test_missing_position_still_raises_existing_error(self):
-        self.connection.seed(1, {})
+        self.connection.seed(1, {"publication_authorization_status": "allowed"})
         self.connection.missing_position = True
         with self.assertRaisesRegex(RuntimeError, "^OUTBOX_PUBLISH_POSITION_MISSING$"):
             self.publish()

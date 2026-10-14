@@ -62,6 +62,7 @@ jobs:
       BRIDGE_BILLING_FALLBACK: "false"
       BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r26.3"
       BRIDGE_DIARIZATION_ENABLED: "true"
+      BRIDGE_PERSISTENCE_MODE: explicit_v1
       PYTHONUNBUFFERED: "1"
       WHISPER_MODEL: small
 
@@ -192,6 +193,29 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Verify guarded publisher source for optional persistence
+        id: outbox_source
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          expected = {
+              'database/outbox_publisher.py': 'd89c6ed30832aec867bde7ff033720eeb29451e38572c2f3cfea4f7046fbf42e',
+              'database/outbox_publication_decision.py': '8c145525a0c7ab3b51b217207400b04640838c2b08cc9b404e72eda11ea174b9',
+              'bridge_neon_persistence.py': '5cc2da78a74e49a48ea1d34965849d930fa9e3798d00c9bc1d0ada7eb43949b3',
+              'database/backfill_video_results.py': '0f48a594302185ff66490d270fd5bc3c896f618cb45beaf7baa1d5114d103024',
+              'database/video_result_persistence.py': '6d40e11cbf2243d51cb521cc416bb73335d78e74d06dc595634cb04582eb9347',
+              'database/runtime_worker_preflight.py': 'ac0a97aa22a511242364c24ab6e96e97be0e6acf31ed3ccfaba048042104b048',
+              'run_master_3_1_free_semantic_v2.py': 'cf1c3c195d244c03e3d9d28f531731df618cd6f83b514eb5d64ac14d2f914802',
+              'run_master_3_1_free_semantic.py': '9963dc127551f6cd5b8063d5ec1776be98498cad1aa1ba4e307cbf87abd3fcdf',
+          }
+          for name, digest in expected.items():
+              source = Path(name)
+              if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != digest:
+                  raise SystemExit('OUTBOX_PUBLICATION_SOURCE_MISMATCH: ' + name)
+          print('OUTBOX_PUBLICATION_SOURCE_BOUND')
+          PY
+
       - name: Deterministic source identity preflight
         if: env.BRIDGE_ORIGINAL_SOURCE_DRIVE_ID != ''
         shell: bash
@@ -224,7 +248,7 @@ jobs:
         run: python check_completed_job.py
 
       - name: Record durable worker start checkpoint
-        if: steps.terminal.outputs.already_completed != 'true'
+        if: steps.terminal.outputs.already_completed != 'true' && env.BRIDGE_PERSIST_DATABASE == 'true'
         env:
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: python database/run_checkpoint_persistence.py --stage worker_start --state started
@@ -268,22 +292,27 @@ jobs:
         shell: bash
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
-          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          BRIDGE_WORKER_DATABASE_URL: ${{ env.BRIDGE_PERSIST_DATABASE == 'true' && secrets.BRIDGE_WORKER_DATABASE_URL || '' }}
         run: |
           set -euo pipefail
-          python database/run_checkpoint_persistence.py --stage process_job --state started
-          (
-            while true; do
-              sleep 300
-              python database/run_checkpoint_persistence.py \
-                --stage process_job --state progress \
-                --details-json '{"heartbeat":true}' || true
-            done
-          ) &
-          HEARTBEAT_PID=$!
+          HEARTBEAT_PID=""
+          if [ "$BRIDGE_PERSIST_DATABASE" = "true" ]; then
+            python database/run_checkpoint_persistence.py --stage process_job --state started
+            (
+              while true; do
+                sleep 300
+                python database/run_checkpoint_persistence.py \
+                  --stage process_job --state progress \
+                  --details-json '{"heartbeat":true}' || true
+              done
+            ) &
+            HEARTBEAT_PID=$!
+          fi
           cleanup_heartbeat() {
-            kill "$HEARTBEAT_PID" 2>/dev/null || true
-            wait "$HEARTBEAT_PID" 2>/dev/null || true
+            if [ -n "$HEARTBEAT_PID" ]; then
+              kill "$HEARTBEAT_PID" 2>/dev/null || true
+              wait "$HEARTBEAT_PID" 2>/dev/null || true
+            fi
           }
           trap cleanup_heartbeat EXIT
 
@@ -299,7 +328,9 @@ jobs:
           set -e
           cleanup_heartbeat
           trap - EXIT
-          if [ "$RC" -eq 0 ]; then
+          if [ "$BRIDGE_PERSIST_DATABASE" != "true" ]; then
+            exit "$RC"
+          elif [ "$RC" -eq 0 ]; then
             python database/run_checkpoint_persistence.py \
               --stage process_job --state completed
           else
@@ -326,12 +357,12 @@ jobs:
         if: always() && (steps.process.outcome == 'success' || steps.terminal.outputs.already_completed == 'true') && env.BRIDGE_OUTPUT_FOLDER_ID != '' && env.BRIDGE_LESSON_NUMBER != ''
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
-          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          BRIDGE_WORKER_DATABASE_URL: ${{ env.BRIDGE_PERSIST_DATABASE == 'true' && secrets.BRIDGE_WORKER_DATABASE_URL || '' }}
         run: python diana_longitudinal_postprocess_v3.py
 
       - name: Persist completed raw evidence and analysis to Neon
         id: persist
-        if: always() && (steps.process.outcome == 'success' || steps.terminal.outputs.already_completed == 'true') && env.BRIDGE_PERSIST_DATABASE == 'true'
+        if: always() && steps.outbox_source.outcome == 'success' && steps.terminal.outputs.already_completed == 'true' && env.BRIDGE_PERSIST_DATABASE == 'true'
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
@@ -342,13 +373,14 @@ jobs:
           token = user_oauth_token()
           if not token:
               raise SystemExit('BLOCKED_ACCESS: Drive OAuth unavailable')
-          if persist_completed_drive_job(token) is None:
+          result = persist_completed_drive_job(token)
+          if result is None:
               raise SystemExit('DATABASE_PERSIST_NOT_CONFIGURED')
-          print('DATABASE_PERSIST_COMPLETE')
+          print('DATABASE_PERSIST_COMPLETE outbox=' + result['outbox']['publication_state'])
           PY
 
       - name: Record durable workflow final checkpoint
-        if: always()
+        if: always() && env.BRIDGE_PERSIST_DATABASE == 'true'
         shell: bash
         env:
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}

@@ -10,14 +10,14 @@ from database.runtime_worker_preflight import normalize_dsn
 
 
 def publish_changeset_outbox(raw_dsn: str, changeset_id: str | uuid.UUID) -> dict[str, object]:
-    """Publish one committed changeset unless an event explicitly blocks it.
+    """Publish one committed changeset only when every event is allowed.
 
     ``public.publish_outbox_event`` owns event-position allocation and rejects
     non-committed changesets. Replaying this helper is safe: already-published
     rows retain their existing partition-local event position. An event payload
     with ``publication_authorization_status="blocked"`` rejects the entire batch
     before any publication call, including retries of already-published events.
-    Other values and legacy events without the field keep their existing behavior.
+    Missing, null, or unrecognized status is also fail-closed for the batch.
     """
     dsn = normalize_dsn(raw_dsn)
     if not dsn:
@@ -57,6 +57,8 @@ def publish_changeset_outbox(raw_dsn: str, changeset_id: str | uuid.UUID) -> dic
             # earlier rows to reach the publication boundary. Do not log payloads.
             if any(status == "blocked" for _, _, status in outbox_rows):
                 raise RuntimeError("OUTBOX_PUBLICATION_AUTHORIZATION_BLOCKED")
+            if any(status != "allowed" for _, _, status in outbox_rows):
+                raise RuntimeError("OUTBOX_PUBLICATION_AUTHORIZATION_UNKNOWN")
             for outbox_id, _, _ in outbox_rows:
                 cursor.execute(
                     "SELECT public.publish_outbox_event(%s)",

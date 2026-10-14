@@ -186,6 +186,7 @@ jobs:
             database/runtime_health_preflight.py \
             database/runtime_app_preflight.py \
             database/outbox_publisher.py \
+            database/outbox_publication_decision.py \
             database/video_result_persistence.py \
             database/runtime_worker_persistence_smoke.py \
             database/backfill_video_results.py \
@@ -312,6 +313,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
           export OUTBOX_GUARD_SOURCE_SHA="$EXPECTED_SOURCE_SHA"
           python -B -m unittest discover -s tests -p test_outbox_publisher.py -v
+          python -B -m unittest discover -s tests -p test_outbox_publication_decision.py -v
+          python -B -m unittest discover -s tests -p test_outbox_mixed_replay_contract.py -v
+          python -B -m unittest discover -s tests -p test_semantic_v2_persistence_gate.py -v
           python -B -m unittest discover -s database/tests -p test_outbox_publisher_postgres.py -v
 
       - name: Run invariant tests

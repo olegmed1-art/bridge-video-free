@@ -215,8 +215,9 @@ class OutboxPublisherPostgresTests(unittest.TestCase):
         self.assert_unpublished()
         evidence("blocked_batch", selected_rows=3, publication_calls=0, changed_rows=0)
 
-    def test_legacy_and_allowed_are_published_idempotently(self):
-        changeset, rows = self.seed([{}, {"publication_authorization_status": "allowed"}])
+    def test_allowed_events_are_published_idempotently(self):
+        changeset, rows = self.seed([{"publication_authorization_status": "allowed"},
+                                     {"publication_authorization_status": "allowed"}])
         first = self.publish(changeset)
         second = self.publish(changeset)
         self.assertEqual(first, second)
@@ -227,7 +228,18 @@ class OutboxPublisherPostgresTests(unittest.TestCase):
         events, stored = self.snapshot()
         self.assertTrue(all(row[1] is not None for row in events))
         self.assertTrue(all(row[2] == "published" and row[3] is not None and row[4] == 1 for row in stored))
-        evidence("legacy_idempotence", published_count=2, same_positions_on_retry=True)
+        evidence("allowed_idempotence", published_count=2, same_positions_on_retry=True)
+
+    def test_mixed_allowed_and_unknown_batch_has_no_publication(self):
+        changeset, _ = self.seed([{"publication_authorization_status": "allowed"},
+                                  {"publication_authorization_status": "unknown"}])
+        before = self.snapshot()
+        with self.assertRaisesRegex(RuntimeError, "^OUTBOX_PUBLICATION_AUTHORIZATION_UNKNOWN$"):
+            self.publish(changeset)
+        self.assertEqual(self.publication_calls, [])
+        self.assertEqual(self.snapshot(), before)
+        self.assert_unpublished()
+        evidence("unknown_batch", selected_rows=2, publication_calls=0, changed_rows=0)
 
     def test_invisible_event_is_fail_closed_before_any_publication(self):
         changeset, rows = self.seed([{}, BLOCKED])
@@ -253,7 +265,7 @@ class OutboxPublisherPostgresTests(unittest.TestCase):
                 conn.execute("ALTER TABLE public.domain_event DISABLE ROW LEVEL SECURITY")
 
     def test_publisher_first_blocks_rebind_until_commit_without_deadlock(self):
-        changeset, rows = self.seed([{}])
+        changeset, rows = self.seed([{"publication_authorization_status": "allowed"}])
         outbox_id, original = rows[0]
         with self.connect() as conn:
             blocked = self.event(conn, changeset, BLOCKED)
@@ -291,7 +303,7 @@ class OutboxPublisherPostgresTests(unittest.TestCase):
                  both_transactions_completed=True, deadlock=False)
 
     def writer_first(self, *, new_event):
-        changeset, rows = self.seed([{}])
+        changeset, rows = self.seed([{"publication_authorization_status": "allowed"}])
         outbox_id, _ = rows[0]
         if not new_event:
             with self.connect() as conn:
