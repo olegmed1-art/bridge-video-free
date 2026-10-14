@@ -78,19 +78,32 @@ def source_locator(cur, school_id, source_id, citation, *, expected_stored=None)
     return row[0]
 
 
-def require_source_asset(cur, school_id, source_id, source, receipt, *, asset_id=None):
-    cur.execute("""SELECT a.asset_id FROM public.source_asset sa JOIN public.asset a
-        ON a.asset_id=sa.asset_id WHERE sa.source_id=%s AND sa.relation_type='embodies' AND a.school_id=%s
-        AND a.checksum_algorithm='sha256' AND a.checksum_value=%s
-        AND a.byte_size=%s AND a.immutable_flag IS TRUE
-        AND a.mime_type='application/pdf' LIMIT 2 FOR SHARE OF a,sa""",
-        (source_id, school_id, source["rendition_sha256"], receipt["source_size_bytes"]))
+def _source_pdf_bindings(cur, school_id, source_id, source, receipt, *, asset_id=None):
+    """Inspect every PDF/embodies link, including links with a different SHA."""
+    cur.execute("""SELECT a.asset_id,sa.relation_type,a.school_id,a.asset_type,a.mime_type,
+        a.byte_size,a.checksum_algorithm,a.checksum_value,a.immutable_flag
+        FROM public.source_asset sa JOIN public.asset a ON a.asset_id=sa.asset_id
+        WHERE sa.source_id=%s AND (sa.relation_type='embodies' OR a.asset_type='pdf'
+            OR a.mime_type='application/pdf') FOR SHARE OF a,sa""", (source_id,))
     rows = cur.fetchall()
+    for row in rows:
+        if ((asset_id is not None and str(row[0]) != asset_id) or
+                (row[1], str(row[2]), row[3], row[4], row[5],
+                 row[6], row[7], row[8]) != (
+                "embodies", school_id, "pdf", "application/pdf",
+                receipt["source_size_bytes"], "sha256", source["rendition_sha256"], True)):
+            raise ValueError("BOOK_SOURCE_ASSET_CONFLICT")
+    if len(rows) > 1:
+        raise ValueError("BOOK_SOURCE_ASSET_CONFLICT")
+    return rows
+
+
+def require_source_asset(cur, school_id, source_id, source, receipt, *, asset_id=None):
+    rows = _source_pdf_bindings(cur, school_id, source_id, source, receipt,
+                                asset_id=asset_id)
     if len(rows) != 1:
         raise ValueError("BOOK_SOURCE_ASSET_BINDING_REQUIRED")
     found = str(rows[0][0])
-    if asset_id is not None and found != asset_id:
-        raise ValueError("BOOK_SOURCE_ASSET_CONFLICT")
     return found
 
 
@@ -114,10 +127,9 @@ def reconcile_book_source_asset(connection, bundle, receipt, *, school_id, sourc
     added_source = added_asset = added_link = 0
     with connection.transaction(force_rollback=dry_run):
         with connection.cursor(row_factory=tuple_row) as cur:
-            if register_missing_source:
-                # The table lock must be followed by a fresh statement snapshot.
-                # A caller's REPEATABLE READ snapshot could miss a competing row.
-                cur.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            # The table locks must be followed by fresh statement snapshots.
+            # A caller's REPEATABLE READ snapshot could miss a competing link.
+            cur.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
             cur.execute("SET LOCAL lock_timeout='5s'")
             cur.execute("SET LOCAL statement_timeout='15s'")
             if register_missing_source:
@@ -127,8 +139,9 @@ def reconcile_book_source_asset(connection, bundle, receipt, *, school_id, sourc
                         ("book-source-asset:" + source["rendition_sha256"],))
             source_locator(cur, school_id, source_id, source["locator"],
                            expected_stored=identity_receipt["stored_locator"])
-            # Prevent concurrent ALTER TABLE while inspecting identity effects.
-            cur.execute("LOCK TABLE public.asset,public.source_asset IN ROW EXCLUSIVE MODE")
+            # Serialize even writers that do not use our advisory key. INSERTs
+            # into either table need ROW EXCLUSIVE and wait until this commits.
+            cur.execute("LOCK TABLE public.asset,public.source_asset IN SHARE ROW EXCLUSIVE MODE")
             cur.execute("""SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t
                 WHERE t.tgrelid IN ('public.asset'::pg_catalog.regclass,'public.source_asset'::pg_catalog.regclass)
                   AND NOT t.tgisinternal AND t.tgenabled<>'D')
@@ -136,6 +149,8 @@ def reconcile_book_source_asset(connection, bundle, receipt, *, school_id, sourc
                   WHERE r.ev_class IN ('public.asset'::pg_catalog.regclass,'public.source_asset'::pg_catalog.regclass))""")
             if cur.fetchone()[0]:
                 raise ValueError("BOOK_SOURCE_IDENTITY_EFFECT_REVIEW_REQUIRED")
+            _source_pdf_bindings(cur, school_id, source_id, source, receipt,
+                                 asset_id=identity_receipt["asset_id"])
             cur.execute("""SELECT asset_id,school_id,byte_size,immutable_flag,mime_type
                 FROM public.asset WHERE checksum_algorithm='sha256' AND checksum_value=%s
                 FOR SHARE""", (source["rendition_sha256"],))

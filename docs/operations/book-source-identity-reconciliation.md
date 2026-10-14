@@ -33,6 +33,14 @@ not inferred. The existing asset path then inserts or reuses the immutable PDF
 row with exact SHA-256/size/MIME and adds one `embodies` link. The function
 returns three separate row counts. Exact replay must return `0/0/0`; any
 conflict or injected interruption rolls back all three rows.
+Before any asset or link insert, it inspects every PDF/`embodies` link already
+attached to that source. A different SHA-256, byte size, MIME, school or asset
+UUID is a conflict, even if a matching PDF is also linked. Identity-table locks
+serialize competing inserts until commit; the check uses a fresh READ COMMITTED
+snapshot. A reused Drive alias with another PDF must be reviewed as a separate
+identity decision, not rebound by this operation.
+The asset and source-asset table locks also serialize unrelated identity writes
+for this short transaction; the five-second lock timeout bounds contention.
 
 An observed absence of source and asset is not authorization to run this
 function. A final identity

@@ -328,7 +328,7 @@ def test_legacy_identity_dry_run_replay_stage_publish_and_visibility_rollback(mo
             mutate.execute("UPDATE public.asset SET immutable_flag=false WHERE asset_id=%s",
                            (identity_result["asset_id"],))
         assert client.get("/v1/knowledge/teacher/book", **request_args).status_code == 409
-        with pytest.raises(ValueError, match="ASSET_BINDING_REQUIRED"):
+        with pytest.raises(ValueError, match="BOOK_SOURCE_ASSET_CONFLICT"):
             publish_book_world(conn, **pub_args)
         with psycopg.connect(DSN, autocommit=True) as restore:
             restore.execute("UPDATE public.asset SET immutable_flag=true WHERE asset_id=%s",
@@ -411,6 +411,35 @@ def test_source_registration_allows_update_only_guard():
         with psycopg.connect(DSN, autocommit=True) as cleanup:
             cleanup.execute("DROP TRIGGER IF EXISTS synthetic_book_update_guard ON public.source")
             cleanup.execute("DROP FUNCTION IF EXISTS public.synthetic_book_update_guard()")
+
+
+def test_existing_drive_alias_rejects_different_pdf_without_partial_rows():
+    from database.book_source_reconciliation import reconcile_book_source_asset
+    from bridge_contracts.book_world import world_uuid
+    bundle, receipt, school_id, source_id, stored = legacy_identity_fixture()
+    identity = reviewed_identity_fixture(bundle, receipt, school_id, source_id, stored)
+    older_sha = uuid4().hex + uuid4().hex
+    older_asset_id = world_uuid("asset", school_id, older_sha)
+    with psycopg.connect(DSN, autocommit=True) as setup:
+        setup.execute("UPDATE public.source SET title=%s WHERE source_id=%s",
+                      (bundle["source"]["title"], source_id))
+        setup.execute("INSERT INTO public.asset(asset_id,school_id,asset_type,mime_type,byte_size,"
+                      "checksum_algorithm,checksum_value,immutable_flag) "
+                      "VALUES(%s,%s,'pdf','application/pdf',%s,'sha256',%s,true)",
+                      (older_asset_id, school_id, receipt["source_size_bytes"], older_sha))
+        setup.execute("INSERT INTO public.source_asset(source_id,asset_id,relation_type) "
+                      "VALUES(%s,%s,'embodies')", (source_id, older_asset_id))
+    with psycopg.connect(DSN) as conn:
+        with pytest.raises(ValueError, match="BOOK_SOURCE_ASSET_CONFLICT"):
+            reconcile_book_source_asset(conn, bundle, receipt, school_id=school_id,
+                source_id=source_id, identity_receipt=identity, register_missing_source=True)
+    with psycopg.connect(DSN, autocommit=True) as read:
+        assert read.execute("SELECT count(*) FROM public.asset WHERE checksum_value=%s",
+                            (bundle["source"]["rendition_sha256"],)).fetchone()[0] == 0
+        assert read.execute("SELECT asset_id FROM public.source_asset WHERE source_id=%s",
+                            (source_id,)).fetchall() == [(UUID(older_asset_id),)]
+        assert read.execute("SELECT count(*) FROM public.source WHERE source_id=%s",
+                            (source_id,)).fetchone()[0] == 1
 
 
 def test_source_registration_sees_noncooperating_writer_after_table_lock():

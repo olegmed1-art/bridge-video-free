@@ -4,13 +4,39 @@ from uuid import UUID
 import unittest
 
 from database.book_source_reconciliation import (
-    _register_missing_source, new_book_source_id,
+    _register_missing_source, _source_pdf_bindings, new_book_source_id,
+    require_source_asset,
 )
 
 SCHOOL = "11111111-1111-1111-1111-111111111111"
 FILE = "SyntheticDriveFileId_0123456789"
 LOCATOR = "https://drive.google.com/file/d/" + FILE + "/view"
 SOURCE = {"locator": LOCATOR, "title": "Synthetic lesson"}
+SHA_Y = "b" * 64
+SIZE_Y = 1234
+
+
+class LinkedAssetCursor:
+    """Model a source with a reviewed PDF and a conflicting older PDF."""
+    def __init__(self, linked):
+        self.linked = linked
+        self.rows = []
+        self.statements = []
+
+    def execute(self, sql, params):
+        self.statements.append(sql)
+        assert "FROM public.source_asset" in sql
+        # The old query filtered on Y and hid the existing X link.
+        self.rows = ([row for row in self.linked if row[7] == params[2]]
+                     if "a.checksum_value=%s" in sql else self.linked)
+
+    def fetchall(self):
+        return self.rows
+
+
+def linked_pdf(asset_id, sha):
+    return (UUID(asset_id), "embodies", UUID(SCHOOL), "pdf", "application/pdf",
+            SIZE_Y, "sha256", sha, True)
 
 
 class RegistryCursor:
@@ -53,6 +79,34 @@ class RegistryCursor:
 
 
 class BookSourceRegistrationTests(unittest.TestCase):
+    def test_existing_alias_rejects_another_pdf_sha(self):
+        wanted = "22222222-2222-2222-2222-222222222222"
+        older = "33333333-3333-3333-3333-333333333333"
+        cursor = LinkedAssetCursor([linked_pdf(older, "a" * 64),
+                                    linked_pdf(wanted, SHA_Y)])
+        with self.assertRaisesRegex(ValueError, "BOOK_SOURCE_ASSET_CONFLICT"):
+            require_source_asset(cursor, SCHOOL, wanted,
+                                 {"rendition_sha256": SHA_Y},
+                                 {"source_size_bytes": SIZE_Y}, asset_id=wanted)
+
+    def test_exact_pdf_link_remains_valid(self):
+        wanted = "22222222-2222-2222-2222-222222222222"
+        cursor = LinkedAssetCursor([linked_pdf(wanted, SHA_Y)])
+        self.assertEqual(require_source_asset(cursor, SCHOOL, wanted,
+                         {"rendition_sha256": SHA_Y},
+                         {"source_size_bytes": SIZE_Y}, asset_id=wanted), wanted)
+
+    def test_preinsert_check_rejects_old_pdf_without_writes(self):
+        wanted = "22222222-2222-2222-2222-222222222222"
+        older = "33333333-3333-3333-3333-333333333333"
+        cursor = LinkedAssetCursor([linked_pdf(older, "a" * 64)])
+        with self.assertRaisesRegex(ValueError, "BOOK_SOURCE_ASSET_CONFLICT"):
+            _source_pdf_bindings(cursor, SCHOOL, wanted,
+                                 {"rendition_sha256": SHA_Y},
+                                 {"source_size_bytes": SIZE_Y}, asset_id=wanted)
+        self.assertTrue(cursor.statements)
+        self.assertTrue(all(sql.lstrip().startswith("SELECT") for sql in cursor.statements))
+
     def test_new_source_is_one_row_and_exact_replay_is_zero(self):
         cursor = RegistryCursor()
         source_id = new_book_source_id(SCHOOL, LOCATOR)
