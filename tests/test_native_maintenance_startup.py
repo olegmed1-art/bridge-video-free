@@ -126,8 +126,10 @@ class StartupTests(unittest.TestCase):
              patch.object(runtime, 'run_identity', return_value={}), \
              patch('ops.native_maintenance_owner_attest.parameters', return_value={}), \
              patch.object(runtime, 'stage') as stage:
+            diagnostic = dict(phase='request', channel=None)
             with self.assertRaisesRegex(Exception, 'START_BINDING'):
-                host._main('a'*40, 1, 1, self.digest, 'a'*64, host.bundle.digest(wheels), envelope, Mock())
+                host._main('a'*40, 1, 1, self.digest, 'a'*64, host.bundle.digest(wheels), envelope, Mock(), diagnostic)
+            self.assertEqual(diagnostic['phase'], 'admission')
             stage.assert_not_called()
         self.assertTrue(channel.failed)
 

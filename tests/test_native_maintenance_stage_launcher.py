@@ -423,6 +423,12 @@ class LauncherWiringTests(unittest.TestCase):
         if fault == 'rehearsal_refusal':
             completion = dict(kind='NATIVE_REHEARSAL_REFUSED',binding=binding,request_digest=accepted,
                               phase='owner_snapshot',code='REFUSED')
+        if fault and fault.startswith('stage_refusal'):
+            completion = dict(kind='NATIVE_STAGE_REFUSED',binding=binding,request_digest=accepted,
+                              phase='runtime',code='DATABASE_NOT_DRAINED')
+            if fault == 'stage_refusal_secret': completion['code']='postgres://secret'
+            if fault == 'stage_refusal_binding': completion['binding']='0'*64
+            if fault == 'stage_refusal_request': completion['request_digest']='0'*64
         process = Mock(returncode=0)
         process.stdin.closed = False
         process.wait.return_value = 1 if fault == 'host_exit' else 0
@@ -483,6 +489,11 @@ class LauncherWiringTests(unittest.TestCase):
             if fault:
                 with self.assertRaises(Exception): launcher.main('stage')
                 output.assert_not_called()
+                if fault == 'stage_refusal':
+                    self.assertEqual(launcher.PHASE,'host_runtime:DATABASE_NOT_DRAINED')
+                if fault.startswith('stage_refusal'):
+                    self.assertNotIn('head',events)
+                    server.serve_once.assert_not_called()
             else:
                 launcher.main('stage')
                 report = json.loads(output.call_args.args[0])
@@ -498,8 +509,31 @@ class LauncherWiringTests(unittest.TestCase):
 
     def test_completion_needs_backup_exit_independent_reads_and_final_live_run(self):
         self.exercise()
-        for fault in ('prior','backup','binding','host_exit','head','drain','cancel_final','rehearsal_refusal','slow_prelaunch','late_completion','slow_popen'):
+        for fault in ('prior','backup','binding','host_exit','head','drain','cancel_final','rehearsal_refusal','slow_prelaunch','late_completion','slow_popen',
+                      'stage_refusal','stage_refusal_secret','stage_refusal_binding','stage_refusal_request'):
             with self.subTest(fault=fault): self.exercise(fault)
+
+
+class StageDiagnosticTests(unittest.TestCase):
+    def test_host_refusal_preserves_original_error_and_redacts_secrets(self):
+        from ops import native_maintenance_stage_host as host
+        for exc, code in ((RuntimeError('DATABASE_NOT_DRAINED'),'DATABASE_NOT_DRAINED'),
+                          (RuntimeError('RUNTIME_PRIOR_SET_RECONCILIATION_REQUIRED'),'RUNTIME_PRIOR_SET_RECONCILIATION_REQUIRED'),
+                          (RuntimeError('postgres://private:password@host'),'REFUSED'),
+                          (KeyError('private_field'),'KEY_ERROR')):
+            for broken_pipe in (False, True):
+                with self.subTest(code=code,broken_pipe=broken_pipe):
+                    channel=Mock()
+                    if broken_pipe: channel.send.side_effect=BrokenPipeError('private transport')
+                    def failed(*args):
+                        args[-1].update(channel=channel,phase='runtime')
+                        raise exc
+                    with patch.object(host,'API'),patch.object(host,'_main',side_effect=failed), \
+                         self.assertRaises(type(exc)) as caught:
+                        host.main(SOURCE,123,2,'a'*64,'b'*64,'c'*64,{'token':'private-token'})
+                    self.assertIs(caught.exception,exc)
+                    channel.send.assert_called_once_with(dict(kind='NATIVE_STAGE_REFUSED',
+                        binding='b'*64,request_digest='a'*64,phase='runtime',code=code))
 
 
 class RehearsalDiagnosticTests(unittest.TestCase):
