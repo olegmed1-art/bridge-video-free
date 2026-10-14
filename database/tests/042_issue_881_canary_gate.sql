@@ -1,4 +1,13 @@
 \set ON_ERROR_STOP on
+\ir fixed_subset_recovery_state.sql.inc
+SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0060_fixed_subset_admission') AND NOT :'legacy_recovered'::boolean AS fixed_subset_installed \gset
+\if :fixed_subset_installed
+\! python database/tests/fixed_subset_admission/runtime_fixture.py --scenario 042 --execute
+\if :SHELL_ERROR
+SELECT 1/0; -- Fail closed: a failed shell fixture must fail this SQL test.
+\endif
+\else
+\set ON_ERROR_STOP on
 BEGIN;
 DO $$
 DECLARE
@@ -256,3 +265,4 @@ BEGIN
 END;
 $$;
 ROLLBACK;
+\endif

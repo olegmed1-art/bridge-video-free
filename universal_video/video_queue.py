@@ -293,6 +293,7 @@ def claim_job(
     *,
     processing_profile: str,
     algorithm_revision: str,
+    batch_id: str | None = None,
 ) -> dict[str, Any] | None:
     from psycopg import connect
     from psycopg.rows import dict_row
@@ -308,10 +309,17 @@ def claim_job(
         options="-c statement_timeout=10000 -c lock_timeout=2000",
         application_name="universal-video-worker-claim",
     ) as connection, connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT * FROM video_queue.claim_job(%s,%s,%s,%s)",
-            (worker_key, lease_seconds, processing_profile, algorithm_revision),
-        )
+        if batch_id is None:
+            cursor.execute(
+                "SELECT * FROM video_queue.claim_job(%s,%s,%s,%s)",
+                (worker_key, lease_seconds, processing_profile, algorithm_revision),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM video_queue.subset_claim_job(%s,%s,%s,%s,%s)",
+                (batch_id, worker_key, lease_seconds, processing_profile,
+                 algorithm_revision),
+            )
         row = cursor.fetchone()
     if row is None:
         return None
