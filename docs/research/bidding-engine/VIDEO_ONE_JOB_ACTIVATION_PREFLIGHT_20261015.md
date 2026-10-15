@@ -165,6 +165,112 @@ replaced constraints absent.
 The operator must also verify the exact deployed 0061/0062 definitions and
 job constraint against reviewed SQL; presence alone does not prove parity.
 
+## Deployed resident and database readback (still pending)
+
+This repository identifies two *possible* service wrappers, not which one is
+running. The native unit runs as `universal-video` from
+`/opt/bridge-school/universal-video-src` using
+`/opt/bridge-school/universal-video/.venv/bin/python -m universal_video.spool_worker`.
+The container image uses `tini -> universal-video-container-entrypoint ->
+universal_video.container_runtime -> python -m universal_video.spool_worker`.
+The normal command enters the polling loop. The proposed one-shot command is
+`python -m universal_video.spool_worker --private-one-job <binding.json>`;
+the installed unit does **not** invoke that command. No deployed `v6` release
+manifest, `approvedonejob` launcher, service revision, or image digest is
+present in this checkout. Those names must be tied to an actual deployed
+artifact before compatibility is asserted.
+
+On the authorized resident host, an operator can record the following
+**read-only, no-secret** facts. Capture only the named properties; do not
+collect unit `Environment`, `systemctl status` logs, `/proc/*/environ`, DSN
+files, or a whole `docker inspect` result. Redact unexpected arguments before
+sharing the output.
+
+```sh
+systemctl show universal-video.service \
+  -p LoadState -p ActiveState -p SubState -p FragmentPath \
+  -p ExecStart -p User -p Group -p WorkingDirectory -p MainPID \
+  -p ExecMainStartTimestamp -p NRestarts
+# Only if this is the actual source checkout; no fetch or pull:
+git -C /opt/bridge-school/universal-video-src rev-parse HEAD
+sha256sum /opt/bridge-school/universal-video-src/universal_video/spool_worker.py \
+          /opt/bridge-school/universal-video-src/universal_video/neon_worker.py \
+          /opt/bridge-school/universal-video-src/universal_video/private_one_job_operator.py \
+          /opt/bridge-school/universal-video-src/universal_video/private_one_job_entrypoint.py
+```
+
+The four reviewed source SHA-256 values at `02202989` are, respectively,
+`add5a84c4dca00112eaedaf5ded41caec08d1246adb04063777b12daffe5c911`,
+`7ffc8ef56fe7ab8301dc9360c840f45dfef8a294b187062d3e5b24e585cfa582`,
+`99be5d2f8c79b1b78ea713b9b041f94170ac62de03157e78013134992f3c5418`,
+and `de870ecdfa22e309e3f03f200d6ea741b848e427fc1d52f08572dc72c1151546`.
+The reviewed source SHA-256 values of proposal files 0061 and 0062 are
+`b218f42dde413cf2ad4765de417d0585773c4d93a8dca7e537d46e625cc2d56e`
+and `58f2fa3dc4d83cb49b6afd35b3cac00c162b22456d114da43fa3d9a65f153a7a`.
+
+If containerized, collect only container name, image ID, state, read-only
+mount destinations and the image's `org.opencontainers.image.revision` label
+through a field-scoped inspection; do not export the full inspect JSON, which
+contains environment values. Compare the image ID and revision with the
+reviewed image receipt and compare all four module hashes with this candidate.
+Absence of `private_one_job_operator.py` or an unexpected source hash is a
+hard hold. Confirm the normal resident and proposed one-shot would use the
+same physical spool root and lock inode; matching path text across different
+mount namespaces is insufficient. Record the existing service state and
+polling configuration as names/presence only, then plan how target-batch
+polling will be quiesced without changing other workload.
+
+The target database must be selected from a fresh operator-owned deployment
+record, not the historical endpoint above. A restricted read-only session on
+that exact endpoint should first record server host/port from the connection
+metadata, database, `session_user`, `current_user`, server version and time.
+Run the SQL inventory above separately under the **existing** queue,
+collector and approver logins, with transaction read-only and a short
+statement timeout. Compare the 0059/0060 `schema_migration` rows and their
+stored checksums with the approved migration receipt; 0061/0062 are proposal
+files, so inspect their actual tables, functions, owners, grants and v2 check
+constraint rather than assuming migration rows exist. For each installed
+function, compare `pg_get_functiondef(oid)` with the reviewed 0061/0062 SQL
+after normalizing formatting, and preserve a signed or hashed readback. A
+mere matching function name is insufficient. The inventory is catalog-only;
+do not call claim, approval, stage, finish or revoke functions to test them.
+
+If a live readback would require new access, a secret transfer, a billable
+database wake-up, or an unverified endpoint, stop at this prepared command
+set. The smallest next check is an authorized operator returning redacted
+service/image identifiers and the read-only catalog result for the pinned
+target and three existing restricted logins. Without it, current deployment,
+schema parity, ACL and rollback readiness remain unknown.
+
+## One-shot coordination contract for an existing launcher
+
+The launcher must supply the exact eleven-key protected binding described
+above and must invoke the explicit one-shot entry point; changing only an
+environment toggle or restarting the normal unit will not select it. After
+the exact 0060 claim commits, the worker writes an exclusive 0600 claim
+receipt with the lease token. After processing and live terminal readback it
+writes `<approval_signal_path>.ready`, also exclusively, then waits up to
+1800 seconds. A separate approver must verify the current lease, use its own
+restricted connection to call the 0061 approval function for that precise
+attempt, and write a 0600 signal containing the exact seven fields listed
+above. The worker checks the signal and 0062 rechecks the SQL approval during
+staging. Signals never confer authority. A stale file blocks a new launch;
+do not delete it until the queue and private result state have been reconciled.
+For the native unit, binding and signal paths must be accessible under its
+existing sandbox: the unit's writable paths are
+`/opt/bridge-school/universal-video` and `/run/bridge-school`. The launcher
+and separate approver need a pre-existing protected handoff directory and
+compatible file ownership while retaining different database principals;
+do not widen filesystem permissions merely to pass the signal.
+
+No implementation or versioned manifest of an existing `v6` launcher was
+found here, so this is a proposed interface for its owner to compare against
+the actual deployed code. In particular, verify its readiness wait, separate
+approver principal, exact lease expiration, 0600 file ownership, and handling
+of interrupted claims. Any mismatch is a hold, not an invitation to run a
+compatibility probe against production. No IBM process is needed for this
+comparison.
+
 ## Conditional ACL delta for separate review — do not execute now
 
 This is the narrow runtime grant delta **after** authorized installation of
