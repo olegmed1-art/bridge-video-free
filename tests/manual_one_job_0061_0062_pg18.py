@@ -79,7 +79,7 @@ def _roles(port: int) -> None:
             db.execute(f'GRANT EXECUTE ON FUNCTION video_queue.{signature} TO video_subset_worker_v2')
 
 
-def _admit(port: int, suffix: str = '0001') -> dict:
+def _admit(port: int, suffix: str = '0001', *, approval_seconds: int = 1200) -> dict:
     file_id = 'synthetic_video_' + suffix
     source_folder = 'source_folder_001'
     output_folder = 'output_folder_001'
@@ -133,7 +133,7 @@ def _admit(port: int, suffix: str = '0001') -> dict:
                        approved_by='synthetic-reviewer',
                        approval_reference='local-test',
                        plan_sha256='a' * 64)),
-                    datetime.now(timezone.utc) + timedelta(minutes=20)))
+                    datetime.now(timezone.utc) + timedelta(seconds=approval_seconds)))
         db.execute('SELECT video_queue.set_subset_runtime(%s,true)',
                    (approval_id,))
     with _connect(port, 'onejob_collector') as db:
@@ -309,10 +309,9 @@ def _rehearse(port: int, tmp: Path, fixture: dict) -> dict[str, str]:
         # A nine-minute request must be rejected when only 90 seconds remain,
         # without leaving admission rows. Then give this same lease five
         # minutes: the approval must be capped, not rejected or extended.
-        with _connect(port) as db:
-            db.execute("UPDATE video_queue.job SET lease_expires_at="
-                       "clock_timestamp()+interval '90 seconds' WHERE job_id=%s",
-                       (claim['job_id'],))
+        with _connect(port, 'onejob_worker') as db:
+            db.execute('SELECT video_queue.heartbeat_subset_job(%s,%s,%s,%s)',
+                       (claim['job_id'], claim['lease_token'], 'one-job-worker', 90))
         with _connect(port, 'onejob_approver') as db:
             try:
                 with db.transaction():
@@ -329,12 +328,9 @@ def _rehearse(port: int, tmp: Path, fixture: dict) -> dict[str, str]:
             assert db.execute('SELECT count(*) AS n FROM '
                               'video_queue.one_job_staging_admission_v1 '
                               'WHERE admission_id=%s', (admission_id,)).fetchone()['n'] == 0
-            db.execute("UPDATE video_queue.job SET lease_expires_at="
-                       "clock_timestamp()+interval '5 minutes' WHERE job_id=%s",
-                       (claim['job_id'],))
-            db.execute("UPDATE video_queue.subset_approval SET expires_at="
-                       "clock_timestamp()+interval '7 minutes' WHERE approval_id=%s",
-                       (fixture['approval_id'],))
+        with _connect(port, 'onejob_worker') as db:
+            db.execute('SELECT video_queue.heartbeat_subset_job(%s,%s,%s,%s)',
+                       (claim['job_id'], claim['lease_token'], 'one-job-worker', 300))
         ready_path = tmp / 'approval.json.ready'
         write_claim_receipt(ready_path, claim, 'one-job-worker',
                             admission_id, fixture['source_fingerprint'])
@@ -464,6 +460,9 @@ def _rehearse(port: int, tmp: Path, fixture: dict) -> dict[str, str]:
                               ).fetchone()['n'] == 1
             assert db.execute('SELECT count(*) AS n FROM video_queue.one_job_staging_lease_approval_v1'
                               ).fetchone()['n'] == 1
+        with _connect(port, 'onejob_approver') as db:
+            db.execute('SELECT video_queue.revoke_one_job_staging_v1(%s)',
+                       (admission_id,))
         return dict(claim='PASS_REAL_0060', evidence='PASS_REAL_0060',
                     approval='PASS_REAL_0061_SEPARATE_ROLE',
                     private_result='PASS_REAL_0062_STAGE_READ_FINISH',
@@ -516,13 +515,9 @@ def _subset_deadline_case(port: int, tmp: Path, fixture: dict) -> dict[str, str]
     with patch.object(operator, '_read_local_json', side_effect=_read):
         journal.reserve()
         claim = _claim(port, fixture, journal)
-    with _connect(port) as db:
-        db.execute("UPDATE video_queue.job SET lease_expires_at="
-                   "clock_timestamp()+interval '7 minutes' WHERE job_id=%s",
-                   (claim['job_id'],))
-        db.execute("UPDATE video_queue.subset_approval SET expires_at="
-                   "clock_timestamp()+interval '90 seconds' WHERE approval_id=%s",
-                   (fixture['approval_id'],))
+    with _connect(port, 'onejob_worker') as db:
+        db.execute('SELECT video_queue.heartbeat_subset_job(%s,%s,%s,%s)',
+                   (claim['job_id'], claim['lease_token'], 'one-job-worker', 420))
 
     def request_approval() -> None:
         with _connect(port, 'onejob_approver') as db:
@@ -534,19 +529,6 @@ def _subset_deadline_case(port: int, tmp: Path, fixture: dict) -> dict[str, str]
                         datetime.now(timezone.utc)+timedelta(minutes=9),
                         'subset-deadline-control'))
 
-    try:
-        request_approval()
-    except psycopg.Error as exc:
-        assert 'ONE_JOB_APPROVAL_TIME_BUDGET_LOW' in str(exc), exc
-    else:
-        raise AssertionError('short subset deadline accepted')
-    with _connect(port) as db:
-        assert db.execute('SELECT count(*) AS n FROM '
-                          'video_queue.one_job_staging_admission_v1 '
-                          'WHERE admission_id=%s', (admission_id,)).fetchone()['n'] == 0
-        db.execute("UPDATE video_queue.subset_approval SET expires_at="
-                   "clock_timestamp()+interval '5 minutes' WHERE approval_id=%s",
-                   (fixture['approval_id'],))
     request_approval()
     with _connect(port) as db:
         row = db.execute('SELECT l.expires_at AS approval_expiry, '
@@ -561,8 +543,36 @@ def _subset_deadline_case(port: int, tmp: Path, fixture: dict) -> dict[str, str]
         assert row['approval_expiry'] <= row['subset_expiry']
         assert row['approval_expiry'] <= row['lease_expires_at']
         assert row['approval_expiry'] > datetime.now(timezone.utc)+timedelta(minutes=3)
-    return dict(subset_deadline='PASS_CAPPED_WITHOUT_EXTENSION',
-                short_subset_budget='PASS_REJECTED')
+    return dict(subset_deadline='PASS_CAPPED_WITHOUT_EXTENSION')
+
+
+def _short_subset_budget_case(port: int, tmp: Path, fixture: dict) -> dict[str, str]:
+    admission_id = str(uuid4())
+    journal = ClaimReceiptJournal(tmp / 'short-subset-claim.json', dict(
+        admission_id=admission_id, expected_job_id=fixture['job_id'],
+        expected_batch_id=fixture['batch_id']))
+    with patch.object(operator, '_read_local_json', side_effect=_read):
+        journal.reserve()
+        claim = _claim(port, fixture, journal)
+    with _connect(port, 'onejob_approver') as db:
+        try:
+            with db.transaction():
+                db.execute('SELECT video_queue.approve_one_job_staging_attempt_v1('
+                           '%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                           (admission_id, str(uuid4()), claim['job_id'],
+                            claim['lease_token'], 'one-job-worker', 1,
+                            fixture['source_fingerprint'],
+                            datetime.now(timezone.utc)+timedelta(minutes=9),
+                            'short-subset-budget-control'))
+        except psycopg.Error as exc:
+            assert 'ONE_JOB_APPROVAL_TIME_BUDGET_LOW' in str(exc), exc
+        else:
+            raise AssertionError('short subset deadline accepted')
+    with _connect(port) as db:
+        assert db.execute('SELECT count(*) AS n FROM '
+                          'video_queue.one_job_staging_admission_v1 '
+                          'WHERE admission_id=%s', (admission_id,)).fetchone()['n'] == 0
+    return dict(short_subset_budget='PASS_REJECTED')
 
 
 def main() -> None:
@@ -620,14 +630,16 @@ def main() -> None:
                 _run(prefix + ['-f', str(ROOT / 'database' / 'proposals' / name)], env=env)
                 print(f'installed {name}', flush=True)
             _roles(args.port)
-            admitted = _admit(args.port)
+            admitted = _admit(args.port, approval_seconds=420)
             print(json.dumps({'status': 'SYNTHETIC_BATCH_ADMITTED',
                               'job_id': admitted['job_id']}, sort_keys=True), flush=True)
             result = _rehearse(args.port, Path(tmp), admitted)
             print(json.dumps(result, sort_keys=True), flush=True)
             second = _admit(args.port, '0002')
             result.update(_ack_loss_case(args.port, Path(tmp), second))
-            third = _admit(args.port, '0003')
+            short = _admit(args.port, '0003', approval_seconds=90)
+            result.update(_short_subset_budget_case(args.port, Path(tmp), short))
+            third = _admit(args.port, '0004', approval_seconds=300)
             result.update(_subset_deadline_case(args.port, Path(tmp), third))
             print(json.dumps(result, sort_keys=True), flush=True)
             print(json.dumps({'status': 'SCHEMA_INSTALLED', 'migrations': len(files),
