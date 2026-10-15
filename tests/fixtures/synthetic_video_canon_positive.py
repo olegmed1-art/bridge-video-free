@@ -7,6 +7,7 @@ fictional labels; production promotion must not consume this fixture.
 from copy import deepcopy
 import hashlib
 import re
+from typing import Mapping
 
 from bridge_contracts.video_canon_ai_promotion import (
     REQUIRED_CHECKS,
@@ -24,6 +25,19 @@ VERSION_ID = "55555555-5555-4555-8555-555555555555"
 RULE_ID = "66666666-6666-4666-8666-666666666666"
 BUNDLE_ID = "77777777-7777-4777-8777-777777777777"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_LOGIN = re.compile(r"^canon_rehearsal_[a-z0-9_]+_login$")
+SYNTHETIC_LOGIN_PRINCIPALS = {
+    "control": "canon_rehearsal_control_login",
+    "semantic": "canon_rehearsal_semantic_login",
+    "bridge": "canon_rehearsal_bridge_login",
+    "firewall": "canon_rehearsal_firewall_login",
+}
+CAPABILITIES = {
+    "control": "bridge_school_canon_control_verifier",
+    "semantic": "bridge_school_canon_semantic_verifier",
+    "bridge": "bridge_school_canon_bridge_verifier",
+    "firewall": "bridge_school_canon_firewall_verifier",
+}
 
 
 def _synthetic_digest(check_id: str) -> str:
@@ -31,7 +45,8 @@ def _synthetic_digest(check_id: str) -> str:
 
 
 def build_synthetic_positive_rehearsal(
-    canon_snapshot_sha256: str, rule_test_state_sha256: str
+    canon_snapshot_sha256: str, rule_test_state_sha256: str,
+    login_principals: Mapping[str, str],
 ) -> dict:
     """Assemble every required handoff row without touching a database.
 
@@ -43,19 +58,27 @@ def build_synthetic_positive_rehearsal(
         canon_snapshot_sha256, rule_test_state_sha256
     )):
         raise ValueError("disposable state hashes must be SHA-256")
+    if (
+        not isinstance(login_principals, Mapping)
+        or set(login_principals) != set(CAPABILITIES)
+        or not all(isinstance(name, str) and _LOGIN.fullmatch(name)
+                   for name in login_principals.values())
+        or len(set(login_principals.values())) != 4
+    ):
+        raise ValueError("four distinct synthetic LOGIN principals required")
     candidate = _candidate()
     payload = candidate["payload"]
     review = _bundle(candidate)
     review["canon_snapshot_sha256"] = canon_snapshot_sha256
     review["rule_test_state_sha256"] = rule_test_state_sha256
     roles = {
-        "SEMANTIC_PARSE": ("semantic-model-a", "bridge_school_canon_semantic_verifier", "I2"),
-        "BRIDGE_LOGIC": ("bridge-engine-b", "bridge_school_canon_bridge_verifier", "I3"),
-        "HIDDEN_INFORMATION_FIREWALL": ("taint-analyzer", "bridge_school_canon_firewall_verifier", "I2"),
+        "SEMANTIC_PARSE": ("semantic-model-a", login_principals["semantic"], "I2"),
+        "BRIDGE_LOGIC": ("bridge-engine-b", login_principals["bridge"], "I3"),
+        "HIDDEN_INFORMATION_FIREWALL": ("taint-analyzer", login_principals["firewall"], "I2"),
     }
     for check in review["checks"]:
         family, principal, assurance = roles.get(check["check_id"], (
-            "formal-checker", "bridge_school_canon_control_verifier", "I1"
+            "formal-checker", login_principals["control"], "I1"
         ))
         check.update(
             verifier_family=family,
@@ -107,6 +130,9 @@ def build_synthetic_positive_rehearsal(
     return {
         "fixture_class": "SYNTHETIC_NON_AUTHORITATIVE",
         "real_rights_or_review_proven": False,
+        "login_principals": dict(login_principals),
+        "capability_grants": {login_principals[key]: capability
+                              for key, capability in CAPABILITIES.items()},
         "synthetic_role_warning": "teacher:diana is a fictional test label; real teacher is Oleg",
         "ids": {"school_id": SCHOOL_ID, "source_id": SOURCE_ID,
                 "analysis_candidate_id": CANDIDATE_ID, "knowledge_item_id": ITEM_ID,

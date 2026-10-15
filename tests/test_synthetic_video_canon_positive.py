@@ -9,11 +9,16 @@ from bridge_contracts.video_canon_ai_promotion import (
     VideoCanonAIPromotionError,
     build_ai_canon_promotion,
 )
-from tests.fixtures.synthetic_video_canon_positive import build_synthetic_positive_rehearsal
+from tests.fixtures.synthetic_video_canon_positive import (
+    SYNTHETIC_LOGIN_PRINCIPALS,
+    build_synthetic_positive_rehearsal,
+)
 
 
 def test_full_synthetic_handoff_is_bound_but_remains_non_authoritative():
-    fixture = build_synthetic_positive_rehearsal("c" * 64, "b" * 64)
+    fixture = build_synthetic_positive_rehearsal(
+        "c" * 64, "b" * 64, SYNTHETIC_LOGIN_PRINCIPALS
+    )
     candidate = fixture["candidate"]
     command = fixture["sealed_command"]
     checks = fixture["verification_rows"]
@@ -25,11 +30,12 @@ def test_full_synthetic_handoff_is_bound_but_remains_non_authoritative():
     assert {row["check_id"] for row in checks} == REQUIRED_CHECKS
     assert len(checks) == len(REQUIRED_CHECKS)
     assert {row["execution_principal"] for row in checks} == {
-        "bridge_school_canon_semantic_verifier",
-        "bridge_school_canon_bridge_verifier",
-        "bridge_school_canon_firewall_verifier",
-        "bridge_school_canon_control_verifier",
+        "canon_rehearsal_semantic_login",
+        "canon_rehearsal_bridge_login",
+        "canon_rehearsal_firewall_login",
+        "canon_rehearsal_control_login",
     }
+    assert len(set(fixture["capability_grants"].values())) == 4
     assert all(
         row["canon_snapshot_sha256"] == ("c" * 64 if row["check_id"] in STATE_DEPENDENT_CHECKS else None)
         for row in checks
@@ -47,9 +53,23 @@ def test_full_synthetic_handoff_is_bound_but_remains_non_authoritative():
 
 def test_rehearsal_needs_fresh_database_state_hashes():
     with pytest.raises(ValueError, match="disposable state hashes"):
-        build_synthetic_positive_rehearsal("unknown", "b" * 64)
-    fixture = build_synthetic_positive_rehearsal("c" * 64, "b" * 64)
+        build_synthetic_positive_rehearsal("unknown", "b" * 64, SYNTHETIC_LOGIN_PRINCIPALS)
+    fixture = build_synthetic_positive_rehearsal(
+        "c" * 64, "b" * 64, SYNTHETIC_LOGIN_PRINCIPALS
+    )
     stale = deepcopy(fixture["review_input"])
     stale["canon_snapshot_sha256"] = "d" * 64
     with pytest.raises(VideoCanonAIPromotionError, match="state-dependent check is stale"):
         build_ai_canon_promotion(fixture["candidate"], stale)
+
+
+def test_login_principal_change_reseals_digest_and_collisions_are_rejected():
+    first = build_synthetic_positive_rehearsal(
+        "c" * 64, "b" * 64, SYNTHETIC_LOGIN_PRINCIPALS
+    )
+    changed = {**SYNTHETIC_LOGIN_PRINCIPALS, "semantic": "canon_rehearsal_semantic_b_login"}
+    second = build_synthetic_positive_rehearsal("c" * 64, "b" * 64, changed)
+    assert first["sealed_command"]["verification_bundle_sha256"] != second["sealed_command"]["verification_bundle_sha256"]
+    duplicate = {**SYNTHETIC_LOGIN_PRINCIPALS, "semantic": SYNTHETIC_LOGIN_PRINCIPALS["control"]}
+    with pytest.raises(ValueError, match="four distinct"):
+        build_synthetic_positive_rehearsal("c" * 64, "b" * 64, duplicate)
