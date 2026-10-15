@@ -25,6 +25,9 @@ CRITICAL_PATHS = (
 )
 
 ALLOWED_KINDS = {"infrastructure", "model", "oracle", "legacy"}
+# The database package intentionally uses Python's implicit namespace form.
+# Keep this allowlist explicit so an unrelated directory cannot hide an import.
+LOCAL_NAMESPACE_ROOTS = {"database"}
 
 
 class DependencyAuditError(RuntimeError):
@@ -34,7 +37,10 @@ class DependencyAuditError(RuntimeError):
 def _repo_roots() -> set[str]:
     roots: set[str] = set()
     for child in ROOT.iterdir():
-        if child.is_dir() and (child / "__init__.py").exists():
+        if child.is_dir() and (
+            (child / "__init__.py").exists()
+            or (child.name in LOCAL_NAMESPACE_ROOTS and any(child.glob("*.py")))
+        ):
             roots.add(child.name)
         elif child.is_file() and child.suffix == ".py":
             roots.add(child.stem)

@@ -94,7 +94,8 @@ class OutboxPublicationDecisionTests(unittest.TestCase):
         identity.ensure_drive_source_identity = Mock(return_value={"source_identity_id": "source-1"})
         producer = types.ModuleType("database.video_result_persistence")
         producer.persist_video_result = Mock(return_value={
-            "changeset_id": "change-5", "publication_authorization_status": "blocked"})
+            "changeset_id": "change-5", "publication_authorization_status": "blocked",
+            "persisted": True})
         stubs = {
             "database": database, "run_drive_3_1_free": io,
             "database.outbox_publisher": publisher,
@@ -135,7 +136,11 @@ class OutboxPublicationDecisionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=root) as temp:
             paths = (
                 "database/outbox_publisher.py", "database/outbox_publication_decision.py",
-                "bridge_neon_persistence.py", "database/backfill_video_results.py",
+                "bridge_neon_persistence.py", "video_completed_staging_handoff.py",
+                "database/video_staging_handoff.py", "database/video_candidate_persistence.py",
+                "diana_longitudinal_postprocess_v3.py",
+                "diana_longitudinal_postprocess_v4_2.py",
+                "database/backfill_video_results.py",
                 "database/video_result_persistence.py", "database/runtime_worker_preflight.py",
                 "run_master_3_1_free_semantic_v2.py", "run_master_3_1_free_semantic.py",
             )

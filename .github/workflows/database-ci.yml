@@ -322,6 +322,7 @@ jobs:
           python -B -m unittest discover -s tests -p test_outbox_publisher.py -v
           python -B -m unittest discover -s tests -p test_outbox_publication_decision.py -v
           python -B -m unittest discover -s tests -p test_outbox_mixed_replay_contract.py -v
+          python -B -m unittest discover -s tests -p test_video_staging_handoff.py -v
           python -B -m unittest discover -s tests -p test_semantic_v2_persistence_gate.py -v
           python -B -m unittest discover -s database/tests -p test_outbox_publisher_postgres.py -v
 

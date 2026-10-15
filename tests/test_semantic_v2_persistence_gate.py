@@ -115,7 +115,11 @@ class SemanticV2PersistenceGateTests(unittest.TestCase):
         script = textwrap.dedent(section.split("python - <<'PY'\n", 1)[1].split("\n          PY", 1)[0])
         paths = (
             "database/outbox_publisher.py", "database/outbox_publication_decision.py",
-            "bridge_neon_persistence.py", "database/backfill_video_results.py",
+            "bridge_neon_persistence.py", "video_completed_staging_handoff.py",
+            "database/video_staging_handoff.py", "database/video_candidate_persistence.py",
+            "diana_longitudinal_postprocess_v3.py",
+            "diana_longitudinal_postprocess_v4_2.py",
+            "database/backfill_video_results.py",
             "database/video_result_persistence.py", "database/runtime_worker_preflight.py",
             "run_master_3_1_free_semantic_v2.py", "run_master_3_1_free_semantic.py",
         )
