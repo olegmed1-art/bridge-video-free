@@ -33,7 +33,18 @@ def test_0060_is_guarded_candidate_and_audited_history_only():
     assert hashlib.sha256(raw).hexdigest()==c.PINNED[key]
     rows=[line.split('\t') for line in (REPO/'database/external_migration_history.tsv').read_text().splitlines()
           if line and not line.startswith('#')]
-    assert [(row[0],row[1]) for row in rows if row[0]==key]==[(key,c.PINNED[key])]
+    variants={(row[2],row[1]) for row in rows if row[0]==key}
+    assert variants=={('legacy-744d068a',c.LEGACY_0060_SHA256),
+                      ('new-scoped-claim',c.PINNED[key])}
+
+
+def test_0060_history_routes_new_and_refuses_legacy_or_unknown_before_sql(staged):
+    assert c.require_current_0060(c.PINNED['0060_fixed_subset_admission'])=='new-scoped-claim'
+    for builder in (c.verify_payload,c.recover_payload):
+        with pytest.raises(ValueError,match='LEGACY_0060_REQUIRES_PINNED_744d068a'):
+            builder(receipt(),installed_0060_checksum=c.LEGACY_0060_SHA256)
+        with pytest.raises(ValueError,match='UNRECOGNIZED_0060_HISTORY'):
+            builder(receipt(),installed_0060_checksum='0'*64)
 
 
 def test_windows_function_definition_newlines_preserve_md5_and_render_lf(staged):
@@ -125,14 +136,14 @@ def receipt():
 
 
 def test_verifier_cannot_restore_or_write_ledger(staged):
-    statements=c.verify_payload(receipt())['sql_statements']
+    statements=c.verify_payload(receipt(),installed_0060_checksum=c.PINNED['0060_fixed_subset_admission'])['sql_statements']
     assert c.TEMP_GRANT in statements and c.TEMP_REVOKE in statements
     assert not any('DROP TRIGGER' in s or 'INSERT INTO public.schema_migration' in s for s in statements)
     assert any('RECOVERY_FULL_HISTORY_DRIFT' in s for s in statements)
 
 
 def test_recovery_orders_checks_and_cleanup(staged):
-    statements=c.recover_payload(receipt())['sql_statements']
+    statements=c.recover_payload(receipt(),installed_0060_checksum=c.PINNED['0060_fixed_subset_admission'])['sql_statements']
     ledger=next(i for i,s in enumerate(statements) if 'INSERT INTO public.schema_migration' in s)
     for label in ('RECOVERY_LEGACY_CATALOG_MISMATCH','RECOVERY_SUBSET_NOT_DISABLED','RECOVERY_HISTORY_CHANGED'):
         assert next(i for i,s in enumerate(statements) if label in s)<ledger
@@ -143,7 +154,7 @@ def test_recovery_orders_checks_and_cleanup(staged):
 @pytest.mark.parametrize('change',[{'state':'UNKNOWN'},{'target':'other'},{'catalog_md5':'xyz'},{'extra':1}])
 def test_invalid_receipts_rejected(staged,change):
     bad={**receipt(),**change}
-    with pytest.raises(ValueError): c.recover_payload(bad)
+    with pytest.raises(ValueError): c.recover_payload(bad,installed_0060_checksum=c.PINNED['0060_fixed_subset_admission'])
 
 
 def test_model_restores_without_mutating_history(staged):

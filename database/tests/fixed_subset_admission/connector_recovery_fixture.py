@@ -268,13 +268,13 @@ def main(argv=None):
                 assert installed[key]==before[key]
             assert sorted(len(x['historical_job_ids']) for x in installed['source_reservation'])==[1,2]
             psql(ROOT/'database/tests/041_universal_video_queue.sql',out/'041-installed.log')
-            verify=c.verify_payload(receipt)['sql_statements']
+            verify=c.verify_payload(receipt,installed_0060_checksum=c.PINNED['0060_fixed_subset_admission'])['sql_statements']
             write(out/'verify-envelope.json',verify)
             index=verify.index(c.TEMP_GRANT)
             result['negative_cases'].append(failure_case('verify-after-grant',verify,out,fail_after=index))
             assert execute(verify)=='COMMITTED_INSTALL_RECEIPT_MATCHES'
             assert snapshot()==installed, 'verifier changed persistent state'
-            recover=c.recover_payload(receipt)['sql_statements']
+            recover=c.recover_payload(receipt,installed_0060_checksum=c.PINNED['0060_fixed_subset_admission'])['sql_statements']
             write(out/'recovery-envelope.json',recover)
             for name,index in [('recovery-after-grant',recover.index(c.TEMP_GRANT)),
                                ('recovery-after-owner-restore',next(i for i,s in enumerate(recover) if c.bare(s).startswith('ALTER FUNCTION '+r.CLAIM+' OWNER TO')))]:

@@ -10,6 +10,11 @@ PINNED = {
     "0059_universal_video_terminal_size_guard": "be1275d293a6aa1a27d5e41b0d2f725179fd3e6b56dd849fe8f4d87c64819a08",
     "0060_fixed_subset_admission": "cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc",
 }
+LEGACY_0060_SHA256 = "c2960f3b78a34985d1afd78930f896f38eebeae2cbd90f83c44a011fe7d779a7"
+INSTALLED_0060_VERSIONS = {
+    LEGACY_0060_SHA256: "legacy-744d068a",
+    PINNED["0060_fixed_subset_admission"]: "new-scoped-claim",
+}
 TEMP_GRANT = "GRANT video_subset_owner TO CURRENT_USER WITH ADMIN FALSE, INHERIT TRUE, SET FALSE GRANTED BY CURRENT_USER"
 TEMP_REVOKE = "REVOKE video_subset_owner FROM CURRENT_USER GRANTED BY CURRENT_USER RESTRICT"
 FUNCTION_CAPS = {
@@ -243,10 +248,20 @@ def install_payload():
     return {**{k: v for k, v in recovery.target().items() if k != 'endpoint_id'}, "sql_statements": queries}
 
 
-def verify_payload(receipt):
+def require_current_0060(installed_0060_checksum):
+    """Route by observed ledger bytes; never infer version from receipt shape."""
+    version = INSTALLED_0060_VERSIONS.get(installed_0060_checksum)
+    if version == "legacy-744d068a":
+        raise ValueError("LEGACY_0060_REQUIRES_PINNED_744d068a_VERIFIER_OR_RECOVERY")
+    if version != "new-scoped-claim":
+        raise ValueError("UNRECOGNIZED_0060_HISTORY")
+    return version
+
+
+def verify_payload(receipt, *, installed_0060_checksum):
     """Same transient grant as recovery; no persistent reader/owner membership."""
     # Reuse all recovery admission checks, then stop before the recovery body.
-    candidate = recover_payload(receipt)
+    candidate = recover_payload(receipt, installed_0060_checksum=installed_0060_checksum)
     body = split_sql((ROOT / "recovery" / (recovery.KEY + ".sql")).read_text())
     index = candidate["sql_statements"].index(body[0])
     candidate["sql_statements"] = candidate["sql_statements"][:index] + [TEMP_REVOKE,
@@ -255,7 +270,8 @@ def verify_payload(receipt):
     return candidate
 
 
-def recover_payload(receipt):
+def recover_payload(receipt, *, installed_0060_checksum):
+    require_current_0060(installed_0060_checksum)
     if set(receipt) != {"before_old_data", "data_digest", "catalog_md5", "target", "state"}:
         raise ValueError("invalid receipt shape")
     if receipt["state"] != "INSTALLED_RUNTIME_HOLD" or receipt["target"] != recovery.target()["branch_id"] or not re.fullmatch(r"[0-9a-f]{32}", receipt["catalog_md5"]):

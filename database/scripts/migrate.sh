@@ -50,8 +50,11 @@ assert_unique_numeric_prefixes() {
 validate_external_history() {
   [[ -f "$EXTERNAL_HISTORY_FILE" ]] || return 0
   local -A seen=()
-  local key checksum provenance
-  while IFS=$'\t' read -r key checksum provenance; do
+  local key checksum version provenance identity
+  local legacy_0060=c2960f3b78a34985d1afd78930f896f38eebeae2cbd90f83c44a011fe7d779a7
+  local candidate_0060=cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc
+  local count_0060=0
+  while IFS=$'\t' read -r key checksum version provenance; do
     [[ -z "$key" || "$key" == \#* ]] && continue
     if [[ ! "$key" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
       echo "Unsafe external migration key in $EXTERNAL_HISTORY_FILE: $key" >&2
@@ -61,19 +64,44 @@ validate_external_history() {
       echo "Invalid external migration SHA-256 for $key" >&2
       exit 1
     fi
-    if [[ -n "${seen[$key]:-}" ]]; then
-      echo "Duplicate external migration history key: $key" >&2
+    if [[ ! "$version" =~ ^[a-z][a-z0-9-]*$ || -z "$provenance" ]]; then
+      echo "Invalid external migration version/provenance for $key" >&2
       exit 1
     fi
-    seen[$key]="$checksum"
+    identity="$key"
+    if [[ "$key" == 0060_fixed_subset_admission ]]; then
+      case "$version:$checksum" in
+        "legacy-744d068a:$legacy_0060"|"new-scoped-claim:$candidate_0060") ;;
+        *) echo "Unsupported 0060 external migration version: $version" >&2; exit 1 ;;
+      esac
+      identity="$key:$version"
+      count_0060=$((count_0060+1))
+    fi
+    if [[ -n "${seen[$identity]:-}" ]]; then
+      echo "Duplicate external migration history key/version: $identity" >&2
+      exit 1
+    fi
+    seen[$identity]="$checksum"
   done < "$EXTERNAL_HISTORY_FILE"
+  if [[ "$count_0060" -ne 0 && "$count_0060" -ne 2 ]]; then
+    echo 'Incomplete 0060 external migration version matrix' >&2
+    exit 1
+  fi
 }
 
-external_checksum_for() {
+external_versions_for() {
   local requested_key="$1"
   [[ -f "$EXTERNAL_HISTORY_FILE" ]] || return 0
   awk -F '\t' -v wanted="$requested_key" '
-    $0 !~ /^#/ && $1 == wanted { print $2; exit }
+    $0 !~ /^#/ && $1 == wanted { print $3 }
+  ' "$EXTERNAL_HISTORY_FILE"
+}
+
+external_version_for() {
+  local requested_key="$1" requested_checksum="$2"
+  [[ -f "$EXTERNAL_HISTORY_FILE" ]] || return 0
+  awk -F '\t' -v wanted="$requested_key" -v checksum="$requested_checksum" '
+    $0 !~ /^#/ && $1 == wanted && $2 == checksum { print $3; exit }
   ' "$EXTERNAL_HISTORY_FILE"
 }
 
@@ -136,17 +164,18 @@ if schema_table_exists; then
       continue
     fi
 
-    external_checksum="$(external_checksum_for "$applied_key")"
-    if [[ -n "$external_checksum" ]]; then
+    external_versions="$(external_versions_for "$applied_key")"
+    if [[ -n "$external_versions" ]]; then
       if [[ -z "$stored_checksum" ]]; then
         echo "External migration history lacks a stored database checksum: $applied_key" >&2
         exit 1
       fi
-      if [[ "$stored_checksum" != "$external_checksum" ]]; then
+      external_version="$(external_version_for "$applied_key" "$stored_checksum")"
+      if [[ -z "$external_version" ]]; then
         echo "External migration checksum mismatch: $applied_key" >&2
         exit 1
       fi
-      echo "Verified audited external migration history: $applied_key"
+      echo "Verified audited external migration history: $applied_key [$external_version]"
       continue
     fi
 

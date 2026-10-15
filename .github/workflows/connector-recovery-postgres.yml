@@ -69,7 +69,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXACT_HEAD"
           if [[ "$EVENT_NAME" == pull_request ]]; then
-            test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 9606da1d41d8dba49d2f1e27f24e712ad820c1f0
+            test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 100983040aa537a44baaf81324460fdb05384631
           else
             test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = fb0d2bb3402dd55140749447b37ebbb8ca8a2343
           fi
@@ -100,6 +100,13 @@ jobs:
             python -m pytest -q -p no:cacheprovider tests/test_universal_video_connector_recovery.py \
             --basetemp="$RUNNER_TEMP/connector-recovery-pytest" \
             --junitxml="$RUNNER_TEMP/connector-recovery-evidence/unit.xml"
+      - name: Both immutable 0060 history variants in disposable PG18
+        run: |
+          set -euo pipefail
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/connector-recovery-home" \
+            PYTHONPATH="$GITHUB_WORKSPACE" PYTHONDONTWRITEBYTECODE=1 \
+            python database/tests/fixed_subset_admission/history_compatibility_fixture.py \
+            --execute --evidence "$RUNNER_TEMP/connector-recovery-evidence/history"
       - name: One scoped synthetic installer verifier recovery rehearsal
         run: |
           set -euo pipefail
@@ -169,15 +176,19 @@ jobs:
           assert r["legacy_acl_owner_definition_equal"] and r["duplicate_reservations_preserved"]
           assert r["retained_0059"] and r["retained_tables"] == 4 and r["retained_nologin_roles"] == 5
           assert r["migrator"] == "FOUR_SKIPS_EXTERNAL_CANDIDATE_AND_REPAIR_RECOGNIZED"
+          history = json.loads((out / "history/history-compatibility.json").read_text())
+          assert history["status"] == "PASS" and history["cleanup"] == "PASS"
+          assert {x["version"] for x in history["histories"]} == {"legacy-744d068a", "new-scoped-claim"}
+          assert all(x["inventory"] == "PASS" and x["history_unchanged"] for x in history["histories"])
           census = json.loads((out / "final-census.json").read_text())
           assert 180000 <= int(census["version"]) < 190000
           assert all(census[k] == 0 for k in ("other_clients", "advisory_locks", "prepared"))
           assert json.loads((out / "service-cleanup.json").read_text())["status"] == "PASS"
           suites = list(ET.parse(out / "unit.xml").getroot().iter("testsuite"))
-          assert sum(int(s.attrib["tests"]) for s in suites) == 26
+          assert sum(int(s.attrib["tests"]) for s in suites) == 27
           assert all(int(s.attrib[k]) == 0 for s in suites for k in ("errors", "failures", "skipped"))
           (out / "acceptance.json").write_text(json.dumps({"status":"PASS_ISOLATED_CONNECTOR_RECOVERY",
-              "negative_pass":17,"cleanup":"PASS","unit_pass":26,"production_execution_allowed":False})+"\n")
+              "negative_pass":17,"cleanup":"PASS","unit_pass":27,"production_execution_allowed":False})+"\n")
           PY
       - name: Preserve bounded evidence in logs without paid artifact storage
         if: always()
