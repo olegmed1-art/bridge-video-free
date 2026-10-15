@@ -2,11 +2,13 @@
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
 
 GATE = Path(__file__).resolve().parents[1] / "scripts" / "vercel_ignore_build.sh"
+BASH = shutil.which("bash")
 SHA = "a" * 40
 OTHER_SHA = "b" * 40
 
@@ -32,10 +34,12 @@ def run_gate(**changes):
             env.pop(name, None)
         else:
             env[name] = value
-    # The real build bundle has no .git directory.
+    # Match the build bundle: no .git and no git executable on PATH.
     with tempfile.TemporaryDirectory() as directory:
+        assert not Path(directory, ".git").exists()
+        env["PATH"] = directory
         return subprocess.run(
-            ["bash", str(GATE)], cwd=directory, env=env,
+            [BASH, str(GATE)], cwd=directory, env=env,
             capture_output=True, text=True, check=False,
         )
 
@@ -47,7 +51,7 @@ def test_exact_main_production_release_builds_without_git():
 
 
 def test_unapproved_and_different_commits_skip():
-    for approval in (None, "", OTHER_SHA, "not-a-sha", SHA.upper()):
+    for approval in (None, "", OTHER_SHA, "not-a-sha", SHA.upper(), "g" * 40, "a" * 39, "a" * 41, "$(exit 1)"):
         result = run_gate(VERCEL_APPROVED_RUNTIME_SHA=approval)
         assert result.returncode == 0, (approval, result.stdout, result.stderr)
         assert "skip" in result.stdout
