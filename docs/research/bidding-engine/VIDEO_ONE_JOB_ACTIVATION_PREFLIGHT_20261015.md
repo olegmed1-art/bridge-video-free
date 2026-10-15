@@ -11,8 +11,9 @@ schema, roles, backup, service image or live queue state.
   Its native unit is `deploy/oracle-universal-video/universal-video.service`,
   running `universal_video.spool_worker`; a Dockerfile also exists. The
   *actual* host, service type, installed image/commit and runtime state have
-  not been read. `run_private_one_job` has no resident hook or launcher yet;
-  do not enable `UNIVERSAL_VIDEO_SUBSET_SYNC` as a substitute for this route.
+  not been read. The resident package now exposes an explicit one-shot
+  `spool_worker --private-one-job <binding.json>` path; ordinary polling does
+  not select it. Do not enable `UNIVERSAL_VIDEO_SUBSET_SYNC` as a substitute.
 - The last documented Neon target is project `misty-poetry-18012774`, branch
   `br-aged-mud-b1i64914`, endpoint `ep-noisy-pine-b1pe30sf`, database
   `neondb`. This is historical, not a verified current target. Its
@@ -33,14 +34,40 @@ schema, roles, backup, service image or live queue state.
   function creates the one-job admission on first approval and binds the
   source fingerprint from the finalized subset/reservation. Expiry cannot
   exceed the current lease or subset approval. Approval near private staging
-  must be coordinated with the long processor; no automatic approval or
-  pause/resume launcher currently exists. A retry needs a fresh approval.
+  is coordinated with the long processor by an exact local signal after the
+  approver's separate SQL call. That signal is only a wake-up hint: 0062
+  verifies the actual approval before staging. A retry needs a fresh approval.
+
+The one-shot launcher uses the existing restricted queue DSN setting and
+collector binding. Its protected binding JSON has exactly these fields:
+`expected_database`, `expected_login`, `expected_batch_id`, `expected_job_id`,
+`expected_source_file_id`, `expected_attempt_count`, `admission_id`,
+`source_fingerprint`, `worker_key`, `claim_receipt_path`, and
+`approval_signal_path`. Both paths are absolute. The claim receipt is written
+once with mode 0600 after the exact claim commits; it contains the lease token
+and attempt for the separate approver. Immediately before staging, the worker
+writes a `<approval_signal_path>.ready` notice with the same binding. The
+approver waits for that notice, uses its own login to call 0061 for the exact
+live claim, then writes a restricted JSON signal with exactly `admission_id`, `job_id`,
+`lease_token`, `worker_key`, `attempt_count`, `source_fingerprint`, and the
+new `lease_approval_id`. The worker checks that signal just before staging;
+an absent signal times out without a private write. No approver credential or
+automatic approval lives in the resident. The one-shot path holds the shared
+workload lock and uses the existing processor, heartbeat, collector and 0062
+finish. It commits a claim only if 0060 returns the expected job, batch,
+source and attempt; mismatch rolls the claim transaction back. Pre-existing
+claim, ready or approval-signal files block a new launch.
+Before a real launch, verify that ordinary resident queue polling is
+quiesced for the target batch and cannot claim a sibling when this one-shot
+lock is released. The shared lock serializes concurrent work but does not
+disable later polling. Reconcile the actual service state and restore its
+previous behavior only after the one-job result is inspected.
 
 ## Minimal read-only SQL inventory
 
 Run this only after an authorized operator supplies the independently
-verified target and separate **existing** restricted queue and approver
-connections. Run it once per login in a read-only transaction. Do not use an
+verified target and separate **existing** restricted queue, collector and
+approver connections. Run it once per login in a read-only transaction. Do not use an
 owner or broad-writer DSN to stand in for either login. Save the result with
 the target endpoint, database, session login, timestamp and source commit;
 compare the two sessions. The query makes no claim, approval or ACL change.
@@ -128,6 +155,10 @@ the approver session, require the approver capability, no queue-worker or
 broad-worker membership, no elevated flags, the two approval/revocation
 EXECUTEs and no private worker EXECUTE. All nine listed functions must exist,
 be owned by the intended `video_subset_owner`, and have no PUBLIC EXECUTE.
+For the collector session, require only the collector capability among the
+listed subset roles, no broad-worker/app membership, no elevated flags and
+no public/private pipeline DML. The one-shot path repeats that identity and
+ACL check on each collector observation connection.
 Missing migration rows, functions, roles, or unexpected grants are holds.
 The v2 output constraint must be present and validated, with its older
 replaced constraints absent.
@@ -187,6 +218,6 @@ Fresh target identity and migration checksums; actual queue, approver and
 collector login names and inherited privileges; exact resident image/commit
 and whether the native unit or container runs; verified backup/restore; one
 finalized batch, approved subset and chosen job/source fingerprint; a
-reviewed one-job claim launcher and a separate timely approval operator; and
-the bounded run/recovery receipt are all still absent from this local record.
+separate timely approval operator and reviewed deployment of this new
+one-shot launcher; and the bounded run/recovery receipt are all still absent.
 No real job should be claimed until these are resolved and separately reviewed.

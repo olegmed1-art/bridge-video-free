@@ -1,7 +1,8 @@
 """Explicit opt-in private result handoff for one approved queue lease.
 
-The resident never constructs this object. It uses the existing queue-worker
-identity and the 0062 private SQL gate, with no broad writer DSN.
+Only the explicit one-shot resident path constructs this object. Ordinary
+resident polling does not. It uses the existing queue-worker identity and
+the 0062 private SQL gate, with no broad writer DSN.
 """
 from __future__ import annotations
 

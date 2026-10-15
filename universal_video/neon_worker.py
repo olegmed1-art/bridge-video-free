@@ -8,6 +8,7 @@ import socket
 import threading
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Mapping
+from uuid import UUID
 
 from bridge_worker_3_1_free import stable_job_id
 
@@ -255,6 +256,7 @@ def process_claim(
     processor: Callable[[Mapping[str, Any]], Mapping[str, Any]] = stable_review_processor,
     subset_adapter: Any = None,
     staging_handoff: ExactLeaseStagingHandoff | PrivateResultStagingHandoff | None = None,
+    private_approval_waiter: Callable[[Mapping[str, Any], str, str, str], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if staging_handoff is not None and not isinstance(
             staging_handoff, (ExactLeaseStagingHandoff, PrivateResultStagingHandoff)):
@@ -266,6 +268,9 @@ def process_claim(
         raise NeonVideoWorkerError("VIDEO_PRIVATE_RESULT_CONNECTION_VALIDATOR_REQUIRED")
     if private_handoff and os.getenv('BRIDGE_WORKER_DATABASE_URL', '').strip():
         raise NeonVideoWorkerError("VIDEO_PRIVATE_RESULT_BROAD_WRITER_DSN_FORBIDDEN")
+    if private_approval_waiter is not None and (
+            not private_handoff or not callable(private_approval_waiter)):
+        raise NeonVideoWorkerError("VIDEO_PRIVATE_APPROVAL_WAITER_INVALID")
     if isinstance(staging_handoff, ExactLeaseStagingHandoff) and staging_handoff.writer_dsn == database_url:
         raise NeonVideoWorkerError("VIDEO_STAGING_SEPARATE_WRITER_REQUIRED")
     output = _base_output(claim)
@@ -301,6 +306,38 @@ def process_claim(
                     final_source = verify_claimed_source(claim, access_token())
                     if initial_source is None or final_source != initial_source:
                         raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_CHANGED_DURING_PROCESSING")
+                    if private_handoff and private_approval_waiter is not None:
+                        # External approver acts on this exact live lease. This
+                        # callback only waits; the SQL staging gate verifies
+                        # the approval independently on the queue connection.
+                        approval_signal = private_approval_waiter(
+                            dict(claim), worker_key,
+                            staging_handoff.admission_id,
+                            staging_handoff.source_fingerprint)
+                        expected_signal = dict(
+                            admission_id=staging_handoff.admission_id,
+                            job_id=str(claim['job_id']),
+                            lease_token=str(claim['lease_token']),
+                            worker_key=worker_key,
+                            attempt_count=claim['attempt_count'],
+                            source_fingerprint=staging_handoff.source_fingerprint)
+                        try:
+                            signal_exact = (
+                                isinstance(approval_signal, Mapping)
+                                and set(approval_signal) ==
+                                set(expected_signal) | {'lease_approval_id'}
+                                and all(approval_signal[key] == value
+                                        for key, value in expected_signal.items())
+                                and type(approval_signal['attempt_count']) is int
+                                and str(UUID(str(approval_signal['lease_approval_id'])))
+                                == approval_signal['lease_approval_id'])
+                        except (TypeError, ValueError, AttributeError):
+                            signal_exact = False
+                        if not signal_exact:
+                            raise PrivateOneJobConfigurationError(
+                                'ONE_JOB_APPROVAL_SIGNAL_NOT_EXACT')
+                        if heartbeat.error is not None:
+                            raise NeonVideoWorkerError("VIDEO_QUEUE_HEARTBEAT_LOST") from heartbeat.error
                     if staging_handoff is not None:
                         staged = staging_handoff(claim, worker_key, access_token())
                         if private_handoff:
@@ -399,6 +436,82 @@ def process_one_neon(
         return True
 
 
+def process_one_private_neon(
+    *, queue_dsn: str, expected_database: str, expected_login: str,
+    expected_batch_id: str, expected_job_id: str,
+    expected_source_file_id: str, expected_attempt_count: int,
+    admission_id: str, source_fingerprint: str,
+    approval_waiter: Callable[[Mapping[str, Any], str, str, str], Mapping[str, Any]],
+    worker_key: str,
+    claim_publisher: Callable[[Mapping[str, Any], str, str, str], None] | None = None,
+    processor: Callable[[Mapping[str, Any]], Mapping[str, Any]] = stable_review_processor,
+) -> dict[str, Any]:
+    """One explicit resident-runtime claim and private finish, never polling.
+
+    The waiter coordinates an independently issued exact-lease approval just
+    before staging; it does not grant approval. The 0061/0062 SQL remains the
+    authority. Ordinary resident polling never invokes this callable.
+    """
+    from .private_one_job_entrypoint import (
+        PrivateOneJobConfigurationError, claim_exact_private_job,
+        run_private_one_job,
+    )
+    from .subset_drive_observation import (
+        DriveSubsetObservationProvider, SubsetDriveConfig, restricted_identity,
+    )
+    from .subset_worker import SubsetWorkerAdapter
+
+    try:
+        exact_admission_id = str(UUID(str(admission_id)))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise PrivateOneJobConfigurationError('ONE_JOB_PRIVATE_CONFIG_INVALID') from exc
+    if (exact_admission_id != admission_id
+            or not isinstance(source_fingerprint, str)
+            or not re.fullmatch(r'[0-9a-f]{64}', source_fingerprint)
+            or not callable(processor)
+            or not callable(approval_waiter)
+            or (claim_publisher is not None and not callable(claim_publisher))
+            or os.getenv('BRIDGE_WORKER_DATABASE_URL', '').strip()):
+        raise PrivateOneJobConfigurationError('ONE_JOB_PRIVATE_CONFIG_INVALID')
+    with shared_workload_lock():
+        validate_video_runtime()
+        key = worker_key
+        config = SubsetDriveConfig.from_env()
+        config.validate_target(queue_dsn)
+        worker_login = restricted_identity(queue_dsn, 'video_subset_worker_v2')
+        collector_login = restricted_identity(config.collector_dsn,
+                                              'video_subset_collector')
+        if (worker_login != expected_login or worker_login == collector_login
+                or config.expected_database != expected_database
+                or config.batch_id != expected_batch_id):
+            raise PrivateOneJobConfigurationError('ONE_JOB_PRIVATE_CONFIG_INVALID')
+        adapter = SubsetWorkerAdapter(DriveSubsetObservationProvider(
+            config, key, expected_login=collector_login))
+        claim = claim_exact_private_job(
+            queue_dsn=queue_dsn, expected_database=expected_database,
+            expected_login=expected_login,
+            expected_batch_id=expected_batch_id,
+            expected_job_id=expected_job_id,
+            expected_source_file_id=expected_source_file_id,
+            expected_attempt_count=expected_attempt_count,
+            worker_key=key, processing_profile=APPROVED_PROFILE,
+            algorithm_revision=APPROVED_REVISION)
+        if claim_publisher is not None:
+            claim_publisher(dict(claim), key, admission_id, source_fingerprint)
+        return run_private_one_job(
+            queue_dsn=queue_dsn, expected_database=expected_database,
+            expected_login=expected_login, claim=claim,
+            expected_batch_id=expected_batch_id,
+            expected_job_id=expected_job_id,
+            expected_lease_token=claim['lease_token'],
+            expected_attempt_count=expected_attempt_count,
+            expected_source_file_id=expected_source_file_id,
+            worker_key=key, admission_id=admission_id,
+            source_fingerprint=source_fingerprint,
+            subset_adapter=adapter, approval_waiter=approval_waiter,
+            processor=processor)
+
+
 __all__ = [
     "APPROVED_PROFILE",
     "APPROVED_REVISION",
@@ -406,6 +519,7 @@ __all__ = [
     "NeonVideoWorkerError",
     "process_claim",
     "process_one_neon",
+    "process_one_private_neon",
     "stable_review_processor",
     "verify_claimed_source",
     "verify_terminal_output_live",

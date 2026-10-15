@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import stat
+import sys
 import time
 import requests
 from pathlib import Path
@@ -735,6 +736,17 @@ def run_forever(spool_root: Path, poll_seconds: float) -> None:
         time.sleep(poll_seconds)
 
 
+def process_private_one_job_once(**exact_binding):
+    """Explicit one-shot private queue path in the resident runtime.
+
+    A separately authorized launcher supplies the exact binding and an
+    approval waiter. The resident polling loop never selects this path.
+    """
+    from .neon_worker import process_one_private_neon
+
+    return process_one_private_neon(**exact_binding)
+
+
 def _run_precanary_startup_probe(spool_root: Path, poll_seconds: float) -> None:
     """Publish startup identity without recovering or polling any job."""
 
@@ -749,6 +761,12 @@ def _run_precanary_startup_probe(spool_root: Path, poll_seconds: float) -> None:
 
 
 def main() -> None:
+    if __name__ == '__main__' and sys.argv[1:]:
+        if len(sys.argv) != 3 or sys.argv[1] != '--private-one-job':
+            raise RuntimeError('unsupported universal-video one-shot arguments')
+        from .private_one_job_operator import main as private_main
+        private_main()
+        return
     root = Path(os.getenv("UNIVERSAL_VIDEO_SPOOL_ROOT", "/opt/bridge-school/universal-video/spool"))
     poll = max(1.0, float(os.getenv("UNIVERSAL_VIDEO_POLL_SECONDS", "2")))
     if os.getenv(PRECANARY_STARTUP_PROBE_ENV, "") == "1":

@@ -3,8 +3,10 @@
 **Prepared only. No target database, real ACL, resident, CI or deployment was
 changed.** The reviewed 0061/0062 SQL and the explicit callable
 `universal_video.private_one_job_entrypoint.run_private_one_job` are the
-candidate. The entrypoint does not claim a job, load a DSN from the environment,
-start the resident, accept a broad writer credential, or choose a fallback.
+candidate. The explicit one-shot `spool_worker --private-one-job` launcher
+now claims only the selected job and uses the existing restricted queue DSN
+setting. Ordinary resident polling remains unchanged. The private processor
+does not accept a broad writer credential or choose a fallback.
 
 ## Action-time prerequisites, in order
 
@@ -26,17 +28,21 @@ start the resident, accept a broad writer credential, or choose a fallback.
    DML, schema and function privileges using `pg_catalog` and a real session;
    the entrypoint repeats these checks on every private queue connection,
    including before-work, heartbeat, retry and finish.
-4. Select exactly one job and batch through a separately reviewed claim
+4. Select exactly one job and batch through the reviewed one-shot claim
    procedure. Pass the already-claimed job, batch, lease token, attempt,
    source file, admission ID and source fingerprint explicitly. This
    entrypoint will not claim a different job if the selected claim is absent.
    The approver remains a separate login and must approve the current attempt
-   before staging. Since 0061 caps approval expiry at the current lease
-   expiry, coordinate that approval near staging after long computation or
-   expect a safe retry. No automatic approval capability is added.
-5. Invoke `run_private_one_job` once from an explicitly authorized launcher
-   with the queue-only DSN, expected database and login, exact claim fields,
-   and the existing `SubsetWorkerAdapter`. Supply no broad writer DSN. Its
+   before staging. The one-shot path writes a protected claim receipt for
+   that approver, emits a ready notice immediately before staging, then
+   waits for a matching local signal. SQL
+   still verifies the actual approval; the signal is not authorization.
+   No automatic approval capability is added.
+5. Invoke `spool_worker --private-one-job <binding.json>` once through the
+   explicitly authorized one-shot launch procedure. It uses the existing
+   restricted queue DSN and collector, selected job/batch/source/attempt,
+   expected database/login and separate approver signal. Supply no broad
+   writer DSN. Its
    preflight must pass before Drive processing; every queue connection repeats
    the identity/ACL check immediately before its SQL operation. Accept only a
    matching private receipt, `REVIEW_READY`, `released_jobs=0`, no publication or canon write,

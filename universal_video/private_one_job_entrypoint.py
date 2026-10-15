@@ -1,9 +1,9 @@
 """Explicit queue-only entrypoint for one already-claimed private result job.
 
-There is no CLI, environment DSN fallback, claim selection, or resident hook.
-The caller supplies the existing queue DSN and exact claim after an external
-approver has handled the 0061 lease decision. This module never imports the
-broad public-result writer.
+There is no CLI, environment DSN fallback or automatic resident polling.
+An explicit resident one-shot path may claim the exact selected job, then
+wait for a separate 0061 approver before private staging. This module never
+imports the broad public-result writer.
 """
 from __future__ import annotations
 
@@ -39,6 +39,14 @@ _QUEUE_IDENTITY_COLUMNS = (
     'can_use_queue_schema', 'can_stage_private', 'can_read_private',
     'can_finish_private', 'can_finish_old', 'can_assert_old',
     'can_attest_old', 'has_pipeline_dml', 'active_role_matches_login',
+)
+
+_CLAIM_COLUMNS = (
+    'job_id', 'batch_id', 'lease_token', 'sequence', 'source_folder_id',
+    'output_folder_id', 'work_folder_id', 'processing_profile',
+    'algorithm_revision', 'source_file_id', 'source_name', 'source_mime_type',
+    'source_size_bytes', 'source_checksum', 'stable_job_key', 'is_canary',
+    'attempt_count',
 )
 
 _QUEUE_IDENTITY_SQL = """
@@ -86,11 +94,14 @@ def _connect_queue(queue_dsn: str):
 
 
 def _process_private_claim(queue_dsn, claim, worker_key, *, subset_adapter,
-                           staging_handoff):
+                           staging_handoff, approval_waiter=None, processor=None):
     from .neon_worker import process_claim
-    return process_claim(queue_dsn, claim, worker_key,
-                         subset_adapter=subset_adapter,
-                         staging_handoff=staging_handoff)
+    options = dict(subset_adapter=subset_adapter,
+                   staging_handoff=staging_handoff,
+                   private_approval_waiter=approval_waiter)
+    if processor is not None:
+        options['processor'] = processor
+    return process_claim(queue_dsn, claim, worker_key, **options)
 
 
 def _assert_queue_only(connection, *, expected_login: str,
@@ -123,6 +134,93 @@ def _assert_queue_only(connection, *, expected_login: str,
         raise PrivateOneJobConfigurationError('ONE_JOB_QUEUE_IDENTITY_OR_ACL_INVALID')
 
 
+@contextmanager
+def _open_checked_queue(queue_dsn: str, *, expected_login: str,
+                        expected_database: str):
+    try:
+        connection = _connect_queue(queue_dsn)
+    except Exception as exc:
+        raise PrivateOneJobConfigurationError('ONE_JOB_QUEUE_CONNECTION_FAILED') from exc
+    with connection:
+        _assert_queue_only(connection, expected_login=expected_login,
+                           expected_database=expected_database)
+        yield connection
+
+
+def claim_exact_private_job(*, queue_dsn: str, expected_database: str,
+                            expected_login: str, expected_batch_id: str,
+                            expected_job_id: str, expected_source_file_id: str,
+                            expected_attempt_count: int, worker_key: str,
+                            processing_profile: str,
+                            algorithm_revision: str) -> dict[str, Any]:
+    """Commit 0060's subset claim only when it returns the selected job.
+
+    The SQL call and exact-result check share one transaction. A different
+    job, absent row, malformed row or lost connection never commits a claim.
+    The separate approver must authorize the resulting lease afterward.
+    """
+    if (not isinstance(queue_dsn, str) or not queue_dsn.strip()
+            or not isinstance(expected_database, str) or not expected_database
+            or not isinstance(expected_login, str) or not expected_login
+            or not isinstance(worker_key, str)
+            or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,159}', worker_key)
+            or not isinstance(expected_source_file_id, str)
+            or not re.fullmatch(r'[A-Za-z0-9_-]{10,200}', expected_source_file_id)
+            or type(expected_attempt_count) is not int
+            or not 1 <= expected_attempt_count <= 3
+            or not isinstance(processing_profile, str) or not processing_profile
+            or not isinstance(algorithm_revision, str) or not algorithm_revision
+            or os.getenv('BRIDGE_WORKER_DATABASE_URL', '').strip()):
+        raise PrivateOneJobConfigurationError('ONE_JOB_PRIVATE_CONFIG_INVALID')
+    batch_id = _exact_uuid(expected_batch_id)
+    job_id = _exact_uuid(expected_job_id)
+    with _open_checked_queue(queue_dsn, expected_login=expected_login,
+                             expected_database=expected_database) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'SELECT * FROM video_queue.subset_claim_job(%s,%s,%s,%s,%s)',
+                (batch_id, worker_key, 900, processing_profile,
+                 algorithm_revision))
+            row = cursor.fetchone()
+            names = (tuple(column.name for column in cursor.description)
+                     if row is not None and not isinstance(row, Mapping) else ())
+        if isinstance(row, Mapping):
+            claim = dict(row)
+        elif isinstance(row, (tuple, list)) and names == _CLAIM_COLUMNS:
+            claim = dict(zip(names, row))
+        else:
+            claim = None
+        if (claim is None or set(claim) != set(_CLAIM_COLUMNS)
+                or str(claim['job_id']) != job_id
+                or str(claim['batch_id']) != batch_id
+                or claim['source_file_id'] != expected_source_file_id
+                or claim['processing_profile'] != processing_profile
+                or claim['algorithm_revision'] != algorithm_revision
+                or type(claim['attempt_count']) is not int
+                or claim['attempt_count'] != expected_attempt_count
+                or type(claim['is_canary']) is not bool
+                or type(claim['sequence']) is not int
+                or claim['sequence'] < 1
+                or not isinstance(claim['stable_job_key'], str)
+                or not re.fullmatch(r'[0-9a-f]{32}', claim['stable_job_key'])
+                or any(not isinstance(claim[name], str)
+                       or not re.fullmatch(r'[A-Za-z0-9_-]{10,200}', claim[name])
+                       for name in ('source_folder_id', 'output_folder_id',
+                                    'work_folder_id'))
+                or not isinstance(claim['source_mime_type'], str)
+                or not claim['source_mime_type'].startswith('video/')
+                or type(claim['source_size_bytes']) is not int
+                or claim['source_size_bytes'] <= 0):
+            raise PrivateOneJobConfigurationError('ONE_JOB_EXACT_CLAIM_MISMATCH')
+        try:
+            claim['lease_token'] = _exact_uuid(claim['lease_token'])
+        except PrivateOneJobConfigurationError as exc:
+            raise PrivateOneJobConfigurationError('ONE_JOB_EXACT_CLAIM_MISMATCH') from exc
+        claim['job_id'] = job_id
+        claim['batch_id'] = batch_id
+    return claim
+
+
 def _exact_uuid(value: Any) -> str:
     try:
         return str(UUID(str(value)))
@@ -136,11 +234,12 @@ def run_private_one_job(*, queue_dsn: str, expected_database: str,
                         expected_lease_token: str, expected_attempt_count: int,
                         expected_source_file_id: str, worker_key: str,
                         admission_id: str, source_fingerprint: str,
-                        subset_adapter: SubsetWorkerAdapter) -> dict[str, Any]:
+                        subset_adapter: SubsetWorkerAdapter,
+                        approval_waiter=None, processor=None) -> dict[str, Any]:
     """Run only the explicitly selected lease with the private 0062 route.
 
     The claim is already leased. This entrypoint neither claims another job
-    nor falls back to the broad writer, old public-candidate path, or resident.
+    nor falls back to the broad writer, old public-candidate path, or polling.
     Every private queue connection repeats the ACL identity check at use.
     """
     if (not isinstance(queue_dsn, str) or not queue_dsn.strip()
@@ -170,13 +269,8 @@ def run_private_one_job(*, queue_dsn: str, expected_database: str,
 
     @contextmanager
     def open_checked_connection():
-        try:
-            connection = _connect_queue(queue_dsn)
-        except Exception as exc:
-            raise PrivateOneJobConfigurationError('ONE_JOB_QUEUE_CONNECTION_FAILED') from exc
-        with connection:
-            _assert_queue_only(connection, expected_login=expected_login,
-                               expected_database=expected_database)
+        with _open_checked_queue(queue_dsn, expected_login=expected_login,
+                                 expected_database=expected_database) as connection:
             yield connection
 
     # Check once before Drive processing, then at every queue SQL connection.
@@ -193,9 +287,17 @@ def run_private_one_job(*, queue_dsn: str, expected_database: str,
         claim=claim, worker_key=worker_key, admission_id=admission_id,
         source_fingerprint=source_fingerprint,
         open_connection=open_checked_connection)
-    return _process_private_claim(queue_dsn, claim, worker_key,
-                                  subset_adapter=checked_adapter,
-                                  staging_handoff=handoff)
+    selected = dict(subset_adapter=checked_adapter, staging_handoff=handoff)
+    if approval_waiter is not None:
+        if not callable(approval_waiter):
+            raise PrivateOneJobConfigurationError('ONE_JOB_APPROVAL_WAITER_INVALID')
+        selected['approval_waiter'] = approval_waiter
+    if processor is not None:
+        if not callable(processor):
+            raise PrivateOneJobConfigurationError('ONE_JOB_PROCESSOR_INVALID')
+        selected['processor'] = processor
+    return _process_private_claim(queue_dsn, claim, worker_key, **selected)
 
 
-__all__ = ['run_private_one_job', 'PrivateOneJobConfigurationError']
+__all__ = ['claim_exact_private_job', 'run_private_one_job',
+           'PrivateOneJobConfigurationError']
