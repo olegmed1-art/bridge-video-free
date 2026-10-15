@@ -1,5 +1,40 @@
 # Fixed-subset connector installation and capability recovery
 
+## ACL/owner evidence (local preparation only)
+
+`acl_snapshot.py` collects a consistent, read-only PostgreSQL catalog snapshot from
+an already-open autocommit psycopg connection. It has no connector, DSN parser, or
+database target. The JSON contains object owners, raw and expanded object/column
+ACLs (including grantors and grant options), non-system role attributes and
+membership options, global and schema default privileges, and MD5 digests of
+function definitions. It excludes role passwords, connection strings, function
+bodies, and application rows. Keep the local artifact restricted because role
+names and the permission graph are operational metadata.
+
+Capture immediately before 0059/0060 installation and after any recovery; compare
+with `assert_restored(before, after, allowed_memberships=...)`. The allowlist must
+be reviewed against the pre-install graph. The comparison requires exact restoration
+of every pre-install owner, ACL, definition digest, column grant, default privilege,
+membership and role attribute, while permitting retained new subset objects and
+NOLOGIN roles. It rejects PUBLIC or unknown legacy writers, new subset API grants,
+unreviewed writer-role membership, and even implicit PUBLIC function EXECUTE in
+global defaults. A failed comparison is a stop condition: do not apply guessed
+GRANTs or broad writer permissions to make it pass. The existing recovery SQL
+remains the rollback mechanism; this collector is evidence and a gate, not a
+privilege-changing repair tool.
+
+`database/tests/fixed_subset_admission/test_acl_snapshot_pg18.py` is an opt-in
+synthetic localhost PG18 test. It proves read-only collection, transaction rollback
+after GRANT/owner change, committed ACL/owner restoration, rejection of broad
+writer/default/membership grants, retained new objects and roles, and scoped test
+cleanup. The existing `connector_recovery_fixture.py` separately executes the
+exact 0059/0060 installer/verifier/recovery SQL and compares legacy ACL/owner state;
+this focused test does not claim to have rerun that full fixture.
+It requires `SUBSET_SYNTHETIC_PG18=1` and
+`SUBSET_SYNTHETIC_PG18_DATADIR` pointing to a disposable directory under the
+machine's temporary directory named `subset-acl-pg18-*`; the test independently
+checks the server's actual data directory before creating or dropping anything.
+
 ASSURED/I2 candidate. Production execution requires a separate action-time approval.
 No CLI here connects to a database. The single synthetic CI has its own fixed
 localhost fixture; never give it a production DSN.
