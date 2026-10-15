@@ -14,7 +14,8 @@ pinned hash.
 
 `bridge_vision/bridgit_holdout_manifest.py` now checks the structure of a
 two-frame local manifest: exact file SHA-256, PNG signature and dimensions,
-distinct frame bytes, increasing PTS claims, adjacent observation indices,
+distinct frame bytes, increasing PTS claims within the versioned 10-second
+adjacency bound, adjacent observation indices,
 two matching `READ` board-number observations per frame, and matching
 source-video hash, episode ID, board epoch, and board number across both
 frames. It resolves frame paths under the supplied root and rejects absent or

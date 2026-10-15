@@ -17,6 +17,7 @@ def test_reader_accepts_clear_synthetic_compass_digits(number):
 
 
 def test_reader_rejects_blank_or_unsupported_frame():
+    pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")
     assert read_board_number(np.full((1010, 1920, 3), 215, dtype=np.uint8))["status"] == "UNREADABLE"
     assert read_board_number(np.full((100, 100, 3), 215, dtype=np.uint8))["reason"] == "UNSUPPORTED_FRAME"

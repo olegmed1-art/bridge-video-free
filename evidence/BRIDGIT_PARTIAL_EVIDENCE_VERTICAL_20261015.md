@@ -6,10 +6,12 @@ sample spacing, frame identity, and shadow aggregation. It requires a matching
 the profile's 10,000 ms neighbor bound; a confirmed upper-right board number;
 explicit source-video SHA-256, episode, board occurrence, frame dimensions,
 independent frame hashes, timestamps, and consecutive observation indices.
-Tracks split when identity or timing changes. Unknown identity fails closed.
+Tracks split when identity or timing changes. A replayed frame hash anywhere in
+the input fails closed. Unknown identity fails closed.
 
 The `accumulate_detected_frames` entry point checks local frame bytes against
-their declared SHA-256, calls a supplied card detector, and passes accepted
+their declared SHA-256, passes a private verified snapshot to the detector,
+checks that snapshot again after observation, and passes accepted
 visual observations to the same aggregator. The vertical regression uses the
 existing `NativeFourSeatCardDetector` with an explicitly synthetic stub
 backend. Two partial samples contribute three distinct observed cards; the

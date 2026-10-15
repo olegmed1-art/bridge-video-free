@@ -149,6 +149,15 @@ def test_repeated_same_seat_card_has_one_slot_with_two_supports(tmp_path: Path):
         sample["frame_sha256"] for sample in samples]
 
 
+def test_nonadjacent_replay_of_first_frame_hash_fails_closed(tmp_path: Path):
+    samples, payloads = _samples(tmp_path)
+    _append_third_sample(samples, payloads, tmp_path, [_card("AS", "N")])
+    samples[2]["frame_path"].write_bytes(samples[0]["frame_path"].read_bytes())
+    samples[2]["frame_sha256"] = samples[0]["frame_sha256"]
+    with pytest.raises(PartialEvidenceError, match="FRAME_HASH_REPLAY"):
+        _run(samples, payloads)
+
+
 def test_rejected_observation_cannot_replace_its_frame_hash(tmp_path: Path):
     samples, _ = _samples(tmp_path)
     frame = dict(samples[0], recognizer_version="synthetic-detector-v1", observations=[],
@@ -196,3 +205,32 @@ def test_frame_bytes_must_match_manifest(tmp_path: Path):
     samples[1]["frame_sha256"] = "0" * 64
     with pytest.raises(PartialEvidenceError, match="FRAME_HASH_MISMATCH"):
         _run(samples, payloads)
+
+
+def test_detector_observes_verified_snapshot_if_source_is_replaced(tmp_path: Path):
+    samples, payloads = _samples(tmp_path)
+    sample = samples[0]
+    original = sample["frame_path"].read_bytes()
+
+    def detector(snapshot: Path):
+        assert snapshot != sample["frame_path"]
+        sample["frame_path"].write_bytes(b"replacement-after-hash")
+        assert snapshot.read_bytes() == original
+        return NativeFourSeatCardDetector(lambda path: payloads[path.name])(snapshot)
+
+    track = accumulate_detected_frames([sample], detector=detector,
+                                       contract=_contract())["tracks"][0]
+    assert track["frame_sha256s"] == [sample["frame_sha256"]]
+    assert track["deal"]["hands"]["N"]["cards"] == ["AS"]
+
+
+def test_detector_cannot_mutate_verified_snapshot_without_rejection(tmp_path: Path):
+    samples, payloads = _samples(tmp_path)
+
+    def detector(snapshot: Path):
+        result = NativeFourSeatCardDetector(lambda path: payloads[path.name])(snapshot)
+        snapshot.write_bytes(b"mutated-during-detection")
+        return result
+
+    with pytest.raises(PartialEvidenceError, match="FRAME_SNAPSHOT_CHANGED"):
+        accumulate_detected_frames([samples[0]], detector=detector, contract=_contract())

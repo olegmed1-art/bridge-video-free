@@ -1,5 +1,6 @@
 {
   "schema_version": "bridgit-adjacent-holdout-v1",
+  "sampling_profile_version": "bridgit-adjacent-candidate-v1",
   "source_video": null,
   "episode_id": null,
   "board_epoch": null,

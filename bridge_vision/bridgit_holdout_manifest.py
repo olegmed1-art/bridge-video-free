@@ -12,6 +12,8 @@ import struct
 from pathlib import Path
 from typing import Any, Mapping
 
+from bridge_vision.bridgit_adjacent_candidate_profile import PROFILE
+
 SCHEMA_VERSION = "bridgit-adjacent-holdout-v1"
 PNG_HEADER = b"\x89PNG\r\n\x1a\n"
 
@@ -40,6 +42,8 @@ def validate_holdout_manifest(data: Mapping[str, Any], root: Path) -> dict[str, 
     issues: list[str] = []
     if data.get("schema_version") != SCHEMA_VERSION:
         issues.append("SCHEMA_VERSION")
+    if data.get("sampling_profile_version") != PROFILE.version:
+        issues.append("SAMPLING_PROFILE_MISMATCH")
     source = data.get("source_video")
     if not isinstance(source, Mapping) or not _nonempty(source.get("id")) or not _sha(source.get("sha256")):
         issues.append("SOURCE_VIDEO_IDENTITY_MISSING")
@@ -113,6 +117,8 @@ def validate_holdout_manifest(data: Mapping[str, Any], root: Path) -> dict[str, 
         issues.append("FRAMES_NOT_INDEPENDENT")
     if len(pts) == 2 and pts[1] <= pts[0]:
         issues.append("PTS_NOT_INCREASING")
+    if len(pts) == 2 and pts[1] - pts[0] > PROFILE.max_gap_ms:
+        issues.append("PTS_GAP_EXCEEDS_PROFILE")
     if len(indices) == 2 and indices[1] != indices[0] + 1:
         issues.append("OBSERVATIONS_NOT_ADJACENT")
     if len(dimensions) == 2 and dimensions[0] != dimensions[1]:

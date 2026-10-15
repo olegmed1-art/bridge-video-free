@@ -116,7 +116,7 @@ def test_synthetic_observer_receives_bound_sprite_and_accumulates_review_only(
 
     def observer(path, sprite):
         called.append((path, sprite.sprite_sha256))
-        card = "AS" if path == samples[0]["frame_path"] else "KS"
+        card = "AS" if path.name == samples[0]["frame_path"].name else "KS"
         return {"table_region": {"x": 0, "y": 0, "w": 100, "h": 100},
                 "cards": [{"card": card, "confidence": 0.95,
                            "box": {"x": 45, "y": 5, "w": 10, "h": 10}}]}
@@ -135,7 +135,8 @@ def test_synthetic_observer_receives_bound_sprite_and_accumulates_review_only(
     assert all(receipt["coordinate_space"] == "LOCAL_FRAME_PNG"
                and receipt["board_number_read_from_pixels"] is None
                for receipt in result["detector_receipts"])
-    assert called == [(sample["frame_path"], pinned_sprite_sha256(5)) for sample in samples]
+    assert [(path.name, sprite_sha) for path, sprite_sha in called] == [
+        (sample["frame_path"].name, pinned_sprite_sha256(5)) for sample in samples]
 
 
 @pytest.mark.parametrize("fault,error", [
@@ -248,7 +249,8 @@ def test_real_shadow_receipt_binds_declared_and_decoded_size(
                         lambda image: {"status": "READ", "number": 12})
     observer = _SyntheticAutoObserver()
     result = _run(samples, tmp_path, observer)
-    assert observer.called == [sample["frame_path"] for sample in samples]
+    assert [path.name for path in observer.called] == [
+        sample["frame_path"].name for sample in samples]
     assert [receipt["decoded_frame_size"] for receipt in result["detector_receipts"]] == [
         sample["raw_frame_size"] for sample in samples]
     assert [receipt["raw_frame_size"] for receipt in result["detector_receipts"]] == [

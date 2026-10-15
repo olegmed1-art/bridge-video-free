@@ -10,6 +10,7 @@ import hashlib
 import math
 from pathlib import Path
 import re
+import tempfile
 from typing import Any, Callable, Mapping, Sequence
 
 from bridge_contracts.video_deal import FULL_DECK, SEATS, canonicalize_video_deal
@@ -159,10 +160,14 @@ def accumulate_partial_frames(
     contract.validate()
     tracks: list[list[Mapping[str, Any]]] = []
     identities: list[tuple[Any, ...]] = []
+    seen_hashes: set[str] = set()
     for frame in frames:
         if not isinstance(frame, Mapping):
             raise PartialEvidenceError("FRAME_INVALID")
         identity = _frame_identity(frame)
+        if frame["frame_sha256"] in seen_hashes:
+            raise PartialEvidenceError("FRAME_HASH_REPLAY")
+        seen_hashes.add(frame["frame_sha256"])
         if tracks:
             previous = tracks[-1][-1]
             gap = frame["timestamp_ms"] - previous["timestamp_ms"]
@@ -194,35 +199,47 @@ def accumulate_detected_frames(
 ) -> dict[str, Any]:
     """Bind local frame bytes to a card detector, then accumulate shadow evidence.
 
-    The detector must be independently authorized for real pixels. This entry
+    The detector receives a private byte-for-byte snapshot with the original
+    basename. Source-path replacement cannot change the pixels it observes.
+    The detector must be independently authorized for real pixels; this entry
     point performs no activation or reference verification on its behalf.
     """
     contract.validate()
     records: list[dict[str, Any]] = []
-    for sample in samples:
-        if not isinstance(sample, Mapping):
-            raise PartialEvidenceError("FRAME_INVALID")
-        path = sample.get("frame_path")
-        if not isinstance(path, Path) or not path.is_file():
-            raise PartialEvidenceError("FRAME_FILE_UNAVAILABLE")
-        raw_hash = hashlib.sha256(path.read_bytes()).hexdigest()
-        if raw_hash != sample.get("frame_sha256"):
-            raise PartialEvidenceError("FRAME_HASH_MISMATCH")
-        detected = detector(path)
-        evidence = detected.get("evidence") if isinstance(detected, Mapping) else None
-        if not isinstance(evidence, Mapping) or not isinstance(evidence.get("accepted"), list):
-            raise PartialEvidenceError("DETECTOR_EVIDENCE_INVALID")
-        observations = [
-            {"status": "ACCEPTED_VISUAL", "source": "VISUAL", "seat": item.get("seat"),
-             "card": item.get("card"), "confidence": item.get("confidence")}
-            for item in evidence["accepted"] if isinstance(item, Mapping)
-        ]
-        record = dict(sample)
-        record.pop("frame_path")
-        record["recognizer_version"] = evidence.get("detector_version")
-        record["observations"] = observations
-        record["rejected_observations"] = evidence.get("rejected") or []
-        records.append(record)
+    with tempfile.TemporaryDirectory(prefix="bridgit-partial-snapshot-") as directory:
+        for index, sample in enumerate(samples):
+            if not isinstance(sample, Mapping):
+                raise PartialEvidenceError("FRAME_INVALID")
+            path = sample.get("frame_path")
+            if not isinstance(path, Path) or not path.is_file():
+                raise PartialEvidenceError("FRAME_FILE_UNAVAILABLE")
+            raw = path.read_bytes()
+            raw_hash = hashlib.sha256(raw).hexdigest()
+            if raw_hash != sample.get("frame_sha256"):
+                raise PartialEvidenceError("FRAME_HASH_MISMATCH")
+            snapshot_dir = Path(directory) / f"{index:08d}"
+            snapshot_dir.mkdir()
+            snapshot = snapshot_dir / path.name
+            snapshot.write_bytes(raw)
+            if hashlib.sha256(snapshot.read_bytes()).hexdigest() != raw_hash:
+                raise PartialEvidenceError("FRAME_SNAPSHOT_MISMATCH")
+            detected = detector(snapshot)
+            if hashlib.sha256(snapshot.read_bytes()).hexdigest() != raw_hash:
+                raise PartialEvidenceError("FRAME_SNAPSHOT_CHANGED")
+            evidence = detected.get("evidence") if isinstance(detected, Mapping) else None
+            if not isinstance(evidence, Mapping) or not isinstance(evidence.get("accepted"), list):
+                raise PartialEvidenceError("DETECTOR_EVIDENCE_INVALID")
+            observations = [
+                {"status": "ACCEPTED_VISUAL", "source": "VISUAL", "seat": item.get("seat"),
+                 "card": item.get("card"), "confidence": item.get("confidence")}
+                for item in evidence["accepted"] if isinstance(item, Mapping)
+            ]
+            record = dict(sample)
+            record.pop("frame_path")
+            record["recognizer_version"] = evidence.get("detector_version")
+            record["observations"] = observations
+            record["rejected_observations"] = evidence.get("rejected") or []
+            records.append(record)
     return accumulate_partial_frames(records, contract=contract)
 
 

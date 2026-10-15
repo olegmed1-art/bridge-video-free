@@ -109,7 +109,13 @@ def accumulate_gambler_partial_frames(
     receipts: list[dict[str, Any]] = []
 
     def detect(path: Path) -> dict[str, Any]:
-        sample = by_path[path.resolve()]
+        try:
+            index = int(path.parent.name)
+            sample = bound_samples[index]
+            if index < 0 or path.name != sample["frame_path"].name:
+                raise ValueError("snapshot identity mismatch")
+        except (ValueError, IndexError) as exc:
+            raise PartialEvidenceError("FRAME_SNAPSHOT_MISMATCH") from exc
         board_read = None
         decoded_size = None
         if sample["data_class"] == "REAL_SHADOW":

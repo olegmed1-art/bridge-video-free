@@ -26,7 +26,8 @@ video SHA-256, explicit episode ID, board occurrence, two matching `READ`
 board-number observations, raw-frame dimensions, PTS in milliseconds,
 consecutive observation index and data class. The adapter binds a sprite-based
 reference ID, validates declared identity before invoking the observer, checks
-local frame bytes against the declared SHA-256, and passes visual observations
+local frame bytes against the declared SHA-256, observes a private verified
+snapshot so replacement of the source path cannot change its pixels, and passes visual observations
 through the four-seat detector to the adjacent-frame accumulator. All tracks
 remain `REVIEW_*`; canonical promotion and real-video accuracy are false.
 The declared video source, episode and PTS still need independent upstream

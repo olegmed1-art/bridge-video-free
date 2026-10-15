@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from bridge_vision.bridgit_holdout_manifest import SCHEMA_VERSION, validate_holdout_manifest
+from bridge_vision.bridgit_adjacent_candidate_profile import PROFILE
 
 
 def _png(value: int) -> bytes:
@@ -39,6 +40,7 @@ def _manifest(root: Path) -> dict:
         })
     return {
         "schema_version": SCHEMA_VERSION,
+        "sampling_profile_version": PROFILE.version,
         "source_video": {"id": "synthetic-video", "sha256": "a" * 64},
         "episode_id": "synthetic-episode", "board_epoch": 1,
         "board_number": 12, "frames": frames,
@@ -54,6 +56,30 @@ def test_synthetic_pair_is_structurally_valid_but_not_accuracy_evidence(tmp_path
 
 def test_non_object_manifest_fails_closed(tmp_path: Path):
     assert validate_holdout_manifest([], tmp_path)["issues"] == ["MANIFEST_INVALID"]
+
+
+@pytest.mark.parametrize("change,issue", [
+    ("missing_profile", "SAMPLING_PROFILE_MISMATCH"),
+    ("wrong_profile", "SAMPLING_PROFILE_MISMATCH"),
+    ("far_pts", "PTS_GAP_EXCEEDS_PROFILE"),
+])
+def test_holdout_requires_versioned_adjacent_time_bound(tmp_path: Path, change: str, issue: str):
+    data = _manifest(tmp_path)
+    if change == "missing_profile":
+        data.pop("sampling_profile_version")
+    elif change == "wrong_profile":
+        data["sampling_profile_version"] = "unknown-profile"
+    else:
+        data["frames"][1]["pts_ms"] = data["frames"][0]["pts_ms"] + PROFILE.max_gap_ms + 1
+    result = validate_holdout_manifest(data, tmp_path)
+    assert result["status"] == "BLOCKED"
+    assert issue in result["issues"]
+
+
+def test_holdout_accepts_exact_profile_maximum_gap(tmp_path: Path):
+    data = _manifest(tmp_path)
+    data["frames"][1]["pts_ms"] = data["frames"][0]["pts_ms"] + PROFILE.max_gap_ms
+    assert validate_holdout_manifest(data, tmp_path)["status"] == "STRUCTURAL_PASS"
 
 
 def test_existing_single_frame_receipt_cannot_be_promoted_to_two_frame_holdout(tmp_path: Path):
