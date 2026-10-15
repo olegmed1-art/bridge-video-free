@@ -49,4 +49,6 @@ jobs:
           tests/test_book_world_admission.py
           tests/test_book_teacher_api.py tests/test_book_world_postgres.py
           tests/test_book_runtime_identity.py tests/test_book_source_identity.py
+          tests/test_book_source_registration.py
+          tests/test_book_source_registration_postgres.py
           tests/test_knowledge_read_api.py tests/test_canon_source_domain_policy.py
