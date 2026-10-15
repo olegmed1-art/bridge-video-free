@@ -136,7 +136,8 @@ class OutboxPublicationDecisionTests(unittest.TestCase):
             paths = (
                 "database/outbox_publisher.py", "database/outbox_publication_decision.py",
                 "bridge_neon_persistence.py", "database/backfill_video_results.py",
-                "database/video_result_persistence.py", "database/runtime_worker_preflight.py",
+                "database/video_result_persistence.py", "database/source_registration.py",
+                "database/source_identity_persistence.py", "database/runtime_worker_preflight.py",
                 "run_master_3_1_free_semantic_v2.py", "run_master_3_1_free_semantic.py",
             )
             for name in paths:

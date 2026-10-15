@@ -25,6 +25,9 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from database.runtime_worker_preflight import normalize_dsn
+from database.source_registration import (
+    lock_source_registration, register_source, require_drive_file_id,
+)
 
 SCHOOL_STABLE_NAME = "Школа спортивного бриджа"
 EXPECTED_SCHEMA = "bridge-tournament-facts-v1"
@@ -162,6 +165,7 @@ def _event_parts(provider_key: str) -> tuple[str, str]:
 def import_facts(raw_dsn: str, data: dict[str, Any]) -> dict[str, Any]:
     dsn = normalize_dsn(raw_dsn)
     source = data["source"]
+    require_drive_file_id(source["drive_id"])
     tournament = data["tournament"]
     rows = data["parsed_rows"]
     event_no, round_no = _event_parts(tournament["provider_native_key"])
@@ -175,6 +179,7 @@ def import_facts(raw_dsn: str, data: dict[str, Any]) -> dict[str, Any]:
 
     with psycopg.connect(dsn, connect_timeout=10, application_name="bridge-tournament-facts-import") as conn:
         with conn.cursor() as cur:
+            lock_source_registration(cur)
             cur.execute("SELECT school_id FROM public.school WHERE stable_name=%s", (SCHOOL_STABLE_NAME,))
             school_rows = cur.fetchall()
             if len(school_rows) != 1:
@@ -210,21 +215,10 @@ def import_facts(raw_dsn: str, data: dict[str, Any]) -> dict[str, Any]:
 
             profile_before = profile_counts()
 
-            cur.execute(
-                """
-                INSERT INTO public.source
-                    (source_id, school_id, source_type, title, canonical_locator, trust_class, rights_notes, status)
-                VALUES (%s,%s,'tournament_report',%s,%s,'derived_checked',%s,'active')
-                ON CONFLICT (source_id) DO NOTHING
-                """,
-                (
-                    source_id,
-                    school_id,
-                    source["title"],
-                    f"drive:{source['drive_id']}",
-                    "Derived school tournament report; official bridge.co.il URLs are preserved in tournament/source-observation metadata.",
-                ),
-            )
+            register_source(cur, school_id=school_id, source_id=source_id,
+                source_type="tournament_report", title=source["title"],
+                locator=f"drive:{source['drive_id']}", trust_class="derived_checked",
+                rights_notes="Derived school tournament report; official bridge.co.il URLs are preserved in tournament/source-observation metadata.")
 
             source_provider_identity_id = _stable_uuid("source-identity", source_id, source_asset_identity_key)
             cur.execute(

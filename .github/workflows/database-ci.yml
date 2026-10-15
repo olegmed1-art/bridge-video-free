@@ -188,6 +188,8 @@ jobs:
             database/outbox_publisher.py \
             database/outbox_publication_decision.py \
             database/video_result_persistence.py \
+            database/source_registration.py \
+            database/book_source_operator.py \
             database/runtime_worker_persistence_smoke.py \
             database/backfill_video_results.py \
             bridge_neon_persistence.py \

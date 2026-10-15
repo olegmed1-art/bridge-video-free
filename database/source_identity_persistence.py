@@ -9,6 +9,9 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from database.runtime_worker_preflight import normalize_dsn
+from database.source_registration import (
+    check_source_registration, lock_source_registration, require_drive_file_id,
+)
 
 
 def _stable_uuid(kind: str, *parts: object) -> uuid.UUID:
@@ -43,10 +46,10 @@ def ensure_drive_source_identity(
 def ensure_drive_source_identity_on_connection(conn, *, source_drive_id, display_name, job_id=None):
     """Existing writer on an authorized connection; use an outer transaction
     to combine helpers atomically (an idle connection commits this transaction).
+    Acquire the shared source barrier before any outer application write/row or
+    advisory lock; the actual transaction must be READ COMMITTED.
     """
-    source_drive_id = str(source_drive_id or "").strip()
-    if not source_drive_id:
-        raise ValueError("source_drive_id is required")
+    source_drive_id = require_drive_file_id(source_drive_id)
 
     source_id = drive_source_id(source_drive_id)
     native_key = drive_source_native_key(source_drive_id)
@@ -61,12 +64,14 @@ def ensure_drive_source_identity_on_connection(conn, *, source_drive_id, display
 
     with conn.transaction():
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM public.source WHERE source_id=%s",
-                (source_id,),
-            )
-            if cur.fetchone() is None:
+            lock_source_registration(cur)
+            cur.execute("SELECT school_id FROM public.source WHERE source_id=%s",
+                        (source_id,))
+            source_row = cur.fetchone()
+            if source_row is None:
                 raise RuntimeError("SOURCE_IDENTITY_SOURCE_NOT_FOUND")
+            check_source_registration(cur, school_id=source_row[0], source_id=source_id,
+                                      locator=f"gdrive:file:{source_drive_id}")
             cur.execute(
                 """
                 INSERT INTO public.source_identity
@@ -88,6 +93,8 @@ def ensure_drive_source_identity_on_connection(conn, *, source_drive_id, display
                 ),
             )
             stored_id, first_seen_at, last_seen_at = cur.fetchone()
+            check_source_registration(cur, school_id=source_row[0], source_id=source_id,
+                                      locator=f"gdrive:file:{source_drive_id}")
 
     return {
         "source_identity_id": str(stored_id),
