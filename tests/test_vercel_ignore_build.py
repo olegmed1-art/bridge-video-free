@@ -1,5 +1,6 @@
 """Offline contract for the Vercel Ignored Build Step."""
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -8,9 +9,18 @@ import tempfile
 
 
 GATE = Path(__file__).resolve().parents[1] / "scripts" / "vercel_ignore_build.sh"
+ROOT = GATE.parents[1]
 BASH = shutil.which("bash")
 SHA = "a" * 40
 OTHER_SHA = "b" * 40
+
+
+def test_deployment_commit_contains_gate_and_whitelist():
+    config = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
+    assert config["ignoreCommand"] == "bash scripts/vercel_ignore_build.sh"
+    ignore = (ROOT / ".vercelignore").read_text(encoding="utf-8").splitlines()
+    assert "!scripts" in ignore
+    assert "!scripts/vercel_ignore_build.sh" in ignore
 
 
 def run_gate(**changes):
@@ -20,6 +30,7 @@ def run_gate(**changes):
         "VERCEL_ENV",
         "VERCEL_GIT_COMMIT_SHA",
         "VERCEL_APPROVED_RUNTIME_SHA",
+        "VERCEL_APPROVED_PREVIEW_SHA",
         "VERCEL_GIT_PREVIOUS_SHA",
     ):
         env.pop(name, None)
@@ -47,7 +58,7 @@ def run_gate(**changes):
 def test_exact_main_production_release_builds_without_git():
     result = run_gate()
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "exact runtime release approved; build" in result.stdout
+    assert "exact release approved; build" in result.stdout
 
 
 def test_unapproved_and_different_commits_skip():
@@ -74,16 +85,50 @@ def test_nonproduction_and_nonmain_skip_even_when_approved():
         assert result.returncode == 0, (changes, result.stdout, result.stderr)
 
 
+def test_preview_requires_separate_exact_sha_and_nonmain_ref():
+    approved = run_gate(
+        VERCEL_GIT_COMMIT_REF="feature/runtime",
+        VERCEL_ENV="preview",
+        VERCEL_APPROVED_RUNTIME_SHA=OTHER_SHA,
+        VERCEL_APPROVED_PREVIEW_SHA=SHA,
+    )
+    assert approved.returncode == 1, approved.stdout + approved.stderr
+    production_with_preview_only = run_gate(
+        VERCEL_APPROVED_RUNTIME_SHA=None,
+        VERCEL_APPROVED_PREVIEW_SHA=SHA,
+    )
+    assert production_with_preview_only.returncode == 0
+    for changes in (
+        {"VERCEL_APPROVED_PREVIEW_SHA": None},
+        {"VERCEL_APPROVED_PREVIEW_SHA": OTHER_SHA},
+        {"VERCEL_APPROVED_PREVIEW_SHA": "$(exit 1)"},
+        {"VERCEL_GIT_COMMIT_REF": "main"},
+        {"VERCEL_GIT_COMMIT_REF": ""},
+        {"VERCEL_ENV": "production"},
+    ):
+        env = {
+            "VERCEL_GIT_COMMIT_REF": "feature/runtime",
+            "VERCEL_ENV": "preview",
+            "VERCEL_APPROVED_RUNTIME_SHA": None,
+            "VERCEL_APPROVED_PREVIEW_SHA": SHA,
+        }
+        env.update(changes)
+        result = run_gate(**env)
+        assert result.returncode == 0, (changes, result.stdout, result.stderr)
+
+
 def test_missing_git_comparison_base_cannot_trigger_build():
     result = run_gate(VERCEL_APPROVED_RUNTIME_SHA=None, VERCEL_GIT_PREVIOUS_SHA=None)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
 def main():
+    test_deployment_commit_contains_gate_and_whitelist()
     test_exact_main_production_release_builds_without_git()
     test_unapproved_and_different_commits_skip()
     test_missing_or_invalid_commit_skips()
     test_nonproduction_and_nonmain_skip_even_when_approved()
+    test_preview_requires_separate_exact_sha_and_nonmain_ref()
     test_missing_git_comparison_base_cannot_trigger_build()
     print("VERCEL_IGNORE_BUILD_CONTRACT_PASS")
 
