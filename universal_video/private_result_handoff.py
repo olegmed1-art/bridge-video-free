@@ -17,6 +17,10 @@ class PrivateResultHandoffError(RuntimeError):
     error_code = 'UV_PRIVATE_RESULT_HANDOFF_FAILED'
 
 
+class PrivateOneJobConfigurationError(PrivateResultHandoffError):
+    """Stop the private route without a worker retry or alternate writer."""
+
+
 _BOUND = ('batch_id', 'job_id', 'lease_token', 'stable_job_key',
           'source_file_id', 'algorithm_revision', 'attempt_count',
           'output_folder_id')
@@ -63,4 +67,5 @@ class PrivateResultStagingHandoff:
         return staged
 
 
-__all__ = ['PrivateResultStagingHandoff', 'PrivateResultHandoffError']
+__all__ = ['PrivateResultStagingHandoff', 'PrivateResultHandoffError',
+           'PrivateOneJobConfigurationError']

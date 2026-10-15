@@ -18,7 +18,9 @@ if sys.platform == 'win32':
     sys.modules['universal_video.workload_lock'] = workload_lock
 
 from universal_video import neon_worker
-from universal_video.private_result_handoff import PrivateResultStagingHandoff
+from universal_video.private_result_handoff import (
+    PrivateOneJobConfigurationError, PrivateResultStagingHandoff,
+)
 from universal_video.subset_worker import SubsetWorkerAdapter
 
 
@@ -132,6 +134,20 @@ class PrivateWorkerTest(unittest.TestCase):
         self.assertNotIn('finish_subset_job', seen[0][0])
         self.assertEqual(seen[0][1][0], self.admission_id)
         self.assertEqual(seen[0][1][7], after)
+
+    def test_late_acl_change_stops_without_retry_or_old_finish(self):
+        with patch.object(neon_worker, '_Heartbeat', NoHeartbeat), \
+             patch.object(neon_worker, '_processing_timeout', nullcontext), \
+             patch.object(neon_worker, 'access_token', return_value='synthetic'), \
+             patch.object(neon_worker, 'verify_claimed_source', return_value={'id': 'same'}), \
+             patch.object(neon_worker, 'verify_terminal_output_live'), \
+             patch('universal_video.private_result_handoff.stage_completed_drive_result_private',
+                   side_effect=PrivateOneJobConfigurationError('ONE_JOB_QUEUE_IDENTITY_OR_ACL_INVALID')):
+            with self.assertRaises(PrivateOneJobConfigurationError):
+                neon_worker.process_claim(
+                    'synthetic-queue-dsn', self.claim, 'queue-worker',
+                    processor=lambda claim: {'terminal_evidence_sha256': 'c' * 64},
+                    subset_adapter=FakeSubset(), staging_handoff=self.handoff)
 
 
 if __name__ == '__main__':

@@ -98,10 +98,11 @@ Compatibility and recovery gate:
   available. The
   one-job path does not materialize public `analysis_candidate` rows, so it is
   a **technical result canary**, not a completed teacher/canon staging run.
-- To activate, a separate entrypoint must construct this handoff with the
-  approved admission ID, source fingerprint and queue-only connection factory,
-  then call `process_claim`. The resident currently constructs none of these
-  and uses its old shadow finish; no production claim is made.
+- The separate opt-in callable `run_private_one_job` constructs this handoff
+  from an exact already-claimed job and checks queue identity/ACL before and
+  during staging. The resident constructs none of these and uses its old
+  shadow finish. See `VIDEO_ONE_JOB_PRIVATE_CUTOVER_20261015.md` for the
+  proposed action-time sequence and rollback; no production claim is made.
 - The 0061 approver expiry cannot outlive the **current** lease at approval
   time. A long processor can heartbeat beyond that expiry, so the separate
   approver must authorize the exact live attempt shortly before private

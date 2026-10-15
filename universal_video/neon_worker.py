@@ -14,7 +14,9 @@ from bridge_worker_3_1_free import stable_job_id
 from .drive_adapter import access_token, file_metadata
 from .route_receipt_v2 import discover_route_receipt
 from .queue_staging_handoff import ExactLeaseStagingHandoff
-from .private_result_handoff import PrivateResultStagingHandoff
+from .private_result_handoff import (
+    PrivateOneJobConfigurationError, PrivateResultStagingHandoff,
+)
 from .runtime_preflight import validate_video_runtime
 from .terminal_evidence_v2 import (
     build_terminal_evidence,
@@ -307,6 +309,8 @@ def process_claim(
                         if post_staging_source != initial_source:
                             raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_CHANGED_DURING_STAGING")
                 except Exception as exc:
+                    if private_handoff and isinstance(exc, PrivateOneJobConfigurationError):
+                        raise
                     outcome, error_code = _failure(exc)
                     output["error_type"] = type(exc).__name__
 
