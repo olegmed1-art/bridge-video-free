@@ -73,7 +73,7 @@ class SubsetDriveConfig:
             if ("hostaddr" in parts or "service" in parts
                     or host != self.expected_host
                     or parts.get("dbname") != self.expected_database
-                    or str(parts.get("port") or "5432") != "5432"):
+                    or parts.get("port") != "5432"):
                 raise SubsetDriveObservationError("VIDEO_SUBSET_TARGET_MISMATCH")
             if host not in ("localhost", "127.0.0.1", "::1") and (
                 parts.get("sslmode") not in ("require", "verify-full")
