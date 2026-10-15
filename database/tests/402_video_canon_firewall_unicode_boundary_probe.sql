@@ -17,6 +17,12 @@ BEGIN
             ('english-hidden-hand', '{"notes":"N: AKQJ"}'::jsonb, true),
             ('length-description', '{"notes":"North has 10-12 points"}'::jsonb, false),
             ('plain-range', '{"notes":"North has 10+"}'::jsonb, false)
+            ,('range-closing-bracket', '{"notes":"North has 10-12]"}'::jsonb, false)
+            ,('range-closing-curly-quote', '{"notes":"North has 10-12”"}'::jsonb, false)
+            ,('range-followed-by-latin-letter', '{"notes":"North has 10-12é"}'::jsonb, true)
+            ,('range-followed-by-greek-letter', '{"notes":"North has 10-12α"}'::jsonb, true)
+            ,('range-followed-by-han-letter', '{"notes":"North has 10-12字"}'::jsonb, true)
+            ,('range-followed-by-underscore', '{"notes":"North has 10-12_AKQJ"}'::jsonb, true)
         ) AS examples(label, payload, expected)
     LOOP
         SELECT bidding.contains_forbidden_hidden_value(case_row.payload) INTO actual;

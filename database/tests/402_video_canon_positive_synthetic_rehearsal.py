@@ -7,6 +7,9 @@ All inputs are fictional. Never use this on a shared PostgreSQL cluster.
 import os
 import re
 import secrets
+import hashlib
+import json
+from pathlib import Path
 
 import psycopg
 from psycopg import sql
@@ -19,12 +22,138 @@ from tests.fixtures.synthetic_video_canon_positive import (
     CAPABILITIES,
     RULE_ID,
     SCHOOL_ID,
-    SYNTHETIC_LOGIN_PRINCIPALS,
     build_synthetic_positive_rehearsal,
 )
 
 DISPOSABLE_COMMENT_PREFIX = "canon-synthetic-disposable-v1:"
 TEMPLATE_COMMENT = "canon-synthetic-schema-template-v1"
+READER_CAPABILITY = "bridge_school_reader"
+SCHEMA_MANIFEST = (Path(__file__).resolve().parents[2] / "tests/fixtures/"
+                   "synthetic_canon_schema_pg18.json")
+
+
+_CATALOG_SQL = """
+WITH user_schemas AS (
+  SELECT oid,nspname,nspacl,nspowner FROM pg_namespace
+  WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema'
+), entries AS (
+  SELECT 'schema' AS kind,n.nspname AS name,
+         jsonb_build_object('acl',n.nspacl::text,
+           'owner',pg_get_userbyid(n.nspowner)) AS body
+  FROM user_schemas n
+  UNION ALL
+  SELECT 'relation',n.nspname||'.'||c.relname,
+         jsonb_build_object('kind',c.relkind,'owner',pg_get_userbyid(c.relowner),
+           'persistence',c.relpersistence,
+           'rls',c.relrowsecurity,'force_rls',c.relforcerowsecurity,
+           'acl',c.relacl::text,'options',c.reloptions,
+           'view',CASE WHEN c.relkind IN ('v','m') THEN pg_get_viewdef(c.oid) END,
+           'index',CASE WHEN c.relkind IN ('i','I') THEN pg_get_indexdef(c.oid) END,
+           'partition',pg_get_expr(c.relpartbound,c.oid))
+  FROM pg_class c JOIN user_schemas n ON n.oid=c.relnamespace
+  UNION ALL
+  SELECT 'column',n.nspname||'.'||c.relname||'.'||a.attname,
+         jsonb_build_object('type',format_type(a.atttypid,a.atttypmod),
+           'not_null',a.attnotnull,'identity',a.attidentity,
+           'generated',a.attgenerated,'acl',a.attacl::text,
+           'collation',a.attcollation::regcollation::text,
+           'default',pg_get_expr(d.adbin,d.adrelid))
+  FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid
+  JOIN user_schemas n ON n.oid=c.relnamespace
+  LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+  WHERE a.attnum>0 AND NOT a.attisdropped
+  UNION ALL
+  SELECT 'function',n.nspname||'.'||p.proname||'('||
+         pg_get_function_identity_arguments(p.oid)||')',
+         jsonb_build_object('definition',pg_get_functiondef(p.oid),
+           'owner',pg_get_userbyid(p.proowner),
+           'acl',p.proacl::text,'security_definer',p.prosecdef,
+           'config',p.proconfig)
+  FROM pg_proc p JOIN user_schemas n ON n.oid=p.pronamespace
+  WHERE p.prokind<>'a'
+  UNION ALL
+  SELECT 'constraint',n.nspname||'.'||
+         CASE WHEN c.conrelid<>0 THEN c.conrelid::regclass::text
+              ELSE c.contypid::regtype::text END||'.'||c.conname,
+         jsonb_build_object('definition',pg_get_constraintdef(c.oid),
+           'validated',c.convalidated,'deferrable',c.condeferrable)
+  FROM pg_constraint c JOIN user_schemas n ON n.oid=c.connamespace
+  UNION ALL
+  SELECT 'trigger',n.nspname||'.'||c.relname||'.'||
+         CASE WHEN t.tgisinternal THEN 'internal.'||co.conname||'.'||
+              t.tgfoid::regprocedure::text||'.'||t.tgtype::text
+              ELSE t.tgname END,
+         jsonb_build_object('definition',CASE WHEN NOT t.tgisinternal
+                                               THEN pg_get_triggerdef(t.oid) END,
+           'enabled',t.tgenabled,'internal',t.tgisinternal,
+           'function',t.tgfoid::regprocedure::text,'type',t.tgtype,
+           'constraint',co.conname)
+  FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+  JOIN user_schemas n ON n.oid=c.relnamespace
+  LEFT JOIN pg_constraint co ON co.oid=t.tgconstraint
+  UNION ALL
+  SELECT 'policy',n.nspname||'.'||c.relname||'.'||p.polname,
+         jsonb_build_object('cmd',p.polcmd,'roles',p.polroles::text,
+           'qual',pg_get_expr(p.polqual,p.polrelid),
+           'check',pg_get_expr(p.polwithcheck,p.polrelid))
+  FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid
+  JOIN user_schemas n ON n.oid=c.relnamespace
+  UNION ALL
+  SELECT 'sequence',n.nspname||'.'||c.relname,
+         jsonb_build_object('type',format_type(s.seqtypid,NULL),
+           'start',s.seqstart,'increment',s.seqincrement,'min',s.seqmin,
+           'max',s.seqmax,'cache',s.seqcache,'cycle',s.seqcycle)
+  FROM pg_sequence s JOIN pg_class c ON c.oid=s.seqrelid
+  JOIN user_schemas n ON n.oid=c.relnamespace
+  UNION ALL
+  SELECT 'capability_role',r.rolname,
+         jsonb_build_object('login',r.rolcanlogin,'inherit',r.rolinherit,
+           'super',r.rolsuper,
+           'createdb',r.rolcreatedb,'createrole',r.rolcreaterole,
+           'replication',r.rolreplication,'bypassrls',r.rolbypassrls,
+           'members',(SELECT coalesce(jsonb_agg(jsonb_build_object(
+                          'name',member.rolname,'admin',m.admin_option,
+                          'inherit',m.inherit_option,'set',m.set_option)
+                          ORDER BY member.rolname),'[]'::jsonb)
+                      FROM pg_auth_members m JOIN pg_roles member ON member.oid=m.member
+                      WHERE m.roleid=r.oid AND member.rolname NOT LIKE 'canon_rehearsal_%'),
+           'inherits',(SELECT coalesce(jsonb_agg(jsonb_build_object(
+                           'name',granted.rolname,'admin',m.admin_option,
+                           'inherit',m.inherit_option,'set',m.set_option)
+                           ORDER BY granted.rolname),'[]'::jsonb)
+                       FROM pg_auth_members m JOIN pg_roles granted ON granted.oid=m.roleid
+                       WHERE m.member=r.oid))
+  FROM pg_roles r WHERE r.rolname='bridge_school_reader'
+    OR r.rolname LIKE 'bridge_school_canon_%'
+)
+SELECT kind,name,body::text FROM entries ORDER BY kind,name,body::text
+"""
+
+
+def _schema_catalog_digest(conn: psycopg.Connection) -> str:
+    """Snapshot definitions and ACLs, independent of table row fingerprints."""
+    rows = conn.execute(_CATALOG_SQL).fetchall()
+    serialized = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _validate_schema_manifest(conn: psycopg.Connection) -> str:
+    manifest = json.loads(SCHEMA_MANIFEST.read_text(encoding="utf-8"))
+    major = int(conn.execute("SHOW server_version_num").fetchone()[0]) // 10000
+    digest = _schema_catalog_digest(conn)
+    if major != manifest["postgres_major"] or digest != manifest["catalog_sha256"]:
+        raise ValueError("schema template DDL/ACL differs from reviewed PG18 manifest")
+    return digest
+
+
+def _rehearsal_principals(database_id: str) -> dict[str, str]:
+    """Distinct cluster-global names for each disposable database."""
+    prefix = "canon_rehearsal_" + database_id[:16] + "_"
+    return {kind: prefix + kind + "_login" for kind in CAPABILITIES}
+
+
+def _reader_principal(database_id: str) -> str:
+    return "canon_rehearsal_" + database_id[:16] + "_reader_login"
 
 
 def _validate_disposable_target(args: dict, database_id: str, server_addr: str,
@@ -61,15 +190,13 @@ def _user_table_fingerprints(conn: psycopg.Connection) -> dict[str, tuple[int, s
     return fingerprints
 
 
-def _create_disposable_database(admin_dsn: str, template_name: str) -> tuple[str, str, dict]:
-    """Clone only an explicitly marked local schema template to a new random DB."""
+def _validate_admin_source(admin_dsn: str, template_name: str) -> tuple[dict, dict]:
+    """Read-only authorization check before any test helper creates a database."""
     args = conninfo_to_dict(admin_dsn)
     if (args.get("host") != "127.0.0.1" or args.get("hostaddr") not in (None, "127.0.0.1")
             or args.get("dbname") != "postgres"
             or not re.fullmatch(r"canon_schema_template_[a-z0-9_]+", template_name)):
         raise ValueError("loopback postgres and canon_schema_template_* required")
-    database_id = secrets.token_hex(16)
-    database_name = "canon_positive_" + database_id
     with psycopg.connect(admin_dsn, autocommit=True) as admin:
         address = admin.execute("SELECT host(inet_server_addr())").fetchone()[0]
         if address != "127.0.0.1":
@@ -83,7 +210,16 @@ def _create_disposable_database(admin_dsn: str, template_name: str) -> tuple[str
     template_args = {**args, "dbname": template_name}
     with psycopg.connect(make_conninfo(**template_args)) as template:
         template.execute("SET TRANSACTION READ ONLY")
+        schema_digest = _validate_schema_manifest(template)
         baseline = _user_table_fingerprints(template)
+    return args, {"rows": baseline, "schema": schema_digest}
+
+
+def _create_disposable_database(admin_dsn: str, template_name: str) -> tuple[str, str, dict]:
+    """Clone only an explicitly marked local schema template to a new random DB."""
+    args, baseline = _validate_admin_source(admin_dsn, template_name)
+    database_id = secrets.token_hex(16)
+    database_name = "canon_positive_" + database_id
     with psycopg.connect(admin_dsn, autocommit=True) as admin:
         admin.execute(sql.SQL("CREATE DATABASE {} WITH TEMPLATE {}").format(
             sql.Identifier(database_name), sql.Identifier(template_name)))
@@ -95,9 +231,10 @@ def _create_disposable_database(admin_dsn: str, template_name: str) -> tuple[str
     return make_conninfo(**args), database_id, baseline
 
 
-def _connect_as(owner_dsn: str, user: str):
+def _connect_as(owner_dsn: str, user: str, password: str):
     args = conninfo_to_dict(owner_dsn)
     args["user"] = user
+    args["password"] = password
     return psycopg.connect(make_conninfo(**args))
 
 
@@ -114,10 +251,14 @@ def _rehearse_created(owner_dsn: str, database_id: str, baseline: dict) -> dict:
             "shobj_description(oid, 'pg_database') FROM pg_database WHERE datname=current_database()"
         ).fetchone()
         current = _user_table_fingerprints(owner)
-        changed_tables = sorted(key for key in baseline.keys() | current.keys()
-                                if baseline.get(key) != current.get(key))
+        changed_tables = sorted(key for key in baseline["rows"].keys() | current.keys()
+                                if baseline["rows"].get(key) != current.get(key))
+        if _schema_catalog_digest(owner) != baseline["schema"]:
+            changed_tables.append("schema DDL/ACL")
         rehearsal_roles = owner.execute(
-            "SELECT count(*) FROM pg_roles WHERE rolname LIKE 'canon_rehearsal_%_login'"
+            "SELECT count(*) FROM pg_roles WHERE rolname = ANY(%s)",
+            (list(_rehearsal_principals(database_id).values()) +
+             [_reader_principal(database_id)],),
         ).fetchone()[0]
         _validate_disposable_target(args, database_id, server_addr, database_name,
                                     comment, changed_tables, rehearsal_roles)
@@ -135,17 +276,26 @@ def _rehearse_created(owner_dsn: str, database_id: str, baseline: dict) -> dict:
     with psycopg.connect(owner_dsn) as owner:
         if owner.execute("SHOW transaction_read_only").fetchone()[0] != "off":
             raise AssertionError("write transaction remains read-only")
-        fixture = build_synthetic_positive_rehearsal(
-            "c" * 64, "b" * 64, SYNTHETIC_LOGIN_PRINCIPALS
-        )
+        principals = _rehearsal_principals(database_id)
+        reader_principal = _reader_principal(database_id)
+        role_passwords = {login: secrets.token_urlsafe(32)
+                          for login in (*principals.values(), reader_principal)}
+        fixture = build_synthetic_positive_rehearsal("c" * 64, "b" * 64, principals)
         ids = fixture["ids"]
-        for kind, login in SYNTHETIC_LOGIN_PRINCIPALS.items():
-            owner.execute(sql.SQL("CREATE ROLE {} LOGIN NOINHERIT").format(sql.Identifier(login)))
+        for kind, login in principals.items():
+            owner.execute(sql.SQL("CREATE ROLE {} LOGIN NOINHERIT PASSWORD {}").format(
+                sql.Identifier(login), sql.Literal(role_passwords[login])))
             owner.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
                 sql.Identifier(args["dbname"]), sql.Identifier(login)))
             owner.execute(sql.SQL("GRANT {} TO {}").format(
                 sql.Identifier(CAPABILITIES[kind]), sql.Identifier(login)
             ))
+        owner.execute(sql.SQL("CREATE ROLE {} LOGIN NOINHERIT PASSWORD {}").format(
+            sql.Identifier(reader_principal), sql.Literal(role_passwords[reader_principal])))
+        owner.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+            sql.Identifier(args["dbname"]), sql.Identifier(reader_principal)))
+        owner.execute(sql.SQL("GRANT {} TO {}").format(
+            sql.Identifier(READER_CAPABILITY), sql.Identifier(reader_principal)))
         owner.execute("INSERT INTO public.school(school_id,stable_name) VALUES (%s,%s)",
                       (SCHOOL_ID, fixture["school_claim"]["stable_name"]))
         source = fixture["source_claim"]
@@ -218,7 +368,7 @@ def _rehearse_created(owner_dsn: str, database_id: str, baseline: dict) -> dict:
             "bidding.video_canon_rule_test_state_sha256(%s)", (SCHOOL_ID, RULE_ID)
         ).fetchone()
     # Re-seal after committing all state that the SQL gate hashes.
-    fixture = build_synthetic_positive_rehearsal(snapshot, rule_state, SYNTHETIC_LOGIN_PRINCIPALS)
+    fixture = build_synthetic_positive_rehearsal(snapshot, rule_state, principals)
     bundle = fixture["verification_bundle_claim"]
     with psycopg.connect(owner_dsn) as owner:
         owner.execute("SET ROLE bridge_school_canon_verifier")
@@ -231,8 +381,8 @@ def _rehearse_created(owner_dsn: str, database_id: str, baseline: dict) -> dict:
              bundle["verification_bundle_sha256"], bundle["bundle_canonical_json"],
              Jsonb(bundle["bundle_payload"])),
         )
-    for kind, login in SYNTHETIC_LOGIN_PRINCIPALS.items():
-        with _connect_as(owner_dsn, login) as verifier:
+    for kind, login in principals.items():
+        with _connect_as(owner_dsn, login, role_passwords[login]) as verifier:
             verifier.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(CAPABILITIES[kind])))
             for check in fixture["verification_rows"]:
                 if check["execution_principal"] != login:
@@ -261,7 +411,9 @@ def _rehearse_created(owner_dsn: str, database_id: str, baseline: dict) -> dict:
         ).fetchone()[0]
         if receipt_id != replay_id:
             raise AssertionError("promotion replay produced a different receipt")
-    with psycopg.connect(owner_dsn, row_factory=dict_row) as reader:
+    with _connect_as(owner_dsn, reader_principal, role_passwords[reader_principal]) as reader:
+        reader.row_factory = dict_row
+        reader.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(READER_CAPABILITY)))
         reader.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         rows = reader.execute(
             _version_query(AuthorityLane.ACTIVE_SCHOOL_CANON),

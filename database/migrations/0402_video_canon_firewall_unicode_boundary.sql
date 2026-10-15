@@ -13,7 +13,9 @@ DECLARE
     old_russian constant text := '(?:^|[^[:alnum:]_])(?:рука|карты)';
     new_russian constant text := '(?:^|[^[:alnum:]_А-Яа-яЁё])(?:рука|карты)';
     old_boundary constant text := '($|[^[:alnum:]_])';
-    new_boundary constant text := '($|[[:space:],./;:!?()])';
+    -- Fail closed for letters in any script and for suit symbols. POSIX
+    -- punctuation covers ASCII closers; list common Unicode quote/dash marks.
+    new_boundary constant text := '($|(?=[^_♥♦♣♠])[[:space:][:punct:]“”‘’«»…—–])';
 BEGIN
     IF NOT EXISTS (SELECT FROM public.schema_migration
                    WHERE migration_key='0329_workflow_video_canon_ai_promotion') THEN

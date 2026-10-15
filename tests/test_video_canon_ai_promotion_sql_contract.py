@@ -272,5 +272,5 @@ def test_unicode_firewall_repair_is_forward_only_and_preserves_guard():
     assert "VIDEO_CANON_FIREWALL_SOURCE_DRIFT" in FIREWALL_REPAIR
     assert "pg_get_functiondef(proc)" in FIREWALL_REPAIR
     assert "(?:^|[^[:alnum:]_А-Яа-яЁё])(?:рука|карты)" in FIREWALL_REPAIR
-    assert "($|[[:space:],./;:!?()])" in FIREWALL_REPAIR
+    assert "($|(?=[^_♥♦♣♠])[[:space:][:punct:]“”‘’«»…—–])" in FIREWALL_REPAIR
     assert "0402_video_canon_firewall_unicode_boundary" in FIREWALL_REPAIR
