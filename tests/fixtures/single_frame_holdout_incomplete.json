@@ -1,0 +1,18 @@
+{
+  "schema_version": "bridgit-adjacent-holdout-v1",
+  "sampling_profile_version": "bridgit-adjacent-candidate-v1",
+  "source_video": null,
+  "episode_id": null,
+  "board_epoch": null,
+  "board_number": 1,
+  "frames": [
+    {
+      "path": "frame-0001-000120-masked-evaluation.png",
+      "sha256": "b7a960a7bfcf3e3cbc4dc191988baa2d31ec740d72fb58e2a9c61f77ef103c13",
+      "pts_ms": null,
+      "observation_index": null,
+      "board_number_read": {"status": "READ", "number": 1},
+      "board_number_confirming_read": null
+    }
+  ]
+}
