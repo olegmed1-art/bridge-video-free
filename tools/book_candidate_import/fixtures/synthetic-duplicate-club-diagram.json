@@ -1,0 +1,42 @@
+{
+  "source": {
+    "rendition_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "fragments": [
+    {
+      "name": "synthetic-club-diagram",
+      "excerpt": "♣ A7 N ♣ J10 ♣ K2 W E S ♣ Q7",
+      "anchor": {
+        "pdf_page_index": 0,
+        "printed_page_label": "i",
+        "bbox": [0.1, 0.2, 0.9, 0.8],
+        "bbox_units": "NORMALIZED_TOP_LEFT",
+        "segment_sha256": "51d92f905e0c5360a26f3a7efda6aabba207303cb25d73641a7094d4cc70bce2",
+        "segment_hash_method": "NORMALIZED_TEXT_UTF8_SHA256"
+      }
+    }
+  ],
+  "illustrations": [
+    {
+      "id": "synthetic-duplicate-club-diagram",
+      "fragment_name": "synthetic-club-diagram",
+      "source_rendition_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "anchor": {
+        "pdf_page_index": 0,
+        "printed_page_label": "i",
+        "bbox": [0.1, 0.2, 0.9, 0.8],
+        "bbox_units": "NORMALIZED_TOP_LEFT",
+        "segment_sha256": "51d92f905e0c5360a26f3a7efda6aabba207303cb25d73641a7094d4cc70bce2",
+        "segment_hash_method": "NORMALIZED_TEXT_UTF8_SHA256"
+      },
+      "claims_complete_deal": false,
+      "printed_hands": {"N": "♣A7", "E": "♣K2", "S": "♣Q7", "W": "♣J10"},
+      "hands": {
+        "N": {"C": ["A", "7"]},
+        "E": {"C": ["K", "2"]},
+        "S": {"C": ["Q", "7"]},
+        "W": {"C": ["J", "T"]}
+      }
+    }
+  ]
+}
