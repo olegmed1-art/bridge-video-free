@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import struct
 import zlib
 from pathlib import Path
@@ -55,8 +56,8 @@ def test_non_object_manifest_fails_closed(tmp_path: Path):
     assert validate_holdout_manifest([], tmp_path)["issues"] == ["MANIFEST_INVALID"]
 
 
-def test_existing_diana73_receipt_cannot_be_promoted_to_two_frame_holdout(tmp_path: Path):
-    fixture = Path(__file__).parent / "fixtures" / "diana73_frame1_holdout_incomplete.json"
+def test_existing_single_frame_receipt_cannot_be_promoted_to_two_frame_holdout(tmp_path: Path):
+    fixture = Path(__file__).parent / "fixtures" / "single_frame_holdout_incomplete.json"
     data = json.loads(fixture.read_text(encoding="utf-8"))
     result = validate_holdout_manifest(data, tmp_path)
     assert result["status"] == "BLOCKED"
@@ -65,12 +66,11 @@ def test_existing_diana73_receipt_cannot_be_promoted_to_two_frame_holdout(tmp_pa
     assert result["ocr_accuracy_evaluated"] is False
 
 
-def test_locally_available_diana73_frame_matches_receipt_but_is_not_holdout(tmp_path: Path):
-    source = (Path(__file__).resolve().parents[2] / "diana73-frame1-local"
-              / "frame-0001-000120-masked-evaluation.png")
+def test_locally_available_single_frame_matches_receipt_but_is_not_holdout(tmp_path: Path):
+    source = Path(os.environ.get("BRIDGIT_SINGLE_FRAME_SMOKE", ""))
     if not source.is_file():
-        pytest.skip("owner-provided Diana73 development frame is not available locally")
-    fixture = Path(__file__).parent / "fixtures" / "diana73_frame1_holdout_incomplete.json"
+        pytest.skip("owner-provided development frame is not available locally")
+    fixture = Path(__file__).parent / "fixtures" / "single_frame_holdout_incomplete.json"
     data = json.loads(fixture.read_text(encoding="utf-8"))
     (tmp_path / source.name).write_bytes(source.read_bytes())
     result = validate_holdout_manifest(data, tmp_path)
