@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -129,6 +129,8 @@ class ApproverTest(unittest.TestCase):
         self.assertEqual(self.sql_params[2:7], (
             self.binding['expected_job_id'], self.receipt['lease_token'],
             self.binding['worker_key'], 1, self.binding['source_fingerprint']))
+        self.assertEqual(self.sql_params[7] - self.identity['server_now'],
+                         timedelta(minutes=9))
         with self.assertRaisesRegex(PrivateOneJobConfigurationError,
                                     'ONE_JOB_APPROVER_SIGNAL_EXISTS'):
             self.invoke()

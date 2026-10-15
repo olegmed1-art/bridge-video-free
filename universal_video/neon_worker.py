@@ -443,6 +443,7 @@ def process_one_private_neon(
     admission_id: str, source_fingerprint: str,
     approval_waiter: Callable[[Mapping[str, Any], str, str, str], Mapping[str, Any]],
     worker_key: str,
+    claim_reserver: Callable[[], None],
     claim_publisher: Callable[[Mapping[str, Any], str, str, str], None],
     claim_committer: Callable[[Mapping[str, Any]], None],
     processor: Callable[[Mapping[str, Any]], Mapping[str, Any]] = stable_review_processor,
@@ -454,7 +455,7 @@ def process_one_private_neon(
     authority. Ordinary resident polling never invokes this callable.
     """
     from .private_one_job_entrypoint import (
-        PrivateOneJobConfigurationError, claim_exact_private_job,
+        PrivateOneJobConfigurationError, _open_checked_queue, claim_exact_private_job,
         run_private_one_job,
     )
     from .subset_drive_observation import (
@@ -471,6 +472,7 @@ def process_one_private_neon(
             or not re.fullmatch(r'[0-9a-f]{64}', source_fingerprint)
             or not callable(processor)
             or not callable(approval_waiter)
+            or not callable(claim_reserver)
             or not callable(claim_publisher)
             or not callable(claim_committer)
             or os.getenv('BRIDGE_WORKER_DATABASE_URL', '').strip()):
@@ -489,8 +491,14 @@ def process_one_private_neon(
                 or config.expected_database != expected_database
                 or config.batch_id != expected_batch_id):
             raise PrivateOneJobConfigurationError('ONE_JOB_PRIVATE_CONFIG_INVALID')
+        # Read-only runtime, target, and identity checks precede the durable
+        # journal; the claim transaction repeats its queue ACL check.
+        with _open_checked_queue(queue_dsn, expected_login=expected_login,
+                                 expected_database=expected_database):
+            pass
         adapter = SubsetWorkerAdapter(DriveSubsetObservationProvider(
             config, key, expected_login=collector_login))
+        claim_reserver()  # Durable before the first potentially mutating SQL.
         claim = claim_exact_private_job(
             queue_dsn=queue_dsn, expected_database=expected_database,
             expected_login=expected_login,

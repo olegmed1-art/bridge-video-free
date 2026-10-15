@@ -203,10 +203,14 @@ class PrivateResidentTest(unittest.TestCase):
             expected_source_file_id='source-file-123456',
             expected_attempt_count=1, admission_id=self.state.admission_id,
             source_fingerprint='c' * 64, worker_key='queue-worker',
+            claim_reserver=self.reserve_claim,
             claim_publisher=self.publish_claim,
             claim_committer=self.commit_claim,
             approval_waiter=self.wait_for_external_approval,
             processor=lambda claim: {'terminal_evidence_sha256': 'd' * 64})
+
+    def reserve_claim(self):
+        self.state.operations.append('reserve')
 
     def publish_claim(self, claim, worker_key, admission_id,
                       source_fingerprint):
@@ -268,10 +272,14 @@ class PrivateResidentTest(unittest.TestCase):
                                       batch_status='RUNNING', released_jobs=0))
         self.assertEqual(self.state.claim_calls, 1)
         self.assertEqual([op for op in self.state.operations if op in
-                          ('claim','claim_receipt','heartbeat','before_work','approval_wait',
+                          ('reserve','claim','claim_receipt','heartbeat','before_work','approval_wait',
                            'stage_connection','readback_connection','private_finish')],
-                         ['claim','claim_receipt','heartbeat','before_work','approval_wait',
+                         ['reserve','claim','claim_receipt','heartbeat','before_work','approval_wait',
                           'stage_connection','readback_connection','private_finish'])
+        self.assertLess(self.state.operations.index('identity'),
+                        self.state.operations.index('reserve'))
+        self.assertLess(self.state.operations.index('reserve'),
+                        self.state.operations.index('claim'))
         self.assertLess(self.state.operations.index('claim_receipt'),
                         self.state.operations.index('claim_commit'))
         self.assertLess(self.state.operations.index('claim_commit'),
@@ -297,6 +305,14 @@ class PrivateResidentTest(unittest.TestCase):
         self.assertNotIn('claim_commit', self.state.operations)
         self.assertNotIn('heartbeat', self.state.operations)
 
+    def test_queue_acl_preflight_failure_leaves_no_reservation_or_claim(self):
+        self.state.identity['is_v2_member'] = False
+        with self.assertRaisesRegex(PrivateOneJobConfigurationError,
+                                    'ONE_JOB_QUEUE_IDENTITY_OR_ACL_INVALID'):
+            self.invoke()
+        self.assertNotIn('reserve', self.state.operations)
+        self.assertEqual(self.state.claim_calls, 0)
+
     def test_missing_receipt_parent_stops_before_claim(self):
         from universal_video.private_one_job_operator import run_from_binding_file
         # The Windows sandbox reports POSIX mode bits as world-writable even
@@ -312,7 +328,8 @@ class PrivateResidentTest(unittest.TestCase):
             binding_path = Path(root) / 'binding.json'
             binding = {key: value for key, value in self.binding.items()
                        if key not in ('queue_dsn', 'claim_publisher',
-                                      'claim_committer', 'approval_waiter', 'processor')}
+                                      'claim_committer', 'claim_reserver',
+                                      'approval_waiter', 'processor')}
             binding['claim_receipt_path'] = str(Path(root) / 'absent' / 'claim.json')
             binding['approval_signal_path'] = str(Path(root) / 'approval.json')
             binding_path.write_text(json.dumps(binding), encoding='utf-8')
@@ -322,6 +339,44 @@ class PrivateResidentTest(unittest.TestCase):
                                             'ONE_JOB_HANDOFF_DIRECTORY_UNAVAILABLE'):
                     run_from_binding_file(str(binding_path))
                 run.assert_not_called()
+
+    def test_failed_runtime_preflight_does_not_wedge_corrected_rerun(self):
+        from universal_video.private_one_job_operator import run_from_binding_file
+        file_fixture = (patch(
+            'universal_video.private_one_job_operator._read_local_json',
+            side_effect=lambda path: json.loads(path.read_text())
+            if path.exists() else None) if sys.platform == 'win32'
+            else nullcontext())
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as root, patch.dict(os.environ, {
+                'BRIDGE_VIDEO_QUEUE_DATABASE_URL': self.dsn}, clear=True), file_fixture:
+            claim_path = Path(root) / 'claim.json'
+            binding_path = Path(root) / 'binding.json'
+            binding = {key: value for key, value in self.binding.items()
+                       if key not in ('queue_dsn', 'claim_publisher',
+                                      'claim_committer', 'claim_reserver',
+                                      'approval_waiter', 'processor')}
+            binding['claim_receipt_path'] = str(claim_path)
+            binding['approval_signal_path'] = str(Path(root) / 'approval.json')
+            binding_path.write_text(json.dumps(binding), encoding='utf-8')
+            os.chmod(binding_path, 0o600)
+            with patch('universal_video.spool_worker.process_private_one_job_once',
+                       side_effect=PrivateOneJobConfigurationError(
+                           'ONE_JOB_QUEUE_IDENTITY_OR_ACL_INVALID')):
+                with self.assertRaisesRegex(PrivateOneJobConfigurationError,
+                                            'ONE_JOB_QUEUE_IDENTITY_OR_ACL_INVALID'):
+                    run_from_binding_file(str(binding_path))
+            self.assertFalse(claim_path.exists())
+
+            def after_preflight(**kwargs):
+                kwargs['claim_reserver']()
+                return 'reserved-before-claim'
+
+            with patch('universal_video.spool_worker.process_private_one_job_once',
+                       side_effect=after_preflight):
+                self.assertEqual(run_from_binding_file(str(binding_path)),
+                                 'reserved-before-claim')
+            self.assertEqual(json.loads(claim_path.read_text())['claim_state'],
+                             'RESERVED')
 
     def test_receipt_journal_preserves_token_until_ambiguous_commit_reconciled(self):
         from universal_video.private_one_job_operator import ClaimReceiptJournal

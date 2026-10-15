@@ -133,7 +133,8 @@ class ClaimReceiptJournal:
         self.binding = dict(binding)
         self.claim: dict[str, Any] | None = None
 
-    def reserve(self) -> None:
+    def preflight(self) -> None:
+        """Check the journal directory without creating a one-shot state."""
         try:
             parent = self.path.parent
             info = parent.lstat()
@@ -141,6 +142,12 @@ class ClaimReceiptJournal:
                     or (os.name != 'nt' and (
                         info.st_uid != os.geteuid() or info.st_mode & 0o022))):
                 raise PrivateOneJobConfigurationError('ONE_JOB_HANDOFF_DIRECTORY_UNSAFE')
+        except OSError as exc:
+            raise PrivateOneJobConfigurationError('ONE_JOB_HANDOFF_DIRECTORY_UNAVAILABLE') from exc
+
+    def reserve(self) -> None:
+        try:
+            self.preflight()
             _write_json_exclusive(self.path, dict(
                 claim_state='RESERVED', admission_id=self.binding['admission_id'],
                 job_id=self.binding['expected_job_id'],
@@ -217,10 +224,11 @@ def run_from_binding_file(binding_path: str) -> dict[str, Any]:
     from .spool_worker import process_private_one_job_once
 
     journal = ClaimReceiptJournal(claim_path, binding)
-    journal.reserve()  # Durable before the first potentially mutating SQL.
+    journal.preflight()
 
     return process_private_one_job_once(
         queue_dsn=queue_dsn, **binding,
+        claim_reserver=journal.reserve,
         claim_publisher=journal.publish_precommit,
         claim_committer=journal.acknowledge_commit,
         approval_waiter=lambda claim, key, admission, fingerprint:

@@ -29,6 +29,11 @@ _KEYS = frozenset({
     'approval_signal_path', 'approver_dsn_file', 'approval_reference',
 })
 
+# The remaining Drive readback and private stage/read may exceed 30 seconds.
+# Nine minutes leaves a minute below the worker's 900-second lease renewal;
+# the SQL gate also rejects an expiry beyond the live lease or subset approval.
+_APPROVAL_VALIDITY_SECONDS = 540
+
 _IDENTITY_SQL = """
 SELECT session_user::text AS login, current_user::text AS active_role,
        current_database()::text AS database_name, clock_timestamp() AS server_now,
@@ -215,7 +220,7 @@ def approve_once(binding_path: str) -> dict[str, str]:
         # The readiness window remains short even if connection setup stalls.
         if not -5 <= time.time() - ready_path.stat().st_mtime <= 60:
             raise PrivateOneJobConfigurationError('ONE_JOB_APPROVER_READY_STALE')
-        expires_at = server_now + timedelta(seconds=30)
+        expires_at = server_now + timedelta(seconds=_APPROVAL_VALIDITY_SECONDS)
         with connection.cursor() as cursor:
             cursor.execute(
                 'SELECT video_queue.approve_one_job_staging_attempt_v1('
