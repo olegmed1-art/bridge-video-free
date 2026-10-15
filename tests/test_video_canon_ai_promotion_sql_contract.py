@@ -2,8 +2,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
-MIGRATION = (ROOT / "database/migrations/0329_workflow_video_canon_ai_promotion.sql").read_text()
-ROLLBACK = (ROOT / "database/rollbacks/0329_workflow_video_canon_ai_promotion.sql").read_text()
+MIGRATION = (ROOT / "database/migrations/0329_workflow_video_canon_ai_promotion.sql").read_text(encoding="utf-8")
+ROLLBACK = (ROOT / "database/rollbacks/0329_workflow_video_canon_ai_promotion.sql").read_text(encoding="utf-8")
+FIREWALL_REPAIR = (ROOT / "database/migrations/0402_video_canon_firewall_unicode_boundary.sql").read_text(encoding="utf-8")
 
 
 def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
@@ -264,3 +265,12 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert MIGRATION.count(
         "VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_EXPIRED"
     ) >= 2
+
+
+def test_unicode_firewall_repair_is_forward_only_and_preserves_guard():
+    assert "0329_workflow_video_canon_ai_promotion" in FIREWALL_REPAIR
+    assert "VIDEO_CANON_FIREWALL_SOURCE_DRIFT" in FIREWALL_REPAIR
+    assert "pg_get_functiondef(proc)" in FIREWALL_REPAIR
+    assert "(?:^|[^[:alnum:]_А-Яа-яЁё])(?:рука|карты)" in FIREWALL_REPAIR
+    assert "($|[[:space:],./;:!?()])" in FIREWALL_REPAIR
+    assert "0402_video_canon_firewall_unicode_boundary" in FIREWALL_REPAIR
