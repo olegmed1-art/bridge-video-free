@@ -20,6 +20,8 @@ from universal_video.subset_drive_observation import (
 
 
 def test_mode_and_target_binding(monkeypatch):
+    monkeypatch.delenv("PGHOSTADDR", raising=False)
+    monkeypatch.delenv("PGSERVICE", raising=False)
     monkeypatch.setenv("UNIVERSAL_VIDEO_SUBSET_SYNC", "yes")
     with pytest.raises(SubsetDriveObservationError, match="VIDEO_SUBSET_MODE_INVALID"):
         subset_sync_enabled()
@@ -32,6 +34,37 @@ def test_mode_and_target_binding(monkeypatch):
         "postgresql://collector@example.neon.tech/neondb", "example.neon.tech", "neondb")
     with pytest.raises(SubsetDriveObservationError, match="VIDEO_SUBSET_TLS_BINDING_REQUIRED"):
         remote.validate_target("postgresql://worker@example.neon.tech/neondb")
+
+
+@pytest.mark.parametrize("bad_dsn", (
+    "postgresql://worker@127.0.0.1:5432/one?hostaddr=203.0.113.10",
+    "postgresql://worker@127.0.0.1:5432/one?service=other",
+    "host=127.0.0.1 hostaddr=203.0.113.10 port=5432 dbname=one user=worker",
+    "host=127.0.0.1 service=other port=5432 dbname=one user=worker",
+))
+def test_target_rejects_uri_and_keyword_connection_overrides(bad_dsn, monkeypatch):
+    monkeypatch.delenv("PGHOSTADDR", raising=False)
+    monkeypatch.delenv("PGSERVICE", raising=False)
+    good_dsn = "postgresql://worker@127.0.0.1:5432/one"
+    for worker_dsn, collector_dsn in ((bad_dsn, good_dsn),
+                                      (good_dsn, bad_dsn)):
+        config = SubsetDriveConfig("approval", "batch", collector_dsn,
+                                   "127.0.0.1", "one")
+        with pytest.raises(SubsetDriveObservationError) as exc:
+            config.validate_target(worker_dsn)
+        assert str(exc.value) == "VIDEO_SUBSET_TARGET_MISMATCH"
+
+
+@pytest.mark.parametrize("variable", ("PGHOSTADDR", "PGSERVICE"))
+def test_target_rejects_implicit_libpq_overrides(variable, monkeypatch):
+    monkeypatch.delenv("PGHOSTADDR", raising=False)
+    monkeypatch.delenv("PGSERVICE", raising=False)
+    dsn = "postgresql://worker@127.0.0.1:5432/one"
+    config = SubsetDriveConfig("approval", "batch", dsn, "127.0.0.1", "one")
+    monkeypatch.setenv(variable, "203.0.113.10" if variable == "PGHOSTADDR" else "other")
+    with pytest.raises(SubsetDriveObservationError) as exc:
+        config.validate_target(dsn)
+    assert str(exc.value) == "VIDEO_SUBSET_TARGET_MISMATCH"
 
 
 def test_wrong_batch_rejected_before_drive_or_sql():
