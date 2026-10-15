@@ -1,9 +1,11 @@
 """Disposable-only positive 0329 rehearsal with real SQL role boundaries.
 
 Requires CANON_SYNTHETIC_PG_DSN pointing to a fresh local database named
-canon_positive_*. All inputs are fictional. Never use this on a shared DB.
+canon_positive_* and CANON_SYNTHETIC_DB_ID matching that database's explicit
+disposable marker. All inputs are fictional. Never use this on a shared DB.
 """
 import os
+import re
 
 import psycopg
 from psycopg import sql
@@ -20,6 +22,24 @@ from tests.fixtures.synthetic_video_canon_positive import (
     build_synthetic_positive_rehearsal,
 )
 
+DISPOSABLE_COMMENT_PREFIX = "canon-synthetic-disposable-v1:"
+
+
+def _validate_disposable_target(args: dict, database_id: str, server_addr: str,
+                                database_name: str, comment: str | None,
+                                row_counts: tuple[int, ...]) -> None:
+    """Fail before any write unless this is an explicitly marked empty test DB."""
+    if (args.get("host") != "127.0.0.1" or args.get("hostaddr") not in (None, "127.0.0.1")
+            or server_addr != "127.0.0.1" or not database_name.startswith("canon_positive_")
+            or database_name != args.get("dbname")):
+        raise ValueError("fresh loopback canon_positive_* database required")
+    if not re.fullmatch(r"[0-9a-f]{32}", database_id):
+        raise ValueError("a 32-character disposable database ID is required")
+    if comment != DISPOSABLE_COMMENT_PREFIX + database_id:
+        raise ValueError("database lacks the matching disposable identity marker")
+    if any(row_counts):
+        raise ValueError("disposable rehearsal database is not empty")
+
 
 def _connect_as(owner_dsn: str, user: str):
     args = conninfo_to_dict(owner_dsn)
@@ -27,16 +47,27 @@ def _connect_as(owner_dsn: str, user: str):
     return psycopg.connect(make_conninfo(**args))
 
 
-def rehearse(owner_dsn: str) -> dict:
+def rehearse(owner_dsn: str, database_id: str) -> dict:
     args = conninfo_to_dict(owner_dsn)
-    if args.get("host") != "127.0.0.1" or not args.get("dbname", "").startswith("canon_positive_"):
-        raise ValueError("fresh loopback canon_positive_* database required")
+    if not re.fullmatch(r"[0-9a-f]{32}", database_id):
+        raise ValueError("a 32-character disposable database ID is required")
     with psycopg.connect(owner_dsn) as owner:
-        database_name, preexisting = owner.execute(
-            "SELECT current_database(), count(*) FROM public.school WHERE stable_name='synthetic-canon-rehearsal'"
+        owner.execute("SET TRANSACTION READ ONLY")
+        server_addr, database_name, comment = owner.execute(
+            "SELECT inet_server_addr()::text, current_database(), "
+            "shobj_description(oid, 'pg_database') FROM pg_database WHERE datname=current_database()"
         ).fetchone()
-        if database_name != args["dbname"] or preexisting:
-            raise ValueError("database is not a fresh synthetic rehearsal")
+        row_counts = owner.execute(
+            "SELECT (SELECT count(*) FROM public.school), (SELECT count(*) FROM public.source), "
+            "(SELECT count(*) FROM public.analysis_candidate), "
+            "(SELECT count(*) FROM public.knowledge_item), "
+            "(SELECT count(*) FROM public.knowledge_version), "
+            "(SELECT count(*) FROM bidding.rule), "
+            "(SELECT count(*) FROM bidding.video_canon_ai_verification), "
+            "(SELECT count(*) FROM pg_roles WHERE rolname LIKE 'canon_rehearsal_%_login')"
+        ).fetchone()
+        _validate_disposable_target(args, database_id, server_addr, database_name,
+                                    comment, row_counts)
         migrations = owner.execute(
             "SELECT migration_key FROM public.schema_migration WHERE migration_key IN "
             "('0329_workflow_video_canon_ai_promotion','0402_video_canon_firewall_unicode_boundary')"
@@ -190,4 +221,5 @@ if __name__ == "__main__":
     dsn = os.environ.get("CANON_SYNTHETIC_PG_DSN", "")
     if not dsn:
         raise SystemExit("CANON_SYNTHETIC_PG_DSN is required")
-    print(rehearse(dsn))
+    database_id = os.environ.get("CANON_SYNTHETIC_DB_ID", "")
+    print(rehearse(dsn, database_id))
