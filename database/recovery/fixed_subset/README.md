@@ -22,7 +22,10 @@ NOLOGIN roles. It rejects PUBLIC or unknown legacy writers, new subset API grant
 unreviewed writer-role membership, and even implicit PUBLIC function EXECUTE in
 global defaults. PostgreSQL 18's creator bootstrap membership is permitted only
 for one of the five exact new subset roles to the pre-install `video_queue` schema
-owner, granted by that same owner with `ADMIN TRUE, INHERIT FALSE, SET FALSE`.
+owner, with `ADMIN TRUE, INHERIT FALSE, SET FALSE`. Its grantor must match the
+single bootstrap grantor already evidenced by the pre-install role graph; a
+superuser schema owner without such old edges may grant to itself. Conflicting
+or absent non-superuser bootstrap-grantor evidence fails closed.
 Memberships with inherited or SET capabilities remain forbidden. A failed
 comparison is a stop condition: do not apply guessed
 GRANTs or broad writer permissions to make it pass. The existing recovery SQL
@@ -40,6 +43,11 @@ It requires `SUBSET_SYNTHETIC_PG18=1` and
 `SUBSET_SYNTHETIC_PG18_DATADIR` pointing to a disposable directory under the
 machine's temporary directory named `subset-acl-pg18-*`; the test independently
 checks the server's actual data directory before creating or dropping anything.
+
+The three SHA-pinned installer/recovery SQL files are checked out as LF on every
+platform via `.gitattributes`. The fixture stores raw `pg_get_functiondef` bytes
+for their server-specific MD5, while `build_recovery.py` normalizes only the
+rendered recovery SQL to LF. Checksum validation remains byte-exact.
 
 ASSURED/I2 candidate. Production execution requires a separate action-time approval.
 No CLI here connects to a database. The single synthetic CI has its own fixed

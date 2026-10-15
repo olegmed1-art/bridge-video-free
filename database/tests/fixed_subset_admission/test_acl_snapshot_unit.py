@@ -43,15 +43,18 @@ def baseline():
         format="fixed-subset-acl-owner-v1", schema="video_queue",
         objects=[dict(kind="schema", name="video_queue", owner="neondb_owner",
                       raw_acl=None, definition_md5=None)],
-        roles=[role("neondb_owner"), role("bridge_school_worker")],
-        memberships=[], columns=[], grants=[], column_grants=[],
+        roles=[role("neondb_owner"), role("bridge_school_worker"), role("postgres")],
+        memberships=[dict(role="bridge_school_worker", member="neondb_owner",
+                          grantor="postgres", admin_option=True,
+                          inherit_option=False, set_option=False)],
+        columns=[], grants=[], column_grants=[],
         default_privileges=[], default_grants=[], effective_global_function_grants=[],
     )
 
 
 def bootstrap():
     return dict(role="video_subset_owner", member="neondb_owner",
-                grantor="neondb_owner", admin_option=True,
+                grantor="postgres", admin_option=True,
                 inherit_option=False, set_option=False)
 
 
@@ -65,7 +68,7 @@ def test_exact_admin_only_bootstrap_is_allowed_after_recovery():
 
 @pytest.mark.parametrize("change", [
     {"admin_option": False}, {"inherit_option": True}, {"set_option": True},
-    {"grantor": "bridge_school_worker"}, {"member": "bridge_school_worker"},
+    {"grantor": "neondb_owner"}, {"member": "bridge_school_worker"},
     {"role": "video_subset_unlisted"},
 ])
 def test_non_bootstrap_memberships_remain_blocked(change):
@@ -87,3 +90,24 @@ def test_existing_role_membership_must_still_match_exactly():
                                      inherit_option=False, set_option=False))
     with pytest.raises(AssertionError, match="memberships differs"):
         acl.assert_restored(before, after)
+
+
+def test_conflicting_pre_install_bootstrap_grantors_fail_closed():
+    before = baseline()
+    before["roles"].append(role("bridge_school_reader"))
+    before["memberships"].append(dict(role="bridge_school_reader", member="neondb_owner",
+                                      grantor="neondb_owner", admin_option=True,
+                                      inherit_option=False, set_option=False))
+    with pytest.raises(ValueError, match="does not identify one bootstrap grantor"):
+        acl.assert_restored(before, deepcopy(before))
+
+
+def test_superuser_creator_without_old_bootstrap_uses_own_grantor():
+    before = baseline()
+    before["objects"][0]["owner"] = "postgres"
+    before["roles"][-1]["superuser"] = True
+    before["memberships"] = []
+    after = deepcopy(before)
+    after["roles"].append(role("video_subset_owner"))
+    after["memberships"].append(dict(bootstrap(), member="postgres"))
+    acl.assert_restored(before, after)

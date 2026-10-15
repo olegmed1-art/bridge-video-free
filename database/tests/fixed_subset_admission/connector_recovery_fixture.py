@@ -167,7 +167,7 @@ def prepare(stage, out):
     write(stage/'catalog-baseline.json',catalog)
     claim=query("SELECT pg_get_functiondef('video_queue.claim_job(text,integer,text,text)'::regprocedure)")
     write(stage/'claim-baseline.json',dict(claim_definition=claim,claim_definition_md5=hashlib.md5(claim.encode()).hexdigest()))
-    (stage/'restore_claim_job.sql').write_text(claim)
+    (stage/'restore_claim_job.sql').write_bytes(claim.encode('utf-8'))
     write(stage/'target.json',TARGET)
     r.ROOT=c.ROOT=stage
     write(stage/'semantic-catalog-baseline.json',{'catalog_md5':query('SELECT '+c.catalog_digest())})

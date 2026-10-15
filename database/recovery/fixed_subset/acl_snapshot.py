@@ -180,8 +180,23 @@ def assert_restored(before, after, *, allowed_memberships=frozenset()):
     if len(schema_owners) != 1:
         raise ValueError("exactly one pre-install video_queue schema owner is required")
     bootstrap_creator = schema_owners.pop()
-    if bootstrap_creator not in {x["name"] for x in before["roles"]}:
+    old_roles = {x["name"]: x for x in before["roles"]}
+    if bootstrap_creator not in old_roles:
         raise ValueError("pre-install schema owner is absent from role snapshot")
+    bootstrap_grantors = {
+        edge["grantor"] for edge in before["memberships"]
+        if edge["member"] == bootstrap_creator and edge["role"] in old_roles
+        and edge["role"] != bootstrap_creator and edge["admin_option"] is True
+        and edge["inherit_option"] is False and edge["set_option"] is False
+    }
+    if len(bootstrap_grantors) == 1:
+        bootstrap_grantor = bootstrap_grantors.pop()
+    elif not bootstrap_grantors and old_roles[bootstrap_creator]["superuser"] is True:
+        bootstrap_grantor = bootstrap_creator
+    else:
+        raise ValueError("pre-install role graph does not identify one bootstrap grantor")
+    if bootstrap_grantor not in old_roles:
+        raise ValueError("bootstrap grantor is absent from pre-install role snapshot")
     for name in ("objects", "columns", "grants", "column_grants", "default_privileges", "default_grants", "effective_global_function_grants", "memberships"):
         old = before[name]
         new = after[name]
@@ -198,7 +213,7 @@ def assert_restored(before, after, *, allowed_memberships=frozenset()):
                 if membership["role"] not in old_roles and membership["member"] in old_roles:
                     if (membership["role"] in SUBSET_ROLES
                             and membership["member"] == bootstrap_creator
-                            and membership["grantor"] == bootstrap_creator
+                            and membership["grantor"] == bootstrap_grantor
                             and membership["admin_option"] is True
                             and membership["inherit_option"] is False
                             and membership["set_option"] is False):
@@ -226,7 +241,15 @@ def assert_restored(before, after, *, allowed_memberships=frozenset()):
         if (grant["kind"] == "function" and grant["name"] not in old_functions
                 and grant["privilege"] == "EXECUTE" and grant["grantee"] != grant["grantor"]):
             raise AssertionError("new subset API remains executable: " + grant["name"])
-    issues = unsafe_writer_paths(after, allowed_memberships=allowed_memberships)
+    baseline_admin_edges = {
+        (edge["role"], edge["member"]) for edge in before["memberships"]
+        if edge["member"] == bootstrap_creator and edge["grantor"] == bootstrap_grantor
+        and edge["admin_option"] is True and edge["inherit_option"] is False
+        and edge["set_option"] is False
+    }
+    issues = unsafe_writer_paths(
+        after, allowed_memberships=allowed_memberships | baseline_admin_edges
+    )
     if issues:
         raise AssertionError("unsafe writer paths: " + "; ".join(issues))
 

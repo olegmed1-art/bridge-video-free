@@ -15,6 +15,30 @@ import build_recovery as r
 import connector_packet as c
 
 
+def test_pinned_sql_files_have_identical_lf_bytes_on_checkout():
+    for key, expected in c.PINNED.items():
+        raw = (REPO/'database/migrations'/(key+'.sql')).read_bytes()
+        assert b'\r' not in raw
+        assert hashlib.sha256(raw).hexdigest() == expected
+    repair = (CODE/(r.KEY+'.sql')).read_bytes()
+    assert b'\r' not in repair
+    assert hashlib.sha256(repair).hexdigest() == '7202fb09ed4a796d4dc6b9d80905b620ede18df4ce38254f133b6a53a0a879e5'
+
+
+def test_windows_function_definition_newlines_preserve_md5_and_render_lf(staged):
+    claim_lf = "CREATE OR REPLACE FUNCTION video_queue.claim_job()\nRETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql\n"
+    claim_crlf = claim_lf.replace('\n', '\r\n')
+    path = r.ROOT/'restore_claim_job.sql'
+    path.write_bytes(claim_crlf.encode())
+    assert r.read_claim_exact(path) == claim_crlf
+    assert hashlib.md5(r.read_claim_exact(path).encode()).hexdigest() == hashlib.md5(claim_crlf.encode()).hexdigest()
+    rendered = r.render_recovery(staged, claim_crlf)
+    assert rendered == r.render_recovery(staged, claim_lf)
+    assert '\r' not in rendered
+    with pytest.raises(ValueError, match='line endings'):
+        r.render_recovery(staged, claim_lf.replace('RETURNS', '\rRETURNS'))
+
+
 @pytest.fixture
 def staged(tmp_path,monkeypatch):
     monkeypatch.setattr(r,'ROOT',tmp_path)
