@@ -64,7 +64,8 @@ SELECT session_user::text, current_database()::text,
            SELECT 1 FROM unnest(%s::text[]) AS q_table(table_name)
             WHERE has_table_privilege(session_user,q_table.table_name,'INSERT,UPDATE,DELETE')
                OR has_any_column_privilege(session_user,q_table.table_name,'INSERT,UPDATE')
-       )
+       ),
+       current_user::text = session_user::text
 """
 
 
@@ -91,11 +92,12 @@ def _assert_queue_only(connection, *, expected_login: str,
             row = cursor.fetchone()
     except Exception as exc:
         raise PrivateOneJobConfigurationError('ONE_JOB_QUEUE_PREFLIGHT_FAILED') from exc
-    if (row is None or len(row) != 15 or row[0] != expected_login
+    if (row is None or len(row) != 16 or row[0] != expected_login
             or row[1] != expected_database or row[2] is not True
             or any(value is not False for value in row[3:7])
             or any(value is not True for value in row[7:11])
-            or any(value is not False for value in row[11:15])):
+            or any(value is not False for value in row[11:15])
+            or row[15] is not True):
         raise PrivateOneJobConfigurationError('ONE_JOB_QUEUE_IDENTITY_OR_ACL_INVALID')
 
 
@@ -117,7 +119,7 @@ def run_private_one_job(*, queue_dsn: str, expected_database: str,
 
     The claim is already leased. This entrypoint neither claims another job
     nor falls back to the broad writer, old public-candidate path, or resident.
-    Every private write/readback connection repeats the ACL identity check.
+    Every private queue connection repeats the ACL identity check at use.
     """
     if (not isinstance(queue_dsn, str) or not queue_dsn.strip()
             or not isinstance(expected_database, str) or not expected_database
@@ -155,15 +157,22 @@ def run_private_one_job(*, queue_dsn: str, expected_database: str,
                                expected_database=expected_database)
             yield connection
 
-    # Check once before Drive processing, then again on both bundle connections.
+    # Check once before Drive processing, then at every queue SQL connection.
     with open_checked_connection():
         pass
+    def validate_queue_connection(connection) -> None:
+        _assert_queue_only(connection, expected_login=expected_login,
+                           expected_database=expected_database)
+
+    checked_adapter = SubsetWorkerAdapter(
+        subset_adapter.observation_provider,
+        connection_validator=validate_queue_connection)
     handoff = PrivateResultStagingHandoff(
         claim=claim, worker_key=worker_key, admission_id=admission_id,
         source_fingerprint=source_fingerprint,
         open_connection=open_checked_connection)
     return _process_private_claim(queue_dsn, claim, worker_key,
-                                  subset_adapter=subset_adapter,
+                                  subset_adapter=checked_adapter,
                                   staging_handoff=handoff)
 
 

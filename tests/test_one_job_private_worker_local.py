@@ -40,6 +40,7 @@ class NoHeartbeat:
 class FakeSubset:
     def __init__(self):
         self.finished = None
+        self.connection_validator = lambda connection: None
 
     def before_work(self, *_):
         return str(uuid4())
@@ -103,6 +104,28 @@ class PrivateWorkerTest(unittest.TestCase):
                 'queue-worker', processor=lambda claim: {},
                 staging_handoff=self.handoff)
 
+    def test_private_handoff_requires_checked_queue_adapter(self):
+        adapter = SubsetWorkerAdapter(
+            lambda claim, worker_key, boundary: str(uuid4()))
+        with self.assertRaisesRegex(neon_worker.NeonVideoWorkerError,
+                                    'VIDEO_PRIVATE_RESULT_CONNECTION_VALIDATOR_REQUIRED'):
+            neon_worker.process_claim('synthetic-queue-dsn', self.claim,
+                'queue-worker', processor=lambda claim: {},
+                subset_adapter=adapter, staging_handoff=self.handoff)
+
+    def test_prework_acl_change_propagates_without_retry(self):
+        subset = FakeSubset()
+        subset.before_work = lambda *_: (_ for _ in ()).throw(
+            PrivateOneJobConfigurationError('ONE_JOB_QUEUE_IDENTITY_OR_ACL_INVALID'))
+        with patch.object(neon_worker, '_Heartbeat', NoHeartbeat), \
+             patch.object(neon_worker, 'access_token', return_value='synthetic'), \
+             patch.object(neon_worker, 'verify_claimed_source', return_value={'id': 'same'}):
+            with self.assertRaisesRegex(PrivateOneJobConfigurationError,
+                                        'ONE_JOB_QUEUE_IDENTITY_OR_ACL_INVALID'):
+                neon_worker.process_claim('synthetic-queue-dsn', self.claim,
+                    'queue-worker', processor=lambda claim: {},
+                    subset_adapter=subset, staging_handoff=self.handoff)
+
     def test_private_handoff_rejects_ambient_broad_writer_dsn(self):
         with patch.dict(os.environ, {'BRIDGE_WORKER_DATABASE_URL': 'synthetic-broad-dsn'}):
             with self.assertRaisesRegex(neon_worker.NeonVideoWorkerError,
@@ -116,9 +139,10 @@ class PrivateWorkerTest(unittest.TestCase):
         before = str(uuid4())
         after = str(uuid4())
         adapter = SubsetWorkerAdapter(
-            lambda claim, worker_key, boundary: after)
+            lambda claim, worker_key, boundary: after,
+            connection_validator=lambda connection: None)
         with patch('universal_video.subset_worker._execute',
-                   side_effect=lambda dsn, sql, params: (
+                   side_effect=lambda dsn, sql, params, **kwargs: (
                        seen.append((sql, params)) or
                        {'job_status': 'REVIEW_READY', 'batch_status': 'RUNNING',
                         'released_jobs': 0})):
@@ -134,6 +158,20 @@ class PrivateWorkerTest(unittest.TestCase):
         self.assertNotIn('finish_subset_job', seen[0][0])
         self.assertEqual(seen[0][1][0], self.admission_id)
         self.assertEqual(seen[0][1][7], after)
+
+    def test_private_finish_requires_connection_validator(self):
+        adapter = SubsetWorkerAdapter(
+            lambda claim, worker_key, boundary: str(uuid4()))
+        with patch('universal_video.subset_worker._execute') as execute:
+            with self.assertRaisesRegex(Exception,
+                                        'VIDEO_PRIVATE_CONNECTION_VALIDATOR_REQUIRED'):
+                adapter.finish_private_job(
+                    'synthetic-queue-dsn', self.claim, 'queue-worker',
+                    before_work_observation_id=str(uuid4()),
+                    admission_id=self.admission_id,
+                    source_fingerprint='b' * 64,
+                    receipt_id=self.receipt_id, outcome='REVIEW_READY', output={})
+            execute.assert_not_called()
 
     def test_late_acl_change_stops_without_retry_or_old_finish(self):
         with patch.object(neon_worker, '_Heartbeat', NoHeartbeat), \

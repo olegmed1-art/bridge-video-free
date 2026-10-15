@@ -262,6 +262,8 @@ def process_claim(
     private_handoff = isinstance(staging_handoff, PrivateResultStagingHandoff)
     if private_handoff and not callable(getattr(subset_adapter, 'finish_private_job', None)):
         raise NeonVideoWorkerError("VIDEO_PRIVATE_RESULT_SUBSET_ADAPTER_REQUIRED")
+    if private_handoff and not callable(getattr(subset_adapter, 'connection_validator', None)):
+        raise NeonVideoWorkerError("VIDEO_PRIVATE_RESULT_CONNECTION_VALIDATOR_REQUIRED")
     if private_handoff and os.getenv('BRIDGE_WORKER_DATABASE_URL', '').strip():
         raise NeonVideoWorkerError("VIDEO_PRIVATE_RESULT_BROAD_WRITER_DSN_FORBIDDEN")
     if isinstance(staging_handoff, ExactLeaseStagingHandoff) and staging_handoff.writer_dsn == database_url:
@@ -285,6 +287,8 @@ def process_claim(
                 output.pop("knowledge_staging", None)
                 output.pop("private_staging", None)
             except Exception as exc:
+                if private_handoff and isinstance(exc, PrivateOneJobConfigurationError):
+                    raise
                 outcome, error_code = _failure(exc)
                 output["error_type"] = type(exc).__name__
 

@@ -62,7 +62,7 @@ class EntryPointTest(unittest.TestCase):
             worker_key='queue-worker', admission_id=str(uuid4()),
             source_fingerprint='b' * 64, subset_adapter=self.adapter)
         self.good_row = ('queue_login','video_rehearsal',True,False,False,False,
-                         False,True,True,True,True,False,False,False,False)
+                         False,True,True,True,True,False,False,False,False,True)
 
     def test_selects_only_private_handoff_and_rechecks_every_connection(self):
         calls = []
@@ -75,7 +75,10 @@ class EntryPointTest(unittest.TestCase):
             return connection
 
         def process(dsn, claim, worker_key, *, subset_adapter, staging_handoff):
-            self.assertIs(subset_adapter, self.adapter)
+            self.assertIsInstance(subset_adapter, SubsetWorkerAdapter)
+            self.assertIs(subset_adapter.observation_provider,
+                          self.adapter.observation_provider)
+            self.assertTrue(callable(subset_adapter.connection_validator))
             self.assertIsInstance(staging_handoff, PrivateResultStagingHandoff)
             self.assertEqual(dsn, self.arguments['queue_dsn'])
             self.assertEqual(claim, self.claim)
@@ -100,6 +103,7 @@ class EntryPointTest(unittest.TestCase):
             self.assertIn('stage_one_job_private_result_v1', sql)
             self.assertIn('finish_one_job_staging_v1', sql)
             self.assertIn('has_any_column_privilege', sql)
+            self.assertIn('current_user::text = session_user::text', sql)
             self.assertIn('public.analysis_candidate', params[0])
             self.assertIn('public.run_checkpoint_event', params[0])
 
@@ -133,7 +137,7 @@ class EntryPointTest(unittest.TestCase):
         invalid = {0: 'broad_writer', 1: 'other_db', 2: False, 3: True,
                    4: True, 5: True, 6: True, 7: False, 8: False,
                    9: False, 10: False, 11: True, 12: True, 13: True,
-                   14: True}
+                   14: True, 15: False}
         for index, value in invalid.items():
             with self.subTest(index=index):
                 row = list(self.good_row)
@@ -171,6 +175,82 @@ class EntryPointTest(unittest.TestCase):
                 run_private_one_job(**self.arguments)
         self.assertEqual(len(selected), 1)
         self.assertEqual(rows, [])
+
+    def test_swapped_finish_connection_is_rejected_before_finish_sql(self):
+        preflight_calls = []
+        finish_calls = []
+        swapped_row = list(self.good_row)
+        swapped_row[0] = 'other_v2_login'
+        swapped_row[14] = True  # inherited analysis_candidate INSERT
+
+        def process(dsn, claim, worker_key, *, subset_adapter, staging_handoff):
+            before = str(uuid4())
+            with patch('universal_video.subset_worker._connect_subset',
+                       return_value=Connection(tuple(swapped_row), finish_calls)):
+                return subset_adapter.finish_private_job(
+                    dsn, claim, worker_key,
+                    before_work_observation_id=before,
+                    admission_id=staging_handoff.admission_id,
+                    source_fingerprint=staging_handoff.source_fingerprint,
+                    receipt_id=str(uuid4()), outcome='REVIEW_READY',
+                    output={'result_mode': 'PRIVATE_RESULT_STAGING_ONLY'})
+
+        with patch('universal_video.private_one_job_entrypoint._connect_queue',
+                   return_value=Connection(self.good_row, preflight_calls)), \
+             patch('universal_video.private_one_job_entrypoint._process_private_claim',
+                   side_effect=process), \
+             patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(PrivateOneJobConfigurationError,
+                                        'ONE_JOB_QUEUE_IDENTITY_OR_ACL_INVALID'):
+                run_private_one_job(**self.arguments)
+        self.assertEqual(len(preflight_calls), 1)
+        self.assertEqual(len(finish_calls), 1)
+        self.assertIn('has_any_column_privilege', finish_calls[0][0])
+        self.assertTrue(finish_calls[0][0].lstrip().startswith('SELECT session_user'))
+
+    def test_all_adapter_queue_calls_use_connection_validator(self):
+        observed = []
+        def process(_dsn, _claim, _worker_key, *, subset_adapter, staging_handoff):
+            with patch('universal_video.subset_worker._execute',
+                       side_effect=lambda dsn, sql, params, **kwargs:
+                       observed.append((sql, kwargs)) or {}):
+                for method, args, kwargs in (
+                    (subset_adapter.before_work, (self.arguments['queue_dsn'],
+                        self.claim, 'queue-worker'), {}),
+                    (subset_adapter.heartbeat_job, (self.arguments['queue_dsn'],),
+                        dict(job_id=self.claim['job_id'],
+                             lease_token=self.claim['lease_token'],
+                             worker_key='queue-worker')),
+                    (subset_adapter.retry_job, (self.arguments['queue_dsn'],),
+                        dict(job_id=self.claim['job_id'],
+                             lease_token=self.claim['lease_token'],
+                             worker_key='queue-worker', error_code='TEST')),
+                    (subset_adapter.finish_job, (self.arguments['queue_dsn'],
+                        self.claim, 'queue-worker'),
+                        dict(before_work_observation_id=str(uuid4()),
+                             outcome='AMBIGUOUS', output={})),
+                    (subset_adapter.finish_private_job,
+                        (self.arguments['queue_dsn'], self.claim, 'queue-worker'),
+                        dict(before_work_observation_id=str(uuid4()),
+                             admission_id=staging_handoff.admission_id,
+                             source_fingerprint=staging_handoff.source_fingerprint,
+                             receipt_id=str(uuid4()), outcome='REVIEW_READY',
+                             output={})),
+                ):
+                    try:
+                        method(*args, **kwargs)
+                    except Exception:
+                        pass  # Synthetic empty response; only SQL dispatch matters.
+            return {'job_status': 'REVIEW_READY', 'released_jobs': 0}
+
+        with patch('universal_video.private_one_job_entrypoint._connect_queue',
+                   return_value=Connection(self.good_row, [])), \
+             patch('universal_video.private_one_job_entrypoint._process_private_claim',
+                   side_effect=process), \
+             patch.dict(os.environ, {}, clear=True):
+            run_private_one_job(**self.arguments)
+        self.assertEqual(len(observed), 5)
+        self.assertTrue(all(call[1].get('connection_validator') for call in observed))
 
     def test_missing_queue_connection_never_processes_or_falls_back(self):
         with patch('universal_video.private_one_job_entrypoint._connect_queue',

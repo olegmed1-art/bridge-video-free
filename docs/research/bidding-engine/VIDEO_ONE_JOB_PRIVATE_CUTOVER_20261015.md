@@ -24,7 +24,8 @@ start the resident, accept a broad writer credential, or choose a fallback.
    functions. Do not grant the old public-candidate assertion/attestation or
    finish path to this route. Verify effective inherited table **and column**
    DML, schema and function privileges using `pg_catalog` and a real session;
-   the entrypoint repeats these checks for every bundle connection.
+   the entrypoint repeats these checks on every private queue connection,
+   including before-work, heartbeat, retry and finish.
 4. Select exactly one job and batch through a separately reviewed claim
    procedure. Pass the already-claimed job, batch, lease token, attempt,
    source file, admission ID and source fingerprint explicitly. This
@@ -36,9 +37,9 @@ start the resident, accept a broad writer credential, or choose a fallback.
 5. Invoke `run_private_one_job` once from an explicitly authorized launcher
    with the queue-only DSN, expected database and login, exact claim fields,
    and the existing `SubsetWorkerAdapter`. Supply no broad writer DSN. Its
-   preflight must pass before Drive processing; bundle-write and readback
-   connections repeat the identity/ACL check. Accept only a matching private
-   receipt, `REVIEW_READY`, `released_jobs=0`, no publication or canon write,
+   preflight must pass before Drive processing; every queue connection repeats
+   the identity/ACL check immediately before its SQL operation. Accept only a
+   matching private receipt, `REVIEW_READY`, `released_jobs=0`, no publication or canon write,
    and a committed readback. Check terminal Drive IDs/hashes and source
    revision again after the run.
 
@@ -46,7 +47,7 @@ start the resident, accept a broad writer credential, or choose a fallback.
 
 - A wrong claim, login, role, database, inherited DML, old-path EXECUTE,
   ambient broad writer DSN or missing new EXECUTE stops **before processing**.
-  A changed identity on a later connection stops that write. There is no
+  A changed identity on any later queue connection stops that operation. There is no
   fallback to `persist_completed_drive_job`, the public-candidate route, or
   `process_one_neon`.
 - Failure before bundle commit leaves no private row. Failure after bundle
