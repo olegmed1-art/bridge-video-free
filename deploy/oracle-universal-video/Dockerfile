@@ -29,13 +29,19 @@ COPY bridge_neon_persistence.py bridge_output_scoped_idempotency.py \
      bridge_speaker_diarization_v3.py bridge_speaker_diarization_v3_core.py \
      bridge_speaker_diarization_v3_repair.py bridge_speaker_identity_postprocess.py \
      bridge_speaker_mapping_r29.py bridge_worker_3_1_free.py \
-     diana_longitudinal_quality_v2.py r29_identity_overlay_probe.py \
+     diana_longitudinal_quality_v2.py diana_longitudinal_quality_v3.py \
+     diana_longitudinal_quality_v4.py diana_longitudinal_quality_v4_1.py \
+     diana_longitudinal_quality_v4_2.py \
+     diana_longitudinal_postprocess.py diana_longitudinal_postprocess_v3.py \
+     diana_longitudinal_postprocess_v4_2.py \
+     video_completed_staging_handoff.py r29_identity_overlay_probe.py \
      route_drive_job_outputs.py run_drive_3_1_free.py run_drive_3_1_free_generic.py run_drive_3_1_free_r264.py \
      run_drive_3_1_free_oidc.py run_drive_3_1_free_oidc_r264.py run_master_3_1_free.py \
      run_master_3_1_free_semantic.py run_master_3_1_free_semantic_v2.py \
      transcript_stage_checkpoint_v1.py ./
 COPY bridge_contracts ./bridge_contracts
 COPY bridge_vision ./bridge_vision
+COPY bridge_school_api ./bridge_school_api
 COPY database ./database
 COPY deploy/oracle-universal-video/universal-video-container-entrypoint.sh /usr/local/bin/universal-video-container-entrypoint
 RUN chmod 0755 /usr/local/bin/universal-video-container-entrypoint \
