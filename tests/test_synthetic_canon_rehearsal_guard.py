@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 RUNNER = runpy.run_path(
-    str(Path(__file__).resolve().parents[1] / "database/tests/329_positive_synthetic_rehearsal.py"),
+    str(Path(__file__).resolve().parents[1] / "database/tests/402_video_canon_positive_synthetic_rehearsal.py"),
     run_name="canon_guard_test",
 )
 validate = RUNNER["_validate_disposable_target"]
