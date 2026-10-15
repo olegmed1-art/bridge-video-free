@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import struct
 import zlib
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +15,7 @@ from bridge_vision.gambler_classic_reference import (
     bank_provenance,
     build_rank_template_bank,
     card_box,
+    load_sprite,
     png_dimensions,
     select_variant_for_card_size,
     variant_candidates_for_card_size,
@@ -54,6 +56,15 @@ def test_validate_variant_5_by_sha_and_dimensions() -> None:
     sprite = validate_sprite_bytes(payload, expected_sha256=sha, expected_variant=5)
     assert sprite.variant == 5
     assert (sprite.card_width, sprite.card_height) == (109, 147)
+
+
+def test_local_sprite_reader_preserves_png_bytes_for_sha_on_windows(tmp_path: Path) -> None:
+    payload = _png(1417, 588)
+    path = tmp_path / "all.png"
+    path.write_bytes(payload)
+    sprite = load_sprite(path, expected_sha256=hashlib.sha256(payload).hexdigest(),
+                         expected_variant=5)
+    assert sprite.payload == payload
 
 
 def test_validate_fails_closed_on_wrong_sha() -> None:
