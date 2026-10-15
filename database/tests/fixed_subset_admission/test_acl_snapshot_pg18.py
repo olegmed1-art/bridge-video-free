@@ -48,7 +48,16 @@ def test_exact_acl_owner_recovery(tmp_path):
         db.execute("CREATE TABLE video_queue.source_reservation (id integer)")
         db.execute("CREATE FUNCTION video_queue.subset_disabled() RETURNS integer LANGUAGE sql AS 'SELECT 0'")
         db.execute("REVOKE ALL ON FUNCTION video_queue.subset_disabled() FROM PUBLIC")
+        db.execute("ALTER FUNCTION video_queue.subset_disabled() OWNER TO video_subset_owner")
+        implicit = acl.collect(db)
+        assert "PUBLIC default function EXECUTE: video_subset_owner" in acl.unsafe_writer_paths(
+            implicit, allowed_memberships=allowed
+        )
+        with pytest.raises(AssertionError, match="PUBLIC default function EXECUTE"):
+            acl.assert_restored(before, implicit, allowed_memberships=allowed)
+        db.execute("ALTER DEFAULT PRIVILEGES FOR ROLE video_subset_owner REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC")
         installed = acl.collect(db)
+        assert not acl.unsafe_writer_paths(installed, allowed_memberships=allowed)
 
         # A fault after a temporary GRANT and ownership transfer must roll back.
         with pytest.raises(psycopg.Error):

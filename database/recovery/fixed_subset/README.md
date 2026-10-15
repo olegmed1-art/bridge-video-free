@@ -44,8 +44,8 @@ It requires `SUBSET_SYNTHETIC_PG18=1` and
 machine's temporary directory named `subset-acl-pg18-*`; the test independently
 checks the server's actual data directory before creating or dropping anything.
 
-The three SHA-pinned installer/recovery SQL files are checked out as LF on every
-platform via `.gitattributes`. The fixture stores raw `pg_get_functiondef` bytes
+The three SHA-pinned installer/recovery SQL files and the legacy 0056-0058 SQL
+files are checked out as LF on every platform via `.gitattributes`. The fixture stores raw `pg_get_functiondef` bytes
 for their server-specific MD5, while `build_recovery.py` normalizes only the
 rendered recovery SQL to LF. Checksum validation remains byte-exact.
 
@@ -94,7 +94,11 @@ four legacy function EXECUTE grants. Five legacy API grants are cut off; six
 guards are added to old batch/job.
 These are material persistent installer changes, not a read-only operation.
 
-The installer temporarily grants definer membership with INHERIT/SET and schema
+The installer sets a global default function ACL for `video_subset_owner` that
+removes implicit PUBLIC EXECUTE. The default ACL persists with the retained
+NOLOGIN role after recovery. Installer, verifier, recovery, 041-043 and the
+independent ACL collector reject a missing or broadened default. The installer
+temporarily grants definer membership with INHERIT/SET and schema
 CREATE, then revokes both. Verifier/recovery temporarily grant only definer
 membership with ADMIN=false, INHERIT=true, SET=false, and revoke the exact
 installer-issued grant before COMMIT. This supplies substantial inherited owner
@@ -132,7 +136,7 @@ the old empty-only0060 rollback or delete existing ledger entries.
 
 ## Evidence scope
 
-The one Ubuntu PG18 fixture creates only0056–0058 synthetic baseline, then executes
+The disposable PG18 fixture (Linux CI or native Windows with Git Bash) creates only0056-0058 synthetic baseline, then executes
 the exact generated install/verifier/recovery lists as the nonsuperuser owner.
 It emulates Neon target GUCs explicitly, injects failures after GRANT/owner changes
 and before install COMMIT, tests unknown default-function grantees, records raw

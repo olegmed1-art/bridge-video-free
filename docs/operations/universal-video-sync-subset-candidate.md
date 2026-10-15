@@ -62,6 +62,9 @@ completed successfully for the scoped-claim 0060 SQL SHA-256
 It verified installer, verifier, data-preserving recovery, 23 unit checks,
 16 negative controls, legacy ACL/ownership restoration and cleanup. It did not
 exercise Neon transport or install anything in production.
+The subsequent local default-ACL fix changes the pending 0060 SQL SHA-256 to
+`cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc`;
+the earlier CI run does not validate these new bytes.
 
 ## One-batch sequence and stop conditions
 

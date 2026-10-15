@@ -32,8 +32,9 @@ coalesce((SELECT pg_get_userbyid(o.proowner)='neondb_owner' AND ARRAY(SELECT a::
 (NOT EXISTS(SELECT FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid WHERE r.rolname='video_subset_owner' AND a.member=current_user::regrole AND a.grantor=current_user::regrole)) AND
 ((SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='video_queue' AND c.relname IN ('subset_approval','source_observation','subset_admission','source_reservation') AND c.relowner='video_subset_owner'::regrole)=4) AND
 (NOT EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace,LATERAL aclexplode(coalesce(c.relacl,acldefault('r',c.relowner))) a WHERE n.nspname='video_queue' AND c.relname IN ('subset_approval','source_observation','subset_admission','source_reservation') AND (a.grantee<>c.relowner OR a.is_grantable))) AND
+((SELECT count(*)=1 FROM pg_default_acl d WHERE d.defaclrole='video_subset_owner'::regrole AND d.defaclnamespace=0 AND d.defaclobjtype='f' AND NOT EXISTS(SELECT FROM aclexplode(d.defaclacl) a WHERE a.grantee<>d.defaclrole OR a.grantor<>d.defaclrole OR a.privilege_type<>'EXECUTE' OR a.is_grantable))) AND
 ((SELECT checksum='be1275d293a6aa1a27d5e41b0d2f725179fd3e6b56dd849fe8f4d87c64819a08' FROM schema_migration WHERE migration_key='0059_universal_video_terminal_size_guard')) AND
-((SELECT checksum='27932f2b5f22f383d9f84341c0ae6e88dc346c7940ec92490edc0a3d37358dfe' FROM schema_migration WHERE migration_key='0060_fixed_subset_admission')) AND
+((SELECT checksum='cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc' FROM schema_migration WHERE migration_key='0060_fixed_subset_admission')) AND
 ((SELECT checksum='7202fb09ed4a796d4dc6b9d80905b620ede18df4ce38254f133b6a53a0a879e5' FROM schema_migration WHERE migration_key='repair-0060-legacy-recovery-v1'))),false) THEN RAISE EXCEPTION 'LEGACY_RECOVERY_STATE_INVALID'; END IF; END $assert$;
 ROLLBACK;
 \else
@@ -49,6 +50,7 @@ DO $assert$ BEGIN IF NOT coalesce(((WITH names(name) AS (VALUES ('admit_approved
  SELECT (SELECT count(*) FROM owned)=25
  AND NOT EXISTS(SELECT FROM names LEFT JOIN owned ON owned.proname=names.name GROUP BY names.name HAVING count(owned.oid)<>1)
  AND NOT EXISTS((SELECT * FROM actual EXCEPT SELECT * FROM expected) UNION ALL
-                (SELECT * FROM expected EXCEPT SELECT * FROM actual)))),false) THEN RAISE EXCEPTION 'SUBSET_EXACT_FUNCTION_ACL'; END IF; END $assert$;
+                (SELECT * FROM expected EXCEPT SELECT * FROM actual))) AND
+ EXISTS(SELECT FROM pg_default_acl d WHERE d.defaclrole='video_subset_owner'::regrole AND d.defaclnamespace=0 AND d.defaclobjtype='f' AND NOT EXISTS(SELECT FROM aclexplode(d.defaclacl) a WHERE a.grantee<>d.defaclrole OR a.grantor<>d.defaclrole OR a.privilege_type<>'EXECUTE' OR a.is_grantable))),false) THEN RAISE EXCEPTION 'SUBSET_EXACT_FUNCTION_ACL'; END IF; END $assert$;
 \endif
 \endif

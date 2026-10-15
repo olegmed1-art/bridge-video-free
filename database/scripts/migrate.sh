@@ -4,6 +4,8 @@ set -euo pipefail
 : "${DATABASE_URL:?DATABASE_URL must be set}"
 
 PSQL=(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -A -t)
+# Native Windows psql writes CRLF even when Git Bash reads LF scripts.
+psql_value() { "${PSQL[@]}" "$@" | tr -d '\r'; }
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-database/migrations}"
 EXTERNAL_HISTORY_FILE="${EXTERNAL_HISTORY_FILE:-database/external_migration_history.tsv}"
 
@@ -106,7 +108,7 @@ assert_unique_numeric_prefixes "$TESTS_DIR" "database-test"
 validate_external_history
 
 schema_table_exists() {
-  [[ "$("${PSQL[@]}" -c "SELECT to_regclass('public.schema_migration') IS NOT NULL;")" == "t" ]]
+  [[ "$(psql_value -c "SELECT to_regclass('public.schema_migration') IS NOT NULL;")" == "t" ]]
 }
 
 # Once migration history exists, every recorded migration must either still exist on
@@ -141,7 +143,7 @@ if schema_table_exists; then
     fi
     echo "Applied migration is missing from repository: ${applied_key}.sql" >&2
     exit 1
-  done < <("${PSQL[@]}" -F $'\t' -c "SELECT migration_key, COALESCE(checksum,'') FROM schema_migration ORDER BY migration_key;")
+  done < <(psql_value -F $'\t' -c "SELECT migration_key, COALESCE(checksum,'') FROM schema_migration ORDER BY migration_key;")
 fi
 
 for migration in "$MIGRATIONS_DIR"/*.sql; do
@@ -153,13 +155,13 @@ for migration in "$MIGRATIONS_DIR"/*.sql; do
   [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid SHA-256 for $key" >&2; exit 1; }
 
   if schema_table_exists; then
-    applied="$("${PSQL[@]}" -c "SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key = '$key');")"
+    applied="$(psql_value -c "SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key = '$key');")"
   else
     applied="f"
   fi
 
   if [[ "$applied" == "t" ]]; then
-    stored="$("${PSQL[@]}" -c "SELECT COALESCE(checksum,'') FROM schema_migration WHERE migration_key = '$key';")"
+    stored="$(psql_value -c "SELECT COALESCE(checksum,'') FROM schema_migration WHERE migration_key = '$key';")"
     if [[ -z "$stored" ]]; then
       echo "Bootstrapping checksum for already-applied migration $key"
       "${PSQL[@]}" -c "UPDATE schema_migration SET checksum = '$checksum' WHERE migration_key = '$key' AND checksum IS NULL;" >/dev/null
@@ -203,14 +205,14 @@ PSQL
     exit 1
   fi
 
-  registered="$("${PSQL[@]}" -c "SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key = '$key');")"
+  registered="$(psql_value -c "SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key = '$key');")"
   if [[ "$registered" != "t" ]]; then
     echo "Migration $key committed without registering itself in schema_migration" >&2
     exit 1
   fi
 
   "${PSQL[@]}" -c "UPDATE schema_migration SET checksum = '$checksum' WHERE migration_key = '$key' AND checksum IS NULL;" >/dev/null
-  stored="$("${PSQL[@]}" -c "SELECT checksum FROM schema_migration WHERE migration_key = '$key';")"
+  stored="$(psql_value -c "SELECT checksum FROM schema_migration WHERE migration_key = '$key';")"
   if [[ "$stored" != "$checksum" ]]; then
     echo "Failed to persist checksum for migration $key" >&2
     exit 1

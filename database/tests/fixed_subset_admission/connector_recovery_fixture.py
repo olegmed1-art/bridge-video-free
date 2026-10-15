@@ -21,6 +21,7 @@ CODE = ROOT / 'database/recovery/fixed_subset'
 sys.path.insert(0, str(CODE))
 import build_recovery as r
 import connector_packet as c
+import acl_snapshot as acl
 
 DATABASE = 'neondb'
 ADMIN = 'postgresql://postgres:postgres@127.0.0.1:5432/neondb'
@@ -66,8 +67,9 @@ def execute(statements, *, admin=False, fail_after=None):
 
 
 def command(args, evidence, *, env=None, expected=True):
-    proc = subprocess.run(args, cwd=ROOT, env=env, capture_output=True, text=True, timeout=100)
-    evidence.write_text(proc.stdout+proc.stderr)
+    proc = subprocess.run(args, cwd=ROOT, env=env, capture_output=True, text=True,
+                          encoding='utf-8', timeout=100)
+    evidence.write_text(proc.stdout+proc.stderr, encoding='utf-8')
     if expected:
         assert proc.returncode == 0, evidence.name + ': ' + proc.stderr[-3000:]
     else:
@@ -202,7 +204,7 @@ def main(argv=None):
     if not args.execute:
         print('Offline: one localhost PG18 installer/verifier/recovery rehearsal; --execute required')
         return
-    assert sys.platform=='linux' and args.evidence
+    assert sys.platform in ('linux','win32') and args.evidence
     assert not any(os.environ.get(k) for k in ('DATABASE_URL','NEON_API_KEY','PGSERVICE','PGHOST','PGPASSWORD'))
     out=args.evidence.resolve(); out.mkdir(parents=True,exist_ok=True)
     result={'status':'FAIL_OR_UNKNOWN','scope':'DISPOSABLE_SYNTHETIC_ONLY','neon_transport_tested':False,'negative_cases':[]}
@@ -211,6 +213,10 @@ def main(argv=None):
             stage=Path(tmp)
             prepare(stage,out)
             before=snapshot(); write(out/'before-install.json',before)
+            with connect(admin=True) as db:
+                db.autocommit=True
+                acl_before=acl.collect(db)
+            acl.write_snapshot(out/'acl-before.json',acl_before)
             install=c.install_payload()['sql_statements']
             write(out/'install-envelope.json',install)
             grant=next(i for i,s in enumerate(install) if 'GRANT video_subset_owner TO CURRENT_USER' in s)
@@ -244,6 +250,11 @@ def main(argv=None):
                 result['negative_cases'].append(failure_case(name,recover,out,fail_after=index))
             recovery_receipt=execute(recover); write(out/'committed-recovery-receipt.json',recovery_receipt)
             recovered=snapshot(); write(out/'after-recovery.json',recovered)
+            with connect(admin=True) as db:
+                db.autocommit=True
+                acl_after=acl.collect(db)
+            acl.write_snapshot(out/'acl-after.json',acl_after)
+            acl.assert_restored(acl_before,acl_after,allowed_memberships=frozenset({('bridge_school_app','bridge_school_worker')}))
             for key in ('batch','job','job_event','sequence','source_reservation','subset_approval','source_observation','subset_admission','roles','memberships'):
                 assert recovered[key]==installed[key], key+' not preserved'
             assert recovered['legacy']==before['legacy'], 'legacy ACL/owner/definition mismatch'
@@ -252,7 +263,7 @@ def main(argv=None):
             assert all(current[k]==v for k,v in prior.items()) and set(current)-set(prior)=={r.KEY}
             # Ordinary migrator sees only the affected five baseline migrations;
             # all are already applied. No unrelated full-preflight is performed.
-            env=os.environ.copy(); env.update(DATABASE_URL=OWNER,MIGRATIONS_DIR=str(stage/'source/database/migrations'),EXTERNAL_HISTORY_FILE=str(ROOT/'database/external_migration_history.tsv'))
+            env=os.environ.copy(); env.update(DATABASE_URL=OWNER,MIGRATIONS_DIR=(stage/'source/database/migrations').as_posix(),EXTERNAL_HISTORY_FILE=(ROOT/'database/external_migration_history.tsv').as_posix())
             rerun=command(['bash','database/scripts/migrate.sh'],out/'migrator-history.log',env=env)
             assert rerun.stdout.count('Skipping already-applied migration ')==5
             assert 'Verified audited external migration history: '+r.KEY in rerun.stdout

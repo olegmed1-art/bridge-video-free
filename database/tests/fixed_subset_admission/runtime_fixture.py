@@ -14,7 +14,7 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict
 
 
-EXPECTED_0060 = "27932f2b5f22f383d9f84341c0ae6e88dc346c7940ec92490edc0a3d37358dfe"
+EXPECTED_0060 = "cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc"
 CLAIM = "video_queue.subset_claim_job(uuid,text,integer,text,text)"
 PROFILE = "bridge_3_1_free"
 REVISION = "3.1-free-r25.16"
