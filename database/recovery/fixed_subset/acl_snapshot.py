@@ -5,6 +5,7 @@ connection, accepts a DSN, or exports SQL bodies, row data, role passwords or GU
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from pathlib import Path
 
@@ -12,12 +13,26 @@ SCHEMA = "video_queue"
 LEGACY_WRITERS = frozenset({"bridge_school_app", "bridge_school_worker"})
 LEGACY_TABLES = frozenset({"batch", "job", "job_event"})
 LEGACY_MUTATORS = frozenset({"enqueue_drive_batch", "claim_job", "heartbeat_job", "retry_job", "finish_job"})
+SUBSET_ROLES = frozenset({
+    "video_subset_owner", "video_subset_approver", "video_subset_collector",
+    "video_subset_admitter", "video_subset_worker_v2",
+})
 
 
 def _rows(cursor, sql, params=()):
     cursor.execute(sql, params)
     names = [column.name for column in cursor.description]
-    return [dict(zip(names, row)) for row in cursor.fetchall()]
+    result = []
+    for row in cursor.fetchall():
+        if isinstance(row, Mapping):
+            if set(row) != set(names):
+                raise ValueError("catalog row keys differ from selected columns")
+            result.append({name: row[name] for name in names})
+        else:
+            if len(row) != len(names):
+                raise ValueError("catalog row width differs from selected columns")
+            result.append(dict(zip(names, row)))
+    return result
 
 
 def collect(connection):
@@ -161,6 +176,12 @@ def unsafe_writer_paths(snapshot, *, allowed_memberships=frozenset()):
 
 def assert_restored(before, after, *, allowed_memberships=frozenset()):
     """Prove every pre-install ACL/owner object and entitlement was restored."""
+    schema_owners = {x["owner"] for x in before["objects"] if x["kind"] == "schema" and x["name"] == SCHEMA}
+    if len(schema_owners) != 1:
+        raise ValueError("exactly one pre-install video_queue schema owner is required")
+    bootstrap_creator = schema_owners.pop()
+    if bootstrap_creator not in {x["name"] for x in before["roles"]}:
+        raise ValueError("pre-install schema owner is absent from role snapshot")
     for name in ("objects", "columns", "grants", "column_grants", "default_privileges", "default_grants", "effective_global_function_grants", "memberships"):
         old = before[name]
         new = after[name]
@@ -172,7 +193,19 @@ def assert_restored(before, after, *, allowed_memberships=frozenset()):
             new = [x for x in new if x["relation"] in legacy]
         elif name == "memberships":
             old_roles = {x["name"] for x in before["roles"]}
-            new = [x for x in new if x["role"] in old_roles or x["member"] in old_roles]
+            retained = []
+            for membership in new:
+                if membership["role"] not in old_roles and membership["member"] in old_roles:
+                    if (membership["role"] in SUBSET_ROLES
+                            and membership["member"] == bootstrap_creator
+                            and membership["grantor"] == bootstrap_creator
+                            and membership["admin_option"] is True
+                            and membership["inherit_option"] is False
+                            and membership["set_option"] is False):
+                        continue
+                if membership["role"] in old_roles or membership["member"] in old_roles:
+                    retained.append(membership)
+            new = retained
         elif name == "effective_global_function_grants":
             old_roles = {x["name"] for x in before["roles"]}
             new = [x for x in new if x["creator"] in old_roles]

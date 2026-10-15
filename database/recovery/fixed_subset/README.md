@@ -10,6 +10,8 @@ membership options, global and schema default privileges, and MD5 digests of
 function definitions. It excludes role passwords, connection strings, function
 bodies, and application rows. Keep the local artifact restricted because role
 names and the permission graph are operational metadata.
+Tuple and `dict_row` cursor factories produce the same values; unexpected row
+shapes fail closed.
 
 Capture immediately before 0059/0060 installation and after any recovery; compare
 with `assert_restored(before, after, allowed_memberships=...)`. The allowlist must
@@ -18,7 +20,11 @@ of every pre-install owner, ACL, definition digest, column grant, default privil
 membership and role attribute, while permitting retained new subset objects and
 NOLOGIN roles. It rejects PUBLIC or unknown legacy writers, new subset API grants,
 unreviewed writer-role membership, and even implicit PUBLIC function EXECUTE in
-global defaults. A failed comparison is a stop condition: do not apply guessed
+global defaults. PostgreSQL 18's creator bootstrap membership is permitted only
+for one of the five exact new subset roles to the pre-install `video_queue` schema
+owner, granted by that same owner with `ADMIN TRUE, INHERIT FALSE, SET FALSE`.
+Memberships with inherited or SET capabilities remain forbidden. A failed
+comparison is a stop condition: do not apply guessed
 GRANTs or broad writer permissions to make it pass. The existing recovery SQL
 remains the rollback mechanism; this collector is evidence and a gate, not a
 privilege-changing repair tool.
