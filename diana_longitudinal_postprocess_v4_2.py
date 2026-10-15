@@ -80,7 +80,8 @@ def _stable_database_summary(runtime: Mapping[str, Any] | None, candidate_record
     status = str(runtime.get('status') or 'UNKNOWN')
     result = {
         'status': status,
-        'candidate_records': int(runtime.get('candidate_records') or candidate_records or 0),
+        'candidate_records': (0 if status == 'BLOCKED_NO_REPLAY'
+                              else int(runtime.get('candidate_records') or candidate_records or 0)),
         'input_fingerprint': runtime.get('input_fingerprint'),
         'method_version': runtime.get('method_version') or QUALITY_METHOD_VERSION,
         'authoritative_tables_modified': bool(runtime.get('authoritative_tables_modified', False)),
@@ -169,7 +170,7 @@ def _reconstruct_from_master_pdf(token: str, master: Mapping[str, Any], master_p
         return reconstruct_report_visual_deals(path, master)
 
 
-def main(*, persisted_result=None) -> int:
+def main(*, persisted_result=None, staging_receipt=None) -> int:
     job_id = os.environ.get('BRIDGE_JOB_ID', '').strip()
     result_folder = os.environ.get('BRIDGE_OUTPUT_FOLDER_ID', '').strip()
     work_folder = os.environ.get('BRIDGE_WORK_FOLDER_ID', '').strip()
@@ -273,8 +274,15 @@ def main(*, persisted_result=None) -> int:
     # Persist before artifact sealing; only a stable summary enters content identity.
     # Exact prior worker result is a server orchestration dependency, not a
     # claim loaded from the generated analysis artifact or environment JSON.
-    runtime_database = (base._persist_staging_if_configured(payload, persisted_result=persisted_result)
-                        if persisted_result is not None else base._persist_staging_if_configured(payload))
+    if persisted_result is not None:
+        from database.video_staging_handoff import persist_quality_handoff
+        runtime_database = persist_quality_handoff(
+            os.environ.get('BRIDGE_WORKER_DATABASE_URL', ''), payload, persisted_result,
+        )
+        if staging_receipt is not None:
+            staging_receipt.update(runtime_database)
+    else:
+        runtime_database = base._persist_staging_if_configured(payload)
     payload['database_staging'] = _stable_database_summary(
         runtime_database,
         int((quality.get('counts') or {}).get('staging_records') or 0),

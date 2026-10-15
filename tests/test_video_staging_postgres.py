@@ -23,8 +23,10 @@ from bridge_contracts.video_local_evidence import LocalEvidenceReader
 from bridge_contracts.video_replay_input import build_replay_input
 from database.source_identity_persistence import ensure_drive_source_identity_on_connection
 from database.video_candidate_persistence import persist_quality_candidates_on_connection, persist_quality_candidates
+from database.video_staging_handoff import persist_quality_handoff
 from database.video_result_persistence import persist_video_result_on_connection, SCHOOL_STABLE_NAME
 from database.video_staging_read import read_internal_school_video_candidate
+from database.video_staging_receipt_read import read_committed_receipt_on_connection
 from diana_longitudinal_quality_v4_2 import build_quality_layer
 
 
@@ -171,6 +173,42 @@ def test_real_retry_is_idempotent(real, dsn):
     assert repeated['inserted'] == 0
     assert repeated['candidate_ids'] == real['written']['candidate_ids']
     assert repeated['replay_receipt_id'] == real['written']['replay_receipt_id']
+
+
+def test_combined_queue_receipt_readback_on_separate_readonly_connection(real, dsn):
+    with reader(dsn) as conn:
+        witness = read_committed_receipt_on_connection(
+            conn, receipt_id=real['written']['replay_receipt_id'],
+            analysis_run_id=real['persisted']['analysis_run_id'],
+            source_id=real['persisted']['source_id'])
+    assert witness == {
+        'status': 'COMMITTED_RECEIPT',
+        'receipt_id': real['written']['replay_receipt_id'],
+        'analysis_run_id': real['persisted']['analysis_run_id'],
+        'source_id': real['persisted']['source_id'],
+    }
+
+
+def test_completed_result_handoff_reuses_sql_receipt_and_rejects_wrong_lineage(real, dsn):
+    # The production handoff passes this exact producer result in memory. The
+    # rehearsal adds only the blocked outbox decision required by the wrapper.
+    actual = dict(real['persisted'], outbox={'publication_state': 'BLOCKED_PENDING'})
+
+    def authorized_writer(_dsn, payload, *, persisted_result):
+        assert _dsn == dsn
+        with worker(dsn) as conn:
+            return persist_quality_candidates_on_connection(
+                conn, payload, persisted_result=persisted_result)
+
+    repeated = persist_quality_handoff(dsn, real['payload'], actual,
+                                       writer=authorized_writer)
+    assert repeated['inserted'] == 0
+    assert repeated['replay_receipt_id'] == real['written']['replay_receipt_id']
+    assert repeated['candidate_ids'] == real['written']['candidate_ids']
+    wrong = dict(actual, analysis_run_id=str(uuid4()))
+    with pytest.raises(ValueError, match='BINDING_MISMATCH'):
+        persist_quality_handoff(dsn, real['payload'], wrong,
+                                writer=authorized_writer)
 
 
 @pytest.mark.parametrize('field', ['source_id','source_asset_id','analysis_run_id','artifact_version_id'])

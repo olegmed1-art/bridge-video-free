@@ -47,10 +47,10 @@ def _ensure_report_runtime() -> None:
     ])
 
 
-def main() -> int:
+def main(*, persisted_result=None, staging_receipt=None) -> int:
     _ensure_report_runtime()
     from diana_longitudinal_postprocess_v4_2 import main as current_main
-    return current_main()
+    return current_main(persisted_result=persisted_result, staging_receipt=staging_receipt)
 
 
 if __name__ == "__main__":
