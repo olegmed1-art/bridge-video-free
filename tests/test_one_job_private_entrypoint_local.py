@@ -5,7 +5,8 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from universal_video.private_one_job_entrypoint import (
-    PrivateOneJobConfigurationError, run_private_one_job,
+    PrivateOneJobConfigurationError, _QUEUE_IDENTITY_COLUMNS,
+    run_private_one_job,
 )
 from universal_video.private_result_handoff import PrivateResultStagingHandoff
 from universal_video.subset_worker import SubsetWorkerAdapter
@@ -63,6 +64,7 @@ class EntryPointTest(unittest.TestCase):
             source_fingerprint='b' * 64, subset_adapter=self.adapter)
         self.good_row = ('queue_login','video_rehearsal',True,False,False,False,
                          False,True,True,True,True,False,False,False,False,True)
+        self.good_named_row = dict(zip(_QUEUE_IDENTITY_COLUMNS, self.good_row))
 
     def test_selects_only_private_handoff_and_rechecks_every_connection(self):
         calls = []
@@ -100,6 +102,8 @@ class EntryPointTest(unittest.TestCase):
         self.assertEqual(len(connections), 3)
         self.assertEqual(len(calls), 3)
         for sql, params in calls:
+            for column in _QUEUE_IDENTITY_COLUMNS:
+                self.assertIn(f' AS {column}', sql)
             self.assertIn('stage_one_job_private_result_v1', sql)
             self.assertIn('finish_one_job_staging_v1', sql)
             self.assertIn('has_any_column_privilege', sql)
@@ -152,6 +156,36 @@ class EntryPointTest(unittest.TestCase):
                         run_private_one_job(**self.arguments)
                     self.assertEqual(process.call_count, 0)
 
+    def test_named_preflight_row_is_complete_and_fail_closed(self):
+        self.assertEqual(len(self.good_named_row), 16)
+        with patch('universal_video.private_one_job_entrypoint._connect_queue',
+                   return_value=Connection(self.good_named_row, [])), \
+             patch('universal_video.private_one_job_entrypoint._process_private_claim',
+                   return_value={'job_status': 'REVIEW_READY'}) as process, \
+             patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(run_private_one_job(**self.arguments)['job_status'],
+                             'REVIEW_READY')
+            process.assert_called_once()
+
+        malformed = (
+            {key: value for key, value in self.good_named_row.items()
+             if key != 'can_finish_private'},
+            self.good_named_row | {'unexpected': False},
+            self.good_named_row | {'has_pipeline_dml': True},
+            self.good_named_row | {'active_role_matches_login': False},
+            self.good_named_row | {'can_stage_private': 1},
+        )
+        for row in malformed:
+            with self.subTest(row=row), \
+                 patch('universal_video.private_one_job_entrypoint._connect_queue',
+                       return_value=Connection(row, [])), \
+                 patch('universal_video.private_one_job_entrypoint._process_private_claim') as process, \
+                 patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(PrivateOneJobConfigurationError,
+                                            'ONE_JOB_QUEUE_IDENTITY_OR_ACL_INVALID'):
+                    run_private_one_job(**self.arguments)
+                process.assert_not_called()
+
     def test_changed_identity_on_result_connection_fails_without_fallback(self):
         rows = [self.good_row, tuple(['broad_writer'] + list(self.good_row[1:]))]
         selected = []
@@ -179,14 +213,15 @@ class EntryPointTest(unittest.TestCase):
     def test_swapped_finish_connection_is_rejected_before_finish_sql(self):
         preflight_calls = []
         finish_calls = []
-        swapped_row = list(self.good_row)
-        swapped_row[0] = 'other_v2_login'
-        swapped_row[14] = True  # inherited analysis_candidate INSERT
+        swapped_row = self.good_named_row | {
+            'session_login': 'other_v2_login',
+            'has_pipeline_dml': True,  # inherited analysis_candidate INSERT
+        }
 
         def process(dsn, claim, worker_key, *, subset_adapter, staging_handoff):
             before = str(uuid4())
             with patch('universal_video.subset_worker._connect_subset',
-                       return_value=Connection(tuple(swapped_row), finish_calls)):
+                       return_value=Connection(swapped_row, finish_calls)):
                 return subset_adapter.finish_private_job(
                     dsn, claim, worker_key,
                     before_work_observation_id=before,

@@ -118,6 +118,7 @@ class PrivateWorkerTest(unittest.TestCase):
         subset.before_work = lambda *_: (_ for _ in ()).throw(
             PrivateOneJobConfigurationError('ONE_JOB_QUEUE_IDENTITY_OR_ACL_INVALID'))
         with patch.object(neon_worker, '_Heartbeat', NoHeartbeat), \
+             patch.object(neon_worker, '_processing_timeout', nullcontext), \
              patch.object(neon_worker, 'access_token', return_value='synthetic'), \
              patch.object(neon_worker, 'verify_claimed_source', return_value={'id': 'same'}):
             with self.assertRaisesRegex(PrivateOneJobConfigurationError,

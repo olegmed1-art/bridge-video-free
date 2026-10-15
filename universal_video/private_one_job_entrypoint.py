@@ -33,39 +33,48 @@ _PIPELINE_WRITE_TABLES = (
     'video_queue.one_job_private_result_attempt_v1',
 )
 
+_QUEUE_IDENTITY_COLUMNS = (
+    'session_login', 'database_name', 'is_v2_member', 'is_worker_member',
+    'is_app_member', 'is_approver_member', 'has_elevated_role',
+    'can_use_queue_schema', 'can_stage_private', 'can_read_private',
+    'can_finish_private', 'can_finish_old', 'can_assert_old',
+    'can_attest_old', 'has_pipeline_dml', 'active_role_matches_login',
+)
+
 _QUEUE_IDENTITY_SQL = """
-SELECT session_user::text, current_database()::text,
-       pg_has_role(session_user,'video_subset_worker_v2','MEMBER'),
-       pg_has_role(session_user,'bridge_school_worker','MEMBER'),
-       pg_has_role(session_user,'bridge_school_app','MEMBER'),
-       pg_has_role(session_user,'video_subset_approver','MEMBER'),
+SELECT session_user::text AS session_login,
+       current_database()::text AS database_name,
+       pg_has_role(session_user,'video_subset_worker_v2','MEMBER') AS is_v2_member,
+       pg_has_role(session_user,'bridge_school_worker','MEMBER') AS is_worker_member,
+       pg_has_role(session_user,'bridge_school_app','MEMBER') AS is_app_member,
+       pg_has_role(session_user,'video_subset_approver','MEMBER') AS is_approver_member,
        (SELECT rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole OR rolreplication
-          FROM pg_catalog.pg_roles WHERE rolname=session_user),
-       has_schema_privilege(session_user,'video_queue','USAGE'),
+          FROM pg_catalog.pg_roles WHERE rolname=session_user) AS has_elevated_role,
+       has_schema_privilege(session_user,'video_queue','USAGE') AS can_use_queue_schema,
        has_function_privilege(session_user,
            'video_queue.stage_one_job_private_result_v1(uuid,uuid,uuid,text,integer,text,uuid,text,text,text)',
-           'EXECUTE'),
+           'EXECUTE') AS can_stage_private,
        has_function_privilege(session_user,
            'video_queue.read_one_job_private_result_v1(uuid,uuid,uuid,text,integer,text,uuid)',
-           'EXECUTE'),
+           'EXECUTE') AS can_read_private,
        has_function_privilege(session_user,
            'video_queue.finish_one_job_private_result_v1(uuid,uuid,uuid,text,integer,text,uuid,uuid,jsonb)',
-           'EXECUTE'),
+           'EXECUTE') AS can_finish_private,
        has_function_privilege(session_user,
            'video_queue.finish_one_job_staging_v1(uuid,uuid,uuid,text,integer,text,uuid,uuid,jsonb)',
-           'EXECUTE'),
+           'EXECUTE') AS can_finish_old,
        has_function_privilege(session_user,
            'video_queue.assert_one_job_staging_v1(uuid,uuid,uuid,text,integer,text)',
-           'EXECUTE'),
+           'EXECUTE') AS can_assert_old,
        has_function_privilege(session_user,
            'video_queue.attest_one_job_staging_receipt_v1(uuid,uuid,uuid,text,integer,text,uuid,uuid,uuid,text)',
-           'EXECUTE'),
+           'EXECUTE') AS can_attest_old,
        EXISTS (
            SELECT 1 FROM unnest(%s::text[]) AS q_table(table_name)
             WHERE has_table_privilege(session_user,q_table.table_name,'INSERT,UPDATE,DELETE')
                OR has_any_column_privilege(session_user,q_table.table_name,'INSERT,UPDATE')
-       ),
-       current_user::text = session_user::text
+       ) AS has_pipeline_dml,
+       current_user::text = session_user::text AS active_role_matches_login
 """
 
 
@@ -92,12 +101,25 @@ def _assert_queue_only(connection, *, expected_login: str,
             row = cursor.fetchone()
     except Exception as exc:
         raise PrivateOneJobConfigurationError('ONE_JOB_QUEUE_PREFLIGHT_FAILED') from exc
-    if (row is None or len(row) != 16 or row[0] != expected_login
-            or row[1] != expected_database or row[2] is not True
-            or any(value is not False for value in row[3:7])
-            or any(value is not True for value in row[7:11])
-            or any(value is not False for value in row[11:15])
-            or row[15] is not True):
+    if isinstance(row, Mapping):
+        values = row if set(row) == set(_QUEUE_IDENTITY_COLUMNS) else None
+    elif isinstance(row, (tuple, list)) and len(row) == len(_QUEUE_IDENTITY_COLUMNS):
+        values = dict(zip(_QUEUE_IDENTITY_COLUMNS, row))
+    else:
+        values = None
+    if (values is None or values['session_login'] != expected_login
+            or values['database_name'] != expected_database
+            or values['is_v2_member'] is not True
+            or any(values[name] is not False for name in (
+                'is_worker_member', 'is_app_member', 'is_approver_member',
+                'has_elevated_role'))
+            or any(values[name] is not True for name in (
+                'can_use_queue_schema', 'can_stage_private',
+                'can_read_private', 'can_finish_private'))
+            or any(values[name] is not False for name in (
+                'can_finish_old', 'can_assert_old', 'can_attest_old',
+                'has_pipeline_dml'))
+            or values['active_role_matches_login'] is not True):
         raise PrivateOneJobConfigurationError('ONE_JOB_QUEUE_IDENTITY_OR_ACL_INVALID')
 
 
