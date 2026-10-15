@@ -28,6 +28,25 @@ CREATE UNIQUE INDEX one_job_staging_only_one_enabled_v1
     ON video_queue.one_job_staging_admission_v1 ((true))
     WHERE enabled AND revoked_at IS NULL;
 
+CREATE TABLE video_queue.one_job_staging_lease_approval_v1 (
+    lease_approval_id uuid PRIMARY KEY,
+    admission_id uuid NOT NULL REFERENCES video_queue.one_job_staging_admission_v1,
+    job_id uuid NOT NULL REFERENCES video_queue.job(job_id),
+    lease_token uuid NOT NULL,
+    worker_key text NOT NULL,
+    attempt_count integer NOT NULL CHECK (attempt_count BETWEEN 1 AND 3),
+    source_fingerprint text NOT NULL CHECK (source_fingerprint ~ '^[0-9a-f]{64}$'),
+    approval_reference text NOT NULL CHECK (length(btrim(approval_reference)) BETWEEN 1 AND 500),
+    approved_by name NOT NULL,
+    approved_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    expires_at timestamptz NOT NULL,
+    CHECK (expires_at > approved_at),
+    UNIQUE (admission_id,attempt_count),
+    UNIQUE (admission_id,lease_token)
+);
+-- Append-only attempt approvals. A new lease after retry needs a new approval;
+-- a consumed or revoked approval is never recycled.
+
 CREATE TABLE video_queue.one_job_staging_receipt_v1 (
     receipt_id uuid PRIMARY KEY,
     admission_id uuid NOT NULL REFERENCES video_queue.one_job_staging_admission_v1,
@@ -68,6 +87,158 @@ ALTER TABLE video_queue.job ADD CONSTRAINT video_job_output_mode_v1_check CHECK 
     ),false)
 );
 
+CREATE FUNCTION video_queue.approve_one_job_staging_attempt_v1(
+    p_admission_id uuid, p_lease_approval_id uuid, p_job_id uuid,
+    p_lease_token uuid, p_worker_key text, p_attempt_count integer,
+    p_source_fingerprint text, p_expires_at timestamptz,
+    p_approval_reference text
+) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, video_queue AS $$
+DECLARE
+    v_job video_queue.job%ROWTYPE;
+    v_batch video_queue.batch%ROWTYPE;
+    v_subset video_queue.subset_admission%ROWTYPE;
+    v_approval video_queue.subset_approval%ROWTYPE;
+    v_reservation video_queue.source_reservation%ROWTYPE;
+    v_scope video_queue.one_job_staging_admission_v1%ROWTYPE;
+    v_bound_job jsonb;
+    v_last_attempt integer;
+BEGIN
+    -- Reuse 0060's authenticated approver capability; never inherit the
+    -- queue or public writer role in this approval session.
+    PERFORM video_queue.subset_capability('video_subset_approver');
+    IF pg_has_role(session_user,'video_subset_worker_v2','MEMBER')
+       OR pg_has_role(session_user,'bridge_school_worker','MEMBER') THEN
+        RAISE EXCEPTION 'ONE_JOB_APPROVER_WORKER_ROLE_CONFLICT';
+    END IF;
+    IF p_admission_id IS NULL OR p_lease_approval_id IS NULL
+       OR p_job_id IS NULL OR p_lease_token IS NULL
+       OR p_worker_key IS NULL OR p_worker_key !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$'
+       OR p_attempt_count IS NULL OR p_attempt_count NOT BETWEEN 1 AND 3
+       OR p_source_fingerprint IS NULL OR p_source_fingerprint !~ '^[0-9a-f]{64}$'
+       OR p_expires_at IS NULL OR p_expires_at <= clock_timestamp()
+       OR p_approval_reference IS NULL
+       OR length(btrim(p_approval_reference)) NOT BETWEEN 1 AND 500 THEN
+        RAISE EXCEPTION 'ONE_JOB_APPROVAL_ARGUMENT_INVALID';
+    END IF;
+    -- Claim/retry and approval serialize on the same job row. No approval can
+    -- silently follow a changed token, owner, attempt, or expired lease.
+    SELECT q_job.* INTO v_job FROM video_queue.job AS q_job
+        WHERE q_job.job_id=p_job_id FOR UPDATE;
+    IF NOT FOUND OR v_job.status IS DISTINCT FROM 'LEASED'
+       OR v_job.lease_token IS DISTINCT FROM p_lease_token
+       OR v_job.lease_owner IS DISTINCT FROM p_worker_key
+       OR v_job.attempt_count IS DISTINCT FROM p_attempt_count
+       OR v_job.lease_expires_at <= clock_timestamp()
+       OR p_expires_at > v_job.lease_expires_at THEN
+        RAISE EXCEPTION 'ONE_JOB_APPROVAL_LEASE_LOST';
+    END IF;
+    SELECT q_batch.* INTO v_batch FROM video_queue.batch AS q_batch
+        WHERE q_batch.batch_id=v_job.batch_id;
+    SELECT q_subset.* INTO v_subset FROM video_queue.subset_admission AS q_subset
+        WHERE q_subset.batch_id=v_job.batch_id AND q_subset.state='FINALIZED';
+    SELECT q_approval.* INTO v_approval FROM video_queue.subset_approval AS q_approval
+        WHERE q_approval.approval_id=v_subset.approval_id FOR SHARE;
+    IF v_subset.approval_id IS NULL OR v_approval.approval_id IS NULL
+       OR NOT v_approval.runtime_enabled OR v_approval.revoked_at IS NOT NULL
+       OR v_approval.expires_at <= clock_timestamp()
+       OR p_expires_at > v_approval.expires_at
+       OR v_batch.result_mode IS DISTINCT FROM 'SHADOW_REVIEW_ONLY'
+       OR v_batch.database_persistence_allowed
+       OR v_batch.canonical_promotion_allowed
+       OR v_subset.contract_sha256 IS DISTINCT FROM v_approval.contract_sha256
+       OR v_subset.queue_manifest_sha256 IS DISTINCT FROM v_approval.queue_manifest_sha256 THEN
+        RAISE EXCEPTION 'ONE_JOB_APPROVAL_SUBSET_HOLD';
+    END IF;
+    PERFORM video_queue.subset_assert_final(v_subset.request_key);
+    v_bound_job := (v_subset.binding->'jobs')->(v_job.sequence-1);
+    SELECT q_reservation.* INTO v_reservation
+      FROM video_queue.source_reservation AS q_reservation
+     WHERE q_reservation.job_id=p_job_id;
+    IF v_bound_job->>'job_id' IS DISTINCT FROM p_job_id::text
+       OR v_bound_job->>'file_id' IS DISTINCT FROM v_job.source_file_id
+       OR v_bound_job->>'source_fingerprint' IS DISTINCT FROM p_source_fingerprint
+       OR v_reservation.source_fingerprint IS DISTINCT FROM p_source_fingerprint
+       OR v_reservation.batch_id IS DISTINCT FROM v_job.batch_id
+       OR v_reservation.admission_request_key IS DISTINCT FROM v_subset.request_key THEN
+        RAISE EXCEPTION 'ONE_JOB_APPROVAL_SOURCE_HOLD';
+    END IF;
+    SELECT q_scope.* INTO v_scope FROM video_queue.one_job_staging_admission_v1 AS q_scope
+        WHERE q_scope.job_id=p_job_id FOR UPDATE;
+    IF FOUND THEN
+        IF v_scope.admission_id IS DISTINCT FROM p_admission_id
+           OR v_scope.revoked_at IS NOT NULL OR NOT v_scope.enabled
+           OR v_scope.batch_id IS DISTINCT FROM v_job.batch_id
+           OR v_scope.subset_approval_id IS DISTINCT FROM v_subset.approval_id
+           OR v_scope.contract_sha256 IS DISTINCT FROM v_subset.contract_sha256
+           OR v_scope.queue_manifest_sha256 IS DISTINCT FROM v_subset.queue_manifest_sha256
+           OR v_scope.source_fingerprint IS DISTINCT FROM p_source_fingerprint
+           OR v_scope.source_file_id IS DISTINCT FROM v_job.source_file_id
+           OR v_scope.stable_job_key IS DISTINCT FROM v_job.stable_job_key
+           OR v_scope.algorithm_revision IS DISTINCT FROM v_batch.algorithm_revision THEN
+            RAISE EXCEPTION 'ONE_JOB_APPROVAL_REVOKED_OR_CHANGED';
+        END IF;
+        SELECT max(q_lease_approval.attempt_count) INTO v_last_attempt
+          FROM video_queue.one_job_staging_lease_approval_v1 AS q_lease_approval
+         WHERE q_lease_approval.admission_id=p_admission_id;
+        IF p_attempt_count <= coalesce(v_last_attempt,0) THEN
+            RAISE EXCEPTION 'ONE_JOB_APPROVAL_REPLAY';
+        END IF;
+        UPDATE video_queue.one_job_staging_admission_v1 AS q_scope
+           SET expires_at=p_expires_at
+         WHERE q_scope.admission_id=p_admission_id;
+    ELSE
+        IF EXISTS (SELECT 1 FROM video_queue.one_job_staging_admission_v1 AS q_scope
+                   WHERE q_scope.admission_id=p_admission_id) THEN
+            RAISE EXCEPTION 'ONE_JOB_APPROVAL_REPLAY';
+        END IF;
+        INSERT INTO video_queue.one_job_staging_admission_v1
+            (admission_id,job_id,batch_id,subset_approval_id,contract_sha256,
+             queue_manifest_sha256,source_fingerprint,source_file_id,
+             stable_job_key,algorithm_revision,enabled,approved_by,expires_at)
+        VALUES (p_admission_id,p_job_id,v_job.batch_id,v_subset.approval_id,
+                v_subset.contract_sha256,v_subset.queue_manifest_sha256,
+                p_source_fingerprint,v_job.source_file_id,v_job.stable_job_key,
+                v_batch.algorithm_revision,true,session_user,p_expires_at);
+    END IF;
+    IF EXISTS (SELECT 1 FROM video_queue.one_job_staging_lease_approval_v1 AS q_lease_approval
+               WHERE q_lease_approval.lease_approval_id=p_lease_approval_id) THEN
+        RAISE EXCEPTION 'ONE_JOB_APPROVAL_REPLAY';
+    END IF;
+    IF p_expires_at <= clock_timestamp() OR v_job.lease_expires_at <= clock_timestamp()
+       OR v_approval.expires_at <= clock_timestamp() THEN
+        RAISE EXCEPTION 'ONE_JOB_APPROVAL_EXPIRED';
+    END IF;
+    INSERT INTO video_queue.one_job_staging_lease_approval_v1
+        (lease_approval_id,admission_id,job_id,lease_token,worker_key,
+         attempt_count,source_fingerprint,approval_reference,approved_by,expires_at)
+    VALUES (p_lease_approval_id,p_admission_id,p_job_id,p_lease_token,p_worker_key,
+            p_attempt_count,p_source_fingerprint,p_approval_reference,session_user,
+            p_expires_at);
+    RETURN p_admission_id;
+END $$;
+
+CREATE FUNCTION video_queue.revoke_one_job_staging_v1(p_admission_id uuid)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, video_queue AS $$
+DECLARE v_scope video_queue.one_job_staging_admission_v1%ROWTYPE;
+BEGIN
+    PERFORM video_queue.subset_capability('video_subset_approver');
+    IF pg_has_role(session_user,'video_subset_worker_v2','MEMBER')
+       OR pg_has_role(session_user,'bridge_school_worker','MEMBER') THEN
+        RAISE EXCEPTION 'ONE_JOB_APPROVER_WORKER_ROLE_CONFLICT';
+    END IF;
+    SELECT q_scope.* INTO v_scope FROM video_queue.one_job_staging_admission_v1 AS q_scope
+        WHERE q_scope.admission_id=p_admission_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'ONE_JOB_APPROVAL_NOT_FOUND'; END IF;
+    IF v_scope.revoked_at IS NOT NULL OR NOT v_scope.enabled THEN
+        RAISE EXCEPTION 'ONE_JOB_APPROVAL_REVOKED';
+    END IF;
+    UPDATE video_queue.one_job_staging_admission_v1 AS q_scope
+       SET revoked_at=clock_timestamp(), enabled=false
+     WHERE q_scope.admission_id=p_admission_id;
+END $$;
+
 CREATE FUNCTION video_queue.check_one_job_staging_scope_v1(
     p_admission_id uuid, p_job_id uuid, p_lease_token uuid,
     p_worker_key text, p_attempt_count integer, p_source_fingerprint text,
@@ -80,6 +251,7 @@ DECLARE
     v_scope video_queue.one_job_staging_admission_v1%ROWTYPE;
     v_subset video_queue.subset_admission%ROWTYPE;
     v_approval video_queue.subset_approval%ROWTYPE;
+    v_lease_approval video_queue.one_job_staging_lease_approval_v1%ROWTYPE;
     v_reservation video_queue.source_reservation%ROWTYPE;
     v_bound_job jsonb;
 BEGIN
@@ -118,6 +290,17 @@ BEGIN
        OR v_scope.algorithm_revision IS DISTINCT FROM v_batch.algorithm_revision
        OR v_scope.source_fingerprint IS DISTINCT FROM p_source_fingerprint THEN
         RAISE EXCEPTION 'ONE_JOB_ADMISSION_HOLD';
+    END IF;
+    SELECT q_lease_approval.* INTO v_lease_approval
+      FROM video_queue.one_job_staging_lease_approval_v1 AS q_lease_approval
+     WHERE q_lease_approval.admission_id=v_scope.admission_id
+       AND q_lease_approval.attempt_count=p_attempt_count FOR SHARE;
+    IF NOT FOUND OR v_lease_approval.job_id IS DISTINCT FROM p_job_id
+       OR v_lease_approval.lease_token IS DISTINCT FROM p_lease_token
+       OR v_lease_approval.worker_key IS DISTINCT FROM p_worker_key
+       OR v_lease_approval.source_fingerprint IS DISTINCT FROM p_source_fingerprint
+       OR v_lease_approval.expires_at <= clock_timestamp() THEN
+        RAISE EXCEPTION 'ONE_JOB_LEASE_APPROVAL_HOLD';
     END IF;
     SELECT q_subset.* INTO v_subset FROM video_queue.subset_admission AS q_subset
         WHERE q_subset.batch_id=v_job.batch_id AND q_subset.state='FINALIZED';
@@ -486,9 +669,12 @@ BEGIN
 END $$;
 
 REVOKE ALL ON video_queue.one_job_staging_admission_v1,
+    video_queue.one_job_staging_lease_approval_v1,
     video_queue.one_job_staging_receipt_v1,
     video_queue.one_job_staging_receipt_attempt_v1 FROM PUBLIC;
-REVOKE ALL ON FUNCTION video_queue.check_one_job_staging_scope_v1(uuid,uuid,uuid,text,integer,text,text),
+REVOKE ALL ON FUNCTION video_queue.approve_one_job_staging_attempt_v1(uuid,uuid,uuid,uuid,text,integer,text,timestamptz,text),
+    video_queue.revoke_one_job_staging_v1(uuid),
+    video_queue.check_one_job_staging_scope_v1(uuid,uuid,uuid,text,integer,text,text),
     video_queue.assert_one_job_staging_v1(uuid,uuid,uuid,text,integer,text),
     video_queue.attest_one_job_staging_receipt_v1(uuid,uuid,uuid,text,integer,text,uuid,uuid,uuid,text),
     video_queue.assert_one_job_terminal_evidence_v1(uuid,jsonb),

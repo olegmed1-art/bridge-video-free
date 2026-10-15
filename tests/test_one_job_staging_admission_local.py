@@ -214,6 +214,47 @@ class OneJobAdapterTest(unittest.TestCase):
                 for check in checks:
                     self.assertIn(check, gate)
 
+    def test_attempt_approval_reuses_0060_approver_and_rejects_worker_role(self):
+        sql = (Path(__file__).resolve().parents[1] / 'database/proposals'
+               / '0061_one_job_staging_admission_v1.sql').read_text(encoding='utf-8')
+        approve = sql.split('CREATE FUNCTION video_queue.approve_one_job_staging_attempt_v1(', 1)[1]
+        approve = approve.split('CREATE FUNCTION video_queue.revoke_one_job_staging_v1(', 1)[0]
+        revoke = sql.split('CREATE FUNCTION video_queue.revoke_one_job_staging_v1(', 1)[1]
+        revoke = revoke.split('CREATE FUNCTION video_queue.check_one_job_staging_scope_v1(', 1)[0]
+        for function in (approve, revoke):
+            self.assertIn("subset_capability('video_subset_approver')", function)
+            self.assertIn("pg_has_role(session_user,'video_subset_worker_v2','MEMBER')", function)
+            self.assertIn("pg_has_role(session_user,'bridge_school_worker','MEMBER')", function)
+        for exact_binding in ('v_job.lease_token IS DISTINCT FROM p_lease_token',
+                              'v_job.lease_owner IS DISTINCT FROM p_worker_key',
+                              'v_job.attempt_count IS DISTINCT FROM p_attempt_count',
+                              'p_expires_at > v_job.lease_expires_at',
+                              'p_expires_at > v_approval.expires_at',
+                              "q_subset.state='FINALIZED'",
+                              'v_bound_job->>\'source_fingerprint\' IS DISTINCT FROM p_source_fingerprint',
+                              'v_reservation.source_fingerprint IS DISTINCT FROM p_source_fingerprint',
+                              'ONE_JOB_APPROVAL_REPLAY',
+                              'ONE_JOB_APPROVAL_REVOKED_OR_CHANGED'):
+            self.assertIn(exact_binding, approve)
+        self.assertIn('SET revoked_at=clock_timestamp(), enabled=false', revoke)
+        self.assertNotIn('GRANT EXECUTE', sql)
+
+    def test_staging_requires_current_attempt_approval(self):
+        sql = (Path(__file__).resolve().parents[1] / 'database/proposals'
+               / '0061_one_job_staging_admission_v1.sql').read_text(encoding='utf-8')
+        scope = sql.split('CREATE FUNCTION video_queue.check_one_job_staging_scope_v1(', 1)[1]
+        scope = scope.split('CREATE FUNCTION video_queue.assert_one_job_staging_v1(', 1)[0]
+        self.assertIn('q_lease_approval.attempt_count=p_attempt_count FOR SHARE', scope)
+        for exact_binding in ('v_lease_approval.job_id IS DISTINCT FROM p_job_id',
+                              'v_lease_approval.lease_token IS DISTINCT FROM p_lease_token',
+                              'v_lease_approval.worker_key IS DISTINCT FROM p_worker_key',
+                              'v_lease_approval.source_fingerprint IS DISTINCT FROM p_source_fingerprint',
+                              'v_lease_approval.expires_at <= clock_timestamp()',
+                              'ONE_JOB_LEASE_APPROVAL_HOLD'):
+            self.assertIn(exact_binding, scope)
+        self.assertIn('video_queue.one_job_staging_lease_approval_v1,', sql)
+        self.assertIn('video_queue.one_job_staging_receipt_attempt_v1 FROM PUBLIC', sql)
+
 
 if __name__ == '__main__':
     unittest.main()

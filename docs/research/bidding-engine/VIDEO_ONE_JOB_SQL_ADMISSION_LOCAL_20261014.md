@@ -15,8 +15,12 @@ commit. An expired/revoked lease, different attempt, source
 fingerprint, job, batch, subset contract, or manifest fails closed. The
 attestation stores the immutable receipt identity separately from each exact
 lease and attempt. After a crash between staging commit and finish, a new
-attempt may rebind the same deterministic receipt only after the current
-lease and source revision pass again. A different job, admission, run, source,
+attempt may rebind the same deterministic receipt only after a dedicated
+approver authorizes the new live lease and the current source revision passes
+again. The API uses 0060's approver capability, rejects worker membership,
+and binds the exact job, lease token, worker key, attempt, source fingerprint
+and expiry. An absent, replayed, expired or revoked approval fails closed.
+A different job, admission, run, source,
 revision, or payload hash is rejected. The finish function requires the
 current attempt attestation and the 0060 post-work observation.
 
@@ -49,8 +53,8 @@ Activation blockers and minimum access changes for review:
    table ACLs. Installation must use an authorized owner context; the local
    draft obtains no membership. The owner of `video_queue.job` must replace
    `video_job_output_shadow_check` with `video_job_output_mode_v1_check` after
-   checking existing rows. Transfer ownership of the three new tables and
-   five new functions to `video_subset_owner`; revoke PUBLIC defaults. Give
+   checking existing rows. Transfer ownership of the four new tables and
+   seven new functions to `video_subset_owner`; revoke PUBLIC defaults. Give
    `EXECUTE` on `assert_one_job_staging_v1(uuid,uuid,uuid,text,integer,text)`
    and `attest_one_job_staging_receipt_v1(uuid,uuid,uuid,text,integer,text,uuid,uuid,uuid,text)`
    **only** to `bridge_school_worker_principal`, and `EXECUTE` on
@@ -59,26 +63,9 @@ Activation blockers and minimum access changes for review:
    `check_one_job_staging_scope_v1` gets no runtime EXECUTE grant. Existing
    `video_queue` schema USAGE is inherited by the writer from
    `bridge_school_worker`; no queue-worker membership is granted to it.
-   The owner transfer, after a separately approved installer obtains the
-   required ownership context, is exactly:
-
-   ```sql
-   ALTER TABLE video_queue.one_job_staging_admission_v1 OWNER TO video_subset_owner;
-   ALTER TABLE video_queue.one_job_staging_receipt_v1 OWNER TO video_subset_owner;
-   ALTER TABLE video_queue.one_job_staging_receipt_attempt_v1 OWNER TO video_subset_owner;
-   ALTER FUNCTION video_queue.check_one_job_staging_scope_v1(
-       uuid,uuid,uuid,text,integer,text,text) OWNER TO video_subset_owner;
-   ALTER FUNCTION video_queue.assert_one_job_staging_v1(
-       uuid,uuid,uuid,text,integer,text) OWNER TO video_subset_owner;
-   ALTER FUNCTION video_queue.attest_one_job_staging_receipt_v1(
-       uuid,uuid,uuid,text,integer,text,uuid,uuid,uuid,text) OWNER TO video_subset_owner;
-   ALTER FUNCTION video_queue.assert_one_job_terminal_evidence_v1(
-       uuid,jsonb) OWNER TO video_subset_owner;
-   ALTER FUNCTION video_queue.finish_one_job_staging_v1(
-       uuid,uuid,uuid,text,integer,text,uuid,uuid,jsonb) OWNER TO video_subset_owner;
-   ```
-
-   The proposed additional function-owner reads are exactly:
+   The complete review-only owner and EXECUTE delta, including the approver
+   and revoker, is in `VIDEO_ONE_JOB_ACTION_TIME_ACL_DELTA_20261015.md`.
+   The proposed additional function-owner reads are:
 
    ```sql
    GRANT SELECT (analysis_candidate_id,analysis_run_id,source_id,candidate_type,status,
@@ -93,21 +80,12 @@ Activation blockers and minimum access changes for review:
        ON public.analysis_run_output TO video_subset_owner;
    GRANT EXECUTE ON FUNCTION video_queue.canonical_json_text(jsonb)
        TO video_subset_owner;
-   GRANT EXECUTE ON FUNCTION video_queue.assert_one_job_staging_v1(
-       uuid,uuid,uuid,text,integer,text),
-       video_queue.attest_one_job_staging_receipt_v1(
-       uuid,uuid,uuid,text,integer,text,uuid,uuid,uuid,text)
-       TO bridge_school_worker_principal;
-   GRANT EXECUTE ON FUNCTION video_queue.finish_one_job_staging_v1(
-       uuid,uuid,uuid,text,integer,text,uuid,uuid,jsonb)
-       TO video_subset_worker_v2;
    ```
 
    These are review-only statements, not applied changes. Before installation,
    confirm whether any columns already have effective grants and omit redundant
-   grants. An approver-only
-   admission create/enable/revoke API remains to be designed, with EXECUTE
-   only for `video_subset_approver`; worker gets no admission table DML.
+    grants. The approver-only API is a local proposal; its EXECUTE is
+    reserved for `video_subset_approver` in the separate ACL delta.
 2. Current `bridge_school_worker` has direct DML on result and candidate
    tables. Therefore this adapter is a cooperative transaction check, not a
    database-enforced one-job writer boundary. For a strict boundary, the
@@ -124,7 +102,8 @@ Activation blockers and minimum access changes for review:
    versioned finish call. Do not use the existing Python staging capability as
    approval. The result writes made before candidate staging also need the
    strict writer boundary above before this is production safe.
-4. The SQL draft has not been parsed or executed by PostgreSQL here. A
+ 4. The previous SQL candidate received an independent disposable PostgreSQL
+    review, but this approver addition has not been executed by PostgreSQL. A
    disposable PG 18 database with migrations through 0060, synthetic sources,
    and actual writer/queue/approver login tests is required. Test wrong job, batch,
    manifest, revision, lease, attempt, expiry, revocation, receipt hash/link,
@@ -132,14 +111,16 @@ Activation blockers and minimum access changes for review:
    staging constraint, and transaction rollback. Compare
    `pg_catalog` effective ACLs before considering any migration.
 
-Eight local stdlib tests check adapter ordering, lost lease, invalid scope,
+Ten local stdlib tests check adapter ordering, lost lease, invalid scope,
 receipt identity/retry behavior under a fake SQL boundary, and the presence
-of the separate SQL role and finish paths. They also compare the terminal
+of the separate SQL role, approver and finish paths. They also compare the terminal
 validation block byte-for-byte with 0058 and require explicit negative checks
 for missing IDs, hashes, receipts, and source binding. The parameterized
-`tests/sql/one_job_terminal_evidence_negative.sql` is ready for the next
-isolated PostgreSQL review: it first validates a complete synthetic fixture,
-then requires rejection of five incomplete variants, including a rehashed
-revision-only fake. No SQL run is claimed here. A local PG 18.6 runtime was
+`tests/sql/one_job_terminal_evidence_negative.sql` validates a complete
+synthetic fixture, then requires rejection of five incomplete variants,
+including a rehashed revision-only fake. The new
+`tests/sql/one_job_approver_negative.sql` adds exact-lease, replay, and
+revocation negatives under a dedicated approver login. No run of the new
+approver SQL is claimed here. A local PG 18.6 runtime was
 found, but loopback client connection was denied by the host with Windows
 error 10013; the temporary server process exited and was not used for tests.
