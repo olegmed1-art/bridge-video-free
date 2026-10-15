@@ -2,6 +2,7 @@
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from textwrap import dedent
 from uuid import uuid4
 
 from database.video_one_job_staging_admission import stage_admitted_candidate_on_connection
@@ -169,6 +170,49 @@ class OneJobAdapterTest(unittest.TestCase):
         self.assertNotIn("status='QUEUED'", finish)
         self.assertNotIn('pg_current_xact_id()', sql)
         self.assertIn('one_job_staging_receipt_attempt_v1', sql)
+
+    def test_terminal_gate_keeps_entire_0058_evidence_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        previous = (root / 'database/migrations/0058_universal_video_terminal_v2_gate'
+                    / '001_apply_terminal_v2.sql').read_text(encoding='utf-8')
+        proposed = (root / 'database/proposals/0061_one_job_staging_admission_v1.sql'
+                    ).read_text(encoding='utf-8')
+        old = previous.split("    IF p_outcome = 'REVIEW_READY' THEN\n", 1)[1]
+        old = old.split("\n    END IF;\n\n    UPDATE video_queue.job", 1)[0]
+        new = proposed.split('CREATE FUNCTION video_queue.assert_one_job_terminal_evidence_v1(', 1)[1]
+        new = new.split("    v_manifest := p_output->'artifact_manifest';", 1)[1]
+        new = "    v_manifest := p_output->'artifact_manifest';" + new.split(
+            "    -- 0058's terminal revision CHECK", 1)[0]
+        self.assertEqual(dedent(old).strip(), dedent(new).strip())
+        finish = proposed.split('CREATE FUNCTION video_queue.finish_one_job_staging_v1(', 1)[1]
+        self.assertLess(finish.index('assert_one_job_terminal_evidence_v1(p_job_id,p_output)'),
+                        finish.index('authorize_subset_attempt('))
+        self.assertLess(finish.index('assert_one_job_terminal_evidence_v1(p_job_id,p_output)'),
+                        finish.index("SET status='REVIEW_READY'"))
+
+    def test_incomplete_terminal_evidence_has_negative_sql_checks(self):
+        sql = (Path(__file__).resolve().parents[1] / 'database/proposals'
+               / '0061_one_job_staging_admission_v1.sql').read_text(encoding='utf-8')
+        gate = sql.split('CREATE FUNCTION video_queue.assert_one_job_terminal_evidence_v1(', 1)[1]
+        gate = gate.split('CREATE FUNCTION video_queue.finish_one_job_staging_v1(', 1)[0]
+        missing_evidence_cases = {
+            'no Drive IDs': ('v_master_id IS NULL', 'v_ai_done_id IS NULL',
+                             "v_artifacts->0->>'drive_id'", "v_artifacts->1->>'drive_id'"),
+            'no artifact hashes': ('v_master_sha IS NULL', 'v_ai_done_sha IS NULL',
+                                   "v_artifacts->0->>'sha256'", "v_artifacts->1->>'sha256'"),
+            'fake revision-only manifest': ('v_manifest_computed_sha IS DISTINCT FROM v_manifest_sha',
+                                            'v_evidence_computed_sha IS DISTINCT FROM v_evidence_sha',
+                                            "v_manifest->>'schema_version'"),
+            'no terminal receipt': ("jsonb_typeof(v_receipt) IS DISTINCT FROM 'object'",
+                                    "v_receipt->>'evidence_sha256'"),
+            'wrong source or folder': ("v_source_identity->>'file_id'",
+                                       "v_source_identity->>'parent_folder_id'",
+                                       "v_artifacts->0->>'parent_id'"),
+        }
+        for scenario, checks in missing_evidence_cases.items():
+            with self.subTest(scenario=scenario):
+                for check in checks:
+                    self.assertIn(check, gate)
 
 
 if __name__ == '__main__':

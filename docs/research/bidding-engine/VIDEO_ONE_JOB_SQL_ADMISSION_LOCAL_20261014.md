@@ -33,6 +33,16 @@ to the old finish function. The original 0056/0060 finish contracts are
 unchanged. This one-job finish never releases pending sibling jobs;
 `released_jobs=0` even for an admitted canary.
 
+After independent PostgreSQL review found that a revision-only fake terminal
+manifest could pass, the finish path now calls
+`assert_one_job_terminal_evidence_v1` before consuming the post-work observation
+or updating the job. Its validation block matches the complete 0058 terminal
+gate: canonical manifest and receipt SHA-256, distinct Drive IDs, source and
+folder identity, both artifact locators/MIME types/positive sizes/hashes, PASS
+readback flags, and hash-bound revision metadata. The terminal artifact
+manifest and receipt retain their original shadow flags; the separately
+admitted job output records the staging exception.
+
 Activation blockers and minimum access changes for review:
 
 1. The 0060 objects are owned by `video_subset_owner` with private EXECUTE and
@@ -40,7 +50,7 @@ Activation blockers and minimum access changes for review:
    draft obtains no membership. The owner of `video_queue.job` must replace
    `video_job_output_shadow_check` with `video_job_output_mode_v1_check` after
    checking existing rows. Transfer ownership of the three new tables and
-   four new functions to `video_subset_owner`; revoke PUBLIC defaults. Give
+   five new functions to `video_subset_owner`; revoke PUBLIC defaults. Give
    `EXECUTE` on `assert_one_job_staging_v1(uuid,uuid,uuid,text,integer,text)`
    and `attest_one_job_staging_receipt_v1(uuid,uuid,uuid,text,integer,text,uuid,uuid,uuid,text)`
    **only** to `bridge_school_worker_principal`, and `EXECUTE` on
@@ -62,6 +72,8 @@ Activation blockers and minimum access changes for review:
        uuid,uuid,uuid,text,integer,text) OWNER TO video_subset_owner;
    ALTER FUNCTION video_queue.attest_one_job_staging_receipt_v1(
        uuid,uuid,uuid,text,integer,text,uuid,uuid,uuid,text) OWNER TO video_subset_owner;
+   ALTER FUNCTION video_queue.assert_one_job_terminal_evidence_v1(
+       uuid,jsonb) OWNER TO video_subset_owner;
    ALTER FUNCTION video_queue.finish_one_job_staging_v1(
        uuid,uuid,uuid,text,integer,text,uuid,uuid,jsonb) OWNER TO video_subset_owner;
    ```
@@ -79,6 +91,8 @@ Activation blockers and minimum access changes for review:
    GRANT SELECT (analysis_run_id,output_entity_id,output_entity_type,output_role,
        status,artifact_version_id,publication_id)
        ON public.analysis_run_output TO video_subset_owner;
+   GRANT EXECUTE ON FUNCTION video_queue.canonical_json_text(jsonb)
+       TO video_subset_owner;
    GRANT EXECUTE ON FUNCTION video_queue.assert_one_job_staging_v1(
        uuid,uuid,uuid,text,integer,text),
        video_queue.attest_one_job_staging_receipt_v1(
@@ -118,7 +132,14 @@ Activation blockers and minimum access changes for review:
    staging constraint, and transaction rollback. Compare
    `pg_catalog` effective ACLs before considering any migration.
 
-Six local stdlib tests check adapter ordering, lost lease, invalid scope,
+Eight local stdlib tests check adapter ordering, lost lease, invalid scope,
 receipt identity/retry behavior under a fake SQL boundary, and the presence
-of the separate SQL role and finish paths. They do not prove SQL execution or
-production behavior.
+of the separate SQL role and finish paths. They also compare the terminal
+validation block byte-for-byte with 0058 and require explicit negative checks
+for missing IDs, hashes, receipts, and source binding. The parameterized
+`tests/sql/one_job_terminal_evidence_negative.sql` is ready for the next
+isolated PostgreSQL review: it first validates a complete synthetic fixture,
+then requires rejection of five incomplete variants, including a rehashed
+revision-only fake. No SQL run is claimed here. A local PG 18.6 runtime was
+found, but loopback client connection was denied by the host with Windows
+error 10013; the temporary server process exited and was not used for tests.
