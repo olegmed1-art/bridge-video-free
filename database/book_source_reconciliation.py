@@ -8,6 +8,9 @@ from uuid import UUID, NAMESPACE_URL, uuid5
 from bridge_contracts.book_source_identity import book_source_matches
 from bridge_contracts.book_world import build_world_publication
 from bridge_contracts.book_source_review import validate_identity_review
+from database.source_registration import (
+    SourceRegistrationError, check_source_registration, lock_source_registration,
+)
 
 
 _DRIVE_VIEW = re.compile(r"https://drive\.google\.com/file/d/([A-Za-z0-9_-]{20,128})/view\Z")
@@ -132,6 +135,17 @@ def reconcile_book_source_asset(connection, bundle, receipt, *, school_id, sourc
             cur.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
             cur.execute("SET LOCAL lock_timeout='5s'")
             cur.execute("SET LOCAL statement_timeout='15s'")
+            # Every participating writer starts with the same source barrier.
+            lock_source_registration(cur)
+            try:
+                check_source_registration(cur, school_id=school_id, source_id=source_id,
+                    locator=source["locator"], expected_stored=identity_receipt["stored_locator"],
+                    source_type="book" if register_missing_source else None)
+            except SourceRegistrationError as exc:
+                code = ("BOOK_SOURCE_DUPLICATE_LOCATOR" if str(exc) ==
+                        "SOURCE_REGISTRATION_DUPLICATE_ALIAS" else
+                        "BOOK_SOURCE_REGISTRY_CONFLICT")
+                raise ValueError(code) from None
             if register_missing_source:
                 added_source = _register_missing_source(
                     cur, school_id, source_id, source, identity_receipt)

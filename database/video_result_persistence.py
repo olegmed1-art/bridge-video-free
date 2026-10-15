@@ -11,6 +11,9 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from database.runtime_worker_preflight import normalize_dsn
+from database.source_registration import (
+    lock_source_registration, register_source, require_drive_file_id,
+)
 
 SCHOOL_STABLE_NAME = "Школа спортивного бриджа"
 
@@ -222,13 +225,15 @@ def persist_video_result_on_connection(conn, master, done, *, rollback=False):
 
     This seam supports isolated PostgreSQL rehearsals without weakening the
     production DSN policy or mocking writes. No environment DSN is consumed.
-    Begin an outer transaction to combine helpers atomically; an idle connection
-    commits this helper's transaction on successful exit.
+    A READ COMMITTED outer transaction may compose helpers atomically. Acquire
+    lock_source_registration before its first application write/row/advisory lock;
+    otherwise this helper rejects an already-writing outer transaction. An idle
+    connection commits this helper's transaction on successful exit.
     """
 
     job_id = str(_require(master, "job_id"))
     source = dict(_require(master, "source"))
-    source_drive_id = str(_require(source, "driveId"))
+    source_drive_id = require_drive_file_id(_require(source, "driveId"))
     source_sha = str(_require(source, "sha256")).lower()
     source_name = str(_require(source, "name"))
     source_mime = str(source.get("mimeType") or "video/*")
@@ -380,6 +385,7 @@ def persist_video_result_on_connection(conn, master, done, *, rollback=False):
 
     with conn.transaction(force_rollback=rollback):
         with conn.cursor() as cur:
+            lock_source_registration(cur)
             cur.execute(
                 "SELECT school_id FROM public.school WHERE stable_name = %s AND status='active'",
                 (SCHOOL_STABLE_NAME,),
@@ -406,6 +412,9 @@ def persist_video_result_on_connection(conn, master, done, *, rollback=False):
                     f"registered algorithm_version_id required for {algorithm_revision}"
                 )
             algorithm_version_id = version_rows[0][0]
+            register_source(cur, school_id=school_id, source_id=source_id,
+                source_type="lesson_video", title=source_name,
+                locator=f"gdrive:file:{source_drive_id}", trust_class="primary_source")
 
             cur.execute(
                 """
@@ -536,20 +545,6 @@ def persist_video_result_on_connection(conn, master, done, *, rollback=False):
                 (source_location_id, source_asset_id, f"gdrive:file:{source_drive_id}"),
             )
 
-            cur.execute(
-                """
-                INSERT INTO public.source
-                    (source_id, school_id, source_type, title, canonical_locator, trust_class)
-                VALUES (%s, %s, 'lesson_video', %s, %s, 'primary_source')
-                ON CONFLICT DO NOTHING
-                """,
-                (
-                    source_id,
-                    school_id,
-                    source_name,
-                    f"gdrive:file:{source_drive_id}",
-                ),
-            )
             cur.execute(
                 """
                 INSERT INTO public.source_asset (source_id, asset_id, relation_type)

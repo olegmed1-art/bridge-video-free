@@ -23,7 +23,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 DATABASE_MODULES = (
     'video_staging_read', 'video_staging_lineage', 'video_candidate_persistence',
-    'video_result_persistence', 'source_identity_persistence', 'runtime_worker_preflight',
+    'video_result_persistence', 'source_registration', 'source_identity_persistence',
+    'runtime_worker_preflight',
 )
 
 
