@@ -242,6 +242,10 @@ def main(argv=None):
             rollback=(ROOT/'database/rollback/0060_fixed_subset_admission.sql').read_text()
             rollback_parts=c.split_sql(rollback.replace('\\set ON_ERROR_STOP on\n','',1))
             with connect(admin=True) as db:
+                # Only inside this doomed superuser transaction, simulate the
+                # rollback's required empty-state precondition. The installed
+                # immutable guard correctly refuses ordinary reservation DELETE.
+                db.execute('ALTER TABLE video_queue.source_reservation DISABLE TRIGGER USER')
                 db.execute('DELETE FROM video_queue.source_reservation')
                 for statement in rollback_parts:
                     if c.bare(statement).upper() not in ('BEGIN','COMMIT'):

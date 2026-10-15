@@ -69,7 +69,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXACT_HEAD"
           if [[ "$EVENT_NAME" == pull_request ]]; then
-            test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 9543f30631e2160c71faf2d3369d50543c3beb3a
+            test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = 9606da1d41d8dba49d2f1e27f24e712ad820c1f0
           else
             test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = fb0d2bb3402dd55140749447b37ebbb8ca8a2343
           fi
