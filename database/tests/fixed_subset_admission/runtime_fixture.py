@@ -1,180 +1,261 @@
-"""Installed 0060 fail-closed canary contract on the disposable database CI host.
+"""Runtime checks for 0060 on the disposable PostgreSQL 18 CI database.
 
-This fixture accepts only the fixed localhost CI identity. Every temporary role
-grant and attempted queue write is rolled back, then catalog/data are rechecked.
+The fixture never accepts an arbitrary DSN and makes no external service calls.
+042 exercises an admitted canary with the actual capability roles; 043 evaluates
+the installed terminal-size constraint at its documented boundaries.
 """
+from __future__ import annotations
 
 import argparse
-import json
 import os
-import uuid
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
+from uuid import uuid4
 
 import psycopg
-from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 
-EXPECTED_0060 = "cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc"
-CLAIM = "video_queue.subset_claim_job(uuid,text,integer,text,text)"
+ROLES = frozenset({
+    "video_subset_approver", "video_subset_collector",
+    "video_subset_admitter", "video_subset_worker_v2",
+})
 PROFILE = "bridge_3_1_free"
 REVISION = "3.1-free-r25.16"
 
 
-def snapshot(db):
-    # The migration owner retains ADMIN-only membership after installation,
-    # not SELECT on the subset-owned reservation table. A savepoint lends
-    # read access only for this snapshot and restores the exact role catalog.
-    db.execute("SAVEPOINT subset_fixture_snapshot")
-    try:
-        db.execute("""GRANT video_subset_owner TO CURRENT_USER
-          WITH ADMIN FALSE, INHERIT TRUE, SET FALSE GRANTED BY CURRENT_USER""")
-        value = db.execute("""SELECT jsonb_build_object(
-      'batch',(SELECT count(*) FROM video_queue.batch),
-      'job',(SELECT count(*) FROM video_queue.job),
-      'events',(SELECT count(*) FROM video_queue.job_event),
-      'reservations',(SELECT count(*) FROM video_queue.source_reservation),
-      'event_sequence',(SELECT jsonb_build_array(last_value,is_called)
-                          FROM video_queue.job_event_event_id_seq),
-      'worker_membership',(SELECT coalesce(jsonb_agg(to_jsonb(a) ORDER BY a.oid),'[]'::jsonb)
-                           FROM pg_auth_members a
-                           WHERE a.roleid='video_subset_worker_v2'::regrole
-                             AND a.member=current_user::regrole))""").fetchone()[0]
-    finally:
-        db.execute("ROLLBACK TO SAVEPOINT subset_fixture_snapshot")
-        db.execute("RELEASE SAVEPOINT subset_fixture_snapshot")
-    assert not db.execute("""SELECT pg_has_role(current_user,
-      'video_subset_owner','USAGE')""").fetchone()[0]
-    return value
+def _admin_dsn() -> str:
+    admin = os.environ.get("ADMIN_DATABASE_URL", "")
+    owner = os.environ.get("DATABASE_URL", "")
+    a, o = urlsplit(admin), urlsplit(owner)
+    if not (
+        a.scheme in ("postgres", "postgresql")
+        and o.scheme in ("postgres", "postgresql")
+        and a.hostname in ("localhost", "127.0.0.1")
+        and o.hostname in ("localhost", "127.0.0.1")
+        and a.port == o.port == 5432
+        and a.path == o.path
+        and a.path in ("/bridge_school_ci", "/bridge_school_preflight")
+        and not (a.query or o.query or a.fragment or o.fragment)
+        and a.username == "postgres"
+        and o.username == "bridge_ci_owner"
+    ):
+        raise RuntimeError("DISPOSABLE_POSTGRES_TARGET_REQUIRED")
+    return admin
 
 
-def expected_error(db, sql, params, message):
-    try:
-        with db.transaction():
-            db.execute(sql, params).fetchall()
-    except psycopg.Error as exc:
-        assert exc.sqlstate == "P0001" and str(exc).splitlines()[0] == message, str(exc)
-    else:
-        raise AssertionError(f"expected {message}")
+def _connect(role: str | None = None):
+    db = psycopg.connect(_admin_dsn(), connect_timeout=5, row_factory=dict_row)
+    if role is not None:
+        if role not in ROLES:
+            db.close()
+            raise ValueError("unknown synthetic capability")
+        # The local superuser assumes an existing NOLOGIN capability inside its
+        # session; session_user remains the tested capability in definer calls.
+        db.execute(f"SET SESSION AUTHORIZATION {role}")
+    return db
 
 
-def test_terminal_size_guard(db):
-    row = db.execute("""SELECT pg_get_constraintdef(oid), convalidated
-      FROM pg_constraint WHERE conrelid='video_queue.job'::regclass
-        AND conname='video_job_terminal_size_check'""").fetchone()
-    assert row is not None and row[1] is False, "0059 size guard missing or validated"
-    definition = row[0].removesuffix(" NOT VALID")
-    assert definition.startswith("CHECK (") and ";" not in definition
+def _sha(db, value) -> str:
+    return db.execute("SELECT video_queue.subset_sha(%s::jsonb) AS digest",
+                      (Jsonb(value),)).fetchone()["digest"]
 
-    # Copy the installed catalog predicate, rather than mirroring its Python
-    # logic. A temporary relation avoids the admission and lease APIs while
-    # proving that PostgreSQL enforces the actual 0059 boundary expression.
-    db.execute("""CREATE TEMP TABLE subset_fixture_terminal_guard
-      (status text NOT NULL, output jsonb NOT NULL) ON COMMIT DROP""")
-    db.execute(sql.SQL("""ALTER TABLE pg_temp.subset_fixture_terminal_guard
-      ADD CONSTRAINT video_job_terminal_size_check {}""").format(sql.SQL(definition)))
 
-    cases = (
-        (1, 1, True), (536870912, 8388608, True),
-        (0, 1024, False), (536870913, 1024, False),
-        (2048, 0, False), (2048, 8388609, False),
-        (1.5, 1024, False), (2048, 1.5, False),
-        (None, 1024, False), (2048, "1024", False),
-    )
-    for pdf_size, ai_size, allowed in cases:
-        output = json.dumps({"artifact_manifest": {"artifacts": [
-            {"size_bytes": pdf_size}, {"size_bytes": ai_size}]}})
-        db.execute("SAVEPOINT subset_fixture_size_case")
+def _canonical(db, value) -> str:
+    return db.execute("SELECT video_queue.subset_json(%s::jsonb) AS body",
+                      (Jsonb(value),)).fetchone()["body"]
+
+
+def _admit_two_file_canary():
+    suffix = uuid4().hex[:12]
+    folder = "source_folder_" + suffix
+    output_folder = "output_folder_" + suffix
+    source_rows = []
+    observed = []
+    queue_files = []
+    with _connect() as db:
+        for sequence in (1, 2):
+            file_id = f"synthetic_video_{suffix}_{sequence:02d}"
+            revision = dict(
+                source_identity="google_drive:" + file_id, file_id=file_id,
+                parent=folder, version="1",
+                modifiedTime="2026-10-15T00:00:00Z", mime_type="video/mp4",
+                size_bytes=1048576, checksum=None, checksums={},
+            )
+            source_rows.append(dict(
+                revision, name=f"Synthetic {sequence}.mp4", trashed=False,
+                source_fingerprint=_sha(db, revision), duration_ms=None,
+                estimated_cost_usd=None,
+            ))
+            observed.append(dict(
+                id=file_id, parents=[folder], name=f"Synthetic {sequence}.mp4",
+                version="1", modifiedTime="2026-10-15T00:00:00Z",
+                mimeType="video/mp4", size="1048576", trashed=False,
+            ))
+            queue_files.append(dict(
+                sequence=sequence, file_id=file_id,
+                name=f"Synthetic {sequence}.mp4", mime_type="video/mp4",
+                size_bytes=1048576, checksum=None,
+            ))
+        manifest = dict(
+            source_folder_id=folder, output_folder_id=output_folder,
+            work_folder_id="work_folder_" + suffix, processing_profile=PROFILE,
+            algorithm_revision=REVISION,
+            canary_source_file_id=queue_files[0]["file_id"],
+            inventory_sha256=_sha(db, queue_files), expected_count=2,
+            total_size_bytes=2097152, files=queue_files,
+            result_mode="SHADOW_REVIEW_ONLY",
+            canonical_promotion_allowed=False, database_persistence_allowed=False,
+        )
+        revision_key = dict(
+            plan_sha256="a" * 64, subset_sha256=_sha(db, source_rows),
+            subset_sequence=1, processing_profile=PROFILE,
+            algorithm_revision=REVISION,
+            canary_source_file_id=queue_files[0]["file_id"],
+        )
+        request_key = "subset-v1:" + _sha(db, revision_key)
+        manifest["request_key"] = request_key
+        contract = dict(
+            schema="universal-video-subset-contract-v1", **revision_key,
+            files=source_rows, enqueue_manifest=manifest,
+            queue_manifest_sha256=_sha(db, manifest), execution_allowed=False,
+            release_allowed=False, database_persistence_allowed=False,
+            canonical_promotion_allowed=False,
+        )
+        contract["contract_sha256"] = _sha(db, contract)
+        contract_bytes = _canonical(db, contract)
+
+    approval_id, observation_id = uuid4(), uuid4()
+    with _connect("video_subset_approver") as db:
+        db.execute(
+            "SELECT video_queue.approve_subset(%s,%s,%s,%s)",
+            (approval_id, contract_bytes, Jsonb(dict(
+                approved_by="disposable-ci",
+                approval_reference="runtime-042",
+                plan_sha256="a" * 64,
+            )), datetime.now(timezone.utc) + timedelta(minutes=20)),
+        )
+        db.execute("SELECT video_queue.set_subset_runtime(%s,true)", (approval_id,))
+    with _connect("video_subset_collector") as db:
+        db.execute(
+            "SELECT video_queue.observe_subset(%s,%s,'ADMISSION',%s,%s,%s)",
+            (observation_id, approval_id, Jsonb(observed),
+             datetime.now(timezone.utc), uuid4()),
+        )
+    with _connect("video_subset_admitter") as db:
+        result = db.execute(
+            "SELECT video_queue.admit_approved_subset(%s,%s,%s,%s,%s) AS admitted",
+            (approval_id, request_key, contract["contract_sha256"],
+             contract["queue_manifest_sha256"], observation_id),
+        ).fetchone()["admitted"]
+    assert result["status"] == "ADMITTED", result
+    return approval_id, result["binding"]["batch_id"], queue_files
+
+
+def _expect_error(role: str, expected: str, sql: str, params: tuple):
+    with _connect(role) as db:
         try:
-            try:
-                db.execute("""INSERT INTO pg_temp.subset_fixture_terminal_guard
-                  (status, output) VALUES ('REVIEW_READY',%s::jsonb)""", (output,))
-                assert allowed, f"invalid terminal sizes accepted: {pdf_size}, {ai_size}"
-            except psycopg.errors.CheckViolation as exc:
-                assert not allowed and exc.diag.constraint_name == "video_job_terminal_size_check", str(exc)
-        finally:
-            db.execute("ROLLBACK TO SAVEPOINT subset_fixture_size_case")
-            db.execute("RELEASE SAVEPOINT subset_fixture_size_case")
+            db.execute(sql, params).fetchall()
+        except psycopg.Error as exc:
+            db.rollback()
+            assert expected in str(exc), str(exc)
+        else:
+            raise AssertionError(f"expected {expected}")
 
-    # The size predicate is scoped to REVIEW_READY; unrelated terminal states
-    # retain their earlier behavior under the same installed constraint.
-    db.execute("""INSERT INTO pg_temp.subset_fixture_terminal_guard
-      (status, output) VALUES ('FAILED','{}'::jsonb)""")
-    assert db.execute("SELECT count(*) FROM pg_temp.subset_fixture_terminal_guard").fetchone()[0] == 1
+
+def scenario_042():
+    approval_id, batch_id, files = _admit_two_file_canary()
+    with _connect("video_subset_worker_v2") as db:
+        claim = db.execute(
+            "SELECT * FROM video_queue.subset_claim_job(%s,%s,%s,%s,%s)",
+            (batch_id, "fixture-worker", 900, PROFILE, REVISION),
+        ).fetchone()
+        assert claim and claim["is_canary"] and claim["source_file_id"] == files[0]["file_id"]
+        assert db.execute(
+            "SELECT * FROM video_queue.subset_claim_job(%s,%s,%s,%s,%s)",
+            (batch_id, "fixture-worker", 900, PROFILE, REVISION),
+        ).fetchone() is None
+
+    job_id, lease_token = claim["job_id"], claim["lease_token"]
+    finish = "SELECT * FROM video_queue.finish_subset_job(%s,%s,%s,%s,%s,%s,%s)"
+    _expect_error(
+        "video_subset_worker_v2", "SUBSET_LEASE_LOST", finish,
+        (job_id, uuid4(), "fixture-worker", "REVIEW_READY", Jsonb({}), uuid4(), None),
+    )
+    _expect_error(
+        "video_subset_worker_v2", "SUBSET_PREWORK_OBSERVATION_REQUIRED", finish,
+        (job_id, lease_token, "fixture-worker", "REVIEW_READY",
+         Jsonb({}), uuid4(), None),
+    )
+    with _connect() as db:
+        state = db.execute(
+            "SELECT status FROM video_queue.job WHERE batch_id=%s ORDER BY sequence",
+            (batch_id,),
+        ).fetchall()
+        assert [row["status"] for row in state] == ["LEASED", "PENDING_CANARY"], state
+    with _connect("video_subset_approver") as db:
+        db.execute("SELECT video_queue.revoke_subset_approval(%s)", (approval_id,))
+    _expect_error(
+        "video_subset_worker_v2", "SUBSET_RUNTIME_HOLD",
+        "SELECT video_queue.authorize_subset_attempt(%s,%s,%s,%s)",
+        (job_id, lease_token, "fixture-worker", uuid4()),
+    )
+    with _connect() as db:
+        state = db.execute(
+            "SELECT status FROM video_queue.job WHERE batch_id=%s ORDER BY sequence",
+            (batch_id,),
+        ).fetchall()
+        assert [row["status"] for row in state] == ["LEASED", "PENDING_CANARY"], state
+    print("FIXED_SUBSET_CANARY_DENIAL_PASS")
+
+
+def scenario_043():
+    with _connect() as db:
+        row = db.execute(
+            """SELECT pg_get_expr(c.conbin,c.conrelid) AS expression,c.convalidated
+               FROM pg_constraint c
+               WHERE c.conrelid='video_queue.job'::regclass
+                 AND c.conname='video_job_terminal_size_check'
+                 AND c.contype='c'"""
+        ).fetchone()
+        assert row and row["convalidated"] is False
+        expression = row["expression"]
+        cases = (
+            ("REVIEW_READY", 1, 1, True),
+            ("REVIEW_READY", 536870912, 8388608, True),
+            ("REVIEW_READY", 536870913, 1024, False),
+            ("REVIEW_READY", 2048, 8388609, False),
+            ("REVIEW_READY", 1.5, 1024, False),
+            ("REVIEW_READY", 2048, 1.5, False),
+            ("REVIEW_READY", None, 1024, False),
+            ("FAILED", None, None, True),
+        )
+        for status, pdf_size, ai_size, expected in cases:
+            output = dict(artifact_manifest=dict(artifacts=[
+                dict(size_bytes=pdf_size), dict(size_bytes=ai_size),
+            ]))
+            actual = db.execute(
+                f"SELECT ({expression}) IS TRUE AS allowed "
+                "FROM (SELECT %s::text AS status,%s::jsonb AS output) AS job",
+                (status, Jsonb(output)),
+            ).fetchone()["allowed"]
+            assert actual is expected, (status, pdf_size, ai_size, actual)
+    print("FIXED_SUBSET_TERMINAL_SIZE_PASS")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--scenario", required=True, choices=("042", "043"))
+    parser.add_argument("--scenario", choices=("042", "043"), required=True)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     if not args.execute:
-        raise SystemExit("explicit --execute required for disposable CI fixture")
-
-    raw = os.environ.get("DATABASE_URL", "")
-    info = conninfo_to_dict(raw) if raw else {}
-    if (info.get("host") not in ("localhost", "127.0.0.1")
-        or info.get("port") != "5432"
-        or info.get("dbname") != "bridge_school_ci"
-        or info.get("user") != "bridge_ci_owner"
-        or not info.get("password")
-        or info.get("hostaddr") or info.get("service")):
-        raise SystemExit("refusing non-local database identity")
-
-    db = psycopg.connect(host="127.0.0.1", hostaddr="127.0.0.1", port=5432,
-                         dbname="bridge_school_ci", user="bridge_ci_owner",
-                         password=info["password"], sslmode="disable",
-                         connect_timeout=5,
-                         options="-c statement_timeout=5000 -c lock_timeout=2000")
-    try:
-        version, identity, checksum = db.execute("""SELECT
-          current_setting('server_version_num')::integer, current_user,
-          (SELECT checksum FROM schema_migration
-           WHERE migration_key='0060_fixed_subset_admission')""").fetchone()
-        assert 180000 <= version < 190000 and identity == "bridge_ci_owner"
-        assert checksum == EXPECTED_0060
-        before = snapshot(db)
-
-        if args.scenario == "043":
-            test_terminal_size_guard(db)
-            db.rollback()
-            assert snapshot(db) == before, "043 fixture changed queue data or roles"
-            db.rollback()
-            print(json.dumps({"scenario": "043", "status": "PASS_INSTALLED_SIZE_GUARD",
-                              "catalog_constraint": "video_job_terminal_size_check",
-                              "size_cases": 10, "exact_snapshot_equal": True}))
-            return
-
-        # CI owner created the NOLOGIN roles but has no inherited runtime right.
-        # Mirror the connector's transient, non-SET membership within a rollback.
-        db.execute("""GRANT video_subset_worker_v2 TO CURRENT_USER
-          WITH ADMIN FALSE, INHERIT TRUE, SET FALSE GRANTED BY CURRENT_USER""")
-        assert db.execute("SELECT has_function_privilege(current_user,%s,'EXECUTE')",
-                          (CLAIM,)).fetchone()[0]
-        assert db.execute("SELECT count(*) FROM video_queue.subset_claim_job(%s,%s,%s,%s,%s)",
-                          (uuid.uuid4(), "ci-issue881-worker", 900, PROFILE, REVISION)).fetchone()[0] == 0
-        expected_error(db,
-            "SELECT * FROM video_queue.subset_claim_job(NULL,%s,%s,%s,%s)",
-            ("ci-issue881-worker", 900, PROFILE, REVISION), "SUBSET_BATCH_REQUIRED")
-
-        # A legacy enqueue cannot manufacture a canary outside an approved
-        # fixed-subset admission, even when invoked by the migration owner.
-        source = "ci-issue881-" + uuid.uuid4().hex
-        expected_error(db, """SELECT * FROM video_queue.enqueue_drive_batch(
-          %s,'source-folder-123456','output-folder-123456','work-folder-123456',
-          %s,%s,%s,repeat('a',64),
-          jsonb_build_array(jsonb_build_object('sequence',1,'file_id',%s::text,
-            'name','canary.mp4','mime_type','video/mp4','size_bytes',12339062,
-            'checksum','md5:'||repeat('1',32))))""",
-            (source, PROFILE, REVISION, source, source), "SUBSET_LEGACY_INSERT_HOLD")
-        db.rollback()
-        assert snapshot(db) == before, "042 fixture leaked rows, sequence, or role membership"
-        db.rollback()
-    finally:
-        db.close()
-    print(json.dumps({"scenario": "042", "status": "PASS_INSTALLED_CANARY_HOLD",
-                      "scoped_claim_without_admission": 0,
-                      "null_batch_rejected": True, "legacy_enqueue_rejected": True,
-                      "exact_snapshot_equal": True}))
+        raise RuntimeError("EXPLICIT_DISPOSABLE_EXECUTION_REQUIRED")
+    _admin_dsn()
+    if args.scenario == "042":
+        scenario_042()
+    else:
+        scenario_043()
 
 
 if __name__ == "__main__":

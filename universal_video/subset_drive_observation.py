@@ -110,13 +110,48 @@ def restricted_identity(dsn: str, capability: str) -> str:
 class DriveSubsetObservationProvider:
     def __init__(self, config: SubsetDriveConfig, worker_key: str, *,
                  token_source: Callable[[], str] = access_token,
-                 metadata_fetcher: Callable[[str, str], Mapping[str, Any]] = file_metadata):
+                 metadata_fetcher: Callable[[str, str], Mapping[str, Any]] = file_metadata,
+                 expected_login: str | None = None):
         if not worker_key or not callable(token_source) or not callable(metadata_fetcher):
             raise SubsetDriveObservationError("VIDEO_SUBSET_BINDING_MISSING")
         self.config = config
         self.worker_key = worker_key
         self.token_source = token_source
         self.metadata_fetcher = metadata_fetcher
+        self.expected_login = expected_login
+
+    def _assert_collector_connection(self, connection) -> None:
+        if self.expected_login is None:
+            return
+        from .private_one_job_entrypoint import _PIPELINE_WRITE_TABLES
+
+        try:
+            row = connection.execute("""
+                SELECT session_user::text AS login,
+                       current_database()::text AS database_name,
+                       current_user::text = session_user::text AS active_role_matches,
+                       pg_has_role(session_user,'video_subset_collector','MEMBER') AS collector_member,
+                       pg_has_role(session_user,'video_subset_worker_v2','MEMBER') AS worker_member,
+                       pg_has_role(session_user,'video_subset_approver','MEMBER') AS approver_member,
+                       pg_has_role(session_user,'bridge_school_worker','MEMBER') AS broad_worker_member,
+                       pg_has_role(session_user,'bridge_school_app','MEMBER') AS app_member,
+                       (SELECT rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole OR rolreplication
+                          FROM pg_catalog.pg_roles WHERE rolname=session_user) AS elevated,
+                       EXISTS (SELECT 1 FROM unnest(%s::text[]) AS q_table(table_name)
+                                WHERE has_table_privilege(session_user,q_table.table_name,'INSERT,UPDATE,DELETE')
+                                   OR has_any_column_privilege(session_user,q_table.table_name,'INSERT,UPDATE'))
+                           AS pipeline_dml
+            """, (list(_PIPELINE_WRITE_TABLES),)).fetchone()
+        except Exception as exc:
+            raise SubsetDriveObservationError('VIDEO_SUBSET_COLLECTOR_PREFLIGHT_FAILED') from exc
+        if (row is None or row.get('login') != self.expected_login
+                or row.get('database_name') != self.config.expected_database
+                or row.get('active_role_matches') is not True
+                or row.get('collector_member') is not True
+                or any(row.get(name) is not False for name in (
+                    'worker_member', 'approver_member', 'broad_worker_member',
+                    'app_member', 'elevated', 'pipeline_dml'))):
+            raise SubsetDriveObservationError('VIDEO_SUBSET_COLLECTOR_IDENTITY_INVALID')
 
     def __call__(self, claim: Mapping[str, Any], worker_key: str, *,
                  boundary: str) -> str:
@@ -137,6 +172,7 @@ class DriveSubsetObservationProvider:
         with psycopg.connect(self.config.collector_dsn, autocommit=True,
                              row_factory=dict_row, connect_timeout=8,
                              options="-c statement_timeout=10000 -c lock_timeout=2000") as conn:
+            self._assert_collector_connection(conn)
             row = conn.execute("""
                 SELECT video_queue.observe_subset(
                     %s,%s,'ATTEMPT',%s,clock_timestamp(),NULL,%s,%s,%s,%s

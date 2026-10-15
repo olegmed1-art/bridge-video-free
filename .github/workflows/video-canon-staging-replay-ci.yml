@@ -11,6 +11,8 @@ on:
       - 'bridge_contracts/video_canon*.py'
       - 'bridge_contracts/video_learning_candidate.py'
       - 'diana_longitudinal*.py'
+      - 'bridge_neon_persistence.py'
+      - 'video_completed_staging_handoff.py'
       - 'database/video_candidate_persistence.py'
       - 'database/video_staging_*.py'
       - 'database/video_result_persistence.py'
@@ -19,6 +21,7 @@ on:
       - 'bridge_school_api/knowledge.py'
       - 'tests/test_video_candidate_persistence_revision.py'
       - 'tests/test_video_staging_postgres.py'
+      - 'tests/test_video_staging_handoff.py'
       - 'tests/test_knowledge_read_api.py'
       - 'docs/research/bidding-engine/VIDEO_STAGING_PERSISTENCE_REHEARSAL_V1.md'
       - 'tools/replay_video_canon.py'
@@ -73,6 +76,7 @@ jobs:
             tests/test_universal_video_speaker_role_verifier.py \
             tests/test_bridge_video_learning_candidate.py \
             tests/test_video_candidate_persistence_revision.py \
+            tests/test_video_staging_handoff.py \
             tests/test_video_extended_extraction.py \
             tests/test_canon_source_domain_policy.py \
             tests/test_bridge_report_board_reconstruction.py \
