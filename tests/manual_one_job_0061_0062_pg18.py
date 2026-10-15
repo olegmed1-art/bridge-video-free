@@ -306,6 +306,35 @@ def _rehearse(port: int, tmp: Path, fixture: dict) -> dict[str, str]:
                                  (claim['job_id'], claim['lease_token'],
                                   'one-job-worker', before_id)).fetchone()['authorize_subset_attempt']
             assert checked['status'] == 'SOURCE_AND_LEASE_VERIFIED'
+        # A nine-minute request must be rejected when only 90 seconds remain,
+        # without leaving admission rows. Then give this same lease five
+        # minutes: the approval must be capped, not rejected or extended.
+        with _connect(port) as db:
+            db.execute("UPDATE video_queue.job SET lease_expires_at="
+                       "clock_timestamp()+interval '90 seconds' WHERE job_id=%s",
+                       (claim['job_id'],))
+        with _connect(port, 'onejob_approver') as db:
+            try:
+                with db.transaction():
+                    db.execute('SELECT video_queue.approve_one_job_staging_attempt_v1('
+                               '%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                               (*scope[:1], str(uuid4()), *scope[1:],
+                                datetime.now(timezone.utc)+timedelta(minutes=9),
+                                'insufficient-budget-control'))
+            except psycopg.Error as exc:
+                assert 'ONE_JOB_APPROVAL_TIME_BUDGET_LOW' in str(exc), exc
+            else:
+                raise AssertionError('insufficient approval budget accepted')
+        with _connect(port) as db:
+            assert db.execute('SELECT count(*) AS n FROM '
+                              'video_queue.one_job_staging_admission_v1 '
+                              'WHERE admission_id=%s', (admission_id,)).fetchone()['n'] == 0
+            db.execute("UPDATE video_queue.job SET lease_expires_at="
+                       "clock_timestamp()+interval '5 minutes' WHERE job_id=%s",
+                       (claim['job_id'],))
+            db.execute("UPDATE video_queue.subset_approval SET expires_at="
+                       "clock_timestamp()+interval '7 minutes' WHERE approval_id=%s",
+                       (fixture['approval_id'],))
         ready_path = tmp / 'approval.json.ready'
         write_claim_receipt(ready_path, claim, 'one-job-worker',
                             admission_id, fixture['source_fingerprint'])
@@ -365,6 +394,35 @@ def _rehearse(port: int, tmp: Path, fixture: dict) -> dict[str, str]:
                 assert 'ONE_JOB_APPROVER_SIGNAL_EXISTS' in str(exc), exc
             else:
                 raise AssertionError('approval signal replayed')
+        with _connect(port) as db:
+            deadlines = db.execute(
+                'SELECT a.expires_at AS admission_expiry, '
+                'l.expires_at AS approval_expiry, j.lease_expires_at, '
+                's.expires_at AS subset_expiry '
+                'FROM video_queue.one_job_staging_admission_v1 a '
+                'JOIN video_queue.one_job_staging_lease_approval_v1 l '
+                'ON l.admission_id=a.admission_id '
+                'JOIN video_queue.job j ON j.job_id=a.job_id '
+                'JOIN video_queue.subset_approval s ON s.approval_id=a.subset_approval_id '
+                'WHERE a.admission_id=%s', (admission_id,)).fetchone()
+            assert deadlines['admission_expiry'] == deadlines['approval_expiry']
+            assert deadlines['approval_expiry'] <= deadlines['lease_expires_at']
+            assert deadlines['approval_expiry'] <= deadlines['subset_expiry']
+            assert deadlines['approval_expiry'] > datetime.now(timezone.utc) + timedelta(minutes=3)
+        with _connect(port, 'onejob_approver') as db:
+            try:
+                with db.transaction():
+                    db.execute('SELECT video_queue.approve_one_job_staging_attempt_v1('
+                               '%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                               (admission_id, str(uuid4()), claim['job_id'],
+                                claim['lease_token'], 'one-job-worker', 1,
+                                fixture['source_fingerprint'],
+                                datetime.now(timezone.utc)+timedelta(minutes=9),
+                                'same-attempt-replay-control'))
+            except psycopg.Error as exc:
+                assert 'ONE_JOB_APPROVAL_REPLAY' in str(exc), exc
+            else:
+                raise AssertionError('same-attempt approval replay accepted')
         with _connect(port, 'onejob_approver') as db:
             try:
                 db.execute('SELECT video_queue.stage_one_job_private_result_v1('
@@ -450,6 +508,63 @@ def _ack_loss_case(port: int, tmp: Path, fixture: dict) -> dict[str, str]:
                 uncertain_replay='PASS_BLOCKED')
 
 
+def _subset_deadline_case(port: int, tmp: Path, fixture: dict) -> dict[str, str]:
+    admission_id = str(uuid4())
+    journal = ClaimReceiptJournal(tmp / 'subset-deadline-claim.json', dict(
+        admission_id=admission_id, expected_job_id=fixture['job_id'],
+        expected_batch_id=fixture['batch_id']))
+    with patch.object(operator, '_read_local_json', side_effect=_read):
+        journal.reserve()
+        claim = _claim(port, fixture, journal)
+    with _connect(port) as db:
+        db.execute("UPDATE video_queue.job SET lease_expires_at="
+                   "clock_timestamp()+interval '7 minutes' WHERE job_id=%s",
+                   (claim['job_id'],))
+        db.execute("UPDATE video_queue.subset_approval SET expires_at="
+                   "clock_timestamp()+interval '90 seconds' WHERE approval_id=%s",
+                   (fixture['approval_id'],))
+
+    def request_approval() -> None:
+        with _connect(port, 'onejob_approver') as db:
+            db.execute('SELECT video_queue.approve_one_job_staging_attempt_v1('
+                       '%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                       (admission_id, str(uuid4()), claim['job_id'],
+                        claim['lease_token'], 'one-job-worker', 1,
+                        fixture['source_fingerprint'],
+                        datetime.now(timezone.utc)+timedelta(minutes=9),
+                        'subset-deadline-control'))
+
+    try:
+        request_approval()
+    except psycopg.Error as exc:
+        assert 'ONE_JOB_APPROVAL_TIME_BUDGET_LOW' in str(exc), exc
+    else:
+        raise AssertionError('short subset deadline accepted')
+    with _connect(port) as db:
+        assert db.execute('SELECT count(*) AS n FROM '
+                          'video_queue.one_job_staging_admission_v1 '
+                          'WHERE admission_id=%s', (admission_id,)).fetchone()['n'] == 0
+        db.execute("UPDATE video_queue.subset_approval SET expires_at="
+                   "clock_timestamp()+interval '5 minutes' WHERE approval_id=%s",
+                   (fixture['approval_id'],))
+    request_approval()
+    with _connect(port) as db:
+        row = db.execute('SELECT l.expires_at AS approval_expiry, '
+                         's.expires_at AS subset_expiry, j.lease_expires_at '
+                         'FROM video_queue.one_job_staging_lease_approval_v1 l '
+                         'JOIN video_queue.one_job_staging_admission_v1 a '
+                         'ON a.admission_id=l.admission_id '
+                         'JOIN video_queue.subset_approval s '
+                         'ON s.approval_id=a.subset_approval_id '
+                         'JOIN video_queue.job j ON j.job_id=a.job_id '
+                         'WHERE a.admission_id=%s', (admission_id,)).fetchone()
+        assert row['approval_expiry'] <= row['subset_expiry']
+        assert row['approval_expiry'] <= row['lease_expires_at']
+        assert row['approval_expiry'] > datetime.now(timezone.utc)+timedelta(minutes=3)
+    return dict(subset_deadline='PASS_CAPPED_WITHOUT_EXTENSION',
+                short_subset_budget='PASS_REJECTED')
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--pg-bin', type=Path, required=True)
@@ -512,6 +627,8 @@ def main() -> None:
             print(json.dumps(result, sort_keys=True), flush=True)
             second = _admit(args.port, '0002')
             result.update(_ack_loss_case(args.port, Path(tmp), second))
+            third = _admit(args.port, '0003')
+            result.update(_subset_deadline_case(args.port, Path(tmp), third))
             print(json.dumps(result, sort_keys=True), flush=True)
             print(json.dumps({'status': 'SCHEMA_INSTALLED', 'migrations': len(files),
                               'proposals': ['0061', '0062'],

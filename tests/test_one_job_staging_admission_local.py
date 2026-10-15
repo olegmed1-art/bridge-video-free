@@ -228,14 +228,21 @@ class OneJobAdapterTest(unittest.TestCase):
         for exact_binding in ('v_job.lease_token IS DISTINCT FROM p_lease_token',
                               'v_job.lease_owner IS DISTINCT FROM p_worker_key',
                               'v_job.attempt_count IS DISTINCT FROM p_attempt_count',
-                              'p_expires_at > v_job.lease_expires_at',
-                              'p_expires_at > v_approval.expires_at',
+                              'v_job.lease_expires_at IS NULL',
+                              'v_approval.expires_at IS NULL',
+                              'p_expires_at, v_job.lease_expires_at, v_approval.expires_at',
+                              "interval '3 minutes'",
+                              'SET expires_at=v_effective_expires_at',
+                              'session_user,v_effective_expires_at',
+                              'ONE_JOB_APPROVAL_TIME_BUDGET_LOW',
                               "q_subset.state='FINALIZED'",
                               'v_bound_job->>\'source_fingerprint\' IS DISTINCT FROM p_source_fingerprint',
                               'v_reservation.source_fingerprint IS DISTINCT FROM p_source_fingerprint',
                               'ONE_JOB_APPROVAL_REPLAY',
                               'ONE_JOB_APPROVAL_REVOKED_OR_CHANGED'):
             self.assertIn(exact_binding, approve)
+        self.assertNotIn('SET expires_at=p_expires_at', approve)
+        self.assertNotIn('session_user,p_expires_at', approve)
         self.assertIn('SET revoked_at=clock_timestamp(), enabled=false', revoke)
         self.assertNotIn('GRANT EXECUTE', sql)
 
