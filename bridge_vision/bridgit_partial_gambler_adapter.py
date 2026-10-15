@@ -6,7 +6,9 @@ checks frame identity before calling it. No Gold-v2 packaging is needed here.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import stat
 from typing import Any, Callable, Mapping, Sequence
 
 from bridge_vision.bridgit_partial_evidence import (
@@ -19,13 +21,50 @@ from bridge_vision.bridgit_primary_video import (
 from bridge_vision.bridgit_board_number import read_board_number
 from bridge_vision.bridgit_partial_pixel_observer import GamblerPartialPixelObserver
 from bridge_vision.gambler_classic_reference import (
-    GamblerClassicReferenceError, GamblerClassicSprite, load_sprite,
+    MAX_SPRITE_BYTES, GamblerClassicReferenceError, GamblerClassicSprite,
+    validate_sprite_bytes,
 )
 from bridge_vision.gambler_reference_authority import authority_provenance
 from bridge_vision.native_cards import NativeFourSeatCardDetector
 
 PARTIAL_GAMBLER_ADAPTER_VERSION = "bridgit-partial-gambler-shadow-v1"
 PixelObserver = Callable[[Path, GamblerClassicSprite], Mapping[str, Any]]
+
+
+def _load_shadow_sprite(path: Path, *, expected_sha256: str,
+                        expected_variant: int) -> GamblerClassicSprite:
+    """Read a bounded pinned PNG as bytes, including on Windows.
+
+    The frozen production reference loader is SHA-pinned by an independent CI
+    contract. Keep this platform fix inside the offline shadow adapter.
+    """
+    flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise GamblerClassicReferenceError("sprite is unavailable") from exc
+    try:
+        meta = os.fstat(fd)
+        if not stat.S_ISREG(meta.st_mode) or not 0 < meta.st_size <= MAX_SPRITE_BYTES:
+            raise GamblerClassicReferenceError("sprite file is not a bounded regular file")
+        chunks: list[bytes] = []
+        remaining = MAX_SPRITE_BYTES + 1
+        while remaining:
+            chunk = os.read(fd, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except OSError as exc:
+        raise GamblerClassicReferenceError("sprite is unavailable") from exc
+    finally:
+        os.close(fd)
+    payload = b"".join(chunks)
+    if not payload or len(payload) > MAX_SPRITE_BYTES:
+        raise GamblerClassicReferenceError("sprite exceeds the byte bound")
+    return validate_sprite_bytes(payload, expected_sha256=expected_sha256,
+                                 expected_variant=expected_variant)
 
 
 def accumulate_gambler_partial_frames(
@@ -46,7 +85,8 @@ def accumulate_gambler_partial_frames(
             Path(asset_root), verified_card_width_px=verified_card_width_px,
             verified_card_height_px=verified_card_height_px,
         )
-        sprite = load_sprite(path, expected_sha256=expected_sha, expected_variant=variant)
+        sprite = _load_shadow_sprite(path, expected_sha256=expected_sha,
+                                     expected_variant=variant)
     except (PrimaryVideoRecognitionError, GamblerClassicReferenceError) as exc:
         raise PartialEvidenceError("PINNED_GAMBLER_ASSET_UNAVAILABLE") from exc
 

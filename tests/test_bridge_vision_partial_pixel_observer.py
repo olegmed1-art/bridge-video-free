@@ -15,7 +15,6 @@ from bridge_vision.bridgit_partial_pixel_observer import (
 from bridge_vision.gambler_classic_reference import (
     CARDS, RANKS, SUITS, GamblerClassicSprite, card_box, decode_card_cells,
 )
-from bridge_vision.gambler_classic_reference import load_sprite
 from bridge_vision.gambler_reference_authority import pinned_sprite_sha256
 
 
@@ -151,7 +150,7 @@ def test_pixel_observer_to_accumulator_preserves_unknown_and_deal_boundary(
     monkeypatch.setattr(adapter, "resolve_original_gambler_asset",
                         lambda root, **kwargs: (5, tmp_path / "synthetic-sprite.png",
                                                 sprite.sprite_sha256))
-    monkeypatch.setattr(adapter, "load_sprite", lambda path, **kwargs: sprite)
+    monkeypatch.setattr(adapter, "_load_shadow_sprite", lambda path, **kwargs: sprite)
     samples = []
     for index, path in enumerate((first, second)):
         read = {"status": "READ", "number": 12}
@@ -192,7 +191,7 @@ def test_all_52_original_cards_and_unknown_controls_at_each_pinned_size(
     root = os.environ.get("BRIDGIT_PINNED_GAMBLER_ASSET_ROOT")
     if not root:
         pytest.skip("verified local Gambler assets not supplied")
-    sprite = load_sprite(Path(root) / f"all-v{variant}.png",
+    sprite = adapter._load_shadow_sprite(Path(root) / f"all-v{variant}.png",
                          expected_sha256=pinned_sprite_sha256(variant), expected_variant=variant)
     cells = decode_card_cells(sprite)
     cw, ch = sprite.card_width, sprite.card_height
@@ -259,7 +258,7 @@ def test_auto_geometry_on_independently_transformed_pinned_cells(
     root = os.environ.get("BRIDGIT_PINNED_GAMBLER_ASSET_ROOT")
     if not root:
         pytest.skip("verified local Gambler assets not supplied")
-    sprite = load_sprite(Path(root) / "all-v5.png",
+    sprite = adapter._load_shadow_sprite(Path(root) / "all-v5.png",
                          expected_sha256=pinned_sprite_sha256(5), expected_variant=5)
     cells = decode_card_cells(sprite)
     cw, ch = sprite.card_width, sprite.card_height
@@ -311,7 +310,7 @@ def test_auto_geometry_single_frame_transform_stability_without_owner_labels(tmp
     source = Path(source_name)
     assert sha256(source.read_bytes()).hexdigest() == (
         "b7a960a7bfcf3e3cbc4dc191988baa2d31ec740d72fb58e2a9c61f77ef103c13")
-    sprite = load_sprite(Path(root) / "all-v5.png",
+    sprite = adapter._load_shadow_sprite(Path(root) / "all-v5.png",
                          expected_sha256=pinned_sprite_sha256(5), expected_variant=5)
     geometry = PartialPixelGeometry(1680, 934, 109, 147, (0, 0, 1332, 934),
                                     (), auto_discover=True)

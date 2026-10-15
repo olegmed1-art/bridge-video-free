@@ -50,7 +50,7 @@ def _bind_synthetic_sprite(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
         return sprite
 
     monkeypatch.setattr(adapter, "resolve_original_gambler_asset", resolve)
-    monkeypatch.setattr(adapter, "load_sprite", load)
+    monkeypatch.setattr(adapter, "_load_shadow_sprite", load)
 
 
 def _run(samples: list[dict], tmp_path: Path, observer):
@@ -58,6 +58,19 @@ def _run(samples: list[dict], tmp_path: Path, observer):
         samples, asset_root=tmp_path, verified_card_width_px=109,
         verified_card_height_px=147, pixel_observer=observer, contract=_contract(),
     )
+
+
+def test_shadow_sprite_loader_preserves_png_bytes_on_windows(tmp_path: Path):
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    ok, encoded = cv2.imencode(".png", np.zeros((588, 1417, 4), dtype=np.uint8))
+    assert ok
+    payload = encoded.tobytes()
+    path = tmp_path / "all.png"
+    path.write_bytes(payload)
+    sprite = adapter._load_shadow_sprite(path, expected_sha256=sha256(payload).hexdigest(),
+                                          expected_variant=5)
+    assert sprite.payload == payload
 
 
 def _real_png_samples(tmp_path: Path) -> list[dict]:

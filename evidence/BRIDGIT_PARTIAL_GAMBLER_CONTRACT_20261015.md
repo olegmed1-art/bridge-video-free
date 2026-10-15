@@ -17,8 +17,9 @@ sprite resolver selects a variant from card scale; its loader checks the pinned
 SHA-256 and native 13×4 dimensions. A missing or altered sprite fails with
 `PINNED_GAMBLER_ASSET_UNAVAILABLE`. No Gold-v2 package is read by this
 interface. It does **not** supply or validate a Bridgit table layout itself.
-The shared loader now opens files in binary mode on Windows, preserving PNG
-bytes for the SHA-256 check.
+The shadow adapter opens the bounded local sprite in binary mode on Windows,
+preserving PNG bytes for the SHA-256 check. The SHA-pinned production loader
+remains unchanged.
 
 Each sample must provide a local `frame_path` and its exact SHA-256, source
 video SHA-256, explicit episode ID, board occurrence, two matching `READ`
