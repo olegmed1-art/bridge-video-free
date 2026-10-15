@@ -395,6 +395,8 @@ def main(argv=None):
     parser.add_argument("mode", choices=["trial", "manual_console_trial", "stop", "isolate_units", "school_worlds"])
     parser.add_argument("--ack", required=True)
     parser.add_argument("--guest-diagnostic", action="store_true", help="One run-bound ubuntu SSH probe; trial only.")
+    parser.add_argument("--revision", choices=("legacy-v1", "normalized-constraints-v2"),
+                        help="Reviewed school_worlds bundle revision; defaults to legacy-v1.")
     args = parser.parse_args(argv)
     expected = {"trial": "OWNER_APPROVED_10MIN_10USD", "manual_console_trial": "OWNER_APPROVED_MANUAL_CONSOLE_10MIN_10USD", "stop": "ORDINARY_STOP_EXACT_IBM", "isolate_units": "OWNER_APPROVED_IBM_FOUR_UNIT_ISOLATION_10MIN_10USD", "school_worlds": "OWNER_APPROVED_IBM_SCHOOL_WORLDS_10MIN_10USD"}[args.mode]
     if args.ack != expected:
@@ -402,6 +404,9 @@ def main(argv=None):
         return 3
     if args.guest_diagnostic and args.mode != "trial":
         emit("BLOCKED", reason="guest_diagnostic_mode_invalid")
+        return 3
+    if args.revision is not None and args.mode != "school_worlds":
+        emit("BLOCKED", reason="revision_mode_invalid")
         return 3
     if args.mode != "stop" and not LIVE_START_ENABLED:
         emit("BLOCKED", reason="live_start_locked")
@@ -428,7 +433,8 @@ def main(argv=None):
             except ImportError:
                 import ibm_school_worlds_probe as school
             with wall_deadline(school.PREPARE_SECONDS):
-                guest_probe = school.prepare()
+                revision = school.LEGACY_BUNDLE_REVISION if args.revision is None else args.revision
+                guest_probe = school.prepare(revision=revision)
         client = Client(authenticate())
         if args.mode in {"isolate_units", "school_worlds"}:
             return trial(client, guest_probe=guest_probe, maintenance=True)

@@ -117,11 +117,12 @@ def parse_log(raw, binding):
     return rows
 
 
-def validate_artifacts(directory, binding, logged):
+def validate_artifacts(directory, binding, logged, *, revision=probe.LEGACY_BUNDLE_REVISION):
+    spec=probe.bundle_revision(revision)
     owned_directory(directory)
     raw = {name: read_file(directory / name) for name in ("receipt.json", "manifest.json", "input.json", "worlds.json", "worlds.pbn")}
     receipt = probe.strict_json(raw["receipt.json"])
-    probe.validate_receipt(receipt, binding)
+    probe.validate_receipt(receipt, binding, revision=revision)
     need(receipt == logged and raw["receipt.json"] == validator.canonical_json_bytes(receipt))
     need(receipt["result"] == "WORLD_GENERATED" and receipt["reason"] == "OK" and receipt["stage"] == "COMPLETE")
     need(receipt["artifact"] == dict(name="worlds.json", bytes=72174, sha256=validator.EXPECTED_RESULT_SHA256, encoding="zlib+base64"))
@@ -135,15 +136,15 @@ def validate_artifacts(directory, binding, logged):
     expected = dict(schema="bridge.ibm.school-worlds.export.v1", source_commit=binding["head"],
                     run_id=binding["run_id"], attempt=binding["attempt"], result="WORLD_GENERATED",
                     snapshot_id=probe.RESUME_SNAPSHOT_ID, snapshot_sha256=probe.RESUME_SNAPSHOT_SHA256,
-                    input_sha256=validator.INPUT_SHA256, generator_sha256=probe.SOURCE_PINS["ibm_worlds_generator"],
-                    reviewed_sources=probe.SOURCE_PINS, host_bundle_sha256=probe.HOST_SOURCE_SHA,
+                     input_sha256=validator.INPUT_SHA256, generator_sha256=spec.source_pins["ibm_worlds_generator"],
+                     reviewed_sources=dict(spec.source_pins), host_bundle_sha256=spec.host_source_sha,
                     files=files, validation=checked, purpose="COMPUTE_VERIFICATION_AND_TRAINING_INPUT_ONLY", service_changes=[])
     need(validator.canonical_json_bytes(manifest) == validator.canonical_json_bytes(expected)
          and raw["manifest.json"] == validator.canonical_json_bytes(manifest))
     return {name: dict(bytes=len(value), sha256=digest(value)) for name, value in raw.items()}
 
 
-def validate_lifecycle(raw, binding, directory):
+def validate_lifecycle(raw, binding, directory, *, revision=probe.LEGACY_BUNDLE_REVISION):
     need(type(binding) is dict and set(binding) == BINDING
          and type(binding["run_id"]) is str and re.fullmatch("[1-9][0-9]{0,19}", binding["run_id"]) is not None
          and type(binding["attempt"]) is int and binding["attempt"] == 1
@@ -196,14 +197,14 @@ def validate_lifecycle(raw, binding, directory):
     need(consecutive == 3 and 3 <= len(observations) <= 200 and names[-2] == "STOP_STATE")
     logged = by_name["SCHOOL_WORLDS_VERIFIED_RECEIPT"]
     need(logged["artifact_path"] == str(directory))
-    files = validate_artifacts(directory, binding, logged["receipt"])
+    files = validate_artifacts(directory, binding, logged["receipt"], revision=revision)
     return dict(files=files, provider_stop=dict(instance_id=probe.IDENTITY["instance_id"],
                 instance_name=probe.IDENTITY["instance_name"], observations=observations,
                 consecutive_stopped_startable=3, terminal_event="STOPPED_OBSERVED",
                 action_queue=QUEUE, stop_post_unknown=terminal["stop_post_unknown"]))
 
 
-def build_receipt(raw, binding, directory, controller_exit, capture_exit):
+def build_receipt(raw, binding, directory, controller_exit, capture_exit, *, revision=probe.LEGACY_BUNDLE_REVISION):
     receipt = dict(schema="bridge.ibm.school-compute.lifecycle.v1", **binding,
                    result="INCOMPLETE", reason="INCOMPLETE", controller_exit=controller_exit,
                    capture_exit=capture_exit, controller_log_sha256=None, files={}, provider_stop=None,
@@ -220,7 +221,7 @@ def build_receipt(raw, binding, directory, controller_exit, capture_exit):
         receipt["reason"] = "CONTROLLER_FAILED" if controller_exit else "CAPTURE_FAILED"
         return receipt
     try:
-        checked = validate_lifecycle(raw, binding, directory)
+        checked = validate_lifecycle(raw, binding, directory, revision=revision)
     except (Exception, KeyboardInterrupt):
         receipt["reason"] = "EVIDENCE_INVALID"
         return receipt
@@ -236,6 +237,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--controller-exit", default="")
     parser.add_argument("--capture-exit", default="")
+    parser.add_argument("--revision", choices=(probe.LEGACY_BUNDLE_REVISION, probe.CONSTRAINT_KEYS_REVISION),
+                        default=probe.LEGACY_BUNDLE_REVISION, help="Reviewed bundle revision; never inferred from artifacts.")
     args = parser.parse_args(argv)
     try:
         binding = probe.context()
@@ -247,7 +250,8 @@ def main(argv=None):
             raw = read_file(control / "controller.jsonl", MAX_LOG)
         except (OSError, EvidenceError):
             raw = None
-        receipt = build_receipt(raw, binding, parent / "ibm-school-worlds", exit_code(args.controller_exit), exit_code(args.capture_exit))
+        receipt = build_receipt(raw, binding, parent / "ibm-school-worlds", exit_code(args.controller_exit), exit_code(args.capture_exit),
+                                revision=args.revision)
         destination = parent / "ibm-school-compute-artifact"
         os.mkdir(destination, 0o700)  # No reused or partial artifact can become a new success.
         files = {}

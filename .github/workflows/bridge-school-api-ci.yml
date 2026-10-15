@@ -4,6 +4,13 @@ on:
   pull_request:
     paths:
       - 'bridge_school_api/**'
+      - 'database/video_staging_read.py'
+      - 'database/video_staging_lineage.py'
+      - 'database/video_candidate_persistence.py'
+      - 'database/video_result_persistence.py'
+      - 'database/source_identity_persistence.py'
+      - 'database/runtime_worker_preflight.py'
+      - 'tests/test_api_runtime_bundle.py'
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_smoke_workflow_contract.py'
       - 'tests/test_runtime_app_incident_probe.py'
@@ -25,6 +32,13 @@ on:
     branches: [main]
     paths:
       - 'bridge_school_api/**'
+      - 'database/video_staging_read.py'
+      - 'database/video_staging_lineage.py'
+      - 'database/video_candidate_persistence.py'
+      - 'database/video_result_persistence.py'
+      - 'database/source_identity_persistence.py'
+      - 'database/runtime_worker_preflight.py'
+      - 'tests/test_api_runtime_bundle.py'
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_smoke_workflow_contract.py'
       - 'tests/test_runtime_app_incident_probe.py'
@@ -96,12 +110,17 @@ jobs:
         run: >-
           docker run --rm --network none bridge-school-api:ci
           python -c "import os; from bridge_school_api.main import app; assert os.getuid() == 65532 and os.getgid() == 65532 and app.title == 'Bridge School API'; from bridge_school_api.tournament_strength_proposal import load_policy; assert load_policy()['status'] == 'PROPOSAL'"
+      - name: Verify actual API image staging route without database or network
+        run: >-
+          docker run --rm --network none
+          -v "$PWD/tests/test_api_runtime_bundle.py:/tmp/test_api_runtime_bundle.py:ro"
+          bridge-school-api:ci python -I -B /tmp/test_api_runtime_bundle.py --smoke /app
 
   production-smoke:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: api-static
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 2
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -137,10 +156,13 @@ jobs:
           BRIDGE_API_TOKEN: github-actions-smoke-token
         run: |
           set -euo pipefail
-          uvicorn app:app --host 127.0.0.1 --port 8000 >/tmp/bridge-school-api.log 2>&1 &
+          # Only this CI process fails on its first DB connection error.
+          python -c "from bridge_school_api import db; db.CONNECT_ATTEMPTS = 1; import uvicorn; uvicorn.run('app:app', host='127.0.0.1', port=8000, workers=1)" >/tmp/bridge-school-api.log 2>&1 &
           echo $! >/tmp/bridge-school-api.pid
           for attempt in $(seq 1 30); do
-            if curl --fail --silent --connect-timeout 2 --max-time 5 http://127.0.0.1:8000/healthz >/tmp/health.json; then
+            # Wait for the local listener without invoking a database route.
+            if (: >/dev/tcp/127.0.0.1/8000) 2>/dev/null; then
+              curl --fail --silent --connect-timeout 2 --max-time 5 http://127.0.0.1:8000/healthz >/tmp/health.json
               exit 0
             fi
             sleep 1

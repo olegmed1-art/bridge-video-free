@@ -40,7 +40,8 @@ printf '%s\n' "$changed"
 # DDS3, BEN, video workers, database migrations, docs, tests, and operational
 # workflows are intentionally not deployment triggers. The only Assistant Lab
 # files allowed to trigger Vercel are the three thin web contract wrappers.
-if printf '%s\n' "$changed" | grep -Eq '^(app\.py$|bridge_school_api/|bridge_contracts/|assistant_lab/(__init__|contract|dispatch)\.py$|pyproject\.toml$|\.python-version$|\.vercelignore$|vercel\.json$|scripts/vercel_ignore_build\.sh$)'; then
+# The six database modules below are the staging reader's explicit import closure.
+if printf '%s\n' "$changed" | grep -Eq '^(app\.py$|bridge_school_api/|bridge_contracts/|database/(video_staging_read|video_staging_lineage|video_candidate_persistence|video_result_persistence|source_identity_persistence|runtime_worker_preflight)\.py$|assistant_lab/(__init__|contract|dispatch)\.py$|pyproject\.toml$|\.python-version$|\.vercelignore$|vercel\.json$|scripts/vercel_ignore_build\.sh$)'; then
   echo "vercel-gate: main web/API runtime changed; build"
   exit 1
 fi

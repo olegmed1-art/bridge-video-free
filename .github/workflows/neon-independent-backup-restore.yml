@@ -275,16 +275,61 @@ jobs:
           research_jobs="$("${psql_base[@]}" -c "SELECT count(*) FROM assistant_lab.research_job;")"
           checkpoint_exists="$("${psql_base[@]}" -c "SELECT to_regclass('public.recovery_checkpoint') IS NOT NULL;")"
           verification_exists="$("${psql_base[@]}" -c "SELECT to_regclass('public.recovery_verification') IS NOT NULL;")"
-          test "$tables" = "$EXPECTED_TABLES"
-          test "$schemas" = "$EXPECTED_SCHEMAS"
-          test "$jobs" = "$EXPECTED_JOBS"
-          test "$research_jobs" = "$EXPECTED_RESEARCH_JOBS"
-          test "$checkpoint_exists" = "t"
-          test "$verification_exists" = "t"
+          require_count() {
+            if [[ ! "$2" =~ ^[0-9]+$ ]]; then
+              printf '::error title=Invalid restore verification count::%s is not an unsigned integer\n' "$1"
+              exit 1
+            fi
+          }
+          require_boolean() {
+            if [[ "$2" != "t" && "$2" != "f" ]]; then
+              printf '::error title=Invalid restore verification boolean::%s is not t or f\n' "$1"
+              exit 1
+            fi
+          }
+          require_count source_tables "$EXPECTED_TABLES"
+          require_count restored_tables "$tables"
+          require_count source_schemas "$EXPECTED_SCHEMAS"
+          require_count restored_schemas "$schemas"
+          require_count source_jobs "$EXPECTED_JOBS"
+          require_count restored_jobs "$jobs"
+          require_count source_research_jobs "$EXPECTED_RESEARCH_JOBS"
+          require_count restored_research_jobs "$research_jobs"
+          require_boolean recovery_checkpoint_exists "$checkpoint_exists"
+          require_boolean recovery_verification_exists "$verification_exists"
+          printf 'Restore verification: tables source=%s restored=%s; schemas source=%s restored=%s; jobs source=%s restored=%s; research_jobs source=%s restored=%s; recovery_checkpoint_exists=%s; recovery_verification_exists=%s\n' \
+            "$EXPECTED_TABLES" "$tables" "$EXPECTED_SCHEMAS" "$schemas" "$EXPECTED_JOBS" "$jobs" \
+            "$EXPECTED_RESEARCH_JOBS" "$research_jobs" "$checkpoint_exists" "$verification_exists"
           echo "restored_tables=$tables" >> "$GITHUB_OUTPUT"
           echo "restored_schemas=$schemas" >> "$GITHUB_OUTPUT"
           echo "restored_jobs=$jobs" >> "$GITHUB_OUTPUT"
           echo "restored_research_jobs=$research_jobs" >> "$GITHUB_OUTPUT"
+          mismatch=0
+          if [ "$tables" != "$EXPECTED_TABLES" ]; then
+            echo '::error title=Restored table count mismatch::Restored table count differs from source'
+            mismatch=1
+          fi
+          if [ "$schemas" != "$EXPECTED_SCHEMAS" ]; then
+            echo '::error title=Restored schema count mismatch::Restored schema count differs from source'
+            mismatch=1
+          fi
+          if [ "$jobs" != "$EXPECTED_JOBS" ]; then
+            echo '::error title=Restored job count mismatch::Restored job count differs from source'
+            mismatch=1
+          fi
+          if [ "$research_jobs" != "$EXPECTED_RESEARCH_JOBS" ]; then
+            echo '::error title=Restored research job count mismatch::Restored research job count differs from source'
+            mismatch=1
+          fi
+          if [ "$checkpoint_exists" != "t" ]; then
+            echo '::error title=Recovery checkpoint missing::public.recovery_checkpoint was not restored'
+            mismatch=1
+          fi
+          if [ "$verification_exists" != "t" ]; then
+            echo '::error title=Recovery verification missing::public.recovery_verification was not restored'
+            mismatch=1
+          fi
+          if (( mismatch )); then exit 1; fi
 
       - name: Publish non-sensitive recovery evidence
         if: always()

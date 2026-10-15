@@ -36,8 +36,24 @@ jobs:
           echo "$RUNNER_TEMP/audit-bin" >> "$GITHUB_PATH"
       - name: Collect reports without fixes
         run: python ops/audit/collect.py
+      - name: Preserve PR reports in the job log
+        if: always() && github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for report in inventory.json ruff.json trivy.json ruff.log trivy.log ruff-version.txt trivy-version.txt summary.md; do
+            path="audit-reports/$report"
+            if [ -f "$path" ]; then
+              printf 'AUDIT_REPORT_BEGIN name=%s sha256=%s bytes=%s\n' \
+                "$report" "$(sha256sum "$path" | cut -d ' ' -f1)" "$(wc -c < "$path")"
+              sed 's/^/AUDIT| /' "$path"
+              printf 'AUDIT_REPORT_END name=%s\n' "$report"
+            else
+              printf 'AUDIT_REPORT_MISSING name=%s\n' "$report"
+            fi
+          done
       - name: Preserve reports
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: repository-audit-${{ github.run_id }}

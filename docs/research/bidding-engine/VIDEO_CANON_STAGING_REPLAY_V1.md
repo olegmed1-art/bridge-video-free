@@ -30,8 +30,9 @@ An input JSON cannot attest its own provenance or teacher identity. Accepted
 assertions additionally require an out-of-band `evidence_resolver` callable,
 supplied only by embedding Python code, and `replay_provenance` containing
 `parent_artifact_sha256` and `parent_hash_domain: RAW_BYTES_SHA256`. No resolver
-is installed by this change. Neither CLI nor Diana integration supplies one,
-so they fail closed until a separately reviewed trusted evidence reader exists.
+is installed by default. The explicit local evidence reader described below
+rechecks bytes; its CLI and Diana environment configuration cannot establish
+independent source origin, teacher identity, role or policy authorization.
 
 The resolver receives the parent raw-artifact digest and returns a mapping with:
 
@@ -52,6 +53,98 @@ make an untrusted reader trustworthy. Resolver failures, synthetic/unknown
 evidence classes and malformed/inconsistent manifests produce gaps. Raw parent
 bytes hashes, embedded JSON bytes hashes and canonical JSON hashes are different
 domains and must never be equated without recomputing both from the same bytes.
+
+## Local evidence reader opt-in (2026-10-11)
+
+`bridge_contracts.video_local_evidence.LocalEvidenceReader` reads only explicitly
+named local files using the existing full-master `source`, `transcript` and
+`screenshots` layout. It does not discover files, parse arbitrary report formats,
+download media, run ASR, load Python modules from configuration or write evidence.
+An inventory is pinned by its raw SHA256 and is **not a trust certificate**:
+
+```json
+{
+  "schema": "video-local-evidence-index-v1",
+  "parent": {"path": "master.raw.json", "raw_sha256": "<64 lowercase hex>",
+             "canonical_sha256": "<64 lowercase hex>"},
+  "source": {"path": null, "video_file_id": "<exact source ID>",
+             "sha256": "<64 lowercase hex>"},
+  "frames": [{"path": "frame.jpg", "evidence_id": "<existing evidence ID>",
+              "sha256": "<64 lowercase hex>"}]
+}
+```
+
+Paths are relative to the inventory directory, confined after resolution;
+absolute paths, traversal, Windows alternate streams and output aliases are
+rejected. Null media path explicitly means missing bytes. Every replay rehashes
+the parent raw bytes, canonical JSON, configured media and available frame bytes.
+Raw and canonical hashes are separate domains. Master source ID/hash and each
+frame's unique inventory ID/hash must match. A listed frame without its original
+bytes stays missing; a similar image or a re-encoding cannot replace it.
+
+```sh
+python -m tools.replay_video_canon private-result.json --output receipt-1.json \
+  --evidence-index /private/evidence/index.json \
+  --evidence-index-sha256 <raw-index-sha256> --local-staging-db disposable.sqlite
+```
+
+The options can be combined with the existing pinned `--selection` and fresh
+`--prepared-output` route. Inspection rows contain checks and explicit gaps.
+Bounded full-master selections also retain an exact quoted artifact observation,
+its source offsets, parent hashes and only byte-verified selected frames.
+`SOURCE_OBSERVATION / ARTIFACT_BYTES_VERIFIED_MEDIA_UNVERIFIED` permits reviewing
+the source artifact with uncertainty. It is **not VERIFIED_SOURCE_OBSERVATION**:
+audio accuracy and audiovisual/source-origin relation still require independent
+media evidence. Named speaker and role remain UNKNOWN. A frame outside the
+half-open speech interval is explicitly CONTEXT_ONLY_OUTSIDE_SPEECH_INTERVAL.
+None of this requires a named identity or manufactures a complete interaction.
+Canon/teacher assertions retain their original VERIFIED identity requirement.
+
+Embedding code may provide `trusted_resolver=` using the existing out-of-band
+parent-manifest contract, independently resolving origin, audio/frame relation,
+roles, identity and policy. The reader additionally binds every returned
+transcript locator to an exact unique source `segment_id`, text digest and
+interval, and its frame to actual rehashed bytes and the half-open interval.
+The file-only CLI/environment never supplies this callback. A generated manifest,
+role label, identity map from another lesson, or high confidence is insufficient.
+There is no independent trusted store adapter in this stage.
+
+Diana opt-in requires **both** `BRIDGE_VIDEO_REPLAY_EVIDENCE_INDEX_PATH` and
+`BRIDGE_VIDEO_REPLAY_EVIDENCE_INDEX_SHA256`. It binds the exact original loaded
+master bytes before derived visual fields are added. `replay_evidence_reader=`
+routes quality strictly to staging even for complete legacy auto-pipeline inputs;
+the replay hash joins the quality fingerprint. No workflow enables the variables.
+Removing them restores the prior routing. Real postprocessor runs still have
+their preexisting persistence/upload effects and are not authorized by these
+local tests. Production writes remain separately gated by fresh backup/restore.
+
+Local validation uses explicit private fixtures when
+`BRIDGE_VIDEO_REAL_FIXTURE_DIR` is set; without it the real test is skipped and
+must not be reported as e2e. Unit positives are synthetic external-store doubles.
+The retained real fixture has no source media/PDF bytes or independent identity
+authorization. It must stay BLOCKED while yielding inspectable artifact records.
+
+The narrow prerequisite in `universal_video/speaker_structure.py` rejects
+producer/source interval or optional ID misalignment before copying labels.
+Ambiguous duplicate intervals are rejected without distinct IDs. This fixes
+positional transfer of annotations; it does not verify role semantics or identity.
+
+### Next acceptance boundary (design only)
+
+The proposed `/v1/knowledge/teacher/video-candidate` belongs in the existing
+knowledge router after ownership/auth contracts are fixed. Bind exact source,
+run, school, UUID, replay hash and receipt; return cited quote/time/frame with
+SOURCE_OBSERVATION or CANDIDATE_RESEARCH and explicit allowed use. Anonymous or
+cross-school requests must not disclose content. No endpoint, permission,
+credential, canon/world/profile writer or migration is implemented here.
+
+Production media acceptance must use the single existing IBM video controller,
+return artifacts and confirm Stop within the shared USD20 project budget.
+Legacy GitHub output is reference evidence, not an IBM execution receipt.
+Before that run, retain the **original bytes of cited frames** in existing
+approved durable storage with source/run IDs, original offsets, hash domains,
+manifest, retention owner and retrieval check. A master PDF is not a complete
+frame archive. New storage or spending requires separate agreement.
 
 A separate `video_canon_replay_receipt` staging payload binds the bundle digest,
 parent raw-artifact digest, trusted manifest digest and candidate payload digest,
@@ -247,8 +340,11 @@ Draft rows join the existing `candidate_staging_records` collection. If an
 operator later runs the real postprocessor with its existing credentials, its
 existing staging persistence and private Drive artifact upload behavior applies.
 This change does not start such a run or configure any credential. With no new
-local selection, existing behavior is preserved; an explicit analysis request
-without evidence still receives the existing blocked replay gaps.
+local selection, replay preparation remains opt-in; an explicit analysis request
+without evidence still receives the existing blocked replay gaps. The current
+candidate writer additionally requires the exact preceding `persisted_result`
+handoff; without it, persistence is explicitly BLOCKED even in a standalone
+postprocessor call. See the [internal staging rollout contract](VIDEO_STAGING_PERSISTENCE_REHEARSAL_V1.md).
 
 Synthetic integration tests exercise PDF byte retention, file pins, raw/parsed
 master binding, overlap and boundary blockers, quality routing, and two full
