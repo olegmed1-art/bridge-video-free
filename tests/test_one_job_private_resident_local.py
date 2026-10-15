@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import os
+import json
 import sys
+import tempfile
 import types
 import unittest
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
@@ -55,6 +58,7 @@ class SyntheticQueue:
         self.expire_after_claim = False
         self.bad_finish = None
         self.lose_finish = False
+        self.lose_claim_ack = False
         self.claim_calls = 0
         self.subset_connections = 0
         self.finished = False
@@ -96,8 +100,12 @@ class Connection:
     def __exit__(self, error_type, *_):
         if error_type is not None:
             self.state.rollbacks += 1
-        elif self.claim_selected and self.state.expire_after_claim:
-            self.state.lease_active = False
+        elif self.claim_selected:
+            self.state.operations.append('claim_commit')
+            if self.state.expire_after_claim:
+                self.state.lease_active = False
+            if self.state.lose_claim_ack:
+                raise OSError('synthetic claim commit ACK lost')
         return False
 
     def cursor(self):
@@ -196,6 +204,7 @@ class PrivateResidentTest(unittest.TestCase):
             expected_attempt_count=1, admission_id=self.state.admission_id,
             source_fingerprint='c' * 64, worker_key='queue-worker',
             claim_publisher=self.publish_claim,
+            claim_committer=self.commit_claim,
             approval_waiter=self.wait_for_external_approval,
             processor=lambda claim: {'terminal_evidence_sha256': 'd' * 64})
 
@@ -206,6 +215,10 @@ class PrivateResidentTest(unittest.TestCase):
                          (self.state.job_id, self.state.lease_token,
                           'queue-worker', self.state.admission_id, 'c' * 64))
         self.state.operations.append('claim_receipt')
+
+    def commit_claim(self, claim):
+        self.assertEqual(claim['lease_token'], self.state.lease_token)
+        self.state.operations.append('claim_acknowledged')
 
     def wait_for_external_approval(self, claim, worker_key, admission_id,
                                    source_fingerprint):
@@ -228,7 +241,9 @@ class PrivateResidentTest(unittest.TestCase):
                    side_effect=self.state.connect_queue), \
              patch('universal_video.subset_worker._connect_subset',
                    side_effect=self.state.connect_subset), \
-             patch.object(neon_worker, 'shared_workload_lock', nullcontext), \
+             patch.object(neon_worker, 'shared_workload_lock',
+                          side_effect=lambda **kw: (
+                              self.assertEqual(kw, {'exclusive': True}) or nullcontext())), \
              patch.object(neon_worker, 'validate_video_runtime'), \
              patch.object(neon_worker, '_Heartbeat', ImmediateHeartbeat), \
              patch.object(neon_worker, '_processing_timeout', nullcontext), \
@@ -257,6 +272,84 @@ class PrivateResidentTest(unittest.TestCase):
                            'stage_connection','readback_connection','private_finish')],
                          ['claim','claim_receipt','heartbeat','before_work','approval_wait',
                           'stage_connection','readback_connection','private_finish'])
+        self.assertLess(self.state.operations.index('claim_receipt'),
+                        self.state.operations.index('claim_commit'))
+        self.assertLess(self.state.operations.index('claim_commit'),
+                        self.state.operations.index('claim_acknowledged'))
+
+    def test_lost_claim_commit_ack_retains_precommit_receipt_and_never_reclaims(self):
+        self.state.lose_claim_ack = True
+        with self.assertRaisesRegex(OSError, 'claim commit ACK lost'):
+            self.invoke()
+        self.assertIn('claim_receipt', self.state.operations)
+        self.assertIn('claim_commit', self.state.operations)
+        self.assertNotIn('claim_acknowledged', self.state.operations)
+        self.assertNotIn('heartbeat', self.state.operations)
+        self.assertEqual(self.state.claim_calls, 1)
+
+    def test_receipt_publication_failure_rolls_back_claim(self):
+        self.binding['claim_publisher'] = lambda *_: (_ for _ in ()).throw(
+            PrivateOneJobConfigurationError('ONE_JOB_CLAIM_RECEIPT_WRITE_FAILED'))
+        with self.assertRaisesRegex(PrivateOneJobConfigurationError,
+                                    'ONE_JOB_CLAIM_RECEIPT_WRITE_FAILED'):
+            self.invoke()
+        self.assertEqual(self.state.rollbacks, 1)
+        self.assertNotIn('claim_commit', self.state.operations)
+        self.assertNotIn('heartbeat', self.state.operations)
+
+    def test_missing_receipt_parent_stops_before_claim(self):
+        from universal_video.private_one_job_operator import run_from_binding_file
+        # The Windows sandbox reports POSIX mode bits as world-writable even
+        # after chmod. Keep the production file check and substitute only the
+        # file decoder for this path-preflight test.
+        file_fixture = (patch(
+            'universal_video.private_one_job_operator._read_local_json',
+            side_effect=lambda path: json.loads(path.read_text())
+            if path.exists() else None) if sys.platform == 'win32'
+            else nullcontext())
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as root, patch.dict(os.environ, {
+                'BRIDGE_VIDEO_QUEUE_DATABASE_URL': self.dsn}, clear=True), file_fixture:
+            binding_path = Path(root) / 'binding.json'
+            binding = {key: value for key, value in self.binding.items()
+                       if key not in ('queue_dsn', 'claim_publisher',
+                                      'claim_committer', 'approval_waiter', 'processor')}
+            binding['claim_receipt_path'] = str(Path(root) / 'absent' / 'claim.json')
+            binding['approval_signal_path'] = str(Path(root) / 'approval.json')
+            binding_path.write_text(json.dumps(binding), encoding='utf-8')
+            os.chmod(binding_path, 0o600)
+            with patch('universal_video.spool_worker.process_private_one_job_once') as run:
+                with self.assertRaisesRegex(PrivateOneJobConfigurationError,
+                                            'ONE_JOB_HANDOFF_DIRECTORY_UNAVAILABLE'):
+                    run_from_binding_file(str(binding_path))
+                run.assert_not_called()
+
+    def test_receipt_journal_preserves_token_until_ambiguous_commit_reconciled(self):
+        from universal_video.private_one_job_operator import ClaimReceiptJournal
+        file_fixture = (patch(
+            'universal_video.private_one_job_operator._read_local_json',
+            side_effect=lambda path: json.loads(path.read_text())
+            if path.exists() else None) if sys.platform == 'win32'
+            else nullcontext())
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as root, file_fixture:
+            path = Path(root) / 'claim.json'
+            journal = ClaimReceiptJournal(path, dict(
+                admission_id=self.state.admission_id,
+                expected_job_id=self.state.job_id,
+                expected_batch_id=self.state.batch_id))
+            journal.reserve()
+            self.assertEqual(json.loads(path.read_text())['claim_state'],
+                             'RESERVED')
+            journal.publish_precommit(self.state.claim, 'queue-worker',
+                                      self.state.admission_id, 'c' * 64)
+            uncertain = json.loads(path.read_text())
+            self.assertEqual(uncertain['claim_state'], 'PRECOMMIT_UNCONFIRMED')
+            self.assertEqual(uncertain['lease_token'], self.state.lease_token)
+            with self.assertRaisesRegex(PrivateOneJobConfigurationError,
+                                        'ONE_JOB_CLAIM_RECEIPT_WRITE_FAILED'):
+                journal.reserve()
+            journal.acknowledge_commit(self.state.claim)
+            self.assertEqual(json.loads(path.read_text())['claim_state'],
+                             'COMMIT_ACKNOWLEDGED')
 
     def test_finish_principal_or_active_role_change_stops_before_finish_sql(self):
         for change in ('principal', 'role'):

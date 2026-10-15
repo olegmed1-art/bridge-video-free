@@ -1,7 +1,9 @@
 # One-job private route: activation preflight draft, 2026-10-15
 
 **Prepared, not executed.** This is a read-only inventory and a conditional,
-unapplied ACL proposal for the independently tested `cbf613d4` candidate.
+unapplied ACL proposal. The receipt/lock revision has passed local synthetic
+tests but awaits independent re-review and disposable PostgreSQL ACK-loss
+evidence.
 The successful disposable PostgreSQL review is not evidence of production
 schema, roles, backup, service image or live queue state.
 
@@ -43,24 +45,28 @@ collector binding. Its protected binding JSON has exactly these fields:
 `expected_database`, `expected_login`, `expected_batch_id`, `expected_job_id`,
 `expected_source_file_id`, `expected_attempt_count`, `admission_id`,
 `source_fingerprint`, `worker_key`, `claim_receipt_path`, and
-`approval_signal_path`. Both paths are absolute. The claim receipt is written
-once with mode 0600 after the exact claim commits; it contains the lease token
-and attempt for the separate approver. Immediately before staging, the worker
+`approval_signal_path`. Both paths are absolute. A 0600 receipt journal is
+reserved before any claim SQL. The complete lease token and attempt are
+published atomically as `PRECOMMIT_UNCONFIRMED` before COMMIT, then changed to
+`COMMIT_ACKNOWLEDGED` only after its ACK. A missing ACK requires separate
+authorized read-only reconciliation; the launcher never blindly reclaims.
+Immediately before staging, the worker
 writes a `<approval_signal_path>.ready` notice with the same binding. The
 approver waits for that notice, uses its own login to call 0061 for the exact
 live claim, then writes a restricted JSON signal with exactly `admission_id`, `job_id`,
 `lease_token`, `worker_key`, `attempt_count`, `source_fingerprint`, and the
 new `lease_approval_id`. The worker checks that signal just before staging;
 an absent signal times out without a private write. No approver credential or
-automatic approval lives in the resident. The one-shot path holds the shared
-workload lock and uses the existing processor, heartbeat, collector and 0062
+automatic approval lives in the resident. The one-shot path holds the workload
+lock exclusively against ordinary shared-lock polling and uses the existing
+processor, heartbeat, collector and 0062
 finish. It commits a claim only if 0060 returns the expected job, batch,
 source and attempt; mismatch rolls the claim transaction back. Pre-existing
 claim, ready or approval-signal files block a new launch.
 Before a real launch, verify that ordinary resident queue polling is
 quiesced for the target batch and cannot claim a sibling when this one-shot
-lock is released. The shared lock serializes concurrent work but does not
-disable later polling. Reconcile the actual service state and restore its
+lock is released. The exclusive lock prevents overlap only while held; it does
+not disable later polling. Reconcile the actual service state and restore its
 previous behavior only after the one-job result is inspected.
 
 ## Minimal read-only SQL inventory
@@ -199,11 +205,11 @@ sha256sum /opt/bridge-school/universal-video-src/universal_video/spool_worker.py
           /opt/bridge-school/universal-video-src/universal_video/private_one_job_entrypoint.py
 ```
 
-The four reviewed source SHA-256 values at `02202989` are, respectively,
+The four local source SHA-256 values for this pending revision are, respectively,
 `add5a84c4dca00112eaedaf5ded41caec08d1246adb04063777b12daffe5c911`,
-`7ffc8ef56fe7ab8301dc9360c840f45dfef8a294b187062d3e5b24e585cfa582`,
-`99be5d2f8c79b1b78ea713b9b041f94170ac62de03157e78013134992f3c5418`,
-and `de870ecdfa22e309e3f03f200d6ea741b848e427fc1d52f08572dc72c1151546`.
+`90214675b46e6a48bb7192f82726965fe62d1db9eaf9bfa87f989e2239b26f27`,
+`edf4816c4df99ccda8906c6bc2ec8c48300317a51d2adf18c2c86ebd7fc28cbe`,
+and `915a1d34f00694fdc3dac11ba9b307412253467b9f798485e2bd97fe91cb4fd5`.
 The reviewed source SHA-256 values of proposal files 0061 and 0062 are
 `b218f42dde413cf2ad4765de417d0585773c4d93a8dca7e537d46e625cc2d56e`
 and `58f2fa3dc4d83cb49b6afd35b3cac00c162b22456d114da43fa3d9a65f153a7a`.
@@ -246,9 +252,36 @@ schema parity, ACL and rollback readiness remain unknown.
 
 The launcher must supply the exact eleven-key protected binding described
 above and must invoke the explicit one-shot entry point; changing only an
-environment toggle or restarting the normal unit will not select it. After
-the exact 0060 claim commits, the worker writes an exclusive 0600 claim
-receipt with the lease token. After processing and live terminal readback it
+environment toggle or restarting the normal unit will not select it. Before
+the exact 0060 claim, the launcher reserves the receipt path in a protected
+directory. It atomically publishes the token before COMMIT. The separate
+approver acts only on `COMMIT_ACKNOWLEDGED`; a `PRECOMMIT_UNCONFIRMED` record
+could represent either a committed or rolled-back claim and must be matched
+against the actual job/lease state using an authorized read-only DB session.
+For that recovery, preserve the journal and run the following bounded query
+under an **existing separate verifier** with SELECT rights on this one job.
+The queue worker must not be given table SELECT or an owner credential.
+
+```sql
+BEGIN TRANSACTION READ ONLY;
+SET LOCAL statement_timeout = '5s';
+SELECT job_id, batch_id, source_file_id, status, attempt_count,
+       lease_owner, lease_token, lease_expires_at
+  FROM video_queue.job
+ WHERE job_id = :expected_job_id AND batch_id = :expected_batch_id;
+ROLLBACK;
+```
+
+Compare every returned identity and the lease token with the saved journal.
+If a matching lease committed and remains active, an operator can plan a
+separately reviewed resume using the **same** lease and approval boundary;
+do not claim again. If it did not commit, or has expired or changed, preserve
+the file as incident evidence and reconcile job events before clearing the
+attempt. A failed final receipt update also leaves an unconfirmed file and
+stops processing. No automatic exactly-once guarantee is claimed for a lost
+COMMIT acknowledgement; the synthetic ACK-loss test only proves this local
+fail-closed behavior.
+After processing and live terminal readback the worker
 writes `<approval_signal_path>.ready`, also exclusively, then waits up to
 1800 seconds. A separate approver must verify the current lease, use its own
 restricted connection to call the 0061 approval function for that precise

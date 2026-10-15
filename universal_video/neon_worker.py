@@ -443,7 +443,8 @@ def process_one_private_neon(
     admission_id: str, source_fingerprint: str,
     approval_waiter: Callable[[Mapping[str, Any], str, str, str], Mapping[str, Any]],
     worker_key: str,
-    claim_publisher: Callable[[Mapping[str, Any], str, str, str], None] | None = None,
+    claim_publisher: Callable[[Mapping[str, Any], str, str, str], None],
+    claim_committer: Callable[[Mapping[str, Any]], None],
     processor: Callable[[Mapping[str, Any]], Mapping[str, Any]] = stable_review_processor,
 ) -> dict[str, Any]:
     """One explicit resident-runtime claim and private finish, never polling.
@@ -470,10 +471,13 @@ def process_one_private_neon(
             or not re.fullmatch(r'[0-9a-f]{64}', source_fingerprint)
             or not callable(processor)
             or not callable(approval_waiter)
-            or (claim_publisher is not None and not callable(claim_publisher))
+            or not callable(claim_publisher)
+            or not callable(claim_committer)
             or os.getenv('BRIDGE_WORKER_DATABASE_URL', '').strip()):
         raise PrivateOneJobConfigurationError('ONE_JOB_PRIVATE_CONFIG_INVALID')
-    with shared_workload_lock():
+    # An exclusive fence conflicts with the normal resident's shared fence.
+    # Operators must still quiesce later polling before this lock is released.
+    with shared_workload_lock(exclusive=True):
         validate_video_runtime()
         key = worker_key
         config = SubsetDriveConfig.from_env()
@@ -495,9 +499,10 @@ def process_one_private_neon(
             expected_source_file_id=expected_source_file_id,
             expected_attempt_count=expected_attempt_count,
             worker_key=key, processing_profile=APPROVED_PROFILE,
-            algorithm_revision=APPROVED_REVISION)
-        if claim_publisher is not None:
-            claim_publisher(dict(claim), key, admission_id, source_fingerprint)
+            algorithm_revision=APPROVED_REVISION,
+            claim_publisher=lambda selected: claim_publisher(
+                selected, key, admission_id, source_fingerprint))
+        claim_committer(dict(claim))
         return run_private_one_job(
             queue_dsn=queue_dsn, expected_database=expected_database,
             expected_login=expected_login, claim=claim,

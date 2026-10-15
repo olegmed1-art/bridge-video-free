@@ -1,6 +1,7 @@
 import json
+import sys
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
@@ -164,7 +165,12 @@ def observed_source(item, *, modified_time="2026-09-02T21:00:00Z", version="1014
 
 @contextmanager
 def exact_source_gate(item):
-    with patch(
+    # These tests check queue outcomes, not the Unix SIGALRM implementation.
+    # Keep the production timeout intact and exercise that gate separately.
+    timeout_fixture = (patch('universal_video.neon_worker._processing_timeout',
+                             nullcontext) if sys.platform == 'win32'
+                       else nullcontext())
+    with timeout_fixture, patch(
         "universal_video.neon_worker.access_token",
         return_value="drive-token",
     ), patch(

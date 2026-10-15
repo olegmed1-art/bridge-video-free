@@ -11,7 +11,7 @@ import os
 import re
 from collections.abc import Mapping
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID
 
 from .private_result_handoff import (
@@ -152,7 +152,8 @@ def claim_exact_private_job(*, queue_dsn: str, expected_database: str,
                             expected_job_id: str, expected_source_file_id: str,
                             expected_attempt_count: int, worker_key: str,
                             processing_profile: str,
-                            algorithm_revision: str) -> dict[str, Any]:
+                            algorithm_revision: str,
+                            claim_publisher: Callable[[Mapping[str, Any]], None]) -> dict[str, Any]:
     """Commit 0060's subset claim only when it returns the selected job.
 
     The SQL call and exact-result check share one transaction. A different
@@ -170,6 +171,7 @@ def claim_exact_private_job(*, queue_dsn: str, expected_database: str,
             or not 1 <= expected_attempt_count <= 3
             or not isinstance(processing_profile, str) or not processing_profile
             or not isinstance(algorithm_revision, str) or not algorithm_revision
+            or not callable(claim_publisher)
             or os.getenv('BRIDGE_WORKER_DATABASE_URL', '').strip()):
         raise PrivateOneJobConfigurationError('ONE_JOB_PRIVATE_CONFIG_INVALID')
     batch_id = _exact_uuid(expected_batch_id)
@@ -218,6 +220,10 @@ def claim_exact_private_job(*, queue_dsn: str, expected_database: str,
             raise PrivateOneJobConfigurationError('ONE_JOB_EXACT_CLAIM_MISMATCH') from exc
         claim['job_id'] = job_id
         claim['batch_id'] = batch_id
+        # The durable receipt must exist before COMMIT. A lost commit ACK then
+        # leaves the exact token for read-only reconciliation, never a blind
+        # second claim. Publication failure rolls this transaction back.
+        claim_publisher(dict(claim))
     return claim
 
 

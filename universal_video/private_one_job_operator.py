@@ -14,6 +14,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Mapping
+from uuid import uuid4
 
 from .private_result_handoff import PrivateOneJobConfigurationError
 
@@ -52,26 +53,122 @@ def _read_local_json(path: Path) -> dict[str, Any] | None:
     return data
 
 
-def write_claim_receipt(path: Path, claim: Mapping[str, Any], worker_key: str,
-                        admission_id: str, source_fingerprint: str) -> None:
-    """Publish one lease token atomically for the separate approver only."""
-    receipt = dict(admission_id=admission_id, job_id=str(claim['job_id']),
+def _receipt(claim: Mapping[str, Any], worker_key: str,
+             admission_id: str, source_fingerprint: str) -> dict[str, Any]:
+    return dict(admission_id=admission_id, job_id=str(claim['job_id']),
                    batch_id=str(claim['batch_id']),
                    lease_token=str(claim['lease_token']), worker_key=worker_key,
                    attempt_count=claim['attempt_count'],
                    source_file_id=claim['source_file_id'],
                    source_fingerprint=source_fingerprint)
-    raw = json.dumps(receipt, sort_keys=True, separators=(',', ':')).encode('utf-8')
+
+
+def _fsync_parent(path: Path) -> None:
+    if os.name == 'nt':
+        return
+    fd = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_json_exclusive(path: Path, payload: Mapping[str, Any]) -> None:
+    """Publish a complete, durable JSON file without exposing partial bytes."""
+    raw = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, 'O_NOFOLLOW', 0)
+    temporary = path.with_name(f'.{path.name}.{uuid4().hex}.tmp')
     try:
-        descriptor = os.open(path, flags, 0o600)
+        descriptor = os.open(temporary, flags, 0o600)
         with os.fdopen(descriptor, 'wb') as stream:
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
+        if os.name == 'nt':
+            # Windows rename fails when the destination exists. Hard-link
+            # creation is denied by some restricted Windows test sandboxes.
+            os.rename(temporary, path)
+        else:
+            os.link(temporary, path)
+        _fsync_parent(path)
     except OSError as exc:
         raise PrivateOneJobConfigurationError('ONE_JOB_CLAIM_RECEIPT_WRITE_FAILED') from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _replace_json(path: Path, payload: Mapping[str, Any]) -> None:
+    if _read_local_json(path) is None:
+        raise PrivateOneJobConfigurationError('ONE_JOB_CLAIM_RECEIPT_MISSING')
+    raw = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    temporary = path.with_name(f'.{path.name}.{uuid4().hex}.tmp')
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        descriptor = os.open(temporary, flags, 0o600)
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        _fsync_parent(path)
+    except OSError as exc:
+        raise PrivateOneJobConfigurationError('ONE_JOB_CLAIM_RECEIPT_WRITE_FAILED') from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def write_claim_receipt(path: Path, claim: Mapping[str, Any], worker_key: str,
+                        admission_id: str, source_fingerprint: str) -> None:
+    """Publish one complete readiness receipt atomically."""
+    _write_json_exclusive(path, _receipt(claim, worker_key, admission_id,
+                                         source_fingerprint))
+
+
+class ClaimReceiptJournal:
+    """Durable claim intent before COMMIT; ambiguous outcomes require readback."""
+
+    def __init__(self, path: Path, binding: Mapping[str, Any]):
+        self.path = path
+        self.binding = dict(binding)
+        self.claim: dict[str, Any] | None = None
+
+    def reserve(self) -> None:
+        try:
+            parent = self.path.parent
+            info = parent.lstat()
+            if (not stat.S_ISDIR(info.st_mode)
+                    or (os.name != 'nt' and (
+                        info.st_uid != os.geteuid() or info.st_mode & 0o022))):
+                raise PrivateOneJobConfigurationError('ONE_JOB_HANDOFF_DIRECTORY_UNSAFE')
+            _write_json_exclusive(self.path, dict(
+                claim_state='RESERVED', admission_id=self.binding['admission_id'],
+                job_id=self.binding['expected_job_id'],
+                batch_id=self.binding['expected_batch_id']))
+        except OSError as exc:
+            raise PrivateOneJobConfigurationError('ONE_JOB_HANDOFF_DIRECTORY_UNAVAILABLE') from exc
+
+    def publish_precommit(self, claim: Mapping[str, Any], worker_key: str,
+                          admission_id: str, source_fingerprint: str) -> None:
+        expected = dict(claim_state='RESERVED',
+                        admission_id=self.binding['admission_id'],
+                        job_id=self.binding['expected_job_id'],
+                        batch_id=self.binding['expected_batch_id'])
+        if _read_local_json(self.path) != expected:
+            raise PrivateOneJobConfigurationError('ONE_JOB_CLAIM_RECEIPT_MISMATCH')
+        self.claim = _receipt(claim, worker_key, admission_id, source_fingerprint)
+        _replace_json(self.path, dict(self.claim,
+                                      claim_state='PRECOMMIT_UNCONFIRMED'))
+
+    def acknowledge_commit(self, claim: Mapping[str, Any]) -> None:
+        if (self.claim is None or
+                str(claim['lease_token']) != self.claim['lease_token']):
+            raise PrivateOneJobConfigurationError('ONE_JOB_CLAIM_RECEIPT_MISMATCH')
+        if _read_local_json(self.path) != dict(
+                self.claim, claim_state='PRECOMMIT_UNCONFIRMED'):
+            raise PrivateOneJobConfigurationError('ONE_JOB_CLAIM_RECEIPT_MISMATCH')
+        _replace_json(self.path, dict(self.claim,
+                                      claim_state='COMMIT_ACKNOWLEDGED'))
 
 
 def wait_for_approval_signal(path: Path, claim: Mapping[str, Any],
@@ -119,10 +216,13 @@ def run_from_binding_file(binding_path: str) -> dict[str, Any]:
         queue_dsn = _read_dsn_file(file_name)
     from .spool_worker import process_private_one_job_once
 
+    journal = ClaimReceiptJournal(claim_path, binding)
+    journal.reserve()  # Durable before the first potentially mutating SQL.
+
     return process_private_one_job_once(
         queue_dsn=queue_dsn, **binding,
-        claim_publisher=lambda claim, key, admission, fingerprint:
-            write_claim_receipt(claim_path, claim, key, admission, fingerprint),
+        claim_publisher=journal.publish_precommit,
+        claim_committer=journal.acknowledge_commit,
         approval_waiter=lambda claim, key, admission, fingerprint:
             wait_for_approval_signal(signal_path, claim, key, admission,
                                      fingerprint))
@@ -139,4 +239,4 @@ def main() -> None:
 
 
 __all__ = ['run_from_binding_file', 'wait_for_approval_signal',
-           'write_claim_receipt']
+           'write_claim_receipt', 'ClaimReceiptJournal']
