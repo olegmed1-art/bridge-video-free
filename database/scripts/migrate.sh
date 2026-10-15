@@ -5,7 +5,18 @@ set -euo pipefail
 
 PSQL=(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -A -t)
 # Native Windows psql writes CRLF even when Git Bash reads LF scripts.
-psql_value() { "${PSQL[@]}" "$@" | tr -d '\r'; }
+# Only line framing is normalized. Values fetched below are base64-encoded in
+# SQL so a data-level CR cannot be mistaken for the line-ending CR.
+psql_value() { "${PSQL[@]}" "$@" | sed $'s/\r$//'; }
+decode_value() {
+  local value
+  value="$(printf '%s' "$1" | base64 --decode)" || return 1
+  if [[ "$(printf '%s' "$value" | base64 --wrap=0)" != "$1" ]]; then
+    echo 'Migration history contains a value that cannot be read without loss' >&2
+    return 1
+  fi
+  printf '%s' "$value"
+}
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-database/migrations}"
 EXTERNAL_HISTORY_FILE="${EXTERNAL_HISTORY_FILE:-database/external_migration_history.tsv}"
 
@@ -116,7 +127,9 @@ schema_table_exists() {
 # checksum. External-history entries are never executed; a numbered forward migration
 # must restore fresh-database schema parity.
 if schema_table_exists; then
-  while IFS=$'\t' read -r applied_key stored_checksum; do
+  while IFS=$'\t' read -r applied_key_b64 stored_checksum_b64; do
+    applied_key="$(decode_value "$applied_key_b64")"
+    stored_checksum="$(decode_value "$stored_checksum_b64")"
     [[ -z "$applied_key" ]] && continue
 
     if [[ "$applied_key" =~ ^[A-Za-z0-9_]+$ && -f "$MIGRATIONS_DIR/${applied_key}.sql" ]]; then
@@ -143,7 +156,7 @@ if schema_table_exists; then
     fi
     echo "Applied migration is missing from repository: ${applied_key}.sql" >&2
     exit 1
-  done < <(psql_value -F $'\t' -c "SELECT migration_key, COALESCE(checksum,'') FROM schema_migration ORDER BY migration_key;")
+  done < <(psql_value -F $'\t' -c "SELECT replace(encode(convert_to(migration_key,'UTF8'),'base64'), E'\\n',''), replace(encode(convert_to(COALESCE(checksum,''),'UTF8'),'base64'), E'\\n','') FROM schema_migration ORDER BY migration_key;")
 fi
 
 for migration in "$MIGRATIONS_DIR"/*.sql; do
@@ -161,7 +174,7 @@ for migration in "$MIGRATIONS_DIR"/*.sql; do
   fi
 
   if [[ "$applied" == "t" ]]; then
-    stored="$(psql_value -c "SELECT COALESCE(checksum,'') FROM schema_migration WHERE migration_key = '$key';")"
+    stored="$(decode_value "$(psql_value -c "SELECT replace(encode(convert_to(COALESCE(checksum,''),'UTF8'),'base64'), E'\\n','') FROM schema_migration WHERE migration_key = '$key';")")"
     if [[ -z "$stored" ]]; then
       echo "Bootstrapping checksum for already-applied migration $key"
       "${PSQL[@]}" -c "UPDATE schema_migration SET checksum = '$checksum' WHERE migration_key = '$key' AND checksum IS NULL;" >/dev/null
@@ -212,7 +225,7 @@ PSQL
   fi
 
   "${PSQL[@]}" -c "UPDATE schema_migration SET checksum = '$checksum' WHERE migration_key = '$key' AND checksum IS NULL;" >/dev/null
-  stored="$(psql_value -c "SELECT checksum FROM schema_migration WHERE migration_key = '$key';")"
+  stored="$(decode_value "$(psql_value -c "SELECT replace(encode(convert_to(checksum,'UTF8'),'base64'), E'\\n','') FROM schema_migration WHERE migration_key = '$key';")")"
   if [[ "$stored" != "$checksum" ]]; then
     echo "Failed to persist checksum for migration $key" >&2
     exit 1

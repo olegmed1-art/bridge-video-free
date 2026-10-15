@@ -65,7 +65,8 @@ do not prove Neon API transport or durable acknowledgement handling.
 The builder requires private local `target.json` (project_id, branch_id,
 endpoint_id, database_name), `catalog-baseline.json`,
 `semantic-catalog-baseline.json`, `claim-baseline.json`, `restore_claim_job.sql`,
-and the hash-pinned source migrations under `source/database/migrations` and041
+and hash-pinned 0059 under `source/database/migrations`, guarded 0060 under
+`source/database/candidates`, and 041
 under `source/database/tests`. No implicit destination or catalog defaults.
 `build_recovery.py` renders the fixed repair; `connector_packet.py` emits argument
 objects for review. A recovery/verifier payload requires the exact receipt of a

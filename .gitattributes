@@ -1,5 +1,5 @@
 database/migrations/0059_universal_video_terminal_size_guard.sql text eol=lf
-database/migrations/0060_fixed_subset_admission.sql text eol=lf
+database/candidates/0060_fixed_subset_admission.sql text eol=lf
 database/recovery/fixed_subset/repair-0060-legacy-recovery-v1.sql text eol=lf
 database/migrations/0056_universal_video_queue.sql text eol=lf
 database/migrations/0057_universal_video_canary_review_gate.sql text eol=lf

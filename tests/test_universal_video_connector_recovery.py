@@ -17,12 +17,23 @@ import connector_packet as c
 
 def test_pinned_sql_files_have_identical_lf_bytes_on_checkout():
     for key, expected in c.PINNED.items():
-        raw = (REPO/'database/migrations'/(key+'.sql')).read_bytes()
+        directory = 'candidates' if key.startswith('0060_') else 'migrations'
+        raw = (REPO/'database'/directory/(key+'.sql')).read_bytes()
         assert b'\r' not in raw
         assert hashlib.sha256(raw).hexdigest() == expected
     repair = (CODE/(r.KEY+'.sql')).read_bytes()
     assert b'\r' not in repair
     assert hashlib.sha256(repair).hexdigest() == '7202fb09ed4a796d4dc6b9d80905b620ede18df4ce38254f133b6a53a0a879e5'
+
+
+def test_0060_is_guarded_candidate_and_audited_history_only():
+    key='0060_fixed_subset_admission'
+    assert not (REPO/'database/migrations'/(key+'.sql')).exists()
+    raw=(REPO/'database/candidates'/(key+'.sql')).read_bytes()
+    assert hashlib.sha256(raw).hexdigest()==c.PINNED[key]
+    rows=[line.split('\t') for line in (REPO/'database/external_migration_history.tsv').read_text().splitlines()
+          if line and not line.startswith('#')]
+    assert [(row[0],row[1]) for row in rows if row[0]==key]==[(key,c.PINNED[key])]
 
 
 def test_windows_function_definition_newlines_preserve_md5_and_render_lf(staged):
@@ -44,9 +55,10 @@ def staged(tmp_path,monkeypatch):
     monkeypatch.setattr(r,'ROOT',tmp_path)
     monkeypatch.setattr(c,'ROOT',tmp_path)
     for name in c.PINNED:
-        dest=tmp_path/'source/database/migrations'/(name+'.sql')
+        directory = 'candidates' if name.startswith('0060_') else 'migrations'
+        dest=tmp_path/'source/database'/directory/(name+'.sql')
         dest.parent.mkdir(parents=True,exist_ok=True)
-        shutil.copyfile(REPO/'database/migrations'/(name+'.sql'),dest)
+        shutil.copyfile(REPO/'database'/directory/(name+'.sql'),dest)
     dest=tmp_path/'source/database/tests/041_universal_video_queue.sql'
     dest.parent.mkdir(parents=True)
     shutil.copyfile(REPO/'database/tests/041_universal_video_queue.sql',dest)

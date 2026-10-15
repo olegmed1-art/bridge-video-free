@@ -144,7 +144,7 @@ def prepare(stage, out):
     write(out/'server-before.json',state)
     migration_dir=stage/'source/database/migrations'
     migration_dir.mkdir(parents=True)
-    for number in ('0056','0057','0058','0059','0060'):
+    for number in ('0056','0057','0058','0059'):
         path=next((ROOT/'database/migrations').glob(number+'_*.sql'))
         shutil.copyfile(path,migration_dir/path.name)
         if path.with_suffix('').is_dir():
@@ -152,6 +152,10 @@ def prepare(stage, out):
         if number in ('0056','0057','0058'):
             psql(path,out/(number+'-baseline.log'))
             execute([f"UPDATE schema_migration SET checksum='{checksum(path)}' WHERE migration_key='{path.stem}'"])
+    candidate=ROOT/'database/candidates/0060_fixed_subset_admission.sql'
+    candidate_dir=stage/'source/database/candidates'
+    candidate_dir.mkdir()
+    shutil.copyfile(candidate,candidate_dir/candidate.name)
     (stage/'source/database/tests').mkdir()
     shutil.copyfile(ROOT/'database/tests/041_universal_video_queue.sql',stage/'source/database/tests/041_universal_video_queue.sql')
     # Duplicate source across different closed legacy batches, mixed terminal states.
@@ -233,6 +237,29 @@ def main(argv=None):
             install=c.install_payload()['sql_statements']
             receipt=execute(install); write(out/'committed-install-receipt.json',receipt)
             installed=snapshot(); write(out/'after-install.json',installed)
+            # Execute the actual rollback body in an empty synthetic subset,
+            # inspect effective capabilities, then force transaction rollback.
+            rollback=(ROOT/'database/rollback/0060_fixed_subset_admission.sql').read_text()
+            rollback_parts=c.split_sql(rollback.replace('\\set ON_ERROR_STOP on\n','',1))
+            with connect(admin=True) as db:
+                db.execute('DELETE FROM video_queue.source_reservation')
+                for statement in rollback_parts:
+                    if c.bare(statement).upper() not in ('BEGIN','COMMIT'):
+                        db.execute(statement)
+                active=db.execute("""SELECT count(*) FROM pg_roles r CROSS JOIN pg_proc p
+                    JOIN pg_namespace n ON n.oid=p.pronamespace
+                    WHERE r.rolname IN ('video_subset_approver','video_subset_collector',
+                                        'video_subset_admitter','video_subset_worker_v2')
+                      AND n.nspname='video_queue'
+                      AND p.proname IN ('approve_subset','set_subset_runtime','revoke_subset_approval',
+                                        'observe_subset','admit_approved_subset','recover_subset_admission',
+                                        'claim_job','subset_claim_job','authorize_subset_attempt',
+                                        'heartbeat_subset_job','retry_subset_job','finish_subset_job')
+                      AND has_function_privilege(r.oid,p.oid,'EXECUTE')""").fetchone()[0]
+                assert active==0
+                db.rollback()
+            assert snapshot()==installed, 'rollback rehearsal changed installed state'
+            result['rollback_acl_matrix']='PASS_12_FUNCTIONS_FOUR_ROLES_TRANSACTION_RESTORED'
             for key in ('batch','job','job_event','sequence'):
                 assert installed[key]==before[key]
             assert sorted(len(x['historical_job_ids']) for x in installed['source_reservation'])==[1,2]
@@ -261,14 +288,24 @@ def main(argv=None):
             prior={x['migration_key']:x for x in installed['registry']}
             current={x['migration_key']:x for x in recovered['registry']}
             assert all(current[k]==v for k,v in prior.items()) and set(current)-set(prior)=={r.KEY}
-            # Ordinary migrator sees only the affected five baseline migrations;
-            # all are already applied. No unrelated full-preflight is performed.
+            # Ordinary migrator sees only four numbered migrations. The gated
+            # 0060 candidate and repair are audited external history, never run.
             env=os.environ.copy(); env.update(DATABASE_URL=OWNER,MIGRATIONS_DIR=(stage/'source/database/migrations').as_posix(),EXTERNAL_HISTORY_FILE=(ROOT/'database/external_migration_history.tsv').as_posix())
             rerun=command(['bash','database/scripts/migrate.sh'],out/'migrator-history.log',env=env)
-            assert rerun.stdout.count('Skipping already-applied migration ')==5
+            assert rerun.stdout.count('Skipping already-applied migration ')==4
+            assert 'Verified audited external migration history: 0060_fixed_subset_admission' in rerun.stdout
             assert 'Verified audited external migration history: '+r.KEY in rerun.stdout
             assert 'Applying migration ' not in rerun.stdout and 'Bootstrapping checksum' not in rerun.stdout
             assert snapshot()==recovered
+            original=snapshot()
+            execute(["UPDATE schema_migration SET checksum=checksum||chr(13) WHERE migration_key='0060_fixed_subset_admission'"],admin=True)
+            try:
+                bad=command(['bash','database/scripts/migrate.sh'],out/'migrator-trailing-cr-rejected.log',env=env,expected=False)
+                assert 'External migration checksum mismatch: 0060_fixed_subset_admission' in bad.stderr
+            finally:
+                execute([f"UPDATE schema_migration SET checksum='{c.PINNED['0060_fixed_subset_admission']}' WHERE migration_key='0060_fixed_subset_admission'"],admin=True)
+            assert snapshot()==original
+            result['negative_cases'].append(dict(name='migrator-trailing-data-cr',status='PASS',scope='database-history',exact_snapshot_equal=True))
             for number in ('041','042','043'):
                 path=next((ROOT/'database/tests').glob(number+'_*.sql'))
                 psql(path,out/(number+'-recovered.log'))
@@ -297,7 +334,7 @@ def main(argv=None):
             result.update(status='PASS_ISOLATED_CONNECTOR_RECOVERY',invariants={'041':'PASS_INSTALLED_AND_RECOVERED','042':'PASS_RECOVERED_LEGACY','043':'PASS_RECOVERED_SIZE_BOUNDARIES'},
                 old_rows_preserved=True,duplicate_reservations_preserved=True,sequence_preserved_by_recovery=True,
                 legacy_acl_owner_definition_equal=True,retained_0059=True,retained_tables=4,retained_nologin_roles=5,
-                migrator='FIVE_SKIPS_EXTERNAL_REPAIR_RECOGNIZED',temporary_grants_persist=False,
+                migrator='FOUR_SKIPS_EXTERNAL_CANDIDATE_AND_REPAIR_RECOGNIZED',temporary_grants_persist=False,
                 repair_sha256=digest((CODE/f'{r.KEY}.sql').read_bytes()))
     finally:
         write(out/'results.json',result)

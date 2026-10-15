@@ -118,7 +118,8 @@ def bare(statement):
 
 
 def migration_statements(key):
-    raw = (ROOT / "source/database/migrations" / (key + ".sql")).read_bytes()
+    directory = "candidates" if key == "0060_fixed_subset_admission" else "migrations"
+    raw = (ROOT / "source/database" / directory / (key + ".sql")).read_bytes()
     if hashlib.sha256(raw).hexdigest() != PINNED[key]:
         raise ValueError("migration checksum changed")
     text = raw.decode()

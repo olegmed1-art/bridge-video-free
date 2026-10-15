@@ -10,7 +10,7 @@ automatic review decision, publication, or canonical persistence in this path.
 
 The candidate is `universal_video/neon_worker.py`,
 `universal_video/subset_drive_observation.py`, `universal_video/subset_worker.py`,
-`database/migrations/0060_fixed_subset_admission.sql`, and
+`database/candidates/0060_fixed_subset_admission.sql`, and
 `database/candidates/reviewed_release_candidate.sql` with
 `reviewed_release_guard.sql`. The release SQL is a **new synchronous variant**:
 its reviewed receipt binds the consumed post-work `source_observation` and the
