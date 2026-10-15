@@ -1,0 +1,26 @@
+# Canon inclusion handoff: offline contract (2026-10-15)
+
+Status: local synthetic contract only. It neither activates knowledge nor authorizes production use. The test fixture's `teacher:diana` label is fictional; for the real lesson the teacher is Oleg and the student is Diana. Role identity must come from trusted source evidence, not this fixture or generated text.
+
+## Existing path and required handoffs
+
+| Boundary | Input and decision | Output to the next executor |
+| --- | --- | --- |
+| Video extraction → staging | `build_video_canon_candidate` accepts a source-bound learning candidate and exact teacher assertion. It preserves the source hash, file ID, transcript locator/digest, verified speaker, semantic scope, versioned rule, contradictions and test cases. Any unapproved source, WORLD evidence, ambiguity, or contradiction stays `EVIDENCE_ONLY`. | Immutable `video_school_canon_candidate`, `payload_hash`, content-addressed `stable_key`, `STAGING_ONLY`; no authority-table write. |
+| Staging → independent verification | The verifier must read the original source and source policy through a trusted channel. It must independently establish role, transcript and source binding, test cases, semantic/bridge reasoning, conflict scan, current Canon snapshot and rollback proof. Generated candidate fields and generated review rows are claims, not independent evidence. | The 16 result rows, their evidence hashes, verifier identities/assurance and snapshot hash required by `build_ai_canon_promotion`. A missing or stale check blocks. |
+| Verification → inclusion command | `build_ai_canon_promotion` seals the candidate payload and verification bundle and returns `AUTO_PROMOTION_READY` only for School primary evidence. Its idempotency key binds candidate and bundle hashes. This is an admission command, **not** activation. | Exact `verification_bundle_canonical_json`, SHA-256 and `promotion_command`, submitted only by the authorized Canon promoter to `bidding.activate_ai_verified_video_canon`. |
+| Guarded SQL → teacher read | The SQL function must re-read persisted candidate, source policy, registered verifier principals, test state, conflict set, activation scope and current Canon snapshot in one transaction. Only its committed receipt and the `ACTIVE_SCHOOL_CANON` read lane can establish inclusion. | Activation/version IDs and effective scope, or an explicit block. The teacher UI must never relabel a staging or WORLD row as Canon. |
+
+The current `bidding.video_canon_source_policy` binds source, file hash, teacher IDs, semantic scopes, system profile, learner level, policy version and authorization evidence. It does **not** carry an explicit separate publication/license-rights field. A real inclusion must therefore establish rights through a trusted owner decision and make its binding reviewable before using this route. The offline test cannot prove the policy row exists, that its attestors are genuine, that a real source was read, or that database activation happened.
+
+## Book and teacher executor contracts
+
+The book executor hands over `book-material-staging-v1` objects with source, edition, rendition hash, page/segment anchor, rights, and stable object ID. `build_world_publication` requires an independent review receipt and `INTERNAL_ALLOWED` rights, and emits reviewed **external** knowledge. `persist_book_world`/`publish_book_world` may store and make that WORLD version active; they report `canon_activation_performed=False`. No book importer, WORLD renderer, or teacher-facing read may call the video Canon promotion function or create `canon_activation` as a side effect.
+
+The teacher executor receives a lane plus version/source identifiers. WORLD answers must remain visibly WORLD with citations. School Canon answers require an active `canon_activation` row and matching `school_canon` version through `bridge_school_api.knowledge._version_query(AuthorityLane.ACTIVE_SCHOOL_CANON)`. If the source role, rights, review, version, activation or current scope cannot be read back, render a blocked state; do not infer Canon from a confident explanation or a staged record.
+
+## Replay and change handling
+
+An identical candidate and verification bundle yield the same sealed command and idempotency key. A changed rule version, source hash, source authorization, evidence receipt or Canon snapshot needs a new bound verification and must not reuse the old command. A contradiction blocks admission even if old checks passed. The database promotion function, not this offline test, is responsible for atomic deduplication and conflict resolution. Source changes must retain old provenance rather than silently overwrite it.
+
+`tests/test_canon_inclusion_offline_integration.py` exercises these boundaries with synthetic data. For an actual inclusion claim, the next safe check is an isolated database rehearsal with independently obtained source/role/rights evidence and a readback through the Canon lane. That requires separate readiness review; this change performs no migration, database call, publication or real activation.
