@@ -1,50 +1,28 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Vercel Ignored Build Step contract:
-#   exit 0 => skip deployment
-#   exit 1 => build/deploy
-#
-# Cost/reliability boundary: Git-connected preview/feature branches must never
-# consume a Vercel build. Vercel evaluates this script from the branch being
-# deployed, so make the branch decision before touching Git history: .vercelignore
-# may remove .git metadata and VERCEL_GIT_PREVIOUS_SHA can be unavailable.
+# Vercel Ignored Build Step: exit 0 skips the build; exit 1 runs it.
+# .vercelignore excludes .git, so the gate uses only Vercel-provided metadata
+# and an exact, non-secret production release approval.
 ref="${VERCEL_GIT_COMMIT_REF:-}"
-if [[ "$ref" != "main" ]]; then
-  echo "vercel-gate: non-main ref '${ref:-unknown}'; skip"
+environment="${VERCEL_ENV:-}"
+commit_sha="${VERCEL_GIT_COMMIT_SHA:-}"
+approved_sha="${VERCEL_APPROVED_RUNTIME_SHA:-}"
+
+if [[ "$ref" != "main" || "$environment" != "production" ]]; then
+  echo 'vercel-gate: not main production; skip'
   exit 0
 fi
 
-# On main, deploy only when the thin web/API runtime changed. Fail open for main
-# if the comparison base cannot be resolved so a legitimate production change
-# is not accidentally suppressed.
-base="${VERCEL_GIT_PREVIOUS_SHA:-}"
-if [[ -z "$base" ]]; then
-  if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
-    base="HEAD^"
-  else
-    echo "vercel-gate: main has no comparison base; build"
-    exit 1
-  fi
+if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ || ! "$approved_sha" =~ ^[0-9a-f]{40}$ ]]; then
+  echo 'vercel-gate: missing or invalid exact runtime approval; skip'
+  exit 0
 fi
 
-if ! git rev-parse --verify "$base^{commit}" >/dev/null 2>&1; then
-  echo "vercel-gate: main comparison base unavailable; build"
-  exit 1
+if [[ "$commit_sha" != "$approved_sha" ]]; then
+  echo 'vercel-gate: commit is not the approved runtime release; skip'
+  exit 0
 fi
 
-changed="$(git diff --name-only "$base" HEAD --)"
-printf '%s\n' "$changed"
-
-# Only the thin web/API runtime is deployable on Vercel. Compute, Research Lab,
-# DDS3, BEN, video workers, database migrations, docs, tests, and operational
-# workflows are intentionally not deployment triggers. The only Assistant Lab
-# files allowed to trigger Vercel are the three thin web contract wrappers.
-# The six database modules below are the staging reader's explicit import closure.
-if printf '%s\n' "$changed" | grep -Eq '^(app\.py$|bridge_school_api/|bridge_contracts/|database/(video_staging_read|video_staging_lineage|video_candidate_persistence|video_result_persistence|source_identity_persistence|runtime_worker_preflight)\.py$|assistant_lab/(__init__|contract|dispatch)\.py$|pyproject\.toml$|\.python-version$|\.vercelignore$|vercel\.json$|scripts/vercel_ignore_build\.sh$)'; then
-  echo "vercel-gate: main web/API runtime changed; build"
-  exit 1
-fi
-
-echo "vercel-gate: main has no web/API runtime change; skip"
-exit 0
+echo 'vercel-gate: exact runtime release approved; build'
+exit 1

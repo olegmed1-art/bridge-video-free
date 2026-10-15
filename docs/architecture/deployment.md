@@ -17,11 +17,15 @@ Vercel shows.
 
 ## Deployment rule
 
-A change to DDS3, BEN, Assistant Lab workers, video processing, research code, tests, docs, database migrations or operational workflows MUST NOT by itself create a Vercel deployment.
+A change to DDS3, BEN, Assistant Lab workers, video processing, research code, tests, docs, database migrations or operational workflows MUST NOT by itself create a Vercel production build.
 
-A Vercel build is relevant only when the thin web/API runtime changes. The repository enforces this with `scripts/vercel_ignore_build.sh` and `vercel.json`.
+A Vercel build is relevant only for an approved thin web/API runtime release. `vercel.json` keeps the existing Git connection to `main`; `scripts/vercel_ignore_build.sh` permits a build only when `VERCEL_ENV=production`, `VERCEL_GIT_COMMIT_REF=main`, and the Vercel commit SHA exactly matches the non-secret Production environment variable `VERCEL_APPROVED_RUNTIME_SHA`. Missing or invalid metadata and an unset approval skip the build. The gate does not require `.git`, which `.vercelignore` excludes.
 
-PRs that change the web/API runtime may receive Vercel Preview deployments. Changes merged to `main` may produce Vercel Production deployments. Compute rollouts are independent and must use their bounded compute-specific deployment path.
+Preview deployments are disabled. Every PR merge to `main`, including a web/API change, skips the full build until its exact merge SHA is approved. Compute rollouts are independent and must use their bounded compute-specific deployment path.
+
+For an explicit web/API release, the deploy owner must review the runtime diff and CI result, identify the exact commit on `main`, then set `VERCEL_APPROVED_RUNTIME_SHA` to that 40-character lowercase SHA in the Vercel project's Production environment. In the project's Deployments page, use **Create Deployment** with that exact Git SHA and select the `main` branch configuration if Vercel asks. Confirm the project's Ignore Build Step remains active, the gate reports approval, the resulting Production deployment has the intended SHA, and application acceptance checks pass. Remove the approval variable after the release. Do not substitute a later commit or bypass the gate if this exact-SHA path is unavailable; resolve that delivery limitation before release.
+
+The setting is reversible: removing `VERCEL_APPROVED_RUNTIME_SHA` makes subsequent builds skip again. Coordinate the one-time rollout of this gate and all pending PR merges with the deploy owner: verify this approval variable is unset before merging the gate, and no current PR will auto-deploy after it. The existing `main` Git connection still starts an Ignored Build Step for each merge; Vercel counts canceled builds toward deployment quotas and concurrent build slots. Agree on that usage before delivery. A rollback of an already published production deployment needs the normal production rollback decision and verification.
 
 ## Heavy compute rule
 
@@ -35,4 +39,4 @@ Automatic research output does not silently modify the teaching canon. Canonical
 
 ## Evolution path
 
-The current monorepo remains canonical. Logical boundaries should converge toward `apps/web`, `services/*` and shared contracts without forcing a premature multi-repository split. A controlled Release Controller may later replace direct platform Git deployment once the current path-aware deployment gate has been proven in production.
+The current monorepo remains canonical. Logical boundaries should converge toward `apps/web`, `services/*` and shared contracts without forcing a premature multi-repository split. A controlled Release Controller may later replace the current exact-SHA approval process after its release behavior has been proven in production.
