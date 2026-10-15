@@ -81,7 +81,8 @@ def source_locator(cur, school_id, source_id, citation, *, expected_stored=None)
     return row[0]
 
 
-def _source_pdf_bindings(cur, school_id, source_id, source, receipt, *, asset_id=None):
+def _source_pdf_bindings(cur, school_id, source_id, source, receipt, *, asset_id=None,
+                         immutable_loss_is_missing=False):
     """Inspect every PDF/embodies link, including links with a different SHA."""
     cur.execute("""SELECT a.asset_id,sa.relation_type,a.school_id,a.asset_type,a.mime_type,
         a.byte_size,a.checksum_algorithm,a.checksum_value,a.immutable_flag
@@ -89,6 +90,17 @@ def _source_pdf_bindings(cur, school_id, source_id, source, receipt, *, asset_id
         WHERE sa.source_id=%s AND (sa.relation_type='embodies' OR a.asset_type='pdf'
             OR a.mime_type='application/pdf') FOR SHARE OF a,sa""", (source_id,))
     rows = cur.fetchall()
+    # A consumer that previously held one exact link must treat loss of the
+    # immutable guarantee as a missing usable binding. Keep other mismatches
+    # (including extra links) classified as identity conflicts.
+    if immutable_loss_is_missing and len(rows) == 1:
+        row = rows[0]
+        if ((asset_id is None or str(row[0]) == asset_id)
+                and (row[1], str(row[2]), row[3], row[4], row[5], row[6], row[7]) == (
+                    "embodies", school_id, "pdf", "application/pdf",
+                    receipt["source_size_bytes"], "sha256", source["rendition_sha256"])
+                and row[8] is False):
+            raise ValueError("BOOK_SOURCE_ASSET_BINDING_REQUIRED")
     for row in rows:
         if ((asset_id is not None and str(row[0]) != asset_id) or
                 (row[1], str(row[2]), row[3], row[4], row[5],
@@ -103,7 +115,7 @@ def _source_pdf_bindings(cur, school_id, source_id, source, receipt, *, asset_id
 
 def require_source_asset(cur, school_id, source_id, source, receipt, *, asset_id=None):
     rows = _source_pdf_bindings(cur, school_id, source_id, source, receipt,
-                                asset_id=asset_id)
+                                asset_id=asset_id, immutable_loss_is_missing=True)
     if len(rows) != 1:
         raise ValueError("BOOK_SOURCE_ASSET_BINDING_REQUIRED")
     found = str(rows[0][0])

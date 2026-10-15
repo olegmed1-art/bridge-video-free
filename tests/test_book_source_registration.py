@@ -96,6 +96,19 @@ class BookSourceRegistrationTests(unittest.TestCase):
                          {"rendition_sha256": SHA_Y},
                          {"source_size_bytes": SIZE_Y}, asset_id=wanted), wanted)
 
+    def test_existing_link_loses_immutable_guarantee(self):
+        wanted = "22222222-2222-2222-2222-222222222222"
+        mutable_link = linked_pdf(wanted, SHA_Y)[:-1] + (False,)
+        cursor = LinkedAssetCursor([mutable_link])
+        with self.assertRaisesRegex(ValueError, "BOOK_SOURCE_ASSET_BINDING_REQUIRED"):
+            require_source_asset(cursor, SCHOOL, wanted,
+                                 {"rendition_sha256": SHA_Y},
+                                 {"source_size_bytes": SIZE_Y}, asset_id=wanted)
+        with self.assertRaisesRegex(ValueError, "BOOK_SOURCE_ASSET_CONFLICT"):
+            _source_pdf_bindings(cursor, SCHOOL, wanted,
+                                 {"rendition_sha256": SHA_Y},
+                                 {"source_size_bytes": SIZE_Y}, asset_id=wanted)
+
     def test_preinsert_check_rejects_old_pdf_without_writes(self):
         wanted = "22222222-2222-2222-2222-222222222222"
         older = "33333333-3333-3333-3333-333333333333"
