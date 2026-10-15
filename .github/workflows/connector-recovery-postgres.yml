@@ -2,6 +2,12 @@ name: Connector recovery disposable PostgreSQL 18
 on:
   push:
     branches: [codex/sync-subset-recovery-pg18-default-acl-20261014]
+  pull_request:
+    paths:
+      - '.github/workflows/connector-recovery-postgres.yml'
+      - '.gitattributes'
+      - 'database/**'
+      - 'tests/test_universal_video_connector_recovery.py'
 permissions:
   contents: read
 concurrency:
@@ -13,10 +19,15 @@ jobs:
       github.repository == 'olegmed1-art/bridge-video-free' &&
       github.event.repository.private == false &&
       github.actor == github.repository_owner &&
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/codex/sync-subset-recovery-pg18-default-acl-20261014' &&
-      github.event.created == true && github.event.deleted == false &&
-      github.event.forced == false && github.run_attempt == 1
+      github.run_attempt == 1 &&
+      ((github.event_name == 'push' &&
+        github.ref == 'refs/heads/codex/sync-subset-recovery-pg18-default-acl-20261014' &&
+        github.event.created == true && github.event.deleted == false &&
+        github.event.forced == false) ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.number == 2168 &&
+        github.event.pull_request.head.repo.full_name == 'olegmed1-art/bridge-video-free' &&
+        github.event.pull_request.head.ref == 'codex/sync-subset-recovery-pg18-default-acl-20261014'))
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
@@ -37,6 +48,7 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - name: Require one initial push
+        if: github.event_name == 'push'
         env:
           EVENT_BEFORE: ${{ github.event.before }}
           EVENT_AFTER: ${{ github.event.after }}
@@ -46,14 +58,21 @@ jobs:
           test "$EVENT_AFTER" = "$GITHUB_SHA"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 2
       - name: Verify source and create evidence directory
+        env:
+          EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = fb0d2bb3402dd55140749447b37ebbb8ca8a2343
+          test "$(git rev-parse HEAD)" = "$EXACT_HEAD"
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = e457b28ebe5e4acf2393411d38b662bacbced0c6
+          else
+            test "$(git cat-file -p HEAD | sed -n 's/^parent //p')" = fb0d2bb3402dd55140749447b37ebbb8ca8a2343
+          fi
           mkdir -p "$RUNNER_TEMP/connector-recovery-evidence" "$RUNNER_TEMP/connector-recovery-home"
           git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/connector-recovery-evidence/source.txt"
           git diff --name-only HEAD^ HEAD > "$RUNNER_TEMP/connector-recovery-evidence/changed-files.txt"
@@ -154,10 +173,10 @@ jobs:
           assert all(census[k] == 0 for k in ("other_clients", "advisory_locks", "prepared"))
           assert json.loads((out / "service-cleanup.json").read_text())["status"] == "PASS"
           suites = list(ET.parse(out / "unit.xml").getroot().iter("testsuite"))
-          assert sum(int(s.attrib["tests"]) for s in suites) == 23
+          assert sum(int(s.attrib["tests"]) for s in suites) == 25
           assert all(int(s.attrib[k]) == 0 for s in suites for k in ("errors", "failures", "skipped"))
           (out / "acceptance.json").write_text(json.dumps({"status":"PASS_ISOLATED_CONNECTOR_RECOVERY",
-              "negative_pass":16,"cleanup":"PASS","unit_pass":23,"production_execution_allowed":False})+"\n")
+              "negative_pass":16,"cleanup":"PASS","unit_pass":25,"production_execution_allowed":False})+"\n")
           PY
       - name: Preserve bounded evidence in logs without paid artifact storage
         if: always()
