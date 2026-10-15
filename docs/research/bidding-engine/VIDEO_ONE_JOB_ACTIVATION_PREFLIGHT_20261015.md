@@ -304,6 +304,34 @@ of interrupted claims. Any mismatch is a hold, not an invitation to run a
 compatibility probe against production. No IBM process is needed for this
 comparison.
 
+The local candidate now includes a manual, separate
+`python -m universal_video.private_one_job_approver <approval-binding.json>`
+entrypoint. Run it once **after** the exact `.ready` notice appears. Its
+protected JSON must have exactly: `expected_database`, `expected_host`,
+`expected_port`, `expected_approver_login`, `expected_worker_login`,
+`expected_batch_id`, `expected_job_id`, `expected_source_file_id`,
+`expected_attempt_count`, `admission_id`, `source_fingerprint`, `worker_key`,
+`claim_receipt_path`, `approval_signal_path`, `approver_dsn_file`, and
+`approval_reference`. The DSN file contains an **existing** restricted
+approver credential, is absolute and mode 0600 on Linux; no queue/worker DSN
+may be present in that process. The entrypoint checks the acknowledged claim,
+exact ready notice, readiness age (at most 60 seconds), target, separate
+principal, effective roles/ACL and server time; it asks 0061 for a 30-second
+approval. Only after the SQL COMMIT does it atomically create the seven-field
+signal. It has no retry or automatic approval. A missing signal after an
+uncertain COMMIT needs catalog readback, not a second approval call.
+
+`tests/manual_one_job_0061_0062_pg18.py` is a runnable local rehearsal; it
+requires an already available PG18 `bin` directory and no downloaded
+dependencies. It creates a fresh loopback cluster beneath this checkout,
+installs unchanged migrations 0001–0060 and the exact proposed 0061/0062
+files, uses synthetic restricted logins and invented source metadata, then
+stops and removes its cluster. It exercises claim, prework observation,
+approval, private stage/read, postwork observation, finish and final owner
+readback, plus role/token/expiry/replay and lost claim-ACK cases. This proves
+the candidate against a disposable PostgreSQL, not Drive, media processing,
+production ownership/ACL deployment, or a currently deployed resident.
+
 ## Conditional ACL delta for separate review — do not execute now
 
 This is the narrow runtime grant delta **after** authorized installation of
