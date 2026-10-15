@@ -208,10 +208,12 @@ def _failure(exc: BaseException) -> tuple[str, str]:
 
 
 class _Heartbeat:
-    def __init__(self, database_url: str, claim: Mapping[str, Any], worker_key: str) -> None:
+    def __init__(self, database_url: str, claim: Mapping[str, Any], worker_key: str,
+                 subset_adapter: Any = None) -> None:
         self.database_url = database_url
         self.claim = claim
         self.worker_key = worker_key
+        self.subset_adapter = subset_adapter
         self.stop = threading.Event()
         self.error: BaseException | None = None
         self.thread = threading.Thread(target=self._run, name="video-queue-heartbeat", daemon=True)
@@ -219,7 +221,9 @@ class _Heartbeat:
     def _run(self) -> None:
         while not self.stop.wait(300):
             try:
-                heartbeat_job(
+                heartbeat = (self.subset_adapter.heartbeat_job
+                             if self.subset_adapter is not None else heartbeat_job)
+                heartbeat(
                     self.database_url,
                     job_id=str(self.claim["job_id"]),
                     lease_token=str(self.claim["lease_token"]),
@@ -245,16 +249,21 @@ def process_claim(
     worker_key: str,
     *,
     processor: Callable[[Mapping[str, Any]], Mapping[str, Any]] = stable_review_processor,
+    subset_adapter: Any = None,
 ) -> dict[str, Any]:
     output = _base_output(claim)
     outcome = "REVIEW_READY"
     error_code: str | None = None
     initial_source: dict[str, Any] | None = None
+    prework_observation_id: str | None = None
 
-    with _Heartbeat(database_url, claim, worker_key) as heartbeat:
+    with _Heartbeat(database_url, claim, worker_key, subset_adapter) as heartbeat:
         with _processing_timeout():
             try:
                 initial_source = verify_claimed_source(claim, access_token())
+                if subset_adapter is not None:
+                    prework_observation_id = subset_adapter.before_work(
+                        database_url, claim, worker_key)
                 output.update(dict(processor(claim)))
                 output.update(_base_output(claim))
             except Exception as exc:
@@ -278,7 +287,9 @@ def process_claim(
                 raise NeonVideoWorkerError("VIDEO_QUEUE_HEARTBEAT_LOST") from heartbeat.error
 
             if outcome == "FAILED":
-                return retry_job(
+                retry = (subset_adapter.retry_job if subset_adapter is not None
+                         else retry_job)
+                return retry(
                     database_url,
                     job_id=str(claim["job_id"]),
                     lease_token=str(claim["lease_token"]),
@@ -287,15 +298,17 @@ def process_claim(
                     max_attempts=3,
                     base_delay_seconds=60,
                 )
-            return finish_job(
-                database_url,
-                job_id=str(claim["job_id"]),
-                lease_token=str(claim["lease_token"]),
-                worker_key=worker_key,
-                outcome=outcome,
-                output=output,
-                error_code=error_code,
-            )
+            if subset_adapter is not None:
+                if prework_observation_id is None:
+                    raise NeonVideoWorkerError("VIDEO_SUBSET_PREWORK_OBSERVATION_MISSING")
+                return subset_adapter.finish_job(
+                    database_url, claim, worker_key,
+                    before_work_observation_id=prework_observation_id,
+                    outcome=outcome, output=output, error_code=error_code)
+            return finish_job(database_url, job_id=str(claim["job_id"]),
+                              lease_token=str(claim["lease_token"]),
+                              worker_key=worker_key, outcome=outcome,
+                              output=output, error_code=error_code)
 
 
 def process_one_neon(
@@ -308,16 +321,38 @@ def process_one_neon(
         validate_video_runtime()
         dsn = database_url or database_url_from_env()
         key = worker_key or worker_key_from_env()
-        claim = claim_job(
-            dsn,
-            key,
+        subset_adapter = None
+        subset_config = None
+        from .subset_drive_observation import (
+            DriveSubsetObservationProvider, SubsetDriveConfig,
+            restricted_identity, subset_sync_enabled,
+        )
+        if subset_sync_enabled():
+            from .subset_worker import SubsetWorkerAdapter
+
+            subset_config = SubsetDriveConfig.from_env()
+            subset_config.validate_target(dsn)
+            worker_login = restricted_identity(dsn, "video_subset_worker_v2")
+            collector_login = restricted_identity(
+                subset_config.collector_dsn, "video_subset_collector")
+            if worker_login == collector_login:
+                raise NeonVideoWorkerError("VIDEO_SUBSET_SEPARATE_IDENTITIES_REQUIRED")
+            subset_adapter = SubsetWorkerAdapter(
+                DriveSubsetObservationProvider(subset_config, key))
+        claim_options = dict(
             lease_seconds=900,
             processing_profile=APPROVED_PROFILE,
             algorithm_revision=APPROVED_REVISION,
         )
+        if subset_config is not None:
+            claim_options["batch_id"] = subset_config.batch_id
+        claim = claim_job(dsn, key, **claim_options)
         if claim is None:
             return False
-        process_claim(dsn, claim, key, processor=processor)
+        if subset_config is not None and claim["batch_id"] != subset_config.batch_id:
+            raise NeonVideoWorkerError("VIDEO_SUBSET_BATCH_MISMATCH")
+        process_claim(dsn, claim, key, processor=processor,
+                      subset_adapter=subset_adapter)
         return True
 
 
