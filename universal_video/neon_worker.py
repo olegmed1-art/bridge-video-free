@@ -14,6 +14,7 @@ from bridge_worker_3_1_free import stable_job_id
 from .drive_adapter import access_token, file_metadata
 from .route_receipt_v2 import discover_route_receipt
 from .queue_staging_handoff import ExactLeaseStagingHandoff
+from .private_result_handoff import PrivateResultStagingHandoff
 from .runtime_preflight import validate_video_runtime
 from .terminal_evidence_v2 import (
     build_terminal_evidence,
@@ -251,11 +252,17 @@ def process_claim(
     *,
     processor: Callable[[Mapping[str, Any]], Mapping[str, Any]] = stable_review_processor,
     subset_adapter: Any = None,
-    staging_handoff: ExactLeaseStagingHandoff | None = None,
+    staging_handoff: ExactLeaseStagingHandoff | PrivateResultStagingHandoff | None = None,
 ) -> dict[str, Any]:
-    if staging_handoff is not None and not isinstance(staging_handoff, ExactLeaseStagingHandoff):
+    if staging_handoff is not None and not isinstance(
+            staging_handoff, (ExactLeaseStagingHandoff, PrivateResultStagingHandoff)):
         raise NeonVideoWorkerError("VIDEO_STAGING_EXACT_LEASE_AUTHORIZATION_REQUIRED")
-    if staging_handoff is not None and staging_handoff.writer_dsn == database_url:
+    private_handoff = isinstance(staging_handoff, PrivateResultStagingHandoff)
+    if private_handoff and not callable(getattr(subset_adapter, 'finish_private_job', None)):
+        raise NeonVideoWorkerError("VIDEO_PRIVATE_RESULT_SUBSET_ADAPTER_REQUIRED")
+    if private_handoff and os.getenv('BRIDGE_WORKER_DATABASE_URL', '').strip():
+        raise NeonVideoWorkerError("VIDEO_PRIVATE_RESULT_BROAD_WRITER_DSN_FORBIDDEN")
+    if isinstance(staging_handoff, ExactLeaseStagingHandoff) and staging_handoff.writer_dsn == database_url:
         raise NeonVideoWorkerError("VIDEO_STAGING_SEPARATE_WRITER_REQUIRED")
     output = _base_output(claim)
     outcome = "REVIEW_READY"
@@ -274,6 +281,7 @@ def process_claim(
                 output.update(_base_output(claim))
                 # Processor output is not proof of a committed staging receipt.
                 output.pop("knowledge_staging", None)
+                output.pop("private_staging", None)
             except Exception as exc:
                 outcome, error_code = _failure(exc)
                 output["error_type"] = type(exc).__name__
@@ -288,8 +296,13 @@ def process_claim(
                     if initial_source is None or final_source != initial_source:
                         raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_CHANGED_DURING_PROCESSING")
                     if staging_handoff is not None:
-                        output["knowledge_staging"] = staging_handoff(
-                            claim, worker_key, access_token())
+                        staged = staging_handoff(claim, worker_key, access_token())
+                        if private_handoff:
+                            output["private_staging"] = staged
+                            output["result_mode"] = "PRIVATE_RESULT_STAGING_ONLY"
+                            output["database_persistence_allowed"] = True
+                        else:
+                            output["knowledge_staging"] = staged
                         post_staging_source = verify_claimed_source(claim, access_token())
                         if post_staging_source != initial_source:
                             raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_CHANGED_DURING_STAGING")
@@ -315,6 +328,14 @@ def process_claim(
             if subset_adapter is not None:
                 if prework_observation_id is None:
                     raise NeonVideoWorkerError("VIDEO_SUBSET_PREWORK_OBSERVATION_MISSING")
+                if private_handoff and outcome == "REVIEW_READY":
+                    return subset_adapter.finish_private_job(
+                        database_url, claim, worker_key,
+                        before_work_observation_id=prework_observation_id,
+                        admission_id=staging_handoff.admission_id,
+                        source_fingerprint=staging_handoff.source_fingerprint,
+                        receipt_id=output["private_staging"]["receipt_id"],
+                        outcome=outcome, output=output)
                 return subset_adapter.finish_job(
                     database_url, claim, worker_key,
                     before_work_observation_id=prework_observation_id,

@@ -163,3 +163,40 @@ class SubsetWorkerAdapter:
             # COMMIT may already have succeeded. Never resubmit this transition here.
             raise SubsetWorkerError("VIDEO_SUBSET_FINISH_RESPONSE_INVALID")
         return row
+
+    def finish_private_job(
+        self, database_url: str, claim: Mapping[str, Any], worker_key: str, *,
+        before_work_observation_id: str, admission_id: str,
+        source_fingerprint: str, receipt_id: str, outcome: str,
+        output: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Versioned private-result finish; never call the public-candidate path."""
+        if outcome != "REVIEW_READY":
+            raise SubsetWorkerError("VIDEO_PRIVATE_FINISH_OUTCOME_INVALID")
+        try:
+            admission_id = str(UUID(admission_id))
+            receipt_id = str(UUID(receipt_id))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise SubsetWorkerError("VIDEO_PRIVATE_FINISH_ID_INVALID") from exc
+        if (not isinstance(source_fingerprint, str) or len(source_fingerprint) != 64
+                or any(c not in "0123456789abcdef" for c in source_fingerprint)):
+            raise SubsetWorkerError("VIDEO_PRIVATE_FINISH_SOURCE_INVALID")
+        observation_id = self._observe(claim, worker_key, "before_finish")
+        if UUID(observation_id) == UUID(before_work_observation_id):
+            raise SubsetWorkerError("VIDEO_SUBSET_DISTINCT_OBSERVATION_REQUIRED")
+        row = _execute(
+            database_url,
+            "SELECT * FROM video_queue.finish_one_job_private_result_v1("
+            "%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)",
+            (admission_id, str(claim["job_id"]), str(claim["lease_token"]),
+             worker_key, claim["attempt_count"], source_fingerprint, receipt_id,
+             observation_id, json.dumps(dict(output), allow_nan=False)),
+        )
+        if (set(row) != {"job_status", "batch_status", "released_jobs"}
+                or row["job_status"] != "REVIEW_READY"
+                or row["batch_status"] not in {"RUNNING", "REVIEW"}
+                or type(row["released_jobs"]) is not int
+                or row["released_jobs"] != 0):
+            # COMMIT may already have succeeded; never resubmit automatically.
+            raise SubsetWorkerError("VIDEO_PRIVATE_FINISH_RESPONSE_INVALID")
+        return row

@@ -1,5 +1,10 @@
 # One-job action-time ACL proposal, 2026-10-15
 
+This describes the earlier **public candidate** route. For a strict
+no-broad-DML one-job canary, use the separate private-result candidate and
+review-only ACL delta in `VIDEO_ONE_JOB_PRIVATE_RESULT_GATE_20261015.md`.
+Do not combine the public-writer grants below with that strict route.
+
 **Review-only; no SQL below has been applied.** The 0061 SQL is still outside
 the migration runner. This delta assumes an authorized installer with ownership
 of the new objects and `video_queue.job`. It creates no login, credential,
