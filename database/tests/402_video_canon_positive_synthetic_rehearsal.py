@@ -1,11 +1,12 @@
 """Disposable-only positive 0329 rehearsal with real SQL role boundaries.
 
-Requires CANON_SYNTHETIC_PG_DSN pointing to a fresh local database named
-canon_positive_* and CANON_SYNTHETIC_DB_ID matching that database's explicit
-disposable marker. All inputs are fictional. Never use this on a shared DB.
+Requires a loopback maintenance-DB connection and an explicit disposable schema
+template. The runner creates its own unique database before staging anything.
+All inputs are fictional. Never use this on a shared PostgreSQL cluster.
 """
 import os
 import re
+import secrets
 
 import psycopg
 from psycopg import sql
@@ -23,12 +24,13 @@ from tests.fixtures.synthetic_video_canon_positive import (
 )
 
 DISPOSABLE_COMMENT_PREFIX = "canon-synthetic-disposable-v1:"
+TEMPLATE_COMMENT = "canon-synthetic-schema-template-v1"
 
 
 def _validate_disposable_target(args: dict, database_id: str, server_addr: str,
                                 database_name: str, comment: str | None,
-                                row_counts: tuple[int, ...]) -> None:
-    """Fail before any write unless this is an explicitly marked empty test DB."""
+                                changed_tables: list[str], rehearsal_roles: int) -> None:
+    """Fail before any target write unless it still matches the cloned template."""
     if (args.get("host") != "127.0.0.1" or args.get("hostaddr") not in (None, "127.0.0.1")
             or server_addr != "127.0.0.1" or not database_name.startswith("canon_positive_")
             or database_name != args.get("dbname")):
@@ -37,8 +39,60 @@ def _validate_disposable_target(args: dict, database_id: str, server_addr: str,
         raise ValueError("a 32-character disposable database ID is required")
     if comment != DISPOSABLE_COMMENT_PREFIX + database_id:
         raise ValueError("database lacks the matching disposable identity marker")
-    if any(row_counts):
-        raise ValueError("disposable rehearsal database is not empty")
+    if changed_tables or rehearsal_roles:
+        raise ValueError("disposable rehearsal database differs from template: " +
+                         ", ".join(changed_tables or ["rehearsal roles exist"]))
+
+
+def _user_table_fingerprints(conn: psycopg.Connection) -> dict[str, tuple[int, str]]:
+    """Include every non-system table, partition and materialized view, even seeds."""
+    tables = conn.execute(
+        "SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+        "WHERE c.relkind IN ('r','p','m') AND n.nspname NOT LIKE 'pg_%' "
+        "AND n.nspname <> 'information_schema' ORDER BY n.nspname,c.relname"
+    ).fetchall()
+    fingerprints = {}
+    for schema, table in tables:
+        key = schema + "." + table
+        fingerprints[key] = conn.execute(sql.SQL(
+            "SELECT count(*), md5(coalesce(string_agg(md5(to_jsonb(t)::text), '' "
+            "ORDER BY md5(to_jsonb(t)::text)), '')) FROM {} AS t"
+        ).format(sql.Identifier(schema, table))).fetchone()
+    return fingerprints
+
+
+def _create_disposable_database(admin_dsn: str, template_name: str) -> tuple[str, str, dict]:
+    """Clone only an explicitly marked local schema template to a new random DB."""
+    args = conninfo_to_dict(admin_dsn)
+    if (args.get("host") != "127.0.0.1" or args.get("hostaddr") not in (None, "127.0.0.1")
+            or args.get("dbname") != "postgres"
+            or not re.fullmatch(r"canon_schema_template_[a-z0-9_]+", template_name)):
+        raise ValueError("loopback postgres and canon_schema_template_* required")
+    database_id = secrets.token_hex(16)
+    database_name = "canon_positive_" + database_id
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        address = admin.execute("SELECT host(inet_server_addr())").fetchone()[0]
+        if address != "127.0.0.1":
+            raise ValueError("actual PostgreSQL server is not loopback")
+        comment = admin.execute(
+            "SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname=%s",
+            (template_name,),
+        ).fetchone()
+        if comment is None or comment[0] != TEMPLATE_COMMENT:
+            raise ValueError("schema template lacks disposable identity marker")
+    template_args = {**args, "dbname": template_name}
+    with psycopg.connect(make_conninfo(**template_args)) as template:
+        template.execute("SET TRANSACTION READ ONLY")
+        baseline = _user_table_fingerprints(template)
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE DATABASE {} WITH TEMPLATE {}").format(
+            sql.Identifier(database_name), sql.Identifier(template_name)))
+        admin.execute(sql.SQL("REVOKE CONNECT ON DATABASE {} FROM PUBLIC").format(
+            sql.Identifier(database_name)))
+        admin.execute(sql.SQL("COMMENT ON DATABASE {} IS {}").format(
+            sql.Identifier(database_name), sql.Literal(DISPOSABLE_COMMENT_PREFIX + database_id)))
+    args["dbname"] = database_name
+    return make_conninfo(**args), database_id, baseline
 
 
 def _connect_as(owner_dsn: str, user: str):
@@ -47,27 +101,26 @@ def _connect_as(owner_dsn: str, user: str):
     return psycopg.connect(make_conninfo(**args))
 
 
-def rehearse(owner_dsn: str, database_id: str) -> dict:
+def _rehearse_created(owner_dsn: str, database_id: str, baseline: dict) -> dict:
     args = conninfo_to_dict(owner_dsn)
     if not re.fullmatch(r"[0-9a-f]{32}", database_id):
         raise ValueError("a 32-character disposable database ID is required")
     with psycopg.connect(owner_dsn) as owner:
         owner.execute("SET TRANSACTION READ ONLY")
+        if owner.execute("SHOW transaction_read_only").fetchone()[0] != "on":
+            raise AssertionError("preflight transaction is not read-only")
         server_addr, database_name, comment = owner.execute(
-            "SELECT inet_server_addr()::text, current_database(), "
+            "SELECT host(inet_server_addr()), current_database(), "
             "shobj_description(oid, 'pg_database') FROM pg_database WHERE datname=current_database()"
         ).fetchone()
-        row_counts = owner.execute(
-            "SELECT (SELECT count(*) FROM public.school), (SELECT count(*) FROM public.source), "
-            "(SELECT count(*) FROM public.analysis_candidate), "
-            "(SELECT count(*) FROM public.knowledge_item), "
-            "(SELECT count(*) FROM public.knowledge_version), "
-            "(SELECT count(*) FROM bidding.rule), "
-            "(SELECT count(*) FROM bidding.video_canon_ai_verification), "
-            "(SELECT count(*) FROM pg_roles WHERE rolname LIKE 'canon_rehearsal_%_login')"
-        ).fetchone()
+        current = _user_table_fingerprints(owner)
+        changed_tables = sorted(key for key in baseline.keys() | current.keys()
+                                if baseline.get(key) != current.get(key))
+        rehearsal_roles = owner.execute(
+            "SELECT count(*) FROM pg_roles WHERE rolname LIKE 'canon_rehearsal_%_login'"
+        ).fetchone()[0]
         _validate_disposable_target(args, database_id, server_addr, database_name,
-                                    comment, row_counts)
+                                    comment, changed_tables, rehearsal_roles)
         migrations = owner.execute(
             "SELECT migration_key FROM public.schema_migration WHERE migration_key IN "
             "('0329_workflow_video_canon_ai_promotion','0402_video_canon_firewall_unicode_boundary')"
@@ -77,13 +130,19 @@ def rehearse(owner_dsn: str, database_id: str) -> dict:
             "0402_video_canon_firewall_unicode_boundary",
         }:
             raise ValueError("required migrations are not installed")
-
+    # The read-only preflight transaction is closed. This new connection starts a
+    # separate write transaction on the database created in this process.
+    with psycopg.connect(owner_dsn) as owner:
+        if owner.execute("SHOW transaction_read_only").fetchone()[0] != "off":
+            raise AssertionError("write transaction remains read-only")
         fixture = build_synthetic_positive_rehearsal(
             "c" * 64, "b" * 64, SYNTHETIC_LOGIN_PRINCIPALS
         )
         ids = fixture["ids"]
         for kind, login in SYNTHETIC_LOGIN_PRINCIPALS.items():
             owner.execute(sql.SQL("CREATE ROLE {} LOGIN NOINHERIT").format(sql.Identifier(login)))
+            owner.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                sql.Identifier(args["dbname"]), sql.Identifier(login)))
             owner.execute(sql.SQL("GRANT {} TO {}").format(
                 sql.Identifier(CAPABILITIES[kind]), sql.Identifier(login)
             ))
@@ -217,9 +276,19 @@ def rehearse(owner_dsn: str, database_id: str) -> dict:
             "canon_activation_id": activation_id, "readback_rows": len(rows), "replay_same_receipt": True}
 
 
+def rehearse(admin_dsn: str, template_name: str) -> dict:
+    owner_dsn, database_id, baseline = _create_disposable_database(admin_dsn, template_name)
+    try:
+        result = _rehearse_created(owner_dsn, database_id, baseline)
+    except Exception as exc:
+        raise RuntimeError("disposable rehearsal retained for inspection: " +
+                           conninfo_to_dict(owner_dsn)["dbname"]) from exc
+    return {**result, "disposable_database": conninfo_to_dict(owner_dsn)["dbname"]}
+
+
 if __name__ == "__main__":
-    dsn = os.environ.get("CANON_SYNTHETIC_PG_DSN", "")
+    dsn = os.environ.get("CANON_SYNTHETIC_PG_ADMIN_DSN", "")
     if not dsn:
-        raise SystemExit("CANON_SYNTHETIC_PG_DSN is required")
-    database_id = os.environ.get("CANON_SYNTHETIC_DB_ID", "")
-    print(rehearse(dsn, database_id))
+        raise SystemExit("CANON_SYNTHETIC_PG_ADMIN_DSN is required")
+    template_name = os.environ.get("CANON_SYNTHETIC_PG_TEMPLATE", "")
+    print(rehearse(dsn, template_name))
