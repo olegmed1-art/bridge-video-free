@@ -269,6 +269,8 @@ class ActiveQueuePostgresTests(unittest.TestCase):
                          ('sql-0374-' + self.prefix + 'paused', mailbox))
             conn.execute("UPDATE autopilot.project_planner_state SET last_decision_code='PROJECT_DONE_WITH_PAUSED_BACKLOG' WHERE singleton")
             self.assertEqual(conn.execute(query).fetchone()[0], 'warning')
+            conn.execute("UPDATE autopilot.project_work_item SET state='DONE',completed_at=now() WHERE state<>'PAUSED'")
+            self.assertEqual(conn.execute(query).fetchone(), ('warning', '0'))
 
     def run_script(self, conn, relative_path):
         # Only reached after the exact disposable CI identity gate. psycopg's
