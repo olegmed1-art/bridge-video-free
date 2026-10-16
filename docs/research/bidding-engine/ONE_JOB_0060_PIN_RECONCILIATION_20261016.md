@@ -63,3 +63,27 @@ representative unauthorized and intended caller roles. Run it only when the
 current external preflight block is resolved. No new local test is added now:
 the current pinned 0060 intentionally has no default ACL change, so such an
 assertion would test a source that this branch does not select.
+
+## Selected integration after PR #2168 merged
+
+The preceding comparison and rehearsal statement describe the earlier PR #2175
+head `81b8e112154e9111d2df61071b7d49cef67d6852`. Its successful PG18 run tested
+only the `27932f:` variant.
+
+PR #2168 merged as current main
+`8f823a51d43cdba3e161085292ebbcf3dd4be7f3`. The combined integration now selects
+exactly one file, `database/candidates/0060_fixed_subset_admission.sql`, with
+82,027 bytes and SHA-256
+`cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc`.
+The approved inventory pin is updated to those verified bytes. Baseline
+0001-0059 and supporting component pins are unchanged.
+
+The ACL regression is enabled only for that exact candidate. It resolves all
+35 pinned regprocedure signatures, requires `prokind='f'`, rejects extra
+overloads and checks owner, PUBLIC access, and capability/login role matrices
+before and after the limited synthetic grants. Transactional probe functions
+test default ACL application and the non-retroactive ownership-transfer
+control. The pure local unit tests run in the existing PG18 job before its
+single synthetic rehearsal. The new exact head requires its own successful
+run; the earlier green result is not evidence for this combined candidate.
+Current run evidence belongs in PR #2175 and its exact-head CI logs.

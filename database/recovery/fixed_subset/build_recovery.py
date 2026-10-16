@@ -24,6 +24,12 @@ def quote(value):
     return "'" + value.replace("'", "''") + "'"
 
 
+def read_claim_exact(path):
+    # Path.read_text() performs universal-newline conversion on Windows.
+    with path.open("r", encoding="utf-8", newline="") as file:
+        return file.read()
+
+
 def acl(value):
     return sorted(value.strip("{}").split(",")) if value else []
 
@@ -134,6 +140,11 @@ def data_digest_sql():
 
 
 def render_recovery(baseline, claim):
+    # pg_get_functiondef() uses server-platform newlines. Keep the catalog's
+    # original MD5 for SQL checks, but render the pinned artifact with LF bytes.
+    claim = claim.replace("\r\n", "\n")
+    if "\r" in claim:
+        raise ValueError("unexpected claim definition line endings")
     statements = []
     for op in operations(baseline):
         kind = op["kind"]
@@ -181,7 +192,7 @@ END $disable$;""")
 def main():
     catalog = json.loads((ROOT / "catalog-baseline.json").read_text(encoding="utf-8"))
     captured = json.loads((ROOT / "claim-baseline.json").read_text(encoding="utf-8"))
-    claim = (ROOT / "restore_claim_job.sql").read_text(encoding="utf-8")
+    claim = read_claim_exact(ROOT / "restore_claim_job.sql")
     assert claim == captured["claim_definition"]
     assert hashlib.md5(claim.encode()).hexdigest() == captured["claim_definition_md5"]
     baseline = projection(catalog)

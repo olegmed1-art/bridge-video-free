@@ -241,7 +241,7 @@
   ],
   "candidate_0060": {
     "name": "0060_fixed_subset_admission.sql",
-    "sha256": "27932f2b5f22f383d9f84341c0ae6e88dc346c7940ec92490edc0a3d37358dfe"
+    "sha256": "cfd5bf6088761dcc1d38a4d0febb6fb24f3d4f396fd67ca08568ff44994c44bc"
   },
   "baseline_components": [
     {

@@ -60,15 +60,20 @@ class SubsetDriveConfig:
                    expected_host, expected_database)
 
     def validate_target(self, worker_dsn: str) -> None:
+        # libpq can take these from process defaults even when the DSN names
+        # the expected host. Never let an implicit address/service redirect it.
+        if "PGHOSTADDR" in os.environ or "PGSERVICE" in os.environ:
+            raise SubsetDriveObservationError("VIDEO_SUBSET_TARGET_MISMATCH")
         for dsn in (worker_dsn, self.collector_dsn):
             try:
                 parts = conninfo_to_dict(dsn)
             except psycopg.ProgrammingError as exc:
                 raise SubsetDriveObservationError("VIDEO_SUBSET_TARGET_MISMATCH") from exc
             host = (parts.get("host") or "").lower()
-            if (host != self.expected_host
+            if ("hostaddr" in parts or "service" in parts
+                    or host != self.expected_host
                     or parts.get("dbname") != self.expected_database
-                    or str(parts.get("port") or "5432") != "5432"):
+                    or parts.get("port") != "5432"):
                 raise SubsetDriveObservationError("VIDEO_SUBSET_TARGET_MISMATCH")
             if host not in ("localhost", "127.0.0.1", "::1") and (
                 parts.get("sslmode") not in ("require", "verify-full")
