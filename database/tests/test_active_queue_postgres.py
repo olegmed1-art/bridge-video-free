@@ -284,6 +284,12 @@ class ActiveQueuePostgresTests(unittest.TestCase):
             self.assertNotIn(marker, after)
             self.assertIn('ACTIVE_QUEUE_0373', after)
             self.assertIn('autopilot.role_dispatch_queue_available', after)
+            # A normal migration runner can reinstall retired 0355. Its second
+            # retirement must accept an already-unfenced 0373 snapshot.
+            self.run_script(conn, 'database/migrations/0355_autopilot_light_v3_compatibility_fence.sql')
+            self.assertIn(marker, conn.execute(definition_query).fetchone()[0])
+            self.run_script(conn, 'database/rollbacks/0355_autopilot_light_v3_compatibility_fence.sql')
+            self.assertEqual(conn.execute(definition_query).fetchone()[0], after)
             conn.execute("UPDATE autopilot.role_dispatch_mailbox_registry SET max_dispatches=1 WHERE lifecycle='ACTIVE'")
             did = self.fixture(conn)
             mailbox = conn.execute("SELECT mailbox_pr FROM autopilot.role_dispatch_mailbox_registry WHERE lifecycle='ACTIVE'").fetchone()[0]

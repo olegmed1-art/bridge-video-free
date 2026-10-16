@@ -31,6 +31,7 @@ DO $restore$
 DECLARE
     original text;
     baseline text;
+    baseline_fence_count integer;
     fence text := $fence$           AND NOT ( -- LIGHT_RUNTIME_MAILBOX_V3_COMPATIBILITY_FENCE_V1
                p_worker_id = 'oracle-autopilot-light-1'
                AND t.goal_type IN (
@@ -60,7 +61,12 @@ BEGIN
                WHERE migration_key='0373_autopilot_active_dispatch_capacity') THEN
         SELECT definition INTO STRICT baseline FROM autopilot.migration_0373_definition_backup
          WHERE object_key='autopilot.claim_next_task(text,integer)';
-        IF (length(baseline)-length(replace(baseline,fence,'')))/length(fence)<>1 THEN
+        baseline_fence_count := (length(baseline)-length(replace(baseline,fence,'')))/length(fence);
+        -- Reinstalling 0355 after a retirement fences the current function but
+        -- correctly leaves this older rollback snapshot unfenced.
+        IF baseline_fence_count NOT IN (0,1)
+           OR (baseline_fence_count=0 AND position(
+               'LIGHT_RUNTIME_MAILBOX_V3_COMPATIBILITY_FENCE_V1' IN baseline)>0) THEN
             RAISE EXCEPTION 'AUTOPILOT_LIGHT_V3_FENCE_RETIREMENT_BACKUP_DRIFT';
         END IF;
         UPDATE autopilot.migration_0373_definition_backup
