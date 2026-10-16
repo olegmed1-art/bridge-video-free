@@ -32,6 +32,7 @@ DECLARE
     original text;
     baseline text;
     baseline_fence_count integer;
+    marker text := 'LIGHT_RUNTIME_MAILBOX_V3_COMPATIBILITY_FENCE_V1';
     fence text := $fence$           AND NOT ( -- LIGHT_RUNTIME_MAILBOX_V3_COMPATIBILITY_FENCE_V1
                p_worker_id = 'oracle-autopilot-light-1'
                AND t.goal_type IN (
@@ -50,7 +51,8 @@ BEGIN
     -- Retire only this predicate. Restoring the pre-0355 function would erase
     -- later claim guards (including 0373) while leaving them recorded as applied.
     original := pg_get_functiondef('autopilot.claim_next_task(text,integer)'::regprocedure);
-    IF (length(original)-length(replace(original,fence,'')))/length(fence)<>1 THEN
+    IF (length(original)-length(replace(original,fence,'')))/length(fence)<>1
+       OR (length(original)-length(replace(original,marker,'')))/length(marker)<>1 THEN
         RAISE EXCEPTION 'AUTOPILOT_LIGHT_V3_FENCE_RETIREMENT_SOURCE_DRIFT';
     END IF;
     EXECUTE replace(original,fence,'');
@@ -65,8 +67,7 @@ BEGIN
         -- Reinstalling 0355 after a retirement fences the current function but
         -- correctly leaves this older rollback snapshot unfenced.
         IF baseline_fence_count NOT IN (0,1)
-           OR (baseline_fence_count=0 AND position(
-               'LIGHT_RUNTIME_MAILBOX_V3_COMPATIBILITY_FENCE_V1' IN baseline)>0) THEN
+           OR (length(baseline)-length(replace(baseline,marker,'')))/length(marker)<>baseline_fence_count THEN
             RAISE EXCEPTION 'AUTOPILOT_LIGHT_V3_FENCE_RETIREMENT_BACKUP_DRIFT';
         END IF;
         UPDATE autopilot.migration_0373_definition_backup

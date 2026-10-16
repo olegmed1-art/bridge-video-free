@@ -317,6 +317,24 @@ class ActiveQueuePostgresTests(unittest.TestCase):
             conn.execute("UPDATE autopilot.role_dispatch_outbox SET status='FAILED_CLOSED',completed_at=now() WHERE dispatch_id=%s", (did,))
             self.assertEqual(conn.execute("SELECT task_id FROM autopilot.claim_next_task('oracle-autopilot-light-1',60)").fetchone()[0], tid)
 
+    def test_fence_retirement_rejects_altered_marker_without_partial_changes(self):
+        marker = 'LIGHT_RUNTIME_MAILBOX_V3_COMPATIBILITY_FENCE_V1'
+        definition_query = "SELECT pg_get_functiondef('autopilot.claim_next_task(text,integer)'::regprocedure)"
+        with self.connect() as conn:
+            conn.autocommit = True
+            conn.execute("UPDATE autopilot.project_planner_state SET enabled=false WHERE singleton")
+            before = conn.execute(definition_query).fetchone()[0]
+            # Internal snapshot drift must roll back even the preceding current
+            # function edit. No partial retirement or migration-marker removal.
+            conn.execute("UPDATE autopilot.migration_0373_definition_backup SET definition=definition || %s "
+                         "WHERE object_key='autopilot.claim_next_task(text,integer)'", ('\n-- ' + marker,))
+            with self.assertRaisesRegex(psycopg.Error, 'AUTOPILOT_LIGHT_V3_FENCE_RETIREMENT_BACKUP_DRIFT'):
+                self.run_script(conn, 'database/rollbacks/0355_autopilot_light_v3_compatibility_fence.sql')
+            conn.execute('ROLLBACK')
+            self.assertEqual(conn.execute(definition_query).fetchone()[0], before)
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM public.schema_migration "
+                                              "WHERE migration_key='0355_autopilot_light_v3_compatibility_fence'").fetchone())
+
     def test_repeatable_read_admission_fails_closed(self):
         with self.connect() as conn:
             conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
